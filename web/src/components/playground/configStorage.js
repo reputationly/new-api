@@ -74,6 +74,8 @@ export const loadConfig = () => {
           max_tokens: Number.isNaN(parsedMaxTokens)
             ? parsedConfig?.inputs?.max_tokens
             : parsedMaxTokens,
+          imageUrls: [],
+          imageEnabled: false,
         },
         parameterEnabled: {
           ...DEFAULT_CONFIG.parameterEnabled,

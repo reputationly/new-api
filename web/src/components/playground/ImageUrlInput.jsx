@@ -159,7 +159,7 @@ const ImageUrlInput = ({
       )}
 
       {/* 已上传图片列表 */}
-      {imageUrls.length > 0 && (
+      {isActive && imageUrls.length > 0 && (
         <div className='space-y-1 max-h-32 overflow-y-auto image-list-scroll'>
           {imageUrls.map((url, index) => (
             <div
