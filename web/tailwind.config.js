@@ -18,9 +18,15 @@ For commercial licensing, please contact support@quantumnous.com
 */
 
 export default {
+  darkMode: 'class',
   content: ['./index.html', './src/**/*.{js,jsx,ts,tsx}'],
   theme: {
     colors: {
+      white: '#ffffff',
+      black: '#000000',
+      zinc: {
+        900: '#18181b',
+      },
       'semi-color-white': 'var(--semi-color-white)',
       'semi-color-black': 'var(--semi-color-black)',
       'semi-color-primary': 'var(--semi-color-primary)',
