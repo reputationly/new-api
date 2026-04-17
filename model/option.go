@@ -355,6 +355,8 @@ func updateOptionMap(key string, value string) (err error) {
 		operation_setting.Price, _ = strconv.ParseFloat(value, 64)
 	case "USDExchangeRate":
 		operation_setting.USDExchangeRate, _ = strconv.ParseFloat(value, 64)
+		// 同步更新 Price，保持充值和汇率一致
+		operation_setting.Price = operation_setting.USDExchangeRate
 	case "MinTopUp":
 		operation_setting.MinTopUp, _ = strconv.Atoi(value)
 	case "StripeApiSecret":
