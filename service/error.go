@@ -83,7 +83,9 @@ func ClaudeErrorWrapperLocal(err error, code string, statusCode int) *dto.Claude
 	return claudeErr
 }
 
-func RelayErrorHandler(ctx context.Context, resp *http.Response, showBodyWhenFail bool) (newApiErr *types.NewAPIError) {
+// RelayErrorHandler 处理上游返回的错误响应
+// modelName 是用户友好的模型名称，用于替换错误消息中的模型路径
+func RelayErrorHandler(ctx context.Context, resp *http.Response, showBodyWhenFail bool, modelName ...string) (newApiErr *types.NewAPIError) {
 	newApiErr = types.InitOpenAIError(types.ErrorCodeBadResponseStatusCode, resp.StatusCode)
 
 	responseBody, err := io.ReadAll(resp.Body)
@@ -114,6 +116,10 @@ func RelayErrorHandler(ctx context.Context, resp *http.Response, showBodyWhenFai
 		// General format error (OpenAI, Anthropic, Gemini, etc.)
 		oaiError := errResponse.TryToOpenAIError()
 		if oaiError != nil {
+			// 优先使用传入的模型名称替换错误消息中的路径
+			if len(modelName) > 0 && modelName[0] != "" {
+				oaiError.Message = replaceUpstreamModelPath(oaiError.Message, modelName[0])
+			}
 			newApiErr = types.WithOpenAIError(*oaiError, resp.StatusCode)
 			if showBodyWhenFail {
 				newApiErr.Err = buildErrWithBody(newApiErr.Error())
@@ -121,11 +127,94 @@ func RelayErrorHandler(ctx context.Context, resp *http.Response, showBodyWhenFai
 			return
 		}
 	}
-	newApiErr = types.NewOpenAIError(errors.New(errResponse.ToMessage()), types.ErrorCodeBadResponseStatusCode, resp.StatusCode)
+
+	message := errResponse.ToMessage()
+	// 优先使用传入的模型名称替换错误消息中的路径
+	if len(modelName) > 0 && modelName[0] != "" {
+		message = replaceUpstreamModelPath(message, modelName[0])
+	}
+	newApiErr = types.NewOpenAIError(errors.New(message), types.ErrorCodeBadResponseStatusCode, resp.StatusCode)
 	if showBodyWhenFail {
 		newApiErr.Err = buildErrWithBody(newApiErr.Error())
 	}
 	return
+}
+
+// replaceUpstreamModelPath 将错误消息中的模型路径替换为用户友好的模型名称
+// 例如: "/NFS_LLM/GLM-5-w4a8/ is not a multimodal model" + "glm-5" -> "glm-5 is not a multimodal model"
+func replaceUpstreamModelPath(errorMessage, friendlyModelName string) string {
+	if errorMessage == "" || friendlyModelName == "" {
+		return errorMessage
+	}
+
+	// 查找错误消息中的路径模式（如 /path/to/model/）并替换
+	// 路径通常以 / 开头，包含多个 /，且可能以 / 结尾
+	for {
+		startIdx := -1
+		endIdx := -1
+
+		// 查找路径的开始位置
+		for i := 0; i < len(errorMessage); i++ {
+			if errorMessage[i] == '/' {
+				// 检查是否是路径的开始（前面是空格、引号、逗号、括号或字符串开头）
+				if i == 0 {
+					startIdx = 0
+				} else {
+					prev := errorMessage[i-1]
+					if prev == ' ' || prev == ',' || prev == '(' || prev == '[' || prev == '"' || prev == '\'' || prev == '\n' {
+						startIdx = i
+					}
+				}
+				break
+			}
+		}
+
+		if startIdx == -1 {
+			break
+		}
+
+		// 查找路径的结束位置
+		for i := startIdx + 1; i <= len(errorMessage); i++ {
+			if i == len(errorMessage) {
+				endIdx = i
+				break
+			}
+			c := errorMessage[i]
+			if c == ' ' || c == ',' || c == ')' || c == ']' || c == '"' || c == '\'' || c == '\n' || c == '<' || c == '>' {
+				endIdx = i
+				break
+			}
+		}
+
+		if endIdx == -1 || endIdx <= startIdx+1 {
+			break
+		}
+
+		path := errorMessage[startIdx:endIdx]
+		// 检查这是否看起来像模型路径（包含多个 /）
+		if strings.Count(path, "/") >= 2 {
+			// 验证路径包含有效内容
+			pathContent := strings.Trim(path, "/")
+			if len(pathContent) > 0 {
+				hasAlphanumeric := false
+				for _, c := range pathContent {
+					if (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '-' || c == '_' || c == '.' {
+						hasAlphanumeric = true
+						break
+					}
+				}
+
+				if hasAlphanumeric {
+					// 替换路径为用户友好的模型名称
+					errorMessage = errorMessage[:startIdx] + friendlyModelName + errorMessage[endIdx:]
+					continue
+				}
+			}
+		}
+		break
+	}
+
+	return errorMessage
 }
 
 func ResetStatusCode(newApiErr *types.NewAPIError, statusCodeMappingStr string) {
