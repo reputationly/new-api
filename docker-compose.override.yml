@@ -7,8 +7,6 @@
 services:
   new-api:
     image: crpi-xzr81d0490mc3794.cn-shanghai.personal.cr.aliyuncs.com/reputationly/new-api:latest
-    ports:
-      - "127.0.0.1:3000:3000"
     environment:
       # 在线升级（Watchtower）：必须与 watchtower 服务的 WATCHTOWER_HTTP_API_TOKEN 一致
       - WATCHTOWER_API_TOKEN=CHANGE_ME_TO_RANDOM_TOKEN
