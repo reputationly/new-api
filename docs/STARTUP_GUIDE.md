@@ -135,6 +135,14 @@ docker logs new-api --tail 30
 curl -s http://localhost:3000/api/status | grep -o '"success":\s*true'
 ```
 
+**WAF / 反向代理部署时的额外配置（`.env.prod`）：**
+
+| 变量 | 说明 | 示例值 |
+|---|---|---|
+| `BIND_HOST` | 端口绑定地址。WAF 回源需设为 `0.0.0.0`，直连部署留空（默认 `127.0.0.1`） | `0.0.0.0` |
+| `TRUSTED_PROXY_CIDR` | WAF/Nginx 所在子网，Gin 从该段的 `X-Forwarded-For` 取真实 IP。直连部署留空 | `10.0.0.0/24` |
+| `STREAMING_TIMEOUT` | Streaming 无响应超时（秒）。接入 DeepSeek R1 等推理模型时建议设为 `300`，默认 `120` | `300` |
+
 **在线升级（通过 Watchtower）：**
 
 ```bash
@@ -175,6 +183,10 @@ ls .env.local   # 不存在则 cp .env.local.example .env.local
 **Q: 生产环境日志报数据库连接错误**
 
 检查 `.env.prod` 中 `SQL_DSN` 的地址和密码，以及华为云 RDS 安全组是否放行了服务器 IP → 5432 端口。
+
+**Q: 限流/审计日志里看到的 IP 是反向代理的 IP 而非用户真实 IP**
+
+未配置 `TRUSTED_PROXY_CIDR`，Gin 不信任代理转发的 `X-Forwarded-For`。在 `.env.prod` 中设置 WAF/Nginx 所在子网 CIDR，例如 `TRUSTED_PROXY_CIDR=10.0.0.0/24`。
 
 **Q: 首次登录的管理员账号是什么**
 
