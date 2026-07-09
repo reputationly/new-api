@@ -197,7 +197,7 @@ export const CHANNEL_OPTIONS = [
   {
     value: 59,
     color: 'orange',
-    label: 'GPUStackPlus (自建图片/视频)',
+    label: 'GPUStackPlus (自建图片/视频/语音)',
   },
 ];
 

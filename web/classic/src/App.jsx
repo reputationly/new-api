@@ -46,6 +46,7 @@ import ModelDeploymentPage from './pages/ModelDeployment';
 import Playground from './pages/Playground';
 import VideoModel from './pages/Video';
 import ImageModel from './pages/Image';
+import AudioModel from './pages/Audio';
 import Subscription from './pages/Subscription';
 import Reconcile from './pages/Reconcile';
 import OAuth2Callback from './components/auth/OAuth2Callback';
@@ -185,6 +186,14 @@ function App() {
           element={
             <PrivateRoute>
               <ImageModel />
+            </PrivateRoute>
+          }
+        />
+        <Route
+          path='/console/audio'
+          element={
+            <PrivateRoute>
+              <AudioModel />
             </PrivateRoute>
           }
         />

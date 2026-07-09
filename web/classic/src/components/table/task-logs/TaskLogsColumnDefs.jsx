@@ -90,7 +90,44 @@ function renderDuration(submit_time, finishTime) {
   );
 }
 
-const renderType = (type, t) => {
+// gpustackplus 任务:Task.Data 存的是门面提交响应(_public 形态),其中带
+// task_type(tts/t2i/i2i/t2v/i2v/flf2v/s2v)。取到就按它精确显示类型,取不到
+// (其他平台/旧数据)落回按 action 的原有分支。data 可能是对象或 JSON 字符串;
+// suno 的 data 是数组,返回空串走原逻辑。
+const facadeTaskType = (record) => {
+  let d = record?.data;
+  if (!d) return '';
+  if (typeof d === 'string') {
+    try {
+      d = JSON.parse(d);
+    } catch (e) {
+      return '';
+    }
+  }
+  if (Array.isArray(d) || typeof d !== 'object') return '';
+  return typeof d.task_type === 'string' ? d.task_type : '';
+};
+
+// 门面 task_type → 展示标签/颜色。tts 用紫色与视频(蓝)、图片(青)区分。
+const FACADE_TASK_TYPE_META = {
+  tts: { label: '语音合成', color: 'purple' },
+  t2i: { label: '文生图', color: 'cyan' },
+  i2i: { label: '图生图', color: 'cyan' },
+  t2v: { label: '文生视频', color: 'blue' },
+  i2v: { label: '图生视频', color: 'blue' },
+  flf2v: { label: '首尾生视频', color: 'blue' },
+  s2v: { label: '音频驱动', color: 'blue' },
+};
+
+const renderType = (type, t, taskType) => {
+  const meta = FACADE_TASK_TYPE_META[taskType];
+  if (meta) {
+    return (
+      <Tag color={meta.color} shape='circle' prefixIcon={<Sparkles size={14} />}>
+        {t(meta.label)}
+      </Tag>
+    );
+  }
   switch (type) {
     case 'MUSIC':
       return (
@@ -322,7 +359,7 @@ export const getTaskLogsColumns = ({
       title: t('类型'),
       dataIndex: 'action',
       render: (text, record, index) => {
-        return <div>{renderType(text, t)}</div>;
+        return <div>{renderType(text, t, facadeTaskType(record))}</div>;
       },
     },
     {
@@ -413,6 +450,17 @@ export const getTaskLogsColumns = ({
         const resultUrl = record.result_url;
         const hasResultUrl =
           typeof resultUrl === 'string' && /^https?:\/\//.test(resultUrl);
+        // 语音合成(tts):成品是 .wav,内联音频播放器(视频弹窗对 wav 只会黑屏出声)
+        if (isSuccess && hasResultUrl && facadeTaskType(record) === 'tts') {
+          return (
+            <audio
+              controls
+              preload='none'
+              src={resultUrl}
+              style={{ height: 28, width: 200 }}
+            />
+          );
+        }
         if (isSuccess && isVideoTask && hasResultUrl) {
           return (
             <a

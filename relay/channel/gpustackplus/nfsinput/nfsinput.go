@@ -40,10 +40,12 @@ import (
 type Field string
 
 const (
-	FieldImage     Field = "image"      // 条件图 / 底图(i2i 支持多图,≤MaxImageRefs)
-	FieldLastFrame Field = "last_frame" // 尾帧(flf2v),单值
-	FieldImageMask Field = "image_mask" // 蒙版(带 mask 的 edit),单值
-	FieldAudio     Field = "audio"      // 音频(s2v),单值
+	FieldImage        Field = "image"         // 条件图 / 底图(i2i 支持多图,≤MaxImageRefs)
+	FieldLastFrame    Field = "last_frame"    // 尾帧(flf2v),单值
+	FieldImageMask    Field = "image_mask"    // 蒙版(带 mask 的 edit),单值
+	FieldAudio        Field = "audio"         // 音频(s2v),单值
+	FieldVoice        Field = "voice"         // TTS 参考音色(zero-shot 克隆),单值
+	FieldEmotionAudio Field = "emotion_audio" // TTS 情感参考音(可选),单值
 )
 
 const (
@@ -127,12 +129,14 @@ func (m *Materializer) Cleanup() {
 	m.written = nil
 }
 
-// extForField 默认扩展名:image 类 .png,audio .wav。
+// extForField 默认扩展名:image 类 .png,音频类(s2v audio / TTS voice / 情感音).wav。
 func extForField(field Field) string {
-	if field == FieldAudio {
+	switch field {
+	case FieldAudio, FieldVoice, FieldEmotionAudio:
 		return ".wav"
+	default:
+		return ".png"
 	}
-	return ".png"
 }
 
 // AddBytes 直接写一段字节(multipart 上传文件字节走这里)。

@@ -45,20 +45,25 @@ import (
 )
 
 // new-api 侧当前支持的 task_type。门面 _VALID_TASK_TYPES 还含 s2v(音频驱动),但
-// new-api 尚未接线音频输入物化(音频只能从 metadata 来,会被 legacyInputKeys 剥掉),
-// 故此处不含 s2v —— 显式 400,避免静默丢音频(§N1 复审)。接 s2v 时:在 materialize
-// 里把音频落 input_refs.audio,再把 s2v 加回本表。
+// new-api 尚未接线 s2v 的音频输入物化,故此处不含 s2v —— 显式 400,避免静默丢音频
+// (§N1 复审)。接 s2v 时:在 materialize 里把音频落 input_refs.audio,再把 s2v 加回本表。
+//
+// tts(语音合成,IndexTTS-2):文本走 prompt,参考音色 metadata.voice + 可选情感参考音
+// metadata.emotion_audio 物化到 input_refs,情感参数(emo_vector/emo_alpha/emo_text)随
+// metadata 透传。见 materializeTTSInputs。
 var validTaskTypes = map[string]bool{
-	"t2i": true, "i2i": true, "t2v": true, "i2v": true, "flf2v": true,
+	"t2i": true, "i2i": true, "t2v": true, "i2v": true, "flf2v": true, "tts": true,
 }
 
 // legacyInputKeys 旧的原始输入 / 引擎原生路径字段:输入统一走 input_refs,这些键
 // 若从 metadata 混进 body,门面会因"检测到原始输入字段"整单 400,故播种后剥掉。
-// 与门面 _INPUT_FIELDS + _ENGINE_OWNED_FIELDS 对齐。
+// 与门面 _INPUT_FIELDS + _ENGINE_OWNED_FIELDS 对齐(含 TTS 的 voice/emotion_audio)。
 var legacyInputKeys = map[string]bool{
 	"image": true, "last_frame": true, "image_mask": true, "audio": true,
+	"voice": true, "emotion_audio": true,
 	"image_path": true, "last_frame_path": true, "image_mask_path": true,
-	"audio_path": true, "video_path": true, "save_result_path": true,
+	"audio_path": true, "spk_audio_path": true, "emo_audio_path": true,
+	"video_path": true, "save_result_path": true,
 }
 
 // localBadRequest 构造本地 400 skip-retry 错误:BuildRequestBody 里的输入校验 /
@@ -200,7 +205,7 @@ func (a *TaskAdaptor) BuildRequestBody(c *gin.Context, info *relaycommon.RelayIn
 	// task_type 白名单校验(§N2):它可能来自 metadata,非法值既会让 NFS 写盘路径异常,
 	// 也会被门面拒;就地本地 400,不进后续物化 / 提交。
 	if !validTaskTypes[taskType] {
-		return nil, localBadRequest(fmt.Errorf("不支持的 task_type: %q(允许:t2i/i2i/t2v/i2v/flf2v;s2v 音频驱动暂未接线)", taskType))
+		return nil, localBadRequest(fmt.Errorf("不支持的 task_type: %q(允许:t2i/i2i/t2v/i2v/flf2v/tts;s2v 音频驱动暂未接线)", taskType))
 	}
 	// 输入兼容性防呆必须在物化之前(§N2 复审):否则 t2v/t2i 带图、flf2v 只给 1 张等非法
 	// 组合会先把图写到 NFS 再被拒,留下孤儿输入文件。这些检查只依赖 taskType / req,不需物化。
@@ -213,7 +218,24 @@ func (a *TaskAdaptor) BuildRequestBody(c *gin.Context, info *relaycommon.RelayIn
 	if taskType == "flf2v" && len(req.Images) < 2 {
 		return nil, localBadRequest(fmt.Errorf("模型 %s 的任务类型 flf2v(首尾帧)需要首帧和尾帧两张图:请提供 images=[首帧,尾帧]", modelName))
 	}
-	if req.HasImage() {
+	if taskType == "tts" {
+		// 语音合成不接受图片输入(参考音走 metadata.voice,下面单独物化)。
+		if req.HasImage() {
+			return nil, localBadRequest(fmt.Errorf("模型 %s 的任务类型 tts 不接受图片输入", modelName))
+		}
+		if strings.TrimSpace(req.Prompt) == "" {
+			return nil, localBadRequest(fmt.Errorf("模型 %s 的任务类型 tts 需要合成文本(prompt)", modelName))
+		}
+	}
+	if taskType == "tts" {
+		// 参考音色(必填)+ 可选情感参考音,物化落 NFS 到 input_refs。物化顺序同视频:
+		// 先写全部输入 → 再提交;失败回滚(见 materializeTTSInputs)。
+		refs, err := materializeTTSInputs(c, info, taskType, modelName, req)
+		if err != nil {
+			return nil, localBadRequest(err)
+		}
+		body["input_refs"] = refs
+	} else if req.HasImage() {
 		// 输入图统一物化落 NFS,发 input_refs 相对路径(不再发 base64/URL 给门面,方案见
 		// gpustack 仓 docs/lightx2v-nfs-input-design.md)。物化顺序:先写全部输入 → 再提交。
 		// 首尾帧(flf2v):images[0]=首帧→image,images[1]=尾帧→last_frame;其余(i2v/s2v)只取首帧。
@@ -262,6 +284,8 @@ var sizeOverrideKeys = map[string]bool{
 func inferTaskType(modelName string) string {
 	m := strings.ToLower(modelName)
 	switch {
+	case strings.Contains(m, "tts"):
+		return "tts"
 	case strings.Contains(m, "flf2v"):
 		return "flf2v"
 	case strings.Contains(m, "i2v"):
@@ -302,6 +326,50 @@ func materializeVideoInputs(c *gin.Context, info *relaycommon.RelayInfo, taskTyp
 			return nil, fmt.Errorf("模型 %s 的任务类型 flf2v(首尾帧)需要首帧和尾帧两张图", modelName)
 		}
 		if err := m.AddString(ctx, nfsinput.FieldLastFrame, 0, false, req.Images[1]); err != nil {
+			m.Cleanup()
+			return nil, err
+		}
+	}
+	return m.Refs(), nil
+}
+
+// metadataString 从请求 metadata 里安全取一个字符串值(容忍 nil / 非字符串)。
+func metadataString(md map[string]any, key string) string {
+	if md == nil {
+		return ""
+	}
+	if v, ok := md[key]; ok {
+		if s, ok := v.(string); ok {
+			return strings.TrimSpace(s)
+		}
+	}
+	return ""
+}
+
+// materializeTTSInputs 物化 TTS 的参考音色(必填,metadata.voice)与可选情感参考音
+// (metadata.emotion_audio),返回 input_refs(field → 相对路径)。voice / emotion_audio
+// 是 URL 或 base64/data-uri 音频字符串,与视频输入复用同一物化机制(SSRF 校验、回滚)。
+// 门面把 voice→spk_audio_path、emotion_audio→emo_audio_path 映射给 IndexTTS 引擎。
+func materializeTTSInputs(c *gin.Context, info *relaycommon.RelayInfo, taskType, modelName string, req relaycommon.TaskSubmitReq) (map[string][]string, error) {
+	voice := metadataString(req.Metadata, "voice")
+	if voice == "" {
+		return nil, fmt.Errorf("模型 %s 的任务类型 tts 需要参考音色:请在 metadata.voice 提供音频 URL 或 base64", modelName)
+	}
+	gid := info.PublicTaskID
+	if strings.TrimSpace(gid) == "" {
+		gid = common.GetUUID()
+	}
+	m := nfsinput.NewMaterializer(taskType, modelName, fmt.Sprintf("%d", info.UserId), gid)
+	ctx := c.Request.Context()
+
+	// 参考音色(必填),单值;失败回滚。
+	if err := m.AddString(ctx, nfsinput.FieldVoice, 0, false, voice); err != nil {
+		m.Cleanup()
+		return nil, err
+	}
+	// 情感参考音(可选),单值。
+	if emo := metadataString(req.Metadata, "emotion_audio"); emo != "" {
+		if err := m.AddString(ctx, nfsinput.FieldEmotionAudio, 0, false, emo); err != nil {
 			m.Cleanup()
 			return nil, err
 		}
