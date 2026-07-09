@@ -31,6 +31,7 @@ export const DEFAULT_ADMIN_CONFIG = {
     playground: true,
     video: false,
     image: false,
+    audio: false,
     chat: true,
   },
   console: {

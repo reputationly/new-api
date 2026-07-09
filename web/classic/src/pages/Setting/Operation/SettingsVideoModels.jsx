@@ -19,6 +19,10 @@ import {
   normalizeSizeList,
   normalizeList,
 } from '../../../constants/videoPlayground.constants';
+import { AUDIO_PAGE_CAPABILITY } from '../../../constants/audioPlayground.constants';
+
+// 能力选项 = 视频能力 + 语音合成(同一份模型配置驱动视频/语音两个体验区)。
+const CAPABILITY_OPTIONS = [...VIDEO_CAPABILITIES, AUDIO_PAGE_CAPABILITY];
 
 const { Text } = Typography;
 
@@ -231,7 +235,7 @@ export default function SettingsVideoModels(props) {
                   multiple
                   filter
                   value={row.capabilities}
-                  optionList={VIDEO_CAPABILITIES.map((c) => ({
+                  optionList={CAPABILITY_OPTIONS.map((c) => ({
                     label: t(c),
                     value: c,
                   }))}

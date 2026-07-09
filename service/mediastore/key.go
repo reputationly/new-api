@@ -72,7 +72,7 @@ func ValidateNFSPath(root, nfsPath string) (string, error) {
 	return resolved, nil
 }
 
-// InferContentType 由 key/文件扩展名推断 Content-Type，覆盖常见图片/视频类型。
+// InferContentType 由 key/文件扩展名推断 Content-Type，覆盖常见图片/视频/音频类型。
 func InferContentType(key string) string {
 	switch strings.ToLower(strings.TrimPrefix(path.Ext(key), ".")) {
 	case "png":
@@ -93,6 +93,14 @@ func InferContentType(key string) string {
 		return "video/quicktime"
 	case "mkv":
 		return "video/x-matroska"
+	case "wav":
+		return "audio/wav"
+	case "mp3":
+		return "audio/mpeg"
+	case "flac":
+		return "audio/flac"
+	case "ogg":
+		return "audio/ogg"
 	default:
 		return "application/octet-stream"
 	}
