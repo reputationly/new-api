@@ -39,9 +39,10 @@ const parseTs = (id, fallback) => {
   return Number.isFinite(n) ? n : fallback;
 };
 
-// 取图片字节：base64 直接取；远程 url 经后端代理取，绕开 CDN 的 CORS 限制
+// 取图片字节：base64 / blob:(IDB 恢复)直接取；远程 url 经后端代理取,绕开 CDN 的 CORS
+// 限制。blob: 必须走本地 fetch——发给后端代理必失败(§4.4)。
 const fetchImageBlob = async (src) => {
-  if (src.startsWith('data:')) {
+  if (src.startsWith('data:') || src.startsWith('blob:')) {
     const resp = await fetch(src);
     return resp.blob();
   }
@@ -166,7 +167,7 @@ const ImageChatArea = ({
       if ((!m.images || m.images.length === 0) && m.imagesNotPersisted) {
         return (
           <Typography.Text type='tertiary' className='text-sm'>
-            {t('图片仅本次会话可见，刷新后不再保留，请重新生成')}
+            {t('图片已过期或本地缓存被清理，请重新生成')}
           </Typography.Text>
         );
       }

@@ -10,6 +10,12 @@ import { useTranslation } from 'react-i18next';
 import { StatusContext } from '../../context/Status';
 import { UserContext } from '../../context/User';
 import {
+  persistWithMedia,
+  hydrateConversationsFromStorage,
+  stripUnresolvedMediaRefs,
+  isMediaRef,
+} from '../../helpers/playgroundMediaStorage';
+import {
   API,
   showError,
   processGroupsData,
@@ -48,43 +54,22 @@ const loadConversations = (storageKey) => {
   }
 };
 
-// base64（data: 开头）图片不落 localStorage，避免撑爆配额；仅保留 url 图。
-// 图生图的底图(conv.images / 用户消息 images)也是 base64,同样剥掉——否则一两张
-// 上传图就可能超配额,导致整段历史写入失败。刷新后底图丢失的对话不能再续问
-// (generate 里对 isI2I 底图为空的续问拦截并提示重开对话)。
-const stripImgList = (arr) =>
-  Array.isArray(arr)
-    ? arr.filter((src) => !String(src).startsWith('data:'))
-    : arr;
-
-const stripBase64ForPersist = (list) =>
-  list.map((conv) => ({
-    ...conv,
-    images: stripImgList(conv.images),
-    messages: (conv.messages || []).map((m) => {
-      if (!m.images || m.images.length === 0) return m;
-      const urlImages = m.images.filter(
-        (src) => !String(src).startsWith('data:'),
-      );
-      if (urlImages.length === m.images.length) return m; // 全是 url，原样保留
-      return {
-        ...m,
-        images: urlImages,
-        imagesNotPersisted:
-          urlImages.length === 0 ? true : m.imagesNotPersisted,
-      };
-    }),
-  }));
+// base64 媒体以 Blob 存 IndexedDB,localStorage 只留短引用(见
+// docs/playground-idb-media-design.md §4.1)。conv.images = 图生图底图(续问要发后端
+// → hydrate 回 data:);messages[].images = 生成结果(仅展示 → hydrate 成 objectURL);
+// markNotPersisted:true → miss/IDB 不可用时给空图消息打占位标(沿用旧语义)。
+const IMAGE_MEDIA_SCHEMA = {
+  convArrayFields: ['images'],
+  convStringFields: [],
+  msgArrayFields: ['images'],
+  markNotPersisted: true,
+};
 
 const persistConversations = (storageKey, list) => {
-  try {
-    localStorage.setItem(
-      storageKey,
-      JSON.stringify(stripBase64ForPersist(list.slice(0, IMAGE_HISTORY_LIMIT))),
-    );
-  } catch (e) {
-    // ignore quota errors
-  }
+  persistWithMedia(storageKey, list, {
+    ...IMAGE_MEDIA_SCHEMA,
+    limit: IMAGE_HISTORY_LIMIT,
+  });
 };
 
 let idSeq = 0;
@@ -114,9 +99,13 @@ export const useImageGeneration = ({ mode = 'text2image' } = {}) => {
 
   // 以「对话」为单位的历史；每个对话 = { id, group, model, size, title, createdAt, updatedAt, messages: [...] }
   // currentConvId 为 null 表示「新对话」（尚未开始生成）
-  const [conversations, setConversations] = useState(() =>
-    loadConversations(storageKey),
-  );
+  const initialConvsRef = useRef(null);
+  const [conversations, setConversations] = useState(() => {
+    const raw = loadConversations(storageKey);
+    const stripped = stripUnresolvedMediaRefs(raw, IMAGE_MEDIA_SCHEMA);
+    initialConvsRef.current = { raw, stripped };
+    return stripped;
+  });
   const [currentConvId, setCurrentConvId] = useState(null);
   const [generating, setGenerating] = useState(false);
 
@@ -140,6 +129,33 @@ export const useImageGeneration = ({ mode = 'text2image' } = {}) => {
   conversationsRef.current = conversations;
   const lockedRef = useRef(locked);
   lockedRef.current = locked;
+
+  // mount 后从 IDB 还原媒体,按初始对象引用逐条合并(不整体覆盖,见设计 §4.1.3)。
+  useEffect(() => {
+    let canceled = false;
+    const init = initialConvsRef.current;
+    if (!init || !(init.raw || []).length) return;
+    (async () => {
+      const hydrated = await hydrateConversationsFromStorage(
+        init.raw,
+        IMAGE_MEDIA_SCHEMA,
+      );
+      if (canceled) return;
+      const hydratedById = new Map(hydrated.map((c) => [c.id, c]));
+      const initialSet = new Set(init.stripped);
+      setConversations((prev) =>
+        prev.map((c) =>
+          initialSet.has(c) && hydratedById.has(c.id)
+            ? hydratedById.get(c.id)
+            : c,
+        ),
+      );
+    })();
+    return () => {
+      canceled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const handleInputChange = useCallback((key, value) => {
     // 锁定后不允许修改分组/模型/尺寸
@@ -366,7 +382,11 @@ export const useImageGeneration = ({ mode = 'text2image' } = {}) => {
       // 图生图续问:底图取自锁定的对话;刷新后 base64 底图已从 localStorage 剥离,
       // 此时无法续问,提示重开对话重新上传(避免向后端发空底图被拒)。
       if (isI2I) {
-        params.images = (params.images || []).filter(Boolean);
+        // 防御(§2 硬规则):hydrate 已保证无 idb-media: 残留,再过滤一遍——裸引用绝不
+        // 能作为底图参数发后端;顺带剥掉 hydrate miss 的空值。
+        params.images = (params.images || []).filter(
+          (s) => s && !isMediaRef(s),
+        );
         if (params.images.length === 0) {
           showError(t('底图已失效,请开启新对话并重新上传底图'));
           return;

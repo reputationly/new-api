@@ -10,6 +10,11 @@ import { useTranslation } from 'react-i18next';
 import { StatusContext } from '../../context/Status';
 import { UserContext } from '../../context/User';
 import {
+  persistWithMedia,
+  hydrateConversationsFromStorage,
+  stripUnresolvedMediaRefs,
+} from '../../helpers/playgroundMediaStorage';
+import {
   API,
   showError,
   processGroupsData,
@@ -51,24 +56,22 @@ const loadConversations = () => {
   }
 };
 
-// 上传的参考音是 base64 data-url,落 localStorage 会撑爆配额(同视频帧图);
-// 落盘前剥掉 data: 音频。预置音色只存 id,刷新后续问可按 id 重取,不受影响。
-const stripVoiceForPersist = (list) =>
-  list.map((conv) =>
-    String(conv.voiceData || '').startsWith('data:')
-      ? { ...conv, voiceData: '' }
-      : conv,
-  );
+// 上传的参考音是 base64 data-url,以 Blob 存 IndexedDB,localStorage 只留短引用(见
+// docs/playground-idb-media-design.md §4.3);刷新后可恢复、可续问。预置音色只存 id,不受影响。
+const AUDIO_MEDIA_SCHEMA = {
+  convArrayFields: [],
+  convStringFields: ['voiceData'],
+  msgArrayFields: [],
+  // 生成的音频结果(原为 /v1/.../content 实时下载):抓 Blob 缓存进 IDB,同视频。
+  msgMediaFields: ['audioUrl'],
+  markNotPersisted: false,
+};
 
 const persistConversations = (list) => {
-  try {
-    localStorage.setItem(
-      AUDIO_HISTORY_STORAGE_KEY,
-      JSON.stringify(stripVoiceForPersist(list.slice(0, AUDIO_HISTORY_LIMIT))),
-    );
-  } catch (e) {
-    // ignore quota errors
-  }
+  persistWithMedia(AUDIO_HISTORY_STORAGE_KEY, list, {
+    ...AUDIO_MEDIA_SCHEMA,
+    limit: AUDIO_HISTORY_LIMIT,
+  });
 };
 
 let idSeq = 0;
@@ -120,7 +123,13 @@ export const useAudioGeneration = () => {
   const [models, setModels] = useState([]);
   const [modelGroupsMap, setModelGroupsMap] = useState(new Map());
 
-  const [conversations, setConversations] = useState(() => loadConversations());
+  const initialConvsRef = useRef(null);
+  const [conversations, setConversations] = useState(() => {
+    const raw = loadConversations();
+    const stripped = stripUnresolvedMediaRefs(raw, AUDIO_MEDIA_SCHEMA);
+    initialConvsRef.current = { raw, stripped };
+    return stripped;
+  });
   const [currentConvId, setCurrentConvId] = useState(null);
   const [generating, setGenerating] = useState(false);
 
@@ -137,6 +146,44 @@ export const useAudioGeneration = () => {
   const lockedRef = useRef(locked);
   lockedRef.current = locked;
   const activePollRef = useRef(null);
+
+  // mount 后从 IDB 还原参考音,按初始对象引用逐条合并(不整体覆盖,见设计 §4.3)。
+  useEffect(() => {
+    let canceled = false;
+    const init = initialConvsRef.current;
+    if (!init || !(init.raw || []).length) return;
+    (async () => {
+      const hydrated = await hydrateConversationsFromStorage(
+        init.raw,
+        AUDIO_MEDIA_SCHEMA,
+      );
+      if (canceled) return;
+      const hydratedById = new Map(hydrated.map((c) => [c.id, c]));
+      const initialSet = new Set(init.stripped);
+      // conv 级媒体字段(参考音,续问要复用):即使会话已被 resume-poll patch 过(换了
+      // 引用),也要从 hydrated 版本补回,否则重载后进行中任务完成后续问会误报参考音失效。
+      const mediaFields = [
+        ...AUDIO_MEDIA_SCHEMA.convArrayFields,
+        ...AUDIO_MEDIA_SCHEMA.convStringFields,
+      ];
+      setConversations((prev) =>
+        prev.map((c) => {
+          const h = hydratedById.get(c.id);
+          if (!h) return c;
+          if (initialSet.has(c)) return h;
+          const merged = { ...c };
+          mediaFields.forEach((f) => {
+            merged[f] = h[f];
+          });
+          return merged;
+        }),
+      );
+    })();
+    return () => {
+      canceled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const handleInputChange = useCallback((key, value) => {
     if (lockedRef.current) return;

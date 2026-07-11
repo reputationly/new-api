@@ -10,6 +10,12 @@ import { useTranslation } from 'react-i18next';
 import { StatusContext } from '../../context/Status';
 import { UserContext } from '../../context/User';
 import {
+  persistWithMedia,
+  hydrateConversationsFromStorage,
+  stripUnresolvedMediaRefs,
+  isMediaRef,
+} from '../../helpers/playgroundMediaStorage';
+import {
   API,
   showError,
   processGroupsData,
@@ -22,6 +28,10 @@ import {
   VIDEO_PAGE_CAPABILITY,
   VIDEO_I2V_CAPABILITY,
   VIDEO_FLF2V_CAPABILITY,
+  VIDEO_S2V_CAPABILITY,
+  VIDEO_SR_CAPABILITY,
+  VIDEO_VACE_CAPABILITY,
+  VIDEO_CAPABILITY_LEGACY_ALIASES,
   VIDEO_DEFAULT_NEGATIVE_PROMPT,
   VIDEO_DEFAULT_ASPECT_RATIO,
   aspectRatioToShape,
@@ -41,13 +51,20 @@ import {
   buildVideoContentUrl,
 } from '../../constants/videoPlayground.constants';
 
-// 文生视频 / 图生视频 / 首尾帧共用本 hook,按 mode 区分能力过滤、是否带帧图。
+// 文生视频 / 图生视频 / 首尾帧 / 数字人 / 视频超分 / 视频编辑共用本 hook,按 mode
+// 区分能力过滤、需要哪些输入(帧图 / 音频 / 视频 / 蒙版 / 参考图)。
 const CONV_STORAGE_KEY_BASE = 'video_playground_conversations';
 const VIDEO_MODES = {
   text2video: { capability: VIDEO_PAGE_CAPABILITY, suffix: '' },
   image2video: { capability: VIDEO_I2V_CAPABILITY, suffix: '_i2v' },
   flf2v: { capability: VIDEO_FLF2V_CAPABILITY, suffix: '_flf2v' },
+  // 门面 task_type：s2v(音频生视频)/ sr(视频超分)/ vace(视频编辑)。
+  s2v: { capability: VIDEO_S2V_CAPABILITY, suffix: '_s2v', taskType: 's2v' },
+  sr: { capability: VIDEO_SR_CAPABILITY, suffix: '_sr', taskType: 'sr' },
+  vace: { capability: VIDEO_VACE_CAPABILITY, suffix: '_vace', taskType: 'vace' },
 };
+// vace 参考图最多张数(与门面 _MAX_INPUT_IMAGES 对齐)。
+const MAX_REF_IMAGES = 5;
 const modeMeta = (mode) => VIDEO_MODES[mode] || VIDEO_MODES.text2video;
 const storageKeyFor = (mode) =>
   `${CONV_STORAGE_KEY_BASE}${modeMeta(mode).suffix}`;
@@ -62,32 +79,26 @@ const loadConversations = (storageKey) => {
   }
 };
 
-// i2v/flf2v 的帧图是 base64 data-url,落 localStorage 会撑爆配额导致整段历史写入
-// 失败(连带正在进行的任务刷新/恢复丢失)。落盘前剥掉 data: 图,只留 url 图。
-const stripFramesForPersist = (list) =>
-  list.map((conv) => {
-    const stripImgs = (arr) =>
-      Array.isArray(arr)
-        ? arr.filter((src) => !String(src).startsWith('data:'))
-        : arr;
-    return {
-      ...conv,
-      images: stripImgs(conv.images),
-      messages: (conv.messages || []).map((m) =>
-        m.images ? { ...m, images: stripImgs(m.images) } : m,
-      ),
-    };
-  });
+// 视频体验区的媒体字段 schema(哪些字段是 base64 媒体):
+//   续问要发后端的(hydrate 回 data:):帧图/人物图 images、vace 参考图 refImages(数组);
+//     s2v 音频 audioData、sr 源视频 sourceVideo、vace src_video/src_mask(单值);
+//   仅展示的(hydrate 成 objectURL):消息级 images。
+// 媒体以 Blob 存 IndexedDB,localStorage 只留短引用,刷新后可恢复、可续问、可回看。
+const VIDEO_MEDIA_SCHEMA = {
+  convArrayFields: ['images', 'refImages'],
+  convStringFields: ['audioData', 'sourceVideo', 'srcVideo', 'maskVideo'],
+  msgArrayFields: ['images'],
+  // 生成的视频结果(原为 /v1/videos/{id}/content 实时下载):抓 Blob 缓存进 IDB,刷新后
+  // 直接读、后端按保留天数清理后仍可回看。
+  msgMediaFields: ['videoUrl'],
+  markNotPersisted: false,
+};
 
 const persistConversations = (storageKey, list) => {
-  try {
-    localStorage.setItem(
-      storageKey,
-      JSON.stringify(stripFramesForPersist(list.slice(0, VIDEO_HISTORY_LIMIT))),
-    );
-  } catch (e) {
-    // ignore quota errors
-  }
+  persistWithMedia(storageKey, list, {
+    ...VIDEO_MEDIA_SCHEMA,
+    limit: VIDEO_HISTORY_LIMIT,
+  });
 };
 
 let idSeq = 0;
@@ -110,7 +121,14 @@ export const useVideoGeneration = ({ mode = 'text2video' } = {}) => {
 
   const isI2V = mode === 'image2video';
   const isFLF2V = mode === 'flf2v';
-  const needsImage = isI2V || isFLF2V;
+  const isS2V = mode === 's2v';
+  const isSR = mode === 'sr';
+  const isVACE = mode === 'vace';
+  // 需要上传一张「主图」的模式:i2v/flf2v 首帧、s2v 人物图(都复用 inputs.firstFrame)。
+  const needsImage = isI2V || isFLF2V || isS2V;
+  // 输出跟随上传输入的模式(非文生视频):不展示/不下发尺寸与宽高比。
+  const followsInput = mode !== 'text2video';
+  const taskType = modeMeta(mode).taskType; // s2v/sr/vace 显式下发;其余靠模型名推断
   const pageCapability = modeMeta(mode).capability;
   const storageKey = storageKeyFor(mode);
 
@@ -122,17 +140,29 @@ export const useVideoGeneration = ({ mode = 'text2video' } = {}) => {
     seed: '', // 随机种子;'' 表示随机(不下发)
     negativePrompt: '', // 负向提示词;Wan 模型下由下方 effect 预填默认值,其它厂商留空
     aspectRatio: '', // 宽高比;仅当该模型在后台配了宽高比才由 effect 选中默认值并下发
-    firstFrame: '', // i2v/flf2v 首帧(base64 data-url)
+    firstFrame: '', // i2v/flf2v 首帧 / s2v 人物图(base64 data-url)
     lastFrame: '', // flf2v 尾帧
+    audioData: '', // s2v 驱动音频(base64 data-url)
+    sourceVideo: '', // sr 源视频(base64 data-url)
+    srRatio: 2, // sr 超分倍率(请求级,门面透传 metadata.sr_ratio)
+    srcVideo: '', // vace 源视频(base64 data-url)
+    maskVideo: '', // vace 蒙版视频(base64 data-url,可选)
+    refImages: [], // vace 参考图(base64 data-url 数组,可选 ≤MAX_REF_IMAGES)
   });
   const [groups, setGroups] = useState([]);
   const [models, setModels] = useState([]);
   // 来自 /api/pricing：model -> enable_groups[]（用于分组过滤）
   const [modelGroupsMap, setModelGroupsMap] = useState(new Map());
 
-  const [conversations, setConversations] = useState(() =>
-    loadConversations(storageKey),
-  );
+  // 初值:同步剥掉未 hydrate 的 idb-media: 引用(避免首帧断图/裸引用误发后端);
+  // 保留初始 conv 对象引用,mount 后 hydrate 完成再按引用逐条合并(不整体覆盖)。
+  const initialConvsRef = useRef(null);
+  const [conversations, setConversations] = useState(() => {
+    const raw = loadConversations(storageKey);
+    const stripped = stripUnresolvedMediaRefs(raw, VIDEO_MEDIA_SCHEMA);
+    initialConvsRef.current = { raw, stripped };
+    return stripped;
+  });
   const [currentConvId, setCurrentConvId] = useState(null);
   const [generating, setGenerating] = useState(false);
 
@@ -151,6 +181,50 @@ export const useVideoGeneration = ({ mode = 'text2video' } = {}) => {
   const activePollRef = useRef(null);
   // 用户是否手动改过负向提示词:改过后不再随模型自动预填/清空。
   const negPromptTouchedRef = useRef(false);
+
+  // mount 后从 IDB 还原媒体,按初始对象引用逐条合并——只替换"挂载至今未被任何 setState
+  // 换过引用"的 conv(hydrate 期间用户新建/正在生成被 patch 的会话原样保留)。不整体覆盖。
+  useEffect(() => {
+    let canceled = false; // 兜 StrictMode dev 双挂载
+    const init = initialConvsRef.current;
+    if (!init || !(init.raw || []).length) return;
+    (async () => {
+      const hydrated = await hydrateConversationsFromStorage(
+        init.raw,
+        VIDEO_MEDIA_SCHEMA,
+      );
+      if (canceled) return;
+      const hydratedById = new Map(hydrated.map((c) => [c.id, c]));
+      const initialSet = new Set(init.stripped);
+      // conv 级媒体字段(续问要复用):即使会话已被 resume-poll patch 过(换了引用),
+      // 也要把这些字段从 hydrated 版本补回去,否则重载后进行中的任务完成后续问会误报
+      // "媒体失效"(IDB 里其实还在)。
+      const mediaFields = [
+        ...VIDEO_MEDIA_SCHEMA.convArrayFields,
+        ...VIDEO_MEDIA_SCHEMA.convStringFields,
+      ];
+      setConversations((prev) =>
+        prev.map((c) => {
+          const h = hydratedById.get(c.id);
+          if (!h) return c;
+          // 挂载至今未被换过引用 → 整条用 hydrated(含还原的媒体 + 原消息)。
+          if (initialSet.has(c)) return h;
+          // 已被 patch(如 resume-poll):只把 conv 级媒体字段还原到实时会话上,
+          // 保留其实时消息/状态。
+          const merged = { ...c };
+          mediaFields.forEach((f) => {
+            merged[f] = h[f];
+          });
+          return merged;
+        }),
+      );
+    })();
+    return () => {
+      canceled = true;
+    };
+    // 挂载一次:storageKey 在本组件生命周期内固定(切 tab 整体重挂载)。
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const handleInputChange = useCallback((key, value) => {
     if (lockedRef.current) return;
@@ -179,10 +253,15 @@ export const useVideoGeneration = ({ mode = 'text2video' } = {}) => {
   // 视频模型集合 = 管理员在「视频模型配置」里声明、且能力含「文生视频」的模型。
   // 只认运营设置里的能力声明，不再按后端端点类型识别。
   const videoModelSet = useMemo(() => {
+    // 兼容旧能力标签:重命名前用旧标签(音频驱动/视频转视频/参考生视频)配过的模型仍能
+    // 匹配到对应新 Tab,不会从体验区消失。
+    const legacy = VIDEO_CAPABILITY_LEGACY_ALIASES[pageCapability];
     const set = new Set();
     Object.entries(videoConfig.models || {}).forEach(([model, cfg]) => {
       const caps = Array.isArray(cfg?.capabilities) ? cfg.capabilities : [];
-      if (caps.includes(pageCapability)) set.add(model);
+      if (caps.includes(pageCapability) || (legacy && caps.includes(legacy))) {
+        set.add(model);
+      }
     });
     return set;
   }, [videoConfig]);
@@ -491,8 +570,18 @@ export const useVideoGeneration = ({ mode = 'text2video' } = {}) => {
       const text = (prompt || '').trim();
       if (!text || generating) return;
 
-      // i2v:images=[首帧];flf2v:images=[首帧,尾帧]。后续追问沿用对话首条锁定的帧图。
+      // i2v:images=[首帧];flf2v:images=[首帧,尾帧];s2v:images=[人物图]。
+      // 后续追问沿用对话首条锁定的帧图 / 媒体输入。
       let convImages = [];
+      // 新增能力的媒体输入(base64),与帧图一起锁进对话、随对话复用、落盘前剥离。
+      let media = {
+        audioData: '',
+        sourceVideo: '',
+        srRatio: 2,
+        srcVideo: '',
+        maskVideo: '',
+        refImages: [],
+      };
       let convId = currentConvId;
       let params;
       if (convId == null) {
@@ -503,7 +592,9 @@ export const useVideoGeneration = ({ mode = 'text2video' } = {}) => {
         if (needsImage) {
           const first = (inputs.firstFrame || '').trim();
           if (!first) {
-            showError(t('请先上传首帧图片'));
+            showError(
+              isS2V ? t('请先上传人物图') : t('请先上传首帧图片'),
+            );
             return;
           }
           if (isFLF2V) {
@@ -517,6 +608,31 @@ export const useVideoGeneration = ({ mode = 'text2video' } = {}) => {
             convImages = [first];
           }
         }
+        // 数字人:必填驱动音频;超分:必填源视频;视频编辑:必填源视频或参考图之一。
+        if (isS2V && !(inputs.audioData || '').trim()) {
+          showError(t('数字人需要上传驱动音频'));
+          return;
+        }
+        if (isSR && !(inputs.sourceVideo || '').trim()) {
+          showError(t('视频超分需要上传源视频'));
+          return;
+        }
+        if (
+          isVACE &&
+          !(inputs.srcVideo || '').trim() &&
+          !(inputs.refImages || []).length
+        ) {
+          showError(t('视频编辑需要上传源视频或参考图之一'));
+          return;
+        }
+        media = {
+          audioData: (inputs.audioData || '').trim(),
+          sourceVideo: (inputs.sourceVideo || '').trim(),
+          srRatio: inputs.srRatio,
+          srcVideo: (inputs.srcVideo || '').trim(),
+          maskVideo: (inputs.maskVideo || '').trim(),
+          refImages: (inputs.refImages || []).filter(Boolean),
+        };
         convId = genId();
         params = {
           group: inputs.group,
@@ -527,6 +643,7 @@ export const useVideoGeneration = ({ mode = 'text2video' } = {}) => {
           negativePrompt: inputs.negativePrompt,
           aspectRatio: inputs.aspectRatio,
           images: convImages,
+          ...media,
         };
       } else {
         const conv = conversationsRef.current.find((c) => c.id === convId);
@@ -551,6 +668,12 @@ export const useVideoGeneration = ({ mode = 'text2video' } = {}) => {
               negativePrompt: conv.negativePrompt,
               aspectRatio: conv.aspectRatio,
               images: conv.images || [],
+              audioData: conv.audioData || '',
+              sourceVideo: conv.sourceVideo || '',
+              srRatio: conv.srRatio != null ? conv.srRatio : 2,
+              srcVideo: conv.srcVideo || '',
+              maskVideo: conv.maskVideo || '',
+              refImages: conv.refImages || [],
             }
           : {
               group: inputs.group,
@@ -561,18 +684,46 @@ export const useVideoGeneration = ({ mode = 'text2video' } = {}) => {
               negativePrompt: inputs.negativePrompt,
               aspectRatio: inputs.aspectRatio,
               images: convImages,
+              ...media,
             };
       }
 
-      // i2v/flf2v 续问:帧图取自锁定的对话;刷新后 base64 帧图已从 localStorage
-      // 剥离,无法续问(避免向后端发空帧被拒),提示重开对话重新上传。
+      // 防御(§2 硬规则):hydrate 已保证无 idb-media: 残留,这里再过滤一遍双保险——
+      // 裸引用绝不能作为媒体参数发后端。同时剥掉 hydrate miss 留下的空值。
+      const cleanMedia = (v) => (isMediaRef(v) ? '' : v);
+      const cleanArr = (arr) =>
+        (arr || []).filter((s) => s && !isMediaRef(s));
+
+      // i2v/flf2v/s2v 续问:帧图/人物图取自锁定的对话;刷新后媒体 miss(Blob 被清/IDB 不可用)
+      // 时缺失,提示重开对话重新上传。
       if (needsImage) {
-        params.images = (params.images || []).filter(Boolean);
+        params.images = cleanArr(params.images);
         const need = isFLF2V ? 2 : 1;
         if (params.images.length < need) {
           showError(t('帧图已失效,请开启新对话并重新上传'));
           return;
         }
+      }
+      params.audioData = cleanMedia(params.audioData);
+      params.sourceVideo = cleanMedia(params.sourceVideo);
+      params.srcVideo = cleanMedia(params.srcVideo);
+      params.maskVideo = cleanMedia(params.maskVideo);
+      params.refImages = cleanArr(params.refImages);
+      if (isS2V && !(params.audioData || '').trim()) {
+        showError(t('驱动音频已失效,请开启新对话并重新上传'));
+        return;
+      }
+      if (isSR && !(params.sourceVideo || '').trim()) {
+        showError(t('源视频已失效,请开启新对话并重新上传'));
+        return;
+      }
+      if (
+        isVACE &&
+        !(params.srcVideo || '').trim() &&
+        !(params.refImages || []).length
+      ) {
+        showError(t('源视频/参考图已失效,请开启新对话并重新上传'));
+        return;
       }
 
       const reqId = genId();
@@ -612,6 +763,13 @@ export const useVideoGeneration = ({ mode = 'text2video' } = {}) => {
               negativePrompt: params.negativePrompt,
               aspectRatio: params.aspectRatio,
               images: params.images || [],
+              // 新增能力媒体输入(base64):锁进对话供续问复用,落盘前 stripFramesForPersist 剥离。
+              audioData: params.audioData || '',
+              sourceVideo: params.sourceVideo || '',
+              srRatio: params.srRatio != null ? params.srRatio : 2,
+              srcVideo: params.srcVideo || '',
+              maskVideo: params.maskVideo || '',
+              refImages: params.refImages || [],
               title: text,
               createdAt: now,
               updatedAt: now,
@@ -642,10 +800,14 @@ export const useVideoGeneration = ({ mode = 'text2video' } = {}) => {
           group: params.group,
           prompt: text,
         };
+        // task_type:数字人/超分/编辑显式下发(门面据此路由),其余靠模型名推断,不发。
+        if (taskType) {
+          body.metadata = { ...(body.metadata || {}), task_type: taskType };
+        }
         // 尺寸/分辨率仅文生视频、且该值仍在当前模型允许集内才下发（对齐宽高比的闸门，
-        // 避免切到未配尺寸的模型时把残留旧值误发）；图生视频/首尾帧跟随参考图，不发 size。
+        // 避免切到未配尺寸的模型时把残留旧值误发）；其余模式输出跟随上传输入，不发 size。
         const videoSizeVal = normalizeVideoSize(params.size);
-        if (!needsImage && availableSizes.includes(videoSizeVal)) {
+        if (!followsInput && availableSizes.includes(videoSizeVal)) {
           body.size = videoSizeVal;
         }
         if (strategy.durationField === 'seconds') {
@@ -672,7 +834,7 @@ export const useVideoGeneration = ({ mode = 'text2video' } = {}) => {
         // (续问历史会话时 conv.aspectRatio 可能是后台已改/删的旧值,校验一遍避免绕过白名单)。
         // wan 视频引擎按 target_shape 出分辨率;i2v/flf2v 跟随输入图故不发。
         if (
-          !needsImage &&
+          !followsInput &&
           params.aspectRatio &&
           availableAspectRatios.includes(params.aspectRatio)
         ) {
@@ -681,9 +843,36 @@ export const useVideoGeneration = ({ mode = 'text2video' } = {}) => {
             body.metadata = { ...(body.metadata || {}), target_shape: shape };
           }
         }
-        // i2v/flf2v:带帧图。后端 gpustackplus:images[0]=首帧,flf2v 时 images[1]=尾帧。
+        // i2v/flf2v/s2v:带主图。后端 gpustackplus:images[0]=首帧/人物图,flf2v 时 images[1]=尾帧。
         if (needsImage && (params.images || []).length > 0) {
           body.images = params.images;
+        }
+        // 数字人:驱动音频 → metadata.audio(门面物化到 audio_path 喂 InfiniteTalk)。
+        if (isS2V && (params.audioData || '').trim()) {
+          body.metadata = { ...(body.metadata || {}), audio: params.audioData };
+        }
+        // 视频超分:源视频 → metadata.video;倍率 → metadata.sr_ratio(门面透传,引擎按 config 封顶)。
+        if (isSR) {
+          if ((params.sourceVideo || '').trim()) {
+            body.metadata = {
+              ...(body.metadata || {}),
+              video: params.sourceVideo,
+            };
+          }
+          const ratio = Number(params.srRatio);
+          if (Number.isFinite(ratio) && ratio > 0) {
+            body.metadata = { ...(body.metadata || {}), sr_ratio: ratio };
+          }
+        }
+        // 视频编辑:源视频/蒙版/参考图 → metadata.src_video/src_mask/src_ref_images。
+        if (isVACE) {
+          const md = { ...(body.metadata || {}) };
+          if ((params.srcVideo || '').trim()) md.src_video = params.srcVideo;
+          if ((params.maskVideo || '').trim()) md.src_mask = params.maskVideo;
+          if ((params.refImages || []).length) {
+            md.src_ref_images = params.refImages;
+          }
+          body.metadata = md;
         }
         const res = await API.post(
           VIDEO_API_ENDPOINTS.VIDEO_GENERATIONS,
@@ -748,7 +937,13 @@ export const useVideoGeneration = ({ mode = 'text2video' } = {}) => {
       pollOnce,
       storageKey,
       needsImage,
+      followsInput,
       isFLF2V,
+      isS2V,
+      isSR,
+      isVACE,
+      taskType,
+      availableSizes,
       availableAspectRatios,
       t,
     ],
@@ -803,6 +998,9 @@ export const useVideoGeneration = ({ mode = 'text2video' } = {}) => {
             : prev.negativePrompt,
         aspectRatio:
           conv.aspectRatio != null ? conv.aspectRatio : prev.aspectRatio,
+        // 新增能力媒体输入:base64 落盘时已剥离,打开历史只恢复标量(srRatio);音频/视频
+        // 需重新上传才能续问(与帧图一致)。
+        srRatio: conv.srRatio != null ? conv.srRatio : prev.srRatio,
       }));
       // 若该会话最后一个任务仍在进行中，恢复轮询
       const assts = (conv.messages || []).filter((m) => m.role === 'assistant');
@@ -827,18 +1025,29 @@ export const useVideoGeneration = ({ mode = 'text2video' } = {}) => {
     };
   }, []);
 
-  // i2v/flf2v 必须先上传帧图:新对话(未锁定)且帧图缺失时发送置灰,
-  // 避免只填提示词就点发送(点了才报错且 Semi 会清空已输入的提示词)。flf2v 需首帧+尾帧。
+  // 必填输入缺失时发送置灰(新对话/未锁定):避免只填提示词就点发送(点了才报错且 Semi
+  // 会清空已输入的提示词)。i2v/s2v 需主图;flf2v 需首帧+尾帧;s2v 另需音频;sr 需源视频;
+  // vace 需源视频或参考图之一。
   const missingRequiredImage =
-    needsImage &&
     !locked &&
-    ((inputs.firstFrame || '').trim() === '' ||
-      (isFLF2V && (inputs.lastFrame || '').trim() === ''));
+    ((needsImage &&
+      ((inputs.firstFrame || '').trim() === '' ||
+        (isFLF2V && (inputs.lastFrame || '').trim() === ''))) ||
+      (isS2V && (inputs.audioData || '').trim() === '') ||
+      (isSR && (inputs.sourceVideo || '').trim() === '') ||
+      (isVACE &&
+        (inputs.srcVideo || '').trim() === '' &&
+        !(inputs.refImages || []).length));
 
   return {
     isI2V,
     isFLF2V,
+    isS2V,
+    isSR,
+    isVACE,
     needsImage,
+    followsInput,
+    maxRefImages: MAX_REF_IMAGES,
     inputs,
     handleInputChange,
     groups,

@@ -15,9 +15,9 @@ export const VIDEO_CAPABILITIES = [
   '文生视频',
   '图生视频',
   '首尾帧',
-  '参考生视频',
-  '音频驱动',
-  '视频转视频',
+  '数字人',
+  '视频超分',
+  '视频编辑',
 ];
 
 // 提示词预设:点击对应按钮清空输入框并填入该提示词(体验区快速试玩)。
@@ -63,9 +63,22 @@ export const aspectRatioToShape = (ratio) => {
 
 // 当前视频体验区页面代表的能力（= 标签页名）
 export const VIDEO_PAGE_CAPABILITY = '文生视频';
-// 图生视频 / 首尾帧能力标签,与文生视频共用体验区,通过 mode 区分
+// 图生视频 / 首尾帧 / 数字人 / 视频超分 / 视频编辑能力标签,与文生视频共用体验区,
+// 通过 mode 区分。门面 task_type 对应:s2v→数字人(音频驱动人像说话,行业通称)、
+// sr→视频超分、vace→视频编辑。
 export const VIDEO_I2V_CAPABILITY = '图生视频';
 export const VIDEO_FLF2V_CAPABILITY = '首尾帧';
+export const VIDEO_S2V_CAPABILITY = '数字人';
+export const VIDEO_SR_CAPABILITY = '视频超分';
+export const VIDEO_VACE_CAPABILITY = '视频编辑';
+
+// 能力标签重命名的向后兼容:重命名前已在「视频模型配置」里用旧标签配过的模型,仍能匹配
+// 到新 Tab(否则那些模型会从体验区消失,直到手动改配置)。key=新标签,value=旧标签。
+export const VIDEO_CAPABILITY_LEGACY_ALIASES = {
+  [VIDEO_S2V_CAPABILITY]: '音频驱动',
+  [VIDEO_SR_CAPABILITY]: '视频转视频',
+  [VIDEO_VACE_CAPABILITY]: '参考生视频',
+};
 
 // 视频模型「策略类别」：不同类上游对尺寸/时长参数的要求不同。
 // - sora 类（真·OpenAI Sora）：像素尺寸（后端 relay_utils 校验器要求 720x1280 等）+ seconds 字段；

@@ -43,9 +43,14 @@ const (
 	FieldImage        Field = "image"         // 条件图 / 底图(i2i 支持多图,≤MaxImageRefs)
 	FieldLastFrame    Field = "last_frame"    // 尾帧(flf2v),单值
 	FieldImageMask    Field = "image_mask"    // 蒙版(带 mask 的 edit),单值
-	FieldAudio        Field = "audio"         // 音频(s2v),单值
+	FieldAudio        Field = "audio"         // 音频(s2v 数字人驱动音频),单值
 	FieldVoice        Field = "voice"         // TTS 参考音色(zero-shot 克隆),单值
 	FieldEmotionAudio Field = "emotion_audio" // TTS 情感参考音(可选),单值
+	// 以下为视频输入(SeedVR2 超分 / VACE 编辑),门面映射见 routes/videos.py _INPUT_FIELDS。
+	FieldVideo        Field = "video"          // SeedVR2 源视频(sr),单值
+	FieldSrcVideo     Field = "src_video"      // VACE 源视频(vace),单值
+	FieldSrcMask      Field = "src_mask"       // VACE 蒙版视频(vace),单值
+	FieldSrcRefImages Field = "src_ref_images" // VACE 参考图(vace R2V),支持多图 ≤MaxImageRefs
 )
 
 const (
@@ -129,9 +134,12 @@ func (m *Materializer) Cleanup() {
 	m.written = nil
 }
 
-// extForField 默认扩展名:image 类 .png,音频类(s2v audio / TTS voice / 情感音).wav。
+// extForField 默认扩展名:视频类(sr 源视频 / VACE src_video·src_mask).mp4,
+// 音频类(s2v audio / TTS voice / 情感音).wav,其余(image / VACE 参考图).png。
 func extForField(field Field) string {
 	switch field {
+	case FieldVideo, FieldSrcVideo, FieldSrcMask:
+		return ".mp4"
 	case FieldAudio, FieldVoice, FieldEmotionAudio:
 		return ".wav"
 	default:
@@ -139,12 +147,57 @@ func extForField(field Field) string {
 	}
 }
 
-// AddBytes 直接写一段字节(multipart 上传文件字节走这里)。
+// extForData 从 data-uri 的 MIME 推导真实扩展名(保留上传的实际格式,如 .mp3/.mov/.jpg),
+// 避免把 mp3 存成 .wav、mov 存成 .mp4 误导下游按扩展名/容器识别的引擎。无法识别或非
+// data-uri 时返回 "",由调用方回退到字段默认扩展名(extForField)。白名单输出,不引入
+// 任意后缀。
+func extForData(raw string) string {
+	if !strings.HasPrefix(raw, "data:") {
+		return ""
+	}
+	end := strings.IndexAny(raw, ";,")
+	if end <= len("data:") {
+		return ""
+	}
+	switch strings.ToLower(strings.TrimSpace(raw[len("data:"):end])) {
+	case "audio/wav", "audio/x-wav", "audio/wave":
+		return ".wav"
+	case "audio/mpeg", "audio/mp3":
+		return ".mp3"
+	case "audio/mp4", "audio/x-m4a", "audio/aac":
+		return ".m4a"
+	case "audio/ogg", "audio/opus":
+		return ".ogg"
+	case "video/mp4":
+		return ".mp4"
+	case "video/quicktime":
+		return ".mov"
+	case "video/webm":
+		return ".webm"
+	case "image/png":
+		return ".png"
+	case "image/jpeg", "image/jpg":
+		return ".jpg"
+	case "image/webp":
+		return ".webp"
+	}
+	return ""
+}
+
+// AddBytes 直接写一段字节(multipart 上传文件字节走这里),用字段默认扩展名。
 func (m *Materializer) AddBytes(field Field, index int, multi bool, data []byte) error {
+	return m.addBytesExt(field, index, multi, data, "")
+}
+
+// addBytesExt 写字节,ext 为空时回退字段默认扩展名。
+func (m *Materializer) addBytesExt(field Field, index int, multi bool, data []byte, ext string) error {
 	if len(data) == 0 {
 		return fmt.Errorf("输入 %s 字节为空", field)
 	}
-	ref := m.relRef(field, index, multi, extForField(field))
+	if ext == "" {
+		ext = extForField(field)
+	}
+	ref := m.relRef(field, index, multi, ext)
 	if err := m.writeBytes(ref, data); err != nil {
 		return err
 	}
@@ -165,7 +218,8 @@ func (m *Materializer) AddString(ctx context.Context, field Field, index int, mu
 		}
 		return m.AddBytes(field, index, multi, data)
 	}
-	// data-uri 或裸 base64。
+	// data-uri 或裸 base64。data-uri 时保留 MIME 推导的真实扩展名。
+	ext := extForData(raw)
 	b64 := raw
 	if strings.HasPrefix(raw, "data:") {
 		if i := strings.Index(raw, ","); i >= 0 {
@@ -176,7 +230,7 @@ func (m *Materializer) AddString(ctx context.Context, field Field, index int, mu
 	if err != nil {
 		return fmt.Errorf("输入 %s 既非 http(s) URL 也非合法 base64/data-uri: %w", field, err)
 	}
-	return m.AddBytes(field, index, multi, data)
+	return m.addBytesExt(field, index, multi, data, ext)
 }
 
 // AddMultipartFile 读 multipart 上传文件字节并写盘。

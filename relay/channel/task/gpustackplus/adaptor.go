@@ -44,15 +44,21 @@ import (
 	"github.com/pkg/errors"
 )
 
-// new-api 侧当前支持的 task_type。门面 _VALID_TASK_TYPES 还含 s2v(音频驱动),但
-// new-api 尚未接线 s2v 的音频输入物化,故此处不含 s2v —— 显式 400,避免静默丢音频
-// (§N1 复审)。接 s2v 时:在 materialize 里把音频落 input_refs.audio,再把 s2v 加回本表。
+// new-api 侧当前支持的 task_type,与门面 routes/videos.py 的 _VALID_TASK_TYPES 对齐。
 //
 // tts(语音合成,IndexTTS-2):文本走 prompt,参考音色 metadata.voice + 可选情感参考音
 // metadata.emotion_audio 物化到 input_refs,情感参数(emo_vector/emo_alpha/emo_text)随
 // metadata 透传。见 materializeTTSInputs。
+//
+// s2v(数字人,InfiniteTalk):人物图走 image/input_reference,驱动音频 metadata.audio,
+// 一并物化到 input_refs(image + audio)。见 materializeS2VInputs。
+// sr(超分,SeedVR2):源视频 metadata.video 物化到 input_refs.video,倍率 metadata.sr_ratio
+// 随 metadata 透传(门面按 config 目标尺寸封顶)。见 materializeSRInputs。
+// vace(视频编辑):源视频 metadata.src_video + 可选蒙版 metadata.src_mask + 可选参考图
+// metadata.src_ref_images 物化到 input_refs。见 materializeVACEInputs。
 var validTaskTypes = map[string]bool{
-	"t2i": true, "i2i": true, "t2v": true, "i2v": true, "flf2v": true, "tts": true,
+	"t2i": true, "i2i": true, "t2v": true, "i2v": true, "flf2v": true,
+	"tts": true, "s2v": true, "sr": true, "vace": true,
 }
 
 // legacyInputKeys 旧的原始输入 / 引擎原生路径字段:输入统一走 input_refs,这些键
@@ -61,6 +67,7 @@ var validTaskTypes = map[string]bool{
 var legacyInputKeys = map[string]bool{
 	"image": true, "last_frame": true, "image_mask": true, "audio": true,
 	"voice": true, "emotion_audio": true,
+	"video": true, "src_video": true, "src_mask": true, "src_ref_images": true,
 	"image_path": true, "last_frame_path": true, "image_mask_path": true,
 	"audio_path": true, "spk_audio_path": true, "emo_audio_path": true,
 	"video_path": true, "save_result_path": true,
@@ -205,7 +212,7 @@ func (a *TaskAdaptor) BuildRequestBody(c *gin.Context, info *relaycommon.RelayIn
 	// task_type 白名单校验(§N2):它可能来自 metadata,非法值既会让 NFS 写盘路径异常,
 	// 也会被门面拒;就地本地 400,不进后续物化 / 提交。
 	if !validTaskTypes[taskType] {
-		return nil, localBadRequest(fmt.Errorf("不支持的 task_type: %q(允许:t2i/i2i/t2v/i2v/flf2v/tts;s2v 音频驱动暂未接线)", taskType))
+		return nil, localBadRequest(fmt.Errorf("不支持的 task_type: %q(允许:t2i/i2i/t2v/i2v/flf2v/tts/s2v/sr/vace)", taskType))
 	}
 	// 输入兼容性防呆必须在物化之前(§N2 复审):否则 t2v/t2i 带图、flf2v 只给 1 张等非法
 	// 组合会先把图写到 NFS 再被拒,留下孤儿输入文件。这些检查只依赖 taskType / req,不需物化。
@@ -227,23 +234,35 @@ func (a *TaskAdaptor) BuildRequestBody(c *gin.Context, info *relaycommon.RelayIn
 			return nil, localBadRequest(fmt.Errorf("模型 %s 的任务类型 tts 需要合成文本(prompt)", modelName))
 		}
 	}
-	if taskType == "tts" {
-		// 参考音色(必填)+ 可选情感参考音,物化落 NFS 到 input_refs。物化顺序同视频:
-		// 先写全部输入 → 再提交;失败回滚(见 materializeTTSInputs)。
-		refs, err := materializeTTSInputs(c, info, taskType, modelName, req)
-		if err != nil {
-			return nil, localBadRequest(err)
+
+	// 输入物化:每个 task_type 落齐自己需要的输入到 NFS,统一发 input_refs 相对路径(不再
+	// 发 base64/URL 给门面,方案见 gpustack 仓 docs/lightx2v-nfs-input-design.md)。物化顺序
+	// 一律"先写全部输入 → 再提交",任一路失败回滚已写文件(见各 materialize 函数),避免孤儿。
+	// URL 下不到 / SSRF 拒 / 写盘失败:本地 400 skip-retry,不触发跨渠道重试(§N3)。
+	var refs map[string][]string
+	switch taskType {
+	case "tts":
+		refs, err = materializeTTSInputs(c, info, taskType, modelName, req)
+	case "s2v":
+		// 数字人:人物图(image/input_reference)+ 驱动音频(metadata.audio)。
+		refs, err = materializeS2VInputs(c, info, taskType, modelName, req)
+	case "sr":
+		// 超分:源视频(metadata.video);倍率 sr_ratio 随 metadata 透传,不物化。
+		refs, err = materializeSRInputs(c, info, taskType, modelName, req)
+	case "vace":
+		// 视频编辑:源视频 + 可选蒙版 + 可选参考图。
+		refs, err = materializeVACEInputs(c, info, taskType, modelName, req)
+	default:
+		// t2v/i2v/flf2v/i2i/t2i:有图才物化(纯文本 t2v/t2i 无输入)。
+		// 首尾帧(flf2v):images[0]=首帧→image,images[1]=尾帧→last_frame;其余只取首帧。
+		if req.HasImage() {
+			refs, err = materializeVideoInputs(c, info, taskType, modelName, req)
 		}
-		body["input_refs"] = refs
-	} else if req.HasImage() {
-		// 输入图统一物化落 NFS,发 input_refs 相对路径(不再发 base64/URL 给门面,方案见
-		// gpustack 仓 docs/lightx2v-nfs-input-design.md)。物化顺序:先写全部输入 → 再提交。
-		// 首尾帧(flf2v):images[0]=首帧→image,images[1]=尾帧→last_frame;其余(i2v/s2v)只取首帧。
-		refs, err := materializeVideoInputs(c, info, taskType, modelName, req)
-		if err != nil {
-			// URL 下不到 / SSRF 拒 / 写盘失败:本地 400 skip-retry,不触发跨渠道重试(§N3)。
-			return nil, localBadRequest(err)
-		}
+	}
+	if err != nil {
+		return nil, localBadRequest(err)
+	}
+	if len(refs) > 0 {
 		body["input_refs"] = refs
 	}
 	// OpenAI 风格 duration/seconds → wan 帧数约定(4n+1,16fps:5s → 81 帧)。
@@ -267,7 +286,10 @@ func (a *TaskAdaptor) BuildRequestBody(c *gin.Context, info *relaycommon.RelayIn
 }
 
 // 门面 task_type 的输入约束(与 gpustack routes/videos.py 的 _VALID_TASK_TYPES 对应)。
-var imageRequiredTaskTypes = map[string]bool{"i2v": true, "flf2v": true, "i2i": true}
+// s2v(数字人)也需要人物图,故列入 imageRequiredTaskTypes;它额外需要驱动音频,由
+// materializeS2VInputs 校验。sr/vace 的输入是视频(走 metadata,非 image 字段),各自的
+// materialize 函数校验,不进这两张表。
+var imageRequiredTaskTypes = map[string]bool{"i2v": true, "flf2v": true, "i2i": true, "s2v": true}
 var textOnlyTaskTypes = map[string]bool{"t2v": true, "t2i": true}
 
 // 被白名单锁定的维度对应的引擎原生别名键——metadata 里这些键会绕过顶层 size/
@@ -284,8 +306,16 @@ var sizeOverrideKeys = map[string]bool{
 func inferTaskType(modelName string) string {
 	m := strings.ToLower(modelName)
 	switch {
-	case strings.Contains(m, "tts"):
+	case strings.Contains(m, "tts") || strings.Contains(m, "indextts"):
 		return "tts"
+	// 数字人 / 超分 / 编辑放在通用 i2v/i2i 之前:InfiniteTalk 名里常含 "talk",
+	// SeedVR2 含 "seedvr"/"sr",VACE 含 "vace" —— 显式匹配免落到 t2v 兜底。
+	case strings.Contains(m, "infinitetalk") || strings.Contains(m, "s2v"):
+		return "s2v"
+	case strings.Contains(m, "seedvr") || strings.Contains(m, "-sr") || strings.HasSuffix(m, "sr"):
+		return "sr"
+	case strings.Contains(m, "vace"):
+		return "vace"
 	case strings.Contains(m, "flf2v"):
 		return "flf2v"
 	case strings.Contains(m, "i2v"):
@@ -307,11 +337,7 @@ func materializeVideoInputs(c *gin.Context, info *relaycommon.RelayInfo, taskTyp
 	if len(req.Images) == 0 {
 		return nil, fmt.Errorf("缺少图片输入")
 	}
-	gid := info.PublicTaskID
-	if strings.TrimSpace(gid) == "" {
-		gid = common.GetUUID()
-	}
-	m := nfsinput.NewMaterializer(taskType, modelName, fmt.Sprintf("%d", info.UserId), gid)
+	m := nfsinput.NewMaterializer(taskType, modelName, fmt.Sprintf("%d", info.UserId), inputGroupID(info))
 	ctx := c.Request.Context()
 
 	// 首帧(image),单值。多输入中途失败时回滚已写文件,避免孤儿(§N2 复审)。
@@ -331,6 +357,145 @@ func materializeVideoInputs(c *gin.Context, info *relaycommon.RelayInfo, taskTyp
 		}
 	}
 	return m.Refs(), nil
+}
+
+// materializeS2VInputs 物化数字人(InfiniteTalk)的输入:人物图(image/input_reference,
+// 取首帧)+ 驱动音频(metadata.audio)。两者同一 gid,先写全部 → 再提交,失败回滚。
+// 门面把 image→image_path、audio→audio_path 映射给 InfiniteTalk 引擎。
+func materializeS2VInputs(c *gin.Context, info *relaycommon.RelayInfo, taskType, modelName string, req relaycommon.TaskSubmitReq) (map[string][]string, error) {
+	if len(req.Images) == 0 {
+		return nil, fmt.Errorf("模型 %s 的任务类型 s2v(数字人)需要人物图:请提供 image/input_reference", modelName)
+	}
+	audio := metadataString(req.Metadata, "audio")
+	if audio == "" {
+		return nil, fmt.Errorf("模型 %s 的任务类型 s2v(数字人)需要驱动音频:请在 metadata.audio 提供音频 URL 或 base64", modelName)
+	}
+	m := nfsinput.NewMaterializer(taskType, modelName, fmt.Sprintf("%d", info.UserId), inputGroupID(info))
+	ctx := c.Request.Context()
+
+	if err := m.AddString(ctx, nfsinput.FieldImage, 0, false, req.Images[0]); err != nil {
+		m.Cleanup()
+		return nil, err
+	}
+	if err := m.AddString(ctx, nfsinput.FieldAudio, 0, false, audio); err != nil {
+		m.Cleanup()
+		return nil, err
+	}
+	return m.Refs(), nil
+}
+
+// materializeSRInputs 物化视频超分(SeedVR2)的源视频(metadata.video)。倍率 sr_ratio 不
+// 物化——它随 metadata 透传进 body,门面转交引擎(引擎按 config 目标尺寸封顶)。
+// 门面把 video→video_path 映射给 SeedVR2 引擎。
+func materializeSRInputs(c *gin.Context, info *relaycommon.RelayInfo, taskType, modelName string, req relaycommon.TaskSubmitReq) (map[string][]string, error) {
+	video := metadataString(req.Metadata, "video")
+	if video == "" {
+		return nil, fmt.Errorf("模型 %s 的任务类型 sr(超分)需要源视频:请在 metadata.video 提供视频 URL 或 base64", modelName)
+	}
+	m := nfsinput.NewMaterializer(taskType, modelName, fmt.Sprintf("%d", info.UserId), inputGroupID(info))
+	if err := m.AddString(c.Request.Context(), nfsinput.FieldVideo, 0, false, video); err != nil {
+		m.Cleanup()
+		return nil, err
+	}
+	return m.Refs(), nil
+}
+
+// materializeVACEInputs 物化视频编辑(VACE)的输入:源视频(metadata.src_video)+ 可选蒙版
+// 视频(metadata.src_mask)+ 可选参考图(metadata.src_ref_images,单串或数组,≤MaxImageRefs)。
+// 三种编辑模式(V2V/MV2V/R2V)中至少要有 src_video 或 src_ref_images,否则引擎无从下手。
+// src_mask 依赖 src_video(与门面 _resolve_input_refs 的 "src_mask requires src_video" 对齐)。
+// 门面把 src_video/src_mask/src_ref_images 原样(无 _path 后缀)映射给 VACE 引擎。
+func materializeVACEInputs(c *gin.Context, info *relaycommon.RelayInfo, taskType, modelName string, req relaycommon.TaskSubmitReq) (map[string][]string, error) {
+	srcVideo := metadataString(req.Metadata, "src_video")
+	srcMask := metadataString(req.Metadata, "src_mask")
+	refImages := metadataStringList(req.Metadata, "src_ref_images")
+	if srcVideo == "" && len(refImages) == 0 {
+		return nil, fmt.Errorf("模型 %s 的任务类型 vace(视频编辑)至少需要 metadata.src_video(源视频)或 metadata.src_ref_images(参考图)之一", modelName)
+	}
+	if srcMask != "" && srcVideo == "" {
+		return nil, fmt.Errorf("模型 %s 的任务类型 vace 的 metadata.src_mask(蒙版)必须与 metadata.src_video 一起提供", modelName)
+	}
+	if len(refImages) > nfsinput.MaxImageRefs {
+		return nil, fmt.Errorf("模型 %s 的 metadata.src_ref_images 最多 %d 张,收到 %d 张", modelName, nfsinput.MaxImageRefs, len(refImages))
+	}
+	m := nfsinput.NewMaterializer(taskType, modelName, fmt.Sprintf("%d", info.UserId), inputGroupID(info))
+	ctx := c.Request.Context()
+
+	if srcVideo != "" {
+		if err := m.AddString(ctx, nfsinput.FieldSrcVideo, 0, false, srcVideo); err != nil {
+			m.Cleanup()
+			return nil, err
+		}
+	}
+	if srcMask != "" {
+		if err := m.AddString(ctx, nfsinput.FieldSrcMask, 0, false, srcMask); err != nil {
+			m.Cleanup()
+			return nil, err
+		}
+	}
+	for i, img := range refImages {
+		if err := m.AddString(ctx, nfsinput.FieldSrcRefImages, i, true, img); err != nil {
+			m.Cleanup()
+			return nil, err
+		}
+	}
+	return m.Refs(), nil
+}
+
+// inputGroupID 取本次请求的 input-group id:优先 info.PublicTaskID,空则新 uuid。
+func inputGroupID(info *relaycommon.RelayInfo) string {
+	if gid := strings.TrimSpace(info.PublicTaskID); gid != "" {
+		return gid
+	}
+	return common.GetUUID()
+}
+
+// metadataStringList 从 metadata 取一个字符串列表:支持数组([]any 里的字符串)、
+// 逗号分隔的单串、或单个字符串。用于 VACE 的 src_ref_images(可多张)。
+func metadataStringList(md map[string]any, key string) []string {
+	if md == nil {
+		return nil
+	}
+	v, ok := md[key]
+	if !ok {
+		return nil
+	}
+	var out []string
+	switch t := v.(type) {
+	case string:
+		s := strings.TrimSpace(t)
+		if s == "" {
+			break
+		}
+		// A data URL carries a comma in its own payload (data:...;base64,XXXX),
+		// so never comma-split it — treat the whole string as one image. Only
+		// plain URL/path lists are comma-separated; multiple data URLs must be
+		// sent as a JSON array (handled by the []any/[]string cases below).
+		if strings.HasPrefix(s, "data:") {
+			out = append(out, s)
+		} else {
+			for _, part := range strings.Split(s, ",") {
+				if p := strings.TrimSpace(part); p != "" {
+					out = append(out, p)
+				}
+			}
+		}
+	case []any:
+		for _, e := range t {
+			if s, ok := e.(string); ok {
+				if s = strings.TrimSpace(s); s != "" {
+					out = append(out, s)
+				}
+			}
+		}
+	case []string:
+		for _, s := range t {
+			if s = strings.TrimSpace(s); s != "" {
+				out = append(out, s)
+			}
+		}
+	}
+	return out
 }
 
 // metadataString 从请求 metadata 里安全取一个字符串值(容忍 nil / 非字符串)。
@@ -355,11 +520,7 @@ func materializeTTSInputs(c *gin.Context, info *relaycommon.RelayInfo, taskType,
 	if voice == "" {
 		return nil, fmt.Errorf("模型 %s 的任务类型 tts 需要参考音色:请在 metadata.voice 提供音频 URL 或 base64", modelName)
 	}
-	gid := info.PublicTaskID
-	if strings.TrimSpace(gid) == "" {
-		gid = common.GetUUID()
-	}
-	m := nfsinput.NewMaterializer(taskType, modelName, fmt.Sprintf("%d", info.UserId), gid)
+	m := nfsinput.NewMaterializer(taskType, modelName, fmt.Sprintf("%d", info.UserId), inputGroupID(info))
 	ctx := c.Request.Context()
 
 	// 参考音色(必填),单值;失败回滚。

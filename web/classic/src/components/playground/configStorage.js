@@ -17,12 +17,23 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 
+import localforage from 'localforage';
 import {
   STORAGE_KEYS,
   DEFAULT_CONFIG,
 } from '../../constants/playground.constants';
 
 const MESSAGES_STORAGE_KEY = 'playground_messages';
+
+// 聊天历史整包 JSON 存 IndexedDB(与体验区媒体同一 DB、独立 store)。localStorage 单源
+// ~5MB 配额会被 vision base64 图撑爆(saveMessages 曾报 QuotaExceededError);IDB 配额按
+// 磁盘计,quota 问题消亡。纯参数配置(playground_config)仍留 localStorage 不动。
+// 见 docs/playground-idb-media-design.md §6。
+const chatStore = localforage.createInstance({
+  name: 'new-api-playground',
+  storeName: 'chat_state',
+});
+chatStore.setDriver(localforage.INDEXEDDB).catch(() => {});
 
 /**
  * 保存配置到 localStorage
@@ -44,22 +55,15 @@ export const saveConfig = (config) => {
  * 保存消息到 localStorage
  * @param {Array} messages - 要保存的消息数组
  */
-export const saveMessages = (messages) => {
+export const saveMessages = async (messages) => {
   try {
-    const messagesToSave = {
+    await chatStore.setItem(MESSAGES_STORAGE_KEY, {
       messages,
       timestamp: new Date().toISOString(),
-    };
-    localStorage.setItem(STORAGE_KEYS.MESSAGES, JSON.stringify(messagesToSave));
+    });
     return 'ok';
   } catch (error) {
-    if (
-      error instanceof DOMException &&
-      (error.name === 'QuotaExceededError' ||
-        error.name === 'NS_ERROR_DOM_QUOTA_REACHED')
-    ) {
-      return 'quota';
-    }
+    // IDB 配额按磁盘计,'quota' 分支自然消亡;失败即 'error'。
     console.error('保存消息失败:', error);
     return 'error';
   }
@@ -111,18 +115,46 @@ export const loadConfig = () => {
  * 从 localStorage 加载消息
  * @returns {Array} 消息数组，如果不存在则返回 null
  */
-export const loadMessages = () => {
+export const loadMessages = async () => {
+  // IDB 读取单独兜错:IDB 不可用(隐私模式/被禁)时 getItem 会 reject,必须降级到下面的
+  // localStorage 回退,而不是整体失败——否则恰恰在该环境下用户历史消失。
+  let saved = null;
   try {
-    const savedMessages = localStorage.getItem(STORAGE_KEYS.MESSAGES);
-    if (savedMessages) {
-      const parsedMessages = JSON.parse(savedMessages);
-      return parsedMessages.messages || null;
-    }
-  } catch (error) {
-    console.error('加载消息失败:', error);
+    saved = await chatStore.getItem(MESSAGES_STORAGE_KEY);
+  } catch (e) {
+    saved = null;
   }
-
-  return null;
+  if (!saved) {
+    // 一次性迁移旧 localStorage 数据 → IDB。只有在 IDB 写入确认成功后才删旧 key,
+    // 否则(IDB 不可用/隐私模式/quota)会删掉用户唯一一份聊天历史造成丢失。
+    try {
+      const legacy = localStorage.getItem(STORAGE_KEYS.MESSAGES);
+      if (legacy) {
+        let parsed = null;
+        try {
+          parsed = JSON.parse(legacy);
+        } catch (e) {
+          parsed = null;
+        }
+        if (parsed && parsed.messages) {
+          try {
+            await chatStore.setItem(MESSAGES_STORAGE_KEY, parsed);
+            saved = parsed;
+            localStorage.removeItem(STORAGE_KEYS.MESSAGES); // 仅写入成功后删
+          } catch (e) {
+            // IDB 写失败:保留旧 localStorage 作为存活副本,本次仍返回消息给会话。
+            saved = parsed;
+          }
+        } else {
+          // 旧数据损坏/为空:可安全清掉。
+          localStorage.removeItem(STORAGE_KEYS.MESSAGES);
+        }
+      }
+    } catch (error) {
+      console.error('加载消息失败:', error);
+    }
+  }
+  return (saved && saved.messages) || null;
 };
 
 /**
@@ -131,17 +163,19 @@ export const loadMessages = () => {
 export const clearConfig = () => {
   try {
     localStorage.removeItem(STORAGE_KEYS.CONFIG);
-    localStorage.removeItem(STORAGE_KEYS.MESSAGES); // 同时清除消息
+    localStorage.removeItem(STORAGE_KEYS.MESSAGES); // 兼容旧数据
+    chatStore.removeItem(MESSAGES_STORAGE_KEY).catch(() => {}); // 同时清除 IDB 消息
   } catch (error) {
     console.error('清除配置失败:', error);
   }
 };
 
 /**
- * 清除保存的消息
+ * 清除保存的消息(IDB + 兼容旧 localStorage)
  */
-export const clearMessages = () => {
+export const clearMessages = async () => {
   try {
+    await chatStore.removeItem(MESSAGES_STORAGE_KEY);
     localStorage.removeItem(STORAGE_KEYS.MESSAGES);
   } catch (error) {
     console.error('清除消息失败:', error);
@@ -187,7 +221,8 @@ export const exportConfig = (config, messages = null) => {
   try {
     const configToExport = {
       ...config,
-      messages: messages || loadMessages(), // 包含消息数据
+      // 消息由调用方传入(ConfigManager 传当前 message);loadMessages 已异步化,不在此同步取。
+      messages: messages || [],
       exportTime: new Date().toISOString(),
       version: '1.0',
     };

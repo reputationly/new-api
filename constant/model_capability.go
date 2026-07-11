@@ -18,9 +18,9 @@ var VideoCapabilities = []string{
 	"文生视频",
 	"图生视频",
 	"首尾帧",
-	"参考生视频",
-	"音频驱动",
-	"视频转视频",
+	"数字人",
+	"视频超分",
+	"视频编辑",
 }
 
 var AudioCapabilities = []string{

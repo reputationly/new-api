@@ -15,7 +15,12 @@ const VideoPlaygroundBody = ({ mode }) => {
   const {
     isI2V,
     isFLF2V,
+    isS2V,
+    isSR,
+    isVACE,
     needsImage,
+    followsInput,
+    maxRefImages,
     inputs,
     handleInputChange,
     groups,
@@ -46,7 +51,12 @@ const VideoPlaygroundBody = ({ mode }) => {
       <div style={{ width: isMobile ? '100%' : 300, flexShrink: 0 }}>
         <VideoConfigPanel
           needsImage={needsImage}
+          followsInput={followsInput}
           isFLF2V={isFLF2V}
+          isS2V={isS2V}
+          isSR={isSR}
+          isVACE={isVACE}
+          maxRefImages={maxRefImages}
           inputs={inputs}
           groups={groups}
           models={models}
@@ -103,6 +113,9 @@ const VideoModel = () => {
           <TabPane tab={t('文生视频')} itemKey='text2video' />
           <TabPane tab={t('图生视频')} itemKey='image2video' />
           <TabPane tab={t('首尾帧')} itemKey='flf2v' />
+          <TabPane tab={t('数字人')} itemKey='s2v' />
+          <TabPane tab={t('视频超分')} itemKey='sr' />
+          <TabPane tab={t('视频编辑')} itemKey='vace' />
         </Tabs>
 
         <VideoPlaygroundBody key={activeTab} mode={activeTab} />

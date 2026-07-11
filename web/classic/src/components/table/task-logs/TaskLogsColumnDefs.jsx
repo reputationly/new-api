@@ -116,7 +116,9 @@ const FACADE_TASK_TYPE_META = {
   t2v: { label: '文生视频', color: 'blue' },
   i2v: { label: '图生视频', color: 'blue' },
   flf2v: { label: '首尾生视频', color: 'blue' },
-  s2v: { label: '音频驱动', color: 'blue' },
+  s2v: { label: '数字人', color: 'blue' },
+  sr: { label: '视频超分', color: 'blue' },
+  vace: { label: '视频编辑', color: 'blue' },
 };
 
 const renderType = (type, t, taskType) => {
