@@ -26,7 +26,7 @@ const MediaFileInput = ({
     const file = e.target.files?.[0];
     e.target.value = ''; // 允许再次选同一文件
     if (!file) return;
-    if (file.size > maxMB * 1024 * 1024) {
+    if (maxMB > 0 && file.size > maxMB * 1024 * 1024) {
       showError(t('文件不能超过 {{size}} MB', { size: maxMB }));
       return;
     }

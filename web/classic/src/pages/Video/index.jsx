@@ -21,6 +21,7 @@ const VideoPlaygroundBody = ({ mode }) => {
     needsImage,
     followsInput,
     maxRefImages,
+    maxInputMB,
     inputs,
     handleInputChange,
     groups,
@@ -57,6 +58,7 @@ const VideoPlaygroundBody = ({ mode }) => {
           isSR={isSR}
           isVACE={isVACE}
           maxRefImages={maxRefImages}
+          maxInputMB={maxInputMB}
           inputs={inputs}
           groups={groups}
           models={models}

@@ -341,7 +341,7 @@ func materializeVideoInputs(c *gin.Context, info *relaycommon.RelayInfo, taskTyp
 	if len(req.Images) == 0 {
 		return nil, fmt.Errorf("缺少图片输入")
 	}
-	m := nfsinput.NewMaterializer(taskType, modelName, fmt.Sprintf("%d", info.UserId), inputGroupID(info))
+	m := newVideoMaterializer(info, taskType, modelName, req)
 	ctx := c.Request.Context()
 
 	// 首帧(image),单值。多输入中途失败时回滚已写文件,避免孤儿(§N2 复审)。
@@ -374,7 +374,7 @@ func materializeS2VInputs(c *gin.Context, info *relaycommon.RelayInfo, taskType,
 	if audio == "" {
 		return nil, fmt.Errorf("模型 %s 的任务类型 s2v(数字人)需要驱动音频:请在 metadata.audio 提供音频 URL 或 base64", modelName)
 	}
-	m := nfsinput.NewMaterializer(taskType, modelName, fmt.Sprintf("%d", info.UserId), inputGroupID(info))
+	m := newVideoMaterializer(info, taskType, modelName, req)
 	ctx := c.Request.Context()
 
 	if err := m.AddString(ctx, nfsinput.FieldImage, 0, false, req.Images[0]); err != nil {
@@ -396,7 +396,7 @@ func materializeSRInputs(c *gin.Context, info *relaycommon.RelayInfo, taskType, 
 	if video == "" {
 		return nil, fmt.Errorf("模型 %s 的任务类型 sr(超分)需要源视频:请在 metadata.video 提供视频 URL 或 base64", modelName)
 	}
-	m := nfsinput.NewMaterializer(taskType, modelName, fmt.Sprintf("%d", info.UserId), inputGroupID(info))
+	m := newVideoMaterializer(info, taskType, modelName, req)
 	if err := m.AddString(c.Request.Context(), nfsinput.FieldVideo, 0, false, video); err != nil {
 		m.Cleanup()
 		return nil, err
@@ -422,7 +422,7 @@ func materializeVACEInputs(c *gin.Context, info *relaycommon.RelayInfo, taskType
 	if len(refImages) > nfsinput.MaxImageRefs {
 		return nil, fmt.Errorf("模型 %s 的 metadata.src_ref_images 最多 %d 张,收到 %d 张", modelName, nfsinput.MaxImageRefs, len(refImages))
 	}
-	m := nfsinput.NewMaterializer(taskType, modelName, fmt.Sprintf("%d", info.UserId), inputGroupID(info))
+	m := newVideoMaterializer(info, taskType, modelName, req)
 	ctx := c.Request.Context()
 
 	if srcVideo != "" {
@@ -452,6 +452,16 @@ func inputGroupID(info *relaycommon.RelayInfo) string {
 		return gid
 	}
 	return common.GetUUID()
+}
+
+// newVideoMaterializer 构造视频输入物化器,并按 VideoModelConfig 的 maxInputMB 设置单文件
+// 大小上限(吃上传的 i2v/flf2v/s2v/sr/vace 通用护栏;0/未配=不限;服务端兜底防直连绕过前端)。
+func newVideoMaterializer(info *relaycommon.RelayInfo, taskType, modelName string, req relaycommon.TaskSubmitReq) *nfsinput.Materializer {
+	m := nfsinput.NewMaterializer(taskType, modelName, fmt.Sprintf("%d", info.UserId), inputGroupID(info))
+	if maxBytes, ok := common.VideoMaxInputBytesForModel(req.Model, info.OriginModelName, modelName); ok {
+		m.SetMaxBytes(maxBytes)
+	}
+	return m
 }
 
 // metadataStringList 从 metadata 取一个字符串列表:支持数组([]any 里的字符串)、

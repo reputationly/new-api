@@ -31,6 +31,7 @@ const VideoConfigPanel = ({
   isSR = false,
   isVACE = false,
   maxRefImages = 5,
+  maxInputMB = 0,
   inputs,
   groups,
   models,
@@ -43,12 +44,17 @@ const VideoConfigPanel = ({
 }) => {
   const { t } = useTranslation();
 
+  // 输入大小上限(MB):直接透传 maxInputMB。0/未配 = 不限(与配置页「留空/0 不限」及
+  // 后端一致);>0 时各上传控件按它拦。不再套前端兜底默认,避免和「显式不限」冲突。
+  const uploadMaxMB = maxInputMB;
+
   // 单帧上传槽:ImageUrlInput 管理数组,这里只取最后一张作为该槽的单帧。
   // 帧图仅在 i2v/flf2v 模式渲染,均为必填 → 单行标签(上传首帧/尾帧)+ 红星,无启用开关。
   const renderFrameSlot = (label, key) => (
     <ImageUrlInput
       label={label}
       required
+      maxMB={uploadMaxMB}
       imageUrls={inputs[key] ? [inputs[key]] : []}
       imageEnabled={true}
       onImageUrlsChange={(v) =>
@@ -185,6 +191,7 @@ const VideoConfigPanel = ({
             label={t('上传驱动音频')}
             required
             kind='audio'
+            maxMB={uploadMaxMB}
             value={inputs.audioData}
             onChange={(v) => onInputChange('audioData', v)}
           />
@@ -198,7 +205,7 @@ const VideoConfigPanel = ({
               required
               kind='video'
               value={inputs.sourceVideo}
-              maxMB={200}
+              maxMB={uploadMaxMB}
               onChange={(v) => onInputChange('sourceVideo', v)}
             />
             <div>
@@ -229,20 +236,21 @@ const VideoConfigPanel = ({
               label={t('上传源视频')}
               kind='video'
               value={inputs.srcVideo}
-              maxMB={200}
+              maxMB={uploadMaxMB}
               onChange={(v) => onInputChange('srcVideo', v)}
             />
             <MediaFileInput
               label={t('上传蒙版视频（可选）')}
               kind='video'
               value={inputs.maskVideo}
-              maxMB={200}
+              maxMB={uploadMaxMB}
               onChange={(v) => onInputChange('maskVideo', v)}
             />
             <ImageUrlInput
               label={t('上传参考图（可选，最多 {{count}} 张）', {
                 count: maxRefImages,
               })}
+              maxMB={uploadMaxMB}
               imageUrls={inputs.refImages || []}
               imageEnabled={true}
               onImageUrlsChange={(v) =>

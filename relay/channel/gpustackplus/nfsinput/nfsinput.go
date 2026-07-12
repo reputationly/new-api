@@ -222,7 +222,7 @@ func (m *Materializer) AddString(ctx context.Context, field Field, index int, mu
 		return fmt.Errorf("输入 %s 为空字符串", field)
 	}
 	if strings.HasPrefix(raw, "http://") || strings.HasPrefix(raw, "https://") {
-		data, err := downloadURL(ctx, raw)
+		data, err := downloadURL(ctx, raw, m.maxBytes)
 		if err != nil {
 			return err
 		}
@@ -272,7 +272,9 @@ func (m *Materializer) Refs() map[string][]string {
 
 // downloadURL 带 SSRF 校验地下载一个远程 URL 到字节(复用项目统一 fetch 设置 + OBS host 白名单)。
 // new-api 够不到(SSRF 拒绝 / 网络失败 / 非 2xx)→ 返回错误,调用方转 400 skip-retry,不提交任务。
-func downloadURL(ctx context.Context, rawURL string) ([]byte, error) {
+// capBytes 为调用方的 per-file 上限(0=不限);实际下载上限取它与全局 MaxObjectSizeMB 的较小正值,
+// 用 io.LimitReader 边下边限,避免超限 URL 被整块拉进内存后才拒(§per-model 护栏对 URL 生效)。
+func downloadURL(ctx context.Context, rawURL string, capBytes int64) ([]byte, error) {
 	s := system_setting.GetMediaStorageSettings()
 	fs := system_setting.GetFetchSetting()
 	if err := common.ValidateURLWithFetchSetting(rawURL,
@@ -308,17 +310,21 @@ func downloadURL(ctx context.Context, rawURL string) ([]byte, error) {
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return nil, fmt.Errorf("下载输入 URL 失败: 上游返回 %d", resp.StatusCode)
 	}
-	maxBytes := int64(s.MaxObjectSizeMB) * 1024 * 1024
+	// 实际上限 = 全局 MaxObjectSizeMB 与 per-file capBytes 的较小正值(0=不限)。
+	limit := int64(s.MaxObjectSizeMB) * 1024 * 1024
+	if capBytes > 0 && (limit <= 0 || capBytes < limit) {
+		limit = capBytes
+	}
 	var reader io.Reader = resp.Body
-	if maxBytes > 0 {
-		reader = io.LimitReader(resp.Body, maxBytes+1)
+	if limit > 0 {
+		reader = io.LimitReader(resp.Body, limit+1)
 	}
 	data, err := io.ReadAll(reader)
 	if err != nil {
 		return nil, fmt.Errorf("读取下载内容失败: %w", err)
 	}
-	if maxBytes > 0 && int64(len(data)) > maxBytes {
-		return nil, fmt.Errorf("输入 URL 内容超过单文件上限 %d MB", s.MaxObjectSizeMB)
+	if limit > 0 && int64(len(data)) > limit {
+		return nil, fmt.Errorf("输入 URL 内容超过大小上限 %d MB", limit/1024/1024)
 	}
 	if len(data) == 0 {
 		return nil, fmt.Errorf("下载输入 URL 得到空内容")

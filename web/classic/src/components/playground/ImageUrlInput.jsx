@@ -42,6 +42,8 @@ const ImageUrlInput = ({
   label,
   tooltip,
   required = false,
+  // 单文件大小上限(MB;0/未传=不限)。视频体验区按 maxInputMB 兜住上传成本。
+  maxMB = 0,
 }) => {
   const { t } = useTranslation();
   const fileInputRef = useRef(null);
@@ -56,6 +58,13 @@ const ImageUrlInput = ({
       if (!imageEnabled || disabled) return;
       const results = [];
       for (const file of files) {
+        if (maxMB > 0 && file.size > maxMB * 1024 * 1024) {
+          Toast.error({
+            content: t('文件不能超过 {{size}} MB', { size: maxMB }),
+            duration: 2,
+          });
+          continue;
+        }
         try {
           const base64 = await readFileAsBase64(file);
           results.push(base64);
@@ -68,7 +77,7 @@ const ImageUrlInput = ({
         Toast.success({ content: t('图片已添加'), duration: 2 });
       }
     },
-    [imageEnabled, disabled, imageUrls, onImageUrlsChange, t],
+    [imageEnabled, disabled, imageUrls, onImageUrlsChange, maxMB, t],
   );
 
   const { getRootProps, getInputProps, isDragActive } = useDropzone({

@@ -44,6 +44,7 @@ import {
   parseVideoModelConfig,
   getSizesForVideoModel,
   getDurationsForVideoModel,
+  getMaxInputMBForModel,
   resolveVideoStrategy,
   normalizeVideoSize,
   normalizeVideoStatus,
@@ -247,6 +248,11 @@ export const useVideoGeneration = ({ mode = 'text2video' } = {}) => {
   );
   const availableAspectRatios = useMemo(
     () => getAspectRatiosForVideoModel(videoConfig, inputs.model),
+    [videoConfig, inputs.model],
+  );
+  // 输入文件大小上限(MB;0=不限)。i2v/flf2v/s2v/sr/vace 上传帧图/音频/视频的护栏。
+  const maxInputMB = useMemo(
+    () => getMaxInputMBForModel(videoConfig, inputs.model),
     [videoConfig, inputs.model],
   );
 
@@ -1048,6 +1054,7 @@ export const useVideoGeneration = ({ mode = 'text2video' } = {}) => {
     needsImage,
     followsInput,
     maxRefImages: MAX_REF_IMAGES,
+    maxInputMB,
     inputs,
     handleInputChange,
     groups,

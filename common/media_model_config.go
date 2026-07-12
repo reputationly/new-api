@@ -283,6 +283,38 @@ func ValidateAudioTextForModel(text string, candidates ...string) error {
 	return nil
 }
 
+// VideoMaxInputBytesForModel 返回该视频模型输入文件大小上限(字节;0=不限)及是否已配置。
+// 优先按模型,其次全局 default。适用于吃上传的能力(i2v/flf2v/s2v/sr/vace),服务端物化时
+// 兜底(前端限制可被直连绕过)。
+func VideoMaxInputBytesForModel(candidates ...string) (maxBytes int64, configured bool) {
+	OptionMapRWMutex.RLock()
+	raw := OptionMap["VideoModelConfig"]
+	OptionMapRWMutex.RUnlock()
+	if strings.TrimSpace(raw) == "" {
+		return 0, false
+	}
+	var cfg struct {
+		Default struct {
+			MaxInputMB *int `json:"maxInputMB"`
+		} `json:"default"`
+		Models map[string]struct {
+			MaxInputMB *int `json:"maxInputMB"`
+		} `json:"models"`
+	}
+	if err := UnmarshalJsonStr(raw, &cfg); err != nil {
+		return 0, false
+	}
+	for _, name := range candidates {
+		if m, ok := cfg.Models[name]; ok && m.MaxInputMB != nil {
+			return int64(*m.MaxInputMB) * 1024 * 1024, true
+		}
+	}
+	if cfg.Default.MaxInputMB != nil {
+		return int64(*cfg.Default.MaxInputMB) * 1024 * 1024, true
+	}
+	return 0, false
+}
+
 // AudioRefAudioMaxBytesForModel 返回该模型参考音大小上限(字节;0=不限制)及是否已配置。
 // 优先按模型,其次全局 default。用于服务端物化参考音时兜底(前端上传限制可被直连绕过)。
 func AudioRefAudioMaxBytesForModel(candidates ...string) (maxBytes int64, configured bool) {

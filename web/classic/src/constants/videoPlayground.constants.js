@@ -157,10 +157,18 @@ export const normalizeSizeList = (list) =>
 
 // 解析 status 中的 VideoModelConfig（字符串或对象）
 // 形如 { default: { sizes:[], durations:[] }, models: { name: { sizes:[], durations:[] } } }
+// maxInputMB:输入文件大小上限(MB)。适用于吃用户上传的模式(i2v/flf2v 帧图、s2v 人物图/
+// 驱动音频、sr 源视频、vace 源视频/蒙版/参考图);0/未配=不限。生成侧 sizes/durations/
+// aspectRatios 对这些输入驱动能力无意义(见 followsInput),maxInputMB 才是它们的护栏。
+const toInputMB = (v) => {
+  const n = parseInt(v, 10);
+  return Number.isFinite(n) && n >= 0 ? n : null;
+};
+
 export const parseVideoModelConfig = (raw) => {
   // 未配置时默认留空，交由 getSizes/DurationsForVideoModel 按模型类别兜底
   const empty = {
-    default: { sizes: [], durations: [], aspectRatios: [] },
+    default: { sizes: [], durations: [], aspectRatios: [], maxInputMB: null },
     models: {},
   };
   if (!raw) return empty;
@@ -175,6 +183,7 @@ export const parseVideoModelConfig = (raw) => {
           durations: normalizeList(cfg?.durations),
           aspectRatios: normalizeList(cfg?.aspectRatios),
           capabilities: normalizeList(cfg?.capabilities),
+          maxInputMB: toInputMB(cfg?.maxInputMB),
         };
       });
     }
@@ -183,12 +192,21 @@ export const parseVideoModelConfig = (raw) => {
         sizes: normalizeSizeList(def.sizes),
         durations: normalizeList(def.durations),
         aspectRatios: normalizeList(def.aspectRatios),
+        maxInputMB: toInputMB(def.maxInputMB),
       },
       models,
     };
   } catch (e) {
     return empty;
   }
+};
+
+// 输入文件大小上限(MB):按模型配置 → 全局默认 → 0(不限)。
+export const getMaxInputMBForModel = (config, model) => {
+  const m = config?.models?.[model];
+  if (m && m.maxInputMB != null) return m.maxInputMB;
+  if (config?.default?.maxInputMB != null) return config.default.maxInputMB;
+  return 0;
 };
 
 // 尺寸/分辨率:纯 opt-in——按模型配置 → 管理端全局默认 → 空(未配置则不展示、不下发)。

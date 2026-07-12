@@ -6,6 +6,7 @@ import {
   Button,
   Select,
   Input,
+  InputNumber,
   Typography,
   Empty,
 } from '@douyinfe/semi-ui';
@@ -27,6 +28,12 @@ const { Text } = Typography;
 
 const toOptions = (arr) => (arr || []).map((s) => ({ label: s, value: s }));
 
+// 非负整数或 undefined(空输入不下发,交由默认/不限兜底)。
+const normInt = (v) => {
+  const n = parseInt(v, 10);
+  return Number.isFinite(n) && n >= 0 ? n : undefined;
+};
+
 export default function SettingsVideoModels(props) {
   const { t } = useTranslation();
   const [loading, setLoading] = useState(false);
@@ -36,7 +43,8 @@ export default function SettingsVideoModels(props) {
   const [defaultSizes, setDefaultSizes] = useState([]);
   const [defaultDurations, setDefaultDurations] = useState([]);
   const [defaultAspectRatios, setDefaultAspectRatios] = useState([]);
-  // [{ model, sizes:[], durations:[], aspectRatios:[] }]
+  const [defaultMaxInputMB, setDefaultMaxInputMB] = useState(undefined);
+  // [{ model, sizes:[], durations:[], aspectRatios:[], maxInputMB }]
   const [modelRows, setModelRows] = useState([]);
 
   useEffect(() => {
@@ -44,6 +52,9 @@ export default function SettingsVideoModels(props) {
     setDefaultSizes(cfg.default.sizes);
     setDefaultDurations(cfg.default.durations);
     setDefaultAspectRatios(cfg.default.aspectRatios || []);
+    setDefaultMaxInputMB(
+      cfg.default.maxInputMB == null ? undefined : cfg.default.maxInputMB,
+    );
     setModelRows(
       Object.entries(cfg.models || {}).map(([model, c]) => ({
         model,
@@ -51,6 +62,7 @@ export default function SettingsVideoModels(props) {
         durations: c.durations || [],
         aspectRatios: c.aspectRatios || [],
         capabilities: c.capabilities || [],
+        maxInputMB: c.maxInputMB == null ? undefined : c.maxInputMB,
       })),
     );
   }, [props.options]);
@@ -64,6 +76,7 @@ export default function SettingsVideoModels(props) {
         durations: [],
         aspectRatios: [],
         capabilities: [],
+        maxInputMB: undefined,
       },
     ]);
   const updateRow = (idx, patch) =>
@@ -85,6 +98,7 @@ export default function SettingsVideoModels(props) {
           durations: normalizeList(r.durations),
           aspectRatios: normalizeList(r.aspectRatios),
           capabilities: normalizeList(r.capabilities),
+          maxInputMB: normInt(r.maxInputMB),
         };
       });
       const value = JSON.stringify({
@@ -92,6 +106,7 @@ export default function SettingsVideoModels(props) {
           sizes: normalizeSizeList(defaultSizes),
           durations: normalizeList(defaultDurations),
           aspectRatios: normalizeList(defaultAspectRatios),
+          maxInputMB: normInt(defaultMaxInputMB),
         },
         models,
       });
@@ -171,6 +186,16 @@ export default function SettingsVideoModels(props) {
               style={{ width: '100%', marginTop: 8 }}
             />
           </div>
+          <div style={{ flex: 1, minWidth: 220 }}>
+            <Text strong>{t('默认输入大小上限(MB)')}</Text>
+            <InputNumber
+              min={0}
+              value={defaultMaxInputMB}
+              onChange={setDefaultMaxInputMB}
+              placeholder={t('留空/0 不限;吃上传的能力用它兜成本')}
+              style={{ width: '100%', marginTop: 8 }}
+            />
+          </div>
         </div>
 
         <Text strong>{t('按模型配置')}</Text>
@@ -241,6 +266,13 @@ export default function SettingsVideoModels(props) {
                   onChange={(v) => updateRow(idx, { capabilities: v })}
                   placeholder={t('支持能力')}
                   style={{ flex: 1, minWidth: 140 }}
+                />
+                <InputNumber
+                  min={0}
+                  value={row.maxInputMB}
+                  onChange={(v) => updateRow(idx, { maxInputMB: v })}
+                  placeholder={t('输入MB')}
+                  style={{ flex: 1, minWidth: 120 }}
                 />
                 <Button
                   type='danger'
