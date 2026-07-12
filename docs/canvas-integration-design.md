@@ -443,6 +443,33 @@ type CanvasStorageUsage struct {
 - 画布助手：若希望 gpustackplus 模型作为助手模型，需支持 `openai-response` 或至少 `openai` chat/completions；否则助手模型列表应隐藏 gpustackplus-only 模型。
 - 能力展示：`common.GetEndpointTypesByChannelType` 和模型元数据要能表达上述能力，`/pg/models` 返回给画布后由前端分类。
 
+### 5.8 视频超分（SeedVR2）= 画布独有能力（产品拍板 2026-07-09）
+
+**定位拍板**：视频超分**不做独立原子能力、不进体验专区/模型广场**，只作为画布编排链路中的能力存在（例如视频生成节点的"1080p 选项"，或画布内显式的超分节点）。理由：超分必须发生在插帧之前才有正确的效果/成本比，单独暴露会让用户对已插帧的 32fps 视频做超分（帧数翻倍、接缝翻倍、耗时翻倍）。
+
+**标准链路（顺序固定，不可调换）**：
+
+```
+生成节点(720p/16fps, target_fps=16 不插帧)
+  → SeedVR2 超分(720p→1080p)
+  → RIFE 插帧(target_fps=32, 在超分实例内一次完成)
+```
+
+**插帧的请求级控制**（三仓已核实，2026-07-09）：
+- 引擎（LightX2V）：`target_fps` 按请求覆盖实例配置（`server/services/inference/worker.py`）；RIFE 模型是否加载由实例启动配置决定（所有视频实例统一带上，权重仅 ~50MB）。
+- gpustack：`/v1/videos` body 除 `model`/`task_type`/`user_id` 外全部透传，`target_fps` 直达引擎，无需改动。
+- new-api：**必须显式传 `target_fps`**（引擎 schema 默认 16 = 不插帧）：原子能力单独调用传 32；画布编排中间步骤传 16；超分收尾节点传 32。
+
+**依赖的实施项**（详见 LightX2V 侧任务）：
+1. LightX2V `seedvr_runner.py`：超分完成后调 VFI（当前分段保存路径绕过插帧钩子）；
+2. LightX2V server：视频输入支持 URL/base64 下载落盘（当前 `video_path` 只认容器内路径）；
+3. gpustack dispatcher：`/v1/videos` 增加视频输入字段（照 image 的 base64/URL 落 NFS→本地路径模式；画布编排场景优先直接引用上一节点在 `/nfs-output` 的产物，避免重复上传）。
+
+**实测约束（A100 40G，2026-07-09 实验，详见 LightX2V `docs/SeedVR2-实验测试报告.md`）**：
+- 模型选 **3B**（画质与 7B 肉眼无差，显存 27.5G vs 39.9G，7B 贴 40G 上限易 OOM）；
+- ≤121 帧（5s@24fps）必须用**单段配置**（`sr_segment_length:121`），默认 81 帧分段会在 3.3s 处产生肉眼可见接缝跳变；>121 帧需等 cross-fade 融合补丁；
+- server 模式 `sr_ratio` 锁 2.0：720p→1080p 可用；**480p 源只能到 960p**，要 480p→1080p 需引擎 schema 加 `sr_ratio` 字段。
+
 ---
 
 ## 六、Phase 4 — 导航 + iframe 入口页

@@ -191,6 +191,64 @@ func extForData(raw string) string {
 	return ""
 }
 
+// —— 文件头(magic-bytes)嗅探:按 field 的媒体类别校验上传内容,挡住"改后缀"(如把
+// .txt/.jpg 改成 .mp4 上传)。只看头几个字节,识别常见容器即可;通不过即拒。内容按容器
+// 解码是引擎的事,这里只做廉价前置过滤,省掉一次白派发。
+
+func magicHasPrefix(b []byte, sig ...byte) bool {
+	if len(b) < len(sig) {
+		return false
+	}
+	for i, c := range sig {
+		if b[i] != c {
+			return false
+		}
+	}
+	return true
+}
+
+func magicHasAt(b []byte, off int, s string) bool {
+	return len(b) >= off+len(s) && string(b[off:off+len(s)]) == s
+}
+
+func isImageBytes(b []byte) bool {
+	return magicHasPrefix(b, 0x89, 0x50, 0x4E, 0x47) || // png
+		magicHasPrefix(b, 0xFF, 0xD8, 0xFF) || // jpg
+		(magicHasAt(b, 0, "RIFF") && magicHasAt(b, 8, "WEBP")) || // webp
+		magicHasAt(b, 0, "GIF8") // gif
+}
+
+func isVideoBytes(b []byte) bool {
+	return magicHasAt(b, 4, "ftyp") || // mp4/mov/m4v(ISO BMFF)
+		magicHasPrefix(b, 0x1A, 0x45, 0xDF, 0xA3) || // webm/mkv(EBML)
+		(magicHasAt(b, 0, "RIFF") && magicHasAt(b, 8, "AVI ")) || // avi
+		magicHasAt(b, 0, "FLV") || // flv
+		magicHasPrefix(b, 0x00, 0x00, 0x01, 0xBA) || // mpeg-ps
+		magicHasPrefix(b, 0x00, 0x00, 0x01, 0xB3) // mpeg-es
+}
+
+func isAudioBytes(b []byte) bool {
+	return (magicHasAt(b, 0, "RIFF") && magicHasAt(b, 8, "WAVE")) || // wav
+		magicHasAt(b, 0, "ID3") || // mp3(带 ID3 标签)
+		(len(b) >= 2 && b[0] == 0xFF && (b[1]&0xE0) == 0xE0) || // mp3/aac 帧同步
+		magicHasAt(b, 0, "OggS") || // ogg/opus
+		magicHasAt(b, 0, "fLaC") || // flac
+		magicHasAt(b, 4, "ftyp") // m4a/aac(ISO 容器)
+}
+
+// magicOK 校验 data 的文件头是否匹配 field 的媒体类别。未知 field 放行。
+func magicOK(field Field, data []byte) bool {
+	switch field {
+	case FieldImage, FieldLastFrame, FieldImageMask, FieldSrcRefImages:
+		return isImageBytes(data)
+	case FieldAudio, FieldVoice, FieldEmotionAudio:
+		return isAudioBytes(data)
+	case FieldVideo, FieldSrcVideo, FieldSrcMask:
+		return isVideoBytes(data)
+	}
+	return true
+}
+
 // AddBytes 直接写一段字节(multipart 上传文件字节走这里),用字段默认扩展名。
 func (m *Materializer) AddBytes(field Field, index int, multi bool, data []byte) error {
 	return m.addBytesExt(field, index, multi, data, "")
@@ -203,6 +261,11 @@ func (m *Materializer) addBytesExt(field Field, index int, multi bool, data []by
 	}
 	if m.maxBytes > 0 && int64(len(data)) > m.maxBytes {
 		return fmt.Errorf("输入 %s 超过大小上限 %d MB", field, m.maxBytes/1024/1024)
+	}
+	// 文件头校验:挡住改后缀的非媒体文件(如 .txt 改 .mp4)。内容能否被容器解码交给引擎,
+	// 这里只做廉价前置过滤,省一次白派发。
+	if !magicOK(field, data) {
+		return fmt.Errorf("输入 %s 不是有效的媒体文件(文件头校验未通过,请勿改后缀上传)", field)
 	}
 	if ext == "" {
 		ext = extForField(field)
