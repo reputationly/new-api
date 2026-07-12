@@ -84,3 +84,87 @@ export const AUDIO_PROMPT_PRESETS = [
 export const AUDIO_HISTORY_STORAGE_KEY = 'audio_playground_conversations';
 export const AUDIO_HISTORY_LIMIT = 10; // 对话段数上限
 export const AUDIO_CONV_TURN_LIMIT = 10; // 单段对话生成次数上限
+
+// 语音能力枚举(中文即值,也是体验区标签页名)。与后端 constant/model_capability.go 的
+// AudioCapabilities 保持一致。新增能力(如 语音转文字)时两处同步。
+export const AUDIO_CAPABILITIES = [AUDIO_PAGE_CAPABILITY];
+
+// 兜底默认:未在「语音模型配置」里显式配置时使用。maxChars=0 表示不限制。
+export const AUDIO_DEFAULT_MAX_CHARS = 2000;
+export const AUDIO_DEFAULT_REF_AUDIO_MB = VOICE_UPLOAD_MAX_MB;
+
+// 解析 status 中的 AudioModelConfig(字符串或对象)。形如:
+//   { default: { maxChars, refAudioMaxMB }, models: { <model>: { capabilities:[], maxChars, refAudioMaxMB } } }
+export const parseAudioModelConfig = (raw) => {
+  const empty = {
+    default: {
+      maxChars: AUDIO_DEFAULT_MAX_CHARS,
+      refAudioMaxMB: AUDIO_DEFAULT_REF_AUDIO_MB,
+    },
+    models: {},
+  };
+  if (!raw) return empty;
+  try {
+    const parsed = typeof raw === 'string' ? JSON.parse(raw) : raw;
+    const def = parsed.default || {};
+    const models = {};
+    if (parsed.models && typeof parsed.models === 'object') {
+      Object.entries(parsed.models).forEach(([name, cfg]) => {
+        models[name] = {
+          capabilities: normalizeList(cfg?.capabilities),
+          maxChars: toPositiveInt(cfg?.maxChars),
+          refAudioMaxMB: toPositiveInt(cfg?.refAudioMaxMB),
+        };
+      });
+    }
+    return {
+      default: {
+        maxChars:
+          toPositiveInt(def.maxChars) ?? AUDIO_DEFAULT_MAX_CHARS,
+        refAudioMaxMB:
+          toPositiveInt(def.refAudioMaxMB) ?? AUDIO_DEFAULT_REF_AUDIO_MB,
+      },
+      models,
+    };
+  } catch (e) {
+    return empty;
+  }
+};
+
+// 解析非负整数;非法/空返回 null(供 ?? 兜底)。
+const toPositiveInt = (v) => {
+  const n = parseInt(v, 10);
+  return Number.isFinite(n) && n >= 0 ? n : null;
+};
+
+// 复用视频配置的列表规范化(去空格/去空/去重)。
+const normalizeList = (list) =>
+  Array.isArray(list)
+    ? Array.from(new Set(list.map((x) => String(x).trim()).filter(Boolean)))
+    : [];
+
+// 该模型可用的语音模型集合(勾选了「语音合成」的模型)。
+export const getAudioModelSet = (config) => {
+  const set = new Set();
+  Object.entries(config?.models || {}).forEach(([model, cfg]) => {
+    const caps = Array.isArray(cfg?.capabilities) ? cfg.capabilities : [];
+    if (caps.includes(AUDIO_PAGE_CAPABILITY)) set.add(model);
+  });
+  return set;
+};
+
+// 字数上限:按模型配置 → 全局默认 → 兜底常量。0 表示不限制。
+export const getMaxCharsForModel = (config, model) => {
+  const m = config?.models?.[model];
+  if (m && m.maxChars != null) return m.maxChars;
+  if (config?.default?.maxChars != null) return config.default.maxChars;
+  return AUDIO_DEFAULT_MAX_CHARS;
+};
+
+// 参考音大小上限(MB):按模型配置 → 全局默认 → 兜底常量。
+export const getRefAudioMaxMBForModel = (config, model) => {
+  const m = config?.models?.[model];
+  if (m && m.refAudioMaxMB != null) return m.refAudioMaxMB;
+  if (config?.default?.refAudioMaxMB != null) return config.default.refAudioMaxMB;
+  return AUDIO_DEFAULT_REF_AUDIO_MB;
+};

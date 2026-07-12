@@ -19,10 +19,9 @@ import {
   normalizeSizeList,
   normalizeList,
 } from '../../../constants/videoPlayground.constants';
-import { AUDIO_PAGE_CAPABILITY } from '../../../constants/audioPlayground.constants';
 
-// 能力选项 = 视频能力 + 语音合成(同一份模型配置驱动视频/语音两个体验区)。
-const CAPABILITY_OPTIONS = [...VIDEO_CAPABILITIES, AUDIO_PAGE_CAPABILITY];
+// 能力选项 = 视频能力。语音合成已拆到独立的「语音模型配置」(SettingsAudioModels)。
+const CAPABILITY_OPTIONS = [...VIDEO_CAPABILITIES];
 
 const { Text } = Typography;
 

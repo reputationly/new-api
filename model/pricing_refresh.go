@@ -5,7 +5,7 @@ package model
 // 因此会绕过默认的 1 分钟延迟刷新。
 func RefreshPricing() {
 	// 快照运营配置须在持 updatePricingLock 之前（避免锁序反转，见 GetPricing）。
-	imgRaw, vidRaw := snapshotMediaConfigs()
+	imgRaw, vidRaw, audRaw := snapshotMediaConfigs()
 
 	updatePricingLock.Lock()
 	defer updatePricingLock.Unlock()
@@ -13,5 +13,5 @@ func RefreshPricing() {
 	modelSupportEndpointsLock.Lock()
 	defer modelSupportEndpointsLock.Unlock()
 
-	updatePricing(imgRaw, vidRaw)
+	updatePricing(imgRaw, vidRaw, audRaw)
 }

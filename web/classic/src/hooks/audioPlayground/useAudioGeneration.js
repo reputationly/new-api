@@ -23,12 +23,8 @@ import {
   cachedGet,
 } from '../../helpers';
 import {
-  parseVideoModelConfig,
-} from '../../constants/videoPlayground.constants';
-import {
   AUDIO_API_ENDPOINTS,
   AUDIO_STATUS,
-  AUDIO_PAGE_CAPABILITY,
   AUDIO_HISTORY_STORAGE_KEY,
   AUDIO_HISTORY_LIMIT,
   AUDIO_CONV_TURN_LIMIT,
@@ -41,6 +37,10 @@ import {
   normalizeAudioStatus,
   parseProgress,
   buildAudioContentUrl,
+  parseAudioModelConfig,
+  getAudioModelSet,
+  getMaxCharsForModel,
+  getRefAudioMaxMBForModel,
 } from '../../constants/audioPlayground.constants';
 
 // 语音合成体验区 hook,镜像 useVideoGeneration:同一异步任务门面(/pg/videos,
@@ -193,18 +193,25 @@ export const useAudioGeneration = () => {
   // 音频模型集合 = 运营后台「视频模型配置」里声明、且能力含「语音合成」的模型。
   // 复用同一份配置(引擎侧同一门面),只是能力标签不同。
   const modelConfig = useMemo(
-    () => parseVideoModelConfig(statusState?.status?.VideoModelConfig),
-    [statusState?.status?.VideoModelConfig],
+    () => parseAudioModelConfig(statusState?.status?.AudioModelConfig),
+    [statusState?.status?.AudioModelConfig],
   );
 
-  const audioModelSet = useMemo(() => {
-    const set = new Set();
-    Object.entries(modelConfig.models || {}).forEach(([model, cfg]) => {
-      const caps = Array.isArray(cfg?.capabilities) ? cfg.capabilities : [];
-      if (caps.includes(AUDIO_PAGE_CAPABILITY)) set.add(model);
-    });
-    return set;
-  }, [modelConfig]);
+  const audioModelSet = useMemo(
+    () => getAudioModelSet(modelConfig),
+    [modelConfig],
+  );
+
+  // 当前模型的字数上限(0=不限制)。
+  const maxChars = useMemo(
+    () => getMaxCharsForModel(modelConfig, inputs.model),
+    [modelConfig, inputs.model],
+  );
+  // 当前模型的参考音大小上限(MB)。
+  const refAudioMaxMB = useMemo(
+    () => getRefAudioMaxMBForModel(modelConfig, inputs.model),
+    [modelConfig, inputs.model],
+  );
 
   const audioGroups = useMemo(() => {
     const set = new Set();
@@ -448,6 +455,18 @@ export const useAudioGeneration = () => {
       const text = (prompt || '').trim();
       if (!text || generating) return;
 
+      // 字数上限(0=不限制):按当前模型配置就地拦截,不占用后端提交。
+      const charLimit = getMaxCharsForModel(modelConfig, inputs.model);
+      if (charLimit > 0 && text.length > charLimit) {
+        showError(
+          t('合成文本超过字数上限 {{max}} 字(当前 {{cur}} 字)', {
+            max: charLimit,
+            cur: text.length,
+          }),
+        );
+        return;
+      }
+
       let convId = currentConvId;
       let params;
       if (convId == null) {
@@ -639,7 +658,15 @@ export const useAudioGeneration = () => {
         setGenerating(false);
       }
     },
-    [currentConvId, inputs, generating, patchConvMessage, pollOnce, t],
+    [
+      currentConvId,
+      inputs,
+      generating,
+      patchConvMessage,
+      pollOnce,
+      modelConfig,
+      t,
+    ],
   );
 
   const regenerate = useCallback((prompt) => generate(prompt), [generate]);
@@ -728,6 +755,8 @@ export const useAudioGeneration = () => {
     locked,
     turnLimitReached,
     missingRequiredVoice,
+    maxChars,
+    refAudioMaxMB,
     generate,
     regenerate,
     refetch,

@@ -24,6 +24,7 @@ import SettingsHeaderNavModules from '../../pages/Setting/Operation/SettingsHead
 import SettingsSidebarModulesAdmin from '../../pages/Setting/Operation/SettingsSidebarModulesAdmin';
 import SettingsImageSizes from '../../pages/Setting/Operation/SettingsImageSizes';
 import SettingsVideoModels from '../../pages/Setting/Operation/SettingsVideoModels';
+import SettingsAudioModels from '../../pages/Setting/Operation/SettingsAudioModels';
 import SettingsSensitiveWords from '../../pages/Setting/Operation/SettingsSensitiveWords';
 import SettingsLog from '../../pages/Setting/Operation/SettingsLog';
 import SettingsMonitoring from '../../pages/Setting/Operation/SettingsMonitoring';
@@ -63,6 +64,9 @@ const OperationSetting = () => {
 
     /* 视频模型配置 */
     VideoModelConfig: '',
+
+    /* 音频模型配置 */
+    AudioModelConfig: '',
 
     /* 敏感词设置 */
     CheckSensitiveEnabled: false,
@@ -150,6 +154,10 @@ const OperationSetting = () => {
         {/* 视频模型配置 */}
         <div style={{ marginTop: '10px' }}>
           <SettingsVideoModels options={inputs} refresh={onRefresh} />
+        </div>
+        {/* 音频模型配置 */}
+        <div style={{ marginTop: '10px' }}>
+          <SettingsAudioModels options={inputs} refresh={onRefresh} />
         </div>
         {/* 屏蔽词过滤设置 */}
         <Card style={{ marginTop: '10px' }}>

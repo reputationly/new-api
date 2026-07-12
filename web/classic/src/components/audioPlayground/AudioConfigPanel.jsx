@@ -34,6 +34,7 @@ const AudioConfigPanel = ({
   models,
   onInputChange,
   disabled = false,
+  refAudioMaxMB = VOICE_UPLOAD_MAX_MB,
   styleState,
 }) => {
   const { t } = useTranslation();
@@ -66,9 +67,9 @@ const AudioConfigPanel = ({
     // 允许再次选同一文件触发 onChange
     e.target.value = '';
     if (!file) return;
-    if (file.size > VOICE_UPLOAD_MAX_MB * 1024 * 1024) {
+    if (refAudioMaxMB > 0 && file.size > refAudioMaxMB * 1024 * 1024) {
       showError(
-        t('参考音频不能超过 {{size}} MB', { size: VOICE_UPLOAD_MAX_MB }),
+        t('参考音频不能超过 {{size}} MB', { size: refAudioMaxMB }),
       );
       return;
     }

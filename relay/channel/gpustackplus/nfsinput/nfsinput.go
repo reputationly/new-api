@@ -81,8 +81,15 @@ type Materializer struct {
 	gid       string // 唯一 input-group id(PublicTaskID 或新 uuid)
 	dateParts string // YYYY/MM/DD(UTC)
 
-	refs    map[Field][]string // 已生成的相对 ref,按 field 归组
-	written []string           // 已写盘的绝对路径,供失败时回滚(§N2 复审)
+	refs     map[Field][]string // 已生成的相对 ref,按 field 归组
+	written  []string           // 已写盘的绝对路径,供失败时回滚(§N2 复审)
+	maxBytes int64              // 单文件字节上限(0=不限;用于参考音大小兜底,防直连绕过前端限制)
+}
+
+// SetMaxBytes 设置单文件字节上限(0=不限)。返回自身便于链式。
+func (m *Materializer) SetMaxBytes(n int64) *Materializer {
+	m.maxBytes = n
+	return m
 }
 
 // NewMaterializer 构造物化上下文。userID / gid 不得为空;gid 传 info.PublicTaskID,空则由调用方传新 uuid。
@@ -193,6 +200,9 @@ func (m *Materializer) AddBytes(field Field, index int, multi bool, data []byte)
 func (m *Materializer) addBytesExt(field Field, index int, multi bool, data []byte, ext string) error {
 	if len(data) == 0 {
 		return fmt.Errorf("输入 %s 字节为空", field)
+	}
+	if m.maxBytes > 0 && int64(len(data)) > m.maxBytes {
+		return fmt.Errorf("输入 %s 超过大小上限 %d MB", field, m.maxBytes/1024/1024)
 	}
 	if ext == "" {
 		ext = extForField(field)

@@ -23,6 +23,7 @@ const AudioPlaygroundBody = () => {
     locked,
     turnLimitReached,
     missingRequiredVoice,
+    refAudioMaxMB,
     generate,
     regenerate,
     refetch,
@@ -44,6 +45,7 @@ const AudioPlaygroundBody = () => {
           models={models}
           onInputChange={handleInputChange}
           disabled={locked}
+          refAudioMaxMB={refAudioMaxMB}
           styleState={styleState}
         />
       </div>

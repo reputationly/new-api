@@ -69,25 +69,27 @@ func GetPricing() []Pricing {
 		// 先在持锁之前快照运营配置，避免在持有 updatePricingLock 时再取
 		// OptionMapRWMutex，与 updateOptionMap(持 OptionMap 写锁)->InvalidatePricingCache
 		// 形成锁序反转死锁。
-		imgRaw, vidRaw := snapshotMediaConfigs()
+		imgRaw, vidRaw, audRaw := snapshotMediaConfigs()
 		updatePricingLock.Lock()
 		defer updatePricingLock.Unlock()
 		// Double check after acquiring the lock
 		if time.Since(lastGetPricingTime) > time.Minute*1 || len(pricingMap) == 0 {
 			modelSupportEndpointsLock.Lock()
 			defer modelSupportEndpointsLock.Unlock()
-			updatePricing(imgRaw, vidRaw)
+			updatePricing(imgRaw, vidRaw, audRaw)
 		}
 	}
 	return pricingMap
 }
 
-// snapshotMediaConfigs 快照图片/视频模型配置的原始 JSON 串。
+// snapshotMediaConfigs 快照图片/视频/音频模型配置的原始 JSON 串。
 // 必须在获取 updatePricingLock 之前调用，以避免锁序反转（见 GetPricing 注释）。
-func snapshotMediaConfigs() (imgRaw, vidRaw string) {
+func snapshotMediaConfigs() (imgRaw, vidRaw, audRaw string) {
 	common.OptionMapRWMutex.RLock()
 	defer common.OptionMapRWMutex.RUnlock()
-	return common.OptionMap["ImageModelSizeConfig"], common.OptionMap["VideoModelConfig"]
+	return common.OptionMap["ImageModelSizeConfig"],
+		common.OptionMap["VideoModelConfig"],
+		common.OptionMap["AudioModelConfig"]
 }
 
 func InvalidatePricingCache() {
@@ -127,7 +129,7 @@ func GetModelSupportEndpointTypes(model string) []constant.EndpointType {
 //
 // 图片旧形态 models[name] 可能是尺寸数组（无 capabilities），解析失败即跳过。
 // 入参为两个配置的原始 JSON 串（由调用方在持 updatePricingLock 前快照，避免锁序反转）。
-func getConfiguredModelCapabilities(imgRaw, vidRaw string) map[string][]string {
+func getConfiguredModelCapabilities(imgRaw, vidRaw, audRaw string) map[string][]string {
 	result := make(map[string][]string)
 
 	parseOne := func(raw string) {
@@ -162,10 +164,11 @@ func getConfiguredModelCapabilities(imgRaw, vidRaw string) map[string][]string {
 
 	parseOne(imgRaw)
 	parseOne(vidRaw)
+	parseOne(audRaw)
 	return result
 }
 
-func updatePricing(imgRaw, vidRaw string) {
+func updatePricing(imgRaw, vidRaw, audRaw string) {
 	//modelRatios := common.GetModelRatios()
 	enableAbilities, err := GetAllEnableAbilityWithChannels()
 	if err != nil {
@@ -344,7 +347,7 @@ func updatePricing(imgRaw, vidRaw string) {
 	}
 
 	// 运营设置里逐模型声明的能力标签（模型广场展示用）
-	configuredCaps := getConfiguredModelCapabilities(imgRaw, vidRaw)
+	configuredCaps := getConfiguredModelCapabilities(imgRaw, vidRaw, audRaw)
 
 	pricingMap = make([]Pricing, 0)
 	for model, groups := range modelGroupsMap {

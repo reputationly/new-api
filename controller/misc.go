@@ -109,6 +109,9 @@ func GetStatus(c *gin.Context) {
 		// 视频模型配置（按模型：声明 + 尺寸 + 时长）
 		"VideoModelConfig": common.OptionMap["VideoModelConfig"],
 
+		// 音频模型配置（按模型：能力声明 + 字数上限 + 参考音大小上限）
+		"AudioModelConfig": common.OptionMap["AudioModelConfig"],
+
 		"oidc_enabled":                system_setting.GetOIDCSettings().Enabled,
 		"oidc_client_id":              system_setting.GetOIDCSettings().ClientId,
 		"oidc_authorization_endpoint": system_setting.GetOIDCSettings().AuthorizationEndpoint,

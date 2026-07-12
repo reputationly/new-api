@@ -39,6 +39,7 @@ import { API_ENDPOINTS } from '../../constants/playground.constants';
 import { StatusContext } from '../../context/Status';
 import { parseImageSizeConfig } from '../../constants/imagePlayground.constants';
 import { parseVideoModelConfig } from '../../constants/videoPlayground.constants';
+import { parseAudioModelConfig } from '../../constants/audioPlayground.constants';
 
 export const useDataLoader = (
   userState,
@@ -54,18 +55,21 @@ export const useDataLoader = (
   const pricingRef = useRef({ types: new Map(), groups: new Map() });
   const [pricingVersion, setPricingVersion] = useState(0);
 
-  // 运营设置里声明为图片/视频的模型集合：文本操练场需排除这些模型
-  // （即便后端未按端点类型识别为 image-generation/openai-video）。
+  // 运营设置里声明为图片/视频/音频的模型集合：文本操练场需排除这些模型
+  // （即便后端未按端点类型识别为 image-generation/openai-video/tts）。
   const mediaModelSet = useMemo(() => {
     const set = new Set();
     const img = parseImageSizeConfig(statusState?.status?.ImageModelSizeConfig);
     const vid = parseVideoModelConfig(statusState?.status?.VideoModelConfig);
+    const aud = parseAudioModelConfig(statusState?.status?.AudioModelConfig);
     Object.keys(img.models || {}).forEach((m) => set.add(m));
     Object.keys(vid.models || {}).forEach((m) => set.add(m));
+    Object.keys(aud.models || {}).forEach((m) => set.add(m));
     return set;
   }, [
     statusState?.status?.ImageModelSizeConfig,
     statusState?.status?.VideoModelConfig,
+    statusState?.status?.AudioModelConfig,
   ]);
 
   const loadModels = useCallback(async () => {

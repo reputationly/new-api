@@ -233,6 +233,10 @@ func (a *TaskAdaptor) BuildRequestBody(c *gin.Context, info *relaycommon.RelayIn
 		if strings.TrimSpace(req.Prompt) == "" {
 			return nil, localBadRequest(fmt.Errorf("模型 %s 的任务类型 tts 需要合成文本(prompt)", modelName))
 		}
+		// 字数上限(AudioModelConfig,按模型/全局默认;0=不限制):就地本地 400,防前端绕过。
+		if err := common.ValidateAudioTextForModel(req.Prompt, req.Model, info.OriginModelName, modelName); err != nil {
+			return nil, localBadRequest(err)
+		}
 	}
 
 	// 输入物化:每个 task_type 落齐自己需要的输入到 NFS,统一发 input_refs 相对路径(不再
@@ -521,6 +525,11 @@ func materializeTTSInputs(c *gin.Context, info *relaycommon.RelayInfo, taskType,
 		return nil, fmt.Errorf("模型 %s 的任务类型 tts 需要参考音色:请在 metadata.voice 提供音频 URL 或 base64", modelName)
 	}
 	m := nfsinput.NewMaterializer(taskType, modelName, fmt.Sprintf("%d", info.UserId), inputGroupID(info))
+	// 参考音大小上限(AudioModelConfig,按模型/全局默认;0=不限):服务端兜底,防直连绕过
+	// 前端上传限制(校验 base64 解码后 / URL 下载后的字节数,见 nfsinput.addBytesExt)。
+	if maxBytes, ok := common.AudioRefAudioMaxBytesForModel(req.Model, info.OriginModelName, modelName); ok {
+		m.SetMaxBytes(maxBytes)
+	}
 	ctx := c.Request.Context()
 
 	// 参考音色(必填),单值;失败回滚。
