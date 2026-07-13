@@ -81,6 +81,22 @@ func canvasAssetMediaType(mimeType string) string {
 	return canvasAssetMediaTypes[prefix]
 }
 
+// canvasAssetSign / canvasAssetDeleteObject 按素材登记的存储位置路由到对应桶:
+// Storage="user_asset" 走用户素材独立桶,空值(存量)走媒体存储桶。
+func canvasAssetSign(ctx context.Context, asset *model.CanvasAsset) (string, error) {
+	if asset.Storage == model.CanvasAssetStorageUserAsset {
+		return mediastore.UserAssetSign(ctx, asset.ObsKey)
+	}
+	return mediastore.Sign(ctx, asset.ObsKey)
+}
+
+func canvasAssetDeleteObject(ctx context.Context, storage, key string) error {
+	if storage == model.CanvasAssetStorageUserAsset {
+		return mediastore.UserAssetDelete(ctx, key)
+	}
+	return mediastore.Delete(ctx, key)
+}
+
 func ListCanvasAssets(c *gin.Context) {
 	userId := c.GetInt("id")
 	page := parsePositiveInt(c.Query("page"), 1, 1<<30)
@@ -95,8 +111,10 @@ func ListCanvasAssets(c *gin.Context) {
 
 func UploadCanvasAsset(c *gin.Context) {
 	userId := c.GetInt("id")
-	if !mediastore.Enabled() {
-		c.JSON(http.StatusServiceUnavailable, gin.H{"success": false, "message": "媒体存储未启用,无法上传素材"})
+	// 上传目标桶:优先用户素材独立桶(user_asset_storage);未启用则回落媒体存储桶。
+	useUserAssetBucket := mediastore.UserAssetEnabled()
+	if !useUserAssetBucket && !mediastore.Enabled() {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"success": false, "message": "用户素材存储与媒体存储均未启用,无法上传素材"})
 		return
 	}
 	limitBytes := canvasStorageLimitBytes(userId)
@@ -156,7 +174,13 @@ func UploadCanvasAsset(c *gin.Context) {
 	// asset_id 服务端生成,不使用用户原始文件名,防路径注入与重名覆盖
 	assetId := "ca_" + common.GetRandomString(20)
 	obsKey := canvasAssetKey(userId, assetId, ext, now)
-	if err := mediastore.Persist(c.Request.Context(), obsKey, mediastore.PersistSource{Data: data, ContentType: mimeType}, map[string]string{
+	storage := ""
+	persist := mediastore.Persist
+	if useUserAssetBucket {
+		storage = model.CanvasAssetStorageUserAsset
+		persist = mediastore.UserAssetPersist
+	}
+	if err := persist(c.Request.Context(), obsKey, mediastore.PersistSource{Data: data, ContentType: mimeType}, map[string]string{
 		"canvas-user": strconv.Itoa(userId),
 	}); err != nil {
 		if errors.Is(err, mediastore.ErrObjectTooLarge) {
@@ -176,13 +200,14 @@ func UploadCanvasAsset(c *gin.Context) {
 		MimeType:  mimeType,
 		SizeBytes: int64(len(data)),
 		ObsKey:    obsKey,
+		Storage:   storage,
 		Source:    "upload",
 	}
 	if err := model.CreateCanvasAssetWithQuota(asset, limitBytes); err != nil {
 		// OBS 上传成功但 DB 失败:best-effort 删除刚上传对象,避免游离
-		go func(key string) {
-			_ = mediastore.Delete(context.Background(), key)
-		}(obsKey)
+		go func(storage, key string) {
+			_ = canvasAssetDeleteObject(context.Background(), storage, key)
+		}(storage, obsKey)
 		if errors.Is(err, model.ErrCanvasStorageQuotaExceeded) {
 			c.JSON(http.StatusRequestEntityTooLarge, gin.H{"success": false, "message": "素材库容量不足,请清理素材或升级套餐"})
 			return
@@ -204,7 +229,7 @@ func GetCanvasAssetURL(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"success": false, "message": err.Error()})
 		return
 	}
-	signed, err := mediastore.Sign(c.Request.Context(), asset.ObsKey)
+	signed, err := canvasAssetSign(c.Request.Context(), asset)
 	if err != nil {
 		c.JSON(http.StatusOK, gin.H{"success": false, "message": "生成访问链接失败: " + err.Error()})
 		return
@@ -224,15 +249,15 @@ func DeleteCanvasAsset(c *gin.Context) {
 		return
 	}
 	// OBS 对象异步删除,失败重试,不阻塞用户操作;DB 已软删并扣减占用
-	go func(key string) {
+	go func(storage, key string) {
 		for attempt := 0; attempt < 3; attempt++ {
-			if err := mediastore.Delete(context.Background(), key); err == nil {
+			if err := canvasAssetDeleteObject(context.Background(), storage, key); err == nil {
 				return
 			}
 			time.Sleep(time.Duration(attempt+1) * 5 * time.Second)
 		}
 		common.SysLog("画布素材 OBS 对象删除失败(已放弃重试): " + key)
-	}(asset.ObsKey)
+	}(asset.Storage, asset.ObsKey)
 	c.JSON(http.StatusOK, gin.H{"success": true, "message": ""})
 }
 

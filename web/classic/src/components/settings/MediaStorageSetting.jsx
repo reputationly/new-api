@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { Card, Spin } from '@douyinfe/semi-ui';
 import SettingsObs from '../../pages/Setting/Storage/SettingsObs';
+import SettingsUserAssetObs from '../../pages/Setting/Storage/SettingsUserAssetObs';
 import MediaStorageStats from '../../pages/Setting/Storage/MediaStorageStats';
 import { API, showError, toBoolean } from '../../helpers';
 
@@ -23,6 +24,13 @@ const MediaStorageSetting = () => {
     'media_storage.bucket_critical_threshold_tb': '3',
     'media_storage.alert_webhook': '',
     'media_storage.alert_dedup_hours': '24',
+    // 用户素材(OBS)独立桶(画布素材库),前缀 user_asset_storage.
+    'user_asset_storage.enabled': false,
+    'user_asset_storage.endpoint': '',
+    'user_asset_storage.region': '',
+    'user_asset_storage.bucket': '',
+    'user_asset_storage.signed_url_ttl_hours': '168',
+    'user_asset_storage.max_object_size_mb': '200',
   });
   let [loading, setLoading] = useState(false);
 
@@ -32,7 +40,11 @@ const MediaStorageSetting = () => {
     if (success) {
       let newInputs = {};
       data.forEach((item) => {
-        if (!item.key.startsWith('media_storage.')) return;
+        if (
+          !item.key.startsWith('media_storage.') &&
+          !item.key.startsWith('user_asset_storage.')
+        )
+          return;
         if (typeof inputs[item.key] === 'boolean') {
           newInputs[item.key] = toBoolean(item.value);
         } else {
@@ -64,6 +76,9 @@ const MediaStorageSetting = () => {
     <Spin spinning={loading} size='large'>
       <Card style={{ marginTop: '10px' }}>
         <SettingsObs options={inputs} refresh={onRefresh} />
+      </Card>
+      <Card style={{ marginTop: '10px' }}>
+        <SettingsUserAssetObs options={inputs} refresh={onRefresh} />
       </Card>
       <MediaStorageStats />
     </Spin>

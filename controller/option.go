@@ -321,7 +321,8 @@ func UpdateOption(c *gin.Context) {
 			})
 			return
 		}
-	case "media_storage.access_key_id", "media_storage.secret_access_key":
+	case "media_storage.access_key_id", "media_storage.secret_access_key",
+		"user_asset_storage.access_key_id", "user_asset_storage.secret_access_key":
 		// OBS 凭证加密后入库（GET 已过滤不回显）。空值表示「保持不变」，直接返回不覆盖。
 		plain := option.Value.(string)
 		if plain == "" {
@@ -341,6 +342,17 @@ func UpdateOption(c *gin.Context) {
 				c.JSON(http.StatusOK, gin.H{
 					"success": false,
 					"message": "OBS 连接校验失败，请检查 Endpoint / Bucket / AK/SK：" + hcErr.Error(),
+				})
+				return
+			}
+		}
+	case "user_asset_storage.enabled":
+		// 启用用户素材独立桶前同样跑连通性校验。
+		if option.Value == "true" {
+			if hcErr := mediastore.UserAssetHealthcheck(context.Background()); hcErr != nil {
+				c.JSON(http.StatusOK, gin.H{
+					"success": false,
+					"message": "用户素材 OBS 连接校验失败，请检查 Endpoint / Bucket / AK/SK：" + hcErr.Error(),
 				})
 				return
 			}
