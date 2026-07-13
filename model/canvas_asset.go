@@ -23,12 +23,15 @@ type CanvasAsset struct {
 	Height     int    `json:"height,omitempty"`
 	DurationMs int64  `json:"duration_ms,omitempty"`
 	ObsKey     string `gorm:"size:512;not null" json:"-"`
-	Hash       string `gorm:"size:128;index" json:"hash,omitempty"`
-	Source     string `gorm:"size:32;index" json:"source"`
-	Status     string `gorm:"size:32;index" json:"status"`
-	CreatedAt  int64  `json:"created_at"`
-	UpdatedAt  int64  `json:"updated_at"`
-	DeletedAt  int64  `gorm:"index" json:"deleted_at,omitempty"`
+	// Storage 素材所在存储:""(存量,媒体存储桶)| "user_asset"(用户素材独立桶)。
+	// 不下发给前端;签名/删除按此路由到对应桶,存量素材不迁移。
+	Storage   string `gorm:"size:32" json:"-"`
+	Hash      string `gorm:"size:128;index" json:"hash,omitempty"`
+	Source    string `gorm:"size:32;index" json:"source"`
+	Status    string `gorm:"size:32;index" json:"status"`
+	CreatedAt int64  `json:"created_at"`
+	UpdatedAt int64  `json:"updated_at"`
+	DeletedAt int64  `gorm:"index" json:"deleted_at,omitempty"`
 }
 
 // CanvasStorageUsage 用户素材库容量占用(按用户总量限制,与 token quota 无关)。
@@ -42,6 +45,10 @@ type CanvasStorageUsage struct {
 const (
 	CanvasAssetStatusActive  = "active"
 	CanvasAssetStatusDeleted = "deleted"
+
+	// CanvasAssetStorageUserAsset 素材存于用户素材独立桶(user_asset_storage);
+	// Storage 为空 = 存量素材,存于媒体存储(media_storage)桶。
+	CanvasAssetStorageUserAsset = "user_asset"
 )
 
 var ErrCanvasStorageQuotaExceeded = errors.New("canvas storage quota exceeded")

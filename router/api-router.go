@@ -64,12 +64,13 @@ func SetApiRouter(router *gin.Engine) {
 		// Universal secure verification routes
 		apiRouter.POST("/verify", middleware.UserAuth(), middleware.CriticalRateLimit(), controller.UniversalVerify)
 
-		// 画布提示词库（仅登录可见，数据来自 canvas_prompts 表/内置 seed，不访问外网）
-		apiRouter.GET("/prompts", middleware.UserAuth(), controller.GetCanvasPrompts)
+		// 画布提示词库（画布配套，仅管理员及以上可用，数据来自 canvas_prompts 表/内置 seed，不访问外网）
+		apiRouter.GET("/prompts", middleware.AdminAuth(), controller.GetCanvasPrompts)
 
 		// 画布项目服务端持久化 + 素材库（OBS 存储、用户级容量限制）
+		// 画布整体仅对管理员及以上开放（与 /canvas-app 静态门禁同语义）
 		canvasRoute := apiRouter.Group("/canvas")
-		canvasRoute.Use(middleware.UserAuth())
+		canvasRoute.Use(middleware.AdminAuth())
 		{
 			canvasRoute.GET("/projects", controller.ListCanvasProjects)
 			canvasRoute.GET("/projects/:project_id", controller.GetCanvasProjectDetail)

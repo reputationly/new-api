@@ -77,6 +77,8 @@ const VideoPlaygroundBody = ({ mode }) => {
           generating={generating}
           turnLimitReached={turnLimitReached}
           missingRequiredImage={missingRequiredImage}
+          showPresets={mode === 'text2video'}
+          isSR={isSR}
           styleState={styleState}
           onSend={generate}
           onRegenerate={regenerate}

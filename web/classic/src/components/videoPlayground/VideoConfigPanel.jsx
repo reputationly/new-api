@@ -310,54 +310,58 @@ const VideoConfigPanel = ({
           </div>
         )}
 
-        {/* 时长 */}
-        <div>
-          <div className='flex items-center gap-2 mb-2'>
-            <Clock size={16} className='text-gray-500' />
-            <Typography.Text strong className='text-sm'>
-              {t('视频时长')}
-            </Typography.Text>
+        {/* 时长(超分输出时长跟随源视频,不展示) */}
+        {!isSR && (
+          <div>
+            <div className='flex items-center gap-2 mb-2'>
+              <Clock size={16} className='text-gray-500' />
+              <Typography.Text strong className='text-sm'>
+                {t('视频时长')}
+              </Typography.Text>
+            </div>
+            <Select
+              placeholder={t('请选择时长')}
+              name='seconds'
+              selection
+              onChange={(value) => onInputChange('seconds', value)}
+              value={inputs.seconds}
+              optionList={durationOptions}
+              disabled={disabled}
+              style={{ width: '100%' }}
+              dropdownStyle={{ width: '100%', maxWidth: '100%' }}
+              className='!rounded-lg'
+            />
           </div>
-          <Select
-            placeholder={t('请选择时长')}
-            name='seconds'
-            selection
-            onChange={(value) => onInputChange('seconds', value)}
-            value={inputs.seconds}
-            optionList={durationOptions}
-            disabled={disabled}
-            style={{ width: '100%' }}
-            dropdownStyle={{ width: '100%', maxWidth: '100%' }}
-            className='!rounded-lg'
-          />
-        </div>
+        )}
 
-        {/* 负向提示词(默认预填 Wan 推荐值) */}
-        <div>
-          <div className='flex items-center gap-2 mb-2'>
-            <Ban size={16} className='text-gray-500' />
-            <Typography.Text strong className='text-sm'>
-              {t('负向提示词')}
-            </Typography.Text>
-            <Tooltip
-              content={t(
-                "Describe what you don't want included in the videos.",
-              )}
-              position='top'
-            >
-              <HelpCircle size={14} className='text-gray-400 cursor-help' />
-            </Tooltip>
+        {/* 负向提示词(默认留空;超分无提示词,不展示) */}
+        {!isSR && (
+          <div>
+            <div className='flex items-center gap-2 mb-2'>
+              <Ban size={16} className='text-gray-500' />
+              <Typography.Text strong className='text-sm'>
+                {t('负向提示词')}
+              </Typography.Text>
+              <Tooltip
+                content={t(
+                  "Describe what you don't want included in the videos.",
+                )}
+                position='top'
+              >
+                <HelpCircle size={14} className='text-gray-400 cursor-help' />
+              </Tooltip>
+            </div>
+            <TextArea
+              placeholder={t('负向提示词(可选)')}
+              name='negativePrompt'
+              value={inputs.negativePrompt || ''}
+              onChange={(value) => onInputChange('negativePrompt', value)}
+              autosize={{ minRows: 2, maxRows: 6 }}
+              disabled={disabled}
+              className='!rounded-lg'
+            />
           </div>
-          <TextArea
-            placeholder={t('负向提示词(可选)')}
-            name='negativePrompt'
-            value={inputs.negativePrompt || ''}
-            onChange={(value) => onInputChange('negativePrompt', value)}
-            autosize={{ minRows: 2, maxRows: 6 }}
-            disabled={disabled}
-            className='!rounded-lg'
-          />
-        </div>
+        )}
 
         {/* 随机种子(seed)—— 常驻,留空为随机 */}
         <div>

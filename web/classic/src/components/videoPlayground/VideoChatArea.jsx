@@ -12,16 +12,11 @@ import { Download, RefreshCw, Send } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { showError, getLogo, stringToColor } from '../../helpers';
 import { UserContext } from '../../context/User';
+import { blockChatDrag } from '../playground/blockChatDrag';
 import {
   VIDEO_STATUS,
   VIDEO_PROMPT_PRESETS,
 } from '../../constants/videoPlayground.constants';
-
-// 预设按钮上显示的短标签:截断长提示词,避免撑爆按钮。
-const presetLabel = (s) => {
-  const v = (s || '').trim();
-  return v.length > 22 ? `${v.slice(0, 22)}…` : v;
-};
 
 const WELCOME_ID = '__welcome__';
 const MAX_PROMPT_LEN = 5000;
@@ -132,6 +127,8 @@ const VideoChatArea = ({
   generating,
   turnLimitReached = false,
   missingRequiredImage = false,
+  showPresets = false,
+  isSR = false,
   onSend,
   onRegenerate,
   onRefetch,
@@ -161,7 +158,9 @@ const VideoChatArea = ({
           role: 'assistant',
           id: WELCOME_ID,
           createAt: 1,
-          content: t('欢迎使用 AI 视频生成，请在下方输入您的提示词'),
+          content: isSR
+            ? t('欢迎使用 AI 视频超分，请在左侧上传源视频后点击下方按钮')
+            : t('欢迎使用 AI 视频生成，请在下方输入您的提示词'),
         },
       ];
     }
@@ -191,7 +190,7 @@ const VideoChatArea = ({
           m.status === VIDEO_STATUS.FAILED ? m.error || t('视频生成失败') : '',
       };
     });
-  }, [messages, t]);
+  }, [messages, isSR, t]);
 
   const byId = useMemo(
     () => new Map(messages.map((m) => [m.id, m])),
@@ -301,6 +300,32 @@ const VideoChatArea = ({
   const renderInputArea = useCallback(() => {
     // 缺必填帧图/生成中/达上限时置灰,回车与点击均不发送,提示词不丢。
     const blockSend = generating || turnLimitReached || missingRequiredImage;
+    // 视频超分不需要提示词:只留一个生成按钮,上传源视频后可点,删除后再次置灰。
+    // 常规比例的矩形按钮,对话框内水平居中、略上提,不做通栏扁条。
+    if (isSR) {
+      return (
+        <div className='px-2 pb-6 sm:px-4 sm:pb-8 pt-1 flex flex-col items-center'>
+          {turnLimitReached && (
+            <Typography.Text
+              type='warning'
+              className='text-xs block mb-2 text-center'
+            >
+              {t('本轮对话已达生成上限，请点击右侧「新对话」继续')}
+            </Typography.Text>
+          )}
+          <Button
+            theme='solid'
+            size='large'
+            onClick={() => onSend('')}
+            disabled={blockSend}
+            icon={<Send size={16} className={blockSend ? '' : 'text-white'} />}
+            className={`!rounded-lg !px-8 !h-11 ${blockSend ? '' : '!bg-purple-500 hover:!bg-purple-600'}`}
+          >
+            {t('生成视频')}
+          </Button>
+        </div>
+      );
+    }
     const canSend = !blockSend && inputValue.trim().length > 0;
     const doSend = () => {
       if (!canSend) return;
@@ -317,20 +342,22 @@ const VideoChatArea = ({
             {t('本轮对话已达生成上限，请点击右侧「新对话」继续')}
           </Typography.Text>
         )}
-        {/* 预设提示词:扁长按钮,防误触;点击清空当前输入并填入该提示词 */}
-        <div className='flex flex-wrap gap-2 mb-2'>
-          {VIDEO_PROMPT_PRESETS.map((p, i) => (
-            <button
-              key={i}
-              type='button'
-              title={p}
-              onClick={() => setInputValue(p)}
-              className='text-xs text-gray-600 bg-gray-100 hover:bg-gray-200 rounded-full px-3 py-1.5 truncate max-w-[220px] transition-colors'
-            >
-              {presetLabel(p)}
-            </button>
-          ))}
-        </div>
+        {/* 预设提示词(仅文生视频):单行等宽排列,超长 CSS 截断;点击清空当前输入并填入 */}
+        {showPresets && (
+          <div className='flex gap-2 mb-2 overflow-hidden'>
+            {VIDEO_PROMPT_PRESETS.map((p, i) => (
+              <button
+                key={i}
+                type='button'
+                title={p}
+                onClick={() => setInputValue(p)}
+                className='flex-1 min-w-0 truncate text-xs text-gray-600 bg-gray-100 hover:bg-gray-200 rounded-full px-3 py-1.5 transition-colors'
+              >
+                {p}
+              </button>
+            ))}
+          </div>
+        )}
         <div className='relative'>
           <TextArea
             value={inputValue}
@@ -373,6 +400,8 @@ const VideoChatArea = ({
     generating,
     turnLimitReached,
     missingRequiredImage,
+    showPresets,
+    isSR,
     inputValue,
     onSend,
     t,
@@ -390,21 +419,27 @@ const VideoChatArea = ({
         overflow: 'hidden',
       }}
     >
-      <Chat
-        chats={chats}
-        roleConfig={roleConfig}
-        onMessageSend={(content) => onSend(content)}
-        onClear={onClear}
-        renderInputArea={renderInputArea}
-        chatBoxRenderConfig={{
-          renderChatBoxContent,
-          renderChatBoxTitle: () => null,
-          renderChatBoxAction: () => null,
-        }}
-        showClearContext
-        placeholder={t('请输入视频生成提示词')}
+      <div
         style={{ height: '100%' }}
-      />
+        onDragOverCapture={blockChatDrag}
+        onDropCapture={blockChatDrag}
+      >
+        <Chat
+          chats={chats}
+          roleConfig={roleConfig}
+          onMessageSend={(content) => onSend(content)}
+          onClear={onClear}
+          renderInputArea={renderInputArea}
+          chatBoxRenderConfig={{
+            renderChatBoxContent,
+            renderChatBoxTitle: () => null,
+            renderChatBoxAction: () => null,
+          }}
+          showClearContext
+          placeholder={t('请输入视频生成提示词')}
+          style={{ height: '100%' }}
+        />
+      </div>
     </Card>
   );
 };

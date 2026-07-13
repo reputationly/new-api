@@ -2,6 +2,7 @@ package openai
 
 import (
 	"bytes"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -428,7 +429,14 @@ func (a *Adaptor) ConvertAudioRequest(c *gin.Context, info *relaycommon.RelayInf
 func (a *Adaptor) ConvertImageRequest(c *gin.Context, info *relaycommon.RelayInfo, request dto.ImageRequest) (any, error) {
 	switch info.RelayMode {
 	case relayconstant.RelayModeImagesEdits:
-		if isJSONRequest(c) {
+		if isJSONRequest(c) || c.GetBool(jsonImageEditsConvertedKey) {
+			// OpenAI 官方及 one-api/new-api 系上游的 /v1/images/edits 只接受
+			// multipart/form-data:JSON 请求(体验区图生图等)的底图若是 data URL,
+			// 在此转成 multipart,否则上游会报 failed to parse multipart form;
+			// image 为远程 URL 等其它形态时维持 JSON 透传(#4646 的引用字段场景)。
+			if body, err := buildImageEditsFormFromJSON(c, request); body != nil || err != nil {
+				return body, err
+			}
 			return request, nil
 		}
 
@@ -561,6 +569,124 @@ func isJSONRequest(c *gin.Context) bool {
 		return false
 	}
 	return strings.HasPrefix(c.Request.Header.Get("Content-Type"), "application/json")
+}
+
+// jsonImageEditsConvertedKey 标记本次 edits 请求原始体是 JSON 且已被转成 multipart:
+// 转换会把 c.Request 的 Content-Type 改写成 multipart(供 DoFormRequest 取 boundary),
+// 渠道重试再次进入 ConvertImageRequest 时靠该标记识别原始 JSON 体,避免误走
+// c.MultipartForm() 解析分支。
+const jsonImageEditsConvertedKey = "openai_image_edits_json_converted"
+
+// parseDataURLList 解析 image/mask 字段(字符串或字符串数组):全部为 data URL 时返回
+// 列表,否则返回 nil(调用方维持 JSON 透传)。
+func parseDataURLList(raw json.RawMessage) []string {
+	if len(raw) == 0 {
+		return nil
+	}
+	var single string
+	if err := common.Unmarshal(raw, &single); err == nil {
+		if strings.HasPrefix(single, "data:") {
+			return []string{single}
+		}
+		return nil
+	}
+	var list []string
+	if err := common.Unmarshal(raw, &list); err != nil || len(list) == 0 {
+		return nil
+	}
+	for _, s := range list {
+		if !strings.HasPrefix(s, "data:") {
+			return nil
+		}
+	}
+	return list
+}
+
+// writeRawFormField 把 RawMessage 字段写入表单:字符串去引号,其余原样。
+func writeRawFormField(writer *multipart.Writer, name string, raw json.RawMessage) {
+	if len(raw) == 0 {
+		return
+	}
+	var s string
+	if err := common.Unmarshal(raw, &s); err == nil {
+		writer.WriteField(name, s)
+		return
+	}
+	writer.WriteField(name, string(raw))
+}
+
+// writeDataURLPart 把一个 data URL 解码为字节并作为文件 part 写入表单。
+func writeDataURLPart(writer *multipart.Writer, fieldName, baseName, dataURL string) error {
+	mimeType, b64, err := service.DecodeBase64FileData(dataURL)
+	if err != nil {
+		return err
+	}
+	data, err := base64.StdEncoding.DecodeString(b64)
+	if err != nil {
+		return err
+	}
+	ext := "png"
+	if idx := strings.Index(mimeType, "/"); idx != -1 && idx+1 < len(mimeType) {
+		ext = mimeType[idx+1:]
+	}
+	h := make(textproto.MIMEHeader)
+	h.Set("Content-Disposition", fmt.Sprintf(`form-data; name="%s"; filename="%s.%s"`, fieldName, baseName, ext))
+	h.Set("Content-Type", mimeType)
+	part, err := writer.CreatePart(h)
+	if err != nil {
+		return err
+	}
+	_, err = part.Write(data)
+	return err
+}
+
+// buildImageEditsFormFromJSON 将 JSON 版 images/edits 请求(底图为 data URL)转为
+// multipart 表单。返回 (nil, nil) 表示不适用(如 image 为远程 URL),调用方维持 JSON 透传。
+func buildImageEditsFormFromJSON(c *gin.Context, request dto.ImageRequest) (*bytes.Buffer, error) {
+	images := parseDataURLList(request.Image)
+	if images == nil {
+		return nil, nil
+	}
+
+	// 表单字段集与 JSON 透传严格一致:经 MarshalJSON 平铺全部已知字段
+	// (Extra 与透传一样不下发),image/mask 单独作为文件 part 写入。
+	flat, err := common.Marshal(request)
+	if err != nil {
+		return nil, err
+	}
+	var fields map[string]json.RawMessage
+	if err := common.Unmarshal(flat, &fields); err != nil {
+		return nil, err
+	}
+	delete(fields, "image")
+	delete(fields, "mask")
+
+	var requestBody bytes.Buffer
+	writer := multipart.NewWriter(&requestBody)
+	for name, raw := range fields {
+		writeRawFormField(writer, name, raw)
+	}
+
+	// 与上方 multipart 分支保持一致:多图用 image[] 字段名
+	fieldName := "image"
+	if len(images) > 1 {
+		fieldName = "image[]"
+	}
+	for i, dataURL := range images {
+		if err := writeDataURLPart(writer, fieldName, fmt.Sprintf("image_%d", i), dataURL); err != nil {
+			return nil, fmt.Errorf("failed to decode image %d: %w", i, err)
+		}
+	}
+	if mask := parseDataURLList(request.Mask); len(mask) == 1 {
+		if err := writeDataURLPart(writer, "mask", "mask", mask[0]); err != nil {
+			return nil, fmt.Errorf("failed to decode mask: %w", err)
+		}
+	}
+
+	writer.Close()
+	c.Set(jsonImageEditsConvertedKey, true)
+	c.Request.Header.Set("Content-Type", writer.FormDataContentType())
+	return &requestBody, nil
 }
 
 // detectImageMimeType determines the MIME type based on the file extension
