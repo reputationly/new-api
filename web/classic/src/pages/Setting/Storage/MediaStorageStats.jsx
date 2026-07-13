@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import {
   Banner,
   Button,
@@ -7,10 +7,10 @@ import {
   Descriptions,
   Row,
   Spin,
-  Table,
   Tag,
   Typography,
 } from '@douyinfe/semi-ui';
+import { VChart } from '@visactor/react-vchart';
 import {
   API,
   showError,
@@ -89,21 +89,62 @@ export default function MediaStorageStats() {
     fetchStats();
   }, []);
 
-  const trend = (data?.trend_7d || [])
-    .slice()
-    .reverse()
-    .map((p) => ({
-      key: p.at,
-      at: timestamp2string(p.at),
-      bytes: formatBytes(p.bytes),
-      objects: p.objects,
-    }));
+  // 近 7 天趋势图:每个快照(默认每小时)一个采样点,按时间升序;悬停显示用量/对象数。
+  const trendValues = useMemo(
+    () =>
+      (data?.trend_7d || [])
+        .slice()
+        .sort((a, b) => a.at - b.at)
+        .map((p) => ({
+          // 'MM-DD HH:mm',7 天窗口内足够区分且不至于撑爆 x 轴
+          time: timestamp2string(p.at).slice(5, 16),
+          fullTime: timestamp2string(p.at),
+          bytes: p.bytes,
+          objects: p.objects,
+        })),
+    [data],
+  );
 
-  const columns = [
-    { title: t('时间'), dataIndex: 'at' },
-    { title: t('用量'), dataIndex: 'bytes' },
-    { title: t('对象数'), dataIndex: 'objects' },
-  ];
+  const trendSpec = useMemo(
+    () => ({
+      type: 'line',
+      height: 260,
+      data: [{ id: 'obsTrend', values: trendValues }],
+      xField: 'time',
+      yField: 'bytes',
+      axes: [
+        {
+          orient: 'left',
+          label: { formatMethod: (v) => formatBytes(v) },
+        },
+        {
+          orient: 'bottom',
+          label: { autoHide: true, autoRotate: true },
+        },
+      ],
+      line: { style: { lineWidth: 2 } },
+      // 每个采样点画一个小圆点,悬停即出值
+      point: { visible: true, style: { size: 5 } },
+      crosshair: { xField: { visible: true } },
+      tooltip: {
+        mark: {
+          title: { value: (datum) => datum.fullTime },
+          content: [
+            { key: t('用量'), value: (datum) => formatBytes(datum.bytes) },
+            { key: t('对象数'), value: (datum) => datum.objects },
+          ],
+        },
+        dimension: {
+          title: { value: (datum) => datum.fullTime },
+          content: [
+            { key: t('用量'), value: (datum) => formatBytes(datum.bytes) },
+            { key: t('对象数'), value: (datum) => datum.objects },
+          ],
+        },
+      },
+    }),
+    [trendValues, t],
+  );
 
   return (
     <Card style={{ marginTop: '10px' }}>
@@ -203,13 +244,14 @@ export default function MediaStorageStats() {
               <Title heading={6} style={{ marginBottom: 8 }}>
                 {t('7 天趋势')}
               </Title>
-              <Table
-                columns={columns}
-                dataSource={trend}
-                pagination={false}
-                size='small'
-                empty={t('暂无趋势数据')}
-              />
+              {trendValues.length > 0 ? (
+                <VChart
+                  spec={trendSpec}
+                  option={{ mode: 'desktop-browser' }}
+                />
+              ) : (
+                <Text type='tertiary'>{t('暂无趋势数据')}</Text>
+              )}
             </>
           )
         )}
