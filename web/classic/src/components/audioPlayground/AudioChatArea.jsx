@@ -12,17 +12,13 @@ import { Download, RefreshCw, Send } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { showError, getLogo, stringToColor } from '../../helpers';
 import { UserContext } from '../../context/User';
+import { blockChatDrag } from '../playground/blockChatDrag';
 import {
   AUDIO_STATUS,
   AUDIO_PROMPT_PRESETS,
 } from '../../constants/audioPlayground.constants';
 
 // 语音合成对话区,镜像 VideoChatArea:成品渲染 <audio> 播放器 + 下载 wav。
-
-const presetLabel = (s) => {
-  const v = (s || '').trim();
-  return v.length > 22 ? `${v.slice(0, 22)}…` : v;
-};
 
 const WELCOME_ID = '__welcome__';
 const MAX_PROMPT_LEN = 5000;
@@ -324,16 +320,17 @@ const AudioChatArea = ({
             {t('请先在左侧选择预置音色或上传参考音频')}
           </Typography.Text>
         )}
-        <div className='flex flex-wrap gap-2 mb-2'>
+        {/* 预设文本:单行等宽排列,超长 CSS 截断 */}
+        <div className='flex gap-2 mb-2 overflow-hidden'>
           {AUDIO_PROMPT_PRESETS.map((p, i) => (
             <button
               key={i}
               type='button'
               title={p}
               onClick={() => setInputValue(p)}
-              className='text-xs text-gray-600 bg-gray-100 hover:bg-gray-200 rounded-full px-3 py-1.5 truncate max-w-[220px] transition-colors'
+              className='flex-1 min-w-0 truncate text-xs text-gray-600 bg-gray-100 hover:bg-gray-200 rounded-full px-3 py-1.5 transition-colors'
             >
-              {presetLabel(p)}
+              {p}
             </button>
           ))}
         </div>
@@ -396,21 +393,27 @@ const AudioChatArea = ({
         overflow: 'hidden',
       }}
     >
-      <Chat
-        chats={chats}
-        roleConfig={roleConfig}
-        onMessageSend={(content) => onSend(content)}
-        onClear={onClear}
-        renderInputArea={renderInputArea}
-        chatBoxRenderConfig={{
-          renderChatBoxContent,
-          renderChatBoxTitle: () => null,
-          renderChatBoxAction: () => null,
-        }}
-        showClearContext
-        placeholder={t('请输入要合成的文本')}
+      <div
         style={{ height: '100%' }}
-      />
+        onDragOverCapture={blockChatDrag}
+        onDropCapture={blockChatDrag}
+      >
+        <Chat
+          chats={chats}
+          roleConfig={roleConfig}
+          onMessageSend={(content) => onSend(content)}
+          onClear={onClear}
+          renderInputArea={renderInputArea}
+          chatBoxRenderConfig={{
+            renderChatBoxContent,
+            renderChatBoxTitle: () => null,
+            renderChatBoxAction: () => null,
+          }}
+          showClearContext
+          placeholder={t('请输入要合成的文本')}
+          style={{ height: '100%' }}
+        />
+      </div>
     </Card>
   );
 };

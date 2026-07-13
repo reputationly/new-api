@@ -32,7 +32,6 @@ import {
   VIDEO_SR_CAPABILITY,
   VIDEO_VACE_CAPABILITY,
   VIDEO_CAPABILITY_LEGACY_ALIASES,
-  VIDEO_DEFAULT_NEGATIVE_PROMPT,
   VIDEO_DEFAULT_ASPECT_RATIO,
   aspectRatioToShape,
   getAspectRatiosForVideoModel,
@@ -105,10 +104,6 @@ const persistConversations = (storageKey, list) => {
 let idSeq = 0;
 const genId = () => `vid-${Date.now()}-${idSeq++}`;
 
-// 默认负向提示词是 Wan 专用的中文词表,只对 Wan 系模型预填;其它厂商(sora/ali/kling…)
-// 默认留空,避免把 Wan 负向词经 metadata 发给不支持/语义不符的上游(codex 复审 P2)。
-const isWanVideoModel = (model) => /wan/i.test(model || '');
-
 // 兼容 OpenAI 错误({error:{message}})与任务错误({code,message,data})两种形态
 const extractApiErrMsg = (error, fallback) => {
   const d = error?.response?.data || {};
@@ -139,7 +134,7 @@ export const useVideoGeneration = ({ mode = 'text2video' } = {}) => {
     size: '',
     seconds: '',
     seed: '', // 随机种子;'' 表示随机(不下发)
-    negativePrompt: '', // 负向提示词;Wan 模型下由下方 effect 预填默认值,其它厂商留空
+    negativePrompt: '', // 负向提示词;默认留空,非空才随 metadata 下发
     aspectRatio: '', // 宽高比;仅当该模型在后台配了宽高比才由 effect 选中默认值并下发
     firstFrame: '', // i2v/flf2v 首帧 / s2v 人物图(base64 data-url)
     lastFrame: '', // flf2v 尾帧
@@ -180,8 +175,6 @@ export const useVideoGeneration = ({ mode = 'text2video' } = {}) => {
   lockedRef.current = locked;
   // 当前进行中的轮询：{ convId, msgId, taskId, timer, canceled }
   const activePollRef = useRef(null);
-  // 用户是否手动改过负向提示词:改过后不再随模型自动预填/清空。
-  const negPromptTouchedRef = useRef(false);
 
   // mount 后从 IDB 还原媒体,按初始对象引用逐条合并——只替换"挂载至今未被任何 setState
   // 换过引用"的 conv(hydrate 期间用户新建/正在生成被 patch 的会话原样保留)。不整体覆盖。
@@ -229,7 +222,6 @@ export const useVideoGeneration = ({ mode = 'text2video' } = {}) => {
 
   const handleInputChange = useCallback((key, value) => {
     if (lockedRef.current) return;
-    if (key === 'negativePrompt') negPromptTouchedRef.current = true;
     setInputs((prev) => ({ ...prev, [key]: value }));
   }, []);
 
@@ -321,17 +313,6 @@ export const useVideoGeneration = ({ mode = 'text2video' } = {}) => {
       setInputs((prev) => ({ ...prev, aspectRatio: next }));
     }
   }, [availableAspectRatios, inputs.aspectRatio, locked]);
-
-  // 负向提示词默认值:仅 Wan 模型预填官方词表,其它厂商清空;用户手动改过后不再自动覆盖。
-  useEffect(() => {
-    if (locked || negPromptTouchedRef.current) return;
-    const def = isWanVideoModel(inputs.model)
-      ? VIDEO_DEFAULT_NEGATIVE_PROMPT
-      : '';
-    setInputs((prev) =>
-      prev.negativePrompt === def ? prev : { ...prev, negativePrompt: def },
-    );
-  }, [inputs.model, locked]);
 
   const loadPricing = useCallback(async () => {
     try {
@@ -573,8 +554,9 @@ export const useVideoGeneration = ({ mode = 'text2video' } = {}) => {
 
   const generate = useCallback(
     async (prompt) => {
+      // 视频超分无提示词框(输出完全由源视频决定),允许空提示词提交;其余模式必填。
       const text = (prompt || '').trim();
-      if (!text || generating) return;
+      if ((!text && !isSR) || generating) return;
 
       // i2v:images=[首帧];flf2v:images=[首帧,尾帧];s2v:images=[人物图]。
       // 后续追问沿用对话首条锁定的帧图 / 媒体输入。
@@ -734,10 +716,12 @@ export const useVideoGeneration = ({ mode = 'text2video' } = {}) => {
 
       const reqId = genId();
       const now = new Date().toISOString();
+      // 超分无提示词:会话气泡/历史标题用固定文案占位,避免空白。
+      const displayText = text || t('视频超分');
       const userMsg = {
         id: `${reqId}-u`,
         role: 'user',
-        content: text,
+        content: displayText,
         images: needsImage ? params.images || [] : undefined,
       };
       const asstId = `${reqId}-a`;
@@ -776,7 +760,7 @@ export const useVideoGeneration = ({ mode = 'text2video' } = {}) => {
               srcVideo: params.srcVideo || '',
               maskVideo: params.maskVideo || '',
               refImages: params.refImages || [],
-              title: text,
+              title: displayText,
               createdAt: now,
               updatedAt: now,
               messages: [userMsg, asstMsg],
@@ -816,10 +800,13 @@ export const useVideoGeneration = ({ mode = 'text2video' } = {}) => {
         if (!followsInput && availableSizes.includes(videoSizeVal)) {
           body.size = videoSizeVal;
         }
-        if (strategy.durationField === 'seconds') {
-          body.seconds = params.seconds;
-        } else {
-          body.duration = parseInt(params.seconds, 10) || undefined;
+        // 超分输出时长跟随源视频,不发时长字段(配置面板也不展示时长框)。
+        if (!isSR) {
+          if (strategy.durationField === 'seconds') {
+            body.seconds = params.seconds;
+          } else {
+            body.duration = parseInt(params.seconds, 10) || undefined;
+          }
         }
         // 随机种子 / 负向提示词:塞进 metadata(gpustackplus task adaptor 整体透传 metadata
         // 给引擎;TaskSubmitReq.Metadata 只从请求的 metadata 对象取,故不能放顶层)。

@@ -15,6 +15,7 @@ import {
   IMAGE_PROMPT_PRESETS,
 } from '../../constants/imagePlayground.constants';
 import { UserContext } from '../../context/User';
+import { blockChatDrag } from '../playground/blockChatDrag';
 import ImagePreviewModal from './ImagePreviewModal';
 
 // 预设按钮上显示的短标签:截断长提示词,避免撑爆按钮。
@@ -314,21 +315,27 @@ const ImageChatArea = ({
         overflow: 'hidden',
       }}
     >
-      <Chat
-        chats={chats}
-        roleConfig={roleConfig}
-        onMessageSend={(content) => onSend(content)}
-        onClear={onClear}
-        renderInputArea={renderInputArea}
-        chatBoxRenderConfig={{
-          renderChatBoxContent,
-          renderChatBoxTitle: () => null,
-          renderChatBoxAction: () => null,
-        }}
-        showClearContext
-        placeholder={t('请输入图片生成提示词')}
+      <div
         style={{ height: '100%' }}
-      />
+        onDragOverCapture={blockChatDrag}
+        onDropCapture={blockChatDrag}
+      >
+        <Chat
+          chats={chats}
+          roleConfig={roleConfig}
+          onMessageSend={(content) => onSend(content)}
+          onClear={onClear}
+          renderInputArea={renderInputArea}
+          chatBoxRenderConfig={{
+            renderChatBoxContent,
+            renderChatBoxTitle: () => null,
+            renderChatBoxAction: () => null,
+          }}
+          showClearContext
+          placeholder={t('请输入图片生成提示词')}
+          style={{ height: '100%' }}
+        />
+      </div>
       <ImagePreviewModal
         visible={preview.visible}
         src={preview.src}

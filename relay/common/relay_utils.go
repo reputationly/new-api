@@ -210,8 +210,12 @@ func ValidateBasicTaskRequest(c *gin.Context, info *RelayInfo, action string) *d
 		return createTaskError(err, "invalid_request", http.StatusBadRequest, true)
 	}
 
-	if taskErr := validatePrompt(req.Prompt); taskErr != nil {
-		return taskErr
+	// sr(视频超分)的输出完全由源视频(metadata.video)决定,不需要提示词,允许空 prompt;
+	// 其余任务类型仍必填。
+	if taskType, _ := req.Metadata["task_type"].(string); taskType != "sr" {
+		if taskErr := validatePrompt(req.Prompt); taskErr != nil {
+			return taskErr
+		}
 	}
 
 	if len(req.Images) == 0 && strings.TrimSpace(req.Image) != "" {

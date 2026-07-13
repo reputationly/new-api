@@ -20,17 +20,13 @@ export const VIDEO_CAPABILITIES = [
   '视频编辑',
 ];
 
-// 提示词预设:点击对应按钮清空输入框并填入该提示词(体验区快速试玩)。
+// 提示词预设:点击对应按钮清空输入框并填入该提示词(体验区快速试玩,仅文生视频展示)。
 export const VIDEO_PROMPT_PRESETS = [
-  'A woman with light skin, wearing a blue jacket and a black hat with a veil, looks down and to her right, then back up as she speaks; she has brown hair styled in an updo, light brown eyebrows, and is wearing a white collared shirt under her jacket; the camera remains stationary on her face as she speaks; the background is out of focus, but shows trees and people in period clothing; the scene is captured in real-life footage.',
-  "A man with graying hair, a beard, and a gray shirt looks down and to his right, then turns his head to the left. The camera angle is a close-up, focused on the man's face. The lighting is dim, with a greenish tint. The scene appears to be real-life footage.",
-  'A clear, turquoise river flows through a rocky canyon, cascading over a small waterfall and forming a pool of water at the bottom. The river is the main focus of the scene, with its clear water reflecting the surrounding trees and rocks. The canyon walls are steep and rocky, with some vegetation growing on them. The trees are mostly pine trees, with their green needles contrasting with the brown and gray rocks. The overall tone of the scene is one of peace and tranquility.',
-  'A young woman in a traditional Mongolian dress is peeking through a sheer white curtain, her face showing a mix of curiosity and apprehension. The woman has long black hair styled in two braids, adorned with white beads, and her eyes are wide with a hint of surprise. Her dress is a vibrant blue with intricate gold embroidery, and she wears a matching headband with a similar design. The background is a simple white curtain, which creates a sense of mystery and intrigue.',
+  '中景，一位穿米色针织衫的年轻女性坐在临窗的咖啡馆座位上，桌上的咖啡冒着热气。她轻轻搅动咖啡，抬头微笑，窗外阳光透过百叶窗在她脸上投下条纹光影。镜头缓慢左移，晨光，柔光，暖色调，低对比度，浅景深，生活方式广告质感。',
+  '特写，一块厚切和牛牛排在铸铁锅中煎烤，金黄色的黄油在肉块边缘融化冒泡。油脂滋滋作响，厨师用勺子将热黄油缓缓淋在牛排表面。固定镜头微距，暖色调，侧光突出油脂光泽，浅景深，高端美食广告质感。',
+  '低角度仰拍，一位穿着发光机能外套的女性站在未来都市的雨夜街头，身后是层层叠叠的全息广告牌和飞行器航线。她转身走入霓虹小巷，外套光纹随步伐流动。镜头跟随移动，荧光加霓虹混合光源，紫红色调，高对比度，赛博朋克风格。',
+  '三维卡通动画，皮克斯动画电影质感。中景，一台方头方脑的黄色小机器人，履带底盘，两只大大的双筒望远镜式眼睛，在洒满阳光的花园里。它伸出机械手轻轻碰了碰一朵向日葵，被弹回的花瓣吓得后退，眼睛惊讶地放大，随后歪头发出好奇的姿态。镜头低角度缓慢环绕，清晨柔光，暖色调，金属漆面反射细腻，全局光照，三维渲染，皮克斯风格。',
 ];
-
-// 视频默认负向提示词(Wan 官方推荐):抑制过曝/静止/畸形等常见劣化,默认预填。
-export const VIDEO_DEFAULT_NEGATIVE_PROMPT =
-  '色调艳丽,过曝,静态,细节模糊不清,字幕,风格,作品,画作,画面,静止,整体发灰,最差质量,低质量,JPEG压缩残留,丑陋的,残缺的,多余的手指,画得不好的手部,画得不好的脸部,畸形的,毁容的,形态畸形的肢体,手指融合,静止不动的画面,杂乱的背景,三条腿,背景人很多,倒着走';
 
 // 视频宽高比(文生视频):可在运营后台按模型配置允许集,未配置默认全集。
 export const VIDEO_ASPECT_RATIOS = ['16:9', '9:16', '1:1', '4:3', '3:4'];
