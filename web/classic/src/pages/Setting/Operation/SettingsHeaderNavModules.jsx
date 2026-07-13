@@ -47,7 +47,6 @@ export default function SettingsHeaderNavModules(props) {
       requireAuth: false, // 默认不需要登录鉴权
     },
     docs: true,
-    canvas: false,
     about: true,
   });
 
@@ -88,7 +87,6 @@ export default function SettingsHeaderNavModules(props) {
         requireAuth: false,
       },
       docs: true,
-      canvas: false,
       about: true,
     };
     setHeaderNavModules(defaultModules);
@@ -144,10 +142,8 @@ export default function SettingsHeaderNavModules(props) {
           };
         }
 
-        // 旧配置没有 canvas 键时按灰度默认关闭补键，避免保存时把该键静默丢掉
-        if (typeof modules.canvas === 'undefined') {
-          modules.canvas = false;
-        }
+        // 画布已改为按角色（管理员及以上）可见，不再有顶栏开关，丢弃历史 canvas 键
+        delete modules.canvas;
 
         setHeaderNavModules(modules);
       } catch (error) {
@@ -160,7 +156,6 @@ export default function SettingsHeaderNavModules(props) {
             requireAuth: false,
           },
           docs: true,
-          canvas: false,
           about: true,
         };
         setHeaderNavModules(defaultModules);
@@ -190,11 +185,6 @@ export default function SettingsHeaderNavModules(props) {
       key: 'docs',
       title: t('文档'),
       description: t('系统文档和帮助信息'),
-    },
-    {
-      key: 'canvas',
-      title: t('画布'),
-      description: t('内置无限画布 AI 创作空间'),
     },
     {
       key: 'about',
