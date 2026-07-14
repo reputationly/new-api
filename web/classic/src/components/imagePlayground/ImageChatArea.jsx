@@ -234,6 +234,16 @@ const ImageChatArea = ({
     };
     return (
       <div className='p-2 sm:p-4'>
+        {generating && (
+          <Typography.Text
+            type='warning'
+            className='text-xs block mb-2 text-center'
+          >
+            {t(
+              '图片生成中，请勿刷新页面或切换到其他功能页，否则本次任务将中断，需重新生成',
+            )}
+          </Typography.Text>
+        )}
         {turnLimitReached && (
           <Typography.Text
             type='warning'
