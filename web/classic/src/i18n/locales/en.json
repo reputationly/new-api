@@ -1756,6 +1756,7 @@
     "图像生成中…": "Generating image…",
     "图片生成失败": "Image generation failed",
     "生成已中断，请重试": "Generation was interrupted, please retry",
+    "图片生成中，请勿刷新页面或切换到其他功能页，否则本次任务将中断，需重新生成": "Generating image — do not refresh or switch to another page, otherwise this task will be interrupted and need to be regenerated.",
     "图像已生成": "Image generated",
     "欢迎使用 AI 图像生成，请在下方输入您的提示词": "Welcome to AI image generation. Enter your prompt below.",
     "请输入图片生成提示词": "Enter an image generation prompt",
