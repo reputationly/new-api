@@ -34,11 +34,10 @@ type obsConfig struct {
 	AllowedURLHosts []string
 }
 
-// obsStore 基于 aws-sdk-go-v2 s3 的 OBS 实现。
+// obsStore 基于 aws-sdk-go-v2 s3 的 OBS 实现（GET 签名走原生协议，见 native_sign.go）。
 type obsStore struct {
 	cfg      obsConfig
 	client   *s3.Client
-	presign  *s3.PresignClient
 	download *http.Client
 }
 
@@ -58,9 +57,8 @@ func newOBSStore(cfg obsConfig) (*obsStore, error) {
 		o.UsePathStyle = false // OBS 推荐 virtual-hosted-style
 	})
 	return &obsStore{
-		cfg:     cfg,
-		client:  client,
-		presign: s3.NewPresignClient(client),
+		cfg:    cfg,
+		client: client,
 		download: &http.Client{
 			Timeout: 5 * time.Minute,
 			// 重定向也可能指向内网：每一跳都重新做 SSRF 校验（scheme + DNS 解析后过滤私网）。
@@ -249,24 +247,13 @@ func validateUpstreamURLSSRF(rawURL string) error {
 	return nil
 }
 
+// Sign 走原生 OBS URL 签名而非 SigV4 presign（缓存命中 + HCSO 文档背书，见 native_sign.go）。
 func (s *obsStore) Sign(ctx context.Context, key string, ttl time.Duration, opts ...SignOption) (string, error) {
 	var o SignOptions
 	for _, fn := range opts {
 		fn(&o)
 	}
-	input := &s3.GetObjectInput{
-		Bucket: aws.String(s.cfg.Bucket),
-		Key:    aws.String(key),
-	}
-	if o.DownloadName != "" {
-		input.ResponseContentDisposition = aws.String(
-			fmt.Sprintf("attachment; filename=%q", o.DownloadName))
-	}
-	req, err := s.presign.PresignGetObject(ctx, input, s3.WithPresignExpires(ttl))
-	if err != nil {
-		return "", err
-	}
-	return req.URL, nil
+	return nativeSignedGetURL(s.cfg, key, ttl, o, time.Now())
 }
 
 func (s *obsStore) Delete(ctx context.Context, key string) error {
