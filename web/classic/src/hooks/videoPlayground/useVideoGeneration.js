@@ -104,6 +104,32 @@ const persistConversations = (storageKey, list) => {
 let idSeq = 0;
 const genId = () => `vid-${Date.now()}-${idSeq++}`;
 
+// completed 视频的 videoUrl 可由 taskId 重建(/v1/videos/{taskId}/content,后端每次代理/签名)。
+// 初始加载 strip 会把 idb 引用剥成 '',若在 hydrate 未完成的窗口发生一次 persist,空值会覆盖
+// localStorage 里的引用而永久丢失 → 渲染兜底成「生成中 100%」。这里对「已完成、有 taskId、
+// videoUrl 为空」的消息用 taskId 重建直连 URL:内存里始终非空,persist 落的是可重建的直连
+// URL(isDirectUrl 原样保留),localStorage 自愈;已损坏的历史数据加载即恢复。identity 保持:
+// 无改动的 conv/message 原样返回,不破坏 hydrate 的引用比对。
+const ensureVideoUrls = (list) => {
+  if (!Array.isArray(list)) return list;
+  return list.map((conv) => {
+    let changed = false;
+    const messages = (conv.messages || []).map((m) => {
+      if (
+        m.role === 'assistant' &&
+        m.status === VIDEO_STATUS.COMPLETED &&
+        m.taskId &&
+        !m.videoUrl
+      ) {
+        changed = true;
+        return { ...m, videoUrl: buildVideoContentUrl(m.taskId) };
+      }
+      return m;
+    });
+    return changed ? { ...conv, messages } : conv;
+  });
+};
+
 // 兼容 OpenAI 错误({error:{message}})与任务错误({code,message,data})两种形态
 const extractApiErrMsg = (error, fallback) => {
   const d = error?.response?.data || {};
@@ -155,7 +181,11 @@ export const useVideoGeneration = ({ mode = 'text2video' } = {}) => {
   const initialConvsRef = useRef(null);
   const [conversations, setConversations] = useState(() => {
     const raw = loadConversations(storageKey);
-    const stripped = stripUnresolvedMediaRefs(raw, VIDEO_MEDIA_SCHEMA);
+    // strip 后立刻用 taskId 重建 completed 视频的空 videoUrl,再存进 initialConvsRef——
+    // 保证 initialSet 与 state 引用一致(hydrate 的引用比对不被破坏)。
+    const stripped = ensureVideoUrls(
+      stripUnresolvedMediaRefs(raw, VIDEO_MEDIA_SCHEMA),
+    );
     initialConvsRef.current = { raw, stripped };
     return stripped;
   });
@@ -198,19 +228,23 @@ export const useVideoGeneration = ({ mode = 'text2video' } = {}) => {
         ...VIDEO_MEDIA_SCHEMA.convStringFields,
       ];
       setConversations((prev) =>
-        prev.map((c) => {
-          const h = hydratedById.get(c.id);
-          if (!h) return c;
-          // 挂载至今未被换过引用 → 整条用 hydrated(含还原的媒体 + 原消息)。
-          if (initialSet.has(c)) return h;
-          // 已被 patch(如 resume-poll):只把 conv 级媒体字段还原到实时会话上,
-          // 保留其实时消息/状态。
-          const merged = { ...c };
-          mediaFields.forEach((f) => {
-            merged[f] = h[f];
-          });
-          return merged;
-        }),
+        // hydrated 版本若 IDB blob 缺失,videoUrl 会是 '';外面再兜一层 taskId 重建,
+        // 避免 completed 消息被还原成空 URL 而渲染成「生成中」。
+        ensureVideoUrls(
+          prev.map((c) => {
+            const h = hydratedById.get(c.id);
+            if (!h) return c;
+            // 挂载至今未被换过引用 → 整条用 hydrated(含还原的媒体 + 原消息)。
+            if (initialSet.has(c)) return h;
+            // 已被 patch(如 resume-poll):只把 conv 级媒体字段还原到实时会话上,
+            // 保留其实时消息/状态。
+            const merged = { ...c };
+            mediaFields.forEach((f) => {
+              merged[f] = h[f];
+            });
+            return merged;
+          }),
+        ),
       );
     })();
     return () => {

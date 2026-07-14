@@ -1755,6 +1755,7 @@
     "图片链接已复制": "Image link copied",
     "图像生成中…": "Generating image…",
     "图片生成失败": "Image generation failed",
+    "生成已中断，请重试": "Generation was interrupted, please retry",
     "图像已生成": "Image generated",
     "欢迎使用 AI 图像生成，请在下方输入您的提示词": "Welcome to AI image generation. Enter your prompt below.",
     "请输入图片生成提示词": "Enter an image generation prompt",

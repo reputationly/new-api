@@ -75,6 +75,20 @@ const persistConversations = (storageKey, list) => {
 let idSeq = 0;
 const genId = () => `img-${Date.now()}-${idSeq++}`;
 
+// 图片生成是一次同步请求,没有可续查的任务句柄(不像视频有 taskId)。切走页面会卸载本
+// 页,在途请求随之丢弃、其完成回调落在已卸载实例上失效 → 结果连 localStorage 都没落。
+// 因此初始加载时残留的 pending 助手消息一定是被打断的,判为失败(可重发),避免历史里永远
+// 卡在「生成中」。仅在 mount 载入时调用:此刻不可能有真正进行中的生成。
+const markInterruptedAsFailed = (list, errText) =>
+  (Array.isArray(list) ? list : []).map((conv) => ({
+    ...conv,
+    messages: (conv.messages || []).map((m) =>
+      m.role === 'assistant' && m.status === IMAGE_GEN_STATUS.PENDING
+        ? { ...m, status: IMAGE_GEN_STATUS.FAILED, error: errText }
+        : m,
+    ),
+  }));
+
 export const useImageGeneration = ({ mode = 'text2image' } = {}) => {
   const { t } = useTranslation();
   const [statusState] = useContext(StatusContext);
@@ -101,7 +115,12 @@ export const useImageGeneration = ({ mode = 'text2image' } = {}) => {
   // currentConvId 为 null 表示「新对话」（尚未开始生成）
   const initialConvsRef = useRef(null);
   const [conversations, setConversations] = useState(() => {
-    const raw = loadConversations(storageKey);
+    // 先把被打断的残留 pending 判为失败,再喂给 strip / hydrate(raw 亦供 hydrate,
+    // 一并修正才能保证媒体还原后的版本不会把 pending 带回来)。
+    const raw = markInterruptedAsFailed(
+      loadConversations(storageKey),
+      t('生成已中断，请重试'),
+    );
     const stripped = stripUnresolvedMediaRefs(raw, IMAGE_MEDIA_SCHEMA);
     initialConvsRef.current = { raw, stripped };
     return stripped;
