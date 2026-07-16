@@ -18,12 +18,6 @@ import { UserContext } from '../../context/User';
 import { blockChatDrag } from '../playground/blockChatDrag';
 import ImagePreviewModal from './ImagePreviewModal';
 
-// 预设按钮上显示的短标签:截断长提示词,避免撑爆按钮。
-const presetLabel = (s) => {
-  const v = (s || '').trim();
-  return v.length > 22 ? `${v.slice(0, 22)}…` : v;
-};
-
 const WELCOME_ID = '__welcome__';
 const MAX_PROMPT_LEN = 5000;
 
@@ -90,6 +84,7 @@ const ImageChatArea = ({
   generating,
   turnLimitReached = false,
   missingRequiredImage = false,
+  showPresets = false,
   onSend,
   onRegenerate,
   onClear,
@@ -252,20 +247,22 @@ const ImageChatArea = ({
             {t('本轮对话已达生成上限，请点击右侧「新对话」继续')}
           </Typography.Text>
         )}
-        {/* 预设提示词:扁长按钮,防误触;点击清空当前输入并填入该提示词 */}
-        <div className='flex flex-wrap gap-2 mb-2'>
-          {IMAGE_PROMPT_PRESETS.map((p, i) => (
-            <button
-              key={i}
-              type='button'
-              title={p}
-              onClick={() => setInputValue(p)}
-              className='text-xs text-gray-600 bg-gray-100 hover:bg-gray-200 rounded-full px-3 py-1.5 truncate max-w-[220px] transition-colors'
-            >
-              {presetLabel(p)}
-            </button>
-          ))}
-        </div>
+        {/* 预设提示词(仅文生图):单行等宽排列,超长 CSS 截断;点击清空当前输入并填入 */}
+        {showPresets && (
+          <div className='flex gap-2 mb-2 overflow-hidden'>
+            {IMAGE_PROMPT_PRESETS.map((p, i) => (
+              <button
+                key={i}
+                type='button'
+                title={p}
+                onClick={() => setInputValue(p)}
+                className='flex-1 min-w-0 truncate text-xs text-gray-600 bg-gray-100 hover:bg-gray-200 rounded-full px-3 py-1.5 transition-colors'
+              >
+                {p}
+              </button>
+            ))}
+          </div>
+        )}
         <div className='relative'>
           <TextArea
             value={inputValue}

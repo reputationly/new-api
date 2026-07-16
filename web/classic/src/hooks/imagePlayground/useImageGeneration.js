@@ -148,6 +148,8 @@ export const useImageGeneration = ({ mode = 'text2image' } = {}) => {
   conversationsRef.current = conversations;
   const lockedRef = useRef(locked);
   lockedRef.current = locked;
+  const groupRef = useRef(inputs.group);
+  groupRef.current = inputs.group;
 
   // mount 后从 IDB 还原媒体,按初始对象引用逐条合并(不整体覆盖,见设计 §4.1.3)。
   useEffect(() => {
@@ -271,9 +273,13 @@ export const useImageGeneration = ({ mode = 'text2image' } = {}) => {
   }, [userState, imageGroups, t]);
 
   const loadModels = useCallback(async () => {
+    const requestedGroup = inputs.group;
     try {
-      const { success, data } = await getUserModelsCached(inputs.group);
+      const { success, data } = await getUserModelsCached(requestedGroup);
       if (!success) return;
+      // 分组在等待响应期间已切换(初始 '' → 用户分组 → 按图片模型过滤后的分组会连续
+      // 变化数次):过期响应直接丢弃,否则旧分组的空结果会最后到达并覆盖正确的模型列表。
+      if (requestedGroup !== groupRef.current) return;
       let list = Array.isArray(data) ? data : [];
       // 严格过滤：仅保留图片模型（后端识别 ∪ 管理员声明）
       list = list.filter((m) => imageModelSet.has(m));
