@@ -1,11 +1,11 @@
 // 图片模型相关常量
 
-// 提示词预设:点击对应按钮清空输入框并填入该提示词(体验区快速试玩)。
+// 提示词预设:点击对应按钮清空输入框并填入该提示词(体验区快速试玩,仅文生图展示)。
 export const IMAGE_PROMPT_PRESETS = [
-  'The ancient battlefield, thousands of troops and horses to fight, the situation is very fierce, countless casualties',
-  'Peach and water photography, light pink background, surreal still life photography, macro shot tropical fruits, translucent textures, rendered in zbrush style, anime aesthetic, fairy tale core, sparkling water droplets, specular reflection, gorgeous colors, 8k',
-  'Stock image, front view, white humidifier placed on the bedside table, white wall, light coming in from the upper left, dappled light and shadow, Scandinavian style, wide-angle shot, central composition, simple background, high-definition, ultra-detailed, high-resolution',
-  "A stunning and vibrant 3D render scene featuring a decadent chocolate strawberry cake with the number '4000' displayed by luxurious candles. The cake is beautifully adorned with colorful confetti, dripping frosting, and a sparkly red ribbon. Surrounding the cake are floating candles, thumbs up icons, and red neon hearts. Iconic superheroes such as Hulk, Spider-Man, Batman, Captain America, and Superman are seen celebrating the momentous occasion. The bold, glowing words 'followers Thank you ideogramers!' are written on the cake, indicating a celebration of a significant milestone among social media followers. The image bears the red neon firm signature \"Hans Darias AI\" and is captured in a cinematic, fashionable style, photo, cinematic, fashion",
+  '远景镜头，在壮丽的雪山背景下，两个小小的人影站在远处山顶，背对着镜头，静静地观赏着日落的美景。夕阳的余晖洒在雪山上，呈现出一片金黄色的光辉，与蔚蓝的天空形成鲜明对比。两人仿佛被这壮观的自然景象所吸引，整个画面充满了宁静与和谐。',
+  '长焦镜头下，一只猎豹在郁郁葱葱的森林中站立，面对镜头，背景被巧妙地虚化，猎豹的面部成为画面的绝对焦点。阳光透过树叶的缝隙，洒在猎豹身上，形成斑驳的光影效果，增强了视觉冲击力。',
+  '18岁的中国女孩，古代服饰，圆脸，看着镜头，民族优雅的服装，商业摄影，室外，电影级光照，半身特写，精致的淡妆，锐利的边缘。',
+  '电影感健身宣传活动，超大哑铃斜放如同标志性道具，穿红色运动装和白色短裤的女性模特坐在哑铃一侧，一条腿弯曲，一条伸直，极简黑色工作室，反光地面，背后用大号字体写着醒目的“STRENGTH”，光线锐利，构图超级干净，奢华运动美学。',
 ];
 
 export const IMAGE_API_ENDPOINTS = {

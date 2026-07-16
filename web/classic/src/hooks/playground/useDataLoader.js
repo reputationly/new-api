@@ -51,6 +51,8 @@ export const useDataLoader = (
 ) => {
   const { t } = useTranslation();
   const [statusState] = useContext(StatusContext);
+  const groupRef = useRef(inputs.group);
+  groupRef.current = inputs.group;
   // 本地保存 pricing 的 model->端点类型、model->分组 映射，用于"仅展示文本模型/分组"过滤。
   const pricingRef = useRef({ types: new Map(), groups: new Map() });
   const [pricingVersion, setPricingVersion] = useState(0);
@@ -73,12 +75,16 @@ export const useDataLoader = (
   ]);
 
   const loadModels = useCallback(async () => {
+    const requestedGroup = inputs.group;
     try {
       const { success, message, data } = await getUserModelsCached(
-        inputs.group,
+        requestedGroup,
       );
 
       if (success) {
+        // 分组在等待响应期间已切换(初始值 → 按文本模型过滤后的分组会连续变化数次):
+        // 过期响应直接丢弃,否则旧分组的结果会最后到达并覆盖正确的模型列表。
+        if (requestedGroup !== groupRef.current) return;
         const previousModel = inputs.model;
         // 仅保留文本模型（排除 图片/视频/embedding/rerank）。pricing 不可用时不过滤。
         let list = Array.isArray(data) ? data : [];
