@@ -380,7 +380,7 @@ function consumeResponseStreamText(state: ResponseStreamState, text: string, onD
     state.buffer += text;
     for (;;) {
         const match = state.buffer.match(/\r?\n\r?\n/);
-        if (!match) break;
+        if (!match || match.index === undefined) break;
         consumeResponseStreamBlock(state.buffer.slice(0, match.index), state, onDelta);
         state.buffer = state.buffer.slice(match.index + match[0].length);
     }
@@ -534,7 +534,7 @@ function consumeGeminiStreamText(state: GeminiStreamState, text: string, onDelta
     state.buffer += text;
     for (;;) {
         const match = state.buffer.match(/\r?\n\r?\n/);
-        if (!match) break;
+        if (!match || match.index === undefined) break;
         consumeGeminiStreamBlock(state.buffer.slice(0, match.index), state, onDelta);
         state.buffer = state.buffer.slice(match.index + match[0].length);
     }
