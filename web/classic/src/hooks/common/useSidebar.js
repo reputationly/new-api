@@ -32,6 +32,7 @@ export const DEFAULT_ADMIN_CONFIG = {
     video: false,
     image: false,
     audio: false,
+    music: false,
     chat: true,
   },
   console: {

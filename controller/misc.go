@@ -112,6 +112,9 @@ func GetStatus(c *gin.Context) {
 		// 音频模型配置（按模型：能力声明 + 字数上限 + 参考音大小上限）
 		"AudioModelConfig": common.OptionMap["AudioModelConfig"],
 
+		// 音乐模型配置（按模型：能力声明 + 字数上限 + 参考音大小上限，ACE-Step 等文生音乐）
+		"MusicModelConfig": common.OptionMap["MusicModelConfig"],
+
 		"oidc_enabled":                system_setting.GetOIDCSettings().Enabled,
 		"oidc_client_id":              system_setting.GetOIDCSettings().ClientId,
 		"oidc_authorization_endpoint": system_setting.GetOIDCSettings().AuthorizationEndpoint,

@@ -86,6 +86,7 @@ import {
   Ticket,
   Users,
   Video,
+  Music,
 } from 'lucide-react';
 import {
   SiAtlassian,
@@ -133,6 +134,8 @@ export function getLucideIcon(key, selected = false) {
       return <TerminalSquare {...commonProps} color={iconColor} />;
     case 'video':
       return <Video {...commonProps} color={iconColor} />;
+    case 'music':
+      return <Music {...commonProps} color={iconColor} />;
     case 'image':
       return <ImageIcon {...commonProps} color={iconColor} />;
     case 'chat':

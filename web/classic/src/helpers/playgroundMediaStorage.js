@@ -39,6 +39,10 @@ const KNOWN_STORAGE_KEYS = [
   'video_playground_conversations_sr',
   'video_playground_conversations_vace',
   'audio_playground_conversations',
+  // 音乐体验区按 mode 分键(见 musicPlayground.constants.js musicHistoryStorageKey)
+  'music_playground_conversations_t2m',
+  'music_playground_conversations_cover',
+  'music_playground_conversations_repaint',
 ];
 
 let rndSeq = 0;

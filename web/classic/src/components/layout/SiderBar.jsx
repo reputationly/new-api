@@ -55,6 +55,7 @@ const routerMap = {
   video: '/console/video',
   image: '/console/image',
   audio: '/console/audio',
+  music: '/console/music',
   personal: '/console/personal',
   kyc: '/console/kyc',
   enterprise: '/console/enterprise',
@@ -324,6 +325,11 @@ const SiderBar = ({ onNavigate = () => {} }) => {
         text: t('语音模型'),
         itemKey: 'audio',
         to: '/audio',
+      },
+      {
+        text: t('音乐模型'),
+        itemKey: 'music',
+        to: '/music',
       },
       {
         text: t('聊天'),

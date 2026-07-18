@@ -27,7 +27,13 @@ var AudioCapabilities = []string{
 	"语音合成",
 }
 
-// IsCapabilityTag 判断某个标签词是否属于能力词表（图片、视频或语音）。
+var MusicCapabilities = []string{
+	"文生音乐",
+	"音乐改编",
+	"音乐重绘",
+}
+
+// IsCapabilityTag 判断某个标签词是否属于能力词表（图片、视频、语音或音乐）。
 // 用于模型广场对标签归类去重：命中者归入「模型能力」分类。
 func IsCapabilityTag(tag string) bool {
 	for _, c := range ImageCapabilities {
@@ -41,6 +47,11 @@ func IsCapabilityTag(tag string) bool {
 		}
 	}
 	for _, c := range AudioCapabilities {
+		if c == tag {
+			return true
+		}
+	}
+	for _, c := range MusicCapabilities {
 		if c == tag {
 			return true
 		}
