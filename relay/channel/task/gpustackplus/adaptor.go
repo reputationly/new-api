@@ -59,6 +59,8 @@ import (
 var validTaskTypes = map[string]bool{
 	"t2i": true, "i2i": true, "t2v": true, "i2v": true, "flf2v": true,
 	"tts": true, "s2v": true, "sr": true, "vace": true,
+	// 音乐生成(ACE-Step):t2m 纯文本、cover 参考音频、repaint 源音频。
+	"t2m": true, "cover": true, "repaint": true,
 }
 
 // legacyInputKeys 旧的原始输入 / 引擎原生路径字段:输入统一走 input_refs,这些键
@@ -68,9 +70,12 @@ var legacyInputKeys = map[string]bool{
 	"image": true, "last_frame": true, "image_mask": true, "audio": true,
 	"voice": true, "emotion_audio": true,
 	"video": true, "src_video": true, "src_mask": true, "src_ref_images": true,
+	// 音乐(ACE-Step)原始输入 + 引擎原生路径字段。
+	"reference_audio": true, "src_audio": true,
 	"image_path": true, "last_frame_path": true, "image_mask_path": true,
 	"audio_path": true, "spk_audio_path": true, "emo_audio_path": true,
 	"video_path": true, "save_result_path": true,
+	"reference_audio_path": true, "src_audio_path": true,
 }
 
 // localBadRequest 构造本地 400 skip-retry 错误:BuildRequestBody 里的输入校验 /
@@ -256,6 +261,10 @@ func (a *TaskAdaptor) BuildRequestBody(c *gin.Context, info *relaycommon.RelayIn
 	case "vace":
 		// 视频编辑:源视频 + 可选蒙版 + 可选参考图。
 		refs, err = materializeVACEInputs(c, info, taskType, modelName, req)
+	case "t2m", "cover", "repaint":
+		// 音乐生成:t2m 无输入;cover 需参考音频(metadata.reference_audio);
+		// repaint 需源音频(metadata.src_audio)。
+		refs, err = materializeMusicInputs(c, info, taskType, modelName, req)
 	default:
 		// t2v/i2v/flf2v/i2i/t2i:有图才物化(纯文本 t2v/t2i 无输入)。
 		// 首尾帧(flf2v):images[0]=首帧→image,images[1]=尾帧→last_frame;其余只取首帧。
@@ -320,6 +329,9 @@ func inferTaskType(modelName string) string {
 		return "sr"
 	case strings.Contains(m, "vace"):
 		return "vace"
+	// 音乐生成:acestep 系模型默认 t2m;cover/repaint 由 metadata.task_type 显式指定。
+	case strings.Contains(m, "acestep"):
+		return "t2m"
 	case strings.Contains(m, "flf2v"):
 		return "flf2v"
 	case strings.Contains(m, "i2v"):
@@ -553,6 +565,40 @@ func materializeTTSInputs(c *gin.Context, info *relaycommon.RelayInfo, taskType,
 			m.Cleanup()
 			return nil, err
 		}
+	}
+	return m.Refs(), nil
+}
+
+// materializeMusicInputs 物化音乐生成(ACE-Step)的音频输入:t2m 无输入(纯 prompt);
+// cover 需参考音频(metadata.reference_audio);repaint 需源音频(metadata.src_audio)。
+// 门面把 reference_audio → reference_audio_path、src_audio → src_audio_path 映射给引擎。
+func materializeMusicInputs(c *gin.Context, info *relaycommon.RelayInfo, taskType, modelName string, req relaycommon.TaskSubmitReq) (map[string][]string, error) {
+	if taskType == "t2m" {
+		return nil, nil // 纯文本生成,无音频输入
+	}
+	var field nfsinput.Field
+	var meta, label string
+	switch taskType {
+	case "cover":
+		field, meta, label = nfsinput.FieldReferenceAudio, "reference_audio", "cover(覆盖生成)需要参考音频:请在 metadata.reference_audio"
+	case "repaint":
+		field, meta, label = nfsinput.FieldSrcAudio, "src_audio", "repaint(音乐重绘)需要源音频:请在 metadata.src_audio"
+	default:
+		return nil, fmt.Errorf("模型 %s 的音乐任务类型 %s 不支持", modelName, taskType)
+	}
+	audio := metadataString(req.Metadata, meta)
+	if audio == "" {
+		return nil, fmt.Errorf("模型 %s 的任务类型 %s 提供音频 URL 或 base64", modelName, label)
+	}
+	m := nfsinput.NewMaterializer(taskType, modelName, fmt.Sprintf("%d", info.UserId), inputGroupID(info))
+	// 音频大小上限(AudioModelConfig,按模型/全局默认;0=不限):服务端兜底,防直连绕过。
+	if maxBytes, ok := common.AudioRefAudioMaxBytesForModel(req.Model, info.OriginModelName, modelName); ok {
+		m.SetMaxBytes(maxBytes)
+	}
+	// 单值音频(必填),失败回滚。
+	if err := m.AddString(c.Request.Context(), field, 0, false, audio); err != nil {
+		m.Cleanup()
+		return nil, err
 	}
 	return m.Refs(), nil
 }

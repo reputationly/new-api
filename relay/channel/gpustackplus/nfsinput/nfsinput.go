@@ -51,6 +51,9 @@ const (
 	FieldSrcVideo     Field = "src_video"      // VACE 源视频(vace),单值
 	FieldSrcMask      Field = "src_mask"       // VACE 蒙版视频(vace),单值
 	FieldSrcRefImages Field = "src_ref_images" // VACE 参考图(vace R2V),支持多图 ≤MaxImageRefs
+	// 以下为音乐输入(ACE-Step),门面映射见 routes/videos.py _INPUT_FIELDS。
+	FieldReferenceAudio Field = "reference_audio" // ACE-Step 参考音频(cover),单值
+	FieldSrcAudio       Field = "src_audio"       // ACE-Step 源音频(repaint),单值
 )
 
 const (
@@ -147,7 +150,7 @@ func extForField(field Field) string {
 	switch field {
 	case FieldVideo, FieldSrcVideo, FieldSrcMask:
 		return ".mp4"
-	case FieldAudio, FieldVoice, FieldEmotionAudio:
+	case FieldAudio, FieldVoice, FieldEmotionAudio, FieldReferenceAudio, FieldSrcAudio:
 		return ".wav"
 	default:
 		return ".png"
@@ -241,7 +244,7 @@ func magicOK(field Field, data []byte) bool {
 	switch field {
 	case FieldImage, FieldLastFrame, FieldImageMask, FieldSrcRefImages:
 		return isImageBytes(data)
-	case FieldAudio, FieldVoice, FieldEmotionAudio:
+	case FieldAudio, FieldVoice, FieldEmotionAudio, FieldReferenceAudio, FieldSrcAudio:
 		return isAudioBytes(data)
 	case FieldVideo, FieldSrcVideo, FieldSrcMask:
 		return isVideoBytes(data)
