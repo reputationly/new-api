@@ -217,7 +217,7 @@ func (a *TaskAdaptor) BuildRequestBody(c *gin.Context, info *relaycommon.RelayIn
 	// task_type 白名单校验(§N2):它可能来自 metadata,非法值既会让 NFS 写盘路径异常,
 	// 也会被门面拒;就地本地 400,不进后续物化 / 提交。
 	if !validTaskTypes[taskType] {
-		return nil, localBadRequest(fmt.Errorf("不支持的 task_type: %q(允许:t2i/i2i/t2v/i2v/flf2v/tts/s2v/sr/vace)", taskType))
+		return nil, localBadRequest(fmt.Errorf("不支持的 task_type: %q(允许:t2i/i2i/t2v/i2v/flf2v/tts/s2v/sr/vace/t2m/cover/repaint)", taskType))
 	}
 	// 输入兼容性防呆必须在物化之前(§N2 复审):否则 t2v/t2i 带图、flf2v 只给 1 张等非法
 	// 组合会先把图写到 NFS 再被拒,留下孤儿输入文件。这些检查只依赖 taskType / req,不需物化。
@@ -241,6 +241,23 @@ func (a *TaskAdaptor) BuildRequestBody(c *gin.Context, info *relaycommon.RelayIn
 		// 字数上限(AudioModelConfig,按模型/全局默认;0=不限制):就地本地 400,防前端绕过。
 		if err := common.ValidateAudioTextForModel(req.Prompt, req.Model, info.OriginModelName, modelName); err != nil {
 			return nil, localBadRequest(err)
+		}
+	}
+	if taskType == "t2m" || taskType == "cover" || taskType == "repaint" {
+		// 字数上限(MusicModelConfig,按模型/全局默认;0=不限制):就地本地 400,防前端(含
+		// 直连 /pg/videos)绕过。校验用户可控的全部文本:描述 prompt、歌词 lyrics、
+		// sample 模式描述 sample_query。任一字段超限即拒。
+		for _, txt := range []string{
+			req.Prompt,
+			metadataString(req.Metadata, "lyrics"),
+			metadataString(req.Metadata, "sample_query"),
+		} {
+			if strings.TrimSpace(txt) == "" {
+				continue
+			}
+			if err := common.ValidateMusicTextForModel(txt, req.Model, info.OriginModelName, modelName); err != nil {
+				return nil, localBadRequest(err)
+			}
 		}
 	}
 
@@ -591,8 +608,8 @@ func materializeMusicInputs(c *gin.Context, info *relaycommon.RelayInfo, taskTyp
 		return nil, fmt.Errorf("模型 %s 的任务类型 %s 提供音频 URL 或 base64", modelName, label)
 	}
 	m := nfsinput.NewMaterializer(taskType, modelName, fmt.Sprintf("%d", info.UserId), inputGroupID(info))
-	// 音频大小上限(AudioModelConfig,按模型/全局默认;0=不限):服务端兜底,防直连绕过。
-	if maxBytes, ok := common.AudioRefAudioMaxBytesForModel(req.Model, info.OriginModelName, modelName); ok {
+	// 参考音/源音大小上限(MusicModelConfig,按模型/全局默认;0=不限):服务端兜底,防直连绕过。
+	if maxBytes, ok := common.MusicRefAudioMaxBytesForModel(req.Model, info.OriginModelName, modelName); ok {
 		m.SetMaxBytes(maxBytes)
 	}
 	// 单值音频(必填),失败回滚。

@@ -346,6 +346,91 @@ func AudioRefAudioMaxBytesForModel(candidates ...string) (maxBytes int64, config
 	return 0, false
 }
 
+// ---- 音乐参数配置(ACE-Step 等文生音乐引擎,存 OptionMap 的 MusicModelConfig 键) ----
+//
+// JSON 结构(与前端 parseMusicModelConfig 对应):
+//
+//	Music: { "default": {"maxChars":int,"refAudioMaxMB":int},
+//	         "models": { "name": {"capabilities":[],"maxChars":int,"refAudioMaxMB":int} } }
+//
+// capabilities ∈ 文生音乐(t2m)/音乐改编(cover)/音乐重绘(repaint),供前端体验区按能力过滤模型 + tab。
+
+// MusicMaxCharsForModel 返回该音乐模型歌词/描述文本的字数上限(0=不限制)及是否配置了 MusicModelConfig。
+// 优先按模型,其次全局 default;两者都无返回 configured=false。
+func MusicMaxCharsForModel(candidates ...string) (maxChars int, configured bool) {
+	OptionMapRWMutex.RLock()
+	raw := OptionMap["MusicModelConfig"]
+	OptionMapRWMutex.RUnlock()
+	if strings.TrimSpace(raw) == "" {
+		return 0, false
+	}
+	var cfg struct {
+		Default struct {
+			MaxChars *int `json:"maxChars"`
+		} `json:"default"`
+		Models map[string]struct {
+			MaxChars *int `json:"maxChars"`
+		} `json:"models"`
+	}
+	if err := UnmarshalJsonStr(raw, &cfg); err != nil {
+		return 0, false
+	}
+	for _, name := range candidates {
+		if m, ok := cfg.Models[name]; ok && m.MaxChars != nil {
+			return *m.MaxChars, true
+		}
+	}
+	if cfg.Default.MaxChars != nil {
+		return *cfg.Default.MaxChars, true
+	}
+	return 0, false
+}
+
+// ValidateMusicTextForModel 校验歌词/描述文本长度:未配置或上限=0 放行;否则要求字符数不超过上限。
+// 按 rune 计数(与前端 text.length 对中文一致)。
+func ValidateMusicTextForModel(text string, candidates ...string) error {
+	maxChars, configured := MusicMaxCharsForModel(candidates...)
+	if !configured || maxChars <= 0 {
+		return nil
+	}
+	if n := len([]rune(text)); n > maxChars {
+		return fmt.Errorf("模型 %s 文本超过字数上限 %d(当前 %d)",
+			firstNonEmptyStr(candidates...), maxChars, n)
+	}
+	return nil
+}
+
+// MusicRefAudioMaxBytesForModel 返回该音乐模型参考音/源音大小上限(字节;0=不限制)及是否已配置。
+// 优先按模型,其次全局 default。用于 cover/repaint 服务端物化时兜底(前端上传限制可被直连绕过)。
+func MusicRefAudioMaxBytesForModel(candidates ...string) (maxBytes int64, configured bool) {
+	OptionMapRWMutex.RLock()
+	raw := OptionMap["MusicModelConfig"]
+	OptionMapRWMutex.RUnlock()
+	if strings.TrimSpace(raw) == "" {
+		return 0, false
+	}
+	var cfg struct {
+		Default struct {
+			RefAudioMaxMB *int `json:"refAudioMaxMB"`
+		} `json:"default"`
+		Models map[string]struct {
+			RefAudioMaxMB *int `json:"refAudioMaxMB"`
+		} `json:"models"`
+	}
+	if err := UnmarshalJsonStr(raw, &cfg); err != nil {
+		return 0, false
+	}
+	for _, name := range candidates {
+		if m, ok := cfg.Models[name]; ok && m.RefAudioMaxMB != nil {
+			return int64(*m.RefAudioMaxMB) * 1024 * 1024, true
+		}
+	}
+	if cfg.Default.RefAudioMaxMB != nil {
+		return int64(*cfg.Default.RefAudioMaxMB) * 1024 * 1024, true
+	}
+	return 0, false
+}
+
 var wxhRe = regexp.MustCompile(`^(\d+)x(\d+)$`)
 
 // DimsFromSize 解析 "WxH"(容忍 × ✕ * 等分隔符与空格)为像素宽高;无法解析

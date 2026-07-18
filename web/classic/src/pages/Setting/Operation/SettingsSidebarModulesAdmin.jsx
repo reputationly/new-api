@@ -159,6 +159,11 @@ export default function SettingsSidebarModulesAdmin(props) {
           title: t('语音模型'),
           description: t('语音合成生成'),
         },
+        {
+          key: 'music',
+          title: t('音乐模型'),
+          description: t('文生音乐生成'),
+        },
         { key: 'chat', title: t('聊天'), description: t('聊天会话管理') },
       ],
     },
