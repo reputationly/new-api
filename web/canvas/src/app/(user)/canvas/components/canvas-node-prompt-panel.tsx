@@ -9,6 +9,8 @@ import { defaultConfig, useConfigStore, useEffectiveConfig, type AiConfig } from
 import { CreditSymbol, requestCreditCost } from "@/constant/credits";
 import { canvasThemes } from "@/lib/canvas-theme";
 import { useThemeStore } from "@/stores/use-theme-store";
+import { capabilitySpec } from "@/services/capabilities/registry";
+import { CanvasCapabilitySettingsPopover } from "./canvas-capability-settings-popover";
 import { CanvasImageSettingsPopover } from "./canvas-image-settings-popover";
 import { CanvasPromptLibrary } from "./canvas-prompt-library";
 import { CanvasAudioSettingsPopover, type CanvasAudioSettingKey } from "./canvas-audio-settings-popover";
@@ -36,8 +38,11 @@ export function CanvasNodePromptPanel({ node, isRunning, onPromptChange, onConfi
     const theme = canvasThemes[useThemeStore((state) => state.theme)];
     const mode = defaultMode(node.type);
     const config = buildNodeConfig(globalConfig, node, mode);
+    const capSpec = capabilitySpec(node.metadata?.capability);
+    // 能力节点:提示词槽位可为 optional(如视频超分),允许空提示词提交
+    const promptOptional = Boolean(capSpec && capSpec.inputs.find((slot) => slot.key === "prompt")?.required === false);
     const hasTextContent = node.type === CanvasNodeType.Text && Boolean(node.metadata?.content?.trim());
-    const hasImageContent = node.type === CanvasNodeType.Image && Boolean(node.metadata?.content);
+    const hasImageContent = !capSpec && node.type === CanvasNodeType.Image && Boolean(node.metadata?.content);
     const isEditingExistingContent = hasTextContent || hasImageContent;
     const [prompt, setPrompt] = useState(isEditingExistingContent ? "" : node.metadata?.prompt || "");
     const credits = requestCreditCost({ channelMode: config.channelMode, model: config.model, count: mode === "image" ? config.count : 1 });
@@ -53,7 +58,7 @@ export function CanvasNodePromptPanel({ node, isRunning, onPromptChange, onConfi
 
     const submit = () => {
         const text = prompt.trim();
-        if (!text || isRunning) return;
+        if ((!text && !promptOptional) || isRunning) return;
         onGenerate(node.id, mode, text);
         setPrompt("");
     };
@@ -79,7 +84,9 @@ export function CanvasNodePromptPanel({ node, isRunning, onPromptChange, onConfi
             <div className="mt-2 flex min-w-0 items-center justify-between gap-2">
                 <div className="flex min-w-0 items-center gap-2">
                     <CanvasPromptLibrary onSelect={updatePrompt} />
-                    {mode === "image" ? (
+                    {capSpec ? (
+                        <CanvasCapabilitySettingsPopover node={node} spec={capSpec} onConfigChange={onConfigChange} />
+                    ) : mode === "image" ? (
                         <>
                             <ModelPicker config={config} value={config.model} onChange={(model) => onConfigChange(node.id, { model })} capability="image" onMissingConfig={() => openConfigDialog(true)} />
                             <CanvasImageSettingsPopover
@@ -109,7 +116,7 @@ export function CanvasNodePromptPanel({ node, isRunning, onPromptChange, onConfi
                     type="primary"
                     className="!h-10 !min-w-16 shrink-0 !rounded-full !px-3"
                     danger={isRunning}
-                    disabled={!isRunning && !prompt.trim()}
+                    disabled={!isRunning && !prompt.trim() && !promptOptional}
                     onClick={() => (isRunning ? onStop(node.id) : submit())}
                     aria-label={isRunning ? "停止生成" : "生成"}
                 >
