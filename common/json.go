@@ -10,6 +10,15 @@ func Unmarshal(data []byte, v any) error {
 	return json.Unmarshal(data, v)
 }
 
+// UnmarshalWithNumber 同 Unmarshal,但把 JSON 数字解码为 json.Number(保留原始文本),
+// 避免解到 any/map[string]any 时数字统一变 float64、大整数(>2^53)经 round-trip 丢精度。
+// 用于需要原样保留未改写字段再 Marshal 回去的场景(如 task: 引用的 body 定点改写)。
+func UnmarshalWithNumber(data []byte, v any) error {
+	dec := json.NewDecoder(bytes.NewReader(data))
+	dec.UseNumber()
+	return dec.Decode(v)
+}
+
 func UnmarshalJsonStr(data string, v any) error {
 	return json.Unmarshal(StringToByteSlice(data), v)
 }
