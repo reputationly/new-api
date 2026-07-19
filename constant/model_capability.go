@@ -1,9 +1,10 @@
 package constant
 
-// 图片 / 视频 / 语音模型能力枚举（中文即值），需与前端
+// 图片 / 视频 / 语音 / 音乐模型能力枚举（中文即值），需与前端
 // web/classic/src/constants/imagePlayground.constants.js 的 IMAGE_CAPABILITIES、
-// videoPlayground.constants.js 的 VIDEO_CAPABILITIES 与
-// audioPlayground.constants.js 的 AUDIO_PAGE_CAPABILITY 保持一致。
+// videoPlayground.constants.js 的 VIDEO_CAPABILITIES、
+// audioPlayground.constants.js 的 AUDIO_CAPABILITIES、
+// musicPlayground.constants.js 的 MUSIC_CAPABILITIES 保持一致。
 // 这些能力由运营设置里逐模型声明，作为「能力标签」在模型广场展示。
 var ImageCapabilities = []string{
 	"文生图",
@@ -23,14 +24,39 @@ var VideoCapabilities = []string{
 	"视频编辑",
 }
 
+// AudioCapabilities 四个语音(TTS)能力标签,区分 IndexTTS-2 的情感合成与 vLLM-Omni
+// 家族的语音合成/对话/设计 —— 归入体验区「语音模型」下的子标签页,并在模型广场同归
+// 「语音」能力分类。全部走门面 task_type=tts,按能力标签过滤模型选对应引擎:
+//
+//	情感合成 -> IndexTTS-2(voice 参考音色 + emotion_audio 情感参考音)
+//	语音合成 -> Qwen3-TTS/VoxCPM2/CosyVoice3/GLM-TTS/MOSS-TTS-Nano。单模型覆盖音色来源
+//	            (上传克隆 ref_audio + 可选 ref_text / 预设音色 speaker)与语言(language)两个
+//	            维度 —— 面板内以选项呈现,不再拆成独立能力。
+//	双人对话 -> MOSS-TTSD(ref_audio + ref_audio_2 双说话人参考音)
+//	声音设计 -> MOSS-VoiceGenerator(instructions 声线描述,无参考音)
 var AudioCapabilities = []string{
+	"情感合成",
 	"语音合成",
+	"双人对话",
+	"声音设计",
 }
 
+// MusicCapabilities 涵盖 ACE-Step 文生音乐/音乐改编/音乐重绘，以及扩散音频生成
+// （vLLM-Omni：AudioX + SoulX-Singer）的音效/视频配音/视频配乐/歌声合成 —— 这四类
+// 归入体验区「音乐模型」下的子标签页,并在模型广场同归「音乐」能力分类。
+//
+//	文生音效   -> AudioX t2a
+//	视频配音效 -> AudioX v2a / tv2a
+//	视频配乐   -> AudioX v2m / tv2m
+//	歌声合成   -> SoulX-Singer svs
 var MusicCapabilities = []string{
 	"文生音乐",
 	"音乐改编",
 	"音乐重绘",
+	"文生音效",
+	"视频配音效",
+	"视频配乐",
+	"歌声合成",
 }
 
 // IsCapabilityTag 判断某个标签词是否属于能力词表（图片、视频、语音或音乐）。

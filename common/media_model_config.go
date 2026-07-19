@@ -431,6 +431,39 @@ func MusicRefAudioMaxBytesForModel(candidates ...string) (maxBytes int64, config
 	return 0, false
 }
 
+// MusicVideoMaxBytesForModel 返回该音乐模型视频输入大小上限(字节;0=不限制)及是否已配置。
+// 优先按模型,其次全局 default。用于 AudioX 视频→音频/音乐(v2a/v2m/tv2a/tv2m)服务端物化
+// 时兜底——这些模型归「音乐」大类,其视频上限配在 MusicModelConfig.videoMaxMB(而非
+// VideoModelConfig),直连 /pg/videos 也走这里,防绕过。
+func MusicVideoMaxBytesForModel(candidates ...string) (maxBytes int64, configured bool) {
+	OptionMapRWMutex.RLock()
+	raw := OptionMap["MusicModelConfig"]
+	OptionMapRWMutex.RUnlock()
+	if strings.TrimSpace(raw) == "" {
+		return 0, false
+	}
+	var cfg struct {
+		Default struct {
+			VideoMaxMB *int `json:"videoMaxMB"`
+		} `json:"default"`
+		Models map[string]struct {
+			VideoMaxMB *int `json:"videoMaxMB"`
+		} `json:"models"`
+	}
+	if err := UnmarshalJsonStr(raw, &cfg); err != nil {
+		return 0, false
+	}
+	for _, name := range candidates {
+		if m, ok := cfg.Models[name]; ok && m.VideoMaxMB != nil {
+			return int64(*m.VideoMaxMB) * 1024 * 1024, true
+		}
+	}
+	if cfg.Default.VideoMaxMB != nil {
+		return int64(*cfg.Default.VideoMaxMB) * 1024 * 1024, true
+	}
+	return 0, false
+}
+
 var wxhRe = regexp.MustCompile(`^(\d+)x(\d+)$`)
 
 // DimsFromSize 解析 "WxH"(容忍 × ✕ * 等分隔符与空格)为像素宽高;无法解析

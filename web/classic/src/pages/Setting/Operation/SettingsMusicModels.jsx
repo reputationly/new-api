@@ -17,6 +17,7 @@ import {
   MUSIC_CAPABILITIES,
   MUSIC_DEFAULT_MAX_CHARS,
   MUSIC_DEFAULT_REF_AUDIO_MB,
+  MUSIC_DEFAULT_VIDEO_MB,
   parseMusicModelConfig,
 } from '../../../constants/musicPlayground.constants';
 
@@ -43,19 +44,24 @@ export default function SettingsMusicModels(props) {
   const [defaultRefAudioMaxMB, setDefaultRefAudioMaxMB] = useState(
     MUSIC_DEFAULT_REF_AUDIO_MB,
   );
-  // [{ model, capabilities:[], maxChars, refAudioMaxMB }]
+  const [defaultVideoMaxMB, setDefaultVideoMaxMB] = useState(
+    MUSIC_DEFAULT_VIDEO_MB,
+  );
+  // [{ model, capabilities:[], maxChars, refAudioMaxMB, videoMaxMB }]
   const [modelRows, setModelRows] = useState([]);
 
   useEffect(() => {
     const cfg = parseMusicModelConfig(props.options?.MusicModelConfig);
     setDefaultMaxChars(cfg.default.maxChars);
     setDefaultRefAudioMaxMB(cfg.default.refAudioMaxMB);
+    setDefaultVideoMaxMB(cfg.default.videoMaxMB);
     setModelRows(
       Object.entries(cfg.models || {}).map(([model, c]) => ({
         model,
         capabilities: c.capabilities || [],
         maxChars: c.maxChars,
         refAudioMaxMB: c.refAudioMaxMB,
+        videoMaxMB: c.videoMaxMB,
       })),
     );
   }, [props.options]);
@@ -68,6 +74,7 @@ export default function SettingsMusicModels(props) {
         capabilities: [],
         maxChars: undefined,
         refAudioMaxMB: undefined,
+        videoMaxMB: undefined,
       },
     ]);
   const updateRow = (idx, patch) =>
@@ -88,12 +95,14 @@ export default function SettingsMusicModels(props) {
           capabilities: normList(r.capabilities),
           maxChars: normInt(r.maxChars),
           refAudioMaxMB: normInt(r.refAudioMaxMB),
+          videoMaxMB: normInt(r.videoMaxMB),
         };
       });
       const value = JSON.stringify({
         default: {
           maxChars: normInt(defaultMaxChars),
           refAudioMaxMB: normInt(defaultRefAudioMaxMB),
+          videoMaxMB: normInt(defaultVideoMaxMB),
         },
         models,
       });
@@ -123,7 +132,7 @@ export default function SettingsMusicModels(props) {
       <Form.Section
         text={t('音乐模型配置')}
         extraText={t(
-          '声明哪些是音乐模型并配置约束。勾选了对应能力(文生音乐/音乐改编/音乐重绘)的模型会出现在音乐体验区对应标签页，能力也会作为标签在模型广场展示。字数上限限制单次描述文本长度(0 表示不限制)；参考音大小上限限制上传驱动音频的文件大小(MB)。留空则用默认值兜底。',
+          '声明哪些是音乐模型并配置约束。勾选了对应能力(文生音乐/音乐改编/音乐重绘/文生音效/视频配音效/视频配乐/歌声合成)的模型会出现在音乐体验区对应标签页，能力也会作为标签在模型广场展示。字数上限限制单次描述文本长度(0 表示不限制)；参考音大小上限限制上传驱动/参考/歌声音频(MB)；视频大小上限限制上传源视频(MB，仅视频配音效/视频配乐用)。留空则用默认值兜底。',
         )}
       >
         <div
@@ -134,7 +143,7 @@ export default function SettingsMusicModels(props) {
             flexWrap: 'wrap',
           }}
         >
-          <div style={{ flex: 1, minWidth: 220 }}>
+          <div style={{ flex: 1, minWidth: 200 }}>
             <Text strong>{t('默认字数上限')}</Text>
             <InputNumber
               min={0}
@@ -144,13 +153,23 @@ export default function SettingsMusicModels(props) {
               style={{ width: '100%', marginTop: 8 }}
             />
           </div>
-          <div style={{ flex: 1, minWidth: 220 }}>
+          <div style={{ flex: 1, minWidth: 200 }}>
             <Text strong>{t('默认参考音大小上限(MB)')}</Text>
             <InputNumber
               min={0}
               value={defaultRefAudioMaxMB}
               onChange={setDefaultRefAudioMaxMB}
-              placeholder={t('如 10')}
+              placeholder={t('如 20')}
+              style={{ width: '100%', marginTop: 8 }}
+            />
+          </div>
+          <div style={{ flex: 1, minWidth: 200 }}>
+            <Text strong>{t('默认视频大小上限(MB)')}</Text>
+            <InputNumber
+              min={0}
+              value={defaultVideoMaxMB}
+              onChange={setDefaultVideoMaxMB}
+              placeholder={t('如 50')}
               style={{ width: '100%', marginTop: 8 }}
             />
           </div>
@@ -200,14 +219,21 @@ export default function SettingsMusicModels(props) {
                   value={row.maxChars}
                   onChange={(v) => updateRow(idx, { maxChars: v })}
                   placeholder={t('字数上限')}
-                  style={{ flex: 1, minWidth: 140 }}
+                  style={{ flex: 1, minWidth: 120 }}
                 />
                 <InputNumber
                   min={0}
                   value={row.refAudioMaxMB}
                   onChange={(v) => updateRow(idx, { refAudioMaxMB: v })}
                   placeholder={t('参考音MB')}
-                  style={{ flex: 1, minWidth: 140 }}
+                  style={{ flex: 1, minWidth: 120 }}
+                />
+                <InputNumber
+                  min={0}
+                  value={row.videoMaxMB}
+                  onChange={(v) => updateRow(idx, { videoMaxMB: v })}
+                  placeholder={t('视频MB')}
+                  style={{ flex: 1, minWidth: 120 }}
                 />
                 <Button
                   type='danger'

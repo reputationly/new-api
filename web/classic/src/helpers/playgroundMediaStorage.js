@@ -38,11 +38,23 @@ const KNOWN_STORAGE_KEYS = [
   'video_playground_conversations_s2v',
   'video_playground_conversations_sr',
   'video_playground_conversations_vace',
+  // 语音体验区:旧单键(遗留数据)+ 拆细后按 mode 分键(audioPlayground.constants.js
+  // audioHistoryStorageKey;AUDIO_TAB_ORDER=emotion/synthesis/dialogue/design)。
+  // 缺任一 key,孤儿清理会误删这些历史仍引用的上传/生成音频。
   'audio_playground_conversations',
-  // 音乐体验区按 mode 分键(见 musicPlayground.constants.js musicHistoryStorageKey)
+  'audio_playground_conversations_emotion',
+  'audio_playground_conversations_synthesis',
+  'audio_playground_conversations_dialogue',
+  'audio_playground_conversations_design',
+  // 音乐体验区按 mode 分键(musicPlayground.constants.js musicHistoryStorageKey):
+  // 原 ACE-Step t2m/cover/repaint + 新 AudioX/SoulX t2a/v2a/v2m/svs。
   'music_playground_conversations_t2m',
   'music_playground_conversations_cover',
   'music_playground_conversations_repaint',
+  'music_playground_conversations_t2a',
+  'music_playground_conversations_v2a',
+  'music_playground_conversations_v2m',
+  'music_playground_conversations_svs',
 ];
 
 let rndSeq = 0;

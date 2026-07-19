@@ -55,6 +55,14 @@ const (
 	// 以下为音乐输入(ACE-Step),门面映射见 routes/videos.py _INPUT_FIELDS。
 	FieldReferenceAudio Field = "reference_audio" // ACE-Step 参考音频(cover),单值
 	FieldSrcAudio       Field = "src_audio"       // ACE-Step 源音频(repaint),单值
+	// 以下为 vLLM-Omni TTS 参考音输入,门面映射 ref_audio→ref_audio_path、
+	// ref_audio_2→ref_audio_2_path(引擎侧再转 file:// URI 交给 speech handler)。
+	FieldRefAudio  Field = "ref_audio"   // vLLM-Omni 克隆参考音(VoxCPM2/CosyVoice3/MOSS-TTSD),单值
+	FieldRefAudio2 Field = "ref_audio_2" // vLLM-Omni 双人对话第二说话人参考音(MOSS-TTSD),单值
+	// 以下为 vLLM-Omni SoulX-Singer SVS(歌声合成)集成 preprocess 输入,门面原样映射
+	// prompt_audio/target_audio(引擎 extra_args 同名键)。AudioX 视频复用上面的 FieldVideo。
+	FieldPromptAudio Field = "prompt_audio" // SoulX 音色参考人声,单值
+	FieldTargetAudio Field = "target_audio" // SoulX 目标曲/伴奏,单值
 )
 
 const (
@@ -151,7 +159,8 @@ func extForField(field Field) string {
 	switch field {
 	case FieldVideo, FieldSrcVideo, FieldSrcMask:
 		return ".mp4"
-	case FieldAudio, FieldVoice, FieldEmotionAudio, FieldReferenceAudio, FieldSrcAudio:
+	case FieldAudio, FieldVoice, FieldEmotionAudio, FieldReferenceAudio, FieldSrcAudio,
+		FieldRefAudio, FieldRefAudio2, FieldPromptAudio, FieldTargetAudio:
 		return ".wav"
 	default:
 		return ".png"
@@ -245,7 +254,8 @@ func magicOK(field Field, data []byte) bool {
 	switch field {
 	case FieldImage, FieldLastFrame, FieldImageMask, FieldSrcRefImages:
 		return isImageBytes(data)
-	case FieldAudio, FieldVoice, FieldEmotionAudio, FieldReferenceAudio, FieldSrcAudio:
+	case FieldAudio, FieldVoice, FieldEmotionAudio, FieldReferenceAudio, FieldSrcAudio,
+		FieldRefAudio, FieldRefAudio2, FieldPromptAudio, FieldTargetAudio:
 		return isAudioBytes(data)
 	case FieldVideo, FieldSrcVideo, FieldSrcMask:
 		return isVideoBytes(data)

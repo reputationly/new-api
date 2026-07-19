@@ -210,9 +210,26 @@ func ValidateBasicTaskRequest(c *gin.Context, info *RelayInfo, action string) *d
 		return createTaskError(err, "invalid_request", http.StatusBadRequest, true)
 	}
 
-	// sr(视频超分)的输出完全由源视频(metadata.video)决定,不需要提示词,允许空 prompt;
-	// 其余任务类型仍必填。
-	if taskType, _ := req.Metadata["task_type"].(string); taskType != "sr" {
+	// 这些任务类型的输出不依赖提示词,允许空 prompt:
+	//   sr —— 视频超分,输出由源视频(metadata.video)决定;
+	//   v2a/v2m —— AudioX 视频→音效/音乐,纯视频输入(metadata.video),无需文本;
+	//   svs —— SoulX 歌声合成,输入是参考音+目标曲(metadata.prompt_audio/target_audio),
+	//          文本仅占位(gpustackplus adaptor 会为空时兜底一个 label)。
+	// 其余任务类型仍必填提示词。
+	promptOptionalTaskTypes := map[string]bool{
+		"sr": true, "v2a": true, "v2m": true, "svs": true,
+	}
+	// 有效 task_type:显式 metadata.task_type 优先;缺失时对靠模型名推断的场景做最小兜底 ——
+	// soulx-singer 系推断为 svs(无文本歌声合成),避免直连(省略 task_type、靠模型名推断)的
+	// svs 请求在此因空 prompt 被拒(在 gpustackplus adaptor 推断出 svs 之前)。v2a/v2m 需显式
+	// task_type,audiox 默认 t2a 仍必填,故只需兜 svs。
+	effectiveTaskType, _ := req.Metadata["task_type"].(string)
+	if effectiveTaskType == "" {
+		if m := strings.ToLower(req.Model); strings.Contains(m, "soulx") || strings.Contains(m, "singer") {
+			effectiveTaskType = "svs"
+		}
+	}
+	if !promptOptionalTaskTypes[effectiveTaskType] {
 		if taskErr := validatePrompt(req.Prompt); taskErr != nil {
 			return taskErr
 		}

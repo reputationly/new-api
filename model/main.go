@@ -311,7 +311,76 @@ func migrateDB() error {
 			return err
 		}
 	}
+	if err := migrateAudioModelConfigLegacyCapability(); err != nil {
+		return err
+	}
 	return nil
+}
+
+// migrateAudioModelConfigLegacyCapability 语音大类拆细的兼容迁移。拆细前音频能力标签只有
+// 「语音合成」(IndexTTS 系,体验区提交 voice 字段);拆细后「语音合成」被复用为合并的 Omni 语音
+// tab(提交 ref_audio/speaker),IndexTTS 归新标签「情感合成」。旧 AudioModelConfig 里标了
+// 「语音合成」的模型若不改标,会落进 Omni tab、发 ref_audio 而非 voice → 后端 materializeTTSInputs
+// 报错。故把 capabilities 里的「语音合成」整体改成「情感合成」(拆细前该大类只有 IndexTTS 系,
+// 全量改安全)。幂等:改后不含旧标签即已迁移;无该配置或解析失败则跳过,绝不破坏原值。
+// 直接写 Option 行(migrateDB 早于 InitOptionMap,OptionMap 稍后加载即拿到迁移后的值)。
+func migrateAudioModelConfigLegacyCapability() error {
+	const markerKey = "audio_capability_split_migrated"
+	// 一次性守卫:标记存在即已迁移过,绝不再跑。否则升级后运营给新 Omni 模型正确标的
+	// 新语义「语音合成」(合并 tab)会在下次重启被改成「情感合成」→ 腐蚀有效配置。
+	var marker Option
+	if err := DB.Where(Option{Key: markerKey}).First(&marker).Error; err == nil {
+		return nil // 已迁移
+	}
+	// 配置改写 + 写标记放同一事务:崩溃不会留下"已改未标"(下次重跑误伤新标签)或
+	// "已标未改"(旧标签永不迁移)的半状态。
+	return DB.Transaction(func(tx *gorm.DB) error {
+		var option Option
+		if err := tx.Where(Option{Key: "AudioModelConfig"}).First(&option).Error; err == nil {
+			raw := strings.TrimSpace(option.Value)
+			if raw != "" && strings.Contains(raw, "语音合成") {
+				var cfg map[string]interface{}
+				if common.UnmarshalJsonStr(raw, &cfg) == nil {
+					changed := false
+					fixCaps := func(node interface{}) {
+						m, ok := node.(map[string]interface{})
+						if !ok {
+							return
+						}
+						caps, ok := m["capabilities"].([]interface{})
+						if !ok {
+							return
+						}
+						for i, c := range caps {
+							if s, ok := c.(string); ok && s == "语音合成" {
+								caps[i] = "情感合成"
+								changed = true
+							}
+						}
+					}
+					fixCaps(cfg["default"])
+					if models, ok := cfg["models"].(map[string]interface{}); ok {
+						for _, v := range models {
+							fixCaps(v)
+						}
+					}
+					if changed {
+						out, err := common.Marshal(cfg)
+						if err != nil {
+							return err
+						}
+						option.Value = string(out)
+						if err := tx.Save(&option).Error; err != nil {
+							return err
+						}
+						common.SysLog("Migrated AudioModelConfig capability 语音合成 -> 情感合成 (audio tab split)")
+					}
+				}
+			}
+		}
+		// 落一次性标记(无论有没有旧数据都标,保证只在首次运行迁移)。
+		return tx.Create(&Option{Key: markerKey, Value: "true"}).Error
+	})
 }
 
 func migrateDBFast() error {

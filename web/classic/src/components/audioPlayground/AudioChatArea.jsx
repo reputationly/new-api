@@ -13,12 +13,10 @@ import { useTranslation } from 'react-i18next';
 import { showError, getLogo, stringToColor } from '../../helpers';
 import { UserContext } from '../../context/User';
 import { blockChatDrag } from '../playground/blockChatDrag';
-import {
-  AUDIO_STATUS,
-  AUDIO_PROMPT_PRESETS,
-} from '../../constants/audioPlayground.constants';
+import { AUDIO_STATUS } from '../../constants/audioPlayground.constants';
 
 // 语音合成对话区,镜像 VideoChatArea:成品渲染 <audio> 播放器 + 下载 wav。
+// 六个玩法共用本组件,仅欢迎语/占位/提示词预设按 mode 传入。
 
 const WELCOME_ID = '__welcome__';
 const MAX_PROMPT_LEN = 5000;
@@ -128,6 +126,10 @@ const AudioChatArea = ({
   generating,
   turnLimitReached = false,
   missingRequiredVoice = false,
+  welcomeText = '',
+  placeholderText = '',
+  missingVoiceHint = '',
+  presets = [],
   onSend,
   onRegenerate,
   onRefetch,
@@ -136,6 +138,8 @@ const AudioChatArea = ({
   const { t } = useTranslation();
   const [userState] = useContext(UserContext);
   const [inputValue, setInputValue] = useState('');
+
+  const placeholder = placeholderText || t('请输入要合成的文本');
 
   const roleConfig = useMemo(
     () => ({
@@ -156,9 +160,11 @@ const AudioChatArea = ({
           role: 'assistant',
           id: WELCOME_ID,
           createAt: 1,
-          content: t(
-            '欢迎使用 AI 语音合成,请在左侧选择参考音色,并在下方输入要合成的文本',
-          ),
+          content:
+            welcomeText ||
+            t(
+              '欢迎使用 AI 语音合成,请在左侧选择参考音色,并在下方输入要合成的文本',
+            ),
         },
       ];
     }
@@ -188,7 +194,7 @@ const AudioChatArea = ({
           m.status === AUDIO_STATUS.FAILED ? m.error || t('语音合成失败') : '',
       };
     });
-  }, [messages, t]);
+  }, [messages, welcomeText, t]);
 
   const byId = useMemo(
     () => new Map(messages.map((m) => [m.id, m])),
@@ -317,28 +323,30 @@ const AudioChatArea = ({
             type='warning'
             className='text-xs block mb-2 text-center'
           >
-            {t('请先在左侧选择预置音色或上传参考音频')}
+            {missingVoiceHint || t('请先在左侧选择预置音色或上传参考音频')}
           </Typography.Text>
         )}
         {/* 预设文本:单行等宽排列,超长 CSS 截断 */}
-        <div className='flex gap-2 mb-2 overflow-hidden'>
-          {AUDIO_PROMPT_PRESETS.map((p, i) => (
-            <button
-              key={i}
-              type='button'
-              title={p}
-              onClick={() => setInputValue(p)}
-              className='flex-1 min-w-0 truncate text-xs text-gray-600 bg-gray-100 hover:bg-gray-200 rounded-full px-3 py-1.5 transition-colors'
-            >
-              {p}
-            </button>
-          ))}
-        </div>
+        {presets.length > 0 && (
+          <div className='flex gap-2 mb-2 overflow-hidden'>
+            {presets.map((p, i) => (
+              <button
+                key={i}
+                type='button'
+                title={p}
+                onClick={() => setInputValue(p)}
+                className='flex-1 min-w-0 truncate text-xs text-gray-600 bg-gray-100 hover:bg-gray-200 rounded-full px-3 py-1.5 transition-colors'
+              >
+                {p}
+              </button>
+            ))}
+          </div>
+        )}
         <div className='relative'>
           <TextArea
             value={inputValue}
             onChange={setInputValue}
-            placeholder={t('请输入要合成的文本')}
+            placeholder={placeholder}
             maxLength={MAX_PROMPT_LEN}
             autosize={{ minRows: 2, maxRows: 6 }}
             className='!rounded-xl'
@@ -376,6 +384,9 @@ const AudioChatArea = ({
     generating,
     turnLimitReached,
     missingRequiredVoice,
+    missingVoiceHint,
+    placeholder,
+    presets,
     inputValue,
     onSend,
     t,
@@ -410,7 +421,7 @@ const AudioChatArea = ({
             renderChatBoxAction: () => null,
           }}
           showClearContext
-          placeholder={t('请输入要合成的文本')}
+          placeholder={placeholder}
           style={{ height: '100%' }}
         />
       </div>
