@@ -135,7 +135,8 @@ export const CAPABILITIES: CapabilitySpec[] = [
         params: [
             // sr_ratio=1 → 仅插帧/不放大(输出被引擎按配置目标尺寸封顶,见设计文档 §3.9)
             { key: "metadata.sr_ratio", label: "放大倍率", type: "number", min: 1, max: 4, step: 0.5, placeholder: "默认 2;1=不放大" },
-            { key: "metadata.target_fps", label: "插帧目标 FPS", type: "number", min: 16, max: 60, step: 1, placeholder: "留空不插帧" },
+            // 部署侧 SeedVR2 config 已常驻 RIFE 插帧(见设计文档 §3.9):留空即用部署默认 32fps,填值覆盖
+            { key: "metadata.target_fps", label: "插帧目标 FPS", type: "number", min: 16, max: 60, step: 1, placeholder: "留空默认 32fps" },
         ],
     },
     {

@@ -160,6 +160,13 @@ func RelayTaskSubmit(c *gin.Context, info *relaycommon.RelayInfo) (*TaskSubmitRe
 		return nil, taskErr
 	}
 
+	// 1.5 非 gpustackplus 渠道:把 task:<task_id> 产物引用展开为 base64 data-url
+	// (第三方适配器只认 base64/URL;gpustackplus 在物化层原生解析,保留 NFS 直读)。
+	// 放在预扣费之前:引用解析失败快速 400,不产生扣费/退款往返。
+	if taskErr := expandTaskRefsForChannel(c, info); taskErr != nil {
+		return nil, taskErr
+	}
+
 	// 2. 确定模型名称
 	modelName := info.OriginModelName
 	if modelName == "" {

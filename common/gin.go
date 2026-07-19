@@ -105,6 +105,24 @@ func CleanupBodyStorage(c *gin.Context) {
 	}
 }
 
+// ReplaceRequestBody 用新字节替换缓存的请求体存储：关闭旧存储、清除旧 []byte 缓存、
+// 写入新存储。用于需要在读取后改写 body 并让后续从缓存 body 重建请求的适配器
+// （如 Sora/OpenAI 从 GetBodyStorage 重建上游请求）看到改写后的内容。
+func ReplaceRequestBody(c *gin.Context, data []byte) error {
+	if old, exists := c.Get(KeyBodyStorage); exists && old != nil {
+		if bs, ok := old.(BodyStorage); ok {
+			bs.Close()
+		}
+	}
+	c.Set(KeyRequestBody, nil)
+	storage, err := CreateBodyStorage(data)
+	if err != nil {
+		return err
+	}
+	c.Set(KeyBodyStorage, storage)
+	return nil
+}
+
 func UnmarshalBodyReusable(c *gin.Context, v any) error {
 	storage, err := GetBodyStorage(c)
 	if err != nil {
