@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { Tabs, TabPane } from '@douyinfe/semi-ui';
 import { useTranslation } from 'react-i18next';
 import { useIsMobile } from '../../hooks/common/useIsMobile';
@@ -6,10 +6,19 @@ import { useAudioGeneration } from '../../hooks/audioPlayground/useAudioGenerati
 import AudioConfigPanel from '../../components/audioPlayground/AudioConfigPanel';
 import AudioChatArea from '../../components/audioPlayground/AudioChatArea';
 import VideoHistoryPanel from '../../components/videoPlayground/VideoHistoryPanel';
+import {
+  AUDIO_TAB_ORDER,
+  AUDIO_MODES,
+  AUDIO_PROMPT_PRESETS,
+  AUDIO_DIALOGUE_PRESETS,
+  AUDIO_DESIGN_PRESETS,
+} from '../../constants/audioPlayground.constants';
 
-// 语音合成体验区:三栏结构镜像视频页(配置 | 对话 | 历史)。
-// 历史面板与视频完全同构(状态常量取值一致),直接复用 VideoHistoryPanel。
-const AudioPlaygroundBody = () => {
+// 单个玩法的三栏体验区。切 tab 时整体重挂载,各玩法历史/参数互不串扰(mode 作为 key)。
+// 四个玩法:情感合成(IndexTTS-2)+ 语音合成/双人对话/声音设计(vLLM-Omni)。语音合成把
+// 音色来源(上传克隆/预设音色)与语言合并为面板内选项。历史面板复用 VideoHistoryPanel。
+const AudioPlaygroundBody = ({ mode }) => {
+  const { t } = useTranslation();
   const isMobile = useIsMobile();
   const styleState = { isMobile };
   const {
@@ -23,6 +32,17 @@ const AudioPlaygroundBody = () => {
     locked,
     turnLimitReached,
     missingRequiredVoice,
+    engine,
+    needsVoice,
+    needsEmotion,
+    needsVoiceSource,
+    needsRefAudio,
+    refAudioRequired,
+    needsDualRef,
+    needsSpeaker,
+    needsLanguage,
+    needsRefText,
+    needsInstructions,
     refAudioMaxMB,
     generate,
     regenerate,
@@ -31,7 +51,52 @@ const AudioPlaygroundBody = () => {
     clearHistory,
     deleteHistoryItem,
     openHistoryItem,
-  } = useAudioGeneration();
+  } = useAudioGeneration(mode);
+
+  const instructionsRequired = AUDIO_MODES[mode]?.instructionsRequired || false;
+
+  // 各玩法欢迎语。
+  const welcomeText =
+    mode === 'synthesis'
+      ? t(
+          '欢迎使用 AI 语音合成,请在左侧选择音色来源(上传克隆或预设音色),并在下方输入要合成的文本',
+        )
+      : mode === 'dialogue'
+        ? t(
+            '欢迎使用 AI 双人对话,请在左侧上传两位说话人参考音,并在下方输入含 [S1]/[S2] 标记的对话脚本',
+          )
+        : mode === 'design'
+          ? t(
+              '欢迎使用 AI 声音设计,请在左侧描述目标声线,并在下方输入要合成的文本',
+            )
+          : t(
+              '欢迎使用 AI 情感合成,请在左侧选择参考音色,并在下方输入要合成的文本',
+            );
+
+  // 各玩法输入框占位。
+  const placeholderText =
+    mode === 'dialogue'
+      ? t('请输入对话脚本,用 [S1]/[S2] 标记两位说话人')
+      : t('请输入要合成的文本');
+
+  // 各玩法缺必填输入提示。
+  const missingVoiceHint = needsDualRef
+    ? t('请先在左侧上传说话人1与说话人2的参考音')
+    : needsRefAudio && refAudioRequired
+      ? t('请先在左侧上传参考音(克隆源)')
+      : instructionsRequired
+        ? t('请先在左侧填写声线描述')
+        : needsVoiceSource
+          ? t('请先在左侧选择音色来源并完成配置')
+          : t('请先在左侧选择预置音色或上传参考音频');
+
+  // 各玩法提示词预设。
+  const presets =
+    mode === 'dialogue'
+      ? AUDIO_DIALOGUE_PRESETS
+      : mode === 'design'
+        ? AUDIO_DESIGN_PRESETS
+        : AUDIO_PROMPT_PRESETS;
 
   return (
     <div
@@ -45,6 +110,18 @@ const AudioPlaygroundBody = () => {
           models={models}
           onInputChange={handleInputChange}
           disabled={locked}
+          engine={engine}
+          needsVoice={needsVoice}
+          needsEmotion={needsEmotion}
+          needsVoiceSource={needsVoiceSource}
+          needsRefAudio={needsRefAudio}
+          refAudioRequired={refAudioRequired}
+          needsDualRef={needsDualRef}
+          needsSpeaker={needsSpeaker}
+          needsLanguage={needsLanguage}
+          needsRefText={needsRefText}
+          needsInstructions={needsInstructions}
+          instructionsRequired={instructionsRequired}
           refAudioMaxMB={refAudioMaxMB}
           styleState={styleState}
         />
@@ -56,6 +133,10 @@ const AudioPlaygroundBody = () => {
           generating={generating}
           turnLimitReached={turnLimitReached}
           missingRequiredVoice={missingRequiredVoice}
+          welcomeText={welcomeText}
+          placeholderText={placeholderText}
+          missingVoiceHint={missingVoiceHint}
+          presets={presets}
           styleState={styleState}
           onSend={generate}
           onRegenerate={regenerate}
@@ -78,17 +159,30 @@ const AudioPlaygroundBody = () => {
   );
 };
 
+// 4 个子标签页(标签文案 = 能力中文,取自 AUDIO_MODES[mode].capability)。
 const AudioModel = () => {
   const { t } = useTranslation();
+  const [activeTab, setActiveTab] = useState('emotion');
 
   return (
     <div className='h-full'>
       <div className='mt-[60px] h-[calc(100vh-66px)] flex flex-col px-3 pb-2'>
-        <Tabs type='line' activeKey='tts' className='flex-shrink-0'>
-          <TabPane tab={t('语音合成')} itemKey='tts' />
+        <Tabs
+          type='line'
+          activeKey={activeTab}
+          onChange={setActiveTab}
+          className='flex-shrink-0'
+        >
+          {AUDIO_TAB_ORDER.map((mode) => (
+            <TabPane
+              key={mode}
+              tab={t(AUDIO_MODES[mode].capability)}
+              itemKey={mode}
+            />
+          ))}
         </Tabs>
 
-        <AudioPlaygroundBody />
+        <AudioPlaygroundBody key={activeTab} mode={activeTab} />
       </div>
     </div>
   );

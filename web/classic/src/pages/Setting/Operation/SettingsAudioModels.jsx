@@ -37,7 +37,9 @@ export default function SettingsAudioModels(props) {
   const [loading, setLoading] = useState(false);
   const [statusState, statusDispatch] = useContext(StatusContext);
 
-  const [defaultMaxChars, setDefaultMaxChars] = useState(AUDIO_DEFAULT_MAX_CHARS);
+  const [defaultMaxChars, setDefaultMaxChars] = useState(
+    AUDIO_DEFAULT_MAX_CHARS,
+  );
   const [defaultRefAudioMaxMB, setDefaultRefAudioMaxMB] = useState(
     AUDIO_DEFAULT_REF_AUDIO_MB,
   );
@@ -61,7 +63,12 @@ export default function SettingsAudioModels(props) {
   const addRow = () =>
     setModelRows((prev) => [
       ...prev,
-      { model: '', capabilities: [], maxChars: undefined, refAudioMaxMB: undefined },
+      {
+        model: '',
+        capabilities: [],
+        maxChars: undefined,
+        refAudioMaxMB: undefined,
+      },
     ]);
   const updateRow = (idx, patch) =>
     setModelRows((prev) =>
@@ -116,11 +123,16 @@ export default function SettingsAudioModels(props) {
       <Form.Section
         text={t('语音模型配置')}
         extraText={t(
-          '声明哪些是语音模型并配置约束。仅勾选了「语音合成」的模型会出现在语音合成体验区，能力也会作为标签在模型广场展示。字数上限限制单次合成文本长度(0 表示不限制)；参考音大小上限限制上传自定义音色的文件大小(MB)。留空则用默认值兜底。',
+          '声明哪些是语音模型并配置约束。勾选了对应能力(情感合成/语音合成/双人对话/声音设计)的模型会出现在语音体验区对应标签页，能力也会作为标签在模型广场展示。一个模型可勾选多项。语音合成一个标签页内即覆盖上传克隆/预设音色/多语言方言(Qwen3-TTS/VoxCPM2/CosyVoice3/GLM-TTS/MOSS-TTS-Nano 均勾选语音合成即可)。字数上限限制单次合成文本长度(0 表示不限制)；参考音大小上限限制上传参考音/克隆源的文件大小(MB)。留空则用默认值兜底。',
         )}
       >
         <div
-          style={{ display: 'flex', gap: 24, marginBottom: 24, flexWrap: 'wrap' }}
+          style={{
+            display: 'flex',
+            gap: 24,
+            marginBottom: 24,
+            flexWrap: 'wrap',
+          }}
         >
           <div style={{ flex: 1, minWidth: 220 }}>
             <Text strong>{t('默认字数上限')}</Text>

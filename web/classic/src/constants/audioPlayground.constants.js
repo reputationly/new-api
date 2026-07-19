@@ -15,9 +15,29 @@ export {
 // 也可能等几分钟;沿用 4s 间隔,上限略低于视频。
 export const AUDIO_POLL_MAX_TIMES = 75; // 约 5 分钟
 
-// 体验区能力标签(= 运营后台「视频模型配置」里给模型声明的能力;中文即值)。
-// 新增能力时同步维护后端 constant/model_capability.go 的 AudioCapabilities。
-export const AUDIO_PAGE_CAPABILITY = '语音合成';
+// 四个能力标签(= 体验区子标签页名;中文即值)。区分 IndexTTS-2 的情感合成与 vLLM-Omni
+// 家族的语音合成(音色来源/语言合并为一个玩法的面板内选项)/对话/设计。与后端
+// constant/model_capability.go 的 AudioCapabilities 保持一致(新增能力两处同步)。
+export const AUDIO_EMOTION_CAPABILITY = '情感合成'; // IndexTTS-2(= 原「语音合成」)
+// 语音合成:Qwen3-TTS / VoxCPM2 / CosyVoice3 / GLM-TTS / MOSS-TTS-Nano。单模型同时覆盖
+// 预设音色 / 声音克隆 / 多语言方言 —— 它们是一次 TTS 请求的不同维度(音色来源 + 语言),
+// 不是独立能力,故合并为一个玩法,音色来源与语言在面板内以选项呈现。
+export const AUDIO_SYNTHESIS_CAPABILITY = '语音合成';
+export const AUDIO_DIALOGUE_CAPABILITY = '双人对话'; // MOSS-TTSD
+export const AUDIO_DESIGN_CAPABILITY = '声音设计'; // MOSS-VoiceGenerator
+
+// 兼容旧引用:情感合成即原单一「语音合成」标签。
+export const AUDIO_PAGE_CAPABILITY = AUDIO_EMOTION_CAPABILITY;
+
+// 语音合成玩法的「音色来源」两个选项(面板内 radio/toggle)。默认上传克隆(对所有 Omni
+// TTS 模型可用;预设音色为 Qwen3-TTS 专属)。
+export const AUDIO_VOICE_SOURCE_UPLOAD = 'upload'; // 上传克隆 → metadata.ref_audio(+可选 ref_text)
+export const AUDIO_VOICE_SOURCE_PRESET = 'preset'; // 预设音色 → metadata.speaker(标量透传)
+export const AUDIO_DEFAULT_VOICE_SOURCE = AUDIO_VOICE_SOURCE_UPLOAD;
+export const AUDIO_VOICE_SOURCE_OPTIONS = [
+  { value: AUDIO_VOICE_SOURCE_UPLOAD, label: '上传克隆' },
+  { value: AUDIO_VOICE_SOURCE_PRESET, label: '预设音色' },
+];
 
 // 预置音色:IndexTTS-2 官方 demo 示例音(HuggingFace spaces/IndexTeam/IndexTTS-2-Demo
 // 的 examples/,官方仓已随「移除 LFS」提交删除)。文件随前端打包(public/audio-presets/),
@@ -65,7 +85,8 @@ export const emotionToVector = (emotion, weight) => {
   const preset = EMOTION_PRESETS.find((e) => e.value === emotion && e.value);
   if (!preset) return null;
   const vec = [0, 0, 0, 0, 0, 0, 0, 0];
-  const w = typeof weight === 'number' && weight >= 0 && weight <= 1 ? weight : 1;
+  const w =
+    typeof weight === 'number' && weight >= 0 && weight <= 1 ? weight : 1;
   vec[preset.index] = w;
   return vec;
 };
@@ -81,13 +102,157 @@ export const AUDIO_PROMPT_PRESETS = [
   '哈哈哈,真是太有意思了,快跟我说说后来怎么样了?',
 ];
 
+// 历史 localStorage 键按 mode 区分(各玩法各自独立历史)。旧单一键保留供迁移/兜底。
 export const AUDIO_HISTORY_STORAGE_KEY = 'audio_playground_conversations';
+export const AUDIO_HISTORY_STORAGE_PREFIX = 'audio_playground_conversations';
+export const audioHistoryStorageKey = (mode) =>
+  `${AUDIO_HISTORY_STORAGE_PREFIX}_${mode}`;
 export const AUDIO_HISTORY_LIMIT = 10; // 对话段数上限
 export const AUDIO_CONV_TURN_LIMIT = 10; // 单段对话生成次数上限
 
 // 语音能力枚举(中文即值,也是体验区标签页名)。与后端 constant/model_capability.go 的
-// AudioCapabilities 保持一致。新增能力(如 语音转文字)时两处同步。
-export const AUDIO_CAPABILITIES = [AUDIO_PAGE_CAPABILITY];
+// AudioCapabilities 保持一致。新增能力时两处同步。
+export const AUDIO_CAPABILITIES = [
+  AUDIO_EMOTION_CAPABILITY,
+  AUDIO_SYNTHESIS_CAPABILITY,
+  AUDIO_DIALOGUE_CAPABILITY,
+  AUDIO_DESIGN_CAPABILITY,
+];
+
+// mode → 门面契约映射。四个玩法都发 task_type='tts'(POST /pg/videos 异步门面),只在输入
+// 面板与所需 metadata 键上不同。与 new-api 任务适配器(relay/channel/task/gpustackplus/
+// adaptor.go)的物化逻辑精确对齐:
+//   - emotion(情感合成,IndexTTS-2):参考音色 → metadata.voice(必填,materializeTTSInputs);
+//     情感参考音 → metadata.emotion_audio(可选);emo_vector/emo_alpha 标量透传。
+//   - synthesis(语音合成,Qwen3-TTS/VoxCPM2/CosyVoice3/GLM-TTS/MOSS-TTS-Nano):单玩法覆盖
+//     音色来源 + 语言两个维度。音色来源 toggle:
+//       · 上传克隆(默认):克隆源 → metadata.ref_audio(materializeOmniTTSInputs);
+//         可选参考文本 → metadata.ref_text(标量透传)。
+//       · 预设音色:音色 → metadata.speaker(标量透传,非上传;Qwen3-TTS 专属)。
+//       两者互斥(选预设不发 ref_audio;选上传不发 speaker)。
+//       语言 → metadata.language(标量,可选;留空=模型默认),两种来源都可带。
+//   - dialogue(双人对话,MOSS-TTSD):对话脚本([S1]/[S2])作 prompt;说话人1 →
+//     metadata.ref_audio + 说话人2 → metadata.ref_audio_2(materializeOmniTTSInputs)。
+//   - design(声音设计,MOSS-VoiceGenerator):声线描述 → metadata.instructions(标量,无参考音)。
+// 字段说明:
+//   engine:indextts(情感合成走 materializeTTSInputs)/ omni(其余走 materializeOmniTTSInputs
+//           或纯标量透传)。仅用于文案/校验分支,task_type 恒为 'tts'。
+//   needsVoice:情感合成的参考音色(预置/上传,→ metadata.voice,必填)。
+//   needsEmotion:情感合成的情感预设 + 强度 UI。
+//   needsVoiceSource:语音合成的「音色来源」toggle(上传克隆 | 预设音色),按选择切换下面两项。
+//   needsRefAudio:单个克隆参考音上传(→ metadata.ref_audio)。语音合成里由 toggle 决定是否必填。
+//   refAudioRequired:该参考音是否必填(synthesis 上传克隆时必填)。
+//   needsDualRef:双人对话双参考音上传(ref_audio + ref_audio_2,均必填)。
+//   needsSpeaker:预设音色下拉(→ metadata.speaker 标量;synthesis 选预设音色时用)。
+//   needsLanguage:语言下拉(→ metadata.language 标量)。
+//   needsRefText:可选参考文本(→ metadata.ref_text 标量;synthesis 上传克隆时用)。
+//   needsInstructions:声线/情感指令文本(→ metadata.instructions 标量)。design 必填。
+//   instructionsRequired:指令是否必填(design 必填)。
+export const AUDIO_MODES = {
+  emotion: {
+    capability: AUDIO_EMOTION_CAPABILITY,
+    engine: 'indextts',
+    needsVoice: true,
+    needsEmotion: true,
+    needsVoiceSource: false,
+    needsRefAudio: false,
+    refAudioRequired: false,
+    needsDualRef: false,
+    needsSpeaker: false,
+    needsLanguage: false,
+    needsRefText: false,
+    needsInstructions: false,
+    instructionsRequired: false,
+  },
+  synthesis: {
+    capability: AUDIO_SYNTHESIS_CAPABILITY,
+    engine: 'omni',
+    needsVoice: false,
+    needsEmotion: false,
+    // 音色来源 toggle + 语言下拉;ref_audio/ref_text/speaker 由 toggle 在面板/hook 内切换。
+    needsVoiceSource: true,
+    needsRefAudio: false,
+    refAudioRequired: false,
+    needsDualRef: false,
+    needsSpeaker: false,
+    needsLanguage: true,
+    needsRefText: false,
+    needsInstructions: false,
+    instructionsRequired: false,
+  },
+  dialogue: {
+    capability: AUDIO_DIALOGUE_CAPABILITY,
+    engine: 'omni',
+    needsVoice: false,
+    needsEmotion: false,
+    needsVoiceSource: false,
+    needsRefAudio: false,
+    refAudioRequired: false,
+    needsDualRef: true,
+    needsSpeaker: false,
+    needsLanguage: false,
+    needsRefText: false,
+    needsInstructions: false,
+    instructionsRequired: false,
+  },
+  design: {
+    capability: AUDIO_DESIGN_CAPABILITY,
+    engine: 'omni',
+    needsVoice: false,
+    needsEmotion: false,
+    needsVoiceSource: false,
+    needsRefAudio: false,
+    refAudioRequired: false,
+    needsDualRef: false,
+    needsSpeaker: false,
+    needsLanguage: false,
+    needsRefText: false,
+    needsInstructions: true,
+    instructionsRequired: true,
+  },
+};
+
+// 体验区子标签页顺序(4 个)。
+export const AUDIO_TAB_ORDER = ['emotion', 'synthesis', 'dialogue', 'design'];
+
+// 预设音色(语音合成 → 音色来源=预设音色,Qwen3-TTS):随 metadata.speaker 透传,门面不
+// 物化、引擎按 voice/speaker 别名读。提供常用列表 + 允许自由输入。
+export const AUDIO_SPEAKER_PRESETS = [
+  { value: 'vivian', label: 'Vivian' },
+  { value: 'ryan', label: 'Ryan' },
+  { value: 'aiden', label: 'Aiden' },
+  { value: 'chelsie', label: 'Chelsie' },
+  { value: 'serena', label: 'Serena' },
+  { value: 'ethan', label: 'Ethan' },
+];
+export const AUDIO_DEFAULT_SPEAKER = 'vivian';
+
+// 多语言/方言(语音合成 → 语言下拉):随 metadata.language 透传。取常用语言 + 中文方言子集。
+export const AUDIO_LANGUAGES = [
+  { value: '', label: '自动' },
+  { value: 'zh', label: '中文(普通话)' },
+  { value: 'yue', label: '粤语' },
+  { value: 'sichuan', label: '四川话' },
+  { value: 'minnan', label: '闽南话' },
+  { value: 'shanghai', label: '上海话' },
+  { value: 'en', label: '英文' },
+  { value: 'ja', label: '日文' },
+  { value: 'ko', label: '韩文' },
+];
+export const AUDIO_DEFAULT_LANGUAGE = '';
+
+// 双人对话(dialogue 玩法)脚本示例:含 [S1]/[S2] 说话人标记。
+export const AUDIO_DIALOGUE_PRESETS = [
+  '[S1]今天天气真不错,我们出去走走吧。[S2]好啊,正好可以透透气。',
+  '[S1]你听说了吗?公司要搬新办公室了。[S2]真的假的?什么时候的事?',
+];
+
+// 声音设计(design 玩法)声线描述示例。
+export const AUDIO_DESIGN_PRESETS = [
+  '一位温柔知性的中年女性,声音低沉富有磁性,语速平缓',
+  '活泼开朗的少年,声音清亮,语速偏快,充满活力',
+  '威严沉稳的老者,声音略带沙哑,吐字缓慢有力',
+];
 
 // 兜底默认:未在「语音模型配置」里显式配置时使用。maxChars=0 表示不限制。
 export const AUDIO_DEFAULT_MAX_CHARS = 2000;
@@ -119,8 +284,7 @@ export const parseAudioModelConfig = (raw) => {
     }
     return {
       default: {
-        maxChars:
-          toPositiveInt(def.maxChars) ?? AUDIO_DEFAULT_MAX_CHARS,
+        maxChars: toPositiveInt(def.maxChars) ?? AUDIO_DEFAULT_MAX_CHARS,
         refAudioMaxMB:
           toPositiveInt(def.refAudioMaxMB) ?? AUDIO_DEFAULT_REF_AUDIO_MB,
       },
@@ -143,12 +307,16 @@ const normalizeList = (list) =>
     ? Array.from(new Set(list.map((x) => String(x).trim()).filter(Boolean)))
     : [];
 
-// 该模型可用的语音模型集合(勾选了「语音合成」的模型)。
-export const getAudioModelSet = (config) => {
+// 指定能力(= 当前 tab)的语音模型集合(勾选了该能力的模型)。未传 capability 时回退到
+// 情感合成(兼容旧调用)。
+export const getAudioModelSet = (
+  config,
+  capability = AUDIO_EMOTION_CAPABILITY,
+) => {
   const set = new Set();
   Object.entries(config?.models || {}).forEach(([model, cfg]) => {
     const caps = Array.isArray(cfg?.capabilities) ? cfg.capabilities : [];
-    if (caps.includes(AUDIO_PAGE_CAPABILITY)) set.add(model);
+    if (caps.includes(capability)) set.add(model);
   });
   return set;
 };
@@ -165,6 +333,7 @@ export const getMaxCharsForModel = (config, model) => {
 export const getRefAudioMaxMBForModel = (config, model) => {
   const m = config?.models?.[model];
   if (m && m.refAudioMaxMB != null) return m.refAudioMaxMB;
-  if (config?.default?.refAudioMaxMB != null) return config.default.refAudioMaxMB;
+  if (config?.default?.refAudioMaxMB != null)
+    return config.default.refAudioMaxMB;
   return AUDIO_DEFAULT_REF_AUDIO_MB;
 };

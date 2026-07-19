@@ -16,9 +16,12 @@ import { blockChatDrag } from '../playground/blockChatDrag';
 import {
   MUSIC_STATUS,
   MUSIC_PROMPT_PRESETS,
+  MUSIC_AUDIOX_PROMPT_PRESETS,
 } from '../../constants/musicPlayground.constants';
 
-// 文生音乐对话区,镜像 AudioChatArea:成品渲染 <audio> 播放器 + 下载 mp3。
+// 音乐模型对话区:成品渲染 <audio> 播放器 + 下载。格式无关(ACE-Step .mp3 / AudioX/SoulX
+// .wav)——下载文件名从返回的 content-url + 响应 media type 推断,不硬编码扩展名。
+// svs(歌声合成)无需文本,输入框为固定占位;预设/占位/欢迎语随 engine / needsText 变化。
 
 const WELCOME_ID = '__welcome__';
 const MAX_PROMPT_LEN = 5000;
@@ -36,14 +39,49 @@ const parseTs = (id, fallback) => {
   return Number.isFinite(n) ? n : fallback;
 };
 
-const downloadMusic = async (url, t) => {
+// 从 URL / 响应 media type 推断音频扩展名(格式无关:.mp3 / .wav / .flac 等)。
+const extFromContentType = (ct) => {
+  if (!ct) return '';
+  const type = ct.split(';')[0].trim().toLowerCase();
+  const map = {
+    'audio/mpeg': 'mp3',
+    'audio/mp3': 'mp3',
+    'audio/wav': 'wav',
+    'audio/x-wav': 'wav',
+    'audio/wave': 'wav',
+    'audio/flac': 'flac',
+    'audio/ogg': 'ogg',
+    'audio/webm': 'webm',
+    'audio/mp4': 'm4a',
+    'audio/aac': 'aac',
+  };
+  return map[type] || '';
+};
+
+const extFromUrl = (url) => {
+  try {
+    const path = new URL(url, window.location.origin).pathname;
+    const m = path.match(/\.([a-z0-9]{2,4})$/i);
+    return m ? m[1].toLowerCase() : '';
+  } catch (e) {
+    return '';
+  }
+};
+
+// 下载生成的音频:优先响应 content-type,其次 URL 后缀,兜底 mp3。
+const downloadAudio = async (url, t) => {
   try {
     const resp = await fetch(url, { credentials: 'include' });
     const blob = await resp.blob();
+    const ext =
+      extFromContentType(resp.headers.get('content-type')) ||
+      extFromContentType(blob.type) ||
+      extFromUrl(url) ||
+      'mp3';
     const blobUrl = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = blobUrl;
-    a.download = `music-${Date.now()}.mp3`;
+    a.download = `music-${Date.now()}.${ext}`;
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
@@ -53,7 +91,7 @@ const downloadMusic = async (url, t) => {
   }
 };
 
-// 生成中:三阶段 + 进度(音乐任务通常无百分比,走 Spin 文案)。
+// 生成中:三阶段 + 进度(任务通常无百分比,走 Spin 文案)。
 const MusicProgress = ({ status, progress, t }) => {
   const current = status === MUSIC_STATUS.QUEUED ? 0 : 1;
   const stages = [t('排队中'), t('生成中'), t('完成')];
@@ -128,6 +166,12 @@ const MusicChatArea = ({
   generating,
   turnLimitReached = false,
   missingRequiredAudio = false,
+  missingRequiredVideo = false,
+  engine = 'acestep',
+  needsText = true,
+  needsVideo = false,
+  needsDualAudio = false,
+  welcomeText = '',
   onSend,
   onRegenerate,
   onRefetch,
@@ -136,6 +180,25 @@ const MusicChatArea = ({
   const { t } = useTranslation();
   const [userState] = useContext(UserContext);
   const [inputValue, setInputValue] = useState('');
+
+  const isAceStep = engine === 'acestep';
+  // svs 无文本 → 不展示提示词预设。
+  const showPresets = !needsDualAudio;
+  const presets = isAceStep
+    ? MUSIC_PROMPT_PRESETS
+    : MUSIC_AUDIOX_PROMPT_PRESETS;
+
+  const defaultWelcome = isAceStep
+    ? t('欢迎使用 AI 文生音乐,请在左侧选择模型,并在下方输入音乐风格描述')
+    : t('欢迎使用 AI 音频生成,请在左侧选择模型并配置输入');
+
+  const placeholder = isAceStep
+    ? t('请输入音乐风格描述')
+    : needsText
+      ? t('请输入音效/配乐描述')
+      : needsVideo
+        ? t('可选:补充描述(留空按纯视频生成)')
+        : t('点击右侧按钮开始生成');
 
   const roleConfig = useMemo(
     () => ({
@@ -156,9 +219,7 @@ const MusicChatArea = ({
           role: 'assistant',
           id: WELCOME_ID,
           createAt: 1,
-          content: t(
-            '欢迎使用 AI 文生音乐,请在左侧选择模型,并在下方输入音乐风格描述',
-          ),
+          content: welcomeText || defaultWelcome,
         },
       ];
     }
@@ -185,10 +246,10 @@ const MusicChatArea = ({
             : 'complete'
           : 'loading',
         content:
-          m.status === MUSIC_STATUS.FAILED ? m.error || t('音乐生成失败') : '',
+          m.status === MUSIC_STATUS.FAILED ? m.error || t('生成失败') : '',
       };
     });
-  }, [messages, t]);
+  }, [messages, welcomeText, defaultWelcome, t]);
 
   const byId = useMemo(
     () => new Map(messages.map((m) => [m.id, m])),
@@ -203,7 +264,7 @@ const MusicChatArea = ({
         return (
           <div className='inline-block' style={{ minWidth: 320 }}>
             <Typography.Text className='text-sm text-gray-600 block mb-2'>
-              {t('音乐已生成')}
+              {t('已生成')}
             </Typography.Text>
             <audio
               src={m.musicUrl}
@@ -217,7 +278,7 @@ const MusicChatArea = ({
                 type='tertiary'
                 size='small'
                 icon={<Download size={14} />}
-                onClick={() => downloadMusic(m.musicUrl, t)}
+                onClick={() => downloadAudio(m.musicUrl, t)}
                 className='!text-gray-500'
               />
               <Button
@@ -237,7 +298,7 @@ const MusicChatArea = ({
         return (
           <div className='inline-block'>
             <Typography.Text type='danger' className='text-sm block mb-1'>
-              {m.error || t('音乐生成失败')}
+              {m.error || t('生成失败')}
             </Typography.Text>
             <Button
               theme='borderless'
@@ -294,9 +355,14 @@ const MusicChatArea = ({
   );
 
   const renderInputArea = useCallback(() => {
-    // 缺驱动音频/生成中/达上限时置灰;回车与点击均不发送,文本不丢。
-    const blockSend = generating || turnLimitReached || missingRequiredAudio;
-    const canSend = !blockSend && inputValue.trim().length > 0;
+    // 缺必填上传/生成中/达上限时置灰;svs 无需文本,空输入也可发送。
+    const blockSend =
+      generating ||
+      turnLimitReached ||
+      missingRequiredAudio ||
+      missingRequiredVideo;
+    const hasText = inputValue.trim().length > 0;
+    const canSend = !blockSend && (needsText ? hasText : true);
     const doSend = () => {
       if (!canSend) return;
       onSend(inputValue.trim());
@@ -312,33 +378,45 @@ const MusicChatArea = ({
             {t('本轮对话已达生成上限，请点击右侧「新对话」继续')}
           </Typography.Text>
         )}
+        {missingRequiredVideo && (
+          <Typography.Text
+            type='warning'
+            className='text-xs block mb-2 text-center'
+          >
+            {t('请先在左侧上传源视频')}
+          </Typography.Text>
+        )}
         {missingRequiredAudio && (
           <Typography.Text
             type='warning'
             className='text-xs block mb-2 text-center'
           >
-            {t('请先在左侧上传驱动音频')}
+            {needsDualAudio
+              ? t('请先在左侧上传音色参考与目标曲/伴奏')
+              : t('请先在左侧上传驱动音频')}
           </Typography.Text>
         )}
-        {/* 预设描述:单行等宽排列,超长 CSS 截断 */}
-        <div className='flex gap-2 mb-2 overflow-hidden'>
-          {MUSIC_PROMPT_PRESETS.map((p, i) => (
-            <button
-              key={i}
-              type='button'
-              title={p}
-              onClick={() => setInputValue(p)}
-              className='flex-1 min-w-0 truncate text-xs text-gray-600 bg-gray-100 hover:bg-gray-200 rounded-full px-3 py-1.5 transition-colors'
-            >
-              {p}
-            </button>
-          ))}
-        </div>
+        {/* 预设描述:单行等宽排列,超长 CSS 截断(svs 无文本时不展示) */}
+        {showPresets && (
+          <div className='flex gap-2 mb-2 overflow-hidden'>
+            {presets.map((p, i) => (
+              <button
+                key={i}
+                type='button'
+                title={p}
+                onClick={() => setInputValue(p)}
+                className='flex-1 min-w-0 truncate text-xs text-gray-600 bg-gray-100 hover:bg-gray-200 rounded-full px-3 py-1.5 transition-colors'
+              >
+                {p}
+              </button>
+            ))}
+          </div>
+        )}
         <div className='relative'>
           <TextArea
             value={inputValue}
             onChange={setInputValue}
-            placeholder={t('请输入音乐风格描述')}
+            placeholder={placeholder}
             maxLength={MAX_PROMPT_LEN}
             autosize={{ minRows: 2, maxRows: 6 }}
             className='!rounded-xl'
@@ -376,6 +454,12 @@ const MusicChatArea = ({
     generating,
     turnLimitReached,
     missingRequiredAudio,
+    missingRequiredVideo,
+    needsText,
+    needsDualAudio,
+    showPresets,
+    presets,
+    placeholder,
     inputValue,
     onSend,
     t,
@@ -410,7 +494,7 @@ const MusicChatArea = ({
             renderChatBoxAction: () => null,
           }}
           showClearContext
-          placeholder={t('请输入音乐风格描述')}
+          placeholder={placeholder}
           style={{ height: '100%' }}
         />
       </div>

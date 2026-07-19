@@ -61,6 +61,8 @@ var validTaskTypes = map[string]bool{
 	"tts": true, "s2v": true, "sr": true, "vace": true,
 	// 音乐生成(ACE-Step):t2m 纯文本、cover 参考音频、repaint 源音频。
 	"t2m": true, "cover": true, "repaint": true,
+	// 扩散音频(vLLM-Omni audiogen):AudioX t2a/v2a/v2m/tv2a/tv2m + SoulX-Singer svs。
+	"t2a": true, "v2a": true, "v2m": true, "tv2a": true, "tv2m": true, "svs": true,
 }
 
 // legacyInputKeys 旧的原始输入 / 引擎原生路径字段:输入统一走 input_refs,这些键
@@ -72,6 +74,13 @@ var legacyInputKeys = map[string]bool{
 	"video": true, "src_video": true, "src_mask": true, "src_ref_images": true,
 	// 音乐(ACE-Step)原始输入 + 引擎原生路径字段。
 	"reference_audio": true, "src_audio": true,
+	// vLLM-Omni TTS 参考音原始输入 + 门面注入的引擎路径字段(ref_audio→ref_audio_path)。
+	// 输入统一走 input_refs 物化,残留裸键会被门面当作"原始输入"整单拒。
+	"ref_audio": true, "ref_audio_2": true,
+	"ref_audio_path": true, "ref_audio_2_path": true,
+	// 扩散音频(vLLM-Omni audiogen):AudioX 视频复用 video(已在上);SoulX SVS 的
+	// prompt_audio/target_audio 引擎字段名与裸键同名,一并剥离。
+	"prompt_audio": true, "target_audio": true,
 	"image_path": true, "last_frame_path": true, "image_mask_path": true,
 	"audio_path": true, "spk_audio_path": true, "emo_audio_path": true,
 	"video_path": true, "save_result_path": true,
@@ -217,7 +226,15 @@ func (a *TaskAdaptor) BuildRequestBody(c *gin.Context, info *relaycommon.RelayIn
 	// task_type 白名单校验(§N2):它可能来自 metadata,非法值既会让 NFS 写盘路径异常,
 	// 也会被门面拒;就地本地 400,不进后续物化 / 提交。
 	if !validTaskTypes[taskType] {
-		return nil, localBadRequest(fmt.Errorf("不支持的 task_type: %q(允许:t2i/i2i/t2v/i2v/flf2v/tts/s2v/sr/vace/t2m/cover/repaint)", taskType))
+		return nil, localBadRequest(fmt.Errorf("不支持的 task_type: %q(允许:t2i/i2i/t2v/i2v/flf2v/tts/s2v/sr/vace/t2m/cover/repaint/t2a/v2a/v2m/tv2a/tv2m/svs)", taskType))
+	}
+	// SoulX svs 的文本仅占位(引擎按 prompt_audio/target_audio 生成歌声),但引擎 input 需非空、
+	// 且真机验证过的请求带 "soulx-singer" 标签。ValidateBasicTaskRequest 已豁免 svs 的空 prompt,
+	// 这里为空时兜底一个 label,避免直连空 prompt 传到引擎(v2a/v2m 纯视频输入,空 prompt 是正确
+	// 语义,不兜底)。
+	if taskType == "svs" && strings.TrimSpace(req.Prompt) == "" {
+		req.Prompt = "soulx-singer"
+		body["prompt"] = req.Prompt
 	}
 	// 输入兼容性防呆必须在物化之前(§N2 复审):否则 t2v/t2i 带图、flf2v 只给 1 张等非法
 	// 组合会先把图写到 NFS 再被拒,留下孤儿输入文件。这些检查只依赖 taskType / req,不需物化。
@@ -243,10 +260,12 @@ func (a *TaskAdaptor) BuildRequestBody(c *gin.Context, info *relaycommon.RelayIn
 			return nil, localBadRequest(err)
 		}
 	}
-	if taskType == "t2m" || taskType == "cover" || taskType == "repaint" {
+	if taskType == "t2m" || taskType == "cover" || taskType == "repaint" ||
+		taskType == "t2a" || taskType == "tv2a" || taskType == "tv2m" {
 		// 字数上限(MusicModelConfig,按模型/全局默认;0=不限制):就地本地 400,防前端(含
-		// 直连 /pg/videos)绕过。校验用户可控的全部文本:描述 prompt、歌词 lyrics、
-		// sample 模式描述 sample_query。任一字段超限即拒。
+		// 直连 /pg/videos)绕过。ACE-Step 校验 prompt/lyrics/sample_query;AudioX 文本类
+		// (t2a/tv2a/tv2m)也归「音乐」大类,同样受 MusicModelConfig 字数限制,只有 prompt。
+		// 任一字段超限即拒。
 		for _, txt := range []string{
 			req.Prompt,
 			metadataString(req.Metadata, "lyrics"),
@@ -268,7 +287,15 @@ func (a *TaskAdaptor) BuildRequestBody(c *gin.Context, info *relaycommon.RelayIn
 	var refs map[string][]string
 	switch taskType {
 	case "tts":
-		refs, err = materializeTTSInputs(c, info, taskType, modelName, req)
+		if isOmniTTSModel(modelName) {
+			// vLLM-Omni:参考音走 ref_audio(+ MOSS-TTSD 第二说话人 ref_audio_2),
+			// 均可选;预设音色走标量 speaker 透传(不物化)。VoiceGenerator/SoundEffect
+			// 纯文本无参考音。
+			refs, err = materializeOmniTTSInputs(c, info, taskType, modelName, req)
+		} else {
+			// 旧 IndexTTS:参考音色 voice 必填,门面映射 voice→spk_audio_path。
+			refs, err = materializeTTSInputs(c, info, taskType, modelName, req)
+		}
 	case "s2v":
 		// 数字人:人物图(image/input_reference)+ 驱动音频(metadata.audio)。
 		refs, err = materializeS2VInputs(c, info, taskType, modelName, req)
@@ -282,6 +309,14 @@ func (a *TaskAdaptor) BuildRequestBody(c *gin.Context, info *relaycommon.RelayIn
 		// 音乐生成:t2m 无输入;cover 需参考音频(metadata.reference_audio);
 		// repaint 需源音频(metadata.src_audio)。
 		refs, err = materializeMusicInputs(c, info, taskType, modelName, req)
+	case "t2a":
+		// AudioX 文本→音效/音乐:纯文本 prompt,无输入物化。
+	case "v2a", "v2m", "tv2a", "tv2m":
+		// AudioX 视频→音效/音乐:物化视频(metadata.video);tv2* 另有文本 prompt(透传)。
+		refs, err = materializeAudioXVideoInputs(c, info, taskType, modelName, req)
+	case "svs":
+		// SoulX-Singer 集成 preprocess:物化 prompt_audio(音色参考)+ target_audio(目标曲/伴奏)。
+		refs, err = materializeSingingInputs(c, info, taskType, modelName, req)
 	default:
 		// t2v/i2v/flf2v/i2i/t2i:有图才物化(纯文本 t2v/t2i 无输入)。
 		// 首尾帧(flf2v):images[0]=首帧→image,images[1]=尾帧→last_frame;其余只取首帧。
@@ -336,7 +371,19 @@ var sizeOverrideKeys = map[string]bool{
 func inferTaskType(modelName string) string {
 	m := strings.ToLower(modelName)
 	switch {
-	case strings.Contains(m, "tts") || strings.Contains(m, "indextts"):
+	// 扩散音频(vLLM-Omni audiogen)放最前,免被下面的 tts/兜底吞掉:
+	//   AudioX 默认 t2a(文生音效);v2a/v2m/tv2a/tv2m 由 metadata.task_type 显式指定。
+	//   SoulX-Singer 默认 svs(歌声合成)。
+	case strings.Contains(m, "audiox"):
+		return "t2a"
+	case strings.Contains(m, "soulx") || strings.Contains(m, "singer"):
+		return "svs"
+	// 语音合成:含 "tts" 的名字(qwen3-tts/glm-tts/moss-ttsd/indextts)+ vLLM-Omni
+	// 里名字不含 "tts" 的 TTS 家族(voxcpm/cosyvoice 克隆、moss-voicegenerator
+	// 声音设计、moss-soundeffect 音效)。都走 /v1/audio/speech 异步契约。
+	case strings.Contains(m, "tts") || strings.Contains(m, "indextts") ||
+		strings.Contains(m, "voxcpm") || strings.Contains(m, "cosyvoice") ||
+		strings.Contains(m, "moss"):
 		return "tts"
 	// 数字人 / 超分 / 编辑放在通用 i2v/i2i 之前:InfiniteTalk 名里常含 "talk",
 	// SeedVR2 含 "seedvr"/"sr",VACE 含 "vace" —— 显式匹配免落到 t2v 兜底。
@@ -579,6 +626,111 @@ func materializeTTSInputs(c *gin.Context, info *relaycommon.RelayInfo, taskType,
 	// 情感参考音(可选),单值。
 	if emo := metadataString(req.Metadata, "emotion_audio"); emo != "" {
 		if err := m.AddString(ctx, nfsinput.FieldEmotionAudio, 0, false, emo); err != nil {
+			m.Cleanup()
+			return nil, err
+		}
+	}
+	return m.Refs(), nil
+}
+
+// materializeAudioXVideoInputs 物化 AudioX 视频→音频/音乐(v2a/v2m/tv2a/tv2m)的源视频
+// (metadata.video)。门面把 video→video_path 映射给引擎(AudioX 用 av.open 读裸路径,无需
+// file://)。audiox_task/seconds_total/num_inference_steps 等标量随 metadata 透传,不物化。
+func materializeAudioXVideoInputs(c *gin.Context, info *relaycommon.RelayInfo, taskType, modelName string, req relaycommon.TaskSubmitReq) (map[string][]string, error) {
+	video := metadataString(req.Metadata, "video")
+	if video == "" {
+		return nil, fmt.Errorf("模型 %s 的任务类型 %s(视频→音频/音乐)需要源视频:请在 metadata.video 提供视频 URL 或 base64", modelName, taskType)
+	}
+	// AudioX 归「音乐」大类,视频上限配在 MusicModelConfig.videoMaxMB(不是 VideoModelConfig)
+	// —— 故不用 newVideoMaterializer(读视频模型配置),改直接建物化器 + 音乐视频上限兜底。
+	m := nfsinput.NewMaterializer(taskType, modelName, fmt.Sprintf("%d", info.UserId), inputGroupID(info))
+	if maxBytes, ok := common.MusicVideoMaxBytesForModel(req.Model, info.OriginModelName, modelName); ok {
+		m.SetMaxBytes(maxBytes)
+	}
+	if err := m.AddString(c.Request.Context(), nfsinput.FieldVideo, 0, false, video); err != nil {
+		m.Cleanup()
+		return nil, err
+	}
+	return m.Refs(), nil
+}
+
+// materializeSingingInputs 物化 SoulX-Singer SVS 集成 preprocess 的输入:prompt_audio(音色
+// 参考人声,必填)+ target_audio(目标曲/伴奏,必填)。服务器内联抽歌词/音符/音高,免预计算
+// 元数据。门面把 prompt_audio/target_audio 原样(引擎 extra_args 同名键)映射给引擎;
+// language/control/num_inference_steps 等标量随 metadata 透传。
+func materializeSingingInputs(c *gin.Context, info *relaycommon.RelayInfo, taskType, modelName string, req relaycommon.TaskSubmitReq) (map[string][]string, error) {
+	promptAudio := metadataString(req.Metadata, "prompt_audio")
+	targetAudio := metadataString(req.Metadata, "target_audio")
+	if promptAudio == "" || targetAudio == "" {
+		return nil, fmt.Errorf("模型 %s 的任务类型 svs(歌声合成)需要 metadata.prompt_audio(音色参考)与 metadata.target_audio(目标曲/伴奏)", modelName)
+	}
+	m := nfsinput.NewMaterializer(taskType, modelName, fmt.Sprintf("%d", info.UserId), inputGroupID(info))
+	// SoulX 归「音乐」大类,参考音上限配在 MusicModelConfig.refAudioMaxMB(不是 AudioModelConfig)。
+	if maxBytes, ok := common.MusicRefAudioMaxBytesForModel(req.Model, info.OriginModelName, modelName); ok {
+		m.SetMaxBytes(maxBytes)
+	}
+	ctx := c.Request.Context()
+	if err := m.AddString(ctx, nfsinput.FieldPromptAudio, 0, false, promptAudio); err != nil {
+		m.Cleanup()
+		return nil, err
+	}
+	if err := m.AddString(ctx, nfsinput.FieldTargetAudio, 0, false, targetAudio); err != nil {
+		m.Cleanup()
+		return nil, err
+	}
+	return m.Refs(), nil
+}
+
+// isOmniTTSModel 判断 tts 任务的模型是否由 vLLM-Omni 引擎服务(区别于旧 IndexTTS)。
+// 二者共用 task_type=tts,但参考音契约不同:IndexTTS 用必填 voice→spk_audio_path;
+// vLLM-Omni 用可选 ref_audio/ref_audio_2 + 标量 speaker 预设音色。按模型名前缀区分
+// (indextts 走旧路径,其余 TTS 家族走 Omni)。与 inferTaskType 的 tts 判定同源。
+func isOmniTTSModel(modelName string) bool {
+	m := strings.ToLower(modelName)
+	if strings.Contains(m, "indextts") {
+		return false
+	}
+	for _, k := range []string{
+		"qwen3-tts", "voxcpm", "cosyvoice", "glm-tts", "moss",
+	} {
+		if strings.Contains(m, k) {
+			return true
+		}
+	}
+	return false
+}
+
+// materializeOmniTTSInputs 物化 vLLM-Omni TTS 的参考音输入(全部可选):
+//   - ref_audio:克隆参考音(VoxCPM2/CosyVoice3 零样本克隆、MOSS-TTSD 说话人一),单值;
+//   - ref_audio_2:MOSS-TTSD 双人对话第二说话人参考音,单值(需与 ref_audio 同时给)。
+//
+// 预设音色(Qwen3-TTS/GLM-TTS)走标量 metadata.speaker 透传,不在此物化;声音设计
+// (MOSS-VoiceGenerator)与音效(MOSS-SoundEffect)纯文本,无参考音。因此本函数可能返回
+// nil(无参考音输入),与 IndexTTS 的 voice 必填不同。门面把 ref_audio→ref_audio_path、
+// ref_audio_2→ref_audio_2_path 注入引擎,引擎再转 file:// URI 交给 speech handler。
+func materializeOmniTTSInputs(c *gin.Context, info *relaycommon.RelayInfo, taskType, modelName string, req relaycommon.TaskSubmitReq) (map[string][]string, error) {
+	refAudio := metadataString(req.Metadata, "ref_audio")
+	refAudio2 := metadataString(req.Metadata, "ref_audio_2")
+	if refAudio == "" {
+		if refAudio2 != "" {
+			return nil, fmt.Errorf("模型 %s 提供了 ref_audio_2 却缺少 ref_audio:双人对话需先给第一说话人参考音", modelName)
+		}
+		return nil, nil // 预设音色 / 声音设计 / 音效:无参考音输入
+	}
+	m := nfsinput.NewMaterializer(taskType, modelName, fmt.Sprintf("%d", info.UserId), inputGroupID(info))
+	if maxBytes, ok := common.AudioRefAudioMaxBytesForModel(req.Model, info.OriginModelName, modelName); ok {
+		m.SetMaxBytes(maxBytes)
+	}
+	ctx := c.Request.Context()
+
+	// 克隆参考音(单值);失败回滚。
+	if err := m.AddString(ctx, nfsinput.FieldRefAudio, 0, false, refAudio); err != nil {
+		m.Cleanup()
+		return nil, err
+	}
+	// 第二说话人参考音(可选,MOSS-TTSD),单值。
+	if refAudio2 != "" {
+		if err := m.AddString(ctx, nfsinput.FieldRefAudio2, 0, false, refAudio2); err != nil {
 			m.Cleanup()
 			return nil, err
 		}

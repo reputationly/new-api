@@ -1,6 +1,10 @@
-// 文生音乐(ACE-Step)体验区常量。链路复用视频体验区的异步任务门面
-// (POST /pg/videos),按 mode 映射 task_type=t2m/cover/repaint,结果为音频(.mp3)。
-// 通用状态机/轮询/内容地址等工具直接复用 videoPlayground.constants。
+// 音乐模型体验区常量。链路复用视频体验区的异步任务门面(POST /pg/videos),按 mode 映射
+// task_type。涵盖两类引擎:
+//   - ACE-Step 文生音乐/音乐改编/音乐重绘(t2m/cover/repaint),结果为音频(.mp3);
+//   - AudioX + SoulX-Singer 扩散音频(文生音效/视频配音效/视频配乐/歌声合成
+//     = t2a/v2a/tv2a/v2m/tv2m/svs),结果为音频(.wav)。
+// 通用状态机/轮询/内容地址等工具直接复用 videoPlayground.constants;结果播放/下载按返回的
+// content-url + media-type 处理,格式无关(见 MusicChatArea)。
 
 export {
   VIDEO_API_ENDPOINTS as MUSIC_API_ENDPOINTS,
@@ -11,43 +15,148 @@ export {
   buildVideoContentUrl as buildMusicContentUrl,
 } from './videoPlayground.constants';
 
-// 音乐生成较慢(30~120s 的曲子,单实例 FIFO),沿用 4s 间隔,上限同视频。
+// 音乐/扩散音频生成较慢(30~120s 的曲子 / AudioX 默认 250 步,单实例 FIFO),沿用 4s
+// 间隔,上限同视频。
 export const MUSIC_POLL_MAX_TIMES = 90; // 约 6 分钟后超时
 
-// 三种玩法(= 门面 task_type)。中文能力标签即体验区标签页名,新增时同步维护
-// 后端 constant/model_capability.go 的 MusicCapabilities。
+// 七个能力标签(= 体验区子标签页名;中文即值)。前三个为 ACE-Step,后四个为 AudioX/SoulX。
+// 与后端 constant/model_capability.go 的 MusicCapabilities 保持一致(新增能力两处同步)。
 export const MUSIC_T2M_CAPABILITY = '文生音乐';
 export const MUSIC_COVER_CAPABILITY = '音乐改编';
 export const MUSIC_REPAINT_CAPABILITY = '音乐重绘';
+export const MUSIC_T2A_CAPABILITY = '文生音效';
+export const MUSIC_V2A_CAPABILITY = '视频配音效';
+export const MUSIC_V2M_CAPABILITY = '视频配乐';
+export const MUSIC_SVS_CAPABILITY = '歌声合成';
 export const MUSIC_CAPABILITIES = [
   MUSIC_T2M_CAPABILITY,
   MUSIC_COVER_CAPABILITY,
   MUSIC_REPAINT_CAPABILITY,
+  MUSIC_T2A_CAPABILITY,
+  MUSIC_V2A_CAPABILITY,
+  MUSIC_V2M_CAPABILITY,
+  MUSIC_SVS_CAPABILITY,
 ];
 
-// mode → 门面契约映射。needsAudio 的模式在配置面板要求上传驱动音频,经 metadata
-// 的 audioMetaKey 透传(adaptor 物化为 NFS input_refs → 引擎)。
+// mode → 门面契约映射。engine 区分参数形态:
+//   - acestep:文本描述(prompt)+ 可选歌词/时长 +(cover/repaint)驱动音频。
+//   - audiox / soulx:与 new-api 任务适配器(relay/channel/task/gpustackplus/adaptor.go)
+//     的 task_type 与 metadata 键精确对齐:
+//       * 文生音效  t2a  :纯文本 prompt,无输入物化。
+//       * 视频配音效 v2a/tv2a:上传视频(metadata.video)+ 可选文本;有文本→tv2a,否则 v2a。
+//       * 视频配乐  v2m/tv2m:上传视频(metadata.video)+ 可选文本;有文本→tv2m,否则 v2m。
+//       * 歌声合成  svs  :两个音频——音色参考(metadata.prompt_audio)+ 目标曲/伴奏
+//                         (metadata.target_audio),均必填;无需文本(发送固定标签占位)。
+// 字段说明:
+//   needsAudio:acestep 的驱动音频(单音频,audioMetaKey 透传)。
+//   needsVideo:audiox 视频条件输入(单视频上传器 → metadata.video)。
+//   needsDualAudio:soulx 双音频上传器(音色参考 + 目标曲/伴奏)。
+//   needsText:文本是否必填(t2m/t2a 必填;v2*/tv2* 可选;svs 无需)。
+//   resolveTaskType(hasText):acestep/t2a/svs 与文本无关;v2*/tv2* 按是否带文本分支。
 export const MUSIC_MODES = {
   t2m: {
     taskType: 't2m',
     capability: MUSIC_T2M_CAPABILITY,
+    engine: 'acestep',
     needsAudio: false,
     audioMetaKey: '',
+    needsVideo: false,
+    needsDualAudio: false,
+    needsText: true,
+    resolveTaskType: () => 't2m',
   },
   cover: {
     taskType: 'cover',
     capability: MUSIC_COVER_CAPABILITY,
+    engine: 'acestep',
     needsAudio: true,
     audioMetaKey: 'reference_audio',
+    needsVideo: false,
+    needsDualAudio: false,
+    needsText: true,
+    resolveTaskType: () => 'cover',
   },
   repaint: {
     taskType: 'repaint',
     capability: MUSIC_REPAINT_CAPABILITY,
+    engine: 'acestep',
     needsAudio: true,
     audioMetaKey: 'src_audio',
+    needsVideo: false,
+    needsDualAudio: false,
+    needsText: true,
+    resolveTaskType: () => 'repaint',
+  },
+  t2a: {
+    taskType: 't2a',
+    capability: MUSIC_T2A_CAPABILITY,
+    engine: 'audiox',
+    needsAudio: false,
+    audioMetaKey: '',
+    needsVideo: false,
+    needsDualAudio: false,
+    needsText: true, // 文生音效:文本必填
+    videoMetaKey: 'video',
+    promptAudioMetaKey: 'prompt_audio',
+    targetAudioMetaKey: 'target_audio',
+    resolveTaskType: () => 't2a',
+  },
+  v2a: {
+    taskType: 'v2a',
+    capability: MUSIC_V2A_CAPABILITY,
+    engine: 'audiox',
+    needsAudio: false,
+    audioMetaKey: '',
+    needsVideo: true,
+    needsDualAudio: false,
+    needsText: false, // 视频配音效:文本可选;有文本→tv2a,否则 v2a
+    videoMetaKey: 'video',
+    promptAudioMetaKey: 'prompt_audio',
+    targetAudioMetaKey: 'target_audio',
+    resolveTaskType: (hasText) => (hasText ? 'tv2a' : 'v2a'),
+  },
+  v2m: {
+    taskType: 'v2m',
+    capability: MUSIC_V2M_CAPABILITY,
+    engine: 'audiox',
+    needsAudio: false,
+    audioMetaKey: '',
+    needsVideo: true,
+    needsDualAudio: false,
+    needsText: false, // 视频配乐:文本可选;有文本→tv2m,否则 v2m
+    videoMetaKey: 'video',
+    promptAudioMetaKey: 'prompt_audio',
+    targetAudioMetaKey: 'target_audio',
+    resolveTaskType: (hasText) => (hasText ? 'tv2m' : 'v2m'),
+  },
+  svs: {
+    taskType: 'svs',
+    capability: MUSIC_SVS_CAPABILITY,
+    engine: 'soulx',
+    needsAudio: false,
+    audioMetaKey: '',
+    needsVideo: false,
+    needsDualAudio: true,
+    needsText: false, // 歌声合成:无需文本(发送固定标签占位)
+    videoMetaKey: 'video',
+    promptAudioMetaKey: 'prompt_audio',
+    targetAudioMetaKey: 'target_audio',
+    resolveTaskType: () => 'svs',
   },
 };
 
+// 体验区子标签页顺序(3 个 ACE-Step + 4 个 AudioX/SoulX)。
+export const MUSIC_TAB_ORDER = [
+  't2m',
+  'cover',
+  'repaint',
+  't2a',
+  'v2a',
+  'v2m',
+  'svs',
+];
+
+// ── ACE-Step 参数 ──────────────────────────────────────────────
 // 时长预设(秒),经 metadata.audio_duration 透传给引擎。'' = 引擎默认(不下发)。
 export const MUSIC_DURATIONS = ['', '30', '60', '90', '120'];
 export const MUSIC_DEFAULT_DURATION = '';
@@ -60,6 +169,14 @@ export const MUSIC_PROMPT_PRESETS = [
   '中国风电子舞曲,融合古典乐器与现代节拍',
   '磅礴大气的史诗级电影配乐,气势恢宏震撼人心',
   '空灵的禅意音乐,适合瑜伽冥想',
+];
+
+// 音效/配乐提示词预设(t2a/v2*/tv2* 展示)。
+export const MUSIC_AUDIOX_PROMPT_PRESETS = [
+  '雨点打在窗户上的滴答声,伴随远处闷雷',
+  '繁忙街道上的汽车鸣笛与人群嘈杂声',
+  '悠扬舒缓的钢琴独奏,适合宁静的夜晚',
+  '激昂的管弦乐,气势磅礴的史诗配乐',
 ];
 
 // 演唱语言(metadata.vocal_language)。'' = 不指定(sample 模式自动检测);
@@ -78,10 +195,43 @@ export const MUSIC_VOCAL_LANGUAGES = [
 export const MUSIC_DEFAULT_GUIDANCE = 7.0;
 export const MUSIC_DEFAULT_STEPS = 8;
 
+// ── AudioX / SoulX 参数 ────────────────────────────────────────
+// 标量参数默认(仅作输入框占位提示;留空即不下发,走引擎默认)。
+// AudioX:seconds_total(仅 AudioX)默认 10、num_inference_steps 默认 250;
+// SoulX(svs):num_inference_steps 默认 32。guidance_scale/seed 两引擎共用。
+export const MUSIC_DEFAULT_SECONDS_TOTAL = 10;
+export const MUSIC_AUDIOX_DEFAULT_STEPS = 250;
+export const MUSIC_SOULX_DEFAULT_STEPS = 32;
+export const MUSIC_AUDIOX_DEFAULT_GUIDANCE = 7.0;
+
+// SoulX 歌声合成的语言与控制方式(metadata.language / metadata.control)。
+export const MUSIC_SVS_LANGUAGES = [
+  { value: 'Mandarin', label: '普通话' },
+  { value: 'Cantonese', label: '粤语' },
+  { value: 'English', label: '英文' },
+];
+export const MUSIC_SVS_DEFAULT_LANGUAGE = 'Mandarin';
+export const MUSIC_SVS_CONTROLS = [
+  { value: 'melody', label: '旋律(melody)' },
+  { value: 'score', label: '曲谱(score)' },
+];
+export const MUSIC_SVS_DEFAULT_CONTROL = 'melody';
+
+// 采样步数占位默认按引擎选择。
+export const musicDefaultStepsForEngine = (engine) => {
+  if (engine === 'audiox') return MUSIC_AUDIOX_DEFAULT_STEPS;
+  if (engine === 'soulx') return MUSIC_SOULX_DEFAULT_STEPS;
+  return MUSIC_DEFAULT_STEPS;
+};
+
+// ── 上传大小上限 ───────────────────────────────────────────────
 // 上传参考/源音大小上限(MB;base64 随请求体走,过大拖慢提交)。
 export const MUSIC_AUDIO_UPLOAD_MAX_MB = 20;
+// 上传视频(v2*/tv2*)大小上限(MB)。
+export const MUSIC_VIDEO_UPLOAD_MAX_MB = 50;
 
-// 历史 localStorage 键按 mode 区分(t2m/cover/repaint 各自独立历史)。
+// ── 历史 ───────────────────────────────────────────────────────
+// 历史 localStorage 键按 mode 区分(各玩法各自独立历史)。
 export const MUSIC_HISTORY_STORAGE_PREFIX = 'music_playground_conversations';
 export const musicHistoryStorageKey = (mode) =>
   `${MUSIC_HISTORY_STORAGE_PREFIX}_${mode}`;
@@ -94,6 +244,7 @@ export { MUSIC_CAPABILITIES as MUSIC_ALL_CAPABILITIES };
 // 兜底默认:未在「音乐模型配置」里显式配置时使用。maxChars=0 表示不限制。
 export const MUSIC_DEFAULT_MAX_CHARS = 2000;
 export const MUSIC_DEFAULT_REF_AUDIO_MB = MUSIC_AUDIO_UPLOAD_MAX_MB;
+export const MUSIC_DEFAULT_VIDEO_MB = MUSIC_VIDEO_UPLOAD_MAX_MB;
 
 // 解析非负整数;非法/空返回 null(供 ?? 兜底)。
 const toPositiveInt = (v) => {
@@ -108,12 +259,14 @@ const normalizeList = (list) =>
     : [];
 
 // 解析 status 中的 MusicModelConfig(字符串或对象)。形如:
-//   { default: { maxChars, refAudioMaxMB }, models: { <model>: { capabilities:[], maxChars, refAudioMaxMB } } }
+//   { default: { maxChars, refAudioMaxMB, videoMaxMB },
+//     models: { <model>: { capabilities:[], maxChars, refAudioMaxMB, videoMaxMB } } }
 export const parseMusicModelConfig = (raw) => {
   const empty = {
     default: {
       maxChars: MUSIC_DEFAULT_MAX_CHARS,
       refAudioMaxMB: MUSIC_DEFAULT_REF_AUDIO_MB,
+      videoMaxMB: MUSIC_DEFAULT_VIDEO_MB,
     },
     models: {},
   };
@@ -128,6 +281,7 @@ export const parseMusicModelConfig = (raw) => {
           capabilities: normalizeList(cfg?.capabilities),
           maxChars: toPositiveInt(cfg?.maxChars),
           refAudioMaxMB: toPositiveInt(cfg?.refAudioMaxMB),
+          videoMaxMB: toPositiveInt(cfg?.videoMaxMB),
         };
       });
     }
@@ -136,6 +290,7 @@ export const parseMusicModelConfig = (raw) => {
         maxChars: toPositiveInt(def.maxChars) ?? MUSIC_DEFAULT_MAX_CHARS,
         refAudioMaxMB:
           toPositiveInt(def.refAudioMaxMB) ?? MUSIC_DEFAULT_REF_AUDIO_MB,
+        videoMaxMB: toPositiveInt(def.videoMaxMB) ?? MUSIC_DEFAULT_VIDEO_MB,
       },
       models,
     };
@@ -169,4 +324,12 @@ export const getRefAudioMaxMBForModel = (config, model) => {
   if (config?.default?.refAudioMaxMB != null)
     return config.default.refAudioMaxMB;
   return MUSIC_DEFAULT_REF_AUDIO_MB;
+};
+
+// 视频大小上限(MB):按模型配置 → 全局默认 → 兜底常量。
+export const getVideoMaxMBForModel = (config, model) => {
+  const m = config?.models?.[model];
+  if (m && m.videoMaxMB != null) return m.videoMaxMB;
+  if (config?.default?.videoMaxMB != null) return config.default.videoMaxMB;
+  return MUSIC_DEFAULT_VIDEO_MB;
 };

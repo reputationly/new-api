@@ -6,9 +6,11 @@ import { useMusicGeneration } from '../../hooks/musicPlayground/useMusicGenerati
 import MusicConfigPanel from '../../components/musicPlayground/MusicConfigPanel';
 import MusicChatArea from '../../components/musicPlayground/MusicChatArea';
 import VideoHistoryPanel from '../../components/videoPlayground/VideoHistoryPanel';
+import { MUSIC_TAB_ORDER } from '../../constants/musicPlayground.constants';
 
-// 单个玩法(文生音乐 / 音乐改编 / 音乐重绘)的三栏体验区。切 tab 时整体重挂载,
-// 各玩法历史/参数互不串扰(mode 作为 key)。历史面板与视频/语音同构,直接复用。
+// 单个玩法的三栏体验区。切 tab 时整体重挂载,各玩法历史/参数互不串扰(mode 作为 key)。
+// 涵盖 ACE-Step(文生音乐/音乐改编/音乐重绘)与 AudioX/SoulX(文生音效/视频配音效/视频
+// 配乐/歌声合成)。历史面板与视频/语音同构,直接复用。
 const MusicPlaygroundBody = ({ mode }) => {
   const { t } = useTranslation();
   const isMobile = useIsMobile();
@@ -24,8 +26,14 @@ const MusicPlaygroundBody = ({ mode }) => {
     locked,
     turnLimitReached,
     missingRequiredAudio,
+    missingRequiredVideo,
+    engine,
     needsAudio,
+    needsVideo,
+    needsDualAudio,
+    needsText,
     refAudioMaxMB,
+    videoMaxMB,
     generate,
     regenerate,
     refetch,
@@ -35,9 +43,21 @@ const MusicPlaygroundBody = ({ mode }) => {
     openHistoryItem,
   } = useMusicGeneration(mode);
 
-  // cover=参考音频 / repaint=源音频(t2m 无音频)。
+  // cover=参考音频 / repaint=源音频(其余玩法无单音频标签)。
   const audioLabel =
     mode === 'cover' ? t('参考音频') : mode === 'repaint' ? t('源音频') : '';
+
+  // 各玩法欢迎语。
+  const welcomeText =
+    mode === 't2a'
+      ? t('欢迎使用 AI 文生音效,请在左侧选择模型,并在下方输入音效描述')
+      : mode === 'v2a'
+        ? t('欢迎使用 AI 视频配音效,请在左侧上传源视频,可选补充文本描述')
+        : mode === 'v2m'
+          ? t('欢迎使用 AI 视频配乐,请在左侧上传源视频,可选补充文本描述')
+          : mode === 'svs'
+            ? t('欢迎使用 AI 歌声合成,请在左侧上传音色参考与目标曲/伴奏')
+            : '';
 
   return (
     <div
@@ -51,9 +71,13 @@ const MusicPlaygroundBody = ({ mode }) => {
           models={models}
           onInputChange={handleInputChange}
           disabled={locked}
+          engine={engine}
           needsAudio={needsAudio}
+          needsVideo={needsVideo}
+          needsDualAudio={needsDualAudio}
           audioLabel={audioLabel}
           refAudioMaxMB={refAudioMaxMB}
+          videoMaxMB={videoMaxMB}
           styleState={styleState}
         />
       </div>
@@ -64,6 +88,12 @@ const MusicPlaygroundBody = ({ mode }) => {
           generating={generating}
           turnLimitReached={turnLimitReached}
           missingRequiredAudio={missingRequiredAudio}
+          missingRequiredVideo={missingRequiredVideo}
+          engine={engine}
+          needsText={needsText}
+          needsVideo={needsVideo}
+          needsDualAudio={needsDualAudio}
+          welcomeText={welcomeText}
           styleState={styleState}
           onSend={generate}
           onRegenerate={regenerate}
@@ -86,6 +116,17 @@ const MusicPlaygroundBody = ({ mode }) => {
   );
 };
 
+// 7 个子标签页(标签文案 = 能力中文)。
+const TAB_LABELS = {
+  t2m: '文生音乐',
+  cover: '音乐改编',
+  repaint: '音乐重绘',
+  t2a: '文生音效',
+  v2a: '视频配音效',
+  v2m: '视频配乐',
+  svs: '歌声合成',
+};
+
 const MusicModel = () => {
   const { t } = useTranslation();
   const [activeTab, setActiveTab] = useState('t2m');
@@ -99,9 +140,9 @@ const MusicModel = () => {
           onChange={setActiveTab}
           className='flex-shrink-0'
         >
-          <TabPane tab={t('文生音乐')} itemKey='t2m' />
-          <TabPane tab={t('音乐改编')} itemKey='cover' />
-          <TabPane tab={t('音乐重绘')} itemKey='repaint' />
+          {MUSIC_TAB_ORDER.map((mode) => (
+            <TabPane key={mode} tab={t(TAB_LABELS[mode])} itemKey={mode} />
+          ))}
         </Tabs>
 
         <MusicPlaygroundBody key={activeTab} mode={activeTab} />

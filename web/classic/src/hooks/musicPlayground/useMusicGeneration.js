@@ -31,6 +31,8 @@ import {
   MUSIC_POLL_INTERVAL_MS,
   MUSIC_POLL_MAX_TIMES,
   MUSIC_DEFAULT_DURATION,
+  MUSIC_SVS_DEFAULT_LANGUAGE,
+  MUSIC_SVS_DEFAULT_CONTROL,
   musicHistoryStorageKey,
   normalizeMusicStatus,
   parseProgress,
@@ -39,19 +41,30 @@ import {
   getMusicModelSet,
   getMaxCharsForModel,
   getRefAudioMaxMBForModel,
+  getVideoMaxMBForModel,
 } from '../../constants/musicPlayground.constants';
 
-// 文生音乐体验区 hook,镜像 useAudioGeneration:同一异步任务门面(/pg/videos)、
-// 同一轮询/历史/锁定模式;按 mode(t2m/cover/repaint)映射 task_type,输入换成
-// 描述 caption(输入框 prompt)+ 可选歌词/时长 +(cover/repaint)驱动音频。
+// 音乐模型体验区 hook。一个 hook 覆盖全部 7 个玩法(mode),同一异步任务门面
+// (/pg/videos)、同一轮询/历史/锁定模式;按 mode 的 engine 分支输入形态与 metadata:
+//   - acestep(t2m/cover/repaint):描述 caption(prompt)+ 可选歌词/时长 +
+//     (cover/repaint)驱动音频(单音频)。
+//   - audiox(t2a/v2a/v2m):t2a 纯文本;v2a/v2m 视频上传(metadata.video)+ 可选文本
+//     (有文本→tv2a/tv2m,否则 v2a/v2m)。
+//   - soulx(svs):双音频上传(metadata.prompt_audio + metadata.target_audio),无需文本。
+// 上传的音频/视频是 base64 data-url,以 Blob 存 IndexedDB,localStorage 只留短引用;
+// 刷新后可恢复、可续问。纯文本玩法(t2m/t2a)无上传,不受影响。
 
-// 上传的驱动音频是 base64 data-url,以 Blob 存 IndexedDB,localStorage 只留短引用;
-// 刷新后可恢复、可续问。t2m 无音频,不受影响。
 const MUSIC_MEDIA_SCHEMA = {
   convArrayFields: [],
-  convStringFields: ['audioData'],
+  // 覆盖全部上传字段:acestep 驱动音频 + audiox 视频 + soulx 双音频。
+  convStringFields: [
+    'audioData',
+    'videoData',
+    'promptAudioData',
+    'targetAudioData',
+  ],
   msgArrayFields: [],
-  // 生成的音频结果:抓 Blob 缓存进 IDB,同视频/语音。
+  // 生成的音频结果:抓 Blob 缓存进 IDB,同视频/语音。格式无关(.mp3 / .wav)。
   msgMediaFields: ['musicUrl'],
   markNotPersisted: false,
 };
@@ -81,29 +94,91 @@ const extractApiErrMsg = (error, fallback) => {
   return d.error?.message || d.message || error?.message || fallback;
 };
 
-// mode 参数化:t2m(纯文本)/cover(参考音频)/repaint(源音频)。
+// 会话内需持久化/回填的全部参数字段(随 mode 使用其子集)。
+const PARAM_FIELDS = [
+  'group',
+  'model',
+  // acestep
+  'lyrics',
+  'duration',
+  'audioData',
+  'audioName',
+  'bpm',
+  'vocalLanguage',
+  // audiox / soulx 上传
+  'videoData',
+  'videoName',
+  'promptAudioData',
+  'promptAudioName',
+  'targetAudioData',
+  'targetAudioName',
+  // audiox 标量
+  'secondsTotal',
+  // soulx
+  'language',
+  'control',
+  // 通用
+  'seed',
+  'guidanceScale',
+  'inferenceSteps',
+];
+
+const pickParams = (src) => {
+  const out = {};
+  PARAM_FIELDS.forEach((f) => {
+    out[f] = src[f];
+  });
+  return out;
+};
+
+// mode 参数化:t2m/cover/repaint(ACE-Step)+ t2a/v2a/v2m/svs(AudioX/SoulX)。
 export const useMusicGeneration = (mode = 't2m') => {
   const { t } = useTranslation();
   const [statusState] = useContext(StatusContext);
   const [userState] = useContext(UserContext);
 
   const modeDef = MUSIC_MODES[mode] || MUSIC_MODES.t2m;
-  const { taskType, capability, needsAudio, audioMetaKey } = modeDef;
+  const {
+    capability,
+    engine,
+    needsAudio,
+    audioMetaKey,
+    needsVideo,
+    needsDualAudio,
+    needsText,
+    videoMetaKey,
+    promptAudioMetaKey,
+    targetAudioMetaKey,
+    resolveTaskType,
+  } = modeDef;
   const storageKey = musicHistoryStorageKey(mode);
 
   const [inputs, setInputs] = useState({
     group: '',
     model: '',
+    // acestep:歌词/时长/驱动音频
     lyrics: '', // 可选歌词(metadata.lyrics);留空则由引擎按 caption 自动生成
     duration: MUSIC_DEFAULT_DURATION, // 秒;'' = 引擎默认
-    audioData: '', // 上传的驱动音频(base64 data-url);仅 cover/repaint 使用
-    audioName: '', // 上传文件名(展示用)
-    // 高级参数:留空即不下发,走引擎默认(见 metadata 组装)。
-    seed: '', // 指定后可复现;空 = 随机
+    audioData: '', // 驱动音频(base64 data-url);仅 cover/repaint 使用
+    audioName: '',
     bpm: '', // 速度;空 = 自动
     vocalLanguage: '', // 演唱语言;空 = 自动
-    guidanceScale: '', // 贴合描述程度;空 = 引擎默认 7.0
-    inferenceSteps: '', // 采样步数;空 = 引擎默认 8
+    // audiox / soulx 上传(base64 data-url)+ 文件名(展示用)
+    videoData: '', // v2a/v2m:源视频 → metadata.video
+    videoName: '',
+    promptAudioData: '', // svs:音色参考 → metadata.prompt_audio
+    promptAudioName: '',
+    targetAudioData: '', // svs:目标曲/伴奏 → metadata.target_audio
+    targetAudioName: '',
+    // audiox 标量
+    secondsTotal: '', // AudioX 时长(秒);默认 10
+    // soulx(svs)专属
+    language: MUSIC_SVS_DEFAULT_LANGUAGE,
+    control: MUSIC_SVS_DEFAULT_CONTROL,
+    // 通用高级参数:留空即不下发,走引擎默认。
+    seed: '', // 指定后可复现;空 = 随机
+    guidanceScale: '', // 贴合描述程度;空 = 引擎默认
+    inferenceSteps: '', // 采样步数;空 = 引擎默认
   });
   const [groups, setGroups] = useState([]);
   const [models, setModels] = useState([]);
@@ -124,7 +199,7 @@ export const useMusicGeneration = (mode = 't2m') => {
     return conv ? conv.messages : [];
   }, [conversations, currentConvId]);
 
-  // 对话内已生成过 → 参数锁定(同语音):模型/歌词/时长/音频均不可改,直到新对话。
+  // 对话内已生成过 → 参数锁定(同语音):模型/上传/参数均不可改,直到新对话。
   const locked = currentConvId !== null;
 
   const conversationsRef = useRef(conversations);
@@ -135,7 +210,7 @@ export const useMusicGeneration = (mode = 't2m') => {
   groupRef.current = inputs.group;
   const activePollRef = useRef(null);
 
-  // mount 后从 IDB 还原驱动音频,按初始对象引用逐条合并(不整体覆盖)。
+  // mount 后从 IDB 还原上传的音频/视频,按初始对象引用逐条合并(不整体覆盖)。
   useEffect(() => {
     let canceled = false;
     const init = initialConvsRef.current;
@@ -176,8 +251,7 @@ export const useMusicGeneration = (mode = 't2m') => {
     setInputs((prev) => ({ ...prev, [key]: value }));
   }, []);
 
-  // 音乐模型集合 = 「音乐模型配置」里声明、且能力含当前 tab 能力(文生音乐/音乐改编/
-  // 音乐重绘)的模型。
+  // 音乐模型集合 = 「音乐模型配置」里声明、且能力含当前 tab 能力的模型。
   const modelConfig = useMemo(
     () => parseMusicModelConfig(statusState?.status?.MusicModelConfig),
     [statusState?.status?.MusicModelConfig],
@@ -193,9 +267,14 @@ export const useMusicGeneration = (mode = 't2m') => {
     () => getMaxCharsForModel(modelConfig, inputs.model),
     [modelConfig, inputs.model],
   );
-  // 当前模型的驱动音频大小上限(MB)。
+  // 当前模型的驱动/参考音大小上限(MB)。
   const refAudioMaxMB = useMemo(
     () => getRefAudioMaxMBForModel(modelConfig, inputs.model),
+    [modelConfig, inputs.model],
+  );
+  // 当前模型的视频大小上限(MB)。
+  const videoMaxMB = useMemo(
+    () => getVideoMaxMBForModel(modelConfig, inputs.model),
     [modelConfig, inputs.model],
   );
 
@@ -352,7 +431,7 @@ export const useMusicGeneration = (mode = 't2m') => {
             inner.error?.message ||
             inner.fail_reason ||
             data.fail_reason ||
-            t('音乐生成失败');
+            t('生成失败');
           patchConvMessage(convId, msgId, {
             status: MUSIC_STATUS.FAILED,
             error: msg,
@@ -444,18 +523,22 @@ export const useMusicGeneration = (mode = 't2m') => {
   const generate = useCallback(
     async (prompt) => {
       const text = (prompt || '').trim();
-      if (!text || generating) return;
+      // t2m/cover/repaint/t2a 需文本;v2*/tv2* 文本可选;svs 无需文本。
+      if (needsText && !text) return;
+      if (generating) return;
 
-      // 字数上限(0=不限制):按当前模型配置就地拦截。
-      const charLimit = getMaxCharsForModel(modelConfig, inputs.model);
-      if (charLimit > 0 && text.length > charLimit) {
-        showError(
-          t('描述文本超过字数上限 {{max}} 字(当前 {{cur}} 字)', {
-            max: charLimit,
-            cur: text.length,
-          }),
-        );
-        return;
+      // 字数上限(0=不限制):按当前模型配置就地拦截(仅对有文本时)。
+      if (text) {
+        const charLimit = getMaxCharsForModel(modelConfig, inputs.model);
+        if (charLimit > 0 && text.length > charLimit) {
+          showError(
+            t('描述文本超过字数上限 {{max}} 字(当前 {{cur}} 字)', {
+              max: charLimit,
+              cur: text.length,
+            }),
+          );
+          return;
+        }
       }
 
       let convId = currentConvId;
@@ -469,20 +552,20 @@ export const useMusicGeneration = (mode = 't2m') => {
           showError(t('请先上传驱动音频'));
           return;
         }
+        if (needsVideo && !(inputs.videoData || '').startsWith('data:')) {
+          showError(t('请先上传源视频'));
+          return;
+        }
+        if (
+          needsDualAudio &&
+          (!(inputs.promptAudioData || '').startsWith('data:') ||
+            !(inputs.targetAudioData || '').startsWith('data:'))
+        ) {
+          showError(t('请先上传音色参考与目标曲/伴奏'));
+          return;
+        }
         convId = genId();
-        params = {
-          group: inputs.group,
-          model: inputs.model,
-          lyrics: inputs.lyrics,
-          duration: inputs.duration,
-          audioData: inputs.audioData,
-          audioName: inputs.audioName,
-          seed: inputs.seed,
-          bpm: inputs.bpm,
-          vocalLanguage: inputs.vocalLanguage,
-          guidanceScale: inputs.guidanceScale,
-          inferenceSteps: inputs.inferenceSteps,
-        };
+        params = pickParams(inputs);
       } else {
         const conv = conversationsRef.current.find((c) => c.id === convId);
         const used = conv
@@ -496,37 +579,14 @@ export const useMusicGeneration = (mode = 't2m') => {
           );
           return;
         }
-        params = conv
-          ? {
-              group: conv.group,
-              model: conv.model,
-              lyrics: conv.lyrics,
-              duration: conv.duration,
-              audioData: conv.audioData,
-              audioName: conv.audioName,
-              seed: conv.seed,
-              bpm: conv.bpm,
-              vocalLanguage: conv.vocalLanguage,
-              guidanceScale: conv.guidanceScale,
-              inferenceSteps: conv.inferenceSteps,
-            }
-          : {
-              group: inputs.group,
-              model: inputs.model,
-              lyrics: inputs.lyrics,
-              duration: inputs.duration,
-              audioData: inputs.audioData,
-              audioName: inputs.audioName,
-              seed: inputs.seed,
-              bpm: inputs.bpm,
-              vocalLanguage: inputs.vocalLanguage,
-              guidanceScale: inputs.guidanceScale,
-              inferenceSteps: inputs.inferenceSteps,
-            };
+        params = conv ? pickParams(conv) : pickParams(inputs);
       }
 
-      // cover/repaint 的驱动音频:刷新后 localStorage 已剥离 → 提示重开对话重传。
+      // 上传的驱动/参考媒体:刷新后 localStorage 已剥离 → 提示重开对话重传。
       let audioDataURL = '';
+      let videoDataURL = '';
+      let promptAudioURL = '';
+      let targetAudioURL = '';
       if (needsAudio) {
         audioDataURL = params.audioData || '';
         if (!audioDataURL.startsWith('data:')) {
@@ -534,10 +594,40 @@ export const useMusicGeneration = (mode = 't2m') => {
           return;
         }
       }
+      if (needsVideo) {
+        videoDataURL = params.videoData || '';
+        if (!videoDataURL.startsWith('data:')) {
+          showError(t('源视频已失效,请开启新对话并重新上传'));
+          return;
+        }
+      }
+      if (needsDualAudio) {
+        promptAudioURL = params.promptAudioData || '';
+        targetAudioURL = params.targetAudioData || '';
+        if (
+          !promptAudioURL.startsWith('data:') ||
+          !targetAudioURL.startsWith('data:')
+        ) {
+          showError(t('参考音频已失效,请开启新对话并重新上传'));
+          return;
+        }
+      }
+
+      // 解析 task_type:v2a/v2m 按是否带文本分支到 tv2a/tv2m;其余与文本无关。
+      const resolvedTaskType = resolveTaskType(text.length > 0);
+      // 占位符仅用于 svs(歌声合成引擎需非空 input,文本仅占位);v2a/v2m 是纯视频输入,
+      // 后端明确允许空 prompt —— 绝不能塞占位,否则会拿"歌声合成"去条件化 AudioX。
+      const promptField = text || (resolvedTaskType === 'svs' ? t('歌声合成') : '');
 
       const reqId = genId();
       const now = new Date().toISOString();
-      const userMsg = { id: `${reqId}-u`, role: 'user', content: text };
+      const userMsg = {
+        id: `${reqId}-u`,
+        role: 'user',
+        // 空文本时用当前玩法的能力标签(视频配音效/视频配乐/歌声合成…),而非硬编码
+        // "歌声合成" —— 否则 v2a/v2m 的纯视频任务在历史里被误标成唱歌。
+        content: text || `（${capability}）`,
+      };
       const asstId = `${reqId}-a`;
       const asstMsg = {
         id: asstId,
@@ -557,18 +647,8 @@ export const useMusicGeneration = (mode = 't2m') => {
           next = [
             {
               id: convId,
-              group: params.group,
-              model: params.model,
-              lyrics: params.lyrics,
-              duration: params.duration,
-              audioData: params.audioData,
-              audioName: params.audioName,
-              seed: params.seed,
-              bpm: params.bpm,
-              vocalLanguage: params.vocalLanguage,
-              guidanceScale: params.guidanceScale,
-              inferenceSteps: params.inferenceSteps,
-              title: text,
+              ...params,
+              title: text || capability,
               createdAt: now,
               updatedAt: now,
               messages: [userMsg, asstMsg],
@@ -591,43 +671,81 @@ export const useMusicGeneration = (mode = 't2m') => {
       setGenerating(true);
 
       try {
-        // gpustackplus 门面契约:task_type/歌词/时长/驱动音频经 metadata 透传
-        // (adaptor 把音频物化 NFS → input_refs → 引擎)。
-        const metadata = { task_type: taskType };
-        const lyrics = (params.lyrics || '').trim();
-        const dur = parseFloat(params.duration);
-        if (Number.isFinite(dur) && dur > 0) metadata.audio_duration = dur;
-        if (needsAudio && audioMetaKey) metadata[audioMetaKey] = audioDataURL;
+        // gpustackplus 门面契约:task_type + 输入(音频/视频)+ 标量参数经 metadata 透传
+        // (adaptor 把上传物化 NFS → input_refs → 引擎)。
+        const metadata = { task_type: resolvedTaskType };
 
-        // t2m 且未填歌词 → 额外开启 sample 模式:引擎按描述用 LM 自动生成 caption+歌词,
-        // 产出整首带词歌(官方 examples/simple_mode 用法)。create_sample 的触发条件是
-        // sample_mode 或非空 sample_query,与 prompt 是否为空无关,所以 prompt 仍保持=描述
-        // 文本 —— 既满足门面「prompt 必填(除 sr)」校验(见 relay/common/relay_utils.go),
-        // 也让不认 sample_mode 的路径能靠 prompt + LM 补词兜底。
-        // 其余情况(已填歌词 或 cover/repaint):描述作为 caption(prompt),歌词直接透传。
-        const promptField = text;
-        if (taskType === 't2m' && !lyrics) {
-          metadata.sample_mode = true;
-          metadata.sample_query = text;
-        } else if (lyrics) {
-          metadata.lyrics = lyrics;
-        }
+        if (engine === 'acestep') {
+          // ── ACE-Step:歌词/时长/驱动音频/BPM/演唱语言 ──
+          const lyrics = (params.lyrics || '').trim();
+          const dur = parseFloat(params.duration);
+          if (Number.isFinite(dur) && dur > 0) metadata.audio_duration = dur;
+          if (needsAudio && audioMetaKey) metadata[audioMetaKey] = audioDataURL;
 
-        // 高级参数:留空即不下发,走引擎默认。字段名对齐 GenerateMusicRequest。
-        const seedStr = String(params.seed ?? '').trim();
-        if (seedStr !== '') {
-          metadata.seed = seedStr;
-          metadata.use_random_seed = false;
+          // t2m 且未填歌词 → 额外开启 sample 模式:引擎按描述用 LM 自动生成 caption+歌词。
+          // prompt 仍保持=描述文本 —— 既满足门面「prompt 必填」校验,也让不认 sample_mode
+          // 的路径能靠 prompt + LM 补词兜底。其余情况(已填歌词 或 cover/repaint):描述作
+          // 为 caption(prompt),歌词直接透传。
+          if (resolvedTaskType === 't2m' && !lyrics) {
+            metadata.sample_mode = true;
+            metadata.sample_query = text;
+          } else if (lyrics) {
+            metadata.lyrics = lyrics;
+          }
+
+          const bpm = parseInt(params.bpm, 10);
+          if (Number.isFinite(bpm) && bpm > 0) metadata.bpm = bpm;
+          const lang = (params.vocalLanguage || '').trim();
+          if (lang) metadata.vocal_language = lang;
+          const gs = parseFloat(params.guidanceScale);
+          if (Number.isFinite(gs) && gs > 0) metadata.guidance_scale = gs;
+          const steps = parseInt(params.inferenceSteps, 10);
+          if (Number.isFinite(steps) && steps > 0)
+            metadata.inference_steps = steps;
+          const seedStr = String(params.seed ?? '').trim();
+          if (seedStr !== '') {
+            metadata.seed = seedStr;
+            metadata.use_random_seed = false;
+          }
+        } else {
+          // ── AudioX / SoulX:视频/双音频 + 标量 ──
+          // AudioX 另需 audiox_task 与 task_type 同值。
+          if (engine === 'audiox') metadata.audiox_task = resolvedTaskType;
+
+          if (needsVideo && videoMetaKey) metadata[videoMetaKey] = videoDataURL;
+          if (needsDualAudio) {
+            if (promptAudioMetaKey)
+              metadata[promptAudioMetaKey] = promptAudioURL;
+            if (targetAudioMetaKey)
+              metadata[targetAudioMetaKey] = targetAudioURL;
+          }
+
+          // AudioX 专属:时长(秒);SoulX 无此参数,不下发。
+          if (engine === 'audiox') {
+            const secs = parseFloat(params.secondsTotal);
+            if (Number.isFinite(secs) && secs > 0)
+              metadata.seconds_total = secs;
+          }
+          // 通用标量:留空即不下发,走引擎默认。
+          const steps = parseInt(params.inferenceSteps, 10);
+          if (Number.isFinite(steps) && steps > 0)
+            metadata.num_inference_steps = steps;
+          const gs = parseFloat(params.guidanceScale);
+          if (Number.isFinite(gs) && gs > 0) metadata.guidance_scale = gs;
+          const seedStr = String(params.seed ?? '').trim();
+          if (seedStr !== '') {
+            const seedNum = parseInt(seedStr, 10);
+            if (Number.isFinite(seedNum)) metadata.seed = seedNum;
+          }
+
+          // SoulX(svs)专属:演唱语言 + 控制方式。
+          if (engine === 'soulx') {
+            const lang = (params.language || '').trim();
+            if (lang) metadata.language = lang;
+            const control = (params.control || '').trim();
+            if (control) metadata.control = control;
+          }
         }
-        const bpm = parseInt(params.bpm, 10);
-        if (Number.isFinite(bpm) && bpm > 0) metadata.bpm = bpm;
-        const lang = (params.vocalLanguage || '').trim();
-        if (lang) metadata.vocal_language = lang;
-        const gs = parseFloat(params.guidanceScale);
-        if (Number.isFinite(gs) && gs > 0) metadata.guidance_scale = gs;
-        const steps = parseInt(params.inferenceSteps, 10);
-        if (Number.isFinite(steps) && steps > 0)
-          metadata.inference_steps = steps;
 
         const body = {
           model: params.model,
@@ -645,7 +763,7 @@ export const useMusicGeneration = (mode = 't2m') => {
         const data = res.data || {};
         const inner = data.data || {};
         const taskId = data.id || data.task_id || inner.task_id || inner.id;
-        if (!taskId) throw new Error(t('提交音乐任务失败'));
+        if (!taskId) throw new Error(t('提交任务失败'));
         const status = normalizeMusicStatus(data.status || inner.status);
         if (status === MUSIC_STATUS.FAILED) {
           const msg =
@@ -653,7 +771,7 @@ export const useMusicGeneration = (mode = 't2m') => {
             inner.error?.message ||
             inner.fail_reason ||
             data.fail_reason ||
-            t('音乐生成失败');
+            t('生成失败');
           patchConvMessage(convId, asstId, {
             status: MUSIC_STATUS.FAILED,
             error: msg,
@@ -675,7 +793,7 @@ export const useMusicGeneration = (mode = 't2m') => {
           MUSIC_POLL_INTERVAL_MS,
         );
       } catch (error) {
-        const msg = extractApiErrMsg(error, t('音乐生成失败'));
+        const msg = extractApiErrMsg(error, t('生成失败'));
         patchConvMessage(convId, asstId, {
           status: MUSIC_STATUS.FAILED,
           error: msg,
@@ -688,9 +806,16 @@ export const useMusicGeneration = (mode = 't2m') => {
       currentConvId,
       inputs,
       generating,
+      engine,
       needsAudio,
       audioMetaKey,
-      taskType,
+      needsVideo,
+      needsDualAudio,
+      needsText,
+      videoMetaKey,
+      promptAudioMetaKey,
+      targetAudioMetaKey,
+      resolveTaskType,
       storageKey,
       patchConvMessage,
       pollOnce,
@@ -733,25 +858,13 @@ export const useMusicGeneration = (mode = 't2m') => {
   const openHistoryItem = useCallback(
     (conv) => {
       setCurrentConvId(conv.id);
-      setInputs((prev) => ({
-        ...prev,
-        group: conv.group != null ? conv.group : prev.group,
-        model: conv.model != null ? conv.model : prev.model,
-        lyrics: conv.lyrics != null ? conv.lyrics : prev.lyrics,
-        duration: conv.duration != null ? conv.duration : prev.duration,
-        audioData: conv.audioData != null ? conv.audioData : prev.audioData,
-        audioName: conv.audioName != null ? conv.audioName : prev.audioName,
-        seed: conv.seed != null ? conv.seed : prev.seed,
-        bpm: conv.bpm != null ? conv.bpm : prev.bpm,
-        vocalLanguage:
-          conv.vocalLanguage != null ? conv.vocalLanguage : prev.vocalLanguage,
-        guidanceScale:
-          conv.guidanceScale != null ? conv.guidanceScale : prev.guidanceScale,
-        inferenceSteps:
-          conv.inferenceSteps != null
-            ? conv.inferenceSteps
-            : prev.inferenceSteps,
-      }));
+      setInputs((prev) => {
+        const next = { ...prev };
+        PARAM_FIELDS.forEach((f) => {
+          if (conv[f] != null) next[f] = conv[f];
+        });
+        return next;
+      });
       const assts = (conv.messages || []).filter((m) => m.role === 'assistant');
       const last = assts[assts.length - 1];
       if (
@@ -773,9 +886,15 @@ export const useMusicGeneration = (mode = 't2m') => {
     };
   }, []);
 
-  // cover/repaint 缺驱动音频 → 发送置灰。t2m 无此约束。
+  // 缺必填上传 → 发送置灰。
   const missingRequiredAudio =
-    !locked && needsAudio && !(inputs.audioData || '').startsWith('data:');
+    !locked &&
+    ((needsAudio && !(inputs.audioData || '').startsWith('data:')) ||
+      (needsDualAudio &&
+        (!(inputs.promptAudioData || '').startsWith('data:') ||
+          !(inputs.targetAudioData || '').startsWith('data:'))));
+  const missingRequiredVideo =
+    !locked && needsVideo && !(inputs.videoData || '').startsWith('data:');
 
   return {
     inputs,
@@ -788,9 +907,15 @@ export const useMusicGeneration = (mode = 't2m') => {
     locked,
     turnLimitReached,
     missingRequiredAudio,
+    missingRequiredVideo,
+    engine,
     needsAudio,
+    needsVideo,
+    needsDualAudio,
+    needsText,
     maxChars,
     refAudioMaxMB,
+    videoMaxMB,
     generate,
     regenerate,
     refetch,

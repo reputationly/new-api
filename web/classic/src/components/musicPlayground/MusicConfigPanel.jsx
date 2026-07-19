@@ -15,37 +15,55 @@ import {
   Users,
   Sparkles,
   Music,
+  Music2,
   FileText,
   Clock,
   HelpCircle,
   Upload,
   SlidersHorizontal,
+  Languages,
 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { renderGroupOption, selectFilter, showError } from '../../helpers';
+import MediaFileInput from '../videoPlayground/MediaFileInput';
 import {
   MUSIC_DURATIONS,
   MUSIC_AUDIO_UPLOAD_MAX_MB,
+  MUSIC_VIDEO_UPLOAD_MAX_MB,
   MUSIC_VOCAL_LANGUAGES,
   MUSIC_DEFAULT_GUIDANCE,
-  MUSIC_DEFAULT_STEPS,
+  MUSIC_DEFAULT_SECONDS_TOTAL,
+  MUSIC_AUDIOX_DEFAULT_GUIDANCE,
+  MUSIC_SVS_LANGUAGES,
+  MUSIC_SVS_CONTROLS,
+  musicDefaultStepsForEngine,
 } from '../../constants/musicPlayground.constants';
 
-// 文生音乐配置面板:分组/模型(同视频/语音)+(cover/repaint)驱动音频上传(可试听)
-// + 可选歌词 + 时长。对话锁定(disabled)后全部不可改,与视频/语音页一致。
+// 音乐模型配置面板:分组/模型(同视频/语音)+ 按 mode 的输入:
+//   - acestep(cover/repaint):驱动音频上传(可试听)+ 歌词 + 时长 + BPM/演唱语言;
+//   - audiox(v2a/v2m):单视频上传器(metadata.video)+ 时长(秒);
+//   - soulx(svs):两个音频上传器(音色参考 + 目标曲/伴奏)+ 演唱语言/控制方式。
+// 标量参数(时长/步数/贴合度/种子)按引擎显示不同默认占位。
+// 对话锁定(disabled)后全部不可改,与视频/语音页一致。
 const MusicConfigPanel = ({
   inputs,
   groups,
   models,
   onInputChange,
   disabled = false,
+  engine = 'acestep',
   needsAudio = false,
+  needsVideo = false,
+  needsDualAudio = false,
   audioLabel = '',
   refAudioMaxMB = MUSIC_AUDIO_UPLOAD_MAX_MB,
+  videoMaxMB = MUSIC_VIDEO_UPLOAD_MAX_MB,
   styleState,
 }) => {
   const { t } = useTranslation();
   const fileInputRef = useRef(null);
+
+  const isAceStep = engine === 'acestep';
 
   const ensureOption = (options, value) => {
     if (!value) return options;
@@ -63,6 +81,12 @@ const MusicConfigPanel = ({
       ? { label: t('自动(引擎默认)'), value: '' }
       : { label: t('{{sec}} 秒', { sec: d }), value: d },
   );
+
+  // 采样步数默认占位:ACE-Step 8 / AudioX 250 / SoulX 32。
+  const defaultSteps = musicDefaultStepsForEngine(engine);
+  const defaultGuidance = isAceStep
+    ? MUSIC_DEFAULT_GUIDANCE
+    : MUSIC_AUDIOX_DEFAULT_GUIDANCE;
 
   const handleFile = (e) => {
     const file = e.target.files?.[0];
@@ -160,7 +184,7 @@ const MusicConfigPanel = ({
           />
         </div>
 
-        {/* 驱动音频(cover=参考音频 / repaint=源音频,必选):上传后可试听 */}
+        {/* 驱动音频(ACE-Step cover=参考音频 / repaint=源音频,必选):上传后可试听 */}
         {needsAudio && (
           <div>
             <div className='flex items-center gap-2 mb-2'>
@@ -219,54 +243,186 @@ const MusicConfigPanel = ({
           </div>
         )}
 
-        {/* 歌词(可选):留空则由模型按描述自动生成 */}
-        <div>
-          <div className='flex items-center gap-2 mb-2'>
-            <FileText size={16} className='text-gray-500' />
-            <Typography.Text strong className='text-sm'>
-              {t('歌词')}
-            </Typography.Text>
-            <Tooltip
-              content={t(
-                '可选。留空则由模型按描述自动生成歌词;填写则按此歌词演唱。支持 [verse]/[chorus]/[bridge] 等结构标签分段。',
-              )}
-              position='top'
-            >
-              <HelpCircle size={14} className='text-gray-400 cursor-help' />
-            </Tooltip>
-          </div>
-          <TextArea
-            placeholder={t(
-              '可选,输入歌词;留空则自动生成。可用 [verse] / [chorus] / [bridge] 分段',
-            )}
-            value={inputs.lyrics}
-            onChange={(value) => onInputChange('lyrics', value)}
-            autosize={{ minRows: 5, maxRows: 14 }}
+        {/* 源视频(AudioX v2a/v2m,必选):视频条件输入 → metadata.video */}
+        {needsVideo && (
+          <MediaFileInput
+            label={t('源视频')}
+            required
+            kind='video'
+            value={inputs.videoData}
+            maxMB={videoMaxMB}
             disabled={disabled}
-            className='!rounded-lg'
+            onChange={(v) => {
+              onInputChange('videoData', v || '');
+              if (!v) onInputChange('videoName', '');
+            }}
           />
-        </div>
+        )}
 
-        {/* 时长 */}
-        <div>
-          <div className='flex items-center gap-2 mb-2'>
-            <Clock size={16} className='text-gray-500' />
-            <Typography.Text strong className='text-sm'>
-              {t('时长')}
-            </Typography.Text>
+        {/* 双音频(SoulX svs,均必选):音色参考 → prompt_audio,目标曲/伴奏 → target_audio */}
+        {needsDualAudio && (
+          <>
+            <MediaFileInput
+              label={t('音色参考(人声)')}
+              required
+              kind='audio'
+              value={inputs.promptAudioData}
+              maxMB={refAudioMaxMB}
+              disabled={disabled}
+              onChange={(v) => {
+                onInputChange('promptAudioData', v || '');
+                if (!v) onInputChange('promptAudioName', '');
+              }}
+            />
+            <MediaFileInput
+              label={t('目标曲/伴奏')}
+              required
+              kind='audio'
+              value={inputs.targetAudioData}
+              maxMB={refAudioMaxMB}
+              disabled={disabled}
+              onChange={(v) => {
+                onInputChange('targetAudioData', v || '');
+                if (!v) onInputChange('targetAudioName', '');
+              }}
+            />
+            <div>
+              <div className='flex items-center gap-2 mb-2'>
+                <Languages size={16} className='text-gray-500' />
+                <Typography.Text strong className='text-sm'>
+                  {t('演唱语言')}
+                </Typography.Text>
+              </div>
+              <Select
+                value={inputs.language}
+                onChange={(v) => onInputChange('language', v)}
+                optionList={MUSIC_SVS_LANGUAGES.map((l) => ({
+                  label: t(l.label),
+                  value: l.value,
+                }))}
+                disabled={disabled}
+                style={{ width: '100%' }}
+                dropdownStyle={{ width: '100%', maxWidth: '100%' }}
+                className='!rounded-lg'
+              />
+            </div>
+            <div>
+              <div className='flex items-center gap-2 mb-2'>
+                <Music2 size={16} className='text-gray-500' />
+                <Typography.Text strong className='text-sm'>
+                  {t('控制方式')}
+                </Typography.Text>
+                <Tooltip
+                  content={t(
+                    '旋律(melody):按目标曲旋律演唱;曲谱(score):按音符曲谱演唱。',
+                  )}
+                  position='top'
+                >
+                  <HelpCircle size={14} className='text-gray-400 cursor-help' />
+                </Tooltip>
+              </div>
+              <Select
+                value={inputs.control}
+                onChange={(v) => onInputChange('control', v)}
+                optionList={MUSIC_SVS_CONTROLS.map((c) => ({
+                  label: t(c.label),
+                  value: c.value,
+                }))}
+                disabled={disabled}
+                style={{ width: '100%' }}
+                dropdownStyle={{ width: '100%', maxWidth: '100%' }}
+                className='!rounded-lg'
+              />
+            </div>
+          </>
+        )}
+
+        {/* 歌词(仅 ACE-Step,可选):留空则由模型按描述自动生成 */}
+        {isAceStep && (
+          <div>
+            <div className='flex items-center gap-2 mb-2'>
+              <FileText size={16} className='text-gray-500' />
+              <Typography.Text strong className='text-sm'>
+                {t('歌词')}
+              </Typography.Text>
+              <Tooltip
+                content={t(
+                  '可选。留空则由模型按描述自动生成歌词;填写则按此歌词演唱。支持 [verse]/[chorus]/[bridge] 等结构标签分段。',
+                )}
+                position='top'
+              >
+                <HelpCircle size={14} className='text-gray-400 cursor-help' />
+              </Tooltip>
+            </div>
+            <TextArea
+              placeholder={t(
+                '可选,输入歌词;留空则自动生成。可用 [verse] / [chorus] / [bridge] 分段',
+              )}
+              value={inputs.lyrics}
+              onChange={(value) => onInputChange('lyrics', value)}
+              autosize={{ minRows: 5, maxRows: 14 }}
+              disabled={disabled}
+              className='!rounded-lg'
+            />
           </div>
-          <Select
-            name='duration'
-            selection
-            onChange={(value) => onInputChange('duration', value)}
-            value={inputs.duration}
-            optionList={durationOptions}
-            disabled={disabled}
-            style={{ width: '100%' }}
-            dropdownStyle={{ width: '100%', maxWidth: '100%' }}
-            className='!rounded-lg'
-          />
-        </div>
+        )}
+
+        {/* 时长(ACE-Step 预设下拉) */}
+        {isAceStep && (
+          <div>
+            <div className='flex items-center gap-2 mb-2'>
+              <Clock size={16} className='text-gray-500' />
+              <Typography.Text strong className='text-sm'>
+                {t('时长')}
+              </Typography.Text>
+            </div>
+            <Select
+              name='duration'
+              selection
+              onChange={(value) => onInputChange('duration', value)}
+              value={inputs.duration}
+              optionList={durationOptions}
+              disabled={disabled}
+              style={{ width: '100%' }}
+              dropdownStyle={{ width: '100%', maxWidth: '100%' }}
+              className='!rounded-lg'
+            />
+          </div>
+        )}
+
+        {/* 时长(仅 AudioX;SoulX 歌声合成无此参数) */}
+        {engine === 'audiox' && (
+          <div>
+            <div className='flex items-center gap-2 mb-2'>
+              <Clock size={16} className='text-gray-500' />
+              <Typography.Text strong className='text-sm'>
+                {t('时长(秒)')}
+              </Typography.Text>
+              <Tooltip
+                content={t('生成音频的总时长(秒);留空 = 默认 {{v}}。', {
+                  v: MUSIC_DEFAULT_SECONDS_TOTAL,
+                })}
+                position='top'
+              >
+                <HelpCircle size={14} className='text-gray-400 cursor-help' />
+              </Tooltip>
+            </div>
+            <InputNumber
+              min={1}
+              max={60}
+              value={
+                inputs.secondsTotal === '' ? undefined : inputs.secondsTotal
+              }
+              onChange={(v) => onInputChange('secondsTotal', v ?? '')}
+              placeholder={t('留空 = 默认 {{v}}', {
+                v: MUSIC_DEFAULT_SECONDS_TOTAL,
+              })}
+              disabled={disabled}
+              style={{ width: '100%' }}
+              className='!rounded-lg'
+            />
+          </div>
+        )}
 
         {/* 高级参数(默认折叠,全部选填;留空即走引擎默认) */}
         <Collapse keepDOM className='!border-0'>
@@ -285,13 +441,15 @@ const MusicConfigPanel = ({
             }
           >
             <div className='space-y-4'>
-              {/* 随机种子:指定后可复现同一首;留空 = 随机 */}
+              {/* 随机种子:指定后可复现;留空 = 随机 */}
               <div>
                 <div className='flex items-center gap-2 mb-1'>
                   <Typography.Text className='text-xs text-gray-600'>
                     {t('随机种子 (seed)')}
                   </Typography.Text>
-                  <Tooltip content={t('指定后可复现同一首;留空 = 每次随机。')}>
+                  <Tooltip
+                    content={t('指定后可复现同一结果;留空 = 每次随机。')}
+                  >
                     <HelpCircle
                       size={13}
                       className='text-gray-400 cursor-help'
@@ -307,41 +465,43 @@ const MusicConfigPanel = ({
                 />
               </div>
 
-              {/* 演唱语言 */}
-              <div>
-                <Typography.Text className='text-xs text-gray-600 block mb-1'>
-                  {t('演唱语言')}
-                </Typography.Text>
-                <Select
-                  value={inputs.vocalLanguage}
-                  onChange={(v) => onInputChange('vocalLanguage', v)}
-                  optionList={MUSIC_VOCAL_LANGUAGES.map((l) => ({
-                    label: t(l.label),
-                    value: l.value,
-                  }))}
-                  disabled={disabled}
-                  style={{ width: '100%' }}
-                  dropdownStyle={{ width: '100%', maxWidth: '100%' }}
-                  className='!rounded-lg'
-                />
-              </div>
-
-              {/* 速度 BPM */}
-              <div>
-                <Typography.Text className='text-xs text-gray-600 block mb-1'>
-                  {t('速度 (BPM)')}
-                </Typography.Text>
-                <InputNumber
-                  min={20}
-                  max={300}
-                  value={inputs.bpm === '' ? undefined : inputs.bpm}
-                  onChange={(v) => onInputChange('bpm', v ?? '')}
-                  placeholder={t('留空 = 自动')}
-                  disabled={disabled}
-                  style={{ width: '100%' }}
-                  className='!rounded-lg'
-                />
-              </div>
+              {/* 演唱语言 / 速度 BPM(仅 ACE-Step) */}
+              {isAceStep && (
+                <>
+                  <div>
+                    <Typography.Text className='text-xs text-gray-600 block mb-1'>
+                      {t('演唱语言')}
+                    </Typography.Text>
+                    <Select
+                      value={inputs.vocalLanguage}
+                      onChange={(v) => onInputChange('vocalLanguage', v)}
+                      optionList={MUSIC_VOCAL_LANGUAGES.map((l) => ({
+                        label: t(l.label),
+                        value: l.value,
+                      }))}
+                      disabled={disabled}
+                      style={{ width: '100%' }}
+                      dropdownStyle={{ width: '100%', maxWidth: '100%' }}
+                      className='!rounded-lg'
+                    />
+                  </div>
+                  <div>
+                    <Typography.Text className='text-xs text-gray-600 block mb-1'>
+                      {t('速度 (BPM)')}
+                    </Typography.Text>
+                    <InputNumber
+                      min={20}
+                      max={300}
+                      value={inputs.bpm === '' ? undefined : inputs.bpm}
+                      onChange={(v) => onInputChange('bpm', v ?? '')}
+                      placeholder={t('留空 = 自动')}
+                      disabled={disabled}
+                      style={{ width: '100%' }}
+                      className='!rounded-lg'
+                    />
+                  </div>
+                </>
+              )}
 
               {/* Guidance Scale */}
               <div>
@@ -369,7 +529,7 @@ const MusicConfigPanel = ({
                   }
                   onChange={(v) => onInputChange('guidanceScale', v ?? '')}
                   placeholder={t('留空 = 默认 {{v}}', {
-                    v: MUSIC_DEFAULT_GUIDANCE,
+                    v: defaultGuidance,
                   })}
                   disabled={disabled}
                   style={{ width: '100%' }}
@@ -392,7 +552,7 @@ const MusicConfigPanel = ({
                 </div>
                 <InputNumber
                   min={1}
-                  max={60}
+                  max={500}
                   value={
                     inputs.inferenceSteps === ''
                       ? undefined
@@ -400,7 +560,7 @@ const MusicConfigPanel = ({
                   }
                   onChange={(v) => onInputChange('inferenceSteps', v ?? '')}
                   placeholder={t('留空 = 默认 {{v}}', {
-                    v: MUSIC_DEFAULT_STEPS,
+                    v: defaultSteps,
                   })}
                   disabled={disabled}
                   style={{ width: '100%' }}
