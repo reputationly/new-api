@@ -281,11 +281,20 @@ func (m *Materializer) addBytesExt(field Field, index int, multi bool, data []by
 	return nil
 }
 
-// AddString 处理一个字符串输入:data-uri / 裸 base64 → 解码写;http(s) URL → 下载写。
+// AddString 处理一个字符串输入:data-uri / 裸 base64 → 解码写;http(s) URL → 下载写;
+// task:<task_id> → 引用同用户已成功任务的产物(NFS 直读优先,OBS 退化,见 taskref.go)。
 func (m *Materializer) AddString(ctx context.Context, field Field, index int, multi bool, raw string) error {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {
 		return fmt.Errorf("输入 %s 为空字符串", field)
+	}
+	if strings.HasPrefix(raw, TaskRefScheme) {
+		data, ext, err := m.resolveTaskRef(ctx, raw)
+		if err != nil {
+			return fmt.Errorf("输入 %s 解析任务引用失败: %w", field, err)
+		}
+		// 保留产物真实扩展名(如 ACE-Step .mp3):下游引擎按扩展名识别容器,ext 为空回退字段默认
+		return m.addBytesExt(field, index, multi, data, ext)
 	}
 	if strings.HasPrefix(raw, "http://") || strings.HasPrefix(raw, "https://") {
 		data, err := downloadURL(ctx, raw, m.maxBytes)
@@ -340,17 +349,19 @@ func (m *Materializer) Refs() map[string][]string {
 // new-api 够不到(SSRF 拒绝 / 网络失败 / 非 2xx)→ 返回错误,调用方转 400 skip-retry,不提交任务。
 // capBytes 为调用方的 per-file 上限(0=不限);实际下载上限取它与全局 MaxObjectSizeMB 的较小正值,
 // 用 io.LimitReader 边下边限,避免超限 URL 被整块拉进内存后才拒(§per-model 护栏对 URL 生效)。
-func downloadURL(ctx context.Context, rawURL string, capBytes int64) ([]byte, error) {
+// trustedHosts 为额外授信的私网 host(如自家 OBS,task: 引用退化下载时传入,与
+// controller/video_proxy.go 的 OwnOBSHost 放行同精神);仅放松私网解析这一条,scheme/端口仍强制。
+func downloadURL(ctx context.Context, rawURL string, capBytes int64, trustedHosts ...string) ([]byte, error) {
 	s := system_setting.GetMediaStorageSettings()
 	fs := system_setting.GetFetchSetting()
 	if err := common.ValidateURLWithFetchSetting(rawURL,
 		fs.EnableSSRFProtection, fs.AllowPrivateIp, fs.DomainFilterMode, fs.IpFilterMode,
-		fs.DomainList, fs.IpList, fs.AllowedPorts, fs.ApplyIPFilterForDomain); err != nil {
+		fs.DomainList, fs.IpList, fs.AllowedPorts, fs.ApplyIPFilterForDomain, trustedHosts...); err != nil {
 		return nil, fmt.Errorf("输入 URL 被安全策略拒绝: %w", err)
 	}
-	// 可选 host 白名单(与 OBS 上游下载共用配置);留空即不额外限制。
+	// 可选 host 白名单(与 OBS 上游下载共用配置);留空即不额外限制。授信 host 一并放行。
 	if hosts := s.AllowedUpstreamHosts(); len(hosts) > 0 {
-		if err := hostAllowed(rawURL, hosts); err != nil {
+		if err := hostAllowed(rawURL, append(append([]string{}, hosts...), trustedHosts...)); err != nil {
 			return nil, err
 		}
 	}

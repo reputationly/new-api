@@ -1,11 +1,12 @@
 import type { CSSProperties, MouseEvent as ReactMouseEvent, ReactNode, RefObject } from "react";
 import { useRef, useState } from "react";
 import { Button, Segmented, Switch } from "antd";
-import { CircleDot, Eraser, FolderOpen, Grid2x2, Hand, Image as ImageIcon, Info, Moon, Music2, Palette, Redo2, Settings2, Square, Sun, Trash2, Type, Undo2, Upload, Video } from "lucide-react";
+import { CircleDot, Eraser, FolderOpen, Grid2x2, Hand, Image as ImageIcon, Info, Moon, Music2, Palette, Redo2, Settings2, Sparkles, Square, Sun, Trash2, Type, Undo2, Upload, Video } from "lucide-react";
 
 import { canvasThemes, type CanvasBackgroundMode, type CanvasColorTheme, type CanvasTheme } from "@/lib/canvas-theme";
 import { useThemeStore } from "@/stores/use-theme-store";
 import { AnimatedThemeToggler } from "@/components/ui/animated-theme-toggler";
+import { capabilitiesByModality } from "@/services/capabilities/registry";
 
 export function CanvasToolbar({
     selectedCount,
@@ -18,6 +19,7 @@ export function CanvasToolbar({
     onAddAudio,
     onAddText,
     onAddConfig,
+    onAddCapability,
     onUndo,
     onRedo,
     onUpload,
@@ -38,6 +40,7 @@ export function CanvasToolbar({
     onAddAudio: () => void;
     onAddText: () => void;
     onAddConfig: () => void;
+    onAddCapability: (capabilityKey: string) => void;
     onUndo: () => void;
     onRedo: () => void;
     onUpload: () => void;
@@ -55,6 +58,7 @@ export function CanvasToolbar({
     const [hovered, setHovered] = useState<string | null>(null);
     const [tipX, setTipX] = useState(0);
     const [appearanceOpen, setAppearanceOpen] = useState(false);
+    const [capabilityOpen, setCapabilityOpen] = useState(false);
     const [panelX, setPanelX] = useState(0);
     const dockStyle = { background: theme.toolbar.panel, borderColor: theme.toolbar.border, color: theme.toolbar.item, boxShadow: colorTheme === "dark" ? "0 18px 45px rgba(0,0,0,.32)" : "0 16px 40px rgba(28,25,23,.12)" };
     const hoverStyle = { background: theme.toolbar.itemHover, color: theme.toolbar.activeText };
@@ -90,6 +94,24 @@ export function CanvasToolbar({
                 <ToolbarButton id="tool-config" label="生成配置" hovered={hovered} hoverStyle={hoverStyle} wrapRef={wrapRef} onTipX={setTipX} onHover={setHovered} onClick={onAddConfig}>
                     <Settings2 className="size-4.5" />
                 </ToolbarButton>
+                <ToolbarButton
+                    id="tool-capability"
+                    label="生成节点"
+                    active={capabilityOpen}
+                    hovered={hovered}
+                    activeStyle={activeStyle}
+                    hoverStyle={hoverStyle}
+                    wrapRef={wrapRef}
+                    onTipX={setTipX}
+                    onHover={setHovered}
+                    onClick={(event) => {
+                        setPanelX(getTipX(wrapRef.current, event.currentTarget));
+                        setAppearanceOpen(false);
+                        setCapabilityOpen((value) => !value);
+                    }}
+                >
+                    <Sparkles className="size-4.5" />
+                </ToolbarButton>
                 <ToolbarButton id="tool-upload" label="上传素材" hovered={hovered} hoverStyle={hoverStyle} wrapRef={wrapRef} onTipX={setTipX} onHover={setHovered} onClick={onUpload}>
                     <Upload className="size-4.5" />
                 </ToolbarButton>
@@ -109,6 +131,7 @@ export function CanvasToolbar({
                     onHover={setHovered}
                     onClick={(event) => {
                         setPanelX(getTipX(wrapRef.current, event.currentTarget));
+                        setCapabilityOpen(false);
                         setAppearanceOpen((value) => !value);
                     }}
                 >
@@ -127,6 +150,37 @@ export function CanvasToolbar({
                     <Eraser className="size-4.5" />
                 </ToolbarButton>
             </div>
+
+            {capabilityOpen ? (
+                <div
+                    className="pointer-events-auto absolute bottom-[72px] z-30 w-[300px] -translate-x-1/2 rounded-xl border p-2.5 shadow-xl backdrop-blur"
+                    style={{ left: panelX || "50%", background: theme.toolbar.panel, borderColor: theme.toolbar.border, color: theme.toolbar.item }}
+                >
+                    <div className="px-1 pb-2 text-sm font-medium opacity-65">添加生成节点</div>
+                    {capabilitiesByModality().map((group) => (
+                        <div key={group.modality} className="mb-1.5">
+                            <div className="px-1 pb-1 text-[11px] font-medium opacity-50">{group.label}</div>
+                            <div className="grid grid-cols-3 gap-1">
+                                {group.items.map((item) => (
+                                    <Button
+                                        key={item.key}
+                                        type="text"
+                                        size="small"
+                                        className="!h-8 !px-1 !text-xs"
+                                        style={{ color: theme.toolbar.item }}
+                                        onClick={() => {
+                                            setCapabilityOpen(false);
+                                            onAddCapability(item.key);
+                                        }}
+                                    >
+                                        {item.label}
+                                    </Button>
+                                ))}
+                            </div>
+                        </div>
+                    ))}
+                </div>
+            ) : null}
 
             {appearanceOpen ? (
                 <div
@@ -281,6 +335,7 @@ function toolLabel(id: string) {
     if (id === "tool-video") return "视频";
     if (id === "tool-audio") return "音频";
     if (id === "tool-config") return "生成配置";
+    if (id === "tool-capability") return "生成节点";
     if (id === "tool-upload") return "上传素材";
     if (id === "tool-assets") return "我的素材";
     if (id === "tool-style") return "画布外观";

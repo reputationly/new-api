@@ -56,6 +56,15 @@ export type CanvasNodeMetadata = {
     mimeType?: string;
     bytes?: number;
     durationMs?: number;
+    // 能力节点(编排,见 docs/canvas-orchestration-design.md §3.3):
+    // capability = 能力注册表 key(t2i/i2v/tts/...);缺省 = 旧节点行为
+    capability?: string;
+    capabilityParams?: Record<string, string | number>;
+    // 异步任务 id(gpustackplus 产物;下游节点以 task:<id> 引用,刷新恢复轮询用)
+    taskId?: string;
+    // 任务产物落 IndexedDB 时的 storageKey:与 storageKey 一致才允许 task: 引用,
+    // 节点媒体被上传/替换后(storageKey 变化)自动失配,防止下游消费旧任务产物
+    taskMediaKey?: string;
 };
 
 export type CanvasNodeData = {

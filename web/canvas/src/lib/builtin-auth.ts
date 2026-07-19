@@ -21,7 +21,18 @@ if (BUILTIN && typeof window !== "undefined") {
 
 export function builtinHeaders(): Record<string, string> {
     if (typeof localStorage === "undefined") return {};
-    const uid = localStorage.getItem("uid");
+    // default 前端登录后写 localStorage['uid'];classic 前端只写 localStorage['user'](JSON,含 id)。
+    // 两者都兜底,避免在 classic 部署下缺少 New-Api-User 头导致站内 API 401。
+    let uid = localStorage.getItem("uid");
+    if (!uid) {
+        try {
+            const raw = localStorage.getItem("user");
+            const id = raw ? (JSON.parse(raw) as { id?: number | string })?.id : undefined;
+            if (id !== undefined && id !== null) uid = String(id);
+        } catch {
+            // localStorage['user'] 非法 JSON,忽略,按未登录处理
+        }
+    }
     return uid ? { "New-Api-User": uid } : {};
 }
 
