@@ -391,12 +391,15 @@ func (a *TaskAdaptor) convertToRequestPayload(req *relaycommon.TaskSubmitReq, in
 		r.Frames = 121 // 24*5+1 = 121
 	}
 
-	// Handle one-of image_urls or binary_data_base64
+	// Handle one-of image_urls or binary_data_base64。
+	// 即梦 binary_data_base64 要"裸 base64"(不带 data-url 头);体验区/画布传入的
+	// 图像统一是 base64 data-url(如 data:image/png;base64,...),此处剥头再下发,
+	// 否则整串被当作 base64 送上游导致解码失败。
 	if req.HasImage() {
 		if strings.HasPrefix(req.Images[0], "http") {
 			r.ImageUrls = req.Images
 		} else {
-			r.BinaryDataBase64 = req.Images
+			r.BinaryDataBase64 = lo.Map(req.Images, func(img string, _ int) string { return stripDataURLPrefix(img) })
 		}
 	}
 	if err := taskcommon.UnmarshalMetadata(req.Metadata, &r); err != nil {
@@ -477,4 +480,16 @@ func (a *TaskAdaptor) ConvertToOpenAIVideo(originTask *model.Task) ([]byte, erro
 
 func isNewAPIRelay(apiKey string) bool {
 	return strings.HasPrefix(apiKey, "sk-")
+}
+
+// stripDataURLPrefix 去掉 base64 data-url 头(data:<mime>;base64,),返回裸 base64;
+// 非 data-url(已是裸 base64)原样返回。即梦 binary_data_base64 只接受裸 base64。
+func stripDataURLPrefix(s string) string {
+	if !strings.HasPrefix(s, "data:") {
+		return s
+	}
+	if i := strings.Index(s, ","); i >= 0 {
+		return s[i+1:]
+	}
+	return s
 }

@@ -33,6 +33,7 @@ import (
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/setting/system_setting"
 )
 
@@ -352,6 +353,13 @@ func (m *Materializer) Refs() map[string][]string {
 // trustedHosts 为额外授信的私网 host(如自家 OBS,task: 引用退化下载时传入,与
 // controller/video_proxy.go 的 OwnOBSHost 放行同精神);仅放松私网解析这一条,scheme/端口仍强制。
 func downloadURL(ctx context.Context, rawURL string, capBytes int64, trustedHosts ...string) ([]byte, error) {
+	return downloadURLWithHeader(ctx, rawURL, capBytes, nil, "", trustedHosts...)
+}
+
+// downloadURLWithHeader 同 downloadURL,附加请求头(如取上游渠道产物需要的
+// Authorization: Bearer <channel-key>,见 ResolveTaskRefBytes 的代理 URL 分支)与可选
+// 渠道代理(proxy 为空则直连;非空复用渠道配置的代理 transport,与 VideoProxy 一致)。
+func downloadURLWithHeader(ctx context.Context, rawURL string, capBytes int64, header http.Header, proxy string, trustedHosts ...string) ([]byte, error) {
 	s := system_setting.GetMediaStorageSettings()
 	fs := system_setting.GetFetchSetting()
 	if err := common.ValidateURLWithFetchSetting(rawURL,
@@ -375,9 +383,23 @@ func downloadURL(ctx context.Context, rawURL string, capBytes int64, trustedHost
 			return http.ErrUseLastResponse
 		},
 	}
+	// 复用渠道配置的代理 transport(如 OpenAI/Sora 需科学上网),但保留自己的
+	// CheckRedirect(防 SSRF 重定向)与 Timeout,不改动 service 缓存的共享 client。
+	if proxy != "" {
+		pc, perr := service.GetHttpClientWithProxy(proxy)
+		if perr != nil {
+			return nil, fmt.Errorf("构造代理下载客户端失败: %w", perr)
+		}
+		client.Transport = pc.Transport
+	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
 	if err != nil {
 		return nil, fmt.Errorf("构造下载请求失败: %w", err)
+	}
+	for k, vs := range header {
+		for _, v := range vs {
+			req.Header.Add(k, v)
+		}
 	}
 	resp, err := client.Do(req)
 	if err != nil {
