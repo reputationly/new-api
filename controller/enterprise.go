@@ -12,6 +12,7 @@ import (
 	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/i18n"
 	"github.com/QuantumNous/new-api/model"
+	"github.com/QuantumNous/new-api/service"
 	"gorm.io/gorm"
 
 	"github.com/gin-gonic/gin"
@@ -205,6 +206,12 @@ func AdminApproveEnterprise(c *gin.Context) {
 	if err := model.ApproveEnterprise(id, reviewerId); err != nil {
 		common.ApiErrorMsg(c, err.Error())
 		return
+	}
+	// 企业认证等价于已实名（与积分资格判定 IsUserPointsEligible 同口径），同样触发
+	// 实名积分发放（本人 + 邀请人）；与 AdminApproveKYC 共用 TryMarkKycPointsGranted
+	// 原子占位，双路径先后通过也只发一次。失败不影响审核主流程。
+	if ent, gErr := model.GetEnterpriseById(id); gErr == nil {
+		service.GrantKycPoints(ent.UserId)
 	}
 	common.ApiSuccess(c, nil)
 }

@@ -42,6 +42,9 @@ type User struct {
 	AccessToken      *string        `json:"access_token" gorm:"type:char(32);column:access_token;uniqueIndex"` // this token is for system management
 	Quota            int            `json:"quota" gorm:"type:bigint;default:0"`                                // bigint：32 位列上限仅 ~$4294（¥3.1万），对公转账大额入账必溢出（PG 报错/MySQL 截断）
 	UsedQuota        int            `json:"used_quota" gorm:"type:bigint;default:0;column:used_quota"`         // used quota，同 Quota 升为 bigint
+	PointsBalance    int            `json:"points_balance" gorm:"type:bigint;default:0;column:points_balance"` // 积分余额(quota unit)，与 Quota 同单位；bigint 防溢出（积分内部放大约 68 倍）
+	PointsUsed       int            `json:"points_used" gorm:"type:bigint;default:0;column:points_used"`       // 已用积分(quota unit)
+	KycPointsGranted bool           `json:"kyc_points_granted" gorm:"default:false;column:kyc_points_granted"` // 实名积分是否已发放(防 KYC reset 后重复领取)
 	RequestCount     int            `json:"request_count" gorm:"type:int;default:0;"`                          // request number
 	Group            string         `json:"group" gorm:"type:varchar(64);default:'default'"`
 	AffCode          string         `json:"aff_code" gorm:"type:varchar(32);column:aff_code;uniqueIndex"`
@@ -63,6 +66,7 @@ func (user *User) ToBaseUser() *UserBase {
 		Id:               user.Id,
 		Group:            user.Group,
 		Quota:            user.Quota,
+		PointsBalance:    user.PointsBalance,
 		Status:           user.Status,
 		Username:         user.Username,
 		Setting:          user.Setting,
@@ -1039,6 +1043,31 @@ func decreaseUserQuota(id int, quota int) (err error) {
 		return err
 	}
 	return err
+}
+
+// TryDecreaseUserQuota 条件扣减钱包：仅当余额充足才扣（WHERE quota >= ?），
+// RowsAffected==1 视为成功。直击 DB 权威值（不走批量队列），成功后异步同步缓存，
+// 镜像 TryDecreaseUserPoints。供混扣预扣用——积分被并发抢光后钱包只承担自身
+// 余额内的部分，不为积分的承诺透支；纯钱包路径与结算补扣保持原有无条件语义。
+func TryDecreaseUserQuota(id int, quota int) (ok bool, err error) {
+	if quota <= 0 {
+		return true, nil
+	}
+	result := DB.Model(&User{}).
+		Where("id = ? AND quota >= ?", id, quota).
+		Update("quota", gorm.Expr("quota - ?", quota))
+	if result.Error != nil {
+		return false, result.Error
+	}
+	if result.RowsAffected == 0 {
+		return false, nil
+	}
+	gopool.Go(func() {
+		if err := cacheDecrUserQuota(id, int64(quota)); err != nil {
+			common.SysLog("failed to sync user quota cache after TryDecrease: " + err.Error())
+		}
+	})
+	return true, nil
 }
 
 func DeltaUpdateUserQuota(id int, delta int) (err error) {

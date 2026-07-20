@@ -35,6 +35,9 @@ export default function SettingsCheckin(props) {
     'checkin_setting.enabled': false,
     'checkin_setting.min_quota': 1000,
     'checkin_setting.max_quota': 10000,
+    'checkin_setting.reward_type': 'quota',
+    'checkin_setting.min_points': 0,
+    'checkin_setting.max_points': 0,
   });
   const refForm = useRef();
   const [inputsRow, setInputsRow] = useState(inputs);
@@ -136,6 +139,47 @@ export default function SettingsCheckin(props) {
                   onChange={handleFieldChange('checkin_setting.max_quota')}
                   min={0}
                   disabled={!inputs['checkin_setting.enabled']}
+                />
+              </Col>
+            </Row>
+            <Row gutter={16}>
+              <Col xs={24} sm={12} md={8} lg={8} xl={8}>
+                <Form.Select
+                  field={'checkin_setting.reward_type'}
+                  label={t('签到奖励类型')}
+                  optionList={[
+                    { label: t('额度'), value: 'quota' },
+                    { label: t('积分'), value: 'points' },
+                  ]}
+                  onChange={handleFieldChange('checkin_setting.reward_type')}
+                  disabled={!inputs['checkin_setting.enabled']}
+                  style={{ width: '100%' }}
+                />
+              </Col>
+              <Col xs={24} sm={12} md={8} lg={8} xl={8}>
+                <Form.InputNumber
+                  field={'checkin_setting.min_points'}
+                  label={t('签到最小积分')}
+                  placeholder={t('积分模式下签到奖励的最小积分')}
+                  onChange={handleFieldChange('checkin_setting.min_points')}
+                  min={0}
+                  disabled={
+                    !inputs['checkin_setting.enabled'] ||
+                    inputs['checkin_setting.reward_type'] !== 'points'
+                  }
+                />
+              </Col>
+              <Col xs={24} sm={12} md={8} lg={8} xl={8}>
+                <Form.InputNumber
+                  field={'checkin_setting.max_points'}
+                  label={t('签到最大积分')}
+                  placeholder={t('积分模式下签到奖励的最大积分')}
+                  onChange={handleFieldChange('checkin_setting.max_points')}
+                  min={0}
+                  disabled={
+                    !inputs['checkin_setting.enabled'] ||
+                    inputs['checkin_setting.reward_type'] !== 'points'
+                  }
                 />
               </Col>
             </Row>

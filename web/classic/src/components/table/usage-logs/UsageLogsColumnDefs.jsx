@@ -35,6 +35,7 @@ import {
   renderModelPriceSimple,
   renderTieredModelPriceSimple,
 } from '../../../helpers';
+import { quotaToPoints } from '../../../helpers/quota';
 import { IconHelpCircle } from '@douyinfe/semi-icons';
 import { CircleAlert, Route, Sparkles } from 'lucide-react';
 
@@ -818,6 +819,15 @@ export const getLogsColumns = ({
         }
         const other = getLogOther(record.other);
         const isSubscription = other?.billing_source === 'subscription';
+        const pointsConsumed = record.points_consumed || 0;
+        const pointsTag =
+          pointsConsumed > 0 ? (
+            <Tooltip content={`${t('积分抵扣')}：${renderQuota(pointsConsumed, 6)}`}>
+              <Tag color='orange' shape='circle' size='small'>
+                {t('积分')} {quotaToPoints(pointsConsumed)}
+              </Tag>
+            </Tooltip>
+          ) : null;
         if (isSubscription) {
           // Subscription billed: show only tag (no $0), but keep tooltip for equivalent cost.
           return (
@@ -826,7 +836,12 @@ export const getLogsColumns = ({
             </Tooltip>
           );
         }
-        return <>{renderQuota(text, 6)}</>;
+        return (
+          <Space spacing={2} align='center'>
+            {renderQuota(text, 6)}
+            {pointsTag}
+          </Space>
+        );
       },
     },
     {

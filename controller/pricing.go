@@ -4,6 +4,7 @@ import (
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/service"
+	"github.com/QuantumNous/new-api/setting/operation_setting"
 	"github.com/QuantumNous/new-api/setting/ratio_setting"
 
 	"github.com/gin-gonic/gin"
@@ -64,15 +65,29 @@ func GetPricing(c *gin.Context) {
 		}
 	}
 
+	// 积分展示：只回传「用户可见 ∩ 白名单」的分组，供模型广场追加积分单价（§8bis.2）
+	pointsSetting := operation_setting.GetPointsSetting()
+	pointsEnabledGroups := make([]string, 0)
+	if pointsSetting.Enabled {
+		for _, g := range pointsSetting.EnabledGroups {
+			if _, ok := usableGroup[g]; ok {
+				pointsEnabledGroups = append(pointsEnabledGroups, g)
+			}
+		}
+	}
+
 	c.JSON(200, gin.H{
-		"success":            true,
-		"data":               pricing,
-		"vendors":            model.GetVendors(),
-		"group_ratio":        groupRatio,
-		"usable_group":       usableGroup,
-		"supported_endpoint": model.GetSupportedEndpointMap(),
-		"auto_groups":        service.GetUserAutoGroup(group),
-		"pricing_version":    "a42d372ccf0b5dd13ecf71203521f9d2",
+		"success":               true,
+		"data":                  pricing,
+		"vendors":               model.GetVendors(),
+		"group_ratio":           groupRatio,
+		"usable_group":          usableGroup,
+		"supported_endpoint":    model.GetSupportedEndpointMap(),
+		"auto_groups":           service.GetUserAutoGroup(group),
+		"points_enabled":        pointsSetting.Enabled,
+		"quota_per_point":       pointsSetting.QuotaPerPoint,
+		"points_enabled_groups": pointsEnabledGroups,
+		"pricing_version":       "a42d372ccf0b5dd13ecf71203521f9d2",
 	})
 }
 

@@ -48,6 +48,7 @@ import {
 import { IconGift } from '@douyinfe/semi-icons';
 import { useMinimumLoadingTime } from '../../hooks/common/useMinimumLoadingTime';
 import { getCurrencyConfig, getQuotaPerUnit } from '../../helpers/render';
+import { quotaToPoints, isPointsEnabled } from '../../helpers/quota';
 import SubscriptionPlansCard from './SubscriptionPlansCard';
 
 const { Text } = Typography;
@@ -108,6 +109,9 @@ const RechargeCard = ({
   const shouldShowSubscription =
     !subscriptionLoading && subscriptionPlans.length > 0;
   const regularPayMethods = payMethods || [];
+  // 子账号不参与积分（积分是主账号资产），统计区隐藏积分项
+  const showPointsStat =
+    isPointsEnabled() && (userState?.user?.parent_user_id || 0) === 0;
   // When QuotaDisplayType = CNY, amounts are already in CNY — skip Price conversion.
   const isCNYDisplay =
     (localStorage.getItem('quota_display_type') || 'USD') === 'CNY';
@@ -161,8 +165,10 @@ const RechargeCard = ({
                 </Text>
               </div>
 
-              {/* 统计数据 */}
-              <div className='grid grid-cols-3 gap-6 mt-4'>
+              {/* 统计数据（子账号不参与积分，隐藏积分项） */}
+              <div
+                className={`grid ${showPointsStat ? 'grid-cols-2 sm:grid-cols-4' : 'grid-cols-3'} gap-6 mt-4`}
+              >
                 {/* 当前余额 */}
                 <div className='text-center'>
                   <div
@@ -187,6 +193,33 @@ const RechargeCard = ({
                     </Text>
                   </div>
                 </div>
+
+                {/* 积分余额 */}
+                {showPointsStat && (
+                  <div className='text-center'>
+                    <div
+                      className='text-base sm:text-2xl font-bold mb-2'
+                      style={{ color: 'white' }}
+                    >
+                      {quotaToPoints(userState?.user?.points_balance)}
+                    </div>
+                    <div className='flex items-center justify-center text-sm'>
+                      <Coins
+                        size={14}
+                        className='mr-1'
+                        style={{ color: 'rgba(255,255,255,0.8)' }}
+                      />
+                      <Text
+                        style={{
+                          color: 'rgba(255,255,255,0.8)',
+                          fontSize: '12px',
+                        }}
+                      >
+                        {t('积分余额')}
+                      </Text>
+                    </div>
+                  </div>
+                )}
 
                 {/* 历史消耗 */}
                 <div className='text-center'>

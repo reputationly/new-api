@@ -200,6 +200,11 @@ func FormatQuota(quota int) string {
 	}
 }
 
+// FormatPoints 把内部 quota unit 换算为「积分数」展示（用于混扣日志/明细）。
+func FormatPoints(quota int) string {
+	return fmt.Sprintf("%d 积分", common.QuotaToPoints(quota))
+}
+
 // FormatQuotaShort 用于充值/订阅等以"用户面值金额"为主的场景，
 // 货币以 2 位小数展示，避免内部 quota → 显示币种 round-trip 的浮点
 // 噪音（例如 ¥21.999995）泄漏到用户可见的日志里。Tokens 模式不变。

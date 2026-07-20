@@ -12,6 +12,7 @@ import (
 const (
 	BillingSourceWallet       = "wallet"
 	BillingSourceSubscription = "subscription"
+	BillingSourceHybrid       = "points_wallet" // 积分+钱包混扣（积分优先，不足扣余额）
 )
 
 // PreConsumeBilling 根据用户计费偏好创建 BillingSession 并执行预扣费。

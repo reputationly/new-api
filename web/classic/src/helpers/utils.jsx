@@ -19,6 +19,7 @@ For commercial licensing, please contact support@quantumnous.com
 
 import { Toast, Pagination } from '@douyinfe/semi-ui';
 import { toastConstants, BILLING_PRICING_VARS, BILLING_VAR_REGEX } from '../constants';
+import { getQuotaPerUnit } from './quota';
 import React from 'react';
 import { toast } from 'react-toastify';
 import {
@@ -617,6 +618,9 @@ export const calculateModelPrice = ({
   currency,
   quotaDisplayType = 'USD',
   precision = 4,
+  pointsEnabled = false,
+  quotaPerPoint = 0,
+  pointsEnabledGroups = [],
 }) => {
   // 1. 选择实际使用的分组
   let usedGroup = selectedGroup;
@@ -716,8 +720,47 @@ export const calculateModelPrice = ({
       ? formatTokenPrice(inputRatioPriceUSD * Number(record.audio_ratio))
       : null;
 
+    // 积分价：仅当积分启用且该模型实际使用的分组在白名单时，按 quota unit 换算积分数。
+    // 返回原始数值不取整——渲染点统一格式化：(0,1) 显示「<1 积分」（结算每笔至少烧
+    // 1 积分，floor 成 0 会造成免费假象），≥1 floor 取整（积分不显示小数）
+    const usdToPoints = (usd) =>
+      pointsEnabled &&
+      quotaPerPoint > 0 &&
+      Array.isArray(pointsEnabledGroups) &&
+      pointsEnabledGroups.includes(usedGroup)
+        ? (usd * getQuotaPerUnit()) / quotaPerPoint / unitDivisor
+        : null;
+    const pointsMap = {
+      input: usdToPoints(inputRatioPriceUSD),
+      completion: usdToPoints(
+        inputRatioPriceUSD * Number(record.completion_ratio),
+      ),
+      cache: hasRatioValue(record.cache_ratio)
+        ? usdToPoints(inputRatioPriceUSD * Number(record.cache_ratio))
+        : null,
+      'create-cache': hasRatioValue(record.create_cache_ratio)
+        ? usdToPoints(inputRatioPriceUSD * Number(record.create_cache_ratio))
+        : null,
+      image: hasRatioValue(record.image_ratio)
+        ? usdToPoints(inputRatioPriceUSD * Number(record.image_ratio))
+        : null,
+      'audio-input': hasRatioValue(record.audio_ratio)
+        ? usdToPoints(inputRatioPriceUSD * Number(record.audio_ratio))
+        : null,
+      'audio-output':
+        hasRatioValue(record.audio_ratio) &&
+        hasRatioValue(record.audio_completion_ratio)
+          ? usdToPoints(
+              inputRatioPriceUSD *
+                Number(record.audio_ratio) *
+                Number(record.audio_completion_ratio),
+            )
+          : null,
+    };
+
     return {
       inputPrice,
+      points: pointsMap,
       completionPrice: formatTokenPrice(
         inputRatioPriceUSD * Number(record.completion_ratio),
       ),
@@ -754,6 +797,17 @@ export const calculateModelPrice = ({
 
     return {
       price: displayVal,
+      points: {
+        // 按次价 ceil：一次调用一次结算，实际就烧 ceil(积分价) 个整积分，
+        // ceil 显示的即真实扣费（floor 会把不足 1 积分的按次价显示成免费）
+        fixed:
+          pointsEnabled &&
+          quotaPerPoint > 0 &&
+          Array.isArray(pointsEnabledGroups) &&
+          pointsEnabledGroups.includes(usedGroup)
+            ? Math.ceil((priceUSD * getQuotaPerUnit()) / quotaPerPoint)
+            : null,
+      },
       isPerToken: false,
       isTokensDisplay: false,
       usedGroup,
@@ -776,6 +830,32 @@ export const getModelPriceItems = (
   t,
   quotaDisplayType = 'USD',
 ) => {
+  // 在每个货币价格项后追加对应「积分价」行（仅当该模型分组可积分消费，§8bis）
+  const appendPoints = (items) => {
+    const pm = priceData.points;
+    if (!pm) return items;
+    const out = [];
+    items.forEach((item) => {
+      out.push(item);
+      const p = pm[item.key];
+      if (p !== null && p !== undefined) {
+        // 积分永远整数显示：(0,1) 显示「<1」防免费假象（结算每笔至少烧 1 积分），
+        // 其余 floor；真正免费(0)如实显示 0（quota 成本为 0 时结算不烧积分）
+        const n = Number(p);
+        const pointsText =
+          n > 0 && n < 1 ? '<1' : Math.floor(n).toLocaleString();
+        out.push({
+          key: `${item.key}-points`,
+          label: t('积分价'),
+          value: `${pointsText} ${t('积分')}`,
+          suffix: item.suffix,
+          isPoints: true,
+        });
+      }
+    });
+    return out;
+  };
+
   if (priceData.isDynamicPricing) {
     return [
       {
@@ -840,7 +920,7 @@ export const getModelPriceItems = (
     }
 
     const unitSuffix = ` / 1${priceData.unitLabel} Tokens`;
-    return [
+    return appendPoints([
       {
         key: 'input',
         label: t('输入价格'),
@@ -883,17 +963,22 @@ export const getModelPriceItems = (
         value: priceData.audioOutputPrice,
         suffix: unitSuffix,
       },
-    ].filter((item) => item.value !== null && item.value !== undefined && item.value !== '');
+    ]).filter((item) => item.value !== null && item.value !== undefined && item.value !== '');
   }
 
-  return [
-    {
-      key: 'fixed',
-      label: t('模型价格'),
-      value: priceData.price,
-      suffix: ` / ${t('次')}`,
-    },
-  ].filter((item) => item.value !== null && item.value !== undefined && item.value !== '');
+  return appendPoints(
+    [
+      {
+        key: 'fixed',
+        label: t('模型价格'),
+        value: priceData.price,
+        suffix: ` / ${t('次')}`,
+      },
+    ].filter(
+      (item) =>
+        item.value !== null && item.value !== undefined && item.value !== '',
+    ),
+  );
 };
 
 // 格式化动态计费摘要（用于卡片视图，与 formatPriceInfo 风格统一）

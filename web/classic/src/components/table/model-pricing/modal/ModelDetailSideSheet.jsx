@@ -44,6 +44,7 @@ const ModelDetailSideSheet = ({
   vendorsMap,
   endpointMap,
   autoGroups,
+  pointsConfig,
   t,
 }) => {
   const isMobile = useIsMobile();
@@ -118,6 +119,7 @@ const ModelDetailSideSheet = ({
                 showRatio={showRatio}
                 usableGroup={usableGroup}
                 autoGroups={autoGroups}
+                pointsConfig={pointsConfig}
                 t={t}
               />
             </div>

@@ -35,10 +35,13 @@ func GetCheckinStatus(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
 		"data": gin.H{
-			"enabled":   setting.Enabled,
-			"min_quota": setting.MinQuota,
-			"max_quota": setting.MaxQuota,
-			"stats":     stats,
+			"enabled":     setting.Enabled,
+			"reward_type": setting.RewardType,
+			"min_quota":   setting.MinQuota,
+			"max_quota":   setting.MaxQuota,
+			"min_points":  setting.MinPoints,
+			"max_points":  setting.MaxPoints,
+			"stats":       stats,
 		},
 	})
 }
@@ -61,12 +64,17 @@ func DoCheckin(c *gin.Context) {
 		})
 		return
 	}
-	model.RecordLog(userId, model.LogTypeSystem, fmt.Sprintf("用户签到，获得额度 %s", logger.LogQuota(checkin.QuotaAwarded)))
+	if checkin.RewardType == model.CheckinRewardPoints {
+		model.RecordLog(userId, model.LogTypeSystem, fmt.Sprintf("用户签到，获得积分 %d", common.QuotaToPoints(checkin.QuotaAwarded)))
+	} else {
+		model.RecordLog(userId, model.LogTypeSystem, fmt.Sprintf("用户签到，获得额度 %s", logger.LogQuota(checkin.QuotaAwarded)))
+	}
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
 		"message": "签到成功",
 		"data": gin.H{
 			"quota_awarded": checkin.QuotaAwarded,
+			"reward_type":   checkin.RewardType,
 			"checkin_date":  checkin.CheckinDate},
 	})
 }

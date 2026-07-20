@@ -30,6 +30,7 @@ import AnnouncementsPanel from './AnnouncementsPanel';
 import FaqPanel from './FaqPanel';
 import UptimePanel from './UptimePanel';
 import SearchModal from './modals/SearchModal';
+import PointsTasksCard from '../points/PointsTasksCard';
 
 import { useDashboardData } from '../../hooks/dashboard/useDashboardData';
 import { useDashboardStats } from '../../hooks/dashboard/useDashboardStats';
@@ -181,6 +182,11 @@ const Dashboard = () => {
         CARD_PROPS={CARD_PROPS}
         CHART_CONFIG={CHART_CONFIG}
       />
+
+      {/* 积分获取引导（§8ter）：有未完成任务时展示，完成/未启用整卡自隐藏 */}
+      <div className='mb-4'>
+        <PointsTasksCard />
+      </div>
 
       {/* API信息和图表面板 */}
       <div className='mb-4'>

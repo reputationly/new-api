@@ -76,6 +76,7 @@ const PricingCardView = ({
   selectedRowKeys = [],
   setSelectedRowKeys,
   openModelDetail,
+  pointsConfig,
 }) => {
   const showSkeleton = useMinimumLoadingTime(loading);
   const startIndex = (currentPage - 1) * pageSize;
@@ -269,6 +270,9 @@ const PricingCardView = ({
             displayPrice,
             currency,
             quotaDisplayType: siteDisplayType,
+            pointsEnabled: pointsConfig?.enabled,
+            quotaPerPoint: pointsConfig?.quotaPerPoint,
+            pointsEnabledGroups: pointsConfig?.enabledGroups,
           });
 
           return (

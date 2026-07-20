@@ -31,6 +31,7 @@ import SettingsLog from '../../pages/Setting/Operation/SettingsLog';
 import SettingsMonitoring from '../../pages/Setting/Operation/SettingsMonitoring';
 import SettingsCreditLimit from '../../pages/Setting/Operation/SettingsCreditLimit';
 import SettingsCheckin from '../../pages/Setting/Operation/SettingsCheckin';
+import SettingsPoints from '../../pages/Setting/Operation/SettingsPoints';
 import { API, showError, toBoolean } from '../../helpers';
 
 const OperationSetting = () => {
@@ -95,6 +96,18 @@ const OperationSetting = () => {
     'checkin_setting.enabled': false,
     'checkin_setting.min_quota': 1000,
     'checkin_setting.max_quota': 10000,
+    'checkin_setting.reward_type': 'quota',
+    'checkin_setting.min_points': 0,
+    'checkin_setting.max_points': 0,
+
+    /* 积分设置：布尔 key 必须在此声明，getOptions 只对声明为布尔的 key 做
+       toBoolean，否则 "false" 字符串透传给 Form.Switch 会显示为开 */
+    'points_setting.enabled': false,
+    'points_setting.require_kyc': true,
+    'points_setting.quota_per_point': 684.93,
+    'points_setting.enabled_groups': '[]',
+    'points_setting.kyc_verified_points': 0,
+    'points_setting.kyc_inviter_points': 0,
 
     /* 令牌设置 */
     'token_setting.max_user_tokens': 1000,
@@ -186,6 +199,10 @@ const OperationSetting = () => {
         {/* 签到设置 */}
         <Card style={{ marginTop: '10px' }}>
           <SettingsCheckin options={inputs} refresh={onRefresh} />
+        </Card>
+        {/* 积分设置 */}
+        <Card style={{ marginTop: '10px' }}>
+          <SettingsPoints options={inputs} refresh={onRefresh} />
         </Card>
       </Spin>
     </>

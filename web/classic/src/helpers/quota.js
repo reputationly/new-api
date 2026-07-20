@@ -23,6 +23,33 @@ export const getQuotaPerUnit = () => {
   return Number.isFinite(raw) && raw > 0 ? raw : 1;
 };
 
+// ---- 积分换算（内部 quota unit ↔ 展示积分数） ----
+
+export const getQuotaPerPoint = () => {
+  const raw = parseFloat(localStorage.getItem('quota_per_point') || '684.93');
+  return Number.isFinite(raw) && raw > 0 ? raw : 684.93;
+};
+
+export const isPointsEnabled = () =>
+  localStorage.getItem('points_enabled') === 'true';
+
+// quota unit -> 积分数（floor 取整，积分对用户不显示小数）。
+// 1e-9 为浮点护栏：整数 quota 的相邻比值间距 ≈1/qpp 远大于该值，不会虚增，
+// 只防止除法在整数边界向下抖动（如 ceil 发放后的精确往返被浮点误差打破）
+export const quotaToPoints = (quota) => {
+  const q = Number(quota || 0);
+  if (!Number.isFinite(q) || q <= 0) return 0;
+  return Math.floor(q / getQuotaPerPoint() + 1e-9);
+};
+
+// 积分数 -> quota unit（ceil 取整，用于提交给后端）。与后端 PointsToQuota 一致：
+// 向上取整保证 quotaToPoints(pointsToQuota(n)) === n 精确往返，差额 <1 quota unit 让利用户
+export const pointsToQuota = (points) => {
+  const p = Number(points || 0);
+  if (!Number.isFinite(p) || p <= 0) return 0;
+  return Math.ceil(p * getQuotaPerPoint());
+};
+
 export const quotaToDisplayAmount = (quota) => {
   const q = Number(quota || 0);
   if (!Number.isFinite(q) || q === 0) return 0;
