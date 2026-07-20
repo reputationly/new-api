@@ -31,12 +31,11 @@ import {
   MUSIC_AUDIO_UPLOAD_MAX_MB,
   MUSIC_VIDEO_UPLOAD_MAX_MB,
   MUSIC_VOCAL_LANGUAGES,
-  MUSIC_DEFAULT_GUIDANCE,
   MUSIC_DEFAULT_SECONDS_TOTAL,
-  MUSIC_AUDIOX_DEFAULT_GUIDANCE,
   MUSIC_SVS_LANGUAGES,
   MUSIC_SVS_CONTROLS,
   musicDefaultStepsForEngine,
+  musicDefaultGuidanceForEngine,
 } from '../../constants/musicPlayground.constants';
 
 // 音乐模型配置面板:分组/模型(同视频/语音)+ 按 mode 的输入:
@@ -82,11 +81,10 @@ const MusicConfigPanel = ({
       : { label: t('{{sec}} 秒', { sec: d }), value: d },
   );
 
-  // 采样步数默认占位:ACE-Step 8 / AudioX 250 / SoulX 32。
+  // 占位默认按引擎:采样步数 ACE-Step 8 / AudioX 250 / SoulX 32;
+  // guidance AudioX·ACE-Step 7 / SoulX 3(与 deploy-config 一致,所见即所发)。
   const defaultSteps = musicDefaultStepsForEngine(engine);
-  const defaultGuidance = isAceStep
-    ? MUSIC_DEFAULT_GUIDANCE
-    : MUSIC_AUDIOX_DEFAULT_GUIDANCE;
+  const defaultGuidance = musicDefaultGuidanceForEngine(engine);
 
   const handleFile = (e) => {
     const file = e.target.files?.[0];

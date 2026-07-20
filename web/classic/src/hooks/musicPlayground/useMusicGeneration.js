@@ -31,6 +31,9 @@ import {
   MUSIC_POLL_INTERVAL_MS,
   MUSIC_POLL_MAX_TIMES,
   MUSIC_DEFAULT_DURATION,
+  MUSIC_DEFAULT_SECONDS_TOTAL,
+  MUSIC_AUDIOX_DEFAULT_STEPS,
+  MUSIC_AUDIOX_DEFAULT_GUIDANCE,
   MUSIC_SVS_DEFAULT_LANGUAGE,
   MUSIC_SVS_DEFAULT_CONTROL,
   musicHistoryStorageKey,
@@ -720,18 +723,30 @@ export const useMusicGeneration = (mode = 't2m') => {
               metadata[targetAudioMetaKey] = targetAudioURL;
           }
 
-          // AudioX 专属:时长(秒);SoulX 无此参数,不下发。
+          // AudioX 专属:时长(秒);SoulX 无此参数,不下发。所见即所发:留空补 UI 默认 10。
           if (engine === 'audiox') {
             const secs = parseFloat(params.secondsTotal);
-            if (Number.isFinite(secs) && secs > 0)
-              metadata.seconds_total = secs;
+            metadata.seconds_total =
+              Number.isFinite(secs) && secs > 0 ? secs : MUSIC_DEFAULT_SECONDS_TOTAL;
           }
-          // 通用标量:留空即不下发,走引擎默认。
+          // 采样步数:AudioX(AudioXPipeline)硬要 num_inference_steps 且**无** deploy-config
+          // 兜底,留空必须补上 UI 默认(placeholder 承诺的 250),否则引擎报
+          // "AudioXPipeline requires sampling_params.num_inference_steps"。SoulX(svs)有
+          // deploy-config 默认(32),留空交给引擎,不在此下发。
           const steps = parseInt(params.inferenceSteps, 10);
-          if (Number.isFinite(steps) && steps > 0)
+          if (Number.isFinite(steps) && steps > 0) {
             metadata.num_inference_steps = steps;
+          } else if (engine === 'audiox') {
+            metadata.num_inference_steps = MUSIC_AUDIOX_DEFAULT_STEPS;
+          }
+          // guidance:AudioX 留空补 UI 默认 7(所见即所发);SoulX 交给引擎 deploy-config
+          // 默认 3(ConfigPanel 的 SoulX 占位也已改成 3,显示=生效),不在此下发。
           const gs = parseFloat(params.guidanceScale);
-          if (Number.isFinite(gs) && gs > 0) metadata.guidance_scale = gs;
+          if (Number.isFinite(gs) && gs > 0) {
+            metadata.guidance_scale = gs;
+          } else if (engine === 'audiox') {
+            metadata.guidance_scale = MUSIC_AUDIOX_DEFAULT_GUIDANCE;
+          }
           const seedStr = String(params.seed ?? '').trim();
           if (seedStr !== '') {
             const seedNum = parseInt(seedStr, 10);
