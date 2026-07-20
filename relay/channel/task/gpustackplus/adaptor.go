@@ -293,7 +293,9 @@ func (a *TaskAdaptor) BuildRequestBody(c *gin.Context, info *relaycommon.RelayIn
 			// 纯文本无参考音。
 			refs, err = materializeOmniTTSInputs(c, info, taskType, modelName, req)
 		} else {
-			// 旧 IndexTTS:参考音色 voice 必填,门面映射 voice→spk_audio_path。
+			// IndexTTS-2(现由 vLLM-Omni 引擎服务):情感合成前端仍用 IndexTTS 语义键
+			// (voice 参考音色 + emotion_audio 情感参考音),但引擎读 ref_audio/emo_audio。
+			// materializeTTSInputs 物化为 ref_audio→ref_audio_path、emotion_audio→emo_audio_path。
 			refs, err = materializeTTSInputs(c, info, taskType, modelName, req)
 		}
 	case "s2v":
@@ -601,10 +603,13 @@ func metadataString(md map[string]any, key string) string {
 	return ""
 }
 
-// materializeTTSInputs 物化 TTS 的参考音色(必填,metadata.voice)与可选情感参考音
-// (metadata.emotion_audio),返回 input_refs(field → 相对路径)。voice / emotion_audio
-// 是 URL 或 base64/data-uri 音频字符串,与视频输入复用同一物化机制(SSRF 校验、回滚)。
-// 门面把 voice→spk_audio_path、emotion_audio→emo_audio_path 映射给 IndexTTS 引擎。
+// materializeTTSInputs 物化 IndexTTS-2 情感合成的参考音色(必填,metadata.voice)与可选
+// 情感参考音(metadata.emotion_audio),返回 input_refs(field → 相对路径)。voice /
+// emotion_audio 是 URL 或 base64/data-uri 音频字符串,与视频输入复用同一物化机制。
+// IndexTTS-2 现由 vLLM-Omni 引擎服务(取代独立 IndexTTS),引擎读 ref_audio/emo_audio,
+// 故:voice→ref_audio(门面映射 ref_audio→ref_audio_path)、emotion_audio→emo_audio_path
+// (引擎 AudioTaskRequest 折叠 emo_audio_path→emo_audio)。情感向量/强度(emo_vector/
+// emo_alpha)是标量,随 metadata 透传,不在此物化。
 func materializeTTSInputs(c *gin.Context, info *relaycommon.RelayInfo, taskType, modelName string, req relaycommon.TaskSubmitReq) (map[string][]string, error) {
 	voice := metadataString(req.Metadata, "voice")
 	if voice == "" {
@@ -618,8 +623,8 @@ func materializeTTSInputs(c *gin.Context, info *relaycommon.RelayInfo, taskType,
 	}
 	ctx := c.Request.Context()
 
-	// 参考音色(必填),单值;失败回滚。
-	if err := m.AddString(ctx, nfsinput.FieldVoice, 0, false, voice); err != nil {
+	// 参考音色(必填),单值;失败回滚。物化为 ref_audio(vLLM-Omni 引擎的克隆参考音字段)。
+	if err := m.AddString(ctx, nfsinput.FieldRefAudio, 0, false, voice); err != nil {
 		m.Cleanup()
 		return nil, err
 	}
