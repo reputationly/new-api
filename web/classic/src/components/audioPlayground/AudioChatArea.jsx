@@ -130,6 +130,7 @@ const AudioChatArea = ({
   placeholderText = '',
   missingVoiceHint = '',
   presets = [],
+  onApplyExample,
   onSend,
   onRegenerate,
   onRefetch,
@@ -326,20 +327,29 @@ const AudioChatArea = ({
             {missingVoiceHint || t('请先在左侧选择预置音色或上传参考音频')}
           </Typography.Text>
         )}
-        {/* 预设文本:单行等宽排列,超长 CSS 截断 */}
+        {/* 一键示例:单行等宽排列,超长 CSS 截断。示例可为纯文本(仅填输入框)或结构化
+            对象({label,prompt,params,files}——同时预置参考音/视频等文件)。 */}
         {presets.length > 0 && (
           <div className='flex gap-2 mb-2 overflow-hidden'>
-            {presets.map((p, i) => (
-              <button
-                key={i}
-                type='button'
-                title={p}
-                onClick={() => setInputValue(p)}
-                className='flex-1 min-w-0 truncate text-xs text-gray-600 bg-gray-100 hover:bg-gray-200 rounded-full px-3 py-1.5 transition-colors'
-              >
-                {p}
-              </button>
-            ))}
+            {presets.map((ex, i) => {
+              const isObj = ex && typeof ex === 'object';
+              const promptText = isObj ? ex.prompt : ex;
+              const label = isObj ? ex.label : ex;
+              return (
+                <button
+                  key={i}
+                  type='button'
+                  title={promptText}
+                  onClick={() => {
+                    setInputValue(promptText || '');
+                    if (isObj) onApplyExample?.(ex);
+                  }}
+                  className='flex-1 min-w-0 truncate text-xs text-gray-600 bg-gray-100 hover:bg-gray-200 rounded-full px-3 py-1.5 transition-colors'
+                >
+                  {label}
+                </button>
+              );
+            })}
           </div>
         )}
         <div className='relative'>
@@ -387,6 +397,7 @@ const AudioChatArea = ({
     missingVoiceHint,
     placeholder,
     presets,
+    onApplyExample,
     inputValue,
     onSend,
     t,

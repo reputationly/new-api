@@ -18,6 +18,7 @@ const MusicPlaygroundBody = ({ mode }) => {
   const {
     inputs,
     handleInputChange,
+    applyExample,
     groups,
     models,
     messages,
@@ -90,10 +91,12 @@ const MusicPlaygroundBody = ({ mode }) => {
           missingRequiredAudio={missingRequiredAudio}
           missingRequiredVideo={missingRequiredVideo}
           engine={engine}
+          mode={mode}
           needsText={needsText}
           needsVideo={needsVideo}
           needsDualAudio={needsDualAudio}
           welcomeText={welcomeText}
+          onApplyExample={applyExample}
           styleState={styleState}
           onSend={generate}
           onRegenerate={regenerate}

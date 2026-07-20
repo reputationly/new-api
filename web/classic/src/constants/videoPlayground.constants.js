@@ -28,6 +28,64 @@ export const VIDEO_PROMPT_PRESETS = [
   '三维卡通动画，皮克斯动画电影质感。中景，一台方头方脑的黄色小机器人，履带底盘，两只大大的双筒望远镜式眼睛，在洒满阳光的花园里。它伸出机械手轻轻碰了碰一朵向日葵，被弹回的花瓣吓得后退，眼睛惊讶地放大，随后歪头发出好奇的姿态。镜头低角度缓慢环绕，清晨柔光，暖色调，金属漆面反射细腻，全局光照，三维渲染，皮克斯风格。',
 ];
 
+// ── 一键示例(带预置文件/参数,按 mode)──────────────────────────────────
+// 结构同音频/音乐:{ label, prompt, params?, files? }。i2v/flf2v/s2v/vace/sr 预置官方示例
+// 素材(见 public/playground-samples/);text2video 纯文本。ChatArea 兼容纯字符串。
+// mode 键与 VideoModel 的 tab itemKey 一致:text2video/image2video/flf2v/s2v/sr/vace。
+export const VIDEO_EXAMPLES = {
+  text2video: VIDEO_PROMPT_PRESETS,
+  image2video: [
+    {
+      label: '图生视频',
+      prompt:
+        '画面中的人物微微转头并露出微笑,发丝随微风轻轻飘动,背景虚化的光斑缓慢晃动,镜头缓缓向前推进。',
+      files: { firstFrame: '/playground-samples/images/wan-i2v-first.jpg' },
+    },
+  ],
+  flf2v: [
+    {
+      label: '首尾帧',
+      prompt:
+        '镜头从首帧场景平滑过渡到尾帧,运动连贯自然,光影随时间流畅变化,电影级插帧质感。',
+      files: {
+        firstFrame: '/playground-samples/images/wan-flf2v-first.png',
+        lastFrame: '/playground-samples/images/wan-flf2v-last.png',
+      },
+    },
+  ],
+  s2v: [
+    {
+      label: '数字人',
+      prompt:
+        'A woman is passionately singing into a professional microphone in a recording studio.',
+      files: {
+        firstFrame: '/playground-samples/images/infinitetalk-person.png',
+        audioData: '/playground-samples/audio/infinitetalk-driving.wav',
+      },
+    },
+  ],
+  sr: [
+    {
+      label: '超分示例视频',
+      prompt: '',
+      files: { sourceVideo: '/playground-samples/video/seedvr2-lowres.mp4' },
+    },
+  ],
+  vace: [
+    {
+      label: '视频编辑',
+      prompt:
+        '视频展示了一位长着尖耳朵的老人,银白色长发和小胡子,身穿色彩斑斓的长袍,散发神秘与智慧的气息。背景为华丽宫殿内部,金碧辉煌,灯光明亮。摄像机旋转动态拍摄,捕捉老人轻松挥手的动作。',
+      files: {
+        srcVideo: '/playground-samples/video/vace-source.mp4',
+        refImages: ['/playground-samples/images/vace-ref-girl.png'],
+      },
+    },
+  ],
+};
+
+export const videoExamplesForMode = (mode) => VIDEO_EXAMPLES[mode] || [];
+
 // 视频宽高比(文生视频):可在运营后台按模型配置允许集,未配置默认全集。
 export const VIDEO_ASPECT_RATIOS = ['16:9', '9:16', '1:1', '4:3', '3:4'];
 // 默认选中的宽高比(minimax 无宽高比可参考;取 16:9 = wan 引擎默认 1280×720)。

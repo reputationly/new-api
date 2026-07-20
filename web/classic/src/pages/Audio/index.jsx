@@ -9,9 +9,10 @@ import VideoHistoryPanel from '../../components/videoPlayground/VideoHistoryPane
 import {
   AUDIO_TAB_ORDER,
   AUDIO_MODES,
-  AUDIO_PROMPT_PRESETS,
-  AUDIO_DIALOGUE_PRESETS,
-  AUDIO_DESIGN_PRESETS,
+  AUDIO_EMOTION_EXAMPLES,
+  AUDIO_SYNTHESIS_EXAMPLES,
+  AUDIO_DIALOGUE_EXAMPLES,
+  AUDIO_DESIGN_EXAMPLES,
 } from '../../constants/audioPlayground.constants';
 
 // 单个玩法的三栏体验区。切 tab 时整体重挂载,各玩法历史/参数互不串扰(mode 作为 key)。
@@ -24,6 +25,7 @@ const AudioPlaygroundBody = ({ mode }) => {
   const {
     inputs,
     handleInputChange,
+    applyExample,
     groups,
     models,
     messages,
@@ -90,13 +92,15 @@ const AudioPlaygroundBody = ({ mode }) => {
           ? t('请先在左侧选择音色来源并完成配置')
           : t('请先在左侧选择预置音色或上传参考音频');
 
-  // 各玩法提示词预设。
+  // 各玩法一键示例(结构化:含预置文件/参数)。
   const presets =
     mode === 'dialogue'
-      ? AUDIO_DIALOGUE_PRESETS
+      ? AUDIO_DIALOGUE_EXAMPLES
       : mode === 'design'
-        ? AUDIO_DESIGN_PRESETS
-        : AUDIO_PROMPT_PRESETS;
+        ? AUDIO_DESIGN_EXAMPLES
+        : mode === 'synthesis'
+          ? AUDIO_SYNTHESIS_EXAMPLES
+          : AUDIO_EMOTION_EXAMPLES;
 
   return (
     <div
@@ -137,6 +141,7 @@ const AudioPlaygroundBody = ({ mode }) => {
           placeholderText={placeholderText}
           missingVoiceHint={missingVoiceHint}
           presets={presets}
+          onApplyExample={applyExample}
           styleState={styleState}
           onSend={generate}
           onRegenerate={regenerate}

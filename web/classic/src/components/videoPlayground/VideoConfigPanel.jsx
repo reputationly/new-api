@@ -50,20 +50,48 @@ const VideoConfigPanel = ({
 
   // 单帧上传槽:ImageUrlInput 管理数组,这里只取最后一张作为该槽的单帧。
   // 帧图仅在 i2v/flf2v 模式渲染,均为必填 → 单行标签(上传首帧/尾帧)+ 红星,无启用开关。
-  const renderFrameSlot = (label, key) => (
-    <ImageUrlInput
-      label={label}
-      required
-      maxMB={uploadMaxMB}
-      imageUrls={inputs[key] ? [inputs[key]] : []}
-      imageEnabled={true}
-      onImageUrlsChange={(v) =>
-        onInputChange(key, (v && v.length ? v[v.length - 1] : '') || '')
-      }
-      onImageEnabledChange={() => {}}
-      disabled={false}
-    />
+  // 只读图片预览(锁定/历史态)。ImageUrlInput 的图片列表在 disabled 时会被整体隐藏
+  // (isActive = imageEnabled && !disabled),不能用来做只读展示;锁定态改用纯 <img>。
+  const renderImagePreview = (label, urls) => (
+    <div>
+      <div className='flex items-center gap-1 mb-2'>
+        <Typography.Text strong className='text-sm'>
+          {label}
+        </Typography.Text>
+      </div>
+      <div className='flex flex-wrap gap-2'>
+        {(urls || []).filter(Boolean).map((url, i) => (
+          <img
+            key={i}
+            src={url}
+            alt={`${label}-${i + 1}`}
+            className='w-20 h-20 object-cover rounded-lg border border-gray-200'
+          />
+        ))}
+      </div>
+    </div>
   );
+
+  // 单帧槽:未锁定=可编辑上传(ImageUrlInput);锁定/历史=只读预览已上传帧。
+  const renderFrameSlot = (label, key) =>
+    disabled ? (
+      inputs[key] ? (
+        renderImagePreview(label, [inputs[key]])
+      ) : null
+    ) : (
+      <ImageUrlInput
+        label={label}
+        required
+        maxMB={uploadMaxMB}
+        imageUrls={inputs[key] ? [inputs[key]] : []}
+        imageEnabled={true}
+        onImageUrlsChange={(v) =>
+          onInputChange(key, (v && v.length ? v[v.length - 1] : '') || '')
+        }
+        onImageEnabledChange={() => {}}
+        disabled={false}
+      />
+    );
 
   const ensureOption = (options, value) => {
     if (!value) return options;
@@ -172,9 +200,11 @@ const VideoConfigPanel = ({
           />
         </div>
 
-        {/* 主图上传(图生视频:首帧;首尾帧:首帧+尾帧;数字人:人物图;锁定/历史态不展示) */}
+        {/* 主图上传(图生视频:首帧;首尾帧:首帧+尾帧;数字人:人物图)。锁定/历史态改为
+            只读展示已上传的文件(disabled 透传,ImageUrlInput/MediaFileInput 仍渲染预览/播放器);
+            未上传的可选项在锁定态不展示,避免空的禁用上传框。 */}
         {needsImage &&
-          !disabled &&
+          (!disabled || inputs.firstFrame) &&
           renderFrameSlot(
             isS2V
               ? t('上传人物图')
@@ -183,22 +213,25 @@ const VideoConfigPanel = ({
                 : t('上传首帧/参考图'),
             'firstFrame',
           )}
-        {isFLF2V && !disabled && renderFrameSlot(t('上传尾帧'), 'lastFrame')}
+        {isFLF2V &&
+          (!disabled || inputs.lastFrame) &&
+          renderFrameSlot(t('上传尾帧'), 'lastFrame')}
 
         {/* 数字人:驱动音频(必填) */}
-        {isS2V && !disabled && (
+        {isS2V && (!disabled || inputs.audioData) && (
           <MediaFileInput
             label={t('上传驱动音频')}
             required
             kind='audio'
             maxMB={uploadMaxMB}
             value={inputs.audioData}
+            disabled={disabled}
             onChange={(v) => onInputChange('audioData', v)}
           />
         )}
 
         {/* 视频超分:源视频(必填)+ 超分倍率 */}
-        {isSR && !disabled && (
+        {isSR && (!disabled || inputs.sourceVideo) && (
           <>
             <MediaFileInput
               label={t('上传源视频')}
@@ -206,6 +239,7 @@ const VideoConfigPanel = ({
               kind='video'
               value={inputs.sourceVideo}
               maxMB={uploadMaxMB}
+              disabled={disabled}
               onChange={(v) => onInputChange('sourceVideo', v)}
             />
             <div>
@@ -230,35 +264,46 @@ const VideoConfigPanel = ({
         )}
 
         {/* 视频编辑:源视频 + 蒙版(可选)+ 参考图(可选,多张)。源视频与参考图至少其一。 */}
-        {isVACE && !disabled && (
+        {isVACE && (
           <>
-            <MediaFileInput
-              label={t('上传源视频')}
-              kind='video'
-              value={inputs.srcVideo}
-              maxMB={uploadMaxMB}
-              onChange={(v) => onInputChange('srcVideo', v)}
-            />
-            <MediaFileInput
-              label={t('上传蒙版视频（可选）')}
-              kind='video'
-              value={inputs.maskVideo}
-              maxMB={uploadMaxMB}
-              onChange={(v) => onInputChange('maskVideo', v)}
-            />
-            <ImageUrlInput
-              label={t('上传参考图（可选，最多 {{count}} 张）', {
-                count: maxRefImages,
-              })}
-              maxMB={uploadMaxMB}
-              imageUrls={inputs.refImages || []}
-              imageEnabled={true}
-              onImageUrlsChange={(v) =>
-                onInputChange('refImages', (v || []).slice(0, maxRefImages))
-              }
-              onImageEnabledChange={() => {}}
-              disabled={false}
-            />
+            {(!disabled || inputs.srcVideo) && (
+              <MediaFileInput
+                label={t('上传源视频')}
+                kind='video'
+                value={inputs.srcVideo}
+                maxMB={uploadMaxMB}
+                disabled={disabled}
+                onChange={(v) => onInputChange('srcVideo', v)}
+              />
+            )}
+            {(!disabled || inputs.maskVideo) && (
+              <MediaFileInput
+                label={t('上传蒙版视频（可选）')}
+                kind='video'
+                value={inputs.maskVideo}
+                maxMB={uploadMaxMB}
+                disabled={disabled}
+                onChange={(v) => onInputChange('maskVideo', v)}
+              />
+            )}
+            {!disabled && (
+              <ImageUrlInput
+                label={t('上传参考图（可选，最多 {{count}} 张）', {
+                  count: maxRefImages,
+                })}
+                maxMB={uploadMaxMB}
+                imageUrls={inputs.refImages || []}
+                imageEnabled={true}
+                onImageUrlsChange={(v) =>
+                  onInputChange('refImages', (v || []).slice(0, maxRefImages))
+                }
+                onImageEnabledChange={() => {}}
+                disabled={false}
+              />
+            )}
+            {disabled &&
+              (inputs.refImages || []).length > 0 &&
+              renderImagePreview(t('参考图'), inputs.refImages)}
           </>
         )}
 

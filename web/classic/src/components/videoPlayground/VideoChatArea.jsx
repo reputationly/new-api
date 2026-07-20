@@ -15,7 +15,7 @@ import { UserContext } from '../../context/User';
 import { blockChatDrag } from '../playground/blockChatDrag';
 import {
   VIDEO_STATUS,
-  VIDEO_PROMPT_PRESETS,
+  videoExamplesForMode,
 } from '../../constants/videoPlayground.constants';
 
 const WELCOME_ID = '__welcome__';
@@ -127,8 +127,9 @@ const VideoChatArea = ({
   generating,
   turnLimitReached = false,
   missingRequiredImage = false,
-  showPresets = false,
+  mode = 'text2video',
   isSR = false,
+  onApplyExample,
   onSend,
   onRegenerate,
   onRefetch,
@@ -138,6 +139,9 @@ const VideoChatArea = ({
   const [userState] = useContext(UserContext);
   // 受控输入框:预设按钮直接 setInputValue,发送后清空(缺图/上限时不清空,提示词不丢)。
   const [inputValue, setInputValue] = useState('');
+  // 一键示例(按 mode):text2video 纯文本;i2v/flf2v/s2v/vace/sr 带预置文件。
+  const presets = videoExamplesForMode(mode);
+  const hasPresets = presets.length > 0;
 
   const roleConfig = useMemo(
     () => ({
@@ -313,6 +317,27 @@ const VideoChatArea = ({
               {t('本轮对话已达生成上限，请点击右侧「新对话」继续')}
             </Typography.Text>
           )}
+          {/* 一键示例(超分无提示词):点击预置源视频到左侧,再点生成。 */}
+          {hasPresets && (
+            <div className='flex gap-2 mb-3 overflow-hidden w-full max-w-sm'>
+              {presets.map((ex, i) => {
+                const isObj = ex && typeof ex === 'object';
+                return (
+                  <button
+                    key={i}
+                    type='button'
+                    title={isObj ? ex.label : ex}
+                    onClick={() => {
+                      if (isObj) onApplyExample?.(ex);
+                    }}
+                    className='flex-1 min-w-0 truncate text-xs text-gray-600 bg-gray-100 hover:bg-gray-200 rounded-full px-3 py-1.5 transition-colors'
+                  >
+                    {isObj ? ex.label : ex}
+                  </button>
+                );
+              })}
+            </div>
+          )}
           <Button
             theme='solid'
             size='large'
@@ -342,20 +367,29 @@ const VideoChatArea = ({
             {t('本轮对话已达生成上限，请点击右侧「新对话」继续')}
           </Typography.Text>
         )}
-        {/* 预设提示词(仅文生视频):单行等宽排列,超长 CSS 截断;点击清空当前输入并填入 */}
-        {showPresets && (
+        {/* 一键示例:纯文本(仅填输入框)或结构化对象({label,prompt,params,files}——
+            同时预置首帧/参考图/驱动音等文件)。单行等宽排列,超长 CSS 截断。 */}
+        {hasPresets && (
           <div className='flex gap-2 mb-2 overflow-hidden'>
-            {VIDEO_PROMPT_PRESETS.map((p, i) => (
-              <button
-                key={i}
-                type='button'
-                title={p}
-                onClick={() => setInputValue(p)}
-                className='flex-1 min-w-0 truncate text-xs text-gray-600 bg-gray-100 hover:bg-gray-200 rounded-full px-3 py-1.5 transition-colors'
-              >
-                {p}
-              </button>
-            ))}
+            {presets.map((ex, i) => {
+              const isObj = ex && typeof ex === 'object';
+              const promptText = isObj ? ex.prompt : ex;
+              const label = isObj ? ex.label : ex;
+              return (
+                <button
+                  key={i}
+                  type='button'
+                  title={promptText || label}
+                  onClick={() => {
+                    setInputValue(promptText || '');
+                    if (isObj) onApplyExample?.(ex);
+                  }}
+                  className='flex-1 min-w-0 truncate text-xs text-gray-600 bg-gray-100 hover:bg-gray-200 rounded-full px-3 py-1.5 transition-colors'
+                >
+                  {label}
+                </button>
+              );
+            })}
           </div>
         )}
         <div className='relative'>
@@ -400,7 +434,9 @@ const VideoChatArea = ({
     generating,
     turnLimitReached,
     missingRequiredImage,
-    showPresets,
+    hasPresets,
+    presets,
+    onApplyExample,
     isSR,
     inputValue,
     onSend,

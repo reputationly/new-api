@@ -179,6 +179,70 @@ export const MUSIC_AUDIOX_PROMPT_PRESETS = [
   '激昂的管弦乐,气势磅礴的史诗配乐',
 ];
 
+// ── 一键示例(带预置文件/参数,按 mode)──────────────────────────────────
+// 结构同音频:{ label, prompt, params?, files? }。cover/repaint 预置驱动音(ACE-Step 官方
+// test_track),svs 预置双音频(SoulX 官方示例);t2m/t2a 纯文本;v2a/v2m 的 AudioX 官方
+// 示例视频为 CC-BY-NC,暂不打包,先给纯文本(需自行上传视频)。ChatArea 兼容纯字符串。
+export const MUSIC_EXAMPLES = {
+  t2m: [
+    {
+      label: '国风电子',
+      prompt: '中国风电子舞曲,融合古典乐器与现代节拍',
+      params: { vocalLanguage: 'zh' },
+    },
+    { label: '深情抒情', prompt: '一首深情的中文抒情歌曲,适合夜晚独自聆听' },
+    {
+      label: '史诗配乐',
+      prompt: '磅礴大气的史诗级电影配乐,气势恢宏震撼人心',
+      params: { vocalLanguage: 'unknown' },
+    },
+  ],
+  cover: [
+    {
+      label: '音乐改编(示例参考音)',
+      prompt: '改编成轻快的流行电子风格,加入合成器与鼓点',
+      params: { audioName: 'acestep-reference.mp3' },
+      files: { audioData: '/playground-samples/audio/acestep-reference.mp3' },
+    },
+  ],
+  repaint: [
+    {
+      label: '音乐重绘(示例源音)',
+      prompt: '保持主旋律,重绘为更抒情的钢琴伴奏版本',
+      params: { audioName: 'acestep-reference.mp3' },
+      files: { audioData: '/playground-samples/audio/acestep-reference.mp3' },
+    },
+  ],
+  t2a: [
+    { label: '雨声闷雷', prompt: '雨点打在窗户上的滴答声,伴随远处闷雷' },
+    { label: '街道嘈杂', prompt: '繁忙街道上的汽车鸣笛与人群嘈杂声' },
+    { label: '钢琴独奏', prompt: '悠扬舒缓的钢琴独奏,适合宁静的夜晚' },
+  ],
+  v2a: [
+    '为视频生成贴合画面的音效',
+    'Ocean waves crashing with people laughing',
+  ],
+  v2m: ['为视频生成贴合氛围的背景音乐', 'Generate music with piano instrument'],
+  svs: [
+    {
+      label: '歌声合成(普通话)',
+      prompt: '',
+      params: {
+        language: 'Mandarin', // = MUSIC_SVS_DEFAULT_LANGUAGE
+        control: 'melody', // = MUSIC_SVS_DEFAULT_CONTROL
+        promptAudioName: 'soulx-prompt-zh.mp3',
+        targetAudioName: 'soulx-target-music.mp3',
+      },
+      files: {
+        promptAudioData: '/playground-samples/audio/soulx-prompt-zh.mp3',
+        targetAudioData: '/playground-samples/audio/soulx-target-music.mp3',
+      },
+    },
+  ],
+};
+
+export const musicExamplesForMode = (mode) => MUSIC_EXAMPLES[mode] || [];
+
 // 演唱语言(metadata.vocal_language)。'' = 不指定(sample 模式自动检测);
 // unknown = 纯器乐。取自 ACE-Step constants.py VALID_LANGUAGES 的常用子集。
 export const MUSIC_VOCAL_LANGUAGES = [
