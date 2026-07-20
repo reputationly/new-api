@@ -47,8 +47,8 @@ import (
 // new-api 侧当前支持的 task_type,与门面 routes/videos.py 的 _VALID_TASK_TYPES 对齐。
 //
 // tts(语音合成,IndexTTS-2):文本走 prompt,参考音色 metadata.voice + 可选情感参考音
-// metadata.emotion_audio 物化到 input_refs,情感参数(emo_vector/emo_alpha/emo_text)随
-// metadata 透传。见 materializeTTSInputs。
+// metadata.emotion_audio 物化到 input_refs,情感标量(emo_vector/emo_alpha/emo_text)收进
+// body.extra_params(引擎只从 extra_params 读)。见 materializeTTSInputs / foldEmotionParamsIntoExtra。
 //
 // s2v(数字人,InfiniteTalk):人物图走 image/input_reference,驱动音频 metadata.audio,
 // 一并物化到 input_refs(image + audio)。见 materializeS2VInputs。
@@ -344,6 +344,13 @@ func (a *TaskAdaptor) BuildRequestBody(c *gin.Context, info *relaycommon.RelayIn
 			body["target_video_length"] = durationSec*16 + 1
 		}
 	}
+	// IndexTTS-2 情感标量:引擎(vLLM-Omni IndexTTS2 talker)只从 extra_params 读
+	// emo_vector/emo_alpha/…,顶层同名键会被引擎 AudioTaskRequest(继承
+	// OpenAICreateSpeechRequest,extra=ignore)静默丢弃。前端经 metadata 平铺发来,
+	// 这里把它们从 body 顶层收进 body["extra_params"](门面非控制键,原样透传)。
+	if taskType == "tts" {
+		foldEmotionParamsIntoExtra(body)
+	}
 
 	data, err := common.Marshal(body)
 	if err != nil {
@@ -367,6 +374,37 @@ var durationOverrideKeys = map[string]bool{
 var sizeOverrideKeys = map[string]bool{
 	"aspect_ratio": true, "size": true, "resolution": true,
 	"width": true, "height": true, "target_width": true, "target_height": true,
+}
+
+// IndexTTS-2 情感标量键:vLLM-Omni 的 IndexTTS2 talker 只从 request.extra_params 读它们
+// (见 vllm-omni tts_adapters/indextts2.py 的 _INDEXTTS2_EMOTION_KEYS)。作为顶层字段下发
+// 会被引擎 AudioTaskRequest(继承 OpenAICreateSpeechRequest,Pydantic extra=ignore)丢弃。
+var indexTTS2EmotionKeys = []string{
+	"emo_vector", "emo_alpha", "emo_text", "use_emo_text", "use_random",
+}
+
+// foldEmotionParamsIntoExtra 把 IndexTTS-2 情感标量从 body 顶层挪进 body["extra_params"]:
+// 引擎只认 extra_params 里的这些键。已有 extra_params 保留、同名不覆盖(caller 显式值优先);
+// 顶层原键删除,避免"既顶层又嵌套"的歧义。门面 extra_params 非控制/引擎拥有/输入键,原样
+// 透传到引擎 body 顶层,而 AudioTaskRequest 有 extra_params 字段,故能完整到达 talker。
+func foldEmotionParamsIntoExtra(body map[string]any) {
+	extra, _ := body["extra_params"].(map[string]any)
+	for _, k := range indexTTS2EmotionKeys {
+		v, ok := body[k]
+		if !ok {
+			continue
+		}
+		if extra == nil {
+			extra = make(map[string]any)
+		}
+		if _, exists := extra[k]; !exists {
+			extra[k] = v
+		}
+		delete(body, k)
+	}
+	if len(extra) > 0 {
+		body["extra_params"] = extra
+	}
 }
 
 // inferTaskType 按模型名推断门面 task_type;显式 metadata.task_type 优先于此推断。
@@ -609,7 +647,7 @@ func metadataString(md map[string]any, key string) string {
 // IndexTTS-2 现由 vLLM-Omni 引擎服务(取代独立 IndexTTS),引擎读 ref_audio/emo_audio,
 // 故:voice→ref_audio(门面映射 ref_audio→ref_audio_path)、emotion_audio→emo_audio_path
 // (引擎 AudioTaskRequest 折叠 emo_audio_path→emo_audio)。情感向量/强度(emo_vector/
-// emo_alpha)是标量,随 metadata 透传,不在此物化。
+// emo_alpha)是标量,不在此物化——由 foldEmotionParamsIntoExtra 收进 body.extra_params。
 func materializeTTSInputs(c *gin.Context, info *relaycommon.RelayInfo, taskType, modelName string, req relaycommon.TaskSubmitReq) (map[string][]string, error) {
 	voice := metadataString(req.Metadata, "voice")
 	if voice == "" {
