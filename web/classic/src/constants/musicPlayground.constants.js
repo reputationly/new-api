@@ -203,6 +203,9 @@ export const MUSIC_DEFAULT_SECONDS_TOTAL = 10;
 export const MUSIC_AUDIOX_DEFAULT_STEPS = 250;
 export const MUSIC_SOULX_DEFAULT_STEPS = 32;
 export const MUSIC_AUDIOX_DEFAULT_GUIDANCE = 7.0;
+// SoulX(svs)guidance 默认 = deploy-config soulxsinger_svs.yaml 的 guidance_scale: 3.0。
+// ConfigPanel 占位与实际引擎默认必须一致(所见即所发)。
+export const MUSIC_SOULX_DEFAULT_GUIDANCE = 3.0;
 
 // SoulX 歌声合成的语言与控制方式(metadata.language / metadata.control)。
 export const MUSIC_SVS_LANGUAGES = [
@@ -222,6 +225,13 @@ export const musicDefaultStepsForEngine = (engine) => {
   if (engine === 'audiox') return MUSIC_AUDIOX_DEFAULT_STEPS;
   if (engine === 'soulx') return MUSIC_SOULX_DEFAULT_STEPS;
   return MUSIC_DEFAULT_STEPS;
+};
+
+// guidance 占位默认按引擎选择(SoulX=3 与 deploy-config 一致;AudioX/ACE-Step=7)。
+export const musicDefaultGuidanceForEngine = (engine) => {
+  if (engine === 'soulx') return MUSIC_SOULX_DEFAULT_GUIDANCE;
+  if (engine === 'audiox') return MUSIC_AUDIOX_DEFAULT_GUIDANCE;
+  return MUSIC_DEFAULT_GUIDANCE;
 };
 
 // ── 上传大小上限 ───────────────────────────────────────────────
