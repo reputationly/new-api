@@ -117,6 +117,8 @@ type RelayInfo struct {
 	UserSetting            dto.UserSetting
 	UserEmail              string
 	UserQuota              int
+	UserPoints             int // 积分余额(quota unit)，供混扣可用性判断/信任旁路/日志使用
+	PointsConsumed         int // 本次消费中积分抵扣的 quota unit，结算后写入
 	RelayFormat            types.RelayFormat
 	SendResponseCount      int
 	ReceivedResponseCount  int

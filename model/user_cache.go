@@ -19,6 +19,7 @@ type UserBase struct {
 	Group            string `json:"group"`
 	Email            string `json:"email"`
 	Quota            int    `json:"quota"`
+	PointsBalance    int    `json:"points_balance"`
 	Status           int    `json:"status"`
 	Username         string `json:"username"`
 	Setting          string `json:"setting"`
@@ -117,6 +118,7 @@ func GetUserCache(userId int) (userCache *UserBase, err error) {
 		Id:               user.Id,
 		Group:            user.Group,
 		Quota:            user.Quota,
+		PointsBalance:    user.PointsBalance,
 		Status:           user.Status,
 		Username:         user.Username,
 		Setting:          user.Setting,
@@ -153,6 +155,26 @@ func cacheIncrUserQuota(userId int, delta int64) error {
 
 func cacheDecrUserQuota(userId int, delta int64) error {
 	return cacheIncrUserQuota(userId, -delta)
+}
+
+// cacheIncrUserPoints 原子增减 Redis Hash 中的积分余额（字段名对应 UserBase.PointsBalance）。
+func cacheIncrUserPoints(userId int, delta int64) error {
+	if !common.RedisEnabled {
+		return nil
+	}
+	return common.RedisHIncrBy(getUserCacheKey(userId), "PointsBalance", delta)
+}
+
+func cacheDecrUserPoints(userId int, delta int64) error {
+	return cacheIncrUserPoints(userId, -delta)
+}
+
+func getUserPointsCache(userId int) (int, error) {
+	cache, err := GetUserCache(userId)
+	if err != nil {
+		return 0, err
+	}
+	return cache.PointsBalance, nil
 }
 
 // Helper functions to get individual fields if needed
@@ -213,6 +235,13 @@ func updateUserQuotaCache(userId int, quota int) error {
 		return nil
 	}
 	return common.RedisHSetField(getUserCacheKey(userId), "Quota", fmt.Sprintf("%d", quota))
+}
+
+func updateUserPointsCache(userId int, points int) error {
+	if !common.RedisEnabled {
+		return nil
+	}
+	return common.RedisHSetField(getUserCacheKey(userId), "PointsBalance", fmt.Sprintf("%d", points))
 }
 
 func updateUserGroupCache(userId int, group string) error {

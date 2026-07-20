@@ -11,6 +11,7 @@ import (
 	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/i18n"
 	"github.com/QuantumNous/new-api/model"
+	"github.com/QuantumNous/new-api/service"
 	"gorm.io/gorm"
 
 	"github.com/gin-gonic/gin"
@@ -296,6 +297,10 @@ func AdminApproveKYC(c *gin.Context) {
 	if err := model.ApproveKYC(id, reviewerId); err != nil {
 		common.ApiErrorMsg(c, err.Error())
 		return
+	}
+	// 实名通过后发放积分（本人 + 邀请人），幂等占位，失败不影响审核主流程
+	if kyc, kErr := model.GetKYCById(id); kErr == nil {
+		service.GrantKycPoints(kyc.UserId)
 	}
 	common.ApiSuccess(c, nil)
 }

@@ -30,6 +30,9 @@ import {
 import {
   quotaToDisplayAmount,
   displayAmountToQuota,
+  pointsToQuota,
+  quotaToPoints,
+  isPointsEnabled,
 } from '../../../../helpers/quota';
 import { useIsMobile } from '../../../../hooks/common/useIsMobile';
 import {
@@ -63,11 +66,14 @@ const EditRedemptionModal = (props) => {
   const isMobile = useIsMobile();
   const formApiRef = useRef(null);
   const [showQuotaInput, setShowQuotaInput] = useState(false);
+  const pointsEnabled = isPointsEnabled();
 
   const getInitValues = () => ({
     name: '',
+    reward_type: 'quota',
     quota: 100000,
     amount: Number(quotaToDisplayAmount(100000).toFixed(6)),
+    points: 1000,
     count: 1,
     expired_time: null,
   });
@@ -87,6 +93,9 @@ const EditRedemptionModal = (props) => {
         data.expired_time = new Date(data.expired_time * 1000);
       }
       data.amount = Number(quotaToDisplayAmount(data.quota || 0).toFixed(6));
+      if (data.reward_type === 'points') {
+        data.points = quotaToPoints(data.quota || 0);
+      }
       formApiRef.current?.setValues({ ...getInitValues(), ...data });
     } else {
       showError(message);
@@ -105,18 +114,23 @@ const EditRedemptionModal = (props) => {
   }, [props.editingRedemption.id]);
 
   const submit = async (values) => {
+    const isPoints = values.reward_type === 'points';
     let name = values.name;
-    if (!isEdit && (!name || name === '')) {
-      name = renderQuota(values.quota);
-    }
     setLoading(true);
     let localInputs = { ...values };
     localInputs.count = parseInt(localInputs.count) || 0;
-    localInputs.quota = displayAmountToQuota(localInputs.amount);
+    localInputs.quota = isPoints
+      ? pointsToQuota(localInputs.points)
+      : displayAmountToQuota(localInputs.amount);
     if (localInputs.quota <= 0) {
-      showError(t('请输入金额'));
+      showError(isPoints ? t('请输入积分数') : t('请输入金额'));
       setLoading(false);
       return;
+    }
+    if (!isEdit && (!name || name === '')) {
+      name = isPoints
+        ? `${parseInt(localInputs.points) || 0} ${t('积分')}`
+        : renderQuota(localInputs.quota);
     }
     localInputs.name = name;
     if (!localInputs.expired_time) {
@@ -298,6 +312,51 @@ const EditRedemptionModal = (props) => {
                   </div>
 
                   <Row gutter={12}>
+                    {pointsEnabled && (
+                      <Col span={24}>
+                        <Form.Select
+                          field='reward_type'
+                          label={t('奖励类型')}
+                          disabled={isEdit}
+                          optionList={[
+                            { label: t('额度'), value: 'quota' },
+                            { label: t('积分'), value: 'points' },
+                          ]}
+                          style={{ width: '100%' }}
+                        />
+                      </Col>
+                    )}
+                    {values.reward_type === 'points' ? (
+                      <Col span={24}>
+                        <Form.InputNumber
+                          field='points'
+                          label={t('积分数')}
+                          placeholder={t('输入积分数')}
+                          min={0}
+                          rules={[
+                            { required: true, message: t('请输入积分数') },
+                            {
+                              validator: (rule, v) => {
+                                const num = parseInt(v, 10);
+                                return num > 0
+                                  ? Promise.resolve()
+                                  : Promise.reject(t('积分数必须大于0'));
+                              },
+                            },
+                          ]}
+                          onChange={(val) => {
+                            const points = val === '' || val == null ? 0 : val;
+                            formApiRef.current?.setValue('points', points);
+                            formApiRef.current?.setValue(
+                              'quota',
+                              pointsToQuota(points),
+                            );
+                          }}
+                          style={{ width: '100%' }}
+                          showClear
+                        />
+                      </Col>
+                    ) : (
                     <Col span={24}>
                       <Form.InputNumber
                         field='amount'
@@ -356,6 +415,7 @@ const EditRedemptionModal = (props) => {
                         />
                       </div>
                     </Col>
+                    )}
                     {!isEdit && (
                       <Col span={12}>
                         <Form.InputNumber

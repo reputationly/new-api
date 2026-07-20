@@ -8,6 +8,7 @@ import (
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/i18n"
 	"github.com/QuantumNous/new-api/model"
+	"github.com/QuantumNous/new-api/setting/operation_setting"
 
 	"github.com/gin-gonic/gin"
 )
@@ -77,6 +78,14 @@ func AddRedemption(c *gin.Context) {
 		common.ApiErrorI18n(c, i18n.MsgRedemptionCountMax)
 		return
 	}
+	// 归一奖励类型；积分码需积分系统已启用（总开关关闭时禁建）
+	if redemption.RewardType == "" {
+		redemption.RewardType = model.RedemptionRewardQuota
+	}
+	if redemption.RewardType == model.RedemptionRewardPoints && !operation_setting.GetPointsSetting().Enabled {
+		common.ApiErrorMsg(c, "积分系统未启用，无法创建积分兑换码")
+		return
+	}
 	if valid, msg := validateExpiredTime(c, redemption.ExpiredTime); !valid {
 		c.JSON(http.StatusOK, gin.H{"success": false, "message": msg})
 		return
@@ -90,6 +99,7 @@ func AddRedemption(c *gin.Context) {
 			Key:         key,
 			CreatedTime: common.GetTimestamp(),
 			Quota:       redemption.Quota,
+			RewardType:  redemption.RewardType,
 			ExpiredTime: redemption.ExpiredTime,
 		}
 		err = cleanRedemption.Insert()

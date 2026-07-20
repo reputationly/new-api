@@ -427,6 +427,8 @@ func GetSelf(c *gin.Context) {
 		"group":             user.Group,
 		"quota":             user.Quota,
 		"used_quota":        user.UsedQuota,
+		"points_balance":    user.PointsBalance,
+		"points_used":       user.PointsUsed,
 		"request_count":     user.RequestCount,
 		"aff_code":          user.AffCode,
 		"aff_count":         user.AffCount,
@@ -1022,6 +1024,58 @@ func ManageUser(c *gin.Context) {
 			"message": "",
 		})
 		return
+	case "add_points":
+		// 镜像 add_quota：req.Value 为 quota unit（前端已把积分数换算），日志展示积分数
+		adminName := c.GetString("username")
+		adminId := c.GetInt("id")
+		adminInfo := map[string]interface{}{
+			"admin_id":       adminId,
+			"admin_username": adminName,
+		}
+		switch req.Mode {
+		case "add":
+			if req.Value <= 0 {
+				common.ApiErrorI18n(c, i18n.MsgUserQuotaChangeZero)
+				return
+			}
+			if err := model.IncreaseUserPoints(user.Id, req.Value, true); err != nil {
+				common.ApiError(c, err)
+				return
+			}
+			model.RecordLogWithAdminInfo(user.Id, model.LogTypeManage,
+				fmt.Sprintf("管理员增加用户积分 %d", common.QuotaToPoints(req.Value)), adminInfo)
+		case "subtract":
+			if req.Value <= 0 {
+				common.ApiErrorI18n(c, i18n.MsgUserQuotaChangeZero)
+				return
+			}
+			if err := model.DecreaseUserPoints(user.Id, req.Value, true); err != nil {
+				common.ApiError(c, err)
+				return
+			}
+			model.RecordLogWithAdminInfo(user.Id, model.LogTypeManage,
+				fmt.Sprintf("管理员减少用户积分 %d", common.QuotaToPoints(req.Value)), adminInfo)
+		case "override":
+			// 单列赋值式 Update（非 Updates(struct)）→ 目标为 0 也写入，绕过零值陷阱
+			oldPoints := user.PointsBalance
+			if err := model.DB.Model(&model.User{}).Where("id = ?", user.Id).Update("points_balance", req.Value).Error; err != nil {
+				common.ApiError(c, err)
+				return
+			}
+			if err := model.InvalidateUserCache(user.Id); err != nil {
+				common.SysLog(fmt.Sprintf("failed to invalidate user cache for user %d: %s", user.Id, err.Error()))
+			}
+			model.RecordLogWithAdminInfo(user.Id, model.LogTypeManage,
+				fmt.Sprintf("管理员覆盖用户积分从 %d 为 %d", common.QuotaToPoints(oldPoints), common.QuotaToPoints(req.Value)), adminInfo)
+		default:
+			common.ApiErrorI18n(c, i18n.MsgInvalidParams)
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{
+			"success": true,
+			"message": "",
+		})
+		return
 	}
 
 	if err := user.Update(false); err != nil {
@@ -1152,7 +1206,7 @@ func TopUp(c *gin.Context) {
 		common.ApiError(c, err)
 		return
 	}
-	quota, err := model.Redeem(req.Key, id)
+	quota, rewardType, err := model.Redeem(req.Key, id)
 	if err != nil {
 		if errors.Is(err, model.ErrRedeemFailed) {
 			common.ApiErrorI18n(c, i18n.MsgRedeemFailed)
@@ -1165,6 +1219,8 @@ func TopUp(c *gin.Context) {
 		"success": true,
 		"message": "",
 		"data":    quota,
+		// 积分码与额度码前端展示/本地余额更新不同；data 维持面值(quota unit)不变以兼容旧客户端
+		"reward_type": rewardType,
 	})
 }
 

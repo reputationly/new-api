@@ -35,6 +35,7 @@ import {
   renderQuota,
   timestamp2string,
 } from '../../../helpers';
+import { quotaToPoints, isPointsEnabled } from '../../../helpers/quota';
 
 const renderTimestamp = (text) => (text ? timestamp2string(text) : '-');
 
@@ -424,6 +425,19 @@ export const getUsersColumns = ({
       key: 'quota_usage',
       render: (text, record) => renderQuotaUsage(text, record, t),
     },
+    ...(isPointsEnabled()
+      ? [
+          {
+            title: t('积分'),
+            key: 'points_balance',
+            render: (text, record) => (
+              <Tag color='orange' shape='circle'>
+                {quotaToPoints(record.points_balance)}
+              </Tag>
+            ),
+          },
+        ]
+      : []),
     {
       title: t('分组'),
       dataIndex: 'group',

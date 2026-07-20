@@ -593,6 +593,9 @@ func RelayTask(c *gin.Context) {
 		task.PrivateData.UpstreamTaskID = result.UpstreamTaskID
 		task.PrivateData.BillingSource = relayInfo.BillingSource
 		task.PrivateData.SubscriptionId = relayInfo.SubscriptionId
+		// 混扣任务持久化积分拆分（SettleBilling 已完成，syncPointsConsumed 已写入）；
+		// 轮询期失败退款/重算凭此按原路调整，否则积分实付会被退进钱包（套利通道）
+		task.PrivateData.PointsConsumed = relayInfo.PointsConsumed
 		task.PrivateData.TokenId = relayInfo.TokenId
 		task.PrivateData.BillingContext = &model.TaskBillingContext{
 			ModelPrice:      relayInfo.PriceData.ModelPrice,

@@ -7,8 +7,15 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/logger"
+	"github.com/QuantumNous/new-api/setting/operation_setting"
 
 	"gorm.io/gorm"
+)
+
+// 兑换码奖励类型
+const (
+	RedemptionRewardQuota  = "quota"  // 充额度（默认，向后兼容）
+	RedemptionRewardPoints = "points" // 充积分
 )
 
 type Redemption struct {
@@ -17,7 +24,8 @@ type Redemption struct {
 	Key          string         `json:"key" gorm:"type:char(32);uniqueIndex"`
 	Status       int            `json:"status" gorm:"default:1"`
 	Name         string         `json:"name" gorm:"index"`
-	Quota        int            `json:"quota" gorm:"default:100"`
+	Quota        int            `json:"quota" gorm:"default:100"`                            // 面值(quota unit)，积分码也存 quota unit
+	RewardType   string         `json:"reward_type" gorm:"type:varchar(20);default:'quota'"` // 奖励类型，历史码默认按额度
 	CreatedTime  int64          `json:"created_time" gorm:"bigint"`
 	RedeemedTime int64          `json:"redeemed_time" gorm:"bigint"`
 	Count        int            `json:"count" gorm:"-:all"` // only for api request
@@ -112,12 +120,14 @@ func GetRedemptionById(id int) (*Redemption, error) {
 	return &redemption, err
 }
 
-func Redeem(key string, userId int) (quota int, err error) {
+// Redeem 兑换成功后返回面值(quota unit)与奖励类型(rewardType)，
+// 供接口层区分「充额度 / 充积分」——前端弹窗文案与本地余额更新按类型分支。
+func Redeem(key string, userId int) (quota int, rewardType string, err error) {
 	if key == "" {
-		return 0, errors.New("未提供兑换码")
+		return 0, "", errors.New("未提供兑换码")
 	}
 	if userId == 0 {
-		return 0, errors.New("无效的 user id")
+		return 0, "", errors.New("无效的 user id")
 	}
 	redemption := &Redemption{}
 
@@ -137,7 +147,20 @@ func Redeem(key string, userId int) (quota int, err error) {
 		if redemption.ExpiredTime != 0 && redemption.ExpiredTime < common.GetTimestamp() {
 			return errors.New("该兑换码已过期")
 		}
-		err = tx.Model(&User{}).Where("id = ?", userId).Update("quota", gorm.Expr("quota + ?", redemption.Quota)).Error
+		// 总开关关闭禁兑积分码（§8.5，与创建侧禁建对称）；事务回滚后码保持未使用，
+		// 恢复开关后仍可兑（存量积分保留原则的对称面）
+		if redemption.RewardType == RedemptionRewardPoints && !operation_setting.GetPointsSetting().Enabled {
+			return errors.New("积分系统已关闭，无法兑换积分码")
+		}
+		// 注意：此处刻意不做 RequireKyc/IsUserPointsEligible 检查——设计 §8ter.1 规定
+		// 未实名用户「可兑入、使用受冻结」：码是用户主动持有的，拒兑等于没收；防薅羊毛
+		// 由使用侧 useHybrid 的资格门保证（未实名积分冻结、实名后解冻），兑入侧不设门。
+		// 按奖励类型分支充值（面值同为 quota unit，同单位直接相加）
+		if redemption.RewardType == RedemptionRewardPoints {
+			err = tx.Model(&User{}).Where("id = ?", userId).Update("points_balance", gorm.Expr("points_balance + ?", redemption.Quota)).Error
+		} else {
+			err = tx.Model(&User{}).Where("id = ?", userId).Update("quota", gorm.Expr("quota + ?", redemption.Quota)).Error
+		}
 		if err != nil {
 			return err
 		}
@@ -149,10 +172,16 @@ func Redeem(key string, userId int) (quota int, err error) {
 	})
 	if err != nil {
 		common.SysError("redemption failed: " + err.Error())
-		return 0, ErrRedeemFailed
+		return 0, "", ErrRedeemFailed
 	}
-	RecordLog(userId, LogTypeTopup, fmt.Sprintf("通过兑换码充值 %s，兑换码ID %d", logger.LogQuotaShort(redemption.Quota), redemption.Id))
-	return redemption.Quota, nil
+	if redemption.RewardType == RedemptionRewardPoints {
+		// 积分走 Redis-first 热路径，兑换后失效缓存下次回源，避免读到旧值
+		_ = InvalidateUserCache(userId)
+		RecordLog(userId, LogTypeTopup, fmt.Sprintf("通过兑换码获得 %d 积分，兑换码ID %d", common.QuotaToPoints(redemption.Quota), redemption.Id))
+	} else {
+		RecordLog(userId, LogTypeTopup, fmt.Sprintf("通过兑换码充值 %s，兑换码ID %d", logger.LogQuotaShort(redemption.Quota), redemption.Id))
+	}
+	return redemption.Quota, redemption.RewardType, nil
 }
 
 func (redemption *Redemption) Insert() error {

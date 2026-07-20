@@ -1,6 +1,7 @@
 package service
 
 import (
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
@@ -10,6 +11,7 @@ import (
 	"github.com/QuantumNous/new-api/logger"
 	"github.com/QuantumNous/new-api/model"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
+	"github.com/QuantumNous/new-api/setting/operation_setting"
 	"github.com/QuantumNous/new-api/types"
 
 	"github.com/bytedance/gopkg/util/gopool"
@@ -28,7 +30,11 @@ type BillingSession struct {
 	preConsumedQuota int  // 实际预扣额度（信任用户可能为 0）
 	tokenConsumed    int  // 令牌额度实际扣减量
 	extraReserved    int  // 发送前补充预扣的额度（订阅退款时需要单独回滚）
-	trusted          bool // 是否命中信任额度旁路
+	// Hybrid 追加预扣的积分/钱包拆分（reserveFunding 记录、rollbackFundingReserve
+	// 精确原路回滚用；仅在 Reserve 持锁期间读写）
+	lastReservePoints int
+	lastReserveWallet int
+	trusted           bool // 是否命中信任额度旁路
 	fundingSettled   bool // funding.Settle 已成功，资金来源已提交
 	settled          bool // Settle 全部完成（资金 + 令牌）
 	refunded         bool // Refund 已调用
@@ -46,6 +52,7 @@ func (s *BillingSession) Settle(actualQuota int) error {
 	}
 	delta := actualQuota - s.preConsumedQuota
 	if delta == 0 {
+		s.syncPointsConsumed()
 		s.settled = true
 		return nil
 	}
@@ -74,6 +81,7 @@ func (s *BillingSession) Settle(actualQuota int) error {
 	if s.funding.Source() == BillingSourceSubscription {
 		s.relayInfo.SubscriptionPostDelta += int64(delta)
 	}
+	s.syncPointsConsumed()
 	s.settled = true
 	return tokenErr
 }
@@ -213,6 +221,10 @@ func (s *BillingSession) preConsume(c *gin.Context, quota int) *types.NewAPIErro
 			}
 			s.tokenConsumed = 0
 		}
+		// 混扣预扣钱包不足（积分被并发抢占后钱包无法覆盖）→ 403 额度不足
+		if errors.Is(err, ErrHybridWalletInsufficient) {
+			return types.NewErrorWithStatusCode(err, types.ErrorCodeInsufficientUserQuota, http.StatusForbidden, types.ErrOptionWithSkipRetry(), types.ErrOptionWithNoRecordErrorLog())
+		}
 		// TODO: model 层应定义哨兵错误（如 ErrNoActiveSubscription），用 errors.Is 替代字符串匹配
 		errMsg := err.Error()
 		if strings.Contains(errMsg, "no active subscription") || strings.Contains(errMsg, "subscription quota insufficient") {
@@ -236,6 +248,17 @@ func (s *BillingSession) reserveFunding(delta int) error {
 			return types.NewError(err, types.ErrorCodeUpdateDataError, types.ErrOptionWithSkipRetry())
 		}
 		funding.consumed += delta
+		return nil
+	case *HybridFunding:
+		// 追加预扣：按积分优先扣，并记录本次拆分供 rollbackFundingReserve 精确回滚
+		pPart, wPart, err := funding.reserveExtra(delta)
+		if err != nil {
+			if errors.Is(err, ErrHybridWalletInsufficient) {
+				return types.NewErrorWithStatusCode(err, types.ErrorCodeInsufficientUserQuota, http.StatusForbidden, types.ErrOptionWithSkipRetry(), types.ErrOptionWithNoRecordErrorLog())
+			}
+			return types.NewError(err, types.ErrorCodeUpdateDataError, types.ErrOptionWithSkipRetry())
+		}
+		s.lastReservePoints, s.lastReserveWallet = pPart, wPart
 		return nil
 	case *SubscriptionFunding:
 		if err := model.PostConsumeUserSubscriptionDelta(funding.subscriptionId, int64(delta)); err != nil {
@@ -261,6 +284,12 @@ func (s *BillingSession) rollbackFundingReserve(delta int) {
 		} else {
 			funding.consumed -= delta
 		}
+	case *HybridFunding:
+		// 撤销刚追加的 delta：按 reserveFunding 记录的拆分精确原路退还。
+		// 不能复用 Settle(-delta)——其「先退钱包」全局策略在原始预扣走过钱包、
+		// 本次追加走积分时会退错桶（codex review P2）
+		funding.unreserveExtra(s.lastReservePoints, s.lastReserveWallet)
+		s.lastReservePoints, s.lastReserveWallet = 0, 0
 	case *SubscriptionFunding:
 		if err := model.PostConsumeUserSubscriptionDelta(funding.subscriptionId, -int64(delta)); err != nil {
 			common.SysLog("error rolling back subscription funding reserve: " + err.Error())
@@ -303,6 +332,9 @@ func (s *BillingSession) shouldTrust(c *gin.Context) bool {
 	switch s.funding.Source() {
 	case BillingSourceWallet:
 		return s.relayInfo.UserQuota > trustQuota
+	case BillingSourceHybrid:
+		// 积分+余额合并判断信任旁路；信任下 preConsume=0，结算时按积分优先补扣
+		return s.relayInfo.UserQuota+s.relayInfo.UserPoints > trustQuota
 	case BillingSourceSubscription:
 		// 订阅不能启用信任旁路。原因：
 		// 1. PreConsumeUserSubscription 要求 amount>0 来创建预扣记录并锁定订阅
@@ -311,6 +343,25 @@ func (s *BillingSession) shouldTrust(c *gin.Context) bool {
 		return false
 	default:
 		return false
+	}
+}
+
+// syncPointsConsumed 结算完成后把混扣的积分抵扣量同步到 RelayInfo（供日志），
+// 并按最终值一次性累加 PointsUsed（对账用）。仅 HybridFunding 生效，其余为 no-op。
+// 记账前先把积分抵扣量向上取整到整积分（不足 1 积分按 1 积分烧，加速营销积分消耗）；
+// 本函数仅在 Settle 的 settled 闸门内执行一次，取整不会重复。
+func (s *BillingSession) syncPointsConsumed() {
+	hf, ok := s.funding.(*HybridFunding)
+	if !ok {
+		return
+	}
+	hf.roundUpToWholePoints()
+	pc := hf.PointsConsumed()
+	s.relayInfo.PointsConsumed = pc
+	if pc > 0 {
+		if err := model.AddUserPointsUsed(s.relayInfo.UserId, pc); err != nil {
+			common.SysLog("failed to add user points used: " + err.Error())
+		}
 	}
 }
 
@@ -352,23 +403,47 @@ func NewBillingSession(c *gin.Context, relayInfo *relaycommon.RelayInfo, preCons
 		if err != nil {
 			return nil, types.NewError(err, types.ErrorCodeQueryDataError, types.ErrOptionWithSkipRetry())
 		}
-		if userQuota <= 0 {
+
+		// 积分混扣判定：总开关开 + 使用分组在白名单 + （不要求实名 or 已实名）。
+		// UsingGroup 此时已是 auto 解析后的真实分组（§2.3）。
+		useHybrid := operation_setting.GetPointsSetting().Enabled &&
+			operation_setting.IsPointsEnabledForGroup(relayInfo.UsingGroup) &&
+			model.IsUserPointsEligible(relayInfo.UserId)
+		userPoints := 0
+		if useHybrid {
+			if p, perr := model.GetUserPoints(relayInfo.UserId, false); perr == nil {
+				userPoints = p
+			}
+		}
+
+		// 白名单分组把积分并入可用性判断：余额为 0 但积分充足也放行（营销积分的意义）。
+		available := userQuota + userPoints
+		if available <= 0 {
 			return nil, types.NewErrorWithStatusCode(
 				fmt.Errorf("用户额度不足, 剩余额度: %s", logger.FormatQuota(userQuota)),
 				types.ErrorCodeInsufficientUserQuota, http.StatusForbidden,
 				types.ErrOptionWithSkipRetry(), types.ErrOptionWithNoRecordErrorLog())
 		}
-		if userQuota-preConsumedQuota < 0 {
+		if available-preConsumedQuota < 0 {
 			return nil, types.NewErrorWithStatusCode(
-				fmt.Errorf("预扣费额度失败, 用户剩余额度: %s, 需要预扣费额度: %s", logger.FormatQuota(userQuota), logger.FormatQuota(preConsumedQuota)),
+				fmt.Errorf("预扣费额度失败, 用户剩余额度: %s, 需要预扣费额度: %s", logger.FormatQuota(available), logger.FormatQuota(preConsumedQuota)),
 				types.ErrorCodeInsufficientUserQuota, http.StatusForbidden,
 				types.ErrOptionWithSkipRetry(), types.ErrOptionWithNoRecordErrorLog())
 		}
+		// UserQuota 维持「钱包余额」语义不变（额度通知依赖它）；UserPoints 供日志/信任旁路。
 		relayInfo.UserQuota = userQuota
+		relayInfo.UserPoints = userPoints
+
+		var funding FundingSource
+		if useHybrid && userPoints > 0 {
+			funding = &HybridFunding{userId: relayInfo.UserId}
+		} else {
+			funding = &WalletFunding{userId: relayInfo.UserId}
+		}
 
 		session := &BillingSession{
 			relayInfo: relayInfo,
-			funding:   &WalletFunding{userId: relayInfo.UserId},
+			funding:   funding,
 		}
 		if apiErr := session.preConsume(c, preConsumedQuota); apiErr != nil {
 			return nil, apiErr

@@ -30,6 +30,7 @@ import {
   IconSend,
 } from '@douyinfe/semi-icons';
 import { renderQuota } from '../../helpers';
+import { quotaToPoints, isPointsEnabled } from '../../helpers/quota';
 import { createSectionTitle } from '../../helpers/dashboard';
 
 export const useDashboardStats = (
@@ -64,6 +65,20 @@ export const useDashboardStats = (
             trendData: [],
             trendColor: '#8b5cf6',
           },
+          // 子账号不参与积分（积分是主账号资产），隐藏永远为 0 的余额项
+          ...(isPointsEnabled() &&
+          (userState?.user?.parent_user_id || 0) === 0
+            ? [
+                {
+                  title: t('积分余额'),
+                  value: quotaToPoints(userState?.user?.points_balance),
+                  icon: <IconCoinMoneyStroked />,
+                  avatarColor: 'orange',
+                  trendData: [],
+                  trendColor: '#f97316',
+                },
+              ]
+            : []),
         ],
       },
       {

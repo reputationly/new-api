@@ -49,6 +49,11 @@ export const useModelPricingData = () => {
   const [vendorsMap, setVendorsMap] = useState({});
   const [loading, setLoading] = useState(true);
   const [groupRatio, setGroupRatio] = useState({});
+  const [pointsConfig, setPointsConfig] = useState({
+    enabled: false,
+    quotaPerPoint: 0,
+    enabledGroups: [],
+  });
   const [usableGroup, setUsableGroup] = useState({});
   const [endpointMap, setEndpointMap] = useState({});
   const [autoGroups, setAutoGroups] = useState([]);
@@ -265,6 +270,9 @@ export const useModelPricingData = () => {
       usable_group,
       supported_endpoint,
       auto_groups,
+      points_enabled,
+      quota_per_point,
+      points_enabled_groups,
     } = res.data;
     if (success) {
       setGroupRatio(group_ratio);
@@ -280,6 +288,11 @@ export const useModelPricingData = () => {
       setVendorsMap(vendorMap);
       setEndpointMap(supported_endpoint || {});
       setAutoGroups(auto_groups || []);
+      setPointsConfig({
+        enabled: !!points_enabled,
+        quotaPerPoint: Number(quota_per_point) || 0,
+        enabledGroups: points_enabled_groups || [],
+      });
       setModelsFormat(data, group_ratio, vendorMap);
     } else {
       showError(message);
@@ -404,6 +417,7 @@ export const useModelPricingData = () => {
     usableGroup,
     endpointMap,
     autoGroups,
+    pointsConfig,
 
     // 计算属性
     priceRate,

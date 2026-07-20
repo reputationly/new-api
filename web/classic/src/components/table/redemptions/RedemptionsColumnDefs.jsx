@@ -21,6 +21,7 @@ import React from 'react';
 import { Tag, Button, Space, Popover, Dropdown } from '@douyinfe/semi-ui';
 import { IconMore } from '@douyinfe/semi-icons';
 import { renderQuota, timestamp2string } from '../../../helpers';
+import { quotaToPoints } from '../../../helpers/quota';
 import {
   REDEMPTION_STATUS,
   REDEMPTION_STATUS_MAP,
@@ -107,11 +108,14 @@ export const getRedemptionsColumns = ({
     {
       title: t('额度'),
       dataIndex: 'quota',
-      render: (text) => {
+      render: (text, record) => {
+        const isPoints = record.reward_type === 'points';
         return (
           <div>
-            <Tag color='grey' shape='circle'>
-              {renderQuota(parseInt(text))}
+            <Tag color={isPoints ? 'orange' : 'grey'} shape='circle'>
+              {isPoints
+                ? `${quotaToPoints(parseInt(text))} ${t('积分')}`
+                : renderQuota(parseInt(text))}
             </Tag>
           </div>
         );

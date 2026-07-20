@@ -38,6 +38,7 @@ import {
 } from 'lucide-react';
 import Turnstile from 'react-turnstile';
 import { API, showError, showSuccess, renderQuota } from '../../../../helpers';
+import { quotaToPoints } from '../../../../helpers/quota';
 
 const CheckinCalendar = ({ t, status, turnstileEnabled, turnstileSiteKey }) => {
   const [loading, setLoading] = useState(false);
@@ -62,24 +63,33 @@ const CheckinCalendar = ({ t, status, turnstileEnabled, turnstileSiteKey }) => {
   // 折叠状态：null 表示未确定（等待首次加载）
   const [isCollapsed, setIsCollapsed] = useState(null);
 
-  // 创建日期到额度的映射，方便快速查找
+  // 创建日期到签到记录的映射，方便快速查找（含奖励类型）
   const checkinRecordsMap = useMemo(() => {
     const map = {};
     const records = checkinData.stats?.records || [];
     records.forEach((record) => {
-      map[record.checkin_date] = record.quota_awarded;
+      map[record.checkin_date] = record;
     });
     return map;
   }, [checkinData.stats?.records]);
 
-  // 计算本月获得的额度
+  const isPointsCheckin = checkinData.reward_type === 'points';
+
+  // 按奖励类型格式化：积分模式显示积分数，否则显示额度
+  const formatReward = (quota, rewardType) =>
+    rewardType === 'points'
+      ? `${quotaToPoints(quota)} ${t('积分')}`
+      : renderQuota(quota);
+
+  // 计算本月获得的额度（按奖励类型分开，积分模式只累加积分记录）
   const monthlyQuota = useMemo(() => {
     const records = checkinData.stats?.records || [];
-    return records.reduce(
-      (sum, record) => sum + (record.quota_awarded || 0),
-      0,
-    );
-  }, [checkinData.stats?.records]);
+    return records.reduce((sum, record) => {
+      if (isPointsCheckin && record.reward_type !== 'points') return sum;
+      if (!isPointsCheckin && record.reward_type === 'points') return sum;
+      return sum + (record.quota_awarded || 0);
+    }, 0);
+  }, [checkinData.stats?.records, isPointsCheckin]);
 
   // 获取签到状态
   const fetchCheckinStatus = async (month) => {
@@ -133,7 +143,9 @@ const CheckinCalendar = ({ t, status, turnstileEnabled, turnstileSiteKey }) => {
       const { success, data, message } = res.data;
       if (success) {
         showSuccess(
-          t('签到成功！获得') + ' ' + renderQuota(data.quota_awarded),
+          t('签到成功！获得') +
+            ' ' +
+            formatReward(data.quota_awarded, data.reward_type),
         );
         // 刷新签到状态
         fetchCheckinStatus(currentMonth);
@@ -183,21 +195,19 @@ const CheckinCalendar = ({ t, status, turnstileEnabled, turnstileSiteKey }) => {
     const month = String(date.getMonth() + 1).padStart(2, '0');
     const day = String(date.getDate()).padStart(2, '0');
     const formattedDate = `${year}-${month}-${day}`; // YYYY-MM-DD
-    const quotaAwarded = checkinRecordsMap[formattedDate];
-    const isCheckedIn = quotaAwarded !== undefined;
+    const record = checkinRecordsMap[formattedDate];
+    const isCheckedIn = record !== undefined;
 
     if (isCheckedIn) {
+      const rewardText = formatReward(record.quota_awarded, record.reward_type);
       return (
-        <Tooltip
-          content={`${t('获得')} ${renderQuota(quotaAwarded)}`}
-          position='top'
-        >
+        <Tooltip content={`${t('获得')} ${rewardText}`} position='top'>
           <div className='absolute inset-0 flex flex-col items-center justify-center cursor-pointer'>
             <div className='w-6 h-6 rounded-full bg-green-500 flex items-center justify-center mb-0.5 shadow-sm'>
               <Check size={14} className='text-white' strokeWidth={3} />
             </div>
             <div className='text-[10px] font-medium text-green-600 dark:text-green-400 leading-none'>
-              {renderQuota(quotaAwarded)}
+              {rewardText}
             </div>
           </div>
         </Tooltip>
@@ -265,7 +275,12 @@ const CheckinCalendar = ({ t, status, turnstileEnabled, turnstileSiteKey }) => {
                   ? t('今日已签到，累计签到') +
                     ` ${checkinData.stats?.total_checkins || 0} ` +
                     t('天')
-                  : t('每日签到可获得随机额度奖励')}
+                  : isPointsCheckin
+                    ? t('每日签到可获得随机积分奖励') +
+                      (checkinData.max_points > 0
+                        ? `（${t('本次可得')} ${checkinData.min_points || 0}~${checkinData.max_points} ${t('积分')}）`
+                        : '')
+                    : t('每日签到可获得随机额度奖励')}
             </div>
           </div>
         </div>
@@ -298,13 +313,17 @@ const CheckinCalendar = ({ t, status, turnstileEnabled, turnstileSiteKey }) => {
           </div>
           <div className='text-center p-2.5 bg-slate-50 dark:bg-slate-800 rounded-lg'>
             <div className='text-xl font-bold text-orange-600'>
-              {renderQuota(monthlyQuota, 6)}
+              {isPointsCheckin
+                ? quotaToPoints(monthlyQuota)
+                : renderQuota(monthlyQuota, 6)}
             </div>
             <div className='text-xs text-gray-500'>{t('本月获得')}</div>
           </div>
           <div className='text-center p-2.5 bg-slate-50 dark:bg-slate-800 rounded-lg'>
             <div className='text-xl font-bold text-blue-600'>
-              {renderQuota(checkinData.stats?.total_quota || 0, 6)}
+              {isPointsCheckin
+                ? quotaToPoints(checkinData.stats?.total_points || 0)
+                : renderQuota(checkinData.stats?.total_quota || 0, 6)}
             </div>
             <div className='text-xs text-gray-500'>{t('累计获得')}</div>
           </div>

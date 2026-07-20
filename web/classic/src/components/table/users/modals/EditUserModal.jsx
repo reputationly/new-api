@@ -29,6 +29,9 @@ import {
 import {
   quotaToDisplayAmount,
   displayAmountToQuota,
+  quotaToPoints,
+  pointsToQuota,
+  isPointsEnabled,
 } from '../../../../helpers/quota';
 import { useIsMobile } from '../../../../hooks/common/useIsMobile';
 import {
@@ -69,6 +72,10 @@ const EditUserModal = (props) => {
   const [adjustAmountLocal, setAdjustAmountLocal] = useState('');
   const [adjustMode, setAdjustMode] = useState('add');
   const [adjustLoading, setAdjustLoading] = useState(false);
+  const [adjustPointsModalOpen, setAdjustPointsModalOpen] = useState(false);
+  const [adjustPointsLocal, setAdjustPointsLocal] = useState('');
+  const [adjustPointsMode, setAdjustPointsMode] = useState('add');
+  const [adjustPointsLoading, setAdjustPointsLoading] = useState(false);
   const isMobile = useIsMobile();
   const [groupOptions, setGroupOptions] = useState([]);
   const [bindingModalVisible, setBindingModalVisible] = useState(false);
@@ -202,6 +209,64 @@ const EditUserModal = (props) => {
       showError(e.message);
     }
     setAdjustLoading(false);
+  };
+
+  const adjustPoints = async () => {
+    const pointsVal = parseInt(adjustPointsLocal) || 0;
+    if (pointsVal <= 0 && adjustPointsMode !== 'override') return;
+    if (
+      adjustPointsMode === 'override' &&
+      (adjustPointsLocal === '' || adjustPointsLocal == null)
+    )
+      return;
+    setAdjustPointsLoading(true);
+    try {
+      const res = await API.post('/api/user/manage', {
+        id: parseInt(userId),
+        action: 'add_points',
+        mode: adjustPointsMode,
+        value: pointsToQuota(
+          adjustPointsMode === 'override' ? pointsVal : Math.abs(pointsVal),
+        ),
+      });
+      const { success, message } = res.data;
+      if (success) {
+        showSuccess(t('调整积分成功'));
+        setAdjustPointsModalOpen(false);
+        setAdjustPointsLocal('');
+        setAdjustPointsMode('add');
+        const userRes = await API.get(`/api/user/${userId}`);
+        if (userRes.data.success) {
+          const data = userRes.data.data;
+          data.password = '';
+          data.quota_amount = Number(
+            quotaToDisplayAmount(data.quota || 0).toFixed(6),
+          );
+          setInputs({ ...getInitValues(), ...data });
+        }
+        props.refresh();
+      } else {
+        showError(message);
+      }
+    } catch (e) {
+      showError(e.message);
+    }
+    setAdjustPointsLoading(false);
+  };
+
+  const getPointsPreviewText = () => {
+    const current = quotaToPoints(inputs?.points_balance || 0);
+    const val = parseInt(adjustPointsLocal) || 0;
+    switch (adjustPointsMode) {
+      case 'add':
+        return `${t('当前积分')}：${current}，+${Math.abs(val)} = ${current + Math.abs(val)} ${t('积分')}`;
+      case 'subtract':
+        return `${t('当前积分')}：${current}，-${Math.abs(val)} = ${Math.max(0, current - Math.abs(val))} ${t('积分')}`;
+      case 'override':
+        return `${t('当前积分')}：${current} → ${val} ${t('积分')}`;
+      default:
+        return '';
+    }
   };
 
   const getPreviewText = () => {
@@ -391,6 +456,21 @@ const EditUserModal = (props) => {
                         </Form.Slot>
                       </Col>
 
+                      {isPointsEnabled() && (
+                        <Col span={24}>
+                          <Form.Slot
+                            label={`${t('积分')}（${t('当前')} ${quotaToPoints(inputs?.points_balance || 0)}）`}
+                          >
+                            <Button
+                              icon={<IconEdit />}
+                              onClick={() => setAdjustPointsModalOpen(true)}
+                            >
+                              {t('调整积分')}
+                            </Button>
+                          </Form.Slot>
+                        </Col>
+                      )}
+
                       <Col span={24}>
                         <div
                           className='text-xs cursor-pointer'
@@ -561,6 +641,66 @@ const EditUserModal = (props) => {
             style={{ width: '100%' }}
             showClear
             step={500000}
+          />
+        </div>
+      </Modal>
+
+      {/* 调整积分模态框 */}
+      <Modal
+        centered
+        visible={adjustPointsModalOpen}
+        onOk={adjustPoints}
+        onCancel={() => {
+          setAdjustPointsModalOpen(false);
+          setAdjustPointsLocal('');
+          setAdjustPointsMode('add');
+        }}
+        confirmLoading={adjustPointsLoading}
+        closable={null}
+        title={
+          <div className='flex items-center'>
+            <IconEdit className='mr-2' />
+            {t('调整积分')}
+          </div>
+        }
+      >
+        <div className='mb-4'>
+          <Text type='secondary' className='block mb-2'>
+            {getPointsPreviewText()}
+          </Text>
+        </div>
+        <div className='mb-3'>
+          <div className='mb-1'>
+            <Text size='small'>{t('操作')}</Text>
+          </div>
+          <RadioGroup
+            type='button'
+            value={adjustPointsMode}
+            onChange={(e) => {
+              setAdjustPointsMode(e.target.value);
+              setAdjustPointsLocal('');
+            }}
+            style={{ width: '100%' }}
+          >
+            <Radio value='add'>{t('添加')}</Radio>
+            <Radio value='subtract'>{t('减少')}</Radio>
+            <Radio value='override'>{t('覆盖')}</Radio>
+          </RadioGroup>
+        </div>
+        <div className='mb-3'>
+          <div className='mb-1'>
+            <Text size='small'>{t('积分')}</Text>
+          </div>
+          <InputNumber
+            placeholder={t('输入积分数')}
+            value={adjustPointsLocal}
+            min={adjustPointsMode === 'override' ? 0 : 0}
+            precision={0}
+            onChange={(val) =>
+              setAdjustPointsLocal(val === '' || val == null ? '' : val)
+            }
+            style={{ width: '100%' }}
+            showClear
           />
         </div>
       </Modal>

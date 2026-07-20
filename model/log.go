@@ -26,6 +26,7 @@ type Log struct {
 	TokenName        string `json:"token_name" gorm:"index;default:''"`
 	ModelName        string `json:"model_name" gorm:"index;index:index_username_model_name,priority:1;default:''"`
 	Quota            int    `json:"quota" gorm:"default:0"`
+	PointsConsumed   int    `json:"points_consumed" gorm:"default:0"` // 本次消费中积分抵扣的 quota unit（0=纯余额）
 	PromptTokens     int    `json:"prompt_tokens" gorm:"default:0"`
 	CompletionTokens int    `json:"completion_tokens" gorm:"default:0"`
 	UseTime          int    `json:"use_time" gorm:"default:0"`
@@ -193,6 +194,7 @@ type RecordConsumeLogParams struct {
 	ModelName        string                 `json:"model_name"`
 	TokenName        string                 `json:"token_name"`
 	Quota            int                    `json:"quota"`
+	PointsConsumed   int                    `json:"points_consumed"`
 	Content          string                 `json:"content"`
 	TokenId          int                    `json:"token_id"`
 	UseTimeSeconds   int                    `json:"use_time_seconds"`
@@ -227,6 +229,7 @@ func RecordConsumeLog(c *gin.Context, userId int, params RecordConsumeLogParams)
 		TokenName:        params.TokenName,
 		ModelName:        params.ModelName,
 		Quota:            params.Quota,
+		PointsConsumed:   params.PointsConsumed,
 		ChannelId:        params.ChannelId,
 		TokenId:          params.TokenId,
 		UseTime:          params.UseTimeSeconds,

@@ -34,6 +34,7 @@ const ModelPricingTable = ({
   showRatio,
   usableGroup,
   autoGroups = [],
+  pointsConfig,
   t,
 }) => {
   const modelEnableGroups = Array.isArray(modelData?.enable_groups)
@@ -59,6 +60,9 @@ const ModelPricingTable = ({
             displayPrice,
             currency,
             quotaDisplayType: siteDisplayType,
+            pointsEnabled: pointsConfig?.enabled,
+            quotaPerPoint: pointsConfig?.quotaPerPoint,
+            pointsEnabledGroups: pointsConfig?.enabledGroups,
           })
         : { inputPrice: '-', outputPrice: '-', price: '-' };
 

@@ -61,10 +61,12 @@ func LogTaskConsumption(c *gin.Context, info *relaycommon.RelayInfo) {
 		ModelName: info.OriginModelName,
 		TokenName: tokenName,
 		Quota:     info.PriceData.Quota,
-		Content:   logContent,
-		TokenId:   info.TokenId,
-		Group:     info.UsingGroup,
-		Other:     other,
+		// 调用方（controller/relay.go）先 SettleBilling 后记日志，混扣积分量已就绪
+		PointsConsumed: info.PointsConsumed,
+		Content:        logContent,
+		TokenId:        info.TokenId,
+		Group:          info.UsingGroup,
+		Other:          other,
 	})
 	model.UpdateUserUsedQuotaAndRequestCount(info.UserId, info.PriceData.Quota)
 	model.UpdateChannelUsedQuota(info.ChannelId, info.PriceData.Quota)
@@ -90,15 +92,60 @@ func taskIsSubscription(task *model.Task) bool {
 	return task.PrivateData.BillingSource == BillingSourceSubscription && task.PrivateData.SubscriptionId > 0
 }
 
-// taskAdjustFunding 调整任务的资金来源（钱包或订阅），delta > 0 表示扣费，delta < 0 表示退还。
+// taskAdjustFunding 调整任务的资金来源（钱包/订阅/混扣），delta > 0 表示扣费，delta < 0 表示退还。
 func taskAdjustFunding(task *model.Task, delta int) error {
 	if taskIsSubscription(task) {
 		return model.PostConsumeUserSubscriptionDelta(task.PrivateData.SubscriptionId, int64(delta))
+	}
+	// 混扣任务：按提交时持久化的积分拆分原路调整（codex review 第九轮）。
+	// 否则积分实付的任务失败后全额退进钱包——营销积分被洗成真实余额（套利通道）；
+	// 重算补扣也会漏掉积分优先。调用方随后的 task.Update() 会持久化拆分变更。
+	if task.PrivateData.BillingSource == BillingSourceHybrid {
+		return taskAdjustHybridFunding(task, delta)
 	}
 	if delta > 0 {
 		return model.DecreaseUserQuota(task.UserId, delta, false)
 	}
 	return model.IncreaseUserQuota(task.UserId, -delta, false)
+}
+
+// taskAdjustHybridFunding 混扣任务的轮询期资金调整，语义与同步路径 HybridFunding 对齐：
+//   - 退款（delta<0）：钱包优先退（真钱保护，与 Settle 负分支同策略），积分部分以提交时
+//     实付 PointsConsumed 封顶原路退（db=true 直写）——全额退款自然还原为精确拆分；
+//   - 补扣（delta>0）：复用 HybridFunding.Settle（积分优先重试、钱包无条件兜底——
+//     服务已交付语义），并同步 PointsUsed 与持久化拆分。
+func taskAdjustHybridFunding(task *model.Task, delta int) error {
+	pc := task.PrivateData.PointsConsumed
+	if delta < 0 {
+		refund := -delta
+		// 调用时 task.Quota 仍是已计费额（重算在资金调整成功后才改写 task.Quota）
+		wc := max(task.Quota-pc, 0)
+		pRefund := min(max(refund-wc, 0), pc) // 钱包份额之外的部分退积分，以实付封顶
+		wRefund := refund - pRefund
+		if wRefund > 0 {
+			if err := model.IncreaseUserQuota(task.UserId, wRefund, false); err != nil {
+				return err
+			}
+		}
+		if pRefund > 0 {
+			if err := model.IncreaseUserPoints(task.UserId, pRefund, true); err != nil {
+				return err
+			}
+			task.PrivateData.PointsConsumed = pc - pRefund
+		}
+		return nil
+	}
+	h := &HybridFunding{userId: task.UserId}
+	if err := h.Settle(delta); err != nil {
+		return err
+	}
+	if p := h.PointsConsumed(); p > 0 {
+		task.PrivateData.PointsConsumed = pc + p
+		if err := model.AddUserPointsUsed(task.UserId, p); err != nil {
+			common.SysLog("failed to add user points used for task recalc: " + err.Error())
+		}
+	}
+	return nil
 }
 
 // taskAdjustTokenQuota 调整任务的令牌额度，delta > 0 表示扣费，delta < 0 表示退还。

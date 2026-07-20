@@ -30,12 +30,14 @@ import {
   getQuotaPerUnit,
 } from '../../helpers';
 import { Modal, Toast } from '@douyinfe/semi-ui';
+import { quotaToPoints } from '../../helpers/quota';
 import { useTranslation } from 'react-i18next';
 import { UserContext } from '../../context/User';
 import { StatusContext } from '../../context/Status';
 
 import RechargeCard from './RechargeCard';
 import InvitationCard from './InvitationCard';
+import PointsTasksCard from '../points/PointsTasksCard';
 import BankTransferCard from './BankTransferCard';
 import InvoiceCard from './InvoiceCard';
 import TransferModal from './modals/TransferModal';
@@ -171,19 +173,28 @@ const TopUp = () => {
       const res = await API.post('/api/user/topup', {
         key: redemptionCode,
       });
-      const { success, message, data } = res.data;
+      const { success, message, data, reward_type } = res.data;
       if (success) {
+        // 积分码充入 points_balance（后端 data 仍为面值 quota unit），展示与本地余额按类型分支
+        const isPoints = reward_type === 'points';
         showSuccess(t('兑换成功！'));
         Modal.success({
           title: t('兑换成功！'),
-          content: t('成功兑换额度：') + renderQuota(data),
+          content: isPoints
+            ? t('成功兑换积分：') + quotaToPoints(data)
+            : t('成功兑换额度：') + renderQuota(data),
           centered: true,
         });
         if (userState.user) {
-          const updatedUser = {
-            ...userState.user,
-            quota: userState.user.quota + data,
-          };
+          const updatedUser = isPoints
+            ? {
+                ...userState.user,
+                points_balance: (userState.user.points_balance || 0) + data,
+              }
+            : {
+                ...userState.user,
+                quota: userState.user.quota + data,
+              };
           userDispatch({ type: 'login', payload: updatedUser });
         }
         setRedemptionCode('');
@@ -1187,6 +1198,11 @@ const TopUp = () => {
           affLink={affLink}
           handleAffLinkClick={handleAffLinkClick}
         />
+      </div>
+
+      {/* 积分获取引导（§8ter）：钱包/兑换场景，未完成任务时展示 */}
+      <div className='mt-4 md:mt-6'>
+        <PointsTasksCard />
       </div>
     </div>
   );
