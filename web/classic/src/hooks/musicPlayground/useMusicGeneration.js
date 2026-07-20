@@ -14,6 +14,7 @@ import {
   hydrateConversationsFromStorage,
   stripUnresolvedMediaRefs,
 } from '../../helpers/playgroundMediaStorage';
+import { urlToDataUrl } from '../../utils/playgroundMedia';
 import {
   API,
   showError,
@@ -253,6 +254,33 @@ export const useMusicGeneration = (mode = 't2m') => {
     if (lockedRef.current) return;
     setInputs((prev) => ({ ...prev, [key]: value }));
   }, []);
+
+  // 一键示例:标量参数(params)+ 文件(files:字段→素材 URL)一次性写入 inputs。
+  // 文件 URL fetch→base64 data-url(与手动上传同形态);数组字段逐个转。锁定时忽略。
+  const applyExample = useCallback(
+    async (ex) => {
+      if (lockedRef.current || !ex || typeof ex !== 'object') return;
+      try {
+        const patch = { ...(ex.params || {}) };
+        const entries = await Promise.all(
+          Object.entries(ex.files || {}).map(async ([field, url]) => [
+            field,
+            Array.isArray(url)
+              ? await Promise.all(url.map(urlToDataUrl))
+              : await urlToDataUrl(url),
+          ]),
+        );
+        entries.forEach(([field, value]) => {
+          patch[field] = value;
+        });
+        if (lockedRef.current) return;
+        setInputs((prev) => ({ ...prev, ...patch }));
+      } catch (e) {
+        showError(t('加载示例素材失败,请重试'));
+      }
+    },
+    [t],
+  );
 
   // 音乐模型集合 = 「音乐模型配置」里声明、且能力含当前 tab 能力的模型。
   const modelConfig = useMemo(
@@ -620,7 +648,8 @@ export const useMusicGeneration = (mode = 't2m') => {
       const resolvedTaskType = resolveTaskType(text.length > 0);
       // 占位符仅用于 svs(歌声合成引擎需非空 input,文本仅占位);v2a/v2m 是纯视频输入,
       // 后端明确允许空 prompt —— 绝不能塞占位,否则会拿"歌声合成"去条件化 AudioX。
-      const promptField = text || (resolvedTaskType === 'svs' ? t('歌声合成') : '');
+      const promptField =
+        text || (resolvedTaskType === 'svs' ? t('歌声合成') : '');
 
       const reqId = genId();
       const now = new Date().toISOString();
@@ -727,7 +756,9 @@ export const useMusicGeneration = (mode = 't2m') => {
           if (engine === 'audiox') {
             const secs = parseFloat(params.secondsTotal);
             metadata.seconds_total =
-              Number.isFinite(secs) && secs > 0 ? secs : MUSIC_DEFAULT_SECONDS_TOTAL;
+              Number.isFinite(secs) && secs > 0
+                ? secs
+                : MUSIC_DEFAULT_SECONDS_TOTAL;
           }
           // 采样步数:AudioX(AudioXPipeline)硬要 num_inference_steps 且**无** deploy-config
           // 兜底,留空必须补上 UI 默认(placeholder 承诺的 250),否则引擎报
@@ -914,6 +945,7 @@ export const useMusicGeneration = (mode = 't2m') => {
   return {
     inputs,
     handleInputChange,
+    applyExample,
     groups,
     models,
     messages,

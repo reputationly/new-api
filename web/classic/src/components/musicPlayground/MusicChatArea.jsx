@@ -15,8 +15,7 @@ import { UserContext } from '../../context/User';
 import { blockChatDrag } from '../playground/blockChatDrag';
 import {
   MUSIC_STATUS,
-  MUSIC_PROMPT_PRESETS,
-  MUSIC_AUDIOX_PROMPT_PRESETS,
+  musicExamplesForMode,
 } from '../../constants/musicPlayground.constants';
 
 // 音乐模型对话区:成品渲染 <audio> 播放器 + 下载。格式无关(ACE-Step .mp3 / AudioX/SoulX
@@ -168,10 +167,12 @@ const MusicChatArea = ({
   missingRequiredAudio = false,
   missingRequiredVideo = false,
   engine = 'acestep',
+  mode = 't2m',
   needsText = true,
   needsVideo = false,
   needsDualAudio = false,
   welcomeText = '',
+  onApplyExample,
   onSend,
   onRegenerate,
   onRefetch,
@@ -182,11 +183,9 @@ const MusicChatArea = ({
   const [inputValue, setInputValue] = useState('');
 
   const isAceStep = engine === 'acestep';
-  // svs 无文本 → 不展示提示词预设。
-  const showPresets = !needsDualAudio;
-  const presets = isAceStep
-    ? MUSIC_PROMPT_PRESETS
-    : MUSIC_AUDIOX_PROMPT_PRESETS;
+  // 一键示例(按 mode):cover/repaint 带驱动音、svs 带双音频,故 svs 也展示(有素材)。
+  const presets = musicExamplesForMode(mode);
+  const showPresets = presets.length > 0;
 
   const defaultWelcome = isAceStep
     ? t('欢迎使用 AI 文生音乐,请在左侧选择模型,并在下方输入音乐风格描述')
@@ -396,20 +395,29 @@ const MusicChatArea = ({
               : t('请先在左侧上传驱动音频')}
           </Typography.Text>
         )}
-        {/* 预设描述:单行等宽排列,超长 CSS 截断(svs 无文本时不展示) */}
+        {/* 一键示例:纯文本(仅填输入框)或结构化对象({label,prompt,params,files}——
+            同时预置驱动音/双音频等文件)。单行等宽排列,超长 CSS 截断。 */}
         {showPresets && (
           <div className='flex gap-2 mb-2 overflow-hidden'>
-            {presets.map((p, i) => (
-              <button
-                key={i}
-                type='button'
-                title={p}
-                onClick={() => setInputValue(p)}
-                className='flex-1 min-w-0 truncate text-xs text-gray-600 bg-gray-100 hover:bg-gray-200 rounded-full px-3 py-1.5 transition-colors'
-              >
-                {p}
-              </button>
-            ))}
+            {presets.map((ex, i) => {
+              const isObj = ex && typeof ex === 'object';
+              const promptText = isObj ? ex.prompt : ex;
+              const label = isObj ? ex.label : ex;
+              return (
+                <button
+                  key={i}
+                  type='button'
+                  title={promptText || label}
+                  onClick={() => {
+                    setInputValue(promptText || '');
+                    if (isObj) onApplyExample?.(ex);
+                  }}
+                  className='flex-1 min-w-0 truncate text-xs text-gray-600 bg-gray-100 hover:bg-gray-200 rounded-full px-3 py-1.5 transition-colors'
+                >
+                  {label}
+                </button>
+              );
+            })}
           </div>
         )}
         <div className='relative'>
@@ -460,6 +468,7 @@ const MusicChatArea = ({
     showPresets,
     presets,
     placeholder,
+    onApplyExample,
     inputValue,
     onSend,
     t,

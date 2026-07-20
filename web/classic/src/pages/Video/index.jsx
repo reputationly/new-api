@@ -24,6 +24,7 @@ const VideoPlaygroundBody = ({ mode }) => {
     maxInputMB,
     inputs,
     handleInputChange,
+    applyExample,
     groups,
     models,
     availableSizes,
@@ -77,8 +78,9 @@ const VideoPlaygroundBody = ({ mode }) => {
           generating={generating}
           turnLimitReached={turnLimitReached}
           missingRequiredImage={missingRequiredImage}
-          showPresets={mode === 'text2video'}
+          mode={mode}
           isSR={isSR}
+          onApplyExample={applyExample}
           styleState={styleState}
           onSend={generate}
           onRegenerate={regenerate}

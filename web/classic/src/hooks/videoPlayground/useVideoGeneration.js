@@ -15,6 +15,7 @@ import {
   stripUnresolvedMediaRefs,
   isMediaRef,
 } from '../../helpers/playgroundMediaStorage';
+import { urlToDataUrl } from '../../utils/playgroundMedia';
 import {
   API,
   showError,
@@ -61,7 +62,11 @@ const VIDEO_MODES = {
   // 门面 task_type：s2v(音频生视频)/ sr(视频超分)/ vace(视频编辑)。
   s2v: { capability: VIDEO_S2V_CAPABILITY, suffix: '_s2v', taskType: 's2v' },
   sr: { capability: VIDEO_SR_CAPABILITY, suffix: '_sr', taskType: 'sr' },
-  vace: { capability: VIDEO_VACE_CAPABILITY, suffix: '_vace', taskType: 'vace' },
+  vace: {
+    capability: VIDEO_VACE_CAPABILITY,
+    suffix: '_vace',
+    taskType: 'vace',
+  },
 };
 // vace 参考图最多张数(与门面 _MAX_INPUT_IMAGES 对齐)。
 const MAX_REF_IMAGES = 5;
@@ -260,6 +265,33 @@ export const useVideoGeneration = ({ mode = 'text2video' } = {}) => {
     if (lockedRef.current) return;
     setInputs((prev) => ({ ...prev, [key]: value }));
   }, []);
+
+  // 一键示例:标量参数(params)+ 文件(files:字段→素材 URL)一次性写入 inputs。
+  // 文件 URL fetch→base64 data-url(与手动上传同形态);数组字段(refImages)逐个转。锁定时忽略。
+  const applyExample = useCallback(
+    async (ex) => {
+      if (lockedRef.current || !ex || typeof ex !== 'object') return;
+      try {
+        const patch = { ...(ex.params || {}) };
+        const entries = await Promise.all(
+          Object.entries(ex.files || {}).map(async ([field, url]) => [
+            field,
+            Array.isArray(url)
+              ? await Promise.all(url.map(urlToDataUrl))
+              : await urlToDataUrl(url),
+          ]),
+        );
+        entries.forEach(([field, value]) => {
+          patch[field] = value;
+        });
+        if (lockedRef.current) return;
+        setInputs((prev) => ({ ...prev, ...patch }));
+      } catch (e) {
+        showError(t('加载示例素材失败,请重试'));
+      }
+    },
+    [t],
+  );
 
   const videoConfig = useMemo(
     () => parseVideoModelConfig(statusState?.status?.VideoModelConfig),
@@ -620,9 +652,7 @@ export const useVideoGeneration = ({ mode = 'text2video' } = {}) => {
         if (needsImage) {
           const first = (inputs.firstFrame || '').trim();
           if (!first) {
-            showError(
-              isS2V ? t('请先上传人物图') : t('请先上传首帧图片'),
-            );
+            showError(isS2V ? t('请先上传人物图') : t('请先上传首帧图片'));
             return;
           }
           if (isFLF2V) {
@@ -719,8 +749,7 @@ export const useVideoGeneration = ({ mode = 'text2video' } = {}) => {
       // 防御(§2 硬规则):hydrate 已保证无 idb-media: 残留,这里再过滤一遍双保险——
       // 裸引用绝不能作为媒体参数发后端。同时剥掉 hydrate miss 留下的空值。
       const cleanMedia = (v) => (isMediaRef(v) ? '' : v);
-      const cleanArr = (arr) =>
-        (arr || []).filter((s) => s && !isMediaRef(s));
+      const cleanArr = (arr) => (arr || []).filter((s) => s && !isMediaRef(s));
 
       // i2v/flf2v/s2v 续问:帧图/人物图取自锁定的对话;刷新后媒体 miss(Blob 被清/IDB 不可用)
       // 时缺失,提示重开对话重新上传。
@@ -1031,9 +1060,17 @@ export const useVideoGeneration = ({ mode = 'text2video' } = {}) => {
             : prev.negativePrompt,
         aspectRatio:
           conv.aspectRatio != null ? conv.aspectRatio : prev.aspectRatio,
-        // 新增能力媒体输入:base64 落盘时已剥离,打开历史只恢复标量(srRatio);音频/视频
-        // 需重新上传才能续问(与帧图一致)。
         srRatio: conv.srRatio != null ? conv.srRatio : prev.srRatio,
+        // 打开历史:恢复该会话上传过的输入媒体(已从 IDB hydrate),供只读查看/播放。
+        // 帧图存为 images 数组(i2v/s2v 首帧=images[0];flf2v 首帧/尾帧=images[0/1])。
+        // 锁定态下 ConfigPanel 的上传控件 disabled → 只展示预览/播放器,不能删改/重传。
+        firstFrame: (conv.images || [])[0] || '',
+        lastFrame: (conv.images || [])[1] || '',
+        audioData: conv.audioData || '',
+        sourceVideo: conv.sourceVideo || '',
+        srcVideo: conv.srcVideo || '',
+        maskVideo: conv.maskVideo || '',
+        refImages: conv.refImages || [],
       }));
       // 若该会话最后一个任务仍在进行中，恢复轮询
       const assts = (conv.messages || []).filter((m) => m.role === 'assistant');
@@ -1084,6 +1121,7 @@ export const useVideoGeneration = ({ mode = 'text2video' } = {}) => {
     maxInputMB,
     inputs,
     handleInputChange,
+    applyExample,
     groups,
     models,
     availableSizes,

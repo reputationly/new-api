@@ -14,6 +14,7 @@ import {
   hydrateConversationsFromStorage,
   stripUnresolvedMediaRefs,
 } from '../../helpers/playgroundMediaStorage';
+import { urlToDataUrl } from '../../utils/playgroundMedia';
 import {
   API,
   showError,
@@ -284,6 +285,33 @@ export const useAudioGeneration = (mode = 'emotion') => {
     if (lockedRef.current) return;
     setInputs((prev) => ({ ...prev, [key]: value }));
   }, []);
+
+  // 一键示例:把示例的标量参数(params)与文件(files:字段→素材 URL)一次性写入 inputs。
+  // 文件 URL fetch→base64 data-url(与手动上传同形态);数组字段逐个转。锁定时忽略。
+  const applyExample = useCallback(
+    async (ex) => {
+      if (lockedRef.current || !ex || typeof ex !== 'object') return;
+      try {
+        const patch = { ...(ex.params || {}) };
+        const entries = await Promise.all(
+          Object.entries(ex.files || {}).map(async ([field, url]) => [
+            field,
+            Array.isArray(url)
+              ? await Promise.all(url.map(urlToDataUrl))
+              : await urlToDataUrl(url),
+          ]),
+        );
+        entries.forEach(([field, value]) => {
+          patch[field] = value;
+        });
+        if (lockedRef.current) return;
+        setInputs((prev) => ({ ...prev, ...patch }));
+      } catch (e) {
+        showError(t('加载示例素材失败,请重试'));
+      }
+    },
+    [t],
+  );
 
   // 语音模型集合 = 「语音模型配置」里声明、且能力含当前 tab 能力的模型。
   const modelConfig = useMemo(
@@ -934,6 +962,7 @@ export const useAudioGeneration = (mode = 'emotion') => {
   return {
     inputs,
     handleInputChange,
+    applyExample,
     groups,
     models,
     messages,

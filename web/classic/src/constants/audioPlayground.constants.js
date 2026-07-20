@@ -254,6 +254,95 @@ export const AUDIO_DESIGN_PRESETS = [
   '威严沉稳的老者,声音略带沙哑,吐字缓慢有力',
 ];
 
+// ── 一键示例(带预置文件/参数)────────────────────────────────────────────
+// 示例对象:{ label(按钮名), prompt(填入输入框的合成文本), params?(直接写入 inputs 的
+// 标量字段), files?(inputs 文件字段 → 素材 URL;点击时 fetch→base64 写入) }。ChatArea
+// 兼容纯字符串示例(向后兼容)。素材见 public/audio-presets/ 与 public/playground-samples/。
+
+// 情感合成:①情感参考音驱动(emo_sad.wav)②情感向量驱动 ③纯预置音色。参考音色走
+// voicePreset(generate 内解析),情感参考音走 emotionAudioData(→ metadata.emotion_audio)。
+export const AUDIO_EMOTION_EXAMPLES = [
+  {
+    label: '悲伤·情感参考音',
+    prompt: '酒楼丧尽天良,开始借机竞拍房间,哎,一群蠢货。',
+    params: {
+      voicePreset: 'voice_07',
+      emotion: '',
+      emotionAudioName: 'emo_sad.wav',
+    },
+    files: { emotionAudioData: '/audio-presets/emo_sad.wav' },
+  },
+  {
+    label: '愤怒·情感向量',
+    prompt: '你到底在搞什么?这件事必须现在给我一个交代!',
+    params: { voicePreset: 'voice_08', emotion: 'angry', emoWeight: 0.7 },
+  },
+  {
+    label: '平静·预置音色',
+    prompt:
+      '这个呀,就是我们精心制作准备的纪念品,大家可以看到这个色泽和材质,多么光彩照人。',
+    params: { voicePreset: 'voice_03', emotion: '' },
+  },
+];
+
+// 语音合成:①声音克隆(上传参考音 + 参考文本)②预设音色。克隆参考音走 refAudioData
+// (→ metadata.ref_audio),参考文本 refText,预设音色走 speaker。
+export const AUDIO_SYNTHESIS_EXAMPLES = [
+  {
+    label: '声音克隆(中文参考音)',
+    prompt:
+      '收到好友从远方寄来的生日礼物,那份意外的惊喜与深深的祝福让我心中充满了甜蜜的快乐。',
+    params: {
+      voiceSource: AUDIO_VOICE_SOURCE_UPLOAD,
+      refText: '希望你以后能够做的比我还好呦。',
+      refAudioName: 'cosyvoice-clone.wav',
+    },
+    files: { refAudioData: '/playground-samples/audio/cosyvoice-clone.wav' },
+  },
+  {
+    label: '预设音色 Vivian',
+    prompt: '其实我真的有发现,我是一个特别善于观察别人情绪的人。',
+    params: { voiceSource: AUDIO_VOICE_SOURCE_PRESET, speaker: 'vivian' },
+  },
+];
+
+// 双人对话:两位说话人参考音(MOSS-TTSD 官方示例)。refAudioData/refAudio2Data →
+// metadata.ref_audio / ref_audio_2;脚本用 [S1]/[S2] 标记。
+export const AUDIO_DIALOGUE_EXAMPLES = [
+  {
+    label: '双人对话',
+    prompt: '[S1]今天天气真不错,我们出去走走吧。[S2]好啊,正好可以透透气。',
+    params: {
+      refAudioName: 'mosstts-speaker1.wav',
+      refAudio2Name: 'mosstts-speaker2.wav',
+    },
+    files: {
+      refAudioData: '/playground-samples/audio/mosstts-speaker1.wav',
+      refAudio2Data: '/playground-samples/audio/mosstts-speaker2.wav',
+    },
+  },
+];
+
+// 声音设计:prompt=要合成的文本;声线描述 → instructions(必填,→ metadata.instructions)。
+export const AUDIO_DESIGN_EXAMPLES = [
+  {
+    label: '美食节目主持',
+    prompt:
+      '亲爱的观众们,今天我要为大家做一道传说中的龙须面,请大家仔细观看我的每一个动作。',
+    params: {
+      instructions:
+        '热情的美食节目主持人,语调生动活泼,充满对美食的热爱和专业精神。',
+    },
+  },
+  {
+    label: '温柔知性女声',
+    prompt: '夜深了,愿你放下一天的疲惫,好好休息,明天又是崭新的一天。',
+    params: {
+      instructions: '一位温柔知性的中年女性,声音低沉富有磁性,语速平缓。',
+    },
+  },
+];
+
 // 兜底默认:未在「语音模型配置」里显式配置时使用。maxChars=0 表示不限制。
 export const AUDIO_DEFAULT_MAX_CHARS = 2000;
 export const AUDIO_DEFAULT_REF_AUDIO_MB = VOICE_UPLOAD_MAX_MB;

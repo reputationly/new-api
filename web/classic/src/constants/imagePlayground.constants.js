@@ -32,8 +32,9 @@ export const IMAGE_CAPABILITIES = [
 export const IMAGE_PAGE_CAPABILITY = '文生图';
 // 图生图（i2i）能力标签，与文生图共用体验区,通过 mode 区分
 export const IMAGE_I2I_CAPABILITY = '图生图';
-// 图生图最多上传底图数（与后端 gpustackplus maxEditImages / 门面 _MAX_INPUT_IMAGES 对齐）
-export const IMAGE_MAX_EDIT_IMAGES = 5;
+// 图生图最多上传底图数。前端限 3 张(≤ 后端 gpustackplus maxEditImages / 门面
+// _MAX_INPUT_IMAGES=5,前端更严不会被门面拒),控制单次请求体大小与体验。
+export const IMAGE_MAX_EDIT_IMAGES = 3;
 
 // 当管理员未配置时的全局兜底：用最兼容的精确像素（dall-e/gpt-image 等只认像素的模型也能过）。
 // "默认用宽高比"应通过运营配置的 default 六种比例实现，而非这里的全局兜底。
