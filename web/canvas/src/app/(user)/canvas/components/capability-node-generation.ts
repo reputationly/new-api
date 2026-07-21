@@ -60,11 +60,17 @@ function blobToDataUrl(blob: Blob): Promise<string> {
     });
 }
 
-/** 遍历上游资源节点,按 spec.inputs 分槽。同 kind 的多个槽位按声明顺序依次填满。 */
+/**
+ * 遍历上游资源节点,按 spec.inputs 分槽(设计文档 §3.5)。
+ * 分配规则:节点 metadata.slotBindings 显式绑定优先(用户在面板为入边指定槽位,如
+ * 双人对话的说话人1/2、首尾帧的首帧/尾帧);未绑定的上游按连线顺序填进
+ * 「声明顺序上第一个还有余量的同 kind 槽位」。绑定里已失联/类型不符的节点 id 忽略。
+ */
 export async function buildCapabilitySlots(spec: CapabilitySpec, nodeId: string, nodes: CanvasNodeData[], connections: CanvasConnection[]): Promise<CapabilitySlotResult> {
     const resourceNodes = getGenerationResourceNodes(nodeId, nodes, connections);
-    const valuesByKind: Record<InputSlotKind, string[]> = { text: [], image: [], video: [], audio: [] };
+    const bindings = nodes.find((node) => node.id === nodeId)?.metadata?.slotBindings || {};
     const texts: string[] = [];
+    const mediaEntries: Array<{ id: string; kind: InputSlotKind; value: string }> = [];
 
     for (const node of resourceNodes) {
         const kind = NODE_KIND[node.type];
@@ -75,16 +81,48 @@ export async function buildCapabilitySlots(spec: CapabilitySpec, nodeId: string,
             continue;
         }
         const value = await mediaSlotValue(node);
-        if (value) valuesByKind[kind].push(value);
+        if (value) mediaEntries.push({ id: node.id, kind, value });
     }
 
     const slots: SlotValues = {};
-    for (const slot of spec.inputs) {
-        if (slot.key === "prompt") continue;
-        const pool = valuesByKind[slot.kind];
-        if (!pool.length) continue;
-        const take = slot.max ?? 1;
-        slots[slot.key] = pool.splice(0, take);
+    const consumed = new Set<string>();
+    const mediaSlots = spec.inputs.filter((slot) => slot.key !== "prompt");
+
+    // 1. 显式绑定优先。用户为某上游指定了槽位 = 该上游被此槽位「认领」:即便绑定数超过槽位
+    //    容量,溢出部分也标记为已消费并丢弃,绝不回落到步骤 2 塞进用户没选的其它槽位
+    //    (那样会把「说话人1」的音频静默错填成「说话人2」);缺口留空,交由生成前校验提示。
+    for (const slot of mediaSlots) {
+        const boundIds = bindings[slot.key] || [];
+        if (!boundIds.length) continue;
+        const capacity = slot.max ?? 1;
+        for (const id of boundIds) {
+            const entry = mediaEntries.find((item) => item.id === id && item.kind === slot.kind && !consumed.has(item.id));
+            if (!entry) continue;
+            consumed.add(entry.id);
+            if ((slots[slot.key]?.length ?? 0) >= capacity) continue; // 槽位已满 → 溢出丢弃,不错填别处
+            (slots[slot.key] ||= []).push(entry.value);
+        }
     }
+
+    // 2. 未绑定的上游按连线顺序补位
+    for (const entry of mediaEntries) {
+        if (consumed.has(entry.id)) continue;
+        for (const slot of mediaSlots) {
+            if (slot.kind !== entry.kind) continue;
+            const capacity = slot.max ?? 1;
+            if ((slots[slot.key] || []).length >= capacity) continue;
+            (slots[slot.key] ||= []).push(entry.value);
+            consumed.add(entry.id);
+            break;
+        }
+    }
+
     return { slots, upstreamText: texts.join("\n\n") };
+}
+
+/** 上游媒体节点清单(槽位指定面板用):id/标题/kind + 当前绑定的槽位 key(未绑定 = "") */
+export function listUpstreamMediaNodes(nodeId: string, nodes: CanvasNodeData[], connections: CanvasConnection[]): Array<{ id: string; title: string; kind: InputSlotKind }> {
+    return getGenerationResourceNodes(nodeId, nodes, connections)
+        .map((node) => ({ id: node.id, title: node.title || node.id, kind: NODE_KIND[node.type] as InputSlotKind }))
+        .filter((item) => item.kind && item.kind !== "text");
 }

@@ -2,17 +2,20 @@
 
 import { Suspense, useEffect, useRef } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { App, Button } from "antd";
-import { Download, FileUp, Plus } from "lucide-react";
+import { App, Button, Dropdown } from "antd";
+import { Download, FileUp, Plus, Sparkles } from "lucide-react";
 
 import { readZip } from "@/lib/zip";
 import { setMediaBlob } from "@/services/file-storage";
 import { setImageBlob } from "@/services/image-storage";
+import { capabilitySpec } from "@/services/capabilities/registry";
+import { modelsForCapability, useMediaConfigStore } from "@/stores/use-media-config-store";
 import { CanvasDeleteProjectsDialog } from "./components/canvas-delete-projects-dialog";
 import { CanvasProjectCard } from "./components/canvas-project-card";
 import type { CanvasExportFile } from "./export-types";
 import { useCanvasStore } from "./stores/use-canvas-store";
 import { useCanvasUiStore } from "./stores/use-canvas-ui-store";
+import { CANVAS_TEMPLATES } from "./templates";
 import { exportCanvasProjects } from "./utils/canvas-export";
 
 export default function CanvasPage() {
@@ -43,6 +46,33 @@ function CanvasPageInner() {
         router.push(`/canvas/editor?id=${id}${agentQuery}`);
     };
     const createAndEnter = () => enterProject(createProject(`无限画布 ${projects.length + 1}`));
+    // 官方模板:预连线的能力链,模型按当前用户可用集合自动选;选不到时留空由节点面板提示
+    const createFromTemplate = async (templateKey: string) => {
+        const template = CANVAS_TEMPLATES.find((item) => item.key === templateKey);
+        if (!template) return;
+        await useMediaConfigStore
+            .getState()
+            .ensureLoaded()
+            .catch(() => undefined);
+        const { configs, availableModels } = useMediaConfigStore.getState();
+        const pickModel = (capabilityKey: string) => {
+            const spec = capabilitySpec(capabilityKey);
+            return spec ? modelsForCapability({ configs, availableModels }, spec)[0] || "" : "";
+        };
+        const missing = template.capabilities.filter((key) => !pickModel(key)).map((key) => capabilitySpec(key)?.label || key);
+        if (missing.length) message.info(`「${missing.join("、")}」暂无可用模型,进入后请在对应节点手动选择`);
+        const { nodes, connections } = template.build(pickModel);
+        enterProject(importProject({ title: template.title, nodes, connections }));
+    };
+    const templateMenuItems = CANVAS_TEMPLATES.map((template) => ({
+        key: template.key,
+        label: (
+            <div className="max-w-[320px] py-0.5">
+                <div className="text-sm">{template.title}</div>
+                <div className="mt-0.5 text-xs opacity-60">{template.description}</div>
+            </div>
+        ),
+    }));
     const importCanvas = async (file?: File) => {
         if (!file) return;
         try {
@@ -104,6 +134,11 @@ function CanvasPageInner() {
                         <Button disabled={!hydrated} icon={<FileUp className="size-4" />} onClick={() => inputRef.current?.click()}>
                             导入画布
                         </Button>
+                        <Dropdown disabled={!hydrated} menu={{ items: templateMenuItems, onClick: ({ key }) => void createFromTemplate(key) }} trigger={["click"]}>
+                            <Button disabled={!hydrated} icon={<Sparkles className="size-4" />}>
+                                官方模板
+                            </Button>
+                        </Dropdown>
                         <Button disabled={!hydrated} type="primary" icon={<Plus className="size-4" />} onClick={createAndEnter}>
                             新建画布
                         </Button>
@@ -121,10 +156,15 @@ function CanvasPageInner() {
                 ) : (
                     <section className="flex min-h-[360px] flex-col items-center justify-center border-y border-stone-200 text-center dark:border-stone-800">
                         <h2 className="text-xl font-medium">还没有画布</h2>
-                        <p className="mt-3 text-sm text-stone-500">新建一个画布后，就可以独立保存节点、连线和画布外观。</p>
-                        <Button type="primary" className="mt-6" icon={<Plus className="size-4" />} onClick={createAndEnter}>
-                            新建画布
-                        </Button>
+                        <p className="mt-3 text-sm text-stone-500">新建一个画布，或从官方模板开始——预连线的能力链,提示词已备好,逐节点点生成即可出片。</p>
+                        <div className="mt-6 flex items-center gap-2">
+                            <Dropdown menu={{ items: templateMenuItems, onClick: ({ key }) => void createFromTemplate(key) }} trigger={["click"]}>
+                                <Button icon={<Sparkles className="size-4" />}>官方模板</Button>
+                            </Dropdown>
+                            <Button type="primary" icon={<Plus className="size-4" />} onClick={createAndEnter}>
+                                新建画布
+                            </Button>
+                        </div>
                     </section>
                 )}
             </div>

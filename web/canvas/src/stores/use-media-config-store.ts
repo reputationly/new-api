@@ -5,6 +5,11 @@
 //   1. GET /api/status(公开)→ ImageModelSizeConfig / VideoModelConfig / AudioModelConfig /
 //      MusicModelConfig 四份 JSON(运营设置维护,含能力标签 capabilities 与参数白名单);
 //   2. GET /pg/models(登录)→ 当前用户可用模型集合;
+//   3. GET /api/user/self/groups(登录)→ 可选分组(用户当前分组置顶,与体验区
+//      processGroupsData 语义一致);节点不选分组 → 请求不带 group,由 Distribute
+//      回落用户默认分组。
+//   4. GET /api/pricing(登录)→ model_name → enable_groups[],用于按所选模型收窄分组
+//      下拉(所选模型未在某分组启用时隐藏该分组,与体验区一致),避免选到「无可用渠道」。
 // 交集 = 各能力节点的模型下拉列表。会话内缓存,进入编辑器拉一次,可手动刷新。
 
 import axios from "axios";
@@ -31,9 +36,18 @@ export type MediaModelConfigs = {
     defaults: Partial<Record<CapabilityModality, Partial<MediaModelEntry>>>;
 };
 
+export type GroupOption = {
+    value: string;
+    label: string;
+    ratio?: number | string;
+};
+
 type MediaConfigStore = {
     configs: MediaModelConfigs | null;
     availableModels: string[];
+    groups: GroupOption[];
+    /** model_name → enable_groups[](/api/pricing);缺失/含 "all"/为空 → 不收窄该模型的分组 */
+    modelGroups: Record<string, string[]>;
     loading: boolean;
     error: string | null;
     loadedAt: number;
@@ -119,9 +133,50 @@ async function fetchAvailableModels(): Promise<string[]> {
     return (response.data?.data || []).map((item) => (item.id || "").trim()).filter(Boolean);
 }
 
+/** 当前登录用户所属分组(new-api SPA 同源 localStorage['user'].group) */
+function localUserGroup(): string {
+    if (typeof localStorage === "undefined") return "";
+    try {
+        const raw = localStorage.getItem("user");
+        const group = raw ? (JSON.parse(raw) as { group?: string })?.group : "";
+        return typeof group === "string" ? group : "";
+    } catch {
+        return "";
+    }
+}
+
+async function fetchUserGroups(): Promise<GroupOption[]> {
+    const response = await axios.get<{ success?: boolean; data?: Record<string, { ratio?: number | string; desc?: string }> }>("/api/user/self/groups", { headers: builtinHeaders() });
+    if (!response.data?.success || !response.data.data) return [];
+    const options: GroupOption[] = Object.entries(response.data.data).map(([group, info]) => ({
+        value: group,
+        label: info?.desc ? (info.desc.length > 20 ? `${info.desc.slice(0, 20)}…` : info.desc) : group,
+        ratio: info?.ratio,
+    }));
+    // 用户当前分组置顶(与体验区 processGroupsData 一致)
+    const userGroup = localUserGroup();
+    if (userGroup) {
+        const index = options.findIndex((option) => option.value === userGroup);
+        if (index > 0) options.unshift(options.splice(index, 1)[0]);
+    }
+    return options;
+}
+
+async function fetchModelGroups(): Promise<Record<string, string[]>> {
+    const response = await axios.get<{ success?: boolean; data?: Array<{ model_name?: string; enable_groups?: string[] }> }>("/api/pricing", { headers: builtinHeaders() });
+    if (!response.data?.success || !Array.isArray(response.data.data)) return {};
+    const map: Record<string, string[]> = {};
+    for (const item of response.data.data) {
+        if (item?.model_name) map[item.model_name] = Array.isArray(item.enable_groups) ? item.enable_groups : [];
+    }
+    return map;
+}
+
 export const useMediaConfigStore = create<MediaConfigStore>()((set, get) => ({
     configs: null,
     availableModels: [],
+    groups: [],
+    modelGroups: {},
     loading: false,
     error: null,
     loadedAt: 0,
@@ -129,8 +184,14 @@ export const useMediaConfigStore = create<MediaConfigStore>()((set, get) => ({
         if (get().loading) return;
         set({ loading: true, error: null });
         try {
-            const [configs, availableModels] = await Promise.all([fetchMediaConfigs(), fetchAvailableModels()]);
-            set({ configs, availableModels, loading: false, loadedAt: Date.now() });
+            // 分组/定价失败不阻塞模型加载(拿不到分组则不选,拿不到定价则不按模型收窄)
+            const [configs, availableModels, groups, modelGroups] = await Promise.all([
+                fetchMediaConfigs(),
+                fetchAvailableModels(),
+                fetchUserGroups().catch(() => [] as GroupOption[]),
+                fetchModelGroups().catch(() => ({}) as Record<string, string[]>),
+            ]);
+            set({ configs, availableModels, groups, modelGroups, loading: false, loadedAt: Date.now() });
         } catch (error) {
             set({ loading: false, error: error instanceof Error ? error.message : "获取模型配置失败" });
         }
@@ -140,6 +201,20 @@ export const useMediaConfigStore = create<MediaConfigStore>()((set, get) => ({
         await get().refresh();
     },
 }));
+
+/**
+ * 按所选模型收窄分组下拉(与体验区一致,设计文档 §3.2)。
+ * 定价数据缺失、模型未选、模型 enable_groups 含 "all" 或为空 → 不收窄(返回全部可用分组);
+ * 否则只保留该模型已启用的分组("auto" 若用户可用则保留)。
+ */
+export function groupsForModel(store: Pick<MediaConfigStore, "groups" | "modelGroups">, model: string): GroupOption[] {
+    const { groups, modelGroups } = store;
+    if (!model) return groups;
+    const enabled = modelGroups[model];
+    if (!enabled || !enabled.length || enabled.includes("all")) return groups;
+    const allow = new Set(enabled);
+    return groups.filter((group) => allow.has(group.value) || group.value === "auto");
+}
 
 /** 能力 X 节点的模型下拉:可用模型 ∩ 该能力所属模态配置中声明了该能力标签的模型 */
 export function modelsForCapability(store: Pick<MediaConfigStore, "configs" | "availableModels">, spec: CapabilitySpec): string[] {

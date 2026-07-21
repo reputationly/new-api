@@ -92,7 +92,8 @@ type GeminiPayload = {
     promptFeedback?: { blockReason?: string };
 };
 type GeminiStreamState = { buffer: string; text: string; toolCalls: ResponseToolCall[]; error?: string };
-type RequestOptions = { signal?: AbortSignal };
+// group:能力节点选择的计费分组(内置渠道专用,设计文档 §3.2);未选不下发,Distribute 回落用户默认分组
+type RequestOptions = { signal?: AbortSignal; group?: string };
 
 const QUALITY_BASE: Record<string, number> = {
     low: 1024,
@@ -638,6 +639,7 @@ export async function requestGeneration(config: AiConfig, prompt: string, option
                 n,
                 ...(quality ? { quality } : {}),
                 ...(requestSize ? { size: requestSize } : {}),
+                ...(options?.group ? { group: options.group } : {}),
                 response_format: "b64_json",
                 output_format: IMAGE_OUTPUT_FORMAT,
             },
@@ -678,6 +680,9 @@ export async function requestEdit(config: AiConfig, prompt: string, references: 
     }
     if (requestSize) {
         formData.set("size", requestSize);
+    }
+    if (options?.group) {
+        formData.set("group", options.group);
     }
     const files = await Promise.all(references.map(async (image) => dataUrlToFile({ ...image, dataUrl: await imageToDataUrl(image) })));
     files.forEach((file) => formData.append("image", file));

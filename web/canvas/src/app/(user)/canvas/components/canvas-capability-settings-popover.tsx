@@ -14,14 +14,18 @@ import { Button, Input, InputNumber, Select } from "antd";
 
 import { canvasThemes } from "@/lib/canvas-theme";
 import { useThemeStore } from "@/stores/use-theme-store";
-import type { CapabilitySpec, ParamSpec } from "@/services/capabilities/registry";
-import { modelsForCapability, paramOptionsForModel, useMediaConfigStore, type MediaModelEntry } from "@/stores/use-media-config-store";
+import type { CapabilitySpec, InputSlotKind, ParamSpec, SelectOption } from "@/services/capabilities/registry";
+import { groupsForModel, modelsForCapability, paramOptionsForModel, useMediaConfigStore, type MediaModelEntry } from "@/stores/use-media-config-store";
 import type { CanvasNodeData } from "../types";
+
+export type UpstreamMediaNode = { id: string; title: string; kind: InputSlotKind };
 
 type CanvasCapabilitySettingsPopoverProps = {
     node: CanvasNodeData;
     spec: CapabilitySpec;
     onConfigChange: (nodeId: string, patch: Partial<CanvasNodeData["metadata"]>) => void;
+    /** 上游媒体节点(槽位指定用,§3.5);未传则不渲染输入分配区 */
+    upstreamMedia?: UpstreamMediaNode[];
     buttonClassName?: string;
 };
 
@@ -37,10 +41,12 @@ export function conformParamsToEntry(spec: CapabilitySpec, params: Record<string
     return next;
 }
 
-export function CanvasCapabilitySettingsPopover({ node, spec, onConfigChange, buttonClassName }: CanvasCapabilitySettingsPopoverProps) {
+export function CanvasCapabilitySettingsPopover({ node, spec, onConfigChange, upstreamMedia = [], buttonClassName }: CanvasCapabilitySettingsPopoverProps) {
     const theme = canvasThemes[useThemeStore((state) => state.theme)];
     const configs = useMediaConfigStore((state) => state.configs);
     const availableModels = useMediaConfigStore((state) => state.availableModels);
+    const groups = useMediaConfigStore((state) => state.groups);
+    const modelGroups = useMediaConfigStore((state) => state.modelGroups);
     const loading = useMediaConfigStore((state) => state.loading);
     const ensureLoaded = useMediaConfigStore((state) => state.ensureLoaded);
     const buttonRef = useRef<HTMLSpanElement>(null);
@@ -78,10 +84,17 @@ export function CanvasCapabilitySettingsPopover({ node, spec, onConfigChange, bu
     const model = node.metadata?.model || "";
     const entry = paramOptionsForModel(configs, spec.modality, model);
     const params = node.metadata?.capabilityParams || {};
+    // 按所选模型收窄分组:只列该模型已启用的分组,避免选到「无可用渠道」的分组(§3.2)
+    const groupOptions = groupsForModel({ groups, modelGroups }, model);
 
     const applyModel = (nextModel: string) => {
         const nextEntry = paramOptionsForModel(configs, spec.modality, nextModel);
         const patch: Partial<CanvasNodeData["metadata"]> = { model: nextModel, capabilityParams: conformParamsToEntry(spec, params, nextEntry) };
+        // 换模型后原分组若不在新模型的可用分组内 → 清空回落默认分组,不残留会失败的选择
+        const currentGroup = node.metadata?.group;
+        if (currentGroup && !groupsForModel({ groups, modelGroups }, nextModel).some((option) => option.value === currentGroup)) {
+            patch.group = undefined;
+        }
         // 图片能力(同步链路)复用既有 metadata.size 语义
         if (spec.channel !== "task") {
             const size = patch.capabilityParams?.size;
@@ -99,11 +112,39 @@ export function CanvasCapabilitySettingsPopover({ node, spec, onConfigChange, bu
         onConfigChange(node.id, patch);
     };
 
+    // 槽位指定(§3.5):某上游节点当前绑定的槽位 key(未绑定 = undefined = 自动)
+    const bindings = node.metadata?.slotBindings || {};
+    const boundSlotOf = (upstreamId: string) => Object.keys(bindings).find((slotKey) => (bindings[slotKey] || []).includes(upstreamId));
+    const rebindUpstream = (upstreamId: string, slotKey: string | null) => {
+        const next: Record<string, string[]> = {};
+        for (const [key, ids] of Object.entries(bindings)) {
+            const kept = (ids || []).filter((id) => id !== upstreamId);
+            if (kept.length) next[key] = kept;
+        }
+        if (slotKey) next[slotKey] = [...(next[slotKey] || []), upstreamId];
+        onConfigChange(node.id, { slotBindings: Object.keys(next).length ? next : undefined });
+    };
+    const assignableUpstream = upstreamMedia.filter((item) => spec.inputs.some((slot) => slot.key !== "prompt" && slot.kind === item.kind));
+    // 仅当存在同 kind 多槽位、多上游或可选槽位歧义时才需要人工指定;单槽单上游自动分配即可
+    const showSlotAssignment = assignableUpstream.length > 0 && spec.inputs.filter((slot) => slot.key !== "prompt").length > 1;
+
     const summary = model ? `${model}` : "选择模型";
     const panel =
         open && buttonRect ? (
             <CapabilityPanelPortal buttonRect={buttonRect} panelRef={panelRef} theme={theme}>
                 <div className="text-sm font-semibold">{spec.label}</div>
+                <div>
+                    <div className="mb-1 text-xs opacity-60">分组</div>
+                    <Select
+                        className="w-full"
+                        value={node.metadata?.group || undefined}
+                        placeholder="默认分组(跟随账户)"
+                        options={groupOptions.map((group) => ({ value: group.value, label: group.ratio !== undefined && group.ratio !== "" ? `${group.label}(倍率 ${group.ratio})` : group.label }))}
+                        onChange={(value) => onConfigChange(node.id, { group: value || undefined })}
+                        allowClear
+                        notFoundContent={loading ? "加载中…" : model ? "该模型无可选分组" : "无可选分组"}
+                    />
+                </div>
                 <div>
                     <div className="mb-1 text-xs opacity-60">模型</div>
                     <Select
@@ -116,6 +157,32 @@ export function CanvasCapabilitySettingsPopover({ node, spec, onConfigChange, bu
                         notFoundContent={loading ? "加载中…" : "无可用模型:请在运营设置为模型声明该能力"}
                     />
                 </div>
+                {showSlotAssignment ? (
+                    <div>
+                        <div className="mb-1 text-xs opacity-60">输入分配(未指定按连线顺序自动)</div>
+                        <div className="space-y-2">
+                            {assignableUpstream.map((item) => {
+                                const compatible = spec.inputs.filter((slot) => slot.key !== "prompt" && slot.kind === item.kind);
+                                return (
+                                    <div key={item.id} className="flex items-center gap-2">
+                                        <span className="min-w-0 flex-1 truncate text-xs" title={item.title}>
+                                            {item.title}
+                                        </span>
+                                        <Select
+                                            className="w-[160px]"
+                                            size="small"
+                                            value={boundSlotOf(item.id)}
+                                            placeholder="自动"
+                                            options={compatible.map((slot) => ({ value: slot.key, label: slot.role }))}
+                                            onChange={(value) => rebindUpstream(item.id, value || null)}
+                                            allowClear
+                                        />
+                                    </div>
+                                );
+                            })}
+                        </div>
+                    </div>
+                ) : null}
                 {spec.params.map((param) => (
                     <CapabilityParamField key={param.key} param={param} entry={entry} value={params[param.key]} onChange={(value) => applyParam(param.key, value)} />
                 ))}
@@ -145,21 +212,24 @@ export function CanvasCapabilitySettingsPopover({ node, spec, onConfigChange, bu
 }
 
 function CapabilityParamField({ param, entry, value, onChange }: { param: ParamSpec; entry: MediaModelEntry; value: string | number | undefined; onChange: (value: string | number | null) => void }) {
-    const whitelist = param.options === "sizes" ? entry.sizes : param.options === "durations" ? entry.durations : Array.isArray(param.options) ? param.options : null;
+    const rawOptions = param.options === "sizes" ? entry.sizes : param.options === "durations" ? entry.durations : Array.isArray(param.options) ? param.options : null;
+    // 归一为 {value,label}:注册表固定列表可带展示名(SelectOption),配置白名单为纯字符串
+    const whitelist = rawOptions ? rawOptions.map((item: string | SelectOption) => (typeof item === "string" ? { value: item, label: item } : item)) : null;
 
     return (
         <div>
             <div className="mb-1 text-xs opacity-60">
                 {param.label}
-                {whitelist && whitelist.length === 1 ? <span className="ml-1 opacity-60">(该模型仅支持 {whitelist[0]})</span> : null}
+                {param.required ? <span className="ml-1 text-red-400">*</span> : null}
+                {whitelist && whitelist.length === 1 ? <span className="ml-1 opacity-60">(该模型仅支持 {whitelist[0].label})</span> : null}
             </div>
             {whitelist && whitelist.length ? (
                 <Select
                     className="w-full"
                     value={value === undefined || value === "" ? undefined : String(value)}
-                    placeholder={`选择${param.label}`}
-                    disabled={whitelist.length === 1 && String(value ?? "") === whitelist[0]}
-                    options={whitelist.map((item) => ({ value: item, label: item }))}
+                    placeholder={param.placeholder || `选择${param.label}`}
+                    disabled={whitelist.length === 1 && String(value ?? "") === whitelist[0].value}
+                    options={whitelist}
                     onChange={(next) => onChange(next)}
                     allowClear={whitelist.length > 1}
                 />
