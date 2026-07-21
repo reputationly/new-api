@@ -9,12 +9,12 @@ import { saveAs } from "file-saver";
 import { requestEdit, requestGeneration, requestImageQuestion } from "@/services/api/image";
 import { requestAudioGeneration, storeGeneratedAudio } from "@/services/api/audio";
 import { requestVideoGeneration, storeGeneratedVideo } from "@/services/api/video";
-import { fetchTaskContentBlob } from "@/services/api/task";
+import { fetchTaskContentBlob, TaskPollTimeoutError } from "@/services/api/task";
 import { capabilitySpec } from "@/services/capabilities/registry";
 import { runTaskCapability, resumeTaskCapability, validateCapabilityInputs, type CapabilityParams } from "@/services/capabilities/execute";
 import { paramOptionsForModel, useMediaConfigStore } from "@/stores/use-media-config-store";
 import { conformParamsToEntry } from "../components/canvas-capability-settings-popover";
-import { buildCapabilitySlots } from "../components/capability-node-generation";
+import { buildCapabilitySlots, listUpstreamMediaNodes } from "../components/capability-node-generation";
 import { DOCS_URL } from "@/constant/env";
 import { defaultConfig, modelOptionName, type AiConfig, useConfigStore, useEffectiveConfig } from "@/stores/use-config-store";
 import { resolveImageUrl, uploadImage, type UploadedImage } from "@/services/image-storage";
@@ -460,6 +460,11 @@ function InfiniteCanvasPage() {
                         setNodes((prev) => prev.map((item) => (item.id === nodeId ? { ...item, metadata: { ...item.metadata, ...videoMetadata(video), taskId, taskMediaKey: video.storageKey } } : item)));
                     }
                 } catch (error) {
+                    // 恢复轮询再超时 → stalled(任务仍在服务端),节点可「继续等待」;其余为真失败
+                    if (error instanceof TaskPollTimeoutError) {
+                        setNodes((prev) => prev.map((item) => (item.id === nodeId ? { ...item, metadata: { ...item.metadata, status: "stalled", errorDetails: error.message } } : item)));
+                        return;
+                    }
                     const errorDetails = error instanceof Error ? error.message : "任务恢复失败";
                     setNodes((prev) => prev.map((item) => (item.id === nodeId ? { ...item, metadata: { ...item.metadata, status: NODE_STATUS_ERROR, errorDetails } } : item)));
                 }
@@ -2028,8 +2033,12 @@ function InfiniteCanvasPage() {
                 return;
             }
             const markSourceStatus = sourceNode?.type !== CanvasNodeType.Image && !editingTextNode;
-            const statusPrompt = sourceNode?.type === CanvasNodeType.Config ? effectivePrompt : prompt;
-            if (!effectivePrompt && (mode === "text" || mode === "audio")) {
+            // stalled「继续等待」:仅恢复已提交任务的轮询(§3.4)。composer 此时为空不代表要清空
+            // 原提示词(否则恢复成功后节点丢失原 prompt),也不应被空提示词的 audio/text 早退拦截
+            // (否则无上游文本的音频节点永远恢复不了)。
+            const isStalledResume = sourceNode?.metadata?.status === "stalled" && Boolean(sourceNode?.metadata?.taskId);
+            const statusPrompt = sourceNode?.type === CanvasNodeType.Config ? effectivePrompt : isStalledResume ? sourceNode?.metadata?.prompt ?? "" : prompt;
+            if (!effectivePrompt && !isStalledResume && (mode === "text" || mode === "audio")) {
                 finishGenerationRequest(nodeId, runController);
                 setRunningNodeId(null);
                 return;
@@ -2042,59 +2051,103 @@ function InfiniteCanvasPage() {
                 // 下游节点即可以 task:<id> 引用串联(设计文档 §3.5/§3.7)。
                 const taskCapability = capabilitySpec(sourceNode?.metadata?.capability);
                 if (taskCapability && taskCapability.channel === "task" && sourceNode) {
-                    const model = modelOptionName(sourceNode.metadata?.model || "");
+                    const controller = runController;
                     const failNode = (errorDetails: string) => {
                         message.error(errorDetails);
                         setNodes((prev) => prev.map((node) => (node.id === nodeId ? { ...node, metadata: { ...node.metadata, status: NODE_STATUS_ERROR, errorDetails } } : node)));
                     };
+                    // 轮询超时 ≠ 失败:任务仍在服务端运行,节点转 stalled,可「继续等待」恢复(§3.4)
+                    const markStalled = (details: string) => {
+                        message.info(details);
+                        setNodes((prev) => prev.map((node) => (node.id === nodeId ? { ...node, metadata: { ...node.metadata, status: "stalled", errorDetails: details } } : node)));
+                    };
+                    const writeTaskProduct = async (taskId: string, capPrompt?: string) => {
+                        const blob = await fetchTaskContentBlob(taskId, { signal: controller.signal });
+                        const promptPatch = capPrompt !== undefined ? { prompt: capPrompt } : {};
+                        if (taskCapability.output === CanvasNodeType.Audio) {
+                            const audio = await storeGeneratedAudio(blob);
+                            setNodes((prev) => prev.map((node) => (node.id === nodeId ? { ...node, metadata: { ...node.metadata, ...audioMetadata(audio), ...promptPatch, taskId, taskMediaKey: audio.storageKey } } : node)));
+                        } else {
+                            const video = await storeGeneratedVideo({ blob });
+                            const spec = NODE_DEFAULT_SIZE[CanvasNodeType.Video];
+                            const videoSize = fitNodeSize(video.width || spec.width, video.height || spec.height, VIDEO_NODE_MAX_WIDTH, VIDEO_NODE_MAX_HEIGHT);
+                            setNodes((prev) =>
+                                prev.map((node) =>
+                                    node.id === nodeId
+                                        ? {
+                                              ...node,
+                                              width: videoSize.width,
+                                              height: videoSize.height,
+                                              position: { x: node.position.x + node.width / 2 - videoSize.width / 2, y: node.position.y + node.height / 2 - videoSize.height / 2 },
+                                              metadata: { ...node.metadata, ...videoMetadata(video), ...promptPatch, taskId, taskMediaKey: video.storageKey },
+                                          }
+                                        : node,
+                                ),
+                            );
+                        }
+                    };
+                    // stalled「继续等待」:仅恢复轮询取回产物,不重新提交、不重复扣费(§3.4)
+                    const stalledTaskId = sourceNode.metadata?.status === "stalled" ? sourceNode.metadata?.taskId : undefined;
+                    if (stalledTaskId) {
+                        try {
+                            await resumeTaskCapability(stalledTaskId, { signal: controller.signal });
+                            await writeTaskProduct(stalledTaskId);
+                        } catch (error) {
+                            if (error instanceof TaskPollTimeoutError) {
+                                markStalled(error.message);
+                                return;
+                            }
+                            throw error;
+                        }
+                        return;
+                    }
+                    const model = modelOptionName(sourceNode.metadata?.model || "");
                     if (!model) {
                         failNode(`请先为「${taskCapability.label}」节点选择模型`);
                         return;
                     }
                     const { slots, upstreamText } = await buildCapabilitySlots(taskCapability, nodeId, nodesRef.current, connectionsRef.current);
                     const capPrompt = [prompt, upstreamText].filter(Boolean).join("\n\n").trim();
-                    const problems = validateCapabilityInputs(taskCapability, capPrompt, slots);
+                    // 参数收敛进模型白名单(只支持 6s/1:1 之类的硬约束在此兜底);文本上限同源校验
+                    const entry = paramOptionsForModel(useMediaConfigStore.getState().configs, taskCapability.modality, model);
+                    const params: CapabilityParams = conformParamsToEntry(taskCapability, sourceNode.metadata?.capabilityParams || {}, entry);
+                    const problems = validateCapabilityInputs(taskCapability, capPrompt, slots, params);
                     if (problems.length) {
                         failNode(problems.join("；"));
                         return;
                     }
-                    // 参数收敛进模型白名单(只支持 6s/1:1 之类的硬约束在此兜底);文本上限同源校验
-                    const entry = paramOptionsForModel(useMediaConfigStore.getState().configs, taskCapability.modality, model);
-                    const params: CapabilityParams = conformParamsToEntry(taskCapability, sourceNode.metadata?.capabilityParams || {}, entry);
                     if (entry.maxChars && capPrompt.length > entry.maxChars) {
                         failNode(`文本超过模型字数上限 ${entry.maxChars}(当前 ${capPrompt.length})`);
                         return;
                     }
-                    const controller = runController;
-                    const result = await runTaskCapability(taskCapability, {
-                        model,
-                        prompt: capPrompt,
-                        params,
-                        slots,
-                        signal: controller.signal,
-                        onTaskId: (taskId) => setNodes((prev) => prev.map((node) => (node.id === nodeId ? { ...node, metadata: { ...node.metadata, taskId } } : node))),
-                    });
-                    const blob = await fetchTaskContentBlob(result.taskId, { signal: controller.signal });
-                    if (taskCapability.output === CanvasNodeType.Audio) {
-                        const audio = await storeGeneratedAudio(blob);
-                        setNodes((prev) => prev.map((node) => (node.id === nodeId ? { ...node, metadata: { ...node.metadata, ...audioMetadata(audio), prompt: capPrompt, taskId: result.taskId, taskMediaKey: audio.storageKey } } : node)));
-                    } else {
-                        const video = await storeGeneratedVideo({ blob });
-                        const spec = NODE_DEFAULT_SIZE[CanvasNodeType.Video];
-                        const videoSize = fitNodeSize(video.width || spec.width, video.height || spec.height, VIDEO_NODE_MAX_WIDTH, VIDEO_NODE_MAX_HEIGHT);
-                        setNodes((prev) =>
-                            prev.map((node) =>
-                                node.id === nodeId
-                                    ? {
-                                          ...node,
-                                          width: videoSize.width,
-                                          height: videoSize.height,
-                                          position: { x: node.position.x + node.width / 2 - videoSize.width / 2, y: node.position.y + node.height / 2 - videoSize.height / 2 },
-                                          metadata: { ...node.metadata, ...videoMetadata(video), prompt: capPrompt, taskId: result.taskId, taskMediaKey: video.storageKey },
-                                      }
-                                    : node,
-                            ),
-                        );
+                    // fps 方案A(§3.9bis,2026-07-21 拍板):视频生成节点存在 sr 下游连线 → 传
+                    // target_fps=16(编排中间步骤不插帧,链尾 sr 统一插帧);否则不传 = 部署默认
+                    // 32fps 插帧,与体验区单独调用一致。用户在参数面板显式填值时不覆盖。
+                    if (taskCapability.output === CanvasNodeType.Video && taskCapability.taskType !== "sr" && params["metadata.target_fps"] === undefined) {
+                        const hasSrDownstream = connectionsRef.current.some((connection) => {
+                            if (connection.fromNodeId !== nodeId) return false;
+                            const downstream = nodesRef.current.find((node) => node.id === connection.toNodeId);
+                            return capabilitySpec(downstream?.metadata?.capability)?.taskType === "sr";
+                        });
+                        if (hasSrDownstream) params["metadata.target_fps"] = 16;
+                    }
+                    try {
+                        const result = await runTaskCapability(taskCapability, {
+                            model,
+                            prompt: capPrompt,
+                            params,
+                            slots,
+                            group: sourceNode.metadata?.group,
+                            signal: controller.signal,
+                            onTaskId: (taskId) => setNodes((prev) => prev.map((node) => (node.id === nodeId ? { ...node, metadata: { ...node.metadata, taskId } } : node))),
+                        });
+                        await writeTaskProduct(result.taskId, capPrompt);
+                    } catch (error) {
+                        if (error instanceof TaskPollTimeoutError) {
+                            markStalled(error.message);
+                            return;
+                        }
+                        throw error;
                     }
                     return;
                 }
@@ -2216,8 +2269,8 @@ function InfiniteCanvasPage() {
                         targetIds.map(async (targetId) => {
                             try {
                                 const image = referenceImages.length
-                                    ? await requestEdit({ ...generationConfig, count: "1" }, effectivePrompt, referenceImages, undefined, { signal: controller.signal }).then((items) => items[0])
-                                    : await requestGeneration({ ...generationConfig, count: "1" }, effectivePrompt, { signal: controller.signal }).then((items) => items[0]);
+                                    ? await requestEdit({ ...generationConfig, count: "1" }, effectivePrompt, referenceImages, undefined, { signal: controller.signal, group: isImageCapabilityNode ? sourceNode?.metadata?.group : undefined }).then((items) => items[0])
+                                    : await requestGeneration({ ...generationConfig, count: "1" }, effectivePrompt, { signal: controller.signal, group: isImageCapabilityNode ? sourceNode?.metadata?.group : undefined }).then((items) => items[0]);
                                 const uploaded = await uploadImage(image.dataUrl);
                                 const imageSize = fitNodeSize(uploaded.width, uploaded.height, imageConfig.width, imageConfig.height);
                                 setNodes((prev) => {
@@ -2727,6 +2780,7 @@ function InfiniteCanvasPage() {
                                     <CanvasNodePromptPanel
                                         node={panelNode}
                                         isRunning={runningNodeId === panelNode.id}
+                                        upstreamMedia={panelNode.metadata?.capability ? listUpstreamMediaNodes(panelNode.id, nodes, connections) : []}
                                         mentionReferences={mentionReferencesByNodeId.get(panelNode.id) || []}
                                         onPromptChange={handleNodePromptChange}
                                         onConfigChange={handleConfigNodeChange}

@@ -1,6 +1,7 @@
-// 能力注册表(设计文档 docs/canvas-orchestration-design.md §3.1)。
-// 把体验区 12 个能力标签形式化为注册表记录:节点的模型下拉、参数面板、输入校验、
-// 请求构建全部由本表驱动,不在业务代码里写能力分支。
+// 能力注册表(设计文档 docs/canvas-orchestration-design.md §3.1,v0.2)。
+// 把体验区 19 个已实现能力标签形式化为注册表记录:节点的模型下拉、参数面板、输入校验、
+// 请求构建全部由本表驱动,不在业务代码里写能力分支。能力私有的组装逻辑(互斥/联动)
+// 收敛在各记录的 postProcess 钩子里,通用层保持零能力分支。
 //
 // label(中文能力标签)是与后台运营设置对齐的协议键——MediaModelConfig.models[name]
 // .capabilities 里存的就是这些中文标签(见 new-api constant/model_capability.go),
@@ -23,17 +24,34 @@ export type InputSlot = {
     role: string;
 };
 
+export type SelectOption = { value: string; label: string };
+
 export type ParamSpec = {
     /** 请求字段映射: "size" | "seconds" | "metadata.sr_ratio" | "metadata.lyrics" ... */
     key: string;
     label: string;
     type: "select" | "number" | "text" | "textarea";
-    /** select 选项来源:配置白名单(sizes/durations)或固定列表 */
-    options?: "sizes" | "durations" | string[];
+    /** select 选项来源:配置白名单(sizes/durations)或固定列表(可带展示名) */
+    options?: "sizes" | "durations" | string[] | SelectOption[];
     placeholder?: string;
     min?: number;
     max?: number;
     step?: number;
+    /** 必填参数(如声音设计的声线描述):生成前校验非空 */
+    required?: boolean;
+    /** 用户未填时兜底下发的默认值(如 AudioX 引擎硬要的 num_inference_steps) */
+    defaultValue?: string | number;
+    /** 仅供 postProcess 消费,不自动映射进请求体(如情感选择 → emo_vector 需二次加工) */
+    virtual?: boolean;
+};
+
+/** postProcess 钩子入参:payload 已按通用规则组装完毕,可在此做能力私有的增删改 */
+export type PostProcessContext = {
+    prompt: string;
+    params: Record<string, string | number>;
+    slots: Record<string, string[]>;
+    metadata: Record<string, unknown>;
+    payload: Record<string, unknown>;
 };
 
 export type CapabilitySpec = {
@@ -46,10 +64,20 @@ export type CapabilitySpec = {
     channel: CapabilityChannel;
     /** channel === "task" 时显式下发的 metadata.task_type;体验区约定 t2v/i2v/flf2v 靠模型推断不下发 */
     taskType?: string;
+    /** 提示词非空时改用的 task_type(AudioX v2a→tv2a / v2m→tv2m,与体验区 resolveTaskType 一致) */
+    taskTypeWithPrompt?: string;
+    /** 把最终 task_type 同值镜像到 metadata 的另一键(AudioX 引擎另需 audiox_task) */
+    mirrorTaskTypeAs?: string;
+    /** 提示词为空时的占位文案(门面 prompt 必填;如 svs 无需文本、sr 无提示词) */
+    promptFallback?: string;
     inputs: InputSlot[];
     params: ParamSpec[];
     /** 跨槽位约束:keys 中至少一个槽位有值(如 vace 的 源视频/参考图 至少其一) */
     atLeastOne?: { keys: string[]; message: string };
+    /** 槽位/参数二选一约束:槽位无值且参数未填 → 报错(如语音合成 克隆参考音/预设音色) */
+    requireOneOf?: { slotKey: string; paramKey: string; message: string };
+    /** 能力私有的请求体后处理(互斥剔除、参数联动),在通用组装完成后执行 */
+    postProcess?: (ctx: PostProcessContext) => void;
 };
 
 const PROMPT_SLOT: InputSlot = { key: "prompt", kind: "text", required: true, role: "提示词" };
@@ -131,6 +159,7 @@ export const CAPABILITIES: CapabilitySpec[] = [
         output: CanvasNodeType.Video,
         channel: "task",
         taskType: "sr",
+        promptFallback: "视频超分",
         inputs: [OPTIONAL_PROMPT_SLOT, { key: "metadata.video", kind: "video", required: true, role: "源视频" }],
         params: [
             // sr_ratio=1 → 仅插帧/不放大(输出被引擎按配置目标尺寸封顶,见设计文档 §3.9)
@@ -155,15 +184,125 @@ export const CAPABILITIES: CapabilitySpec[] = [
         params: [{ key: "metadata.seed", label: "随机种子", type: "number", placeholder: "留空随机" }],
         atLeastOne: { keys: ["metadata.src_video", "metadata.src_ref_images"], message: "视频编辑至少需要连接 源视频 或 参考图 之一" },
     },
+    // ── 音频:四个能力共用 task_type=tts,按能力标签筛出的模型集合区分引擎(§3.1) ──
     {
-        key: "tts",
+        key: "tts_emotion",
+        label: "情感合成",
+        modality: "audio",
+        output: CanvasNodeType.Audio,
+        channel: "task",
+        taskType: "tts",
+        inputs: [
+            PROMPT_SLOT,
+            { key: "metadata.voice", kind: "audio", required: true, role: "参考音色" },
+            { key: "metadata.emotion_audio", kind: "audio", required: false, role: "情感参考音" },
+        ],
+        params: [
+            // 维度次序与 IndexTTS-2 一致:[喜,怒,哀,惧,厌恶,低落,惊喜,平静](体验区 EMOTION_PRESETS)
+            {
+                key: "emotion",
+                label: "情感预设",
+                type: "select",
+                virtual: true,
+                options: [
+                    { value: "happy", label: "喜" },
+                    { value: "angry", label: "怒" },
+                    { value: "sad", label: "哀" },
+                    { value: "afraid", label: "惧" },
+                    { value: "disgusted", label: "厌恶" },
+                    { value: "melancholic", label: "低落" },
+                    { value: "surprised", label: "惊喜" },
+                    { value: "calm", label: "平静" },
+                ],
+                placeholder: "留空跟随音色",
+            },
+            { key: "emoAlpha", label: "情感强度", type: "number", virtual: true, min: 0, max: 1, step: 0.05, placeholder: "默认 0.65" },
+        ],
+        postProcess: ({ params, metadata }) => {
+            // 选中情绪 → one-hot 8 维向量(选中维 = 强度),emo_alpha 同步;未选不发情感参数
+            const EMOTION_INDEX: Record<string, number> = { happy: 0, angry: 1, sad: 2, afraid: 3, disgusted: 4, melancholic: 5, surprised: 6, calm: 7 };
+            const index = EMOTION_INDEX[String(params.emotion ?? "")];
+            if (index === undefined) return;
+            const alphaRaw = Number(params.emoAlpha);
+            const alpha = Number.isFinite(alphaRaw) && alphaRaw >= 0 && alphaRaw <= 1 ? alphaRaw : 0.65;
+            const vector = [0, 0, 0, 0, 0, 0, 0, 0];
+            vector[index] = alpha;
+            metadata.emo_vector = vector;
+            metadata.emo_alpha = alpha;
+        },
+    },
+    {
+        key: "tts_synth",
         label: "语音合成",
         modality: "audio",
         output: CanvasNodeType.Audio,
         channel: "task",
         taskType: "tts",
-        inputs: [PROMPT_SLOT, { key: "metadata.voice", kind: "audio", required: true, role: "参考音色" }],
-        params: [{ key: "metadata.emo_alpha", label: "情感强度", type: "number", min: 0, max: 1, step: 0.05, placeholder: "默认 0.65" }],
+        inputs: [PROMPT_SLOT, { key: "metadata.ref_audio", kind: "audio", required: false, role: "克隆参考音" }],
+        params: [
+            {
+                key: "metadata.speaker",
+                label: "预设音色",
+                type: "select",
+                options: [
+                    { value: "vivian", label: "Vivian" },
+                    { value: "ryan", label: "Ryan" },
+                    { value: "aiden", label: "Aiden" },
+                    { value: "chelsie", label: "Chelsie" },
+                    { value: "serena", label: "Serena" },
+                    { value: "ethan", label: "Ethan" },
+                ],
+                placeholder: "连接克隆参考音时无需选择",
+            },
+            { key: "metadata.ref_text", label: "参考文本", type: "text", placeholder: "克隆参考音的文字内容(可选)" },
+            {
+                key: "metadata.language",
+                label: "语言/方言",
+                type: "select",
+                options: [
+                    { value: "zh", label: "中文(普通话)" },
+                    { value: "yue", label: "粤语" },
+                    { value: "sichuan", label: "四川话" },
+                    { value: "minnan", label: "闽南话" },
+                    { value: "shanghai", label: "上海话" },
+                    { value: "en", label: "英文" },
+                    { value: "ja", label: "日文" },
+                    { value: "ko", label: "韩文" },
+                ],
+                placeholder: "留空自动",
+            },
+        ],
+        requireOneOf: { slotKey: "metadata.ref_audio", paramKey: "metadata.speaker", message: "语音合成需要连接上游音频节点作为克隆参考音,或在参数面板选择预设音色" },
+        postProcess: ({ metadata }) => {
+            // 音色来源互斥(与体验区 voiceSource toggle 一致):有克隆参考音 → 不发 speaker;
+            // 走预设音色 → 不发 ref_text(参考文本只对克隆参考音有意义)
+            if (metadata.ref_audio) delete metadata.speaker;
+            else delete metadata.ref_text;
+        },
+    },
+    {
+        key: "tts_dialogue",
+        label: "双人对话",
+        modality: "audio",
+        output: CanvasNodeType.Audio,
+        channel: "task",
+        taskType: "tts",
+        inputs: [
+            { key: "prompt", kind: "text", required: true, role: "对话脚本(如 [S1]你好。[S2]你好呀。)" },
+            { key: "metadata.ref_audio", kind: "audio", required: true, role: "说话人1参考音" },
+            { key: "metadata.ref_audio_2", kind: "audio", required: true, role: "说话人2参考音" },
+        ],
+        params: [],
+    },
+    {
+        key: "tts_design",
+        label: "声音设计",
+        modality: "audio",
+        output: CanvasNodeType.Audio,
+        channel: "task",
+        taskType: "tts",
+        inputs: [PROMPT_SLOT],
+        params: [{ key: "metadata.instructions", label: "声线描述", type: "textarea", required: true, placeholder: "如:温柔女声,语速平缓,带一点笑意" }],
     },
     {
         key: "t2m",
@@ -180,6 +319,15 @@ export const CAPABILITIES: CapabilitySpec[] = [
             { key: "metadata.bpm", label: "BPM", type: "number", min: 40, max: 220, step: 1, placeholder: "留空默认" },
             { key: "metadata.seed", label: "随机种子", type: "number", placeholder: "留空随机" },
         ],
+        postProcess: ({ prompt, metadata }) => {
+            // 与体验区一致:t2m 未填歌词 → 开 sample 模式,引擎按描述 LM 自动生成 caption+歌词;
+            // prompt 仍保持=描述文本(满足门面 prompt 必填,也让不认 sample_mode 的路径兜底)
+            if (!String(metadata.lyrics ?? "").trim()) {
+                delete metadata.lyrics;
+                metadata.sample_mode = true;
+                metadata.sample_query = prompt;
+            }
+        },
     },
     {
         key: "cover",
@@ -207,9 +355,102 @@ export const CAPABILITIES: CapabilitySpec[] = [
             { key: "metadata.seed", label: "随机种子", type: "number", placeholder: "留空随机" },
         ],
     },
+    // ── AudioX 扩散音频:引擎硬要 num_inference_steps(无 deploy-config 兜底),
+    //    seconds_total/guidance_scale 同「所见即所发」补 UI 默认(与体验区一致) ──
+    {
+        key: "t2a",
+        label: "文生音效",
+        modality: "music",
+        output: CanvasNodeType.Audio,
+        channel: "task",
+        taskType: "t2a",
+        mirrorTaskTypeAs: "audiox_task",
+        inputs: [PROMPT_SLOT],
+        params: [
+            { key: "metadata.seconds_total", label: "时长(秒)", type: "number", min: 1, max: 60, step: 1, defaultValue: 10, placeholder: "默认 10" },
+            { key: "metadata.num_inference_steps", label: "采样步数", type: "number", min: 50, max: 500, step: 10, defaultValue: 250, placeholder: "默认 250" },
+            { key: "metadata.guidance_scale", label: "引导系数", type: "number", min: 1, max: 20, step: 0.5, defaultValue: 7.0, placeholder: "默认 7.0" },
+            { key: "metadata.seed", label: "随机种子", type: "number", placeholder: "留空随机" },
+        ],
+    },
+    {
+        key: "v2a",
+        label: "视频配音效",
+        modality: "music",
+        output: CanvasNodeType.Audio,
+        channel: "task",
+        taskType: "v2a",
+        taskTypeWithPrompt: "tv2a",
+        mirrorTaskTypeAs: "audiox_task",
+        inputs: [OPTIONAL_PROMPT_SLOT, { key: "metadata.video", kind: "video", required: true, role: "源视频" }],
+        params: [
+            { key: "metadata.seconds_total", label: "时长(秒)", type: "number", min: 1, max: 60, step: 1, defaultValue: 10, placeholder: "默认 10" },
+            { key: "metadata.num_inference_steps", label: "采样步数", type: "number", min: 50, max: 500, step: 10, defaultValue: 250, placeholder: "默认 250" },
+            { key: "metadata.guidance_scale", label: "引导系数", type: "number", min: 1, max: 20, step: 0.5, defaultValue: 7.0, placeholder: "默认 7.0" },
+            { key: "metadata.seed", label: "随机种子", type: "number", placeholder: "留空随机" },
+        ],
+    },
+    {
+        key: "v2m",
+        label: "视频配乐",
+        modality: "music",
+        output: CanvasNodeType.Audio,
+        channel: "task",
+        taskType: "v2m",
+        taskTypeWithPrompt: "tv2m",
+        mirrorTaskTypeAs: "audiox_task",
+        inputs: [OPTIONAL_PROMPT_SLOT, { key: "metadata.video", kind: "video", required: true, role: "源视频" }],
+        params: [
+            { key: "metadata.seconds_total", label: "时长(秒)", type: "number", min: 1, max: 60, step: 1, defaultValue: 10, placeholder: "默认 10" },
+            { key: "metadata.num_inference_steps", label: "采样步数", type: "number", min: 50, max: 500, step: 10, defaultValue: 250, placeholder: "默认 250" },
+            { key: "metadata.guidance_scale", label: "引导系数", type: "number", min: 1, max: 20, step: 0.5, defaultValue: 7.0, placeholder: "默认 7.0" },
+            { key: "metadata.seed", label: "随机种子", type: "number", placeholder: "留空随机" },
+        ],
+    },
+    // SoulX 歌声合成:num_inference_steps/guidance_scale 有 deploy-config 默认(32/3.0),留空不下发
+    {
+        key: "svs",
+        label: "歌声合成",
+        modality: "music",
+        output: CanvasNodeType.Audio,
+        channel: "task",
+        taskType: "svs",
+        promptFallback: "歌声合成",
+        inputs: [
+            { key: "metadata.prompt_audio", kind: "audio", required: true, role: "音色参考人声" },
+            { key: "metadata.target_audio", kind: "audio", required: true, role: "目标曲/伴奏" },
+        ],
+        params: [
+            {
+                key: "metadata.language",
+                label: "演唱语言",
+                type: "select",
+                options: [
+                    { value: "Mandarin", label: "普通话" },
+                    { value: "Cantonese", label: "粤语" },
+                    { value: "English", label: "英文" },
+                ],
+                placeholder: "默认普通话",
+            },
+            {
+                key: "metadata.control",
+                label: "控制方式",
+                type: "select",
+                options: [
+                    { value: "melody", label: "旋律(melody)" },
+                    { value: "score", label: "曲谱(score)" },
+                ],
+                placeholder: "默认旋律",
+            },
+            { key: "metadata.seed", label: "随机种子", type: "number", placeholder: "留空随机" },
+        ],
+    },
 ];
 
 const byKey = new Map(CAPABILITIES.map((spec) => [spec.key, spec]));
+// 兼容 v0.1 旧节点:当年的 "tts"(voice+emo_alpha)即 IndexTTS-2 情感合成,别名指向新 key,
+// 旧项目 JSON 打开后能力行为不丢
+byKey.set("tts", byKey.get("tts_emotion")!);
 
 export function capabilitySpec(key: string | undefined): CapabilitySpec | null {
     return (key && byKey.get(key)) || null;

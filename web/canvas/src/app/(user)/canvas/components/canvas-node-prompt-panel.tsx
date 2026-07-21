@@ -10,7 +10,7 @@ import { CreditSymbol, requestCreditCost } from "@/constant/credits";
 import { canvasThemes } from "@/lib/canvas-theme";
 import { useThemeStore } from "@/stores/use-theme-store";
 import { capabilitySpec } from "@/services/capabilities/registry";
-import { CanvasCapabilitySettingsPopover } from "./canvas-capability-settings-popover";
+import { CanvasCapabilitySettingsPopover, type UpstreamMediaNode } from "./canvas-capability-settings-popover";
 import { CanvasImageSettingsPopover } from "./canvas-image-settings-popover";
 import { CanvasPromptLibrary } from "./canvas-prompt-library";
 import { CanvasAudioSettingsPopover, type CanvasAudioSettingKey } from "./canvas-audio-settings-popover";
@@ -29,10 +29,12 @@ type CanvasNodePromptPanelProps = {
     onGenerate: (nodeId: string, mode: CanvasNodeGenerationMode, prompt: string) => void;
     onStop: (nodeId: string) => void;
     mentionReferences?: CanvasResourceReference[];
+    /** 上游媒体节点(能力节点槽位指定用,§3.5) */
+    upstreamMedia?: UpstreamMediaNode[];
     onImageSettingsOpenChange?: (open: boolean) => void;
 };
 
-export function CanvasNodePromptPanel({ node, isRunning, onPromptChange, onConfigChange, onGenerate, onStop, mentionReferences = [], onImageSettingsOpenChange }: CanvasNodePromptPanelProps) {
+export function CanvasNodePromptPanel({ node, isRunning, onPromptChange, onConfigChange, onGenerate, onStop, mentionReferences = [], upstreamMedia = [], onImageSettingsOpenChange }: CanvasNodePromptPanelProps) {
     const globalConfig = useEffectiveConfig();
     const openConfigDialog = useConfigStore((state) => state.openConfigDialog);
     const theme = canvasThemes[useThemeStore((state) => state.theme)];
@@ -56,9 +58,12 @@ export function CanvasNodePromptPanel({ node, isRunning, onPromptChange, onConfi
         if (!isEditingExistingContent) onPromptChange(node.id, value);
     };
 
+    const isStalled = Boolean(capSpec && node.metadata?.status === "stalled" && node.metadata?.taskId);
+
     const submit = () => {
         const text = prompt.trim();
-        if ((!text && !promptOptional) || isRunning) return;
+        // stalled 节点点击 = 继续等待(client-page 按 taskId 恢复轮询),不要求提示词
+        if ((!text && !promptOptional && !isStalled) || isRunning) return;
         onGenerate(node.id, mode, text);
         setPrompt("");
     };
@@ -85,7 +90,7 @@ export function CanvasNodePromptPanel({ node, isRunning, onPromptChange, onConfi
                 <div className="flex min-w-0 items-center gap-2">
                     <CanvasPromptLibrary onSelect={updatePrompt} />
                     {capSpec ? (
-                        <CanvasCapabilitySettingsPopover node={node} spec={capSpec} onConfigChange={onConfigChange} />
+                        <CanvasCapabilitySettingsPopover node={node} spec={capSpec} onConfigChange={onConfigChange} upstreamMedia={upstreamMedia} />
                     ) : mode === "image" ? (
                         <>
                             <ModelPicker config={config} value={config.model} onChange={(model) => onConfigChange(node.id, { model })} capability="image" onMissingConfig={() => openConfigDialog(true)} />
@@ -116,9 +121,9 @@ export function CanvasNodePromptPanel({ node, isRunning, onPromptChange, onConfi
                     type="primary"
                     className="!h-10 !min-w-16 shrink-0 !rounded-full !px-3"
                     danger={isRunning}
-                    disabled={!isRunning && !prompt.trim() && !promptOptional}
+                    disabled={!isRunning && !isStalled && !prompt.trim() && !promptOptional}
                     onClick={() => (isRunning ? onStop(node.id) : submit())}
-                    aria-label={isRunning ? "停止生成" : "生成"}
+                    aria-label={isRunning ? "停止生成" : isStalled ? "继续等待" : "生成"}
                 >
                     <span className="flex items-center gap-1.5">
                         {isRunning ? (
@@ -127,6 +132,9 @@ export function CanvasNodePromptPanel({ node, isRunning, onPromptChange, onConfi
                                 <Square className="size-3.5 fill-current" />
                                 <span className="text-xs font-medium">停止</span>
                             </>
+                        ) : isStalled ? (
+                            // 任务仍在服务端运行,点击恢复轮询(不重新扣费,§3.4)
+                            <span className="text-xs font-medium">继续等待</span>
                         ) : (
                             <>
                                 <span className="inline-flex items-center gap-1 text-xs font-medium tabular-nums">

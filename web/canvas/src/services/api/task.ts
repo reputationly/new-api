@@ -15,12 +15,21 @@ export const TASK_POLL_MAX_TIMES = 90; // ≈ 6 分钟,与体验区一致
 export type PlaygroundTaskPayload = {
     model: string;
     prompt: string;
+    group?: string;
     metadata?: Record<string, unknown>;
     images?: string[];
     size?: string;
     seconds?: string;
     [key: string]: unknown;
 };
+
+/** 轮询超时(≠任务失败:任务仍在服务端运行,节点转 stalled,可「继续等待」恢复,§3.4) */
+export class TaskPollTimeoutError extends Error {
+    constructor(public readonly taskId: string) {
+        super("任务仍在生成中,已超过预计等待时间");
+        this.name = "TaskPollTimeoutError";
+    }
+}
 
 export type PlaygroundTaskStatus = "queued" | "in_progress" | "completed" | "failed" | "canceled";
 
@@ -85,7 +94,7 @@ export async function fetchPlaygroundTask(taskId: string, options?: { signal?: A
     return { status, errorMessage };
 }
 
-/** 轮询到终态。completed → 返回;failed/canceled/超时 → 抛错。 */
+/** 轮询到终态。completed → 返回;failed/canceled → 抛错;超时 → TaskPollTimeoutError(可恢复)。 */
 export async function pollPlaygroundTask(taskId: string, options?: { signal?: AbortSignal; onProgress?: (status: PlaygroundTaskStatus) => void }): Promise<void> {
     for (let attempt = 0; attempt < TASK_POLL_MAX_TIMES; attempt++) {
         await new Promise((resolve) => setTimeout(resolve, TASK_POLL_INTERVAL_MS));
@@ -95,7 +104,7 @@ export async function pollPlaygroundTask(taskId: string, options?: { signal?: Ab
         if (status === "completed") return;
         if (status === "failed" || status === "canceled") throw new Error(errorMessage || "任务失败");
     }
-    throw new Error("任务轮询超时,可稍后在节点上重试恢复");
+    throw new TaskPollTimeoutError(taskId);
 }
 
 /** 拉取成品字节(带会话头),供落 IndexedDB/展示 */
