@@ -238,17 +238,16 @@ export const AUDIO_SPEAKER_PRESETS = [
 ];
 export const AUDIO_DEFAULT_SPEAKER = 'vivian';
 
-// 多语言/方言(语音合成 → 语言下拉):随 metadata.language 透传。取常用语言 + 中文方言子集。
+// 口音(语音融合):TTS 不翻译,文本什么语言就念什么,引擎 Auto 自动识别语言,故不让用户选
+// 语言(英文文本选日文无意义)。用户唯一有意义的主动选择是「中文方言口音」——同一段中文用
+// 普通话(=自动)/北京话/四川话念,口音不同。value 是引擎 supported_languages 枚举(引擎对
+// language 做 .title() 归一化,serving_speech.py:1648)。方言仅对中文文本生效;当前
+// checkpoint 只有北京话/四川话两种(能力由 checkpoint 的 codec_language_id 决定,换
+// checkpoint 可扩;非中文文本请留「自动」)。
 export const AUDIO_LANGUAGES = [
   { value: '', label: '自动' },
-  { value: 'zh', label: '中文(普通话)' },
-  { value: 'yue', label: '粤语' },
-  { value: 'sichuan', label: '四川话' },
-  { value: 'minnan', label: '闽南话' },
-  { value: 'shanghai', label: '上海话' },
-  { value: 'en', label: '英文' },
-  { value: 'ja', label: '日文' },
-  { value: 'ko', label: '韩文' },
+  { value: 'Beijing_Dialect', label: '北京话' },
+  { value: 'Sichuan_Dialect', label: '四川话' },
 ];
 export const AUDIO_DEFAULT_LANGUAGE = '';
 
@@ -309,9 +308,9 @@ export const AUDIO_SYNTHESIS_EXAMPLES = [
     params: { speaker: 'ryan' },
   },
   {
-    label: '粤语·Serena',
-    prompt: '今日天气真係唔错,不如一齐出去行下街啦。',
-    params: { speaker: 'serena', language: 'yue' },
+    label: '四川话·Serena',
+    prompt: '今天天气巴适得很,不如一起出去耍哈嘛。',
+    params: { speaker: 'serena', language: 'Sichuan_Dialect' },
   },
 ];
 
