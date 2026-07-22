@@ -314,7 +314,50 @@ func migrateDB() error {
 	if err := migrateAudioModelConfigLegacyCapability(); err != nil {
 		return err
 	}
+	if err := migrateAffCountBackfill(); err != nil {
+		return err
+	}
 	return nil
+}
+
+// migrateAffCountBackfill 一次性回填 aff_count。历史 bug：aff_count 自增曾被 QuotaForInviter>0 门控，
+// 未配置邀请奖励时邀请人数恒为 0（邀请关系 inviter_id 仍正确写入）。按 inviter_id 重算真实计数写回。
+// 一次性守卫：marker 存在即已回填，绝不再跑。三库通用（GORM 抽象，软删用户自动排除）。
+func migrateAffCountBackfill() error {
+	const markerKey = "aff_count_backfilled"
+	var marker Option
+	if err := DB.Where(Option{Key: markerKey}).First(&marker).Error; err == nil {
+		return nil // 已回填
+	}
+	return DB.Transaction(func(tx *gorm.DB) error {
+		// 先清零历史残留的非零计数，保证「重算」语义完整：
+		// 曾配过邀请奖励、被邀请人后来被删除的旧 inviter 不在下方分组结果里，不清零会永久残留脏值。
+		// 仅触及非零行（现网计数普遍为 0，基本 no-op）。
+		if err := tx.Model(&User{}).Where("aff_count > ?", 0).Update("aff_count", 0).Error; err != nil {
+			return err
+		}
+		type grp struct {
+			InviterId int
+			Cnt       int
+		}
+		var groups []grp
+		if err := tx.Model(&User{}).
+			Select("inviter_id, COUNT(*) as cnt").
+			Where("inviter_id != ?", 0).
+			Group("inviter_id").
+			Scan(&groups).Error; err != nil {
+			return err
+		}
+		for _, g := range groups {
+			if err := tx.Model(&User{}).Where("id = ?", g.InviterId).
+				Update("aff_count", g.Cnt).Error; err != nil {
+				return err
+			}
+		}
+		common.SysLog(fmt.Sprintf("Backfilled aff_count for %d inviters", len(groups)))
+		// 落一次性标记（无论有无数据都标，保证只在首次运行回填）。
+		return tx.Create(&Option{Key: markerKey, Value: "true"}).Error
+	})
 }
 
 // migrateAudioModelConfigLegacyCapability 语音大类拆细的兼容迁移。拆细前音频能力标签只有

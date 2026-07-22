@@ -50,7 +50,8 @@ type User struct {
 	AffCode          string         `json:"aff_code" gorm:"type:varchar(32);column:aff_code;uniqueIndex"`
 	AffCount         int            `json:"aff_count" gorm:"type:int;default:0;column:aff_count"`
 	AffQuota         int            `json:"aff_quota" gorm:"type:int;default:0;column:aff_quota"`           // 邀请剩余额度
-	AffHistoryQuota  int            `json:"aff_history_quota" gorm:"type:int;default:0;column:aff_history"` // 邀请历史额度
+	AffHistoryQuota  int            `json:"aff_history_quota" gorm:"type:int;default:0;column:aff_history"`             // 邀请历史额度
+	AffPointsEarned  int            `json:"aff_points_earned" gorm:"type:bigint;default:0;column:aff_points_earned"`    // 累计通过邀请获得的积分(quota unit)，被邀请人实名后累加
 	InviterId        int            `json:"inviter_id" gorm:"type:int;column:inviter_id;index"`
 	DeletedAt        gorm.DeletedAt `gorm:"index"`
 	LinuxDOId        string         `json:"linux_do_id" gorm:"column:linux_do_id;index"`
@@ -423,15 +424,117 @@ func HardDeleteUserById(id int) error {
 	})
 }
 
-func inviteUser(inviterId int) (err error) {
-	user, err := GetUserById(inviterId, true)
-	if err != nil {
-		return err
+// inviteUser 记录一次邀请关系：仅递增邀请人的邀请人数（aff_count）。
+// 用原子表达式递增，并发安全、三库兼容；计数不再与任何额度奖励耦合。
+func inviteUser(inviterId int) error {
+	return DB.Model(&User{}).Where("id = ?", inviterId).
+		Update("aff_count", gorm.Expr("aff_count + ?", 1)).Error
+}
+
+// InviteeInfo 「我邀请的用户列表」的行数据。
+type InviteeInfo struct {
+	Id            int    `json:"id"`
+	Username      string `json:"username"`
+	Verified      bool   `json:"verified"`       // 已实名/已认证：个人 KYC 或企业认证任一通过（与积分资格口径一致）
+	CreatedAt     int64  `json:"created_at"`     // 注册时间(unix 秒)
+	LastUsed      int64  `json:"last_used"`      // max(last_login_at, token 最近 accessed_time)
+	PointsBalance int    `json:"points_balance"` // 积分余额(quota unit)
+	Quota         int    `json:"quota"`          // 账户余额
+	PointsUsed    int    `json:"points_used"`    // 积分消耗(quota unit)
+	UsedQuota     int    `json:"used_quota"`     // 余额消耗
+}
+
+// GetInviteesByInviter 分页返回某邀请人名下被邀请用户列表，按注册时间由近到远。
+// last_used = max(last_login_at, 名下 token 最近 accessed_time)，覆盖「登录网站」与「用 key 调模型」两种活动。
+// token 聚合仿 GetLastUsedTimesByParent：先按 user_id 分组取 MAX(accessed_time)，纯 GORM 三库通用（软删 token 自动排除）。
+func GetInviteesByInviter(inviterId, page, pageSize int) (list []InviteeInfo, total int64, verifiedTotal int64, err error) {
+	// 防御性钳制：page_size 为负时 GORM Limit(-1) 会取消分页上限、一次性返回全部，须收敛到合理范围。
+	if page < 1 {
+		page = 1
 	}
-	user.AffCount++
-	user.AffQuota += common.QuotaForInviter
-	user.AffHistoryQuota += common.QuotaForInviter
-	return DB.Save(user).Error
+	if pageSize < 1 {
+		pageSize = common.ItemsPerPage
+	} else if pageSize > 100 {
+		pageSize = 100
+	}
+	if err = DB.Model(&User{}).Where("inviter_id = ?", inviterId).Count(&total).Error; err != nil {
+		return nil, 0, 0, err
+	}
+	if total == 0 {
+		return []InviteeInfo{}, 0, 0, nil
+	}
+	// 已实名/已认证被邀请人数：个人 KYC 或企业认证任一通过（与 GrantKycPoints 的资格口径一致）
+	if err = DB.Model(&User{}).Where("inviter_id = ? AND (kyc_status = ? OR enterprise_status = ?)", inviterId, KYCStatusApproved, EnterpriseStatusApproved).Count(&verifiedTotal).Error; err != nil {
+		return nil, 0, 0, err
+	}
+	offset := (page - 1) * pageSize
+	if offset < 0 {
+		offset = 0
+	}
+	type row struct {
+		Id               int
+		Username         string
+		KycStatus        int
+		EnterpriseStatus int
+		CreatedAt        int64
+		LastLoginAt      int64
+		PointsBalance    int
+		Quota            int
+		PointsUsed       int
+		UsedQuota        int
+	}
+	var rows []row
+	if err = DB.Model(&User{}).
+		Select("id, username, kyc_status, enterprise_status, created_at, last_login_at, points_balance, quota, points_used, used_quota").
+		Where("inviter_id = ?", inviterId).
+		Order("created_at DESC").
+		Limit(pageSize).Offset(offset).
+		Scan(&rows).Error; err != nil {
+		return nil, 0, 0, err
+	}
+
+	userIds := make([]int, 0, len(rows))
+	for _, r := range rows {
+		userIds = append(userIds, r.Id)
+	}
+	lastTokenUsed := make(map[int]int64, len(userIds))
+	if len(userIds) > 0 {
+		type tokRow struct {
+			UserId       int
+			AccessedTime int64
+		}
+		var toks []tokRow
+		if err = DB.Model(&Token{}).
+			Select("user_id, MAX(accessed_time) as accessed_time").
+			Where("user_id IN ?", userIds).
+			Group("user_id").
+			Scan(&toks).Error; err != nil {
+			return nil, 0, 0, err
+		}
+		for _, t := range toks {
+			lastTokenUsed[t.UserId] = t.AccessedTime
+		}
+	}
+
+	result := make([]InviteeInfo, 0, len(rows))
+	for _, r := range rows {
+		lastUsed := r.LastLoginAt
+		if tu := lastTokenUsed[r.Id]; tu > lastUsed {
+			lastUsed = tu
+		}
+		result = append(result, InviteeInfo{
+			Id:            r.Id,
+			Username:      r.Username,
+			Verified:      r.KycStatus == KYCStatusApproved || r.EnterpriseStatus == EnterpriseStatusApproved,
+			CreatedAt:     r.CreatedAt,
+			LastUsed:      lastUsed,
+			PointsBalance: r.PointsBalance,
+			Quota:         r.Quota,
+			PointsUsed:    r.PointsUsed,
+			UsedQuota:     r.UsedQuota,
+		})
+	}
+	return result, total, verifiedTotal, nil
 }
 
 func (user *User) TransferAffQuotaToQuota(quota int) error {
@@ -482,6 +585,9 @@ func (user *User) Insert(inviterId int) error {
 	user.Quota = common.QuotaForNewUser
 	//user.SetAccessToken(common.GetUUID())
 	user.AffCode = common.GetRandomString(4)
+	// 持久化邀请关系：邮箱注册由 controller 预设 InviterId，但 GitHub/LinuxDO 走本函数时未预设。
+	// 在此统一落库，保证被邀请人 inviter_id 正确、进「我邀请的用户」并在实名后触发邀请积分。
+	user.InviterId = inviterId
 
 	// 初始化用户设置，包括默认的边栏配置
 	if user.Setting == "" {
@@ -513,16 +619,10 @@ func (user *User) Insert(inviterId int) error {
 	if common.QuotaForNewUser > 0 {
 		RecordLog(user.Id, LogTypeSystem, fmt.Sprintf("新用户注册赠送 %s", logger.LogQuota(common.QuotaForNewUser)))
 	}
+	// 只要存在邀请人就记录邀请关系（aff_count++），与奖励解耦。
+	// 邀请奖励改为被邀请人实名后发放积分（service.GrantKycPoints），此处不再发放任何额度。
 	if inviterId != 0 {
-		if common.QuotaForInvitee > 0 {
-			_ = IncreaseUserQuota(user.Id, common.QuotaForInvitee, true)
-			RecordLog(user.Id, LogTypeSystem, fmt.Sprintf("使用邀请码赠送 %s", logger.LogQuota(common.QuotaForInvitee)))
-		}
-		if common.QuotaForInviter > 0 {
-			//_ = IncreaseUserQuota(inviterId, common.QuotaForInviter)
-			RecordLog(inviterId, LogTypeSystem, fmt.Sprintf("邀请用户赠送 %s", logger.LogQuota(common.QuotaForInviter)))
-			_ = inviteUser(inviterId)
-		}
+		_ = inviteUser(inviterId)
 	}
 	return nil
 }
@@ -540,6 +640,9 @@ func (user *User) InsertWithTx(tx *gorm.DB, inviterId int) error {
 	}
 	user.Quota = common.QuotaForNewUser
 	user.AffCode = common.GetRandomString(4)
+	// 持久化邀请关系：OAuth 注册路径构造 user 时未设 InviterId，须在此落库，
+	// 否则被邀请人 inviter_id=0，既不出现在「我邀请的用户」，邀请人也拿不到实名后的邀请积分。
+	user.InviterId = inviterId
 
 	// 初始化用户设置
 	if user.Setting == "" {
@@ -574,15 +677,10 @@ func (user *User) FinalizeOAuthUserCreation(inviterId int) {
 	if common.QuotaForNewUser > 0 {
 		RecordLog(user.Id, LogTypeSystem, fmt.Sprintf("新用户注册赠送 %s", logger.LogQuota(common.QuotaForNewUser)))
 	}
+	// 只要存在邀请人就记录邀请关系（aff_count++），与奖励解耦。
+	// 邀请奖励改为被邀请人实名后发放积分（service.GrantKycPoints），此处不再发放任何额度。
 	if inviterId != 0 {
-		if common.QuotaForInvitee > 0 {
-			_ = IncreaseUserQuota(user.Id, common.QuotaForInvitee, true)
-			RecordLog(user.Id, LogTypeSystem, fmt.Sprintf("使用邀请码赠送 %s", logger.LogQuota(common.QuotaForInvitee)))
-		}
-		if common.QuotaForInviter > 0 {
-			RecordLog(inviterId, LogTypeSystem, fmt.Sprintf("邀请用户赠送 %s", logger.LogQuota(common.QuotaForInviter)))
-			_ = inviteUser(inviterId)
-		}
+		_ = inviteUser(inviterId)
 	}
 }
 

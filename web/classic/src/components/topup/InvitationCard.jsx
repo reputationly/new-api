@@ -17,28 +17,36 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 
-import React from 'react';
+import React, { useState } from 'react';
 import {
   Avatar,
   Typography,
   Card,
-  Button,
   Input,
   Badge,
+  Button,
   Space,
 } from '@douyinfe/semi-ui';
-import { Copy, Users, BarChart2, TrendingUp, Gift, Zap } from 'lucide-react';
+import { Copy, Users, UserCheck, Coins, Gift } from 'lucide-react';
+import { quotaToPoints } from '../../helpers/quota';
+import InvitedUsersTable from './InvitedUsersTable';
 
 const { Text } = Typography;
 
-const InvitationCard = ({
-  t,
-  userState,
-  renderQuota,
-  setOpenTransfer,
-  affLink,
-  handleAffLinkClick,
-}) => {
+const InvitationCard = ({ t, userState, affLink, handleAffLinkClick }) => {
+  // 被邀请人列表的汇总统计（总数 / 已实名数），由内嵌表格加载后回传。
+  const [stats, setStats] = useState({ total: 0, verifiedTotal: 0 });
+
+  const inviteCount = stats.total || userState?.user?.aff_count || 0;
+  const verifiedCount = stats.verifiedTotal || 0;
+  const pointsEarned = quotaToPoints(userState?.user?.aff_points_earned || 0);
+
+  const statItems = [
+    { icon: Users, label: t('邀请人数'), value: inviteCount },
+    { icon: UserCheck, label: t('已实名人数'), value: verifiedCount },
+    { icon: Coins, label: t('累计邀请积分'), value: pointsEarned },
+  ];
+
   return (
     <Card className='!rounded-2xl shadow-sm border-0'>
       {/* 卡片头部 */}
@@ -50,11 +58,10 @@ const InvitationCard = ({
           <Typography.Text className='text-lg font-medium'>
             {t('邀请奖励')}
           </Typography.Text>
-          <div className='text-xs'>{t('邀请好友获得额外奖励')}</div>
+          <div className='text-xs'>{t('邀请好友获得积分奖励')}</div>
         </div>
       </div>
 
-      {/* 收益展示区域 */}
       <Space vertical style={{ width: '100%' }}>
         {/* 统计数据统一卡片 */}
         <Card
@@ -70,104 +77,40 @@ const InvitationCard = ({
                 backgroundRepeat: 'no-repeat',
               }}
             >
-              {/* 标题和按钮 */}
               <div className='relative z-10 h-full flex flex-col justify-between p-4'>
                 <div className='flex justify-between items-center'>
                   <Text strong style={{ color: 'white', fontSize: '16px' }}>
-                    {t('收益统计')}
+                    {t('邀请统计')}
                   </Text>
-                  <Button
-                    type='primary'
-                    theme='solid'
-                    size='small'
-                    disabled={
-                      !userState?.user?.aff_quota ||
-                      userState?.user?.aff_quota <= 0
-                    }
-                    onClick={() => setOpenTransfer(true)}
-                    className='!rounded-lg'
-                  >
-                    <Zap size={12} className='mr-1' />
-                    {t('划转到余额')}
-                  </Button>
                 </div>
 
                 {/* 统计数据 */}
                 <div className='grid grid-cols-3 gap-6 mt-4'>
-                  {/* 待使用收益 */}
-                  <div className='text-center'>
-                    <div
-                      className='text-base sm:text-2xl font-bold mb-2'
-                      style={{ color: 'white' }}
-                    >
-                      {renderQuota(userState?.user?.aff_quota || 0)}
-                    </div>
-                    <div className='flex items-center justify-center text-sm'>
-                      <TrendingUp
-                        size={14}
-                        className='mr-1'
-                        style={{ color: 'rgba(255,255,255,0.8)' }}
-                      />
-                      <Text
-                        style={{
-                          color: 'rgba(255,255,255,0.8)',
-                          fontSize: '12px',
-                        }}
+                  {statItems.map(({ icon: Icon, label, value }) => (
+                    <div key={label} className='text-center'>
+                      <div
+                        className='text-base sm:text-2xl font-bold mb-2'
+                        style={{ color: 'white' }}
                       >
-                        {t('待使用收益')}
-                      </Text>
+                        {value}
+                      </div>
+                      <div className='flex items-center justify-center text-sm'>
+                        <Icon
+                          size={14}
+                          className='mr-1'
+                          style={{ color: 'rgba(255,255,255,0.8)' }}
+                        />
+                        <Text
+                          style={{
+                            color: 'rgba(255,255,255,0.8)',
+                            fontSize: '12px',
+                          }}
+                        >
+                          {label}
+                        </Text>
+                      </div>
                     </div>
-                  </div>
-
-                  {/* 总收益 */}
-                  <div className='text-center'>
-                    <div
-                      className='text-base sm:text-2xl font-bold mb-2'
-                      style={{ color: 'white' }}
-                    >
-                      {renderQuota(userState?.user?.aff_history_quota || 0)}
-                    </div>
-                    <div className='flex items-center justify-center text-sm'>
-                      <BarChart2
-                        size={14}
-                        className='mr-1'
-                        style={{ color: 'rgba(255,255,255,0.8)' }}
-                      />
-                      <Text
-                        style={{
-                          color: 'rgba(255,255,255,0.8)',
-                          fontSize: '12px',
-                        }}
-                      >
-                        {t('总收益')}
-                      </Text>
-                    </div>
-                  </div>
-
-                  {/* 邀请人数 */}
-                  <div className='text-center'>
-                    <div
-                      className='text-base sm:text-2xl font-bold mb-2'
-                      style={{ color: 'white' }}
-                    >
-                      {userState?.user?.aff_count || 0}
-                    </div>
-                    <div className='flex items-center justify-center text-sm'>
-                      <Users
-                        size={14}
-                        className='mr-1'
-                        style={{ color: 'rgba(255,255,255,0.8)' }}
-                      />
-                      <Text
-                        style={{
-                          color: 'rgba(255,255,255,0.8)',
-                          fontSize: '12px',
-                        }}
-                      >
-                        {t('邀请人数')}
-                      </Text>
-                    </div>
-                  </div>
+                  ))}
                 </div>
               </div>
             </div>
@@ -202,24 +145,32 @@ const InvitationCard = ({
             <div className='flex items-start gap-2'>
               <Badge dot type='success' />
               <Text type='tertiary' className='text-sm'>
-                {t('邀请好友注册，好友充值后您可获得相应奖励')}
+                {t('邀请好友注册，好友完成实名认证后您可获得积分奖励')}
               </Text>
             </div>
 
             <div className='flex items-start gap-2'>
               <Badge dot type='success' />
               <Text type='tertiary' className='text-sm'>
-                {t('通过划转功能将奖励额度转入到您的账户余额中')}
+                {t('获得的积分可用于消费抵扣')}
               </Text>
             </div>
 
             <div className='flex items-start gap-2'>
               <Badge dot type='success' />
               <Text type='tertiary' className='text-sm'>
-                {t('邀请的好友越多，获得的奖励越多')}
+                {t('邀请的好友越多，获得的积分越多')}
               </Text>
             </div>
           </div>
+        </Card>
+
+        {/* 我邀请的用户列表 */}
+        <Card
+          className='!rounded-xl w-full'
+          title={<Text type='tertiary'>{t('我邀请的用户')}</Text>}
+        >
+          <InvitedUsersTable t={t} onStats={setStats} />
         </Card>
       </Space>
     </Card>

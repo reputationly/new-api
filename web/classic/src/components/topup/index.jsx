@@ -27,7 +27,6 @@ import {
   renderQuota,
   renderQuotaWithAmount,
   copy,
-  getQuotaPerUnit,
 } from '../../helpers';
 import { Modal, Toast } from '@douyinfe/semi-ui';
 import { quotaToPoints } from '../../helpers/quota';
@@ -40,7 +39,6 @@ import InvitationCard from './InvitationCard';
 import PointsTasksCard from '../points/PointsTasksCard';
 import BankTransferCard from './BankTransferCard';
 import InvoiceCard from './InvoiceCard';
-import TransferModal from './modals/TransferModal';
 import PaymentConfirmModal from './modals/PaymentConfirmModal';
 import TopupHistoryModal from './modals/TopupHistoryModal';
 import DirectPayQRModal from './modals/DirectPayQRModal';
@@ -103,8 +101,6 @@ const TopUp = () => {
 
   // 邀请相关状态
   const [affLink, setAffLink] = useState('');
-  const [openTransfer, setOpenTransfer] = useState(false);
-  const [transferAmount, setTransferAmount] = useState(0);
 
   // 账单Modal状态
   const [openHistory, setOpenHistory] = useState(false);
@@ -871,25 +867,6 @@ const TopUp = () => {
     }
   };
 
-  // 划转邀请额度
-  const transfer = async () => {
-    if (transferAmount < getQuotaPerUnit()) {
-      showError(t('划转金额最低为') + ' ' + renderQuota(getQuotaPerUnit()));
-      return;
-    }
-    const res = await API.post(`/api/user/aff_transfer`, {
-      quota: transferAmount,
-    });
-    const { success, message } = res.data;
-    if (success) {
-      showSuccess(message);
-      setOpenTransfer(false);
-      getUserQuota().then();
-    } else {
-      showError(message);
-    }
-  };
-
   // 复制邀请链接
   const handleAffLinkClick = async () => {
     await copy(affLink);
@@ -908,7 +885,6 @@ const TopUp = () => {
   useEffect(() => {
     // 始终获取最新用户数据，确保余额等统计信息准确
     getUserQuota().then();
-    setTransferAmount(getQuotaPerUnit());
   }, []);
 
   useEffect(() => {
@@ -999,10 +975,6 @@ const TopUp = () => {
     setOpen(false);
   };
 
-  const handleTransferCancel = () => {
-    setOpenTransfer(false);
-  };
-
   const handleOpenHistory = () => {
     setOpenHistory(true);
   };
@@ -1048,19 +1020,6 @@ const TopUp = () => {
 
   return (
     <div className='w-full max-w-7xl mx-auto relative min-h-screen lg:min-h-0 mt-[60px] px-2'>
-      {/* 划转模态框 */}
-      <TransferModal
-        t={t}
-        openTransfer={openTransfer}
-        transfer={transfer}
-        handleTransferCancel={handleTransferCancel}
-        userState={userState}
-        renderQuota={renderQuota}
-        getQuotaPerUnit={getQuotaPerUnit}
-        transferAmount={transferAmount}
-        setTransferAmount={setTransferAmount}
-      />
-
       {/* 充值确认模态框 */}
       <PaymentConfirmModal
         t={t}
@@ -1193,8 +1152,6 @@ const TopUp = () => {
         <InvitationCard
           t={t}
           userState={userState}
-          renderQuota={renderQuota}
-          setOpenTransfer={setOpenTransfer}
           affLink={affLink}
           handleAffLinkClick={handleAffLinkClick}
         />

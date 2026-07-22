@@ -256,9 +256,6 @@ const renderInviteInfo = (text, record, t) => {
           {t('邀请')}: {renderNumber(record.aff_count)}
         </Tag>
         <Tag color='white' shape='circle' className='!text-xs'>
-          {t('收益')}: {renderQuota(record.aff_history_quota)}
-        </Tag>
-        <Tag color='white' shape='circle' className='!text-xs'>
           {record.inviter_id === 0
             ? t('无邀请人')
             : `${t('邀请人')}: ${record.inviter_id}`}
