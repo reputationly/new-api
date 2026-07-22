@@ -9,7 +9,6 @@ import {
   TextArea,
   RadioGroup,
   Radio,
-  Switch,
 } from '@douyinfe/semi-ui';
 import {
   Settings,
@@ -22,7 +21,6 @@ import {
   Upload,
   Languages,
   Wand2,
-  FileText,
 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { renderGroupOption, selectFilter, showError } from '../../helpers';
@@ -34,7 +32,6 @@ import {
   EMOTION_PRESETS,
   AUDIO_SPEAKER_PRESETS,
   AUDIO_LANGUAGES,
-  AUDIO_VOICE_SOURCE_OPTIONS,
 } from '../../constants/audioPlayground.constants';
 
 // 语音合成配置面板:分组/模型(同视频)+ 按 mode 的输入:
@@ -412,101 +409,8 @@ const AudioConfigPanel = ({
           </div>
         )}
 
-        {/* 音色来源(语音合成):上传克隆 | 预设音色。切换驱动下面 ref_audio/speaker 二选一。 */}
-        {needsVoiceSource && (
-          <div>
-            <div className='flex items-center gap-2 mb-2'>
-              <Mic size={16} className='text-gray-500' />
-              <Typography.Text strong className='text-sm'>
-                {t('音色来源')}
-              </Typography.Text>
-              <Tooltip
-                content={t(
-                  '上传克隆:上传一段参考音克隆其音色(适用所有语音合成模型)。预设音色:选用模型内置音色(Qwen3-TTS 等)。',
-                )}
-                position='top'
-              >
-                <HelpCircle size={14} className='text-gray-400 cursor-help' />
-              </Tooltip>
-            </div>
-            <RadioGroup
-              type='button'
-              value={inputs.voiceSource}
-              onChange={(e) => onInputChange('voiceSource', e.target.value)}
-              disabled={disabled}
-            >
-              {AUDIO_VOICE_SOURCE_OPTIONS.map((o) => (
-                <Radio key={o.value} value={o.value}>
-                  {t(o.label)}
-                </Radio>
-              ))}
-            </RadioGroup>
-          </div>
-        )}
-
-        {/* 参考音(上传克隆源必选;dialogue 走下方双上传) */}
-        {needsRefAudio && !needsDualRef && (
-          <MediaFileInput
-            label={needsRefText ? t('参考音(克隆源)') : t('参考音')}
-            required={refAudioRequired}
-            kind='audio'
-            value={inputs.refAudioData}
-            maxMB={refAudioMaxMB}
-            disabled={disabled}
-            onChange={(v) => {
-              onInputChange('refAudioData', v || '');
-              if (!v) onInputChange('refAudioName', '');
-            }}
-          />
-        )}
-
-        {/* 参考文本(声音克隆):参考音对应的文字稿。未开「仅用音色向量」时必填(引擎克隆需
-            参考音转录做 ICL,否则上游报 ref_text 必填);开启则改为只克隆音色、免文本 →
-            metadata.ref_text / metadata.x_vector_only_mode */}
-        {needsRefText && (
-          <div>
-            <div className='flex items-center gap-2 mb-2'>
-              <FileText size={16} className='text-gray-500' />
-              <Typography.Text strong className='text-sm'>
-                {t('参考文本')}
-              </Typography.Text>
-              {!inputs.xVectorOnlyMode && (
-                <span className='text-red-500'>*</span>
-              )}
-              <Tooltip
-                content={t(
-                  '参考音对应的文字稿。声音克隆需要它做上下文学习;若不便提供,可开启下方「仅用音色向量」改为只克隆音色。',
-                )}
-                position='top'
-              >
-                <HelpCircle size={14} className='text-gray-400 cursor-help' />
-              </Tooltip>
-            </div>
-            <div className='flex items-center gap-2 mb-2'>
-              <Switch
-                size='small'
-                checked={!!inputs.xVectorOnlyMode}
-                onChange={(v) => onInputChange('xVectorOnlyMode', v)}
-                disabled={disabled}
-              />
-              <Typography.Text className='text-xs text-gray-500'>
-                {t('仅用音色向量(免参考文本)')}
-              </Typography.Text>
-            </div>
-            <TextArea
-              placeholder={
-                inputs.xVectorOnlyMode
-                  ? t('已开启仅用音色向量,无需参考文本')
-                  : t('请输入参考音对应的文字稿')
-              }
-              value={inputs.refText}
-              onChange={(value) => onInputChange('refText', value)}
-              autosize={{ minRows: 2, maxRows: 5 }}
-              disabled={disabled || inputs.xVectorOnlyMode}
-              className='!rounded-lg'
-            />
-          </div>
-        )}
+        {/* 双人对话(MOSS-TTSD)的双参考音在下方 needsDualRef 区块;语音融合只做预设音色,
+            不再有上传克隆/参考文本入口(CustomVoice checkpoint 不支持克隆)。 */}
 
         {/* 双人对话(MOSS-TTSD):说话人1 → ref_audio,说话人2 → ref_audio_2,均必选 */}
         {needsDualRef && (

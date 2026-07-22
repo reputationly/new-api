@@ -34,9 +34,6 @@ import {
   AUDIO_DEFAULT_EMO_WEIGHT,
   AUDIO_DEFAULT_SPEAKER,
   AUDIO_DEFAULT_LANGUAGE,
-  AUDIO_DEFAULT_VOICE_SOURCE,
-  AUDIO_VOICE_SOURCE_UPLOAD,
-  AUDIO_VOICE_SOURCE_PRESET,
   PRESET_VOICES,
   VOICE_UPLOAD_VALUE,
   emotionToVector,
@@ -143,14 +140,10 @@ const PARAM_FIELDS = [
   'refAudioName',
   'refAudio2Data',
   'refAudio2Name',
-  // 语音合成音色来源 toggle(upload | preset)
-  'voiceSource',
   // Omni 标量
   'speaker',
   'language',
   'instructions',
-  'refText',
-  'xVectorOnlyMode',
 ];
 
 const pickParams = (src) => {
@@ -174,8 +167,12 @@ export const useAudioGeneration = (mode = 'emotion') => {
     needsVoice,
     needsEmotion,
     needsVoiceSource,
+    needsRefAudio,
+    refAudioRequired,
     needsDualRef,
+    needsSpeaker,
     needsLanguage,
+    needsRefText,
     needsInstructions,
     instructionsRequired,
   } = modeDef;
@@ -197,14 +194,10 @@ export const useAudioGeneration = (mode = 'emotion') => {
     refAudioName: '',
     refAudio2Data: '', // dialogue 说话人2 → metadata.ref_audio_2
     refAudio2Name: '',
-    // 语音合成音色来源:上传克隆(默认)| 预设音色。
-    voiceSource: AUDIO_DEFAULT_VOICE_SOURCE,
     // Omni 标量参数
-    speaker: AUDIO_DEFAULT_SPEAKER, // 语音合成(预设音色)→ metadata.speaker
-    language: AUDIO_DEFAULT_LANGUAGE, // 语音合成语言下拉 → metadata.language
+    speaker: AUDIO_DEFAULT_SPEAKER, // 语音融合(预设音色)→ metadata.speaker
+    language: AUDIO_DEFAULT_LANGUAGE, // 语音融合语言/方言 → metadata.language
     instructions: '', // design(必填)→ metadata.instructions
-    refText: '', // 语音合成(上传克隆)参考文本 → metadata.ref_text(未开仅音色向量时必填)
-    xVectorOnlyMode: false, // 语音合成(上传克隆):仅用音色向量克隆、免参考文本 → metadata.x_vector_only_mode
   });
   const [groups, setGroups] = useState([]);
   const [models, setModels] = useState([]);
@@ -228,16 +221,8 @@ export const useAudioGeneration = (mode = 'emotion') => {
   // 对话内已生成过 → 参数锁定(同视频):模型/音色/参数均不可改,直到新对话。
   const locked = currentConvId !== null;
 
-  // 语音合成的音色来源 toggle 决定运行时有效标志:上传克隆 → ref_audio(必填)+ 可选
-  // ref_text;预设音色 → speaker(标量)。非 synthesis 玩法沿用各自 modeDef(全 false)。
-  const isPreset =
-    needsVoiceSource && inputs.voiceSource === AUDIO_VOICE_SOURCE_PRESET;
-  const isUploadSource =
-    needsVoiceSource && inputs.voiceSource === AUDIO_VOICE_SOURCE_UPLOAD;
-  const needsRefAudio = isUploadSource;
-  const refAudioRequired = isUploadSource;
-  const needsRefText = isUploadSource;
-  const needsSpeaker = isPreset;
+  // 各玩法输入要求直接来自 modeDef(AUDIO_MODES):语音融合=预设音色(needsSpeaker)+方言;
+  // 情感合成=参考音色(needsVoice);双人对话=双参考音(needsDualRef);声音设计=声线描述。
 
   const conversationsRef = useRef(conversations);
   conversationsRef.current = conversations;
@@ -626,16 +611,6 @@ export const useAudioGeneration = (mode = 'emotion') => {
           showError(t('请先上传参考音(克隆源)'));
           return;
         }
-        // clone:未开启「仅用音色向量」时参考文本必填(引擎克隆需参考音转录,
-        // 否则上游报 "requires non-empty 'ref_text'")。
-        if (
-          needsRefText &&
-          !inputs.xVectorOnlyMode &&
-          !(inputs.refText || '').trim()
-        ) {
-          showError(t('请填写参考文本(参考音的文字稿),或开启「仅用音色向量」'));
-          return;
-        }
         // dialogue:两个说话人参考音均必填。
         if (
           needsDualRef &&
@@ -777,38 +752,20 @@ export const useAudioGeneration = (mode = 'emotion') => {
                 : AUDIO_DEFAULT_EMO_WEIGHT;
           }
         } else {
-          // ── vLLM-Omni 家族:语音合成 / 双人对话 / 声音设计 ──
-          // 语音合成的「音色来源」互斥:预设音色发 speaker(不发 ref_audio);上传克隆发
-          // ref_audio(+ 可选 ref_text)。按 params.voiceSource 判定,与面板 toggle 对齐。
-          const presetSource =
-            needsVoiceSource &&
-            params.voiceSource === AUDIO_VOICE_SOURCE_PRESET;
-          if (needsVoiceSource && presetSource) {
-            // 预设音色(标量透传,门面不物化)。
+          // ── vLLM-Omni 家族:语音融合 / 双人对话 / 声音设计 ──
+          // 语音融合:预设音色 → metadata.speaker(标量透传,门面不物化)。
+          if (needsSpeaker) {
             const sp = (params.speaker || '').trim();
             if (sp) metadata.speaker = sp;
-          } else {
-            // 参考音(上传克隆源 / dialogue 说话人1;dialogue 走 needsDualRef)。
-            if ((needsRefAudio || needsDualRef) && refAudioURL) {
-              metadata.ref_audio = refAudioURL;
-            }
-            // 双人对话第二说话人。
+          }
+          // 参考音(dialogue 说话人1 → ref_audio,说话人2 → ref_audio_2)。
+          if (needsRefAudio || needsDualRef) {
+            if (refAudioURL) metadata.ref_audio = refAudioURL;
             if (needsDualRef && refAudio2URL) {
               metadata.ref_audio_2 = refAudio2URL;
             }
-            // 克隆参考文本 / 仅音色向量(仅上传克隆时,标量透传)。开启「仅用音色向量」→
-            // 发 x_vector_only_mode=true(引擎跳过参考文本 ICL);否则发参考文本(必填,已在
-            // 提交前校验非空)。
-            if (needsRefText) {
-              if (params.xVectorOnlyMode) {
-                metadata.x_vector_only_mode = true;
-              } else {
-                const rt = (params.refText || '').trim();
-                if (rt) metadata.ref_text = rt;
-              }
-            }
           }
-          // 语言/方言(标量透传;两种音色来源都可带)。
+          // 语言/方言(标量透传)。
           if (needsLanguage) {
             const lang = (params.language || '').trim();
             if (lang) metadata.language = lang;
@@ -972,9 +929,6 @@ export const useAudioGeneration = (mode = 'emotion') => {
       (needsRefAudio &&
         refAudioRequired &&
         !(inputs.refAudioData || '').startsWith('data:')) ||
-      (needsRefText &&
-        !inputs.xVectorOnlyMode &&
-        !(inputs.refText || '').trim()) ||
       (needsDualRef &&
         (!(inputs.refAudioData || '').startsWith('data:') ||
           !(inputs.refAudio2Data || '').startsWith('data:'))) ||

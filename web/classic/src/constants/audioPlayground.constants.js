@@ -169,12 +169,18 @@ export const AUDIO_MODES = {
     engine: 'omni',
     needsVoice: false,
     needsEmotion: false,
-    // 音色来源 toggle + 语言下拉;ref_audio/ref_text/speaker 由 toggle 在面板/hook 内切换。
-    needsVoiceSource: true,
+    // 语音融合(Qwen3-TTS CustomVoice)只做预设音色 + 语言/方言。不暴露上传克隆:
+    // CustomVoice checkpoint 无 speaker encoder 权重,克隆请求会让引擎维度不匹配崩溃
+    // (需 Base checkpoint 才支持克隆),故此处仅预设音色(speaker) + 方言(language)。
+    // 扩展限制:synthesis 原设计是多模型共享能力,VoxCPM2/CosyVoice3/MOSS-TTS 等靠
+    // ref_audio 零样本克隆(无预设音色)。当前只配了 qwen3-tts,故一刀切为预设音色;若将来
+    // 接入那些克隆模型,需改为按模型「音色来源」能力区分(后端 AudioModelConfig 加标注,
+    // 前端按当前模型动态显示 预设音色下拉 / 克隆上传),而非对整个 tab 一刀切。
+    needsVoiceSource: false,
     needsRefAudio: false,
     refAudioRequired: false,
     needsDualRef: false,
-    needsSpeaker: false,
+    needsSpeaker: true,
     needsLanguage: true,
     needsRefText: false,
     needsInstructions: false,
@@ -217,13 +223,18 @@ export const AUDIO_TAB_ORDER = ['emotion', 'synthesis', 'dialogue', 'design'];
 
 // 预设音色(语音合成 → 音色来源=预设音色,Qwen3-TTS):随 metadata.speaker 透传,门面不
 // 物化、引擎按 voice/speaker 别名读。提供常用列表 + 允许自由输入。
+// 预设音色 = Qwen3-TTS CustomVoice checkpoint 内置的 9 个说话人(与引擎
+// /v1/audio/voices 返回一致;此前只列 6 个且含引擎不存在的 chelsie/ethan,已修正)。
 export const AUDIO_SPEAKER_PRESETS = [
   { value: 'vivian', label: 'Vivian' },
   { value: 'ryan', label: 'Ryan' },
   { value: 'aiden', label: 'Aiden' },
-  { value: 'chelsie', label: 'Chelsie' },
   { value: 'serena', label: 'Serena' },
-  { value: 'ethan', label: 'Ethan' },
+  { value: 'dylan', label: 'Dylan' },
+  { value: 'eric', label: 'Eric' },
+  { value: 'ono_anna', label: 'Ono Anna' },
+  { value: 'sohee', label: 'Sohee' },
+  { value: 'uncle_fu', label: 'Uncle Fu' },
 ];
 export const AUDIO_DEFAULT_SPEAKER = 'vivian';
 
@@ -285,24 +296,22 @@ export const AUDIO_EMOTION_EXAMPLES = [
   },
 ];
 
-// 语音合成:①声音克隆(上传参考音 + 参考文本)②预设音色。克隆参考音走 refAudioData
-// (→ metadata.ref_audio),参考文本 refText,预设音色走 speaker。
+// 语音融合:预设音色(speaker)+ 可选方言(language)。展示不同音色与方言组合。
 export const AUDIO_SYNTHESIS_EXAMPLES = [
-  {
-    label: '声音克隆(中文参考音)',
-    prompt:
-      '收到好友从远方寄来的生日礼物,那份意外的惊喜与深深的祝福让我心中充满了甜蜜的快乐。',
-    params: {
-      voiceSource: AUDIO_VOICE_SOURCE_UPLOAD,
-      refText: '希望你以后能够做的比我还好呦。',
-      refAudioName: 'cosyvoice-clone.wav',
-    },
-    files: { refAudioData: '/playground-samples/audio/cosyvoice-clone.wav' },
-  },
   {
     label: '预设音色 Vivian',
     prompt: '其实我真的有发现,我是一个特别善于观察别人情绪的人。',
-    params: { voiceSource: AUDIO_VOICE_SOURCE_PRESET, speaker: 'vivian' },
+    params: { speaker: 'vivian' },
+  },
+  {
+    label: '男声 Ryan',
+    prompt: '大家好,欢迎来到今天的节目,我们准备了很多精彩的内容。',
+    params: { speaker: 'ryan' },
+  },
+  {
+    label: '粤语·Serena',
+    prompt: '今日天气真係唔错,不如一齐出去行下街啦。',
+    params: { speaker: 'serena', language: 'yue' },
   },
 ];
 
