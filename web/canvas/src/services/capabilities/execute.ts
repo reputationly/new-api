@@ -37,8 +37,6 @@ export function validateCapabilityInputs(spec: CapabilitySpec, prompt: string, s
     for (const param of spec.params) {
         if (param.required && !hasParamValue(params, param.key)) problems.push(`请在参数面板填写「${param.label}」`);
     }
-    // 能力私有的条件校验(如语音合成:连了克隆参考音且未开仅音色向量时,参考文本必填)
-    if (spec.validate) problems.push(...spec.validate({ prompt, slots, params }));
     return problems;
 }
 

@@ -78,8 +78,6 @@ export type CapabilitySpec = {
     requireOneOf?: { slotKey: string; paramKey: string; message: string };
     /** 能力私有的请求体后处理(互斥剔除、参数联动),在通用组装完成后执行 */
     postProcess?: (ctx: PostProcessContext) => void;
-    /** 能力私有的条件校验(通用 required/requireOneOf 之外);返回问题描述数组(空=通过) */
-    validate?: (ctx: { prompt: string; slots: Record<string, string[]>; params: Record<string, string | number> }) => string[];
 };
 
 const PROMPT_SLOT: InputSlot = { key: "prompt", kind: "text", required: true, role: "提示词" };
@@ -240,33 +238,28 @@ export const CAPABILITIES: CapabilitySpec[] = [
         output: CanvasNodeType.Audio,
         channel: "task",
         taskType: "tts",
-        inputs: [PROMPT_SLOT, { key: "metadata.ref_audio", kind: "audio", required: false, role: "克隆参考音" }],
+        // 语音融合(Qwen3-TTS CustomVoice)只做预设音色 + 语言/方言。不暴露克隆参考音:
+        // CustomVoice checkpoint 无 speaker encoder 权重,克隆会让引擎维度不匹配崩溃
+        // (克隆需 Base checkpoint)。故仅 speaker(预设音色,默认 vivian) + language。
+        inputs: [PROMPT_SLOT],
         params: [
             {
                 key: "metadata.speaker",
                 label: "预设音色",
                 type: "select",
+                defaultValue: "vivian",
                 options: [
                     { value: "vivian", label: "Vivian" },
                     { value: "ryan", label: "Ryan" },
                     { value: "aiden", label: "Aiden" },
-                    { value: "chelsie", label: "Chelsie" },
                     { value: "serena", label: "Serena" },
-                    { value: "ethan", label: "Ethan" },
+                    { value: "dylan", label: "Dylan" },
+                    { value: "eric", label: "Eric" },
+                    { value: "ono_anna", label: "Ono Anna" },
+                    { value: "sohee", label: "Sohee" },
+                    { value: "uncle_fu", label: "Uncle Fu" },
                 ],
-                placeholder: "连接克隆参考音时无需选择",
-            },
-            { key: "metadata.ref_text", label: "参考文本", type: "text", placeholder: "克隆参考音的文字稿(未开仅音色向量时必填)" },
-            {
-                key: "metadata.x_vector_only_mode",
-                label: "克隆方式",
-                type: "select",
-                virtual: true,
-                options: [
-                    { value: "", label: "提供参考文本(推荐)" },
-                    { value: "true", label: "仅用音色向量(免参考文本)" },
-                ],
-                placeholder: "连接克隆参考音时生效",
+                placeholder: "选择预设音色",
             },
             {
                 key: "metadata.language",
@@ -285,34 +278,6 @@ export const CAPABILITIES: CapabilitySpec[] = [
                 placeholder: "留空自动",
             },
         ],
-        requireOneOf: { slotKey: "metadata.ref_audio", paramKey: "metadata.speaker", message: "语音合成需要连接上游音频节点作为克隆参考音,或在参数面板选择预设音色" },
-        validate: ({ slots, params }) => {
-            // 克隆参考音(Base 任务)需参考文本做 ICL,除非开启仅音色向量;否则上游报
-            // "requires non-empty 'ref_text'"。预设音色分支无此要求(requireOneOf 已覆盖)。
-            const hasRefAudio = (slots["metadata.ref_audio"] || []).length > 0;
-            const xVecOnly = String(params["metadata.x_vector_only_mode"] || "") === "true";
-            const hasRefText = String(params["metadata.ref_text"] || "").trim() !== "";
-            if (hasRefAudio && !xVecOnly && !hasRefText) {
-                return ["克隆参考音需填写「参考文本」(参考音的文字稿),或将「克隆方式」设为仅用音色向量"];
-            }
-            return [];
-        },
-        postProcess: ({ params, metadata }) => {
-            // 音色来源互斥(与体验区 voiceSource toggle 一致):有克隆参考音 → 不发 speaker;
-            // 走预设音色 → 不发 ref_text(参考文本只对克隆参考音有意义)。
-            if (metadata.ref_audio) {
-                delete metadata.speaker;
-                // 仅音色向量:发布尔 x_vector_only_mode=true 并移除参考文本(引擎跳过 ICL);
-                // 否则走参考文本 ICL(validate 已保证非空)。x_vector_only_mode 是 virtual 参数,
-                // 不会被通用层自动映射,只在此处按布尔下发。
-                if (String(params["metadata.x_vector_only_mode"] || "") === "true") {
-                    metadata.x_vector_only_mode = true;
-                    delete metadata.ref_text;
-                }
-            } else {
-                delete metadata.ref_text;
-            }
-        },
     },
     {
         key: "tts_dialogue",
