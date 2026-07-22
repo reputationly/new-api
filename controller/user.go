@@ -394,6 +394,26 @@ func GetAffCode(c *gin.Context) {
 	return
 }
 
+// GetAffInvitees 分页返回当前用户邀请的用户列表（按注册时间由近到远）。
+// 额外返回 verified_total（已实名被邀请人数），供邀请卡统计区展示。
+func GetAffInvitees(c *gin.Context) {
+	id := c.GetInt("id")
+	pageInfo := common.GetPageQuery(c)
+	invitees, total, verifiedTotal, err := model.GetInviteesByInviter(id, pageInfo.GetPage(), pageInfo.GetPageSize())
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	common.ApiSuccess(c, gin.H{
+		"items":          invitees,
+		"total":          total,
+		"verified_total": verifiedTotal,
+		"page":           pageInfo.GetPage(),
+		"page_size":      pageInfo.GetPageSize(),
+	})
+	return
+}
+
 func GetSelf(c *gin.Context) {
 	id := c.GetInt("id")
 	userRole := c.GetInt("role")
@@ -434,6 +454,7 @@ func GetSelf(c *gin.Context) {
 		"aff_count":         user.AffCount,
 		"aff_quota":         user.AffQuota,
 		"aff_history_quota": user.AffHistoryQuota,
+		"aff_points_earned": user.AffPointsEarned,
 		"inviter_id":        user.InviterId,
 		"linux_do_id":       user.LinuxDOId,
 		"setting":           user.Setting,

@@ -117,6 +117,7 @@ func SetApiRouter(router *gin.Engine) {
 				// 子账户黑名单：一切能改变余额/产生消费承诺的入口全部封死（设计 §4.4）。
 				// 子账户是企业主账户的只读视图，不能充值/兑换/邀请/认证/管理令牌。
 				selfRoute.GET("/aff", middleware.SubAccountForbidden(), controller.GetAffCode)
+				selfRoute.GET("/aff/invitees", middleware.SubAccountForbidden(), controller.GetAffInvitees)
 				selfRoute.GET("/topup/info", controller.GetTopUpInfo)
 				selfRoute.GET("/topup/self", controller.GetUserTopUps)
 				selfRoute.POST("/topup", middleware.SubAccountForbidden(), middleware.CriticalRateLimit(), controller.TopUp)

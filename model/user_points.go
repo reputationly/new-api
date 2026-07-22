@@ -149,6 +149,15 @@ func AddUserPointsUsed(id int, points int) error {
 	return DB.Model(&User{}).Where("id = ?", id).Update("points_used", gorm.Expr("points_used + ?", points)).Error
 }
 
+// AddUserAffPointsEarned 累加邀请人通过邀请累计获得的积分（quota unit），仅用于展示统计。
+// 在被邀请人实名后给邀请人发放邀请积分时同步累加（GrantKycPoints），有 KycPointsGranted 占位保证不重复。
+func AddUserAffPointsEarned(id int, points int) error {
+	if points <= 0 {
+		return nil
+	}
+	return DB.Model(&User{}).Where("id = ?", id).Update("aff_points_earned", gorm.Expr("aff_points_earned + ?", points)).Error
+}
+
 // TryMarkKycPointsGranted 原子占位闸门：仅当 kyc_points_granted 仍为 false 时置 true，
 // 返回 true 表示首次（可发放）。用于防 KYC reset 后重新提交再获批导致重复发积分（§8.2）。
 // 本人与邀请人两笔发放绑定在同一次占位成功之后。布尔值经 GORM 抽象，三库兼容。

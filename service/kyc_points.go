@@ -51,6 +51,10 @@ func GrantKycPoints(userId int) {
 		if err := model.IncreaseUserPoints(user.InviterId, q, true); err != nil {
 			common.SysLog("GrantKycPoints: grant inviter failed: " + err.Error())
 		} else {
+			// 累加邀请人「累计邀请积分」统计（展示用），与积分发放绑定同一次占位，不重复。
+			if err := model.AddUserAffPointsEarned(user.InviterId, q); err != nil {
+				common.SysLog("GrantKycPoints: add aff points earned failed: " + err.Error())
+			}
 			model.RecordLog(user.InviterId, model.LogTypeSystem,
 				fmt.Sprintf("邀请用户(ID:%d)完成实名认证赠送 %d 积分", userId, ps.KycInviterPoints))
 		}
