@@ -150,6 +150,7 @@ const PARAM_FIELDS = [
   'language',
   'instructions',
   'refText',
+  'xVectorOnlyMode',
 ];
 
 const pickParams = (src) => {
@@ -202,7 +203,8 @@ export const useAudioGeneration = (mode = 'emotion') => {
     speaker: AUDIO_DEFAULT_SPEAKER, // 语音合成(预设音色)→ metadata.speaker
     language: AUDIO_DEFAULT_LANGUAGE, // 语音合成语言下拉 → metadata.language
     instructions: '', // design(必填)→ metadata.instructions
-    refText: '', // 语音合成(上传克隆)可选参考文本 → metadata.ref_text
+    refText: '', // 语音合成(上传克隆)参考文本 → metadata.ref_text(未开仅音色向量时必填)
+    xVectorOnlyMode: false, // 语音合成(上传克隆):仅用音色向量克隆、免参考文本 → metadata.x_vector_only_mode
   });
   const [groups, setGroups] = useState([]);
   const [models, setModels] = useState([]);
@@ -624,6 +626,16 @@ export const useAudioGeneration = (mode = 'emotion') => {
           showError(t('请先上传参考音(克隆源)'));
           return;
         }
+        // clone:未开启「仅用音色向量」时参考文本必填(引擎克隆需参考音转录,
+        // 否则上游报 "requires non-empty 'ref_text'")。
+        if (
+          needsRefText &&
+          !inputs.xVectorOnlyMode &&
+          !(inputs.refText || '').trim()
+        ) {
+          showError(t('请填写参考文本(参考音的文字稿),或开启「仅用音色向量」'));
+          return;
+        }
         // dialogue:两个说话人参考音均必填。
         if (
           needsDualRef &&
@@ -784,10 +796,16 @@ export const useAudioGeneration = (mode = 'emotion') => {
             if (needsDualRef && refAudio2URL) {
               metadata.ref_audio_2 = refAudio2URL;
             }
-            // 克隆参考文本(可选,标量透传;仅上传克隆时)。
+            // 克隆参考文本 / 仅音色向量(仅上传克隆时,标量透传)。开启「仅用音色向量」→
+            // 发 x_vector_only_mode=true(引擎跳过参考文本 ICL);否则发参考文本(必填,已在
+            // 提交前校验非空)。
             if (needsRefText) {
-              const rt = (params.refText || '').trim();
-              if (rt) metadata.ref_text = rt;
+              if (params.xVectorOnlyMode) {
+                metadata.x_vector_only_mode = true;
+              } else {
+                const rt = (params.refText || '').trim();
+                if (rt) metadata.ref_text = rt;
+              }
             }
           }
           // 语言/方言(标量透传;两种音色来源都可带)。
@@ -954,6 +972,9 @@ export const useAudioGeneration = (mode = 'emotion') => {
       (needsRefAudio &&
         refAudioRequired &&
         !(inputs.refAudioData || '').startsWith('data:')) ||
+      (needsRefText &&
+        !inputs.xVectorOnlyMode &&
+        !(inputs.refText || '').trim()) ||
       (needsDualRef &&
         (!(inputs.refAudioData || '').startsWith('data:') ||
           !(inputs.refAudio2Data || '').startsWith('data:'))) ||
