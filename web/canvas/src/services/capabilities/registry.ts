@@ -262,26 +262,17 @@ export const CAPABILITIES: CapabilitySpec[] = [
                 placeholder: "选择预设音色",
             },
             {
-                // value 必须是引擎 supported_languages 的确切枚举(引擎 .title() 归一化);
-                // 方言仅 北京话/四川话,另支持法/德/意/葡/俄/西。留空=引擎自动判定。
+                // 口音:TTS 不翻译,引擎 Auto 按文本语言发音,故不让用户选语言;仅提供中文方言
+                // 口音(同一段中文换口音)。value 是引擎 supported_languages 枚举(.title()
+                // 归一化)。方言仅对中文文本生效,当前 checkpoint 只有北京话/四川话;留空=自动。
                 key: "metadata.language",
-                label: "语言/方言",
+                label: "口音",
                 type: "select",
                 options: [
-                    { value: "Chinese", label: "中文(普通话)" },
                     { value: "Beijing_Dialect", label: "北京话" },
                     { value: "Sichuan_Dialect", label: "四川话" },
-                    { value: "English", label: "英文" },
-                    { value: "Japanese", label: "日文" },
-                    { value: "Korean", label: "韩文" },
-                    { value: "French", label: "法语" },
-                    { value: "German", label: "德语" },
-                    { value: "Italian", label: "意大利语" },
-                    { value: "Portuguese", label: "葡萄牙语" },
-                    { value: "Russian", label: "俄语" },
-                    { value: "Spanish", label: "西班牙语" },
                 ],
-                placeholder: "留空自动",
+                placeholder: "留空自动(按文本语言)",
             },
         ],
     },

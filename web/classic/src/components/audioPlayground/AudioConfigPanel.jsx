@@ -475,14 +475,22 @@ const AudioConfigPanel = ({
           </div>
         )}
 
-        {/* 多语言/方言(Qwen3-TTS/CosyVoice3):语言下拉 → metadata.language(标量透传) */}
+        {/* 口音(语音融合):默认自动;方言(北京话/四川话)仅对中文文本生效 → metadata.language */}
         {needsLanguage && (
           <div>
             <div className='flex items-center gap-2 mb-2'>
               <Languages size={16} className='text-gray-500' />
               <Typography.Text strong className='text-sm'>
-                {t('语言/方言')}
+                {t('口音')}
               </Typography.Text>
+              <Tooltip
+                content={t(
+                  '默认自动:引擎按文本语言发音(TTS 不翻译)。方言(北京话/四川话)仅对中文文本生效。',
+                )}
+                position='top'
+              >
+                <HelpCircle size={14} className='text-gray-400 cursor-help' />
+              </Tooltip>
             </div>
             <Select
               selection

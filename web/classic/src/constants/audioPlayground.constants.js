@@ -238,25 +238,16 @@ export const AUDIO_SPEAKER_PRESETS = [
 ];
 export const AUDIO_DEFAULT_SPEAKER = 'vivian';
 
-// 多语言/方言(语音融合 → 语言下拉):随 metadata.language 透传。value 必须是引擎
-// (Qwen3-TTS)supported_languages 的确切枚举——引擎会对 language 做 .title() 归一化
-// (serving_speech.py:1648,如 sichuan_dialect→Sichuan_Dialect),不匹配即报 Invalid
-// language。方言只支持 北京话/四川话(无粤语/闽南话/上海话);另支持法/德/意/葡/俄/西。
-// 空 value=不发 language(引擎按输入自动判定)。
+// 口音(语音融合):TTS 不翻译,文本什么语言就念什么,引擎 Auto 自动识别语言,故不让用户选
+// 语言(英文文本选日文无意义)。用户唯一有意义的主动选择是「中文方言口音」——同一段中文用
+// 普通话(=自动)/北京话/四川话念,口音不同。value 是引擎 supported_languages 枚举(引擎对
+// language 做 .title() 归一化,serving_speech.py:1648)。方言仅对中文文本生效;当前
+// checkpoint 只有北京话/四川话两种(能力由 checkpoint 的 codec_language_id 决定,换
+// checkpoint 可扩;非中文文本请留「自动」)。
 export const AUDIO_LANGUAGES = [
   { value: '', label: '自动' },
-  { value: 'Chinese', label: '中文(普通话)' },
   { value: 'Beijing_Dialect', label: '北京话' },
   { value: 'Sichuan_Dialect', label: '四川话' },
-  { value: 'English', label: '英文' },
-  { value: 'Japanese', label: '日文' },
-  { value: 'Korean', label: '韩文' },
-  { value: 'French', label: '法语' },
-  { value: 'German', label: '德语' },
-  { value: 'Italian', label: '意大利语' },
-  { value: 'Portuguese', label: '葡萄牙语' },
-  { value: 'Russian', label: '俄语' },
-  { value: 'Spanish', label: '西班牙语' },
 ];
 export const AUDIO_DEFAULT_LANGUAGE = '';
 
@@ -317,9 +308,9 @@ export const AUDIO_SYNTHESIS_EXAMPLES = [
     params: { speaker: 'ryan' },
   },
   {
-    label: '粤语·Serena',
-    prompt: '今日天气真係唔错,不如一齐出去行下街啦。',
-    params: { speaker: 'serena', language: 'yue' },
+    label: '四川话·Serena',
+    prompt: '今天天气巴适得很,不如一起出去耍哈嘛。',
+    params: { speaker: 'serena', language: 'Sichuan_Dialect' },
   },
 ];
 
