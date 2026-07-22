@@ -90,5 +90,22 @@
   "Xinference": "Xinference",
   "Xunfei": "Xunfei",
   "Alipay": "Alipay",
-  "WeChat Pay": "WeChat Pay"
+  "WeChat Pay": "WeChat Pay",
+  "Admin Notifications": "Admin Notifications",
+  "Notify admins via WeChat Work / DingTalk webhooks": "Notify admins via WeChat Work / DingTalk webhooks",
+  "Push a reminder to admins via WeChat Work / DingTalk group bots when users submit items that need review": "Push a reminder to admins via WeChat Work / DingTalk group bots when users submit items that need review",
+  "WeChat Work Webhook URL": "WeChat Work Webhook URL",
+  "DingTalk Webhook URL": "DingTalk Webhook URL",
+  "Group robot webhook URL. Leave blank to disable.": "Group robot webhook URL. Leave blank to disable.",
+  "Group robot webhook URL. Add \"管理员通知\" as a custom keyword (or allowlist the server IP) on the DingTalk side. Leave blank to disable.": "Group robot webhook URL. Add \"管理员通知\" as a custom keyword (or allowlist the server IP) on the DingTalk side. Leave blank to disable.",
+  "Events to notify": "Events to notify",
+  "New ticket / feedback": "New ticket / feedback",
+  "Enterprise verification submitted": "Enterprise verification submitted",
+  "Real-name verification submitted": "Real-name verification submitted",
+  "Bank transfer submitted": "Bank transfer submitted",
+  "Invoice request submitted": "Invoice request submitted",
+  "Send test": "Send test",
+  "Test notification sent": "Test notification sent",
+  "Failed to send test notification": "Failed to send test notification",
+  "Save notification settings": "Save notification settings"
 }

@@ -65,6 +65,13 @@ const defaultOperationsSettings: OperationsSettings = {
   'perf_metrics_setting.flush_interval': 5,
   'perf_metrics_setting.bucket_time': 'hour',
   'perf_metrics_setting.retention_days': 0,
+  'notification_setting.wechat_work_webhook_url': '',
+  'notification_setting.dingtalk_webhook_url': '',
+  'notification_setting.notify_feedback': false,
+  'notification_setting.notify_enterprise': false,
+  'notification_setting.notify_kyc': false,
+  'notification_setting.notify_bank_transfer': false,
+  'notification_setting.notify_invoice': false,
 }
 
 export function OperationsSettings() {
@@ -95,6 +102,7 @@ export function OperationsSettings() {
     | 'worker'
     | 'logs'
     | 'performance'
+    | 'admin-notification'
     | 'update-checker'
   const sectionContent = getOperationsSectionContent(
     activeSection,

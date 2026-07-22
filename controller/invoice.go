@@ -11,6 +11,7 @@ import (
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/model"
+	"github.com/QuantumNous/new-api/service"
 	"gorm.io/gorm"
 
 	"github.com/gin-gonic/gin"
@@ -99,6 +100,9 @@ func SubmitInvoice(c *gin.Context) {
 		common.ApiErrorMsg(c, "提交失败，请稍后重试")
 		return
 	}
+	go service.NotifyAdminEvent(service.AdminNotifyInvoice,
+		fmt.Sprintf("用户 %s 提交了开票申请，金额 ¥%.2f，抬头：%s",
+			c.GetString("username"), common.FenToYuan(req.AmountFen), strings.TrimSpace(req.Title)))
 	c.JSON(http.StatusCreated, gin.H{
 		"success": true,
 		"message": "",

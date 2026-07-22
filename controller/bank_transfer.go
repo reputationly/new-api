@@ -10,6 +10,7 @@ import (
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/model"
+	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
 	"gorm.io/gorm"
 
@@ -116,6 +117,8 @@ func SubmitBankTransfer(c *gin.Context) {
 		common.ApiErrorMsg(c, "提交失败，请稍后重试")
 		return
 	}
+	go service.NotifyAdminEvent(service.AdminNotifyBankTransfer,
+		fmt.Sprintf("用户 %s 提交了企业转账，金额 ¥%.2f", c.GetString("username"), common.FenToYuan(req.AmountFen)))
 	c.JSON(http.StatusCreated, gin.H{
 		"success": true,
 		"message": "",

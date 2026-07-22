@@ -12,6 +12,7 @@ import (
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/model"
+	"github.com/QuantumNous/new-api/service"
 
 	"github.com/gin-gonic/gin"
 )
@@ -86,6 +87,8 @@ func CreateFeedbackTopic(c *gin.Context) {
 		common.ApiErrorMsg(c, err.Error())
 		return
 	}
+	go service.NotifyAdminEvent(service.AdminNotifyFeedback,
+		fmt.Sprintf("用户 %s 提交了工单：%s", c.GetString("username"), title))
 	c.JSON(http.StatusCreated, gin.H{"success": true, "message": "", "data": feedbackTopicToItem(topic, "")})
 }
 

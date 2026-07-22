@@ -294,6 +294,13 @@ export type OperationsSettings = {
   'perf_metrics_setting.flush_interval': number
   'perf_metrics_setting.bucket_time': 'hour' | 'minute' | '5min'
   'perf_metrics_setting.retention_days': number
+  'notification_setting.wechat_work_webhook_url': string
+  'notification_setting.dingtalk_webhook_url': string
+  'notification_setting.notify_feedback': boolean
+  'notification_setting.notify_enterprise': boolean
+  'notification_setting.notify_kyc': boolean
+  'notification_setting.notify_bank_transfer': boolean
+  'notification_setting.notify_invoice': boolean
 }
 
 export type SecuritySettings = {

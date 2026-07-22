@@ -4410,6 +4410,23 @@
     "Zero retention": "零数据保留",
     "Zhipu": "智谱",
     "Zhipu V4": "智谱 V4",
-    "Zoom": "缩放"
+    "Zoom": "缩放",
+    "Admin Notifications": "管理员通知",
+    "Notify admins via WeChat Work / DingTalk webhooks": "通过企业微信 / 钉钉 webhook 通知管理员",
+    "Push a reminder to admins via WeChat Work / DingTalk group bots when users submit items that need review": "当用户提交需要审核的事项时，通过企业微信 / 钉钉群机器人向管理员推送提醒",
+    "WeChat Work Webhook URL": "企业微信 Webhook 地址",
+    "DingTalk Webhook URL": "钉钉 Webhook 地址",
+    "Group robot webhook URL. Leave blank to disable.": "群机器人 webhook 地址，留空则不启用。",
+    "Group robot webhook URL. Add \"管理员通知\" as a custom keyword (or allowlist the server IP) on the DingTalk side. Leave blank to disable.": "群机器人 webhook 地址。请在钉钉侧将「管理员通知」设为自定义关键词（或将服务器 IP 加入白名单）。留空则不启用。",
+    "Events to notify": "通知的事件",
+    "New ticket / feedback": "新工单 / 反馈",
+    "Enterprise verification submitted": "提交企业认证",
+    "Real-name verification submitted": "提交实名认证",
+    "Bank transfer submitted": "提交对公转账",
+    "Invoice request submitted": "提交开票申请",
+    "Send test": "发送测试",
+    "Test notification sent": "测试通知已发送",
+    "Failed to send test notification": "发送测试通知失败",
+    "Save notification settings": "保存通知设置"
   }
 }
