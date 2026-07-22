@@ -72,6 +72,9 @@ func SubmitEnterprise(c *gin.Context) {
 		return // bindAndUpsertEnterprise already wrote the response
 	}
 
+	go service.NotifyAdminEvent(service.AdminNotifyEnterprise,
+		fmt.Sprintf("用户 %s 提交了企业认证：%s", c.GetString("username"), ent.CompanyName))
+
 	c.JSON(http.StatusCreated, gin.H{
 		"success": true,
 		"message": "",

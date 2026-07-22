@@ -44,6 +44,14 @@ export async function deleteLogsBefore(targetTimestamp: number) {
   return res.data
 }
 
+export async function testNotification(channel: 'wechat_work' | 'dingtalk') {
+  const res = await api.post<UpdateOptionResponse>(
+    '/api/option/notification_test',
+    { channel }
+  )
+  return res.data
+}
+
 export async function resetModelRatios() {
   const res = await api.post<UpdateOptionResponse>(
     '/api/option/rest_model_ratio'

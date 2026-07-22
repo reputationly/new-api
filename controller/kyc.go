@@ -113,6 +113,9 @@ func SubmitKYC(c *gin.Context) {
 		return
 	}
 
+	go service.NotifyAdminEvent(service.AdminNotifyKYC,
+		fmt.Sprintf("用户 %s 提交了实名认证，姓名：%s", c.GetString("username"), req.RealName))
+
 	plain, _ := common.DecryptIDNumber(kyc.IdNumberEnc)
 	resp := dto.KYCStatusResponse{
 		Status:         kyc.Status,

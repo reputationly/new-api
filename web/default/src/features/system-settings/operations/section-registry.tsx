@@ -17,6 +17,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import { SystemBehaviorSection } from '../general/system-behavior-section'
+import { AdminNotificationSection } from '../integrations/admin-notification-section'
 import { EmailSettingsSection } from '../integrations/email-settings-section'
 import { MonitoringSettingsSection } from '../integrations/monitoring-settings-section'
 import { WorkerSettingsSection } from '../integrations/worker-settings-section'
@@ -139,6 +140,31 @@ const OPERATIONS_SECTIONS = [
             settings['perf_metrics_setting.bucket_time'] ?? 'hour',
           'perf_metrics_setting.retention_days':
             settings['perf_metrics_setting.retention_days'] ?? 0,
+        }}
+      />
+    ),
+  },
+  {
+    id: 'admin-notification',
+    titleKey: 'Admin Notifications',
+    descriptionKey: 'Notify admins via WeChat Work / DingTalk webhooks',
+    build: (settings: OperationsSettings) => (
+      <AdminNotificationSection
+        defaultValues={{
+          'notification_setting.wechat_work_webhook_url':
+            settings['notification_setting.wechat_work_webhook_url'],
+          'notification_setting.dingtalk_webhook_url':
+            settings['notification_setting.dingtalk_webhook_url'],
+          'notification_setting.notify_feedback':
+            settings['notification_setting.notify_feedback'],
+          'notification_setting.notify_enterprise':
+            settings['notification_setting.notify_enterprise'],
+          'notification_setting.notify_kyc':
+            settings['notification_setting.notify_kyc'],
+          'notification_setting.notify_bank_transfer':
+            settings['notification_setting.notify_bank_transfer'],
+          'notification_setting.notify_invoice':
+            settings['notification_setting.notify_invoice'],
         }}
       />
     ),
