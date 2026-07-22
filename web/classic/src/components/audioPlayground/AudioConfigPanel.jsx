@@ -9,6 +9,7 @@ import {
   TextArea,
   RadioGroup,
   Radio,
+  Switch,
 } from '@douyinfe/semi-ui';
 import {
   Settings,
@@ -459,7 +460,9 @@ const AudioConfigPanel = ({
           />
         )}
 
-        {/* 可选参考文本(声音克隆):参考音对应的文字稿,提升克隆稳定性 → metadata.ref_text */}
+        {/* 参考文本(声音克隆):参考音对应的文字稿。未开「仅用音色向量」时必填(引擎克隆需
+            参考音转录做 ICL,否则上游报 ref_text 必填);开启则改为只克隆音色、免文本 →
+            metadata.ref_text / metadata.x_vector_only_mode */}
         {needsRefText && (
           <div>
             <div className='flex items-center gap-2 mb-2'>
@@ -467,24 +470,39 @@ const AudioConfigPanel = ({
               <Typography.Text strong className='text-sm'>
                 {t('参考文本')}
               </Typography.Text>
-              <Typography.Text className='text-xs text-gray-400'>
-                {t('选填')}
-              </Typography.Text>
+              {!inputs.xVectorOnlyMode && (
+                <span className='text-red-500'>*</span>
+              )}
               <Tooltip
                 content={t(
-                  '可选。填写参考音对应的文字稿,部分模型据此提升克隆稳定性;留空则自动识别。',
+                  '参考音对应的文字稿。声音克隆需要它做上下文学习;若不便提供,可开启下方「仅用音色向量」改为只克隆音色。',
                 )}
                 position='top'
               >
                 <HelpCircle size={14} className='text-gray-400 cursor-help' />
               </Tooltip>
             </div>
+            <div className='flex items-center gap-2 mb-2'>
+              <Switch
+                size='small'
+                checked={!!inputs.xVectorOnlyMode}
+                onChange={(v) => onInputChange('xVectorOnlyMode', v)}
+                disabled={disabled}
+              />
+              <Typography.Text className='text-xs text-gray-500'>
+                {t('仅用音色向量(免参考文本)')}
+              </Typography.Text>
+            </div>
             <TextArea
-              placeholder={t('可选,输入参考音对应的文字稿')}
+              placeholder={
+                inputs.xVectorOnlyMode
+                  ? t('已开启仅用音色向量,无需参考文本')
+                  : t('请输入参考音对应的文字稿')
+              }
               value={inputs.refText}
               onChange={(value) => onInputChange('refText', value)}
               autosize={{ minRows: 2, maxRows: 5 }}
-              disabled={disabled}
+              disabled={disabled || inputs.xVectorOnlyMode}
               className='!rounded-lg'
             />
           </div>
