@@ -238,17 +238,25 @@ export const AUDIO_SPEAKER_PRESETS = [
 ];
 export const AUDIO_DEFAULT_SPEAKER = 'vivian';
 
-// 多语言/方言(语音合成 → 语言下拉):随 metadata.language 透传。取常用语言 + 中文方言子集。
+// 多语言/方言(语音融合 → 语言下拉):随 metadata.language 透传。value 必须是引擎
+// (Qwen3-TTS)supported_languages 的确切枚举——引擎会对 language 做 .title() 归一化
+// (serving_speech.py:1648,如 sichuan_dialect→Sichuan_Dialect),不匹配即报 Invalid
+// language。方言只支持 北京话/四川话(无粤语/闽南话/上海话);另支持法/德/意/葡/俄/西。
+// 空 value=不发 language(引擎按输入自动判定)。
 export const AUDIO_LANGUAGES = [
   { value: '', label: '自动' },
-  { value: 'zh', label: '中文(普通话)' },
-  { value: 'yue', label: '粤语' },
-  { value: 'sichuan', label: '四川话' },
-  { value: 'minnan', label: '闽南话' },
-  { value: 'shanghai', label: '上海话' },
-  { value: 'en', label: '英文' },
-  { value: 'ja', label: '日文' },
-  { value: 'ko', label: '韩文' },
+  { value: 'Chinese', label: '中文(普通话)' },
+  { value: 'Beijing_Dialect', label: '北京话' },
+  { value: 'Sichuan_Dialect', label: '四川话' },
+  { value: 'English', label: '英文' },
+  { value: 'Japanese', label: '日文' },
+  { value: 'Korean', label: '韩文' },
+  { value: 'French', label: '法语' },
+  { value: 'German', label: '德语' },
+  { value: 'Italian', label: '意大利语' },
+  { value: 'Portuguese', label: '葡萄牙语' },
+  { value: 'Russian', label: '俄语' },
+  { value: 'Spanish', label: '西班牙语' },
 ];
 export const AUDIO_DEFAULT_LANGUAGE = '';
 
