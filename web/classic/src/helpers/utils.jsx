@@ -66,6 +66,12 @@ export function getUserIdFromLocalStorage() {
   return user.id;
 }
 
+// 是否包含中日韩(CJK)字符。用于判定提示词是否需要中译英。
+// 覆盖基本汉字(一-鿿)与扩展 A(㐀-䶿);日文假名不在音效场景内,按需扩展。
+export function containsCJK(str) {
+  return /[一-鿿㐀-䶿]/.test(str || '');
+}
+
 export function getFooterHTML() {
   return localStorage.getItem('footer_html');
 }

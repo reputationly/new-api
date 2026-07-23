@@ -25,6 +25,9 @@ export const MUSIC_T2M_CAPABILITY = '文生音乐';
 export const MUSIC_COVER_CAPABILITY = '音乐改编';
 export const MUSIC_REPAINT_CAPABILITY = '音乐重绘';
 export const MUSIC_T2A_CAPABILITY = '文生音效';
+// 视频生音 = 视频配音效 + 视频配乐 合并(a/m 后缀对引擎无差别,统一走 a 系 v2a/tv2a)。
+export const MUSIC_V2X_CAPABILITY = '视频生音';
+// 合并前的旧标签,保留为合法值以兼容既有模型配置(匹配见 MUSIC_MODES.v2a.matchCapabilities)。
 export const MUSIC_V2A_CAPABILITY = '视频配音效';
 export const MUSIC_V2M_CAPABILITY = '视频配乐';
 export const MUSIC_SVS_CAPABILITY = '歌声合成';
@@ -33,8 +36,7 @@ export const MUSIC_CAPABILITIES = [
   MUSIC_COVER_CAPABILITY,
   MUSIC_REPAINT_CAPABILITY,
   MUSIC_T2A_CAPABILITY,
-  MUSIC_V2A_CAPABILITY,
-  MUSIC_V2M_CAPABILITY,
+  MUSIC_V2X_CAPABILITY,
   MUSIC_SVS_CAPABILITY,
 ];
 
@@ -96,38 +98,33 @@ export const MUSIC_MODES = {
     needsVideo: false,
     needsDualAudio: false,
     needsText: true, // 文生音效:文本必填
+    needsTranslation: true, // 中文提示词提交前中译英(AudioX 文本编码器仅认英文)
     videoMetaKey: 'video',
     promptAudioMetaKey: 'prompt_audio',
     targetAudioMetaKey: 'target_audio',
     resolveTaskType: () => 't2a',
   },
+  // 视频生音:视频配音效 + 视频配乐 合并。统一走 a 系;有文本→tv2a(翻译),无文本→v2a(不翻译)。
+  // matchCapabilities 使既有标了旧标签(视频配音效/视频配乐)的模型仍归入本 tab(后向兼容)。
   v2a: {
     taskType: 'v2a',
-    capability: MUSIC_V2A_CAPABILITY,
+    capability: MUSIC_V2X_CAPABILITY,
+    matchCapabilities: [
+      MUSIC_V2X_CAPABILITY,
+      MUSIC_V2A_CAPABILITY,
+      MUSIC_V2M_CAPABILITY,
+    ],
     engine: 'audiox',
     needsAudio: false,
     audioMetaKey: '',
     needsVideo: true,
     needsDualAudio: false,
-    needsText: false, // 视频配音效:文本可选;有文本→tv2a,否则 v2a
+    needsText: false, // 视频生音:文本可选;有文本→tv2a,否则 v2a
+    needsTranslation: true, // 有文本时中译英
     videoMetaKey: 'video',
     promptAudioMetaKey: 'prompt_audio',
     targetAudioMetaKey: 'target_audio',
     resolveTaskType: (hasText) => (hasText ? 'tv2a' : 'v2a'),
-  },
-  v2m: {
-    taskType: 'v2m',
-    capability: MUSIC_V2M_CAPABILITY,
-    engine: 'audiox',
-    needsAudio: false,
-    audioMetaKey: '',
-    needsVideo: true,
-    needsDualAudio: false,
-    needsText: false, // 视频配乐:文本可选;有文本→tv2m,否则 v2m
-    videoMetaKey: 'video',
-    promptAudioMetaKey: 'prompt_audio',
-    targetAudioMetaKey: 'target_audio',
-    resolveTaskType: (hasText) => (hasText ? 'tv2m' : 'v2m'),
   },
   svs: {
     taskType: 'svs',
@@ -151,8 +148,7 @@ export const MUSIC_TAB_ORDER = [
   'cover',
   'repaint',
   't2a',
-  'v2a',
-  'v2m',
+  'v2a', // 视频生音(视频配音效/视频配乐已合并)
   'svs',
 ];
 
@@ -220,9 +216,9 @@ export const MUSIC_EXAMPLES = {
   ],
   v2a: [
     '为视频生成贴合画面的音效',
+    '为视频生成贴合氛围的背景音乐',
     'Ocean waves crashing with people laughing',
   ],
-  v2m: ['为视频生成贴合氛围的背景音乐', 'Generate music with piano instrument'],
   svs: [
     {
       label: '歌声合成(普通话)',
@@ -332,6 +328,14 @@ const normalizeList = (list) =>
     ? Array.from(new Set(list.map((x) => String(x).trim()).filter(Boolean)))
     : [];
 
+// 解析 per-model 的 translation 配置(中译英)。形如 { enabled:bool, defaultModel:string }。
+// 缺省 enabled=false、defaultModel=''。
+const parseTranslationCfg = (cfg) => ({
+  enabled: cfg?.enabled === true,
+  defaultModel:
+    typeof cfg?.defaultModel === 'string' ? cfg.defaultModel.trim() : '',
+});
+
 // 解析 status 中的 MusicModelConfig(字符串或对象)。形如:
 //   { default: { maxChars, refAudioMaxMB, videoMaxMB },
 //     models: { <model>: { capabilities:[], maxChars, refAudioMaxMB, videoMaxMB } } }
@@ -356,6 +360,7 @@ export const parseMusicModelConfig = (raw) => {
           maxChars: toPositiveInt(cfg?.maxChars),
           refAudioMaxMB: toPositiveInt(cfg?.refAudioMaxMB),
           videoMaxMB: toPositiveInt(cfg?.videoMaxMB),
+          translation: parseTranslationCfg(cfg?.translation),
         };
       });
     }
@@ -374,13 +379,22 @@ export const parseMusicModelConfig = (raw) => {
 };
 
 // 指定能力(= 当前 tab)的音乐模型集合(勾选了该能力的模型)。
-export const getMusicModelSet = (config, capability) => {
+// matchCaps 为可选别名数组:命中其中任一能力即算(用于「视频生音」兼容旧标签)。
+export const getMusicModelSet = (config, capability, matchCaps) => {
+  const wanted =
+    Array.isArray(matchCaps) && matchCaps.length ? matchCaps : [capability];
   const set = new Set();
   Object.entries(config?.models || {}).forEach(([model, cfg]) => {
     const caps = Array.isArray(cfg?.capabilities) ? cfg.capabilities : [];
-    if (caps.includes(capability)) set.add(model);
+    if (caps.some((c) => wanted.includes(c))) set.add(model);
   });
   return set;
+};
+
+// 某模型的翻译配置(是否启用中译英 + 默认语言模型)。仅按模型,无全局兜底。
+export const getTranslationForModel = (config, model) => {
+  const t = config?.models?.[model]?.translation;
+  return { enabled: t?.enabled === true, defaultModel: t?.defaultModel || '' };
 };
 
 // 字数上限:按模型配置 → 全局默认 → 兜底常量。0 表示不限制。

@@ -22,6 +22,7 @@ import {
   processModelsData,
   getUserModelsCached,
   cachedGet,
+  containsCJK,
 } from '../../helpers';
 import {
   MUSIC_API_ENDPOINTS,
@@ -46,7 +47,41 @@ import {
   getMaxCharsForModel,
   getRefAudioMaxMBForModel,
   getVideoMaxMBForModel,
+  getTranslationForModel,
 } from '../../constants/musicPlayground.constants';
+
+// 中译英走体验区聊天门面(单次非流式);后端按会话身份注入上游 key。
+const MUSIC_TRANSLATE_ENDPOINT = '/pg/chat/completions';
+
+// 语言模型下拉过滤:仅保留 chat completions 兼容端点,排除嵌入/重排序/音频/视频/图片。
+// 纯图片模型后端会附带 openai 兜底端点,故用"含 chat 且不含任一非 chat"双条件。
+// 注意:translatePrompt 固定打 /pg/chat/completions,故不含 openai-response——
+// 仅声明 Responses 端点的模型走 chat completions 会失败,不应列入(含 openai 的仍保留)。
+const CHAT_ENDPOINT_TYPES = ['openai', 'anthropic', 'gemini'];
+const NON_CHAT_ENDPOINT_TYPES = [
+  'embeddings',
+  'jina-rerank',
+  'audio-speech',
+  'openai-video',
+  'image-generation',
+];
+const isChatModel = (types) => {
+  if (!Array.isArray(types) || types.length === 0) return false;
+  const hasChat = types.some((x) => CHAT_ENDPOINT_TYPES.includes(x));
+  const hasNonChat = types.some((x) => NON_CHAT_ENDPOINT_TYPES.includes(x));
+  return hasChat && !hasNonChat;
+};
+
+// 内置翻译模板(设计 §8):把用户输入转成一句 AudioCaps 风格英文音频描述。
+const TRANSLATE_SYSTEM_BASE = `You convert a user's sound request into ONE concise English caption for an audio generator (AudioX, trained on AudioCaps-style natural-language captions).
+Rules:
+- Output English only. One line. <= 40 words. No quotes, no brackets/tags, no music notation, no BPM, no [verse]/[chorus] style markers.
+- Describe the SOUND SCENE: sound sources + environment + acoustic qualities (distant / close / loud / faint / continuous / sudden ...). Comma-separated events.
+- If already English, lightly normalize; do not add unrelated content.
+- Preserve the user's intent faithfully; do not invent a different scene.`;
+// 视频生音(tv2a)追加:引导描述贴合视频画面(文字主导视频,见设计 §3 约束 3)。
+const TRANSLATE_SYSTEM_VIDEO = `${TRANSLATE_SYSTEM_BASE}
+- the sound should stay consistent with the video scene.`;
 
 // 音乐模型体验区 hook。一个 hook 覆盖全部 7 个玩法(mode),同一异步任务门面
 // (/pg/videos)、同一轮询/历史/锁定模式;按 mode 的 engine 分支输入形态与 metadata:
@@ -125,6 +160,9 @@ const PARAM_FIELDS = [
   'seed',
   'guidanceScale',
   'inferenceSteps',
+  // 中译英语言模型:随会话持久化,保证锁定会话后续轮次/刷新后仍用同一语言模型。
+  'translationGroup',
+  'translationModel',
 ];
 
 const pickParams = (src) => {
@@ -144,12 +182,14 @@ export const useMusicGeneration = (mode = 't2m') => {
   const modeDef = MUSIC_MODES[mode] || MUSIC_MODES.t2m;
   const {
     capability,
+    matchCapabilities,
     engine,
     needsAudio,
     audioMetaKey,
     needsVideo,
     needsDualAudio,
     needsText,
+    needsTranslation,
     videoMetaKey,
     promptAudioMetaKey,
     targetAudioMetaKey,
@@ -183,10 +223,16 @@ export const useMusicGeneration = (mode = 't2m') => {
     seed: '', // 指定后可复现;空 = 随机
     guidanceScale: '', // 贴合描述程度;空 = 引擎默认
     inferenceSteps: '', // 采样步数;空 = 引擎默认
+    // 中译英用的语言模型(分组+模型两级);仅 needsTranslation 且模型启用译文时使用。
+    translationGroup: '',
+    translationModel: '',
   });
   const [groups, setGroups] = useState([]);
   const [models, setModels] = useState([]);
   const [modelGroupsMap, setModelGroupsMap] = useState(new Map());
+  const [modelEndpointTypes, setModelEndpointTypes] = useState(new Map());
+  const [translationGroups, setTranslationGroups] = useState([]);
+  const [translationModels, setTranslationModels] = useState([]);
 
   const initialConvsRef = useRef(null);
   const [conversations, setConversations] = useState(() => {
@@ -212,6 +258,8 @@ export const useMusicGeneration = (mode = 't2m') => {
   lockedRef.current = locked;
   const groupRef = useRef(inputs.group);
   groupRef.current = inputs.group;
+  const translationGroupRef = useRef(inputs.translationGroup);
+  translationGroupRef.current = inputs.translationGroup;
   const activePollRef = useRef(null);
 
   // mount 后从 IDB 还原上传的音频/视频,按初始对象引用逐条合并(不整体覆盖)。
@@ -289,9 +337,17 @@ export const useMusicGeneration = (mode = 't2m') => {
   );
 
   const musicModelSet = useMemo(
-    () => getMusicModelSet(modelConfig, capability),
-    [modelConfig, capability],
+    () => getMusicModelSet(modelConfig, capability, matchCapabilities),
+    [modelConfig, capability, matchCapabilities],
   );
+
+  // 当前模型的译文配置(是否启用中译英 + 默认语言模型)。
+  const translationCfg = useMemo(
+    () => getTranslationForModel(modelConfig, inputs.model),
+    [modelConfig, inputs.model],
+  );
+  // 是否在面板展示「语言模型」下拉:玩法需翻译 且 当前模型启用译文。
+  const showTranslation = !!needsTranslation && translationCfg.enabled;
 
   // 当前模型的字数上限(0=不限制)。
   const maxChars = useMemo(
@@ -317,6 +373,23 @@ export const useMusicGeneration = (mode = 't2m') => {
     return set;
   }, [musicModelSet, modelGroupsMap]);
 
+  // chat 模型集合(可作翻译语言模型)= supported_endpoint_types 命中 chat 过滤。
+  const chatModelSet = useMemo(() => {
+    const set = new Set();
+    modelEndpointTypes.forEach((types, model) => {
+      if (isChatModel(types)) set.add(model);
+    });
+    return set;
+  }, [modelEndpointTypes]);
+  // 含 chat 模型的分组集合。
+  const chatGroups = useMemo(() => {
+    const set = new Set();
+    chatModelSet.forEach((model) => {
+      (modelGroupsMap.get(model) || []).forEach((g) => set.add(g));
+    });
+    return set;
+  }, [chatModelSet, modelGroupsMap]);
+
   const loadPricing = useCallback(async () => {
     try {
       const payload = await cachedGet(MUSIC_API_ENDPOINTS.PRICING, {
@@ -325,11 +398,14 @@ export const useMusicGeneration = (mode = 't2m') => {
       const { success, data } = payload || {};
       if (!success || !Array.isArray(data)) return;
       const groupsMap = new Map();
+      const endpointMap = new Map();
       data.forEach((item) => {
         if (!item || !item.model_name) return;
         groupsMap.set(item.model_name, item.enable_groups || []);
+        endpointMap.set(item.model_name, item.supported_endpoint_types || []);
       });
       setModelGroupsMap(groupsMap);
+      setModelEndpointTypes(endpointMap);
     } catch (e) {
       // 留空:分组不按 enable_groups 收窄
     }
@@ -386,6 +462,79 @@ export const useMusicGeneration = (mode = 't2m') => {
     }
   }, [inputs.group, inputs.model, musicModelSet, t]);
 
+  // 翻译语言模型的分组下拉:仅含 chat 模型的分组。
+  const loadTranslationGroups = useCallback(async () => {
+    try {
+      const { success, data } = await cachedGet(
+        MUSIC_API_ENDPOINTS.USER_GROUPS,
+      );
+      if (!success) return;
+      const userGroup =
+        userState?.user?.group ||
+        JSON.parse(localStorage.getItem('user') || '{}')?.group;
+      let opts = processGroupsData(data, userGroup);
+      const allowAll = chatGroups.has('all');
+      if (chatGroups.size > 0 && !allowAll) {
+        opts = opts.filter(
+          (g) => chatGroups.has(g.value) || g.value === 'auto',
+        );
+      }
+      setTranslationGroups(opts);
+      setInputs((prev) => {
+        const has = opts.some((g) => g.value === prev.translationGroup);
+        if (has) return prev;
+        // 未选定分组时:优先选包含默认语言模型的分组,让管理员配的 defaultModel 可命中;
+        // 匹配不到再退回第一个可用分组。
+        let target = opts[0]?.value || '';
+        const wantModel = translationCfg.defaultModel;
+        if (wantModel) {
+          const groupsOfModel = modelGroupsMap.get(wantModel) || [];
+          const hit = opts.find((g) => groupsOfModel.includes(g.value));
+          if (hit) target = hit.value;
+        }
+        return { ...prev, translationGroup: target };
+      });
+    } catch (e) {
+      // 静默:翻译分组加载失败不阻塞主流程
+    }
+  }, [userState, chatGroups, modelGroupsMap, translationCfg.defaultModel]);
+
+  // 翻译语言模型下拉:所选翻译分组下的 chat 模型;默认优先取模型配置的 defaultModel。
+  const loadTranslationModels = useCallback(async () => {
+    const requestedGroup = inputs.translationGroup;
+    try {
+      const { success, data } = await getUserModelsCached(requestedGroup);
+      if (!success) return;
+      // 陈旧响应守卫:请求在途时若已切换翻译分组,丢弃旧组结果(同 loadModels)。
+      if (requestedGroup !== translationGroupRef.current) return;
+      let list = Array.isArray(data) ? data : [];
+      // pricing 就绪时按 chat 端点精确过滤;若 pricing 未就绪(端点信息缺失),
+      // 无从判断则 fail open——保留全部模型,避免下拉全空导致翻译整条不可用。
+      if (modelEndpointTypes.size > 0) {
+        list = list.filter((m) => chatModelSet.has(m));
+      }
+      const { modelOptions } = processModelsData(list, inputs.translationModel);
+      setTranslationModels(modelOptions);
+      setInputs((prev) => {
+        const has = modelOptions.some((o) => o.value === prev.translationModel);
+        if (has) return prev;
+        const wanted = translationCfg.defaultModel;
+        const fallback = modelOptions.some((o) => o.value === wanted)
+          ? wanted
+          : modelOptions[0]?.value || '';
+        return { ...prev, translationModel: fallback };
+      });
+    } catch (e) {
+      // 静默
+    }
+  }, [
+    inputs.translationGroup,
+    inputs.translationModel,
+    chatModelSet,
+    modelEndpointTypes,
+    translationCfg.defaultModel,
+  ]);
+
   useEffect(() => {
     if (userState?.user) loadPricing();
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -398,6 +547,15 @@ export const useMusicGeneration = (mode = 't2m') => {
     if (userState?.user) loadModels();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [userState?.user, inputs.group, musicModelSet]);
+  // 仅当玩法需翻译且模型启用译文时,才加载语言模型下拉数据。
+  useEffect(() => {
+    if (userState?.user && showTranslation) loadTranslationGroups();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [userState?.user, showTranslation, chatGroups]);
+  useEffect(() => {
+    if (userState?.user && showTranslation) loadTranslationModels();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [userState?.user, showTranslation, inputs.translationGroup, chatModelSet]);
 
   const patchConvMessage = useCallback(
     (convId, msgId, patch) => {
@@ -551,6 +709,40 @@ export const useMusicGeneration = (mode = 't2m') => {
     [currentConvId, resumePoll],
   );
 
+  // 单次非流式调用选中的语言模型,把中文 rawText 转成一句英文音频描述。
+  // forVideo=true 时用带"贴合画面"约束的模板(tv2a)。失败抛错,交由 generate 走降级。
+  const translatePrompt = useCallback(
+    async (rawText, forVideo) => {
+      const model = inputs.translationModel;
+      const group = inputs.translationGroup;
+      if (!model) throw new Error('no-translation-model');
+      // 复用 axios API 实例:自动带 baseURL(分离部署时打到 API 而非前端 origin)与
+      // New-API-User 认证头,与 /pg/videos 提交同构。skipErrorHandler 交由本地 catch 降级。
+      const res = await API.post(
+        MUSIC_TRANSLATE_ENDPOINT,
+        {
+          model,
+          group,
+          stream: false,
+          messages: [
+            {
+              role: 'system',
+              content: forVideo ? TRANSLATE_SYSTEM_VIDEO : TRANSLATE_SYSTEM_BASE,
+            },
+            { role: 'user', content: rawText },
+          ],
+        },
+        { skipErrorHandler: true },
+      );
+      const out = (
+        res?.data?.choices?.[0]?.message?.content || ''
+      ).trim();
+      if (!out) throw new Error('translate-empty');
+      return out;
+    },
+    [inputs.translationModel, inputs.translationGroup],
+  );
+
   const generate = useCallback(
     async (prompt) => {
       const text = (prompt || '').trim();
@@ -644,12 +836,33 @@ export const useMusicGeneration = (mode = 't2m') => {
         }
       }
 
-      // 解析 task_type:v2a/v2m 按是否带文本分支到 tv2a/tv2m;其余与文本无关。
-      const resolvedTaskType = resolveTaskType(text.length > 0);
-      // 占位符仅用于 svs(歌声合成引擎需非空 input,文本仅占位);v2a/v2m 是纯视频输入,
+      // ── 中译英(前端编排)──────────────────────────────────────────
+      // 命中「玩法需翻译 + 有文本 + 含中文 + 该模型启用译文」时,先调语言模型转英文,
+      // 再用英文提交(AudioX 文本编码器仅认英文,中文会塌成 <unk>)。已是英文则不触发。
+      // 失败降级(设计 §11):视频生音 → 丢文字改纯视频 v2a;文生音效 → 报错不提交。
+      let effectiveText = text;
+      if (needsTranslation && text && containsCJK(text) && translationCfg.enabled) {
+        setGenerating(true);
+        try {
+          effectiveText = await translatePrompt(text, needsVideo);
+        } catch (e) {
+          setGenerating(false);
+          if (needsVideo) {
+            effectiveText = '';
+            showError(t('文字未生效,已按纯视频生成'));
+          } else {
+            showError(t('翻译失败,请改用英文描述'));
+            return;
+          }
+        }
+      }
+
+      // 解析 task_type:视频生音按是否带(译后)文本分支到 tv2a/v2a;其余与文本无关。
+      const resolvedTaskType = resolveTaskType(effectiveText.length > 0);
+      // 占位符仅用于 svs(歌声合成引擎需非空 input,文本仅占位);v2a 是纯视频输入,
       // 后端明确允许空 prompt —— 绝不能塞占位,否则会拿"歌声合成"去条件化 AudioX。
       const promptField =
-        text || (resolvedTaskType === 'svs' ? t('歌声合成') : '');
+        effectiveText || (resolvedTaskType === 'svs' ? t('歌声合成') : '');
 
       const reqId = genId();
       const now = new Date().toISOString();
@@ -858,6 +1071,9 @@ export const useMusicGeneration = (mode = 't2m') => {
       needsVideo,
       needsDualAudio,
       needsText,
+      needsTranslation,
+      translationCfg.enabled,
+      translatePrompt,
       videoMetaKey,
       promptAudioMetaKey,
       targetAudioMetaKey,
@@ -960,6 +1176,10 @@ export const useMusicGeneration = (mode = 't2m') => {
     needsVideo,
     needsDualAudio,
     needsText,
+    needsTranslation,
+    showTranslation,
+    translationGroups,
+    translationModels,
     maxChars,
     refAudioMaxMB,
     videoMaxMB,

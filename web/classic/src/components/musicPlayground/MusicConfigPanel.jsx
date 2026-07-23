@@ -54,6 +54,9 @@ const MusicConfigPanel = ({
   needsAudio = false,
   needsVideo = false,
   needsDualAudio = false,
+  showTranslation = false,
+  translationGroups = [],
+  translationModels = [],
   audioLabel = '',
   refAudioMaxMB = MUSIC_AUDIO_UPLOAD_MAX_MB,
   videoMaxMB = MUSIC_VIDEO_UPLOAD_MAX_MB,
@@ -73,6 +76,14 @@ const MusicConfigPanel = ({
 
   const groupOptions = ensureOption(groups || [], inputs.group);
   const modelOptions = ensureOption(models || [], inputs.model);
+  const translationGroupOptions = ensureOption(
+    translationGroups || [],
+    inputs.translationGroup,
+  );
+  const translationModelOptions = ensureOption(
+    translationModels || [],
+    inputs.translationModel,
+  );
 
   // 时长下拉:'' → 「自动(引擎默认)」,其余为秒数。
   const durationOptions = MUSIC_DURATIONS.map((d) =>
@@ -181,6 +192,53 @@ const MusicConfigPanel = ({
             className='!rounded-lg'
           />
         </div>
+
+        {/* 语言模型(中译英):仅在玩法需翻译且当前模型启用译文时展示。先选分组再选模型,
+            其余参数(temperature 等)后端默认,不暴露。 */}
+        {showTranslation && (
+          <div>
+            <div className='flex items-center gap-2 mb-2'>
+              <Languages size={16} className='text-gray-500' />
+              <Typography.Text strong className='text-sm'>
+                {t('语言模型')}
+              </Typography.Text>
+              <Tooltip
+                content={t('中文将自动翻译为英文后生成')}
+                position='top'
+              >
+                <HelpCircle size={14} className='text-gray-400 cursor-help' />
+              </Tooltip>
+            </div>
+            <Select
+              placeholder={t('请选择分组')}
+              selection
+              filter={selectFilter}
+              autoClearSearchValue={false}
+              onChange={(value) => onInputChange('translationGroup', value)}
+              value={inputs.translationGroup}
+              optionList={translationGroupOptions}
+              renderOptionItem={renderGroupOption}
+              disabled={disabled}
+              style={{ width: '100%' }}
+              dropdownStyle={{ width: '100%', maxWidth: '100%' }}
+              className='!rounded-lg mb-2'
+            />
+            <Select
+              placeholder={t('请选择模型')}
+              selection
+              filter={selectFilter}
+              autoClearSearchValue={false}
+              onChange={(value) => onInputChange('translationModel', value)}
+              value={inputs.translationModel}
+              optionList={translationModelOptions}
+              emptyContent={t('当前分组下暂无可用语言模型')}
+              disabled={disabled}
+              style={{ width: '100%' }}
+              dropdownStyle={{ width: '100%', maxWidth: '100%' }}
+              className='!rounded-lg'
+            />
+          </div>
+        )}
 
         {/* 驱动音频(ACE-Step cover=参考音频 / repaint=源音频,必选):上传后可试听 */}
         {needsAudio && (
