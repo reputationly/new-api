@@ -263,7 +263,7 @@ const VideoConfigPanel = ({
           </>
         )}
 
-        {/* 视频编辑:源视频 + 蒙版(可选)+ 参考图(可选,多张)。源视频与参考图至少其一。 */}
+        {/* 视频编辑(Bernini):源视频 +/或 参考图,按输入自动分流 v2v/rv2v/r2v。二者至少其一。 */}
         {isVACE && (
           <>
             {(!disabled || inputs.srcVideo) && (
@@ -274,16 +274,6 @@ const VideoConfigPanel = ({
                 maxMB={uploadMaxMB}
                 disabled={disabled}
                 onChange={(v) => onInputChange('srcVideo', v)}
-              />
-            )}
-            {(!disabled || inputs.maskVideo) && (
-              <MediaFileInput
-                label={t('上传蒙版视频（可选）')}
-                kind='video'
-                value={inputs.maskVideo}
-                maxMB={uploadMaxMB}
-                disabled={disabled}
-                onChange={(v) => onInputChange('maskVideo', v)}
               />
             )}
             {!disabled && (

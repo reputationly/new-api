@@ -87,7 +87,7 @@ const refFromKey = (key) => `${MEDIA_PREFIX}${key}`;
 // 缺省覆盖图片/视频/音频三区当前字段。
 const DEFAULT_SCHEMA = {
   convArrayFields: ['images', 'refImages'],
-  convStringFields: ['audioData', 'sourceVideo', 'srcVideo', 'maskVideo', 'voiceData'],
+  convStringFields: ['audioData', 'sourceVideo', 'srcVideo', 'voiceData'],
   msgArrayFields: ['images'],
   msgMediaFields: [],
   markNotPersisted: false,

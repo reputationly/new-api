@@ -109,6 +109,9 @@ export const CAPABILITIES: CapabilitySpec[] = [
         modality: "video",
         output: CanvasNodeType.Video,
         channel: "task",
+        // 显式下发 t2v(不靠模型名推断):Bernini 同名模型横跨 t2v 与 v2v/rv2v/r2v,
+        // inferTaskType 按名恒判 v2v,故这里显式;对其它 t2v 模型无影响。
+        taskType: "t2v",
         inputs: [PROMPT_SLOT],
         params: [
             { key: "size", label: "尺寸", type: "select", options: "sizes" },
@@ -169,20 +172,29 @@ export const CAPABILITIES: CapabilitySpec[] = [
         ],
     },
     {
+        // key 沿用 "vace"(稳定标识,不破坏已保存画布),现驱动 Bernini 视频编辑。
         key: "vace",
         label: "视频编辑",
         modality: "video",
         output: CanvasNodeType.Video,
         channel: "task",
-        taskType: "vace",
+        // 默认 v2v;真实 task_type 由 postProcess 按输入分流(源视频/参考图组合)。
+        taskType: "v2v",
         inputs: [
             PROMPT_SLOT,
-            // 后端约束(materializeVACEInputs):源视频/参考图至少其一——R2V 仅参考图也是合法模式
+            // 后端约束(materializeBerniniInputs):源视频/参考图至少其一——r2v 仅参考图也是合法模式
             { key: "metadata.src_video", kind: "video", required: false, role: "源视频" },
             { key: "metadata.src_ref_images", kind: "image", required: false, max: 5, role: "参考图" },
         ],
         params: [{ key: "metadata.seed", label: "随机种子", type: "number", placeholder: "留空随机" }],
         atLeastOne: { keys: ["metadata.src_video", "metadata.src_ref_images"], message: "视频编辑至少需要连接 源视频 或 参考图 之一" },
+        // Bernini 按输入自动分流玩法:有源视频且无参考图=v2v、源视频+参考图=rv2v、仅参考图=r2v
+        //(与 classic 体验区 useVideoGeneration 的分流规则一致)。
+        postProcess: ({ slots, metadata }) => {
+            const hasSrcVideo = (slots["metadata.src_video"] || []).length > 0;
+            const hasRefs = (slots["metadata.src_ref_images"] || []).length > 0;
+            metadata.task_type = hasSrcVideo ? (hasRefs ? "rv2v" : "v2v") : "r2v";
+        },
     },
     // ── 音频:四个能力共用 task_type=tts,按能力标签筛出的模型集合区分引擎(§3.1) ──
     {

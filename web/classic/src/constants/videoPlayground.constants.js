@@ -71,14 +71,35 @@ export const VIDEO_EXAMPLES = {
       files: { sourceVideo: '/playground-samples/video/seedvr2-lowres.mp4' },
     },
   ],
+  // 视频编辑(Bernini):三种玩法由输入组合自动分流——
+  //   仅源视频 → v2v(纯提示词编辑)、源视频+参考图 → rv2v、仅参考图 → r2v(参考图生视频)。
   vace: [
     {
-      label: '视频编辑',
+      label: '视频编辑(纯提示词 · v2v)',
       prompt:
-        '视频展示了一位长着尖耳朵的老人,银白色长发和小胡子,身穿色彩斑斓的长袍,散发神秘与智慧的气息。背景为华丽宫殿内部,金碧辉煌,灯光明亮。摄像机旋转动态拍摄,捕捉老人轻松挥手的动作。',
+        '保持人物动作与镜头运动不变,将整段画面转为中国水墨丹青风格:背景大面积留白,笔触淡雅,墨色随动作晕染流动,层次分明。',
+      files: {
+        srcVideo: '/playground-samples/video/vace-source.mp4',
+      },
+    },
+    {
+      label: '参考图视频编辑(rv2v)',
+      prompt:
+        '参考图中人物的相貌与服饰,替换源视频里的主体,保持原有动作、光影与镜头运动一致,细节自然融合。',
       files: {
         srcVideo: '/playground-samples/video/vace-source.mp4',
         refImages: ['/playground-samples/images/vace-ref-girl.png'],
+      },
+    },
+    {
+      label: '参考图生视频(r2v)',
+      prompt:
+        '以参考图中的少女与灵蛇为主体,生成一段电影质感短片:少女立于雾气缭绕的竹林中,灵蛇盘绕身侧缓缓游动,光斑浮动,镜头缓缓环绕拍摄。',
+      files: {
+        refImages: [
+          '/playground-samples/images/vace-ref-girl.png',
+          '/playground-samples/images/vace-ref-snake.png',
+        ],
       },
     },
   ],
@@ -212,7 +233,7 @@ export const normalizeSizeList = (list) =>
 // 解析 status 中的 VideoModelConfig（字符串或对象）
 // 形如 { default: { sizes:[], durations:[] }, models: { name: { sizes:[], durations:[] } } }
 // maxInputMB:输入文件大小上限(MB)。适用于吃用户上传的模式(i2v/flf2v 帧图、s2v 人物图/
-// 驱动音频、sr 源视频、vace 源视频/蒙版/参考图);0/未配=不限。生成侧 sizes/durations/
+// 驱动音频、sr 源视频、视频编辑 源视频/参考图);0/未配=不限。生成侧 sizes/durations/
 // aspectRatios 对这些输入驱动能力无意义(见 followsInput),maxInputMB 才是它们的护栏。
 const toInputMB = (v) => {
   const n = parseInt(v, 10);

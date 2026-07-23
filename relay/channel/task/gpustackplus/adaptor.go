@@ -54,11 +54,12 @@ import (
 // 一并物化到 input_refs(image + audio)。见 materializeS2VInputs。
 // sr(超分,SeedVR2):源视频 metadata.video 物化到 input_refs.video,倍率 metadata.sr_ratio
 // 随 metadata 透传(门面按 config 目标尺寸封顶)。见 materializeSRInputs。
-// vace(视频编辑):源视频 metadata.src_video + 可选蒙版 metadata.src_mask + 可选参考图
-// metadata.src_ref_images 物化到 input_refs。见 materializeVACEInputs。
+// v2v/rv2v/r2v(视频编辑,Bernini,顶替下线的 wan2.2-VACE):按输入组合区分——v2v 仅源
+// 视频 metadata.src_video、rv2v 源视频 + 参考图 metadata.src_ref_images、r2v 仅参考图。
+// 物化到 input_refs,见 materializeBerniniInputs。
 var validTaskTypes = map[string]bool{
 	"t2i": true, "i2i": true, "t2v": true, "i2v": true, "flf2v": true,
-	"tts": true, "s2v": true, "sr": true, "vace": true,
+	"tts": true, "s2v": true, "sr": true, "v2v": true, "rv2v": true, "r2v": true,
 	// 音乐生成(ACE-Step):t2m 纯文本、cover 参考音频、repaint 源音频。
 	"t2m": true, "cover": true, "repaint": true,
 	// 扩散音频(vLLM-Omni audiogen):AudioX t2a/v2a/v2m/tv2a/tv2m + SoulX-Singer svs。
@@ -226,7 +227,7 @@ func (a *TaskAdaptor) BuildRequestBody(c *gin.Context, info *relaycommon.RelayIn
 	// task_type 白名单校验(§N2):它可能来自 metadata,非法值既会让 NFS 写盘路径异常,
 	// 也会被门面拒;就地本地 400,不进后续物化 / 提交。
 	if !validTaskTypes[taskType] {
-		return nil, localBadRequest(fmt.Errorf("不支持的 task_type: %q(允许:t2i/i2i/t2v/i2v/flf2v/tts/s2v/sr/vace/t2m/cover/repaint/t2a/v2a/v2m/tv2a/tv2m/svs)", taskType))
+		return nil, localBadRequest(fmt.Errorf("不支持的 task_type: %q(允许:t2i/i2i/t2v/i2v/flf2v/tts/s2v/sr/v2v/rv2v/r2v/t2m/cover/repaint/t2a/v2a/v2m/tv2a/tv2m/svs)", taskType))
 	}
 	// SoulX svs 的文本仅占位(引擎按 prompt_audio/target_audio 生成歌声),但引擎 input 需非空、
 	// 且真机验证过的请求带 "soulx-singer" 标签。ValidateBasicTaskRequest 已豁免 svs 的空 prompt,
@@ -304,9 +305,9 @@ func (a *TaskAdaptor) BuildRequestBody(c *gin.Context, info *relaycommon.RelayIn
 	case "sr":
 		// 超分:源视频(metadata.video);倍率 sr_ratio 随 metadata 透传,不物化。
 		refs, err = materializeSRInputs(c, info, taskType, modelName, req)
-	case "vace":
-		// 视频编辑:源视频 + 可选蒙版 + 可选参考图。
-		refs, err = materializeVACEInputs(c, info, taskType, modelName, req)
+	case "v2v", "rv2v", "r2v":
+		// 视频编辑(Bernini):v2v 仅源视频 / rv2v 源视频+参考图 / r2v 仅参考图。
+		refs, err = materializeBerniniInputs(c, info, taskType, modelName, req)
 	case "t2m", "cover", "repaint":
 		// 音乐生成:t2m 无输入;cover 需参考音频(metadata.reference_audio);
 		// repaint 需源音频(metadata.src_audio)。
@@ -361,8 +362,8 @@ func (a *TaskAdaptor) BuildRequestBody(c *gin.Context, info *relaycommon.RelayIn
 
 // 门面 task_type 的输入约束(与 gpustack routes/videos.py 的 _VALID_TASK_TYPES 对应)。
 // s2v(数字人)也需要人物图,故列入 imageRequiredTaskTypes;它额外需要驱动音频,由
-// materializeS2VInputs 校验。sr/vace 的输入是视频(走 metadata,非 image 字段),各自的
-// materialize 函数校验,不进这两张表。
+// materializeS2VInputs 校验。sr / v2v/rv2v/r2v 的输入是视频或参考图(走 metadata,非
+// image 字段),各自的 materialize 函数校验,不进这两张表。
 var imageRequiredTaskTypes = map[string]bool{"i2v": true, "flf2v": true, "i2i": true, "s2v": true}
 var textOnlyTaskTypes = map[string]bool{"t2v": true, "t2i": true}
 
@@ -426,13 +427,15 @@ func inferTaskType(modelName string) string {
 		strings.Contains(m, "moss"):
 		return "tts"
 	// 数字人 / 超分 / 编辑放在通用 i2v/i2i 之前:InfiniteTalk 名里常含 "talk",
-	// SeedVR2 含 "seedvr"/"sr",VACE 含 "vace" —— 显式匹配免落到 t2v 兜底。
+	// SeedVR2 含 "seedvr"/"sr",Bernini 视频编辑含 "bernini" —— 显式匹配免落到 t2v 兜底。
 	case strings.Contains(m, "infinitetalk") || strings.Contains(m, "s2v"):
 		return "s2v"
 	case strings.Contains(m, "seedvr") || strings.Contains(m, "-sr") || strings.HasSuffix(m, "sr"):
 		return "sr"
-	case strings.Contains(m, "vace"):
-		return "vace"
+	// Bernini 一个模型出 v2v/rv2v/r2v 三种玩法,模型名只能给兜底默认(v2v);
+	// 真实玩法由前端体验区按输入组合显式下发 metadata.task_type(优先于此推断)。
+	case strings.Contains(m, "bernini"):
+		return "v2v"
 	// 音乐生成:acestep 系模型默认 t2m;cover/repaint 由 metadata.task_type 显式指定。
 	case strings.Contains(m, "acestep"):
 		return "t2m"
@@ -520,43 +523,57 @@ func materializeSRInputs(c *gin.Context, info *relaycommon.RelayInfo, taskType, 
 	return m.Refs(), nil
 }
 
-// materializeVACEInputs 物化视频编辑(VACE)的输入:源视频(metadata.src_video)+ 可选蒙版
-// 视频(metadata.src_mask)+ 可选参考图(metadata.src_ref_images,单串或数组,≤MaxImageRefs)。
-// 三种编辑模式(V2V/MV2V/R2V)中至少要有 src_video 或 src_ref_images,否则引擎无从下手。
-// src_mask 依赖 src_video(与门面 _resolve_input_refs 的 "src_mask requires src_video" 对齐)。
-// 门面把 src_video/src_mask/src_ref_images 原样(无 _path 后缀)映射给 VACE 引擎。
-func materializeVACEInputs(c *gin.Context, info *relaycommon.RelayInfo, taskType, modelName string, req relaycommon.TaskSubmitReq) (map[string][]string, error) {
+// materializeBerniniInputs 物化视频编辑(Bernini,顶替下线的 VACE)的输入。Bernini 把
+// 编辑能力拆成三个 task_type,按输入组合区分(与前端体验区自动分流规则一致):
+//   - v2v :纯提示词编辑,须有源视频(metadata.src_video),参考图忽略;
+//   - rv2v:源视频 + 参考图(metadata.src_ref_images,单串或数组,≤MaxImageRefs),两者必填;
+//   - r2v :参考图生视频,须有参考图、且无源视频。
+//
+// 门面把 src_video/src_ref_images 原样(无 _path 后缀)映射给 Bernini 引擎。Bernini 无
+// mask/MV2V 玩法,故不再处理 src_mask。
+func materializeBerniniInputs(c *gin.Context, info *relaycommon.RelayInfo, taskType, modelName string, req relaycommon.TaskSubmitReq) (map[string][]string, error) {
 	srcVideo := metadataString(req.Metadata, "src_video")
-	srcMask := metadataString(req.Metadata, "src_mask")
 	refImages := metadataStringList(req.Metadata, "src_ref_images")
-	if srcVideo == "" && len(refImages) == 0 {
-		return nil, fmt.Errorf("模型 %s 的任务类型 vace(视频编辑)至少需要 metadata.src_video(源视频)或 metadata.src_ref_images(参考图)之一", modelName)
-	}
-	if srcMask != "" && srcVideo == "" {
-		return nil, fmt.Errorf("模型 %s 的任务类型 vace 的 metadata.src_mask(蒙版)必须与 metadata.src_video 一起提供", modelName)
-	}
 	if len(refImages) > nfsinput.MaxImageRefs {
 		return nil, fmt.Errorf("模型 %s 的 metadata.src_ref_images 最多 %d 张,收到 %d 张", modelName, nfsinput.MaxImageRefs, len(refImages))
+	}
+	// 按 task_type 精确校验输入(前端已按输入组合分流,这里是服务端兜底,防直连绕过)。
+	switch taskType {
+	case "v2v":
+		if srcVideo == "" {
+			return nil, fmt.Errorf("模型 %s 的任务类型 v2v(视频编辑)需要源视频:请在 metadata.src_video 提供视频 URL 或 base64", modelName)
+		}
+	case "rv2v":
+		if srcVideo == "" || len(refImages) == 0 {
+			return nil, fmt.Errorf("模型 %s 的任务类型 rv2v(参考视频编辑)需要源视频(metadata.src_video)和参考图(metadata.src_ref_images)各至少一个", modelName)
+		}
+	case "r2v":
+		if len(refImages) == 0 {
+			return nil, fmt.Errorf("模型 %s 的任务类型 r2v(参考图生视频)需要参考图:请在 metadata.src_ref_images 提供 1~%d 张图", modelName, nfsinput.MaxImageRefs)
+		}
+		if srcVideo != "" {
+			return nil, fmt.Errorf("模型 %s 的任务类型 r2v(参考图生视频)不接受源视频;含源视频的编辑请用 v2v/rv2v", modelName)
+		}
+	default:
+		return nil, fmt.Errorf("模型 %s 的视频编辑任务类型 %s 不支持", modelName, taskType)
 	}
 	m := newVideoMaterializer(info, taskType, modelName, req)
 	ctx := c.Request.Context()
 
+	// 先写全部输入 → 再提交,任一路失败回滚已写文件避免孤儿。
 	if srcVideo != "" {
 		if err := m.AddString(ctx, nfsinput.FieldSrcVideo, 0, false, srcVideo); err != nil {
 			m.Cleanup()
 			return nil, err
 		}
 	}
-	if srcMask != "" {
-		if err := m.AddString(ctx, nfsinput.FieldSrcMask, 0, false, srcMask); err != nil {
-			m.Cleanup()
-			return nil, err
-		}
-	}
-	for i, img := range refImages {
-		if err := m.AddString(ctx, nfsinput.FieldSrcRefImages, i, true, img); err != nil {
-			m.Cleanup()
-			return nil, err
+	// v2v 只用源视频(参考图忽略);rv2v/r2v 物化参考图。
+	if taskType != "v2v" {
+		for i, img := range refImages {
+			if err := m.AddString(ctx, nfsinput.FieldSrcRefImages, i, true, img); err != nil {
+				m.Cleanup()
+				return nil, err
+			}
 		}
 	}
 	return m.Refs(), nil
