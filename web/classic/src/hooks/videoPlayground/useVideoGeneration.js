@@ -56,7 +56,9 @@ import {
 // 区分能力过滤、需要哪些输入(帧图 / 音频 / 视频 / 蒙版 / 参考图)。
 const CONV_STORAGE_KEY_BASE = 'video_playground_conversations';
 const VIDEO_MODES = {
-  text2video: { capability: VIDEO_PAGE_CAPABILITY, suffix: '' },
+  // text2video 显式下发 t2v(不再靠模型名推断):Bernini 同名模型横跨 t2v 与
+  // v2v/rv2v/r2v,inferTaskType 按名恒判 v2v,故这里必须显式;对其它 t2v 模型无影响。
+  text2video: { capability: VIDEO_PAGE_CAPABILITY, suffix: '', taskType: 't2v' },
   image2video: { capability: VIDEO_I2V_CAPABILITY, suffix: '_i2v' },
   flf2v: { capability: VIDEO_FLF2V_CAPABILITY, suffix: '_flf2v' },
   // 门面 task_type：s2v(音频生视频)/ sr(视频超分)。

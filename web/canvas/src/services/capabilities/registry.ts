@@ -109,6 +109,9 @@ export const CAPABILITIES: CapabilitySpec[] = [
         modality: "video",
         output: CanvasNodeType.Video,
         channel: "task",
+        // 显式下发 t2v(不靠模型名推断):Bernini 同名模型横跨 t2v 与 v2v/rv2v/r2v,
+        // inferTaskType 按名恒判 v2v,故这里显式;对其它 t2v 模型无影响。
+        taskType: "t2v",
         inputs: [PROMPT_SLOT],
         params: [
             { key: "size", label: "尺寸", type: "select", options: "sizes" },
