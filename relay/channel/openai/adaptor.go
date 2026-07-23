@@ -709,6 +709,34 @@ func detectImageMimeType(filename string) string {
 	}
 }
 
+// SupportsNativeResponses reports whether this OpenAI-compatible upstream serves
+// /v1/responses natively. Because the OpenAI adaptor backs both the official API
+// and many third-party OpenAI-compatible providers (custom base_url), we detect
+// capability by endpoint identity: official OpenAI and Azure support Responses,
+// while custom base_urls are assumed Chat-only. Exceptions are handled by the
+// ForceNative / ForceConvert policy.
+func (a *Adaptor) SupportsNativeResponses(info *relaycommon.RelayInfo) bool {
+	if info == nil {
+		return false
+	}
+	if info.ChannelType == constant.ChannelTypeAzure {
+		return true
+	}
+	if info.ChannelType == constant.ChannelTypeOpenAI {
+		base := strings.TrimSpace(info.ChannelBaseUrl)
+		if base == "" || strings.Contains(base, "api.openai.com") {
+			return true
+		}
+	}
+	return false
+}
+
+// SupportsNativeChat reports whether this upstream serves /v1/chat/completions
+// natively. All OpenAI-compatible upstreams do.
+func (a *Adaptor) SupportsNativeChat(info *relaycommon.RelayInfo) bool {
+	return true
+}
+
 func (a *Adaptor) ConvertOpenAIResponsesRequest(c *gin.Context, info *relaycommon.RelayInfo, request dto.OpenAIResponsesRequest) (any, error) {
 	//  转换模型推理力度后缀
 	effort, originModel := reasoning.ParseOpenAIReasoningEffortFromModelSuffix(request.Model)

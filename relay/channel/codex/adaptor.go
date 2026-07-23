@@ -107,6 +107,17 @@ func (a *Adaptor) ConvertOpenAIResponsesRequest(c *gin.Context, info *relaycommo
 	return request, nil
 }
 
+// SupportsNativeResponses is true: the Codex backend only speaks the Responses API.
+func (a *Adaptor) SupportsNativeResponses(info *relaycommon.RelayInfo) bool {
+	return true
+}
+
+// SupportsNativeChat is false: Codex has no /v1/chat/completions endpoint
+// (ConvertOpenAIRequest explicitly rejects it).
+func (a *Adaptor) SupportsNativeChat(info *relaycommon.RelayInfo) bool {
+	return false
+}
+
 func (a *Adaptor) DoRequest(c *gin.Context, info *relaycommon.RelayInfo, requestBody io.Reader) (any, error) {
 	return channel.DoApiRequest(a, c, info, requestBody)
 }

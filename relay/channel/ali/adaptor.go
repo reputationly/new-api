@@ -230,6 +230,17 @@ func (a *Adaptor) ConvertAudioRequest(c *gin.Context, info *relaycommon.RelayInf
 	return nil, errors.New("not implemented")
 }
 
+// SupportsNativeResponses reports that this upstream serves /v1/responses
+// natively (see GetRequestURL's RelayModeResponses branch), so it must not be
+// borrowed through the responses→chat conversion path.
+func (a *Adaptor) SupportsNativeResponses(info *relaycommon.RelayInfo) bool {
+	return true
+}
+
+func (a *Adaptor) SupportsNativeChat(info *relaycommon.RelayInfo) bool {
+	return true
+}
+
 func (a *Adaptor) ConvertOpenAIResponsesRequest(c *gin.Context, info *relaycommon.RelayInfo, request dto.OpenAIResponsesRequest) (any, error) {
 	return request, nil
 }

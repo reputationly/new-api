@@ -334,7 +334,8 @@ func (o *OpenAIResponsesResponse) GetSize() string {
 }
 
 type IncompleteDetails struct {
-	Reasoning string `json:"reasoning"`
+	Reasoning string `json:"reasoning,omitempty"`
+	Reason    string `json:"reason,omitempty"`
 }
 
 type ResponsesOutput struct {
@@ -348,6 +349,13 @@ type ResponsesOutput struct {
 	CallId    string                   `json:"call_id,omitempty"`
 	Name      string                   `json:"name,omitempty"`
 	Arguments json.RawMessage          `json:"arguments,omitempty"`
+	// Input carries the reconstructed freeform input for custom_tool_call items
+	// (e.g. an apply_patch text patch), used by the responses-via-chat path.
+	Input json.RawMessage `json:"input,omitempty"`
+	// Namespace un-flattens a namespaced function_call back to its namespace.
+	Namespace string `json:"namespace,omitempty"`
+	// Summary carries reasoning summary parts for reasoning output items.
+	Summary []ResponsesReasoningSummaryPart `json:"summary,omitempty"`
 }
 
 // ArgumentsString returns function call arguments in the string form expected by Chat Completions.
