@@ -22,18 +22,6 @@ import (
 
 func ResponsesHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *types.NewAPIError) {
 	info.InitChannelMeta(c)
-	if info.RelayMode == relayconstant.RelayModeResponsesCompact {
-		switch info.ApiType {
-		case appconstant.APITypeOpenAI, appconstant.APITypeCodex:
-		default:
-			return types.NewErrorWithStatusCode(
-				fmt.Errorf("unsupported endpoint %q for api type %d", "/v1/responses/compact", info.ApiType),
-				types.ErrorCodeInvalidRequest,
-				http.StatusBadRequest,
-				types.ErrOptionWithSkipRetry(),
-			)
-		}
-	}
 
 	var responsesReq *dto.OpenAIResponsesRequest
 	switch req := info.Request.(type) {
@@ -70,6 +58,64 @@ func ResponsesHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *
 		return types.NewError(fmt.Errorf("invalid api type: %d", info.ApiType), types.ErrorCodeInvalidApiType, types.ErrOptionWithSkipRetry())
 	}
 	adaptor.Init(info)
+
+	// G6: capability-based routing for /v1/responses (and /compact). When the
+	// upstream only speaks Chat Completions, borrow the Chat path and convert
+	// both ways.
+	switch decideResponsesRoute(info, adaptor) {
+	case routeConvertToChat:
+		if info.RelayMode == relayconstant.RelayModeResponsesCompact {
+			usage, newApiErr := responsesCompactViaChatCompletions(c, info, adaptor, request)
+			if newApiErr != nil {
+				service.ResetStatusCode(newApiErr, c.GetString("status_code_mapping"))
+				return newApiErr
+			}
+			// Mirror the native compaction billing (price by estimated prompt tokens).
+			originModelName := info.OriginModelName
+			originPriceData := info.PriceData
+			if _, err := helper.ModelPriceHelper(c, info, info.GetEstimatePromptTokens(), &types.TokenCountMeta{}); err != nil {
+				info.OriginModelName = originModelName
+				info.PriceData = originPriceData
+				return types.NewError(err, types.ErrorCodeModelPriceError, types.ErrOptionWithSkipRetry(), types.ErrOptionWithStatusCode(http.StatusBadRequest))
+			}
+			service.PostTextConsumeQuota(c, info, usage, nil)
+			info.OriginModelName = originModelName
+			info.PriceData = originPriceData
+			return nil
+		}
+		usage, newApiErr := responsesViaChatCompletions(c, info, adaptor, request)
+		if newApiErr != nil {
+			service.ResetStatusCode(newApiErr, c.GetString("status_code_mapping"))
+			return newApiErr
+		}
+		if strings.HasPrefix(info.OriginModelName, "gpt-4o-audio") {
+			service.PostAudioConsumeQuota(c, info, usage, "")
+		} else {
+			service.PostTextConsumeQuota(c, info, usage, nil)
+		}
+		return nil
+	case routeNoCompatibleEndpoint:
+		return types.NewErrorWithStatusCode(
+			fmt.Errorf("upstream does not natively support /v1/responses and its Chat Completions wire format is not OpenAI-compatible, so responses→chat conversion is unavailable; use a ForceNative/ForceConvert policy or reach this provider through an OpenAI-compatible relay"),
+			types.ErrorCodeInvalidRequest,
+			http.StatusBadRequest,
+			types.ErrOptionWithSkipRetry(),
+		)
+	}
+
+	// Native /responses/compact is only reliably served by OpenAI/Codex upstreams
+	// (other native-responses adaptors lack a compact endpoint URL). Chat-only
+	// upstreams took the routeConvertToChat branch above.
+	if info.RelayMode == relayconstant.RelayModeResponsesCompact &&
+		info.ApiType != appconstant.APITypeOpenAI && info.ApiType != appconstant.APITypeCodex {
+		return types.NewErrorWithStatusCode(
+			fmt.Errorf("unsupported endpoint %q for api type %d", "/v1/responses/compact", info.ApiType),
+			types.ErrorCodeInvalidRequest,
+			http.StatusBadRequest,
+			types.ErrOptionWithSkipRetry(),
+		)
+	}
+
 	var requestBody io.Reader
 	if model_setting.GetGlobalSettings().PassThroughRequestEnabled || info.ChannelSetting.PassThroughBodyEnabled {
 		storage, err := common.GetBodyStorage(c)

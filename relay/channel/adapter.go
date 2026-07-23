@@ -31,6 +31,38 @@ type Adaptor interface {
 	ConvertGeminiRequest(c *gin.Context, info *relaycommon.RelayInfo, request *dto.GeminiChatRequest) (any, error)
 }
 
+// ResponsesCapabilityAware is an optional capability an Adaptor may implement to
+// declare whether its upstream natively serves the Responses / Chat endpoints.
+// Adaptors that don't implement it fall back to the defaults in the
+// SupportsNative* helpers (no native responses, native chat), which keeps the
+// change surface small — only channels with non-default behavior implement it.
+type ResponsesCapabilityAware interface {
+	// SupportsNativeResponses reports whether the upstream natively serves /v1/responses.
+	SupportsNativeResponses(info *relaycommon.RelayInfo) bool
+	// SupportsNativeChat reports whether the upstream natively serves /v1/chat/completions.
+	SupportsNativeChat(info *relaycommon.RelayInfo) bool
+}
+
+// SupportsNativeResponses reports whether the adaptor's upstream natively
+// supports the Responses API. Defaults to false for adaptors that don't
+// implement ResponsesCapabilityAware.
+func SupportsNativeResponses(a Adaptor, info *relaycommon.RelayInfo) bool {
+	if aware, ok := a.(ResponsesCapabilityAware); ok {
+		return aware.SupportsNativeResponses(info)
+	}
+	return false
+}
+
+// SupportsNativeChat reports whether the adaptor's upstream natively supports
+// Chat Completions. Defaults to true for adaptors that don't implement
+// ResponsesCapabilityAware.
+func SupportsNativeChat(a Adaptor, info *relaycommon.RelayInfo) bool {
+	if aware, ok := a.(ResponsesCapabilityAware); ok {
+		return aware.SupportsNativeChat(info)
+	}
+	return true
+}
+
 type TaskAdaptor interface {
 	Init(info *relaycommon.RelayInfo)
 

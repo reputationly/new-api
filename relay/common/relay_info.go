@@ -180,6 +180,10 @@ type RelayInfo struct {
 	*ResponsesUsageInfo
 	*ChannelMeta
 	*TaskRelayInfo
+	// ResponsesToolContext carries the Codex tool taxonomy (built from the
+	// Responses request tools) so the responses-via-chat path can map upstream
+	// tool-call names back to the original Responses tool shapes.
+	ResponsesToolContext *dto.ResponsesToolContext
 }
 
 func (info *RelayInfo) InitChannelMeta(c *gin.Context) {

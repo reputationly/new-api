@@ -400,3 +400,143 @@ func ChatCompletionsRequestToResponsesRequest(req *dto.GeneralOpenAIRequest) (*d
 
 	return out, nil
 }
+
+// ChatCompletionsResponseToResponsesResponse converts a non-streaming Chat
+// Completions response into a Responses API response. It is the reverse of
+// ResponsesResponseToChatCompletionsResponse and is used to serve
+// Responses-only clients (e.g. Codex) from Chat-only upstreams.
+func ChatCompletionsResponseToResponsesResponse(resp *dto.OpenAITextResponse, id string, toolCtx *dto.ResponsesToolContext) (*dto.OpenAIResponsesResponse, error) {
+	if resp == nil {
+		return nil, errors.New("response is nil")
+	}
+
+	var msg *dto.Message
+	finishReason := ""
+	if len(resp.Choices) > 0 {
+		msg = &resp.Choices[0].Message
+		finishReason = resp.Choices[0].FinishReason
+	}
+
+	output := make([]dto.ResponsesOutput, 0, 2)
+
+	if msg != nil {
+		if reasoning := strings.TrimSpace(msg.GetReasoningContent()); reasoning != "" {
+			output = append(output, dto.ResponsesOutput{
+				Type:    "reasoning",
+				ID:      "rs_" + id,
+				Status:  "completed",
+				Summary: []dto.ResponsesReasoningSummaryPart{{Type: "summary_text", Text: reasoning}},
+			})
+		}
+
+		if text := msg.StringContent(); text != "" {
+			output = append(output, dto.ResponsesOutput{
+				Type:   "message",
+				ID:     "msg_" + id,
+				Status: "completed",
+				Role:   "assistant",
+				Content: []dto.ResponsesOutputContent{
+					{Type: "output_text", Text: text},
+				},
+			})
+		}
+
+		for _, tc := range msg.ParseToolCalls() {
+			callID := strings.TrimSpace(tc.ID)
+			name := strings.TrimSpace(tc.Function.Name)
+			if callID == "" || name == "" {
+				continue
+			}
+			output = append(output, toolCallItemToResponsesOutput(
+				ResponseToolCallItem(callID, name, tc.Function.Arguments, toolCtx)))
+		}
+	}
+
+	created := 0
+	switch v := resp.Created.(type) {
+	case int:
+		created = v
+	case int64:
+		created = int(v)
+	case float64:
+		created = int(v)
+	}
+
+	out := &dto.OpenAIResponsesResponse{
+		ID:        "resp_" + id,
+		Object:    "response",
+		CreatedAt: created,
+		Status:    json.RawMessage(`"completed"`),
+		Model:     resp.Model,
+		Output:    output,
+		Usage:     chatUsageToResponses(resp.Usage),
+	}
+	if finishReason == "length" {
+		out.Status = json.RawMessage(`"incomplete"`)
+		out.IncompleteDetails = &dto.IncompleteDetails{Reason: "max_output_tokens"}
+	}
+
+	return out, nil
+}
+
+// toolCallItemToResponsesOutput converts a map-shaped tool-call item (from
+// ResponseToolCallItem) into the typed ResponsesOutput for the non-stream response.
+func toolCallItemToResponsesOutput(item map[string]any) dto.ResponsesOutput {
+	out := dto.ResponsesOutput{
+		Type:      mapGetString(item, "type"),
+		ID:        mapGetString(item, "id"),
+		Status:    mapGetString(item, "status"),
+		CallId:    mapGetString(item, "call_id"),
+		Name:      mapGetString(item, "name"),
+		Namespace: mapGetString(item, "namespace"),
+	}
+	if args, ok := item["arguments"].(string); ok {
+		out.Arguments = jsonStringRaw(args)
+	}
+	if input, ok := item["input"].(string); ok {
+		out.Input = jsonStringRaw(input)
+	}
+	return out
+}
+
+// jsonStringRaw encodes a Go string as a JSON string value (json.RawMessage).
+func jsonStringRaw(s string) json.RawMessage {
+	b, err := common.Marshal(s)
+	if err != nil {
+		return nil
+	}
+	return b
+}
+
+// chatArgumentsToResponses encodes Chat tool-call arguments (a raw JSON string
+// like `{"cmd":"ls"}`) into the Responses `arguments` field, which is a
+// JSON-encoded string (e.g. "\"{\\\"cmd\\\":\\\"ls\\\"}\"").
+func chatArgumentsToResponses(arguments string) json.RawMessage {
+	if arguments == "" {
+		arguments = "{}"
+	}
+	b, err := common.Marshal(arguments)
+	if err != nil {
+		return nil
+	}
+	return b
+}
+
+func chatUsageToResponses(u dto.Usage) *dto.Usage {
+	out := &dto.Usage{
+		PromptTokens:     u.PromptTokens,
+		CompletionTokens: u.CompletionTokens,
+		TotalTokens:      u.TotalTokens,
+		InputTokens:      u.PromptTokens,
+		OutputTokens:     u.CompletionTokens,
+	}
+	if out.TotalTokens == 0 {
+		out.TotalTokens = out.PromptTokens + out.CompletionTokens
+	}
+	if u.PromptTokensDetails.CachedTokens != 0 || u.PromptTokensDetails.ImageTokens != 0 || u.PromptTokensDetails.AudioTokens != 0 {
+		details := u.PromptTokensDetails
+		out.InputTokensDetails = &details
+	}
+	out.CompletionTokenDetails = u.CompletionTokenDetails
+	return out
+}

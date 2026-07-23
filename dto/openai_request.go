@@ -248,6 +248,9 @@ type FunctionRequest struct {
 	Name        string `json:"name"`
 	Parameters  any    `json:"parameters,omitempty"`
 	Arguments   string `json:"arguments,omitempty"`
+	// Strict enables strict schema enforcement for tool arguments.
+	// nil = absent (omitted); an explicit false is preserved on marshal.
+	Strict any `json:"strict,omitempty"`
 }
 
 type StreamOptions struct {

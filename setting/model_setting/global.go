@@ -32,10 +32,48 @@ func (p ChatCompletionsToResponsesPolicy) IsChannelEnabled(channelID int, channe
 	return false
 }
 
+// ResponsesConversionMatch is a channel/model match set used as an override for
+// the Responses → Chat Completions auto-detection. It mirrors the shape of
+// ChatCompletionsToResponsesPolicy but its semantics are "override", not "the
+// only switch": both match sets default to empty, leaving routing to capability
+// auto-detection.
+type ResponsesConversionMatch struct {
+	Enabled       bool     `json:"enabled"`
+	AllChannels   bool     `json:"all_channels"`
+	ChannelIDs    []int    `json:"channel_ids,omitempty"`
+	ChannelTypes  []int    `json:"channel_types,omitempty"`
+	ModelPatterns []string `json:"model_patterns,omitempty"`
+}
+
+func (m ResponsesConversionMatch) MatchesChannel(channelID int, channelType int) bool {
+	if !m.Enabled {
+		return false
+	}
+	if m.AllChannels {
+		return true
+	}
+	if channelID > 0 && len(m.ChannelIDs) > 0 && slices.Contains(m.ChannelIDs, channelID) {
+		return true
+	}
+	if channelType > 0 && len(m.ChannelTypes) > 0 && slices.Contains(m.ChannelTypes, channelType) {
+		return true
+	}
+	return false
+}
+
+// ResponsesToChatCompletionsPolicy overrides the default capability-based
+// routing for /v1/responses requests. ForceNative pins a channel/model to the
+// native Responses path; ForceConvert pins it to the Chat conversion path.
+type ResponsesToChatCompletionsPolicy struct {
+	ForceConvert ResponsesConversionMatch `json:"force_convert"`
+	ForceNative  ResponsesConversionMatch `json:"force_native"`
+}
+
 type GlobalSettings struct {
 	PassThroughRequestEnabled        bool                             `json:"pass_through_request_enabled"`
 	ThinkingModelBlacklist           []string                         `json:"thinking_model_blacklist"`
 	ChatCompletionsToResponsesPolicy ChatCompletionsToResponsesPolicy `json:"chat_completions_to_responses_policy"`
+	ResponsesToChatCompletionsPolicy ResponsesToChatCompletionsPolicy `json:"responses_to_chat_completions_policy"`
 }
 
 // 默认配置
