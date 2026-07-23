@@ -118,7 +118,10 @@ const FACADE_TASK_TYPE_META = {
   flf2v: { label: '首尾生视频', color: 'blue' },
   s2v: { label: '数字人', color: 'blue' },
   sr: { label: '视频超分', color: 'blue' },
-  vace: { label: '视频编辑', color: 'blue' },
+  // 视频编辑(Bernini):按输入分流的三种玩法,统一显示「视频编辑」。
+  v2v: { label: '视频编辑', color: 'blue' },
+  rv2v: { label: '视频编辑', color: 'blue' },
+  r2v: { label: '视频编辑', color: 'blue' },
 };
 
 const renderType = (type, t, taskType) => {
