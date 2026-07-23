@@ -46,14 +46,16 @@ var AudioCapabilities = []string{
 // 归入体验区「音乐模型」下的子标签页,并在模型广场同归「音乐」能力分类。
 //
 //	文生音效   -> AudioX t2a
-//	视频配音效 -> AudioX v2a / tv2a
-//	视频配乐   -> AudioX v2m / tv2m
+//	视频生音   -> AudioX v2a / tv2a（音效/配乐合并，a/m 后缀对引擎无差别）
 //	歌声合成   -> SoulX-Singer svs
+//
+// 视频配音效/视频配乐 为合并前的旧标签,保留以兼容既有模型配置的标签分类。
 var MusicCapabilities = []string{
 	"文生音乐",
 	"音乐改编",
 	"音乐重绘",
 	"文生音效",
+	"视频生音",
 	"视频配音效",
 	"视频配乐",
 	"歌声合成",

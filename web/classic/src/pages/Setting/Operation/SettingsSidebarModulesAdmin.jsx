@@ -162,7 +162,7 @@ export default function SettingsSidebarModulesAdmin(props) {
         {
           key: 'music',
           title: t('音乐模型'),
-          description: t('文生音乐/音乐改编/音乐重绘/音效/视频配乐/歌声合成'),
+          description: t('文生音乐/音乐改编/音乐重绘/文生音效/视频生音/歌声合成'),
         },
         { key: 'chat', title: t('聊天'), description: t('聊天会话管理') },
       ],

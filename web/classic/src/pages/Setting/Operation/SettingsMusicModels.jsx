@@ -7,6 +7,8 @@ import {
   Select,
   Input,
   InputNumber,
+  Switch,
+  Tooltip,
   Typography,
   Empty,
 } from '@douyinfe/semi-ui';
@@ -62,6 +64,8 @@ export default function SettingsMusicModels(props) {
         maxChars: c.maxChars,
         refAudioMaxMB: c.refAudioMaxMB,
         videoMaxMB: c.videoMaxMB,
+        translationEnabled: c.translation?.enabled === true,
+        translationDefaultModel: c.translation?.defaultModel || '',
       })),
     );
   }, [props.options]);
@@ -75,6 +79,8 @@ export default function SettingsMusicModels(props) {
         maxChars: undefined,
         refAudioMaxMB: undefined,
         videoMaxMB: undefined,
+        translationEnabled: false,
+        translationDefaultModel: '',
       },
     ]);
   const updateRow = (idx, patch) =>
@@ -97,6 +103,13 @@ export default function SettingsMusicModels(props) {
           refAudioMaxMB: normInt(r.refAudioMaxMB),
           videoMaxMB: normInt(r.videoMaxMB),
         };
+        // 仅在启用时写 translation,保持 JSON 精简;defaultModel 为选填。
+        if (r.translationEnabled) {
+          models[name].translation = {
+            enabled: true,
+            defaultModel: (r.translationDefaultModel || '').trim(),
+          };
+        }
       });
       const value = JSON.stringify({
         default: {
@@ -132,7 +145,7 @@ export default function SettingsMusicModels(props) {
       <Form.Section
         text={t('音乐模型配置')}
         extraText={t(
-          '声明哪些是音乐模型并配置约束。勾选了对应能力(文生音乐/音乐改编/音乐重绘/文生音效/视频配音效/视频配乐/歌声合成)的模型会出现在音乐体验区对应标签页，能力也会作为标签在模型广场展示。字数上限限制单次描述文本长度(0 表示不限制)；参考音大小上限限制上传驱动/参考/歌声音频(MB)；视频大小上限限制上传源视频(MB，仅视频配音效/视频配乐用)。留空则用默认值兜底。',
+          '声明哪些是音乐模型并配置约束。勾选了对应能力(文生音乐/音乐改编/音乐重绘/文生音效/视频生音/歌声合成)的模型会出现在音乐体验区对应标签页，能力也会作为标签在模型广场展示。字数上限限制单次描述文本长度(0 表示不限制)；参考音大小上限限制上传驱动/参考/歌声音频(MB)；视频大小上限限制上传源视频(MB，仅视频生音用)。开启「中译英」后,文生音效/视频生音的中文提示词会先用所选默认语言模型翻译成英文再生成(AudioX 文本编码器仅认英文)。留空则用默认值兜底。',
         )}
       >
         <div
@@ -234,6 +247,36 @@ export default function SettingsMusicModels(props) {
                   onChange={(v) => updateRow(idx, { videoMaxMB: v })}
                   placeholder={t('视频MB')}
                   style={{ flex: 1, minWidth: 120 }}
+                />
+                <Tooltip content={t('中文将自动翻译为英文后生成')} position='top'>
+                  <div
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: 4,
+                      flexShrink: 0,
+                    }}
+                  >
+                    <Text type='tertiary' size='small'>
+                      {t('中译英')}
+                    </Text>
+                    <Switch
+                      size='small'
+                      checked={row.translationEnabled}
+                      onChange={(v) =>
+                        updateRow(idx, { translationEnabled: v })
+                      }
+                    />
+                  </div>
+                </Tooltip>
+                <Input
+                  value={row.translationDefaultModel}
+                  onChange={(v) =>
+                    updateRow(idx, { translationDefaultModel: v })
+                  }
+                  placeholder={t('默认语言模型')}
+                  disabled={!row.translationEnabled}
+                  style={{ flex: 1, minWidth: 140 }}
                 />
                 <Button
                   type='danger'

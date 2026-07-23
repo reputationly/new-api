@@ -33,6 +33,9 @@ const MusicPlaygroundBody = ({ mode }) => {
     needsVideo,
     needsDualAudio,
     needsText,
+    showTranslation,
+    translationGroups,
+    translationModels,
     refAudioMaxMB,
     videoMaxMB,
     generate,
@@ -53,12 +56,10 @@ const MusicPlaygroundBody = ({ mode }) => {
     mode === 't2a'
       ? t('欢迎使用 AI 文生音效,请在左侧选择模型,并在下方输入音效描述')
       : mode === 'v2a'
-        ? t('欢迎使用 AI 视频配音效,请在左侧上传源视频,可选补充文本描述')
-        : mode === 'v2m'
-          ? t('欢迎使用 AI 视频配乐,请在左侧上传源视频,可选补充文本描述')
-          : mode === 'svs'
-            ? t('欢迎使用 AI 歌声合成,请在左侧上传音色参考与目标曲/伴奏')
-            : '';
+        ? t('欢迎使用 AI 视频生音,请在左侧上传源视频,可选补充文本描述(建议贴合画面)')
+        : mode === 'svs'
+          ? t('欢迎使用 AI 歌声合成,请在左侧上传音色参考与目标曲/伴奏')
+          : '';
 
   return (
     <div
@@ -76,6 +77,9 @@ const MusicPlaygroundBody = ({ mode }) => {
           needsAudio={needsAudio}
           needsVideo={needsVideo}
           needsDualAudio={needsDualAudio}
+          showTranslation={showTranslation}
+          translationGroups={translationGroups}
+          translationModels={translationModels}
           audioLabel={audioLabel}
           refAudioMaxMB={refAudioMaxMB}
           videoMaxMB={videoMaxMB}
@@ -119,14 +123,13 @@ const MusicPlaygroundBody = ({ mode }) => {
   );
 };
 
-// 7 个子标签页(标签文案 = 能力中文)。
+// 6 个子标签页(标签文案 = 能力中文)。视频配音效/视频配乐已合并为「视频生音」。
 const TAB_LABELS = {
   t2m: '文生音乐',
   cover: '音乐改编',
   repaint: '音乐重绘',
   t2a: '文生音效',
-  v2a: '视频配音效',
-  v2m: '视频配乐',
+  v2a: '视频生音',
   svs: '歌声合成',
 };
 
