@@ -29,6 +29,7 @@ const VideoConfigPanel = ({
   isFLF2V = false,
   isS2V = false,
   isSR = false,
+  isDub = false,
   isVACE = false,
   maxRefImages = 5,
   maxInputMB = 0,
@@ -230,11 +231,11 @@ const VideoConfigPanel = ({
           />
         )}
 
-        {/* 视频超分:源视频(必填)+ 超分倍率 */}
-        {isSR && (!disabled || inputs.sourceVideo) && (
+        {/* 视频超分:源视频(必填)+ 超分倍率;视频配乐:仅源视频(必填,复用同一输入)。 */}
+        {(isSR || isDub) && (!disabled || inputs.sourceVideo) && (
           <>
             <MediaFileInput
-              label={t('上传源视频')}
+              label={t(isDub ? '上传待配乐视频' : '上传源视频')}
               required
               kind='video'
               value={inputs.sourceVideo}
@@ -242,24 +243,26 @@ const VideoConfigPanel = ({
               disabled={disabled}
               onChange={(v) => onInputChange('sourceVideo', v)}
             />
-            <div>
-              <div className='flex items-center gap-2 mb-2'>
-                <Ruler size={16} className='text-gray-500' />
-                <Typography.Text strong className='text-sm'>
-                  {t('超分倍率')}
-                </Typography.Text>
+            {isSR && (
+              <div>
+                <div className='flex items-center gap-2 mb-2'>
+                  <Ruler size={16} className='text-gray-500' />
+                  <Typography.Text strong className='text-sm'>
+                    {t('超分倍率')}
+                  </Typography.Text>
+                </div>
+                <InputNumber
+                  min={1}
+                  max={4}
+                  step={0.25}
+                  value={inputs.srRatio}
+                  onChange={(v) => onInputChange('srRatio', v == null ? 2 : v)}
+                  disabled={disabled}
+                  style={{ width: '100%' }}
+                  className='!rounded-lg'
+                />
               </div>
-              <InputNumber
-                min={1}
-                max={4}
-                step={0.25}
-                value={inputs.srRatio}
-                onChange={(v) => onInputChange('srRatio', v == null ? 2 : v)}
-                disabled={disabled}
-                style={{ width: '100%' }}
-                className='!rounded-lg'
-              />
-            </div>
+            )}
           </>
         )}
 
@@ -345,8 +348,8 @@ const VideoConfigPanel = ({
           </div>
         )}
 
-        {/* 时长(超分输出时长跟随源视频,不展示) */}
-        {!isSR && (
+        {/* 时长(超分/配乐输出时长跟随源视频,不展示) */}
+        {!isSR && !isDub && (
           <div>
             <div className='flex items-center gap-2 mb-2'>
               <Clock size={16} className='text-gray-500' />

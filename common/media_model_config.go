@@ -432,9 +432,10 @@ func MusicRefAudioMaxBytesForModel(candidates ...string) (maxBytes int64, config
 }
 
 // MusicVideoMaxBytesForModel 返回该音乐模型视频输入大小上限(字节;0=不限制)及是否已配置。
-// 优先按模型,其次全局 default。用于 AudioX 视频→音频/音乐(v2a/v2m/tv2a/tv2m)服务端物化
+// 优先按模型,其次全局 default。用于 AudioX 视频→音乐(v2m/tv2m)服务端物化
 // 时兜底——这些模型归「音乐」大类,其视频上限配在 MusicModelConfig.videoMaxMB(而非
 // VideoModelConfig),直连 /pg/videos 也走这里,防绕过。
+// 注:v2a(视频配乐)已改判视频大类,走 VideoMaxInputBytesForModel,不经此处。
 func MusicVideoMaxBytesForModel(candidates ...string) (maxBytes int64, configured bool) {
 	OptionMapRWMutex.RLock()
 	raw := OptionMap["MusicModelConfig"]

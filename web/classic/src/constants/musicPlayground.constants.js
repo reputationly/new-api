@@ -25,18 +25,15 @@ export const MUSIC_T2M_CAPABILITY = '文生音乐';
 export const MUSIC_COVER_CAPABILITY = '音乐改编';
 export const MUSIC_REPAINT_CAPABILITY = '音乐重绘';
 export const MUSIC_T2A_CAPABILITY = '文生音效';
-// 视频生音 = 视频配音效 + 视频配乐 合并(a/m 后缀对引擎无差别,统一走 a 系 v2a/tv2a)。
-export const MUSIC_V2X_CAPABILITY = '视频生音';
-// 合并前的旧标签,保留为合法值以兼容既有模型配置(匹配见 MUSIC_MODES.v2a.matchCapabilities)。
-export const MUSIC_V2A_CAPABILITY = '视频配音效';
-export const MUSIC_V2M_CAPABILITY = '视频配乐';
+// 2026-07 下线:视频生音(AudioX v2a/tv2a,出 .wav)及其旧标签 视频配音效/视频配乐。
+// 视频配乐产品线移交 LTX-2.3(task_type=v2a 契约改判,产物=配好音的视频),入口在
+// 体验区「语音模型 → 视频配乐」(见 audioPlayground 侧),不再归音乐页。
 export const MUSIC_SVS_CAPABILITY = '歌声合成';
 export const MUSIC_CAPABILITIES = [
   MUSIC_T2M_CAPABILITY,
   MUSIC_COVER_CAPABILITY,
   MUSIC_REPAINT_CAPABILITY,
   MUSIC_T2A_CAPABILITY,
-  MUSIC_V2X_CAPABILITY,
   MUSIC_SVS_CAPABILITY,
 ];
 
@@ -104,28 +101,7 @@ export const MUSIC_MODES = {
     targetAudioMetaKey: 'target_audio',
     resolveTaskType: () => 't2a',
   },
-  // 视频生音:视频配音效 + 视频配乐 合并。统一走 a 系;有文本→tv2a(翻译),无文本→v2a(不翻译)。
-  // matchCapabilities 使既有标了旧标签(视频配音效/视频配乐)的模型仍归入本 tab(后向兼容)。
-  v2a: {
-    taskType: 'v2a',
-    capability: MUSIC_V2X_CAPABILITY,
-    matchCapabilities: [
-      MUSIC_V2X_CAPABILITY,
-      MUSIC_V2A_CAPABILITY,
-      MUSIC_V2M_CAPABILITY,
-    ],
-    engine: 'audiox',
-    needsAudio: false,
-    audioMetaKey: '',
-    needsVideo: true,
-    needsDualAudio: false,
-    needsText: false, // 视频生音:文本可选;有文本→tv2a,否则 v2a
-    needsTranslation: true, // 有文本时中译英
-    videoMetaKey: 'video',
-    promptAudioMetaKey: 'prompt_audio',
-    targetAudioMetaKey: 'target_audio',
-    resolveTaskType: (hasText) => (hasText ? 'tv2a' : 'v2a'),
-  },
+  // (原「视频生音」v2a 模式已于 2026-07 下线,见文件头能力常量处的迁移说明。)
   svs: {
     taskType: 'svs',
     capability: MUSIC_SVS_CAPABILITY,
@@ -142,13 +118,13 @@ export const MUSIC_MODES = {
   },
 };
 
-// 体验区子标签页顺序(3 个 ACE-Step + 4 个 AudioX/SoulX)。
+// 体验区子标签页顺序(3 个 ACE-Step + 2 个 AudioX/SoulX)。
+// v2a(视频生音)已下线:视频配乐移交 LTX-2.3,入口在语音模型页。
 export const MUSIC_TAB_ORDER = [
   't2m',
   'cover',
   'repaint',
   't2a',
-  'v2a', // 视频生音(视频配音效/视频配乐已合并)
   'svs',
 ];
 
@@ -213,11 +189,6 @@ export const MUSIC_EXAMPLES = {
     { label: '雨声闷雷', prompt: '雨点打在窗户上的滴答声,伴随远处闷雷' },
     { label: '街道嘈杂', prompt: '繁忙街道上的汽车鸣笛与人群嘈杂声' },
     { label: '钢琴独奏', prompt: '悠扬舒缓的钢琴独奏,适合宁静的夜晚' },
-  ],
-  v2a: [
-    '为视频生成贴合画面的音效',
-    '为视频生成贴合氛围的背景音乐',
-    'Ocean waves crashing with people laughing',
   ],
   svs: [
     {

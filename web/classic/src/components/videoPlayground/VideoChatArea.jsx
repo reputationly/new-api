@@ -129,6 +129,7 @@ const VideoChatArea = ({
   missingRequiredImage = false,
   mode = 'text2video',
   isSR = false,
+  isDub = false,
   onApplyExample,
   onSend,
   onRegenerate,
@@ -164,7 +165,11 @@ const VideoChatArea = ({
           createAt: 1,
           content: isSR
             ? t('欢迎使用 AI 视频超分，请在左侧上传源视频后点击下方按钮')
-            : t('欢迎使用 AI 视频生成，请在下方输入您的提示词'),
+            : isDub
+              ? t(
+                  '欢迎使用 AI 视频配乐，请在左侧上传待配乐视频，并在下方描述想要的声音（音效/环境音/背景音乐/台词，画面将逐帧保持不变）',
+                )
+              : t('欢迎使用 AI 视频生成，请在下方输入您的提示词'),
         },
       ];
     }
@@ -194,7 +199,7 @@ const VideoChatArea = ({
           m.status === VIDEO_STATUS.FAILED ? m.error || t('视频生成失败') : '',
       };
     });
-  }, [messages, isSR, t]);
+  }, [messages, isSR, isDub, t]);
 
   const byId = useMemo(
     () => new Map(messages.map((m) => [m.id, m])),
@@ -351,7 +356,9 @@ const VideoChatArea = ({
         </div>
       );
     }
-    const canSend = !blockSend && inputValue.trim().length > 0;
+    // 视频配乐(dub)提示词可选:空文本=让模型按画面自由配环境音(hook/网关/引擎
+    // 全链路已放行)。缺视频仍由 blockSend 里的 missingRequiredImage 拦住。
+    const canSend = !blockSend && (inputValue.trim().length > 0 || isDub);
     const doSend = () => {
       if (!canSend) return;
       onSend(inputValue.trim());
@@ -396,7 +403,11 @@ const VideoChatArea = ({
           <TextArea
             value={inputValue}
             onChange={setInputValue}
-            placeholder={t('请输入视频生成提示词')}
+            placeholder={t(
+              isDub
+                ? '描述想要的声音(音效/环境音/背景音乐/台词;可留空,模型将按画面自由配音)'
+                : '请输入视频生成提示词',
+            )}
             maxLength={MAX_PROMPT_LEN}
             autosize={{ minRows: 2, maxRows: 6 }}
             className='!rounded-xl'
@@ -438,6 +449,7 @@ const VideoChatArea = ({
     presets,
     onApplyExample,
     isSR,
+    isDub,
     inputValue,
     onSend,
     t,

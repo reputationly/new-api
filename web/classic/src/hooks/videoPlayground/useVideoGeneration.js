@@ -32,6 +32,7 @@ import {
   VIDEO_S2V_CAPABILITY,
   VIDEO_SR_CAPABILITY,
   VIDEO_VACE_CAPABILITY,
+  VIDEO_DUB_CAPABILITY,
   VIDEO_CAPABILITY_LEGACY_ALIASES,
   VIDEO_DEFAULT_ASPECT_RATIO,
   aspectRatioToShape,
@@ -64,6 +65,9 @@ const VIDEO_MODES = {
   // 门面 task_type：s2v(音频生视频)/ sr(视频超分)。
   s2v: { capability: VIDEO_S2V_CAPABILITY, suffix: '_s2v', taskType: 's2v' },
   sr: { capability: VIDEO_SR_CAPABILITY, suffix: '_sr', taskType: 'sr' },
+  // 视频配乐(LTX-2.3 首发):源视频复用 sr 的 sourceVideo 输入,提示词可选(描述想要
+  // 的声音:音效/环境音/BGM/台词),输出=原画面 + AI 音轨的 mp4。task_type 显式 v2a。
+  dub: { capability: VIDEO_DUB_CAPABILITY, suffix: '_dub', taskType: 'v2a' },
   // 「视频编辑」mode 键沿用 vace(避免动 localStorage 历史键 / 示例 key),但现驱动 Bernini:
   // 实际 task_type 在提交时按输入自动分流为 v2v/rv2v/r2v(见下方 isVACE 提交块),故不设静态 taskType。
   vace: {
@@ -154,6 +158,7 @@ export const useVideoGeneration = ({ mode = 'text2video' } = {}) => {
   const isS2V = mode === 's2v';
   const isSR = mode === 'sr';
   const isVACE = mode === 'vace';
+  const isDub = mode === 'dub';
   // 需要上传一张「主图」的模式:i2v/flf2v 首帧、s2v 人物图(都复用 inputs.firstFrame)。
   const needsImage = isI2V || isFLF2V || isS2V;
   // 输出跟随上传输入的模式(非文生视频):不展示/不下发尺寸与宽高比。
@@ -639,9 +644,10 @@ export const useVideoGeneration = ({ mode = 'text2video' } = {}) => {
 
   const generate = useCallback(
     async (prompt) => {
-      // 视频超分无提示词框(输出完全由源视频决定),允许空提示词提交;其余模式必填。
+      // 视频超分无提示词框(输出完全由源视频决定),允许空提示词提交;视频配乐提示词
+      // 可选(空提示词=让模型按画面自由配环境音);其余模式必填。
       const text = (prompt || '').trim();
-      if ((!text && !isSR) || generating) return;
+      if ((!text && !isSR && !isDub) || generating) return;
 
       // i2v:images=[首帧];flf2v:images=[首帧,尾帧];s2v:images=[人物图]。
       // 后续追问沿用对话首条锁定的帧图 / 媒体输入。
@@ -685,6 +691,10 @@ export const useVideoGeneration = ({ mode = 'text2video' } = {}) => {
         }
         if (isSR && !(inputs.sourceVideo || '').trim()) {
           showError(t('视频超分需要上传源视频'));
+          return;
+        }
+        if (isDub && !(inputs.sourceVideo || '').trim()) {
+          showError(t('视频配乐需要上传待配乐视频'));
           return;
         }
         if (
@@ -779,7 +789,7 @@ export const useVideoGeneration = ({ mode = 'text2video' } = {}) => {
         showError(t('驱动音频已失效,请开启新对话并重新上传'));
         return;
       }
-      if (isSR && !(params.sourceVideo || '').trim()) {
+      if ((isSR || isDub) && !(params.sourceVideo || '').trim()) {
         showError(t('源视频已失效,请开启新对话并重新上传'));
         return;
       }
@@ -794,8 +804,8 @@ export const useVideoGeneration = ({ mode = 'text2video' } = {}) => {
 
       const reqId = genId();
       const now = new Date().toISOString();
-      // 超分无提示词:会话气泡/历史标题用固定文案占位,避免空白。
-      const displayText = text || t('视频超分');
+      // 超分无提示词/配乐提示词可选:空提示词时会话气泡/历史标题用固定文案占位。
+      const displayText = text || t(isDub ? '视频配乐' : '视频超分');
       const userMsg = {
         id: `${reqId}-u`,
         role: 'user',
@@ -877,8 +887,8 @@ export const useVideoGeneration = ({ mode = 'text2video' } = {}) => {
         if (!followsInput && availableSizes.includes(videoSizeVal)) {
           body.size = videoSizeVal;
         }
-        // 超分输出时长跟随源视频,不发时长字段(配置面板也不展示时长框)。
-        if (!isSR) {
+        // 超分/配乐输出时长跟随源视频,不发时长字段(配置面板也不展示时长框)。
+        if (!isSR && !isDub) {
           if (strategy.durationField === 'seconds') {
             body.seconds = params.seconds;
           } else {
@@ -933,6 +943,14 @@ export const useVideoGeneration = ({ mode = 'text2video' } = {}) => {
           if (Number.isFinite(ratio) && ratio > 0) {
             body.metadata = { ...(body.metadata || {}), sr_ratio: ratio };
           }
+        }
+        // 视频配乐:源视频 → metadata.video(门面物化到 video_path 喂 LTX-2.3);
+        // task_type=v2a 已在上方显式下发;无倍率/时长等额外标量。
+        if (isDub && (params.sourceVideo || '').trim()) {
+          body.metadata = {
+            ...(body.metadata || {}),
+            video: params.sourceVideo,
+          };
         }
         // 视频编辑(Bernini):按输入自动分流 task_type —— 有源视频且无参考图=v2v、
         // 源视频+参考图=rv2v、仅参考图=r2v(与后端 materializeBerniniInputs 校验一致)。
@@ -1014,6 +1032,7 @@ export const useVideoGeneration = ({ mode = 'text2video' } = {}) => {
       isS2V,
       isSR,
       isVACE,
+      isDub,
       taskType,
       availableSizes,
       availableAspectRatios,
@@ -1113,7 +1132,7 @@ export const useVideoGeneration = ({ mode = 'text2video' } = {}) => {
       ((inputs.firstFrame || '').trim() === '' ||
         (isFLF2V && (inputs.lastFrame || '').trim() === ''))) ||
       (isS2V && (inputs.audioData || '').trim() === '') ||
-      (isSR && (inputs.sourceVideo || '').trim() === '') ||
+      ((isSR || isDub) && (inputs.sourceVideo || '').trim() === '') ||
       (isVACE &&
         (inputs.srcVideo || '').trim() === '' &&
         !(inputs.refImages || []).length));
@@ -1124,6 +1143,7 @@ export const useVideoGeneration = ({ mode = 'text2video' } = {}) => {
     isS2V,
     isSR,
     isVACE,
+    isDub,
     needsImage,
     followsInput,
     maxRefImages: MAX_REF_IMAGES,

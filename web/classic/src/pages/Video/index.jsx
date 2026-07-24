@@ -7,9 +7,11 @@ import VideoConfigPanel from '../../components/videoPlayground/VideoConfigPanel'
 import VideoChatArea from '../../components/videoPlayground/VideoChatArea';
 import VideoHistoryPanel from '../../components/videoPlayground/VideoHistoryPanel';
 
-// 单个模式(文生视频 / 图生视频 / 首尾帧)的三栏体验区。切 tab 时整体重挂载,
-// 各模式历史/参数互不串扰。
-const VideoPlaygroundBody = ({ mode }) => {
+// 单个模式(文生视频 / 图生视频 / 首尾帧 / … / 视频配乐)的三栏体验区。切 tab 时整体
+// 重挂载,各模式历史/参数互不串扰。
+// 导出供语音模型页复用:「视频配乐」(mode='dub')的入口在语音页,但输入(上传视频)与
+// 产物(配好音的视频)是视频形态,复用本三栏体验区而非音频体验区。
+export const VideoPlaygroundBody = ({ mode }) => {
   const isMobile = useIsMobile();
   const styleState = { isMobile };
   const {
@@ -18,6 +20,7 @@ const VideoPlaygroundBody = ({ mode }) => {
     isS2V,
     isSR,
     isVACE,
+    isDub,
     needsImage,
     followsInput,
     maxRefImages,
@@ -58,6 +61,7 @@ const VideoPlaygroundBody = ({ mode }) => {
           isS2V={isS2V}
           isSR={isSR}
           isVACE={isVACE}
+          isDub={isDub}
           maxRefImages={maxRefImages}
           maxInputMB={maxInputMB}
           inputs={inputs}
@@ -80,6 +84,7 @@ const VideoPlaygroundBody = ({ mode }) => {
           missingRequiredImage={missingRequiredImage}
           mode={mode}
           isSR={isSR}
+          isDub={isDub}
           onApplyExample={applyExample}
           styleState={styleState}
           onSend={generate}

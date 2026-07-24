@@ -60,10 +60,15 @@ import (
 var validTaskTypes = map[string]bool{
 	"t2i": true, "i2i": true, "t2v": true, "i2v": true, "flf2v": true,
 	"tts": true, "s2v": true, "sr": true, "v2v": true, "rv2v": true, "r2v": true,
+	// 视频配乐(LTX-2.3 v2a):输入视频 + 可选 prompt → 原画面逐帧不动 + AI 音轨的
+	// mp4。2026-07 契约改判:v2a 原属 AudioX(出 .wav 纯音频),该产品线下线,
+	// v2a 现为「视频→配好音的视频」任务形态(可挂多模型,LTX-2.3 首发);tv2a
+	// 随之删除(新契约 prompt 本就可选,无需"带文本"单列)。
+	"v2a": true,
 	// 音乐生成(ACE-Step):t2m 纯文本、cover 参考音频、repaint 源音频。
 	"t2m": true, "cover": true, "repaint": true,
-	// 扩散音频(vLLM-Omni audiogen):AudioX t2a/v2a/v2m/tv2a/tv2m + SoulX-Singer svs。
-	"t2a": true, "v2a": true, "v2m": true, "tv2a": true, "tv2m": true, "svs": true,
+	// 扩散音频(vLLM-Omni audiogen):AudioX t2a/v2m/tv2m + SoulX-Singer svs。
+	"t2a": true, "v2m": true, "tv2m": true, "svs": true,
 }
 
 // legacyInputKeys 旧的原始输入 / 引擎原生路径字段:输入统一走 input_refs,这些键
@@ -227,7 +232,7 @@ func (a *TaskAdaptor) BuildRequestBody(c *gin.Context, info *relaycommon.RelayIn
 	// task_type 白名单校验(§N2):它可能来自 metadata,非法值既会让 NFS 写盘路径异常,
 	// 也会被门面拒;就地本地 400,不进后续物化 / 提交。
 	if !validTaskTypes[taskType] {
-		return nil, localBadRequest(fmt.Errorf("不支持的 task_type: %q(允许:t2i/i2i/t2v/i2v/flf2v/tts/s2v/sr/v2v/rv2v/r2v/t2m/cover/repaint/t2a/v2a/v2m/tv2a/tv2m/svs)", taskType))
+		return nil, localBadRequest(fmt.Errorf("不支持的 task_type: %q(允许:t2i/i2i/t2v/i2v/flf2v/tts/s2v/sr/v2a/v2v/rv2v/r2v/t2m/cover/repaint/t2a/v2m/tv2m/svs)", taskType))
 	}
 	// SoulX svs 的文本仅占位(引擎按 prompt_audio/target_audio 生成歌声),但引擎 input 需非空、
 	// 且真机验证过的请求带 "soulx-singer" 标签。ValidateBasicTaskRequest 已豁免 svs 的空 prompt,
@@ -262,10 +267,11 @@ func (a *TaskAdaptor) BuildRequestBody(c *gin.Context, info *relaycommon.RelayIn
 		}
 	}
 	if taskType == "t2m" || taskType == "cover" || taskType == "repaint" ||
-		taskType == "t2a" || taskType == "tv2a" || taskType == "tv2m" {
+		taskType == "t2a" || taskType == "tv2m" {
 		// 字数上限(MusicModelConfig,按模型/全局默认;0=不限制):就地本地 400,防前端(含
 		// 直连 /pg/videos)绕过。ACE-Step 校验 prompt/lyrics/sample_query;AudioX 文本类
-		// (t2a/tv2a/tv2m)也归「音乐」大类,同样受 MusicModelConfig 字数限制,只有 prompt。
+		// (t2a/tv2m)也归「音乐」大类,同样受 MusicModelConfig 字数限制,只有 prompt。
+		// (tv2a 已随 AudioX 视频配乐下线;v2a 现属视频大类,不走音乐字数限制。)
 		// 任一字段超限即拒。
 		for _, txt := range []string{
 			req.Prompt,
@@ -314,8 +320,13 @@ func (a *TaskAdaptor) BuildRequestBody(c *gin.Context, info *relaycommon.RelayIn
 		refs, err = materializeMusicInputs(c, info, taskType, modelName, req)
 	case "t2a":
 		// AudioX 文本→音效/音乐:纯文本 prompt,无输入物化。
-	case "v2a", "v2m", "tv2a", "tv2m":
-		// AudioX 视频→音效/音乐:物化视频(metadata.video);tv2* 另有文本 prompt(透传)。
+	case "v2a":
+		// 视频配乐(LTX-2.3 首发):源视频(metadata.video)+ 可选 prompt(透传)。
+		// 归视频大类 → 走 VideoModelConfig 上限(newVideoMaterializer),与下线的
+		// AudioX v2a(音乐大类上限)不同,故独立物化函数。
+		refs, err = materializeDubInputs(c, info, taskType, modelName, req)
+	case "v2m", "tv2m":
+		// AudioX 视频→音乐:物化视频(metadata.video);tv2m 另有文本 prompt(透传)。
 		refs, err = materializeAudioXVideoInputs(c, info, taskType, modelName, req)
 	case "svs":
 		// SoulX-Singer 集成 preprocess:物化 prompt_audio(音色参考)+ target_audio(目标曲/伴奏)。
@@ -413,10 +424,17 @@ func inferTaskType(modelName string) string {
 	m := strings.ToLower(modelName)
 	switch {
 	// 扩散音频(vLLM-Omni audiogen)放最前,免被下面的 tts/兜底吞掉:
-	//   AudioX 默认 t2a(文生音效);v2a/v2m/tv2a/tv2m 由 metadata.task_type 显式指定。
+	//   AudioX 默认 t2a(文生音效);v2m/tv2m 由 metadata.task_type 显式指定
+	//  (v2a/tv2a 已随 AudioX 视频配乐下线,v2a 契约改判给视频配乐,见 validTaskTypes)。
 	//   SoulX-Singer 默认 svs(歌声合成)。
 	case strings.Contains(m, "audiox"):
 		return "t2a"
+	// 视频配乐(v2a,LTX-2.3 首发):只匹配任务 token(v2a/dub,如部署名 ltx2-v2a),
+	// 不匹配模型家族名——裸 "ltx" 会把 LTX-Video t2v/i2v、ltx2 t2av 等生成类部署
+	// 误判成配音。生成类 LTX 落 t2v 兜底;不带任务后缀的配音部署用显式
+	// metadata.task_type(优先于本推断)。与 gpustack-ui task-inputs.ts 保持镜像。
+	case strings.Contains(m, "v2a") || strings.Contains(m, "dub"):
+		return "v2a"
 	case strings.Contains(m, "soulx") || strings.Contains(m, "singer"):
 		return "svs"
 	// 语音合成:含 "tts" 的名字(qwen3-tts/glm-tts/moss-ttsd/indextts)+ vLLM-Omni
@@ -514,6 +532,23 @@ func materializeSRInputs(c *gin.Context, info *relaycommon.RelayInfo, taskType, 
 	video := metadataString(req.Metadata, "video")
 	if video == "" {
 		return nil, fmt.Errorf("模型 %s 的任务类型 sr(超分)需要源视频:请在 metadata.video 提供视频 URL 或 base64", modelName)
+	}
+	m := newVideoMaterializer(info, taskType, modelName, req)
+	if err := m.AddString(c.Request.Context(), nfsinput.FieldVideo, 0, false, video); err != nil {
+		m.Cleanup()
+		return nil, err
+	}
+	return m.Refs(), nil
+}
+
+// materializeDubInputs 物化视频配乐(v2a,LTX-2.3 首发)的源视频(metadata.video)。
+// 契约:原视频画面逐帧不动,只补 AI 音轨,产物 mp4。门面把 video→video_path 给引擎;
+// prompt(声音描述,可选)/negative_prompt/seed 等标量随 metadata 透传,不物化。
+// 与 SR 同走视频大类上限(VideoModelConfig.maxInputMB)。
+func materializeDubInputs(c *gin.Context, info *relaycommon.RelayInfo, taskType, modelName string, req relaycommon.TaskSubmitReq) (map[string][]string, error) {
+	video := metadataString(req.Metadata, "video")
+	if video == "" {
+		return nil, fmt.Errorf("模型 %s 的任务类型 v2a(视频配乐)需要源视频:请在 metadata.video 提供视频 URL 或 base64", modelName)
 	}
 	m := newVideoMaterializer(info, taskType, modelName, req)
 	if err := m.AddString(c.Request.Context(), nfsinput.FieldVideo, 0, false, video); err != nil {
@@ -693,9 +728,10 @@ func materializeTTSInputs(c *gin.Context, info *relaycommon.RelayInfo, taskType,
 	return m.Refs(), nil
 }
 
-// materializeAudioXVideoInputs 物化 AudioX 视频→音频/音乐(v2a/v2m/tv2a/tv2m)的源视频
+// materializeAudioXVideoInputs 物化 AudioX 视频→音乐(v2m/tv2m)的源视频
 // (metadata.video)。门面把 video→video_path 映射给引擎(AudioX 用 av.open 读裸路径,无需
 // file://)。audiox_task/seconds_total/num_inference_steps 等标量随 metadata 透传,不物化。
+// 注:v2a/tv2a 已随 AudioX 视频配乐下线;v2a 契约改判给视频配乐,走 materializeDubInputs。
 func materializeAudioXVideoInputs(c *gin.Context, info *relaycommon.RelayInfo, taskType, modelName string, req relaycommon.TaskSubmitReq) (map[string][]string, error) {
 	video := metadataString(req.Metadata, "video")
 	if video == "" {
