@@ -99,6 +99,7 @@ const MusicPlaygroundBody = ({ mode }) => {
           needsText={needsText}
           needsVideo={needsVideo}
           needsDualAudio={needsDualAudio}
+          showTranslation={showTranslation}
           welcomeText={welcomeText}
           onApplyExample={applyExample}
           styleState={styleState}

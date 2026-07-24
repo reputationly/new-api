@@ -171,6 +171,7 @@ const MusicChatArea = ({
   needsText = true,
   needsVideo = false,
   needsDualAudio = false,
+  showTranslation = false,
   welcomeText = '',
   onApplyExample,
   onSend,
@@ -258,7 +259,31 @@ const MusicChatArea = ({
   const renderChatBoxContent = useCallback(
     ({ message, defaultContent }) => {
       const m = byId.get(message.id);
-      if (!m || m.role === 'user') return defaultContent;
+      if (!m) return defaultContent;
+      // 用户消息:原文正下方用灰色小字挂译文对照(中译英)。无译文则原样渲染。
+      if (m.role === 'user') {
+        if (!m.translatedText) return defaultContent;
+        return (
+          <div>
+            {defaultContent}
+            <Typography.Text
+              type='tertiary'
+              className='text-xs block mt-1'
+            >
+              {`🌐 ${m.translatedText}`}
+            </Typography.Text>
+          </div>
+        );
+      }
+      // 助手消息:翻译阶段(拿到 taskId 前)优先显示「翻译中…」,取代生成进度。
+      if (m.translating) {
+        return (
+          <div className='flex items-center gap-2 text-gray-500 text-sm py-2'>
+            <Spin size='small' />
+            {t('翻译中…')}
+          </div>
+        );
+      }
       if (m.status === MUSIC_STATUS.COMPLETED && m.musicUrl) {
         return (
           <div className='inline-block' style={{ minWidth: 320 }}>
@@ -369,6 +394,14 @@ const MusicChatArea = ({
     };
     return (
       <div className='p-2 sm:p-4'>
+        {showTranslation && (
+          <Typography.Text
+            type='tertiary'
+            className='text-xs block mb-2 text-center'
+          >
+            {t('当前模型仅支持英文,已开启语言模型自动翻译')}
+          </Typography.Text>
+        )}
         {turnLimitReached && (
           <Typography.Text
             type='warning'
@@ -463,6 +496,7 @@ const MusicChatArea = ({
     turnLimitReached,
     missingRequiredAudio,
     missingRequiredVideo,
+    showTranslation,
     needsText,
     needsDualAudio,
     showPresets,
