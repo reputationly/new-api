@@ -219,14 +219,22 @@ func ValidateBasicTaskRequest(c *gin.Context, info *RelayInfo, action string) *d
 	promptOptionalTaskTypes := map[string]bool{
 		"sr": true, "v2a": true, "v2m": true, "svs": true,
 	}
-	// 有效 task_type:显式 metadata.task_type 优先;缺失时对靠模型名推断的场景做最小兜底 ——
-	// soulx-singer 系推断为 svs(无文本歌声合成),避免直连(省略 task_type、靠模型名推断)的
-	// svs 请求在此因空 prompt 被拒(在 gpustackplus adaptor 推断出 svs 之前)。v2a/v2m 需显式
-	// task_type,audiox 默认 t2a 仍必填,故只需兜 svs。
+	// 有效 task_type:显式 metadata.task_type 优先;缺失时对靠模型名推断的场景做最小兜底,
+	// 避免直连(省略 task_type)的空 prompt 请求在 gpustackplus adaptor 推断出 task_type
+	// 之前就被本函数误拒:
+	//   soulx-singer 系 → svs(无文本歌声合成);
+	//   v2a/dub 系   → v2a(视频配乐,LTX-2.3,2026-07 契约:prompt 可选,空=按画面自由
+	//                  配环境音)。token 与 gpustackplus adaptor.inferTaskType /
+	//                  gpustack-ui task-inputs.ts 保持镜像(仅任务 token v2a/dub,不匹配
+	//                  模型家族名),三处必须同步演进。
+	// v2m 仍需显式 task_type(AudioX 视频生音乐,行为不变);audiox 默认 t2a 必填 prompt。
 	effectiveTaskType, _ := req.Metadata["task_type"].(string)
 	if effectiveTaskType == "" {
-		if m := strings.ToLower(req.Model); strings.Contains(m, "soulx") || strings.Contains(m, "singer") {
+		m := strings.ToLower(req.Model)
+		if strings.Contains(m, "soulx") || strings.Contains(m, "singer") {
 			effectiveTaskType = "svs"
+		} else if strings.Contains(m, "v2a") || strings.Contains(m, "dub") {
+			effectiveTaskType = "v2a"
 		}
 	}
 	if !promptOptionalTaskTypes[effectiveTaskType] {

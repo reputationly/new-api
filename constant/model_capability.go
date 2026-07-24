@@ -22,6 +22,10 @@ var VideoCapabilities = []string{
 	"数字人",
 	"视频超分",
 	"视频编辑",
+	// 视频配乐 -> 门面 task_type=v2a(视频→配好音的视频,LTX-2.3 首发,可挂多模型)。
+	// 2026-07 从音乐词表迁入:AudioX 视频配乐(出 .wav)下线,该标签现属视频大类
+	// (产物是视频);存量 AudioX 模型配置若还挂着此标签,需在管理端摘除。
+	"视频配乐",
 }
 
 // AudioCapabilities 四个语音(TTS)能力标签,区分 IndexTTS-2 的情感合成与 vLLM-Omni
@@ -42,22 +46,20 @@ var AudioCapabilities = []string{
 }
 
 // MusicCapabilities 涵盖 ACE-Step 文生音乐/音乐改编/音乐重绘，以及扩散音频生成
-// （vLLM-Omni：AudioX + SoulX-Singer）的音效/视频配音/视频配乐/歌声合成 —— 这四类
-// 归入体验区「音乐模型」下的子标签页,并在模型广场同归「音乐」能力分类。
+// （vLLM-Omni：AudioX + SoulX-Singer）的音效/歌声合成 —— 归入体验区「音乐模型」下的
+// 子标签页,并在模型广场同归「音乐」能力分类。
 //
 //	文生音效   -> AudioX t2a
-//	视频生音   -> AudioX v2a / tv2a（音效/配乐合并，a/m 后缀对引擎无差别）
 //	歌声合成   -> SoulX-Singer svs
 //
-// 视频配音效/视频配乐 为合并前的旧标签,保留以兼容既有模型配置的标签分类。
+// 2026-07 下线:视频生音/视频配音效/视频配乐(AudioX v2a/tv2a,出 .wav)——视频配乐
+// 产品线移交 LTX-2.3(task_type=v2a 契约改判,产物为配好音的视频),标签迁入
+// VideoCapabilities;AudioX 的 v2m/tv2m 仍有效但暂无前端入口(去留待产品确认)。
 var MusicCapabilities = []string{
 	"文生音乐",
 	"音乐改编",
 	"音乐重绘",
 	"文生音效",
-	"视频生音",
-	"视频配音效",
-	"视频配乐",
 	"歌声合成",
 }
 

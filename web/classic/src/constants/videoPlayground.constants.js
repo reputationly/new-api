@@ -18,6 +18,9 @@ export const VIDEO_CAPABILITIES = [
   '数字人',
   '视频超分',
   '视频编辑',
+  // 视频配乐(task_type=v2a):原画面逐帧不动 + AI 音轨,LTX-2.3 首发,可挂多模型。
+  // 2026-07 从音乐词表迁入(AudioX 视频生音下线);体验区入口在「语音模型」页。
+  '视频配乐',
 ];
 
 // 提示词预设:点击对应按钮清空输入框并填入该提示词(体验区快速试玩,仅文生视频展示)。
@@ -146,6 +149,8 @@ export const VIDEO_FLF2V_CAPABILITY = '首尾帧';
 export const VIDEO_S2V_CAPABILITY = '数字人';
 export const VIDEO_SR_CAPABILITY = '视频超分';
 export const VIDEO_VACE_CAPABILITY = '视频编辑';
+// 视频配乐(dub → 门面 task_type=v2a):上传视频 + 声音描述,产物=配好音的视频。
+export const VIDEO_DUB_CAPABILITY = '视频配乐';
 
 // 能力标签重命名的向后兼容:重命名前已在「视频模型配置」里用旧标签配过的模型,仍能匹配
 // 到新 Tab(否则那些模型会从体验区消失,直到手动改配置)。key=新标签,value=旧标签。

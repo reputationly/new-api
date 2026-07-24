@@ -6,6 +6,7 @@ import { useAudioGeneration } from '../../hooks/audioPlayground/useAudioGenerati
 import AudioConfigPanel from '../../components/audioPlayground/AudioConfigPanel';
 import AudioChatArea from '../../components/audioPlayground/AudioChatArea';
 import VideoHistoryPanel from '../../components/videoPlayground/VideoHistoryPanel';
+import { VideoPlaygroundBody } from '../Video';
 import {
   AUDIO_TAB_ORDER,
   AUDIO_MODES,
@@ -187,7 +188,13 @@ const AudioModel = () => {
           ))}
         </Tabs>
 
-        <AudioPlaygroundBody key={activeTab} mode={activeTab} />
+        {/* 视频配乐(dub):输入上传视频、产物配好音的视频 —— 复用视频体验区三栏
+            (VideoPlaygroundBody/useVideoGeneration,task_type=v2a),不走音频 hook。 */}
+        {activeTab === 'dub' ? (
+          <VideoPlaygroundBody key={activeTab} mode='dub' />
+        ) : (
+          <AudioPlaygroundBody key={activeTab} mode={activeTab} />
+        )}
       </div>
     </div>
   );

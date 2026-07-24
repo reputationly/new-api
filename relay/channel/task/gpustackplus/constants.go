@@ -29,8 +29,10 @@ var ModelList = []string{
 	"moss-ttsd",
 	"moss-voicegenerator",
 	"moss-soundeffect",
-	// 扩散音频(vLLM-Omni,Phase 2)。AudioX 文/视频→音效/音乐(t2a/v2a/v2m/tv2a/tv2m,
-	// 后四者由 metadata.task_type 指定);SoulX-Singer 歌声合成(svs,集成 preprocess)。
+	// 扩散音频(vLLM-Omni,Phase 2)。AudioX 文生音效/视频生音乐(t2a/v2m/tv2m,后两者由
+	// metadata.task_type 指定;v2a/tv2a 已随视频配乐下线);SoulX-Singer 歌声合成(svs)。
 	"audiox",
 	"soulx-singer",
+	// 视频配乐(task_type=v2a 新契约:视频→配好音的视频,LTX-2.3 首发)。
+	"ltx2-v2a",
 }

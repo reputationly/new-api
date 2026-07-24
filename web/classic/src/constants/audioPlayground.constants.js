@@ -216,10 +216,22 @@ export const AUDIO_MODES = {
     needsInstructions: true,
     instructionsRequired: true,
   },
+  // 视频配乐(LTX-2.3,task_type=v2a):入口挂在语音页,但输入(上传视频)与产物
+  // (配好音的视频)是视频形态 —— 页面渲染走 VideoPlaygroundBody(mode='dub',见
+  // pages/Audio/index.jsx 分支),不经 useAudioGeneration,本表仅提供 tab 文案。
+  dub: {
+    capability: '视频配乐',
+  },
 };
 
-// 体验区子标签页顺序(4 个)。
-export const AUDIO_TAB_ORDER = ['emotion', 'synthesis', 'dialogue', 'design'];
+// 体验区子标签页顺序(5 个)。
+export const AUDIO_TAB_ORDER = [
+  'emotion',
+  'synthesis',
+  'dialogue',
+  'design',
+  'dub',
+];
 
 // 预设音色(语音合成 → 音色来源=预设音色,Qwen3-TTS):随 metadata.speaker 透传,门面不
 // 物化、引擎按 voice/speaker 别名读。提供常用列表 + 允许自由输入。
