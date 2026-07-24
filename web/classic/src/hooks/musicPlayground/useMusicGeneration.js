@@ -76,6 +76,7 @@ const isChatModel = (types) => {
 const TRANSLATE_SYSTEM_BASE = `You convert a user's sound request into ONE concise English caption for an audio generator (AudioX, trained on AudioCaps-style natural-language captions).
 Rules:
 - Output English only. One line. <= 40 words. No quotes, no brackets/tags, no music notation, no BPM, no [verse]/[chorus] style markers.
+- Output ONLY the caption text itself. Do NOT add any preface, explanation, notes, labels, headings, or markdown. Never begin with phrases like "Sure", "Here is", "Caption:", or "好的". Return the caption and nothing else.
 - Describe the SOUND SCENE: sound sources + environment + acoustic qualities (distant / close / loud / faint / continuous / sudden ...). Comma-separated events.
 - If already English, lightly normalize; do not add unrelated content.
 - Preserve the user's intent faithfully; do not invent a different scene.`;
@@ -684,16 +685,24 @@ export const useMusicGeneration = (mode = 't2m') => {
     let best = null;
     conversationsRef.current.forEach((conv) => {
       (conv.messages || []).forEach((m) => {
-        if (
-          m.role === 'assistant' &&
-          m.taskId &&
-          (m.status === MUSIC_STATUS.QUEUED ||
-            m.status === MUSIC_STATUS.IN_PROGRESS)
-        ) {
+        if (m.role !== 'assistant') return;
+        const active =
+          m.status === MUSIC_STATUS.QUEUED ||
+          m.status === MUSIC_STATUS.IN_PROGRESS;
+        if (!active) return;
+        if (m.taskId) {
           const ts = Number(String(m.id).split('-')[1]) || 0;
           if (!best || ts > best.ts) {
             best = { convId: conv.id, msgId: m.id, taskId: m.taskId, ts };
           }
+        } else {
+          // 孤儿助手消息:建消息后未拿到 taskId 即中断(如翻译那几秒内刷新页面),
+          // 无从恢复。清「翻译中」并置 FAILED(带重试),避免气泡永久转圈。
+          patchConvMessage(conv.id, m.id, {
+            translating: false,
+            status: MUSIC_STATUS.FAILED,
+            error: t('翻译失败,请改用英文描述'),
+          });
         }
       });
     });
@@ -840,29 +849,10 @@ export const useMusicGeneration = (mode = 't2m') => {
       // 命中「玩法需翻译 + 有文本 + 含中文 + 该模型启用译文」时,先调语言模型转英文,
       // 再用英文提交(AudioX 文本编码器仅认英文,中文会塌成 <unk>)。已是英文则不触发。
       // 失败降级(设计 §11):视频生音 → 丢文字改纯视频 v2a;文生音效 → 报错不提交。
-      let effectiveText = text;
-      if (needsTranslation && text && containsCJK(text) && translationCfg.enabled) {
-        setGenerating(true);
-        try {
-          effectiveText = await translatePrompt(text, needsVideo);
-        } catch (e) {
-          setGenerating(false);
-          if (needsVideo) {
-            effectiveText = '';
-            showError(t('文字未生效,已按纯视频生成'));
-          } else {
-            showError(t('翻译失败,请改用英文描述'));
-            return;
-          }
-        }
-      }
-
-      // 解析 task_type:视频生音按是否带(译后)文本分支到 tv2a/v2a;其余与文本无关。
-      const resolvedTaskType = resolveTaskType(effectiveText.length > 0);
-      // 占位符仅用于 svs(歌声合成引擎需非空 input,文本仅占位);v2a 是纯视频输入,
-      // 后端明确允许空 prompt —— 绝不能塞占位,否则会拿"歌声合成"去条件化 AudioX。
-      const promptField =
-        effectiveText || (resolvedTaskType === 'svs' ? t('歌声合成') : '');
+      // 时序:消息先建(点发送即可见),翻译放在建消息之后 —— 译文回填 userMsg 展示对照,
+      // 助手气泡在拿到 taskId 前先显示「翻译中…」,避免翻译那几秒聊天区空白。
+      const willTranslate =
+        needsTranslation && !!text && containsCJK(text) && translationCfg.enabled;
 
       const reqId = genId();
       const now = new Date().toISOString();
@@ -883,6 +873,8 @@ export const useMusicGeneration = (mode = 't2m') => {
         progress: 0,
         taskId: null,
         musicUrl: null,
+        // 翻译中标志:渲染层据此优先显示「翻译中…」;译文回填/降级/失败后一律置 false。
+        translating: willTranslate,
       };
 
       setConversations((prev) => {
@@ -914,6 +906,42 @@ export const useMusicGeneration = (mode = 't2m') => {
       });
       if (currentConvId == null) setCurrentConvId(convId);
       setGenerating(true);
+
+      // 建消息之后再翻译:成功回填译文小字(userMsg)并清「翻译中」;失败按玩法降级。
+      let effectiveText = text;
+      if (willTranslate) {
+        try {
+          effectiveText = await translatePrompt(text, needsVideo);
+          patchConvMessage(convId, userMsg.id, {
+            translatedText: effectiveText,
+          });
+          patchConvMessage(convId, asstId, { translating: false });
+        } catch (e) {
+          if (needsVideo) {
+            // 视频生音降级:丢弃文字,按纯视频 v2a 继续提交(气泡保留原文,不显译文)。
+            effectiveText = '';
+            patchConvMessage(convId, asstId, { translating: false });
+            showError(t('文字未生效,已按纯视频生成'));
+          } else {
+            // 文生音效降级:消息已建 → asstMsg 直接置 FAILED(带重试),不提交。
+            patchConvMessage(convId, asstId, {
+              status: MUSIC_STATUS.FAILED,
+              translating: false,
+              error: t('翻译失败,请改用英文描述'),
+            });
+            showError(t('翻译失败,请改用英文描述'));
+            setGenerating(false);
+            return;
+          }
+        }
+      }
+
+      // 解析 task_type:视频生音按是否带(译后)文本分支到 tv2a/v2a;其余与文本无关。
+      const resolvedTaskType = resolveTaskType(effectiveText.length > 0);
+      // 占位符仅用于 svs(歌声合成引擎需非空 input,文本仅占位);v2a 是纯视频输入,
+      // 后端明确允许空 prompt —— 绝不能塞占位,否则会拿"歌声合成"去条件化 AudioX。
+      const promptField =
+        effectiveText || (resolvedTaskType === 'svs' ? t('歌声合成') : '');
 
       try {
         // gpustackplus 门面契约:task_type + 输入(音频/视频)+ 标量参数经 metadata 透传

@@ -1890,6 +1890,8 @@
     "当前分组下暂无可用语言模型": "No available language model under the current group",
     "文字未生效,已按纯视频生成": "Text was not applied; generated from video only",
     "翻译失败,请改用英文描述": "Translation failed; please describe in English",
+    "翻译中…": "Translating…",
+    "当前模型仅支持英文,已开启语言模型自动翻译": "This model only supports English; automatic translation is enabled",
     "中译英": "ZH→EN",
     "默认语言模型": "Default language model",
     "视频生音": "Video to Audio",
