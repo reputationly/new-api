@@ -1,4 +1,9 @@
-// Package gpustackplus(普通 Adaptor)实现 GPUStackPlus 的**同步图片**链路:
+// Package gpustackplus(普通 Adaptor)实现 GPUStackPlus 的**同步**链路。
+//
+// 两条:图片(本文件)与语音合成(speech.go)。共同点是把门面的异步任务包成同步调用——
+// 提交 → 服务端阻塞轮询 → 取成品,对下游呈现标准 OpenAI 形状,自部署引擎的异步性不外泄。
+//
+// 图片链路:
 // /v1/images/generations(t2i)与 /v1/images/edits(i2i,qwen-image-edit)→
 // 提交 GPUStack 异步门面 POST /v1/videos → 服务端阻塞轮询 GET /v1/videos/{id} →
 // done 后拿 nfs_path(成品在共享 SFS 上的绝对路径)→ 落 OBS → 返回 OpenAI 图片
@@ -279,8 +284,13 @@ func materializeEditInputs(c *gin.Context, info *relaycommon.RelayInfo, taskType
 	}
 
 	// 蒙版(可选,单值):有蒙版时底图必须恰好 1 张(引擎约束,new-api 侧防呆)。
+	// 两种到达形态都认:JSON 的 mask 字段,以及 OpenAI 官方 SDK 走的 multipart mask 文件
+	// (后者不在 dto.ImageRequest 里——GetAndValidOpenAIImageRequest 的 multipart 分支只解
+	// prompt/model/n/quality/size/image,不认 mask,所以必须在这里直接从表单取,否则蒙版会被
+	// 静默丢弃、出图看起来"成功"却没生效)。
 	maskRaw := extractMask(request)
-	if maskRaw != "" && total != 1 {
+	maskFile := extractMaskFile(c)
+	if (maskRaw != "" || maskFile != nil) && total != 1 {
 		return nil, errors.New("带蒙版(mask)的图片编辑只允许 1 张底图")
 	}
 
@@ -302,13 +312,40 @@ func materializeEditInputs(c *gin.Context, info *relaycommon.RelayInfo, taskType
 		}
 		idx++
 	}
-	if maskRaw != "" {
+	switch {
+	case maskRaw != "":
 		if err := m.AddString(ctx, nfsinput.FieldImageMask, 0, false, maskRaw); err != nil {
+			m.Cleanup()
+			return nil, materializeErr(err)
+		}
+	case maskFile != nil:
+		if err := m.AddMultipartFile(nfsinput.FieldImageMask, 0, false, maskFile); err != nil {
 			m.Cleanup()
 			return nil, materializeErr(err)
 		}
 	}
 	return m.Refs(), nil
+}
+
+// extractMaskFile 取 multipart 表单里的蒙版文件(OpenAI /v1/images/edits 的官方形态)。
+// 没有则返回 nil。字段名同时认 mask 与 mask[](部分客户端会加方括号)。
+func extractMaskFile(c *gin.Context) *multipart.FileHeader {
+	mf := c.Request.MultipartForm
+	if mf == nil {
+		if _, err := c.MultipartForm(); err != nil {
+			return nil
+		}
+		mf = c.Request.MultipartForm
+	}
+	if mf == nil || mf.File == nil {
+		return nil
+	}
+	for _, key := range []string{"mask", "mask[]"} {
+		if files := mf.File[key]; len(files) > 0 {
+			return files[0]
+		}
+	}
+	return nil
 }
 
 // materializeErr 把物化错误(含 URL 下不到)统一归为 400 skip-retry,不提交任务、不重试。
@@ -467,23 +504,20 @@ func (a *Adaptor) DoRequest(c *gin.Context, info *relaycommon.RelayInfo, request
 }
 
 func (a *Adaptor) DoResponse(c *gin.Context, resp *http.Response, info *relaycommon.RelayInfo) (usage any, err *types.NewAPIError) {
+	// 语音合成走同源但独立的一条同步链路(见 speech.go):同样是提交→轮询→取成品,
+	// 但成品是二进制音频、不经 OBS,且用独立信号量。
+	if info.RelayMode == relayconstant.RelayModeAudioSpeech {
+		return a.doSpeechResponse(c, resp, info)
+	}
 	if info.RelayMode != relayconstant.RelayModeImagesGenerations &&
 		info.RelayMode != relayconstant.RelayModeImagesEdits {
 		return nil, types.NewError(errors.New("gpustackplus 图片链路仅支持 /v1/images/generations 与 /v1/images/edits"), types.ErrorCodeInvalidRequest)
 	}
 
 	// 1) 读提交响应,取 upstream task_id。
-	body, readErr := io.ReadAll(resp.Body)
-	if readErr != nil {
-		return nil, types.NewOpenAIError(readErr, types.ErrorCodeReadResponseBodyFailed, http.StatusInternalServerError)
-	}
-	_ = resp.Body.Close()
-	var sr submitResponse
-	if uErr := common.Unmarshal(body, &sr); uErr != nil {
-		return nil, types.NewOpenAIError(fmt.Errorf("unmarshal submit resp: %w, body: %s", uErr, string(body)), types.ErrorCodeBadResponseBody, http.StatusInternalServerError)
-	}
-	if sr.TaskID == "" {
-		return nil, types.NewError(fmt.Errorf("upstream task_id empty, body: %s", string(body)), types.ErrorCodeBadResponse)
+	taskID, apiErr := parseSubmitTaskID(resp)
+	if apiErr != nil {
+		return nil, apiErr
 	}
 
 	// 2) 并发上限(§D):图片阻塞路径信号量,满 → 快速 429 skip-retry,不排队占 goroutine。
@@ -492,13 +526,13 @@ func (a *Adaptor) DoResponse(c *gin.Context, resp *http.Response, info *relaycom
 	case imageBlockingSem <- struct{}{}:
 		defer func() { <-imageBlockingSem }()
 	default:
-		a.cancelTask(c.Request.Context(), sr.TaskID)
+		a.cancelTask(c.Request.Context(), taskID)
 		return nil, busyRetryErr("系统繁忙,请稍后再试", http.StatusTooManyRequests)
 	}
 
 	// 3) 阻塞轮询直到完成/失败(带 QUEUED 超时兜底 + 断开感知 + 超时/断开尽力 cancel)。
 	//    预算按模型挑:慢模型(HunyuanImage-3.0 级 ~110s)不能用快模型的 25s/303s 卡口。
-	st, pErr := a.pollUntilDone(c, sr.TaskID,
+	st, pErr := a.pollUntilDone(c, taskID,
 		pollBudgetFor(firstNonEmpty(info.UpstreamModelName, info.OriginModelName)))
 	if pErr != nil {
 		if be, ok := pErr.(*types.NewAPIError); ok {
@@ -660,6 +694,15 @@ func (a *Adaptor) fetchStatus(ctx context.Context, client *http.Client, uri stri
 func (a *Adaptor) GetModelList() []string { return ModelList }
 func (a *Adaptor) GetChannelName() string { return ChannelName }
 
+// ConvertAudioRequest 语音合成(TTS)同步兼容层的入口,实现见 speech.go。
+// 转写 / 翻译(audio/transcriptions、audio/translations)门面没有对应能力,不支持。
+func (a *Adaptor) ConvertAudioRequest(c *gin.Context, info *relaycommon.RelayInfo, request dto.AudioRequest) (io.Reader, error) {
+	if info.RelayMode != relayconstant.RelayModeAudioSpeech {
+		return nil, errors.New("gpustackplus 音频链路仅支持 /v1/audio/speech")
+	}
+	return a.convertSpeechRequest(c, info, request)
+}
+
 // ————— 以下模式不适用于本渠道,返回 not available —————
 
 func (a *Adaptor) ConvertOpenAIRequest(c *gin.Context, info *relaycommon.RelayInfo, request *dto.GeneralOpenAIRequest) (any, error) {
@@ -669,9 +712,6 @@ func (a *Adaptor) ConvertRerankRequest(c *gin.Context, relayMode int, request dt
 	return nil, errors.New("not available")
 }
 func (a *Adaptor) ConvertEmbeddingRequest(c *gin.Context, info *relaycommon.RelayInfo, request dto.EmbeddingRequest) (any, error) {
-	return nil, errors.New("not available")
-}
-func (a *Adaptor) ConvertAudioRequest(c *gin.Context, info *relaycommon.RelayInfo, request dto.AudioRequest) (io.Reader, error) {
 	return nil, errors.New("not available")
 }
 func (a *Adaptor) ConvertClaudeRequest(c *gin.Context, info *relaycommon.RelayInfo, request *dto.ClaudeRequest) (any, error) {

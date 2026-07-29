@@ -5,7 +5,9 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"regexp"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
@@ -59,6 +61,10 @@ type requestPayload struct {
 	Seed        *dto.IntValue  `json:"seed,omitempty"`
 	CameraFixed *dto.BoolValue `json:"camera_fixed,omitempty"`
 	Watermark   *dto.BoolValue `json:"watermark,omitempty"`
+	// Priority 执行优先级 [0,9],仅 Seedance 2.0;SafetyIdentifier 终端用户标识(≤64 字符)。
+	// 两者与上面的字段一样从 metadata 透传——结构体没有对应字段的话 UnmarshalMetadata 会直接丢弃。
+	Priority         *dto.IntValue `json:"priority,omitempty"`
+	SafetyIdentifier string        `json:"safety_identifier,omitempty"`
 }
 
 type responsePayload struct {
@@ -151,6 +157,11 @@ func (a *TaskAdaptor) EstimateBilling(c *gin.Context, info *relaycommon.RelayInf
 func hasVideoInMetadata(metadata map[string]interface{}) bool {
 	if metadata == nil {
 		return false
+	}
+	// 参考视频也可以走 metadata.reference_videos(buildArkContent 会拼成 video_url 条目),
+	// 这里必须一并识别,否则视频输入折扣算不到,计费与实际请求不一致。
+	if len(metadataStringList(metadata, "reference_videos", "reference_video")) > 0 {
+		return true
 	}
 	contentRaw, ok := metadata["content"]
 	if !ok {
@@ -273,25 +284,30 @@ func (a *TaskAdaptor) convertToRequestPayload(req *relaycommon.TaskSubmitReq) (*
 		Content: []ContentItem{},
 	}
 
-	// Add images if present
-	if req.HasImage() {
-		for _, imgURL := range req.Images {
-			r.Content = append(r.Content, ContentItem{
-				Type: "image_url",
-				ImageURL: &MediaURL{
-					URL: imgURL,
-				},
-			})
-		}
-	}
-
 	metadata := req.Metadata
 	if err := taskcommon.UnmarshalMetadata(metadata, &r); err != nil {
 		return nil, errors.Wrap(err, "unmarshal metadata failed")
 	}
 
+	// metadata.content 是整包覆盖的逃生口:客户端自己排好了 Ark 的 content 数组(含 role),
+	// 此时不再按统一契约拼装,只在最后补文本。没给才按 images / 参考媒体自动拼。
+	if len(r.Content) == 0 {
+		r.Content = buildArkContent(req, metadata)
+	}
+
 	if sec, _ := strconv.Atoi(req.Seconds); sec > 0 {
 		r.Duration = lo.ToPtr(dto.IntValue(sec))
+	}
+
+	// 顶层 size / duration 是 new-api 统一视频契约(OpenAI /v1/videos 形状)的字段,
+	// Ark 只认 resolution + ratio + duration。不映射的话,同一份请求发到自建渠道
+	// (gpustackplus,读顶层 size)能出对分辨率,发到 Seedance 就整个丢掉——下游得按
+	// 渠道写两套参数,这正是网关该屏蔽掉的差异。
+	//
+	// metadata 里显式给的 Ark 原生键优先,这里只在其缺省时兜底,老调用方行为不变。
+	applyTopLevelSize(&r, req.Size)
+	if r.Duration == nil && req.Duration > 0 {
+		r.Duration = lo.ToPtr(dto.IntValue(req.Duration))
 	}
 
 	r.Content = lo.Reject(r.Content, func(c ContentItem, _ int) bool { return c.Type == "text" })
@@ -301,6 +317,154 @@ func (a *TaskAdaptor) convertToRequestPayload(req *relaycommon.TaskSubmitReq) (*
 	})
 
 	return &r, nil
+}
+
+// failureReason 组失败原因:优先上游描述,并带上机器可读的 error.code
+// (video_task_failed / video_task_expired / video_task_billing_failed 等),
+// 便于事后区分"生成失败"与"超时/计费收口失败"。
+func failureReason(resTask *responseTask, fallback string) string {
+	message := strings.TrimSpace(resTask.Error.Message)
+	if message == "" {
+		message = fallback
+	}
+	if code := strings.TrimSpace(resTask.Error.Code); code != "" {
+		return fmt.Sprintf("%s (%s)", message, code)
+	}
+	return message
+}
+
+// buildArkContent 把统一契约的输入拼成 Ark 的 content[] 数组。
+//
+// Ark 靠每个 content 项的 role 区分语义(首帧 / 尾帧 / 多模态参考),不带 role 的多图上游
+// 无法解释——这也是首尾帧、2.0 多模态参考此前发不出去的原因。参考视频 / 音频没有对应的
+// 顶层字段,走 metadata.reference_videos / reference_audios(单串或数组均可)。
+func buildArkContent(req *relaycommon.TaskSubmitReq, metadata map[string]any) []ContentItem {
+	items := make([]ContentItem, 0, len(req.Images)+2)
+	for i, imgURL := range req.Images {
+		items = append(items, ContentItem{
+			Type:     "image_url",
+			ImageURL: &MediaURL{URL: imgURL},
+			Role:     imageRole(len(req.Images), i, metadata),
+		})
+	}
+	for _, videoURL := range metadataStringList(metadata, "reference_videos", "reference_video") {
+		items = append(items, ContentItem{
+			Type: "video_url", VideoURL: &MediaURL{URL: videoURL}, Role: "reference_video",
+		})
+	}
+	for _, audioURL := range metadataStringList(metadata, "reference_audios", "reference_audio") {
+		items = append(items, ContentItem{
+			Type: "audio_url", AudioURL: &MediaURL{URL: audioURL}, Role: "reference_audio",
+		})
+	}
+	return items
+}
+
+// imageRole 决定第 index 张图的 role。
+// metadata.image_role 显式指定时一律听它(例如 2.0 只给 1 张参考图,不想被当成首帧);
+// 否则按张数推断:1 张=首帧、2 张=首尾帧、≥3 张=多模态参考图(2.0 支持 1~9 张)。
+func imageRole(total, index int, metadata map[string]any) string {
+	if explicit := metadataString(metadata, "image_role"); explicit != "" {
+		return explicit
+	}
+	switch {
+	case total == 1:
+		return "first_frame"
+	case total == 2:
+		if index == 0 {
+			return "first_frame"
+		}
+		return "last_frame"
+	default:
+		return "reference_image"
+	}
+}
+
+// metadataString 取 metadata 里的字符串值(非字符串或缺失返回 "")。
+func metadataString(metadata map[string]any, key string) string {
+	if metadata == nil {
+		return ""
+	}
+	s, _ := metadata[key].(string)
+	return strings.TrimSpace(s)
+}
+
+// metadataStringList 按 keys 顺序取第一个命中的值,支持单串与数组两种写法。
+func metadataStringList(metadata map[string]any, keys ...string) []string {
+	if metadata == nil {
+		return nil
+	}
+	for _, key := range keys {
+		switch v := metadata[key].(type) {
+		case string:
+			if s := strings.TrimSpace(v); s != "" {
+				return []string{s}
+			}
+		case []any:
+			var out []string
+			for _, item := range v {
+				if s, ok := item.(string); ok && strings.TrimSpace(s) != "" {
+					out = append(out, strings.TrimSpace(s))
+				}
+			}
+			if len(out) > 0 {
+				return out
+			}
+		}
+	}
+	return nil
+}
+
+// sizeTierRe 匹配文档里 size 的档位形态:720P / 1080p / 4K。
+var sizeTierRe = regexp.MustCompile(`^(?i)(\d+p|4k)$`)
+
+// applyTopLevelSize 把统一契约的顶层 size 翻译成 Ark 的 ratio / resolution。
+// size 有三种合法形态(见 API 文档「创建视频生成任务」):档位("720P")、纯比例("16:9")
+// 与精确像素("1280x720")。Ark 不吃像素,所以像素形态要拆成比例 + 分辨率档位
+// (按短边归档,取不小于短边的最近档,超过 1080 归 4k)。已由 metadata 显式指定的字段不覆盖。
+func applyTopLevelSize(r *requestPayload, size string) {
+	size = strings.TrimSpace(size)
+	if size == "" {
+		return
+	}
+	if sizeTierRe.MatchString(size) {
+		if r.Resolution == "" {
+			r.Resolution = strings.ToLower(size)
+		}
+		return
+	}
+	if common.IsAspectRatio(size) {
+		if r.Ratio == "" {
+			r.Ratio = common.NormalizeAspectRatio(size)
+		}
+		return
+	}
+	w, h, ok := common.DimsFromSize(size)
+	if !ok {
+		return
+	}
+	if r.Ratio == "" {
+		if ar := common.AspectRatioFromSize(size); ar != "" {
+			r.Ratio = ar
+		}
+	}
+	if r.Resolution != "" {
+		return
+	}
+	shortEdge := h
+	if w < h {
+		shortEdge = w
+	}
+	switch {
+	case shortEdge <= 480:
+		r.Resolution = "480p"
+	case shortEdge <= 720:
+		r.Resolution = "720p"
+	case shortEdge <= 1080:
+		r.Resolution = "1080p"
+	default:
+		r.Resolution = "4k"
+	}
 }
 
 func (a *TaskAdaptor) ParseTaskResult(respBody []byte) (*relaycommon.TaskInfo, error) {
@@ -331,7 +495,13 @@ func (a *TaskAdaptor) ParseTaskResult(respBody []byte) (*relaycommon.TaskInfo, e
 	case "failed":
 		taskResult.Status = model.TaskStatusFailure
 		taskResult.Progress = "100%"
-		taskResult.Reason = resTask.Error.Message
+		taskResult.Reason = failureReason(&resTask, "生成失败")
+	case "expired", "cancelled", "canceled":
+		// 超时结束 / 被取消同样是终态。漏掉的话 default 会把它当"生成中",任务永远轮询
+		// 不到终点:既不落 FAILURE、也不触发退款(见 controller/task_video.go 的失败分支)。
+		taskResult.Status = model.TaskStatusFailure
+		taskResult.Progress = "100%"
+		taskResult.Reason = failureReason(&resTask, "任务已"+resTask.Status)
 	default:
 		// Unknown status, treat as processing
 		taskResult.Status = model.TaskStatusInProgress
@@ -357,11 +527,14 @@ func (a *TaskAdaptor) ConvertToOpenAIVideo(originTask *model.Task) ([]byte, erro
 	openAIVideo.CompletedAt = originTask.UpdatedAt
 	openAIVideo.Model = originTask.Properties.OriginModelName
 
-	if dResp.Status == "failed" {
-		openAIVideo.Error = &dto.OpenAIVideoError{
-			Message: dResp.Error.Message,
-			Code:    dResp.Error.Code,
+	// 终态非成功都要把错误透出去:除 failed 外还有 expired / cancelled(见 ParseTaskResult),
+	// 只判 failed 的话客户端只能看到一个没有原因的 failed 状态。
+	if openAIVideo.Status == dto.VideoStatusFailed {
+		message := strings.TrimSpace(dResp.Error.Message)
+		if message == "" {
+			message = strings.TrimSpace(originTask.FailReason)
 		}
+		openAIVideo.Error = &dto.OpenAIVideoError{Message: message, Code: dResp.Error.Code}
 	}
 
 	return common.Marshal(openAIVideo)

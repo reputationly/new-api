@@ -297,7 +297,7 @@ func (a *TaskAdaptor) BuildRequestBody(c *gin.Context, info *relaycommon.RelayIn
 	var refs map[string][]string
 	switch taskType {
 	case "tts":
-		if isOmniTTSModel(modelName) {
+		if IsOmniTTSModel(modelName) {
 			// vLLM-Omni:参考音走 ref_audio(+ MOSS-TTSD 第二说话人 ref_audio_2),
 			// 均可选;预设音色走标量 speaker 透传(不物化)。VoiceGenerator/SoundEffect
 			// 纯文本无参考音。
@@ -800,11 +800,15 @@ func materializeSingingInputs(c *gin.Context, info *relaycommon.RelayInfo, taskT
 	return m.Refs(), nil
 }
 
-// isOmniTTSModel 判断 tts 任务的模型是否由 vLLM-Omni 引擎服务(区别于旧 IndexTTS)。
+// IsOmniTTSModel 判断 tts 任务的模型是否由 vLLM-Omni 引擎服务(区别于旧 IndexTTS)。
 // 二者共用 task_type=tts,但参考音契约不同:IndexTTS 用必填 voice→spk_audio_path;
 // vLLM-Omni 用可选 ref_audio/ref_audio_2 + 标量 speaker 预设音色。按模型名前缀区分
 // (indextts 走旧路径,其余 TTS 家族走 Omni)。与 inferTaskType 的 tts 判定同源。
-func isOmniTTSModel(modelName string) bool {
+//
+// 导出供同步语音链路(relay/channel/gpustackplus/speech.go)复用:两条链路必须对
+// 「预设音色 vs 参考音」用同一套判定,否则同一个模型走 /v1/audio/speech 与
+// /v1/videos 会得到不同的音色语义。
+func IsOmniTTSModel(modelName string) bool {
 	m := strings.ToLower(modelName)
 	if strings.Contains(m, "indextts") {
 		return false
