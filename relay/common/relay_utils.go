@@ -247,6 +247,12 @@ func ValidateBasicTaskRequest(c *gin.Context, info *RelayInfo, action string) *d
 		// 兼容单图上传
 		req.Images = []string{req.Image}
 	}
+	// OpenAI /v1/videos 风格用 input_reference 传条件图。这里不归一化的话,除 gpustackplus
+	// (在自己的 adaptor 里补了一遍)之外的任务渠道都拿不到条件图,图生视频会被静默降级成
+	// 文生视频——同一份请求换个渠道行为就变了,正是网关该抹平的差异。
+	if len(req.Images) == 0 && strings.TrimSpace(req.InputReference) != "" {
+		req.Images = []string{strings.TrimSpace(req.InputReference)}
+	}
 
 	storeTaskRequest(c, info, action, req)
 	return nil
