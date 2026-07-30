@@ -12,51 +12,49 @@ func setOpt(img, vid string) {
 	OptionMapRWMutex.Unlock()
 }
 
-func TestImageSizeValidation(t *testing.T) {
-	setOpt(`{"default":["1024x1024"],"models":{"z-image":{"sizes":["1024x1024","1664x928"]},"legacy":["512x512"]}}`, "")
-	// 未配置的模型:放行
-	if err := ValidateImageSizeForModel("9999x9999", "not-configured"); err != nil {
-		t.Fatalf("unconfigured model should pass, got %v", err)
-	}
-	// 配置命中(含大小写/分隔符归一化)
-	if err := ValidateImageSizeForModel("1664X928", "z-image"); err != nil {
-		t.Fatalf("allowed size should pass, got %v", err)
-	}
-	// 配置未命中:拒绝
-	if err := ValidateImageSizeForModel("2048x2048", "z-image"); err == nil {
-		t.Fatal("disallowed size should be rejected")
-	}
-	// 旧形态(值为数组)
-	if err := ValidateImageSizeForModel("512x512", "legacy"); err != nil {
-		t.Fatalf("legacy array form should pass, got %v", err)
-	}
-	// size 为空:不校验
-	if err := ValidateImageSizeForModel("", "z-image"); err != nil {
-		t.Fatalf("empty size should pass, got %v", err)
-	}
-}
-
-func TestVideoParamsValidation(t *testing.T) {
+func TestVideoDurationValidation(t *testing.T) {
 	setOpt("", `{"models":{"wan2.2-t2v":{"sizes":["1280x720"],"durations":["5","10"]}}}`)
 	// 未配置模型:放行
-	if err := ValidateVideoParamsForModel("9x9", 999, "", "other"); err != nil {
+	if err := ValidateVideoDurationForModel(999, "", "other"); err != nil {
 		t.Fatalf("unconfigured should pass, got %v", err)
 	}
-	// 尺寸+时长命中
-	if err := ValidateVideoParamsForModel("1280x720", 5, "", "wan2.2-t2v"); err != nil {
-		t.Fatalf("allowed params should pass, got %v", err)
-	}
-	// 尺寸不中
-	if err := ValidateVideoParamsForModel("640x480", 5, "", "wan2.2-t2v"); err == nil {
-		t.Fatal("bad size should reject")
+	// 时长命中
+	if err := ValidateVideoDurationForModel(5, "", "wan2.2-t2v"); err != nil {
+		t.Fatalf("allowed duration should pass, got %v", err)
 	}
 	// 时长不中
-	if err := ValidateVideoParamsForModel("1280x720", 7, "", "wan2.2-t2v"); err == nil {
+	if err := ValidateVideoDurationForModel(7, "", "wan2.2-t2v"); err == nil {
 		t.Fatal("bad duration should reject")
 	}
 	// 时长走 secondsStr 且带单位 "10s" 兼容(前导整数匹配)
 	setOpt("", `{"models":{"m":{"durations":["10s"]}}}`)
-	if err := ValidateVideoParamsForModel("", 10, "", "m"); err != nil {
+	if err := ValidateVideoDurationForModel(10, "", "m"); err != nil {
 		t.Fatalf("10 vs 10s should match, got %v", err)
+	}
+}
+
+// 只配了 sizes、没配 durations 的模型:视为该模型未配置任何校验维度,时长一律放行。
+func TestSizesOnlyConfigDoesNotGateDuration(t *testing.T) {
+	setOpt("", `{"models":{"wan2.2-i2v":{"sizes":["720P","480P"]}}}`)
+	if _, configured := VideoDurationsAllowedForModel("wan2.2-i2v"); configured {
+		t.Fatal("sizes-only config should not count as duration-configured")
+	}
+	if err := ValidateVideoDurationForModel(4, "", "wan2.2-i2v"); err != nil {
+		t.Fatalf("sizes-only config should not gate duration, got %v", err)
+	}
+}
+
+// 回归:sizes 与请求尺寸对不上时不再影响放行结果。运营填档位词("720P")而客户端
+// 发精确像素("720x1280")是常态,二者无法字符串比较,早前版本会把合法请求拒成 400。
+// 这里用同一份配置跑两种请求尺寸,断言二者结果一致——即 size 已完全退出校验决策。
+func TestSizeDoesNotAffectValidation(t *testing.T) {
+	setOpt("", `{"models":{"wan2.2-i2v":{"sizes":["720P","480P"],"durations":["4","5"]}}}`)
+	// 时长命中:无论请求尺寸是否与配置的档位词一致,都放行
+	if err := ValidateVideoDurationForModel(4, "", "wan2.2-i2v"); err != nil {
+		t.Fatalf("duration in whitelist should pass regardless of size, got %v", err)
+	}
+	// 时长不中:仍然拒绝(证明本用例的配置确实生效,不是因为整体没配才放行)
+	if err := ValidateVideoDurationForModel(9, "", "wan2.2-i2v"); err == nil {
+		t.Fatal("duration outside whitelist should still reject")
 	}
 }
