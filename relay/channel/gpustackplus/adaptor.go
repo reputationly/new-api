@@ -190,13 +190,9 @@ func (a *Adaptor) ConvertImageRequest(c *gin.Context, info *relaycommon.RelayInf
 		return nil, errors.New("model is required(渠道模型映射与请求 model 均为空)")
 	}
 
-	// 若超管为该模型配置了尺寸白名单(系统设置→图片模型尺寸配置),按配置校验;
-	// 未配置则不加限制。配置按公开模型名键控,故用 origin/request.Model(公开名)做 key。
-	// 参数错误归为 400 并跳过重试——外层 image_handler 的 types.NewError 用 errors.As
-	// 透传本错误,不会被覆盖成 500 可重试(否则会在预扣费后无谓重试)。
-	if err := common.ValidateImageSizeForModel(request.Size, info.OriginModelName, request.Model); err != nil {
-		return nil, types.NewErrorWithStatusCode(err, types.ErrorCodeInvalidRequest, http.StatusBadRequest, types.ErrOptionWithSkipRetry())
-	}
+	// 不校验 size:图片模型尺寸配置的 sizes 只供前端体验区做候选值(见
+	// common/media_model_config.go 文件头),运营填的档位词/宽高比与客户端发的精确像素
+	// 无法字符串比较,拦截会误伤合法请求。尺寸合法性交由引擎判定。
 
 	body := map[string]any{
 		"model":   modelName,

@@ -145,13 +145,15 @@ func (a *TaskAdaptor) ValidateRequestAndSetAction(c *gin.Context, info *relaycom
 	if taskErr := relaycommon.ValidateBasicTaskRequest(c, info, constant.TaskActionGenerate); taskErr != nil {
 		return taskErr
 	}
-	// 若超管为该模型配置了尺寸/时长白名单(系统设置→视频模型配置),按配置校验;
-	// 未配置则不加限制。此处早于模型映射,用请求里的公开 model 名做 key。参数错误
-	// 归为本地 400(不重试、不误标渠道故障)。
+	// 若超管为该模型配置了时长白名单(系统设置→视频模型配置),按配置校验;未配置则
+	// 不加限制。此处早于模型映射,用请求里的公开 model 名做 key。参数错误归为本地 400
+	// (不重试、不误标渠道故障)。
 	// 配置按公开模型名键控(体验区用选中的公开名读它),映射不改 OriginModelName;
 	// 故只用公开名做 key,与映射时机无关。
+	// 尺寸不校验:sizes 只供体验区做候选值,档位词/宽高比与精确像素对不上(见
+	// common/media_model_config.go 文件头),交由引擎判定。
 	if req, err := relaycommon.GetTaskRequest(c); err == nil {
-		if verr := common.ValidateVideoParamsForModel(req.Size, req.Duration, req.Seconds,
+		if verr := common.ValidateVideoDurationForModel(req.Duration, req.Seconds,
 			req.Model, info.OriginModelName); verr != nil {
 			return service.TaskErrorWrapperLocal(verr, "invalid_request", http.StatusBadRequest)
 		}
@@ -193,19 +195,16 @@ func (a *TaskAdaptor) BuildRequestBody(c *gin.Context, info *relaycommon.RelayIn
 	// aspect_ratio 等)经 metadata 整体透传;门面会剥掉 engine-owned 字段,
 	// 下面的保留字段随后覆盖同名键,防止篡改核心语义。
 	//
-	// 白名单加固:若该模型配了尺寸/时长白名单,剔除 metadata 里对应维度的引擎原生
-	// 别名键(如 target_video_length / aspect_ratio),否则客户端可绕过顶层 size/
-	// duration 的校验,用 metadata 直接注入被禁值。被锁维度只允许走(已校验的)顶层字段。
-	allowedSizes, allowedDurations, _ := common.VideoParamsAllowedForModel(req.Model, info.OriginModelName)
-	sizeLocked := len(allowedSizes) > 0
+	// 白名单加固:若该模型配了时长白名单,剔除 metadata 里的引擎原生别名键
+	// (target_video_length / num_frames 等),否则客户端可绕过顶层 duration 的校验,
+	// 用 metadata 直接注入被禁值。被锁维度只允许走(已校验的)顶层字段。
+	// 尺寸无对应加固:sizes 不再做接口校验,没有可绕过的校验,metadata 里的尺寸类键照常透传。
+	allowedDurations, _ := common.VideoDurationsAllowedForModel(req.Model, info.OriginModelName)
 	durationLocked := len(allowedDurations) > 0
 	body := make(map[string]any, len(req.Metadata)+8)
 	for k, v := range req.Metadata {
 		lk := strings.ToLower(strings.TrimSpace(k))
 		if durationLocked && durationOverrideKeys[lk] {
-			continue
-		}
-		if sizeLocked && sizeOverrideKeys[lk] {
 			continue
 		}
 		body[k] = v
@@ -223,8 +222,8 @@ func (a *TaskAdaptor) BuildRequestBody(c *gin.Context, info *relaycommon.RelayIn
 	if _, ok := body["task_type"]; !ok {
 		body["task_type"] = inferTaskType(modelName)
 	}
-	// 转发已校验的顶层 size:同时给 size 与由它换算的 aspect_ratio,兼容不同引擎读法。
-	// size 被锁定时上面已剔除 metadata 的同类别名,这里的规范值即唯一来源(不退化、不绕过)。
+	// 转发顶层 size:同时给 size 与由它换算的 aspect_ratio,兼容不同引擎读法。
+	// 顶层 size 优先级高于 metadata 同名键(在上面的透传之后赋值,覆盖之)。
 	if s := strings.TrimSpace(req.Size); s != "" {
 		body["size"] = s
 		if ar := common.AspectRatioFromSize(s); ar != "" {
@@ -382,14 +381,10 @@ func (a *TaskAdaptor) BuildRequestBody(c *gin.Context, info *relaycommon.RelayIn
 var imageRequiredTaskTypes = map[string]bool{"i2v": true, "flf2v": true, "i2i": true, "s2v": true}
 var textOnlyTaskTypes = map[string]bool{"t2v": true, "t2i": true}
 
-// 被白名单锁定的维度对应的引擎原生别名键——metadata 里这些键会绕过顶层 size/
-// duration 校验,锁定时需从透传体里剔除(小写匹配)。
+// 时长白名单锁定时需剔除的引擎原生别名键——metadata 里这些键会绕过顶层 duration
+// 校验(小写匹配)。尺寸无对应表:sizes 不做接口校验,无校验可绕过。
 var durationOverrideKeys = map[string]bool{
 	"target_video_length": true, "video_length": true, "num_frames": true, "frames": true,
-}
-var sizeOverrideKeys = map[string]bool{
-	"aspect_ratio": true, "size": true, "resolution": true,
-	"width": true, "height": true, "target_width": true, "target_height": true,
 }
 
 // IndexTTS-2 情感标量键:vLLM-Omni 的 IndexTTS2 talker 只从 request.extra_params 读它们

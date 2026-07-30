@@ -8,10 +8,13 @@ import (
 )
 
 // 图片/视频"模型尺寸/参数"配置(超管在系统设置里维护,存 OptionMap 的
-// ImageModelSizeConfig / VideoModelConfig 两个 JSON 键)。这份配置原本只驱动
-// 前端体验区的可选值,这里额外把它作为**后端接口参数校验**的来源:某模型显式
-// 配了 sizes/durations 时,请求值必须落在允许集内,否则报错并列出允许值;模型
-// 未配置(或该维度为空)则不做任何限制(沿用调用方的默认校验)。
+// ImageModelSizeConfig / VideoModelConfig 两个 JSON 键)。
+//
+// **sizes 只驱动前端体验区的可选值,不做后端接口校验。** 早前版本拿它当接口白名单,
+// 但配置值与请求值存在语义层级错配:运营填的是档位词或宽高比("720P"/"16:9"),
+// API 客户端发的是引擎真正接受的精确像素("720x1280"),纯字符串比较永远对不上,
+// 合法请求被一律拒成 400。引擎自身会拒绝它不支持的尺寸,网关这层重复拦截收益极小、
+// 误伤成本极高,故已移除。durations(整数秒,单位统一、不存在错配)仍作为校验来源。
 //
 // JSON 结构(与前端 parseImageSizeConfig / parseVideoModelConfig 对应):
 //
@@ -38,16 +41,6 @@ func normalizeSizeToken(s string) string {
 	return v
 }
 
-func containsNormalizedSize(allowed []string, size string) bool {
-	target := normalizeSizeToken(size)
-	for _, a := range allowed {
-		if normalizeSizeToken(a) == target {
-			return true
-		}
-	}
-	return false
-}
-
 // toStringList 把 JSON 数组([]any of string/number)转成去空字符串列表。
 func toStringList(v any) []string {
 	arr, ok := v.([]any)
@@ -70,27 +63,6 @@ func toStringList(v any) []string {
 	return out
 }
 
-func normalizeSizeSet(list []string) []string {
-	out := make([]string, 0, len(list))
-	for _, s := range list {
-		if n := normalizeSizeToken(s); n != "" {
-			out = append(out, n)
-		}
-	}
-	return out
-}
-
-// modelEntrySizes 取某模型条目的 sizes:兼容新形态({sizes:[...]})与旧形态(值直接是数组)。
-func modelEntrySizes(entry any) []string {
-	switch e := entry.(type) {
-	case []any: // 旧形态:值为尺寸数组
-		return toStringList(e)
-	case map[string]any:
-		return toStringList(e["sizes"])
-	}
-	return nil
-}
-
 func modelEntryDurations(entry any) []string {
 	if e, ok := entry.(map[string]any); ok {
 		return toStringList(e["durations"])
@@ -109,41 +81,6 @@ func modelsMap(raw string) map[string]any {
 	}
 	models, _ := cfg["models"].(map[string]any)
 	return models
-}
-
-// ---- 图片尺寸配置 ----
-
-// ImageSizeAllowedForModel 返回该模型配置的允许尺寸集及是否已配置(非空)。
-func ImageSizeAllowedForModel(candidates ...string) (allowed []string, configured bool) {
-	OptionMapRWMutex.RLock()
-	raw := OptionMap["ImageModelSizeConfig"]
-	OptionMapRWMutex.RUnlock()
-	models := modelsMap(raw)
-	if models == nil {
-		return nil, false
-	}
-	for _, name := range candidates {
-		if entry, ok := models[name]; ok {
-			if sizes := normalizeSizeSet(modelEntrySizes(entry)); len(sizes) > 0 {
-				return sizes, true
-			}
-		}
-	}
-	return nil, false
-}
-
-// ValidateImageSizeForModel 校验图片尺寸:模型未配置尺寸则放行;配置了则要求
-// size 落在允许集内,否则返回带允许值的错误。size 为空时不校验(无值可校验)。
-func ValidateImageSizeForModel(size string, candidates ...string) error {
-	if strings.TrimSpace(size) == "" {
-		return nil
-	}
-	allowed, configured := ImageSizeAllowedForModel(candidates...)
-	if !configured || containsNormalizedSize(allowed, size) {
-		return nil
-	}
-	return fmt.Errorf("模型 %s 不支持尺寸 %q,仅支持: %s",
-		firstNonEmptyStr(candidates...), size, strings.Join(allowed, ", "))
 }
 
 // ---- 视频参数配置 ----
@@ -179,52 +116,47 @@ func durationMatches(allowed []string, candidates []string) bool {
 	return false
 }
 
-// VideoParamsAllowedForModel 返回该模型配置的允许尺寸/时长集及是否已配置任一维度。
-func VideoParamsAllowedForModel(candidates ...string) (sizes, durations []string, configured bool) {
+// VideoDurationsAllowedForModel 返回该模型配置的允许时长集及是否已配置(非空)。
+// 只看 durations——sizes 不参与后端校验(见文件头说明)。
+func VideoDurationsAllowedForModel(candidates ...string) (durations []string, configured bool) {
 	OptionMapRWMutex.RLock()
 	raw := OptionMap["VideoModelConfig"]
 	OptionMapRWMutex.RUnlock()
 	models := modelsMap(raw)
 	if models == nil {
-		return nil, nil, false
+		return nil, false
 	}
 	for _, name := range candidates {
 		entry, ok := models[name]
 		if !ok {
 			continue
 		}
-		s := normalizeSizeSet(modelEntrySizes(entry))
-		d := normalizeDurationSet(modelEntryDurations(entry))
-		if len(s) > 0 || len(d) > 0 {
-			return s, d, true
+		if d := normalizeDurationSet(modelEntryDurations(entry)); len(d) > 0 {
+			return d, true
 		}
 	}
-	return nil, nil, false
+	return nil, false
 }
 
-// ValidateVideoParamsForModel 校验视频尺寸与时长:模型未配置则放行;配置了对应维度
-// 则要求请求值落在允许集内。size 为空或 seconds 无值的维度跳过(无值可校验)。
-func ValidateVideoParamsForModel(size string, seconds int, secondsStr string, candidates ...string) error {
-	allowedSizes, allowedDurations, configured := VideoParamsAllowedForModel(candidates...)
+// ValidateVideoDurationForModel 校验视频时长:模型未配置 durations 则放行;配置了
+// 则要求请求值落在允许集内。seconds 无值时跳过(无值可校验)。
+// 尺寸不在此校验——运营配的档位词/宽高比与客户端发的精确像素无法字符串比较,
+// 拦截只会误伤合法请求,交由引擎自行拒绝。
+func ValidateVideoDurationForModel(seconds int, secondsStr string, candidates ...string) error {
+	allowedDurations, configured := VideoDurationsAllowedForModel(candidates...)
 	if !configured {
 		return nil
 	}
-	if len(allowedSizes) > 0 && strings.TrimSpace(size) != "" && !containsNormalizedSize(allowedSizes, size) {
-		return fmt.Errorf("模型 %s 不支持尺寸 %q,仅支持: %s",
-			firstNonEmptyStr(candidates...), size, strings.Join(allowedSizes, ", "))
+	var cands []string
+	if seconds > 0 {
+		cands = append(cands, strconv.Itoa(seconds))
 	}
-	if len(allowedDurations) > 0 {
-		var cands []string
-		if seconds > 0 {
-			cands = append(cands, strconv.Itoa(seconds))
-		}
-		if strings.TrimSpace(secondsStr) != "" {
-			cands = append(cands, secondsStr)
-		}
-		if len(cands) > 0 && !durationMatches(allowedDurations, cands) {
-			return fmt.Errorf("模型 %s 不支持时长 %s,仅支持: %s",
-				firstNonEmptyStr(candidates...), strings.Join(cands, "/"), strings.Join(allowedDurations, ", "))
-		}
+	if strings.TrimSpace(secondsStr) != "" {
+		cands = append(cands, secondsStr)
+	}
+	if len(cands) > 0 && !durationMatches(allowedDurations, cands) {
+		return fmt.Errorf("模型 %s 不支持时长 %s,仅支持: %s",
+			firstNonEmptyStr(candidates...), strings.Join(cands, "/"), strings.Join(allowedDurations, ", "))
 	}
 	return nil
 }
