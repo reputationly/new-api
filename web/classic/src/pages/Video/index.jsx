@@ -87,6 +87,7 @@ export const VideoPlaygroundBody = ({ mode }) => {
           turnLimitReached={turnLimitReached}
           missingRequiredImage={missingRequiredImage}
           mode={mode}
+          selectedModel={inputs.model}
           isSR={isSR}
           isDub={isDub}
           onApplyExample={applyExample}

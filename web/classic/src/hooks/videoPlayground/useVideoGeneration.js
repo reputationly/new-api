@@ -43,6 +43,7 @@ import {
   VIDEO_INTERPOLATION_TARGET_FPS,
   VIDEO_PIPELINE_SR_RATIO,
   isPipelineTargetSize,
+  isFlf2vModel,
   findCapabilityModelIn,
   DUB_PIPELINE_MODES,
   VIDEO_POLL_INTERVAL_MS,
@@ -68,8 +69,8 @@ const VIDEO_MODES = {
   // 图生视频(2026-07 改判 Bernini r2v):参考图(1~3 张)生成视频,显式 task_type=r2v
   // (Bernini 模型名推断恒 v2v,必须显式)。旧 wan i2v 的「首帧生视频」迁到关键帧模式。
   image2video: { capability: VIDEO_I2V_CAPABILITY, suffix: '_i2v', taskType: 'r2v' },
-  // 关键帧(原「首尾帧」,wan2.2 i2v):仅首帧→i2v、首+尾帧→flf2v,提交时按输入派生
-  // task_type 显式下发(模型名推断分不出两者),故不设静态 taskType。
+  // 关键帧(原「首尾帧」):同一 tab 承载 wan2.2 的 i2v 与 flf2v 两个模型(同权重、不同
+  // --task 的两个实例)。task_type 按所选模型显式下发(见 isFlf2vModel),故不设静态 taskType。
   flf2v: { capability: VIDEO_FLF2V_CAPABILITY, suffix: '_flf2v' },
   // 门面 task_type：s2v(音频生视频)/ sr(视频超分)。
   s2v: { capability: VIDEO_S2V_CAPABILITY, suffix: '_s2v', taskType: 's2v' },
@@ -228,6 +229,9 @@ export const useVideoGeneration = ({ mode = 'text2video' } = {}) => {
     srcVideo2: '', // 视频编辑(Bernini)第二源视频(mv2v/ads2v 双视频,可选)
     refImages: [], // 视频编辑 rv2v / 图生视频 r2v 参考图(base64 data-url 数组)
   });
+  // 关键帧 tab 下选中的是不是首尾帧模型。i2v 与 flf2v 是同权重、不同 --task 的两个引擎
+  // 实例,尾帧的取舍只能由模型决定(判据见 isFlf2vModel)。
+  const isFlf2vSelected = isFlf2vModel(inputs.model);
   const [groups, setGroups] = useState([]);
   const [models, setModels] = useState([]);
   // 来自 /api/pricing：model -> enable_groups[]（用于分组过滤）
@@ -318,7 +322,13 @@ export const useVideoGeneration = ({ mode = 'text2video' } = {}) => {
 
   const handleInputChange = useCallback((key, value) => {
     if (lockedRef.current) return;
-    setInputs((prev) => ({ ...prev, [key]: value }));
+    setInputs((prev) => {
+      const next = { ...prev, [key]: value };
+      // 切模型时清尾帧:关键帧 tab 下 i2v/flf2v 两类模型共用这一组输入框,从 flf2v 切到
+      // i2v 后尾帧槽不再渲染,残留值会变成看不见却仍在 state 里的脏数据。
+      if (key === 'model' && !isFlf2vModel(value)) next.lastFrame = '';
+      return next;
+    });
   }, []);
 
   // 一键示例:标量参数(params)+ 文件(files:字段→素材 URL)一次性写入 inputs。
@@ -853,11 +863,18 @@ export const useVideoGeneration = ({ mode = 'text2video' } = {}) => {
             showError(isS2V ? t('请先上传人物图') : t('请先上传首帧图片'));
             return;
           }
-          if (isFLF2V) {
-            // 关键帧:尾帧可选 —— 仅首帧走 i2v,首+尾帧走 flf2v(提交时派生)。
+          if (isFLF2V && isFlf2vSelected) {
+            // 首尾帧模型:尾帧必填。引擎实例的 task 由启动期 --task 定死,缺尾帧发过去
+            // 会读空路径直接崩,不能就地降级成 i2v(那是另一个实例、另一档 shift/插帧配置)。
             const last = (inputs.lastFrame || '').trim();
-            convImages = last ? [first, last] : [first];
+            if (!last) {
+              showError(t('该模型是首尾帧模型,需要上传尾帧图片'));
+              return;
+            }
+            convImages = [first, last];
           } else {
+            // i2v 模型(含关键帧 tab 下选中的 i2v 模型):只发首帧。切模型时 lastFrame 已被
+            // 清空,这里再兜一道——多发的尾帧会被门面 400 拒(adaptor.go 的 i2v 反向防呆)。
             convImages = [first];
           }
         }
@@ -968,7 +985,8 @@ export const useVideoGeneration = ({ mode = 'text2video' } = {}) => {
       // 时缺失,提示重开对话重新上传。
       if (needsImage) {
         params.images = cleanArr(params.images);
-        const need = 1; // 关键帧尾帧可选:首帧在即可续问(尾帧缺失时按 i2v 派生)。
+        // 首尾帧模型续问需要首帧+尾帧都在;i2v 模型只需首帧。
+        const need = isFLF2V && isFlf2vSelected ? 2 : 1;
         if (params.images.length < need) {
           showError(t('帧图已失效,请开启新对话并重新上传'));
           return;
@@ -1081,12 +1099,12 @@ export const useVideoGeneration = ({ mode = 'text2video' } = {}) => {
         if (taskType) {
           body.metadata = { ...(body.metadata || {}), task_type: taskType };
         }
-        // 关键帧(wan2.2 i2v):仅首帧 → i2v,首+尾帧 → flf2v。模型名推断分不出
-        // 两者(同一 i2v 实例),必须显式下发。
+        // 关键帧:task_type 按所选模型下发,不再按输入张数派生。后端 inferTaskType 其实
+        // 也能从模型名判出同样的结果,但显式下发才能保证前后端判据一次对齐、不靠巧合。
         if (isFLF2V) {
           body.metadata = {
             ...(body.metadata || {}),
-            task_type: (params.images || []).length >= 2 ? 'flf2v' : 'i2v',
+            task_type: isFlf2vSelected ? 'flf2v' : 'i2v',
           };
         }
         // 尺寸/分辨率仅文生视频、且该值仍在当前模型允许集内才下发（对齐宽高比的闸门，
@@ -1425,11 +1443,12 @@ export const useVideoGeneration = ({ mode = 'text2video' } = {}) => {
   }, []);
 
   // 必填输入缺失时发送置灰(新对话/未锁定):避免只填提示词就点发送(点了才报错且 Semi
-  // 会清空已输入的提示词)。关键帧需首帧(尾帧可选);图生视频需参考图;s2v 需主图+音频;
-  // sr/dub 需源视频;vace 需 ≥1 源视频。
+  // 会清空已输入的提示词)。关键帧需首帧,选中首尾帧模型时还需尾帧;图生视频需参考图;
+  // s2v 需主图+音频;sr/dub 需源视频;vace 需 ≥1 源视频。
   const missingRequiredImage =
     !locked &&
     ((needsImage && (inputs.firstFrame || '').trim() === '') ||
+      (isFLF2V && isFlf2vSelected && (inputs.lastFrame || '').trim() === '') ||
       (isI2V && !(inputs.refImages || []).filter(Boolean).length) ||
       (isS2V && (inputs.audioData || '').trim() === '') ||
       ((isSR || isDub) && (inputs.sourceVideo || '').trim() === '') ||

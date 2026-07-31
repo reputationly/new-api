@@ -1960,6 +1960,7 @@
     "时长(秒)，如 5": "Duration (s), e.g. 5",
     "输入尺寸后回车，如 1280x720": "Type a size and press Enter, e.g. 1280x720",
     "声明哪些是视频模型，并为其配置可选尺寸与时长。未单独配置的模型使用默认值；下拉支持输入自定义值。": "Declare which models are video models and configure their available sizes and durations. Models without a specific config use the defaults; the dropdowns also accept custom values.",
+    "「关键帧」能力同时承载两类模型：模型名含 flf2v 的按首尾帧模型处理(尾帧必填)，否则按只吃首帧的 i2v。此处填的是对外模型名，若渠道做了模型重定向，对外名也必须保留 flf2v 标识，否则体验区会按 i2v 下发、与上游 flf2v 实例错配。": "The \"Keyframe\" capability covers two kinds of models: names containing flf2v are treated as first-and-last-frame models (last frame required), otherwise as i2v models that take only a first frame. The name entered here is the public model name — if the channel remaps models, the public name must also keep the flf2v marker, or the playground will send i2v and mismatch the upstream flf2v instance.",
     "本轮对话生成次数已达上限（{{count}} 次），请开启新对话": "This conversation has reached the generation limit ({{count}}). Please start a new conversation.",
     "本轮对话已达生成上限，请点击右侧「新对话」继续": "This conversation has reached the generation limit. Click \"New Chat\" on the right to continue.",
     "图片仅本次会话可见，刷新后不再保留，请重新生成": "Images are only visible in the current session and are not kept after refresh. Please regenerate.",

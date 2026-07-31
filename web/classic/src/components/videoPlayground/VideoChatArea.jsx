@@ -156,6 +156,7 @@ const VideoChatArea = ({
   turnLimitReached = false,
   missingRequiredImage = false,
   mode = 'text2video',
+  selectedModel = '',
   isSR = false,
   isDub = false,
   onApplyExample,
@@ -169,7 +170,8 @@ const VideoChatArea = ({
   // 受控输入框:预设按钮直接 setInputValue,发送后清空(缺图/上限时不清空,提示词不丢)。
   const [inputValue, setInputValue] = useState('');
   // 一键示例(按 mode):text2video 纯文本;i2v/flf2v/s2v/vace/sr 带预置文件。
-  const presets = videoExamplesForMode(mode);
+  // 关键帧还要按所选模型过滤:i2v 模型只出仅首帧的示例,flf2v 模型只出带尾帧的。
+  const presets = videoExamplesForMode(mode, selectedModel);
   const hasPresets = presets.length > 0;
 
   const roleConfig = useMemo(

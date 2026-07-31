@@ -53,7 +53,8 @@ export const VIDEO_EXAMPLES = {
       },
     },
   ],
-  // 关键帧(wan2.2 i2v):仅首帧 → i2v;首帧+尾帧 → flf2v(提交时按输入派生)。
+  // 关键帧:两个示例分别服务两类模型,由 videoExamplesForMode 按所选模型过滤——
+  // i2v 模型只出「仅首帧」,flf2v 模型只出「首帧+尾帧」。
   flf2v: [
     {
       label: '仅首帧(i2v)',
@@ -135,7 +136,33 @@ export const VIDEO_EXAMPLES = {
   ],
 };
 
-export const videoExamplesForMode = (mode) => VIDEO_EXAMPLES[mode] || [];
+// 「关键帧」tab 同时承载两类 wan 模型:--task i2v 的「首帧生视频」和 --task flf2v 的
+// 「首尾帧」。它们是同一份权重、不同启动参数的两个引擎实例,task 在实例启动期就定死了:
+// i2v 实例收到尾帧会静默丢弃(I2VInputInfo 没有 last_frame_path 字段),flf2v 实例缺尾帧
+// 会读空路径直接崩。所以尾帧「能不能传/要不要传」只能由所选模型决定,不能按用户输入派生。
+// 判据与后端 inferTaskType(relay/channel/task/gpustackplus/adaptor.go)同源:名字含
+// flf2v 即首尾帧模型,否则按 i2v。
+//
+// 注意判据的**对象**前后端不同:这里拿到的是对外模型名(/api/pricing 的 key、运营在
+// 「视频模型配置」里填的那个),后端 inferTaskType 拿到的是渠道重定向后的上游名。两者
+// 分叉就会错配 —— 对外名叫 wan2.2-keyframe、上游是 wan2.2-flf2v-a14b 时,前端判成 i2v、
+// 隐藏尾帧槽并显式下发 task_type=i2v(显式值优先于 inferTaskType),该模型在体验区直接
+// 不可用;反向(对外名含 flf2v、上游是 i2v 实例)同样错配。
+// 所以约束是:新增首尾帧模型时,GPUStack 上游名与对外名**都**必须带 flf2v;做了模型
+// 重定向的,别名也要保留这个标识(运营页 SettingsVideoModels 的说明里同步了这条)。
+export const isFlf2vModel = (model) =>
+  String(model || '')
+    .toLowerCase()
+    .includes('flf2v');
+
+// 一键示例按 mode 取;「关键帧」下再按所选模型过滤——i2v 模型只能用仅首帧的示例,
+// flf2v 模型只能用带尾帧的示例,否则点了示例反而凑不出该模型要求的输入组合。
+export const videoExamplesForMode = (mode, model) => {
+  const list = VIDEO_EXAMPLES[mode] || [];
+  if (mode !== 'flf2v') return list;
+  const wantLast = isFlf2vModel(model);
+  return list.filter((ex) => Boolean(ex?.files?.lastFrame) === wantLast);
+};
 
 // 视频宽高比(文生视频):可在运营后台按模型配置允许集,未配置默认全集。
 export const VIDEO_ASPECT_RATIOS = ['16:9', '9:16', '1:1', '4:3', '3:4'];
@@ -172,8 +199,8 @@ export const VIDEO_PAGE_CAPABILITY = '文生视频';
 // 通过 mode 区分。门面 task_type 对应:s2v→数字人(音频驱动人像说话,行业通称)、
 // sr→视频超分、vace→视频编辑。
 export const VIDEO_I2V_CAPABILITY = '图生视频';
-// 2026-07「首尾帧」改名「关键帧」:wan2.2 i2v,仅首帧(i2v)或首+尾帧(flf2v)都可,
-// task_type 提交时按输入派生。旧标签走 LEGACY_ALIASES 兼容。
+// 2026-07「首尾帧」改名「关键帧」:同一 tab 承载 wan2.2 的 i2v 与 flf2v 两个模型,
+// task_type 按所选模型下发(见 isFlf2vModel),不再按输入张数派生。旧标签走 LEGACY_ALIASES 兼容。
 export const VIDEO_FLF2V_CAPABILITY = '关键帧';
 export const VIDEO_S2V_CAPABILITY = '数字人';
 export const VIDEO_SR_CAPABILITY = '视频超分';
