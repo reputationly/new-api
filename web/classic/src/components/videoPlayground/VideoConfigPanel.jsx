@@ -21,6 +21,7 @@ import {
 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { renderGroupOption, selectFilter } from '../../helpers';
+import { isFlf2vModel } from '../../constants/videoPlayground.constants';
 import ImageUrlInput from '../playground/ImageUrlInput';
 import MediaFileInput from './MediaFileInput';
 
@@ -47,6 +48,9 @@ const VideoConfigPanel = ({
   styleState,
 }) => {
   const { t } = useTranslation();
+
+  // 关键帧 tab 里 i2v / flf2v 两类模型共存,尾帧是否可传完全由所选模型决定。
+  const needsLastFrame = isFlf2vModel(inputs?.model);
 
   // 输入大小上限(MB):直接透传 maxInputMB。0/未配 = 不限(与配置页「留空/0 不限」及
   // 后端一致);>0 时各上传控件按它拦。不再套前端兜底默认,避免和「显式不限」冲突。
@@ -218,10 +222,12 @@ const VideoConfigPanel = ({
                 : t('上传首帧/参考图'),
             'firstFrame',
           )}
-        {/* 关键帧:尾帧可选 —— 仅首帧走 i2v,首+尾帧走 flf2v(提交时派生)。 */}
+        {/* 关键帧:尾帧槽只对 flf2v 模型渲染,且必填。i2v 模型压根不给这个框——它的引擎
+            实例会静默丢弃尾帧(见 isFlf2vModel 注释),给了框等于骗用户。 */}
         {isFLF2V &&
+          needsLastFrame &&
           (!disabled || inputs.lastFrame) &&
-          renderFrameSlot(t('上传尾帧（可选）'), 'lastFrame', { optional: true })}
+          renderFrameSlot(t('上传尾帧'), 'lastFrame')}
 
         {/* 数字人:驱动音频(必填) */}
         {isS2V && (!disabled || inputs.audioData) && (

@@ -255,6 +255,13 @@ func (a *TaskAdaptor) BuildRequestBody(c *gin.Context, info *relaycommon.RelayIn
 	if taskType == "flf2v" && len(req.Images) < 2 {
 		return nil, localBadRequest(fmt.Errorf("模型 %s 的任务类型 flf2v(首尾帧)需要首帧和尾帧两张图:请提供 images=[首帧,尾帧]", modelName))
 	}
+	// 反向防呆:i2v 只物化 images[0](materializeVideoInputs 仅在 flf2v 分支读 images[1]),
+	// 多传的尾帧会被静默丢弃 —— 引擎侧同样如此(I2VInputInfo 没有 last_frame_path 字段,
+	// 多余键被 update_input_info_from_dict 丢掉),用户拿到的是一条只用首帧的普通 i2v 却
+	// 毫无提示。宁可 400 也不要静默降级。
+	if taskType == "i2v" && len(req.Images) > 1 {
+		return nil, localBadRequest(fmt.Errorf("模型 %s 的任务类型 i2v(图生视频)只接受首帧一张图,多传的图不会生效;首尾帧请显式指定 metadata.task_type=flf2v 并提供 images=[首帧,尾帧]", modelName))
+	}
 	if taskType == "tts" {
 		// 语音合成不接受图片输入(参考音走 metadata.voice,下面单独物化)。
 		if req.HasImage() {
