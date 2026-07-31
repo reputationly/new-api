@@ -6,7 +6,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
+	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/model"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 
@@ -235,4 +237,35 @@ func TestValidateBasicTaskRequestNormalizesInputReference(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "https://x/first.jpg", r.Content[0].ImageURL.URL)
 	require.Equal(t, "first_frame", r.Content[0].Role)
+}
+
+// duration 传 -1(模型自选)或用 frames 控帧时,实际时长只能从上游回执拿。
+// 顶层 duration(火山方舟)与 output.duration(四海)两种落点都要认。
+func TestConvertToOpenAIVideoEchoesActualDuration(t *testing.T) {
+	a := &TaskAdaptor{}
+	newTask := func(data string) *model.Task {
+		return &model.Task{
+			TaskID: "vt_1", Status: model.TaskStatusSuccess, Progress: "100%",
+			Data: []byte(data),
+		}
+	}
+
+	for name, data := range map[string]string{
+		"顶层 duration":     `{"id":"vt_1","status":"succeeded","duration":11,"content":{"video_url":"https://x/o.mp4"}}`,
+		"output.duration": `{"id":"vt_1","status":"succeeded","output":{"duration":11},"content":{"video_url":"https://x/o.mp4"}}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			raw, err := a.ConvertToOpenAIVideo(newTask(data))
+			require.NoError(t, err)
+			var video dto.OpenAIVideo
+			require.NoError(t, common.Unmarshal(raw, &video))
+			require.Equal(t, "11", video.Seconds)
+		})
+	}
+
+	t.Run("上游没回时长则不输出 seconds", func(t *testing.T) {
+		raw, err := a.ConvertToOpenAIVideo(newTask(`{"id":"vt_1","status":"succeeded"}`))
+		require.NoError(t, err)
+		require.NotContains(t, string(raw), `"seconds"`)
+	})
 }
