@@ -78,9 +78,15 @@ type responseTask struct {
 	Content struct {
 		VideoURL string `json:"video_url"`
 	} `json:"content"`
-	Seed            int    `json:"seed"`
-	Resolution      string `json:"resolution"`
-	Duration        int    `json:"duration"`
+	Seed       int    `json:"seed"`
+	Resolution string `json:"resolution"`
+	// Duration / Output.Duration 都是"实际生成时长(秒)"的回执。两处都读:火山方舟文档把它
+	// 放在顶层,四海文档自己前后不一致(提交/查询对照表写顶层 duration,响应字段表写
+	// output.duration)。只读一处的话,换个上游就静默取到 0。
+	Duration int `json:"duration"`
+	Output   struct {
+		Duration int `json:"duration"`
+	} `json:"output"`
 	Ratio           string `json:"ratio"`
 	FramesPerSecond int    `json:"framespersecond"`
 	ServiceTier     string `json:"service_tier"`
@@ -333,6 +339,14 @@ func failureReason(resTask *responseTask, fallback string) string {
 	return message
 }
 
+// actualDuration 取上游回执的实际生成时长(秒),顶层与 output 下取先命中的非零值。
+func (r *responseTask) actualDuration() int {
+	if r.Duration > 0 {
+		return r.Duration
+	}
+	return r.Output.Duration
+}
+
 // buildArkContent 把统一契约的输入拼成 Ark 的 content[] 数组。
 //
 // Ark 靠每个 content 项的 role 区分语义(首帧 / 尾帧 / 多模态参考),不带 role 的多图上游
@@ -526,6 +540,12 @@ func (a *TaskAdaptor) ConvertToOpenAIVideo(originTask *model.Task) ([]byte, erro
 	openAIVideo.CreatedAt = originTask.CreatedAt
 	openAIVideo.CompletedAt = originTask.UpdatedAt
 	openAIVideo.Model = originTask.Properties.OriginModelName
+
+	// 回传实际时长:duration 传 -1(模型自选)或用 frames 精确控帧时,调用方无从得知最终几秒,
+	// 上游回执是唯一来源。seconds 是统一视频契约(OpenAI /v1/videos 形状)里既有的字段。
+	if seconds := dResp.actualDuration(); seconds > 0 {
+		openAIVideo.Seconds = strconv.Itoa(seconds)
+	}
 
 	// 终态非成功都要把错误透出去:除 failed 外还有 expired / cancelled(见 ParseTaskResult),
 	// 只判 failed 的话客户端只能看到一个没有原因的 failed 状态。
