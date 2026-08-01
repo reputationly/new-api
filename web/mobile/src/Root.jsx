@@ -13,6 +13,14 @@ const Root = () => {
   const [, userDispatch] = useContext(UserContext);
 
   useEffect(() => {
+    // 邀请码落盘：分享链接是 /m/register?aff=xxx，但用户可能先逛别的页面再去注册，
+    // 那时 query 早没了。这里在应用启动就把它存下来，注册页兜底读取。
+    // key 与 classic / default 主题一致（都是 'aff'）。
+    const aff = new URLSearchParams(window.location.search).get('aff')?.trim();
+    if (aff) {
+      localStorage.setItem('aff', aff);
+    }
+
     const stored = localStorage.getItem('user');
     if (stored) {
       try {

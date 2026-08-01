@@ -37,7 +37,9 @@ export interface RegisterPayload {
   password: string
   email?: string
   verification_code?: string
-  aff?: string
+  // 后端 model.User 的 json tag 是 aff_code(见 model/user.go),不是 aff——
+  // 名字写错不会报错,只会让 InviterId 恒为 0,邀请关系静默丢失。
+  aff_code?: string
   turnstile?: string
 }
 
