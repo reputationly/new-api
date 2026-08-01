@@ -3993,8 +3993,8 @@
     "重置密码": "Réinitialiser le mot de passe",
     "画布": "Canevas",
     "内置无限画布 AI 创作空间": "Espace de création IA sur canevas infini intégré",
-    "质量档": "Mode qualité",
-    "仅对 hunyuan-image-3 生效：开启后模型会先思考并改写提示词再生成，出图更贴合描述，但生成时长会明显增加（约 2.8 倍）。其他图片模型（如 z-image、qwen-image-edit）没有该能力，开启也不会有任何效果。默认关闭。": "Uniquement effectif pour hunyuan-image-3 : une fois activé, le modèle raisonne et réécrit d'abord votre invite avant de générer, l'image respecte donc mieux la description, mais la génération est nettement plus longue (environ 2,8x). Les autres modèles d'image (comme z-image et qwen-image-edit) n'ont pas cette capacité et l'activer n'a aucun effet. Désactivé par défaut.",
-    "当前模型不是 hunyuan-image-3，仅在渠道已映射到该模型时生效": "Le modèle actuel n'est pas hunyuan-image-3 ; cela ne prend effet que si le canal le redirige vers ce modèle."
+    "提示词智能优化": "Optimisation de l'invite",
+    "开启后会自动丰富和优化提示词，适合只写了主题或简短创意的情况。如果提示词已经很详细，或对文字、数量、位置和版式有严格要求，建议关闭。部分模型（如 hunyuan-image-3）开启后会先思考再改写提示词，生成时长明显增加（约 2.8 倍）。": "Une fois activé, votre invite est automatiquement enrichie et affinée — utile si vous n'avez écrit qu'un thème ou une idée courte. Si votre invite est déjà détaillée, ou si vous avez des exigences strictes concernant le texte, les quantités, le positionnement ou la mise en page, laissez l'option désactivée. Certains modèles (comme hunyuan-image-3) raisonnent avant de réécrire l'invite, ce qui augmente nettement le temps de génération (environ 2,8x).",
+    "简短描述建议开启；详细文案或严格版式建议关闭": "Recommandé pour les descriptions courtes ; à désactiver pour un texte détaillé ou une mise en page stricte"
   }
 }

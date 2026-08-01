@@ -105,7 +105,7 @@ export const useImageGeneration = ({ mode = 'text2image' } = {}) => {
     size: '',
     seed: '', // 随机种子;'' 表示随机(不下发,引擎自动随机)
     negativePrompt: '', // 负向提示词;生图默认不填
-    qualityMode: false, // 质量档(bot_task);默认关(不下发即引擎快档)
+    qualityMode: false, // 提示词智能优化；默认关
     imageUrls: [], // 图生图底图（base64 data-url 数组,≤IMAGE_MAX_EDIT_IMAGES）
   });
   const [groups, setGroups] = useState([]);
@@ -498,10 +498,16 @@ export const useImageGeneration = ({ mode = 'text2image' } = {}) => {
         if (params.negativePrompt && params.negativePrompt.trim()) {
           reqBody.negative_prompt = params.negativePrompt.trim();
         }
-        // 质量档:开了才发,关闭时不带该字段(引擎缺省即快档)。这里刻意不按模型名过滤——
-        // 渠道映射可能把当前模型指向 HunyuanImage-3.0,按名字拦会误伤;不认此参数的
-        // 引擎会直接忽略。
+        // 提示词智能优化:开了才发,关闭时一个字段都不带。
+        //
+        // ⚠️ 关闭时不能发 use_prompt_enhancer: false ——这些未知字段落在
+        // dto.ImageRequest.Extra,虽然 MarshalJSON 不合并 Extra,但部分适配器绕开它
+        // 直接读:replicate(adaptor.go:148)与 siliconflow(adaptor.go:42)会把 Extra
+        // 全量转发给上游 input,不认的字段可能报错或改变行为。minimax / ali 是白名单,
+        // 不受影响。关闭时省掉该字段不影响 ERNIE:gpustackplus 的 imageBoolExtraFrom
+        // 读不到即 false,仍会显式下发 extra_args.apply_pe=false 给引擎。
         if (params.qualityMode) {
+          reqBody.use_prompt_enhancer = true;
           reqBody.bot_task = IMAGE_QUALITY_BOT_TASK;
         }
         // 图生图:走 edits 端点,带底图数组(gpustackplus 后端接受 image 数组)
