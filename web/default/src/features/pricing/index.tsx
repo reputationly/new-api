@@ -59,7 +59,7 @@ export function Pricing() {
     groupFilter,
     quotaTypeFilter,
     endpointTypeFilter,
-    tagFilter,
+    categoryFilter,
     tokenUnit,
     viewMode,
     showRechargePrice,
@@ -69,14 +69,14 @@ export function Pricing() {
     setGroupFilter,
     setQuotaTypeFilter,
     setEndpointTypeFilter,
-    setTagFilter,
+    setCategoryFilter,
     setTokenUnit,
     setViewMode,
     setShowRechargePrice,
     filteredModels,
     hasActiveFilters,
     activeFilterCount,
-    availableTags,
+    categoryIndex,
     clearFilters,
     clearSearch,
   } = useFilters(models || [])
@@ -207,16 +207,16 @@ export function Pricing() {
               endpointTypeFilter={endpointTypeFilter}
               vendorFilter={vendorFilter}
               groupFilter={groupFilter}
-              tagFilter={tagFilter}
+              categoryFilter={categoryFilter}
               onQuotaTypeChange={setQuotaTypeFilter}
               onEndpointTypeChange={setEndpointTypeFilter}
               onVendorChange={setVendorFilter}
               onGroupChange={setGroupFilter}
-              onTagChange={setTagFilter}
+              onCategoryChange={setCategoryFilter}
               vendors={vendors || []}
               groups={availableGroups}
               groupRatios={groupRatio}
-              tags={availableTags}
+              categoryIndex={categoryIndex}
               models={models || []}
               hasActiveFilters={hasActiveFilters}
               onClearFilters={clearFilters}
@@ -239,16 +239,16 @@ export function Pricing() {
                 endpointTypeFilter={endpointTypeFilter}
                 vendorFilter={vendorFilter}
                 groupFilter={groupFilter}
-                tagFilter={tagFilter}
+                categoryFilter={categoryFilter}
                 onQuotaTypeChange={setQuotaTypeFilter}
                 onEndpointTypeChange={setEndpointTypeFilter}
                 onVendorChange={setVendorFilter}
                 onGroupChange={setGroupFilter}
-                onTagChange={setTagFilter}
+                onCategoryChange={setCategoryFilter}
                 vendors={vendors || []}
                 groups={availableGroups}
                 groupRatios={groupRatio}
-                tags={availableTags}
+                categoryIndex={categoryIndex}
                 models={models || []}
                 hasActiveFilters={hasActiveFilters}
                 activeFilterCount={activeFilterCount}

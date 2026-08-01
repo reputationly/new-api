@@ -4,6 +4,8 @@ import { Button, CapsuleTabs, Empty, NavBar, TextArea } from 'antd-mobile';
 
 import { useAudioGeneration } from '@classic/hooks/audioPlayground/useAudioGeneration';
 import {
+  AUDIO_LANGUAGES,
+  AUDIO_SPEAKER_PRESETS,
   EMOTION_PRESETS,
   PRESET_VOICES,
   VOICE_UPLOAD_MAX_MB,
@@ -15,19 +17,14 @@ import { useVisibleModes } from '../hooks/useVisibleModes';
 import { useAutoOpenLatest } from '../hooks/useAutoOpenLatest';
 import ConfigBar from '../components/gen/ConfigBar';
 import ConversationBar from '../components/gen/ConversationBar';
+import MediaBar from '../components/gen/MediaBar';
 import VoiceRecorder from '../components/gen/VoiceRecorder';
 import MessageFeed from '../components/gen/MessageFeed';
 import PromptBar from '../components/gen/PromptBar';
+import ShareBar from '../components/gen/ShareBar';
 import { showError } from '../shims/classic-utils';
 import { fileToDataUrl } from '../utils/file';
-import ShareBar from '../components/gen/ShareBar';
-
-// 一期移动端开放不需要上传参考音的两个模式：情感合成（预置音色）与声音设计。
-// 克隆/双人对话需上传参考音频，引导桌面端。
-const MODES = [
-  { key: 'emotion', title: '情感合成' },
-  { key: 'design', title: '声音设计' },
-];
+import { VideoBody } from './Video';
 
 const AudioBody = ({ mode }) => {
   const {
@@ -39,7 +36,12 @@ const AudioBody = ({ mode }) => {
     generating,
     turnLimitReached,
     missingRequiredVoice,
+    needsVoice,
+    needsDualRef,
+    needsSpeaker,
+    needsLanguage,
     needsInstructions,
+    refAudioMaxMB,
     generate,
     regenerate,
     refetch,
@@ -53,9 +55,17 @@ const AudioBody = ({ mode }) => {
 
   useAutoOpenLatest(conversations, currentConvId, openHistoryItem);
 
-  const isEmotion = mode === 'emotion';
   const [recorderVisible, setRecorderVisible] = useState(false);
   const voiceFileRef = useRef(null);
+  const usingOwnVoice = inputs.voicePreset === VOICE_UPLOAD_VALUE;
+
+  // 录制/上传即视为"要用自己的声音"：把音色切到自定义，省得用户还得回选择器里找
+  // 「我的声音」（它排在 10 个预设音色之后，滚不到就等于不存在）。
+  const applyOwnVoice = (dataUrl, name) => {
+    handleInputChange('voiceData', dataUrl);
+    handleInputChange('voiceName', name);
+    handleInputChange('voicePreset', VOICE_UPLOAD_VALUE);
+  };
 
   const handlePickVoice = async (e) => {
     const file = e.target.files?.[0];
@@ -66,13 +76,94 @@ const AudioBody = ({ mode }) => {
       return;
     }
     try {
-      const dataUrl = await fileToDataUrl(file);
-      handleInputChange('voiceData', dataUrl);
-      handleInputChange('voiceName', file.name);
+      applyOwnVoice(await fileToDataUrl(file), file.name);
     } catch (err) {
       showError('读取音频文件失败');
     }
   };
+
+  // 情感合成的参考音色条常驻显示（不再藏进「音色」选择器的最后一项）。
+  const voiceSlot = needsVoice && {
+    type: 'custom',
+    key: 'ownVoice',
+    label: '参考音色',
+    render: (
+      <div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <Button
+            size='mini'
+            fill='outline'
+            disabled={generating}
+            onClick={() => setRecorderVisible(true)}
+          >
+            🎤 录制我的声音
+          </Button>
+          <Button
+            size='mini'
+            fill='outline'
+            disabled={generating}
+            onClick={() => voiceFileRef.current?.click()}
+          >
+            上传音频
+          </Button>
+          <span className='m-media-slot-name'>
+            {usingOwnVoice
+              ? inputs.voiceData
+                ? inputs.voiceName || '已就绪'
+                : '待录制/上传'
+              : '当前用预设音色'}
+          </span>
+        </div>
+        {usingOwnVoice && inputs.voiceData && (
+          <audio
+            src={inputs.voiceData}
+            controls
+            preload='none'
+            style={{ width: '100%', marginTop: 6 }}
+          />
+        )}
+        <input
+          ref={voiceFileRef}
+          type='file'
+          accept='audio/*'
+          hidden
+          onChange={handlePickVoice}
+        />
+      </div>
+    ),
+  };
+
+  const mediaSlots = [
+    voiceSlot,
+    needsDualRef && {
+      type: 'single',
+      key: 'refAudioData',
+      kind: 'audio',
+      label: '说话人1 参考音',
+      required: true,
+      maxMB: refAudioMaxMB,
+      value: inputs.refAudioData,
+      name: inputs.refAudioName,
+      onChange: (v, name) => {
+        handleInputChange('refAudioData', v || '');
+        handleInputChange('refAudioName', v ? name : '');
+      },
+    },
+    needsDualRef && {
+      type: 'single',
+      key: 'refAudio2Data',
+      kind: 'audio',
+      label: '说话人2 参考音',
+      required: true,
+      maxMB: refAudioMaxMB,
+      value: inputs.refAudio2Data,
+      name: inputs.refAudio2Name,
+      onChange: (v, name) => {
+        handleInputChange('refAudio2Data', v || '');
+        handleInputChange('refAudio2Name', v ? name : '');
+      },
+    },
+  ];
 
   const renderAssistant = (m) => (
     <AsyncTaskBubble
@@ -109,7 +200,7 @@ const AudioBody = ({ mode }) => {
             options: models,
             onChange: (v) => handleInputChange('model', v),
           },
-          ...(isEmotion
+          ...(needsVoice
             ? [
                 {
                   key: 'voicePreset',
@@ -133,65 +224,36 @@ const AudioBody = ({ mode }) => {
                 },
               ]
             : []),
+          ...(needsSpeaker
+            ? [
+                {
+                  key: 'speaker',
+                  label: '音色',
+                  value: inputs.speaker,
+                  options: AUDIO_SPEAKER_PRESETS,
+                  onChange: (v) => handleInputChange('speaker', v),
+                },
+              ]
+            : []),
+          ...(needsLanguage
+            ? [
+                {
+                  key: 'language',
+                  label: '口音',
+                  value: inputs.language,
+                  options: AUDIO_LANGUAGES,
+                  onChange: (v) => handleInputChange('language', v),
+                },
+              ]
+            : []),
         ]}
       />
-      {/* 自定义音色(录制/上传):data-url 写进 voiceData,与桌面端「上传自定义音频」同一条链路 */}
-      {isEmotion && inputs.voicePreset === VOICE_UPLOAD_VALUE && (
-        <div
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            gap: 8,
-            padding: '8px 12px',
-            borderBottom: '0.5px solid rgba(17,24,39,0.06)',
-          }}
-        >
-          <Button
-            size='mini'
-            fill='outline'
-            disabled={generating}
-            onClick={() => setRecorderVisible(true)}
-          >
-            🎤 录制
-          </Button>
-          <Button
-            size='mini'
-            fill='outline'
-            disabled={generating}
-            onClick={() => voiceFileRef.current?.click()}
-          >
-            上传
-          </Button>
-          <span style={{ fontSize: 12, color: 'var(--adm-color-weak)' }}>
-            {inputs.voiceData ? inputs.voiceName || '已就绪' : '未设置'}
-          </span>
-          <input
-            ref={voiceFileRef}
-            type='file'
-            accept='audio/*'
-            hidden
-            onChange={handlePickVoice}
-          />
-        </div>
-      )}
-      {isEmotion &&
-        inputs.voicePreset === VOICE_UPLOAD_VALUE &&
-        inputs.voiceData && (
-          <audio
-            src={inputs.voiceData}
-            controls
-            preload='none'
-            style={{ width: '100%', height: 32 }}
-          />
-        )}
-      {isEmotion && (
+      <MediaBar slots={mediaSlots} disabled={generating} />
+      {needsVoice && (
         <VoiceRecorder
           visible={recorderVisible}
           onClose={() => setRecorderVisible(false)}
-          onConfirm={(dataUrl) => {
-            handleInputChange('voiceData', dataUrl);
-            handleInputChange('voiceName', '录制音频.wav');
-          }}
+          onConfirm={(dataUrl) => applyOwnVoice(dataUrl, '录制音频.wav')}
         />
       )}
       <ConversationBar
@@ -208,9 +270,13 @@ const AudioBody = ({ mode }) => {
           messages={messages}
           renderAssistant={renderAssistant}
           empty={
-            isEmotion
+            needsVoice
               ? '选择音色与情感，输入要朗读的文本'
-              : '先描述音色特征，再输入要朗读的文本'
+              : needsDualRef
+                ? '上传两位说话人的参考音，输入含 [S1]/[S2] 标记的对话脚本'
+                : needsInstructions
+                  ? '先描述音色特征，再输入要朗读的文本'
+                  : '选择音色与口音，输入要朗读的文本'
           }
         />
       </div>
@@ -218,7 +284,9 @@ const AudioBody = ({ mode }) => {
         onSend={generate}
         generating={generating}
         disabled={turnLimitReached || missingRequiredVoice}
-        placeholder='输入要合成的文本…'
+        placeholder={
+          needsDualRef ? '输入对话脚本，如 [S1]…[S2]…' : '输入要合成的文本…'
+        }
         extra={
           needsInstructions ? (
             <div
@@ -246,8 +314,8 @@ const AudioBody = ({ mode }) => {
 
 const Audio = () => {
   const navigate = useNavigate();
-  const modes = useVisibleModes('audio', MODES);
-  const [mode, setMode] = useState(modes[0]?.key || MODES[0].key);
+  const modes = useVisibleModes('audio');
+  const [mode, setMode] = useState(modes[0]?.key || 'emotion');
   useEffect(() => {
     if (modes.length && !modes.some((m) => m.key === mode)) setMode(modes[0].key);
   }, [modes, mode]);
@@ -265,7 +333,13 @@ const Audio = () => {
             ))}
           </CapsuleTabs>
           <div style={{ flex: 1, minHeight: 0 }}>
-            <AudioBody key={mode} mode={mode} />
+            {/* 视频配音：入口在语音页，但输入是视频、产物也是视频，复用视频体验区
+                （与桌面端同一分流，走 useVideoGeneration 的 task_type=v2a）。 */}
+            {mode === 'dub' ? (
+              <VideoBody key={mode} mode='dub' />
+            ) : (
+              <AudioBody key={mode} mode={mode} />
+            )}
           </div>
         </>
       )}

@@ -1,40 +1,43 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   Button,
   CapsuleTabs,
   Empty,
-  Image,
-  ImageViewer,
   NavBar,
   ProgressCircle,
   SpinLoading,
   TextArea,
 } from 'antd-mobile';
-import { AddOutline } from 'antd-mobile-icons';
 
 import { useVideoGeneration } from '@classic/hooks/videoPlayground/useVideoGeneration';
+import { isFlf2vModel } from '@classic/constants/videoPlayground.constants';
 import { useVisibleModes } from '../hooks/useVisibleModes';
 import { useAutoOpenLatest } from '../hooks/useAutoOpenLatest';
 
 import ConfigBar from '../components/gen/ConfigBar';
 import ConversationBar from '../components/gen/ConversationBar';
+import MediaBar, {
+  MOBILE_MAX_VIDEO_MB,
+  MOBILE_RECORD_VIDEO_MAX_SEC,
+} from '../components/gen/MediaBar';
 import MessageFeed from '../components/gen/MessageFeed';
 import PromptBar from '../components/gen/PromptBar';
 import ShareBar from '../components/gen/ShareBar';
-import { showError } from '../shims/classic-utils';
-import { fileToDataUrl } from '../utils/file';
 
-// 一期移动端只开放高频的文生视频/图生视频；首尾帧、数字人、超分、视频编辑
-// 输入形态复杂（多图/音频/视频上传），引导到桌面端。
-const MODES = [
-  { key: 'text2video', title: '文生视频' },
-  { key: 'image2video', title: '图生视频' },
-];
-
-const VideoBody = ({ mode }) => {
+// 视频体验区。文生/图生/关键帧/数字人/视频编辑共用本组件，输入形态按 mode 分流；
+// 「视频配音」(dub) 的入口挂在语音页，但产物是视频，也复用这里（与桌面端一致）。
+export const VideoBody = ({ mode }) => {
   const {
+    isI2V,
+    isFLF2V,
+    isS2V,
+    isSR,
+    isVACE,
+    isDub,
     needsImage,
+    followsInput,
+    maxRefImages,
     maxInputMB,
     inputs,
     handleInputChange,
@@ -61,24 +64,109 @@ const VideoBody = ({ mode }) => {
 
   useAutoOpenLatest(conversations, currentConvId, openHistoryItem);
 
-  const fileRef = useRef(null);
-  const [viewerOpen, setViewerOpen] = useState(false);
+  // 图片沿用后台配额（0=不限）；视频再压一道移动端闸门，见 MOBILE_MAX_VIDEO_MB。
+  const imageMaxMB = maxInputMB;
+  const videoMaxMB = maxInputMB
+    ? Math.min(maxInputMB, MOBILE_MAX_VIDEO_MB)
+    : MOBILE_MAX_VIDEO_MB;
+  // 关键帧 tab 下 i2v 与 flf2v 是两个引擎实例，只有后者认尾帧（判据见 isFlf2vModel）。
+  const needsLastFrame = isFLF2V && isFlf2vModel(inputs.model);
+  const needsVideoUpload = isVACE || isSR || isDub;
 
-  const handlePickImage = async (e) => {
-    const file = e.target.files?.[0];
-    e.target.value = '';
-    if (!file) return;
-    if (maxInputMB && file.size > maxInputMB * 1024 * 1024) {
-      showError(`图片不能超过 ${maxInputMB}MB`);
-      return;
-    }
-    try {
-      const dataUrl = await fileToDataUrl(file);
-      handleInputChange('firstFrame', dataUrl);
-    } catch (err) {
-      showError('读取图片失败');
-    }
-  };
+  const mediaSlots = [
+    needsImage && {
+      type: 'single',
+      key: 'firstFrame',
+      kind: 'image',
+      label: isS2V ? '人物图' : '首帧',
+      required: true,
+      maxMB: imageMaxMB,
+      value: inputs.firstFrame,
+      onChange: (v) => handleInputChange('firstFrame', v),
+    },
+    needsLastFrame && {
+      type: 'single',
+      key: 'lastFrame',
+      kind: 'image',
+      label: '尾帧',
+      required: true,
+      maxMB: imageMaxMB,
+      value: inputs.lastFrame,
+      onChange: (v) => handleInputChange('lastFrame', v),
+    },
+    isS2V && {
+      type: 'single',
+      key: 'audioData',
+      kind: 'audio',
+      label: '驱动音频',
+      required: true,
+      maxMB: imageMaxMB,
+      value: inputs.audioData,
+      onChange: (v) => handleInputChange('audioData', v),
+    },
+    (isSR || isDub) && {
+      type: 'single',
+      key: 'sourceVideo',
+      kind: 'video',
+      label: isDub ? '待配音视频' : '源视频',
+      required: true,
+      maxMB: videoMaxMB,
+      value: inputs.sourceVideo,
+      onChange: (v) => handleInputChange('sourceVideo', v),
+    },
+    isVACE && {
+      type: 'single',
+      key: 'srcVideo',
+      kind: 'video',
+      label: '源视频',
+      required: true,
+      maxMB: videoMaxMB,
+      value: inputs.srcVideo,
+      onChange: (v) => handleInputChange('srcVideo', v),
+    },
+    isVACE && {
+      type: 'single',
+      key: 'srcVideo2',
+      kind: 'video',
+      label: '第二视频（可选，双视频=多源编辑）',
+      maxMB: videoMaxMB,
+      value: inputs.srcVideo2,
+      onChange: (v) => handleInputChange('srcVideo2', v),
+    },
+    // 图生视频(Bernini r2v)：参考图必填，定义主体/服装/道具/场景；视频编辑里则是可选。
+    (isI2V || isVACE) && {
+      type: 'list',
+      key: 'refImages',
+      label: isI2V ? '参考图' : '参考图（可选）',
+      required: isI2V,
+      max: maxRefImages,
+      maxMB: imageMaxMB,
+      values: inputs.refImages || [],
+      onChange: (v) => handleInputChange('refImages', v),
+    },
+  ];
+
+  const missingHint = isI2V
+    ? '请先上传参考图'
+    : needsLastFrame && !(inputs.lastFrame || '').trim()
+      ? '请先上传尾帧'
+      : isS2V && !(inputs.audioData || '').trim()
+        ? '请先上传驱动音频'
+        : needsVideoUpload
+          ? '请先上传视频'
+          : '请先上传图片';
+
+  const emptyHint = isDub
+    ? '上传视频后可留空直接配音，或描述想要的声音'
+    : isVACE
+      ? '上传源视频并描述你想要的改动'
+      : isS2V
+        ? '上传人物图与驱动音频，再描述画面'
+        : isI2V
+          ? '上传参考图并输入提示词开始生成'
+          : needsImage
+            ? '上传帧图并输入提示词开始生成'
+            : '输入提示词开始生成视频';
 
   const renderAssistant = (m) => {
     if (m.status === 'completed' && m.videoUrl) {
@@ -168,13 +256,19 @@ const VideoBody = ({ mode }) => {
             options: models,
             onChange: (v) => handleInputChange('model', v),
           },
-          {
-            key: 'size',
-            label: '尺寸',
-            value: inputs.size,
-            options: availableSizes,
-            onChange: (v) => handleInputChange('size', v),
-          },
+          // 尺寸/比例只有文生视频会下发；其余玩法输出跟随上传的图/视频，
+          // 摆出来就是个点了不生效的假开关（旧版图生视频那个「尺寸：480P」即是）。
+          ...(followsInput
+            ? []
+            : [
+                {
+                  key: 'size',
+                  label: '尺寸',
+                  value: inputs.size,
+                  options: availableSizes,
+                  onChange: (v) => handleInputChange('size', v),
+                },
+              ]),
           {
             key: 'seconds',
             label: '时长',
@@ -182,37 +276,50 @@ const VideoBody = ({ mode }) => {
             options: availableDurations,
             onChange: (v) => handleInputChange('seconds', v),
           },
-          {
-            key: 'aspectRatio',
-            label: '比例',
-            value: inputs.aspectRatio,
-            options: availableAspectRatios,
-            onChange: (v) => handleInputChange('aspectRatio', v),
-          },
+          ...(followsInput
+            ? []
+            : [
+                {
+                  key: 'aspectRatio',
+                  label: '比例',
+                  value: inputs.aspectRatio,
+                  options: availableAspectRatios,
+                  onChange: (v) => handleInputChange('aspectRatio', v),
+                },
+              ]),
         ]}
       />
-      {/* 插帧/配音开关：默认关。插帧透传 target_fps；配音开启则生成后自动接 v2a 配音段 */}
-      <div className='m-config-bar' style={{ paddingTop: 0, borderBottom: '0.5px solid rgba(17,24,39,0.06)' }}>
+      {/* 插帧/配音开关：默认关。插帧透传 target_fps；配音开启则生成后自动接 v2a 配音段。
+          超分与配乐本身就是后处理，两个开关都不适用，整条不渲染。 */}
+      {!isSR && !isDub && (
         <div
-          className={`m-config-chip${inputs.interpolation ? ' active' : ''}`}
-          onClick={() =>
-            !generating &&
-            handleInputChange('interpolation', !inputs.interpolation)
-          }
+          className='m-config-bar'
+          style={{
+            paddingTop: 0,
+            borderBottom: '0.5px solid rgba(17,24,39,0.06)',
+          }}
         >
-          插帧：{inputs.interpolation ? '开' : '关'} · 帧率翻倍更流畅
-        </div>
-        {dubAvailable && (
           <div
-            className={`m-config-chip${inputs.dubbing ? ' active' : ''}`}
+            className={`m-config-chip${inputs.interpolation ? ' active' : ''}`}
             onClick={() =>
-              !generating && handleInputChange('dubbing', !inputs.dubbing)
+              !generating &&
+              handleInputChange('interpolation', !inputs.interpolation)
             }
           >
-            配音：{inputs.dubbing ? '开' : '关'} · 生成后自动配音
+            插帧：{inputs.interpolation ? '开' : '关'} · 帧率翻倍更流畅
           </div>
-        )}
-      </div>
+          {dubAvailable && (
+            <div
+              className={`m-config-chip${inputs.dubbing ? ' active' : ''}`}
+              onClick={() =>
+                !generating && handleInputChange('dubbing', !inputs.dubbing)
+              }
+            >
+              配音：{inputs.dubbing ? '开' : '关'} · 生成后自动配音
+            </div>
+          )}
+        </div>
+      )}
       {dubAvailable && inputs.dubbing && (
         <div style={{ padding: '8px 12px 0' }}>
           <TextArea
@@ -224,7 +331,7 @@ const VideoBody = ({ mode }) => {
           />
         </div>
       )}
-      {/1080/i.test(inputs.size || '') && (
+      {!followsInput && /1080/i.test(inputs.size || '') && (
         <div
           style={{
             padding: '6px 12px',
@@ -237,6 +344,15 @@ const VideoBody = ({ mode }) => {
           1080P 将先生成再调用超分模型提升画质：耗时更久，且会同时产生本模型与超分模型的额度/积分消耗
         </div>
       )}
+      <MediaBar
+        slots={mediaSlots}
+        disabled={generating}
+        notice={
+          needsVideoUpload
+            ? `视频需整段上传，建议在 WiFi 下操作；单个文件不超过 ${videoMaxMB}MB，现场录像不超过 ${MOBILE_RECORD_VIDEO_MAX_SEC} 秒`
+            : ''
+        }
+      />
       <ConversationBar
         conversations={conversations}
         currentConvId={currentConvId}
@@ -250,67 +366,23 @@ const VideoBody = ({ mode }) => {
         <MessageFeed
           messages={messages}
           renderAssistant={renderAssistant}
-          empty={
-            needsImage ? '上传一张图片并输入提示词开始生成' : '输入提示词开始生成视频'
-          }
+          empty={emptyHint}
         />
       </div>
       <PromptBar
         onSend={generate}
         generating={generating}
         disabled={turnLimitReached || missingRequiredImage}
+        // 配乐的提示词是可选的（留空=按画面自动配），别拦住只上传视频就想发的用户。
+        allowEmpty={isDub}
         placeholder={
           turnLimitReached
             ? '本会话轮数已达上限，请新建会话'
             : missingRequiredImage
-              ? '请先上传图片'
-              : '描述你想要的视频…'
-        }
-        extra={
-          needsImage ? (
-            <div style={{ marginBottom: 8 }}>
-              {inputs.firstFrame ? (
-                <div style={{ position: 'relative', display: 'inline-block' }}>
-                  {/* 点击预览看原图；× 移除后拖拽入口才重新出现（满额隐藏） */}
-                  <Image
-                    src={inputs.firstFrame}
-                    width={72}
-                    height={72}
-                    fit='cover'
-                    style={{ borderRadius: 8 }}
-                    onClick={() => setViewerOpen(true)}
-                  />
-                  <Button
-                    size='mini'
-                    style={{ position: 'absolute', top: -8, right: -8 }}
-                    onClick={() => handleInputChange('firstFrame', '')}
-                  >
-                    ×
-                  </Button>
-                  <ImageViewer
-                    image={inputs.firstFrame}
-                    visible={viewerOpen}
-                    onClose={() => setViewerOpen(false)}
-                  />
-                </div>
-              ) : (
-                <Button
-                  size='small'
-                  fill='outline'
-                  onClick={() => fileRef.current?.click()}
-                >
-                  <AddOutline /> 上传图片
-                </Button>
-              )}
-              <input
-                ref={fileRef}
-                type='file'
-                accept='image/*'
-                hidden
-                onChange={handlePickImage}
-              />
-            </div>
-          ) : null
+              ? missingHint
+              : isDub
+                ? '描述想要的声音（可选）…'
+                : '描述你想要的视频…'
         }
       />
     </div>
@@ -319,8 +391,8 @@ const VideoBody = ({ mode }) => {
 
 const Video = () => {
   const navigate = useNavigate();
-  const modes = useVisibleModes('video', MODES);
-  const [mode, setMode] = useState(modes[0]?.key || MODES[0].key);
+  const modes = useVisibleModes('video');
+  const [mode, setMode] = useState(modes[0]?.key || 'text2video');
 
   useEffect(() => {
     if (modes.length && !modes.some((m) => m.key === mode)) {

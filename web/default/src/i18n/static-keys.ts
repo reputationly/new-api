@@ -61,7 +61,12 @@ export const STATIC_I18N_KEYS = [
   'All',
   'All Vendors',
   'All Groups',
-  'All Tags',
+  'All Categories',
+  'Text Models',
+  'Image Models',
+  'Video Models',
+  'Audio Models',
+  'Music Models',
   'More...',
   'Less',
 

@@ -12,12 +12,18 @@ import { FilterOutline } from 'antd-mobile-icons';
 
 import { StatusContext } from '@classic/context/Status';
 import { API } from '@classic/helpers/api';
+import {
+  MODEL_CATEGORIES,
+  buildModelCategoryIndex,
+  resolveModelCategory,
+} from '@classic/constants/playgroundAdmin.constants';
 
 import { showError } from '../shims/classic-utils';
 
 const PAGE = 30;
 
-// 模型广场：搜索 + 分组/供应商筛选 + 紧凑列表 + 点击查看详情
+// 模型广场：搜索 + 分组/大类筛选 + 紧凑列表 + 点击查看详情。
+// 手机端不做供应商筛选（供应商有二十多家，胶囊铺满两屏还选不准），供应商信息在列表行里展示。
 const Models = () => {
   const navigate = useNavigate();
   const [statusState] = useContext(StatusContext);
@@ -26,7 +32,7 @@ const Models = () => {
   const [groupRatioMap, setGroupRatioMap] = useState({});
   const [keyword, setKeyword] = useState('');
   const [group, setGroup] = useState('');
-  const [vendorId, setVendorId] = useState(0);
+  const [category, setCategory] = useState('');
   const [limit, setLimit] = useState(PAGE);
   const [detail, setDetail] = useState(null);
   const [filterVisible, setFilterVisible] = useState(false);
@@ -51,25 +57,49 @@ const Models = () => {
 
   const vendorName = (id) => vendors.find((v) => v.id === id)?.name || '';
 
+  const siteStatus = useMemo(() => {
+    if (statusState?.status) return statusState.status;
+    try {
+      return JSON.parse(localStorage.getItem('status') || '{}');
+    } catch (e) {
+      return {};
+    }
+  }, [statusState?.status]);
+
+  // 大类索引来自 /api/status 的四份体验区 ModelConfig（与 PC 端同一判定）。
+  const categoryIndex = useMemo(
+    () => buildModelCategoryIndex(siteStatus),
+    [siteStatus],
+  );
+
   const groups = useMemo(() => {
     const set = new Set();
     models.forEach((m) => (m.enable_groups || []).forEach((g) => set.add(g)));
     return Array.from(set);
   }, [models]);
 
+  // 只保留本站真有模型的大类，避免出现点了没结果的空胶囊。
+  const categories = useMemo(() => {
+    const counted = new Set(
+      models.map((m) => resolveModelCategory(m, categoryIndex)),
+    );
+    return MODEL_CATEGORIES.filter((c) => counted.has(c.key));
+  }, [models, categoryIndex]);
+
   const filtered = useMemo(() => {
     const kw = keyword.trim().toLowerCase();
     return models.filter((m) => {
       if (kw && !(m.model_name || '').toLowerCase().includes(kw)) return false;
       if (group && !(m.enable_groups || []).includes(group)) return false;
-      if (vendorId && m.vendor_id !== vendorId) return false;
+      if (category && resolveModelCategory(m, categoryIndex) !== category)
+        return false;
       return true;
     });
-  }, [models, keyword, group, vendorId]);
+  }, [models, keyword, group, category, categoryIndex]);
 
   useEffect(() => {
     setLimit(PAGE);
-  }, [keyword, group, vendorId]);
+  }, [keyword, group, category]);
 
   // 价格口径与 PC 端一致（helpers/utils.jsx getPriceData）：
   // 按量:输入价 = model_ratio × 2 × 分组倍率 → $/1M tokens；按次:价格 × 分组倍率。
@@ -83,14 +113,6 @@ const Models = () => {
   })();
   const effectiveGroup = group || userGroup;
   const groupRatio = groupRatioMap[effectiveGroup] ?? 1;
-  const siteStatus = useMemo(() => {
-    if (statusState?.status) return statusState.status;
-    try {
-      return JSON.parse(localStorage.getItem('status') || '{}');
-    } catch (e) {
-      return {};
-    }
-  }, [statusState?.status]);
   const currencyConfig = useMemo(() => {
     const displayType =
       siteStatus?.quota_display_type ||
@@ -134,8 +156,9 @@ const Models = () => {
       ? `${displayPrice(m.model_price * groupRatio)}/次`
       : `${displayPrice(inputPricePerM(m))}/1M`;
   };
-  const activeFilterCount = Number(Boolean(group)) + Number(Boolean(vendorId));
-  const selectedVendorName = vendorId ? vendorName(vendorId) : '全部供应商';
+  const activeFilterCount = Number(Boolean(group)) + Number(Boolean(category));
+  const selectedCategoryLabel =
+    MODEL_CATEGORIES.find((c) => c.key === category)?.label || '全部大类';
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
@@ -196,7 +219,7 @@ const Models = () => {
               whiteSpace: 'nowrap',
             }}
           >
-            {group || '全部分组'} · {selectedVendorName}
+            {group || '全部分组'} · {selectedCategoryLabel}
           </span>
           <span style={{ flexShrink: 0 }}>{filtered.length} 个模型</span>
         </div>
@@ -284,8 +307,32 @@ const Models = () => {
         <div style={{ fontWeight: 600, fontSize: 16, marginBottom: 16 }}>
           筛选模型
         </div>
-        {groups.length > 0 && (
+        {categories.length > 0 && (
           <div style={{ marginBottom: 18 }}>
+            <div style={{ fontSize: 12, color: '#9aa1ad', marginBottom: 8 }}>
+              模型大类
+            </div>
+            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+              <div
+                className={`m-config-chip${category === '' ? ' active' : ''}`}
+                onClick={() => setCategory('')}
+              >
+                全部大类
+              </div>
+              {categories.map((item) => (
+                <div
+                  key={item.key}
+                  className={`m-config-chip${category === item.key ? ' active' : ''}`}
+                  onClick={() => setCategory(item.key)}
+                >
+                  {item.label}
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+        {groups.length > 0 && (
+          <div style={{ marginBottom: 20 }}>
             <div style={{ fontSize: 12, color: '#9aa1ad', marginBottom: 8 }}>
               分组
             </div>
@@ -308,37 +355,13 @@ const Models = () => {
             </div>
           </div>
         )}
-        {vendors.length > 0 && (
-          <div style={{ marginBottom: 20 }}>
-            <div style={{ fontSize: 12, color: '#9aa1ad', marginBottom: 8 }}>
-              供应商
-            </div>
-            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-              <div
-                className={`m-config-chip${vendorId === 0 ? ' active' : ''}`}
-                onClick={() => setVendorId(0)}
-              >
-                全部供应商
-              </div>
-              {vendors.map((vendor) => (
-                <div
-                  key={vendor.id}
-                  className={`m-config-chip${vendorId === vendor.id ? ' active' : ''}`}
-                  onClick={() => setVendorId(vendor.id)}
-                >
-                  {vendor.name}
-                </div>
-              ))}
-            </div>
-          </div>
-        )}
         <div style={{ display: 'flex', gap: 10 }}>
           <Button
             block
             fill="outline"
             onClick={() => {
               setGroup('');
-              setVendorId(0);
+              setCategory('');
             }}
           >
             重置

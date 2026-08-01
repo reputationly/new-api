@@ -18,6 +18,7 @@ For commercial licensing, please contact support@quantumnous.com
 */
 import { useMemo, useCallback, useState } from 'react'
 import { useSearch } from '@tanstack/react-router'
+import { useStatus } from '@/hooks/use-status'
 import {
   FILTER_ALL,
   SORT_OPTIONS,
@@ -27,7 +28,8 @@ import {
   VIEW_MODES,
   type ViewMode,
 } from '../constants'
-import { filterAndSortModels, extractAllTags } from '../lib/filters'
+import { filterAndSortModels } from '../lib/filters'
+import { buildModelCategoryIndex } from '../lib/model-category'
 import type { PricingModel, TokenUnit } from '../types'
 
 type FilterState = {
@@ -37,7 +39,7 @@ type FilterState = {
   group?: string
   quotaType?: string
   endpointType?: string
-  tag?: string
+  category?: string
   tokenUnit?: TokenUnit
   view?: ViewMode
   rechargePrice?: boolean
@@ -52,6 +54,7 @@ function normalizeViewMode(value: unknown): ViewMode {
 
 export function useFilters(models: PricingModel[]) {
   const search = useSearch({ from: '/pricing/' })
+  const { status } = useStatus()
   const [filterState, setFilterState] = useState<FilterState>(() => ({
     search: search.search,
     sort: search.sort,
@@ -59,7 +62,7 @@ export function useFilters(models: PricingModel[]) {
     group: search.group,
     quotaType: search.quotaType,
     endpointType: search.endpointType,
-    tag: search.tag,
+    category: search.category,
     tokenUnit: search.tokenUnit,
     view: search.view,
     rechargePrice: search.rechargePrice,
@@ -71,7 +74,7 @@ export function useFilters(models: PricingModel[]) {
   const groupFilter = filterState.group || FILTER_ALL
   const quotaTypeFilter = filterState.quotaType || QUOTA_TYPES.ALL
   const endpointTypeFilter = filterState.endpointType || ENDPOINT_TYPES.ALL
-  const tagFilter = filterState.tag || FILTER_ALL
+  const categoryFilter = filterState.category || FILTER_ALL
   const tokenUnit: TokenUnit =
     filterState.tokenUnit === 'K' ? 'K' : DEFAULT_TOKEN_UNIT
   const viewMode = normalizeViewMode(filterState.view)
@@ -118,8 +121,9 @@ export function useFilters(models: PricingModel[]) {
       }),
     [updateFilters]
   )
-  const setTagFilter = useCallback(
-    (v: string) => updateFilters({ tag: v === FILTER_ALL ? undefined : v }),
+  const setCategoryFilter = useCallback(
+    (v: string) =>
+      updateFilters({ category: v === FILTER_ALL ? undefined : v }),
     [updateFilters]
   )
   const setTokenUnit = useCallback(
@@ -137,10 +141,12 @@ export function useFilters(models: PricingModel[]) {
     [updateFilters]
   )
 
-  const availableTags = useMemo(() => {
-    if (!models || models.length === 0) return []
-    return extractAllTags(models)
-  }, [models])
+  // 模型大类索引来自 /api/status 的四份体验区 ModelConfig（见 lib/model-category）。
+  const categoryIndex = useMemo(
+    () =>
+      buildModelCategoryIndex(status as Record<string, unknown> | undefined),
+    [status]
+  )
 
   const filteredModels = useMemo(() => {
     if (!models || models.length === 0) return []
@@ -151,7 +157,8 @@ export function useFilters(models: PricingModel[]) {
       group: groupFilter,
       quotaType: quotaTypeFilter,
       endpointType: endpointTypeFilter,
-      tag: tagFilter,
+      category: categoryFilter,
+      categoryIndex,
       sortBy,
     })
   }, [
@@ -161,7 +168,8 @@ export function useFilters(models: PricingModel[]) {
     groupFilter,
     quotaTypeFilter,
     endpointTypeFilter,
-    tagFilter,
+    categoryFilter,
+    categoryIndex,
     sortBy,
   ])
 
@@ -171,8 +179,14 @@ export function useFilters(models: PricingModel[]) {
       groupFilter !== FILTER_ALL ||
       quotaTypeFilter !== QUOTA_TYPES.ALL ||
       endpointTypeFilter !== ENDPOINT_TYPES.ALL ||
-      tagFilter !== FILTER_ALL,
-    [vendorFilter, groupFilter, quotaTypeFilter, endpointTypeFilter, tagFilter]
+      categoryFilter !== FILTER_ALL,
+    [
+      vendorFilter,
+      groupFilter,
+      quotaTypeFilter,
+      endpointTypeFilter,
+      categoryFilter,
+    ]
   )
 
   const activeFilterCount = useMemo(
@@ -181,8 +195,14 @@ export function useFilters(models: PricingModel[]) {
       (groupFilter !== FILTER_ALL ? 1 : 0) +
       (quotaTypeFilter !== QUOTA_TYPES.ALL ? 1 : 0) +
       (endpointTypeFilter !== ENDPOINT_TYPES.ALL ? 1 : 0) +
-      (tagFilter !== FILTER_ALL ? 1 : 0),
-    [vendorFilter, groupFilter, quotaTypeFilter, endpointTypeFilter, tagFilter]
+      (categoryFilter !== FILTER_ALL ? 1 : 0),
+    [
+      vendorFilter,
+      groupFilter,
+      quotaTypeFilter,
+      endpointTypeFilter,
+      categoryFilter,
+    ]
   )
 
   const clearFilters = useCallback(() => {
@@ -191,7 +211,7 @@ export function useFilters(models: PricingModel[]) {
       group: undefined,
       quotaType: undefined,
       endpointType: undefined,
-      tag: undefined,
+      category: undefined,
     })
   }, [updateFilters])
 
@@ -206,7 +226,7 @@ export function useFilters(models: PricingModel[]) {
     groupFilter,
     quotaTypeFilter,
     endpointTypeFilter,
-    tagFilter,
+    categoryFilter,
     tokenUnit,
     viewMode,
     showRechargePrice,
@@ -216,14 +236,14 @@ export function useFilters(models: PricingModel[]) {
     setGroupFilter,
     setQuotaTypeFilter,
     setEndpointTypeFilter,
-    setTagFilter,
+    setCategoryFilter,
     setTokenUnit,
     setViewMode,
     setShowRechargePrice,
     filteredModels,
     hasActiveFilters,
     activeFilterCount,
-    availableTags,
+    categoryIndex,
     clearFilters,
     clearSearch,
   }

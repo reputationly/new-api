@@ -24,6 +24,7 @@ import {
   ENDPOINT_TYPES,
 } from '../constants'
 import type { PricingModel } from '../types'
+import { resolveModelCategory, type ModelCategoryKey } from './model-category'
 
 // ----------------------------------------------------------------------------
 // Filter Utilities
@@ -99,6 +100,20 @@ export function filterByEndpointType(
 }
 
 /**
+ * Filter models by broad category (text / image / video / audio / music)
+ */
+export function filterByCategory(
+  models: PricingModel[],
+  category: string,
+  categoryIndex: Map<string, ModelCategoryKey>
+): PricingModel[] {
+  if (category === FILTER_ALL) return models
+  return models.filter(
+    (m) => resolveModelCategory(m, categoryIndex) === category
+  )
+}
+
+/**
  * Get model price for sorting
  */
 function getModelPrice(model: PricingModel): number {
@@ -142,7 +157,8 @@ export function filterAndSortModels(
     group: string
     quotaType: string
     endpointType: string
-    tag: string
+    category: string
+    categoryIndex: Map<string, ModelCategoryKey>
     sortBy: string
   }
 ): PricingModel[] {
@@ -151,7 +167,7 @@ export function filterAndSortModels(
   result = filterByGroup(result, filters.group)
   result = filterByQuotaType(result, filters.quotaType)
   result = filterByEndpointType(result, filters.endpointType)
-  result = filterByTag(result, filters.tag)
+  result = filterByCategory(result, filters.category, filters.categoryIndex)
   result = sortModels(result, filters.sortBy)
 
   return result
@@ -166,39 +182,4 @@ export function parseTags(tagsString?: string): string[] {
     .split(/[,;|\s]+/)
     .map((t) => t.trim())
     .filter(Boolean)
-}
-
-/**
- * Extract all unique tags from models
- */
-export function extractAllTags(models: PricingModel[]): string[] {
-  const tagSet = new Set<string>()
-
-  models.forEach((model) => {
-    if (model.tags) {
-      const tags = parseTags(model.tags)
-      tags.forEach((tag) => {
-        tagSet.add(tag.toLowerCase())
-      })
-    }
-  })
-
-  return Array.from(tagSet).sort((a, b) => a.localeCompare(b))
-}
-
-/**
- * Filter models by tag
- */
-export function filterByTag(
-  models: PricingModel[],
-  tag: string
-): PricingModel[] {
-  if (tag === FILTER_ALL) return models
-
-  const tagLower = tag.toLowerCase()
-  return models.filter((m) => {
-    if (!m.tags) return false
-    const modelTags = parseTags(m.tags).map((t) => t.toLowerCase())
-    return modelTags.includes(tagLower)
-  })
 }

@@ -21,6 +21,7 @@ For commercial licensing, please contact support@quantumnous.com
 // ----------------------------------------------------------------------------
 
 export * from './filters'
+export * from './model-category'
 export * from './price'
 export * from './model-helpers'
 export * from './billing-expr'
