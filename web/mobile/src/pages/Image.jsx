@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   Button,
@@ -9,7 +9,6 @@ import {
   NavBar,
   SpinLoading,
 } from 'antd-mobile';
-import { AddOutline } from 'antd-mobile-icons';
 
 import { useImageGeneration } from '@classic/hooks/imagePlayground/useImageGeneration';
 import { IMAGE_MAX_EDIT_IMAGES } from '@classic/constants/imagePlayground.constants';
@@ -18,16 +17,10 @@ import { useVisibleModes } from '../hooks/useVisibleModes';
 import { useAutoOpenLatest } from '../hooks/useAutoOpenLatest';
 import ConfigBar from '../components/gen/ConfigBar';
 import ConversationBar from '../components/gen/ConversationBar';
+import MediaBar from '../components/gen/MediaBar';
 import MessageFeed from '../components/gen/MessageFeed';
 import PromptBar from '../components/gen/PromptBar';
 import ShareBar from '../components/gen/ShareBar';
-import { showError } from '../shims/classic-utils';
-import { fileToDataUrl } from '../utils/file';
-
-const MODES = [
-  { key: 'text2image', title: '文生图' },
-  { key: 'image2image', title: '图生图' },
-];
 
 const ImageBody = ({ mode }) => {
   const {
@@ -53,30 +46,7 @@ const ImageBody = ({ mode }) => {
 
   useAutoOpenLatest(conversations, currentConvId, openHistoryItem);
 
-  const fileRef = useRef(null);
   const [viewerImage, setViewerImage] = useState('');
-
-  const handlePickImage = async (e) => {
-    const files = Array.from(e.target.files || []);
-    e.target.value = '';
-    if (!files.length) return;
-    try {
-      const urls = await Promise.all(files.map(fileToDataUrl));
-      const merged = [...(inputs.imageUrls || []), ...urls].slice(
-        0,
-        IMAGE_MAX_EDIT_IMAGES,
-      );
-      handleInputChange('imageUrls', merged);
-    } catch (err) {
-      showError('读取图片失败');
-    }
-  };
-
-  const removeBaseImage = (idx) => {
-    const next = [...(inputs.imageUrls || [])];
-    next.splice(idx, 1);
-    handleInputChange('imageUrls', next);
-  };
 
   const renderAssistant = (m) => {
     if (m.status === 'success' && (m.images || []).length > 0) {
@@ -156,6 +126,20 @@ const ImageBody = ({ mode }) => {
           },
         ]}
       />
+      <MediaBar
+        disabled={generating}
+        slots={[
+          isI2I && {
+            type: 'list',
+            key: 'imageUrls',
+            label: '底图',
+            required: true,
+            max: IMAGE_MAX_EDIT_IMAGES,
+            values: inputs.imageUrls || [],
+            onChange: (v) => handleInputChange('imageUrls', v),
+          },
+        ]}
+      />
       <ConversationBar
         conversations={conversations}
         currentConvId={currentConvId}
@@ -185,55 +169,6 @@ const ImageBody = ({ mode }) => {
               ? '请先上传底图'
               : '描述你想要的图片…'
         }
-        extra={
-          isI2I ? (
-            <div
-              style={{
-                marginBottom: 8,
-                display: 'flex',
-                gap: 8,
-                flexWrap: 'wrap',
-              }}
-            >
-              {(inputs.imageUrls || []).map((url, idx) => (
-                <div key={idx} style={{ position: 'relative' }}>
-                  <AmImage
-                    src={url}
-                    width={64}
-                    height={64}
-                    fit='cover'
-                    style={{ borderRadius: 8 }}
-                    onClick={() => setViewerImage(url)}
-                  />
-                  <Button
-                    size='mini'
-                    style={{ position: 'absolute', top: -8, right: -8 }}
-                    onClick={() => removeBaseImage(idx)}
-                  >
-                    ×
-                  </Button>
-                </div>
-              ))}
-              {(inputs.imageUrls || []).length < IMAGE_MAX_EDIT_IMAGES && (
-                <Button
-                  size='small'
-                  fill='outline'
-                  onClick={() => fileRef.current?.click()}
-                >
-                  <AddOutline /> 底图
-                </Button>
-              )}
-              <input
-                ref={fileRef}
-                type='file'
-                accept='image/*'
-                multiple
-                hidden
-                onChange={handlePickImage}
-              />
-            </div>
-          ) : null
-        }
       />
       <ImageViewer
         image={viewerImage}
@@ -246,8 +181,8 @@ const ImageBody = ({ mode }) => {
 
 const ImagePage = () => {
   const navigate = useNavigate();
-  const modes = useVisibleModes('image', MODES);
-  const [mode, setMode] = useState(modes[0]?.key || MODES[0].key);
+  const modes = useVisibleModes('image');
+  const [mode, setMode] = useState(modes[0]?.key || 'text2image');
   useEffect(() => {
     if (modes.length && !modes.some((m) => m.key === mode)) setMode(modes[0].key);
   }, [modes, mode]);

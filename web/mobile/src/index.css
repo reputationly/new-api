@@ -196,6 +196,13 @@ body {
   font-weight: 500;
 }
 
+/* antd-mobile 的 .adm-popup-body 是 width:100%;left:0 且没有 box-sizing —— 各处
+   bodyStyle 上的 padding 会加在 100vw 之外，弹层整体向右溢出（内容左对齐、右侧按钮
+   被裁掉，看起来像"框往右偏了"）。统一改成 border-box，所有弹层一次修好。 */
+.adm-popup-body {
+  box-sizing: border-box;
+}
+
 /* 顶部导航：毛玻璃 */
 .adm-nav-bar {
   background: rgba(255, 255, 255, 0.82);
@@ -299,6 +306,76 @@ body {
   color: var(--brand-primary);
   border-color: rgba(79, 70, 229, 0.22);
   font-weight: 500;
+}
+
+/* 能力标签条：体验区一个分类最多 5 个中文 tab，默认 15px 字 + 20px 内边距在小屏上
+   放不下第三个。收紧字号与内边距让常见的 4 个能一屏看全，仍保留横向滚动兜底；
+   同时取消 flex:auto，避免 tab 少时被拉伸得又宽又空。 */
+.adm-capsule-tabs-header {
+  padding: 10px 6px;
+}
+
+.adm-capsule-tabs-tab-wrapper {
+  flex: 0 0 auto;
+  padding: 0 4px;
+}
+
+.adm-capsule-tabs-tab {
+  padding: 6px 13px;
+  font-size: 13px;
+}
+
+/* 媒体输入区：贴在参数条下方，各玩法所需的图/音/视频上传格纵向排布。
+   放在这里而不是底部输入条：视频编辑等玩法要 3 个输入格，塞进输入条会把键盘挤没。 */
+.m-media-bar {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 10px 12px;
+  background: #fff;
+  border-bottom: 0.5px solid rgba(17, 24, 39, 0.06);
+  max-height: 42vh;
+  overflow-y: auto;
+}
+
+.m-media-notice {
+  font-size: 12px;
+  line-height: 1.5;
+  color: #b45309;
+  background: #fffbeb;
+  border-radius: 8px;
+  padding: 6px 10px;
+}
+
+.m-media-slot-label {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+  color: #9aa1ad;
+  margin-bottom: 6px;
+}
+
+.m-media-slot-hint {
+  margin-left: auto;
+  font-variant-numeric: tabular-nums;
+}
+
+.m-media-slot-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 6px;
+}
+
+.m-media-slot-name {
+  font-size: 11.5px;
+  color: #9aa1ad;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 /* 分组列表标题 */

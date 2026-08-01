@@ -2,12 +2,12 @@ import { useMemo } from 'react';
 
 import { usePlaygroundTabs } from '@classic/hooks/common/usePlaygroundTabs';
 
-// 移动端各页 MODES（curated 子集）与运营「体验区管理」可见 tab 求交集，
-// 使桌面端隐藏某 tab 时移动端同步隐藏。返回过滤后的 modes 数组。
-export const useVisibleModes = (category, modes) => {
+// 移动端各页的能力 tab 直接取「体验区管理」配置出的完整 tab 列表，不再各页维护 curated
+// 子集：桌面端有哪些能力手机端就有哪些，显隐只由后台一处控制。返回 [{key,title}]。
+export const useVisibleModes = (category) => {
   const visible = usePlaygroundTabs(category);
-  return useMemo(() => {
-    const keys = new Set(visible.map((tb) => tb.key));
-    return modes.filter((m) => keys.has(m.key));
-  }, [visible, modes]);
+  return useMemo(
+    () => visible.map((tb) => ({ key: tb.key, title: tb.label })),
+    [visible],
+  );
 };

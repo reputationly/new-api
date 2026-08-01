@@ -11,15 +11,24 @@ import {
   VOICE_RECORD_MAX_SEC,
 } from '@classic/constants/audioPlayground.constants';
 
-// 参考音色现场录制(移动端)。录音与转 WAV 的逻辑与桌面端共用同一个 hook,
-// 这里只是 antd-mobile 的壳。
-const VoiceRecorder = ({ visible, onClose, onConfirm }) => {
+// 现场录音(移动端)。录音与转 WAV 的逻辑与桌面端共用同一个 hook,这里只是 antd-mobile
+// 的壳。默认参数是「参考音色」那一档(带朗读引导文案);体验区里其它音频输入格
+// (驱动音频/参考音频/目标曲…)复用同一个弹层,只是不给朗读脚本、录制上限另给。
+const VoiceRecorder = ({
+  visible,
+  onClose,
+  onConfirm,
+  title = '录制参考音色',
+  script = VOICE_RECORD_SCRIPT,
+  minSeconds = VOICE_RECORD_MIN_SEC,
+  maxSeconds = VOICE_RECORD_MAX_SEC,
+}) => {
   // preview 直接取 hook 的 result:手动停止与录满上限自动停止走同一条路。
   const { recording, seconds, error, result: preview, start, stop, reset } =
-    useVoiceRecorder({ maxSeconds: VOICE_RECORD_MAX_SEC });
+    useVoiceRecorder({ maxSeconds });
 
   const supported = isVoiceRecordSupported();
-  const tooShort = preview && preview.duration < VOICE_RECORD_MIN_SEC;
+  const tooShort = preview && preview.duration < minSeconds;
 
   const handleClose = () => {
     if (recording) stop();
@@ -46,7 +55,7 @@ const VoiceRecorder = ({ visible, onClose, onConfirm }) => {
       }}
     >
       <div style={{ fontSize: 16, fontWeight: 500, marginBottom: 12 }}>
-        录制参考音色
+        {title}
       </div>
 
       {!supported && (
@@ -82,20 +91,24 @@ const VoiceRecorder = ({ visible, onClose, onConfirm }) => {
       <div
         style={{ fontSize: 12, color: 'var(--adm-color-weak)', marginBottom: 6 }}
       >
-        请在安静环境下用自然语气朗读以下文字，约 8-9 秒：
+        {script
+          ? '请在安静环境下用自然语气朗读以下文字，约 8-9 秒：'
+          : `请在安静环境下录制，最长 ${maxSeconds} 秒（不少于 ${minSeconds} 秒）：`}
       </div>
-      <div
-        style={{
-          padding: 12,
-          borderRadius: 8,
-          background: 'var(--adm-color-fill-content, #f5f5f5)',
-          fontSize: 15,
-          lineHeight: 1.7,
-          marginBottom: 16,
-        }}
-      >
-        {VOICE_RECORD_SCRIPT}
-      </div>
+      {script && (
+        <div
+          style={{
+            padding: 12,
+            borderRadius: 8,
+            background: 'var(--adm-color-fill-content, #f5f5f5)',
+            fontSize: 15,
+            lineHeight: 1.7,
+            marginBottom: 16,
+          }}
+        >
+          {script}
+        </div>
+      )}
 
       {preview ? (
         <div>
@@ -108,7 +121,7 @@ const VoiceRecorder = ({ visible, onClose, onConfirm }) => {
                 marginTop: 6,
               }}
             >
-              录音过短（不足 {VOICE_RECORD_MIN_SEC} 秒），建议重录
+              录音过短（不足 {minSeconds} 秒），建议重录
             </div>
           )}
           <div style={{ display: 'flex', gap: 8, marginTop: 16 }}>
@@ -137,7 +150,7 @@ const VoiceRecorder = ({ visible, onClose, onConfirm }) => {
                 停止
               </Button>
               <span style={{ fontSize: 14 }}>
-                录制中 {seconds}s / {VOICE_RECORD_MAX_SEC}s
+                录制中 {seconds}s / {maxSeconds}s
               </span>
             </>
           ) : (

@@ -61,6 +61,64 @@ export const PLAYGROUND_CATEGORIES = [
 export const getPlaygroundCategory = (key) =>
   PLAYGROUND_CATEGORIES.find((c) => c.key === key) || null;
 
+// ---------------------------------------------------------------------------
+// 模型大类（模型广场筛选用）
+// ---------------------------------------------------------------------------
+// 模型广场按「文本/图像/视频/语音/音乐」五个大类筛选，而不是按单个能力标签（文生图、
+// 数字人……）—— 能力标签是 tab 粒度、数量多且只对体验区有意义，做筛选项太碎。
+// 大类判定复用体验区那四份 ModelConfig：运营把某模型配进哪份配置，它就属于哪个大类
+// （同一份配置也决定它出现在哪个体验区分类页），无需再引入第二套标注。
+
+export const MODEL_CATEGORIES = PLAYGROUND_CATEGORIES.map((c) => ({
+  key: c.key,
+  label: c.label,
+}));
+
+// 文本模型没有 ModelConfig（靠"不是媒体模型"反推），作为兜底大类。
+export const MODEL_CATEGORY_TEXT = 'playground';
+
+// 只上架、未配进体验区的模型（如仅供 API 调用的绘图模型）没有配置可查，按端点类型兜底。
+// audio-speech 必须排在 openai-video 前：TTS 模型同时声明这两种端点。
+const ENDPOINT_CATEGORY_FALLBACK = [
+  ['image-generation', 'image'],
+  ['audio-speech', 'audio'],
+  ['openai-video', 'video'],
+];
+
+const parseModelConfig = (raw) => {
+  if (!raw) return null;
+  if (typeof raw === 'object') return raw;
+  try {
+    return JSON.parse(raw);
+  } catch (e) {
+    return null;
+  }
+};
+
+// 由 /api/status 建「模型名 -> 大类 key」索引。同名模型只认第一份命中的配置。
+export const buildModelCategoryIndex = (status) => {
+  const index = new Map();
+  PLAYGROUND_CATEGORIES.forEach((cat) => {
+    if (!cat.configKey) return;
+    const parsed = parseModelConfig(status?.[cat.configKey]);
+    Object.keys(parsed?.models || {}).forEach((name) => {
+      if (!index.has(name)) index.set(name, cat.key);
+    });
+  });
+  return index;
+};
+
+// model 需带 model_name 与 supported_endpoint_types（/api/pricing 的形态）。
+export const resolveModelCategory = (model, index) => {
+  const hit = index?.get(model?.model_name);
+  if (hit) return hit;
+  const types = model?.supported_endpoint_types || [];
+  const fallback = ENDPOINT_CATEGORY_FALLBACK.find(([endpoint]) =>
+    types.includes(endpoint),
+  );
+  return fallback ? fallback[1] : MODEL_CATEGORY_TEXT;
+};
+
 // 解析 /api/status 的 PlaygroundTabConfig（{category:{modeKey:bool}}）。
 export const parsePlaygroundTabConfig = (raw) => {
   if (!raw) return {};
