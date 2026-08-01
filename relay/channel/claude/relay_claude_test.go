@@ -436,3 +436,54 @@ func TestRequestOpenAI2ClaudeMessage_ConvertsTextFileContentToText(t *testing.T)
 	require.NotNil(t, content[0].Text)
 	require.Equal(t, "alpha\nbeta", *content[0].Text)
 }
+
+// 客户端可以用 type:"file" 传图片(data-uri 前缀，或带 .png 扩展名的裸 base64)——
+// 这类 mime 是解得出来的，必须转成 Claude 的 image 块。
+//
+// 这条用例是补的洞:原有的 pdf / text / unsupported 三条都盖不住 file 携带图片的场景，
+// 于是 file 分支只处理 pdf+text 时，图片附件被静默丢弃却没有测试变红。
+func TestRequestOpenAI2ClaudeMessage_KeepsImageFileContent(t *testing.T) {
+	const onePixelPNG = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="
+
+	cases := []struct {
+		name     string
+		fileName string
+		fileData string
+	}{
+		{name: "raw base64 with png filename", fileName: "photo.png", fileData: onePixelPNG},
+		{name: "data uri without filename", fileName: "", fileData: "data:image/png;base64," + onePixelPNG},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			request := dto.GeneralOpenAIRequest{
+				Model: "claude-3-5-sonnet",
+				Messages: []dto.Message{
+					{
+						Role: "user",
+						Content: []any{
+							dto.MediaContent{
+								Type: dto.ContentTypeFile,
+								File: &dto.MessageFile{FileName: tc.fileName, FileData: tc.fileData},
+							},
+							dto.MediaContent{Type: dto.ContentTypeText, Text: "what is this"},
+						},
+					},
+				},
+			}
+
+			claudeRequest, err := RequestOpenAI2ClaudeMessage(nil, request)
+			require.NoError(t, err)
+			require.Len(t, claudeRequest.Messages, 1)
+
+			content, ok := claudeRequest.Messages[0].Content.([]dto.ClaudeMediaMessage)
+			require.True(t, ok)
+			require.Len(t, content, 2, "图片附件不能被丢弃")
+			require.Equal(t, "image", content[0].Type)
+			require.NotNil(t, content[0].Source)
+			require.Equal(t, "base64", content[0].Source.Type)
+			require.Equal(t, "image/png", content[0].Source.MediaType)
+			require.Equal(t, "text", content[1].Type)
+		})
+	}
+}
