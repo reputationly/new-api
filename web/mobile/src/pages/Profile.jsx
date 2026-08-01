@@ -5,7 +5,7 @@ import { Button, Dialog, List, NavBar } from 'antd-mobile';
 import { UserContext } from '@classic/context/User';
 import { API, updateAPI } from '@classic/helpers/api';
 
-import { isAdmin, showError, showSuccess } from '../shims/classic-utils';
+import { copy, isAdmin, showError, showSuccess } from '../shims/classic-utils';
 import { pointsEnabled, renderPoints, renderQuota } from '../utils/quota';
 
 const Profile = () => {
@@ -18,6 +18,7 @@ const Profile = () => {
   // 管理员待办角标：{kyc, enterprise, bank_transfer, invoice} + 工单未读
   const [pendingCounts, setPendingCounts] = useState(null);
   const [adminTicketUnread, setAdminTicketUnread] = useState(0);
+  const [affLink, setAffLink] = useState('');
   const admin = isAdmin();
 
   const loadSelf = useCallback(async () => {
@@ -40,6 +41,28 @@ const Profile = () => {
       }
     } catch (e) {
       // 签到未启用时静默
+    }
+  }, []);
+
+  // 邀请链接指向桌面路径 /register?aff=xxx 而不是 /m/register：router/mobile-router.go
+  // 会把手机 UA 的 /register 带 query 跳到 /m/register，桌面 UA 则留在桌面版 ——
+  // 一条链接两端通吃，用户不用管接链接的人拿什么设备打开。
+  // 挂载时就预取，好让点击时能同步复制（原因见 handleCopyAffLink）。
+  // silent=true 用于预取：子账户会被 SubAccountForbidden 拦下，不该一进页面就弹错。
+  const fetchAffLink = useCallback(async ({ silent } = { silent: true }) => {
+    try {
+      const res = await API.get('/api/user/aff', { skipErrorHandler: silent });
+      const { success, message, data } = res.data;
+      if (!success || !data) {
+        if (!silent) showError(message || '获取邀请码失败');
+        return '';
+      }
+      const link = `${window.location.origin}/register?aff=${data}`;
+      setAffLink(link);
+      return link;
+    } catch (e) {
+      if (!silent) showError(e);
+      return '';
     }
   }, []);
 
@@ -76,7 +99,8 @@ const Profile = () => {
     loadSelf();
     loadCheckin();
     loadBadges();
-  }, [loadSelf, loadCheckin, loadBadges]);
+    fetchAffLink();
+  }, [loadSelf, loadCheckin, loadBadges, fetchAffLink]);
 
   const badge = (n) =>
     n > 0 ? <span className='m-badge danger'>{n}</span> : null;
@@ -94,6 +118,25 @@ const Profile = () => {
       }
     } catch (e) {
       showError(e);
+    }
+  };
+
+  const handleCopyAffLink = async () => {
+    // 走到这里 affLink 通常已由挂载时的 loadAffLink 预取好，直接同步复制。
+    // 这一点是要害：navigator.clipboard.writeText 要求 transient user activation，
+    // 而点击后先 await 一个网络请求会把这个激活窗口耗掉，弱网下必然降级到
+    // execCommand 兜底（新版 WebView 里也可能静默失败）。预取失败时才现取，
+    // 那条路仍有手势过期风险，但兜底弹层能保证用户至少拿得到链接。
+    let link = affLink;
+    if (!link) {
+      link = await fetchAffLink({ silent: false });
+      if (!link) return;
+    }
+    if (await copy(link)) {
+      showSuccess('专属邀请链接已复制到剪切板');
+    } else {
+      // 剪贴板被浏览器拦下时把链接摆出来让用户长按复制，别让人白点一下拿不到东西
+      Dialog.alert({ title: '专属邀请链接', content: link });
     }
   };
 
@@ -168,6 +211,12 @@ const Profile = () => {
         )}
         <List.Item onClick={() => navigate('/tokens')}>令牌管理</List.Item>
         <List.Item onClick={() => navigate('/logs')}>使用日志</List.Item>
+        <List.Item
+          description='点击复制，好友通过该链接注册即计入你的邀请'
+          onClick={handleCopyAffLink}
+        >
+          我的邀请链接
+        </List.Item>
         <List.Item extra={badge(ticketUnread)} onClick={() => navigate('/tickets')}>
           我的工单
         </List.Item>

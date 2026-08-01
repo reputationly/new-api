@@ -15,6 +15,11 @@ import {
   getLogo,
 } from '../shims/classic-utils';
 import { useAgreementGate } from '../components/AgreementGate';
+import { isWeChatBrowser } from '../utils/share';
+
+// 微信内置浏览器接不上系统密码管理器（iOS 的 WKWebView 与安卓的 X5/XWeb 都是），
+// 用户每次都得手打账号密码。这里退而求其次记住用户名（密码绝不落盘），至少省一半输入。
+const REMEMBERED_USERNAME_KEY = 'm_login_username';
 
 const Login = () => {
   const navigate = useNavigate();
@@ -22,7 +27,13 @@ const Login = () => {
   const [statusState] = useContext(StatusContext);
   const [, userDispatch] = useContext(UserContext);
 
-  const [username, setUsername] = useState('');
+  // 惰性初始值而非 useEffect 回填：浏览器的自动填充永远晚于挂载发生，只在挂载写一次
+  // 就不会把它填的那一组覆盖掉。否则用户从密码管理器选了账号 A（同时填好 A 的密码），
+  // 我们再把用户名改回记住的 B，就成了「用户名 B + A 的密码」，登录失败还查不出原因。
+  // 只在微信里预填：普通浏览器原生自动填充本来就好用，字段非空反而会让账号选择条不弹。
+  const [username, setUsername] = useState(() =>
+    isWeChatBrowser() ? localStorage.getItem(REMEMBERED_USERNAME_KEY) || '' : '',
+  );
   const [password, setPassword] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [turnstileToken, setTurnstileToken] = useState('');
@@ -45,6 +56,17 @@ const Login = () => {
   }, []);
 
   const finishLogin = (data) => {
+    // 记住用户实际输入的那个标识（可能是用户名也可能是邮箱），而不是后端回的
+    // 规范化用户名 —— 下次他还是会照原样再打一遍。2FA 分支也经过这里，一处即可。
+    // 必须 try 住：无痕模式/存储配额满时 setItem 会抛，裸写会把 finishLogin 整个中断，
+    // 变成"登录明明成功却停在登录页且没有任何提示"。记用户名是锦上添花，不能挡住登录。
+    try {
+      if (username.trim()) {
+        localStorage.setItem(REMEMBERED_USERNAME_KEY, username.trim());
+      }
+    } catch (e) {
+      // 记不住就算了，不影响登录
+    }
     userDispatch({ type: 'login', payload: data });
     setUserData(data);
     updateAPI();

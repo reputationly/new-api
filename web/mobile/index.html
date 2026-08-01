@@ -11,10 +11,57 @@
     <meta name="theme-color" content="#ffffff" />
     <link rel="icon" href="/m/favicon.ico" />
     <link rel="apple-touch-icon" href="/m/icon-192.png" />
+    <!-- 手写而非由 vite-plugin-pwa 注入：清单由服务端按运营配置实时生成，见 vite.config.js -->
+    <link rel="manifest" href="/m/manifest.webmanifest" />
     <title>New API</title>
+    <!--
+      首屏占位：JS 包（gzip 后约 300KB）下载+解析+执行完成前，#root 是空的，屏幕就是
+      一片纯白、零反馈 —— 微信内置浏览器冷启动 + 弱网下这段能有好几秒，用户以为页面挂了。
+      这段样式与骨架必须内联在 HTML 里（外链就又多一个往返，等于没救）。
+      收起方式是纯 CSS：React 一挂载 #root 就不再是 :empty，占位自动隐藏，
+      不需要 JS 配合，也就不会出现"忘了移除"或"移除时机不对"的问题。
+    -->
+    <style>
+      #app-loading {
+        position: fixed;
+        inset: 0;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        gap: 14px;
+        background: #f5f6f9;
+        font-family: -apple-system, BlinkMacSystemFont, 'Helvetica Neue',
+          'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', sans-serif;
+      }
+      #root:not(:empty) ~ #app-loading {
+        display: none;
+      }
+      #app-loading .spinner {
+        width: 30px;
+        height: 30px;
+        border: 3px solid rgba(79, 70, 229, 0.18);
+        border-top-color: #4f46e5;
+        border-radius: 50%;
+        animation: app-loading-spin 0.8s linear infinite;
+      }
+      #app-loading .tip {
+        font-size: 13px;
+        color: #9aa1ad;
+      }
+      @keyframes app-loading-spin {
+        to {
+          transform: rotate(360deg);
+        }
+      }
+    </style>
   </head>
   <body>
     <div id="root"></div>
+    <div id="app-loading">
+      <div class="spinner"></div>
+      <div class="tip">加载中…</div>
+    </div>
     <script type="module" src="/src/main.jsx"></script>
   </body>
 </html>
