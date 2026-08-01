@@ -65,6 +65,17 @@ export const VOICE_UPLOAD_VALUE = '__upload__';
 // 上传参考音大小上限(base64 后随请求体走,过大拖慢提交)。
 export const VOICE_UPLOAD_MAX_MB = 10;
 
+// 现场录制参考音的引导文案。IndexTTS 官方(README/文档)并未给出推荐朗读句,此处为自拟:
+// 中性叙述语气 + 常用字 + 四声齐全,正常语速约 8-9 秒,落在官方建议的几秒干净人声区间。
+// 刻意不带情绪:情感合成的情感由 emo_vector/情感参考音单独控制,音色参考音带情绪反而
+// 会干扰克隆结果。
+export const VOICE_RECORD_SCRIPT =
+  '今天天气不错，我打算下午去公园走一走，顺便把上周借的书还掉，回来的路上再买点水果。';
+
+// 录制时长:低于 MIN 音色特征不足;到 MAX 自动停止,防止误录长音频撑大请求体。
+export const VOICE_RECORD_MIN_SEC = 3;
+export const VOICE_RECORD_MAX_SEC = 20;
+
 // 情感预设:选中某情绪 → 前端拼 one-hot 8 维向量发 metadata.emo_vector。
 // 维度次序与 IndexTTS-2 一致:[喜,怒,哀,惧,厌恶,低落,惊喜,平静]
 // (官方 webui 的 8 个滑块次序)。空值 = 跟随参考音色,不发情感参数。

@@ -7,7 +7,9 @@ import { MUSIC_DURATIONS } from '@classic/constants/musicPlayground.constants';
 
 import AsyncTaskBubble from '../components/gen/AsyncTaskBubble';
 import { useVisibleModes } from '../hooks/useVisibleModes';
+import { useAutoOpenLatest } from '../hooks/useAutoOpenLatest';
 import ConfigBar from '../components/gen/ConfigBar';
+import ConversationBar from '../components/gen/ConversationBar';
 import MessageFeed from '../components/gen/MessageFeed';
 import PromptBar from '../components/gen/PromptBar';
 import ShareBar from '../components/gen/ShareBar';
@@ -31,7 +33,14 @@ const MusicBody = ({ mode }) => {
     regenerate,
     refetch,
     newConversation,
+    conversations,
+    currentConvId,
+    openHistoryItem,
+    deleteHistoryItem,
+    clearHistory,
   } = useMusicGeneration(mode);
+
+  useAutoOpenLatest(conversations, currentConvId, openHistoryItem);
 
   const [showLyrics, setShowLyrics] = useState(false);
   const isT2M = mode === 't2m';
@@ -100,14 +109,16 @@ const MusicBody = ({ mode }) => {
             : []),
         ]}
       />
+      <ConversationBar
+        conversations={conversations}
+        currentConvId={currentConvId}
+        showNew={messages.length > 0}
+        onNew={newConversation}
+        onOpen={openHistoryItem}
+        onDelete={deleteHistoryItem}
+        onClear={clearHistory}
+      />
       <div style={{ flex: 1, overflowY: 'auto' }}>
-        {messages.length > 0 && (
-          <div style={{ textAlign: 'center', paddingTop: 8 }}>
-            <Button size='mini' fill='none' onClick={newConversation}>
-              新建会话
-            </Button>
-          </div>
-        )}
         <MessageFeed
           messages={messages}
           renderAssistant={renderAssistant}
