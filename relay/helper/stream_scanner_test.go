@@ -614,7 +614,12 @@ func TestStreamScannerHandler_StreamStatus_InitializedIfNil(t *testing.T) {
 	assert.NotNil(t, info.StreamStatus)
 }
 
-func TestStreamScannerHandler_StreamStatus_PreInitialized(t *testing.T) {
+// StreamScannerHandler 无条件重建 StreamStatus(stream_scanner.go:43),已有的状态会被丢弃。
+//
+// 这是有意为之而非疏漏:GenRelayInfo 在重试循环之外只调一次(controller/relay.go:124 vs
+// 203),同一个 RelayInfo 会跨重试复用。不重置的话,上一次失败尝试记下的错误会泄漏进下一
+// 次的 StreamStatus,把成功的重试也标成有错。
+func TestStreamScannerHandler_StreamStatus_PreInitializedIsReset(t *testing.T) {
 	t.Parallel()
 
 	body := buildSSEBody(5)
@@ -626,7 +631,7 @@ func TestStreamScannerHandler_StreamStatus_PreInitialized(t *testing.T) {
 	StreamScannerHandler(c, resp, info, func(data string, sr *StreamResult) {})
 
 	assert.Equal(t, relaycommon.StreamEndReasonDone, info.StreamStatus.EndReason)
-	assert.Equal(t, 1, info.StreamStatus.TotalErrorCount())
+	assert.Equal(t, 0, info.StreamStatus.TotalErrorCount(), "上一次尝试的错误不应带进本次")
 }
 
 func TestStreamScannerHandler_PingInterleavesWithSlowUpstream(t *testing.T) {

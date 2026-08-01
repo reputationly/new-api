@@ -48,21 +48,21 @@ type sqliteColumnInfo struct {
 }
 
 type legacyToken struct {
-	Id                 int            `gorm:"primaryKey"`
-	UserId             int            `gorm:"index"`
-	Key                string         `gorm:"column:key;type:char(48);uniqueIndex"`
-	Status             int            `gorm:"default:1"`
-	Name               string         `gorm:"index"`
-	CreatedTime        int64          `gorm:"bigint"`
-	AccessedTime       int64          `gorm:"bigint"`
-	ExpiredTime        int64          `gorm:"bigint;default:-1"`
-	RemainQuota        int            `gorm:"default:0"`
+	Id                 int    `gorm:"primaryKey"`
+	UserId             int    `gorm:"index"`
+	Key                string `gorm:"column:key;type:char(48);uniqueIndex"`
+	Status             int    `gorm:"default:1"`
+	Name               string `gorm:"index"`
+	CreatedTime        int64  `gorm:"bigint"`
+	AccessedTime       int64  `gorm:"bigint"`
+	ExpiredTime        int64  `gorm:"bigint;default:-1"`
+	RemainQuota        int    `gorm:"default:0"`
 	UnlimitedQuota     bool
 	ModelLimitsEnabled bool
-	ModelLimits        string         `gorm:"type:text"`
-	AllowIps           *string        `gorm:"default:''"`
-	UsedQuota          int            `gorm:"default:0"`
-	Group              string         `gorm:"column:group;default:''"`
+	ModelLimits        string  `gorm:"type:text"`
+	AllowIps           *string `gorm:"default:''"`
+	UsedQuota          int     `gorm:"default:0"`
+	Group              string  `gorm:"column:group;default:''"`
 	CrossGroupRetry    bool
 	DeletedAt          gorm.DeletedAt `gorm:"index"`
 }
@@ -101,8 +101,29 @@ func openTokenControllerTestDB(t *testing.T) *gorm.DB {
 func migrateTokenControllerTestDB(t *testing.T, db *gorm.DB) {
 	t.Helper()
 
-	if err := db.AutoMigrate(&model.Token{}); err != nil {
-		t.Fatalf("failed to migrate token table: %v", err)
+	// User 表也要建:令牌读取路径的 resolveTokenReadScope 会走 GetUserCache →
+	// GetUserById 判断是不是企业子账户(controller/token.go:62),缺表会直接
+	// "no such table: users" 把 handler 打回错误。
+	if err := db.AutoMigrate(&model.Token{}, &model.User{}); err != nil {
+		t.Fatalf("failed to migrate token/user tables: %v", err)
+	}
+}
+
+// seedTokenControllerUser 建一个普通用户(非子账户),让 resolveTokenReadScope 能解析出
+// ownerUserId。ParentUserId 为 0 即走「本人令牌」分支。
+func seedTokenControllerUser(t *testing.T, db *gorm.DB, userID int) {
+	t.Helper()
+
+	user := &model.User{
+		Id:       userID,
+		Username: fmt.Sprintf("token-test-user-%d", userID),
+		Password: "placeholder",
+		AffCode:  fmt.Sprintf("aff%d", userID),
+		Role:     common.RoleCommonUser,
+		Status:   common.UserStatusEnabled,
+	}
+	if err := db.Create(user).Error; err != nil {
+		t.Fatalf("failed to seed user %d: %v", userID, err)
 	}
 }
 
@@ -392,6 +413,7 @@ func TestTokenMigrationFromChar48ToVarchar128Postgres(t *testing.T) {
 
 func TestGetAllTokensMasksKeyInResponse(t *testing.T) {
 	db := setupTokenControllerTestDB(t)
+	seedTokenControllerUser(t, db, 1)
 	token := seedToken(t, db, 1, "list-token", "abcd1234efgh5678")
 	seedToken(t, db, 2, "other-user-token", "zzzz1234yyyy5678")
 
@@ -420,6 +442,7 @@ func TestGetAllTokensMasksKeyInResponse(t *testing.T) {
 
 func TestSearchTokensMasksKeyInResponse(t *testing.T) {
 	db := setupTokenControllerTestDB(t)
+	seedTokenControllerUser(t, db, 1)
 	token := seedToken(t, db, 1, "searchable-token", "ijkl1234mnop5678")
 
 	ctx, recorder := newAuthenticatedContext(t, http.MethodGet, "/api/token/search?keyword=searchable-token&p=1&size=10", nil, 1)
@@ -447,6 +470,7 @@ func TestSearchTokensMasksKeyInResponse(t *testing.T) {
 
 func TestGetTokenMasksKeyInResponse(t *testing.T) {
 	db := setupTokenControllerTestDB(t)
+	seedTokenControllerUser(t, db, 1)
 	token := seedToken(t, db, 1, "detail-token", "qrst1234uvwx5678")
 
 	ctx, recorder := newAuthenticatedContext(t, http.MethodGet, "/api/token/"+strconv.Itoa(token.Id), nil, 1)
@@ -508,6 +532,7 @@ func TestUpdateTokenMasksKeyInResponse(t *testing.T) {
 
 func TestGetTokenKeyRequiresOwnershipAndReturnsFullKey(t *testing.T) {
 	db := setupTokenControllerTestDB(t)
+	seedTokenControllerUser(t, db, 1)
 	token := seedToken(t, db, 1, "owned-token", "owner1234token5678")
 
 	authorizedCtx, authorizedRecorder := newAuthenticatedContext(t, http.MethodPost, "/api/token/"+strconv.Itoa(token.Id)+"/key", nil, 1)
