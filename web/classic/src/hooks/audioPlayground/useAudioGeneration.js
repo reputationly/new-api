@@ -942,6 +942,7 @@ export const useAudioGeneration = (mode = 'emotion') => {
     models,
     messages,
     conversations,
+    currentConvId,
     generating,
     locked,
     turnLimitReached,

@@ -15,8 +15,10 @@ import { AddOutline } from 'antd-mobile-icons';
 
 import { useVideoGeneration } from '@classic/hooks/videoPlayground/useVideoGeneration';
 import { useVisibleModes } from '../hooks/useVisibleModes';
+import { useAutoOpenLatest } from '../hooks/useAutoOpenLatest';
 
 import ConfigBar from '../components/gen/ConfigBar';
+import ConversationBar from '../components/gen/ConversationBar';
 import MessageFeed from '../components/gen/MessageFeed';
 import PromptBar from '../components/gen/PromptBar';
 import ShareBar from '../components/gen/ShareBar';
@@ -50,7 +52,14 @@ const VideoBody = ({ mode }) => {
     regenerate,
     refetch,
     newConversation,
+    conversations,
+    currentConvId,
+    openHistoryItem,
+    deleteHistoryItem,
+    clearHistory,
   } = useVideoGeneration({ mode });
+
+  useAutoOpenLatest(conversations, currentConvId, openHistoryItem);
 
   const fileRef = useRef(null);
   const [viewerOpen, setViewerOpen] = useState(false);
@@ -228,14 +237,16 @@ const VideoBody = ({ mode }) => {
           1080P 将先生成再调用超分模型提升画质：耗时更久，且会同时产生本模型与超分模型的额度/积分消耗
         </div>
       )}
+      <ConversationBar
+        conversations={conversations}
+        currentConvId={currentConvId}
+        showNew={messages.length > 0}
+        onNew={newConversation}
+        onOpen={openHistoryItem}
+        onDelete={deleteHistoryItem}
+        onClear={clearHistory}
+      />
       <div style={{ flex: 1, overflowY: 'auto' }}>
-        {messages.length > 0 && (
-          <div style={{ textAlign: 'center', paddingTop: 8 }}>
-            <Button size='mini' fill='none' onClick={newConversation}>
-              新建会话
-            </Button>
-          </div>
-        )}
         <MessageFeed
           messages={messages}
           renderAssistant={renderAssistant}

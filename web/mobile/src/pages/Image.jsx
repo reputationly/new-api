@@ -15,7 +15,9 @@ import { useImageGeneration } from '@classic/hooks/imagePlayground/useImageGener
 import { IMAGE_MAX_EDIT_IMAGES } from '@classic/constants/imagePlayground.constants';
 
 import { useVisibleModes } from '../hooks/useVisibleModes';
+import { useAutoOpenLatest } from '../hooks/useAutoOpenLatest';
 import ConfigBar from '../components/gen/ConfigBar';
+import ConversationBar from '../components/gen/ConversationBar';
 import MessageFeed from '../components/gen/MessageFeed';
 import PromptBar from '../components/gen/PromptBar';
 import ShareBar from '../components/gen/ShareBar';
@@ -42,7 +44,14 @@ const ImageBody = ({ mode }) => {
     generate,
     regenerate,
     newConversation,
+    conversations,
+    currentConvId,
+    openHistoryItem,
+    deleteHistoryItem,
+    clearHistory,
   } = useImageGeneration({ mode });
+
+  useAutoOpenLatest(conversations, currentConvId, openHistoryItem);
 
   const fileRef = useRef(null);
   const [viewerImage, setViewerImage] = useState('');
@@ -147,14 +156,16 @@ const ImageBody = ({ mode }) => {
           },
         ]}
       />
+      <ConversationBar
+        conversations={conversations}
+        currentConvId={currentConvId}
+        showNew={messages.length > 0}
+        onNew={newConversation}
+        onOpen={openHistoryItem}
+        onDelete={deleteHistoryItem}
+        onClear={clearHistory}
+      />
       <div style={{ flex: 1, overflowY: 'auto' }}>
-        {messages.length > 0 && (
-          <div style={{ textAlign: 'center', paddingTop: 8 }}>
-            <Button size='mini' fill='none' onClick={newConversation}>
-              新建会话
-            </Button>
-          </div>
-        )}
         <MessageFeed
           messages={messages}
           renderAssistant={renderAssistant}

@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Button, CapsuleTabs, Empty, NavBar, TextArea } from 'antd-mobile';
 
@@ -6,13 +6,20 @@ import { useAudioGeneration } from '@classic/hooks/audioPlayground/useAudioGener
 import {
   EMOTION_PRESETS,
   PRESET_VOICES,
+  VOICE_UPLOAD_MAX_MB,
+  VOICE_UPLOAD_VALUE,
 } from '@classic/constants/audioPlayground.constants';
 
 import AsyncTaskBubble from '../components/gen/AsyncTaskBubble';
 import { useVisibleModes } from '../hooks/useVisibleModes';
+import { useAutoOpenLatest } from '../hooks/useAutoOpenLatest';
 import ConfigBar from '../components/gen/ConfigBar';
+import ConversationBar from '../components/gen/ConversationBar';
+import VoiceRecorder from '../components/gen/VoiceRecorder';
 import MessageFeed from '../components/gen/MessageFeed';
 import PromptBar from '../components/gen/PromptBar';
+import { showError } from '../shims/classic-utils';
+import { fileToDataUrl } from '../utils/file';
 import ShareBar from '../components/gen/ShareBar';
 
 // 一期移动端开放不需要上传参考音的两个模式：情感合成（预置音色）与声音设计。
@@ -37,9 +44,35 @@ const AudioBody = ({ mode }) => {
     regenerate,
     refetch,
     newConversation,
+    conversations,
+    currentConvId,
+    openHistoryItem,
+    deleteHistoryItem,
+    clearHistory,
   } = useAudioGeneration(mode);
 
+  useAutoOpenLatest(conversations, currentConvId, openHistoryItem);
+
   const isEmotion = mode === 'emotion';
+  const [recorderVisible, setRecorderVisible] = useState(false);
+  const voiceFileRef = useRef(null);
+
+  const handlePickVoice = async (e) => {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (!file) return;
+    if (file.size > VOICE_UPLOAD_MAX_MB * 1024 * 1024) {
+      showError(`参考音频不能超过 ${VOICE_UPLOAD_MAX_MB}MB`);
+      return;
+    }
+    try {
+      const dataUrl = await fileToDataUrl(file);
+      handleInputChange('voiceData', dataUrl);
+      handleInputChange('voiceName', file.name);
+    } catch (err) {
+      showError('读取音频文件失败');
+    }
+  };
 
   const renderAssistant = (m) => (
     <AsyncTaskBubble
@@ -82,10 +115,13 @@ const AudioBody = ({ mode }) => {
                   key: 'voicePreset',
                   label: '音色',
                   value: inputs.voicePreset,
-                  options: PRESET_VOICES.map((v) => ({
-                    label: v.label,
-                    value: v.id,
-                  })),
+                  options: [
+                    ...PRESET_VOICES.map((v) => ({
+                      label: v.label,
+                      value: v.id,
+                    })),
+                    { label: '我的声音', value: VOICE_UPLOAD_VALUE },
+                  ],
                   onChange: (v) => handleInputChange('voicePreset', v),
                 },
                 {
@@ -99,14 +135,75 @@ const AudioBody = ({ mode }) => {
             : []),
         ]}
       />
-      <div style={{ flex: 1, overflowY: 'auto' }}>
-        {messages.length > 0 && (
-          <div style={{ textAlign: 'center', paddingTop: 8 }}>
-            <Button size='mini' fill='none' onClick={newConversation}>
-              新建会话
-            </Button>
-          </div>
+      {/* 自定义音色(录制/上传):data-url 写进 voiceData,与桌面端「上传自定义音频」同一条链路 */}
+      {isEmotion && inputs.voicePreset === VOICE_UPLOAD_VALUE && (
+        <div
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: 8,
+            padding: '8px 12px',
+            borderBottom: '0.5px solid rgba(17,24,39,0.06)',
+          }}
+        >
+          <Button
+            size='mini'
+            fill='outline'
+            disabled={generating}
+            onClick={() => setRecorderVisible(true)}
+          >
+            🎤 录制
+          </Button>
+          <Button
+            size='mini'
+            fill='outline'
+            disabled={generating}
+            onClick={() => voiceFileRef.current?.click()}
+          >
+            上传
+          </Button>
+          <span style={{ fontSize: 12, color: 'var(--adm-color-weak)' }}>
+            {inputs.voiceData ? inputs.voiceName || '已就绪' : '未设置'}
+          </span>
+          <input
+            ref={voiceFileRef}
+            type='file'
+            accept='audio/*'
+            hidden
+            onChange={handlePickVoice}
+          />
+        </div>
+      )}
+      {isEmotion &&
+        inputs.voicePreset === VOICE_UPLOAD_VALUE &&
+        inputs.voiceData && (
+          <audio
+            src={inputs.voiceData}
+            controls
+            preload='none'
+            style={{ width: '100%', height: 32 }}
+          />
         )}
+      {isEmotion && (
+        <VoiceRecorder
+          visible={recorderVisible}
+          onClose={() => setRecorderVisible(false)}
+          onConfirm={(dataUrl) => {
+            handleInputChange('voiceData', dataUrl);
+            handleInputChange('voiceName', '录制音频.wav');
+          }}
+        />
+      )}
+      <ConversationBar
+        conversations={conversations}
+        currentConvId={currentConvId}
+        showNew={messages.length > 0}
+        onNew={newConversation}
+        onOpen={openHistoryItem}
+        onDelete={deleteHistoryItem}
+        onClear={clearHistory}
+      />
+      <div style={{ flex: 1, overflowY: 'auto' }}>
         <MessageFeed
           messages={messages}
           renderAssistant={renderAssistant}

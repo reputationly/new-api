@@ -1,4 +1,4 @@
-import React, { useRef } from 'react';
+import React, { useRef, useState } from 'react';
 import {
   Card,
   Select,
@@ -25,6 +25,7 @@ import {
 import { useTranslation } from 'react-i18next';
 import { renderGroupOption, selectFilter, showError } from '../../helpers';
 import MediaFileInput from '../videoPlayground/MediaFileInput';
+import VoiceRecorderModal from './VoiceRecorderModal';
 import {
   PRESET_VOICES,
   VOICE_UPLOAD_VALUE,
@@ -66,6 +67,7 @@ const AudioConfigPanel = ({
   const { t } = useTranslation();
   const fileInputRef = useRef(null);
   const emotionAudioRef = useRef(null);
+  const [recorderVisible, setRecorderVisible] = useState(false);
 
   const ensureOption = (options, value) => {
     if (!value) return options;
@@ -268,6 +270,15 @@ const AudioConfigPanel = ({
                 >
                   {inputs.voiceName ? t('重新上传') : t('选择音频文件')}
                 </Button>
+                <Button
+                  theme='outline'
+                  type='tertiary'
+                  size='small'
+                  icon={<Mic size={14} />}
+                  onClick={() => setRecorderVisible(true)}
+                >
+                  {t('录制')}
+                </Button>
                 {inputs.voiceName && (
                   <Typography.Text
                     className='text-xs text-gray-500 truncate'
@@ -288,6 +299,14 @@ const AudioConfigPanel = ({
                 style={{ height: 32 }}
               />
             )}
+            <VoiceRecorderModal
+              visible={recorderVisible}
+              onClose={() => setRecorderVisible(false)}
+              onConfirm={(dataUrl) => {
+                onInputChange('voiceData', dataUrl);
+                onInputChange('voiceName', t('录制音频.wav'));
+              }}
+            />
           </div>
         )}
 

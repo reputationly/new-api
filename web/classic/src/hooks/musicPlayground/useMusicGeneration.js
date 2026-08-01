@@ -1194,6 +1194,7 @@ export const useMusicGeneration = (mode = 't2m') => {
     models,
     messages,
     conversations,
+    currentConvId,
     generating,
     locked,
     turnLimitReached,

@@ -609,6 +609,7 @@ export const useImageGeneration = ({ mode = 'text2image' } = {}) => {
     availableSizes,
     messages,
     conversations,
+    currentConvId,
     generating,
     locked,
     turnLimitReached,

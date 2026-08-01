@@ -1476,6 +1476,7 @@ export const useVideoGeneration = ({ mode = 'text2video' } = {}) => {
     availableAspectRatios,
     messages,
     conversations,
+    currentConvId,
     generating,
     locked,
     turnLimitReached,
