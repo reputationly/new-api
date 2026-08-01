@@ -36,8 +36,18 @@ const Register = () => {
   const emailVerification = !!status.email_verification;
   const turnstileEnabled = !!status.turnstile_check;
   const turnstileSiteKey = status.turnstile_site_key || '';
-  // 邀请码从 ?aff= 带入（分享链接场景）
-  const affCode = new URLSearchParams(window.location.search).get('aff') || '';
+  // 邀请码优先从当前 ?aff= 取；取不到再回落 localStorage——用户可能是从
+  // /m/?aff=xxx 进来先逛了一圈才点注册，那时 query 已经没了（Root.jsx 启动时落的盘）。
+  const affCode =
+    new URLSearchParams(window.location.search).get('aff')?.trim() ||
+    localStorage.getItem('aff') ||
+    '';
+  // 回桌面版注册页的地址。desktop=1 是后端中间件认的放行开关
+  // （router/mobile-router.go 的 desktopPreferenceParam），不带就会被弹回 /m。
+  // aff 一并带过去，绕过去了也不能丢邀请码。
+  const desktopRegisterHref = `/register?desktop=1${
+    affCode ? `&aff=${encodeURIComponent(affCode)}` : ''
+  }`;
 
   const sendCode = async () => {
     if (!email.trim()) {
@@ -240,6 +250,20 @@ const Register = () => {
         }}
       >
         已有账户？<Link to='/login'>去登录</Link>
+      </p>
+      {/* 移动端没有 OAuth，给一个回桌面版的出口。必须带 desktop=1，否则会被
+          后端中间件立刻弹回 /m/register（见 router/mobile-router.go）。
+          邀请码要一并带上，不然绕过去就丢了。 */}
+      <p
+        style={{
+          textAlign: 'center',
+          color: '#9ca3af',
+          fontSize: 13,
+          marginTop: 8,
+        }}
+      >
+        使用 GitHub 等其他方式注册请
+        <a href={desktopRegisterHref}>前往电脑端</a>
       </p>
     </div>
   );

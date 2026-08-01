@@ -203,7 +203,17 @@ const Login = () => {
           marginTop: 24,
         }}
       >
-        没有账户？<Link to='/register'>立即注册</Link> · 找回密码请前往电脑端
+        没有账户？
+        {/* 透传 query：从 /m/login?aff=xxx 点过来时别把邀请码弄丢 */}
+        <Link to={{ pathname: '/register', search: window.location.search }}>
+          立即注册
+        </Link>{' '}
+        · 找回密码请前往电脑端
+        <br />
+        {/* 移动端没有 OAuth；desktop=1 让后端中间件放行，否则会被弹回 /m/login
+            （见 router/mobile-router.go）。 */}
+        使用 GitHub 等其他方式登录请
+        <a href='/login?desktop=1'>前往电脑端</a>
       </p>
     </div>
   );
