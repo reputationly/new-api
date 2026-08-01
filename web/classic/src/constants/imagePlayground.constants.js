@@ -45,24 +45,16 @@ export const FALLBACK_IMAGE_SIZES = [
   '512x512',
 ];
 
-// 质量档（bot_task）：只有 HunyuanImage-3.0 带自回归（AR）阶段——开启后模型先思考并
-// 改写提示词再去噪，短提示词下出图更贴合描述，代价是耗时显著增加（后端实测约 2.8 倍）。
-// 其余图片模型（z-image、qwen-image-edit 等）引擎侧没有这条通路，传了也不生效。
-// 子串匹配（大小写不敏感）与后端 GPUSTACKPLUS_SLOW_IMAGE_MODELS 的默认值保持一致。
+// 「提示词智能优化」开关打开时,附带下发的 HunyuanImage-3.0 自回归(AR)档:
+// 引擎先思考并改写提示词再去噪,短提示词下出图更贴合描述,代价是耗时约 2.8 倍
+// (后端实测)。关闭时不下发该字段,引擎缺省 bot_task=None 即快速档。
 //
-// ⚠️ 仅用于 UI 提示，不用于拦截下发：渠道模型映射可以把任意模型名指向 HunyuanImage-3.0，
-// 前端看不到映射结果，按名字硬拦会把这类模型的质量档一并掐掉。开关开了就照发，
-// 由引擎决定认不认（其 ImageTaskRequest 是 extra="allow"，不认也只是忽略）。
-export const IMAGE_QUALITY_MODE_MODELS = ['hunyuan-image-3', 'hunyuanimage-3'];
-
-// 开启质量档时下发的 bot_task：官方默认档（CoT 思考 → 改写提示词 → 生图）。
-// 关闭时不下发该字段，引擎缺省 bot_task=None 即快速档。
+// ⚠️ 这是 Hunyuan 专有参数,与同一开关下发的通用字段 use_prompt_enhancer
+// (ERNIE 侧映射为 extra_args.apply_pe)是两套机制,故两个都发:不认的引擎
+// 会直接忽略(其 ImageTaskRequest 是 extra="allow")。
+// 也刻意不按模型名过滤——渠道映射可以把任意模型名指向 HunyuanImage-3.0,
+// 前端看不到映射结果,按名字硬拦会误伤。
 export const IMAGE_QUALITY_BOT_TASK = 'think_recaption';
-
-export const supportsImageQualityMode = (model) => {
-  const name = String(model || '').toLowerCase();
-  return IMAGE_QUALITY_MODE_MODELS.some((s) => name.includes(s));
-};
 
 // localStorage key：图片生成历史
 export const IMAGE_HISTORY_STORAGE_KEY = 'image_playground_history';

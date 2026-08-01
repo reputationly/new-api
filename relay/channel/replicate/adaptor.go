@@ -45,6 +45,22 @@ func (a *Adaptor) GetRequestURL(info *relaycommon.RelayInfo) (string, error) {
 	return relaycommon.GetFullRequestURL(info.ChannelBaseUrl, requestPath, info.ChannelType), nil
 }
 
+// newAPIControlExtraKeys new-api 体验区注入的**渠道控制**字段,不是模型 input。
+//
+// 体验区的「提示词智能优化」开关走通用 OpenAI 图片请求下发,这些未知字段落在
+// dto.ImageRequest.Extra,由 gpustackplus 挑出来映射成引擎参数
+// (见 relay/channel/gpustackplus/adaptor.go 的 applyErnieImageTurboDefaults 与
+// hunyuanPromptKeys)。前端看不到渠道映射结果,无法按渠道决定发不发,所以同一个请求
+// 也可能落到 Replicate——原样转成 input 会让上游报未知输入而整单失败。
+//
+// 只挡体验区确实会注入的这两个键,不做成通用黑名单:Replicate 的模型 input 是任意的,
+// 全量透传是本适配器有意的能力(直连调用方靠它传任意模型参数)。像 system_prompt 这类
+// 在 Replicate 上真实存在的输入名一律不挡,避免误伤——体验区也从不下发它。
+var newAPIControlExtraKeys = map[string]struct{}{
+	"use_prompt_enhancer": {},
+	"bot_task":            {},
+}
+
 func (a *Adaptor) SetupRequestHeader(c *gin.Context, req *http.Header, info *relaycommon.RelayInfo) error {
 	if info == nil {
 		return errors.New("replicate adaptor: relay info is nil")
@@ -146,6 +162,9 @@ func (a *Adaptor) ConvertImageRequest(c *gin.Context, info *relaycommon.RelayInf
 	}
 
 	for key, raw := range request.Extra {
+		if _, internal := newAPIControlExtraKeys[strings.ToLower(strings.TrimSpace(key))]; internal {
+			continue
+		}
 		if strings.EqualFold(key, "input") {
 			var extraInput map[string]any
 			if err := common.Unmarshal(raw, &extraInput); err != nil {
