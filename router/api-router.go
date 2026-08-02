@@ -481,6 +481,7 @@ func SetApiRouter(router *gin.Engine) {
 		{
 			taskRoute.GET("/self", middleware.UserAuth(), controller.GetUserTask)
 			taskRoute.GET("/self/:id/download", middleware.UserAuth(), controller.GetSelfTaskDownloadURL)
+			taskRoute.POST("/self/:id/share", middleware.UserAuth(), controller.CreateTaskShareLink)
 			taskRoute.GET("/", middleware.AdminAuth(), controller.GetAllTask)
 			taskRoute.GET("/:id/download", middleware.AdminAuth(), controller.GetTaskDownloadURL)
 		}

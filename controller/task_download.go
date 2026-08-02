@@ -49,6 +49,10 @@ func GetTaskDownloadURL(c *gin.Context) {
 
 // respondTaskDownloadURL 对 OBS 对象签一个带 response-content-disposition 的 URL（浏览器用
 // 友好名下载，如 generate_20260703.mp4）；非 OBS 结果原样返回可访问 URL。
+//
+// 响应里的 attachment 表示该 URL 是否真能触发「保存」而不是「播放」：只有 OBS 分支
+// 签了 Content-Disposition，非 OBS 结果拿到的是上游/代理裸链，导航过去只会当场播放，
+// data: URL 甚至会被浏览器直接拦掉。调用方据此决定是直接导航还是退回读 blob 的老路。
 func respondTaskDownloadURL(c *gin.Context, task *model.Task, exists bool) {
 	if !exists || task == nil {
 		c.JSON(http.StatusNotFound, gin.H{"success": false, "message": "任务不存在"})
@@ -56,7 +60,10 @@ func respondTaskDownloadURL(c *gin.Context, task *model.Task, exists bool) {
 	}
 	raw := task.GetResultURL()
 	if !mediastore.IsOBSRef(raw) {
-		common.ApiSuccess(c, gin.H{"url": service.ResolveResultURL(c.Request.Context(), raw)})
+		common.ApiSuccess(c, gin.H{
+			"url":        service.ResolveResultURL(c.Request.Context(), raw),
+			"attachment": false,
+		})
 		return
 	}
 	key := mediastore.KeyFromRef(raw)
@@ -65,7 +72,7 @@ func respondTaskDownloadURL(c *gin.Context, task *model.Task, exists bool) {
 		common.ApiError(c, err)
 		return
 	}
-	common.ApiSuccess(c, gin.H{"url": url})
+	common.ApiSuccess(c, gin.H{"url": url, "attachment": true})
 }
 
 // buildDownloadName 生成友好下载文件名：<动作>_<完成日期>.<扩展名>，全 ASCII 以避免

@@ -22,6 +22,8 @@ func SetRouter(router *gin.Engine, assets ThemeAssets) {
 	SetCanvasRouter(router, assets)
 	// 移动端 H5 同理：/m/* 永远由 Go 单二进制内置伺服
 	SetMobileRouter(router, assets)
+	// 免登录分享落地页同理：/s/* 由 Go 直出，且必须早于 SetWebRouter 的 SPA fallback
+	SetShareRouter(router)
 	frontendBaseUrl := os.Getenv("FRONTEND_BASE_URL")
 	if common.IsMasterNode && frontendBaseUrl != "" {
 		frontendBaseUrl = ""

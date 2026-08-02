@@ -60,6 +60,15 @@ func InitEnv() {
 		CryptoSecret = os.Getenv("CRYPTO_SECRET")
 	} else {
 		CryptoSecret = SessionSecret
+		// 两者都没配时 CryptoSecret 是启动时随机生成的 uuid，进程一重启就变。
+		// 它用于签发免登录分享链接（service/sharelink），届时所有存量链接会在
+		// 无人操作的情况下集体失效——尤其在有自动升级（watchtower 之类）的部署里，
+		// 失效时点不可预期。这里必须出声，否则是静默故障。
+		if os.Getenv("SESSION_SECRET") == "" {
+			log.Println("WARNING: neither CRYPTO_SECRET nor SESSION_SECRET is set; " +
+				"share links will be invalidated on every restart.")
+			log.Println("警告：未设置 CRYPTO_SECRET / SESSION_SECRET，分享链接将在每次重启后全部失效。")
+		}
 	}
 	if os.Getenv("SQLITE_PATH") != "" {
 		SQLitePath = os.Getenv("SQLITE_PATH")

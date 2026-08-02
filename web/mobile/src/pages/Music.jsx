@@ -137,7 +137,11 @@ const MusicBody = ({ mode }) => {
         renderResult={(url) => (
           <div>
             <audio controls src={url} style={{ width: '100%' }} />
-            <ShareBar url={url} filename={`music-${m.taskId || m.id}.mp3`} />
+            <ShareBar
+              url={url}
+              filename={`music-${m.taskId || m.id}.mp3`}
+              taskId={m.taskId}
+            />
           </div>
         )}
         onRetry={() => regenerate(m.prompt)}

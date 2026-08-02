@@ -181,6 +181,7 @@ export const VideoBody = ({ mode }) => {
           <ShareBar
             url={m.videoUrl}
             filename={`video-${m.taskId || m.id}.mp4`}
+            taskId={m.taskId}
           />
         </div>
       );
