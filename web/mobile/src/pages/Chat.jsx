@@ -13,6 +13,7 @@ import {
 import { buildApiPayload } from '@classic/helpers/api';
 
 import ConfigBar from '../components/gen/ConfigBar';
+import MarkdownMessage from '../components/gen/MarkdownMessage';
 import MessageFeed from '../components/gen/MessageFeed';
 import PromptBar from '../components/gen/PromptBar';
 import {
@@ -111,10 +112,16 @@ const Chat = () => {
             </Collapse.Panel>
           </Collapse>
         )}
-        <div style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
-          {text ||
-            (m.status === MESSAGE_STATUS.LOADING ? '思考中…' : '')}
-        </div>
+        {/* 落到终态才渲染 markdown,流式期间维持 pre-wrap 原样输出:一次绕开逐 token
+            重新 parse 的性能开销和半截语法造成的跳变闪烁,详见 MarkdownMessage 顶部注释。 */}
+        {text && m.status === MESSAGE_STATUS.COMPLETE ? (
+          <MarkdownMessage>{text}</MarkdownMessage>
+        ) : (
+          <div style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
+            {text ||
+              (m.status === MESSAGE_STATUS.LOADING ? '思考中…' : '')}
+          </div>
+        )}
         {m.status === MESSAGE_STATUS.ERROR && (
           <div style={{ color: 'var(--adm-color-danger)', marginTop: 4 }}>
             请求出错，请重试

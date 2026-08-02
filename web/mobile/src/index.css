@@ -278,6 +278,161 @@ body {
   box-shadow: var(--card-shadow);
 }
 
+/* 助手气泡里的 markdown 渲染（只在消息终态启用，见 components/gen/MarkdownMessage.jsx）。
+   气泡自己已经有 padding，所以首尾元素的外边距要抹掉，否则上下会各多出一截空白。 */
+.m-md {
+  font-size: 14.5px;
+  line-height: 1.65;
+  word-break: break-word;
+}
+
+.m-md > :first-child {
+  margin-top: 0;
+}
+
+.m-md > :last-child {
+  margin-bottom: 0;
+}
+
+.m-md p {
+  margin: 0 0 10px;
+}
+
+.m-md h1,
+.m-md h2,
+.m-md h3,
+.m-md h4 {
+  margin: 16px 0 8px;
+  line-height: 1.35;
+  font-weight: 600;
+}
+
+.m-md h1 {
+  font-size: 18px;
+}
+
+.m-md h2 {
+  font-size: 16.5px;
+}
+
+.m-md h3 {
+  font-size: 15.5px;
+}
+
+.m-md h4 {
+  font-size: 14.5px;
+}
+
+.m-md ul,
+.m-md ol {
+  margin: 0 0 10px;
+  padding-left: 22px;
+}
+
+.m-md li {
+  margin: 4px 0;
+}
+
+.m-md blockquote {
+  margin: 10px 0;
+  padding: 2px 0 2px 12px;
+  border-left: 3px solid rgba(99, 102, 241, 0.35);
+  color: #4b5563;
+}
+
+.m-md a {
+  color: var(--brand-primary);
+  text-decoration: none;
+}
+
+.m-md hr {
+  margin: 14px 0;
+  border: 0;
+  border-top: 0.5px solid rgba(17, 24, 39, 0.12);
+}
+
+.m-md img {
+  max-width: 100%;
+  border-radius: 8px;
+}
+
+.m-md-inline-code {
+  padding: 1px 5px;
+  border-radius: 5px;
+  background: rgba(17, 24, 39, 0.06);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.9em;
+  word-break: break-all;
+}
+
+/* 代码块：横向滚动而不是折行——手机上折行的代码基本没法读，也没法整段看清缩进 */
+.m-md-code {
+  margin: 10px 0;
+  border-radius: 10px;
+  overflow: hidden;
+  background: var(--brand-ink);
+}
+
+.m-md-code-bar {
+  display: flex;
+  justify-content: flex-end;
+  padding: 5px 6px 0;
+}
+
+.m-md-copy {
+  padding: 3px 11px;
+  border: 0;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.14);
+  color: #e5e7eb;
+  font-family: inherit;
+  font-size: 11.5px;
+}
+
+.m-md-copy:active {
+  background: rgba(255, 255, 255, 0.28);
+}
+
+.m-md-code pre {
+  margin: 0;
+  padding: 8px 12px 12px;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
+.m-md-code code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12.5px;
+  line-height: 1.6;
+  color: #e5e7eb;
+  white-space: pre;
+}
+
+/* 表格：窄屏必然溢出，交给容器横向滚动，而不是让它把气泡撑破 */
+.m-md-table-wrap {
+  margin: 10px 0;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
+.m-md-table-wrap table {
+  border-collapse: collapse;
+  font-size: 13px;
+  white-space: nowrap;
+}
+
+.m-md-table-wrap th,
+.m-md-table-wrap td {
+  padding: 6px 10px;
+  border: 0.5px solid rgba(17, 24, 39, 0.12);
+  text-align: left;
+}
+
+.m-md-table-wrap th {
+  background: #f5f6f9;
+  font-weight: 600;
+}
+
 /* 参数胶囊条：换行铺开，所有参数一屏可见（横向滚动会截断且不可发现） */
 .m-config-bar {
   display: flex;
