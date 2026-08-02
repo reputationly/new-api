@@ -200,6 +200,15 @@ func isVideoField(field Field) bool {
 //
 // 两个调用方,取舍不同,见各自注释:checkAudioDuration 一律以它为准(安全闸,声明可伪造),
 // extFromMagic 只拿它兜底(文件命名,已知声明更准)。
+//
+// 这里刻意不收口到 allowedRefExts:.aac 不在那份白名单里,但 GetAudioDuration 认它,
+// 少了这一支,合法的 ADTS AAC 会解不出时长、进而被 checkAudioDuration 判成内容不符而拒。
+// 收口只发生在 extFromMagic(文件命名)那一侧,别把它挪到这里来。
+//
+// 本函数的签名集合必须与 isAudioBytes 逐条对齐,且每个返回值都要是 GetAudioDuration
+// 支持的扩展名 —— checkAudioDuration「解析失败即拒」正是建立在这条不变量上:magicOK
+// 放行的音频,这里一定认得容器、一定有对应解析器,于是解析失败只可能是内容不符。
+// 两边漂移会让某个合法格式变成「认不出→解析失败→被拒」。见 TestAudioMagicListsAligned。
 func audioExtFromMagic(b []byte) string {
 	switch {
 	case magicHasAt(b, 0, "RIFF") && magicHasAt(b, 8, "WAVE"):
@@ -339,16 +348,27 @@ func magicOK(field Field, data []byte) bool {
 //
 // 注意这与 checkAudioDuration 的取舍不同:那里是安全闸,声明由客户端控制、可伪造,所以
 // 一律以文件头为准;这里是文件命名,已知的声明更准,magic 只做兜底。
+//
+// 出口收口到 allowedRefExts,与 refMediaExt 共用同一份名单(见 taskref.go「白名单输出,
+// 不把任意后缀带进 NFS 输入文件名」)。magic 认得的容器比白名单宽:ADTS AAC / avi / flv /
+// mpg / gif 都能识别,但这些格式今天正是靠类别默认值(.wav/.mp4/.png)蒙混过去的——下游
+// 按内容嗅探解得开,一旦给它一个没见过的后缀,反而可能被扩展名白名单直接拒掉,把本来
+// 能跑的输入改坏。收口之后,本函数产出的后缀必定是 extForData / taskref 本就会产出的值,
+// 不会给系统引入任何新后缀。
 func extFromMagic(field Field, data []byte) string {
+	var ext string
 	switch {
 	case isImageField(field):
-		return imageExtFromMagic(data)
+		ext = imageExtFromMagic(data)
 	case isAudioField(field):
-		return audioExtFromMagic(data)
+		ext = audioExtFromMagic(data)
 	case isVideoField(field):
-		return videoExtFromMagic(data)
+		ext = videoExtFromMagic(data)
 	}
-	return ""
+	if !allowedRefExts[ext] {
+		return ""
+	}
+	return ext
 }
 
 func imageExtFromMagic(b []byte) string {
@@ -412,7 +432,7 @@ func (m *Materializer) addBytesExt(field Field, index int, multi bool, data []by
 	if ext == "" {
 		ext = extForField(field)
 	}
-	if err := m.checkAudioDuration(field, data, ext); err != nil {
+	if err := m.checkAudioDuration(field, data); err != nil {
 		return err
 	}
 	ref := m.relRef(field, index, multi, ext)
@@ -430,27 +450,34 @@ func (m *Materializer) addBytesExt(field Field, index int, multi bool, data []by
 // target_video_length,已实测),音频多长就生成多长,过长会 OOM 或长时间占卡。这里在写盘
 // 之前拦,调用方 Cleanup 能把同批已写的输入一并回滚,不留孤儿文件、不占卡、不扣费。
 //
-// 容器一律按文件头现场判定(audioExtFromMagic),不用传进来的 ext —— 那个值在多数路径上
-// 要么为空、要么由客户端声明,信它等于给出一条绕过时长闸的路。
+// 容器一律按文件头现场判定(audioExtFromMagic),不看调用方传进来的 ext —— 那个值在多数
+// 路径上要么为空、要么由客户端声明,信它等于给出一条绕过时长闸的路。
 //
-// 解析失败放行,只记日志:走到这里的字节已经过了上面的 magicOK(音频字段要求 isAudioBytes),
-// 容器是认得的,再解不出来基本是文件本身残缺——这种输入到了引擎也跑不起来,占不住卡,
-// 与本闸要防的「合法长音频吃满显存」不是一类。反过来若判成违规,受伤的是能识别容器但
-// 解析器覆盖不到的边角格式。此处与 magic-bytes 同定位:廉价前置过滤,真正解码是引擎的事。
-func (m *Materializer) checkAudioDuration(field Field, data []byte, ext string) error {
+// 解析失败即拒,不放行。依据是一条不变量:audioExtFromMagic 的签名集合与 isAudioBytes
+// 逐条对齐,且它返回的每个扩展名 GetAudioDuration 都支持(见该函数注释)。所以能走到这里
+// 的字节——已过 magicOK——容器必定认得、解析器必定存在,此时解析失败只可能是内容不是它
+// 自称的那个容器:要么残缺,要么是伪装文件头的 polyglot(前 12 字节写成 RIFF/WAVE、后面
+// 塞任意载荷,能过只看头几个字节的 magicOK)。这类输入本就该拒,顺带把 magicOK 挡不住的
+// 那部分伪装收掉,等于给内容校验补了一层真解码。
+//
+// 代价是本闸只在配了 maxAudioSec 时才生效,且只覆盖音频字段——图片/视频没有对应的解码
+// 验证。所以这是加固,不是通用防线,别当成全类别的内容校验。
+func (m *Materializer) checkAudioDuration(field Field, data []byte) error {
 	if m.maxAudioSec <= 0 || !isAudioField(field) {
 		return nil
 	}
 	probeExt := audioExtFromMagic(data)
 	if probeExt == "" {
-		probeExt = ext
+		// magicOK 已放行却认不出容器 = 两份签名名单漂移了,是本方的 bug,不该让用户的
+		// 合法音频替它买单。记日志放行,漂移本身由 TestAudioMagicListsAligned 挡在 CI。
+		common.SysLog(fmt.Sprintf("nfsinput: magicOK 放行但 audioExtFromMagic 认不出容器,跳过时长校验 field=%s(签名名单可能与 isAudioBytes 漂移)", field))
+		return nil
 	}
 	// ctx 参数在 common.GetAudioDuration 里没有被使用(只出现在签名上),故不把 ctx 一路
 	// 透进 AddBytes——那会改动多处公开调用点,换不来任何实际行为。
 	sec, err := common.GetAudioDuration(context.Background(), bytes.NewReader(data), probeExt)
 	if err != nil {
-		common.SysLog(fmt.Sprintf("nfsinput: 音频时长解析失败,跳过时长校验 field=%s ext=%s err=%v", field, probeExt, err))
-		return nil
+		return fmt.Errorf("输入 %s 的文件头声称是 %s,但内容无法按该容器解析(文件残缺或与文件头不符): %w", field, probeExt, err)
 	}
 	if sec > m.maxAudioSec {
 		return fmt.Errorf("输入 %s 时长 %.1f 秒,超过上限 %.0f 秒", field, sec, m.maxAudioSec)
