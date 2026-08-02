@@ -13,6 +13,7 @@ import AsyncTaskBubble from '../components/gen/AsyncTaskBubble';
 import { useVisibleModes } from '../hooks/useVisibleModes';
 import { useAutoOpenLatest } from '../hooks/useAutoOpenLatest';
 import ConfigBar from '../components/gen/ConfigBar';
+import ConfigCollapse from '../components/gen/ConfigCollapse';
 import ConversationBar from '../components/gen/ConversationBar';
 import MediaBar, { MOBILE_MAX_VIDEO_MB } from '../components/gen/MediaBar';
 import MessageFeed from '../components/gen/MessageFeed';
@@ -27,6 +28,7 @@ const MusicBody = ({ mode }) => {
     models,
     messages,
     generating,
+    locked,
     turnLimitReached,
     missingRequiredAudio,
     missingRequiredVideo,
@@ -57,6 +59,8 @@ const MusicBody = ({ mode }) => {
   const mobileVideoMaxMB = videoMaxMB
     ? Math.min(videoMaxMB, MOBILE_MAX_VIDEO_MB)
     : MOBILE_MAX_VIDEO_MB;
+  // 锁定态（选中了某条会话）参数与素材都改不动，见 useMusicGeneration 的 handleInputChange。
+  const editDisabled = generating || locked;
 
   const mediaSlots = [
     needsAudio && {
@@ -152,63 +156,72 @@ const MusicBody = ({ mode }) => {
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
-      <ConfigBar
-        disabled={generating}
-        fields={[
-          {
-            key: 'group',
-            label: '分组',
-            value: inputs.group,
-            options: groups,
-            onChange: (v) => handleInputChange('group', v),
-          },
-          {
-            key: 'model',
-            label: '模型',
-            value: inputs.model,
-            options: models,
-            onChange: (v) => handleInputChange('model', v),
-          },
-          ...(isT2M
-            ? [
-                {
-                  key: 'duration',
-                  label: '时长',
-                  value: inputs.duration,
-                  options: MUSIC_DURATIONS.map((d) => ({
-                    label: d ? `${d} 秒` : '默认',
-                    value: d,
-                  })),
-                  onChange: (v) => handleInputChange('duration', v),
-                },
-              ]
-            : []),
-          ...(needsDualAudio
-            ? [
-                {
-                  key: 'language',
-                  label: '演唱语言',
-                  value: inputs.language,
-                  options: MUSIC_SVS_LANGUAGES,
-                  onChange: (v) => handleInputChange('language', v),
-                },
-                {
-                  key: 'control',
-                  label: '控制方式',
-                  value: inputs.control,
-                  options: MUSIC_SVS_CONTROLS,
-                  onChange: (v) => handleInputChange('control', v),
-                },
-              ]
-            : []),
-        ]}
-      />
-      <MediaBar slots={mediaSlots} disabled={generating} />
+      <ConfigCollapse
+        locked={locked}
+        title={inputs.model}
+        slots={mediaSlots}
+        onNew={newConversation}
+      >
+        <ConfigBar
+          disabled={editDisabled}
+          fields={[
+            {
+              key: 'group',
+              label: '分组',
+              value: inputs.group,
+              options: groups,
+              onChange: (v) => handleInputChange('group', v),
+            },
+            {
+              key: 'model',
+              label: '模型',
+              value: inputs.model,
+              options: models,
+              onChange: (v) => handleInputChange('model', v),
+            },
+            ...(isT2M
+              ? [
+                  {
+                    key: 'duration',
+                    label: '时长',
+                    value: inputs.duration,
+                    options: MUSIC_DURATIONS.map((d) => ({
+                      label: d ? `${d} 秒` : '默认',
+                      value: d,
+                    })),
+                    onChange: (v) => handleInputChange('duration', v),
+                  },
+                ]
+              : []),
+            ...(needsDualAudio
+              ? [
+                  {
+                    key: 'language',
+                    label: '演唱语言',
+                    value: inputs.language,
+                    options: MUSIC_SVS_LANGUAGES,
+                    onChange: (v) => handleInputChange('language', v),
+                  },
+                  {
+                    key: 'control',
+                    label: '控制方式',
+                    value: inputs.control,
+                    options: MUSIC_SVS_CONTROLS,
+                    onChange: (v) => handleInputChange('control', v),
+                  },
+                ]
+              : []),
+          ]}
+        />
+        <MediaBar
+          slots={mediaSlots}
+          disabled={editDisabled}
+          readOnly={locked}
+        />
+      </ConfigCollapse>
       <ConversationBar
         conversations={conversations}
         currentConvId={currentConvId}
-        showNew={messages.length > 0}
-        onNew={newConversation}
         onOpen={openHistoryItem}
         onDelete={deleteHistoryItem}
         onClear={clearHistory}
@@ -270,6 +283,7 @@ const MusicBody = ({ mode }) => {
                     placeholder='歌词留空则由引擎自动生成'
                     value={inputs.lyrics}
                     onChange={(v) => handleInputChange('lyrics', v)}
+                    disabled={editDisabled}
                     rows={2}
                     autoSize={{ minRows: 2, maxRows: 6 }}
                   />

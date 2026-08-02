@@ -128,6 +128,8 @@ const PickerActions = ({
 
 // 单个媒体输入格：采集/选文件 → 校验 → 转 data-url 回填。
 // 图片给缩略图（点开看原图），音/视频用原生播放器（手机上比自绘控件可靠）。
+// readOnly=锁定态：只展示预览/播放器，不给采集与移除入口（此时 handleInputChange 本就
+// 会直接 return，摆出可点的按钮只会让人以为是坏了）。
 const MediaSlot = ({
   label,
   kind = 'image',
@@ -136,12 +138,13 @@ const MediaSlot = ({
   onChange,
   maxMB = 0,
   disabled = false,
+  readOnly = false,
   required = false,
 }) => {
   const [viewerOpen, setViewerOpen] = useState(false);
   const [recorderOpen, setRecorderOpen] = useState(false);
 
-  const actions = (
+  const pickers = (
     <PickerActions
       kind={kind}
       label={label}
@@ -153,75 +156,98 @@ const MediaSlot = ({
     />
   );
 
+  const editActions = readOnly ? null : (
+    <div className='m-media-slot-actions'>
+      {pickers}
+      <Button
+        size='mini'
+        fill='outline'
+        disabled={disabled}
+        onClick={() => onChange('', '')}
+      >
+        移除
+      </Button>
+    </div>
+  );
+
+  const labelEl = (
+    <div className='m-media-slot-label'>
+      {label}
+      {required && !readOnly && (
+        <span style={{ color: 'var(--adm-color-danger)' }}>*</span>
+      )}
+      {name && <span className='m-media-slot-name'>{name}</span>}
+    </div>
+  );
+
+  const recorder = kind === 'audio' && !readOnly && (
+    <VoiceRecorder
+      visible={recorderOpen}
+      onClose={() => setRecorderOpen(false)}
+      onConfirm={(dataUrl) => onChange(dataUrl, '录制音频.wav')}
+      title={`录制${label}`}
+      script=''
+      minSeconds={MOBILE_RECORD_AUDIO_MIN_SEC}
+      maxSeconds={MOBILE_RECORD_AUDIO_MAX_SEC}
+    />
+  );
+
+  if (!value) {
+    return (
+      <div className='m-media-slot'>
+        {labelEl}
+        {readOnly ? <span className='m-media-slot-name'>未上传</span> : pickers}
+        {recorder}
+      </div>
+    );
+  }
+
+  // 图片已选：缩略图 + 标签 + 操作压成一行。原来是「标签 / 72px 预览 / 按钮」三层纵向
+  // 堆叠，一个格子就要 300px 上下，关键帧的首尾两格能吃掉三分之一屏。
+  // 缩略图保底 56px：首尾帧常常是同一场景的细微差别，再小就看不出有没有传反；点开看原图。
+  if (kind === 'image') {
+    return (
+      <div className='m-media-slot m-media-slot-row'>
+        <Image
+          src={value}
+          width={56}
+          height={56}
+          fit='cover'
+          style={{ borderRadius: 8, flex: '0 0 auto' }}
+          onClick={() => setViewerOpen(true)}
+        />
+        <div className='m-media-slot-col'>
+          {labelEl}
+          {editActions}
+        </div>
+        <ImageViewer
+          image={value}
+          visible={viewerOpen}
+          onClose={() => setViewerOpen(false)}
+        />
+      </div>
+    );
+  }
+
+  // 音/视频：原生控件高度固定、压不动，只把标签与操作并到同一行省掉一层。
   return (
     <div className='m-media-slot'>
-      <div className='m-media-slot-label'>
-        {label}
-        {required && <span style={{ color: 'var(--adm-color-danger)' }}>*</span>}
+      <div className='m-media-slot-head'>
+        {labelEl}
+        {editActions}
       </div>
-      {value ? (
-        <div>
-          {kind === 'image' && (
-            <div style={{ position: 'relative', display: 'inline-block' }}>
-              <Image
-                src={value}
-                width={72}
-                height={72}
-                fit='cover'
-                style={{ borderRadius: 8 }}
-                onClick={() => setViewerOpen(true)}
-              />
-              <ImageViewer
-                image={value}
-                visible={viewerOpen}
-                onClose={() => setViewerOpen(false)}
-              />
-            </div>
-          )}
-          {kind === 'audio' && (
-            <audio
-              src={value}
-              controls
-              preload='none'
-              style={{ width: '100%' }}
-            />
-          )}
-          {kind === 'video' && (
-            <video
-              src={value}
-              controls
-              playsInline
-              preload='metadata'
-              style={{ width: '100%', maxHeight: 140, borderRadius: 8 }}
-            />
-          )}
-          <div className='m-media-slot-actions'>
-            {actions}
-            <Button
-              size='mini'
-              fill='outline'
-              disabled={disabled}
-              onClick={() => onChange('', '')}
-            >
-              移除
-            </Button>
-            {name && <span className='m-media-slot-name'>{name}</span>}
-          </div>
-        </div>
+      {kind === 'audio' ? (
+        <audio src={value} controls preload='none' style={{ width: '100%' }} />
       ) : (
-        actions
-      )}
-      {kind === 'audio' && (
-        <VoiceRecorder
-          visible={recorderOpen}
-          onClose={() => setRecorderOpen(false)}
-          onConfirm={(dataUrl) => onChange(dataUrl, '录制音频.wav')}
-          title={`录制${label}`}
-          script=''
-          minSeconds={MOBILE_RECORD_AUDIO_MIN_SEC}
-          maxSeconds={MOBILE_RECORD_AUDIO_MAX_SEC}
+        <video
+          src={value}
+          controls
+          playsInline
+          preload='metadata'
+          style={{ width: '100%', maxHeight: 140, borderRadius: 8 }}
         />
       )}
+      {recorder}
     </div>
   );
 };
@@ -234,6 +260,7 @@ const MediaListSlot = ({
   max = 3,
   maxMB = 0,
   disabled = false,
+  readOnly = false,
   required = false,
 }) => {
   const pickRef = useRef(null);
@@ -267,7 +294,9 @@ const MediaListSlot = ({
     <div className='m-media-slot'>
       <div className='m-media-slot-label'>
         {label}
-        {required && <span style={{ color: 'var(--adm-color-danger)' }}>*</span>}
+        {required && !readOnly && (
+          <span style={{ color: 'var(--adm-color-danger)' }}>*</span>
+        )}
         <span className='m-media-slot-hint'>
           {values.length}/{max}
         </span>
@@ -277,23 +306,25 @@ const MediaListSlot = ({
           <div key={idx} style={{ position: 'relative' }}>
             <Image
               src={url}
-              width={72}
-              height={72}
+              width={readOnly ? 56 : 72}
+              height={readOnly ? 56 : 72}
               fit='cover'
               style={{ borderRadius: 8 }}
               onClick={() => setViewer(url)}
             />
-            <Button
-              size='mini'
-              disabled={disabled}
-              style={{ position: 'absolute', top: -8, right: -8 }}
-              onClick={() => removeAt(idx)}
-            >
-              ×
-            </Button>
+            {!readOnly && (
+              <Button
+                size='mini'
+                disabled={disabled}
+                style={{ position: 'absolute', top: -8, right: -8 }}
+                onClick={() => removeAt(idx)}
+              >
+                ×
+              </Button>
+            )}
           </div>
         ))}
-        {!full && (
+        {!full && !readOnly && (
           <>
             <Button
               size='small'
@@ -342,13 +373,19 @@ const MediaListSlot = ({
 // 各玩法所需媒体输入的容器：贴在参数条下方，纵向排布（一屏内可见，不占底部输入条）。
 // slots 形如 [{ type:'single'|'list'|'custom', key, ... }]，falsy 项直接跳过，
 // 这样调用方可以写 `isS2V && {...}` 而不必先过滤。整条为空时不渲染。
-const MediaBar = ({ slots = [], notice = '', disabled = false }) => {
+const MediaBar = ({
+  slots = [],
+  notice = '',
+  disabled = false,
+  readOnly = false,
+}) => {
   const visible = slots.filter(Boolean);
-  if (!visible.length && !notice) return null;
+  if (!visible.length && (!notice || readOnly)) return null;
 
   return (
     <div className='m-media-bar'>
-      {notice && <div className='m-media-notice'>{notice}</div>}
+      {/* 上传须知只对还能上传的人有意义，锁定态下是纯噪音 */}
+      {notice && !readOnly && <div className='m-media-notice'>{notice}</div>}
       {visible.map(({ type, key, render, ...rest }) => {
         if (type === 'custom') {
           return (
@@ -361,7 +398,9 @@ const MediaBar = ({ slots = [], notice = '', disabled = false }) => {
           );
         }
         const Slot = type === 'list' ? MediaListSlot : MediaSlot;
-        return <Slot key={key} disabled={disabled} {...rest} />;
+        return (
+          <Slot key={key} disabled={disabled} readOnly={readOnly} {...rest} />
+        );
       })}
     </div>
   );

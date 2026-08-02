@@ -444,6 +444,8 @@ body {
 }
 
 .m-config-chip {
+  display: inline-flex;
+  align-items: center;
   font-size: 12.5px;
   padding: 6px 13px;
   border-radius: 999px;
@@ -451,9 +453,6 @@ body {
   color: #4b5563;
   border: 1px solid transparent;
   white-space: nowrap;
-  max-width: 60vw;
-  overflow: hidden;
-  text-overflow: ellipsis;
 }
 
 .m-config-chip.active {
@@ -461,6 +460,35 @@ body {
   color: var(--brand-primary);
   border-color: rgba(79, 70, 229, 0.22);
   font-weight: 500;
+}
+
+/* 无可选项的字段（如只有一个分组）：保留展示但去掉可点的观感 */
+.m-config-chip.static {
+  background: transparent;
+  border-color: rgba(17, 24, 39, 0.1);
+  color: #6b7280;
+  font-weight: 400;
+}
+
+.m-chip-key {
+  flex: 0 0 auto;
+}
+
+.m-config-chip svg {
+  flex: 0 0 auto;
+  margin-left: 4px;
+}
+
+/* 值单独限宽截断，而不是给整个胶囊设 max-width：模型名长短不一，胶囊跟着变宽就会换行，
+   配置区高度随选中的模型跳变，下面的对话区也跟着忽高忽矮。9em 能让「分组 + 模型」在
+   360px 逻辑宽下稳定同行；截掉的部分在 Picker 里看得到全名。 */
+.m-chip-val {
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 9em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 /* 能力标签条：体验区一个分类最多 5 个中文 tab，默认 15px 字 + 20px 内边距在小屏上
@@ -509,6 +537,81 @@ body {
   font-size: 12px;
   color: #9aa1ad;
   margin-bottom: 6px;
+  min-width: 0;
+}
+
+/* 图片已选后的紧凑行：缩略图 | 标签+操作。省掉纵向堆叠的两层。 */
+.m-media-slot-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.m-media-slot-col {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.m-media-slot-row .m-media-slot-label {
+  margin-bottom: 4px;
+}
+
+.m-media-slot-row .m-media-slot-actions {
+  margin-top: 0;
+}
+
+/* 音/视频已选后：标签与操作并到播放器上方同一行 */
+.m-media-slot-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+
+.m-media-slot-head .m-media-slot-label,
+.m-media-slot-head .m-media-slot-actions {
+  margin-bottom: 0;
+  margin-top: 0;
+}
+
+/* 锁定态的配置摘要条：缩略图/角标 + 参数概要 + 新建会话 */
+.m-config-summary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  background: rgba(255, 255, 255, 0.9);
+  border-bottom: 0.5px solid rgba(17, 24, 39, 0.06);
+}
+
+.m-config-summary-main {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 1 1 auto;
+  min-width: 0;
+  color: #6b7280;
+}
+
+.m-summary-title {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12.5px;
+}
+
+.m-summary-badge {
+  flex: 0 0 auto;
+  font-size: 11px;
+  line-height: 1;
+  padding: 5px 7px;
+  border-radius: 5px;
+  background: #f1f2f6;
+  color: #6b7280;
 }
 
 .m-media-slot-hint {

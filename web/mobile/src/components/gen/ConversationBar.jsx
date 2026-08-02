@@ -42,11 +42,11 @@ const summarize = (conv) => {
   };
 };
 
+// 「新建会话」不在这里：它只在锁定态才有意义（未锁定时本就是新会话），而锁定态的
+// 配置摘要条(ConfigCollapse)就摆在正上方并带着这个按钮——放两个只会让人以为点错了。
 const ConversationBar = ({
   conversations = [],
   currentConvId,
-  showNew,
-  onNew,
   onOpen,
   onDelete,
   onClear,
@@ -83,11 +83,6 @@ const ConversationBar = ({
           borderBottom: '0.5px solid rgba(17,24,39,0.06)',
         }}
       >
-        {showNew && (
-          <Button size='mini' fill='none' onClick={onNew}>
-            新建会话
-          </Button>
-        )}
         <Button size='mini' fill='none' onClick={() => setVisible(true)}>
           历史{conversations.length > 0 ? ` (${conversations.length})` : ''}
         </Button>

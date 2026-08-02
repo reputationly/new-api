@@ -17,6 +17,7 @@ import { useVisibleModes } from '../hooks/useVisibleModes';
 import { useAutoOpenLatest } from '../hooks/useAutoOpenLatest';
 import ConfigBar from '../components/gen/ConfigBar';
 import ConversationBar from '../components/gen/ConversationBar';
+import ConfigCollapse from '../components/gen/ConfigCollapse';
 import MediaBar from '../components/gen/MediaBar';
 import VoiceRecorder from '../components/gen/VoiceRecorder';
 import MessageFeed from '../components/gen/MessageFeed';
@@ -34,6 +35,7 @@ const AudioBody = ({ mode }) => {
     models,
     messages,
     generating,
+    locked,
     turnLimitReached,
     missingRequiredVoice,
     needsVoice,
@@ -58,6 +60,8 @@ const AudioBody = ({ mode }) => {
   const [recorderVisible, setRecorderVisible] = useState(false);
   const voiceFileRef = useRef(null);
   const usingOwnVoice = inputs.voicePreset === VOICE_UPLOAD_VALUE;
+  // 锁定态（选中了某条会话）参数与音色都改不动，见 useAudioGeneration 的 handleInputChange。
+  const editDisabled = generating || locked;
 
   // 录制/上传即视为"要用自己的声音"：把音色切到自定义，省得用户还得回选择器里找
   // 「我的声音」（它排在 10 个预设音色之后，滚不到就等于不存在）。
@@ -90,22 +94,27 @@ const AudioBody = ({ mode }) => {
     render: (
       <div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-          <Button
-            size='mini'
-            fill='outline'
-            disabled={generating}
-            onClick={() => setRecorderVisible(true)}
-          >
-            🎤 录制我的声音
-          </Button>
-          <Button
-            size='mini'
-            fill='outline'
-            disabled={generating}
-            onClick={() => voiceFileRef.current?.click()}
-          >
-            上传音频
-          </Button>
+          {/* 锁定态改不动音色，只留下方的播放器供试听 */}
+          {!locked && (
+            <>
+              <Button
+                size='mini'
+                fill='outline'
+                disabled={editDisabled}
+                onClick={() => setRecorderVisible(true)}
+              >
+                🎤 录制我的声音
+              </Button>
+              <Button
+                size='mini'
+                fill='outline'
+                disabled={editDisabled}
+                onClick={() => voiceFileRef.current?.click()}
+              >
+                上传音频
+              </Button>
+            </>
+          )}
           <span className='m-media-slot-name'>
             {usingOwnVoice
               ? inputs.voiceData
@@ -187,72 +196,83 @@ const AudioBody = ({ mode }) => {
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
-      <ConfigBar
-        disabled={generating}
-        fields={[
-          {
-            key: 'group',
-            label: '分组',
-            value: inputs.group,
-            options: groups,
-            onChange: (v) => handleInputChange('group', v),
-          },
-          {
-            key: 'model',
-            label: '模型',
-            value: inputs.model,
-            options: models,
-            onChange: (v) => handleInputChange('model', v),
-          },
-          ...(needsVoice
-            ? [
-                {
-                  key: 'voicePreset',
-                  label: '音色',
-                  value: inputs.voicePreset,
-                  options: [
-                    ...PRESET_VOICES.map((v) => ({
-                      label: v.label,
-                      value: v.id,
-                    })),
-                    { label: '我的声音', value: VOICE_UPLOAD_VALUE },
-                  ],
-                  onChange: (v) => handleInputChange('voicePreset', v),
-                },
-                {
-                  key: 'emotion',
-                  label: '情感',
-                  value: inputs.emotion,
-                  options: EMOTION_PRESETS,
-                  onChange: (v) => handleInputChange('emotion', v),
-                },
-              ]
-            : []),
-          ...(needsSpeaker
-            ? [
-                {
-                  key: 'speaker',
-                  label: '音色',
-                  value: inputs.speaker,
-                  options: AUDIO_SPEAKER_PRESETS,
-                  onChange: (v) => handleInputChange('speaker', v),
-                },
-              ]
-            : []),
-          ...(needsLanguage
-            ? [
-                {
-                  key: 'language',
-                  label: '口音',
-                  value: inputs.language,
-                  options: AUDIO_LANGUAGES,
-                  onChange: (v) => handleInputChange('language', v),
-                },
-              ]
-            : []),
-        ]}
-      />
-      <MediaBar slots={mediaSlots} disabled={generating} />
+      <ConfigCollapse
+        locked={locked}
+        title={inputs.model}
+        slots={mediaSlots}
+        onNew={newConversation}
+      >
+        <ConfigBar
+          disabled={editDisabled}
+          fields={[
+            {
+              key: 'group',
+              label: '分组',
+              value: inputs.group,
+              options: groups,
+              onChange: (v) => handleInputChange('group', v),
+            },
+            {
+              key: 'model',
+              label: '模型',
+              value: inputs.model,
+              options: models,
+              onChange: (v) => handleInputChange('model', v),
+            },
+            ...(needsVoice
+              ? [
+                  {
+                    key: 'voicePreset',
+                    label: '音色',
+                    value: inputs.voicePreset,
+                    options: [
+                      ...PRESET_VOICES.map((v) => ({
+                        label: v.label,
+                        value: v.id,
+                      })),
+                      { label: '我的声音', value: VOICE_UPLOAD_VALUE },
+                    ],
+                    onChange: (v) => handleInputChange('voicePreset', v),
+                  },
+                  {
+                    key: 'emotion',
+                    label: '情感',
+                    value: inputs.emotion,
+                    options: EMOTION_PRESETS,
+                    onChange: (v) => handleInputChange('emotion', v),
+                  },
+                ]
+              : []),
+            ...(needsSpeaker
+              ? [
+                  {
+                    key: 'speaker',
+                    label: '音色',
+                    value: inputs.speaker,
+                    options: AUDIO_SPEAKER_PRESETS,
+                    onChange: (v) => handleInputChange('speaker', v),
+                  },
+                ]
+              : []),
+            ...(needsLanguage
+              ? [
+                  {
+                    key: 'language',
+                    label: '口音',
+                    value: inputs.language,
+                    options: AUDIO_LANGUAGES,
+                    onChange: (v) => handleInputChange('language', v),
+                  },
+                ]
+              : []),
+          ]}
+        />
+        <MediaBar
+          slots={mediaSlots}
+          disabled={editDisabled}
+          readOnly={locked}
+        />
+      </ConfigCollapse>
       {needsVoice && (
         <VoiceRecorder
           visible={recorderVisible}
@@ -263,8 +283,6 @@ const AudioBody = ({ mode }) => {
       <ConversationBar
         conversations={conversations}
         currentConvId={currentConvId}
-        showNew={messages.length > 0}
-        onNew={newConversation}
         onOpen={openHistoryItem}
         onDelete={deleteHistoryItem}
         onClear={clearHistory}

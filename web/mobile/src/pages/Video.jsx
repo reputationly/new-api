@@ -16,6 +16,7 @@ import { useVisibleModes } from '../hooks/useVisibleModes';
 import { useAutoOpenLatest } from '../hooks/useAutoOpenLatest';
 
 import ConfigBar from '../components/gen/ConfigBar';
+import ConfigCollapse from '../components/gen/ConfigCollapse';
 import ConversationBar from '../components/gen/ConversationBar';
 import MediaBar, {
   MOBILE_MAX_VIDEO_MB,
@@ -49,6 +50,7 @@ export const VideoBody = ({ mode }) => {
     dubAvailable,
     messages,
     generating,
+    locked,
     turnLimitReached,
     missingRequiredImage,
     generate,
@@ -72,6 +74,11 @@ export const VideoBody = ({ mode }) => {
   // 关键帧 tab 下 i2v 与 flf2v 是两个引擎实例，只有后者认尾帧（判据见 isFlf2vModel）。
   const needsLastFrame = isFLF2V && isFlf2vModel(inputs.model);
   const needsVideoUpload = isVACE || isSR || isDub;
+  // 锁定态（选中了某条会话）参数与素材都改不动，见 useVideoGeneration 的 handleInputChange。
+  const editDisabled = generating || locked;
+  // 输出时长由输入决定的玩法不下发 duration，也就不该摆时长选择器：超分/配音跟源视频，
+  // 数字人跟驱动音频（引擎不读 target_video_length，实测 10 秒音频给 duration:5 仍出 10 秒）。
+  const showDuration = !isSR && !isDub && !isS2V;
 
   const mediaSlots = [
     needsImage && {
@@ -238,127 +245,149 @@ export const VideoBody = ({ mode }) => {
     );
   };
 
+  const summaryTitle = [
+    inputs.model,
+    !followsInput && inputs.size,
+    showDuration && inputs.seconds && `${inputs.seconds}s`,
+  ]
+    .filter(Boolean)
+    .join(' · ');
+
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
-      <ConfigBar
-        disabled={generating}
-        fields={[
-          {
-            key: 'group',
-            label: '分组',
-            value: inputs.group,
-            options: groups,
-            onChange: (v) => handleInputChange('group', v),
-          },
-          {
-            key: 'model',
-            label: '模型',
-            value: inputs.model,
-            options: models,
-            onChange: (v) => handleInputChange('model', v),
-          },
-          // 尺寸/比例只有文生视频会下发；其余玩法输出跟随上传的图/视频，
-          // 摆出来就是个点了不生效的假开关（旧版图生视频那个「尺寸：480P」即是）。
-          ...(followsInput
-            ? []
-            : [
-                {
-                  key: 'size',
-                  label: '尺寸',
-                  value: inputs.size,
-                  options: availableSizes,
-                  onChange: (v) => handleInputChange('size', v),
-                },
-              ]),
-          {
-            key: 'seconds',
-            label: '时长',
-            value: inputs.seconds,
-            options: availableDurations,
-            onChange: (v) => handleInputChange('seconds', v),
-          },
-          ...(followsInput
-            ? []
-            : [
-                {
-                  key: 'aspectRatio',
-                  label: '比例',
-                  value: inputs.aspectRatio,
-                  options: availableAspectRatios,
-                  onChange: (v) => handleInputChange('aspectRatio', v),
-                },
-              ]),
-        ]}
-      />
-      {/* 插帧/配音开关：默认关。插帧透传 target_fps；配音开启则生成后自动接 v2a 配音段。
-          超分与配乐本身就是后处理，两个开关都不适用，整条不渲染。 */}
-      {!isSR && !isDub && (
-        <div
-          className='m-config-bar'
-          style={{
-            paddingTop: 0,
-            borderBottom: '0.5px solid rgba(17,24,39,0.06)',
-          }}
-        >
+      <ConfigCollapse
+        locked={locked}
+        title={summaryTitle}
+        slots={mediaSlots}
+        onNew={newConversation}
+      >
+        <ConfigBar
+          disabled={editDisabled}
+          fields={[
+            {
+              key: 'group',
+              label: '分组',
+              value: inputs.group,
+              options: groups,
+              onChange: (v) => handleInputChange('group', v),
+            },
+            {
+              key: 'model',
+              label: '模型',
+              value: inputs.model,
+              options: models,
+              onChange: (v) => handleInputChange('model', v),
+            },
+            // 尺寸/比例只有文生视频会下发；其余玩法输出跟随上传的图/视频，
+            // 摆出来就是个点了不生效的假开关（旧版图生视频那个「尺寸：480P」即是）。
+            ...(followsInput
+              ? []
+              : [
+                  {
+                    key: 'size',
+                    label: '尺寸',
+                    value: inputs.size,
+                    options: availableSizes,
+                    onChange: (v) => handleInputChange('size', v),
+                  },
+                ]),
+            ...(showDuration
+              ? [
+                  {
+                    key: 'seconds',
+                    label: '时长',
+                    value: inputs.seconds,
+                    options: availableDurations,
+                    onChange: (v) => handleInputChange('seconds', v),
+                  },
+                ]
+              : []),
+            ...(followsInput
+              ? []
+              : [
+                  {
+                    key: 'aspectRatio',
+                    label: '比例',
+                    value: inputs.aspectRatio,
+                    options: availableAspectRatios,
+                    onChange: (v) => handleInputChange('aspectRatio', v),
+                  },
+                ]),
+          ]}
+        />
+        {/* 插帧/配音开关：默认关。插帧透传 target_fps；配音开启则生成后自动接 v2a 配音段。
+            超分与配乐本身就是后处理，两个开关都不适用，整条不渲染。
+            说明文字只在关闭态显示：开着的时候用户已经知道它是什么了，而那句话有它没它
+            都占满一整行。 */}
+        {!isSR && !isDub && (
           <div
-            className={`m-config-chip${inputs.interpolation ? ' active' : ''}`}
-            onClick={() =>
-              !generating &&
-              handleInputChange('interpolation', !inputs.interpolation)
-            }
+            className='m-config-bar'
+            style={{
+              paddingTop: 0,
+              borderBottom: '0.5px solid rgba(17,24,39,0.06)',
+            }}
           >
-            插帧：{inputs.interpolation ? '开' : '关'} · 帧率翻倍更流畅
-          </div>
-          {dubAvailable && (
             <div
-              className={`m-config-chip${inputs.dubbing ? ' active' : ''}`}
+              className={`m-config-chip${inputs.interpolation ? ' active' : ''}`}
               onClick={() =>
-                !generating && handleInputChange('dubbing', !inputs.dubbing)
+                !editDisabled &&
+                handleInputChange('interpolation', !inputs.interpolation)
               }
             >
-              配音：{inputs.dubbing ? '开' : '关'} · 生成后自动配音
+              {inputs.interpolation ? '插帧：开' : '插帧：关 · 帧率翻倍更流畅'}
             </div>
-          )}
-        </div>
-      )}
-      {dubAvailable && inputs.dubbing && (
-        <div style={{ padding: '8px 12px 0' }}>
-          <TextArea
-            placeholder='配音提示词（可选）：描述想要的声音，留空则按画面自动配音'
-            value={inputs.dubPrompt || ''}
-            onChange={(v) => handleInputChange('dubPrompt', v)}
-            rows={2}
-            maxLength={500}
-          />
-        </div>
-      )}
-      {!followsInput && /1080/i.test(inputs.size || '') && (
-        <div
-          style={{
-            padding: '6px 12px',
-            fontSize: 12,
-            color: '#b45309',
-            background: '#fffbeb',
-            borderBottom: '0.5px solid rgba(17,24,39,0.06)',
-          }}
-        >
-          1080P 将先生成再调用超分模型提升画质：耗时更久，且会同时产生本模型与超分模型的额度/积分消耗
-        </div>
-      )}
-      <MediaBar
-        slots={mediaSlots}
-        disabled={generating}
-        notice={
-          needsVideoUpload
-            ? `视频需整段上传，建议在 WiFi 下操作；单个文件不超过 ${videoMaxMB}MB，现场录像不超过 ${MOBILE_RECORD_VIDEO_MAX_SEC} 秒`
-            : ''
-        }
-      />
+            {dubAvailable && (
+              <div
+                className={`m-config-chip${inputs.dubbing ? ' active' : ''}`}
+                onClick={() =>
+                  !editDisabled && handleInputChange('dubbing', !inputs.dubbing)
+                }
+              >
+                {inputs.dubbing ? '配音：开' : '配音：关 · 生成后自动配音'}
+              </div>
+            )}
+          </div>
+        )}
+        {dubAvailable && inputs.dubbing && (
+          <div style={{ padding: '8px 12px 0' }}>
+            <TextArea
+              placeholder='配音提示词（可选）：描述想要的声音，留空则按画面自动配音'
+              value={inputs.dubPrompt || ''}
+              onChange={(v) => handleInputChange('dubPrompt', v)}
+              disabled={editDisabled}
+              rows={2}
+              maxLength={500}
+            />
+          </div>
+        )}
+        {!followsInput && /1080/i.test(inputs.size || '') && (
+          <div
+            style={{
+              padding: '6px 12px',
+              fontSize: 12,
+              color: '#b45309',
+              background: '#fffbeb',
+              borderBottom: '0.5px solid rgba(17,24,39,0.06)',
+            }}
+          >
+            1080P
+            将先生成再调用超分模型提升画质：耗时更久，且会同时产生本模型与超分模型的额度/积分消耗
+          </div>
+        )}
+        <MediaBar
+          slots={mediaSlots}
+          disabled={editDisabled}
+          readOnly={locked}
+          notice={
+            needsVideoUpload
+              ? `视频需整段上传，建议在 WiFi 下操作；单个文件不超过 ${videoMaxMB}MB，现场录像不超过 ${MOBILE_RECORD_VIDEO_MAX_SEC} 秒`
+              : ''
+          }
+        />
+      </ConfigCollapse>
       <ConversationBar
         conversations={conversations}
         currentConvId={currentConvId}
-        showNew={messages.length > 0}
-        onNew={newConversation}
         onOpen={openHistoryItem}
         onDelete={deleteHistoryItem}
         onClear={clearHistory}

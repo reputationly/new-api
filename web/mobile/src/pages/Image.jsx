@@ -16,6 +16,7 @@ import { IMAGE_MAX_EDIT_IMAGES } from '@classic/constants/imagePlayground.consta
 import { useVisibleModes } from '../hooks/useVisibleModes';
 import { useAutoOpenLatest } from '../hooks/useAutoOpenLatest';
 import ConfigBar from '../components/gen/ConfigBar';
+import ConfigCollapse from '../components/gen/ConfigCollapse';
 import ConversationBar from '../components/gen/ConversationBar';
 import MediaBar from '../components/gen/MediaBar';
 import MessageFeed from '../components/gen/MessageFeed';
@@ -32,6 +33,7 @@ const ImageBody = ({ mode }) => {
     availableSizes,
     messages,
     generating,
+    locked,
     turnLimitReached,
     missingRequiredImage,
     generate,
@@ -98,53 +100,63 @@ const ImageBody = ({ mode }) => {
     );
   };
 
+  // 锁定态（选中了某条会话）参数与底图都改不动，见 useImageGeneration 的 handleInputChange。
+  const editDisabled = generating || locked;
+  const mediaSlots = [
+    isI2I && {
+      type: 'list',
+      key: 'imageUrls',
+      label: '底图',
+      required: true,
+      max: IMAGE_MAX_EDIT_IMAGES,
+      values: inputs.imageUrls || [],
+      onChange: (v) => handleInputChange('imageUrls', v),
+    },
+  ];
+
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
-      <ConfigBar
-        disabled={generating}
-        fields={[
-          {
-            key: 'group',
-            label: '分组',
-            value: inputs.group,
-            options: groups,
-            onChange: (v) => handleInputChange('group', v),
-          },
-          {
-            key: 'model',
-            label: '模型',
-            value: inputs.model,
-            options: models,
-            onChange: (v) => handleInputChange('model', v),
-          },
-          {
-            key: 'size',
-            label: '尺寸',
-            value: inputs.size,
-            options: availableSizes,
-            onChange: (v) => handleInputChange('size', v),
-          },
-        ]}
-      />
-      <MediaBar
-        disabled={generating}
-        slots={[
-          isI2I && {
-            type: 'list',
-            key: 'imageUrls',
-            label: '底图',
-            required: true,
-            max: IMAGE_MAX_EDIT_IMAGES,
-            values: inputs.imageUrls || [],
-            onChange: (v) => handleInputChange('imageUrls', v),
-          },
-        ]}
-      />
+      <ConfigCollapse
+        locked={locked}
+        title={[inputs.model, inputs.size].filter(Boolean).join(' · ')}
+        slots={mediaSlots}
+        onNew={newConversation}
+      >
+        <ConfigBar
+          disabled={editDisabled}
+          fields={[
+            {
+              key: 'group',
+              label: '分组',
+              value: inputs.group,
+              options: groups,
+              onChange: (v) => handleInputChange('group', v),
+            },
+            {
+              key: 'model',
+              label: '模型',
+              value: inputs.model,
+              options: models,
+              onChange: (v) => handleInputChange('model', v),
+            },
+            {
+              key: 'size',
+              label: '尺寸',
+              value: inputs.size,
+              options: availableSizes,
+              onChange: (v) => handleInputChange('size', v),
+            },
+          ]}
+        />
+        <MediaBar
+          disabled={editDisabled}
+          readOnly={locked}
+          slots={mediaSlots}
+        />
+      </ConfigCollapse>
       <ConversationBar
         conversations={conversations}
         currentConvId={currentConvId}
-        showNew={messages.length > 0}
-        onNew={newConversation}
         onOpen={openHistoryItem}
         onDelete={deleteHistoryItem}
         onClear={clearHistory}
