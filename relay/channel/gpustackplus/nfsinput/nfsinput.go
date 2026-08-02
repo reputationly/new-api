@@ -242,10 +242,29 @@ func isAudioField(field Field) bool {
 	return false
 }
 
-// extForData 从 data-uri 的 MIME 推导真实扩展名(保留上传的实际格式,如 .mp3/.mov/.jpg),
-// 避免把 mp3 存成 .wav、mov 存成 .mp4 误导下游按扩展名/容器识别的引擎。无法识别或非
-// data-uri 时返回 "",由调用方回退到字段默认扩展名(extForField)。白名单输出,不引入
-// 任意后缀。
+// extForData 从 data-uri 的 MIME 推导真实扩展名(保留上传的实际格式,如 .mp3/.mov/.jpg)。
+// 无法识别或非 data-uri 时返回 "",由调用方回退到字段默认扩展名(extForField)。白名单
+// 输出,不引入任意后缀。
+//
+// —— 关于 NFS 输入文件扩展名的作用,一次性说清,本包其余几处都引用这里 ——
+//
+// 本包早前的注释声称「后缀错了会误导下游按扩展名识别容器的引擎」。**这个说法不成立**,
+// 2026-08 逐仓核对过:
+//
+//   - 引擎全部按内容解码,没有任何按后缀分发的逻辑:
+//     音频 LightX2V/lightx2v/utils/audio_io.py load_audio_file → torchaudio.load()
+//     (torchcodec/FFmpeg),退化到 soundfile.read()(libsndfile);
+//     图片 Bernini/bernini/data_utils.py → PIL.Image.open();
+//     视频 LightX2V → cv2.VideoCapture() / PyAV av.open()。
+//   - 门面也不看:gpustack/routes/videos.py 的 _validate_input_ref 只校验相对路径、越界、
+//     租户绑定与文件存在,无扩展名校验;_resolve_input_refs 更是把 _INPUT_FIELDS 里声明的
+//     ext 直接丢弃(`for field, (engine_field, _ext) := range ...`)。
+//   - 反证:门面自己的管理端上传路径 _persist_upload_files 按字段写死后缀(audio 一律
+//     .wav),完全不看上传内容。若引擎真按后缀认容器,那条路早就坏了。
+//
+// 所以扩展名对功能没有影响。保留真实后缀的价值只剩一条:运维在 NFS 上翻输入文件时,
+// 名字不骗人、便于排查。这条价值不大但也不为零,故保留现有推导;但**不要再基于「引擎需要
+// 正确后缀」去扩大改动范围**——那是一个已被证伪的前提,它曾经导致过一次不必要的行为变更。
 func extForData(raw string) string {
 	if !strings.HasPrefix(raw, "data:") {
 		return ""
@@ -341,20 +360,20 @@ func magicOK(field Field, data []byte) bool {
 //
 // 只在调用方没给出 ext 时用:URL 下载 / multipart 上传 / 裸 base64 三条路都不带 ext,
 // 此前一律落到 extForField 的类别默认值,于是 URL 传进来的 mp3 被存成 .wav、webm 被存成
-// .mp4 —— 正是 extForData 注释里点名要避免的「误导下游按扩展名识别容器的引擎」。
+// .mp4。**这纯粹是可读性问题,不影响功能**——扩展名对下游解码没有作用,依据见 extForData
+// 注释里那段核对记录。别再给这个函数安上「引擎需要正确后缀」的理由。
 //
 // 反过来,data-uri 的 MIME 与任务引用给出的 ext 不覆盖:它们能表达 magic 分不出的差异
-// (最典型是 mov 与 mp4 同为 ISO BMFF),拿 magic 去盖反而是退步。
+// (最典型是 mov 与 mp4 同为 ISO BMFF),拿 magic 去盖只会让文件名更不准。
 //
 // 注意这与 checkAudioDuration 的取舍不同:那里是安全闸,声明由客户端控制、可伪造,所以
 // 一律以文件头为准;这里是文件命名,已知的声明更准,magic 只做兜底。
 //
 // 出口收口到 allowedRefExts,与 refMediaExt 共用同一份名单(见 taskref.go「白名单输出,
-// 不把任意后缀带进 NFS 输入文件名」)。magic 认得的容器比白名单宽:ADTS AAC / avi / flv /
-// mpg / gif 都能识别,但这些格式今天正是靠类别默认值(.wav/.mp4/.png)蒙混过去的——下游
-// 按内容嗅探解得开,一旦给它一个没见过的后缀,反而可能被扩展名白名单直接拒掉,把本来
-// 能跑的输入改坏。收口之后,本函数产出的后缀必定是 extForData / taskref 本就会产出的值,
-// 不会给系统引入任何新后缀。
+// 不把任意后缀带进 NFS 输入文件名」)。magic 认得的容器比白名单宽——ADTS AAC / avi / flv /
+// mpg / gif 都能识别——收口的理由不是「后缀错了下游会拒」(已证伪),而是:本函数只是给
+// 文件名补个可读性,没必要为此把 NFS 上出现的后缀集合扩大到别的路径从未产出过的值。
+// 收口后它的产出必定落在 extForData / taskref 本就会产出的集合里,新增变量为零。
 func extFromMagic(field Field, data []byte) string {
 	var ext string
 	switch {
@@ -497,7 +516,8 @@ func (m *Materializer) AddString(ctx context.Context, field Field, index int, mu
 		if err != nil {
 			return fmt.Errorf("输入 %s 解析任务引用失败: %w", field, err)
 		}
-		// 保留产物真实扩展名(如 ACE-Step .mp3):下游引擎按扩展名识别容器,ext 为空回退字段默认
+		// 保留产物真实扩展名(如 ACE-Step .mp3),ext 为空回退字段默认。只为 NFS 上文件名不
+		// 骗人;扩展名不影响下游解码,见 extForData 注释里的核对记录。
 		return m.addBytesExt(field, index, multi, data, ext)
 	}
 	if strings.HasPrefix(raw, "http://") || strings.HasPrefix(raw, "https://") {

@@ -203,7 +203,8 @@ var (
 )
 
 // 落盘扩展名:不带 ext 的三条路(URL 下载 / multipart / 裸 base64)此前一律落到 extForField
-// 的类别默认值,mp3 被存成 .wav、webm 被存成 .mp4,误导按扩展名识别容器的下游引擎。
+// 的类别默认值,mp3 被存成 .wav、webm 被存成 .mp4。这是可读性问题,不影响下游解码
+// (引擎按内容嗅探,核对依据见 extForData 注释)。
 func TestExtFromMagic(t *testing.T) {
 	png := []byte{0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A}
 	jpg := []byte{0xFF, 0xD8, 0xFF, 0xE0, 0x00, 0x10}

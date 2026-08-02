@@ -55,8 +55,10 @@ func (m *Materializer) resolveTaskRef(ctx context.Context, raw string) ([]byte, 
 // ResolveTaskRefBytes 把 task:<task_id> 解析为产物字节 + 真实扩展名。
 // maxBytes 为 per-model 上限(0=仅受全局 MaxObjectSizeMB 约束)。扩展名从 OBS key /
 // URL 路径提取(引擎 save_result_path 的扩展名经 KeyFromNFSPath 原样保留,如 ACE-Step
-// 音乐产物 .mp3):不能丢——下游引擎按扩展名识别容器(与 extForData 同精神);
-// 无法识别时返回 "",由调用方回退默认扩展名。
+// 音乐产物 .mp3);无法识别时返回 "",由调用方回退默认扩展名。
+//
+// 保留真实扩展名只为 NFS 上文件名可读——扩展名不影响下游解码,引擎全部按内容嗅探,
+// 核对依据见 nfsinput.go extForData 的注释。别据此推断「后缀丢了会出问题」。
 func ResolveTaskRefBytes(ctx context.Context, userID int, raw string, maxBytes int64) ([]byte, string, error) {
 	taskID := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(raw), TaskRefScheme))
 	if taskID == "" {
