@@ -3995,6 +3995,17 @@
     "内置无限画布 AI 创作空间": "Espace de création IA sur canevas infini intégré",
     "提示词智能优化": "Optimisation de l'invite",
     "开启后会自动丰富和优化提示词，适合只写了主题或简短创意的情况。如果提示词已经很详细，或对文字、数量、位置和版式有严格要求，建议关闭。部分模型（如 hunyuan-image-3）开启后会先思考再改写提示词，生成时长明显增加（约 2.8 倍）。": "Une fois activé, votre invite est automatiquement enrichie et affinée — utile si vous n'avez écrit qu'un thème ou une idée courte. Si votre invite est déjà détaillée, ou si vous avez des exigences strictes concernant le texte, les quantités, le positionnement ou la mise en page, laissez l'option désactivée. Certains modèles (comme hunyuan-image-3) raisonnent avant de réécrire l'invite, ce qui augmente nettement le temps de génération (environ 2,8x).",
-    "简短描述建议开启；详细文案或严格版式建议关闭": "Recommandé pour les descriptions courtes ; à désactiver pour un texte détaillé ou une mise en page stricte"
+    "简短描述建议开启；详细文案或严格版式建议关闭": "Recommandé pour les descriptions courtes ; à désactiver pour un texte détaillé ou une mise en page stricte",
+    "现场拍摄": "Enregistrer une vidéo",
+    "开始录制": "Démarrer l'enregistrement",
+    "录制中": "Enregistrement",
+    "停止": "Arrêter",
+    "重拍": "Recommencer",
+    "切换摄像头": "Changer de caméra",
+    "使用这段录像": "Utiliser cet enregistrement",
+    "时长 {{sec}} 秒，大小 {{size}} MB": "{{sec}} s · {{size}} Mo",
+    "文件超过 {{size}} MB 上限，请缩短时长后重录": "Le fichier dépasse la limite de {{size}} Mo — veuillez enregistrer une séquence plus courte.",
+    "按 {{height}}P / {{fps}}fps 录制，比手机系统相机的 4K 小很多，最长 {{sec}} 秒": "Enregistrement en {{height}}P / {{fps}} ips — bien plus léger que la 4K de votre téléphone. Durée max : {{sec}} secondes.",
+    "当前浏览器不支持录像（需要 HTTPS 环境，部分内置浏览器亦不开放摄像头）。请改用上传视频文件。": "Votre navigateur ne prend pas en charge l'enregistrement vidéo (HTTPS requis ; certains navigateurs intégrés bloquent l'accès à la caméra). Veuillez importer un fichier vidéo à la place."
   }
 }

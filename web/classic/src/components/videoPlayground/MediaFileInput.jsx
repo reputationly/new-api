@@ -1,10 +1,12 @@
 import React, { useRef, useState } from 'react';
 import { Button, Typography, Modal } from '@douyinfe/semi-ui';
 import { IconUpload } from '@douyinfe/semi-icons';
-import { X, RefreshCw, Play } from 'lucide-react';
+import { X, RefreshCw, Play, Video } from 'lucide-react';
 import { useDropzone } from 'react-dropzone';
 import { useTranslation } from 'react-i18next';
 import { showError } from '../../helpers';
+import VideoRecorderModal from './VideoRecorderModal';
+import { isVideoRecordSupported } from '../../hooks/videoPlayground/useVideoRecorder';
 
 // 音频/视频单文件上传:读成 base64 data-url 交给上层(new-api 侧渠道会物化到 NFS,与
 // 图生视频的帧图同机制)。支持点击选择与拖拽上传,带体积上限 + 试听/预览。
@@ -22,6 +24,11 @@ const MediaFileInput = ({
   const { t } = useTranslation();
   const inputRef = useRef(null);
   const [previewOpen, setPreviewOpen] = useState(false);
+  const [recorderOpen, setRecorderOpen] = useState(false);
+
+  // 现场拍摄只给视频槽。手机上走 <input type="file"> 唤起的是系统相机,分辨率/码率网页
+  // 完全管不着(华为一律 4K30,十几秒就顶穿 maxMB),自己录才能把档位定死。
+  const canRecord = kind === 'video' && isVideoRecordSupported();
 
   const defaultAccept =
     kind === 'video' ? 'video/*,.mp4,.mov,.webm' : 'audio/*,.wav,.mp3,.m4a';
@@ -97,6 +104,21 @@ const MediaFileInput = ({
         </div>
       )}
 
+      {/* 上传框之外单列一个拍摄入口:不放进拖拽区里,免得点它同时触发选文件。 */}
+      {!value && canRecord && (
+        <Button
+          size='small'
+          type='tertiary'
+          theme='borderless'
+          icon={<Video size={14} />}
+          disabled={disabled}
+          className='mt-1'
+          onClick={() => setRecorderOpen(true)}
+        >
+          {t('现场拍摄')}
+        </Button>
+      )}
+
       {/* 已选文件:视频=缩略图预览(点击弹窗看原视频),音频=内联播放器。 */}
       {value &&
         (kind === 'video' ? (
@@ -134,6 +156,18 @@ const MediaFileInput = ({
           >
             {t('更换')}
           </Button>
+          {canRecord && (
+            <Button
+              size='small'
+              type='tertiary'
+              theme='borderless'
+              icon={<Video size={14} />}
+              disabled={disabled}
+              onClick={() => setRecorderOpen(true)}
+            >
+              {t('现场拍摄')}
+            </Button>
+          )}
           <Button
             size='small'
             type='danger'
@@ -164,6 +198,16 @@ const MediaFileInput = ({
             style={{ maxHeight: '70vh' }}
           />
         </Modal>
+      )}
+
+      {/* 拍摄产物与上传走同一条路:一个 data-url 交回 onChange,上限也复用 maxMB。 */}
+      {canRecord && (
+        <VideoRecorderModal
+          visible={recorderOpen}
+          onClose={() => setRecorderOpen(false)}
+          onConfirm={(dataUrl) => onChange(dataUrl)}
+          maxMB={maxMB}
+        />
       )}
     </div>
   );

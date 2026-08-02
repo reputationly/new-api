@@ -4518,6 +4518,17 @@
     "内置无限画布 AI 创作空间": "Không gian sáng tạo AI canvas vô hạn tích hợp",
     "提示词智能优化": "Tối ưu câu lệnh tự động",
     "开启后会自动丰富和优化提示词，适合只写了主题或简短创意的情况。如果提示词已经很详细，或对文字、数量、位置和版式有严格要求，建议关闭。部分模型（如 hunyuan-image-3）开启后会先思考再改写提示词，生成时长明显增加（约 2.8 倍）。": "Khi bật, câu lệnh sẽ được tự động bổ sung và tinh chỉnh — phù hợp khi bạn chỉ viết chủ đề hoặc ý tưởng ngắn. Nếu câu lệnh đã chi tiết, hoặc bạn có yêu cầu nghiêm ngặt về chữ, số lượng, vị trí và bố cục, nên tắt. Một số mô hình (như hunyuan-image-3) sẽ suy luận trước rồi mới viết lại câu lệnh, khiến thời gian tạo tăng đáng kể (khoảng 2,8 lần).",
-    "简短描述建议开启；详细文案或严格版式建议关闭": "Mô tả ngắn nên bật; nội dung chi tiết hoặc bố cục nghiêm ngặt nên tắt"
+    "简短描述建议开启；详细文案或严格版式建议关闭": "Mô tả ngắn nên bật; nội dung chi tiết hoặc bố cục nghiêm ngặt nên tắt",
+    "现场拍摄": "Quay video",
+    "开始录制": "Bắt đầu quay",
+    "录制中": "Đang quay",
+    "停止": "Dừng",
+    "重拍": "Quay lại",
+    "切换摄像头": "Đổi camera",
+    "使用这段录像": "Dùng bản quay này",
+    "时长 {{sec}} 秒，大小 {{size}} MB": "{{sec}} giây · {{size}} MB",
+    "文件超过 {{size}} MB 上限，请缩短时长后重录": "Tệp vượt quá giới hạn {{size}} MB — vui lòng quay đoạn ngắn hơn.",
+    "按 {{height}}P / {{fps}}fps 录制，比手机系统相机的 4K 小很多，最长 {{sec}} 秒": "Quay ở {{height}}P / {{fps}}fps — nhỏ hơn nhiều so với 4K của camera điện thoại. Tối đa {{sec}} giây.",
+    "当前浏览器不支持录像（需要 HTTPS 环境，部分内置浏览器亦不开放摄像头）。请改用上传视频文件。": "Trình duyệt hiện tại không hỗ trợ quay video (cần HTTPS; một số trình duyệt trong ứng dụng chặn quyền camera). Vui lòng tải lên tệp video thay thế."
   }
 }

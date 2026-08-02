@@ -323,6 +323,18 @@ export const normalizeSizeList = (list) =>
     ? Array.from(new Set(list.map(normalizeVideoSize).filter(Boolean)))
     : [];
 
+// 现场拍摄档位。存在的理由见 hooks/videoPlayground/useVideoRecorder.js 顶部注释:
+// 系统相机的分辨率/帧率网页管不着(华为 4K30 约 5-7 MB/s,录十几秒就顶穿 maxInputMB),
+// 只有自己开 getUserMedia 才谈得上「预设」。720p/24fps/2Mbps ≈ 0.25 MB/s,10 秒约 2.5MB。
+export const VIDEO_RECORD_WIDTH = 1280;
+export const VIDEO_RECORD_HEIGHT = 720;
+export const VIDEO_RECORD_FPS = 24;
+export const VIDEO_RECORD_VIDEO_BPS = 2_000_000;
+export const VIDEO_RECORD_AUDIO_BPS = 128_000;
+
+// 到 MAX 自动停止,防止误录长视频撑大请求体(按上面的码率,180 秒约 45MB)。
+export const VIDEO_RECORD_MAX_SEC = 180;
+
 // 解析 status 中的 VideoModelConfig（字符串或对象）
 // 形如 { default: { sizes:[], durations:[] }, models: { name: { sizes:[], durations:[] } } }
 // maxInputMB:输入文件大小上限(MB)。适用于吃用户上传的模式(i2v/flf2v 帧图、s2v 人物图/
