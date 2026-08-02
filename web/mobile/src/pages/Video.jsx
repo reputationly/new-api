@@ -77,7 +77,8 @@ export const VideoBody = ({ mode }) => {
   // 锁定态（选中了某条会话）参数与素材都改不动，见 useVideoGeneration 的 handleInputChange。
   const editDisabled = generating || locked;
   // 输出时长由输入决定的玩法不下发 duration，也就不该摆时长选择器：超分/配音跟源视频，
-  // 数字人跟驱动音频（引擎不读 target_video_length，实测 10 秒音频给 duration:5 仍出 10 秒）。
+  // 数字人跟驱动音频（引擎不读 target_video_length；上限由后台 maxAudioSec 配置，
+  // 后端据此下发 video_duration，见 adaptor.go 的 s2v 分支）。
   const showDuration = !isSR && !isDub && !isS2V;
 
   const mediaSlots = [

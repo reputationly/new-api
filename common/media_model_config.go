@@ -251,8 +251,13 @@ func VideoMaxInputBytesForModel(candidates ...string) (maxBytes int64, configure
 // 优先按模型,其次全局 default。与 maxInputMB 是两个正交的轴:1 MB 的 mp3 可能有 60 秒,
 // 10 MB 的 wav 可能只有 10 秒,体积上限挡不住时长。
 //
-// 它只对数字人(s2v)有实际意义——该任务的产出视频长度完全由驱动音频决定(引擎不读
-// target_video_length,已实测),音频多长就生成多长,过长的音频会让引擎 OOM 或长时间占卡。
+// 它只对数字人(s2v)有实际意义:该任务的输出时长 = min(驱动音频时长, video_duration,
+// 参考视频时长),引擎不读 target_video_length。音频越长生成越久,过长会让引擎 OOM 或
+// 长时间占卡,故需要这道闸门。
+//
+// 本值同时是两处的来源:物化层按音频真实时长拒绝超限输入(newVideoMaterializer),
+// 以及请求体里下发给引擎的 video_duration 上限(buildRequest 的 s2v 分支)——一个配置
+// 管两头,避免"放行了却被引擎截断"。
 func VideoMaxAudioSecForModel(candidates ...string) (maxSec float64, configured bool) {
 	OptionMapRWMutex.RLock()
 	raw := OptionMap["VideoModelConfig"]

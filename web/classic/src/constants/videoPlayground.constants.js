@@ -351,8 +351,21 @@ export const VIDEO_RECORD_MAX_SEC = 180;
 // 驱动音频、sr 源视频、视频编辑 源视频/参考图);0/未配=不限。生成侧 sizes/durations/
 // aspectRatios 对这些输入驱动能力无意义(见 followsInput),maxInputMB 才是它们的护栏。
 // maxAudioSec:驱动音频时长上限(秒);0/未配=不限。与 maxInputMB 是两个正交的轴——
-// 体积挡不住时长(1 MB 的 mp3 可能有 60 秒)。只对数字人(s2v)有意义:它的产出视频长度
-// 完全由驱动音频决定,音频多长就生成多长,过长会让引擎 OOM 或长时间占卡。
+// 体积挡不住时长(1 MB 的 mp3 可能有 60 秒)。只对数字人(s2v)有意义:它的输出时长 =
+// min(驱动音频时长, video_duration, 参考视频时长),音频越长生成越久,过长会让引擎
+// OOM 或长时间占卡。后端还会把本值作为 video_duration 下发给引擎,所以它同时是
+// "拒绝超长音频"和"告诉引擎最多生成多久"两件事的唯一来源。
+
+// 音频时长闸的容差(秒)。真实音频时长几乎从不是整数——编码器帧对齐、mp3 的 encoder
+// delay/padding 会让"一分钟"变成 60.024 秒;卡死整数会把用户眼里合法的一分钟音频拒掉,
+// 报错还显示成"60.0 秒超过 60 秒",读起来像我们的 bug。
+//
+// 必须与 Go 侧 relay/channel/gpustackplus/nfsinput 的 AudioDurationToleranceSec 保持
+// 同值。前端这道闸只是「选完文件当场反馈」,权威判定在后端;两边阈值不一致时,严的那边
+// 说了算——前端更严就会出现"后端明明放行了、界面却不让选"的怪象(这正是 2026-08 只改了
+// 后端容差留下的缺口)。
+export const AUDIO_DURATION_TOLERANCE_SEC = 1;
+
 const toInputMB = (v) => {
   const n = parseInt(v, 10);
   return Number.isFinite(n) && n >= 0 ? n : null;

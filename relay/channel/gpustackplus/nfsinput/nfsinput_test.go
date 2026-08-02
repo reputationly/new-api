@@ -184,6 +184,20 @@ func TestCheckAudioDuration(t *testing.T) {
 		t.Fatalf("exactly at limit should pass, got %v", err)
 	}
 
+	// 容差内的轻微超出 → 放行。真实音频的时长几乎从不是整数(编码器帧对齐、mp3 的
+	// encoder delay/padding),配 60 秒时用户眼里的"一分钟"常常是 60.024 秒;卡死整数会
+	// 把合法输入拒掉,而错误信息四舍五入后还显示成"60.0 秒超过 60 秒"。
+	m = (&Materializer{}).SetMaxAudioSeconds(10 - AudioDurationToleranceSec/2)
+	if err := m.checkAudioDuration(FieldAudio, tenSec); err != nil {
+		t.Fatalf("容差内的轻微超出应放行,got %v", err)
+	}
+
+	// 超出容差 → 仍然拒。容差是给编码误差的,不是把上限整体抬高。
+	m = (&Materializer{}).SetMaxAudioSeconds(10 - AudioDurationToleranceSec*1.5)
+	if err := m.checkAudioDuration(FieldAudio, tenSec); err == nil {
+		t.Fatal("超出容差应被拒,否则上限形同虚设")
+	}
+
 	// 认不出容器 → 放行。这类字节实际到不了这里(addBytesExt 里 magicOK 先要求
 	// isAudioBytes),留着是兜住「两份签名名单漂移」这个本方 bug:那种情况下不该让用户的
 	// 合法音频替我们买单。真正的漂移由 TestAudioMagicListsAligned 挡在 CI。

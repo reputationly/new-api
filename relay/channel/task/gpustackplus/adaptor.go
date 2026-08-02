@@ -393,13 +393,39 @@ func (a *TaskAdaptor) BuildRequestBody(c *gin.Context, info *relaycommon.RelayIn
 			durationSec = v
 		}
 	}
-	// s2v(数字人)除外:它的产出长度完全由驱动音频决定。实测 infinitetalk-720p 收到
-	// target_video_length=81(duration:5 换算而来)、驱动音频 10 秒,产出仍是 10 秒——引擎
-	// 根本不读这个字段。对 s2v 下发它没有任何效果,只会让人误以为时长可控,故不再转换;
-	// 时长管控改由 VideoModelConfig.maxAudioSec 在物化时按音频真实长度执行。别恢复。
+	// s2v(数字人)除外:引擎不读 target_video_length,下发它没有任何效果,只会让人误以为
+	// 时长可控。s2v 的时长走下面的 video_duration。别恢复。
 	if durationSec > 0 && taskType != "s2v" {
 		if _, ok := body["target_video_length"]; !ok {
 			body["target_video_length"] = durationSec*16 + 1
+		}
+	}
+	// s2v 的输出时长 = min(驱动音频时长, video_duration, 参考视频时长)。不下发
+	// video_duration 时它回落到引擎实例配置(实测某些实例是 30),于是 60 秒音频只出
+	// 30 秒——2026-08 线上就这么截过一次。
+	//
+	// 注意别再把这里写成「产出长度完全由驱动音频决定」:那个结论来自一次 10 秒音频的
+	// 实测,10 < 30 压根没触发截断,是把"这次没截"过度推广了。
+	//
+	// 上限取 maxAudioSec + 容差,与物化层那道音频时长闸门(newVideoMaterializer →
+	// checkAudioDuration)用同一个阈值。必须同一个:那边放行到 maxAudioSec+容差,这里若
+	// 只给 maxAudioSec,被容差放进来的那一截就会被引擎截掉——s2v 是嘴型对齐音频,末尾被
+	// 砍就是"最后一个字没说完",比画面早结束显眼得多,等于容差白放。
+	// 未配则不下发,维持引擎实例配置的行为。
+	//
+	// 客户端在 metadata 里显式给了 video_duration 就尊重它,不覆盖也不 clamp。理由:
+	//   - 那是明确的用户意图(「这条 60 秒音频我只要前 30 秒」),覆盖会让直连调用方
+	//     没法请求短于配置上限的视频;体验区两端都不发这个字段,只有直连才会走到;
+	//   - 它也不构成绕过 maxAudioSec 的路子。真正的硬约束是音频时长——物化层已按
+	//     真实时长拒掉超限输入,这里传再大的值,引擎的 min(音频时长, video_duration)
+	//     也吃不到更多算力。往小传只是少生成,更无危害。
+	// 别改成无条件覆盖:上面那句「与物化层同一阈值」约束的是我们下发的默认值,不是
+	// "任何来源的 video_duration 都得等于这个数"。
+	if taskType == "s2v" {
+		if _, ok := body["video_duration"]; !ok {
+			if maxSec, cfgOK := common.VideoMaxAudioSecForModel(req.Model, info.OriginModelName, modelName); cfgOK && maxSec > 0 {
+				body["video_duration"] = maxSec + nfsinput.AudioDurationToleranceSec
+			}
 		}
 	}
 	// IndexTTS-2 情感标量:引擎(vLLM-Omni IndexTTS2 talker)只从 extra_params 读

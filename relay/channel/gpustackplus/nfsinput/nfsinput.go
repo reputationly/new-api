@@ -462,12 +462,29 @@ func (m *Materializer) addBytesExt(field Field, index int, multi bool, data []by
 	return nil
 }
 
-// checkAudioDuration 音频时长闸:超过上限即拒(未配上限或非音频字段直接放行)。
+// AudioDurationToleranceSec 音频时长闸的容差(秒)。音频文件的真实时长几乎从不是整数
+// ——编码器帧对齐、mp3 的 encoder delay/padding 都会让"一分钟"变成 60.024 秒这样的值。
+// 配 maxAudioSec=60 时卡死 60.000 会把用户眼里合法的一分钟音频拒掉,而错误信息四舍五入
+// 后还长这样:"时长 60.0 秒,超过上限 60 秒",读起来像我们的 bug。
+//
+// 放宽 1 秒是安全的:本闸门要拦的是"传了三分钟音频"这类会 OOM / 长时间占卡的输入,
+// 差零点几秒不会多占资源。
+//
+// 导出是因为它同时定义了「实际可接受的音频上限」:数字人(s2v)下发给引擎的
+// video_duration 必须用同一个阈值(见 gpustackplus/adaptor.go),否则这边放行到 61 秒、
+// 那边只许生成 60 秒,被放行的那一截会被引擎截掉——s2v 是嘴型对齐音频,截掉末尾就是
+// "最后一个字没说完",比画面早结束显眼得多。
+const AudioDurationToleranceSec = 1.0
+
+// checkAudioDuration 音频时长闸:超过上限(含 AudioDurationToleranceSec 容差)即拒;
+// 未配上限或非音频字段直接放行。
 // 与 maxBytes 正交——体积挡不住时长,1 MB 的 mp3 可能有 60 秒。
 //
-// 真正在意这条的是数字人(s2v):它的产出视频长度完全由驱动音频决定(引擎不读
-// target_video_length,已实测),音频多长就生成多长,过长会 OOM 或长时间占卡。这里在写盘
-// 之前拦,调用方 Cleanup 能把同批已写的输入一并回滚,不留孤儿文件、不占卡、不扣费。
+// 真正在意这条的是数字人(s2v):它的输出时长 = min(驱动音频时长, video_duration,
+// 参考视频时长),引擎不读 target_video_length。音频越长生成越久,过长会 OOM 或长时间
+// 占卡。这里在写盘之前拦,调用方 Cleanup 能把同批已写的输入一并回滚,不留孤儿文件、
+// 不占卡、不扣费。同一个 maxAudioSec 也会作为 video_duration 下发给引擎(见
+// gpustackplus/adaptor.go 的 s2v 分支),两头同源,不会一边放行一边被截断。
 //
 // 容器一律按文件头现场判定(audioExtFromMagic),不看调用方传进来的 ext —— 那个值在多数
 // 路径上要么为空、要么由客户端声明,信它等于给出一条绕过时长闸的路。
@@ -498,8 +515,8 @@ func (m *Materializer) checkAudioDuration(field Field, data []byte) error {
 	if err != nil {
 		return fmt.Errorf("输入 %s 的文件头声称是 %s,但内容无法按该容器解析(文件残缺或与文件头不符): %w", field, probeExt, err)
 	}
-	if sec > m.maxAudioSec {
-		return fmt.Errorf("输入 %s 时长 %.1f 秒,超过上限 %.0f 秒", field, sec, m.maxAudioSec)
+	if sec > m.maxAudioSec+AudioDurationToleranceSec {
+		return fmt.Errorf("输入 %s 时长 %.2f 秒,超过上限 %.0f 秒", field, sec, m.maxAudioSec)
 	}
 	return nil
 }

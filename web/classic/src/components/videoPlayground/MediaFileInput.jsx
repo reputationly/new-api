@@ -7,6 +7,7 @@ import { useTranslation } from 'react-i18next';
 import { showError } from '../../helpers';
 import VideoRecorderModal from './VideoRecorderModal';
 import { isVideoRecordSupported } from '../../hooks/videoPlayground/useVideoRecorder';
+import { AUDIO_DURATION_TOLERANCE_SEC } from '../../constants/videoPlayground.constants';
 
 // 探测音频时长(秒)。拿不到就 resolve(null) —— 浏览器解不了的容器不该因此挡住上传,
 // 与后端 nfsinput.checkAudioDuration「解析失败即放行」同策略。
@@ -65,14 +66,18 @@ const MediaFileInput = ({
       showError(t('文件不能超过 {{size}} MB', { size: maxMB }));
       return;
     }
-    // 时长闸:数字人的产出视频长度完全跟随驱动音频,过长会让引擎 OOM 或长时间占卡。
-    // 选完文件当场拦,不等提交(后端物化时另有同名兜底,防直连绕过)。
+    // 时长闸:数字人的输出时长 = min(驱动音频时长, video_duration, 参考视频时长),
+    // 音频越长生成越久,过长会让引擎 OOM 或长时间占卡。选完文件当场拦,不等提交
+    // (后端物化时另有同名兜底,防直连绕过)。
+    //
+    // 容差必须与后端同值,见 AUDIO_DURATION_TOLERANCE_SEC:这边更严就会出现"后端放行了、
+    // 界面却不让选"——用户眼里的一分钟音频常是 60.024 秒,卡死整数会把它当场弹回。
     if (kind === 'audio' && maxSec > 0) {
       const sec = await probeAudioSeconds(file);
-      if (sec != null && sec > maxSec) {
+      if (sec != null && sec > maxSec + AUDIO_DURATION_TOLERANCE_SEC) {
         showError(
           t('音频时长 {{sec}} 秒，超过上限 {{max}} 秒', {
-            sec: sec.toFixed(1),
+            sec: sec.toFixed(2),
             max: maxSec,
           }),
         );
