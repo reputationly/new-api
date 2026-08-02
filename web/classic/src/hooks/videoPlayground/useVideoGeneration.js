@@ -149,7 +149,18 @@ const genId = () => `vid-${Date.now()}-${idSeq++}`;
 // 遗留的进行中 1080P 任务在新版恢复时，stage1 完成后取不到下一段而停在 480P。
 // 无需迁移（新结构/无 pipeline）时返回原引用，保持 identity 不触发多余克隆。
 const migratePipeline = (pipeline) => {
-  if (!pipeline || 'upscale' in pipeline || 'dub' in pipeline) return pipeline;
+  if (!pipeline) return pipeline;
+  if ('upscale' in pipeline || 'dub' in pipeline) {
+    // 已是分段结构。但配音段的提示词字段在「配音改为复用视频提示词」那次改动里
+    // 由 dubPrompt 更名为 prompt：改动前存下、且此刻仍在跑的流水线要在这里补一次，
+    // 否则刷新后续跑配音段会把用户当初填的提示词丢成空串。
+    const dub = pipeline.dub;
+    if (dub && dub.prompt === undefined && dub.dubPrompt !== undefined) {
+      const { dubPrompt, ...rest } = dub;
+      return { ...pipeline, dub: { ...rest, prompt: dubPrompt } };
+    }
+    return pipeline;
+  }
   if (pipeline.srModel) {
     return {
       group: pipeline.group,
@@ -232,7 +243,6 @@ export const useVideoGeneration = ({ mode = 'text2video' } = {}) => {
     srRatio: 2, // sr 超分倍率(请求级,门面透传 metadata.sr_ratio)
     interpolation: false, // 插帧开关(默认关):开启才透传 metadata.target_fps,超分/配乐不适用
     dubbing: false, // 配音开关(默认关):开启则生成后接 v2a 配音段(文生/图生/视频编辑)
-    dubPrompt: '', // 配音提示词(可选):开配音后可描述想要的声音,非空才随配音段下发
     srcVideo: '', // 视频编辑(Bernini)源视频(base64 data-url)
     srcVideo2: '', // 视频编辑(Bernini)第二源视频(mv2v/ads2v 双视频,可选)
     refImages: [], // 视频编辑 rv2v / 图生视频 r2v 参考图(base64 data-url 数组)
@@ -676,10 +686,8 @@ export const useVideoGeneration = ({ mode = 'text2video' } = {}) => {
         stage === 'upscaling'
           ? pipeline.upscale?.srModel
           : pipeline.dub?.dubModel;
-      // 配音提示词可选：用户填了才作为 v2a 的 prompt 下发（描述想要的声音）；
-      // 留空=让模型按画面自由配环境音。超分段无提示词。
-      const stagePrompt =
-        stage === 'dubbing' ? pipeline.dub?.dubPrompt || '' : '';
+      // 配音段沿用生成该视频的提示词（见 pipeline.dub 构造处）。超分段无提示词。
+      const stagePrompt = stage === 'dubbing' ? pipeline.dub?.prompt || '' : '';
       const failMsg =
         stage === 'upscaling'
           ? t('超分任务提交失败，已展示原始分辨率结果')
@@ -939,7 +947,6 @@ export const useVideoGeneration = ({ mode = 'text2video' } = {}) => {
           // 插帧/配音随会话锁定：续会话或刷新后按会话原设置而非当前开关判定流水线。
           interpolation: !!inputs.interpolation,
           dubbing: !!inputs.dubbing,
-          dubPrompt: (inputs.dubPrompt || '').trim(),
           ...media,
         };
       } else {
@@ -973,7 +980,6 @@ export const useVideoGeneration = ({ mode = 'text2video' } = {}) => {
               taskTypeOverride: conv.taskTypeOverride || '',
               interpolation: !!conv.interpolation,
               dubbing: !!conv.dubbing,
-              dubPrompt: conv.dubPrompt || '',
             }
           : {
               group: inputs.group,
@@ -985,7 +991,6 @@ export const useVideoGeneration = ({ mode = 'text2video' } = {}) => {
               images: convImages,
               interpolation: !!inputs.interpolation,
               dubbing: !!inputs.dubbing,
-              dubPrompt: (inputs.dubPrompt || '').trim(),
               ...media,
             };
       }
@@ -1077,7 +1082,6 @@ export const useVideoGeneration = ({ mode = 'text2video' } = {}) => {
               // 插帧/配音随会话锁定：刷新/续会话按此判定流水线，不受当前开关影响。
               interpolation: !!params.interpolation,
               dubbing: !!params.dubbing,
-              dubPrompt: params.dubPrompt || '',
               title: displayText,
               createdAt: now,
               updatedAt: now,
@@ -1180,9 +1184,10 @@ export const useVideoGeneration = ({ mode = 'text2video' } = {}) => {
             upscale: wantUpscale
               ? { srModel, interpolation: !!params.interpolation }
               : null,
-            dub: wantDub
-              ? { dubModel, dubPrompt: (params.dubPrompt || '').trim() }
-              : null,
+            // 配音段直接复用本次生成视频的提示词：它本就是这段画面的描述,而 foley 模型
+            // 要的正是「画面里什么在发声」。原来这里读的是一个独立的「配音提示词」输入框,
+            // 用户不填就下发空串——而空 prompt 恰恰是该模型配出无关背景音乐的主因。
+            dub: wantDub ? { dubModel, prompt: text } : null,
           };
           // 有超分段 → stage1 降 480P；无超分段（仅配音）→ stage1 按选中尺寸正常生成。
           if (wantUpscale) {
@@ -1432,7 +1437,6 @@ export const useVideoGeneration = ({ mode = 'text2video' } = {}) => {
         // 恢复插帧/配音开关显示（锁定态下只读展示，续会话仍读 params 里的会话值）
         interpolation: !!conv.interpolation,
         dubbing: !!conv.dubbing,
-        dubPrompt: conv.dubPrompt || '',
       }));
       // 若该会话最后一个任务仍在进行中，恢复轮询
       const assts = (conv.messages || []).filter((m) => m.role === 'assistant');

@@ -6,7 +6,6 @@ import {
   Typography,
   Tooltip,
   InputNumber,
-  TextArea,
 } from '@douyinfe/semi-ui';
 import {
   Settings,
@@ -504,21 +503,8 @@ const VideoConfigPanel = ({
             />
           </div>
         )}
-
-        {/* 配音提示词（可选）：开配音后可描述想要的声音；留空则模型按画面自由配音 */}
-        {dubAvailable && inputs.dubbing && (
-          <TextArea
-            placeholder={t(
-              '配音提示词（可选）：描述想要的声音，如「舒缓的钢琴背景乐」；留空则按画面自动配音',
-            )}
-            value={inputs.dubPrompt || ''}
-            onChange={(value) => onInputChange('dubPrompt', value)}
-            disabled={disabled}
-            autosize={{ minRows: 2, maxRows: 4 }}
-            maxCount={500}
-            className='!rounded-lg'
-          />
-        )}
+        {/* 配音不再有独立的提示词框：v2a 段直接复用生成这段视频的提示词
+            （见 useVideoGeneration 里 pipeline.dub 的构造）。 */}
       </div>
     </Card>
   );

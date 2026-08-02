@@ -7,7 +7,6 @@ import {
   NavBar,
   ProgressCircle,
   SpinLoading,
-  TextArea,
 } from 'antd-mobile';
 
 import { useVideoGeneration } from '@classic/hooks/videoPlayground/useVideoGeneration';
@@ -164,7 +163,7 @@ export const VideoBody = ({ mode }) => {
           : '请先上传图片';
 
   const emptyHint = isDub
-    ? '上传视频后可留空直接配音，或描述想要的声音'
+    ? '上传视频后描述画面里什么在发声，如「脚步踩过落叶」'
     : isVACE
       ? '上传源视频并描述你想要的改动'
       : isS2V
@@ -348,18 +347,7 @@ export const VideoBody = ({ mode }) => {
             )}
           </div>
         )}
-        {dubAvailable && inputs.dubbing && (
-          <div style={{ padding: '8px 12px 0' }}>
-            <TextArea
-              placeholder='配音提示词（可选）：描述想要的声音，留空则按画面自动配音'
-              value={inputs.dubPrompt || ''}
-              onChange={(v) => handleInputChange('dubPrompt', v)}
-              disabled={editDisabled}
-              rows={2}
-              maxLength={500}
-            />
-          </div>
-        )}
+        {/* 配音不再有独立的提示词框：v2a 段直接复用生成这段视频的提示词 */}
         {!followsInput && /1080/i.test(inputs.size || '') && (
           <div
             style={{
@@ -411,7 +399,7 @@ export const VideoBody = ({ mode }) => {
             : missingRequiredImage
               ? missingHint
               : isDub
-                ? '描述想要的声音（可选）…'
+                ? '描述画面里什么在发声…'
                 : '描述你想要的视频…'
         }
       />

@@ -244,6 +244,38 @@ func (a *TaskAdaptor) BuildRequestBody(c *gin.Context, info *relaycommon.RelayIn
 		req.Prompt = "soulx-singer"
 		body["prompt"] = req.Prompt
 	}
+	// v2a(视频配音)的提示词整形。LTX-2.3 挂的是 Foley LoRA,它的训练字幕里带「无人声/
+	// 无音乐」的抑制句,官方与社区模型卡给的示例提示词也一律以这两句结尾。不加时该模型
+	// 的典型失效就是配出一段与画面无关的背景音乐——社区那个 foley LoRA 正是把「LTX-2.3
+	// 自己加背景音乐,而你想要真实音效」列为主要使用场景。
+	// 想要音乐配乐请用 v2m(视频→音乐),那是另一个 task_type、另一套模型。
+	if taskType == "v2a" {
+		req.Prompt = withFoleySuppression(req.Prompt)
+		body["prompt"] = req.Prompt
+		// 负向词只在客户端没给时兜底。
+		//
+		// ⚠ 当前部署下这个字段「传了但不生效」,是有意保留的,别当死代码删掉。
+		//
+		// 为什么不生效(链路在最后一步断):new-api 塞进 body → gpustack 门面原样透传 →
+		// LightX2V 的 ltx2_runner.run_text_encoder 判 `if config["enable_cfg"]`,为 false
+		// 时走 else 分支、压根不编码负向文本(那里有明注)。而我们的 v2a 配置正是
+		// enable_cfg=false。
+		//
+		// 为什么不能直接把 enable_cfg 打开:v2a 挂的是**引导蒸馏**的
+		// ltx-2.3-22b-distilled-1.1(cfg=1 + 8 步硬编码 sigma 表)。引导已经烤进权重,
+		// 再叠一层外部 CFG 只会过饱和,且蒸馏模型从未被训练做无条件预测,uncond 分支不可信。
+		// 佐证:LightX2V configs/ltx2/ 下 13 个配置里,蒸馏 ckpt 一律 enable_cfg=false /
+		// scale=1 / 8 步,非蒸馏一律 true / 3~4 / 30~40 步,相关性 100%。
+		//
+		// 什么时候会活过来:v2a 换到非蒸馏 dev ckpt 时(那才是 Foley LoRA 模型卡
+		// 30 步 / guidance 6 的适用前提,代价约 4 倍推理耗时)。届时要同步改的是
+		// LightX2V configs/ltx2/{,a100/}ltx2_3_v2a.json 三项:dit_original_ckpt 换成
+		// 非蒸馏权重、enable_cfg=true、sample_guide_scale=6.0,并删掉 distilled_sigma_values
+		// (它是配 8 步的固定表)、infer_steps 提到 30。本文件这侧不用动。
+		if !hasKeyFold(body, "negative_prompt") {
+			body["negative_prompt"] = foleyNegativePrompt
+		}
+	}
 	// 输入兼容性防呆必须在物化之前(§N2 复审):否则 t2v/t2i 带图、flf2v 只给 1 张等非法
 	// 组合会先把图写到 NFS 再被拒,留下孤儿输入文件。这些检查只依赖 taskType / req,不需物化。
 	if imageRequiredTaskTypes[taskType] && !req.HasImage() {
@@ -549,6 +581,38 @@ func materializeSRInputs(c *gin.Context, info *relaycommon.RelayInfo, taskType, 
 		return nil, err
 	}
 	return m.Refs(), nil
+}
+
+// Foley 抑制句与负向词取自官方模型卡 Lightricks/LTX-2.3-22b-LoRA-Foley-V2A 的示例提示词
+// (「A barista uses an espresso machine to steam milk. No speech is present. No music is
+// present」)。该 LoRA 的训练字幕就带这两句,补上是在对齐训练分布。
+const foleySuppression = "No speech is present. No music is present."
+
+const foleyNegativePrompt = "music, melody, song, singing, vocals, score, soundtrack, beat, rhythm bed, instrumental backing, speech, dialogue"
+
+// withFoleySuppression 在提示词末尾补上 Foley 抑制句;已含则原样返回。
+// 空提示词同样补——v2a 收到空 prompt 时最容易配出与画面无关的背景音乐。
+func withFoleySuppression(prompt string) string {
+	p := strings.TrimSpace(prompt)
+	if strings.Contains(strings.ToLower(p), "no music is present") {
+		return p
+	}
+	if p == "" {
+		return foleySuppression
+	}
+	// 中英文句末标点都收掉再接,避免出现「…在林间小路上散步。No speech…」这种断裂。
+	return strings.TrimRight(p, "。．.!！?？,，;；、 \t\n") + ". " + foleySuppression
+}
+
+// hasKeyFold 忽略大小写与首尾空白判断键是否已存在。metadata 是原样透传的,
+// 客户端可能写成 Negative_Prompt,不能只比对精确键名。
+func hasKeyFold(m map[string]any, key string) bool {
+	for k := range m {
+		if strings.EqualFold(strings.TrimSpace(k), key) {
+			return true
+		}
+	}
+	return false
 }
 
 // materializeDubInputs 物化视频配乐(v2a,LTX-2.3 首发)的源视频(metadata.video)。
