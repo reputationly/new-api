@@ -12,12 +12,14 @@
   --page-bg: #f5f6f9;
   --card-radius: 18px;
   --card-border: 1px solid rgba(17, 24, 39, 0.05);
-  --card-shadow: 0 1px 2px rgba(16, 24, 40, 0.04), 0 8px 24px rgba(16, 24, 40, 0.05);
+  --card-shadow:
+    0 1px 2px rgba(16, 24, 40, 0.04), 0 8px 24px rgba(16, 24, 40, 0.05);
 
   /* antd-mobile 主题覆盖 */
   --adm-color-primary: var(--brand-primary);
-  --adm-font-family: -apple-system, BlinkMacSystemFont, 'Helvetica Neue',
-    'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', sans-serif;
+  --adm-font-family:
+    -apple-system, BlinkMacSystemFont, 'Helvetica Neue', 'PingFang SC',
+    'Hiragino Sans GB', 'Microsoft YaHei', sans-serif;
 }
 
 html,
@@ -80,7 +82,11 @@ body {
   width: 240px;
   height: 240px;
   border-radius: 50%;
-  background: radial-gradient(circle, rgba(139, 92, 246, 0.35), transparent 65%);
+  background: radial-gradient(
+    circle,
+    rgba(139, 92, 246, 0.35),
+    transparent 65%
+  );
   pointer-events: none;
 }
 
@@ -92,7 +98,11 @@ body {
   width: 220px;
   height: 220px;
   border-radius: 50%;
-  background: radial-gradient(circle, rgba(232, 207, 154, 0.14), transparent 65%);
+  background: radial-gradient(
+    circle,
+    rgba(232, 207, 154, 0.14),
+    transparent 65%
+  );
   pointer-events: none;
 }
 
@@ -130,7 +140,9 @@ body {
   align-items: flex-start;
   gap: 10px;
   min-height: 92px;
-  transition: transform 0.12s ease, box-shadow 0.12s ease;
+  transition:
+    transform 0.12s ease,
+    box-shadow 0.12s ease;
 }
 
 .m-tile:active {
@@ -225,8 +237,16 @@ body {
 .m-login-bg {
   min-height: 100%;
   background:
-    radial-gradient(900px 420px at 50% -180px, rgba(79, 70, 229, 0.16), transparent),
-    radial-gradient(600px 300px at 85% 15%, rgba(232, 207, 154, 0.1), transparent),
+    radial-gradient(
+      900px 420px at 50% -180px,
+      rgba(79, 70, 229, 0.16),
+      transparent
+    ),
+    radial-gradient(
+      600px 300px at 85% 15%,
+      rgba(232, 207, 154, 0.1),
+      transparent
+    ),
     var(--page-bg);
   display: flex;
   flex-direction: column;

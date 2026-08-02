@@ -111,7 +111,12 @@ const ConversationBar = ({
         >
           <span style={{ fontSize: 16, fontWeight: 500 }}>对话历史</span>
           {conversations.length > 0 && (
-            <Button size='mini' fill='none' color='danger' onClick={handleClear}>
+            <Button
+              size='mini'
+              fill='none'
+              color='danger'
+              onClick={handleClear}
+            >
               清空
             </Button>
           )}

@@ -173,14 +173,14 @@ const Models = () => {
           }}
         >
           <SearchBar
-            placeholder="搜索模型名称"
+            placeholder='搜索模型名称'
             value={keyword}
             onChange={setKeyword}
             style={{ flex: 1 }}
           />
           <Button
-            size="small"
-            fill="outline"
+            size='small'
+            fill='outline'
             onClick={() => setFilterVisible(true)}
             style={{
               '--border-radius': '18px',
@@ -358,7 +358,7 @@ const Models = () => {
         <div style={{ display: 'flex', gap: 10 }}>
           <Button
             block
-            fill="outline"
+            fill='outline'
             onClick={() => {
               setGroup('');
               setCategory('');
@@ -366,7 +366,7 @@ const Models = () => {
           >
             重置
           </Button>
-          <Button block color="primary" onClick={() => setFilterVisible(false)}>
+          <Button block color='primary' onClick={() => setFilterVisible(false)}>
             完成
           </Button>
         </div>
@@ -407,7 +407,7 @@ const Models = () => {
                     : '按量计费'}
               </span>
               {vendorName(detail.vendor_id) && (
-                <span className="m-badge info">
+                <span className='m-badge info'>
                   {vendorName(detail.vendor_id)}
                 </span>
               )}
@@ -436,7 +436,7 @@ const Models = () => {
                 </div>
                 <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
                   {detail.enable_groups.map((g) => (
-                    <Tag key={g} color="default" fill="outline">
+                    <Tag key={g} color='default' fill='outline'>
                       {g}
                     </Tag>
                   ))}

@@ -16,9 +16,7 @@ const useAdminList = (baseUrl, defaultStatus = 1) => {
     async (s = status) => {
       setLoading(true);
       try {
-        const res = await API.get(
-          `${baseUrl}?status=${s}&page=1&page_size=50`,
-        );
+        const res = await API.get(`${baseUrl}?status=${s}&page=1&page_size=50`);
         if (res.data.success) {
           setList(res.data.data || []);
           setTotal(res.data.total || 0);
@@ -38,7 +36,14 @@ const useAdminList = (baseUrl, defaultStatus = 1) => {
     load(status);
   }, [status, load]);
 
-  return { list, total, status, setStatus, loading, reload: () => load(status) };
+  return {
+    list,
+    total,
+    status,
+    setStatus,
+    loading,
+    reload: () => load(status),
+  };
 };
 
 export default useAdminList;

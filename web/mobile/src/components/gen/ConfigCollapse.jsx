@@ -67,7 +67,11 @@ const ConfigCollapse = ({ locked, title, slots = [], onNew, children }) => {
             </span>
           ))}
           <span className='m-summary-title'>{title}</span>
-          {expanded ? <UpOutline fontSize={10} /> : <DownOutline fontSize={10} />}
+          {expanded ? (
+            <UpOutline fontSize={10} />
+          ) : (
+            <DownOutline fontSize={10} />
+          )}
         </div>
         <Button size='mini' fill='none' onClick={onNew}>
           新建会话

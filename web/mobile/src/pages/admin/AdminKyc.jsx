@@ -1,12 +1,6 @@
 import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import {
-  Button,
-  Dialog,
-  Image,
-  NavBar,
-  PullToRefresh,
-} from 'antd-mobile';
+import { Button, Dialog, Image, NavBar, PullToRefresh } from 'antd-mobile';
 
 import { API } from '@classic/helpers/api';
 
@@ -25,7 +19,9 @@ const STATUS_OPTIONS = [
 
 const AdminKyc = () => {
   const navigate = useNavigate();
-  const { list, status, setStatus, reload } = useAdminList('/api/user/kyc/admin');
+  const { list, status, setStatus, reload } = useAdminList(
+    '/api/user/kyc/admin',
+  );
   const [rejectId, setRejectId] = useState(null);
   const [inspect, setInspect] = useState(null); // {reveal, images}
 
@@ -84,33 +80,62 @@ const AdminKyc = () => {
   return (
     <div>
       <NavBar onBack={() => navigate(-1)}>实名认证审批</NavBar>
-      <StatusFilter value={status} onChange={setStatus} options={STATUS_OPTIONS} />
+      <StatusFilter
+        value={status}
+        onChange={setStatus}
+        options={STATUS_OPTIONS}
+      />
       <PullToRefresh onRefresh={reload}>
-        <div style={{ padding: 12, display: 'flex', flexDirection: 'column', gap: 10 }}>
+        <div
+          style={{
+            padding: 12,
+            display: 'flex',
+            flexDirection: 'column',
+            gap: 10,
+          }}
+        >
           {list.map((row) => {
             const st = REVIEW_STATUS[row.status] || {};
             return (
               <div className='m-card' key={row.id}>
-                <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                <div
+                  style={{ display: 'flex', justifyContent: 'space-between' }}
+                >
                   <div style={{ fontWeight: 600 }}>
                     {row.real_name}
-                    <span style={{ color: '#9aa1ad', fontWeight: 400, fontSize: 13 }}>
-                      {' '}· {row.username}
+                    <span
+                      style={{
+                        color: '#9aa1ad',
+                        fontWeight: 400,
+                        fontSize: 13,
+                      }}
+                    >
+                      {' '}
+                      · {row.username}
                     </span>
                   </div>
                   <span className={`m-badge ${st.badge || ''}`}>{st.text}</span>
                 </div>
                 <div style={{ fontSize: 12.5, color: '#6b7280', marginTop: 6 }}>
-                  证件号 {row.id_number_masked} · 提交 {formatTs(row.submitted_at)}
-                  {row.submit_count > 1 ? ` · 第 ${row.submit_count} 次提交` : ''}
+                  证件号 {row.id_number_masked} · 提交{' '}
+                  {formatTs(row.submitted_at)}
+                  {row.submit_count > 1
+                    ? ` · 第 ${row.submit_count} 次提交`
+                    : ''}
                 </div>
                 {row.reject_reason && (
-                  <div style={{ fontSize: 12.5, color: '#b91c1c', marginTop: 4 }}>
+                  <div
+                    style={{ fontSize: 12.5, color: '#b91c1c', marginTop: 4 }}
+                  >
                     驳回原因：{row.reject_reason}
                   </div>
                 )}
                 <div style={{ display: 'flex', gap: 8, marginTop: 12 }}>
-                  <Button size='small' fill='outline' onClick={() => handleInspect(row)}>
+                  <Button
+                    size='small'
+                    fill='outline'
+                    onClick={() => handleInspect(row)}
+                  >
                     查看资料
                   </Button>
                   {row.status === 1 && (

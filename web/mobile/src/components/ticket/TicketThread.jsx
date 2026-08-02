@@ -1,6 +1,10 @@
 import React from 'react';
 
-import { FEEDBACK_CATEGORY, FEEDBACK_STATUS, formatTs } from '../../utils/review';
+import {
+  FEEDBACK_CATEGORY,
+  FEEDBACK_STATUS,
+  formatTs,
+} from '../../utils/review';
 
 // 工单消息线程（用户端/管理端共用）。selfRole: 当前查看者的 author_role，
 // 用于决定气泡靠左还是靠右。
@@ -10,7 +14,9 @@ const TicketThread = ({ topic, messages = [], selfIsAdmin = false }) => {
   return (
     <div style={{ padding: 12 }}>
       <div className='m-card' style={{ marginBottom: 12 }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8 }}>
+        <div
+          style={{ display: 'flex', justifyContent: 'space-between', gap: 8 }}
+        >
           <div style={{ fontWeight: 600, fontSize: 16 }}>{topic?.title}</div>
           <span className={`m-badge ${status.badge || ''}`}>{status.text}</span>
         </div>
@@ -48,7 +54,9 @@ const TicketThread = ({ topic, messages = [], selfIsAdmin = false }) => {
                   {msg.author_name || (isAdminMsg ? '官方客服' : '用户')} ·{' '}
                   {formatTs(msg.created_at)}
                 </div>
-                <div style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
+                <div
+                  style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}
+                >
                   {msg.content}
                 </div>
               </div>

@@ -24,8 +24,15 @@ const VoiceRecorder = ({
   maxSeconds = VOICE_RECORD_MAX_SEC,
 }) => {
   // preview 直接取 hook 的 result:手动停止与录满上限自动停止走同一条路。
-  const { recording, seconds, error, result: preview, start, stop, reset } =
-    useVoiceRecorder({ maxSeconds });
+  const {
+    recording,
+    seconds,
+    error,
+    result: preview,
+    start,
+    stop,
+    reset,
+  } = useVoiceRecorder({ maxSeconds });
 
   const supported = isVoiceRecordSupported();
   const tooShort = preview && preview.duration < minSeconds;
@@ -89,7 +96,11 @@ const VoiceRecorder = ({
       )}
 
       <div
-        style={{ fontSize: 12, color: 'var(--adm-color-weak)', marginBottom: 6 }}
+        style={{
+          fontSize: 12,
+          color: 'var(--adm-color-weak)',
+          marginBottom: 6,
+        }}
       >
         {script
           ? '请在安静环境下用自然语气朗读以下文字，约 8-9 秒：'
@@ -125,11 +136,7 @@ const VoiceRecorder = ({
             </div>
           )}
           <div style={{ display: 'flex', gap: 8, marginTop: 16 }}>
-            <Button
-              size='small'
-              fill='outline'
-              onClick={reset}
-            >
+            <Button size='small' fill='outline' onClick={reset}>
               重录
             </Button>
             <Button

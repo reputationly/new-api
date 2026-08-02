@@ -80,8 +80,12 @@ const Profile = () => {
     if (isAdmin()) {
       try {
         const [countsRes, unreadRes] = await Promise.all([
-          API.get('/api/user/review/pending_counts', { skipErrorHandler: true }),
-          API.get('/api/user/feedback/admin/unread', { skipErrorHandler: true }),
+          API.get('/api/user/review/pending_counts', {
+            skipErrorHandler: true,
+          }),
+          API.get('/api/user/feedback/admin/unread', {
+            skipErrorHandler: true,
+          }),
         ]);
         if (countsRes.data.success) setPendingCounts(countsRes.data.data);
         if (unreadRes.data.success) {
@@ -217,7 +221,10 @@ const Profile = () => {
         >
           我的邀请链接
         </List.Item>
-        <List.Item extra={badge(ticketUnread)} onClick={() => navigate('/tickets')}>
+        <List.Item
+          extra={badge(ticketUnread)}
+          onClick={() => navigate('/tickets')}
+        >
           我的工单
         </List.Item>
         <List.Item onClick={() => navigate('/setting')}>账户设置</List.Item>
@@ -225,7 +232,8 @@ const Profile = () => {
           description='移动端暂不支持充值'
           onClick={() =>
             Dialog.alert({
-              content: '请在电脑浏览器打开本站，进入「控制台 → 充值」完成充值。',
+              content:
+                '请在电脑浏览器打开本站，进入「控制台 → 充值」完成充值。',
             })
           }
         >

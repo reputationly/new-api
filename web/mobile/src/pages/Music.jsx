@@ -244,7 +244,9 @@ const MusicBody = ({ mode }) => {
       <PromptBar
         onSend={generate}
         generating={generating}
-        disabled={turnLimitReached || missingRequiredAudio || missingRequiredVideo}
+        disabled={
+          turnLimitReached || missingRequiredAudio || missingRequiredVideo
+        }
         // 歌声合成不需要文本（发送固定标签占位），别拦住只传了两段音频就想发的用户。
         allowEmpty={!needsText}
         placeholder={
@@ -302,7 +304,8 @@ const Music = () => {
   const modes = useVisibleModes('music');
   const [mode, setMode] = useState(modes[0]?.key || 't2m');
   useEffect(() => {
-    if (modes.length && !modes.some((m) => m.key === mode)) setMode(modes[0].key);
+    if (modes.length && !modes.some((m) => m.key === mode))
+      setMode(modes[0].key);
   }, [modes, mode]);
 
   return (

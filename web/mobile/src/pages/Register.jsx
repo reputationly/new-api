@@ -109,14 +109,17 @@ const Register = () => {
     }
     setSubmitting(true);
     try {
-      const res = await API.post(`/api/user/register?turnstile=${turnstileToken}`, {
-        username: username.trim(),
-        password,
-        password2,
-        email: email.trim(),
-        verification_code: verificationCode.trim(),
-        aff_code: affCode,
-      });
+      const res = await API.post(
+        `/api/user/register?turnstile=${turnstileToken}`,
+        {
+          username: username.trim(),
+          password,
+          password2,
+          email: email.trim(),
+          verification_code: verificationCode.trim(),
+          aff_code: affCode,
+        },
+      );
       const { success, message } = res.data;
       if (success) {
         // 注册成功后直接走一次登录，免得用户再输一遍
@@ -156,7 +159,9 @@ const Register = () => {
         }}
       >
         <img className='m-login-logo' src={getLogo()} alt='logo' />
-        <h2 style={{ margin: '16px 0 4px', fontSize: 22 }}>{getSystemName()}</h2>
+        <h2 style={{ margin: '16px 0 4px', fontSize: 22 }}>
+          {getSystemName()}
+        </h2>
         <div style={{ fontSize: 13, color: '#9ca3af' }}>创建新账户</div>
       </div>
       <div className='m-login-card'>
@@ -234,7 +239,9 @@ const Register = () => {
       </div>
       {agreementNode}
       {turnstileEnabled && turnstileSiteKey && (
-        <div style={{ display: 'flex', justifyContent: 'center', marginTop: 16 }}>
+        <div
+          style={{ display: 'flex', justifyContent: 'center', marginTop: 16 }}
+        >
           <Turnstile
             sitekey={turnstileSiteKey}
             onVerify={(token) => setTurnstileToken(token)}

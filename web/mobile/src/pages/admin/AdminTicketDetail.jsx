@@ -86,12 +86,20 @@ const AdminTicketDetail = () => {
           detail && (
             <span style={{ display: 'flex', gap: 4 }}>
               {topicStatus !== 2 && topicStatus !== 4 && (
-                <Button size='mini' fill='none' onClick={() => setStatus(2, '处理中')}>
+                <Button
+                  size='mini'
+                  fill='none'
+                  onClick={() => setStatus(2, '处理中')}
+                >
                   转处理中
                 </Button>
               )}
               {topicStatus !== 4 && (
-                <Button size='mini' fill='none' onClick={() => setStatus(4, '已关闭')}>
+                <Button
+                  size='mini'
+                  fill='none'
+                  onClick={() => setStatus(4, '已关闭')}
+                >
                   关闭
                 </Button>
               )}

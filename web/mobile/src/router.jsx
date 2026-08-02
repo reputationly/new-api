@@ -85,7 +85,10 @@ const router = createBrowserRouter(
           element: guarded(lazyEl(AdminTicketDetail)),
         },
         { path: '/admin/kyc', element: guarded(lazyEl(AdminKyc)) },
-        { path: '/admin/enterprise', element: guarded(lazyEl(AdminEnterprise)) },
+        {
+          path: '/admin/enterprise',
+          element: guarded(lazyEl(AdminEnterprise)),
+        },
         { path: '/admin/transfers', element: guarded(lazyEl(AdminTransfers)) },
         { path: '/admin/invoices', element: guarded(lazyEl(AdminInvoices)) },
         { path: '/chat', element: guarded(lazyEl(Chat)) },

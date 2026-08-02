@@ -28,7 +28,11 @@ const AdminTickets = () => {
   return (
     <div>
       <NavBar onBack={() => navigate(-1)}>工单管理</NavBar>
-      <StatusFilter value={status} onChange={setStatus} options={STATUS_OPTIONS} />
+      <StatusFilter
+        value={status}
+        onChange={setStatus}
+        options={STATUS_OPTIONS}
+      />
       <PullToRefresh onRefresh={reload}>
         {list.length > 0 ? (
           <List className='m-list-card' style={{ marginTop: 12 }}>
@@ -40,11 +44,15 @@ const AdminTickets = () => {
                   onClick={() => navigate(`/admin/tickets/${t.id}`)}
                   description={`${t.username || ''} · ${FEEDBACK_CATEGORY[t.category] || '其他'} · ${formatTs(t.created_at)}`}
                   extra={
-                    <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                    <span
+                      style={{ display: 'flex', alignItems: 'center', gap: 6 }}
+                    >
                       {!!t.admin_unread && (
                         <span className='m-badge danger'>未读</span>
                       )}
-                      <span className={`m-badge ${st.badge || ''}`}>{st.text}</span>
+                      <span className={`m-badge ${st.badge || ''}`}>
+                        {st.text}
+                      </span>
                     </span>
                   }
                 >

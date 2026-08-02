@@ -14,11 +14,7 @@ import {
 import { API } from '@classic/helpers/api';
 
 import { showError, showSuccess } from '../shims/classic-utils';
-import {
-  FEEDBACK_CATEGORY,
-  FEEDBACK_STATUS,
-  formatTs,
-} from '../utils/review';
+import { FEEDBACK_CATEGORY, FEEDBACK_STATUS, formatTs } from '../utils/review';
 
 const categoryColumns = [
   Object.entries(FEEDBACK_CATEGORY).map(([v, label]) => ({
@@ -39,7 +35,9 @@ const Tickets = () => {
 
   const load = useCallback(async () => {
     try {
-      const res = await API.get('/api/user/feedback/topics?page=1&page_size=50');
+      const res = await API.get(
+        '/api/user/feedback/topics?page=1&page_size=50',
+      );
       if (res.data.success) {
         setList(res.data.data || []);
       } else {
@@ -115,7 +113,9 @@ const Tickets = () => {
                   onClick={() => navigate(`/tickets/${t.id}`)}
                   description={`${FEEDBACK_CATEGORY[t.category] || '其他'} · ${formatTs(t.created_at)} · ${t.message_count} 条消息`}
                   extra={
-                    <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                    <span
+                      style={{ display: 'flex', alignItems: 'center', gap: 6 }}
+                    >
                       {!!t.user_unread && (
                         <span className='m-badge danger'>新回复</span>
                       )}
@@ -179,7 +179,11 @@ const Tickets = () => {
             marginBottom: 10,
           }}
         >
-          <Input placeholder='标题（128 字内）' value={title} onChange={setTitle} />
+          <Input
+            placeholder='标题（128 字内）'
+            value={title}
+            onChange={setTitle}
+          />
         </div>
         <div
           style={{
@@ -196,7 +200,12 @@ const Tickets = () => {
             rows={4}
           />
         </div>
-        <Button block color='primary' loading={submitting} onClick={handleCreate}>
+        <Button
+          block
+          color='primary'
+          loading={submitting}
+          onClick={handleCreate}
+        >
           提交工单
         </Button>
       </Popup>

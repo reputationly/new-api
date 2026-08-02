@@ -198,11 +198,7 @@ const Tokens = () => {
         visible={addVisible}
         title='新建令牌'
         content={
-          <Input
-            placeholder='令牌名称'
-            value={newName}
-            onChange={setNewName}
-          />
+          <Input placeholder='令牌名称' value={newName} onChange={setNewName} />
         }
         closeOnAction
         onClose={() => setAddVisible(false)}

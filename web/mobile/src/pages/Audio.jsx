@@ -339,7 +339,8 @@ const Audio = () => {
   const modes = useVisibleModes('audio');
   const [mode, setMode] = useState(modes[0]?.key || 'emotion');
   useEffect(() => {
-    if (modes.length && !modes.some((m) => m.key === mode)) setMode(modes[0].key);
+    if (modes.length && !modes.some((m) => m.key === mode))
+      setMode(modes[0].key);
   }, [modes, mode]);
 
   return (

@@ -87,14 +87,10 @@ const Logs = () => {
               description={dayjs(log.created_at * 1000).format(
                 'MM-DD HH:mm:ss',
               )}
-              extra={
-                log.type === 2 ? `-${renderQuota(log.quota || 0)}` : ''
-              }
+              extra={log.type === 2 ? `-${renderQuota(log.quota || 0)}` : ''}
             >
               {log.type === 2 && (
-                <span
-                  style={{ fontSize: 12, color: 'var(--adm-color-weak)' }}
-                >
+                <span style={{ fontSize: 12, color: 'var(--adm-color-weak)' }}>
                   提示 {log.prompt_tokens} / 补全 {log.completion_tokens}
                 </span>
               )}

@@ -14,17 +14,12 @@ const TabLayout = () => {
   const location = useLocation();
 
   return (
-    <div
-      style={{ display: 'flex', flexDirection: 'column', height: '100%' }}
-    >
+    <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
       <div style={{ flex: 1, overflowY: 'auto' }}>
         <Outlet />
       </div>
       <div className='m-tabbar-wrap'>
-        <TabBar
-          activeKey={location.pathname}
-          onChange={(key) => navigate(key)}
-        >
+        <TabBar activeKey={location.pathname} onChange={(key) => navigate(key)}>
           {tabs.map((item) => (
             <TabBar.Item key={item.key} icon={item.icon} title={item.title} />
           ))}

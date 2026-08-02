@@ -24,7 +24,9 @@ const MessageFeed = ({ messages = [], renderAssistant, empty }) => {
   }
 
   return (
-    <div style={{ padding: 12, display: 'flex', flexDirection: 'column', gap: 12 }}>
+    <div
+      style={{ padding: 12, display: 'flex', flexDirection: 'column', gap: 12 }}
+    >
       {messages.map((m, idx) =>
         m.role === 'user' ? (
           <div

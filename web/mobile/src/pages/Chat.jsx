@@ -118,8 +118,7 @@ const Chat = () => {
           <MarkdownMessage>{text}</MarkdownMessage>
         ) : (
           <div style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
-            {text ||
-              (m.status === MESSAGE_STATUS.LOADING ? '思考中…' : '')}
+            {text || (m.status === MESSAGE_STATUS.LOADING ? '思考中…' : '')}
           </div>
         )}
         {m.status === MESSAGE_STATUS.ERROR && (

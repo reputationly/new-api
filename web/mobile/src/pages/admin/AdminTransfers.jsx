@@ -113,18 +113,43 @@ const AdminTransfers = () => {
   return (
     <div>
       <NavBar onBack={() => navigate(-1)}>企业转账审核</NavBar>
-      <StatusFilter value={status} onChange={setStatus} options={STATUS_OPTIONS} />
+      <StatusFilter
+        value={status}
+        onChange={setStatus}
+        options={STATUS_OPTIONS}
+      />
       <PullToRefresh onRefresh={reload}>
-        <div style={{ padding: 12, display: 'flex', flexDirection: 'column', gap: 10 }}>
+        <div
+          style={{
+            padding: 12,
+            display: 'flex',
+            flexDirection: 'column',
+            gap: 10,
+          }}
+        >
           {list.map((row) => {
             const st = TRANSFER_STATUS[row.status] || {};
             return (
               <div className='m-card' key={row.id}>
-                <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                  <div style={{ fontWeight: 600, fontVariantNumeric: 'tabular-nums' }}>
+                <div
+                  style={{ display: 'flex', justifyContent: 'space-between' }}
+                >
+                  <div
+                    style={{
+                      fontWeight: 600,
+                      fontVariantNumeric: 'tabular-nums',
+                    }}
+                  >
                     {fenToYuan(row.amount_fen)}
-                    <span style={{ color: '#9aa1ad', fontWeight: 400, fontSize: 13 }}>
-                      {' '}· {row.username}
+                    <span
+                      style={{
+                        color: '#9aa1ad',
+                        fontWeight: 400,
+                        fontSize: 13,
+                      }}
+                    >
+                      {' '}
+                      · {row.username}
                     </span>
                   </div>
                   <span className={`m-badge ${st.badge || ''}`}>{st.text}</span>
@@ -133,25 +158,37 @@ const AdminTransfers = () => {
                   单号 {row.trade_no} · 提交 {formatTs(row.submitted_at)}
                 </div>
                 {row.status === 2 && (
-                  <div style={{ fontSize: 12.5, color: '#047857', marginTop: 2 }}>
+                  <div
+                    style={{ fontSize: 12.5, color: '#047857', marginTop: 2 }}
+                  >
                     实际入账 {fenToYuan(row.credited_fen)}
                     {row.review_remark ? ` · ${row.review_remark}` : ''}
                   </div>
                 )}
                 {row.reject_reason && (
-                  <div style={{ fontSize: 12.5, color: '#b91c1c', marginTop: 2 }}>
+                  <div
+                    style={{ fontSize: 12.5, color: '#b91c1c', marginTop: 2 }}
+                  >
                     驳回原因：{row.reject_reason}
                   </div>
                 )}
                 <div style={{ display: 'flex', gap: 8, marginTop: 12 }}>
                   {row.has_receipt && (
-                    <Button size='small' fill='outline' onClick={() => viewReceipt(row)}>
+                    <Button
+                      size='small'
+                      fill='outline'
+                      onClick={() => viewReceipt(row)}
+                    >
                       查看凭证
                     </Button>
                   )}
                   {row.status === 1 && (
                     <>
-                      <Button size='small' color='primary' onClick={() => openApprove(row)}>
+                      <Button
+                        size='small'
+                        color='primary'
+                        onClick={() => openApprove(row)}
+                      >
                         入账
                       </Button>
                       <Button
@@ -200,7 +237,14 @@ const AdminTransfers = () => {
               <p style={{ fontSize: 13, color: '#6b7280' }}>
                 {approveRow.username} 申报 {fenToYuan(approveRow.amount_fen)}
               </p>
-              <div style={{ background: '#f1f2f6', borderRadius: 8, padding: '6px 10px', marginBottom: 8 }}>
+              <div
+                style={{
+                  background: '#f1f2f6',
+                  borderRadius: 8,
+                  padding: '6px 10px',
+                  marginBottom: 8,
+                }}
+              >
                 <Input
                   type='number'
                   placeholder='实际到账金额（元）'
@@ -208,7 +252,13 @@ const AdminTransfers = () => {
                   onChange={setCreditedYuan}
                 />
               </div>
-              <div style={{ background: '#f1f2f6', borderRadius: 8, padding: '6px 10px' }}>
+              <div
+                style={{
+                  background: '#f1f2f6',
+                  borderRadius: 8,
+                  padding: '6px 10px',
+                }}
+              >
                 <TextArea
                   placeholder='审核备注（可选）'
                   value={remark}

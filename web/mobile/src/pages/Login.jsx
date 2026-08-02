@@ -32,7 +32,9 @@ const Login = () => {
   // 我们再把用户名改回记住的 B，就成了「用户名 B + A 的密码」，登录失败还查不出原因。
   // 只在微信里预填：普通浏览器原生自动填充本来就好用，字段非空反而会让账号选择条不弹。
   const [username, setUsername] = useState(() =>
-    isWeChatBrowser() ? localStorage.getItem(REMEMBERED_USERNAME_KEY) || '' : '',
+    isWeChatBrowser()
+      ? localStorage.getItem(REMEMBERED_USERNAME_KEY) || ''
+      : '',
   );
   const [password, setPassword] = useState('');
   const [submitting, setSubmitting] = useState(false);
@@ -152,65 +154,67 @@ const Login = () => {
         </div>
       </div>
       <div className='m-login-card'>
-      {!require2FA ? (
-        <Form
-          layout='vertical'
-          onFinish={handleSubmit}
-          footer={
-            <Button block color='primary' loading={submitting} type='submit'>
-              登录
-            </Button>
-          }
-        >
-          <Form.Item label='用户名 / 邮箱'>
-            <Input
-              placeholder='请输入用户名或邮箱'
-              value={username}
-              onChange={setUsername}
-              name='username'
-              autoComplete='username'
-            />
-          </Form.Item>
-          <Form.Item label='密码'>
-            <Input
-              placeholder='请输入密码'
-              type='password'
-              value={password}
-              onChange={setPassword}
-              name='password'
-              autoComplete='current-password'
-              onEnterPress={handleSubmit}
-            />
-          </Form.Item>
-        </Form>
-      ) : (
-        <Form
-          layout='vertical'
-          footer={
-            <Button
-              block
-              color='primary'
-              loading={submitting}
-              onClick={handle2FASubmit}
-            >
-              验证并登录
-            </Button>
-          }
-        >
-          <Form.Item label='两步验证码'>
-            <Input
-              placeholder='验证器 6 位数字或备用码'
-              value={twoFACode}
-              onChange={setTwoFACode}
-              onEnterPress={handle2FASubmit}
-            />
-          </Form.Item>
-        </Form>
-      )}
+        {!require2FA ? (
+          <Form
+            layout='vertical'
+            onFinish={handleSubmit}
+            footer={
+              <Button block color='primary' loading={submitting} type='submit'>
+                登录
+              </Button>
+            }
+          >
+            <Form.Item label='用户名 / 邮箱'>
+              <Input
+                placeholder='请输入用户名或邮箱'
+                value={username}
+                onChange={setUsername}
+                name='username'
+                autoComplete='username'
+              />
+            </Form.Item>
+            <Form.Item label='密码'>
+              <Input
+                placeholder='请输入密码'
+                type='password'
+                value={password}
+                onChange={setPassword}
+                name='password'
+                autoComplete='current-password'
+                onEnterPress={handleSubmit}
+              />
+            </Form.Item>
+          </Form>
+        ) : (
+          <Form
+            layout='vertical'
+            footer={
+              <Button
+                block
+                color='primary'
+                loading={submitting}
+                onClick={handle2FASubmit}
+              >
+                验证并登录
+              </Button>
+            }
+          >
+            <Form.Item label='两步验证码'>
+              <Input
+                placeholder='验证器 6 位数字或备用码'
+                value={twoFACode}
+                onChange={setTwoFACode}
+                onEnterPress={handle2FASubmit}
+              />
+            </Form.Item>
+          </Form>
+        )}
       </div>
       {agreementNode}
       {turnstileEnabled && turnstileSiteKey && (
-        <div style={{ display: 'flex', justifyContent: 'center', marginTop: 16 }}>
+        <div
+          style={{ display: 'flex', justifyContent: 'center', marginTop: 16 }}
+        >
           <Turnstile
             sitekey={turnstileSiteKey}
             onVerify={(token) => setTurnstileToken(token)}

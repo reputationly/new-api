@@ -196,7 +196,8 @@ const ImagePage = () => {
   const modes = useVisibleModes('image');
   const [mode, setMode] = useState(modes[0]?.key || 'text2image');
   useEffect(() => {
-    if (modes.length && !modes.some((m) => m.key === mode)) setMode(modes[0].key);
+    if (modes.length && !modes.some((m) => m.key === mode))
+      setMode(modes[0].key);
   }, [modes, mode]);
 
   return (
