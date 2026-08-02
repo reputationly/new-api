@@ -34,6 +34,7 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/service"
+	"github.com/QuantumNous/new-api/service/mediastore"
 	"github.com/QuantumNous/new-api/setting/system_setting"
 )
 
@@ -308,7 +309,23 @@ func (m *Materializer) AddString(ctx context.Context, field Field, index int, mu
 		return m.addBytesExt(field, index, multi, data, ext)
 	}
 	if strings.HasPrefix(raw, "http://") || strings.HasPrefix(raw, "https://") {
-		data, err := downloadURL(ctx, raw, m.maxBytes)
+		// 自家 OBS host 授信。不放行的话,本网关自己产出、自己落盘的对象反而进不来:
+		// 从 VPC 内访问 OBS 时 <bucket>.<endpoint> 解析到的是云厂商内网服务端点,例如华为云
+		// 给的是 100.125.x.x —— 落在 100.64.0.0/10 (CGNAT),被 isPrivateIP 判为私网直接拒
+		// (见 common/ssrf_protection.go privateIPv4Nets)。注意 Go 标准库的 net.IP.IsPrivate()
+		// 不含该段,是本项目按 IANA 特殊用途注册表补全的名单才盖到,别照标准库的直觉判断。
+		//
+		// 与 taskref.go 那三处传 trusted 有一个关键区别,别当成同一回事:那边的 URL 来自
+		// 库里已校验归属+已成功的任务记录、或服务端当场 Sign 出来的,用户控制不了;这里的
+		// raw 是请求体里的任意字符串。所以这是一次有意的信任边界扩张,不是补齐对称性。
+		// 扩张范围已被 OwnOBSHost() 限死:精确全等匹配单个 <bucket>.<endpoint> host
+		// (不含裸 endpoint,避免放行该 endpoint 上的其它桶/列举),媒体存储一关即失效;
+		// 且只放松「该 host 解析到私网」这一条,scheme/端口/域名与 IP 黑白名单仍全部强制。
+		var trusted []string
+		if h := mediastore.OwnOBSHost(); h != "" {
+			trusted = append(trusted, h)
+		}
+		data, err := downloadURL(ctx, raw, m.maxBytes, trusted...)
 		if err != nil {
 			return err
 		}
