@@ -4529,6 +4529,10 @@
     "时长 {{sec}} 秒，大小 {{size}} MB": "{{sec}} giây · {{size}} MB",
     "文件超过 {{size}} MB 上限，请缩短时长后重录": "Tệp vượt quá giới hạn {{size}} MB — vui lòng quay đoạn ngắn hơn.",
     "按 {{height}}P / {{fps}}fps 录制，比手机系统相机的 4K 小很多，最长 {{sec}} 秒": "Quay ở {{height}}P / {{fps}}fps — nhỏ hơn nhiều so với 4K của camera điện thoại. Tối đa {{sec}} giây.",
-    "当前浏览器不支持录像（需要 HTTPS 环境，部分内置浏览器亦不开放摄像头）。请改用上传视频文件。": "Trình duyệt hiện tại không hỗ trợ quay video (cần HTTPS; một số trình duyệt trong ứng dụng chặn quyền camera). Vui lòng tải lên tệp video thay thế."
+    "当前浏览器不支持录像（需要 HTTPS 环境，部分内置浏览器亦不开放摄像头）。请改用上传视频文件。": "Trình duyệt hiện tại không hỗ trợ quay video (cần HTTPS; một số trình duyệt trong ứng dụng chặn quyền camera). Vui lòng tải lên tệp video thay thế.",
+    "默认音频时长上限(秒)": "Giới hạn thời lượng âm thanh mặc định (giây)",
+    "留空/0 不限;数字人产出长度跟随驱动音频": "Để trống/0 là không giới hạn; độ dài video người số theo âm thanh dẫn",
+    "音频秒数": "Số giây âm thanh",
+    "音频时长 {{sec}} 秒，超过上限 {{max}} 秒": "Âm thanh dài {{sec}} giây, vượt giới hạn {{max}} giây"
   }
 }

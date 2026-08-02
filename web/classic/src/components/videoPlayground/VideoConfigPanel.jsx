@@ -16,7 +16,6 @@ import {
   Clock,
   HelpCircle,
   Shuffle,
-  Ban,
   Proportions,
 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
@@ -37,6 +36,7 @@ const VideoConfigPanel = ({
   dubAvailable = false,
   maxRefImages = 5,
   maxInputMB = 0,
+  maxAudioSec = 0,
   inputs,
   groups,
   models,
@@ -55,6 +55,10 @@ const VideoConfigPanel = ({
   // 输入大小上限(MB):直接透传 maxInputMB。0/未配 = 不限(与配置页「留空/0 不限」及
   // 后端一致);>0 时各上传控件按它拦。不再套前端兜底默认,避免和「显式不限」冲突。
   const uploadMaxMB = maxInputMB;
+
+  // 驱动音频时长上限(秒),同样 0/未配 = 不限。只作用于数字人的音频槽:该任务的产出
+  // 长度就是音频长度,这是唯一需要按时长兜成本的输入。
+  const uploadMaxAudioSec = maxAudioSec;
 
   // 单帧上传槽:ImageUrlInput 管理数组,这里只取最后一张作为该槽的单帧。
   // 帧图仅在 i2v/flf2v 模式渲染,均为必填 → 单行标签(上传首帧/尾帧)+ 红星,无启用开关。
@@ -236,6 +240,7 @@ const VideoConfigPanel = ({
             required
             kind='audio'
             maxMB={uploadMaxMB}
+            maxSec={uploadMaxAudioSec}
             value={inputs.audioData}
             disabled={disabled}
             onChange={(v) => onInputChange('audioData', v)}
@@ -404,8 +409,10 @@ const VideoConfigPanel = ({
           </div>
         )}
 
-        {/* 时长(超分/配乐输出时长跟随源视频,不展示) */}
-        {!isSR && !isDub && (
+        {/* 时长(超分/配乐跟随源视频、数字人跟随驱动音频,均不展示)。
+            数字人这条是实测结论:引擎不读 target_video_length,产出长度就是音频长度,
+            摆个时长下拉只会骗人(选 5 秒拿到 10 秒)。长度管控走 maxAudioSec。 */}
+        {!isSR && !isDub && !isS2V && (
           <div>
             <div className='flex items-center gap-2 mb-2'>
               <Clock size={16} className='text-gray-500' />
@@ -423,35 +430,6 @@ const VideoConfigPanel = ({
               disabled={disabled}
               style={{ width: '100%' }}
               dropdownStyle={{ width: '100%', maxWidth: '100%' }}
-              className='!rounded-lg'
-            />
-          </div>
-        )}
-
-        {/* 负向提示词(默认留空;超分无提示词,不展示) */}
-        {!isSR && (
-          <div>
-            <div className='flex items-center gap-2 mb-2'>
-              <Ban size={16} className='text-gray-500' />
-              <Typography.Text strong className='text-sm'>
-                {t('负向提示词')}
-              </Typography.Text>
-              <Tooltip
-                content={t(
-                  "Describe what you don't want included in the videos.",
-                )}
-                position='top'
-              >
-                <HelpCircle size={14} className='text-gray-400 cursor-help' />
-              </Tooltip>
-            </div>
-            <TextArea
-              placeholder={t('负向提示词(可选)')}
-              name='negativePrompt'
-              value={inputs.negativePrompt || ''}
-              onChange={(value) => onInputChange('negativePrompt', value)}
-              autosize={{ minRows: 2, maxRows: 6 }}
-              disabled={disabled}
               className='!rounded-lg'
             />
           </div>

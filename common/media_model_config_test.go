@@ -44,6 +44,32 @@ func TestSizesOnlyConfigDoesNotGateDuration(t *testing.T) {
 	}
 }
 
+// maxAudioSec:按模型优先于 default,两者都没配才算未配置。
+func TestVideoMaxAudioSecForModel(t *testing.T) {
+	setOpt("", `{"default":{"maxAudioSec":15},"models":{"infinitetalk-720p":{"maxAudioSec":30}}}`)
+	if sec, ok := VideoMaxAudioSecForModel("infinitetalk-720p"); !ok || sec != 30 {
+		t.Fatalf("per-model should win, got %v %v", sec, ok)
+	}
+	// 未在 models 里列出的模型回落到 default
+	if sec, ok := VideoMaxAudioSecForModel("other"); !ok || sec != 15 {
+		t.Fatalf("should fall back to default, got %v %v", sec, ok)
+	}
+	// 候选名按顺序匹配:第一个命中的模型配置生效(公开名 → 映射后的上游名)
+	if sec, ok := VideoMaxAudioSecForModel("other", "infinitetalk-720p"); !ok || sec != 30 {
+		t.Fatalf("later candidate should still match, got %v %v", sec, ok)
+	}
+	// 只配了别的维度 → 未配置,不限制
+	setOpt("", `{"models":{"infinitetalk-720p":{"maxInputMB":50}}}`)
+	if sec, ok := VideoMaxAudioSecForModel("infinitetalk-720p"); ok || sec != 0 {
+		t.Fatalf("maxInputMB-only config should not count as audio-configured, got %v %v", sec, ok)
+	}
+	// 整体未配置
+	setOpt("", "")
+	if _, ok := VideoMaxAudioSecForModel("infinitetalk-720p"); ok {
+		t.Fatal("empty config should report unconfigured")
+	}
+}
+
 // 回归:sizes 与请求尺寸对不上时不再影响放行结果。运营填档位词("720P")而客户端
 // 发精确像素("720x1280")是常态,二者无法字符串比较,早前版本会把合法请求拒成 400。
 // 这里用同一份配置跑两种请求尺寸,断言二者结果一致——即 size 已完全退出校验决策。

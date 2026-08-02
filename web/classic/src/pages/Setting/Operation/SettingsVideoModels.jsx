@@ -34,6 +34,12 @@ const normInt = (v) => {
   return Number.isFinite(n) && n >= 0 ? n : undefined;
 };
 
+// 非负数或 undefined。音频时长允许小数(如 30.5 秒),故不走 normInt。
+const normNum = (v) => {
+  const n = Number(v);
+  return Number.isFinite(n) && n >= 0 ? n : undefined;
+};
+
 export default function SettingsVideoModels(props) {
   const { t } = useTranslation();
   const [loading, setLoading] = useState(false);
@@ -44,7 +50,8 @@ export default function SettingsVideoModels(props) {
   const [defaultDurations, setDefaultDurations] = useState([]);
   const [defaultAspectRatios, setDefaultAspectRatios] = useState([]);
   const [defaultMaxInputMB, setDefaultMaxInputMB] = useState(undefined);
-  // [{ model, sizes:[], durations:[], aspectRatios:[], maxInputMB }]
+  const [defaultMaxAudioSec, setDefaultMaxAudioSec] = useState(undefined);
+  // [{ model, sizes:[], durations:[], aspectRatios:[], maxInputMB, maxAudioSec }]
   const [modelRows, setModelRows] = useState([]);
 
   useEffect(() => {
@@ -55,6 +62,9 @@ export default function SettingsVideoModels(props) {
     setDefaultMaxInputMB(
       cfg.default.maxInputMB == null ? undefined : cfg.default.maxInputMB,
     );
+    setDefaultMaxAudioSec(
+      cfg.default.maxAudioSec == null ? undefined : cfg.default.maxAudioSec,
+    );
     setModelRows(
       Object.entries(cfg.models || {}).map(([model, c]) => ({
         model,
@@ -63,6 +73,7 @@ export default function SettingsVideoModels(props) {
         aspectRatios: c.aspectRatios || [],
         capabilities: c.capabilities || [],
         maxInputMB: c.maxInputMB == null ? undefined : c.maxInputMB,
+        maxAudioSec: c.maxAudioSec == null ? undefined : c.maxAudioSec,
       })),
     );
   }, [props.options]);
@@ -77,6 +88,7 @@ export default function SettingsVideoModels(props) {
         aspectRatios: [],
         capabilities: [],
         maxInputMB: undefined,
+        maxAudioSec: undefined,
       },
     ]);
   const updateRow = (idx, patch) =>
@@ -99,6 +111,7 @@ export default function SettingsVideoModels(props) {
           aspectRatios: normalizeList(r.aspectRatios),
           capabilities: normalizeList(r.capabilities),
           maxInputMB: normInt(r.maxInputMB),
+          maxAudioSec: normNum(r.maxAudioSec),
         };
       });
       const value = JSON.stringify({
@@ -107,6 +120,7 @@ export default function SettingsVideoModels(props) {
           durations: normalizeList(defaultDurations),
           aspectRatios: normalizeList(defaultAspectRatios),
           maxInputMB: normInt(defaultMaxInputMB),
+          maxAudioSec: normNum(defaultMaxAudioSec),
         },
         models,
       });
@@ -201,6 +215,16 @@ export default function SettingsVideoModels(props) {
               style={{ width: '100%', marginTop: 8 }}
             />
           </div>
+          <div style={{ flex: 1, minWidth: 220 }}>
+            <Text strong>{t('默认音频时长上限(秒)')}</Text>
+            <InputNumber
+              min={0}
+              value={defaultMaxAudioSec}
+              onChange={setDefaultMaxAudioSec}
+              placeholder={t('留空/0 不限;数字人产出长度跟随驱动音频')}
+              style={{ width: '100%', marginTop: 8 }}
+            />
+          </div>
         </div>
 
         <Text strong>{t('按模型配置')}</Text>
@@ -277,6 +301,13 @@ export default function SettingsVideoModels(props) {
                   value={row.maxInputMB}
                   onChange={(v) => updateRow(idx, { maxInputMB: v })}
                   placeholder={t('输入MB')}
+                  style={{ flex: 1, minWidth: 120 }}
+                />
+                <InputNumber
+                  min={0}
+                  value={row.maxAudioSec}
+                  onChange={(v) => updateRow(idx, { maxAudioSec: v })}
+                  placeholder={t('音频秒数')}
                   style={{ flex: 1, minWidth: 120 }}
                 />
                 <Button

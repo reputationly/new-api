@@ -247,6 +247,41 @@ func VideoMaxInputBytesForModel(candidates ...string) (maxBytes int64, configure
 	return 0, false
 }
 
+// VideoMaxAudioSecForModel 返回该视频模型驱动音频的时长上限(秒;0=不限)及是否已配置。
+// 优先按模型,其次全局 default。与 maxInputMB 是两个正交的轴:1 MB 的 mp3 可能有 60 秒,
+// 10 MB 的 wav 可能只有 10 秒,体积上限挡不住时长。
+//
+// 它只对数字人(s2v)有实际意义——该任务的产出视频长度完全由驱动音频决定(引擎不读
+// target_video_length,已实测),音频多长就生成多长,过长的音频会让引擎 OOM 或长时间占卡。
+func VideoMaxAudioSecForModel(candidates ...string) (maxSec float64, configured bool) {
+	OptionMapRWMutex.RLock()
+	raw := OptionMap["VideoModelConfig"]
+	OptionMapRWMutex.RUnlock()
+	if strings.TrimSpace(raw) == "" {
+		return 0, false
+	}
+	var cfg struct {
+		Default struct {
+			MaxAudioSec *float64 `json:"maxAudioSec"`
+		} `json:"default"`
+		Models map[string]struct {
+			MaxAudioSec *float64 `json:"maxAudioSec"`
+		} `json:"models"`
+	}
+	if err := UnmarshalJsonStr(raw, &cfg); err != nil {
+		return 0, false
+	}
+	for _, name := range candidates {
+		if m, ok := cfg.Models[name]; ok && m.MaxAudioSec != nil {
+			return *m.MaxAudioSec, true
+		}
+	}
+	if cfg.Default.MaxAudioSec != nil {
+		return *cfg.Default.MaxAudioSec, true
+	}
+	return 0, false
+}
+
 // AudioRefAudioMaxBytesForModel 返回该模型参考音大小上限(字节;0=不限制)及是否已配置。
 // 优先按模型,其次全局 default。用于服务端物化参考音时兜底(前端上传限制可被直连绕过)。
 func AudioRefAudioMaxBytesForModel(candidates ...string) (maxBytes int64, configured bool) {

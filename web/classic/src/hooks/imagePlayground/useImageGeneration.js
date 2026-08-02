@@ -104,7 +104,6 @@ export const useImageGeneration = ({ mode = 'text2image' } = {}) => {
     model: '',
     size: '',
     seed: '', // 随机种子;'' 表示随机(不下发,引擎自动随机)
-    negativePrompt: '', // 负向提示词;生图默认不填
     qualityMode: false, // 提示词智能优化；默认关
     imageUrls: [], // 图生图底图（base64 data-url 数组,≤IMAGE_MAX_EDIT_IMAGES）
   });
@@ -370,7 +369,6 @@ export const useImageGeneration = ({ mode = 'text2image' } = {}) => {
           model: inputs.model,
           size: normalizeImageSize(inputs.size),
           seed: inputs.seed,
-          negativePrompt: inputs.negativePrompt,
           qualityMode: inputs.qualityMode,
           images: convImages,
         };
@@ -394,7 +392,6 @@ export const useImageGeneration = ({ mode = 'text2image' } = {}) => {
               model: conv.model,
               size: conv.size,
               seed: conv.seed,
-              negativePrompt: conv.negativePrompt,
               qualityMode: conv.qualityMode,
               images: conv.images || [],
             }
@@ -403,7 +400,6 @@ export const useImageGeneration = ({ mode = 'text2image' } = {}) => {
               model: inputs.model,
               size: normalizeImageSize(inputs.size),
               seed: inputs.seed,
-              negativePrompt: inputs.negativePrompt,
               qualityMode: inputs.qualityMode,
               images: convImages,
             };
@@ -453,7 +449,6 @@ export const useImageGeneration = ({ mode = 'text2image' } = {}) => {
               model: params.model,
               size: params.size,
               seed: params.seed,
-              negativePrompt: params.negativePrompt,
               qualityMode: params.qualityMode,
               images: params.images || [],
               title: text,
@@ -493,10 +488,6 @@ export const useImageGeneration = ({ mode = 'text2image' } = {}) => {
         // 随机种子:非空即下发(整数);留空则不发,由引擎自动随机。
         if (params.seed !== '' && params.seed != null) {
           reqBody.seed = Number(params.seed);
-        }
-        // 负向提示词:非空才发(生图默认不填)。gpustackplus 从 Extra 读取,不外泄其它渠道。
-        if (params.negativePrompt && params.negativePrompt.trim()) {
-          reqBody.negative_prompt = params.negativePrompt.trim();
         }
         // 提示词智能优化:开了才发,关闭时一个字段都不带。
         //
@@ -588,10 +579,6 @@ export const useImageGeneration = ({ mode = 'text2image' } = {}) => {
         model: conv.model != null ? conv.model : prev.model,
         size: conv.size != null ? conv.size : prev.size,
         seed: conv.seed != null ? conv.seed : prev.seed,
-        negativePrompt:
-          conv.negativePrompt != null
-            ? conv.negativePrompt
-            : prev.negativePrompt,
         qualityMode:
           conv.qualityMode != null ? conv.qualityMode : prev.qualityMode,
         // 图生图历史会话恢复底图，供左侧锁定态只读预览；媒体已由 IDB hydrate。

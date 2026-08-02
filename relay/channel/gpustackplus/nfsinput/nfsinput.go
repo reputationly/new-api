@@ -20,6 +20,7 @@
 package nfsinput
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"fmt"
@@ -94,14 +95,22 @@ type Materializer struct {
 	gid       string // 唯一 input-group id(PublicTaskID 或新 uuid)
 	dateParts string // YYYY/MM/DD(UTC)
 
-	refs     map[Field][]string // 已生成的相对 ref,按 field 归组
-	written  []string           // 已写盘的绝对路径,供失败时回滚(§N2 复审)
-	maxBytes int64              // 单文件字节上限(0=不限;用于参考音大小兜底,防直连绕过前端限制)
+	refs        map[Field][]string // 已生成的相对 ref,按 field 归组
+	written     []string           // 已写盘的绝对路径,供失败时回滚(§N2 复审)
+	maxBytes    int64              // 单文件字节上限(0=不限;用于参考音大小兜底,防直连绕过前端限制)
+	maxAudioSec float64            // 音频字段时长上限(秒;0=不限),与 maxBytes 正交,见 addBytesExt
 }
 
 // SetMaxBytes 设置单文件字节上限(0=不限)。返回自身便于链式。
 func (m *Materializer) SetMaxBytes(n int64) *Materializer {
 	m.maxBytes = n
+	return m
+}
+
+// SetMaxAudioSeconds 设置音频字段的时长上限(秒;0=不限)。返回自身便于链式。
+// 与 SetMaxBytes 是两个正交的轴:体积上限管不住时长(1 MB 的 mp3 可能有 60 秒)。
+func (m *Materializer) SetMaxAudioSeconds(n float64) *Materializer {
+	m.maxAudioSec = n
 	return m
 }
 
@@ -157,15 +166,71 @@ func (m *Materializer) Cleanup() {
 // extForField 默认扩展名:视频类(sr 源视频 / VACE src_video·src_mask).mp4,
 // 音频类(s2v audio / TTS voice / 情感音).wav,其余(image / VACE 参考图).png。
 func extForField(field Field) string {
-	switch field {
-	case FieldVideo, FieldSrcVideo, FieldSrcMask:
+	switch {
+	case isVideoField(field):
 		return ".mp4"
-	case FieldAudio, FieldVoice, FieldEmotionAudio, FieldReferenceAudio, FieldSrcAudio,
-		FieldRefAudio, FieldRefAudio2, FieldPromptAudio, FieldTargetAudio:
+	case isAudioField(field):
 		return ".wav"
 	default:
 		return ".png"
 	}
+}
+
+// —— 字段媒体类别:extForField / magicOK / extFromMagic 三处都要按类别分流,名单收敛在这里,
+// 免得同一组字段在多处各写一份、日后加字段时漏掉某处。
+
+func isImageField(field Field) bool {
+	switch field {
+	case FieldImage, FieldLastFrame, FieldImageMask, FieldSrcRefImages:
+		return true
+	}
+	return false
+}
+
+func isVideoField(field Field) bool {
+	switch field {
+	case FieldVideo, FieldSrcVideo, FieldSrcMask:
+		return true
+	}
+	return false
+}
+
+// audioExtFromMagic 按文件头识别音频容器,返回 GetAudioDuration 认得的扩展名;认不出返回 ""。
+// 与 isAudioBytes 用同一组签名(顺序一致),两者必须同步维护。
+//
+// 两个调用方,取舍不同,见各自注释:checkAudioDuration 一律以它为准(安全闸,声明可伪造),
+// extFromMagic 只拿它兜底(文件命名,已知声明更准)。
+func audioExtFromMagic(b []byte) string {
+	switch {
+	case magicHasAt(b, 0, "RIFF") && magicHasAt(b, 8, "WAVE"):
+		return ".wav"
+	case magicHasAt(b, 0, "ID3"):
+		return ".mp3"
+	case len(b) >= 2 && b[0] == 0xFF && (b[1]&0xE0) == 0xE0:
+		// MPEG 帧同步。layer 位(byte1 的 bit2-1)为 00 是 ADTS AAC,01 才是 Layer III(mp3);
+		// isAudioBytes 把这两种混在一条判断里,这里要分开——它们走不同的解析器。
+		if b[1]&0x06 == 0 {
+			return ".aac"
+		}
+		return ".mp3"
+	case magicHasAt(b, 0, "OggS"):
+		return ".ogg"
+	case magicHasAt(b, 0, "fLaC"):
+		return ".flac"
+	case magicHasAt(b, 4, "ftyp"):
+		return ".m4a"
+	}
+	return ""
+}
+
+// isAudioField 判断字段是否属于音频类。与 extForField 共用同一份名单,避免两处漂移。
+func isAudioField(field Field) bool {
+	switch field {
+	case FieldAudio, FieldVoice, FieldEmotionAudio, FieldReferenceAudio, FieldSrcAudio,
+		FieldRefAudio, FieldRefAudio2, FieldPromptAudio, FieldTargetAudio:
+		return true
+	}
+	return false
 }
 
 // extForData 从 data-uri 的 MIME 推导真实扩展名(保留上传的实际格式,如 .mp3/.mov/.jpg),
@@ -252,16 +317,73 @@ func isAudioBytes(b []byte) bool {
 
 // magicOK 校验 data 的文件头是否匹配 field 的媒体类别。未知 field 放行。
 func magicOK(field Field, data []byte) bool {
-	switch field {
-	case FieldImage, FieldLastFrame, FieldImageMask, FieldSrcRefImages:
+	switch {
+	case isImageField(field):
 		return isImageBytes(data)
-	case FieldAudio, FieldVoice, FieldEmotionAudio, FieldReferenceAudio, FieldSrcAudio,
-		FieldRefAudio, FieldRefAudio2, FieldPromptAudio, FieldTargetAudio:
+	case isAudioField(field):
 		return isAudioBytes(data)
-	case FieldVideo, FieldSrcVideo, FieldSrcMask:
+	case isVideoField(field):
 		return isVideoBytes(data)
 	}
 	return true
+}
+
+// extFromMagic 按文件头推导真实扩展名;认不出返回 ""(交由 extForField 落类别默认值)。
+//
+// 只在调用方没给出 ext 时用:URL 下载 / multipart 上传 / 裸 base64 三条路都不带 ext,
+// 此前一律落到 extForField 的类别默认值,于是 URL 传进来的 mp3 被存成 .wav、webm 被存成
+// .mp4 —— 正是 extForData 注释里点名要避免的「误导下游按扩展名识别容器的引擎」。
+//
+// 反过来,data-uri 的 MIME 与任务引用给出的 ext 不覆盖:它们能表达 magic 分不出的差异
+// (最典型是 mov 与 mp4 同为 ISO BMFF),拿 magic 去盖反而是退步。
+//
+// 注意这与 checkAudioDuration 的取舍不同:那里是安全闸,声明由客户端控制、可伪造,所以
+// 一律以文件头为准;这里是文件命名,已知的声明更准,magic 只做兜底。
+func extFromMagic(field Field, data []byte) string {
+	switch {
+	case isImageField(field):
+		return imageExtFromMagic(data)
+	case isAudioField(field):
+		return audioExtFromMagic(data)
+	case isVideoField(field):
+		return videoExtFromMagic(data)
+	}
+	return ""
+}
+
+func imageExtFromMagic(b []byte) string {
+	switch {
+	case magicHasPrefix(b, 0x89, 0x50, 0x4E, 0x47):
+		return ".png"
+	case magicHasPrefix(b, 0xFF, 0xD8, 0xFF):
+		return ".jpg"
+	case magicHasAt(b, 0, "RIFF") && magicHasAt(b, 8, "WEBP"):
+		return ".webp"
+	case magicHasAt(b, 0, "GIF8"):
+		return ".gif"
+	}
+	return ""
+}
+
+func videoExtFromMagic(b []byte) string {
+	switch {
+	case magicHasAt(b, 4, "ftyp"):
+		// ISO BMFF:mp4 / mov / m4v 共用 ftyp,只有 brand 分得开。认得 "qt  " 报 .mov,
+		// 其余一律 .mp4 —— 与既有默认一致,分不出时不猜。
+		if magicHasAt(b, 8, "qt  ") {
+			return ".mov"
+		}
+		return ".mp4"
+	case magicHasPrefix(b, 0x1A, 0x45, 0xDF, 0xA3):
+		return ".webm"
+	case magicHasAt(b, 0, "RIFF") && magicHasAt(b, 8, "AVI "):
+		return ".avi"
+	case magicHasAt(b, 0, "FLV"):
+		return ".flv"
+	case magicHasPrefix(b, 0x00, 0x00, 0x01, 0xBA), magicHasPrefix(b, 0x00, 0x00, 0x01, 0xB3):
+		return ".mpg"
+	}
+	return ""
 }
 
 // AddBytes 直接写一段字节(multipart 上传文件字节走这里),用字段默认扩展名。
@@ -282,14 +404,57 @@ func (m *Materializer) addBytesExt(field Field, index int, multi bool, data []by
 	if !magicOK(field, data) {
 		return fmt.Errorf("输入 %s 不是有效的媒体文件(文件头校验未通过,请勿改后缀上传)", field)
 	}
+	// 扩展名优先级:调用方给的已知值(data-uri MIME / 任务引用)> 文件头推导 > 字段默认。
+	// 中间这层是给不带 ext 的三条路(URL 下载 / multipart / 裸 base64)补真实容器用的。
+	if ext == "" {
+		ext = extFromMagic(field, data)
+	}
 	if ext == "" {
 		ext = extForField(field)
+	}
+	if err := m.checkAudioDuration(field, data, ext); err != nil {
+		return err
 	}
 	ref := m.relRef(field, index, multi, ext)
 	if err := m.writeBytes(ref, data); err != nil {
 		return err
 	}
 	m.refs[field] = append(m.refs[field], ref)
+	return nil
+}
+
+// checkAudioDuration 音频时长闸:超过上限即拒(未配上限或非音频字段直接放行)。
+// 与 maxBytes 正交——体积挡不住时长,1 MB 的 mp3 可能有 60 秒。
+//
+// 真正在意这条的是数字人(s2v):它的产出视频长度完全由驱动音频决定(引擎不读
+// target_video_length,已实测),音频多长就生成多长,过长会 OOM 或长时间占卡。这里在写盘
+// 之前拦,调用方 Cleanup 能把同批已写的输入一并回滚,不留孤儿文件、不占卡、不扣费。
+//
+// 容器一律按文件头现场判定(audioExtFromMagic),不用传进来的 ext —— 那个值在多数路径上
+// 要么为空、要么由客户端声明,信它等于给出一条绕过时长闸的路。
+//
+// 解析失败放行,只记日志:走到这里的字节已经过了上面的 magicOK(音频字段要求 isAudioBytes),
+// 容器是认得的,再解不出来基本是文件本身残缺——这种输入到了引擎也跑不起来,占不住卡,
+// 与本闸要防的「合法长音频吃满显存」不是一类。反过来若判成违规,受伤的是能识别容器但
+// 解析器覆盖不到的边角格式。此处与 magic-bytes 同定位:廉价前置过滤,真正解码是引擎的事。
+func (m *Materializer) checkAudioDuration(field Field, data []byte, ext string) error {
+	if m.maxAudioSec <= 0 || !isAudioField(field) {
+		return nil
+	}
+	probeExt := audioExtFromMagic(data)
+	if probeExt == "" {
+		probeExt = ext
+	}
+	// ctx 参数在 common.GetAudioDuration 里没有被使用(只出现在签名上),故不把 ctx 一路
+	// 透进 AddBytes——那会改动多处公开调用点,换不来任何实际行为。
+	sec, err := common.GetAudioDuration(context.Background(), bytes.NewReader(data), probeExt)
+	if err != nil {
+		common.SysLog(fmt.Sprintf("nfsinput: 音频时长解析失败,跳过时长校验 field=%s ext=%s err=%v", field, probeExt, err))
+		return nil
+	}
+	if sec > m.maxAudioSec {
+		return fmt.Errorf("输入 %s 时长 %.1f 秒,超过上限 %.0f 秒", field, sec, m.maxAudioSec)
+	}
 	return nil
 }
 

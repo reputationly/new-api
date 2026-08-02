@@ -8,9 +8,34 @@ import { showError } from '../../helpers';
 import VideoRecorderModal from './VideoRecorderModal';
 import { isVideoRecordSupported } from '../../hooks/videoPlayground/useVideoRecorder';
 
+// 探测音频时长(秒)。拿不到就 resolve(null) —— 浏览器解不了的容器不该因此挡住上传,
+// 与后端 nfsinput.checkAudioDuration「解析失败即放行」同策略。
+const probeAudioSeconds = (file) =>
+  new Promise((resolve) => {
+    const url = URL.createObjectURL(file);
+    const el = document.createElement('audio');
+    let settled = false;
+    const done = (sec) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      URL.revokeObjectURL(url);
+      resolve(sec);
+    };
+    // 兜底超时:某些容器两个事件都不触发,没有它整个选择流程会静默卡死(既不报错也不上传),
+    // 是比漏检更糟的体验。超时按「探测不出来」处理,交给后端物化时兜底。
+    const timer = setTimeout(() => done(null), 5000);
+    el.preload = 'metadata';
+    el.onloadedmetadata = () =>
+      done(Number.isFinite(el.duration) ? el.duration : null);
+    el.onerror = () => done(null);
+    el.src = url;
+  });
+
 // 音频/视频单文件上传:读成 base64 data-url 交给上层(new-api 侧渠道会物化到 NFS,与
 // 图生视频的帧图同机制)。支持点击选择与拖拽上传,带体积上限 + 试听/预览。
 // kind: 'audio' | 'video'。
+// maxSec: 音频时长上限(秒;0=不限)。与 maxMB 正交——体积挡不住时长。
 const MediaFileInput = ({
   label,
   required = false,
@@ -18,6 +43,7 @@ const MediaFileInput = ({
   value = '', // base64 data-url 或 ''
   accept,
   maxMB = 50,
+  maxSec = 0,
   disabled = false,
   onChange,
 }) => {
@@ -33,11 +59,25 @@ const MediaFileInput = ({
   const defaultAccept =
     kind === 'video' ? 'video/*,.mp4,.mov,.webm' : 'audio/*,.wav,.mp3,.m4a';
 
-  const readFile = (file) => {
+  const readFile = async (file) => {
     if (!file) return;
     if (maxMB > 0 && file.size > maxMB * 1024 * 1024) {
       showError(t('文件不能超过 {{size}} MB', { size: maxMB }));
       return;
+    }
+    // 时长闸:数字人的产出视频长度完全跟随驱动音频,过长会让引擎 OOM 或长时间占卡。
+    // 选完文件当场拦,不等提交(后端物化时另有同名兜底,防直连绕过)。
+    if (kind === 'audio' && maxSec > 0) {
+      const sec = await probeAudioSeconds(file);
+      if (sec != null && sec > maxSec) {
+        showError(
+          t('音频时长 {{sec}} 秒，超过上限 {{max}} 秒', {
+            sec: sec.toFixed(1),
+            max: maxSec,
+          }),
+        );
+        return;
+      }
     }
     const reader = new FileReader();
     reader.onload = () => onChange(reader.result);

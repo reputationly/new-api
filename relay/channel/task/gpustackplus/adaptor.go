@@ -361,7 +361,11 @@ func (a *TaskAdaptor) BuildRequestBody(c *gin.Context, info *relaycommon.RelayIn
 			durationSec = v
 		}
 	}
-	if durationSec > 0 {
+	// s2v(数字人)除外:它的产出长度完全由驱动音频决定。实测 infinitetalk-720p 收到
+	// target_video_length=81(duration:5 换算而来)、驱动音频 10 秒,产出仍是 10 秒——引擎
+	// 根本不读这个字段。对 s2v 下发它没有任何效果,只会让人误以为时长可控,故不再转换;
+	// 时长管控改由 VideoModelConfig.maxAudioSec 在物化时按音频真实长度执行。别恢复。
+	if durationSec > 0 && taskType != "s2v" {
 		if _, ok := body["target_video_length"]; !ok {
 			body["target_video_length"] = durationSec*16 + 1
 		}
@@ -653,6 +657,11 @@ func newVideoMaterializer(info *relaycommon.RelayInfo, taskType, modelName strin
 	m := nfsinput.NewMaterializer(taskType, modelName, fmt.Sprintf("%d", info.UserId), inputGroupID(info))
 	if maxBytes, ok := common.VideoMaxInputBytesForModel(req.Model, info.OriginModelName, modelName); ok {
 		m.SetMaxBytes(maxBytes)
+	}
+	// 音频时长上限:与体积上限正交。物化层按字段判定,只有 s2v 会写音频字段(见
+	// materializeS2VInputs),其余任务共用本构造器也不受影响,故无需按 taskType 分流。
+	if maxSec, ok := common.VideoMaxAudioSecForModel(req.Model, info.OriginModelName, modelName); ok {
+		m.SetMaxAudioSeconds(maxSec)
 	}
 	return m
 }

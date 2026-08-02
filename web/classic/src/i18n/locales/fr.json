@@ -4006,6 +4006,10 @@
     "时长 {{sec}} 秒，大小 {{size}} MB": "{{sec}} s · {{size}} Mo",
     "文件超过 {{size}} MB 上限，请缩短时长后重录": "Le fichier dépasse la limite de {{size}} Mo — veuillez enregistrer une séquence plus courte.",
     "按 {{height}}P / {{fps}}fps 录制，比手机系统相机的 4K 小很多，最长 {{sec}} 秒": "Enregistrement en {{height}}P / {{fps}} ips — bien plus léger que la 4K de votre téléphone. Durée max : {{sec}} secondes.",
-    "当前浏览器不支持录像（需要 HTTPS 环境，部分内置浏览器亦不开放摄像头）。请改用上传视频文件。": "Votre navigateur ne prend pas en charge l'enregistrement vidéo (HTTPS requis ; certains navigateurs intégrés bloquent l'accès à la caméra). Veuillez importer un fichier vidéo à la place."
+    "当前浏览器不支持录像（需要 HTTPS 环境，部分内置浏览器亦不开放摄像头）。请改用上传视频文件。": "Votre navigateur ne prend pas en charge l'enregistrement vidéo (HTTPS requis ; certains navigateurs intégrés bloquent l'accès à la caméra). Veuillez importer un fichier vidéo à la place.",
+    "默认音频时长上限(秒)": "Durée audio max. par défaut (s)",
+    "留空/0 不限;数字人产出长度跟随驱动音频": "Vide/0 = illimité ; la durée de l'humain numérique suit l'audio pilote",
+    "音频秒数": "Secondes audio",
+    "音频时长 {{sec}} 秒，超过上限 {{max}} 秒": "Audio de {{sec}} s, au-delà de la limite de {{max}} s"
   }
 }

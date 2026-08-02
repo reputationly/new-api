@@ -52,6 +52,7 @@ import {
   getSizesForVideoModel,
   getDurationsForVideoModel,
   getMaxInputMBForModel,
+  getMaxAudioSecForModel,
   resolveVideoStrategy,
   normalizeVideoSize,
   normalizeVideoStatus,
@@ -65,10 +66,18 @@ const CONV_STORAGE_KEY_BASE = 'video_playground_conversations';
 const VIDEO_MODES = {
   // text2video 显式下发 t2v(不再靠模型名推断):Bernini 同名模型横跨 t2v 与
   // v2v/rv2v/r2v,inferTaskType 按名恒判 v2v,故这里必须显式;对其它 t2v 模型无影响。
-  text2video: { capability: VIDEO_PAGE_CAPABILITY, suffix: '', taskType: 't2v' },
+  text2video: {
+    capability: VIDEO_PAGE_CAPABILITY,
+    suffix: '',
+    taskType: 't2v',
+  },
   // 图生视频(2026-07 改判 Bernini r2v):参考图(1~3 张)生成视频,显式 task_type=r2v
   // (Bernini 模型名推断恒 v2v,必须显式)。旧 wan i2v 的「首帧生视频」迁到关键帧模式。
-  image2video: { capability: VIDEO_I2V_CAPABILITY, suffix: '_i2v', taskType: 'r2v' },
+  image2video: {
+    capability: VIDEO_I2V_CAPABILITY,
+    suffix: '_i2v',
+    taskType: 'r2v',
+  },
   // 关键帧(原「首尾帧」):同一 tab 承载 wan2.2 的 i2v 与 flf2v 两个模型(同权重、不同
   // --task 的两个实例)。task_type 按所选模型显式下发(见 isFlf2vModel),故不设静态 taskType。
   flf2v: { capability: VIDEO_FLF2V_CAPABILITY, suffix: '_flf2v' },
@@ -215,7 +224,6 @@ export const useVideoGeneration = ({ mode = 'text2video' } = {}) => {
     size: '',
     seconds: '',
     seed: '', // 随机种子;'' 表示随机(不下发)
-    negativePrompt: '', // 负向提示词;默认留空,非空才随 metadata 下发
     aspectRatio: '', // 宽高比;仅当该模型在后台配了宽高比才由 effect 选中默认值并下发
     firstFrame: '', // i2v/flf2v 首帧 / s2v 人物图(base64 data-url)
     lastFrame: '', // flf2v 尾帧
@@ -391,6 +399,11 @@ export const useVideoGeneration = ({ mode = 'text2video' } = {}) => {
   // 输入文件大小上限(MB;0=不限)。i2v/flf2v/s2v/sr/vace 上传帧图/音频/视频的护栏。
   const maxInputMB = useMemo(
     () => getMaxInputMBForModel(videoConfig, inputs.model),
+    [videoConfig, inputs.model],
+  );
+  // 驱动音频时长上限(秒;0=不限)。只对数字人有意义:产出视频长度就是音频长度。
+  const maxAudioSec = useMemo(
+    () => getMaxAudioSecForModel(videoConfig, inputs.model),
     [videoConfig, inputs.model],
   );
 
@@ -660,7 +673,9 @@ export const useVideoGeneration = ({ mode = 'text2video' } = {}) => {
             }
           : { task_type: 'v2a', video: `task:${prevTaskId}` };
       const model =
-        stage === 'upscaling' ? pipeline.upscale?.srModel : pipeline.dub?.dubModel;
+        stage === 'upscaling'
+          ? pipeline.upscale?.srModel
+          : pipeline.dub?.dubModel;
       // 配音提示词可选：用户填了才作为 v2a 的 prompt 下发（描述想要的声音）；
       // 留空=让模型按画面自由配环境音。超分段无提示词。
       const stagePrompt =
@@ -684,7 +699,9 @@ export const useVideoGeneration = ({ mode = 'text2video' } = {}) => {
         const inner = data.data || {};
         const nextTaskId = data.id || data.task_id || inner.task_id || inner.id;
         if (!nextTaskId) {
-          throw new Error(data.message || data.error?.message || 'submit stage failed');
+          throw new Error(
+            data.message || data.error?.message || 'submit stage failed',
+          );
         }
         patchConvMessage(convId, msgId, {
           taskId: nextTaskId,
@@ -915,7 +932,6 @@ export const useVideoGeneration = ({ mode = 'text2video' } = {}) => {
           size: normalizeVideoSize(inputs.size),
           seconds: inputs.seconds,
           seed: inputs.seed,
-          negativePrompt: inputs.negativePrompt,
           aspectRatio: inputs.aspectRatio,
           images: convImages,
           // ads2v 等无法自动分流的玩法由示例 params.taskType 显式带入(落在 inputs 上)。
@@ -946,7 +962,6 @@ export const useVideoGeneration = ({ mode = 'text2video' } = {}) => {
               size: conv.size,
               seconds: conv.seconds,
               seed: conv.seed,
-              negativePrompt: conv.negativePrompt,
               aspectRatio: conv.aspectRatio,
               images: conv.images || [],
               audioData: conv.audioData || '',
@@ -966,7 +981,6 @@ export const useVideoGeneration = ({ mode = 'text2video' } = {}) => {
               size: normalizeVideoSize(inputs.size),
               seconds: inputs.seconds,
               seed: inputs.seed,
-              negativePrompt: inputs.negativePrompt,
               aspectRatio: inputs.aspectRatio,
               images: convImages,
               interpolation: !!inputs.interpolation,
@@ -1050,7 +1064,6 @@ export const useVideoGeneration = ({ mode = 'text2video' } = {}) => {
               size: params.size,
               seconds: params.seconds,
               seed: params.seed,
-              negativePrompt: params.negativePrompt,
               aspectRatio: params.aspectRatio,
               images: params.images || [],
               // 新增能力媒体输入(base64):锁进对话供续问复用,落盘前 stripFramesForPersist 剥离。
@@ -1127,7 +1140,10 @@ export const useVideoGeneration = ({ mode = 'text2video' } = {}) => {
         // 配音段：文生/图生/视频编辑，会话配音开关开时可能启用。
         // 读 params.dubbing（随会话锁定）而非当前开关，续会话/刷新后仍按原设置。
         const maybeDub =
-          !isSR && !isDub && !!params.dubbing && DUB_PIPELINE_MODES.includes(mode);
+          !isSR &&
+          !isDub &&
+          !!params.dubbing &&
+          DUB_PIPELINE_MODES.includes(mode);
 
         // 从 params.group 的权威可用模型列表按能力挑超分/配音模型（既保证对该分组
         // 可用又匹配能力，兼容多同能力模型分组分别启用）。仅在可能用到时才拉列表。
@@ -1141,10 +1157,18 @@ export const useVideoGeneration = ({ mode = 'text2video' } = {}) => {
           }
         }
         const srModel = maybeUpscale
-          ? findCapabilityModelIn(videoConfig, usableModels, VIDEO_SR_CAPABILITY)
+          ? findCapabilityModelIn(
+              videoConfig,
+              usableModels,
+              VIDEO_SR_CAPABILITY,
+            )
           : '';
         const dubModel = maybeDub
-          ? findCapabilityModelIn(videoConfig, usableModels, VIDEO_DUB_CAPABILITY)
+          ? findCapabilityModelIn(
+              videoConfig,
+              usableModels,
+              VIDEO_DUB_CAPABILITY,
+            )
           : '';
         const wantUpscale = maybeUpscale && !!srModel;
         const wantDub = maybeDub && !!dubModel;
@@ -1165,30 +1189,29 @@ export const useVideoGeneration = ({ mode = 'text2video' } = {}) => {
             body.size = normalizeVideoSize(srLowSize);
           }
         }
-        if (!wantUpscale && !followsInput && availableSizes.includes(videoSizeVal)) {
+        if (
+          !wantUpscale &&
+          !followsInput &&
+          availableSizes.includes(videoSizeVal)
+        ) {
           body.size = videoSizeVal;
         }
-        // 超分/配乐输出时长跟随源视频,不发时长字段(配置面板也不展示时长框)。
-        if (!isSR && !isDub) {
+        // 超分/配乐跟随源视频、数字人跟随驱动音频,均不发时长字段(配置面板也不展示时长框)。
+        // 数字人这条是实测结论:引擎不读由 duration 换算出的 target_video_length,产出长度
+        // 就是音频长度。发了既无效又误导,长度管控走 maxAudioSec 在物化时按真实音频长度执行。
+        if (!isSR && !isDub && !isS2V) {
           if (strategy.durationField === 'seconds') {
             body.seconds = params.seconds;
           } else {
             body.duration = parseInt(params.seconds, 10) || undefined;
           }
         }
-        // 随机种子 / 负向提示词:塞进 metadata(gpustackplus task adaptor 整体透传 metadata
-        // 给引擎;TaskSubmitReq.Metadata 只从请求的 metadata 对象取,故不能放顶层)。
-        // seed 留空则引擎随机;negative_prompt 非空才发。
+        // 随机种子:塞进 metadata(gpustackplus task adaptor 整体透传 metadata 给引擎;
+        // TaskSubmitReq.Metadata 只从请求的 metadata 对象取,故不能放顶层)。留空则引擎随机。
         if (params.seed !== '' && params.seed != null) {
           body.metadata = {
             ...(body.metadata || {}),
             seed: Number(params.seed),
-          };
-        }
-        if (params.negativePrompt && params.negativePrompt.trim()) {
-          body.metadata = {
-            ...(body.metadata || {}),
-            negative_prompt: params.negativePrompt.trim(),
           };
         }
         // 插帧(默认关):按提交时的开关状态透传 target_fps(引擎 RIFE 帧率翻倍)。
@@ -1264,11 +1287,7 @@ export const useVideoGeneration = ({ mode = 'text2video' } = {}) => {
           const override = (params.taskTypeOverride || '').trim();
           // override(ads2v)只在真双视频时生效:删掉第二视频后回落自动分流,
           // 避免残留 override 让 1 视频提交被后端「需要恰好 2 个视频」拒掉。
-          md.task_type = v2
-            ? override || 'mv2v'
-            : hasRefs
-              ? 'rv2v'
-              : 'v2v';
+          md.task_type = v2 ? override || 'mv2v' : hasRefs ? 'rv2v' : 'v2v';
           body.metadata = md;
         }
         const res = await API.post(
@@ -1397,10 +1416,6 @@ export const useVideoGeneration = ({ mode = 'text2video' } = {}) => {
         size: conv.size != null ? conv.size : prev.size,
         seconds: conv.seconds != null ? conv.seconds : prev.seconds,
         seed: conv.seed != null ? conv.seed : prev.seed,
-        negativePrompt:
-          conv.negativePrompt != null
-            ? conv.negativePrompt
-            : prev.negativePrompt,
         aspectRatio:
           conv.aspectRatio != null ? conv.aspectRatio : prev.aspectRatio,
         srRatio: conv.srRatio != null ? conv.srRatio : prev.srRatio,
@@ -1466,6 +1481,7 @@ export const useVideoGeneration = ({ mode = 'text2video' } = {}) => {
     dubAvailable,
     maxRefImages: isI2V ? MAX_R2V_REF_IMAGES : MAX_REF_IMAGES,
     maxInputMB,
+    maxAudioSec,
     inputs,
     handleInputChange,
     applyExample,

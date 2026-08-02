@@ -27,6 +27,7 @@ export const VideoPlaygroundBody = ({ mode }) => {
     followsInput,
     maxRefImages,
     maxInputMB,
+    maxAudioSec,
     inputs,
     handleInputChange,
     applyExample,
@@ -68,6 +69,7 @@ export const VideoPlaygroundBody = ({ mode }) => {
           dubAvailable={dubAvailable}
           maxRefImages={maxRefImages}
           maxInputMB={maxInputMB}
+          maxAudioSec={maxAudioSec}
           inputs={inputs}
           groups={groups}
           models={models}

@@ -340,15 +340,29 @@ export const VIDEO_RECORD_MAX_SEC = 180;
 // maxInputMB:输入文件大小上限(MB)。适用于吃用户上传的模式(i2v/flf2v 帧图、s2v 人物图/
 // 驱动音频、sr 源视频、视频编辑 源视频/参考图);0/未配=不限。生成侧 sizes/durations/
 // aspectRatios 对这些输入驱动能力无意义(见 followsInput),maxInputMB 才是它们的护栏。
+// maxAudioSec:驱动音频时长上限(秒);0/未配=不限。与 maxInputMB 是两个正交的轴——
+// 体积挡不住时长(1 MB 的 mp3 可能有 60 秒)。只对数字人(s2v)有意义:它的产出视频长度
+// 完全由驱动音频决定,音频多长就生成多长,过长会让引擎 OOM 或长时间占卡。
 const toInputMB = (v) => {
   const n = parseInt(v, 10);
+  return Number.isFinite(n) && n >= 0 ? n : null;
+};
+
+const toAudioSec = (v) => {
+  const n = Number(v);
   return Number.isFinite(n) && n >= 0 ? n : null;
 };
 
 export const parseVideoModelConfig = (raw) => {
   // 未配置时默认留空，交由 getSizes/DurationsForVideoModel 按模型类别兜底
   const empty = {
-    default: { sizes: [], durations: [], aspectRatios: [], maxInputMB: null },
+    default: {
+      sizes: [],
+      durations: [],
+      aspectRatios: [],
+      maxInputMB: null,
+      maxAudioSec: null,
+    },
     models: {},
   };
   if (!raw) return empty;
@@ -364,6 +378,7 @@ export const parseVideoModelConfig = (raw) => {
           aspectRatios: normalizeList(cfg?.aspectRatios),
           capabilities: normalizeList(cfg?.capabilities),
           maxInputMB: toInputMB(cfg?.maxInputMB),
+          maxAudioSec: toAudioSec(cfg?.maxAudioSec),
         };
       });
     }
@@ -373,6 +388,7 @@ export const parseVideoModelConfig = (raw) => {
         durations: normalizeList(def.durations),
         aspectRatios: normalizeList(def.aspectRatios),
         maxInputMB: toInputMB(def.maxInputMB),
+        maxAudioSec: toAudioSec(def.maxAudioSec),
       },
       models,
     };
@@ -386,6 +402,14 @@ export const getMaxInputMBForModel = (config, model) => {
   const m = config?.models?.[model];
   if (m && m.maxInputMB != null) return m.maxInputMB;
   if (config?.default?.maxInputMB != null) return config.default.maxInputMB;
+  return 0;
+};
+
+// 驱动音频时长上限(秒):按模型配置 → 全局默认 → 0(不限)。
+export const getMaxAudioSecForModel = (config, model) => {
+  const m = config?.models?.[model];
+  if (m && m.maxAudioSec != null) return m.maxAudioSec;
+  if (config?.default?.maxAudioSec != null) return config.default.maxAudioSec;
   return 0;
 };
 

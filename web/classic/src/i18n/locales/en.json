@@ -4462,6 +4462,10 @@
     "时长 {{sec}} 秒，大小 {{size}} MB": "{{sec}}s · {{size}} MB",
     "文件超过 {{size}} MB 上限，请缩短时长后重录": "File exceeds the {{size}} MB limit — please record a shorter clip.",
     "按 {{height}}P / {{fps}}fps 录制，比手机系统相机的 4K 小很多，最长 {{sec}} 秒": "Records at {{height}}P / {{fps}}fps — far smaller than your phone's 4K. Max {{sec}} seconds.",
-    "当前浏览器不支持录像（需要 HTTPS 环境，部分内置浏览器亦不开放摄像头）。请改用上传视频文件。": "Your browser doesn't support video recording (HTTPS required; some in-app browsers block camera access). Please upload a video file instead."
+    "当前浏览器不支持录像（需要 HTTPS 环境，部分内置浏览器亦不开放摄像头）。请改用上传视频文件。": "Your browser doesn't support video recording (HTTPS required; some in-app browsers block camera access). Please upload a video file instead.",
+    "默认音频时长上限(秒)": "Default max audio duration (sec)",
+    "留空/0 不限;数字人产出长度跟随驱动音频": "Blank/0 = unlimited; digital human output length follows the driving audio",
+    "音频秒数": "Audio sec",
+    "音频时长 {{sec}} 秒，超过上限 {{max}} 秒": "Audio is {{sec}}s, exceeding the {{max}}s limit"
   }
 }

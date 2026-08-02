@@ -5,7 +5,6 @@ import {
   Typography,
   Tooltip,
   InputNumber,
-  TextArea,
   Switch,
 } from '@douyinfe/semi-ui';
 import {
@@ -15,7 +14,6 @@ import {
   Ruler,
   HelpCircle,
   Shuffle,
-  Ban,
   Gauge,
 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
@@ -208,31 +206,6 @@ const ImageConfigPanel = ({
             />
           </div>
         )}
-
-        {/* 负向提示词 */}
-        <div>
-          <div className='flex items-center gap-2 mb-2'>
-            <Ban size={16} className='text-gray-500' />
-            <Typography.Text strong className='text-sm'>
-              {t('负向提示词')}
-            </Typography.Text>
-            <Tooltip
-              content={t("Describe what you don't want included in the image.")}
-              position='top'
-            >
-              <HelpCircle size={14} className='text-gray-400 cursor-help' />
-            </Tooltip>
-          </div>
-          <TextArea
-            placeholder={t('负向提示词(可选)')}
-            name='negativePrompt'
-            value={inputs.negativePrompt || ''}
-            onChange={(value) => onInputChange('negativePrompt', value)}
-            autosize={{ minRows: 2, maxRows: 6 }}
-            disabled={disabled}
-            className='!rounded-lg'
-          />
-        </div>
 
         {/* 提示词智能优化：默认关闭。 */}
         <div>
