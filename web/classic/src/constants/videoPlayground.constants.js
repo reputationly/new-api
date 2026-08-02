@@ -283,6 +283,16 @@ export const findCapabilityModelIn = (videoConfig, list, capability) => {
 // 支持「配音」流水线的体验区模式（生成后接 v2a 配音段）：文生/图生/视频编辑。
 export const DUB_PIPELINE_MODES = ['text2video', 'image2video', 'vace'];
 
+// 「生成后自动配音」总闸门。2026-08 暂时全端关闭：v2a 配出的音频与画面内容常常无关，
+// 在质量达标前不该让用户按次付费去开它。置 false 后 dubAvailable 恒假 —— 开关在
+// 桌面端与移动端都不渲染，且历史会话里存了 dubbing:true 的续问也不会再接配音段
+// （见 useVideoGeneration 的 dubAvailable / maybeDub）。
+//
+// 恢复时把这里改回 true 即可，无需动别处。注意这与移动端的 allowDub:false 是两回事：
+// 那个是「手机上要多排一次 v2a、等待久失败面大」的长期取舍，恢复本闸门时不要一并撤掉。
+// 语音页的独立「视频配乐」入口（用户自己上传视频去配音）不受此闸门影响，仍然可用。
+export const DUB_PIPELINE_ENABLED = false;
+
 export const VIDEO_POLL_INTERVAL_MS = 4000;
 export const VIDEO_POLL_MAX_TIMES = 90; // 约 6 分钟后超时
 

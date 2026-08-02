@@ -11,7 +11,7 @@ import {
 
 import { useVideoGeneration } from '@classic/hooks/videoPlayground/useVideoGeneration';
 import { isFlf2vModel } from '@classic/constants/videoPlayground.constants';
-import { useVisibleModes } from '../hooks/useVisibleModes';
+import { useVisibleModes, useDesktopOnlyHint } from '../hooks/useVisibleModes';
 import { useAutoOpenLatest } from '../hooks/useAutoOpenLatest';
 
 import ConfigBar from '../components/gen/ConfigBar';
@@ -46,7 +46,6 @@ export const VideoBody = ({ mode }) => {
     availableSizes,
     availableDurations,
     availableAspectRatios,
-    dubAvailable,
     messages,
     generating,
     locked,
@@ -61,7 +60,9 @@ export const VideoBody = ({ mode }) => {
     openHistoryItem,
     deleteHistoryItem,
     clearHistory,
-  } = useVideoGeneration({ mode });
+    // allowDub:false —— 手机端不做「生成后自动配音」：要多排一次 v2a，等待更久、
+    // 失败面更大，统一去桌面端做。它也堵住历史会话里存了 dubbing:true 的续问。
+  } = useVideoGeneration({ mode, allowDub: false });
 
   useAutoOpenLatest(conversations, currentConvId, openHistoryItem);
 
@@ -313,19 +314,11 @@ export const VideoBody = ({ mode }) => {
                   },
                 ]),
           ]}
-        />
-        {/* 插帧/配音开关：默认关。插帧透传 target_fps；配音开启则生成后自动接 v2a 配音段。
-            超分与配乐本身就是后处理，两个开关都不适用，整条不渲染。
-            说明文字只在关闭态显示：开着的时候用户已经知道它是什么了，而那句话有它没它
-            都占满一整行。 */}
-        {!isSR && !isDub && (
-          <div
-            className='m-config-bar'
-            style={{
-              paddingTop: 0,
-              borderBottom: '0.5px solid rgba(17,24,39,0.06)',
-            }}
-          >
+        >
+          {/* 插帧开关：默认关，透传 target_fps。超分/配音本身就是后处理，不适用，不渲染。
+              只写「插帧：关」不带说明：一句解释就撑满一行，而这个词本身够自解释。
+              配音开关手机端不提供，见上面的 allowDub。 */}
+          {!isSR && !isDub && (
             <div
               className={`m-config-chip${inputs.interpolation ? ' active' : ''}`}
               onClick={() =>
@@ -333,20 +326,10 @@ export const VideoBody = ({ mode }) => {
                 handleInputChange('interpolation', !inputs.interpolation)
               }
             >
-              {inputs.interpolation ? '插帧：开' : '插帧：关 · 帧率翻倍更流畅'}
+              插帧：{inputs.interpolation ? '开' : '关'}
             </div>
-            {dubAvailable && (
-              <div
-                className={`m-config-chip${inputs.dubbing ? ' active' : ''}`}
-                onClick={() =>
-                  !editDisabled && handleInputChange('dubbing', !inputs.dubbing)
-                }
-              >
-                {inputs.dubbing ? '配音：开' : '配音：关 · 生成后自动配音'}
-              </div>
-            )}
-          </div>
-        )}
+          )}
+        </ConfigBar>
         {/* 配音不再有独立的提示词框：v2a 段直接复用生成这段视频的提示词 */}
         {!followsInput && /1080/i.test(inputs.size || '') && (
           <div
@@ -410,6 +393,7 @@ export const VideoBody = ({ mode }) => {
 const Video = () => {
   const navigate = useNavigate();
   const modes = useVisibleModes('video');
+  const desktopOnlyHint = useDesktopOnlyHint('video');
   const [mode, setMode] = useState(modes[0]?.key || 'text2video');
 
   useEffect(() => {
@@ -430,6 +414,9 @@ const Video = () => {
               <CapsuleTabs.Tab key={m.key} title={m.title} />
             ))}
           </CapsuleTabs>
+          {desktopOnlyHint && (
+            <div className='m-desktop-hint'>{desktopOnlyHint}</div>
+          )}
           <div style={{ flex: 1, minHeight: 0 }}>
             <VideoBody key={mode} mode={mode} />
           </div>

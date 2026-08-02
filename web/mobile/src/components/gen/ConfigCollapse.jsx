@@ -77,7 +77,17 @@ const ConfigCollapse = ({ locked, title, slots = [], onNew, children }) => {
           新建会话
         </Button>
       </div>
-      {expanded && children}
+      {expanded && (
+        // 展开只是「看」，不是「改」：hook 里 handleInputChange 早就 return 了，胶囊点下去
+        // 毫无反应。这里统一置灰并把 Picker 的下拉箭头藏掉（见 .m-config-locked），再补
+        // 一句话说明出路——否则用户只会以为页面卡了。
+        <div className='m-config-locked'>
+          <div className='m-locked-hint'>
+            本次会话的模型与参数已固定；如需更换模型或调整参数，请点击「新建会话」
+          </div>
+          {children}
+        </div>
+      )}
     </>
   );
 };

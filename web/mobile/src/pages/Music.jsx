@@ -4,13 +4,12 @@ import { Button, CapsuleTabs, Empty, NavBar, TextArea } from 'antd-mobile';
 
 import { useMusicGeneration } from '@classic/hooks/musicPlayground/useMusicGeneration';
 import {
-  MUSIC_DURATIONS,
   MUSIC_SVS_CONTROLS,
   MUSIC_SVS_LANGUAGES,
 } from '@classic/constants/musicPlayground.constants';
 
 import AsyncTaskBubble from '../components/gen/AsyncTaskBubble';
-import { useVisibleModes } from '../hooks/useVisibleModes';
+import { useVisibleModes, useDesktopOnlyHint } from '../hooks/useVisibleModes';
 import { useAutoOpenLatest } from '../hooks/useAutoOpenLatest';
 import ConfigBar from '../components/gen/ConfigBar';
 import ConfigCollapse from '../components/gen/ConfigCollapse';
@@ -179,20 +178,9 @@ const MusicBody = ({ mode }) => {
               options: models,
               onChange: (v) => handleInputChange('model', v),
             },
-            ...(isT2M
-              ? [
-                  {
-                    key: 'duration',
-                    label: '时长',
-                    value: inputs.duration,
-                    options: MUSIC_DURATIONS.map((d) => ({
-                      label: d ? `${d} 秒` : '默认',
-                      value: d,
-                    })),
-                    onChange: (v) => handleInputChange('duration', v),
-                  },
-                ]
-              : []),
+            // 手机端不摆时长下拉：文生音乐未填歌词时走 sample_mode，引擎的
+            // llm_generation_inputs.py 会用 LM 自己推的时长无条件覆盖下发值，摆出来
+            // 就是个点了不生效的假开关（同视频页 s2v 的处理）。要指定时长去网页端。
             ...(needsDualAudio
               ? [
                   {
@@ -302,6 +290,7 @@ const MusicBody = ({ mode }) => {
 const Music = () => {
   const navigate = useNavigate();
   const modes = useVisibleModes('music');
+  const desktopOnlyHint = useDesktopOnlyHint('music');
   const [mode, setMode] = useState(modes[0]?.key || 't2m');
   useEffect(() => {
     if (modes.length && !modes.some((m) => m.key === mode))
@@ -320,6 +309,9 @@ const Music = () => {
               <CapsuleTabs.Tab key={m.key} title={m.title} />
             ))}
           </CapsuleTabs>
+          {desktopOnlyHint && (
+            <div className='m-desktop-hint'>{desktopOnlyHint}</div>
+          )}
           <div style={{ flex: 1, minHeight: 0 }}>
             <MusicBody key={mode} mode={mode} />
           </div>

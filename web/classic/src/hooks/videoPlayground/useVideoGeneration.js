@@ -46,6 +46,7 @@ import {
   isFlf2vModel,
   findCapabilityModelIn,
   DUB_PIPELINE_MODES,
+  DUB_PIPELINE_ENABLED,
   VIDEO_POLL_INTERVAL_MS,
   VIDEO_POLL_MAX_TIMES,
   parseVideoModelConfig,
@@ -209,7 +210,14 @@ const extractApiErrMsg = (error, fallback) => {
   return d.error?.message || d.message || error?.message || fallback;
 };
 
-export const useVideoGeneration = ({ mode = 'text2video' } = {}) => {
+// allowDub=false:整端关闭「生成后自动配音」。移动端用它——配音要额外排一次 v2a,
+// 手机上等待更久、失败面更大,统一去桌面端做。它同时压住 dubAvailable(开关不出现、
+// 残留的 on 状态被既有 effect 清掉)与 maybeDub(历史会话里存了 dubbing:true 的续问
+// 也不会再接配音段)——只删 UI 开关堵不住后者。
+export const useVideoGeneration = ({
+  mode = 'text2video',
+  allowDub = true,
+} = {}) => {
   const { t } = useTranslation();
   const [statusState] = useContext(StatusContext);
   const [userState] = useContext(UserContext);
@@ -438,13 +446,15 @@ export const useVideoGeneration = ({ mode = 'text2video' } = {}) => {
   // 具体模型在提交时从 params.group 的权威可用列表按能力挑，见 generate。
   const dubAvailable = useMemo(
     () =>
+      DUB_PIPELINE_ENABLED &&
+      allowDub &&
       DUB_PIPELINE_MODES.includes(mode) &&
       !!findCapabilityModelIn(
         videoConfig,
         groupUsableModels,
         VIDEO_DUB_CAPABILITY,
       ),
-    [mode, videoConfig, groupUsableModels],
+    [allowDub, mode, videoConfig, groupUsableModels],
   );
 
   const videoGroups = useMemo(() => {
@@ -1144,6 +1154,8 @@ export const useVideoGeneration = ({ mode = 'text2video' } = {}) => {
         // 配音段：文生/图生/视频编辑，会话配音开关开时可能启用。
         // 读 params.dubbing（随会话锁定）而非当前开关，续会话/刷新后仍按原设置。
         const maybeDub =
+          DUB_PIPELINE_ENABLED &&
+          allowDub &&
           !isSR &&
           !isDub &&
           !!params.dubbing &&
@@ -1374,6 +1386,7 @@ export const useVideoGeneration = ({ mode = 'text2video' } = {}) => {
       availableAspectRatios,
       videoConfig,
       mode,
+      allowDub,
       t,
     ],
   );

@@ -34,6 +34,11 @@ import {
   MUSIC_DEFAULT_SECONDS_TOTAL,
   MUSIC_SVS_LANGUAGES,
   MUSIC_SVS_CONTROLS,
+  MUSIC_DEFAULT_COVER_STRENGTH,
+  MUSIC_REPAINT_MODES,
+  MUSIC_DEFAULT_REPAINT_STRENGTH,
+  MUSIC_REPAINT_MIN_SEC,
+  MUSIC_REPAINT_MAX_SEC,
   musicDefaultStepsForEngine,
   musicDefaultGuidanceForEngine,
 } from '../../constants/musicPlayground.constants';
@@ -50,11 +55,13 @@ const MusicConfigPanel = ({
   models,
   onInputChange,
   disabled = false,
+  mode = 't2m',
   engine = 'acestep',
   needsAudio = false,
   needsVideo = false,
   needsDualAudio = false,
   showTranslation = false,
+  showAssistModel = false,
   translationGroups = [],
   translationModels = [],
   audioLabel = '',
@@ -96,6 +103,23 @@ const MusicConfigPanel = ({
   // guidance AudioX·ACE-Step 7 / SoulX 3(与 deploy-config 一致,所见即所发)。
   const defaultSteps = musicDefaultStepsForEngine(engine);
   const defaultGuidance = musicDefaultGuidanceForEngine(engine);
+
+  // 重绘区间越界提示。两个都留空 = 全曲重绘(引擎默认),不提示。
+  const repaintRangeWarning = (() => {
+    const a = parseFloat(inputs.repaintStart);
+    const b = parseFloat(inputs.repaintEnd);
+    if (!Number.isFinite(a) || !Number.isFinite(b)) return '';
+    if (b <= a) return t('重绘区间的结束时间要大于开始时间');
+    const span = b - a;
+    if (span < MUSIC_REPAINT_MIN_SEC || span > MUSIC_REPAINT_MAX_SEC) {
+      return t('重绘区间建议在 {{min}}~{{max}} 秒之间(当前 {{cur}} 秒)', {
+        min: MUSIC_REPAINT_MIN_SEC,
+        max: MUSIC_REPAINT_MAX_SEC,
+        cur: Math.round(span),
+      });
+    }
+    return '';
+  })();
 
   const handleFile = (e) => {
     const file = e.target.files?.[0];
@@ -193,17 +217,22 @@ const MusicConfigPanel = ({
           />
         </div>
 
-        {/* 语言模型(中译英):仅在玩法需翻译且当前模型启用译文时展示。先选分组再选模型,
-            其余参数(temperature 等)后端默认,不暴露。 */}
-        {showTranslation && (
+        {/* 辅助语言模型:两个用途共用一套选择 —— 音效的中译英,和文生音乐的「AI 帮我写词」。
+            都是单次非流式打 /pg/chat/completions,没必要让用户选两次。
+            先选分组再选模型,其余参数(temperature 等)后端默认,不暴露。 */}
+        {(showTranslation || showAssistModel) && (
           <div>
             <div className='flex items-center gap-2 mb-2'>
               <Languages size={16} className='text-gray-500' />
               <Typography.Text strong className='text-sm'>
-                {t('语言模型')}
+                {showTranslation ? t('语言模型') : t('辅助语言模型')}
               </Typography.Text>
               <Tooltip
-                content={t('中文将自动翻译为英文后生成')}
+                content={
+                  showTranslation
+                    ? t('中文将自动翻译为英文后生成')
+                    : t('用于「AI 帮我写词」:据你的描述拟出歌词与曲式参数')
+                }
                 position='top'
               >
                 <HelpCircle size={14} className='text-gray-400 cursor-help' />
@@ -265,28 +294,51 @@ const MusicConfigPanel = ({
               style={{ display: 'none' }}
               onChange={handleFile}
             />
-            {!disabled && (
+            {/* 从「改编风格 / 重绘片段」跳进来时源音频已定(task:<task_id>),不必也不该
+                再让用户上传;想换素材点「改为上传文件」清掉引用即可。 */}
+            {inputs.srcTaskId ? (
               <div className='flex items-center gap-2'>
-                <Button
-                  theme='outline'
-                  type='tertiary'
-                  size='small'
-                  icon={<Upload size={14} />}
-                  onClick={() => fileInputRef.current?.click()}
-                >
-                  {inputs.audioName ? t('重新上传') : t('选择音频文件')}
-                </Button>
-                {inputs.audioName && (
-                  <Typography.Text
-                    className='text-xs text-gray-500 truncate'
-                    style={{ maxWidth: 140 }}
+                <Typography.Text className='text-xs text-gray-600'>
+                  {inputs.srcTaskLabel || t('上一首生成结果')}
+                </Typography.Text>
+                {!disabled && (
+                  <Button
+                    theme='borderless'
+                    type='tertiary'
+                    size='small'
+                    onClick={() => {
+                      onInputChange('srcTaskId', '');
+                      onInputChange('srcTaskLabel', '');
+                    }}
                   >
-                    {inputs.audioName}
-                  </Typography.Text>
+                    {t('改为上传文件')}
+                  </Button>
                 )}
               </div>
+            ) : (
+              !disabled && (
+                <div className='flex items-center gap-2'>
+                  <Button
+                    theme='outline'
+                    type='tertiary'
+                    size='small'
+                    icon={<Upload size={14} />}
+                    onClick={() => fileInputRef.current?.click()}
+                  >
+                    {inputs.audioName ? t('重新上传') : t('选择音频文件')}
+                  </Button>
+                  {inputs.audioName && (
+                    <Typography.Text
+                      className='text-xs text-gray-500 truncate'
+                      style={{ maxWidth: 140 }}
+                    >
+                      {inputs.audioName}
+                    </Typography.Text>
+                  )}
+                </div>
+              )
             )}
-            {inputs.audioData && (
+            {!inputs.srcTaskId && inputs.audioData && (
               <audio
                 key={inputs.audioData.slice(0, 64)}
                 src={inputs.audioData}
@@ -409,6 +461,8 @@ const MusicConfigPanel = ({
               >
                 <HelpCircle size={14} className='text-gray-400 cursor-help' />
               </Tooltip>
+              {/* 「AI 帮我写词」按钮在对话区输入框旁边 —— 它要拿输入框里的描述当输入,
+                  而那个值在 MusicChatArea 的本地 state 里。 */}
             </div>
             <TextArea
               placeholder={t(
@@ -423,14 +477,25 @@ const MusicConfigPanel = ({
           </div>
         )}
 
-        {/* 时长(ACE-Step 预设下拉) */}
-        {isAceStep && (
+        {/* 时长(仅文生音乐)。改编/重绘不显示:引擎里
+              if params.task_type in ("cover", "repaint", ...): audio_duration = None
+            (inference.py:819)——产出长度锁死为源音频长度,下发多少都被静默忽略。
+            摆出来就是个假开关,同视频页 s2v 的处理。 */}
+        {mode === 't2m' && (
           <div>
             <div className='flex items-center gap-2 mb-2'>
               <Clock size={16} className='text-gray-500' />
               <Typography.Text strong className='text-sm'>
-                {t('时长')}
+                {t('目标时长')}
               </Typography.Text>
+              <Tooltip
+                content={t(
+                  '模型把它当作参考锚点而非精确指令,成品会在附近浮动。30~60 秒与 2~4 分钟最稳定。需先填写歌词才会生效。',
+                )}
+                position='top'
+              >
+                <HelpCircle size={14} className='text-gray-400 cursor-help' />
+              </Tooltip>
             </div>
             <Select
               name='duration'
@@ -444,6 +509,136 @@ const MusicConfigPanel = ({
               className='!rounded-lg'
             />
           </div>
+        )}
+
+        {/* 改编强度(仅 cover)。官方标为 cover 的 Key parameter:越高越贴原曲结构,
+            越低越自由。原先没暴露,用户只能吃引擎默认的 1.0(最大保留),等于"改编"改不动。 */}
+        {mode === 'cover' && (
+          <div>
+            <div className='flex items-center gap-2 mb-2'>
+              <SlidersHorizontal size={16} className='text-gray-500' />
+              <Typography.Text strong className='text-sm'>
+                {t('保留原曲结构')}
+              </Typography.Text>
+              <Tooltip
+                content={t(
+                  '1 = 最大限度保留原曲结构(引擎默认);越低越自由发挥,改动越大。留空走引擎默认。',
+                )}
+                position='top'
+              >
+                <HelpCircle size={14} className='text-gray-400 cursor-help' />
+              </Tooltip>
+            </div>
+            <InputNumber
+              min={0}
+              max={1}
+              step={0.1}
+              value={
+                inputs.coverStrength === '' ? undefined : inputs.coverStrength
+              }
+              onChange={(v) => onInputChange('coverStrength', v ?? '')}
+              placeholder={t('留空 = 默认 {{v}}', {
+                v: MUSIC_DEFAULT_COVER_STRENGTH,
+              })}
+              disabled={disabled}
+              style={{ width: '100%' }}
+              className='!rounded-lg'
+            />
+          </div>
+        )}
+
+        {/* 重绘区间与力度(仅 repaint)。不填区间时引擎默认 start=0/end=-1 → 全曲重绘,
+            那就跟改编没区别了 —— repaint 的价值正在于只改一段。 */}
+        {mode === 'repaint' && (
+          <>
+            <div>
+              <div className='flex items-center gap-2 mb-2'>
+                <Clock size={16} className='text-gray-500' />
+                <Typography.Text strong className='text-sm'>
+                  {t('重绘区间(秒)')}
+                </Typography.Text>
+                <Tooltip
+                  content={t(
+                    '只重绘这一段,其余保持原样。引擎可操作范围 {{min}}~{{max}} 秒;两个都留空 = 全曲重绘。',
+                    { min: MUSIC_REPAINT_MIN_SEC, max: MUSIC_REPAINT_MAX_SEC },
+                  )}
+                  position='top'
+                >
+                  <HelpCircle size={14} className='text-gray-400 cursor-help' />
+                </Tooltip>
+              </div>
+              <div className='flex items-center gap-2'>
+                <InputNumber
+                  min={0}
+                  value={
+                    inputs.repaintStart === '' ? undefined : inputs.repaintStart
+                  }
+                  onChange={(v) => onInputChange('repaintStart', v ?? '')}
+                  placeholder={t('起')}
+                  disabled={disabled}
+                  style={{ flex: 1 }}
+                  className='!rounded-lg'
+                />
+                <span className='text-gray-400'>-</span>
+                <InputNumber
+                  min={0}
+                  value={
+                    inputs.repaintEnd === '' ? undefined : inputs.repaintEnd
+                  }
+                  onChange={(v) => onInputChange('repaintEnd', v ?? '')}
+                  placeholder={t('止')}
+                  disabled={disabled}
+                  style={{ flex: 1 }}
+                  className='!rounded-lg'
+                />
+              </div>
+              {repaintRangeWarning && (
+                <Typography.Text type='warning' className='text-xs mt-1 block'>
+                  {repaintRangeWarning}
+                </Typography.Text>
+              )}
+            </div>
+            <div>
+              <div className='flex items-center gap-2 mb-2'>
+                <SlidersHorizontal size={16} className='text-gray-500' />
+                <Typography.Text strong className='text-sm'>
+                  {t('重绘方式')}
+                </Typography.Text>
+              </div>
+              <Select
+                value={inputs.repaintMode}
+                onChange={(v) => onInputChange('repaintMode', v)}
+                optionList={MUSIC_REPAINT_MODES.map((o) => ({
+                  label: t(o.label),
+                  value: o.value,
+                }))}
+                disabled={disabled}
+                style={{ width: '100%' }}
+                dropdownStyle={{ width: '100%', maxWidth: '100%' }}
+                className='!rounded-lg'
+              />
+              {/* 强度只在 balanced 模式生效(引擎侧语义),其余模式不显示也不下发。 */}
+              {inputs.repaintMode === 'balanced' && (
+                <InputNumber
+                  min={0}
+                  max={1}
+                  step={0.1}
+                  value={
+                    inputs.repaintStrength === ''
+                      ? undefined
+                      : inputs.repaintStrength
+                  }
+                  onChange={(v) => onInputChange('repaintStrength', v ?? '')}
+                  placeholder={t('重绘强度,留空 = 默认 {{v}}', {
+                    v: MUSIC_DEFAULT_REPAINT_STRENGTH,
+                  })}
+                  disabled={disabled}
+                  style={{ width: '100%' }}
+                  className='!rounded-lg mt-2'
+                />
+              )}
+            </div>
+          </>
         )}
 
         {/* 时长(仅 AudioX;SoulX 歌声合成无此参数) */}
@@ -551,6 +746,22 @@ const MusicConfigPanel = ({
                       value={inputs.bpm === '' ? undefined : inputs.bpm}
                       onChange={(v) => onInputChange('bpm', v ?? '')}
                       placeholder={t('留空 = 自动')}
+                      disabled={disabled}
+                      style={{ width: '100%' }}
+                      className='!rounded-lg'
+                    />
+                  </div>
+                  {/* 调式:与 BPM 同类的曲式元数据,官方建议不要写进描述而走独立字段。
+                      格式必须是「音名[升降号] major|minor」且 mode 小写(引擎
+                      constants.py VALID_KEYSCALES),写成 "Am" / "C Major" 都会被静默丢弃。 */}
+                  <div>
+                    <Typography.Text className='text-xs text-gray-600 block mb-1'>
+                      {t('调式')}
+                    </Typography.Text>
+                    <Input
+                      value={inputs.keyScale}
+                      onChange={(v) => onInputChange('keyScale', v)}
+                      placeholder={t('如 C major / A minor;留空 = 自动')}
                       disabled={disabled}
                       style={{ width: '100%' }}
                       className='!rounded-lg'

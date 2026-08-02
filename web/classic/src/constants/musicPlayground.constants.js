@@ -120,13 +120,7 @@ export const MUSIC_MODES = {
 
 // 体验区子标签页顺序(3 个 ACE-Step + 2 个 AudioX/SoulX)。
 // v2a(视频生音)已下线:视频配乐移交 LTX-2.3,入口在语音模型页。
-export const MUSIC_TAB_ORDER = [
-  't2m',
-  'cover',
-  'repaint',
-  't2a',
-  'svs',
-];
+export const MUSIC_TAB_ORDER = ['t2m', 'cover', 'repaint', 't2a', 'svs'];
 
 // ── ACE-Step 参数 ──────────────────────────────────────────────
 // 时长预设(秒),经 metadata.audio_duration 透传给引擎。'' = 引擎默认(不下发)。
@@ -225,6 +219,26 @@ export const MUSIC_VOCAL_LANGUAGES = [
 // 高级参数默认(仅作输入框占位提示;留空即不下发,走引擎默认)。
 export const MUSIC_DEFAULT_GUIDANCE = 7.0;
 export const MUSIC_DEFAULT_STEPS = 8;
+
+// ── ACE-Step 改编(cover)参数 ───────────────────────────────────
+// audio_cover_strength:官方标为 cover 的 Key parameter。越高越贴原曲结构,越低越自由。
+// 引擎默认 1.0(最大保留)。'' = 不下发。
+export const MUSIC_DEFAULT_COVER_STRENGTH = 1.0;
+
+// ── ACE-Step 重绘(repaint)参数 ─────────────────────────────────
+// 重绘区间 [start, end)(秒)。引擎默认 start=0 / end=None(→ -1 = 到结尾),即"全曲重绘",
+// 那样跟 cover 就没区别了 —— repaint 的价值在于只改一段,所以区间必须让用户填。
+// 官方给的可操作范围是 3~90 秒(Tutorial「Operation range: 3 seconds to 90 seconds」)。
+export const MUSIC_REPAINT_MIN_SEC = 3;
+export const MUSIC_REPAINT_MAX_SEC = 90;
+// repaint_mode:保守=最大保留源音频,平衡=按 repaint_strength 调,激进=纯扩散。
+export const MUSIC_REPAINT_MODES = [
+  { value: 'conservative', label: '保守(最大保留原曲)' },
+  { value: 'balanced', label: '平衡(可调强度)' },
+  { value: 'aggressive', label: '激进(完全重生成)' },
+];
+export const MUSIC_DEFAULT_REPAINT_MODE = 'balanced';
+export const MUSIC_DEFAULT_REPAINT_STRENGTH = 0.5;
 
 // ── AudioX / SoulX 参数 ────────────────────────────────────────
 // 标量参数默认(仅作输入框占位提示;留空即不下发,走引擎默认)。

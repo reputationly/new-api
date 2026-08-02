@@ -175,6 +175,9 @@ const MusicChatArea = ({
   welcomeText = '',
   onApplyExample,
   onSend,
+  drafting = false,
+  onDraftPlan,
+  onSendToSrc,
   onRegenerate,
   onRefetch,
   onClear,
@@ -266,10 +269,7 @@ const MusicChatArea = ({
         return (
           <div>
             {defaultContent}
-            <Typography.Text
-              type='tertiary'
-              className='text-xs block mt-1'
-            >
+            <Typography.Text type='tertiary' className='text-xs block mt-1'>
               {`🌐 ${m.translatedText}`}
             </Typography.Text>
           </div>
@@ -314,6 +314,30 @@ const MusicChatArea = ({
                 disabled={generating}
                 className='!text-gray-500'
               />
+              {/* 拿这首继续加工:切到改编/重绘并把它作为源音频。发的是 task:<task_id>,
+                  后端在共享盘上直读产物(nfsinput/taskref.go),不必下载再上传一遍。 */}
+              {onSendToSrc && m.taskId && (
+                <>
+                  <Button
+                    theme='borderless'
+                    type='tertiary'
+                    size='small'
+                    onClick={() => onSendToSrc('cover', m.taskId)}
+                    className='!text-gray-500 !text-xs'
+                  >
+                    {t('改编风格')}
+                  </Button>
+                  <Button
+                    theme='borderless'
+                    type='tertiary'
+                    size='small'
+                    onClick={() => onSendToSrc('repaint', m.taskId)}
+                    className='!text-gray-500 !text-xs'
+                  >
+                    {t('重绘片段')}
+                  </Button>
+                </>
+              )}
             </div>
           </div>
         );
@@ -453,6 +477,32 @@ const MusicChatArea = ({
             })}
           </div>
         )}
+        {/* 「AI 帮我写词」= 官方 Simple Mode 的【Create Sample】那一步:据这句描述拟出
+            caption/歌词/BPM/调式/时长,caption 回填到输入框、其余回填到左侧面板,由用户
+            过目再改。这一步不只是省事 —— 填了歌词之后提交就不再走 sample_mode,引擎那边
+            「用 LM 自己推的时长覆盖用户值」的逻辑不触发,时长/BPM 才真正生效。 */}
+        {onDraftPlan && (
+          <div className='flex items-center gap-2 mb-2'>
+            <Button
+              theme='borderless'
+              type='primary'
+              size='small'
+              loading={drafting}
+              disabled={generating || !hasText}
+              onClick={async () => {
+                const caption = await onDraftPlan(inputValue.trim());
+                if (typeof caption === 'string' && caption) {
+                  setInputValue(caption);
+                }
+              }}
+            >
+              {t('AI 帮我写词')}
+            </Button>
+            <Typography.Text type='tertiary' className='text-xs'>
+              {t('先拟好歌词与曲式再生成,左侧的时长/速度才会生效')}
+            </Typography.Text>
+          </div>
+        )}
         <div className='relative'>
           <TextArea
             value={inputValue}
@@ -505,6 +555,8 @@ const MusicChatArea = ({
     onApplyExample,
     inputValue,
     onSend,
+    drafting,
+    onDraftPlan,
     t,
   ]);
 

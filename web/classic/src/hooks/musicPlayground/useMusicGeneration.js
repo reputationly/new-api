@@ -38,6 +38,7 @@ import {
   MUSIC_AUDIOX_DEFAULT_GUIDANCE,
   MUSIC_SVS_DEFAULT_LANGUAGE,
   MUSIC_SVS_DEFAULT_CONTROL,
+  MUSIC_DEFAULT_REPAINT_MODE,
   musicHistoryStorageKey,
   normalizeMusicStatus,
   parseProgress,
@@ -83,6 +84,45 @@ Rules:
 // 视频生音(tv2a)追加:引导描述贴合视频画面(文字主导视频,见设计 §3 约束 3)。
 const TRANSLATE_SYSTEM_VIDEO = `${TRANSLATE_SYSTEM_BASE}
 - the sound should stay consistent with the video scene.`;
+
+// 拟方案(文生音乐两步流程的第一步)。
+//
+// 官方 harness 的 Simple Mode 是两步:一句话 →【Create Sample】让 5Hz LM 产出
+// caption/歌词/BPM/调式/时长 → 用户审阅编辑 →【Generate Music】。我们原来把两步压成一步,
+// 在"未填歌词"时静默下发 sample_mode,而引擎在 sample_mode 下会用 LM 自己推的
+// duration/bpm/keyscale 无条件覆盖用户下发值(llm_generation_inputs.py),于是"选了 60 秒
+// 出 2:30"。补上审阅这一步后,提交时 caption+lyrics 都有值 → 不再命中 sample_mode 分支 →
+// 时长/BPM 自然生效。
+//
+// 这里用的是网关自己的通用语言模型,不是 ACE-Step 的 5Hz LM(那要给门面加 create_sample
+// 直通 + 两仓部署)。官方文档称模型对 caption 格式不敏感,且"用 LLM 改写模板"本就是官方
+// 给的写 caption 方法之一,所以这条路是被认可的;若实测音乐性不足,再考虑接 5Hz LM。
+// 每个字段的取值域都照 ACE-Step 1.5 引擎侧的硬约束写(acestep/constants.py):
+//   VALID_LANGUAGES / VALID_KEYSCALES(注意 major|minor 小写、"A minor" 而非 "Am")/
+//   BPM_MIN..MAX=30..300 / DURATION_MIN..MAX=10..600。
+// 写错格式引擎会静默忽略该字段,退回自动推断 —— 用户以为设了,其实没生效。
+const DRAFT_SYSTEM = `You are a music production assistant for ACE-Step 1.5, a text-to-music diffusion model. Given a user's one-line song idea, produce a complete production plan that the model can consume directly.
+
+Return ONLY a JSON object. No markdown fence, no explanation, no preface:
+{"caption": string, "lyrics": string, "bpm": number, "keyScale": string, "duration": number, "vocalLanguage": string}
+
+Field rules — these are hard constraints from the engine; a malformed value is silently dropped and the setting is lost:
+
+- caption: ENGLISH only. This is the single most important input. Cover these dimensions: genre/style, instrumentation, mood and atmosphere, timbre and production texture, vocal gender and delivery, arrangement or progression. Be concrete ("dreamy shoegaze with reverb-heavy guitars and whispered female vocals"), not generic ("nice music"). Comma-separated tags and natural prose both work.
+  NEVER put tempo, BPM, key, or time signature in the caption — the model gets confused when the caption contradicts the dedicated fields. Put them in bpm / keyScale only.
+
+- lyrics: actual singable lyrics in the language the user asked for (default: the language of the user's own request). Structure with section tags on their own line: [Verse 1], [Chorus], [Verse 2], [Bridge], [Outro]. Also available: [Interlude], [Instrumental] for non-vocal sections. Keep verses 4-8 lines; make the chorus memorable and repetitive.
+  For a purely instrumental piece output exactly "[Instrumental]" and nothing else.
+
+- bpm: integer, 30-300. Typical: slow ballad 60-80, mid-tempo 90-120, fast 130-180. Must not contradict the mood described in the caption.
+
+- keyScale: EXACTLY the format "<note><accidental> <mode>" where note is A-G, accidental is empty / # / b, and mode is lowercase "major" or "minor". Valid: "C major", "A minor", "F# minor", "Bb major". INVALID: "C Major", "Am", "F#m", "C". Common keys (C, G, D, A minor, E minor) are the most stable.
+
+- duration: integer seconds, 10-600. Prefer 30-60 for a short piece or 120-240 for a full song — those ranges are the most stable; very long generations tend to repeat or lose structure.
+
+- vocalLanguage: one BCP-47-ish code from the engine's list. Common: zh (Mandarin), yue (Cantonese), en, ja, ko, es, fr, de, ru, pt, it, ar, hi, th, vi. Use "unknown" for instrumental tracks. Must match the language the lyrics are actually written in.
+
+Keep the user's intent faithfully. Do not substitute a different genre, mood, or language than the one asked for.`;
 
 // 音乐模型体验区 hook。一个 hook 覆盖全部 7 个玩法(mode),同一异步任务门面
 // (/pg/videos)、同一轮询/历史/锁定模式;按 mode 的 engine 分支输入形态与 metadata:
@@ -145,6 +185,16 @@ const PARAM_FIELDS = [
   'audioName',
   'bpm',
   'vocalLanguage',
+  'keyScale',
+  // acestep 改编/重绘
+  'coverStrength',
+  'repaintStart',
+  'repaintEnd',
+  'repaintMode',
+  'repaintStrength',
+  // 引用上一首生成结果作为源音频(task:<task_id>);有值时不需要上传
+  'srcTaskId',
+  'srcTaskLabel',
   // audiox / soulx 上传
   'videoData',
   'videoName',
@@ -208,6 +258,17 @@ export const useMusicGeneration = (mode = 't2m') => {
     audioName: '',
     bpm: '', // 速度;空 = 自动
     vocalLanguage: '', // 演唱语言;空 = 自动
+    keyScale: '', // 调式(如 C Major / Am);空 = 自动
+    // acestep 改编(cover):保留原曲结构的程度;空 = 引擎默认 1.0
+    coverStrength: '',
+    // acestep 重绘(repaint):重绘区间与力度。区间空 = 全曲重绘(引擎默认,与改编无异)
+    repaintStart: '',
+    repaintEnd: '',
+    repaintMode: MUSIC_DEFAULT_REPAINT_MODE,
+    repaintStrength: '',
+    // 引用上一首生成结果当源音频:有值时走 task:<id>,免去"下载再上传"
+    srcTaskId: '',
+    srcTaskLabel: '',
     // audiox / soulx 上传(base64 data-url)+ 文件名(展示用)
     videoData: '', // v2a/v2m:源视频 → metadata.video
     videoName: '',
@@ -244,6 +305,8 @@ export const useMusicGeneration = (mode = 't2m') => {
   });
   const [currentConvId, setCurrentConvId] = useState(null);
   const [generating, setGenerating] = useState(false);
+  // 「AI 帮我写词」调用中(单次非流式,1~3 秒);按钮据此转圈并禁用。
+  const [drafting, setDrafting] = useState(false);
 
   const messages = useMemo(() => {
     const conv = conversations.find((c) => c.id === currentConvId);
@@ -349,6 +412,9 @@ export const useMusicGeneration = (mode = 't2m') => {
   );
   // 是否在面板展示「语言模型」下拉:玩法需翻译 且 当前模型启用译文。
   const showTranslation = !!needsTranslation && translationCfg.enabled;
+  // 文生音乐的「AI 帮我写词」也要挑一个语言模型,与中译英共用同一套下拉。
+  const isT2M = resolveTaskType(true) === 't2m';
+  const showAssistModel = showTranslation || isT2M;
 
   // 当前模型的字数上限(0=不限制)。
   const maxChars = useMemo(
@@ -548,15 +614,16 @@ export const useMusicGeneration = (mode = 't2m') => {
     if (userState?.user) loadModels();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [userState?.user, inputs.group, musicModelSet]);
-  // 仅当玩法需翻译且模型启用译文时,才加载语言模型下拉数据。
+  // 辅助语言模型下拉:两个用途共用一套选择 —— 音效的中译英,和文生音乐的「AI 帮我写词」。
+  // 都是「单次非流式打 /pg/chat/completions」,没必要让用户选两次。
   useEffect(() => {
-    if (userState?.user && showTranslation) loadTranslationGroups();
+    if (userState?.user && showAssistModel) loadTranslationGroups();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [userState?.user, showTranslation, chatGroups]);
+  }, [userState?.user, showAssistModel, chatGroups]);
   useEffect(() => {
-    if (userState?.user && showTranslation) loadTranslationModels();
+    if (userState?.user && showAssistModel) loadTranslationModels();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [userState?.user, showTranslation, inputs.translationGroup, chatModelSet]);
+  }, [userState?.user, showAssistModel, inputs.translationGroup, chatModelSet]);
 
   const patchConvMessage = useCallback(
     (convId, msgId, patch) => {
@@ -736,20 +803,86 @@ export const useMusicGeneration = (mode = 't2m') => {
           messages: [
             {
               role: 'system',
-              content: forVideo ? TRANSLATE_SYSTEM_VIDEO : TRANSLATE_SYSTEM_BASE,
+              content: forVideo
+                ? TRANSLATE_SYSTEM_VIDEO
+                : TRANSLATE_SYSTEM_BASE,
             },
             { role: 'user', content: rawText },
           ],
         },
         { skipErrorHandler: true },
       );
-      const out = (
-        res?.data?.choices?.[0]?.message?.content || ''
-      ).trim();
+      const out = (res?.data?.choices?.[0]?.message?.content || '').trim();
       if (!out) throw new Error('translate-empty');
       return out;
     },
     [inputs.translationModel, inputs.translationGroup],
+  );
+
+  // 「AI 帮我写词」= 官方 Simple Mode 里【Create Sample】那一步:据一句话描述拟出
+  // caption/歌词/BPM/调式/时长,直接回填到配置面板的各个控件,由用户过目再改。
+  //
+  // 这一步的意义不只是省事:填了歌词之后提交就不再命中 sample_mode 分支,引擎那边
+  // "用 LM 自己推的时长覆盖用户值"的逻辑也就不会触发,时长/BPM 才真正生效。
+  const draftPlan = useCallback(
+    async (rawText) => {
+      const text = (rawText || '').trim();
+      if (!text) {
+        showError(t('请先在下方输入框描述你想要的音乐'));
+        return false;
+      }
+      const model = inputs.translationModel;
+      if (!model) {
+        showError(t('请先在「辅助语言模型」里选择一个模型'));
+        return false;
+      }
+      setDrafting(true);
+      try {
+        const res = await API.post(
+          MUSIC_TRANSLATE_ENDPOINT,
+          {
+            model,
+            group: inputs.translationGroup,
+            stream: false,
+            messages: [
+              { role: 'system', content: DRAFT_SYSTEM },
+              { role: 'user', content: text },
+            ],
+          },
+          { skipErrorHandler: true },
+        );
+        let out = (res?.data?.choices?.[0]?.message?.content || '').trim();
+        // 模型常自作主张包一层 ```json 围栏,剥掉再解析。
+        out = out
+          .replace(/^```(?:json)?\s*/i, '')
+          .replace(/\s*```$/, '')
+          .trim();
+        const plan = JSON.parse(out);
+        setInputs((prev) => {
+          const next = { ...prev };
+          if (plan.lyrics) next.lyrics = String(plan.lyrics).trim();
+          if (Number.isFinite(Number(plan.bpm)) && Number(plan.bpm) > 0)
+            next.bpm = String(Math.round(Number(plan.bpm)));
+          if (plan.keyScale) next.keyScale = String(plan.keyScale).trim();
+          if (
+            Number.isFinite(Number(plan.duration)) &&
+            Number(plan.duration) > 0
+          )
+            next.duration = String(Math.round(Number(plan.duration)));
+          if (plan.vocalLanguage)
+            next.vocalLanguage = String(plan.vocalLanguage).trim();
+          return next;
+        });
+        // caption 单独返回:它要替换输入框里的描述,由调用方决定怎么用。
+        return typeof plan.caption === 'string' ? plan.caption.trim() : true;
+      } catch (e) {
+        showError(t('生成方案失败,请重试或换一个语言模型'));
+        return false;
+      } finally {
+        setDrafting(false);
+      }
+    },
+    [inputs.translationModel, inputs.translationGroup, t],
   );
 
   const generate = useCallback(
@@ -780,7 +913,11 @@ export const useMusicGeneration = (mode = 't2m') => {
           showError(t('请先选择一个音乐模型'));
           return;
         }
-        if (needsAudio && !(inputs.audioData || '').startsWith('data:')) {
+        if (
+          needsAudio &&
+          !inputs.srcTaskId &&
+          !(inputs.audioData || '').startsWith('data:')
+        ) {
           showError(t('请先上传驱动音频'));
           return;
         }
@@ -820,8 +957,13 @@ export const useMusicGeneration = (mode = 't2m') => {
       let promptAudioURL = '';
       let targetAudioURL = '';
       if (needsAudio) {
-        audioDataURL = params.audioData || '';
-        if (!audioDataURL.startsWith('data:')) {
+        // 引用上一首生成结果:发 task:<task_id>,由后端 nfsinput/taskref.go 在共享盘上
+        // 直读产物(零网络、已做归属与终态校验),不必把音频拉成 base64 再传一遍。
+        // 它也不受 localStorage 剥离上传数据的影响,所以放在失效校验之前。
+        audioDataURL = params.srcTaskId
+          ? `task:${params.srcTaskId}`
+          : params.audioData || '';
+        if (!params.srcTaskId && !audioDataURL.startsWith('data:')) {
           showError(t('驱动音频已失效,请开启新对话并重新上传'));
           return;
         }
@@ -852,7 +994,10 @@ export const useMusicGeneration = (mode = 't2m') => {
       // 时序:消息先建(点发送即可见),翻译放在建消息之后 —— 译文回填 userMsg 展示对照,
       // 助手气泡在拿到 taskId 前先显示「翻译中…」,避免翻译那几秒聊天区空白。
       const willTranslate =
-        needsTranslation && !!text && containsCJK(text) && translationCfg.enabled;
+        needsTranslation &&
+        !!text &&
+        containsCJK(text) &&
+        translationCfg.enabled;
 
       const reqId = genId();
       const now = new Date().toISOString();
@@ -955,6 +1100,15 @@ export const useMusicGeneration = (mode = 't2m') => {
           if (Number.isFinite(dur) && dur > 0) metadata.audio_duration = dur;
           if (needsAudio && audioMetaKey) metadata[audioMetaKey] = audioDataURL;
 
+          // thinking=true 让 5Hz LM 先出音频语义码再喂 DiT(llm_dit 两阶段);默认的 false
+          // 只跑单阶段 dit。官方把它列为质量第一条建议(GRADIO_GUIDE.md「Use thinking mode」)。
+          metadata.thinking = true;
+          // 引擎 batch_size 默认 2,但 ACE-Step 侧的门面适配层只把 raw_audio_paths[0]
+          // 搬到 save_result_path(tasks_facade_service.materialize_output),第二首直接丢。
+          // 显式压到 1:同样拿一首,少烧一半算力。要真拿多首得改 ACE-Step/gpustack/new-api
+          // 三层的单产物契约,不在本次范围——这里先并发提交多个任务代替。
+          metadata.batch_size = 1;
+
           // t2m 且未填歌词 → 额外开启 sample 模式:引擎按描述用 LM 自动生成 caption+歌词。
           // prompt 仍保持=描述文本 —— 既满足门面「prompt 必填」校验,也让不认 sample_mode
           // 的路径能靠 prompt + LM 补词兜底。其余情况(已填歌词 或 cover/repaint):描述作
@@ -970,6 +1124,34 @@ export const useMusicGeneration = (mode = 't2m') => {
           if (Number.isFinite(bpm) && bpm > 0) metadata.bpm = bpm;
           const lang = (params.vocalLanguage || '').trim();
           if (lang) metadata.vocal_language = lang;
+          const keyScale = (params.keyScale || '').trim();
+          if (keyScale) metadata.key_scale = keyScale;
+
+          // 改编:保留原曲结构的程度。官方标为 cover 的 Key parameter,原先没暴露,
+          // 用户只能吃引擎默认的 1.0(最大保留),等于"改编"改不动。
+          if (resolvedTaskType === 'cover') {
+            const cs = parseFloat(params.coverStrength);
+            if (Number.isFinite(cs) && cs >= 0 && cs <= 1)
+              metadata.audio_cover_strength = cs;
+          }
+
+          // 重绘:区间 + 力度。区间不填时引擎默认 start=0/end=-1 → 全曲重绘,那就跟改编
+          // 没区别了 —— repaint 的价值就在只改一段,所以这里如实透传用户填的区间。
+          if (resolvedTaskType === 'repaint') {
+            const rs = parseFloat(params.repaintStart);
+            const re = parseFloat(params.repaintEnd);
+            if (Number.isFinite(rs) && rs >= 0) metadata.repainting_start = rs;
+            if (Number.isFinite(re) && re > 0) metadata.repainting_end = re;
+            const rm = (params.repaintMode || '').trim();
+            if (rm) metadata.repaint_mode = rm;
+            // repaint_strength 仅 balanced 模式生效(引擎侧语义),其余模式不下发。
+            if (rm === 'balanced') {
+              const rst = parseFloat(params.repaintStrength);
+              if (Number.isFinite(rst) && rst >= 0 && rst <= 1)
+                metadata.repaint_strength = rst;
+            }
+          }
+
           const gs = parseFloat(params.guidanceScale);
           if (Number.isFinite(gs) && gs > 0) metadata.guidance_scale = gs;
           const steps = parseInt(params.inferenceSteps, 10);
@@ -1176,10 +1358,12 @@ export const useMusicGeneration = (mode = 't2m') => {
     };
   }, []);
 
-  // 缺必填上传 → 发送置灰。
+  // 缺必填上传 → 发送置灰。引用上一首生成结果(srcTaskId)时不需要上传,故同样算已备齐。
   const missingRequiredAudio =
     !locked &&
-    ((needsAudio && !(inputs.audioData || '').startsWith('data:')) ||
+    ((needsAudio &&
+      !inputs.srcTaskId &&
+      !(inputs.audioData || '').startsWith('data:')) ||
       (needsDualAudio &&
         (!(inputs.promptAudioData || '').startsWith('data:') ||
           !(inputs.targetAudioData || '').startsWith('data:'))));
@@ -1207,6 +1391,9 @@ export const useMusicGeneration = (mode = 't2m') => {
     needsText,
     needsTranslation,
     showTranslation,
+    showAssistModel,
+    drafting,
+    draftPlan,
     translationGroups,
     translationModels,
     maxChars,

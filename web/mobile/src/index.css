@@ -634,6 +634,37 @@ body {
   color: #6b7280;
 }
 
+/* 锁定态展开后的只读配置区：胶囊一律降成灰底灰字，并抹掉「可选」的视觉线索
+   （下拉箭头、选中态高亮），让「点不动」在点之前就看得出来。 */
+.m-config-locked .m-config-chip,
+.m-config-locked .m-config-chip.active {
+  background: #f6f7f9;
+  color: #9ca3af;
+  border-color: transparent;
+  font-weight: 400;
+}
+
+.m-config-locked .m-config-chip svg {
+  display: none;
+}
+
+/* 能力标签条下的「去网页端」提示：说明性文字，不该抢 tab 的视觉权重 */
+.m-desktop-hint {
+  padding: 6px 12px;
+  font-size: 11.5px;
+  line-height: 1.5;
+  color: #9ca3af;
+  background: rgba(255, 255, 255, 0.9);
+  border-bottom: 0.5px solid rgba(17, 24, 39, 0.06);
+}
+
+.m-locked-hint {
+  padding: 8px 12px 0;
+  font-size: 11.5px;
+  line-height: 1.5;
+  color: #9ca3af;
+}
+
 .m-media-slot-hint {
   margin-left: auto;
   font-variant-numeric: tabular-nums;

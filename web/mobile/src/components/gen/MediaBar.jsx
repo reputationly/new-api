@@ -9,7 +9,11 @@ import {
 
 import VoiceRecorder from './VoiceRecorder';
 import { showError } from '../../shims/classic-utils';
-import { fileToDataUrl, readMediaDuration } from '../../utils/file';
+import {
+  fileToDataUrl,
+  imageFileToDataUrl,
+  readMediaDuration,
+} from '../../utils/file';
 
 // 手机上传源视频要整段 base64 塞进请求体，弱网下大文件几乎必挂。后台给桌面端配的
 // maxInputMB 可能到 30~50MB，移动端再收一道闸，超了直接拦下并提示裁剪。
@@ -48,7 +52,11 @@ const acceptFile = async (file, { kind, label, maxMB, fromCapture }) => {
     }
   }
   try {
-    return await fileToDataUrl(file);
+    // 图片先缩到 2048 长边再转 base64,见 imageFileToDataUrl 的注释:手机直出照片
+    // 直接进 state 会同时拖慢缩略图解码、IDB 持久化和提交。视频/音频不动。
+    return kind === 'image'
+      ? await imageFileToDataUrl(file)
+      : await fileToDataUrl(file);
   } catch (e) {
     showError(`读取${KIND_NAME[kind]}失败`);
     return null;
@@ -277,7 +285,12 @@ const MediaListSlot = ({
       return;
     }
     try {
-      const urls = await Promise.all(files.map(fileToDataUrl));
+      // 串行而非 Promise.all：一次多选可能是好几张手机直出照片，并发解码会让峰值内存
+      // 叠加（每张 4000×3000 解出来就是 ~48MB 位图），低端机上容易直接卡死。
+      const urls = [];
+      for (const f of files.slice(0, max - values.length)) {
+        urls.push(await imageFileToDataUrl(f));
+      }
       onChange([...values, ...urls].slice(0, max));
     } catch (err) {
       showError('读取图片失败');

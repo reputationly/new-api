@@ -11,7 +11,9 @@ const normalizeOptions = (options = []) =>
       : { label: String(o), value: o },
   );
 
-const ConfigBar = ({ fields, disabled = false }) => {
+// children 会渲染进同一个 flex 容器：插帧/配音这类开关胶囊自己起一条 m-config-bar 的话，
+// 就算只剩两个短标签也各占一整行，白白多吃两行高度。
+const ConfigBar = ({ fields, disabled = false, children }) => {
   const [openKey, setOpenKey] = useState('');
 
   return (
@@ -54,6 +56,7 @@ const ConfigBar = ({ fields, disabled = false }) => {
             </React.Fragment>
           );
         })}
+      {children}
     </div>
   );
 };
