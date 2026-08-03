@@ -23,6 +23,7 @@ export const VideoPlaygroundBody = ({ mode }) => {
     isVACE,
     isDub,
     dubAvailable,
+    pipelineModel,
     needsImage,
     followsInput,
     maxRefImages,
@@ -67,6 +68,7 @@ export const VideoPlaygroundBody = ({ mode }) => {
           isVACE={isVACE}
           isDub={isDub}
           dubAvailable={dubAvailable}
+          pipelineModel={pipelineModel}
           maxRefImages={maxRefImages}
           maxInputMB={maxInputMB}
           maxAudioSec={maxAudioSec}

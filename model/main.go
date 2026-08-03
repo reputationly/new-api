@@ -314,6 +314,9 @@ func migrateDB() error {
 	if err := migrateAudioModelConfigLegacyCapability(); err != nil {
 		return err
 	}
+	if err := migrateVideoModelConfigPipelineFlag(); err != nil {
+		return err
+	}
 	if err := migrateAffCountBackfill(); err != nil {
 		return err
 	}
@@ -424,6 +427,99 @@ func migrateAudioModelConfigLegacyCapability() error {
 		// 落一次性标记(无论有没有旧数据都标,保证只在首次运行迁移)。
 		return tx.Create(&Option{Key: markerKey, Value: "true"}).Error
 	})
+}
+
+// migrateVideoModelConfigPipelineFlag 给视频模型补 pipeline 标记。体验区的 1080P 自动超分、
+// 自动配音、插帧(metadata.target_fps)都是自建 gpustackplus 引擎特有的玩法,原来的判据里没有
+// 任何一项识别渠道:只要某个第三方模型(Sora/MiniMax 等)恰好配了 480P 与 1080P 两个档位,用户
+// 选 1080P 就会被降级成 480P 再丢给自建超分模型。改判后前端只认显式的 models[x].pipeline,
+// 未标记即原样透传。本迁移把存量的自建模型补上 pipeline:true,保证升级前后行为一致,
+// 不留「部署完到运营手动勾选」的窗口期。
+//
+// 判据是渠道归属(该模型挂在 type=GPUStackPlus 的渠道上),不是尺寸档位:sizes 描述的是
+// 「支持哪些输出档位」,与渠道归属无关,拿它推断两头都会错——第三方模型恰好配了 480+1080
+// 会被误标(假阳性),而自建的 i2v/关键帧/数字人/视频编辑模型根本不配 sizes
+// (followsInput,输出跟随输入)、只配 720P 的自建 t2v 也一样,会被漏标(假阴性)。
+// 漏标的后果是真回归:这些模型升级后插帧开关消失、target_fps 停发、配音段不再接。
+//
+// 幂等:一次性标记守卫,标记存在即跳过;否则运营事后取消勾选会在下次重启被覆盖回来。
+// 无该配置或解析失败则只落标记、绝不破坏原值。直接写 Option 行(migrateDB 早于 InitOptionMap,
+// 且 Channel/Ability 的 AutoMigrate 在本函数之前,建表与存量数据都已就位)。
+func migrateVideoModelConfigPipelineFlag() error {
+	const markerKey = "video_pipeline_flag_migrated"
+	var marker Option
+	if err := DB.Where(Option{Key: markerKey}).First(&marker).Error; err == nil {
+		return nil // 已迁移
+	}
+	selfHosted, err := selfHostedVideoModelNames()
+	if err != nil {
+		return err
+	}
+	// 配置改写 + 写标记放同一事务:崩溃不会留下"已改未标"或"已标未改"的半状态。
+	return DB.Transaction(func(tx *gorm.DB) error {
+		var option Option
+		if err := tx.Where(Option{Key: "VideoModelConfig"}).First(&option).Error; err == nil {
+			raw := strings.TrimSpace(option.Value)
+			if raw != "" {
+				var cfg map[string]interface{}
+				if common.UnmarshalJsonStr(raw, &cfg) == nil {
+					changed := false
+					if models, ok := cfg["models"].(map[string]interface{}); ok {
+						for name, v := range models {
+							m, ok := v.(map[string]interface{})
+							if !ok {
+								continue
+							}
+							if _, exists := m["pipeline"]; exists {
+								continue // 已有显式取值,不覆盖
+							}
+							if !selfHosted[name] {
+								continue
+							}
+							m["pipeline"] = true
+							changed = true
+							common.SysLog(fmt.Sprintf("VideoModelConfig: marked %s as self-hosted pipeline model", name))
+						}
+					}
+					if changed {
+						out, err := common.Marshal(cfg)
+						if err != nil {
+							return err
+						}
+						option.Value = string(out)
+						if err := tx.Save(&option).Error; err != nil {
+							return err
+						}
+					}
+				}
+			}
+		}
+		// 落一次性标记(无论有没有可迁移的数据都标,保证只在首次运行迁移)。
+		return tx.Create(&Option{Key: markerKey, Value: "true"}).Error
+	})
+}
+
+// selfHostedVideoModelNames 取出所有挂在自建 gpustackplus 渠道上的对外模型名。
+// abilities 存的就是对外模型名,与「视频模型配置」里填的是同一套(配置页已注明填对外名),
+// 渠道做了重定向也不影响。join 写法仿 GetAllEnableAbilityWithChannels(model/ability.go),
+// 三种数据库通用。
+// 不按 enabled 过滤:渠道被临时禁用不代表它不是自建模型,过滤掉会让那批模型漏标、
+// 升级后丢掉插帧与配音能力。
+func selfHostedVideoModelNames() (map[string]bool, error) {
+	var rows []struct{ Model string }
+	err := DB.Table("abilities").
+		Select("DISTINCT abilities.model AS model").
+		Joins("left join channels on abilities.channel_id = channels.id").
+		Where("channels.type = ?", constant.ChannelTypeGPUStackPlus).
+		Scan(&rows).Error
+	if err != nil {
+		return nil, err
+	}
+	names := make(map[string]bool, len(rows))
+	for _, r := range rows {
+		names[r.Model] = true
+	}
+	return names, nil
 }
 
 func migrateDBFast() error {

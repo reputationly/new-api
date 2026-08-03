@@ -4466,6 +4466,8 @@
     "默认音频时长上限(秒)": "Default max audio duration (sec)",
     "留空/0 不限;数字人产出长度跟随驱动音频": "Blank/0 = unlimited; digital human output length follows the driving audio",
     "音频秒数": "Audio sec",
-    "音频时长 {{sec}} 秒，超过上限 {{max}} 秒": "Audio is {{sec}}s, exceeding the {{max}}s limit"
+    "音频时长 {{sec}} 秒，超过上限 {{max}} 秒": "Audio is {{sec}}s, exceeding the {{max}}s limit",
+    "自建流水线": "Self-hosted pipeline",
+    "「自建流水线」只给跑在自建 gpustackplus 引擎上的模型开：开启后该模型在体验区选 1080P 会先按 480P 生成再自动调用超分模型(两笔额度/积分消耗)，并可接自动配音段、显示插帧开关(target_fps)。第三方渠道模型不要开——它们原生支持 1080P 直出、也不认识 target_fps，关闭时体验区把尺寸等参数原样透传给上游。": "Enable \"Self-hosted pipeline\" only for models running on your own gpustackplus engine: when on, choosing 1080P in the playground first generates at 480P and then automatically calls the upscale model (two separate quota/point charges), the auto-dubbing stage can be appended, and the frame-interpolation switch (target_fps) is shown. Leave it off for third-party channel models — they output 1080P natively and do not understand target_fps; when off, the playground passes size and other parameters through to the upstream unchanged."
   }
 }

@@ -361,6 +361,17 @@ func buildArkContent(req *relaycommon.TaskSubmitReq, metadata map[string]any) []
 			Role:     imageRole(len(req.Images), i, metadata),
 		})
 	}
+	// 体验区「图生视频」把参考图放在 metadata.src_ref_images(自建门面的字段名),不走顶层
+	// images。不认它的话图会被整个丢掉、请求静默降级成纯文生视频——用户传了图却看不出没生效。
+	// 这批的语义就是多模态参考图,role 固定 reference_image:image_role 是给顶层 images 的
+	// 张数推断兜底用的(1 张=首帧),套到参考图上只会把它误判成首帧。
+	// 这里不设张数上限,让 API 调用方能用满 2.0 的 1~9 张,超了由上游报错;体验区自己另有
+	// 3 张的 UI 上限(MAX_R2V_REF_IMAGES),两者互不影响。
+	for _, imgURL := range metadataStringList(metadata, "src_ref_images") {
+		items = append(items, ContentItem{
+			Type: "image_url", ImageURL: &MediaURL{URL: imgURL}, Role: "reference_image",
+		})
+	}
 	for _, videoURL := range metadataStringList(metadata, "reference_videos", "reference_video") {
 		items = append(items, ContentItem{
 			Type: "video_url", VideoURL: &MediaURL{URL: videoURL}, Role: "reference_video",

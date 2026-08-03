@@ -4010,6 +4010,8 @@
     "默认音频时长上限(秒)": "Durée audio max. par défaut (s)",
     "留空/0 不限;数字人产出长度跟随驱动音频": "Vide/0 = illimité ; la durée de l'humain numérique suit l'audio pilote",
     "音频秒数": "Secondes audio",
-    "音频时长 {{sec}} 秒，超过上限 {{max}} 秒": "Audio de {{sec}} s, au-delà de la limite de {{max}} s"
+    "音频时长 {{sec}} 秒，超过上限 {{max}} 秒": "Audio de {{sec}} s, au-delà de la limite de {{max}} s",
+    "自建流水线": "Pipeline auto-hébergé",
+    "「自建流水线」只给跑在自建 gpustackplus 引擎上的模型开：开启后该模型在体验区选 1080P 会先按 480P 生成再自动调用超分模型(两笔额度/积分消耗)，并可接自动配音段、显示插帧开关(target_fps)。第三方渠道模型不要开——它们原生支持 1080P 直出、也不认识 target_fps，关闭时体验区把尺寸等参数原样透传给上游。": "N'activez « Pipeline auto-hébergé » que pour les modèles tournant sur votre propre moteur gpustackplus : une fois activé, choisir 1080P dans le playground génère d'abord en 480P puis appelle automatiquement le modèle d'upscaling (deux débits de quota/points distincts), l'étape de doublage automatique peut être ajoutée et l'interrupteur d'interpolation d'images (target_fps) s'affiche. Laissez-le désactivé pour les modèles de canaux tiers — ils produisent nativement du 1080P et ne connaissent pas target_fps ; désactivé, le playground transmet la taille et les autres paramètres tels quels à l'amont."
   }
 }

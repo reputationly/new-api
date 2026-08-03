@@ -43,6 +43,7 @@ import {
   VIDEO_INTERPOLATION_TARGET_FPS,
   VIDEO_PIPELINE_SR_RATIO,
   isPipelineTargetSize,
+  isPipelineModel,
   isFlf2vModel,
   findCapabilityModelIn,
   DUB_PIPELINE_MODES,
@@ -441,20 +442,30 @@ export const useVideoGeneration = ({
     return set;
   }, [videoConfig]);
 
-  // 配音开关是否可用：当前模式支持配音流水线 + 选中分组的可用模型里有「视频配乐」
-  // 能力模型（从分组可用列表按能力挑，兼容多配音模型按分组分别启用）。超分/配音的
-  // 具体模型在提交时从 params.group 的权威可用列表按能力挑，见 generate。
+  // 当前选中的生成模型是否跑在自建 gpustackplus 引擎上（后台按模型勾选）。自动超分/
+  // 自动配音/插帧都只对它成立，其余渠道原样透传，见 isPipelineModel 的注释。这里按
+  // inputs.model 算，只用于 UI 门控（开关与提示要不要出现）；提交时的权威判据按
+  // params.model 另算，见 generate——锁定会话/续问时权威值在 params 而非当前选中项。
+  const pipelineModel = useMemo(
+    () => isPipelineModel(videoConfig, inputs.model),
+    [videoConfig, inputs.model],
+  );
+
+  // 配音开关是否可用：模型是自建流水线模型 + 当前模式支持配音流水线 + 选中分组的可用
+  // 模型里有「视频配乐」能力模型（从分组可用列表按能力挑，兼容多配音模型按分组分别
+  // 启用）。超分/配音的具体模型在提交时从 params.group 的权威可用列表按能力挑，见 generate。
   const dubAvailable = useMemo(
     () =>
       DUB_PIPELINE_ENABLED &&
       allowDub &&
+      pipelineModel &&
       DUB_PIPELINE_MODES.includes(mode) &&
       !!findCapabilityModelIn(
         videoConfig,
         groupUsableModels,
         VIDEO_DUB_CAPABILITY,
       ),
-    [allowDub, mode, videoConfig, groupUsableModels],
+    [allowDub, pipelineModel, mode, videoConfig, groupUsableModels],
   );
 
   const videoGroups = useMemo(() => {
@@ -515,6 +526,15 @@ export const useVideoGeneration = ({
       setInputs((prev) => ({ ...prev, dubbing: false }));
     }
   }, [dubAvailable, inputs.dubbing, locked]);
+
+  // 同理:切到非自建流水线模型时插帧开关会消失(target_fps 是自建引擎的字段),
+  // 关掉残留的 on 状态，免得开关看不见却还留着（锁定的会话不动）。
+  useEffect(() => {
+    if (locked) return;
+    if (!pipelineModel && inputs.interpolation) {
+      setInputs((prev) => ({ ...prev, interpolation: false }));
+    }
+  }, [pipelineModel, inputs.interpolation, locked]);
 
   const loadPricing = useCallback(async () => {
     try {
@@ -1142,9 +1162,16 @@ export const useVideoGeneration = ({
         // （文生/图生/视频编辑，开关开启）可各自独立启用，也可叠加成三段。
         // 后置段模型是否可用统一查后端「该分组可用模型」列表（GetUserModels：auto→
         // GetUserAutoGroup、显式→该组已启用模型），与生成模型同一套判定，缓存命中即时。
+        //
+        // 总前提：生成模型跑在自建 gpustackplus 引擎上（后台按模型勾选）。第三方渠道
+        // 原生支持 1080P 直出、也没有我们的 sr/v2a 模型可接，参数必须原样透传，不能替
+        // 用户把 1080P 改写成 480P 再拼两段。判据按 params.model（随会话锁定）而非当前
+        // 选中模型，续会话/刷新后与首次提交同解，见 isPipelineModel 的注释。
+        const usePipeline = isPipelineModel(videoConfig, params.model);
         // 超分段：仅文生视频选 1080P、模型配了 480P 档位时可能启用。
         const srLowSize = availableSizes.find((s) => /480/.test(s));
         const maybeUpscale =
+          usePipeline &&
           !isSR &&
           !isDub &&
           !followsInput &&
@@ -1156,6 +1183,7 @@ export const useVideoGeneration = ({
         const maybeDub =
           DUB_PIPELINE_ENABLED &&
           allowDub &&
+          usePipeline &&
           !isSR &&
           !isDub &&
           !!params.dubbing &&
@@ -1232,25 +1260,43 @@ export const useVideoGeneration = ({
           };
         }
         // 插帧(默认关):按提交时的开关状态透传 target_fps(引擎 RIFE 帧率翻倍)。
-        // 超分/配乐不适用;有超分段时插帧后移到超分段(stage1 不发),仅配音段无超分
-        // 时插帧仍作用于生成任务。
-        if (params.interpolation && !isSR && !isDub && !pipeline?.upscale) {
+        // 仅自建引擎认这个字段,第三方渠道不下发(usePipeline);超分/配乐不适用;
+        // 有超分段时插帧后移到超分段(stage1 不发),仅配音段无超分时插帧仍作用于生成任务。
+        if (
+          params.interpolation &&
+          usePipeline &&
+          !isSR &&
+          !isDub &&
+          !pipeline?.upscale
+        ) {
           body.metadata = {
             ...(body.metadata || {}),
             target_fps: VIDEO_INTERPOLATION_TARGET_FPS,
           };
         }
-        // 宽高比 → target_shape:[h,w]。纯 opt-in:仅 t2v、且该值仍在当前模型的允许集内才下发
-        // (续问历史会话时 conv.aspectRatio 可能是后台已改/删的旧值,校验一遍避免绕过白名单)。
-        // wan 视频引擎按 target_shape 出分辨率;i2v/flf2v 跟随输入图故不发。
+        // 宽高比。两边认的字段不一样,按渠道分发:
+        // - 自建引擎:target_shape:[h,w]。wan t2v runner 的 get_latent_shape_with_target_hw
+        //   优先采用它,不认识 aspect_ratio。
+        // - 其他渠道:ratio("16:9" 这种原生形态)。Ark/Seedance 只认 ratio,收到 target_shape
+        //   会整个忽略、只能出默认比例——界面上摆着宽高比选择器却不生效。
+        // 纯 opt-in:仅 t2v、且该值仍在当前模型的允许集内才下发(续问历史会话时
+        // conv.aspectRatio 可能是后台已改/删的旧值,校验一遍避免绕过白名单)。
+        // i2v/flf2v 跟随输入图故不发。
         if (
           !followsInput &&
           params.aspectRatio &&
           availableAspectRatios.includes(params.aspectRatio)
         ) {
-          const shape = aspectRatioToShape(params.aspectRatio);
-          if (shape) {
-            body.metadata = { ...(body.metadata || {}), target_shape: shape };
+          if (usePipeline) {
+            const shape = aspectRatioToShape(params.aspectRatio);
+            if (shape) {
+              body.metadata = { ...(body.metadata || {}), target_shape: shape };
+            }
+          } else {
+            body.metadata = {
+              ...(body.metadata || {}),
+              ratio: params.aspectRatio,
+            };
           }
         }
         // i2v/flf2v/s2v:带主图。后端 gpustackplus:images[0]=首帧/人物图,flf2v 时 images[1]=尾帧。
@@ -1496,6 +1542,7 @@ export const useVideoGeneration = ({
     needsImage,
     followsInput,
     dubAvailable,
+    pipelineModel,
     maxRefImages: isI2V ? MAX_R2V_REF_IMAGES : MAX_REF_IMAGES,
     maxInputMB,
     maxAudioSec,

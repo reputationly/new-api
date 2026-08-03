@@ -265,6 +265,15 @@ export const VIDEO_INTERPOLATION_TARGET_FPS = 32;
 export const VIDEO_PIPELINE_SR_RATIO = 2.25;
 export const isPipelineTargetSize = (s) => /1080/i.test(s || '');
 
+// 该模型是否跑在自建 gpustackplus 引擎上（「视频模型配置」里按模型勾选）。
+// 自动超分/自动配音/插帧(target_fps)都是自建引擎特有的玩法：超分要把 1080P 拆成
+// 「先低档位生成再走 sr 模型」两段，插帧是 gpustack 门面直通给引擎 RIFE 的字段。
+// 第三方渠道(Sora/MiniMax 等)原生支持 1080P 直出、也不认识 target_fps，参数必须原样
+// 透传，不能替用户改写。故判据只认显式标记：未标记 = 透传，新接入的第三方模型天然安全。
+// 只按模型判，不设 default 层兜底——兜底会让新模型默认被编排，正是要消除的行为。
+export const isPipelineModel = (config, model) =>
+  !!config?.models?.[model]?.pipeline;
+
 // 从给定「可用模型列表」中取首个声明了指定能力的模型名（超分/配音流水线模型识别）。
 // 按分组可用列表挑而非全局取首个：多模型同能力、按分组分别启用时，避免钉死在
 // 对当前分组不可用的那个。list 空/未传时返回 ''（无可用能力模型）。
@@ -402,6 +411,7 @@ export const parseVideoModelConfig = (raw) => {
           capabilities: normalizeList(cfg?.capabilities),
           maxInputMB: toInputMB(cfg?.maxInputMB),
           maxAudioSec: toAudioSec(cfg?.maxAudioSec),
+          pipeline: !!cfg?.pipeline,
         };
       });
     }

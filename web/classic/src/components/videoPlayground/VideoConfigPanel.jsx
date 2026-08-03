@@ -33,6 +33,9 @@ const VideoConfigPanel = ({
   isDub = false,
   isVACE = false,
   dubAvailable = false,
+  // 选中模型是否跑在自建 gpustackplus 引擎上：1080P 两段流水线与插帧都只对它成立，
+  // 其余渠道原样透传，故那两处 UI 也只对它展示（见 useVideoGeneration 的 pipelineModel）。
+  pipelineModel = false,
   maxRefImages = 5,
   maxInputMB = 0,
   maxAudioSec = 0,
@@ -374,7 +377,7 @@ const VideoConfigPanel = ({
               dropdownStyle={{ width: '100%', maxWidth: '100%' }}
               className='!rounded-lg'
             />
-            {/1080/i.test(inputs.size || '') && (
+            {pipelineModel && /1080/i.test(inputs.size || '') && (
               <Typography.Text className='text-xs text-amber-600 mt-1 block'>
                 {t(
                   '1080P 将先生成再调用超分模型提升画质：耗时更久，且会同时产生本模型与超分模型的额度/积分消耗',
@@ -464,8 +467,9 @@ const VideoConfigPanel = ({
           />
         </div>
 
-        {/* 插帧(RIFE 帧率翻倍)——超分/配乐不适用;默认关,开启才透传 target_fps */}
-        {!isSR && !isDub && (
+        {/* 插帧(RIFE 帧率翻倍)——自建引擎特有(target_fps),第三方渠道不展示;
+            超分/配乐不适用;默认关,开启才透传 target_fps */}
+        {pipelineModel && !isSR && !isDub && (
           <div className='flex items-center justify-between'>
             <div className='flex items-center gap-2'>
               <Typography.Text strong className='text-sm'>

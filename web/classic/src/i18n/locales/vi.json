@@ -4533,6 +4533,8 @@
     "默认音频时长上限(秒)": "Giới hạn thời lượng âm thanh mặc định (giây)",
     "留空/0 不限;数字人产出长度跟随驱动音频": "Để trống/0 là không giới hạn; độ dài video người số theo âm thanh dẫn",
     "音频秒数": "Số giây âm thanh",
-    "音频时长 {{sec}} 秒，超过上限 {{max}} 秒": "Âm thanh dài {{sec}} giây, vượt giới hạn {{max}} giây"
+    "音频时长 {{sec}} 秒，超过上限 {{max}} 秒": "Âm thanh dài {{sec}} giây, vượt giới hạn {{max}} giây",
+    "自建流水线": "Pipeline tự triển khai",
+    "「自建流水线」只给跑在自建 gpustackplus 引擎上的模型开：开启后该模型在体验区选 1080P 会先按 480P 生成再自动调用超分模型(两笔额度/积分消耗)，并可接自动配音段、显示插帧开关(target_fps)。第三方渠道模型不要开——它们原生支持 1080P 直出、也不认识 target_fps，关闭时体验区把尺寸等参数原样透传给上游。": "Chỉ bật «Pipeline tự triển khai» cho các model chạy trên engine gpustackplus tự dựng: khi bật, chọn 1080P trong playground sẽ tạo ở 480P trước rồi tự động gọi model upscale (tính phí hạn mức/điểm hai lần), có thể nối thêm bước lồng tiếng tự động và hiển thị công tắc nội suy khung hình (target_fps). Đừng bật cho model của kênh bên thứ ba — chúng hỗ trợ xuất 1080P gốc và không hiểu target_fps; khi tắt, playground truyền thẳng kích thước và các tham số khác lên upstream."
   }
 }

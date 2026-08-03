@@ -134,6 +134,32 @@ func TestConvertToRequestPayloadAssignsContentRoles(t *testing.T) {
 		require.Equal(t, "reference_image", r.Content[0].Role)
 	})
 
+	// 体验区「图生视频」发的是 metadata.src_ref_images(自建门面的字段名)而非顶层 images,
+	// 不认就会把图整个丢掉、静默降级成文生视频。张数不设上限,用满 2.0 的 1~9 张。
+	t.Run("src_ref_images=多模态参考图", func(t *testing.T) {
+		r, err := a.convertToRequestPayload(&relaycommon.TaskSubmitReq{
+			Model: "doubao-seedance-2-0-260128", Prompt: "p",
+			Metadata: map[string]any{"src_ref_images": []any{"https://x/1.jpg", "https://x/2.jpg"}},
+		})
+		require.NoError(t, err)
+		require.Len(t, r.Content, 3) // 2 张参考图 + 补上的文本
+		for i := range 2 {
+			require.Equal(t, "image_url", r.Content[i].Type)
+			require.Equal(t, "reference_image", r.Content[i].Role)
+		}
+		require.Equal(t, "https://x/1.jpg", r.Content[0].ImageURL.URL)
+	})
+
+	// 单张参考图不能被 image_role 的"1 张=首帧"推断带偏:那条推断只服务顶层 images。
+	t.Run("src_ref_images 单张仍是参考图", func(t *testing.T) {
+		r, err := a.convertToRequestPayload(&relaycommon.TaskSubmitReq{
+			Model: "doubao-seedance-2-0-260128", Prompt: "p",
+			Metadata: map[string]any{"src_ref_images": "https://x/only.jpg"},
+		})
+		require.NoError(t, err)
+		require.Equal(t, "reference_image", r.Content[0].Role)
+	})
+
 	t.Run("参考视频/音频走 metadata", func(t *testing.T) {
 		r, err := a.convertToRequestPayload(&relaycommon.TaskSubmitReq{
 			Model: "doubao-seedance-2-0-260128", Prompt: "p",

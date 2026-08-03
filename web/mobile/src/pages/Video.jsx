@@ -35,6 +35,7 @@ export const VideoBody = ({ mode }) => {
     isSR,
     isVACE,
     isDub,
+    pipelineModel,
     needsImage,
     followsInput,
     maxRefImages,
@@ -316,10 +317,12 @@ export const VideoBody = ({ mode }) => {
                 ]),
           ]}
         >
-          {/* 插帧开关：默认关，透传 target_fps。超分/配音本身就是后处理，不适用，不渲染。
+          {/* 插帧开关：默认关，透传 target_fps。target_fps 是自建引擎(gpustackplus)的
+              RIFE 字段，第三方渠道不认，故只对自建流水线模型渲染。超分/配音本身就是
+              后处理，不适用，也不渲染。
               只写「插帧：关」不带说明：一句解释就撑满一行，而这个词本身够自解释。
               配音开关手机端不提供，见上面的 allowDub。 */}
-          {!isSR && !isDub && (
+          {pipelineModel && !isSR && !isDub && (
             <div
               className={`m-config-chip${inputs.interpolation ? ' active' : ''}`}
               onClick={() =>
@@ -332,7 +335,7 @@ export const VideoBody = ({ mode }) => {
           )}
         </ConfigBar>
         {/* 配音不再有独立的提示词框：v2a 段直接复用生成这段视频的提示词 */}
-        {!followsInput && /1080/i.test(inputs.size || '') && (
+        {pipelineModel && !followsInput && /1080/i.test(inputs.size || '') && (
           <div
             style={{
               padding: '6px 12px',

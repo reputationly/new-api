@@ -9,6 +9,7 @@ import {
   InputNumber,
   Typography,
   Empty,
+  Switch,
 } from '@douyinfe/semi-ui';
 import { Plus, Trash2 } from 'lucide-react';
 import { API, showSuccess, showError } from '../../../helpers';
@@ -51,7 +52,7 @@ export default function SettingsVideoModels(props) {
   const [defaultAspectRatios, setDefaultAspectRatios] = useState([]);
   const [defaultMaxInputMB, setDefaultMaxInputMB] = useState(undefined);
   const [defaultMaxAudioSec, setDefaultMaxAudioSec] = useState(undefined);
-  // [{ model, sizes:[], durations:[], aspectRatios:[], maxInputMB, maxAudioSec }]
+  // [{ model, sizes:[], durations:[], aspectRatios:[], maxInputMB, maxAudioSec, pipeline }]
   const [modelRows, setModelRows] = useState([]);
 
   useEffect(() => {
@@ -74,6 +75,7 @@ export default function SettingsVideoModels(props) {
         capabilities: c.capabilities || [],
         maxInputMB: c.maxInputMB == null ? undefined : c.maxInputMB,
         maxAudioSec: c.maxAudioSec == null ? undefined : c.maxAudioSec,
+        pipeline: !!c.pipeline,
       })),
     );
   }, [props.options]);
@@ -89,6 +91,7 @@ export default function SettingsVideoModels(props) {
         capabilities: [],
         maxInputMB: undefined,
         maxAudioSec: undefined,
+        pipeline: false,
       },
     ]);
   const updateRow = (idx, patch) =>
@@ -112,6 +115,7 @@ export default function SettingsVideoModels(props) {
           capabilities: normalizeList(r.capabilities),
           maxInputMB: normInt(r.maxInputMB),
           maxAudioSec: normNum(r.maxAudioSec),
+          pipeline: !!r.pipeline,
         };
       });
       const value = JSON.stringify({
@@ -155,6 +159,9 @@ export default function SettingsVideoModels(props) {
           ) +
           t(
             '「关键帧」能力同时承载两类模型：模型名含 flf2v 的按首尾帧模型处理(尾帧必填)，否则按只吃首帧的 i2v。此处填的是对外模型名，若渠道做了模型重定向，对外名也必须保留 flf2v 标识，否则体验区会按 i2v 下发、与上游 flf2v 实例错配。',
+          ) +
+          t(
+            '「自建流水线」只给跑在自建 gpustackplus 引擎上的模型开：开启后该模型在体验区选 1080P 会先按 480P 生成再自动调用超分模型(两笔额度/积分消耗)，并可接自动配音段、显示插帧开关(target_fps)。第三方渠道模型不要开——它们原生支持 1080P 直出、也不认识 target_fps，关闭时体验区把尺寸等参数原样透传给上游。',
           )
         }
       >
@@ -310,6 +317,24 @@ export default function SettingsVideoModels(props) {
                   placeholder={t('音频秒数')}
                   style={{ flex: 1, minWidth: 120 }}
                 />
+                <div
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 6,
+                    height: 32,
+                    flexShrink: 0,
+                  }}
+                >
+                  <Text type='tertiary' size='small'>
+                    {t('自建流水线')}
+                  </Text>
+                  <Switch
+                    checked={!!row.pipeline}
+                    onChange={(v) => updateRow(idx, { pipeline: v })}
+                    size='small'
+                  />
+                </div>
                 <Button
                   type='danger'
                   theme='borderless'
