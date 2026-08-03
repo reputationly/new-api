@@ -119,6 +119,33 @@ type statusResponse struct {
 	NFSPath   string `json:"nfs_path"`
 	Error     string `json:"error"`
 	ErrorType string `json:"error_type"`
+	// Progress 门面已按阶段权重表折算好的全局进度 0-100(引擎只报"阶段+阶段内
+	// 百分比",合成在门面侧完成);Phase 是产生该进度的阶段名,仅用于日志/排查。
+	// 老版本门面不返回这两个字段,零值走 taskcommon 的固定档位兜底。
+	Progress float64 `json:"progress"`
+	Phase    string  `json:"phase"`
+}
+
+// progressInProgressFloor/Ceil 把门面的 0-100 映射到 new-api 的进度语义。
+// new-api 里 100% 是终态(成功/失败都写 100%,见 service/task_polling.go),
+// 运行中报 100% 会被前端读成"已完成但没有结果";10%/20% 又已被 submitted/
+// queued 占用。所以真实进度压缩进 [30,95],既接上 ProgressInProgress 的起点,
+// 又给落 OBS 那段尾巴留出空间。
+const (
+	progressInProgressFloor = 30.0
+	progressInProgressCeil  = 95.0
+)
+
+// scaleProgress 把门面的全局进度折进 [30,95] 区间并格式化成 new-api 的 "N%"。
+func scaleProgress(global float64) string {
+	if global < 0 {
+		global = 0
+	}
+	if global > 100 {
+		global = 100
+	}
+	scaled := progressInProgressFloor + (progressInProgressCeil-progressInProgressFloor)*global/100
+	return strconv.Itoa(int(scaled)) + "%"
 }
 
 type TaskAdaptor struct {
@@ -1063,6 +1090,11 @@ func (a *TaskAdaptor) ParseTaskResult(respBody []byte) (*relaycommon.TaskInfo, e
 		ti.Status = model.TaskStatusQueued
 	case "running", "processing", "in_progress":
 		ti.Status = model.TaskStatusInProgress
+		// 只在真拿到进度时才覆盖固定档位:门面返回 0 既可能是"刚开始"也可能是
+		// "老版本门面没这个字段",两种都该退回 ProgressInProgress 的 30%。
+		if sr.Progress > 0 {
+			ti.Progress = scaleProgress(sr.Progress)
+		}
 	case "done", "completed", "succeed", "success":
 		ti.Status = model.TaskStatusSuccess
 		// 关键:把成品在 SFS 上的绝对路径交给落盘钩子(显式 nfs_path,非启发式)。

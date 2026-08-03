@@ -1,6 +1,103 @@
 package gpustackplus
 
-import "testing"
+import (
+	"strconv"
+	"strings"
+	"testing"
+
+	"github.com/QuantumNous/new-api/model"
+)
+
+func TestParseTaskResultProgress(t *testing.T) {
+	cases := []struct {
+		name         string
+		body         string
+		wantStatus   string
+		wantProgress string
+	}{
+		{
+			// 老版本门面不返回 progress/phase:必须退回固定档位（由 task_polling
+			// 的 ProgressInProgress 写 30%），而不是把零值当成"进度 0"报出去。
+			name:         "无 progress 字段时不覆盖",
+			body:         `{"task_id":"t1","status":"running"}`,
+			wantStatus:   model.TaskStatusInProgress,
+			wantProgress: "",
+		},
+		{
+			name:         "progress 为 0 同样不覆盖",
+			body:         `{"task_id":"t1","status":"running","progress":0,"phase":"prepare"}`,
+			wantStatus:   model.TaskStatusInProgress,
+			wantProgress: "",
+		},
+		{
+			// 门面 denoise 50% => 全局 46 => 30 + 65*0.46 = 59.9
+			name:         "去噪中段折进 30-95 区间",
+			body:         `{"task_id":"t1","status":"running","progress":46.0,"phase":"denoise"}`,
+			wantStatus:   model.TaskStatusInProgress,
+			wantProgress: "59%",
+		},
+		{
+			// 门面的运行中上限 99 也必须落在 95% 以内，给落 OBS 的尾巴留空间。
+			name:         "运行中上限不触及 100%",
+			body:         `{"task_id":"t1","status":"running","progress":99.0,"phase":"postprocess"}`,
+			wantStatus:   model.TaskStatusInProgress,
+			wantProgress: "94%",
+		},
+		{
+			// 终态由状态机写 100%，adaptor 不该在这里塞进度。
+			name:         "完成态不带 progress",
+			body:         `{"task_id":"t1","status":"done","nfs_path":"/nfs-output/a.mp4","progress":100}`,
+			wantStatus:   model.TaskStatusSuccess,
+			wantProgress: "",
+		},
+		{
+			name:         "排队中不带 progress",
+			body:         `{"task_id":"t1","status":"queued"}`,
+			wantStatus:   model.TaskStatusQueued,
+			wantProgress: "",
+		},
+	}
+	a := &TaskAdaptor{}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			ti, err := a.ParseTaskResult([]byte(c.body))
+			if err != nil {
+				t.Fatalf("ParseTaskResult 报错: %v", err)
+			}
+			if ti.Status != c.wantStatus {
+				t.Errorf("status got = %q, want = %q", ti.Status, c.wantStatus)
+			}
+			if ti.Progress != c.wantProgress {
+				t.Errorf("progress got = %q, want = %q", ti.Progress, c.wantProgress)
+			}
+		})
+	}
+}
+
+func TestScaleProgressIsMonotonicAndBounded(t *testing.T) {
+	prev := -1.0
+	for g := 0.0; g <= 100.0; g += 0.5 {
+		got := scaleProgress(g)
+		n, err := strconv.ParseFloat(strings.TrimSuffix(got, "%"), 64)
+		if err != nil {
+			t.Fatalf("scaleProgress(%v) = %q 无法解析: %v", g, got, err)
+		}
+		if n < progressInProgressFloor || n > progressInProgressCeil {
+			t.Fatalf("scaleProgress(%v) = %q 越界 [%v,%v]", g, got, progressInProgressFloor, progressInProgressCeil)
+		}
+		if n < prev {
+			t.Fatalf("scaleProgress 非单调: %v -> %q，前值 %v", g, got, prev)
+		}
+		prev = n
+	}
+	// 越界输入被夹紧，不产生非法百分比。
+	if got := scaleProgress(-10); got != "30%" {
+		t.Errorf("负值应夹到下界，got = %q", got)
+	}
+	if got := scaleProgress(1000); got != "95%" {
+		t.Errorf("超限应夹到上界，got = %q", got)
+	}
+}
 
 func TestWithFoleySuppression(t *testing.T) {
 	cases := []struct {
