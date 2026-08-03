@@ -473,13 +473,36 @@ export const hasImageContent = (message) => {
   );
 };
 
+// 从出站正文里剔除 <think> 段。content 可能是字符串,也可能是多模态数组(见
+// buildMessageContent),后者只处理 text 项,图片原样带走。
+const stripThinkForAPI = (content) => {
+  if (typeof content === 'string') {
+    return processIncompleteThinkTags(content, '').content;
+  }
+  if (Array.isArray(content)) {
+    return content.map((item) =>
+      item?.type === 'text'
+        ? { ...item, text: processIncompleteThinkTags(item.text || '', '').content }
+        : item,
+    );
+  }
+  return content;
+};
+
 // 格式化消息用于API请求
+// 助手的思考不回传:同一段信息,上游用 reasoning_content 字段送来时本函数天然丢掉
+// (只取 role/content),用正文内联 <think> 送来时却原样带回去——同样的东西因传输形式
+// 不同而区别对待,说不通。多数推理模型也明确要求别把思考塞回上下文,且它会逐轮累积、
+// 重复计费。只处理 assistant:用户自己在提问里打的 <think> 是正经内容,不能动。
 export const formatMessageForAPI = (message) => {
   if (!message) return null;
 
   return {
     role: message.role,
-    content: message.content,
+    content:
+      message.role === MESSAGE_ROLES.ASSISTANT
+        ? stripThinkForAPI(message.content)
+        : message.content,
   };
 };
 

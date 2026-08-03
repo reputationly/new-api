@@ -20,6 +20,7 @@ import {
   createMessage,
   createLoadingAssistantMessage,
   getTextContent,
+  processIncompleteThinkTags,
 } from '../shims/classic-utils';
 
 const Chat = () => {
@@ -94,10 +95,24 @@ const Chat = () => {
   };
 
   const renderAssistant = (m) => {
-    const text = getTextContent(m);
+    // 模型吐思考有两条路:独立的 reasoning_content 字段,和正文里的 <think> 标签。
+    // 流式链路只搬前者——useApiRequest 的 streamMessageUpdate/completeMessage 全程不碰
+    // <think>,只有手动停止和刷新修复才会解析。所以正文内联的那种必须在渲染时抽,
+    // 与 classic MessageContent 同策略;漏了就会像多轮对话里那样裸露一段 <think>。
+    // 用 Incomplete 版是为了流式期间半截未闭合的 <think> 也能进折叠卡而不是甩在正文。
+    const { content: text, reasoningContent } = processIncompleteThinkTags(
+      getTextContent(m),
+      m.reasoningContent || '',
+    );
+    // 思考抽走后正文可能暂时为空:<think> 闭合前所有 token 都在思考里,正文一片空白
+    // 看着像卡死。LOADING(等首包)和 INCOMPLETE(思考流式中)都要给占位,只判 LOADING
+    // 会漏掉后者——正文有内容时 text 自然顶掉占位,不会误显示。
+    const pending =
+      m.status === MESSAGE_STATUS.LOADING ||
+      m.status === MESSAGE_STATUS.INCOMPLETE;
     return (
       <div>
-        {m.reasoningContent && (
+        {reasoningContent && (
           <Collapse defaultActiveKey={[]} style={{ marginBottom: 8 }}>
             <Collapse.Panel key='think' title='思考过程'>
               <div
@@ -107,7 +122,7 @@ const Chat = () => {
                   whiteSpace: 'pre-wrap',
                 }}
               >
-                {m.reasoningContent}
+                {reasoningContent}
               </div>
             </Collapse.Panel>
           </Collapse>
@@ -118,7 +133,7 @@ const Chat = () => {
           <MarkdownMessage>{text}</MarkdownMessage>
         ) : (
           <div style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
-            {text || (m.status === MESSAGE_STATUS.LOADING ? '思考中…' : '')}
+            {text || (pending ? '思考中…' : '')}
           </div>
         )}
         {m.status === MESSAGE_STATUS.ERROR && (
