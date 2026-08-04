@@ -75,6 +75,25 @@ const ImageBody = ({ mode }) => {
         </div>
       );
     }
+    // 已成功但图没了(base64 图不落盘/本地缓存被清理):同桌面端如实说过期,别落到下面的
+    // 进度分支被显示成永远的「生成中」。
+    if (m.status === 'success') {
+      return (
+        <div>
+          <div style={{ color: 'var(--adm-color-weak)' }}>
+            图片已过期或本地缓存被清理，请重新生成
+          </div>
+          <Button
+            size='mini'
+            fill='outline'
+            style={{ marginTop: 8 }}
+            onClick={() => regenerate(m.prompt)}
+          >
+            重新生成
+          </Button>
+        </div>
+      );
+    }
     if (m.status === 'failed') {
       return (
         <div>
@@ -180,6 +199,17 @@ const ImageBody = ({ mode }) => {
             : missingRequiredImage
               ? '请先上传底图'
               : '描述你想要的图片…'
+        }
+        // 图片生成是一次同步请求,没有 taskId 可续查:切标签/返回都会卸载本页,在途请求
+        // 随之作废(下次进来只会看到「生成已中断」,见 useImageGeneration 的
+        // markInterruptedAsFailed)。视频/音乐那套「切走再回来接着轮询」在这里不成立,
+        // 只能把话说在前面 —— 仅生成中显示,平时不占位。
+        extra={
+          generating ? (
+            <div className='m-locked-hint' style={{ padding: '0 4px 8px' }}>
+              生成中，请勿切换标签或返回上一页，否则本次生成会中断。
+            </div>
+          ) : null
         }
       />
       <ImageViewer

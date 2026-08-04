@@ -166,6 +166,32 @@ const persistConversations = (storageKey, list) => {
   });
 };
 
+// 加载漏斗:重建 completed 消息的空 musicUrl(初始态与 hydrate 两条路径都经此)。
+// 结果音频以 Blob 缓存进 IDB,localStorage 只留 idb-media: 引用 —— 引用未 hydrate(或
+// blob 已被孤儿清理删掉)时会被剥成 '',而 AsyncTaskBubble/MusicChatArea 判「完成」都要
+// status + url 双条件,于是一条早已生成好的曲子会退化成永远 100% 的「生成中」。任务产物
+// 在后端按 taskId 可寻址,故这里直接用 taskId 重建 URL。identity 保持:无改动的
+// conv/message 原样返回,不破坏 hydrate 的引用比对。同 useVideoGeneration 的 ensureVideoUrls。
+const ensureMusicUrls = (list) => {
+  if (!Array.isArray(list)) return list;
+  return list.map((conv) => {
+    let changed = false;
+    const messages = (conv.messages || []).map((m) => {
+      if (
+        m.role === 'assistant' &&
+        m.status === MUSIC_STATUS.COMPLETED &&
+        m.taskId &&
+        !m.musicUrl
+      ) {
+        changed = true;
+        return { ...m, musicUrl: buildMusicContentUrl(m.taskId) };
+      }
+      return m;
+    });
+    return changed ? { ...conv, messages } : conv;
+  });
+};
+
 let idSeq = 0;
 const genId = () => `mus-${Date.now()}-${idSeq++}`;
 
@@ -299,7 +325,11 @@ export const useMusicGeneration = (mode = 't2m') => {
   const initialConvsRef = useRef(null);
   const [conversations, setConversations] = useState(() => {
     const raw = loadConversations(storageKey);
-    const stripped = stripUnresolvedMediaRefs(raw, MUSIC_MEDIA_SCHEMA);
+    // strip 后立刻用 taskId 重建 completed 消息的空 musicUrl,再存进 initialConvsRef——
+    // 保证 initialSet 与 state 引用一致(hydrate 的引用比对不被破坏)。
+    const stripped = ensureMusicUrls(
+      stripUnresolvedMediaRefs(raw, MUSIC_MEDIA_SCHEMA),
+    );
     initialConvsRef.current = { raw, stripped };
     return stripped;
   });
@@ -344,16 +374,20 @@ export const useMusicGeneration = (mode = 't2m') => {
         ...MUSIC_MEDIA_SCHEMA.convStringFields,
       ];
       setConversations((prev) =>
-        prev.map((c) => {
-          const h = hydratedById.get(c.id);
-          if (!h) return c;
-          if (initialSet.has(c)) return h;
-          const merged = { ...c };
-          mediaFields.forEach((f) => {
-            merged[f] = h[f];
-          });
-          return merged;
-        }),
+        // hydrated 版本若 IDB blob 缺失,musicUrl 会是 '';外面再兜一层 taskId 重建,
+        // 避免 completed 消息被还原成空 URL 而渲染成「生成中」。
+        ensureMusicUrls(
+          prev.map((c) => {
+            const h = hydratedById.get(c.id);
+            if (!h) return c;
+            if (initialSet.has(c)) return h;
+            const merged = { ...c };
+            mediaFields.forEach((f) => {
+              merged[f] = h[f];
+            });
+            return merged;
+          }),
+        ),
       );
     })();
     return () => {

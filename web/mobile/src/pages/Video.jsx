@@ -195,6 +195,25 @@ export const VideoBody = ({ mode }) => {
         </div>
       );
     }
+    // 已完成却没有结果地址(本地缓存丢失且无 taskId 可重建,或后端已清理):如实说失效,
+    // 别落到下面的进度分支被显示成永远的「生成中」。
+    if (m.status === 'completed') {
+      return (
+        <div>
+          <div style={{ color: 'var(--adm-color-weak)' }}>
+            结果已失效，请重新生成
+          </div>
+          <Button
+            size='mini'
+            fill='outline'
+            style={{ marginTop: 8 }}
+            onClick={() => regenerate(m.prompt)}
+          >
+            重新生成
+          </Button>
+        </div>
+      );
+    }
     if (m.status === 'failed' || m.status === 'canceled') {
       return (
         <div>
@@ -212,13 +231,14 @@ export const VideoBody = ({ mode }) => {
         </div>
       );
     }
-    // queued / in_progress
+    // queued / in_progress。进度封顶 99%:上游偶尔在终态落地前先报 100,
+    // 「100% 还在生成中」看起来就是卡死了,100% 只留给真正完成的那一刻。
+    const percent =
+      typeof m.progress === 'number' ? Math.min(99, Math.round(m.progress)) : 0;
     return (
       <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-        {typeof m.progress === 'number' && m.progress > 0 ? (
-          <ProgressCircle percent={Math.round(m.progress)}>
-            {Math.round(m.progress)}%
-          </ProgressCircle>
+        {percent > 0 ? (
+          <ProgressCircle percent={percent}>{percent}%</ProgressCircle>
         ) : (
           <SpinLoading style={{ '--size': '24px' }} />
         )}

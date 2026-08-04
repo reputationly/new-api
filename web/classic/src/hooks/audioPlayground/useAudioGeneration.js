@@ -92,6 +92,31 @@ const persistConversations = (storageKey, list) => {
   });
 };
 
+// 加载漏斗:重建 completed 消息的空 audioUrl(初始态与 hydrate 两条路径都经此)。
+// 结果音频以 Blob 缓存进 IDB,localStorage 只留 idb-media: 引用 —— 引用未 hydrate(或
+// blob 已被孤儿清理删掉)时会被剥成 '',而渲染层判「完成」是 status + url 双条件,于是
+// 一条早已合成好的音频会退化成永远 100% 的「生成中」。产物在后端按 taskId 可寻址,直接
+// 用 taskId 重建。identity 保持:无改动的 conv/message 原样返回,不破坏 hydrate 的引用比对。
+const ensureAudioUrls = (list) => {
+  if (!Array.isArray(list)) return list;
+  return list.map((conv) => {
+    let changed = false;
+    const messages = (conv.messages || []).map((m) => {
+      if (
+        m.role === 'assistant' &&
+        m.status === AUDIO_STATUS.COMPLETED &&
+        m.taskId &&
+        !m.audioUrl
+      ) {
+        changed = true;
+        return { ...m, audioUrl: buildAudioContentUrl(m.taskId) };
+      }
+      return m;
+    });
+    return changed ? { ...conv, messages } : conv;
+  });
+};
+
 let idSeq = 0;
 const genId = () => `aud-${Date.now()}-${idSeq++}`;
 
@@ -206,7 +231,11 @@ export const useAudioGeneration = (mode = 'emotion') => {
   const initialConvsRef = useRef(null);
   const [conversations, setConversations] = useState(() => {
     const raw = loadConversations(storageKey);
-    const stripped = stripUnresolvedMediaRefs(raw, AUDIO_MEDIA_SCHEMA);
+    // strip 后立刻用 taskId 重建 completed 消息的空 audioUrl,再存进 initialConvsRef——
+    // 保证 initialSet 与 state 引用一致(hydrate 的引用比对不被破坏)。
+    const stripped = ensureAudioUrls(
+      stripUnresolvedMediaRefs(raw, AUDIO_MEDIA_SCHEMA),
+    );
     initialConvsRef.current = { raw, stripped };
     return stripped;
   });
@@ -250,16 +279,20 @@ export const useAudioGeneration = (mode = 'emotion') => {
         ...AUDIO_MEDIA_SCHEMA.convStringFields,
       ];
       setConversations((prev) =>
-        prev.map((c) => {
-          const h = hydratedById.get(c.id);
-          if (!h) return c;
-          if (initialSet.has(c)) return h;
-          const merged = { ...c };
-          mediaFields.forEach((f) => {
-            merged[f] = h[f];
-          });
-          return merged;
-        }),
+        // hydrated 版本若 IDB blob 缺失,audioUrl 会是 '';外面再兜一层 taskId 重建,
+        // 避免 completed 消息被还原成空 URL 而渲染成「生成中」。
+        ensureAudioUrls(
+          prev.map((c) => {
+            const h = hydratedById.get(c.id);
+            if (!h) return c;
+            if (initialSet.has(c)) return h;
+            const merged = { ...c };
+            mediaFields.forEach((f) => {
+              merged[f] = h[f];
+            });
+            return merged;
+          }),
+        ),
       );
     })();
     return () => {
