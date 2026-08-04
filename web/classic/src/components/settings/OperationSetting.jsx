@@ -27,6 +27,7 @@ import SettingsMonitoring from '../../pages/Setting/Operation/SettingsMonitoring
 import SettingsCreditLimit from '../../pages/Setting/Operation/SettingsCreditLimit';
 import SettingsCheckin from '../../pages/Setting/Operation/SettingsCheckin';
 import SettingsPoints from '../../pages/Setting/Operation/SettingsPoints';
+import SettingsAdminNotification from '../../pages/Setting/Operation/SettingsAdminNotification';
 import { API, showError, toBoolean } from '../../helpers';
 
 const OperationSetting = () => {
@@ -104,6 +105,15 @@ const OperationSetting = () => {
 
     /* 令牌设置 */
     'token_setting.max_user_tokens': 1000,
+
+    /* 管理员通知设置：5 个 notify_* 必须在此声明为布尔，理由同上（积分设置那段注释） */
+    'notification_setting.wechat_work_webhook_url': '',
+    'notification_setting.dingtalk_webhook_url': '',
+    'notification_setting.notify_feedback': false,
+    'notification_setting.notify_kyc': false,
+    'notification_setting.notify_enterprise': false,
+    'notification_setting.notify_bank_transfer': false,
+    'notification_setting.notify_invoice': false,
   });
 
   let [loading, setLoading] = useState(false);
@@ -178,6 +188,10 @@ const OperationSetting = () => {
         {/* 积分设置 */}
         <Card style={{ marginTop: '10px' }}>
           <SettingsPoints options={inputs} refresh={onRefresh} />
+        </Card>
+        {/* 管理员通知设置 */}
+        <Card style={{ marginTop: '10px' }}>
+          <SettingsAdminNotification options={inputs} refresh={onRefresh} />
         </Card>
       </Spin>
     </>
