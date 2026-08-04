@@ -35,6 +35,7 @@ export default function SettingsObs(props) {
     'media_storage.nfs_output_root': '/nfs-output',
     'media_storage.ingest_nfs_path': true,
     'media_storage.ingest_upstream_url': true,
+    'media_storage.ingest_client_upload': true,
     'media_storage.upstream_url_allowed_hosts': '',
     'media_storage.async_worker_count': 4,
     'media_storage.stats_snapshot_interval_minutes': 60,
@@ -299,6 +300,21 @@ export default function SettingsObs(props) {
                 uncheckedText='〇'
                 onChange={handleFieldChange(
                   'media_storage.ingest_upstream_url',
+                )}
+              />
+            </Col>
+            <Col xs={24} sm={12} md={8}>
+              <Form.Switch
+                field={'media_storage.ingest_client_upload'}
+                label={t('用户上传落盘')}
+                extraText={t(
+                  '体验区上传的图片/音视频搬 OBS，改用签名 URL 发给第三方渠道，避免请求体过大被上游网关拒绝',
+                )}
+                size='default'
+                checkedText='｜'
+                uncheckedText='〇'
+                onChange={handleFieldChange(
+                  'media_storage.ingest_client_upload',
                 )}
               />
             </Col>

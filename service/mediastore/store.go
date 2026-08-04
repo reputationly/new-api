@@ -52,6 +52,9 @@ type Store interface {
 	Persist(ctx context.Context, key string, src PersistSource, meta map[string]string) error
 	// Sign 为 key 实时签发带 Expires 的可访问 URL（永不落库）。
 	Sign(ctx context.Context, key string, ttl time.Duration, opts ...SignOption) (string, error)
+	// Exists 判断对象是否存在（HeadObject）。签名是纯离线计算，对已被生命周期删掉的 key
+	// 一样签得出 URL，调用方拿到的是一个 403 链接；需要确认可达时先过这一道。
+	Exists(ctx context.Context, key string) (bool, error)
 	// Delete 删除单个对象（幂等）。
 	Delete(ctx context.Context, key string) error
 	// DeleteObjects 批量删除（单次 ≤1000，幂等）。

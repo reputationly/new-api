@@ -35,6 +35,12 @@ type MediaStorageSettings struct {
 	NFSOutputRoot     string `json:"nfs_output_root"`     // 容器内 SFS 挂载点；只读此前缀下文件
 	IngestNFSPath     bool   `json:"ingest_nfs_path"`     // 自建模型 nfs_path 搬 OBS
 	IngestUpstreamURL bool   `json:"ingest_upstream_url"` // 第三方上游 URL 搬 OBS
+	// IngestClientUpload 客户端上传的 data-url 媒体搬 OBS，换成签名 URL 再发给上游（入站方向）。
+	// 与上面两个 Ingest* 相反：那两个是"上游产物搬进来"，这个是"用户上传搬出去"。
+	// 独立开关而非复用 Enabled()：打开归档不应顺带把用户上传的内容送进桶、并把 URL 交给
+	// 第三方供应商——那是不同的隐私姿态。也是 OBS/上游抽风时的 kill switch。
+	// 详见 docs/inbound-media-offload-design.md。
+	IngestClientUpload bool `json:"ingest_client_upload"`
 	// 上游 URL 下载的 host 白名单（防 SSRF 纵深），逗号/空白分隔，支持子域匹配
 	// （填 example.com 同时放行 cdn.example.com）。留空 = 不限 host，仅做私网 IP/DNS 过滤。
 	UpstreamURLAllowedHosts string `json:"upstream_url_allowed_hosts"`
@@ -59,6 +65,7 @@ var mediaStorageSettings = MediaStorageSettings{
 	NFSOutputRoot:                "/nfs-output",
 	IngestNFSPath:                true,
 	IngestUpstreamURL:            true,
+	IngestClientUpload:           true,
 	StatsSnapshotIntervalMinutes: 60,
 	BucketWarnThresholdTB:        2,
 	BucketCriticalThresholdTB:    3,

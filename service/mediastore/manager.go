@@ -107,6 +107,18 @@ func Sign(ctx context.Context, key string, opts ...SignOption) (string, error) {
 	return store.Sign(ctx, key, SignedURLTTL(), opts...)
 }
 
+// Exists 判断对象是否存在（HeadObject）。总开关关闭时返回 ErrNotEnabled。
+func Exists(ctx context.Context, key string) (bool, error) {
+	if !Enabled() {
+		return false, ErrNotEnabled
+	}
+	store, err := Get()
+	if err != nil {
+		return false, err
+	}
+	return store.Exists(ctx, key)
+}
+
 // Delete 删除单个对象。
 func Delete(ctx context.Context, key string) error {
 	store, err := Get()

@@ -156,14 +156,18 @@ func RelayTaskSubmit(c *gin.Context, info *relaycommon.RelayInfo) (*TaskSubmitRe
 		return nil, service.TaskErrorWrapperLocal(fmt.Errorf("invalid api platform: %s", platform), "invalid_api_platform", http.StatusBadRequest)
 	}
 	adaptor.Init(info)
+	// 复位成客户端原始 body 再重建 task_request:上一次尝试可能已把媒体字段改写过
+	// (ReplaceRequestBody 是持久替换),不复位则重试换渠道时会拿到上一轮的改写结果。
+	// 必须在 ValidateRequestAndSetAction 之前——task_request 正是从 body 重建的。
+	RestoreOriginalTaskBody(c)
 	if taskErr := adaptor.ValidateRequestAndSetAction(c, info); taskErr != nil {
 		return nil, taskErr
 	}
 
-	// 1.5 非 gpustackplus 渠道:把 task:<task_id> 产物引用展开为 base64 data-url
-	// (第三方适配器只认 base64/URL;gpustackplus 在物化层原生解析,保留 NFS 直读)。
-	// 放在预扣费之前:引用解析失败快速 400,不产生扣费/退款往返。
-	if taskErr := expandTaskRefsForChannel(c, info); taskErr != nil {
+	// 1.5 按渠道改写请求里的媒体字段:task:<task_id> 产物引用展开、客户端上传的
+	// data-url 卸载到 OBS 换签名 URL(见 docs/inbound-media-offload-design.md)。
+	// 放在预扣费之前:失败快速 400,不产生扣费/退款往返。
+	if taskErr := rewriteTaskMedia(c, info); taskErr != nil {
 		return nil, taskErr
 	}
 

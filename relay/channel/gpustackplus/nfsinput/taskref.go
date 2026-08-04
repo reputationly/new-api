@@ -60,24 +60,11 @@ func (m *Materializer) resolveTaskRef(ctx context.Context, raw string) ([]byte, 
 // 保留真实扩展名只为 NFS 上文件名可读——扩展名不影响下游解码,引擎全部按内容嗅探,
 // 核对依据见 nfsinput.go extForData 的注释。别据此推断「后缀丢了会出问题」。
 func ResolveTaskRefBytes(ctx context.Context, userID int, raw string, maxBytes int64) ([]byte, string, error) {
-	taskID := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(raw), TaskRefScheme))
-	if taskID == "" {
-		return nil, "", fmt.Errorf("任务引用为空,期望形如 task:<task_id>")
-	}
-	task, exists, err := model.GetByTaskId(userID, taskID)
+	task, resultURL, err := loadTaskForRef(userID, raw)
 	if err != nil {
-		return nil, "", fmt.Errorf("查询被引用任务 %s 失败: %w", taskID, err)
+		return nil, "", err
 	}
-	if !exists || task == nil {
-		return nil, "", fmt.Errorf("被引用任务 %s 不存在或不属于当前用户", taskID)
-	}
-	if task.Status != model.TaskStatusSuccess {
-		return nil, "", fmt.Errorf("被引用任务 %s 未成功完成(当前状态 %s),无法引用其产物", taskID, task.Status)
-	}
-	resultURL := strings.TrimSpace(task.GetResultURL())
-	if resultURL == "" {
-		return nil, "", fmt.Errorf("被引用任务 %s 无产物记录", taskID)
-	}
+	taskID := task.TaskID
 
 	// 自家 OBS host 授信:与 controller/video_proxy.go 同精神——旧数据 ResultURL 可能是
 	// 明文签名 OBS URL(非 obs:// 占位符),隔离环境下解析到私网会被 SSRF 拒;
@@ -146,6 +133,52 @@ func ResolveTaskRefBytes(ctx context.Context, userID int, raw string, maxBytes i
 		}
 	}
 	return nil, "", fmt.Errorf("被引用任务 %s 的产物形态无法识别", taskID)
+}
+
+// loadTaskForRef 解析 task:<task_id> 并做四道校验:查库、归属当前用户、SUCCESS 终态、
+// 产物记录非空。返回任务与已 Trim 的 ResultURL。
+// ResolveTaskRefBytes(取字节)与 TaskRefOBSKey(取 OBS key)共用这段,两者的校验口径
+// 必须一致——否则直签捷径会成为绕过归属校验的旁路。
+func loadTaskForRef(userID int, raw string) (*model.Task, string, error) {
+	taskID := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(raw), TaskRefScheme))
+	if taskID == "" {
+		return nil, "", fmt.Errorf("任务引用为空,期望形如 task:<task_id>")
+	}
+	task, exists, err := model.GetByTaskId(userID, taskID)
+	if err != nil {
+		return nil, "", fmt.Errorf("查询被引用任务 %s 失败: %w", taskID, err)
+	}
+	if !exists || task == nil {
+		return nil, "", fmt.Errorf("被引用任务 %s 不存在或不属于当前用户", taskID)
+	}
+	if task.Status != model.TaskStatusSuccess {
+		return nil, "", fmt.Errorf("被引用任务 %s 未成功完成(当前状态 %s),无法引用其产物", taskID, task.Status)
+	}
+	resultURL := strings.TrimSpace(task.GetResultURL())
+	if resultURL == "" {
+		return nil, "", fmt.Errorf("被引用任务 %s 无产物记录", taskID)
+	}
+	return task, resultURL, nil
+}
+
+// TaskRefOBSKey 返回 task:<task_id> 产物的 OBS key,仅当该产物已落 OBS(ResultURL 为
+// obs://<key>)。给「入站媒体卸载」用:白名单渠道拿到 key 后直接签名交给上游,省掉
+// 「OBS 下载 → base64 → 上传回 OBS」的整趟往返(见 docs/inbound-media-offload-design.md)。
+//
+// 非 obs:// 形态返回 ("", nil)——这不是错误,调用方应回退到 ResolveTaskRefBytes 字节路径。
+// 查库/归属/终态失败返回 error,与 ResolveTaskRefBytes 同口径。
+//
+// 注意:返回 key 只说明"任务记录里写着它",不代表对象还在桶里(生命周期规则会删)。
+// 签名是纯离线计算,对已删对象照样签得出一个 403 链接,调用方须自行过 mediastore.Exists。
+func TaskRefOBSKey(userID int, raw string) (string, error) {
+	_, resultURL, err := loadTaskForRef(userID, raw)
+	if err != nil {
+		return "", err
+	}
+	if !mediastore.IsOBSRef(resultURL) {
+		return "", nil
+	}
+	return mediastore.KeyFromRef(resultURL), nil
 }
 
 // proxyTaskContentURL 复刻 taskcommon.BuildProxyURL 的形态(不 import taskcommon 避免包环),

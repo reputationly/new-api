@@ -3,6 +3,7 @@ package mediastore
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -19,6 +20,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go-v2/service/s3/types"
+	awshttp "github.com/aws/smithy-go/transport/http"
 )
 
 // obsConfig 构建 obsStore 所需的最小配置（由 system_setting 映射而来）。
@@ -254,6 +256,33 @@ func (s *obsStore) Sign(ctx context.Context, key string, ttl time.Duration, opts
 		fn(&o)
 	}
 	return nativeSignedGetURL(s.cfg, key, ttl, o, time.Now())
+}
+
+// Exists 走 HeadObject：不传输对象体，是确认可达性最廉价的一次往返。
+// 404 / NoSuchKey 折成 (false, nil)；其余错误（鉴权、网络）如实返回，
+// 让调用方能区分"确实没有"与"没查成"。
+func (s *obsStore) Exists(ctx context.Context, key string) (bool, error) {
+	_, err := s.client.HeadObject(ctx, &s3.HeadObjectInput{
+		Bucket: aws.String(s.cfg.Bucket),
+		Key:    aws.String(key),
+	})
+	if err == nil {
+		return true, nil
+	}
+	var notFound *types.NotFound
+	if errors.As(err, &notFound) {
+		return false, nil
+	}
+	var noSuchKey *types.NoSuchKey
+	if errors.As(err, &noSuchKey) {
+		return false, nil
+	}
+	// HeadObject 无响应体，SDK 有时只能给出裸 http 状态码。
+	var respErr *awshttp.ResponseError
+	if errors.As(err, &respErr) && respErr.HTTPStatusCode() == http.StatusNotFound {
+		return false, nil
+	}
+	return false, err
 }
 
 func (s *obsStore) Delete(ctx context.Context, key string) error {
