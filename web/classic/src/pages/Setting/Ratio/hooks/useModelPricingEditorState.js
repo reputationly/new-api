@@ -98,7 +98,9 @@ const toNumberOrNull = (value) => {
   return Number.isFinite(num) ? num : null;
 };
 
-const formatNumber = (value) => {
+// 存储精度：保留 12 位有效，去掉浮点尾巴。与 formatDisplayPrice（屏幕 2 位）
+// 是两套独立精度，显示截断绝不回流到存储（见设计 §6.1.1）。
+export const formatNumber = (value) => {
   const num = toNumberOrNull(value);
   if (num === null) {
     return '';
@@ -106,7 +108,7 @@ const formatNumber = (value) => {
   return parseFloat(num.toFixed(12)).toString();
 };
 
-const toNormalizedNumber = (value) => {
+export const toNormalizedNumber = (value) => {
   const formatted = formatNumber(value);
   return formatted === '' ? null : Number(formatted);
 };

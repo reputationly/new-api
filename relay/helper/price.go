@@ -231,6 +231,12 @@ func HasModelBillingConfig(modelName string) bool {
 	if _, ok, _ := ratio_setting.GetModelRatio(modelName); ok {
 		return true
 	}
+	// 视频计费矩阵是第四个定价源（docs/video-billing-matrix-design.md §2.6）。
+	// 不登记的话，只靠矩阵定价的模型会从 /v1/models 里消失（controller/model.go:137,184），
+	// 且 ModelPriceHelperPerCall 会先于矩阵报 model_price_error。
+	if _, ok := ratio_setting.GetVideoPricing(modelName); ok {
+		return true
+	}
 	if billing_setting.GetBillingMode(modelName) != billing_setting.BillingModeTieredExpr {
 		return false
 	}

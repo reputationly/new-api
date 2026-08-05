@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -158,38 +157,9 @@ func (a *TaskAdaptor) EstimateBilling(c *gin.Context, info *relaycommon.RelayInf
 	return nil
 }
 
-// hasVideoInMetadata 直接检查 metadata 的 content 数组是否包含 video_url 条目，
-// 避免构建完整的上游 requestPayload。
+// hasVideoInMetadata 见 relaycommon.VideoHasVideoInput——与计费矩阵共用同一份判定。
 func hasVideoInMetadata(metadata map[string]interface{}) bool {
-	if metadata == nil {
-		return false
-	}
-	// 参考视频也可以走 metadata.reference_videos(buildArkContent 会拼成 video_url 条目),
-	// 这里必须一并识别,否则视频输入折扣算不到,计费与实际请求不一致。
-	if len(metadataStringList(metadata, "reference_videos", "reference_video")) > 0 {
-		return true
-	}
-	contentRaw, ok := metadata["content"]
-	if !ok {
-		return false
-	}
-	contentSlice, ok := contentRaw.([]interface{})
-	if !ok {
-		return false
-	}
-	for _, item := range contentSlice {
-		itemMap, ok := item.(map[string]interface{})
-		if !ok {
-			continue
-		}
-		if itemMap["type"] == "video_url" {
-			return true
-		}
-		if _, has := itemMap["video_url"]; has {
-			return true
-		}
-	}
-	return false
+	return relaycommon.VideoHasVideoInput(metadata)
 }
 
 // BuildRequestBody converts request into Doubao specific format.
@@ -440,22 +410,16 @@ func metadataStringList(metadata map[string]any, keys ...string) []string {
 	return nil
 }
 
-// sizeTierRe 匹配文档里 size 的档位形态:720P / 1080p / 4K。
-var sizeTierRe = regexp.MustCompile(`^(?i)(\d+p|4k)$`)
-
 // applyTopLevelSize 把统一契约的顶层 size 翻译成 Ark 的 ratio / resolution。
 // size 有三种合法形态(见 API 文档「创建视频生成任务」):档位("720P")、纯比例("16:9")
-// 与精确像素("1280x720")。Ark 不吃像素,所以像素形态要拆成比例 + 分辨率档位
-// (按短边归档,取不小于短边的最近档,超过 1080 归 4k)。已由 metadata 显式指定的字段不覆盖。
+// 与精确像素("1280x720")。Ark 不吃像素,所以像素形态要拆成比例 + 分辨率档位。
+// 已由 metadata 显式指定的字段不覆盖。
+//
+// 分辨率归档委托给 relaycommon.VideoResolutionTier——计费矩阵查的是同一个函数,
+// 两边一旦分叉就会出现「按 720p 收费、实际生成 1080p」这类静默错账。
 func applyTopLevelSize(r *requestPayload, size string) {
 	size = strings.TrimSpace(size)
 	if size == "" {
-		return
-	}
-	if sizeTierRe.MatchString(size) {
-		if r.Resolution == "" {
-			r.Resolution = strings.ToLower(size)
-		}
 		return
 	}
 	if common.IsAspectRatio(size) {
@@ -464,31 +428,13 @@ func applyTopLevelSize(r *requestPayload, size string) {
 		}
 		return
 	}
-	w, h, ok := common.DimsFromSize(size)
-	if !ok {
-		return
-	}
-	if r.Ratio == "" {
+	if _, _, ok := common.DimsFromSize(size); ok && r.Ratio == "" {
 		if ar := common.AspectRatioFromSize(size); ar != "" {
 			r.Ratio = ar
 		}
 	}
-	if r.Resolution != "" {
-		return
-	}
-	shortEdge := h
-	if w < h {
-		shortEdge = w
-	}
-	switch {
-	case shortEdge <= 480:
-		r.Resolution = "480p"
-	case shortEdge <= 720:
-		r.Resolution = "720p"
-	case shortEdge <= 1080:
-		r.Resolution = "1080p"
-	default:
-		r.Resolution = "4k"
+	if r.Resolution == "" {
+		r.Resolution = relaycommon.VideoResolutionTier(size)
 	}
 }
 

@@ -603,7 +603,9 @@ func RelayTask(c *gin.Context) {
 			ModelRatio:      relayInfo.PriceData.ModelRatio,
 			OtherRatios:     relayInfo.PriceData.OtherRatios,
 			OriginModelName: relayInfo.OriginModelName,
-			PerCallBilling:  common.StringsContains(constant.TaskPricePatches, relayInfo.OriginModelName) || relayInfo.PriceData.UsePrice,
+			// 与消费日志的 count_billing 同源，见 service.IsTaskPerCallBilling
+			PerCallBilling: service.IsTaskPerCallBilling(relayInfo),
+			VideoBilling:   freezeVideoBilling(relayInfo),
 		}
 		task.Quota = result.Quota
 		task.Data = result.TaskData
@@ -615,6 +617,23 @@ func RelayTask(c *gin.Context) {
 
 	if taskErr != nil {
 		respondTaskError(c, taskErr)
+	}
+}
+
+// freezeVideoBilling 把提交时算出的视频计费维度与单价落进任务记录，
+// 供几百秒后的异步轮询结算使用（那时请求体已不在，无从重新解析）。
+// 未命中矩阵时返回 nil，轮询阶段照旧走 ModelRatio × OtherRatios。
+func freezeVideoBilling(relayInfo *relaycommon.RelayInfo) *model.TaskVideoBilling {
+	if relayInfo.TaskRelayInfo == nil || relayInfo.VideoBilling == nil {
+		return nil
+	}
+	v := relayInfo.VideoBilling
+	return &model.TaskVideoBilling{
+		Mode:          v.Mode,
+		UnitPrice:     v.UnitPrice,
+		Resolution:    v.Resolution,
+		Seconds:       v.Seconds,
+		HasVideoInput: v.HasVideoInput,
 	}
 }
 

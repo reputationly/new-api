@@ -4029,6 +4029,24 @@
     "音频秒数": "Secondes audio",
     "音频时长 {{sec}} 秒，超过上限 {{max}} 秒": "Audio de {{sec}} s, au-delà de la limite de {{max}} s",
     "自建流水线": "Pipeline auto-hébergé",
-    "「自建流水线」只给跑在自建 gpustackplus 引擎上的模型开：开启后该模型在体验区选 1080P 会先按 480P 生成再自动调用超分模型(两笔额度/积分消耗)，并可接自动配音段、显示插帧开关(target_fps)。第三方渠道模型不要开——它们原生支持 1080P 直出、也不认识 target_fps，关闭时体验区把尺寸等参数原样透传给上游。": "N'activez « Pipeline auto-hébergé » que pour les modèles tournant sur votre propre moteur gpustackplus : une fois activé, choisir 1080P dans le playground génère d'abord en 480P puis appelle automatiquement le modèle d'upscaling (deux débits de quota/points distincts), l'étape de doublage automatique peut être ajoutée et l'interrupteur d'interpolation d'images (target_fps) s'affiche. Laissez-le désactivé pour les modèles de canaux tiers — ils produisent nativement du 1080P et ne connaissent pas target_fps ; désactivé, le playground transmet la taille et les autres paramètres tels quels à l'amont."
+    "「自建流水线」只给跑在自建 gpustackplus 引擎上的模型开：开启后该模型在体验区选 1080P 会先按 480P 生成再自动调用超分模型(两笔额度/积分消耗)，并可接自动配音段、显示插帧开关(target_fps)。第三方渠道模型不要开——它们原生支持 1080P 直出、也不认识 target_fps，关闭时体验区把尺寸等参数原样透传给上游。": "N'activez « Pipeline auto-hébergé » que pour les modèles tournant sur votre propre moteur gpustackplus : une fois activé, choisir 1080P dans le playground génère d'abord en 480P puis appelle automatiquement le modèle d'upscaling (deux débits de quota/points distincts), l'étape de doublage automatique peut être ajoutée et l'interrupteur d'interpolation d'images (target_fps) s'affiche. Laissez-le désactivé pour les modèles de canaux tiers — ils produisent nativement du 1080P et ne connaissent pas target_fps ; désactivé, le playground transmet la taille et les autres paramètres tels quels à l'amont.",
+    "输入不含视频": "Entrée sans vidéo",
+    "输入包含视频": "Entrée avec vidéo",
+    "分辨率": "Résolution",
+    "留空即不配置": "Laisser vide pour ne pas configurer",
+    "请先添加分辨率": "Ajoutez d'abord une résolution",
+    "视频计费配置": "Configuration de facturation vidéo",
+    "按「分辨率 × 输入是否含视频」或「分辨率 × 秒数」为视频模型定价，与供应商价目表逐格对应，可直接对抄。未配置的模型完全走原有的模型倍率/固定价格路径，不受影响。": "Tarifez les modèles vidéo selon « résolution × présence de vidéo en entrée » ou « résolution × secondes ». La grille correspond case par case au tarif du fournisseur et peut être recopiée telle quelle. Les modèles non configurés conservent le chemin existant (ratio de modèle / prix fixe) et ne sont pas affectés.",
+    "「按 Token」用于上游会返回用量的模型（如 Seedance）：填每百万 tokens 的价格，结算时按上游实际返回的 token 数计费。注意秒数已隐含在 token 里，无需也不应再按秒数缩放。「按次」用于不返回 token 的模型（如 Kling）：填单次生成的价格，提交时即定价。": "« Par token » concerne les modèles dont l'amont renvoie la consommation (ex. Seedance) : saisissez le prix par million de tokens ; la facturation utilise le nombre de tokens réellement renvoyé. La durée est déjà incluse dans le nombre de tokens : ne la multipliez pas de nouveau par les secondes. « Par requête » concerne les modèles sans tokens (ex. Kling) : saisissez le prix d'une génération, fixé à la soumission.",
+    "价格单位为人民币（¥），按运营设置的「美元兑人民币汇率」{{rate}} 折算为美元存储；显示保留 2 位小数，存储仍为高精度，计费不受影响。若日志按人民币展示，同一汇率下账单金额与此处填的价格逐格对应。": "Les prix sont en CNY (¥) et convertis en USD pour le stockage selon le « taux de change USD/CNY » ({{rate}}) des paramètres d'exploitation. L'affichage garde 2 décimales tandis que le stockage reste en haute précision : la facturation n'est pas affectée. Si les journaux sont en CNY, au même taux le montant facturé correspond case par case à ces prix.",
+    "暂无视频计费配置，请添加": "Aucune configuration de facturation vidéo, veuillez en ajouter une",
+    "按 Token": "Par token",
+    "分辨率，如 720p": "Résolution, ex. 720p",
+    "秒数，如 5": "Secondes, ex. 5",
+    "单位：¥ / 百万 tokens": "Unité : ¥ / 1M tokens",
+    "单位：¥ / 次": "Unité : ¥ / requête",
+    "{{seconds}} 秒": "{{seconds}} s",
+    "视频按次 {{price}}": "Vidéo par requête {{price}}",
+    "视频按量 {{price}} / 1M tokens": "Vidéo par token {{price}} / 1M tokens"
   }
 }

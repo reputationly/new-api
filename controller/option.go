@@ -258,6 +258,16 @@ func UpdateOption(c *gin.Context) {
 			})
 			return
 		}
+	case "VideoPricingConfig":
+		// 计费配置校验不过就整条拒绝——半张表生效造成的错账比保存失败糟糕得多。
+		err = ratio_setting.UpdateVideoPricingByJSONString(option.Value.(string))
+		if err != nil {
+			c.JSON(http.StatusOK, gin.H{
+				"success": false,
+				"message": "视频计费配置设置失败: " + err.Error(),
+			})
+			return
+		}
 	case "ModelRequestRateLimitGroup":
 		err = setting.CheckModelRequestRateLimitGroup(option.Value.(string))
 		if err != nil {

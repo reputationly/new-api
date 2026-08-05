@@ -676,10 +676,29 @@ type TaskRelayInfo struct {
 
 	ConsumeQuota bool
 
+	// VideoBilling 命中「视频计费矩阵」时的冻结信息（docs/video-billing-matrix-design.md）。
+	// nil 表示未命中，走原有的 EstimateBilling + ModelRatio 路径。
+	VideoBilling *VideoBillingContext
+
 	// LockedChannel holds the full channel object when the request is bound to
 	// a specific channel (e.g., remix on origin task's channel). Stored as any
 	// to avoid an import cycle with model; callers type-assert to *model.Channel.
 	LockedChannel any
+}
+
+// VideoBillingContext 提交时冻结的视频计费维度与单价。
+//
+// 必须冻结:视频任务的结算发生在几百秒后的异步轮询里，那时既没有 gin context
+// 也没有请求体，无从重新解析分辨率 / 秒数 / 是否含视频输入。
+//
+// UnitPrice 单位是**美元**——token 模式为 $/百万 tokens，per_call 模式为 $/次。
+// 货币换算只发生在管理端编辑器里，后端全程不碰汇率。
+type VideoBillingContext struct {
+	Mode          string
+	UnitPrice     float64
+	Resolution    string
+	Seconds       int
+	HasVideoInput bool
 }
 
 type TaskSubmitReq struct {

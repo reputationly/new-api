@@ -193,24 +193,37 @@ func RelayTaskSubmit(c *gin.Context, info *relaycommon.RelayInfo) (*TaskSubmitRe
 	info.OriginModelName = modelName
 	priceData, err := helper.ModelPriceHelperPerCall(c, info)
 	if err != nil {
-		return nil, service.TaskErrorWrapper(err, "model_price_error", http.StatusBadRequest)
+		// 「按次」视频矩阵可以完全脱离 legacy 价格：它在提交时就知道终价，
+		// 不该逼运营为它补一个假的 ModelPrice。token 模式仍需 ModelRatio 当预扣
+		// 锚点（否则预扣为 0 = 不查余额），缺它照旧报错。见设计文档 §2.6。
+		if !videoPerCallPriceable(c, info) {
+			return nil, service.TaskErrorWrapper(err, "model_price_error", http.StatusBadRequest)
+		}
+		priceData = types.PriceData{GroupRatioInfo: helper.HandleGroupRatio(c, info)}
 	}
 	info.PriceData = priceData
 
-	// 5. 计费估算：让适配器根据用户请求提供 OtherRatios（时长、分辨率等）
-	//    必须在 ModelPriceHelperPerCall 之后调用（它会重建 PriceData）。
-	//    ResolveOriginTask 可能已在 remix 路径中预设了 OtherRatios，此处合并。
-	if estimatedRatios := adaptor.EstimateBilling(c, info); len(estimatedRatios) > 0 {
-		for k, v := range estimatedRatios {
-			info.PriceData.AddOtherRatio(k, v)
-		}
-	}
+	// 4.5 视频计费矩阵（运营可配，见 docs/video-billing-matrix-design.md）。
+	//     命中则由矩阵接管定价，跳过下面第 5、6 步——矩阵单价已是终价，
+	//     再乘一遍适配器里硬编码的 video_input 折扣就是二次计费。
+	videoMatrixHit := applyVideoPricing(c, info)
 
-	// 6. 将 OtherRatios 应用到基础额度
-	if !common.StringsContains(constant.TaskPricePatches, modelName) {
-		for _, ra := range info.PriceData.OtherRatios {
-			if ra != 1.0 {
-				info.PriceData.Quota = int(float64(info.PriceData.Quota) * ra)
+	if !videoMatrixHit {
+		// 5. 计费估算：让适配器根据用户请求提供 OtherRatios（时长、分辨率等）
+		//    必须在 ModelPriceHelperPerCall 之后调用（它会重建 PriceData）。
+		//    ResolveOriginTask 可能已在 remix 路径中预设了 OtherRatios，此处合并。
+		if estimatedRatios := adaptor.EstimateBilling(c, info); len(estimatedRatios) > 0 {
+			for k, v := range estimatedRatios {
+				info.PriceData.AddOtherRatio(k, v)
+			}
+		}
+
+		// 6. 将 OtherRatios 应用到基础额度
+		if !common.StringsContains(constant.TaskPricePatches, modelName) {
+			for _, ra := range info.PriceData.OtherRatios {
+				if ra != 1.0 {
+					info.PriceData.Quota = int(float64(info.PriceData.Quota) * ra)
+				}
 			}
 		}
 	}

@@ -34,6 +34,7 @@ import {
   renderModelTag,
   renderModelPriceSimple,
   renderTieredModelPriceSimple,
+  renderVideoMatrixPriceSimple,
 } from '../../../helpers';
 import { quotaToPoints } from '../../../helpers/quota';
 import { IconHelpCircle } from '@douyinfe/semi-icons';
@@ -466,6 +467,11 @@ function getUsageLogDetailSummary(record, text, billingDisplayMode, t) {
 
   if (other?.billing_mode === 'tiered_expr') {
     return { segments: renderTieredModelPriceSimple(summaryOpts) };
+  }
+
+  // 视频计费矩阵：最终额度由 tokens × 单价 × 分组倍率 得出，与 model_ratio 无关。
+  if (other?.video_price_mode) {
+    return { segments: renderVideoMatrixPriceSimple(summaryOpts) };
   }
 
   return {

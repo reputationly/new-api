@@ -17,6 +17,7 @@ import (
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/relay/channel/task/taskcommon"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
+	"github.com/QuantumNous/new-api/setting/ratio_setting"
 
 	"github.com/samber/lo"
 )
@@ -577,17 +578,61 @@ func settleTaskBillingOnComplete(ctx context.Context, adaptor TaskPollingAdaptor
 	// 0. 按次计费的任务不做差额结算
 	if bc := task.PrivateData.BillingContext; bc != nil && bc.PerCallBilling {
 		logger.LogInfo(ctx, fmt.Sprintf("任务 %s 按次计费，跳过差额结算", task.TaskID))
+		warnVideoMatrixSkipped(ctx, task, "任务被判定为按次计费")
 		return
 	}
 	// 1. 优先让 adaptor 决定最终额度
 	if actualQuota := adaptor.AdjustBillingOnComplete(task, taskResult); actualQuota > 0 {
 		RecalculateTaskQuota(ctx, task, actualQuota, "adaptor计费调整")
+		warnVideoMatrixSkipped(ctx, task, "adaptor 抢先给出了额度")
+		return
+	}
+	// 1.5 视频计费矩阵（运营可配）优先于通用的 token 重算：矩阵单价已含分辨率与
+	//     视频输入两维，且不依赖 ModelRatio（模型可能配的是固定价格）。
+	if RecalculateTaskQuotaByVideoMatrix(ctx, task, videoBillableTokens(taskResult)) {
 		return
 	}
 	// 2. 回退到 token 重算
 	if taskResult.TotalTokens > 0 {
 		RecalculateTaskQuotaByTokens(ctx, task, taskResult.TotalTokens)
+		warnVideoMatrixSkipped(ctx, task, "落到了通用 token 重算")
 		return
 	}
 	// 3. 无调整，保持预扣额度
+	warnVideoMatrixSkipped(ctx, task, "上游未返回可计费的 token 用量")
+}
+
+// videoBillableTokens 视频矩阵结算用的 token 数。
+//
+// total_tokens 可能被中转商吞掉（我们已见识过它们自加请求体上限这类改动）。
+// doubao 的 usage 结构里没有 prompt_tokens（adaptor.go:95-98），视频任务也没有
+// 输入侧 token，所以 completion_tokens 就是全部用量，兜底是等价而非近似。
+//
+// 不兜的话矩阵拿到 0 直接放弃，任务按预扣的 ModelRatio/2 收费——一个与配置单价
+// 毫无关系的数，且全程无提示。
+func videoBillableTokens(taskResult *relaycommon.TaskInfo) int {
+	if taskResult == nil {
+		return 0
+	}
+	if taskResult.TotalTokens > 0 {
+		return taskResult.TotalTokens
+	}
+	return taskResult.CompletionTokens
+}
+
+// warnVideoMatrixSkipped 冻结了视频计费矩阵、结算却没走矩阵分支时喊一声。
+//
+// 从「矩阵已配置」到「矩阵真的结算」中间有十来道守卫（见
+// docs/video-billing-matrix-design.md §2.4），任何一道关上，矩阵都会**静默**失效、
+// 任务按预扣额度收费。这条 WARN 是最后一道网：将来再多出一道门，线上会喊，
+// 而不是等对账差额被人发现。
+func warnVideoMatrixSkipped(ctx context.Context, task *model.Task, reason string) {
+	bc := task.PrivateData.BillingContext
+	if bc == nil || bc.VideoBilling == nil || bc.VideoBilling.Mode != ratio_setting.VideoPriceModeToken {
+		return
+	}
+	logger.LogWarn(ctx, fmt.Sprintf(
+		"任务 %s 已冻结视频计费矩阵(%s/%s，单价 %g)，但结算未走矩阵：%s。本单按预扣额度 %d 收费，请核对对账差额。",
+		task.TaskID, bc.VideoBilling.Resolution, videoInputLabel(bc.VideoBilling.HasVideoInput),
+		bc.VideoBilling.UnitPrice, reason, task.Quota))
 }

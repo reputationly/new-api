@@ -90,6 +90,25 @@ func TestConvertToRequestPayloadMapsTopLevelSizeAndDuration(t *testing.T) {
 	})
 }
 
+// 计费矩阵按分辨率档位查价,发给上游的也是分辨率档位——两者必须是同一个数,
+// 否则会出现「按 720p 收费、实际生成 1080p」这类静默错账。
+// 这条断言钉住 applyTopLevelSize 与 relaycommon.VideoResolutionTier 不分叉。
+func TestResolutionTierMatchesBillingResolver(t *testing.T) {
+	a := &TaskAdaptor{}
+	for _, size := range []string{
+		"720P", "1080p", "4K", "480P",
+		"1280x720", "1920x1080", "1080x1920", "854x480", "640x360", "3840x2160",
+		"16:9", "9:16", "", "abc",
+	} {
+		r, err := a.convertToRequestPayload(&relaycommon.TaskSubmitReq{
+			Model: "doubao-seedance-2-0-260128", Prompt: "x", Size: size,
+		})
+		require.NoErrorf(t, err, "size=%q", size)
+		require.Equalf(t, relaycommon.VideoResolutionTier(size), r.Resolution,
+			"size=%q：计费档位与上游请求档位不一致", size)
+	}
+}
+
 // Ark 靠 content[].role 区分首帧/尾帧/多模态参考,不带 role 的多图上游无法解释。
 func TestConvertToRequestPayloadAssignsContentRoles(t *testing.T) {
 	a := &TaskAdaptor{}

@@ -135,6 +135,25 @@ type TaskBillingContext struct {
 	OtherRatios     map[string]float64 `json:"other_ratios,omitempty"`      // 附加倍率（时长、分辨率等）
 	OriginModelName string             `json:"origin_model_name,omitempty"` // 模型名称，必须为OriginModelName
 	PerCallBilling  bool               `json:"per_call_billing,omitempty"`  // 按次计费：跳过轮询阶段的差额结算
+
+	// VideoBilling 命中「视频计费矩阵」时的冻结单价与维度。nil（旧任务、未配置的模型）
+	// 时轮询阶段走原有的 ModelRatio × OtherRatios 路径。
+	VideoBilling *TaskVideoBilling `json:"video_billing,omitempty"`
+}
+
+// TaskVideoBilling 视频计费矩阵在提交时冻结的结果。
+//
+// 冻结是必需的：视频任务的结算发生在几百秒后的异步轮询里，那时既没有 gin context
+// 也没有请求体，无从重新解析分辨率 / 秒数 / 是否含视频输入。
+//
+// UnitPrice 单位是**美元**——token 模式为 $/百万 tokens，per_call 模式为 $/次。
+// 货币换算只发生在管理端编辑器里，后端全程不碰汇率。
+type TaskVideoBilling struct {
+	Mode          string  `json:"mode,omitempty"`
+	UnitPrice     float64 `json:"unit_price,omitempty"`
+	Resolution    string  `json:"resolution,omitempty"`
+	Seconds       int     `json:"seconds,omitempty"`
+	HasVideoInput bool    `json:"has_video_input,omitempty"`
 }
 
 // GetUpstreamTaskID 获取上游真实 task ID（用于与 provider 通信）

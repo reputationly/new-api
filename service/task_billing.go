@@ -14,6 +14,49 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
+// IsTaskPerCallBilling 判定任务是否「按次/按个」计费。
+//
+// **这是唯一的判定入口**：轮询期是否跳过差额结算（TaskBillingContext.PerCallBilling）、
+// 消费日志是否标 count_billing（对账据此按「个」计数），都必须走它。
+//
+// 此前这套逻辑在 controller 与 service 各写了一份、靠注释约束「保持一致」，
+// 结果给视频矩阵改了 controller 那一份、漏了这一份，对账把一单 20 万 token 的
+// 视频任务算成了 1 个计件。收成一个函数就消掉了这个约束本身。
+//
+// token 模式的视频矩阵必须走轮询期差额结算，故两个来源都要屏蔽：
+//   - PriceData.UsePrice —— 已由 applyVideoPricing 在提交侧清零，这里是纵深
+//   - TaskPricePatches   —— 环境变量 TASK_PRICE_PATCH 里的模型名单
+func IsTaskPerCallBilling(info *relaycommon.RelayInfo) bool {
+	if info == nil {
+		return false
+	}
+	if info.TaskRelayInfo != nil && info.VideoBilling != nil &&
+		info.VideoBilling.Mode == ratio_setting.VideoPriceModeToken {
+		return false
+	}
+	return common.StringsContains(constant.TaskPricePatches, info.OriginModelName) ||
+		info.PriceData.UsePrice
+}
+
+// fillVideoBillingOther 把视频计费矩阵命中的那一格写进日志 other。
+//
+// 提交侧的消费日志（LogTaskConsumption）与结算/退款日志（taskBillingOther）都要填：
+// 差额为 0 时不写结算日志、per_call 模式压根不走结算，那些情况下主消费记录是
+// 唯一的记录。缺了这组字段，前端 usage-log 的矩阵分支不会触发，会退回去显示一个
+// 没参与计算的 model_ratio。
+func fillVideoBillingOther(other map[string]interface{}, mode, resolution string, unitPrice float64, hasVideoInput bool, seconds int) {
+	if mode == "" {
+		return
+	}
+	other["video_price_mode"] = mode
+	other["video_unit_price"] = unitPrice
+	other["video_resolution"] = resolution
+	other["video_has_input"] = hasVideoInput
+	if seconds > 0 {
+		other["video_seconds"] = seconds
+	}
+}
+
 // LogTaskConsumption 记录任务消费日志和统计信息（仅记录，不涉及实际扣费）。
 // 实际扣费已由 BillingSession（PreConsumeBilling + SettleBilling）完成。
 func LogTaskConsumption(c *gin.Context, info *relaycommon.RelayInfo) {
@@ -37,11 +80,15 @@ func LogTaskConsumption(c *gin.Context, info *relaycommon.RelayInfo) {
 	}
 	other := make(map[string]interface{})
 	other["is_task"] = true
-	// 仅「按次/按个」任务（TaskPricePatches 命中或固定价格）供方才按「个」计费，需打
-	// count_billing 供对账归类。token 计费任务（PerCallBilling=false，走轮询 token 重算）
-	// 必须保留 token 用量，不能标计件。此判定与 controller/relay.go 的 PerCallBilling 定义一致。
-	if common.StringsContains(constant.TaskPricePatches, info.OriginModelName) || info.PriceData.UsePrice {
+	// 仅「按次/按个」任务才按「个」计费，需打 count_billing 供对账归类
+	// （reconcile_helpers.go 据此把整单算作 TokensCount=1）。token 计费任务必须保留
+	// token 用量，不能标计件——判定与 TaskBillingContext.PerCallBilling 同源。
+	if IsTaskPerCallBilling(info) {
 		other["count_billing"] = true
+	}
+	if info.TaskRelayInfo != nil && info.VideoBilling != nil {
+		vb := info.VideoBilling
+		fillVideoBillingOther(other, vb.Mode, vb.Resolution, vb.UnitPrice, vb.HasVideoInput, vb.Seconds)
 	}
 	other["request_path"] = c.Request.URL.Path
 	other["model_price"] = info.PriceData.ModelPrice
@@ -183,6 +230,11 @@ func taskBillingOther(task *model.Task) map[string]interface{} {
 				other[k] = v
 			}
 		}
+		// 视频计费矩阵命中时把查到哪一格也记进日志——否则运营对着一条金额
+		// 无从判断是取了 720p 还是 1080p、含不含视频输入，对账就没法追。
+		if vb := bc.VideoBilling; vb != nil {
+			fillVideoBillingOther(other, vb.Mode, vb.Resolution, vb.UnitPrice, vb.HasVideoInput, vb.Seconds)
+		}
 	}
 	props := task.Properties
 	if props.UpstreamModelName != "" && props.UpstreamModelName != props.OriginModelName {
@@ -320,26 +372,9 @@ func RecalculateTaskQuotaByTokens(ctx context.Context, task *model.Task, totalTo
 		return
 	}
 
-	// 获取用户和组的倍率信息
-	group := task.Group
-	if group == "" {
-		user, err := model.GetUserById(task.UserId, false)
-		if err == nil {
-			group = user.Group
-		}
-	}
-	if group == "" {
+	finalGroupRatio, ok := taskGroupRatio(task)
+	if !ok {
 		return
-	}
-
-	groupRatio := ratio_setting.GetGroupRatio(group)
-	userGroupRatio, hasUserGroupRatio := ratio_setting.GetGroupGroupRatio(group, group)
-
-	var finalGroupRatio float64
-	if hasUserGroupRatio {
-		finalGroupRatio = userGroupRatio
-	} else {
-		finalGroupRatio = groupRatio
 	}
 
 	// 计算 OtherRatios 乘积（视频折扣、时长等）
@@ -357,4 +392,78 @@ func RecalculateTaskQuotaByTokens(ctx context.Context, task *model.Task, totalTo
 
 	reason := fmt.Sprintf("token重算：tokens=%d, modelRatio=%.2f, groupRatio=%.2f, otherMultiplier=%.4f", totalTokens, modelRatio, finalGroupRatio, otherMultiplier)
 	RecalculateTaskQuota(ctx, task, actualQuota, reason)
+}
+
+// taskGroupRatio 解析任务的最终分组倍率。task.Group 为空时回查用户当前分组。
+func taskGroupRatio(task *model.Task) (float64, bool) {
+	group := task.Group
+	if group == "" {
+		user, err := model.GetUserById(task.UserId, false)
+		if err == nil {
+			group = user.Group
+		}
+	}
+	if group == "" {
+		return 0, false
+	}
+	if userGroupRatio, ok := ratio_setting.GetGroupGroupRatio(group, group); ok {
+		return userGroupRatio, true
+	}
+	return ratio_setting.GetGroupRatio(group), true
+}
+
+// RecalculateTaskQuotaByVideoMatrix 按提交时冻结的视频计费矩阵单价做差额结算。
+// 设计见 docs/video-billing-matrix-design.md。
+//
+//	quota = tokens ÷ 1e6 × 单价($/百万 tokens) × QuotaPerUnit × groupRatio
+//
+// 与 RecalculateTaskQuotaByTokens 的三点区别，都是刻意的：
+//   - **不读 GetModelRatio**：模型可能配的是固定价格（hasRatioSetting=false），
+//     那条路径会直接 return，导致 480p 与 1080p 收一样的钱。
+//   - **不乘 OtherRatios**：矩阵单价已是终价，再乘一遍适配器的 video_input 折扣是二次计费。
+//   - **不碰汇率**：单价是美元，货币换算只发生在管理端编辑器里。
+func RecalculateTaskQuotaByVideoMatrix(ctx context.Context, task *model.Task, totalTokens int) bool {
+	if totalTokens <= 0 {
+		return false
+	}
+	bc := task.PrivateData.BillingContext
+	if bc == nil || bc.VideoBilling == nil {
+		return false
+	}
+	vb := bc.VideoBilling
+	if vb.Mode != ratio_setting.VideoPriceModeToken || vb.UnitPrice <= 0 {
+		return false
+	}
+
+	// 用**提交时冻结**的分组倍率，不重新解析。三个理由：
+	//  1. 重新解析会丢信息：提交时用的是 GetGroupGroupRatio(用户分组, 使用分组)，
+	//     而这里只有 task.Group（= 使用分组），拿它当两个参数传会漏掉
+	//     「用户分组 × 使用分组」的特殊倍率，跨分组用户的结算金额与预扣对不上。
+	//  2. 结算发生在几百秒后，其间管理员改了倍率配置就会让同一单前后两个价。
+	//  3. 日志里 other["group_ratio"] 写的就是这个冻结值，用它才能自洽——
+	//     否则运营按日志上的倍率反算金额永远对不上。
+	//
+	// 不做「为 0 就回退重查」的兜底：VideoBilling 只由本次新增的冻结逻辑写入，
+	// 那条路径上 GroupRatio 必然同时落库（controller/relay.go），所以 0 一定是
+	// 「免费分组」这个合法值（见 ModelPriceHelperPerCall 的 groupRatio==0 免费分支），
+	// 不是「没冻结过」。当成缺失去重查会把 GroupGroupRatio 里的 0 折算回 1.0，
+	// 对一单提交时免费的任务按原价补扣。
+	finalGroupRatio := bc.GroupRatio
+	if finalGroupRatio < 0 {
+		return false
+	}
+
+	actualQuota := int(float64(totalTokens) / 1e6 * vb.UnitPrice * common.QuotaPerUnit * finalGroupRatio)
+
+	reason := fmt.Sprintf("视频矩阵重算：tokens=%d, %s/%s, unitPrice=%g, groupRatio=%.2f",
+		totalTokens, vb.Resolution, videoInputLabel(vb.HasVideoInput), vb.UnitPrice, finalGroupRatio)
+	RecalculateTaskQuota(ctx, task, actualQuota, reason)
+	return true
+}
+
+func videoInputLabel(hasVideo bool) string {
+	if hasVideo {
+		return ratio_setting.VideoPriceKeyWithVideo
+	}
+	return ratio_setting.VideoPriceKeyWithoutVideo
 }

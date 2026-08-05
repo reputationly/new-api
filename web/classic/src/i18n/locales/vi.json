@@ -4552,6 +4552,24 @@
     "音频秒数": "Số giây âm thanh",
     "音频时长 {{sec}} 秒，超过上限 {{max}} 秒": "Âm thanh dài {{sec}} giây, vượt giới hạn {{max}} giây",
     "自建流水线": "Pipeline tự triển khai",
-    "「自建流水线」只给跑在自建 gpustackplus 引擎上的模型开：开启后该模型在体验区选 1080P 会先按 480P 生成再自动调用超分模型(两笔额度/积分消耗)，并可接自动配音段、显示插帧开关(target_fps)。第三方渠道模型不要开——它们原生支持 1080P 直出、也不认识 target_fps，关闭时体验区把尺寸等参数原样透传给上游。": "Chỉ bật «Pipeline tự triển khai» cho các model chạy trên engine gpustackplus tự dựng: khi bật, chọn 1080P trong playground sẽ tạo ở 480P trước rồi tự động gọi model upscale (tính phí hạn mức/điểm hai lần), có thể nối thêm bước lồng tiếng tự động và hiển thị công tắc nội suy khung hình (target_fps). Đừng bật cho model của kênh bên thứ ba — chúng hỗ trợ xuất 1080P gốc và không hiểu target_fps; khi tắt, playground truyền thẳng kích thước và các tham số khác lên upstream."
+    "「自建流水线」只给跑在自建 gpustackplus 引擎上的模型开：开启后该模型在体验区选 1080P 会先按 480P 生成再自动调用超分模型(两笔额度/积分消耗)，并可接自动配音段、显示插帧开关(target_fps)。第三方渠道模型不要开——它们原生支持 1080P 直出、也不认识 target_fps，关闭时体验区把尺寸等参数原样透传给上游。": "Chỉ bật «Pipeline tự triển khai» cho các model chạy trên engine gpustackplus tự dựng: khi bật, chọn 1080P trong playground sẽ tạo ở 480P trước rồi tự động gọi model upscale (tính phí hạn mức/điểm hai lần), có thể nối thêm bước lồng tiếng tự động và hiển thị công tắc nội suy khung hình (target_fps). Đừng bật cho model của kênh bên thứ ba — chúng hỗ trợ xuất 1080P gốc và không hiểu target_fps; khi tắt, playground truyền thẳng kích thước và các tham số khác lên upstream.",
+    "输入不含视频": "Đầu vào không có video",
+    "输入包含视频": "Đầu vào có video",
+    "分辨率": "Độ phân giải",
+    "留空即不配置": "Để trống nếu không cấu hình",
+    "请先添加分辨率": "Hãy thêm độ phân giải trước",
+    "视频计费配置": "Cấu hình tính phí video",
+    "按「分辨率 × 输入是否含视频」或「分辨率 × 秒数」为视频模型定价，与供应商价目表逐格对应，可直接对抄。未配置的模型完全走原有的模型倍率/固定价格路径，不受影响。": "Định giá mô hình video theo \"độ phân giải × đầu vào có video hay không\" hoặc \"độ phân giải × số giây\". Bảng tương ứng từng ô với bảng giá của nhà cung cấp nên có thể chép trực tiếp. Các mô hình chưa cấu hình vẫn dùng đường tính phí cũ (hệ số mô hình / giá cố định) và không bị ảnh hưởng.",
+    "「按 Token」用于上游会返回用量的模型（如 Seedance）：填每百万 tokens 的价格，结算时按上游实际返回的 token 数计费。注意秒数已隐含在 token 里，无需也不应再按秒数缩放。「按次」用于不返回 token 的模型（如 Kling）：填单次生成的价格，提交时即定价。": "\"Theo token\" dùng cho các mô hình mà upstream trả về mức sử dụng (như Seedance): nhập giá cho mỗi triệu token, quyết toán theo số token upstream thực trả. Lưu ý số giây đã nằm trong số token nên không được nhân thêm theo giây. \"Theo lượt\" dùng cho các mô hình không trả token (như Kling): nhập giá một lần tạo, chốt ngay khi gửi yêu cầu.",
+    "价格单位为人民币（¥），按运营设置的「美元兑人民币汇率」{{rate}} 折算为美元存储；显示保留 2 位小数，存储仍为高精度，计费不受影响。若日志按人民币展示，同一汇率下账单金额与此处填的价格逐格对应。": "Giá tính bằng Nhân dân tệ (¥) và được quy đổi sang USD để lưu trữ theo \"tỷ giá USD/CNY\" ({{rate}}) trong cài đặt vận hành. Hiển thị giữ 2 chữ số thập phân còn lưu trữ vẫn ở độ chính xác cao nên không ảnh hưởng tới tính phí. Nếu nhật ký hiển thị bằng Nhân dân tệ thì với cùng tỷ giá, số tiền hóa đơn khớp từng ô với giá nhập ở đây.",
+    "暂无视频计费配置，请添加": "Chưa có cấu hình tính phí video, hãy thêm",
+    "按 Token": "Theo token",
+    "分辨率，如 720p": "Độ phân giải, ví dụ 720p",
+    "秒数，如 5": "Số giây, ví dụ 5",
+    "单位：¥ / 百万 tokens": "Đơn vị: ¥ / 1 triệu token",
+    "单位：¥ / 次": "Đơn vị: ¥ / lượt",
+    "{{seconds}} 秒": "{{seconds}} giây",
+    "视频按次 {{price}}": "Video theo lượt {{price}}",
+    "视频按量 {{price}} / 1M tokens": "Video theo token {{price}} / 1 triệu token"
   }
 }

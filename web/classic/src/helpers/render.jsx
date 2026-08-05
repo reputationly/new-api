@@ -2464,6 +2464,50 @@ export function renderTieredModelPriceSimple(opts) {
   return [];
 }
 
+// 视频计费矩阵（docs/video-billing-matrix-design.md）的计费过程展示。
+//
+// 必须单独渲染：这类任务的实际公式是 tokens ÷ 1M × 单价 × 分组倍率，
+// 而 renderModelPriceSimple 只会展示 model_ratio —— 那个倍率只参与预扣、
+// 没有参与最终扣费，照它展示等于给运营一个反算不出金额的数字。
+export function renderVideoMatrixPriceSimple(opts) {
+  const {
+    video_price_mode: mode,
+    video_unit_price: unitPrice = 0,
+    video_resolution: resolution,
+    video_has_input: hasVideoInput = false,
+    video_seconds: seconds,
+    group_ratio: groupRatio,
+    user_group_ratio,
+  } = opts;
+
+  const dimension = [
+    resolution,
+    mode === 'per_call'
+      ? seconds && i18next.t('{{seconds}} 秒', { seconds })
+      : hasVideoInput
+        ? i18next.t('输入包含视频')
+        : i18next.t('输入不含视频'),
+  ]
+    .filter(Boolean)
+    .join(' · ');
+
+  return [
+    { tone: 'primary', text: getGroupRatioText(groupRatio, user_group_ratio) },
+    dimension ? { tone: 'primary', text: dimension } : null,
+    {
+      tone: 'secondary',
+      text:
+        mode === 'per_call'
+          ? i18next.t('视频按次 {{price}}', {
+              price: formatCompactDisplayPrice(unitPrice),
+            })
+          : i18next.t('视频按量 {{price}} / 1M tokens', {
+              price: formatCompactDisplayPrice(unitPrice),
+            }),
+    },
+  ].filter(Boolean);
+}
+
 export function renderModelPriceSimple(opts) {
   const {
     model_ratio: modelRatio,

@@ -4485,6 +4485,24 @@
     "音频秒数": "Audio sec",
     "音频时长 {{sec}} 秒，超过上限 {{max}} 秒": "Audio is {{sec}}s, exceeding the {{max}}s limit",
     "自建流水线": "Self-hosted pipeline",
-    "「自建流水线」只给跑在自建 gpustackplus 引擎上的模型开：开启后该模型在体验区选 1080P 会先按 480P 生成再自动调用超分模型(两笔额度/积分消耗)，并可接自动配音段、显示插帧开关(target_fps)。第三方渠道模型不要开——它们原生支持 1080P 直出、也不认识 target_fps，关闭时体验区把尺寸等参数原样透传给上游。": "Enable \"Self-hosted pipeline\" only for models running on your own gpustackplus engine: when on, choosing 1080P in the playground first generates at 480P and then automatically calls the upscale model (two separate quota/point charges), the auto-dubbing stage can be appended, and the frame-interpolation switch (target_fps) is shown. Leave it off for third-party channel models — they output 1080P natively and do not understand target_fps; when off, the playground passes size and other parameters through to the upstream unchanged."
+    "「自建流水线」只给跑在自建 gpustackplus 引擎上的模型开：开启后该模型在体验区选 1080P 会先按 480P 生成再自动调用超分模型(两笔额度/积分消耗)，并可接自动配音段、显示插帧开关(target_fps)。第三方渠道模型不要开——它们原生支持 1080P 直出、也不认识 target_fps，关闭时体验区把尺寸等参数原样透传给上游。": "Enable \"Self-hosted pipeline\" only for models running on your own gpustackplus engine: when on, choosing 1080P in the playground first generates at 480P and then automatically calls the upscale model (two separate quota/point charges), the auto-dubbing stage can be appended, and the frame-interpolation switch (target_fps) is shown. Leave it off for third-party channel models — they output 1080P natively and do not understand target_fps; when off, the playground passes size and other parameters through to the upstream unchanged.",
+    "输入不含视频": "Input without video",
+    "输入包含视频": "Input with video",
+    "分辨率": "Resolution",
+    "留空即不配置": "Leave blank to skip",
+    "请先添加分辨率": "Add a resolution first",
+    "视频计费配置": "Video Billing Config",
+    "按「分辨率 × 输入是否含视频」或「分辨率 × 秒数」为视频模型定价，与供应商价目表逐格对应，可直接对抄。未配置的模型完全走原有的模型倍率/固定价格路径，不受影响。": "Price video models by \"resolution × whether the input contains video\" or \"resolution × seconds\". The grid maps one-to-one to the provider's price list, so you can copy it cell by cell. Models left unconfigured keep using the existing model ratio / fixed price path and are unaffected.",
+    "「按 Token」用于上游会返回用量的模型（如 Seedance）：填每百万 tokens 的价格，结算时按上游实际返回的 token 数计费。注意秒数已隐含在 token 里，无需也不应再按秒数缩放。「按次」用于不返回 token 的模型（如 Kling）：填单次生成的价格，提交时即定价。": "\"Per token\" is for models whose upstream returns usage (e.g. Seedance): enter the price per million tokens; settlement uses the token count the upstream actually returns. Note that duration is already baked into the token count, so it must not be scaled by seconds again. \"Per request\" is for models that return no tokens (e.g. Kling): enter the price of a single generation, fixed at submit time.",
+    "价格单位为人民币（¥），按运营设置的「美元兑人民币汇率」{{rate}} 折算为美元存储；显示保留 2 位小数，存储仍为高精度，计费不受影响。若日志按人民币展示，同一汇率下账单金额与此处填的价格逐格对应。": "Prices are in CNY (¥) and are converted to USD for storage using the \"USD to CNY exchange rate\" ({{rate}}) from operation settings. Display keeps 2 decimals while storage stays high-precision, so billing is unaffected. When logs are shown in CNY, at the same rate the billed amount matches these prices cell by cell.",
+    "暂无视频计费配置，请添加": "No video billing config yet, please add one",
+    "按 Token": "Per token",
+    "分辨率，如 720p": "Resolution, e.g. 720p",
+    "秒数，如 5": "Seconds, e.g. 5",
+    "单位：¥ / 百万 tokens": "Unit: ¥ / 1M tokens",
+    "单位：¥ / 次": "Unit: ¥ / request",
+    "{{seconds}} 秒": "{{seconds}}s",
+    "视频按次 {{price}}": "Video per request {{price}}",
+    "视频按量 {{price}} / 1M tokens": "Video per token {{price}} / 1M tokens"
   }
 }
