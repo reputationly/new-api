@@ -15,6 +15,9 @@
 
 /* ==================== 全局基础样式 ==================== */
 :root {
+  /* 站点只有浅色一套皮肤，禁止浏览器夜间模式自动反色，详见 index.html 的同名 meta */
+  color-scheme: only light;
+
   --sidebar-width: 180px;
   --sidebar-width-collapsed: 60px;
   --sidebar-current-width: var(--sidebar-width);

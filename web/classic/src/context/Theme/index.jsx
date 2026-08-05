@@ -17,13 +17,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 
-import {
-  createContext,
-  useCallback,
-  useContext,
-  useState,
-  useEffect,
-} from 'react';
+import { createContext, useCallback, useContext, useEffect } from 'react';
 
 const ThemeContext = createContext(null);
 export const useTheme = () => useContext(ThemeContext);
@@ -34,80 +28,33 @@ export const useActualTheme = () => useContext(ActualThemeContext);
 const SetThemeContext = createContext(null);
 export const useSetTheme = () => useContext(SetThemeContext);
 
-// 检测系统主题偏好
-const getSystemTheme = () => {
-  if (typeof window !== 'undefined' && window.matchMedia) {
-    return window.matchMedia('(prefers-color-scheme: dark)').matches
-      ? 'dark'
-      : 'light';
-  }
-  return 'light';
-};
+// 站点只维护浅色一套皮肤：深色变体的组件覆盖长期没跟上，切过去会出现底色变黑、
+// 但卡片和按钮仍是浅色前景的错配，因此顶栏的主题切换入口已下线。
+//
+// 注意这里不能只藏入口 —— 此前把 theme-mode 存成 dark（或 auto 且系统是深色）的老用户，
+// 一旦入口消失就永远卡在深色里、再没有切回来的办法。所以主题在 Provider 层直接钉死为
+// light，并清掉历史残留值；三个 context 依旧导出，消费方（如首页 iframe 主题同步）
+// 拿到的恒为 'light'，无需改动。
+const THEME = 'light';
 
 export const ThemeProvider = ({ children }) => {
-  const [theme, _setTheme] = useState(() => {
+  useEffect(() => {
+    document.body.removeAttribute('theme-mode');
+    document.documentElement.classList.remove('dark');
     try {
-      return localStorage.getItem('theme-mode') || 'auto';
+      localStorage.removeItem('theme-mode');
     } catch {
-      return 'auto';
-    }
-  });
-
-  const [systemTheme, setSystemTheme] = useState(getSystemTheme());
-
-  // 计算实际应用的主题
-  const actualTheme = theme === 'auto' ? systemTheme : theme;
-
-  // 监听系统主题变化
-  useEffect(() => {
-    if (typeof window !== 'undefined' && window.matchMedia) {
-      const mediaQuery = window.matchMedia('(prefers-color-scheme: dark)');
-
-      const handleSystemThemeChange = (e) => {
-        setSystemTheme(e.matches ? 'dark' : 'light');
-      };
-
-      mediaQuery.addEventListener('change', handleSystemThemeChange);
-
-      return () => {
-        mediaQuery.removeEventListener('change', handleSystemThemeChange);
-      };
+      // 隐私模式下 localStorage 不可写，忽略即可
     }
   }, []);
 
-  // 应用主题到DOM
-  useEffect(() => {
-    const body = document.body;
-    if (actualTheme === 'dark') {
-      body.setAttribute('theme-mode', 'dark');
-      document.documentElement.classList.add('dark');
-    } else {
-      body.removeAttribute('theme-mode');
-      document.documentElement.classList.remove('dark');
-    }
-  }, [actualTheme]);
-
-  const setTheme = useCallback((newTheme) => {
-    let themeValue;
-
-    if (typeof newTheme === 'boolean') {
-      // 向后兼容原有的 boolean 参数
-      themeValue = newTheme ? 'dark' : 'light';
-    } else if (typeof newTheme === 'string') {
-      // 新的字符串参数支持 'light', 'dark', 'auto'
-      themeValue = newTheme;
-    } else {
-      themeValue = 'auto';
-    }
-
-    _setTheme(themeValue);
-    localStorage.setItem('theme-mode', themeValue);
-  }, []);
+  // 保留 setter 形状，避免残存调用方炸掉；调用无副作用
+  const setTheme = useCallback(() => {}, []);
 
   return (
     <SetThemeContext.Provider value={setTheme}>
-      <ActualThemeContext.Provider value={actualTheme}>
-        <ThemeContext.Provider value={theme}>{children}</ThemeContext.Provider>
+      <ActualThemeContext.Provider value={THEME}>
+        <ThemeContext.Provider value={THEME}>{children}</ThemeContext.Provider>
       </ActualThemeContext.Provider>
     </SetThemeContext.Provider>
   );

@@ -42,11 +42,9 @@ const HeaderBar = ({ onMobileMenuToggle, drawerOpen }) => {
     docsLink,
     isDemoSiteMode,
     isConsoleRoute,
-    theme,
     headerNavModules,
     pricingRequireAuth,
     logout,
-    handleThemeToggle,
     handleMobileMenuToggle,
     navigate,
     t,
@@ -109,8 +107,6 @@ const HeaderBar = ({ onMobileMenuToggle, drawerOpen }) => {
             isNewYear={isNewYear}
             unreadCount={unreadCount}
             onNoticeOpen={handleNoticeOpen}
-            theme={theme}
-            onThemeToggle={handleThemeToggle}
             userState={userState}
             isLoading={isLoading}
             isMobile={isMobile}

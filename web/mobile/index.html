@@ -9,6 +9,16 @@
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-title" content="New API" />
     <meta name="theme-color" content="#ffffff" />
+    <!--
+      移动端只做浅色一套配色：页面里没有任何 dark 变体样式，一旦浏览器（夸克 / UC /
+      Chrome 的「夜间模式」「强制深色」）自作主张把页面反色，就会出现底色被刷黑、
+      而按钮和卡片沿用浅色前景的错配。这里显式声明只支持浅色，让浏览器放弃自动反色：
+      color-scheme=only light 是标准写法（Chromium Auto Dark Theme / Safari 认），
+      nightmode=disable 是 UC/夸克 U4 内核的私有开关，两个都给上。
+      同样的声明在 src/index.css 的 :root 里也写了一份，防止 meta 被中间层改写时失效。
+    -->
+    <meta name="color-scheme" content="only light" />
+    <meta name="nightmode" content="disable" />
     <link rel="icon" href="/m/favicon.ico" />
     <link rel="apple-touch-icon" href="/m/icon-192.png" />
     <!-- 手写而非由 vite-plugin-pwa 注入：清单由服务端按运营配置实时生成，见 vite.config.js -->

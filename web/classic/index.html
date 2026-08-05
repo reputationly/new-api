@@ -5,6 +5,14 @@
     <link rel="icon" href="/logo.png" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="theme-color" content="#ffffff" />
+    <!--
+      站点只维护浅色一套皮肤（主题切换入口已下线，见 src/context/Theme），这里显式声明
+      只支持浅色，免得浏览器的「夜间模式 / 强制深色」自作主张反色 —— 那样只有底色被刷黑、
+      卡片和按钮仍是浅色前景，反而更花。color-scheme 是标准写法，nightmode 是 UC/夸克
+      U4 内核的私有开关。同样的声明在 src/index.css 的 :root 里也有一份。
+    -->
+    <meta name="color-scheme" content="only light" />
+    <meta name="nightmode" content="disable" />
     <meta
       name="description"
       lang="zh"

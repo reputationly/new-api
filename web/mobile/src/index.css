@@ -1,4 +1,7 @@
 :root {
+  /* 移动端只有浅色一套皮肤，禁止浏览器夜间模式自动反色，详见 index.html 的同名 meta */
+  color-scheme: only light;
+
   --safe-area-inset-top: env(safe-area-inset-top, 0px);
   --safe-area-inset-bottom: env(safe-area-inset-bottom, 0px);
 
