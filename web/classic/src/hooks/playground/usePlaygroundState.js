@@ -189,6 +189,8 @@ export const usePlaygroundState = () => {
   const chatRef = useRef(null);
   const saveConfigTimeoutRef = useRef(null);
   const saveMessagesTimeoutRef = useRef(null);
+  // 防抖窗口内待落盘的配置，卸载时据此补写，见下方 debouncedSaveConfig 与清理 effect
+  const pendingConfigRef = useRef(null);
 
   // 配置更新函数
   const handleInputChange = useCallback((name, value) => {
@@ -220,15 +222,18 @@ export const usePlaygroundState = () => {
       clearTimeout(saveConfigTimeoutRef.current);
     }
 
+    pendingConfigRef.current = {
+      inputs,
+      parameterEnabled,
+      showDebugPanel,
+      customRequestMode,
+      customRequestBody,
+    };
+
     saveConfigTimeoutRef.current = setTimeout(() => {
-      const configToSave = {
-        inputs,
-        parameterEnabled,
-        showDebugPanel,
-        customRequestMode,
-        customRequestBody,
-      };
-      saveConfig(configToSave);
+      saveConfig(pendingConfigRef.current);
+      pendingConfigRef.current = null;
+      saveConfigTimeoutRef.current = null;
     }, 1000);
   }, [
     inputs,
@@ -289,11 +294,18 @@ export const usePlaygroundState = () => {
     }
   }, []);
 
-  // 清理定时器
+  // 清理定时器。卸载时不能只 clearTimeout 就走人——那会把防抖窗口内还没落盘的配置直接
+  // 丢掉，用户刚改完模型就退出页面等于白改。手机端尤其明显（选完模型 1 秒内点返回是常态），
+  // 所以这里补写一次再清。
   useEffect(() => {
     return () => {
       if (saveConfigTimeoutRef.current) {
         clearTimeout(saveConfigTimeoutRef.current);
+        saveConfigTimeoutRef.current = null;
+      }
+      if (pendingConfigRef.current) {
+        saveConfig(pendingConfigRef.current);
+        pendingConfigRef.current = null;
       }
     };
   }, []);

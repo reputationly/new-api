@@ -1,4 +1,4 @@
-import React, { useContext } from 'react';
+import React, { useContext, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Button, Collapse, NavBar } from 'antd-mobile';
 
@@ -41,6 +41,7 @@ const Chat = () => {
     sseSourceRef,
     saveMessagesImmediately,
     handleInputChange,
+    debouncedSaveConfig,
     models,
     groups,
   } = state;
@@ -61,6 +62,15 @@ const Chat = () => {
     setGroups,
     setModelEndpointTypes,
   );
+
+  // usePlaygroundState 只在挂载时 loadConfig() 读一次，回存要调用方自己接。手机端此前
+  // 漏了这一半（classic 是在 pages/Playground/index.jsx 的 effect 里接的），于是选过的
+  // 模型/分组从没落盘，每次进对话页 inputs 都回落 DEFAULT_CONFIG，表现为模型总是默认值。
+  // 与 classic 同策略：inputs 变化即防抖回存；两端共用 playground_config 这一个 key，
+  // 未在手机端暴露的字段（parameterEnabled 等）由 loadConfig 原样带出再原样写回。
+  useEffect(() => {
+    debouncedSaveConfig();
+  }, [inputs, debouncedSaveConfig]);
 
   const lastMessage = message[message.length - 1];
   const generating =
