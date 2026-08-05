@@ -98,6 +98,10 @@ var defaultModelRatio = map[string]float64{
 	"gpt-5-mini-2025-08-07":            0.125,
 	"gpt-5-nano":                       0.025,
 	"gpt-5-nano-2025-08-07":            0.025,
+	"gpt-5.5":                          2.5, // $5 / 1M tokens
+	"gpt-5.6-sol":                      2.5,
+	"gpt-5.6-terra":                    1.25,
+	"gpt-5.6-luna":                     0.5,
 	//"gpt-3.5-turbo-0301":           0.75, //deprecated
 	"gpt-3.5-turbo":          0.25,
 	"gpt-3.5-turbo-0613":     0.75,
@@ -521,8 +525,17 @@ func getHardcodedCompletionModelRatio(name string) (float64, bool) {
 		}
 		// gpt-5 匹配
 		if strings.HasPrefix(name, "gpt-5") {
-			if strings.HasPrefix(name, "gpt-5.5") {
-				return 6, true
+			if !strings.Contains(name, ".") {
+				return 8, true
+			}
+			// 有意偏离上游：上游只用 Contains(".") 挡无点的 gpt-5 系,带点的 5.1/5.2/5.3
+			// 会直接落到下面的 6/unlocked,补全倍率从 8 掉到 6(少计费 25%)且变成可被运营
+			// 覆盖。而这几个版本仍在 relay/channel/openai/constant.go 里对外提供,不能跟着
+			// 降。这里显式挡回原来的 8/locked,只让 5.4 起的新模型走下面的新规则。
+			if strings.HasPrefix(name, "gpt-5.1") ||
+				strings.HasPrefix(name, "gpt-5.2") ||
+				strings.HasPrefix(name, "gpt-5.3") {
+				return 8, true
 			}
 			if strings.HasPrefix(name, "gpt-5.4") {
 				if strings.HasPrefix(name, "gpt-5.4-nano") {
@@ -530,7 +543,8 @@ func getHardcodedCompletionModelRatio(name string) (float64, bool) {
 				}
 				return 6, true
 			}
-			return 8, true
+			// gpt-5.5 and later models are unlocked
+			return 6, false
 		}
 		// gpt-4.5-preview匹配
 		if strings.HasPrefix(name, "gpt-4.5-preview") {
