@@ -44,7 +44,9 @@ import { useTranslation } from 'react-i18next';
 import {
   PAGE_SIZE,
   PRICE_SUFFIX,
+  VIDEO_MODE_TOKEN,
   buildSummaryText,
+  canUseTokenVideoMatrix,
   formatDisplayPrice,
   hasValue,
   normalizeRate,
@@ -53,6 +55,7 @@ import {
 import { useIsMobile } from '../../../../hooks/common/useIsMobile';
 import { StatusContext } from '../../../../context/Status';
 import TieredPricingEditor from './TieredPricingEditor';
+import VideoMatrixEditor from './VideoMatrixEditor';
 
 const { Text } = Typography;
 const EMPTY_CANDIDATE_MODEL_NAMES = [];
@@ -151,6 +154,8 @@ export default function ModelPricingEditor({
     handleBillingModeChange,
     handleBillingExprChange,
     handleRequestRuleExprChange,
+    handleVideoMatrixChange,
+    handleVideoMatrixToggle,
     handleSubmit,
     addModel,
     deleteModel,
@@ -413,21 +418,26 @@ export default function ModelPricingEditor({
             title={selectedModel ? selectedModel.name : t('模型计费编辑器')}
             headerExtraContent={
               selectedModel ? (
-                <Tag
-                  color={
-                    selectedModel.billingMode === 'per-request'
-                      ? 'teal'
+                <Space>
+                  <Tag
+                    color={
+                      selectedModel.billingMode === 'per-request'
+                        ? 'teal'
+                        : selectedModel.billingMode === 'tiered_expr'
+                          ? 'amber'
+                          : 'blue'
+                    }
+                  >
+                    {selectedModel.billingMode === 'per-request'
+                      ? t('按次计费')
                       : selectedModel.billingMode === 'tiered_expr'
-                        ? 'amber'
-                        : 'blue'
-                  }
-                >
-                  {selectedModel.billingMode === 'per-request'
-                    ? t('按次计费')
-                    : selectedModel.billingMode === 'tiered_expr'
-                      ? getExprModeLabel(selectedModel)
-                      : t('按量计费')}
-                </Tag>
+                        ? getExprModeLabel(selectedModel)
+                        : t('按量计费')}
+                  </Tag>
+                  {selectedModel.videoMatrix ? (
+                    <Tag color='violet'>{t('视频矩阵')}</Tag>
+                  ) : null}
+                </Space>
               ) : null
             }
           >
@@ -735,6 +745,72 @@ export default function ModelPricingEditor({
                   </>
                 )}
 
+                {/* 视频计费矩阵：不是第四种计费方式，而是叠在上面按量/按次之上的
+                    一层特殊场景。token 模式下上面那层管预扣、矩阵管结算，两者都要有。
+
+                    tiered_expr 下矩阵**仍然可用**：per_call 的格子里就是终价，
+                    videoPerCallPriceable 已为它放行；token 模式也可用，只要 DB 里
+                    已有 ModelPrice/ModelRatio 当锚点（buildModelState 会原样带进
+                    状态、serializeModel 会原样写回）。tiered 界面没有价格输入框，
+                    所以只在「本来就没锚点」时才禁 token——判据是 canUseTokenVideoMatrix。
+                    完整状态空间见 isVideoMatrixMissingAnchor 上方的表。 */}
+                <Card
+                  bodyStyle={{ padding: 16 }}
+                  style={{
+                    marginBottom: 16,
+                    background: 'var(--semi-color-fill-0)',
+                  }}
+                >
+                  <div className='mb-3 flex items-center justify-between gap-3'>
+                    <div>
+                      <div className='font-medium'>{t('视频计费矩阵')}</div>
+                      <div className='text-xs text-gray-500 mt-1'>
+                        {t(
+                          '用于 Seedance 这类按「分辨率 × 输入是否含视频」或「分辨率 × 秒数」定价的视频模型，与供应商价目表逐格对应，可直接对抄。不开启则完全走上面的价格，行为不变。',
+                        )}
+                      </div>
+                    </div>
+                    <Switch
+                      size='small'
+                      checked={Boolean(selectedModel.videoMatrix)}
+                      onChange={handleVideoMatrixToggle}
+                    />
+                  </div>
+
+                  {selectedModel.videoMatrix ? (
+                    <>
+                      <Banner
+                        type='info'
+                        bordered
+                        fullMode={false}
+                        closeIcon={null}
+                        style={{ marginBottom: 12 }}
+                        description={
+                          selectedModel.videoMatrix.mode === VIDEO_MODE_TOKEN
+                            ? t(
+                                '「按 Token」：实际收费 = 上游返回的 token 数 × 下表单价。上面的按量/按次价格仅用于提交时的预扣（必填），不参与最终金额。秒数已隐含在 token 里，无需也不应再按秒数缩放。',
+                              )
+                            : t(
+                                '「按次」：下表格子里就是终价，提交时即定价、不再差额结算。上面的按量/按次价格不参与计算，可以留空。',
+                              )
+                        }
+                      />
+                      <VideoMatrixEditor
+                        value={selectedModel.videoMatrix}
+                        onChange={handleVideoMatrixChange}
+                        allowTokenMode={canUseTokenVideoMatrix(selectedModel)}
+                        t={t}
+                      />
+                      <div className='mt-3 text-xs text-gray-500'>
+                        {t(
+                          '价格填人民币，按运营设置的汇率 {{rate}} 折算为美元存储。留空的格子视为未配置，命中不到时该次请求回退到上面的价格路径。',
+                          { rate },
+                        )}
+                      </div>
+                    </>
+                  ) : null}
+                </Card>
+
                 <Card
                   bodyStyle={{ padding: 16 }}
                   style={{ background: 'var(--semi-color-fill-0)' }}
@@ -810,6 +886,7 @@ export default function ModelPricingEditor({
             {t(
               '适合同系列模型一起定价，例如把 gpt-5.1 的价格批量同步到 gpt-5.1-high、gpt-5.1-low 等模型。',
             )}
+            {t('视频计费矩阵不在批量范围内，需要逐个模型配置。')}
           </div>
         ) : null}
       </Modal>

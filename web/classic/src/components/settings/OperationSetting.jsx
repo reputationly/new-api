@@ -28,7 +28,6 @@ import SettingsCreditLimit from '../../pages/Setting/Operation/SettingsCreditLim
 import SettingsCheckin from '../../pages/Setting/Operation/SettingsCheckin';
 import SettingsPoints from '../../pages/Setting/Operation/SettingsPoints';
 import SettingsAdminNotification from '../../pages/Setting/Operation/SettingsAdminNotification';
-import SettingsVideoPricing from '../../pages/Setting/Operation/SettingsVideoPricing';
 import { API, showError, toBoolean } from '../../helpers';
 
 const OperationSetting = () => {
@@ -61,9 +60,6 @@ const OperationSetting = () => {
 
     /* 视频模型配置 */
     VideoModelConfig: '',
-
-    /* 视频计费配置（分辨率 × 视频输入 / 分辨率 × 秒数） */
-    VideoPricingConfig: '',
 
     /* 音频模型配置 */
     AudioModelConfig: '',
@@ -184,10 +180,6 @@ const OperationSetting = () => {
         {/* 额度设置 */}
         <Card style={{ marginTop: '10px' }}>
           <SettingsCreditLimit options={inputs} refresh={onRefresh} />
-        </Card>
-        {/* 视频计费配置 */}
-        <Card style={{ marginTop: '10px' }}>
-          <SettingsVideoPricing options={inputs} refresh={onRefresh} />
         </Card>
         {/* 签到设置 */}
         <Card style={{ marginTop: '10px' }}>
