@@ -482,7 +482,10 @@ const stripThinkForAPI = (content) => {
   if (Array.isArray(content)) {
     return content.map((item) =>
       item?.type === 'text'
-        ? { ...item, text: processIncompleteThinkTags(item.text || '', '').content }
+        ? {
+            ...item,
+            text: processIncompleteThinkTags(item.text || '', '').content,
+          }
         : item,
     );
   }
@@ -720,6 +723,18 @@ export const calculateModelPrice = ({
     };
   }
 
+  // 2.5 视频计费矩阵：实收由「分辨率 × 输入是否含视频」查表决定，与 model_ratio 无关。
+  // 不短路的话定价页会展示那个预扣锚点（480p 实际 ¥46 却显示 ¥51），还会多出一个
+  // 对视频模型毫无意义的「补全价格」。见 docs/video-billing-matrix-design.md §2.6。
+  if (record.video_pricing?.mode) {
+    return {
+      isVideoMatrix: true,
+      videoPricing: record.video_pricing,
+      usedGroup,
+      usedGroupRatio,
+    };
+  }
+
   // 3. 根据计费类型计算价格
   if (record.quota_type === 0) {
     // 按量计费
@@ -913,6 +928,18 @@ export const getModelPriceItems = (priceData, t, quotaDisplayType = 'USD') => {
         value: '',
         suffix: '',
         isDynamic: true,
+      },
+    ];
+  }
+
+  if (priceData.isVideoMatrix) {
+    return [
+      {
+        key: 'video-matrix',
+        label: t('场景计费'),
+        value: '',
+        suffix: '',
+        isVideoMatrix: true,
       },
     ];
   }
@@ -1114,6 +1141,66 @@ export const formatDynamicPriceSummary = (billingExpr, t, groupRatio = 1) => {
           ))}
         </span>
       )}
+    </>
+  );
+};
+
+/**
+ * 把视频计费矩阵的所有格子摊平成 [{resolution, column, priceUSD}]，并乘上分组倍率。
+ *
+ * 供定价页展示复用。列的语义随 mode 变：token 模式是「输入是否含视频」，
+ * per_call 模式是秒数。
+ */
+// 矩阵的纯计算部分拆到 ./videoMatrix，好让手机端直接复用而不是抄一份
+// （utils.jsx 会传染桌面依赖、在 mobile 侧被整模块 shim 掉）。此处重导出，
+// 既有从 helpers barrel 引用的地方不受影响。
+export {
+  videoResolutionRank,
+  videoSecondsRank,
+  flattenVideoMatrix,
+} from './videoMatrix';
+
+/**
+ * 卡片/表格视图的紧凑摘要：矩阵有多格，列表里放不下，显示价格区间。
+ * 详细的逐格价目在详情弹窗里（VideoMatrixBreakdown）。
+ */
+export const formatVideoMatrixSummary = (priceData, t) => {
+  const rows = flattenVideoMatrix(
+    priceData?.videoPricing,
+    priceData?.usedGroupRatio,
+  );
+  if (!rows.length) {
+    return (
+      <span style={{ color: 'var(--semi-color-text-1)' }}>{t('场景计费')}</span>
+    );
+  }
+
+  const { symbol, rate } = getModelPricingCurrencyConfig();
+  const prices = rows.map((r) => r.priceUSD * rate);
+  const lo = Math.min(...prices);
+  const hi = Math.max(...prices);
+  const fmt = (v) => `${symbol}${Number(v.toFixed(2))}`;
+  const isToken = priceData.videoPricing.mode === 'token';
+
+  return (
+    <>
+      <span style={{ color: 'var(--semi-color-text-1)' }}>
+        {lo === hi ? fmt(lo) : `${fmt(lo)} ~ ${fmt(hi)}`}
+        {isToken ? ` / 1M tokens` : ` / ${t('次')}`}
+      </span>
+      <span
+        style={{
+          display: 'inline-block',
+          marginLeft: 6,
+          padding: '1px 6px',
+          borderRadius: 4,
+          fontSize: 11,
+          background: 'var(--semi-color-fill-1)',
+          color: 'var(--semi-color-text-2)',
+        }}
+      >
+        {t('{{count}} 档', { count: rows.length })}
+      </span>
     </>
   );
 };

@@ -1222,6 +1222,19 @@ func updateUserUsedQuotaAndRequestCount(id int, quota int, count int) {
 	//}
 }
 
+// UpdateUserUsedQuotaOnly 只调整已用额度，不动请求次数。
+//
+// 用于异步任务的差额回冲：提交时按**预扣额**记过一次 used_quota + request_count，
+// 完成时实收若低于预扣，必须把多记的部分冲回去，但那一次请求已经计过数、不能重复计。
+// 传负数即回冲。
+func UpdateUserUsedQuotaOnly(id int, quota int) {
+	if common.BatchUpdateEnabled {
+		addNewRecord(BatchUpdateTypeUsedQuota, id, quota)
+		return
+	}
+	updateUserUsedQuota(id, quota)
+}
+
 func updateUserUsedQuota(id int, quota int) {
 	err := DB.Model(&User{}).Where("id = ?", id).Updates(
 		map[string]interface{}{

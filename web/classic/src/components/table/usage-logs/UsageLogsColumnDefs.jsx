@@ -470,8 +470,14 @@ function getUsageLogDetailSummary(record, text, billingDisplayMode, t) {
   }
 
   // 视频计费矩阵：最终额度由 tokens × 单价 × 分组倍率 得出，与 model_ratio 无关。
+  // completion_tokens 是 Log 的顶层字段（不在 other 里），单独带上才拼得出算式。
   if (other?.video_price_mode) {
-    return { segments: renderVideoMatrixPriceSimple(summaryOpts) };
+    return {
+      segments: renderVideoMatrixPriceSimple({
+        ...summaryOpts,
+        completion_tokens: record.completion_tokens,
+      }),
+    };
   }
 
   return {

@@ -2478,6 +2478,7 @@ export function renderVideoMatrixPriceSimple(opts) {
     video_seconds: seconds,
     group_ratio: groupRatio,
     user_group_ratio,
+    completion_tokens: tokens = 0,
   } = opts;
 
   const dimension = [
@@ -2490,6 +2491,32 @@ export function renderVideoMatrixPriceSimple(opts) {
   ]
     .filter(Boolean)
     .join(' · ');
+
+  const { ratio: effectiveGroupRatio } = getEffectiveRatio(
+    groupRatio,
+    user_group_ratio,
+  );
+
+  // 完整算式。对账的核心诉求是逐项与供应商明细对上——只给一个金额，
+  // 运营没法判断是 token 数不同还是单价取错了档。
+  // tokens 由结算日志的 completion_tokens 带来（见 RecordTaskBillingLogParams）。
+  let formula = null;
+  if (mode !== 'per_call' && tokens > 0) {
+    const { symbol, rate } = getCurrencyConfig();
+    // 0 是合法倍率（免费分组），不能用 `|| 1` 兜底——那会让免费任务的算式算出全价。
+    const rawRatio = Number(effectiveGroupRatio);
+    const ratio = Number.isFinite(rawRatio) && rawRatio >= 0 ? rawRatio : 1;
+    const amount = (tokens / 1e6) * unitPrice * ratio;
+    formula = i18next.t(
+      '{{tokens}} × {{price}} / 1M tokens × {{ratio}} = {{amount}}',
+      {
+        tokens: Number(tokens).toLocaleString(),
+        price: formatCompactDisplayPrice(unitPrice),
+        ratio: formatRatioValue(ratio, 4),
+        amount: `${symbol}${Number((amount * rate).toFixed(6))}`,
+      },
+    );
+  }
 
   return [
     { tone: 'primary', text: getGroupRatioText(groupRatio, user_group_ratio) },
@@ -2505,6 +2532,7 @@ export function renderVideoMatrixPriceSimple(opts) {
               price: formatCompactDisplayPrice(unitPrice),
             }),
     },
+    formula ? { tone: 'secondary', text: formula } : null,
   ].filter(Boolean);
 }
 

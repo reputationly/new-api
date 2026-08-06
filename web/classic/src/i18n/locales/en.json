@@ -4511,6 +4511,15 @@
     "单位：¥ / 次": "Unit: ¥ / request",
     "{{seconds}} 秒": "{{seconds}}s",
     "视频按次 {{price}}": "Video per request {{price}}",
-    "视频按量 {{price}} / 1M tokens": "Video per token {{price}} / 1M tokens"
+    "视频按量 {{price}} / 1M tokens": "Video per token {{price}} / 1M tokens",
+    "场景": "Scenario",
+    "场景计费": "Scenario pricing",
+    "按上游返回的 token 数计费，单价随分辨率与是否含视频输入变化。时长已隐含在 token 数里。": "Billed by the token count returned upstream; the unit price varies by resolution and whether the input contains video. Duration is already baked into the token count.",
+    "按次计费，单价随分辨率与时长变化。": "Billed per request; the unit price varies by resolution and duration.",
+    "上表为基础单价，实际按下方各分组的倍率折算。": "The table above shows base unit prices; actual prices are scaled by each group ratio listed below.",
+    "见上方场景计费价目表": "See the scenario price list above",
+    "{{count}} 档": "{{count}} tiers",
+    "单位": "Unit",
+    "{{tokens}} × {{price}} / 1M tokens × {{ratio}} = {{amount}}": "{{tokens}} × {{price}} / 1M tokens × {{ratio}} = {{amount}}"
   }
 }

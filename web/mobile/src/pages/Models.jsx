@@ -12,6 +12,9 @@ import { FilterOutline } from 'antd-mobile-icons';
 
 import { StatusContext } from '@classic/context/Status';
 import { API } from '@classic/helpers/api';
+// 直接引纯计算模块——helpers/utils.jsx 会传染桌面依赖、在 mobile 侧被整模块 shim，
+// videoMatrix.js 不引 UI 依赖，两端共用同一份，不必再手抄同步。
+import { flattenVideoMatrix } from '@classic/helpers/videoMatrix';
 import {
   MODEL_CATEGORIES,
   buildModelCategoryIndex,
@@ -136,6 +139,18 @@ const Models = () => {
   // 动态计费（tiered_expr）：表达式才是定价事实，静态倍率会误导（同 PC 判定）
   const isDynamic = (m) => m.billing_mode === 'tiered_expr' && !!m.billing_expr;
 
+  // 视频计费矩阵：实收按「分辨率 × 输入是否含视频」查表，与 model_ratio 无关——
+  // 后者只是提交时的预扣锚点。不单独判的话列表会显示锚点价（480p 实际 ¥46 却显示
+  // ¥51），详情还会算出一个「输出价格」——视频模型根本没有补全价这回事。
+  // 判定与 PC 端 calculateModelPrice 同源，见 docs/video-billing-matrix-design.md §2.6。
+  const isVideoMatrix = (m) => !!m.video_pricing?.mode;
+
+  // 直接复用 PC 端的摊平实现，不再抄一份：它已处理好「0 倍率是合法值」与
+  // 「按折算前的原始价过滤未配置格子」两个坑，抄一份就意味着以后要修两遍
+  // ——排序那个 bug 就是因为抄了三份才出现三次。
+  const videoMatrixCells = (m) =>
+    flattenVideoMatrix(m.video_pricing, groupRatio);
+
   const formatPrice = (value) => {
     const numericValue = Number(value);
     if (!Number.isFinite(numericValue)) return '-';
@@ -152,6 +167,18 @@ const Models = () => {
 
   const priceText = (m) => {
     if (isDynamic(m)) return '动态计费';
+    if (isVideoMatrix(m)) {
+      // 矩阵有多格，列表里放不下，给区间；逐格价目在详情里。
+      const cells = videoMatrixCells(m);
+      if (!cells.length) return '场景计费';
+      const prices = cells.map((c) => c.priceUSD);
+      const lo = Math.min(...prices);
+      const hi = Math.max(...prices);
+      const unit = m.video_pricing.mode === 'token' ? '/1M' : '/次';
+      return lo === hi
+        ? `${displayPrice(lo)}${unit}`
+        : `${displayPrice(lo)}~${displayPrice(hi)}${unit}`;
+    }
     return m.quota_type === 1
       ? `${displayPrice(m.model_price * groupRatio)}/次`
       : `${displayPrice(inputPricePerM(m))}/1M`;
@@ -402,9 +429,11 @@ const Models = () => {
               >
                 {isDynamic(detail)
                   ? '动态计费'
-                  : detail.quota_type === 1
-                    ? '按次计费'
-                    : '按量计费'}
+                  : isVideoMatrix(detail)
+                    ? '场景计费'
+                    : detail.quota_type === 1
+                      ? '按次计费'
+                      : '按量计费'}
               </span>
               {vendorName(detail.vendor_id) && (
                 <span className='m-badge info'>
@@ -412,13 +441,52 @@ const Models = () => {
                 </span>
               )}
             </div>
-            <div style={{ fontSize: 14, color: '#374151', marginTop: 12 }}>
-              {isDynamic(detail)
-                ? '动态计费：按用量阶梯表达式实时计算，详细规则请在电脑端模型广场查看'
-                : detail.quota_type === 1
-                  ? `单次价格：${displayPrice(detail.model_price * groupRatio)}`
-                  : `输入 ${displayPrice(inputPricePerM(detail))} / 1M Tokens · 输出 ${displayPrice(inputPricePerM(detail) * (detail.completion_ratio || 1))} / 1M Tokens`}
-            </div>
+            {isVideoMatrix(detail) ? (
+              // 交叉表：纵轴分辨率、横轴场景。与配置页和 PC 端同一版式，
+              // 手机窄屏下按行堆叠更好读，故用「分辨率 + 场景」两列。
+              <div style={{ marginTop: 12 }}>
+                <div
+                  style={{ fontSize: 12, color: '#9aa1ad', marginBottom: 6 }}
+                >
+                  单位：{currencyConfig.symbol} /{' '}
+                  {detail.video_pricing.mode === 'token' ? '1M tokens' : '次'}
+                </div>
+                {videoMatrixCells(detail).map((cell) => (
+                  <div
+                    key={`${cell.resolution}-${cell.column}`}
+                    style={{
+                      display: 'flex',
+                      justifyContent: 'space-between',
+                      alignItems: 'baseline',
+                      fontSize: 14,
+                      color: '#374151',
+                      padding: '4px 0',
+                      borderBottom: '1px solid #f1f2f4',
+                    }}
+                  >
+                    <span>
+                      <strong>{cell.resolution}</strong>
+                      <span style={{ color: '#9aa1ad', marginLeft: 6 }}>
+                        {detail.video_pricing.mode === 'token'
+                          ? cell.column === 'without_video'
+                            ? '输入不含视频'
+                            : '输入包含视频'
+                          : `${cell.column} 秒`}
+                      </span>
+                    </span>
+                    <strong>{displayPrice(cell.priceUSD)}</strong>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <div style={{ fontSize: 14, color: '#374151', marginTop: 12 }}>
+                {isDynamic(detail)
+                  ? '动态计费：按用量阶梯表达式实时计算，详细规则请在电脑端模型广场查看'
+                  : detail.quota_type === 1
+                    ? `单次价格：${displayPrice(detail.model_price * groupRatio)}`
+                    : `输入 ${displayPrice(inputPricePerM(detail))} / 1M Tokens · 输出 ${displayPrice(inputPricePerM(detail) * (detail.completion_ratio || 1))} / 1M Tokens`}
+              </div>
+            )}
             <div style={{ fontSize: 12, color: '#9aa1ad', marginTop: 6 }}>
               按「{effectiveGroup || '默认'}」分组倍率 ×{groupRatio} 计算
             </div>

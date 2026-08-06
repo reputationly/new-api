@@ -579,6 +579,7 @@ func settleTaskBillingOnComplete(ctx context.Context, adaptor TaskPollingAdaptor
 	if bc := task.PrivateData.BillingContext; bc != nil && bc.PerCallBilling {
 		logger.LogInfo(ctx, fmt.Sprintf("任务 %s 按次计费，跳过差额结算", task.TaskID))
 		warnVideoMatrixSkipped(ctx, task, "任务被判定为按次计费")
+		DeferredBillingFallback(ctx, task, "任务被判定为按次计费")
 		return
 	}
 	// 1. 优先让 adaptor 决定最终额度
@@ -593,13 +594,13 @@ func settleTaskBillingOnComplete(ctx context.Context, adaptor TaskPollingAdaptor
 		return
 	}
 	// 2. 回退到 token 重算
-	if taskResult.TotalTokens > 0 {
-		RecalculateTaskQuotaByTokens(ctx, task, taskResult.TotalTokens)
+	if RecalculateTaskQuotaByTokens(ctx, task, taskResult.TotalTokens) {
 		warnVideoMatrixSkipped(ctx, task, "落到了通用 token 重算")
 		return
 	}
-	// 3. 无调整，保持预扣额度
+	// 3. 无调整，保持预扣额度。延迟记账的任务到这里还一分钱没记过，必须兜底补记。
 	warnVideoMatrixSkipped(ctx, task, "上游未返回可计费的 token 用量")
+	DeferredBillingFallback(ctx, task, "未能按用量结算")
 }
 
 // videoBillableTokens 视频矩阵结算用的 token 数。

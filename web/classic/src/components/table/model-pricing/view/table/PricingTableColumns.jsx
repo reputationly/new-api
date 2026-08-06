@@ -25,6 +25,7 @@ import {
   stringToColor,
   calculateModelPrice,
   getModelPriceItems,
+  formatVideoMatrixSummary,
   getLobeHubIcon,
 } from '../../../../../helpers';
 import {
@@ -33,7 +34,15 @@ import {
 } from '../../../../common/ui/RenderUtils';
 import { useIsMobile } from '../../../../../hooks/common/useIsMobile';
 
-function renderQuotaType(type, t) {
+// record 可选：视频计费矩阵不是 quota_type 的取值，得看 record 本身。
+function renderQuotaType(type, t, record) {
+  if (record?.video_pricing?.mode) {
+    return (
+      <Tag color='orange' shape='circle'>
+        {t('场景计费')}
+      </Tag>
+    );
+  }
   switch (type) {
     case 1:
       return (
@@ -185,7 +194,7 @@ export const getPricingTableColumns = ({
     title: t('计费类型'),
     dataIndex: 'quota_type',
     render: (text, record, index) => {
-      return renderQuotaType(parseInt(text), t);
+      return renderQuotaType(parseInt(text), t, record);
     },
     sorter: (a, b) => a.quota_type - b.quota_type,
   };
@@ -259,6 +268,14 @@ export const getPricingTableColumns = ({
     ...(isMobile ? {} : { fixed: 'right' }),
     render: (text, record, index) => {
       const priceData = getPriceData(record);
+      // 矩阵有多格，列表里放不下，给价格区间；逐格价目在详情弹窗里。
+      if (priceData.isVideoMatrix) {
+        return (
+          <div className='text-gray-700'>
+            {formatVideoMatrixSummary(priceData, t)}
+          </div>
+        );
+      }
       const priceItems = getModelPriceItems(priceData, t, siteDisplayType);
 
       return (

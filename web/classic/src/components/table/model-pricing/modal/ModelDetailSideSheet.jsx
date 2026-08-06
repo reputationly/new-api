@@ -27,6 +27,7 @@ import ModelBasicInfo from './components/ModelBasicInfo';
 import ModelEndpoints from './components/ModelEndpoints';
 import ModelPricingTable from './components/ModelPricingTable';
 import DynamicPricingBreakdown from './components/DynamicPricingBreakdown';
+import VideoMatrixBreakdown from './components/VideoMatrixBreakdown';
 
 const { Text } = Typography;
 
@@ -102,6 +103,20 @@ const ModelDetailSideSheet = ({
                 <div style={{ padding: '0 24px' }}>
                   <DynamicPricingBreakdown
                     billingExpr={modelData.billing_expr}
+                    t={t}
+                  />
+                </div>
+              </>
+            )}
+            {modelData.video_pricing?.mode && (
+              <>
+                <Divider margin={16} />
+                <div style={{ padding: '0 24px' }}>
+                  {/* 与 DynamicPricingBreakdown 同处理：这里展示基础单价，
+                      分组倍率由下方的分组价格表承载——详情页会列出多个分组，
+                      在这里挑其中一个折算反而误导。 */}
+                  <VideoMatrixBreakdown
+                    videoPricing={modelData.video_pricing}
                     t={t}
                   />
                 </div>

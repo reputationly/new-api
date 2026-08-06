@@ -36,7 +36,11 @@ type Pricing struct {
 	SupportedEndpointTypes []constant.EndpointType `json:"supported_endpoint_types"`
 	BillingMode            string                  `json:"billing_mode,omitempty"`
 	BillingExpr            string                  `json:"billing_expr,omitempty"`
-	PricingVersion         string                  `json:"pricing_version,omitempty"`
+	// VideoPricing 视频计费矩阵（docs/video-billing-matrix-design.md §2.6 接入点 3）。
+	// 不透出的话定价页只能展示 ModelRatio——那是预扣锚点，不是真实单价，
+	// 对用户是误导（480p 实际 ¥46 却显示 ¥51，还多出一个无意义的「补全价格」）。
+	VideoPricing   *ratio_setting.VideoPriceEntry `json:"video_pricing,omitempty"`
+	PricingVersion string                         `json:"pricing_version,omitempty"`
 }
 
 type PricingVendor struct {
@@ -430,6 +434,9 @@ func updatePricing(imgRaw, vidRaw, audRaw, musRaw string) {
 				pricing.BillingMode = billingMode
 				pricing.BillingExpr = expr
 			}
+		}
+		if entry, ok := ratio_setting.GetVideoPricing(model); ok {
+			pricing.VideoPricing = &entry
 		}
 		pricingMap = append(pricingMap, pricing)
 	}

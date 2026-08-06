@@ -587,7 +587,12 @@ func RelayTask(c *gin.Context) {
 		if settleErr := service.SettleBilling(c, relayInfo, result.Quota); settleErr != nil {
 			common.SysError("settle task billing error: " + settleErr.Error())
 		}
-		service.LogTaskConsumption(c, relayInfo)
+		// 「上游返回用量计费」的任务在提交时不记账，等完成拿到真实用量再记一条终值，
+		// 避免使用日志出现「大额预扣 + 大额退款」这种要做减法才看得懂的组合。
+		// 预扣本身照常发生（余额闸门），改的只是记账时机。见 service.IsDeferredUsageBilling。
+		if !service.IsDeferredUsageBilling(relayInfo) {
+			service.LogTaskConsumption(c, relayInfo)
+		}
 
 		task := model.InitTask(result.Platform, relayInfo)
 		task.PrivateData.UpstreamTaskID = result.UpstreamTaskID

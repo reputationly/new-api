@@ -441,6 +441,277 @@ func TestLogTaskConsumption_CarriesVideoMatrixFields(t *testing.T) {
 	require.NotContains(t, other, "count_billing")
 }
 
+// ===========================================================================
+// 已用额度统计口径：提交按预扣额记，实收更低必须回冲
+// ===========================================================================
+
+func getUserUsedQuota(t *testing.T, id int) int {
+	t.Helper()
+	var user model.User
+	require.NoError(t, model.DB.Select("used_quota").Where("id = ?", id).First(&user).Error)
+	return user.UsedQuota
+}
+
+func getUserRequestCount(t *testing.T, id int) int {
+	t.Helper()
+	var user model.User
+	require.NoError(t, model.DB.Select("request_count").Where("id = ?", id).First(&user).Error)
+	return user.RequestCount
+}
+
+// 非延迟记账的任务（sora / midjourney / per_call 矩阵）仍走「提交记预扣、完成记差额」。
+// 差额退还时必须回冲 used_quota，否则用户的「已用额度」永远停在预扣值上。
+func TestNonDeferred_RefundRollsBackUsedQuota(t *testing.T) {
+	truncate(t)
+	const uid = 9301
+	seedUser(t, uid, 10_000_000)
+
+	const preConsumed = 873287
+	const actual = 159544
+	task := makeVideoTask(t, uid, uid, preConsumed, nil) // 无 VideoBilling → 非延迟
+	task.PrivateData.BillingContext.GroupRatio = 1.0
+	// 模拟提交时 LogTaskConsumption 的记账
+	model.UpdateUserUsedQuotaAndRequestCount(uid, preConsumed)
+	require.Equal(t, preConsumed, getUserUsedQuota(t, uid))
+
+	RecalculateTaskQuota(context.Background(), task, actual, "测试差额退还")
+
+	require.Equal(t, actual, getUserUsedQuota(t, uid),
+		"已用额度应落到实收，不该停在预扣额 %d", preConsumed)
+	require.Equal(t, 1, getUserRequestCount(t, uid), "回冲额度不能把请求次数也减掉")
+}
+
+// ===========================================================================
+// 「上游返回用量计费」：提交不记账，完成记一条终值
+// ===========================================================================
+
+func TestDeferredBilling_Predicate(t *testing.T) {
+	tokenInfo := videoRelayInfo(t, "m", false, &relaycommon.VideoBillingContext{
+		Mode: ratio_setting.VideoPriceModeToken, UnitPrice: 6.3,
+	})
+	perCallInfo := videoRelayInfo(t, "m", false, &relaycommon.VideoBillingContext{
+		Mode: ratio_setting.VideoPriceModePerCall, UnitPrice: 0.4,
+	})
+
+	require.True(t, IsDeferredUsageBilling(tokenInfo))
+	require.False(t, IsDeferredUsageBilling(perCallInfo), "按次矩阵提交时已定价，照常记账")
+	require.False(t, IsDeferredUsageBilling(videoRelayInfo(t, "m", false, nil)))
+	require.False(t, IsDeferredUsageBilling(nil))
+	require.False(t, IsDeferredUsageBilling(&relaycommon.RelayInfo{}), "TaskRelayInfo 为 nil 不该 panic")
+}
+
+// 核心：提交时零记账，完成时记一条 = 实收。使用日志里这一单只有一条，
+// 金额就是实收，与供应商账单同形（不再是「¥12.75 消费 + ¥10.42 退款」）。
+func TestDeferredBilling_RecordsFinalAmountOnce(t *testing.T) {
+	truncate(t)
+	const uid = 9401
+	seedUser(t, uid, 10_000_000)
+
+	const preConsumed = 873287 // 预扣照常发生（余额闸门），只是没记账
+	task := makeVideoTask(t, uid, uid, preConsumed, &model.TaskVideoBilling{
+		Mode: "token", UnitPrice: seedanceCNYRate / testRate, Resolution: "480p",
+	})
+	task.PrivateData.BillingContext.GroupRatio = 1.0
+	require.Equal(t, 0, getUserUsedQuota(t, uid), "前置：提交时未记账")
+
+	require.True(t, RecalculateTaskQuotaByVideoMatrix(context.Background(), task, 50638))
+
+	require.Equal(t, task.Quota, getUserUsedQuota(t, uid), "已用额度 = 实收")
+	require.Equal(t, 1, getUserRequestCount(t, uid), "次数在这里才计，且只计一次")
+	require.Equal(t, int64(1), countLogs(t), "只有一条日志")
+
+	var log model.Log
+	require.NoError(t, model.DB.Order("id desc").First(&log).Error)
+	require.Equal(t, model.LogTypeConsume, log.Type, "记的是消费不是退款")
+	require.Equal(t, task.Quota, log.Quota, "日志金额 = 实收，不是差额")
+}
+
+// 结算日志必须带上上游返回的 token 数：日志的「输出」列靠它，前端也靠它才拼得出
+// 「tokens × 单价 × 倍率 = 金额」这条算式。不带的话对账只能拿一个孤零零的金额去比，
+// 判断不出差异是 token 数不同还是单价取错了档。
+func TestVideoMatrix_LogCarriesCompletionTokens(t *testing.T) {
+	truncate(t)
+	const uid = 9406
+	seedUser(t, uid, 10_000_000)
+
+	task := makeVideoTask(t, uid, uid, 873287, &model.TaskVideoBilling{
+		Mode: "token", UnitPrice: seedanceCNYRate / testRate, Resolution: "480p",
+	})
+	task.PrivateData.BillingContext.GroupRatio = 1.0
+
+	require.True(t, RecalculateTaskQuotaByVideoMatrix(context.Background(), task, 50638))
+
+	var log model.Log
+	require.NoError(t, model.DB.Order("id desc").First(&log).Error)
+	require.Equal(t, 50638, log.CompletionTokens)
+
+	// 按日志上的数字反算，应当还原出落账金额
+	var other map[string]interface{}
+	require.NoError(t, json.Unmarshal([]byte(log.Other), &other))
+	unitPrice := other["video_unit_price"].(float64)
+	ratio := other["group_ratio"].(float64)
+	recomputed := float64(log.CompletionTokens) / 1e6 * unitPrice * common.QuotaPerUnit * ratio
+	require.InDelta(t, recomputed, float64(task.Quota), 1.0)
+}
+
+// 预扣恰好等于实收时也必须记账——延迟记账下这是唯一的记账时机，
+// 零差额直接 return 会让这一单在日志里完全不存在。
+func TestDeferredBilling_RecordsEvenWhenDeltaIsZero(t *testing.T) {
+	truncate(t)
+	const uid = 9402
+	seedUser(t, uid, 10_000_000)
+
+	task := makeVideoTask(t, uid, uid, 159544, &model.TaskVideoBilling{
+		Mode: "token", UnitPrice: seedanceCNYRate / testRate, Resolution: "480p",
+	})
+	task.PrivateData.BillingContext.GroupRatio = 1.0
+
+	require.True(t, RecalculateTaskQuotaByVideoMatrix(context.Background(), task, 50638))
+	require.Equal(t, int64(1), countLogs(t))
+	require.Equal(t, task.Quota, getUserUsedQuota(t, uid))
+}
+
+// 免费分组（groupRatio=0）算出的 actualQuota 就是 0，那是合法结果不是失败。
+// 早退的话这一单永远不出现在使用日志里——用户用了却查不到。
+func TestDeferredBilling_ZeroQuotaStillRecords(t *testing.T) {
+	truncate(t)
+	const uid = 9407
+	seedUser(t, uid, 10_000_000)
+
+	// 免费分组：提交时 FreeModel=true 已跳过预扣，task.Quota 为 0
+	task := makeVideoTask(t, uid, uid, 0, &model.TaskVideoBilling{
+		Mode: "token", UnitPrice: seedanceCNYRate / testRate, Resolution: "480p",
+	})
+	task.PrivateData.BillingContext.GroupRatio = 0
+
+	require.True(t, RecalculateTaskQuotaByVideoMatrix(context.Background(), task, 50638))
+
+	require.Equal(t, int64(1), countLogs(t), "免费任务也要有一条记录")
+	var log model.Log
+	require.NoError(t, model.DB.Order("id desc").First(&log).Error)
+	require.Equal(t, model.LogTypeConsume, log.Type)
+	require.Equal(t, 0, log.Quota)
+	require.Equal(t, 50638, log.CompletionTokens, "用量照记，只是金额为 0")
+	require.Equal(t, 10_000_000, getUserQuota(t, uid), "余额不动")
+}
+
+// 极小倍率 + 小任务被 int() 截断为 0：预扣必须退回，不能白留。
+func TestDeferredBilling_TruncatedToZeroRefundsPreConsumed(t *testing.T) {
+	truncate(t)
+	const uid = 9408
+	const initQuota = 10_000_000
+	const preConsumed = 1000
+	seedUser(t, uid, initQuota)
+
+	task := makeVideoTask(t, uid, uid, preConsumed, &model.TaskVideoBilling{
+		Mode: "token", UnitPrice: seedanceCNYRate / testRate, Resolution: "480p",
+	})
+	task.PrivateData.BillingContext.GroupRatio = 0.001
+
+	// 100 tokens × 6.3 × 500000 / 1e6 × 0.001 = 0.315 → int() → 0
+	require.True(t, RecalculateTaskQuotaByVideoMatrix(context.Background(), task, 100))
+
+	require.Equal(t, 0, task.Quota)
+	require.Equal(t, initQuota+preConsumed, getUserQuota(t, uid), "预扣必须退回")
+	require.Equal(t, int64(1), countLogs(t))
+}
+
+// 非延迟记账的任务保持既有语义：actualQuota=0 视为「无调整」，不记账不退款。
+// 既有的 TestRecalculate_ActualQuotaZero 也钉着这条，这里从矩阵入口再确认一次。
+func TestNonDeferred_ZeroQuotaStillNoop(t *testing.T) {
+	truncate(t)
+	const uid = 9409
+	seedUser(t, uid, 10_000_000)
+
+	task := makeVideoTask(t, uid, uid, 5000, nil) // 无 VideoBilling → 非延迟
+	RecalculateTaskQuota(context.Background(), task, 0, "zero actual")
+
+	require.Equal(t, 5000, task.Quota, "额度不该被改写")
+	require.Equal(t, int64(0), countLogs(t))
+}
+
+// 结算没走到任何记账分支时的兜底：钱扣了、日志里查无此单是最糟的失败。
+func TestDeferredBilling_FallbackRecordsPreConsumed(t *testing.T) {
+	truncate(t)
+	const uid = 9403
+	seedUser(t, uid, 10_000_000)
+
+	const preConsumed = 873287
+	task := makeVideoTask(t, uid, uid, preConsumed, &model.TaskVideoBilling{
+		Mode: "token", UnitPrice: seedanceCNYRate / testRate, Resolution: "480p",
+	})
+	task.PrivateData.BillingContext.GroupRatio = 1.0
+
+	DeferredBillingFallback(context.Background(), task, "上游未返回用量")
+
+	require.Equal(t, int64(1), countLogs(t))
+	require.Equal(t, preConsumed, getUserUsedQuota(t, uid), "兜底按预扣额入账")
+}
+
+// 非延迟记账的任务不该被兜底重复记账。
+func TestDeferredBilling_FallbackIsNoopForNormalTasks(t *testing.T) {
+	truncate(t)
+	const uid = 9404
+	seedUser(t, uid, 10_000_000)
+
+	task := makeVideoTask(t, uid, uid, 1000, nil)
+	DeferredBillingFallback(context.Background(), task, "任意原因")
+
+	require.Equal(t, int64(0), countLogs(t))
+	require.Equal(t, 0, getUserUsedQuota(t, uid))
+}
+
+// 延迟记账的任务失败时全额退，净消费为 0——不该留下一条没有对应消费行的孤儿退款。
+func TestDeferredBilling_FailedTaskWritesNoLog(t *testing.T) {
+	truncate(t)
+	const uid = 9405
+	seedUser(t, uid, 10_000_000)
+
+	task := makeVideoTask(t, uid, uid, 873287, &model.TaskVideoBilling{
+		Mode: "token", UnitPrice: seedanceCNYRate / testRate, Resolution: "480p",
+	})
+
+	RefundTaskQuota(context.Background(), task, "上游返回失败")
+
+	require.Equal(t, int64(0), countLogs(t), "从没记过消费，就不该有退款行")
+	require.Equal(t, 0, getUserUsedQuota(t, uid))
+}
+
+// 任务失败全额退款后这笔消费为 0，已用额度不该把失败的单算进去。
+func TestRefundTaskQuota_RollsBackUsedQuota(t *testing.T) {
+	truncate(t)
+	const uid = 9302
+	seedUser(t, uid, 10_000_000)
+
+	const preConsumed = 873287
+	task := makeVideoTask(t, uid, uid, preConsumed, nil) // 无 VideoBilling → 非延迟
+	model.UpdateUserUsedQuotaAndRequestCount(uid, preConsumed)
+
+	RefundTaskQuota(context.Background(), task, "上游返回失败")
+
+	require.Equal(t, 0, getUserUsedQuota(t, uid))
+	require.Equal(t, 1, getUserRequestCount(t, uid), "请求确实发生过，次数不回冲")
+}
+
+// 非延迟记账的任务实收高于预扣时走补扣分支。
+// 同一次请求在提交时已计过数，差额结算不该再计一次。
+func TestNonDeferred_TopUpKeepsRequestCount(t *testing.T) {
+	truncate(t)
+	const uid = 9303
+	seedUser(t, uid, 10_000_000)
+
+	const preConsumed = 1000 // 故意远低于实收
+	const actual = 159544
+	task := makeVideoTask(t, uid, uid, preConsumed, nil)
+	task.PrivateData.BillingContext.GroupRatio = 1.0
+	model.UpdateUserUsedQuotaAndRequestCount(uid, preConsumed)
+
+	RecalculateTaskQuota(context.Background(), task, actual, "测试差额补扣")
+
+	require.Equal(t, actual, getUserUsedQuota(t, uid))
+	require.Equal(t, 1, getUserRequestCount(t, uid), "一次请求只该计一次数")
+}
+
 func TestQuotaTruncationBoundIsNegligible(t *testing.T) {
 	// 每单最多少收 1 quota；1 万单累计上限。
 	perOrder := quotaToCNY(1, testRate)

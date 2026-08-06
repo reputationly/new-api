@@ -374,9 +374,10 @@ func UpdateOption(c *gin.Context) {
 		return
 	}
 	// 图片/视频模型配置里声明的「能力」会作为标签在模型广场展示；
-	// 保存后失效定价缓存，使 /api/pricing 下次重建即带上最新能力标签。
+	// 视频计费矩阵本身也直接进定价页。保存后失效定价缓存，使 /api/pricing 下次重建即最新。
 	switch option.Key {
-	case "ImageModelSizeConfig", "VideoModelConfig", "AudioModelConfig", "MusicModelConfig":
+	case "ImageModelSizeConfig", "VideoModelConfig", "AudioModelConfig", "MusicModelConfig",
+		"VideoPricingConfig":
 		model.InvalidatePricingCache()
 	}
 	c.JSON(http.StatusOK, gin.H{

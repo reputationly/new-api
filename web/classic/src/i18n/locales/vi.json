@@ -4578,6 +4578,15 @@
     "单位：¥ / 次": "Đơn vị: ¥ / lượt",
     "{{seconds}} 秒": "{{seconds}} giây",
     "视频按次 {{price}}": "Video theo lượt {{price}}",
-    "视频按量 {{price}} / 1M tokens": "Video theo token {{price}} / 1 triệu token"
+    "视频按量 {{price}} / 1M tokens": "Video theo token {{price}} / 1 triệu token",
+    "场景": "Kịch bản",
+    "场景计费": "Tính phí theo kịch bản",
+    "按上游返回的 token 数计费，单价随分辨率与是否含视频输入变化。时长已隐含在 token 数里。": "Tính phí theo số token upstream trả về; đơn giá thay đổi theo độ phân giải và việc đầu vào có video hay không. Thời lượng đã nằm trong số token.",
+    "按次计费，单价随分辨率与时长变化。": "Tính phí theo lượt; đơn giá thay đổi theo độ phân giải và thời lượng.",
+    "上表为基础单价，实际按下方各分组的倍率折算。": "Bảng trên là đơn giá cơ sở; giá thực tế được quy đổi theo hệ số của từng nhóm bên dưới.",
+    "见上方场景计费价目表": "Xem bảng giá theo kịch bản ở trên",
+    "{{count}} 档": "{{count}} mức",
+    "单位": "Đơn vị",
+    "{{tokens}} × {{price}} / 1M tokens × {{ratio}} = {{amount}}": "{{tokens}} × {{price}} / 1M tokens × {{ratio}} = {{amount}}"
   }
 }

@@ -20,7 +20,11 @@ For commercial licensing, please contact support@quantumnous.com
 import React from 'react';
 import { Avatar, Typography, Table, Tag } from '@douyinfe/semi-ui';
 import { IconCoinMoneyStroked } from '@douyinfe/semi-icons';
-import { calculateModelPrice, getModelPriceItems } from '../../../../../helpers';
+import {
+  calculateModelPrice,
+  getModelPriceItems,
+  formatVideoMatrixSummary,
+} from '../../../../../helpers';
 
 const { Text } = Typography;
 
@@ -77,12 +81,16 @@ const ModelPricingTable = ({
         billingType:
           modelData?.billing_mode === 'tiered_expr'
             ? t('动态计费')
-            : modelData?.quota_type === 0
-              ? t('按量计费')
-              : modelData?.quota_type === 1
-                ? t('按次计费')
-                : '-',
+            : modelData?.video_pricing?.mode
+              ? t('场景计费')
+              : modelData?.quota_type === 0
+                ? t('按量计费')
+                : modelData?.quota_type === 1
+                  ? t('按次计费')
+                  : '-',
         priceItems: getModelPriceItems(priceData, t, siteDisplayType),
+        // 视频矩阵行要按本行分组倍率折算出区间，需要原始 priceData
+        priceData,
       };
     });
 
@@ -123,6 +131,7 @@ const ModelPricingTable = ({
         if (text === t('按量计费')) color = 'violet';
         else if (text === t('按次计费')) color = 'teal';
         else if (text === t('动态计费')) color = 'amber';
+        else if (text === t('场景计费')) color = 'orange';
         return (
           <Tag color={color} size='small' shape='circle'>
             {text || '-'}
@@ -134,12 +143,26 @@ const ModelPricingTable = ({
     columns.push({
       title: siteDisplayType === 'TOKENS' ? t('计费摘要') : t('价格摘要'),
       dataIndex: 'priceItems',
-      render: (items) => {
+      render: (items, record) => {
         if (items.length === 1 && items[0].isDynamic) {
           return (
             <Text type='tertiary' size='small'>
               {t('见上方动态计费详情')}
             </Text>
+          );
+        }
+        // 场景计费：给出本分组折算后的价格区间，逐档拆解在上方矩阵里。
+        // 只写「见上方」的话，非 1 倍率的分组用户还得自己乘一遍。
+        if (items.length === 1 && items[0].isVideoMatrix) {
+          return (
+            <div className='space-y-1'>
+              <div className='font-semibold text-orange-600'>
+                {formatVideoMatrixSummary(record.priceData, t)}
+              </div>
+              <div className='text-xs text-gray-500'>
+                {t('见上方场景计费价目表')}
+              </div>
+            </div>
           );
         }
         return (

@@ -39,6 +39,7 @@ import {
   calculateModelPrice,
   formatPriceInfo,
   formatDynamicPriceSummary,
+  formatVideoMatrixSummary,
   getLobeHubIcon,
 } from '../../../../../helpers';
 import PricingCardSkeleton from './PricingCardSkeleton';
@@ -161,7 +162,15 @@ const PricingCardView = ({
         -
       </Tag>
     );
-    if (record.quota_type === 1) {
+    // 视频计费矩阵不是 quota_type 的取值，优先判：实收由查表决定，
+    // 显示「按量计费」会让人以为是那个 model_ratio。
+    if (record.video_pricing?.mode) {
+      billingTag = (
+        <Tag key='billing' shape='circle' color='orange' size='small'>
+          {t('场景计费')}
+        </Tag>
+      );
+    } else if (record.quota_type === 1) {
       billingTag = (
         <Tag key='billing' shape='circle' color='teal' size='small'>
           {t('按次计费')}
@@ -294,6 +303,8 @@ const PricingCardView = ({
                       <div className='flex flex-col gap-1 text-xs mt-1'>
                         {priceData.isDynamicPricing ? (
                           formatDynamicPriceSummary(priceData.billingExpr, t, priceData.usedGroupRatio)
+                        ) : priceData.isVideoMatrix ? (
+                          formatVideoMatrixSummary(priceData, t)
                         ) : (
                           formatPriceInfo(priceData, t, siteDisplayType)
                         )}
