@@ -93,7 +93,21 @@ jobs:
             ${{ secrets.ACR_REGISTRY }}/reputationly/new-api:ovaijisuan-${{ matrix.arch }}
             ${{ secrets.ACR_REGISTRY }}/reputationly/new-api:${{ needs.prepare.outputs.version }}-${{ matrix.arch }}
           cache-from: type=gha
-          cache-to: type=gha,mode=max
+          # mode=min,不是 max。GHA 缓存每仓库上限 10 GB,而 mode=max 会把 5 个
+          # builder stage 的每一层(含各自的 node_modules)全导出去,单次约 2.3 GB
+          # ——四五次就顶满,之后每次新建都在踢掉下次要用的层,构建时间从 ~9 分钟
+          # 涨到 25 分钟以上,且不会自愈。
+          #
+          # 代价很小:Dockerfile 里 default / classic / mobile 三个 stage 都是
+          # `COPY ./VERSION .` 后紧跟 `bun run build`,而 VERSION 每次 run 现算
+          # (日期+SHA)必变;builder2 的 `COPY . .` 同理。也就是说这些 stage 本来
+          # 就每次全冷,mode=max 多存的那几个 GB 基本没人读。
+          #
+          # 真正被牺牲掉的只有 `bun install` / `go mod download` 这几层的跨次复用。
+          # 若日后发现这部分冷启动明显拖时间,下一步是换 registry 缓存
+          # (type=registry,ref=<ACR>/...:buildcache,mode=max):没有配额、且每次覆盖
+          # 同一个 tag,不会像 GHA 缓存这样无限累积。
+          cache-to: type=gha,mode=min
           provenance: mode=max
           sbom: true
 
