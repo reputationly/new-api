@@ -160,7 +160,7 @@ func (a *Adaptor) convertSpeechRequest(c *gin.Context, info *relaycommon.RelayIn
 	}
 	// 字数上限(AudioModelConfig,按模型/全局默认;0=不限制):与任务链路同一把闸,
 	// 防止绕开 /v1/videos 走 /v1/audio/speech 提交超长文本。
-	if err := common.ValidateAudioTextForModel(text, request.Model, info.OriginModelName, modelName); err != nil {
+	if err := common.ValidateAudioTextForModel("tts", text, request.Model, info.OriginModelName, modelName); err != nil {
 		return nil, err
 	}
 	if request.StreamFormat != "" {
@@ -234,7 +234,7 @@ func (a *Adaptor) materializeSpeechInputs(c *gin.Context, info *relaycommon.Rela
 	}
 
 	m := nfsinput.NewMaterializer("tts", modelName, userIDStr(info), inputGroupID(info))
-	if maxBytes, ok := common.AudioRefAudioMaxBytesForModel(request.Model, info.OriginModelName, modelName); ok {
+	if maxBytes, ok := common.AudioRefAudioMaxBytesForModel("tts", request.Model, info.OriginModelName, modelName); ok {
 		m.SetMaxBytes(maxBytes)
 	}
 	// 两个家族都物化到 ref_audio:IndexTTS-2 现在同样由 vLLM-Omni 引擎服务,任务链路的

@@ -13,6 +13,7 @@ import { useTranslation } from 'react-i18next';
 import { showError, getLogo, stringToColor } from '../../helpers';
 import { UserContext } from '../../context/User';
 import { blockChatDrag } from '../playground/blockChatDrag';
+import PromptOptimizeButton from '../playground/PromptOptimizeButton';
 import {
   VIDEO_STATUS,
   videoExamplesForMode,
@@ -156,9 +157,12 @@ const VideoChatArea = ({
   turnLimitReached = false,
   missingRequiredImage = false,
   mode = 'text2video',
+  // 提示词优化配置按「分类 + tab」读:视频配音(dub)的入口在语音页,配置也存在 audio 下。
+  category = 'video',
   selectedModel = '',
   isSR = false,
   isDub = false,
+  isFlf2vSelected = false,
   onApplyExample,
   onSend,
   onRegenerate,
@@ -169,9 +173,11 @@ const VideoChatArea = ({
   const [userState] = useContext(UserContext);
   // 受控输入框:预设按钮直接 setInputValue,发送后清空(缺图/上限时不清空,提示词不丢)。
   const [inputValue, setInputValue] = useState('');
+  // AI 优化提示词在途:此刻允许发送等于把没优化的原文发出去,故一并灰掉发送按钮。
+  const [optimizing, setOptimizing] = useState(false);
   // 一键示例(按 mode):text2video 纯文本;i2v/flf2v/s2v/vace/sr 带预置文件。
   // 关键帧还要按所选模型过滤:i2v 模型只出仅首帧的示例,flf2v 模型只出带尾帧的。
-  const presets = videoExamplesForMode(mode, selectedModel);
+  const presets = videoExamplesForMode(mode, isFlf2vSelected);
   const hasPresets = presets.length > 0;
 
   const roleConfig = useMemo(
@@ -396,7 +402,8 @@ const VideoChatArea = ({
     }
     // 视频配乐(dub)提示词可选:空文本=让模型按画面自由配环境音(hook/网关/引擎
     // 全链路已放行)。缺视频仍由 blockSend 里的 missingRequiredImage 拦住。
-    const canSend = !blockSend && (inputValue.trim().length > 0 || isDub);
+    const canSend =
+      !blockSend && !optimizing && (inputValue.trim().length > 0 || isDub);
     const doSend = () => {
       if (!canSend) return;
       onSend(inputValue.trim());
@@ -437,6 +444,14 @@ const VideoChatArea = ({
             })}
           </div>
         )}
+        <PromptOptimizeButton
+          category={category}
+          tabKey={mode}
+          value={inputValue}
+          onChange={setInputValue}
+          disabled={generating}
+          onOptimizingChange={setOptimizing}
+        />
         <div className='relative'>
           <TextArea
             value={inputValue}
@@ -489,7 +504,10 @@ const VideoChatArea = ({
     isSR,
     isDub,
     inputValue,
+    optimizing,
     onSend,
+    category,
+    mode,
     t,
   ]);
 

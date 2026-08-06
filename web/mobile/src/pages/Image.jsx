@@ -192,6 +192,8 @@ const ImageBody = ({ mode }) => {
       <PromptBar
         onSend={generate}
         generating={generating}
+        optimizeCategory='image'
+        optimizeTab={mode}
         disabled={turnLimitReached || missingRequiredImage}
         placeholder={
           turnLimitReached

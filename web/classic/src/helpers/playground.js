@@ -14,6 +14,30 @@ export function isPlaygroundSupported(model, modelEndpointTypes) {
   return !types.some((t) => t in PLAYGROUND_UNSUPPORTED_ENDPOINTS);
 }
 
+// 语言模型判据：仅保留 chat completions 兼容端点，排除嵌入/重排序/音频/视频/图片。
+// 纯图片模型后端会附带 openai 兜底端点，故用"含 chat 且不含任一非 chat"双条件。
+// 注意：不含 openai-response —— 调用方（音乐翻译、提示词 AI 优化）都固定打
+// /pg/chat/completions，仅声明 Responses 端点的模型走 chat completions 会失败，
+// 不应列入（同时含 openai 的仍保留）。
+//
+// 放在这里而不是各调用点各写一份：判据只有一份，端点类型增补时不会两边分叉。
+const CHAT_ENDPOINT_TYPES = ['openai', 'anthropic', 'gemini'];
+const NON_CHAT_ENDPOINT_TYPES = [
+  'embeddings',
+  'jina-rerank',
+  'audio-speech',
+  'openai-video',
+  'image-generation',
+];
+
+// types = /api/pricing 行的 supported_endpoint_types 数组。
+export function isChatModel(types) {
+  if (!Array.isArray(types) || types.length === 0) return false;
+  const hasChat = types.some((x) => CHAT_ENDPOINT_TYPES.includes(x));
+  const hasNonChat = types.some((x) => NON_CHAT_ENDPOINT_TYPES.includes(x));
+  return hasChat && !hasNonChat;
+}
+
 // 一个模型挂多个非 chat 端点时，按 priority 选第一个用于弹框展示。
 export function pickPrimaryUnsupportedEndpoint(modelEndpointTypes, model) {
   const types = modelEndpointTypes?.get?.(model) || [];

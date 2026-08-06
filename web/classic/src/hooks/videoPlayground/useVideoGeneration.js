@@ -256,9 +256,6 @@ export const useVideoGeneration = ({
     srcVideo2: '', // 视频编辑(Bernini)第二源视频(mv2v/ads2v 双视频,可选)
     refImages: [], // 视频编辑 rv2v / 图生视频 r2v 参考图(base64 data-url 数组)
   });
-  // 关键帧 tab 下选中的是不是首尾帧模型。i2v 与 flf2v 是同权重、不同 --task 的两个引擎
-  // 实例,尾帧的取舍只能由模型决定(判据见 isFlf2vModel)。
-  const isFlf2vSelected = isFlf2vModel(inputs.model);
   const [groups, setGroups] = useState([]);
   const [models, setModels] = useState([]);
   // 来自 /api/pricing：model -> enable_groups[]（用于分组过滤）
@@ -353,7 +350,8 @@ export const useVideoGeneration = ({
       const next = { ...prev, [key]: value };
       // 切模型时清尾帧:关键帧 tab 下 i2v/flf2v 两类模型共用这一组输入框,从 flf2v 切到
       // i2v 后尾帧槽不再渲染,残留值会变成看不见却仍在 state 里的脏数据。
-      if (key === 'model' && !isFlf2vModel(value)) next.lastFrame = '';
+      if (key === 'model' && !isFlf2vModel(value, videoConfigRef.current))
+        next.lastFrame = '';
       return next;
     });
   }, []);
@@ -402,28 +400,35 @@ export const useVideoGeneration = ({
     () => parseVideoModelConfig(statusState?.status?.VideoModelConfig),
     [statusState?.status?.VideoModelConfig],
   );
+  // handleInputChange 的依赖必须保持为空(它被下游当稳定引用用),所以走 ref 读配置。
+  const videoConfigRef = useRef(videoConfig);
+  videoConfigRef.current = videoConfig;
+
+  // 关键帧 tab 下选中的是不是首尾帧模型。i2v 与 flf2v 是同权重、不同 --task 的两个引擎
+  // 实例,尾帧的取舍只能由模型决定(判据见 isFlf2vModel:先读运营声明,再退回名字)。
+  const isFlf2vSelected = isFlf2vModel(inputs.model, videoConfig);
 
   const availableSizes = useMemo(
-    () => getSizesForVideoModel(videoConfig, inputs.model),
-    [videoConfig, inputs.model],
+    () => getSizesForVideoModel(videoConfig, inputs.model, mode),
+    [videoConfig, inputs.model, mode],
   );
   const availableDurations = useMemo(
-    () => getDurationsForVideoModel(videoConfig, inputs.model),
-    [videoConfig, inputs.model],
+    () => getDurationsForVideoModel(videoConfig, inputs.model, mode),
+    [videoConfig, inputs.model, mode],
   );
   const availableAspectRatios = useMemo(
-    () => getAspectRatiosForVideoModel(videoConfig, inputs.model),
-    [videoConfig, inputs.model],
+    () => getAspectRatiosForVideoModel(videoConfig, inputs.model, mode),
+    [videoConfig, inputs.model, mode],
   );
   // 输入文件大小上限(MB;0=不限)。i2v/flf2v/s2v/sr/vace 上传帧图/音频/视频的护栏。
   const maxInputMB = useMemo(
-    () => getMaxInputMBForModel(videoConfig, inputs.model),
-    [videoConfig, inputs.model],
+    () => getMaxInputMBForModel(videoConfig, inputs.model, mode),
+    [videoConfig, inputs.model, mode],
   );
   // 驱动音频时长上限(秒;0=不限)。只对数字人有意义:产出视频长度就是音频长度。
   const maxAudioSec = useMemo(
-    () => getMaxAudioSecForModel(videoConfig, inputs.model),
-    [videoConfig, inputs.model],
+    () => getMaxAudioSecForModel(videoConfig, inputs.model, mode),
+    [videoConfig, inputs.model, mode],
   );
 
   // 视频模型集合 = 管理员在「视频模型配置」里声明、且能力含「文生视频」的模型。
@@ -1539,6 +1544,7 @@ export const useVideoGeneration = ({
     isSR,
     isVACE,
     isDub,
+    isFlf2vSelected,
     needsImage,
     followsInput,
     dubAvailable,

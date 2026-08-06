@@ -16,6 +16,7 @@ import {
 } from '../../constants/imagePlayground.constants';
 import { UserContext } from '../../context/User';
 import { blockChatDrag } from '../playground/blockChatDrag';
+import PromptOptimizeButton from '../playground/PromptOptimizeButton';
 import ImagePreviewModal from './ImagePreviewModal';
 
 const WELCOME_ID = '__welcome__';
@@ -84,6 +85,7 @@ const ImageChatArea = ({
   generating,
   turnLimitReached = false,
   missingRequiredImage = false,
+  mode = 'text2image',
   showPresets = false,
   onSend,
   onRegenerate,
@@ -94,6 +96,8 @@ const ImageChatArea = ({
   const [preview, setPreview] = useState({ visible: false, src: '' });
   // 受控输入框:预设按钮直接 setInputValue,发送后清空(缺图/上限时不清空,提示词不丢)。
   const [inputValue, setInputValue] = useState('');
+  // AI 优化提示词在途:此刻允许发送等于把没优化的原文发出去,故一并灰掉发送按钮。
+  const [optimizing, setOptimizing] = useState(false);
 
   const roleConfig = useMemo(
     () => ({
@@ -221,7 +225,7 @@ const ImageChatArea = ({
   const renderInputArea = useCallback(() => {
     // 缺必填底图/生成中/达上限时置灰,回车与点击均不发送,提示词不丢。
     const blockSend = generating || turnLimitReached || missingRequiredImage;
-    const canSend = !blockSend && inputValue.trim().length > 0;
+    const canSend = !blockSend && !optimizing && inputValue.trim().length > 0;
     const doSend = () => {
       if (!canSend) return;
       onSend(inputValue.trim());
@@ -263,6 +267,14 @@ const ImageChatArea = ({
             ))}
           </div>
         )}
+        <PromptOptimizeButton
+          category='image'
+          tabKey={mode}
+          value={inputValue}
+          onChange={setInputValue}
+          disabled={generating}
+          onOptimizingChange={setOptimizing}
+        />
         <div className='relative'>
           <TextArea
             value={inputValue}
@@ -306,7 +318,9 @@ const ImageChatArea = ({
     turnLimitReached,
     missingRequiredImage,
     inputValue,
+    optimizing,
     onSend,
+    mode,
     t,
   ]);
 

@@ -6,6 +6,8 @@
 // 通用状态机/轮询/内容地址等工具直接复用 videoPlayground.constants;结果播放/下载按返回的
 // content-url + media-type 处理,格式无关(见 MusicChatArea)。
 
+import { tabScopedValue } from './playgroundAdmin.constants';
+
 export {
   VIDEO_API_ENDPOINTS as MUSIC_API_ENDPOINTS,
   VIDEO_STATUS as MUSIC_STATUS,
@@ -321,6 +323,26 @@ const parseTranslationCfg = (cfg) => ({
     typeof cfg?.defaultModel === 'string' ? cfg.defaultModel.trim() : '',
 });
 
+// tab 子层规范化:models[name].tabs[tabKey] 只放该 tab 声明用得到的字段。
+// 空对象保留(= 该模型挂进了这个 tab,参数全走兜底);未配的字段不落键,好让
+// tabScopedValue 正确降级。translation 是复合项,只在显式给了对象时才落键。
+const normalizeMusicTabs = (raw) => {
+  if (!raw || typeof raw !== 'object') return {};
+  const out = {};
+  Object.entries(raw).forEach(([tabKey, cfg]) => {
+    const entry = {};
+    const chars = toPositiveInt(cfg?.maxChars);
+    if (chars != null) entry.maxChars = chars;
+    const mb = toPositiveInt(cfg?.refAudioMaxMB);
+    if (mb != null) entry.refAudioMaxMB = mb;
+    if (cfg?.translation && typeof cfg.translation === 'object') {
+      entry.translation = parseTranslationCfg(cfg.translation);
+    }
+    out[tabKey] = entry;
+  });
+  return out;
+};
+
 // 解析 status 中的 MusicModelConfig(字符串或对象)。形如:
 //   { default: { maxChars, refAudioMaxMB, videoMaxMB },
 //     models: { <model>: { capabilities:[], maxChars, refAudioMaxMB, videoMaxMB } } }
@@ -346,6 +368,7 @@ export const parseMusicModelConfig = (raw) => {
           refAudioMaxMB: toPositiveInt(cfg?.refAudioMaxMB),
           videoMaxMB: toPositiveInt(cfg?.videoMaxMB),
           translation: parseTranslationCfg(cfg?.translation),
+          tabs: normalizeMusicTabs(cfg?.tabs),
         };
       });
     }
@@ -376,23 +399,29 @@ export const getMusicModelSet = (config, capability, matchCaps) => {
   return set;
 };
 
-// 某模型的翻译配置(是否启用中译英 + 默认语言模型)。仅按模型,无全局兜底。
-export const getTranslationForModel = (config, model) => {
-  const t = config?.models?.[model]?.translation;
+// 某模型的翻译配置(是否启用中译英 + 默认语言模型):tab 级 → 模型级。无全局兜底。
+export const getTranslationForModel = (config, model, tabKey) => {
+  const m = config?.models?.[model];
+  const t = tabScopedValue(m, tabKey, 'translation') || m?.translation;
   return { enabled: t?.enabled === true, defaultModel: t?.defaultModel || '' };
 };
 
-// 字数上限:按模型配置 → 全局默认 → 兜底常量。0 表示不限制。
-export const getMaxCharsForModel = (config, model) => {
+// 字数上限:tab 级 → 模型级 → 全局默认 → 兜底常量。0 表示不限制。
+// tabKey 传空时退化为改造前的「只按模型名」语义(直连请求/非体验区调用)。
+export const getMaxCharsForModel = (config, model, tabKey) => {
   const m = config?.models?.[model];
+  const scoped = tabScopedValue(m, tabKey, 'maxChars');
+  if (scoped != null) return scoped;
   if (m && m.maxChars != null) return m.maxChars;
   if (config?.default?.maxChars != null) return config.default.maxChars;
   return MUSIC_DEFAULT_MAX_CHARS;
 };
 
-// 参考音大小上限(MB):按模型配置 → 全局默认 → 兜底常量。
-export const getRefAudioMaxMBForModel = (config, model) => {
+// 参考音大小上限(MB):tab 级 → 模型级 → 全局默认 → 兜底常量。
+export const getRefAudioMaxMBForModel = (config, model, tabKey) => {
   const m = config?.models?.[model];
+  const scoped = tabScopedValue(m, tabKey, 'refAudioMaxMB');
+  if (scoped != null) return scoped;
   if (m && m.refAudioMaxMB != null) return m.refAudioMaxMB;
   if (config?.default?.refAudioMaxMB != null)
     return config.default.refAudioMaxMB;
@@ -400,6 +429,8 @@ export const getRefAudioMaxMBForModel = (config, model) => {
 };
 
 // 视频大小上限(MB):按模型配置 → 全局默认 → 兜底常量。
+// 无 tab 级:AudioX 视频生音(v2m/tv2m)已下线,音乐页当前没有吃视频的玩法,故不进
+// 任何 tab 的 fields;它只剩服务端对直连请求的兜底,保持模型级语义。
 export const getVideoMaxMBForModel = (config, model) => {
   const m = config?.models?.[model];
   if (m && m.videoMaxMB != null) return m.videoMaxMB;

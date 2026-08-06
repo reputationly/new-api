@@ -1,5 +1,7 @@
 // 视频模型相关常量
 
+import { tabScopedValue } from './playgroundAdmin.constants';
+
 export const VIDEO_API_ENDPOINTS = {
   VIDEO_GENERATIONS: '/pg/videos', // POST 提交任务
   VIDEO_FETCH: '/pg/videos', // GET /pg/videos/:id 轮询
@@ -140,27 +142,33 @@ export const VIDEO_EXAMPLES = {
 // 「首尾帧」。它们是同一份权重、不同启动参数的两个引擎实例,task 在实例启动期就定死了:
 // i2v 实例收到尾帧会静默丢弃(I2VInputInfo 没有 last_frame_path 字段),flf2v 实例缺尾帧
 // 会读空路径直接崩。所以尾帧「能不能传/要不要传」只能由所选模型决定,不能按用户输入派生。
-// 判据与后端 inferTaskType(relay/channel/task/gpustackplus/adaptor.go)同源:名字含
-// flf2v 即首尾帧模型,否则按 i2v。
+// 判据优先读运营在体验区管理「关键帧」一格里给该模型声明的 taskType;没声明才退回
+// 名字里含不含 flf2v。与后端 taskTypeOfRequest 的优先级链同源(声明 → 输入形态 → 名字)。
 //
-// 注意判据的**对象**前后端不同:这里拿到的是对外模型名(/api/pricing 的 key、运营在
-// 「视频模型配置」里填的那个),后端 inferTaskType 拿到的是渠道重定向后的上游名。两者
-// 分叉就会错配 —— 对外名叫 wan2.2-keyframe、上游是 wan2.2-flf2v-a14b 时,前端判成 i2v、
-// 隐藏尾帧槽并显式下发 task_type=i2v(显式值优先于 inferTaskType),该模型在体验区直接
-// 不可用;反向(对外名含 flf2v、上游是 i2v 实例)同样错配。
-// 所以约束是:新增首尾帧模型时,GPUStack 上游名与对外名**都**必须带 flf2v;做了模型
-// 重定向的,别名也要保留这个标识(运营页 SettingsVideoModels 的说明里同步了这条)。
-export const isFlf2vModel = (model) =>
-  String(model || '')
+// 为什么要声明字段:名字判据的**对象**前后端不同 —— 这里拿到的是对外模型名(/api/pricing
+// 的 key),后端兜底推断拿到的是渠道重定向后的上游名。两者分叉就会错配:对外名叫
+// wan2.2-keyframe、上游是 wan2.2-flf2v-a14b 时,前端判成 i2v、隐藏尾帧槽并显式下发
+// task_type=i2v,该模型在体验区直接不可用;反向同样错配。声明字段把这个判断从「猜名字」
+// 变成「运营说了算」,前后端读的是同一份声明,不可能再分叉。
+//
+// 未声明时仍受原约束:GPUStack 上游名与对外名**都**要带 flf2v,做了模型重定向的别名也
+// 要保留这个标识(体验区管理「关键帧」一格的说明里同步了这条)。
+export const isFlf2vModel = (model, config) => {
+  const declared =
+    config?.models?.[String(model || '').trim()]?.tabs?.flf2v?.taskType;
+  if (declared) return declared === 'flf2v';
+  return String(model || '')
     .toLowerCase()
     .includes('flf2v');
+};
 
 // 一键示例按 mode 取;「关键帧」下再按所选模型过滤——i2v 模型只能用仅首帧的示例,
 // flf2v 模型只能用带尾帧的示例,否则点了示例反而凑不出该模型要求的输入组合。
-export const videoExamplesForMode = (mode, model) => {
+// 判断结果由调用方传入(isFlf2vModel 现在要配合配置声明读,见上),这里不再自己推。
+export const videoExamplesForMode = (mode, isFlf2vSelected) => {
   const list = VIDEO_EXAMPLES[mode] || [];
   if (mode !== 'flf2v') return list;
-  const wantLast = isFlf2vModel(model);
+  const wantLast = Boolean(isFlf2vSelected);
   return list.filter((ex) => Boolean(ex?.files?.lastFrame) === wantLast);
 };
 
@@ -385,6 +393,41 @@ const toAudioSec = (v) => {
   return Number.isFinite(n) && n >= 0 ? n : null;
 };
 
+// tab 子层规范化：只保留声明过的字段，值的清洗规则与模型级一致。
+// 未配的字段一律不落键（undefined），这样 tabScopedValue 才能正确地"落空即降级"。
+const normalizeVideoTabEntry = (cfg) => {
+  const out = {};
+  const sizes = normalizeSizeList(cfg?.sizes);
+  if (sizes.length) out.sizes = sizes;
+  const durations = normalizeList(cfg?.durations);
+  if (durations.length) out.durations = durations;
+  const ratios = normalizeList(cfg?.aspectRatios);
+  if (ratios.length) out.aspectRatios = ratios;
+  const mb = toInputMB(cfg?.maxInputMB);
+  if (mb != null) out.maxInputMB = mb;
+  const sec = toAudioSec(cfg?.maxAudioSec);
+  if (sec != null) out.maxAudioSec = sec;
+  // taskType:该 tab 覆盖多个门面 task_type 时(「关键帧」= i2v/flf2v),由运营在体验区
+  // 管理里指明这个模型属于哪一个。不是参数,是玩法声明——所以不进 tab.fields,
+  // 也就不会被 recomputeModelLevel 反推到模型级。
+  const taskType = String(cfg?.taskType || '')
+    .trim()
+    .toLowerCase();
+  if (taskType) out.taskType = taskType;
+  return out;
+};
+
+const normalizeTabsMap = (raw, normalizeEntry) => {
+  if (!raw || typeof raw !== 'object') return {};
+  const out = {};
+  Object.entries(raw).forEach(([tabKey, cfg]) => {
+    // 空对象也保留：它是「该模型已挂进这个 tab、但参数全用兜底」的显式声明，
+    // 能力标签正是由这些键派生的，丢了会让模型从 tab 里消失。
+    out[tabKey] = normalizeEntry(cfg);
+  });
+  return out;
+};
+
 export const parseVideoModelConfig = (raw) => {
   // 未配置时默认留空，交由 getSizes/DurationsForVideoModel 按模型类别兜底
   const empty = {
@@ -412,6 +455,7 @@ export const parseVideoModelConfig = (raw) => {
           maxInputMB: toInputMB(cfg?.maxInputMB),
           maxAudioSec: toAudioSec(cfg?.maxAudioSec),
           pipeline: !!cfg?.pipeline,
+          tabs: normalizeTabsMap(cfg?.tabs, normalizeVideoTabEntry),
         };
       });
     }
@@ -430,35 +474,47 @@ export const parseVideoModelConfig = (raw) => {
   }
 };
 
-// 输入文件大小上限(MB):按模型配置 → 全局默认 → 0(不限)。
-export const getMaxInputMBForModel = (config, model) => {
+// ── 参数读取(全部 tab 感知)────────────────────────────────────────────
+// 优先级一律 tab 级 → 模型级 → 管理端全局默认 → 内置兜底。tabKey 传空时退化成
+// 改造前的「只按模型名」语义(直连请求解析不出 tab、或非体验区调用时)。
+// 同一模型挂多个玩法时,靠 tab 级把参数分开:文生视频给尺寸/宽高比,图生视频给上传
+// 上限,互不串扰。
+
+// 输入文件大小上限(MB):0(不限)兜底。
+export const getMaxInputMBForModel = (config, model, tabKey) => {
   const m = config?.models?.[model];
+  const scoped = tabScopedValue(m, tabKey, 'maxInputMB');
+  if (scoped != null) return scoped;
   if (m && m.maxInputMB != null) return m.maxInputMB;
   if (config?.default?.maxInputMB != null) return config.default.maxInputMB;
   return 0;
 };
 
-// 驱动音频时长上限(秒):按模型配置 → 全局默认 → 0(不限)。
-export const getMaxAudioSecForModel = (config, model) => {
+// 驱动音频时长上限(秒):0(不限)兜底。
+export const getMaxAudioSecForModel = (config, model, tabKey) => {
   const m = config?.models?.[model];
+  const scoped = tabScopedValue(m, tabKey, 'maxAudioSec');
+  if (scoped != null) return scoped;
   if (m && m.maxAudioSec != null) return m.maxAudioSec;
   if (config?.default?.maxAudioSec != null) return config.default.maxAudioSec;
   return 0;
 };
 
-// 尺寸/分辨率:纯 opt-in——按模型配置 → 管理端全局默认 → 空(未配置则不展示、不下发)。
-// 与宽高比一致:留空即"不支持选择",避免给未配置的模型误显尺寸选择器。
-export const getSizesForVideoModel = (config, model) => {
+// 尺寸/分辨率:纯 opt-in——留空即"不支持选择",避免给未配置的模型误显尺寸选择器。
+export const getSizesForVideoModel = (config, model, tabKey) => {
   const m = config?.models?.[model];
+  const scoped = tabScopedValue(m, tabKey, 'sizes');
+  if (scoped) return scoped;
   if (m && Array.isArray(m.sizes) && m.sizes.length > 0) return m.sizes;
   if (config?.default?.sizes?.length) return config.default.sizes;
   return [];
 };
 
-// 宽高比:纯 opt-in——按模型配置 → 管理端全局默认 → 空(未配置则不展示、不下发)。
-// 不做全集兜底,避免给 minimax 等不支持宽高比的模型误显选择器。
-export const getAspectRatiosForVideoModel = (config, model) => {
+// 宽高比:纯 opt-in。不做全集兜底,避免给 minimax 等不支持宽高比的模型误显选择器。
+export const getAspectRatiosForVideoModel = (config, model, tabKey) => {
   const m = config?.models?.[model];
+  const scoped = tabScopedValue(m, tabKey, 'aspectRatios');
+  if (scoped) return scoped;
   if (m && Array.isArray(m.aspectRatios) && m.aspectRatios.length > 0)
     return m.aspectRatios;
   if (config?.default?.aspectRatios?.length) return config.default.aspectRatios;
@@ -505,9 +561,11 @@ export const parseProgress = (raw) => {
   return undefined;
 };
 
-// 时长优先级：按模型配置 → 管理端全局默认 → 按模型类别兜底（sora seconds / minimax duration）
-export const getDurationsForVideoModel = (config, model) => {
+// 时长优先级：tab → 模型 → 管理端全局默认 → 按模型类别兜底（sora seconds / minimax duration）
+export const getDurationsForVideoModel = (config, model, tabKey) => {
   const m = config?.models?.[model];
+  const scoped = tabScopedValue(m, tabKey, 'durations');
+  if (scoped) return scoped;
   if (m && Array.isArray(m.durations) && m.durations.length > 0)
     return m.durations;
   if (config?.default?.durations?.length) return config.default.durations;

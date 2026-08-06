@@ -196,7 +196,7 @@ const AudioModel = () => {
         {/* 视频配乐(dub):输入上传视频、产物配好音的视频 —— 复用视频体验区三栏
             (VideoPlaygroundBody/useVideoGeneration,task_type=v2a),不走音频 hook。 */}
         {activeTab === 'dub' ? (
-          <VideoPlaygroundBody key={activeTab} mode='dub' />
+          <VideoPlaygroundBody key={activeTab} mode='dub' category='audio' />
         ) : (
           <AudioPlaygroundBody key={activeTab} mode={activeTab} />
         )}

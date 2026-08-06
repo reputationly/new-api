@@ -359,7 +359,7 @@ const Audio = () => {
             {/* 视频配音：入口在语音页，但输入是视频、产物也是视频，复用视频体验区
                 （与桌面端同一分流，走 useVideoGeneration 的 task_type=v2a）。 */}
             {mode === 'dub' ? (
-              <VideoBody key={mode} mode='dub' />
+              <VideoBody key={mode} mode='dub' category='audio' />
             ) : (
               <AudioBody key={mode} mode={mode} />
             )}

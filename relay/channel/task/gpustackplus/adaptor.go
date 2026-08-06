@@ -177,10 +177,22 @@ func (a *TaskAdaptor) ValidateRequestAndSetAction(c *gin.Context, info *relaycom
 	// (不重试、不误标渠道故障)。
 	// 配置按公开模型名键控(体验区用选中的公开名读它),映射不改 OriginModelName;
 	// 故只用公开名做 key,与映射时机无关。
+	// tab 的选取依赖 task_type,而它主要由「体验区配置声明的候选集 ∩ 输入形态」定
+	// (见 taskTypeOfRequest),两者都只认公开名与请求内容,与映射时机无关。
+	// 只有模型没配进体验区时才退回 inferTaskType(名字推断):那条兜底路径这里用公开名、
+	// BuildRequestBody 用映射后的上游名,重定向时仍可能分叉。不误拒的依据是
+	// 「模型级配置 ⊇ 任一 tab」这条不变量(见前端 recomputeModelLevel:列表并集、上限取
+	// max、任一 tab 不限则整体不限;迁移也只从模型级往 tab 扇出)—— 推错到没配的 tab 会
+	// 退回模型级(最宽松)。若哪天把模型级改成交集或精确值,须把校验挪到模型映射之后。
 	// 尺寸不校验:sizes 只供体验区做候选值,档位词/宽高比与精确像素对不上(见
 	// common/media_model_config.go 文件头),交由引擎判定。
 	if req, err := relaycommon.GetTaskRequest(c); err == nil {
-		if verr := common.ValidateVideoDurationForModel(req.Duration, req.Seconds,
+		taskType, terr := taskTypeOfRequest(&req,
+			firstNonEmpty(req.Model, info.OriginModelName), req.Model, info.OriginModelName)
+		if terr != nil {
+			return service.TaskErrorWrapperLocal(terr, "invalid_request", http.StatusBadRequest)
+		}
+		if verr := common.ValidateVideoDurationForModel(taskType, req.Duration, req.Seconds,
 			req.Model, info.OriginModelName); verr != nil {
 			return service.TaskErrorWrapperLocal(verr, "invalid_request", http.StatusBadRequest)
 		}
@@ -226,7 +238,14 @@ func (a *TaskAdaptor) BuildRequestBody(c *gin.Context, info *relaycommon.RelayIn
 	// (target_video_length / num_frames 等),否则客户端可绕过顶层 duration 的校验,
 	// 用 metadata 直接注入被禁值。被锁维度只允许走(已校验的)顶层字段。
 	// 尺寸无对应加固:sizes 不再做接口校验,没有可绕过的校验,metadata 里的尺寸类键照常透传。
-	allowedDurations, _ := common.VideoDurationsAllowedForModel(req.Model, info.OriginModelName)
+	// task_type 在这里一次解析、下面复用:早前 allowedDurations 与 body["task_type"]
+	// 各推一次,前者用公开名、后者用上游名,做了模型重定向时会分叉。
+	resolvedTaskType, err := taskTypeOfRequest(&req, modelName, req.Model, info.OriginModelName)
+	if err != nil {
+		return nil, err
+	}
+	allowedDurations, _ := common.VideoDurationsAllowedForModel(
+		resolvedTaskType, req.Model, info.OriginModelName)
 	durationLocked := len(allowedDurations) > 0
 	body := make(map[string]any, len(req.Metadata)+8)
 	for k, v := range req.Metadata {
@@ -247,7 +266,7 @@ func (a *TaskAdaptor) BuildRequestBody(c *gin.Context, info *relaycommon.RelayIn
 	// user_id 用字符串:与 NFS 输入路径的 <user_id> 段一致,门面校验 parent_dir_name == user_id。
 	body["user_id"] = fmt.Sprintf("%d", info.UserId)
 	if _, ok := body["task_type"]; !ok {
-		body["task_type"] = inferTaskType(modelName)
+		body["task_type"] = resolvedTaskType
 	}
 	// 转发顶层 size:同时给 size 与由它换算的 aspect_ratio,兼容不同引擎读法。
 	// 顶层 size 优先级高于 metadata 同名键(在上面的透传之后赋值,覆盖之)。
@@ -321,6 +340,13 @@ func (a *TaskAdaptor) BuildRequestBody(c *gin.Context, info *relaycommon.RelayIn
 	if taskType == "i2v" && len(req.Images) > 1 {
 		return nil, localBadRequest(fmt.Errorf("模型 %s 的任务类型 i2v(图生视频)只接受首帧一张图,多传的图不会生效;首尾帧请显式指定 metadata.task_type=flf2v 并提供 images=[首帧,尾帧]", modelName))
 	}
+	// 同上:s2v 只物化 images[0](materializeS2VInputs),多传的人物图静默丢弃。
+	// 这条防呆不能靠 taskTypesCompatibleWithInputs 收紧谓词代劳 —— 单玩法模型走
+	// 「候选集只剩一个」的快捷路径、显式 metadata.task_type 走第 1 级,两条都不看谓词;
+	// 且谓词收紧后兼容集为空,报出来的是"无法判定是哪种玩法",指错方向。
+	if taskType == "s2v" && len(req.Images) > 1 {
+		return nil, localBadRequest(fmt.Errorf("模型 %s 的任务类型 s2v(数字人)只接受一张人物图,多传的图不会生效", modelName))
+	}
 	if taskType == "tts" {
 		// 语音合成不接受图片输入(参考音走 metadata.voice,下面单独物化)。
 		if req.HasImage() {
@@ -330,7 +356,7 @@ func (a *TaskAdaptor) BuildRequestBody(c *gin.Context, info *relaycommon.RelayIn
 			return nil, localBadRequest(fmt.Errorf("模型 %s 的任务类型 tts 需要合成文本(prompt)", modelName))
 		}
 		// 字数上限(AudioModelConfig,按模型/全局默认;0=不限制):就地本地 400,防前端绕过。
-		if err := common.ValidateAudioTextForModel(req.Prompt, req.Model, info.OriginModelName, modelName); err != nil {
+		if err := common.ValidateAudioTextForModel(taskType, req.Prompt, req.Model, info.OriginModelName, modelName); err != nil {
 			return nil, localBadRequest(err)
 		}
 	}
@@ -349,7 +375,7 @@ func (a *TaskAdaptor) BuildRequestBody(c *gin.Context, info *relaycommon.RelayIn
 			if strings.TrimSpace(txt) == "" {
 				continue
 			}
-			if err := common.ValidateMusicTextForModel(txt, req.Model, info.OriginModelName, modelName); err != nil {
+			if err := common.ValidateMusicTextForModel(taskType, txt, req.Model, info.OriginModelName, modelName); err != nil {
 				return nil, localBadRequest(err)
 			}
 		}
@@ -450,7 +476,7 @@ func (a *TaskAdaptor) BuildRequestBody(c *gin.Context, info *relaycommon.RelayIn
 	// "任何来源的 video_duration 都得等于这个数"。
 	if taskType == "s2v" {
 		if _, ok := body["video_duration"]; !ok {
-			if maxSec, cfgOK := common.VideoMaxAudioSecForModel(req.Model, info.OriginModelName, modelName); cfgOK && maxSec > 0 {
+			if maxSec, cfgOK := common.VideoMaxAudioSecForModel(taskType, req.Model, info.OriginModelName, modelName); cfgOK && maxSec > 0 {
 				body["video_duration"] = maxSec + nfsinput.AudioDurationToleranceSec
 			}
 		}
@@ -512,6 +538,161 @@ func foldEmotionParamsIntoExtra(body map[string]any) {
 	if len(extra) > 0 {
 		body["extra_params"] = extra
 	}
+}
+
+// ── task_type 解析 ────────────────────────────────────────────────────────
+//
+// 玩法是**请求**的属性,不是**模型**的属性。一个部署同时服务文生/图生/首尾帧是我们期望
+// 的部署形态(省显存),这时模型名里不可能编码出"这一次是哪种玩法"。历史实现只有
+// inferTaskType 一条路,等于把 GPUStack 的部署命名当成了跨系统 API 契约 —— 而部署名是
+// 运营随手起的,没有任何地方能强制,判错的后果还是静默的(落 t2v 兜底,按错误玩法派发)。
+//
+// 现在按四级解析,名字推断降为最后兜底:
+//
+//	1. 显式 metadata.task_type            —— 体验区非文生玩法都走这条
+//	2. 体验区配置声明的候选集只有一个     —— 单玩法模型,直接定
+//	3. 候选集 ∩ 输入形态 恰好剩一个       —— 多玩法模型的主力判据,见下
+//	4. 模型没配进体验区                   —— 退回 inferTaskType,维持改造前语义
+//	4'. 第 3 级剩多个,但 inferTaskType 的答案就在其中 —— 采信名字。名字带任务标识的
+//	    存量模型(wan2.2-flf2v-a14b 收到首帧+尾帧两张图)改造前就这么判,不裁决会把
+//	    存量直连请求打成 400
+//	   都不成立 → 明确报错,要求显式指定,而不是默默猜一个发上去
+//
+// 第 3 级只对视频大类生效(候选集全部落在 videoFamilyTaskTypes 里时)。图像/语音/音乐
+// 大类要么候选集本就唯一(语音四个 tab 共用 tts),要么输入形态区分度不足(音乐 t2m/t2a/
+// svs 都是纯文本),一律走第 4 级 —— 不改变这些大类的现有行为。
+//
+// 由此推出一个刻意留下的边界:同名模型被配进多份配置时(如既在 VideoModelConfig 又在
+// MusicModelConfig),候选集是四份的并集(见 common.PlaygroundTaskTypeCandidates),必然
+// 混入非视频 task_type,于是必然退化到第 4 级名字兜底 —— 视频那部分也跟着失去输入推导。
+// 这不是回归(退化后的行为与改造前逐字相同),而是"少赚一笔"。要在这种配置下继续推导,
+// 得先知道本次请求属于哪个大类;但四个大类共用同一个提交入口,大类恰恰要靠 task_type
+// 才能定 —— 循环,故不做。这种配置形态本身就该在管理页上改掉。
+
+// videoFamilyTaskTypes 视频链路的 task_type 全集;只有候选集完全落在这里面时才做输入
+// 形态推导(见 taskTypesCompatibleWithInputs)。
+var videoFamilyTaskTypes = map[string]bool{
+	"t2v": true, "i2v": true, "flf2v": true, "s2v": true,
+	"sr": true, "v2a": true,
+	"v2v": true, "rv2v": true, "r2v": true, "mv2v": true, "ads2v": true,
+}
+
+// taskTypesCompatibleWithInputs 按请求实际带了哪些输入,返回**兼容的** task_type 集合。
+//
+// 返回集合而不是"猜的那一个"是关键:判据不足时必须暴露出来,不能替调用方拍板。
+// 每条规则都要求"该玩法需要的输入齐 + 没有它不认的外来输入",后半句才是区分度的来源。
+//
+// 各玩法的输入契约取自本文件的 materialize* 函数,两处必须同步:
+//   - 首帧图(i2v/flf2v/s2v)读顶层 req.Images(image/images/input_reference 已归一);
+//   - 参考图(r2v/rv2v)读 metadata.src_ref_images —— 与首帧图是**不同的键**,
+//     "都是一张图"并不代表分不开;两个键同时给才是真歧义,落到报错。
+//   - sr/v2a 读 metadata.video;Bernini 读 metadata.src_video。
+//
+// 无法区分、只能靠显式 task_type 的两处:
+//   - metadata.video 单独出现 → sr(超分)与 v2a(配乐)输入完全一致;
+//   - src_video 恰好 2 个     → mv2v(多源编辑)与 ads2v(广告植入)输入完全一致。
+//
+// 「多传了该玩法用不上的输入」不在这里表达,由物化前的防呆逐条 400(i2v/s2v 多图、
+// v2v/mv2v/ads2v 带参考图)。两个原因:显式 metadata.task_type 与「候选集只剩一个」
+// 的快捷路径都不经过本函数,写在这里拦不全;且收紧谓词只会让兼容集变空,报出来的是
+// 「无法判定是哪种玩法」,而调用方的真实问题是「多传了输入」,指错方向。
+func taskTypesCompatibleWithInputs(req *relaycommon.TaskSubmitReq) []string {
+	images := len(req.Images)
+	hasAudio := metadataString(req.Metadata, "audio") != ""
+	hasVideo := metadataString(req.Metadata, "video") != ""
+	srcVideos := len(metadataStringList(req.Metadata, "src_video"))
+	refImages := len(metadataStringList(req.Metadata, "src_ref_images"))
+
+	noBernini := srcVideos == 0 && refImages == 0
+	noFrames := images == 0 && !hasAudio
+	var out []string
+	add := func(ok bool, taskType string) {
+		if ok {
+			out = append(out, taskType)
+		}
+	}
+	// 帧图链路:顶层图,不碰 metadata.video / Bernini 键。
+	add(images == 0 && !hasAudio && !hasVideo && noBernini, "t2v")
+	add(images >= 1 && !hasAudio && !hasVideo && noBernini, "i2v")
+	add(images >= 2 && !hasAudio && !hasVideo && noBernini, "flf2v")
+	add(images >= 1 && hasAudio && !hasVideo && noBernini, "s2v")
+	// 整段视频输入:sr 与 v2a 同形,靠显式 task_type 或 tab 声明分。
+	add(hasVideo && noFrames && noBernini, "sr")
+	add(hasVideo && noFrames && noBernini, "v2a")
+	// Bernini 编辑链路:自有键,不碰顶层图与 metadata.video。
+	add(srcVideos == 1 && refImages == 0 && noFrames && !hasVideo, "v2v")
+	add(srcVideos == 1 && refImages >= 1 && noFrames && !hasVideo, "rv2v")
+	add(srcVideos == 0 && refImages >= 1 && noFrames && !hasVideo, "r2v")
+	add(srcVideos == 2 && noFrames && !hasVideo, "mv2v")
+	add(srcVideos == 2 && noFrames && !hasVideo, "ads2v")
+	return out
+}
+
+// taskTypeOfRequest 复原本次请求的 task_type;判据不足时返回错误(见上方解析链说明)。
+// 校验阶段与 BuildRequestBody 都调它,保证两处判据一致 —— 早前两处分别用公开名和映射后
+// 的上游名各推一次,重定向时会分叉。
+//
+// 两个名字参数刻意分开,别合并:
+//   - configNames 查体验区配置,配置按**公开名**键控,两个调用点都只能传公开名,
+//     否则两处候选集不同,分叉就又回来了;
+//   - inferName 只喂最后的名字推断兜底,该用当下能拿到的最准的名字(BuildRequestBody
+//     阶段是映射后的上游名,校验阶段只有公开名)。
+func taskTypeOfRequest(req *relaycommon.TaskSubmitReq, inferName string, configNames ...string) (string, error) {
+	fallback := inferTaskType(inferName)
+	if req == nil {
+		return fallback, nil
+	}
+	// 1. 显式声明。
+	if v, ok := req.Metadata["task_type"].(string); ok && strings.TrimSpace(v) != "" {
+		return strings.TrimSpace(v), nil
+	}
+	// 2/4. 体验区配置声明的候选集。
+	cands := common.PlaygroundTaskTypeCandidates(configNames...)
+	if len(cands) == 0 {
+		return fallback, nil // 未配进体验区(纯直连模型):维持改造前语义
+	}
+	if len(cands) == 1 {
+		return cands[0], nil
+	}
+	for _, tt := range cands {
+		if !videoFamilyTaskTypes[tt] {
+			return fallback, nil // 非视频大类不做输入推导,行为不变
+		}
+	}
+	// 3. 用输入形态在候选集里收敛。
+	compatible := map[string]bool{}
+	for _, tt := range taskTypesCompatibleWithInputs(req) {
+		compatible[tt] = true
+	}
+	var narrowed []string
+	for _, tt := range cands {
+		if compatible[tt] {
+			narrowed = append(narrowed, tt)
+		}
+	}
+	if len(narrowed) == 1 {
+		return narrowed[0], nil
+	}
+	// 输入形态分不开、但模型名带任务标识时按名字收口:wan2.2-flf2v-a14b 收到首帧+尾帧
+	// 两张图,i2v/flf2v 都兼容 —— 改造前正是按名字判的,不裁决会把存量直连请求打成 400。
+	// 只在 narrowed 里裁决:名字给的答案必须既是该模型声明过的玩法,又与本次输入相容。
+	for _, tt := range narrowed {
+		if tt == fallback {
+			return fallback, nil
+		}
+	}
+	// 判不出来:明确报错,不猜。narrowed 为空说明输入形态不匹配该模型声明的任何玩法
+	// (这时**不**拿名字兜底 —— 名字给的答案同样发不得,如只挂「关键帧」的模型收到
+	// src_ref_images,按名字会当 t2v 发出去,本来就是错的);多于一个且名字也推不进
+	// 候选集,说明这几种玩法的输入形态本就相同(sr/v2a、mv2v/ads2v,或无特征名模型收到
+	// 2 张图时的 i2v/flf2v)—— 两种情况都只有调用方自己知道意图。
+	ambiguous := narrowed
+	if len(ambiguous) == 0 {
+		ambiguous = cands
+	}
+	return "", fmt.Errorf(
+		"模型 %s 同时服务多种玩法(%s),本次请求的输入形态无法判定是哪一种:请在 metadata.task_type 里显式指定",
+		firstNonEmpty(configNames...), strings.Join(ambiguous, "/"))
 }
 
 // inferTaskType 按模型名推断门面 task_type;显式 metadata.task_type 优先于此推断。
@@ -706,10 +887,18 @@ func materializeBerniniInputs(c *gin.Context, info *relaycommon.RelayInfo, taskT
 		return nil, fmt.Errorf("模型 %s 的 metadata.src_video 最多 %d 个视频,收到 %d 个", modelName, maxBerniniSrcVideos, len(srcVideos))
 	}
 	// 按 task_type 精确校验输入(前端已按输入组合分流,这里是服务端兜底,防直连绕过)。
+	//
+	// v2v/mv2v/ads2v 一并拒收参考图:下面物化时它们只写源视频(见 rv2v/r2v 的分支条件),
+	// 参考图会被静默丢弃 —— 与 i2v 多图那条防呆同一个理由,宁可 400 也不要静默降级。
+	// 这里而不是 taskTypesCompatibleWithInputs 里拦:显式 metadata.task_type 与「候选集
+	// 只剩一个」的快捷路径都不看谓词,只有落在物化前才拦得全。
 	switch taskType {
 	case "v2v":
 		if len(srcVideos) != 1 {
 			return nil, fmt.Errorf("模型 %s 的任务类型 v2v(视频编辑)需要且只需要 1 个源视频(metadata.src_video);两个视频请用 mv2v/ads2v", modelName)
+		}
+		if len(refImages) != 0 {
+			return nil, fmt.Errorf("模型 %s 的任务类型 v2v(视频编辑)不接受参考图(metadata.src_ref_images);带参考图请用 rv2v", modelName)
 		}
 	case "rv2v":
 		if len(srcVideos) != 1 || len(refImages) == 0 {
@@ -725,6 +914,9 @@ func materializeBerniniInputs(c *gin.Context, info *relaycommon.RelayInfo, taskT
 	case "mv2v", "ads2v":
 		if len(srcVideos) != 2 {
 			return nil, fmt.Errorf("模型 %s 的任务类型 %s 需要恰好 2 个源视频(metadata.src_video 数组);单视频编辑请用 v2v/rv2v", modelName, taskType)
+		}
+		if len(refImages) != 0 {
+			return nil, fmt.Errorf("模型 %s 的任务类型 %s 只用源视频,不接受参考图(metadata.src_ref_images);带参考图的编辑请用 rv2v/r2v", modelName, taskType)
 		}
 	default:
 		return nil, fmt.Errorf("模型 %s 的视频编辑任务类型 %s 不支持", modelName, taskType)
@@ -772,12 +964,12 @@ func inputGroupID(info *relaycommon.RelayInfo) string {
 // 大小上限(吃上传的 i2v/flf2v/s2v/sr/vace 通用护栏;0/未配=不限;服务端兜底防直连绕过前端)。
 func newVideoMaterializer(info *relaycommon.RelayInfo, taskType, modelName string, req relaycommon.TaskSubmitReq) *nfsinput.Materializer {
 	m := nfsinput.NewMaterializer(taskType, modelName, fmt.Sprintf("%d", info.UserId), inputGroupID(info))
-	if maxBytes, ok := common.VideoMaxInputBytesForModel(req.Model, info.OriginModelName, modelName); ok {
+	if maxBytes, ok := common.VideoMaxInputBytesForModel(taskType, req.Model, info.OriginModelName, modelName); ok {
 		m.SetMaxBytes(maxBytes)
 	}
 	// 音频时长上限:与体积上限正交。物化层按字段判定,只有 s2v 会写音频字段(见
 	// materializeS2VInputs),其余任务共用本构造器也不受影响,故无需按 taskType 分流。
-	if maxSec, ok := common.VideoMaxAudioSecForModel(req.Model, info.OriginModelName, modelName); ok {
+	if maxSec, ok := common.VideoMaxAudioSecForModel(taskType, req.Model, info.OriginModelName, modelName); ok {
 		m.SetMaxAudioSeconds(maxSec)
 	}
 	return m
@@ -859,7 +1051,7 @@ func materializeTTSInputs(c *gin.Context, info *relaycommon.RelayInfo, taskType,
 	m := nfsinput.NewMaterializer(taskType, modelName, fmt.Sprintf("%d", info.UserId), inputGroupID(info))
 	// 参考音大小上限(AudioModelConfig,按模型/全局默认;0=不限):服务端兜底,防直连绕过
 	// 前端上传限制(校验 base64 解码后 / URL 下载后的字节数,见 nfsinput.addBytesExt)。
-	if maxBytes, ok := common.AudioRefAudioMaxBytesForModel(req.Model, info.OriginModelName, modelName); ok {
+	if maxBytes, ok := common.AudioRefAudioMaxBytesForModel(taskType, req.Model, info.OriginModelName, modelName); ok {
 		m.SetMaxBytes(maxBytes)
 	}
 	ctx := c.Request.Context()
@@ -913,7 +1105,7 @@ func materializeSingingInputs(c *gin.Context, info *relaycommon.RelayInfo, taskT
 	}
 	m := nfsinput.NewMaterializer(taskType, modelName, fmt.Sprintf("%d", info.UserId), inputGroupID(info))
 	// SoulX 归「音乐」大类,参考音上限配在 MusicModelConfig.refAudioMaxMB(不是 AudioModelConfig)。
-	if maxBytes, ok := common.MusicRefAudioMaxBytesForModel(req.Model, info.OriginModelName, modelName); ok {
+	if maxBytes, ok := common.MusicRefAudioMaxBytesForModel(taskType, req.Model, info.OriginModelName, modelName); ok {
 		m.SetMaxBytes(maxBytes)
 	}
 	ctx := c.Request.Context()
@@ -969,7 +1161,7 @@ func materializeOmniTTSInputs(c *gin.Context, info *relaycommon.RelayInfo, taskT
 		return nil, nil // 预设音色 / 声音设计 / 音效:无参考音输入
 	}
 	m := nfsinput.NewMaterializer(taskType, modelName, fmt.Sprintf("%d", info.UserId), inputGroupID(info))
-	if maxBytes, ok := common.AudioRefAudioMaxBytesForModel(req.Model, info.OriginModelName, modelName); ok {
+	if maxBytes, ok := common.AudioRefAudioMaxBytesForModel(taskType, req.Model, info.OriginModelName, modelName); ok {
 		m.SetMaxBytes(maxBytes)
 	}
 	ctx := c.Request.Context()
@@ -1012,7 +1204,7 @@ func materializeMusicInputs(c *gin.Context, info *relaycommon.RelayInfo, taskTyp
 	}
 	m := nfsinput.NewMaterializer(taskType, modelName, fmt.Sprintf("%d", info.UserId), inputGroupID(info))
 	// 参考音/源音大小上限(MusicModelConfig,按模型/全局默认;0=不限):服务端兜底,防直连绕过。
-	if maxBytes, ok := common.MusicRefAudioMaxBytesForModel(req.Model, info.OriginModelName, modelName); ok {
+	if maxBytes, ok := common.MusicRefAudioMaxBytesForModel(taskType, req.Model, info.OriginModelName, modelName); ok {
 		m.SetMaxBytes(maxBytes)
 	}
 	// 单值音频(必填),失败回滚。

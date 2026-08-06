@@ -10,7 +10,7 @@ import {
 } from 'antd-mobile';
 
 import { useVideoGeneration } from '@classic/hooks/videoPlayground/useVideoGeneration';
-import { isFlf2vModel } from '@classic/constants/videoPlayground.constants';
+import { tabHasField } from '@classic/constants/playgroundAdmin.constants';
 import { useVisibleModes, useDesktopOnlyHint } from '../hooks/useVisibleModes';
 import { useAutoOpenLatest } from '../hooks/useAutoOpenLatest';
 
@@ -27,7 +27,7 @@ import ShareBar from '../components/gen/ShareBar';
 
 // 视频体验区。文生/图生/关键帧/数字人/视频编辑共用本组件，输入形态按 mode 分流；
 // 「视频配音」(dub) 的入口挂在语音页，但产物是视频，也复用这里（与桌面端一致）。
-export const VideoBody = ({ mode }) => {
+export const VideoBody = ({ mode, category = 'video' }) => {
   const {
     isI2V,
     isFLF2V,
@@ -37,7 +37,7 @@ export const VideoBody = ({ mode }) => {
     isDub,
     pipelineModel,
     needsImage,
-    followsInput,
+    isFlf2vSelected,
     maxRefImages,
     maxInputMB,
     inputs,
@@ -72,15 +72,20 @@ export const VideoBody = ({ mode }) => {
   const videoMaxMB = maxInputMB
     ? Math.min(maxInputMB, MOBILE_MAX_VIDEO_MB)
     : MOBILE_MAX_VIDEO_MB;
-  // 关键帧 tab 下 i2v 与 flf2v 是两个引擎实例，只有后者认尾帧（判据见 isFlf2vModel）。
-  const needsLastFrame = isFLF2V && isFlf2vModel(inputs.model);
+  // 关键帧 tab 下 i2v 与 flf2v 是两个引擎实例，只有后者认尾帧（判据见 isFlf2vModel，
+  // 由 useVideoGeneration 统一算好：要读运营配置里的 taskType 声明，不能只看名字）。
+  const needsLastFrame = isFLF2V && isFlf2vSelected;
   const needsVideoUpload = isVACE || isSR || isDub;
   // 锁定态（选中了某条会话）参数与素材都改不动，见 useVideoGeneration 的 handleInputChange。
   const editDisabled = generating || locked;
-  // 输出时长由输入决定的玩法不下发 duration，也就不该摆时长选择器：超分/配音跟源视频，
-  // 数字人跟驱动音频（引擎不读 target_video_length；上限由后台 maxAudioSec 配置，
-  // 后端据此下发 video_duration，见 adaptor.go 的 s2v 分支）。
-  const showDuration = !isSR && !isDub && !isS2V;
+  // 哪些参数控件出现在本 tab，统一读中央元数据的 fields（playgroundAdmin.constants.js），
+  // 不再在这里按 isSR/isDub/isS2V/followsInput 重写一遍——桌面端 VideoConfigPanel、
+  // admin 页各有一份判断时，加一个玩法要改三处且极易漏。
+  // 语义仍与原来一致：输出时长由输入决定的玩法（配音跟源视频、数字人跟驱动音频）不声明
+  // durations，尺寸/比例跟随输入图的玩法不声明 sizes/aspectRatios。
+  const showDuration = tabHasField(category, mode, 'durations');
+  const showSize = tabHasField(category, mode, 'sizes');
+  const showAspectRatio = tabHasField(category, mode, 'aspectRatios');
 
   const mediaSlots = [
     needsImage && {
@@ -269,7 +274,7 @@ export const VideoBody = ({ mode }) => {
 
   const summaryTitle = [
     inputs.model,
-    !followsInput && inputs.size,
+    showSize && inputs.size,
     showDuration && inputs.seconds && `${inputs.seconds}s`,
   ]
     .filter(Boolean)
@@ -302,9 +307,8 @@ export const VideoBody = ({ mode }) => {
             },
             // 尺寸/比例只有文生视频会下发；其余玩法输出跟随上传的图/视频，
             // 摆出来就是个点了不生效的假开关（旧版图生视频那个「尺寸：480P」即是）。
-            ...(followsInput
-              ? []
-              : [
+            ...(showSize
+              ? [
                   {
                     key: 'size',
                     label: '尺寸',
@@ -312,7 +316,8 @@ export const VideoBody = ({ mode }) => {
                     options: availableSizes,
                     onChange: (v) => handleInputChange('size', v),
                   },
-                ]),
+                ]
+              : []),
             ...(showDuration
               ? [
                   {
@@ -324,9 +329,8 @@ export const VideoBody = ({ mode }) => {
                   },
                 ]
               : []),
-            ...(followsInput
-              ? []
-              : [
+            ...(showAspectRatio
+              ? [
                   {
                     key: 'aspectRatio',
                     label: '比例',
@@ -334,7 +338,8 @@ export const VideoBody = ({ mode }) => {
                     options: availableAspectRatios,
                     onChange: (v) => handleInputChange('aspectRatio', v),
                   },
-                ]),
+                ]
+              : []),
           ]}
         >
           {/* 插帧开关：默认关，透传 target_fps。target_fps 是自建引擎(gpustackplus)的
@@ -355,7 +360,7 @@ export const VideoBody = ({ mode }) => {
           )}
         </ConfigBar>
         {/* 配音不再有独立的提示词框：v2a 段直接复用生成这段视频的提示词 */}
-        {pipelineModel && !followsInput && /1080/i.test(inputs.size || '') && (
+        {pipelineModel && showSize && /1080/i.test(inputs.size || '') && (
           <div
             style={{
               padding: '6px 12px',
@@ -397,6 +402,8 @@ export const VideoBody = ({ mode }) => {
       <PromptBar
         onSend={generate}
         generating={generating}
+        optimizeCategory={category}
+        optimizeTab={mode}
         disabled={turnLimitReached || missingRequiredImage}
         // 配乐的提示词是可选的（留空=按画面自动配），别拦住只上传视频就想发的用户。
         allowEmpty={isDub}

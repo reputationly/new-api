@@ -2,6 +2,8 @@
 // (POST /pg/videos, task_type=tts),仅参数与结果形态不同(音频 .wav)。
 // 状态机/轮询/内容地址等通用工具直接复用 videoPlayground.constants。
 
+import { tabScopedValue } from './playgroundAdmin.constants';
+
 export {
   VIDEO_API_ENDPOINTS as AUDIO_API_ENDPOINTS,
   VIDEO_STATUS as AUDIO_STATUS,
@@ -399,6 +401,7 @@ export const parseAudioModelConfig = (raw) => {
           capabilities: normalizeList(cfg?.capabilities),
           maxChars: toPositiveInt(cfg?.maxChars),
           refAudioMaxMB: toPositiveInt(cfg?.refAudioMaxMB),
+          tabs: normalizeAudioTabs(cfg?.tabs),
         };
       });
     }
@@ -421,6 +424,23 @@ const toPositiveInt = (v) => {
   return Number.isFinite(n) && n >= 0 ? n : null;
 };
 
+// tab 子层规范化:models[name].tabs[tabKey] 只放该 tab 声明用得到的字段。
+// 空对象保留(= 该模型挂进了这个 tab,参数全走兜底);未配的字段不落键,好让
+// tabScopedValue 正确降级。
+const normalizeAudioTabs = (raw) => {
+  if (!raw || typeof raw !== 'object') return {};
+  const out = {};
+  Object.entries(raw).forEach(([tabKey, cfg]) => {
+    const entry = {};
+    const chars = toPositiveInt(cfg?.maxChars);
+    if (chars != null) entry.maxChars = chars;
+    const mb = toPositiveInt(cfg?.refAudioMaxMB);
+    if (mb != null) entry.refAudioMaxMB = mb;
+    out[tabKey] = entry;
+  });
+  return out;
+};
+
 // 复用视频配置的列表规范化(去空格/去空/去重)。
 const normalizeList = (list) =>
   Array.isArray(list)
@@ -441,17 +461,22 @@ export const getAudioModelSet = (
   return set;
 };
 
-// 字数上限:按模型配置 → 全局默认 → 兜底常量。0 表示不限制。
-export const getMaxCharsForModel = (config, model) => {
+// 字数上限:tab 级 → 模型级 → 全局默认 → 兜底常量。0 表示不限制。
+// tabKey 传空时退化为改造前的「只按模型名」语义(直连请求/非体验区调用)。
+export const getMaxCharsForModel = (config, model, tabKey) => {
   const m = config?.models?.[model];
+  const scoped = tabScopedValue(m, tabKey, 'maxChars');
+  if (scoped != null) return scoped;
   if (m && m.maxChars != null) return m.maxChars;
   if (config?.default?.maxChars != null) return config.default.maxChars;
   return AUDIO_DEFAULT_MAX_CHARS;
 };
 
-// 参考音大小上限(MB):按模型配置 → 全局默认 → 兜底常量。
-export const getRefAudioMaxMBForModel = (config, model) => {
+// 参考音大小上限(MB):tab 级 → 模型级 → 全局默认 → 兜底常量。
+export const getRefAudioMaxMBForModel = (config, model, tabKey) => {
   const m = config?.models?.[model];
+  const scoped = tabScopedValue(m, tabKey, 'refAudioMaxMB');
+  if (scoped != null) return scoped;
   if (m && m.refAudioMaxMB != null) return m.refAudioMaxMB;
   if (config?.default?.refAudioMaxMB != null)
     return config.default.refAudioMaxMB;

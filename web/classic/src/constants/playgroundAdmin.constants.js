@@ -2,6 +2,105 @@
 // 共用的唯一真相源。key=稳定标识（分类=侧栏 itemKey / 存储配置键；tab=各页 mode
 // key，不用显示名以免改名破坏配置）；capability=该 tab 过滤模型用的能力标签。
 // 文本模型（对话）无 tab、无能力标签、无媒体配置（靠排除媒体模型过滤），仅参与分类显隐。
+//
+// ── tab 专用配置（fields）────────────────────────────────────────────────
+// 每个 tab 声明自己「真正用得到」的配置字段。同一模型挂多个能力时，各 tab 的参数
+// 互不干扰（存储见下），运营也只会看到当前 tab 用得上的输入框——不再出现「数字人
+// 配了尺寸但页面根本不显示尺寸选择器」这类无效项。
+// 这份 schema 同时喂给两侧：admin 页决定渲染哪些输入框，体验区决定显示哪些控件，
+// 避免两边各写一套 if 判断而对不上（历史上 VideoConfigPanel / 手机端 Video.jsx 各
+// 硬编码过一份）。
+//
+// ── 存储形态 ────────────────────────────────────────────────────────────
+// 仍复用四份 option（ImageModelSizeConfig / VideoModelConfig / AudioModelConfig /
+// MusicModelConfig），在 models[name] 下新增 tabs 子层：
+//   "wan2.2": {
+//     "pipeline": true,                       // 模型级（不随 tab 变）
+//     "capabilities": ["文生视频","图生视频"],  // 由 tabs 的键派生回写，供模型广场用
+//     "tabs": {
+//       "text2video":  { "sizes": [...], "durations": [...], "aspectRatios": [...] },
+//       "image2video": { "durations": [...], "maxInputMB": 20 }
+//     },
+//     "durations": [...]                       // 模型级兜底（迁移写入，直连请求兜底用）
+//   }
+// 读取优先级：tab 级 → 模型级 → 分类 default → 内置兜底。老配置（无 tabs）读到的
+// 就是模型级，行为与改造前一致。
+//
+// storeIn：个别 tab 的入口分类与模型配置所在的 option 不是一份——「视频配音」入口挂
+// 在语音页，但产物是视频、模型配在 VideoModelConfig。缺省=所属分类的 configKey。
+//
+// promptOptimize：该 tab 的提示词框是否提供「AI 优化提示词」。开关、优化用的语言模型
+// 与优化系统提示词全由运营在体验区管理里配（用户不选模型），见 PlaygroundTabConfig
+// 的 __global.promptOptimize 与各 tab 的 promptOptimize。
+
+// 字段元信息：admin 页据此渲染输入控件，也给体验区/校验提示复用。
+// type: list=字符串列表（Semi Select tags）；int=非负整数（0/留空=不限）；
+//       translation=中译英开关+默认语言模型（音乐专用复合项）。
+export const PLAYGROUND_FIELD_META = {
+  sizes: {
+    label: '尺寸 / 分辨率',
+    type: 'list',
+    placeholder: '如 1280x720、1920x1080、1080P',
+    help: '留空=该 tab 不展示尺寸选择器（纯 opt-in）。档位词（1080P）与精确像素混用由引擎判定，服务端不校验。',
+  },
+  durations: {
+    label: '时长（秒）',
+    type: 'list',
+    placeholder: '如 5、10',
+    help: '留空=不限制。服务端会按 task_type 对应的 tab 校验，直连请求同样受限。',
+  },
+  aspectRatios: {
+    label: '宽高比',
+    type: 'list',
+    placeholder: '如 16:9、9:16、1:1',
+    help: '留空=该 tab 不展示宽高比选择器。',
+  },
+  maxInputMB: {
+    label: '上传文件上限（MB）',
+    type: 'int',
+    help: '0 或留空=不限制。服务端物化输入时兜底，防直连绕过前端。',
+  },
+  maxAudioSec: {
+    label: '驱动音频时长上限（秒）',
+    type: 'int',
+    help: '0 或留空=不限制。同时用作数字人 video_duration 的下发默认值。',
+  },
+  maxChars: {
+    label: '文本字数上限',
+    type: 'int',
+    help: '0 或留空=不限制。',
+  },
+  refAudioMaxMB: {
+    label: '参考音上限（MB）',
+    type: 'int',
+    help: '0 或留空=不限制。',
+  },
+  // 「视频生音」已下线，没有 tab 认领这个字段，但服务端护栏
+  // （MusicVideoMaxBytesForModel）仍在跑。放进 FIELD_META 是为了让它能在「分类默认值」
+  // 和「按模型交叉检查」的孤儿字段里被编辑到——否则值照样生效，运营却改不了。
+  videoMaxMB: {
+    label: '视频输入上限（MB）',
+    type: 'int',
+    help: '0 或留空=不限制。体验区已无「视频生音」入口，此项只对直连请求生效。',
+  },
+  translation: {
+    label: '提示词中译英',
+    type: 'translation',
+    help: '开启后中文提示词提交前自动译英（文本编码器只认英文的模型需要）。',
+  },
+};
+
+// 模型级（不随 tab 变化）的字段：单独渲染在模型行上，不进 tabs 子层。
+export const PLAYGROUND_MODEL_LEVEL_FIELDS = {
+  VideoModelConfig: [
+    {
+      key: 'pipeline',
+      label: '两段流水线（1080P 超分插帧）',
+      type: 'bool',
+      help: '该模型是否配有配套超分模型，用于 1080P 档位的两段流水线。属模型能力，与 tab 无关。',
+    },
+  ],
+};
 
 export const PLAYGROUND_CATEGORIES = [
   {
@@ -15,8 +114,20 @@ export const PLAYGROUND_CATEGORIES = [
     label: '图像模型', // 由「图片模型」改名
     configKey: 'ImageModelSizeConfig',
     tabs: [
-      { key: 'text2image', label: '文生图', capability: '文生图' },
-      { key: 'image2image', label: '图生图', capability: '图生图' },
+      {
+        key: 'text2image',
+        label: '文生图',
+        capability: '文生图',
+        fields: ['sizes'],
+        promptOptimize: true,
+      },
+      {
+        key: 'image2image',
+        label: '图生图',
+        capability: '图生图',
+        fields: ['sizes'],
+        promptOptimize: true,
+      },
     ],
   },
   {
@@ -24,11 +135,49 @@ export const PLAYGROUND_CATEGORIES = [
     label: '视频模型',
     configKey: 'VideoModelConfig',
     tabs: [
-      { key: 'text2video', label: '文生视频', capability: '文生视频' },
-      { key: 'image2video', label: '图生视频', capability: '图生视频' },
-      { key: 'flf2v', label: '关键帧', capability: '关键帧' },
-      { key: 's2v', label: '数字人', capability: '数字人' },
-      { key: 'vace', label: '视频编辑', capability: '视频编辑' },
+      {
+        key: 'text2video',
+        label: '文生视频',
+        capability: '文生视频',
+        // 纯文本输入：没有上传，故无 maxInputMB。
+        fields: ['sizes', 'durations', 'aspectRatios'],
+        promptOptimize: true,
+      },
+      {
+        key: 'image2video',
+        label: '图生视频',
+        capability: '图生视频',
+        // 画幅跟随输入图，尺寸/宽高比不可选。
+        fields: ['durations', 'maxInputMB'],
+        promptOptimize: true,
+      },
+      {
+        key: 'flf2v',
+        label: '关键帧',
+        capability: '关键帧',
+        fields: ['durations', 'maxInputMB'],
+        promptOptimize: true,
+        taskTypeChoices: [
+          { value: 'flf2v', label: '首尾帧（flf2v，尾帧必填）' },
+          { value: 'i2v', label: '只吃首帧（i2v）' },
+        ],
+        hint: '「关键帧」同时承载两类模型：首尾帧（flf2v，尾帧必填）与只吃首帧（i2v）。两者是同权重、不同启动参数的两个引擎实例，认错就会静默丢尾帧或直接崩，所以请给每个模型显式选一个。留「自动」则回退到看模型名里含不含 flf2v——那要求上游名与对外名都带这个标识，做了模型重定向时容易错配。',
+      },
+      {
+        key: 's2v',
+        label: '数字人',
+        capability: '数字人',
+        // 时长由驱动音频决定，不给选。
+        fields: ['maxInputMB', 'maxAudioSec'],
+        promptOptimize: true,
+      },
+      {
+        key: 'vace',
+        label: '视频编辑',
+        capability: '视频编辑',
+        fields: ['durations', 'maxInputMB'],
+        promptOptimize: true,
+      },
     ],
   },
   {
@@ -36,12 +185,41 @@ export const PLAYGROUND_CATEGORIES = [
     label: '语音模型',
     configKey: 'AudioModelConfig',
     tabs: [
-      { key: 'emotion', label: '情感合成', capability: '情感合成' },
-      { key: 'synthesis', label: '语音合成', capability: '语音合成' },
-      { key: 'dialogue', label: '双人对话', capability: '双人对话' },
-      { key: 'design', label: '声音设计', capability: '声音设计' },
-      // 视频配音：入口挂在语音页，产物是视频（走 VideoPlaygroundBody mode=dub）。
-      { key: 'dub', label: '视频配音', capability: '视频配音' },
+      {
+        key: 'emotion',
+        label: '情感合成',
+        capability: '情感合成',
+        fields: ['maxChars', 'refAudioMaxMB'],
+      },
+      {
+        key: 'synthesis',
+        label: '语音合成',
+        capability: '语音合成',
+        fields: ['maxChars', 'refAudioMaxMB'],
+      },
+      {
+        key: 'dialogue',
+        label: '双人对话',
+        capability: '双人对话',
+        fields: ['maxChars', 'refAudioMaxMB'],
+      },
+      {
+        // 声线描述纯文本，无参考音上传。
+        key: 'design',
+        label: '声音设计',
+        capability: '声音设计',
+        fields: ['maxChars'],
+      },
+      // 视频配音：入口挂在语音页，产物是视频（走 VideoPlaygroundBody mode=dub），
+      // 模型也配在 VideoModelConfig —— 故 storeIn 指回视频配置。
+      {
+        key: 'dub',
+        label: '视频配音',
+        capability: '视频配音',
+        storeIn: 'VideoModelConfig',
+        fields: ['maxInputMB'],
+        promptOptimize: true,
+      },
     ],
   },
   {
@@ -49,17 +227,83 @@ export const PLAYGROUND_CATEGORIES = [
     label: '音乐模型',
     configKey: 'MusicModelConfig',
     tabs: [
-      { key: 't2m', label: '文生音乐', capability: '文生音乐' },
-      { key: 'cover', label: '音乐改编', capability: '音乐改编' },
-      { key: 'repaint', label: '音乐重绘', capability: '音乐重绘' },
-      { key: 't2a', label: '文生音效', capability: '文生音效' },
-      { key: 'svs', label: '歌声合成', capability: '歌声合成' },
+      {
+        // 文生音乐不挂通用「AI 优化提示词」：它已有更专的「AI 帮我写词」（一次产出
+        // caption/歌词/BPM/调式/时长并回填各控件），两个按钮并排只会让人选错。
+        key: 't2m',
+        label: '文生音乐',
+        capability: '文生音乐',
+        fields: ['maxChars', 'translation'],
+      },
+      {
+        key: 'cover',
+        label: '音乐改编',
+        capability: '音乐改编',
+        fields: ['maxChars', 'refAudioMaxMB'],
+      },
+      {
+        key: 'repaint',
+        label: '音乐重绘',
+        capability: '音乐重绘',
+        fields: ['maxChars', 'refAudioMaxMB'],
+      },
+      {
+        key: 't2a',
+        label: '文生音效',
+        capability: '文生音效',
+        fields: ['maxChars', 'translation'],
+        promptOptimize: true,
+      },
+      {
+        key: 'svs',
+        label: '歌声合成',
+        capability: '歌声合成',
+        fields: ['maxChars', 'refAudioMaxMB'],
+      },
     ],
   },
 ];
 
 export const getPlaygroundCategory = (key) =>
   PLAYGROUND_CATEGORIES.find((c) => c.key === key) || null;
+
+export const getPlaygroundTab = (categoryKey, tabKey) =>
+  getPlaygroundCategory(categoryKey)?.tabs.find((t) => t.key === tabKey) ||
+  null;
+
+// 该 tab 的模型配置落在哪份 option。
+export const getTabStoreKey = (categoryKey, tabKey) => {
+  const cat = getPlaygroundCategory(categoryKey);
+  const tab = cat?.tabs.find((t) => t.key === tabKey);
+  if (!tab) return null;
+  return tab.storeIn || cat.configKey || null;
+};
+
+export const getTabFields = (categoryKey, tabKey) =>
+  getPlaygroundTab(categoryKey, tabKey)?.fields || [];
+
+// 体验区面板据此决定「这个玩法要不要显示某控件」，不再各自硬编码 mode 判断。
+export const tabHasField = (categoryKey, tabKey, field) =>
+  getTabFields(categoryKey, tabKey).includes(field);
+
+// 落在同一份 option 的全部 tab（含跨分类的「视频配音」）。迁移、能力派生、
+// admin 保存都要按 option 维度遍历。返回 [{category, tab}]。
+export const listTabsByStoreKey = (storeKey) => {
+  const out = [];
+  PLAYGROUND_CATEGORIES.forEach((cat) => {
+    cat.tabs.forEach((tab) => {
+      if ((tab.storeIn || cat.configKey) === storeKey) {
+        out.push({ category: cat.key, tab });
+      }
+    });
+  });
+  return out;
+};
+
+// 能力标签 → tab（同一份 option 内）。用于老配置按 capabilities 反查 tab。
+export const tabKeyForCapability = (storeKey, capability) =>
+  listTabsByStoreKey(storeKey).find((x) => x.tab.capability === capability)?.tab
+    .key || null;
 
 // ---------------------------------------------------------------------------
 // 模型大类（模型广场筛选用）
@@ -119,7 +363,21 @@ export const resolveModelCategory = (model, index) => {
   return fallback ? fallback[1] : MODEL_CATEGORY_TEXT;
 };
 
-// 解析 /api/status 的 PlaygroundTabConfig（{category:{modeKey:bool}}）。
+// ---------------------------------------------------------------------------
+// tab 显示配置（PlaygroundTabConfig）
+// ---------------------------------------------------------------------------
+// 形态：{ [category]: { [tabKey]: true | false | { enabled, mobile, order, label } } }
+// 布尔是旧形态（只有网页端显隐），等价于 { enabled: <bool> }，读时按需升维，不做
+// 破坏性改写——运营在 admin 页保存时才会写成对象。
+// 缺省语义一律「未配置=显示」：新增能力上线即可见，不用先去后台开一遍。
+
+const TAB_DISPLAY_DEFAULT = {
+  enabled: true,
+  mobile: true,
+  order: null, // null=按声明顺序
+  label: '', // ''=用内置显示名
+};
+
 export const parsePlaygroundTabConfig = (raw) => {
   if (!raw) return {};
   if (typeof raw === 'object') return raw;
@@ -131,9 +389,202 @@ export const parsePlaygroundTabConfig = (raw) => {
   }
 };
 
-// tab 是否显示：缺省（未配置）=显示；仅显式 false 才隐藏。
-export const isPlaygroundTabVisible = (tabConfig, category, modeKey) => {
-  const cat = tabConfig && tabConfig[category];
-  if (!cat) return true;
-  return cat[modeKey] !== false;
+// 取某 tab 的显示配置，统一补齐成对象形态（兼容旧布尔）。
+export const getTabDisplay = (tabConfig, category, tabKey) => {
+  const v = tabConfig?.[category]?.[tabKey];
+  if (v === undefined || v === null) return { ...TAB_DISPLAY_DEFAULT };
+  if (typeof v === 'boolean') return { ...TAB_DISPLAY_DEFAULT, enabled: v };
+  if (typeof v !== 'object') return { ...TAB_DISPLAY_DEFAULT };
+  return {
+    enabled: v.enabled !== false,
+    mobile: v.mobile !== false,
+    order: Number.isFinite(v.order) ? v.order : null,
+    label: typeof v.label === 'string' ? v.label.trim() : '',
+  };
+};
+
+// tab 是否显示（网页端）：缺省=显示；仅显式 false 才隐藏。
+export const isPlaygroundTabVisible = (tabConfig, category, modeKey) =>
+  getTabDisplay(tabConfig, category, modeKey).enabled;
+
+// tab 是否在手机端显示：先得网页端开着（后台关掉的两端都没有），再看 mobile 开关。
+export const isPlaygroundTabVisibleOnMobile = (
+  tabConfig,
+  category,
+  modeKey,
+) => {
+  const d = getTabDisplay(tabConfig, category, modeKey);
+  return d.enabled && d.mobile;
+};
+
+// 跨分类的全局项挂在保留键 __global 下（它不是分类 key，分类查询天然不受影响）。
+export const PLAYGROUND_GLOBAL_KEY = '__global';
+
+// 「AI 优化提示词」的全局配置：用哪个语言模型、总开关。
+// 刻意只配模型不配分组：分组是用户维度的（运营选的分组用户未必有权限），留空即走
+// 用户自己的默认分组，与体验区其它调用一致。
+export const getPromptOptimizeGlobal = (tabConfig) => {
+  const g = tabConfig?.[PLAYGROUND_GLOBAL_KEY]?.promptOptimize;
+  return {
+    enabled: g?.enabled === true,
+    model: typeof g?.model === 'string' ? g.model.trim() : '',
+  };
+};
+
+// 某 tab 的「AI 优化提示词」配置。systemPrompt 留空=用内置默认（见
+// constants/promptOptimize.constants.js 的 defaultOptimizeSystemPrompt）。
+// tab 级 enabled 缺省为 true：全局开了就都能用，个别 tab 不想要再单独关。
+export const getTabPromptOptimize = (tabConfig, category, tabKey) => {
+  const v = tabConfig?.[category]?.[tabKey]?.promptOptimize;
+  return {
+    enabled: v?.enabled !== false,
+    systemPrompt: typeof v?.systemPrompt === 'string' ? v.systemPrompt : '',
+  };
+};
+
+// 按运营配置排序 + 应用显示名覆盖，返回带 display 的 tab 列表（不做显隐过滤）。
+// order 未配置的排在已配置的之后，同 order 按声明顺序稳定。
+export const resolvePlaygroundTabs = (category, tabConfig) => {
+  const tabs = getPlaygroundCategory(category)?.tabs || [];
+  return tabs
+    .map((tab, idx) => {
+      const display = getTabDisplay(tabConfig, category, tab.key);
+      return {
+        ...tab,
+        idx,
+        display,
+        label: display.label || tab.label,
+      };
+    })
+    .sort((a, b) => {
+      const ao = a.display.order;
+      const bo = b.display.order;
+      if (ao === bo) return a.idx - b.idx;
+      if (ao === null) return 1;
+      if (bo === null) return -1;
+      return ao - bo;
+    });
+};
+
+// ---------------------------------------------------------------------------
+// 模型配置里的 tab 子层读取
+// ---------------------------------------------------------------------------
+// 取某模型在某 tab 下显式配置的字段值；未配置返回 undefined，由调用方继续按
+// 模型级 → 分类 default → 内置兜底降级。tabKey 为空（非体验区调用、或直连请求
+// 解析不出 tab）时直接返回 undefined，退回原有的模型级语义。
+// 列表字段的空数组视为「未配置」（与既有 opt-in 语义一致：留空=不展示/不限制）。
+export const tabScopedValue = (modelEntry, tabKey, field) => {
+  if (!tabKey) return undefined;
+  const t = modelEntry?.tabs?.[tabKey];
+  if (!t || typeof t !== 'object') return undefined;
+  const v = t[field];
+  if (v === undefined || v === null) return undefined;
+  if (Array.isArray(v) && v.length === 0) return undefined;
+  return v;
+};
+
+// 由 tabs 的键派生能力标签（模型广场展示用）。运营把模型加进哪个 tab，它就有哪个
+// 能力——不再单独勾一遍能力标签，避免「勾了能力却没配参数」两处对不上。
+// extra：配置里已存在、但当前没有对应 tab 的能力标签（如图像的「图像编辑」等尚未
+// 开体验区玩法的能力），原样保留，避免保存一次就把模型广场的标签抹掉。
+export const deriveCapabilities = (storeKey, tabsObj, existingCaps) => {
+  const owned = listTabsByStoreKey(storeKey);
+  const byKey = new Map(owned.map((x) => [x.tab.key, x.tab.capability]));
+  const ownedCaps = new Set(owned.map((x) => x.tab.capability));
+  const out = [];
+  Object.keys(tabsObj || {}).forEach((k) => {
+    const cap = byKey.get(k);
+    if (cap && !out.includes(cap)) out.push(cap);
+  });
+  (existingCaps || []).forEach((c) => {
+    // 没有对应 tab 的能力标签透传保留（只读，admin 页在「按模型」视图里展示）。
+    if (!ownedCaps.has(c) && !out.includes(c)) out.push(c);
+  });
+  return out;
+};
+
+// 与 deriveCapabilities 对称：挑出「无对应 tab」的能力标签，供 admin 页只读展示。
+export const capabilitiesWithoutTab = (storeKey, caps) => {
+  const owned = new Set(
+    listTabsByStoreKey(storeKey).map((x) => x.tab.capability),
+  );
+  return (caps || []).filter((c) => !owned.has(c));
+};
+
+// 「孤儿字段」＝这个模型身上存在、却没有任何一个 tab 认领的参数。
+//
+// 两种来路：模型没挂任何玩法（如超分模型 seedvr2，超分只作 1080P 流水线的内部一段，
+// 体验区没有入口），或字段本身无玩法认领（如音乐的 videoMaxMB，「视频生音」已下线）。
+// 这类值仍会被服务端护栏读到——task_type 解析不出 tab 时正是退回模型级——所以必须
+// 留一个可编辑的地方，否则就成了「照样生效但改不了」的暗配置。admin 页在「按模型
+// 交叉检查」里渲染它们。recomputeModelLevel 也不会动这些字段（见其实现）。
+export const orphanFields = (storeKey, model) => {
+  const claimed = new Set();
+  listTabsByStoreKey(storeKey)
+    .filter((x) => model?.tabs?.[x.tab.key] !== undefined)
+    .forEach((x) => (x.tab.fields || []).forEach((f) => claimed.add(f)));
+  return Object.keys(PLAYGROUND_FIELD_META).filter(
+    (f) => !claimed.has(f) && model?.[f] !== undefined && model?.[f] !== null,
+  );
+};
+
+// 由 tabs 反推模型级平铺字段（保存时调用）。
+//
+// 模型级字段不再由运营直接编辑，但不能删：它是「解析不出 tab」时的取值来源——直连
+// 请求里 task_type 缺失或一个 task_type 对应多个 tab（语音四玩法共用 tts）时，护栏
+// 只能退回模型级。取「最宽松」的口径：列表取并集、上限取最大值，且只要有一个 tab 没
+// 设上限就整个不落键（= 不限）。这样模型级永远不会比任何一个 tab 更严，不会出现
+// 「体验区里选得到、直连却被模型级挡掉」。
+//
+// 只重算「该模型至少参与了一个声明该字段的 tab」的字段，其余平铺字段原样保留：
+// 没进任何 tab 的模型（如只挂了「图像编辑」这种暂无玩法的能力）配置不会被抹掉。
+export const recomputeModelLevel = (storeKey, model) => {
+  const out = { ...(model || {}) };
+  delete out.tabs;
+  delete out.capabilities;
+  const tabsObj = model?.tabs || {};
+  const owned = listTabsByStoreKey(storeKey).filter(
+    (x) => tabsObj[x.tab.key] !== undefined,
+  );
+  const fields = new Set();
+  owned.forEach((x) => (x.tab.fields || []).forEach((f) => fields.add(f)));
+  fields.forEach((field) => {
+    const entries = owned
+      .filter((x) => (x.tab.fields || []).includes(field))
+      .map((x) => tabsObj[x.tab.key]?.[field]);
+    switch (PLAYGROUND_FIELD_META[field]?.type) {
+      case 'list': {
+        const union = [];
+        entries.forEach((v) =>
+          (Array.isArray(v) ? v : []).forEach((item) => {
+            if (!union.includes(item)) union.push(item);
+          }),
+        );
+        if (union.length) out[field] = union;
+        else delete out[field];
+        break;
+      }
+      case 'int': {
+        // 0 与留空同义（不限），任一 tab 不限则模型级不限。
+        const unlimited = entries.some((v) => v == null || v === 0);
+        const max = Math.max(0, ...entries.map((v) => (v == null ? 0 : v)));
+        if (unlimited || max <= 0) delete out[field];
+        else out[field] = max;
+        break;
+      }
+      case 'translation': {
+        const on = entries.filter((v) => v && v.enabled === true);
+        if (on.length) {
+          out[field] = {
+            enabled: true,
+            defaultModel: on.find((v) => v.defaultModel)?.defaultModel || '',
+          };
+        } else delete out[field];
+        break;
+      }
+      default:
+        break;
+    }
+  });
+  return out;
 };

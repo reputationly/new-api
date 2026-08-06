@@ -232,6 +232,8 @@ const MusicBody = ({ mode }) => {
       <PromptBar
         onSend={generate}
         generating={generating}
+        optimizeCategory='music'
+        optimizeTab={mode}
         disabled={
           turnLimitReached || missingRequiredAudio || missingRequiredVideo
         }

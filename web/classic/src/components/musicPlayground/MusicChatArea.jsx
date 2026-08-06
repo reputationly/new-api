@@ -13,6 +13,7 @@ import { useTranslation } from 'react-i18next';
 import { showError, getLogo, stringToColor } from '../../helpers';
 import { UserContext } from '../../context/User';
 import { blockChatDrag } from '../playground/blockChatDrag';
+import PromptOptimizeButton from '../playground/PromptOptimizeButton';
 import {
   MUSIC_STATUS,
   musicExamplesForMode,
@@ -185,6 +186,8 @@ const MusicChatArea = ({
   const { t } = useTranslation();
   const [userState] = useContext(UserContext);
   const [inputValue, setInputValue] = useState('');
+  // AI 优化提示词在途:此刻允许发送等于把没优化的原文发出去,故一并灰掉发送按钮。
+  const [optimizing, setOptimizing] = useState(false);
 
   const isAceStep = engine === 'acestep';
   // 一键示例(按 mode):cover/repaint 带驱动音、svs 带双音频,故 svs 也展示(有素材)。
@@ -410,7 +413,7 @@ const MusicChatArea = ({
       missingRequiredAudio ||
       missingRequiredVideo;
     const hasText = inputValue.trim().length > 0;
-    const canSend = !blockSend && (needsText ? hasText : true);
+    const canSend = !blockSend && !optimizing && (needsText ? hasText : true);
     const doSend = () => {
       if (!canSend) return;
       onSend(inputValue.trim());
@@ -503,6 +506,18 @@ const MusicChatArea = ({
             </Typography.Text>
           </div>
         )}
+        {/* 「AI 优化提示词」只在文生音效(t2a)出现:它的输入是一句声音描述,补全成
+            声源/包络/声学空间的完整描述能直接提升出音质量。ACE-Step 系玩法的输入是
+            caption/歌词,已有上面的「AI 帮我写词」,不再叠一个按钮(由中央元数据的
+            promptOptimize 声明决定,这里无需 mode 判断)。 */}
+        <PromptOptimizeButton
+          category='music'
+          tabKey={mode}
+          value={inputValue}
+          onChange={setInputValue}
+          disabled={generating}
+          onOptimizingChange={setOptimizing}
+        />
         <div className='relative'>
           <TextArea
             value={inputValue}
@@ -554,9 +569,11 @@ const MusicChatArea = ({
     placeholder,
     onApplyExample,
     inputValue,
+    optimizing,
     onSend,
     drafting,
     onDraftPlan,
+    mode,
     t,
   ]);
 

@@ -12,7 +12,7 @@ import VideoHistoryPanel from '../../components/videoPlayground/VideoHistoryPane
 // 重挂载,各模式历史/参数互不串扰。
 // 导出供语音模型页复用:「视频配乐」(mode='dub')的入口在语音页,但输入(上传视频)与
 // 产物(配好音的视频)是视频形态,复用本三栏体验区而非音频体验区。
-export const VideoPlaygroundBody = ({ mode }) => {
+export const VideoPlaygroundBody = ({ mode, category = 'video' }) => {
   const isMobile = useIsMobile();
   const styleState = { isMobile };
   const {
@@ -22,10 +22,10 @@ export const VideoPlaygroundBody = ({ mode }) => {
     isSR,
     isVACE,
     isDub,
+    isFlf2vSelected,
     dubAvailable,
     pipelineModel,
     needsImage,
-    followsInput,
     maxRefImages,
     maxInputMB,
     maxAudioSec,
@@ -60,13 +60,15 @@ export const VideoPlaygroundBody = ({ mode }) => {
       <div style={{ width: isMobile ? '100%' : 300, flexShrink: 0 }}>
         <VideoConfigPanel
           needsImage={needsImage}
-          followsInput={followsInput}
+          category={category}
+          mode={mode}
           isI2V={isI2V}
           isFLF2V={isFLF2V}
           isS2V={isS2V}
           isSR={isSR}
           isVACE={isVACE}
           isDub={isDub}
+          isFlf2vSelected={isFlf2vSelected}
           dubAvailable={dubAvailable}
           pipelineModel={pipelineModel}
           maxRefImages={maxRefImages}
@@ -91,9 +93,11 @@ export const VideoPlaygroundBody = ({ mode }) => {
           turnLimitReached={turnLimitReached}
           missingRequiredImage={missingRequiredImage}
           mode={mode}
+          category={category}
           selectedModel={inputs.model}
           isSR={isSR}
           isDub={isDub}
+          isFlf2vSelected={isFlf2vSelected}
           onApplyExample={applyExample}
           styleState={styleState}
           onSend={generate}

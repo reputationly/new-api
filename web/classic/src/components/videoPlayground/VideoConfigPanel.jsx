@@ -19,19 +19,26 @@ import {
 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { renderGroupOption, selectFilter } from '../../helpers';
-import { isFlf2vModel } from '../../constants/videoPlayground.constants';
 import ImageUrlInput from '../playground/ImageUrlInput';
 import MediaFileInput from './MediaFileInput';
+import { tabHasField } from '../../constants/playgroundAdmin.constants';
 
 const VideoConfigPanel = ({
   needsImage = false,
-  followsInput = false,
+  // 哪些控件出现在本 tab,统一由中央元数据的 fields 声明决定(见 playgroundAdmin.
+  // constants.js)—— 以前这里按 isSR/isDub/isS2V/followsInput 各写一套 if,与 admin
+  // 页、手机端各自的判断分了三家,加一个玩法要改三处且容易漏。
+  category = 'video',
+  mode = 'text2video',
   isI2V = false,
   isFLF2V = false,
   isS2V = false,
   isSR = false,
   isDub = false,
   isVACE = false,
+  // 关键帧 tab 里 i2v / flf2v 两类模型共存,尾帧是否可传完全由所选模型决定。判断在
+  // useVideoGeneration 里做(要读运营配置里的 taskType 声明),这里只消费结果。
+  isFlf2vSelected = false,
   dubAvailable = false,
   // 选中模型是否跑在自建 gpustackplus 引擎上：1080P 两段流水线与插帧都只对它成立，
   // 其余渠道原样透传，故那两处 UI 也只对它展示（见 useVideoGeneration 的 pipelineModel）。
@@ -51,8 +58,7 @@ const VideoConfigPanel = ({
 }) => {
   const { t } = useTranslation();
 
-  // 关键帧 tab 里 i2v / flf2v 两类模型共存,尾帧是否可传完全由所选模型决定。
-  const needsLastFrame = isFlf2vModel(inputs?.model);
+  const needsLastFrame = isFlf2vSelected;
 
   // 输入大小上限(MB):直接透传 maxInputMB。0/未配 = 不限(与配置页「留空/0 不限」及
   // 后端一致);>0 时各上传控件按它拦。不再套前端兜底默认,避免和「显式不限」冲突。
@@ -357,64 +363,66 @@ const VideoConfigPanel = ({
         )}
 
         {/* 视频尺寸/分辨率(仅文生视频,且该模型在后台配了尺寸才展示;图生视频跟随参考图) */}
-        {!followsInput && (availableSizes || []).length > 0 && (
-          <div>
-            <div className='flex items-center gap-2 mb-2'>
-              <Ruler size={16} className='text-gray-500' />
-              <Typography.Text strong className='text-sm'>
-                {t('视频尺寸')}
-              </Typography.Text>
+        {tabHasField(category, mode, 'sizes') &&
+          (availableSizes || []).length > 0 && (
+            <div>
+              <div className='flex items-center gap-2 mb-2'>
+                <Ruler size={16} className='text-gray-500' />
+                <Typography.Text strong className='text-sm'>
+                  {t('视频尺寸')}
+                </Typography.Text>
+              </div>
+              <Select
+                placeholder={t('请选择尺寸')}
+                name='size'
+                selection
+                onChange={(value) => onInputChange('size', value)}
+                value={inputs.size}
+                optionList={sizeOptions}
+                disabled={disabled}
+                style={{ width: '100%' }}
+                dropdownStyle={{ width: '100%', maxWidth: '100%' }}
+                className='!rounded-lg'
+              />
+              {pipelineModel && /1080/i.test(inputs.size || '') && (
+                <Typography.Text className='text-xs text-amber-600 mt-1 block'>
+                  {t(
+                    '1080P 将先生成再调用超分模型提升画质：耗时更久，且会同时产生本模型与超分模型的额度/积分消耗',
+                  )}
+                </Typography.Text>
+              )}
             </div>
-            <Select
-              placeholder={t('请选择尺寸')}
-              name='size'
-              selection
-              onChange={(value) => onInputChange('size', value)}
-              value={inputs.size}
-              optionList={sizeOptions}
-              disabled={disabled}
-              style={{ width: '100%' }}
-              dropdownStyle={{ width: '100%', maxWidth: '100%' }}
-              className='!rounded-lg'
-            />
-            {pipelineModel && /1080/i.test(inputs.size || '') && (
-              <Typography.Text className='text-xs text-amber-600 mt-1 block'>
-                {t(
-                  '1080P 将先生成再调用超分模型提升画质：耗时更久，且会同时产生本模型与超分模型的额度/积分消耗',
-                )}
-              </Typography.Text>
-            )}
-          </div>
-        )}
+          )}
 
         {/* 宽高比(仅文生视频,且该模型在后台配了宽高比才展示;wan 下由此决定输出分辨率) */}
-        {!followsInput && (availableAspectRatios || []).length > 0 && (
-          <div>
-            <div className='flex items-center gap-2 mb-2'>
-              <Proportions size={16} className='text-gray-500' />
-              <Typography.Text strong className='text-sm'>
-                {t('宽高比')}
-              </Typography.Text>
+        {tabHasField(category, mode, 'aspectRatios') &&
+          (availableAspectRatios || []).length > 0 && (
+            <div>
+              <div className='flex items-center gap-2 mb-2'>
+                <Proportions size={16} className='text-gray-500' />
+                <Typography.Text strong className='text-sm'>
+                  {t('宽高比')}
+                </Typography.Text>
+              </div>
+              <Select
+                placeholder={t('请选择宽高比')}
+                name='aspectRatio'
+                selection
+                onChange={(value) => onInputChange('aspectRatio', value)}
+                value={inputs.aspectRatio}
+                optionList={aspectRatioOptions}
+                disabled={disabled}
+                style={{ width: '100%' }}
+                dropdownStyle={{ width: '100%', maxWidth: '100%' }}
+                className='!rounded-lg'
+              />
             </div>
-            <Select
-              placeholder={t('请选择宽高比')}
-              name='aspectRatio'
-              selection
-              onChange={(value) => onInputChange('aspectRatio', value)}
-              value={inputs.aspectRatio}
-              optionList={aspectRatioOptions}
-              disabled={disabled}
-              style={{ width: '100%' }}
-              dropdownStyle={{ width: '100%', maxWidth: '100%' }}
-              className='!rounded-lg'
-            />
-          </div>
-        )}
+          )}
 
         {/* 时长(超分/配乐跟随源视频、数字人跟随驱动音频,均不展示)。
             数字人这条是实测结论:引擎不读 target_video_length,产出长度就是音频长度,
             摆个时长下拉只会骗人(选 5 秒拿到 10 秒)。长度管控走 maxAudioSec。 */}
-        {!isSR && !isDub && !isS2V && (
+        {tabHasField(category, mode, 'durations') && (
           <div>
             <div className='flex items-center gap-2 mb-2'>
               <Clock size={16} className='text-gray-500' />

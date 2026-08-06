@@ -320,6 +320,9 @@ func migrateDB() error {
 	if err := migrateAffCountBackfill(); err != nil {
 		return err
 	}
+	if err := migratePlaygroundTabConfig(); err != nil {
+		return err
+	}
 	return nil
 }
 

@@ -1,5 +1,7 @@
 // 图片模型相关常量
 
+import { tabScopedValue } from './playgroundAdmin.constants';
+
 // 提示词预设:点击对应按钮清空输入框并填入该提示词(体验区快速试玩,仅文生图展示)。
 export const IMAGE_PROMPT_PRESETS = [
   '远景镜头，在壮丽的雪山背景下，两个小小的人影站在远处山顶，背对着镜头，静静地观赏着日落的美景。夕阳的余晖洒在雪山上，呈现出一片金黄色的光辉，与蔚蓝的天空形成鲜明对比。两人仿佛被这壮观的自然景象所吸引，整个画面充满了宁静与和谐。',
@@ -92,12 +94,30 @@ export const normalizeCapabilityList = (list) =>
     ? Array.from(new Set(list.map((x) => String(x).trim()).filter(Boolean)))
     : [];
 
+// tab 子层规范化：models[name].tabs[tabKey] 只放该 tab 声明用得到的字段（图像目前
+// 只有 sizes）。空对象保留（= 该模型挂进了这个 tab、尺寸走兜底）；未配的字段不落键，
+// 好让 tabScopedValue 正确降级。
+const normalizeImageTabs = (raw) => {
+  if (!raw || typeof raw !== 'object') return {};
+  const out = {};
+  Object.entries(raw).forEach(([tabKey, cfg]) => {
+    const entry = {};
+    const sizes = normalizeSizeList(cfg?.sizes);
+    if (sizes.length) entry.sizes = sizes;
+    out[tabKey] = entry;
+  });
+  return out;
+};
+
 // 解析管理员配置的「按模型尺寸」，返回指定模型的可选尺寸列表
-// config 形如 { default: [...], models: { modelName: { sizes:[], capabilities:[] } } }
-export const getSizesForModel = (config, model) => {
+// config 形如 { default: [...], models: { modelName: { sizes:[], capabilities:[], tabs:{} } } }
+// 优先级：tab 级 → 模型级 → 全局默认 → 内置兜底。tabKey 传空时退化为只按模型名。
+export const getSizesForModel = (config, model, tabKey) => {
   const fallback = FALLBACK_IMAGE_SIZES;
   if (!config || typeof config !== 'object') return fallback;
   const entry = config.models && config.models[model];
+  const scoped = tabScopedValue(entry, tabKey, 'sizes');
+  if (scoped) return scoped;
   // 兼容旧形态（entry 为尺寸数组）与新形态（{ sizes, capabilities }）
   const modelSizes = Array.isArray(entry) ? entry : entry?.sizes;
   if (Array.isArray(modelSizes) && modelSizes.length > 0) return modelSizes;
@@ -124,6 +144,7 @@ export const parseImageSizeConfig = (raw) => {
           models[model] = {
             sizes: normalizeSizeList(cfg?.sizes),
             capabilities: normalizeCapabilityList(cfg?.capabilities),
+            tabs: normalizeImageTabs(cfg?.tabs),
           };
         }
       });

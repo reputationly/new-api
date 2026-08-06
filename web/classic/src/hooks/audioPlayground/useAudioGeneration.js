@@ -346,13 +346,13 @@ export const useAudioGeneration = (mode = 'emotion') => {
 
   // 当前模型的字数上限(0=不限制)。
   const maxChars = useMemo(
-    () => getMaxCharsForModel(modelConfig, inputs.model),
-    [modelConfig, inputs.model],
+    () => getMaxCharsForModel(modelConfig, inputs.model, mode),
+    [modelConfig, inputs.model, mode],
   );
   // 当前模型的参考音大小上限(MB)。
   const refAudioMaxMB = useMemo(
-    () => getRefAudioMaxMBForModel(modelConfig, inputs.model),
-    [modelConfig, inputs.model],
+    () => getRefAudioMaxMBForModel(modelConfig, inputs.model, mode),
+    [modelConfig, inputs.model, mode],
   );
 
   const audioGroups = useMemo(() => {
@@ -606,7 +606,7 @@ export const useAudioGeneration = (mode = 'emotion') => {
       if (!text || generating) return;
 
       // 字数上限(0=不限制):按当前模型配置就地拦截,不占用后端提交。
-      const charLimit = getMaxCharsForModel(modelConfig, inputs.model);
+      const charLimit = getMaxCharsForModel(modelConfig, inputs.model, mode);
       if (charLimit > 0 && text.length > charLimit) {
         showError(
           t('合成文本超过字数上限 {{max}} 字(当前 {{cur}} 字)', {

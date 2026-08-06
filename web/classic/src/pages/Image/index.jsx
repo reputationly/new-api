@@ -60,6 +60,7 @@ const ImagePlaygroundBody = ({ mode }) => {
           generating={generating}
           turnLimitReached={turnLimitReached}
           missingRequiredImage={missingRequiredImage}
+          mode={mode}
           showPresets={!isI2I}
           styleState={styleState}
           onSend={generate}

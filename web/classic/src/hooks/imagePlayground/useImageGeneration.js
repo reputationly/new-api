@@ -192,8 +192,8 @@ export const useImageGeneration = ({ mode = 'text2image' } = {}) => {
   );
 
   const availableSizes = useMemo(
-    () => getSizesForModel(sizeConfig, inputs.model),
-    [sizeConfig, inputs.model],
+    () => getSizesForModel(sizeConfig, inputs.model, mode),
+    [sizeConfig, inputs.model, mode],
   );
 
   // 图片模型集合 = 管理员在「图片模型尺寸配置」里声明、且能力含「文生图」的模型。

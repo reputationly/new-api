@@ -14,6 +14,7 @@ import {
   hydrateConversationsFromStorage,
   stripUnresolvedMediaRefs,
 } from '../../helpers/playgroundMediaStorage';
+import { isChatModel } from '../../helpers/playground';
 import { urlToDataUrl } from '../../utils/playgroundMedia';
 import {
   API,
@@ -54,24 +55,8 @@ import {
 // 中译英走体验区聊天门面(单次非流式);后端按会话身份注入上游 key。
 const MUSIC_TRANSLATE_ENDPOINT = '/pg/chat/completions';
 
-// 语言模型下拉过滤:仅保留 chat completions 兼容端点,排除嵌入/重排序/音频/视频/图片。
-// 纯图片模型后端会附带 openai 兜底端点,故用"含 chat 且不含任一非 chat"双条件。
-// 注意:translatePrompt 固定打 /pg/chat/completions,故不含 openai-response——
-// 仅声明 Responses 端点的模型走 chat completions 会失败,不应列入(含 openai 的仍保留)。
-const CHAT_ENDPOINT_TYPES = ['openai', 'anthropic', 'gemini'];
-const NON_CHAT_ENDPOINT_TYPES = [
-  'embeddings',
-  'jina-rerank',
-  'audio-speech',
-  'openai-video',
-  'image-generation',
-];
-const isChatModel = (types) => {
-  if (!Array.isArray(types) || types.length === 0) return false;
-  const hasChat = types.some((x) => CHAT_ENDPOINT_TYPES.includes(x));
-  const hasNonChat = types.some((x) => NON_CHAT_ENDPOINT_TYPES.includes(x));
-  return hasChat && !hasNonChat;
-};
+// 语言模型下拉过滤:判据见 helpers/playground.js#isChatModel(提示词 AI 优化的
+// 模型选择器共用同一份 —— 两处都固定打 /pg/chat/completions)。
 
 // 内置翻译模板(设计 §8):把用户输入转成一句 AudioCaps 风格英文音频描述。
 const TRANSLATE_SYSTEM_BASE = `You convert a user's sound request into ONE concise English caption for an audio generator (AudioX, trained on AudioCaps-style natural-language captions).
@@ -441,8 +426,8 @@ export const useMusicGeneration = (mode = 't2m') => {
 
   // 当前模型的译文配置(是否启用中译英 + 默认语言模型)。
   const translationCfg = useMemo(
-    () => getTranslationForModel(modelConfig, inputs.model),
-    [modelConfig, inputs.model],
+    () => getTranslationForModel(modelConfig, inputs.model, mode),
+    [modelConfig, inputs.model, mode],
   );
   // 是否在面板展示「语言模型」下拉:玩法需翻译 且 当前模型启用译文。
   const showTranslation = !!needsTranslation && translationCfg.enabled;
@@ -452,13 +437,13 @@ export const useMusicGeneration = (mode = 't2m') => {
 
   // 当前模型的字数上限(0=不限制)。
   const maxChars = useMemo(
-    () => getMaxCharsForModel(modelConfig, inputs.model),
-    [modelConfig, inputs.model],
+    () => getMaxCharsForModel(modelConfig, inputs.model, mode),
+    [modelConfig, inputs.model, mode],
   );
   // 当前模型的驱动/参考音大小上限(MB)。
   const refAudioMaxMB = useMemo(
-    () => getRefAudioMaxMBForModel(modelConfig, inputs.model),
-    [modelConfig, inputs.model],
+    () => getRefAudioMaxMBForModel(modelConfig, inputs.model, mode),
+    [modelConfig, inputs.model, mode],
   );
   // 当前模型的视频大小上限(MB)。
   const videoMaxMB = useMemo(
@@ -928,7 +913,7 @@ export const useMusicGeneration = (mode = 't2m') => {
 
       // 字数上限(0=不限制):按当前模型配置就地拦截(仅对有文本时)。
       if (text) {
-        const charLimit = getMaxCharsForModel(modelConfig, inputs.model);
+        const charLimit = getMaxCharsForModel(modelConfig, inputs.model, mode);
         if (charLimit > 0 && text.length > charLimit) {
           showError(
             t('描述文本超过字数上限 {{max}} 字(当前 {{cur}} 字)', {
