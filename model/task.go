@@ -117,10 +117,14 @@ type TaskPrivateData struct {
 	UpstreamTaskID string `json:"upstream_task_id,omitempty"` // 上游真实 task ID
 	ResultURL      string `json:"result_url,omitempty"`       // 任务成功后的结果 URL（视频地址等）
 	// 计费上下文：用于异步退款/差额结算（轮询阶段读取）
-	BillingSource  string              `json:"billing_source,omitempty"`  // "wallet" / "subscription" / "points_wallet"
-	SubscriptionId int                 `json:"subscription_id,omitempty"` // 订阅 ID，用于订阅退款
-	PointsConsumed int                 `json:"points_consumed,omitempty"` // 混扣任务提交结算时的积分抵扣量(quota unit)，轮询期退款/重算按原路调整
-	TokenId        int                 `json:"token_id,omitempty"`        // 令牌 ID，用于令牌额度退款
+	BillingSource  string `json:"billing_source,omitempty"`  // "wallet" / "subscription" / "points_wallet"
+	SubscriptionId int    `json:"subscription_id,omitempty"` // 订阅 ID，用于订阅退款
+	PointsConsumed int    `json:"points_consumed,omitempty"` // 混扣任务提交结算时的积分抵扣量(quota unit)，轮询期退款/重算按原路调整
+	TokenId        int    `json:"token_id,omitempty"`        // 令牌 ID，用于令牌额度退款
+	// TokenName 提交时的令牌名，供异步结算写日志用。**不能靠 TokenId 回查 tokens 表**：
+	// 体验区（/pg）用的是 playgroundSetupContext 造的内存临时令牌，从未入库、Id 恒为 0，
+	// 回查必然落空，日志「令牌」列就空着。真实令牌也可能在任务完成前被删掉。
+	TokenName      string              `json:"token_name,omitempty"`
 	BillingContext *TaskBillingContext `json:"billing_context,omitempty"` // 计费参数快照（用于轮询阶段重新计算）
 	// PersistRetryCount 上游已完成但成品落 OBS 失败的重试次数（轮询阶段递增，
 	// 超限才判失败退款，避免瞬时 OBS 抖动丢弃已渲染成品）。见 task_polling.go。

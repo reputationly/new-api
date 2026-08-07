@@ -33,6 +33,7 @@ import {
   copy,
   renderClaudeLogContent,
   renderLogContent,
+  buildVideoMatrixDetailRows,
   renderAudioModelPrice,
   renderClaudeModelPrice,
   renderModelPrice,
@@ -416,6 +417,10 @@ export const useLogsData = () => {
       logs[i].key = logs[i].id;
       let other = getLogOther(logs[i].other);
       let expandDataLocal = [];
+      // 视频计费矩阵自带一套展开行（对齐供应商账单），并屏蔽通用的
+      // 「日志详情 / 计费过程」——那两行按 model_ratio 展示，而 model_ratio
+      // 在这条路上只是预扣锚点、没参与最终扣费。与 tiered_expr 同一套处理方式。
+      const isVideoMatrix = !!other?.video_price_mode;
 
       if (isAdminUser && (logs[i].type === 0 || logs[i].type === 2 || logs[i].type === 6)) {
         expandDataLocal.push({
@@ -460,7 +465,7 @@ export const useLogsData = () => {
         });
       }
       if (logs[i].type === 2) {
-        if (other?.billing_mode !== 'tiered_expr') {
+        if (other?.billing_mode !== 'tiered_expr' && !isVideoMatrix) {
           expandDataLocal.push({
             key: t('日志详情'),
             value: other?.claude
@@ -503,7 +508,18 @@ export const useLogsData = () => {
           Boolean(other?.violation_fee_marker);
 
         let content = '';
-        if (!isViolationFeeLog && other?.billing_mode !== 'tiered_expr') {
+        if (isVideoMatrix) {
+          buildVideoMatrixDetailRows({
+            ...other,
+            completion_tokens: logs[i].completion_tokens,
+            group_name: logs[i].group,
+          }).forEach((row) => expandDataLocal.push(row));
+        }
+        if (
+          !isViolationFeeLog &&
+          other?.billing_mode !== 'tiered_expr' &&
+          !isVideoMatrix
+        ) {
           const logOpts = {
             ...other,
             prompt_tokens: logs[i].prompt_tokens,

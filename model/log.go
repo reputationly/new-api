@@ -269,6 +269,9 @@ type RecordTaskBillingLogParams struct {
 	// 必须记，否则日志的「输出」列恒为 0，前端也拼不出「tokens × 单价 = 金额」
 	// 这条算式——对账时只能拿一个孤零零的金额去和供应商明细比。
 	CompletionTokens int
+	// TokenName 提交时冻结的令牌名。给了就用它，不再按 TokenId 回查——体验区的临时令牌
+	// 没有库里的行（见 TaskPrivateData.TokenName）。留空才退回回查，兼容存量任务。
+	TokenName string
 }
 
 func RecordTaskBillingLog(params RecordTaskBillingLogParams) {
@@ -276,8 +279,8 @@ func RecordTaskBillingLog(params RecordTaskBillingLogParams) {
 		return
 	}
 	username, _ := GetUsernameById(params.UserId, false)
-	tokenName := ""
-	if params.TokenId > 0 {
+	tokenName := params.TokenName
+	if tokenName == "" && params.TokenId > 0 {
 		if token, err := GetTokenById(params.TokenId); err == nil {
 			tokenName = token.Name
 		}

@@ -602,6 +602,7 @@ func RelayTask(c *gin.Context) {
 		// 轮询期失败退款/重算凭此按原路调整，否则积分实付会被退进钱包（套利通道）
 		task.PrivateData.PointsConsumed = relayInfo.PointsConsumed
 		task.PrivateData.TokenId = relayInfo.TokenId
+		task.PrivateData.TokenName = c.GetString("token_name")
 		task.PrivateData.BillingContext = &model.TaskBillingContext{
 			ModelPrice:      relayInfo.PriceData.ModelPrice,
 			GroupRatio:      relayInfo.PriceData.GroupRatioInfo.GroupRatio,

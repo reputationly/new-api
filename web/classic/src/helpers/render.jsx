@@ -2536,6 +2536,96 @@ export function renderVideoMatrixPriceSimple(opts) {
   ].filter(Boolean);
 }
 
+// 视频计费矩阵的展开行（使用日志点开后那张 key-value 表）。
+//
+// 字段刻意逐条对着供应商账单排：令牌数、单价、分辨率、参考视频、分组倍率、计费过程。
+// 对账时人是拿两张表并排看的，字段名和顺序一致才能一眼扫完；顺序不同就得来回找。
+//
+// 同时**替换掉**通用的「日志详情 / 计费过程」两行。那两行按
+// `输入价格 = model_ratio × 2 × 汇率` 展示，而 model_ratio 在这条路上只是预扣锚点、
+// 没参与最终扣费（实测显示 ¥51，实收单价 ¥46）；输出价格更是因为没有 completion_ratio
+// 直接算出 ¥NaN。给一个反算不出金额的数字，比不给更糟。
+export function buildVideoMatrixDetailRows(opts) {
+  const {
+    video_price_mode: mode,
+    video_unit_price: unitPrice = 0,
+    video_resolution: resolution,
+    video_has_input: hasVideoInput = false,
+    video_seconds: seconds,
+    group_ratio: groupRatio,
+    user_group_ratio,
+    completion_tokens: tokens = 0,
+    group_name: groupName,
+  } = opts;
+  if (!mode) return [];
+
+  const isPerCall = mode === 'per_call';
+  const { symbol, rate } = getCurrencyConfig();
+  const { ratio: effectiveRatio, label: ratioLabel } = getEffectiveRatio(
+    groupRatio,
+    user_group_ratio,
+  );
+  // 0 是合法倍率（免费分组），不能用 `|| 1` 兜底——那会让免费任务算出全价。
+  const rawRatio = Number(effectiveRatio);
+  const ratio = Number.isFinite(rawRatio) && rawRatio >= 0 ? rawRatio : 1;
+  const unitText = isPerCall ? i18next.t('次') : '1M Tokens';
+  // 单价固定 4 位：供应商账单就是 ¥46.0000 这个精度，对账时逐位比。
+  const unitDisplay = `${symbol}${(Number(unitPrice) * rate).toFixed(4)} / ${unitText}`;
+
+  const rows = [];
+  rows.push({
+    key: i18next.t('计价方式'),
+    value: isPerCall
+      ? i18next.t('按次固定价')
+      : i18next.t('按上游返回的 token 用量'),
+  });
+  if (!isPerCall && tokens > 0) {
+    rows.push({
+      key: i18next.t('计费 Tokens'),
+      value: Number(tokens).toLocaleString(),
+    });
+  }
+  rows.push({ key: i18next.t('单价'), value: unitDisplay });
+  if (resolution) {
+    rows.push({ key: i18next.t('分辨率'), value: resolution });
+  }
+  if (isPerCall) {
+    if (seconds > 0) {
+      rows.push({
+        key: i18next.t('时长'),
+        value: i18next.t('{{seconds}} 秒', { seconds }),
+      });
+    }
+  } else {
+    rows.push({
+      key: i18next.t('参考视频'),
+      value: hasVideoInput ? i18next.t('是') : i18next.t('否'),
+    });
+  }
+  rows.push({
+    key: ratioLabel,
+    value: groupName
+      ? `${groupName} (${formatRatioValue(ratio, 4)}x)`
+      : `${formatRatioValue(ratio, 4)}x`,
+  });
+
+  if (!isPerCall && tokens > 0) {
+    const amount = (tokens / 1e6) * Number(unitPrice) * ratio;
+    rows.push({
+      key: i18next.t('计费过程'),
+      value: `${Number(tokens).toLocaleString()} × ${symbol}${(Number(unitPrice) * rate).toFixed(4)} / 1M Tokens × ${formatRatioValue(ratio, 4)} = ${symbol}${(amount * rate).toFixed(6)}`,
+    });
+  } else if (isPerCall) {
+    const amount = Number(unitPrice) * ratio;
+    rows.push({
+      key: i18next.t('计费过程'),
+      value: `${symbol}${(Number(unitPrice) * rate).toFixed(4)} / ${i18next.t('次')} × ${formatRatioValue(ratio, 4)} = ${symbol}${(amount * rate).toFixed(6)}`,
+    });
+  }
+
+  return rows;
+}
+
 export function renderModelPriceSimple(opts) {
   const {
     model_ratio: modelRatio,
