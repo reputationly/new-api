@@ -32,6 +32,15 @@ import {
 } from '../constants/playground.constants';
 import { TABLE_COMPACT_MODES_KEY } from '../constants';
 import { MOBILE_BREAKPOINT } from '../hooks/common/useIsMobile';
+// 纯计算部分拆出去的两个模块（不引 UI 依赖，手机端可直接 import，不必手抄）。
+// 必须 import 进来而不是 `export ... from`：本文件内部要调用它们，
+// 纯重导出不会在模块作用域建立绑定，运行时抛 ReferenceError 且构建期不报错。
+import { formatPriceWithCeiling } from './priceFormat';
+import {
+  videoResolutionRank,
+  videoSecondsRank,
+  flattenVideoMatrix,
+} from './videoMatrix';
 
 const HTMLToastContent = ({ htmlContent }) => {
   return <div dangerouslySetInnerHTML={{ __html: htmlContent }} />;
@@ -646,9 +655,11 @@ export const selectFilter = (input, option) => {
 // -------------------------------
 // 模型定价计算工具函数
 // 实现挪到 ./priceFormat，好让手机端直接复用而不是抄一份
-// （utils.jsx 会传染桌面依赖、在 mobile 侧被整模块 shim 掉）。此处重导出，
-// 既有从 helpers barrel 引用的地方不受影响。
-export { formatPriceWithCeiling } from './priceFormat';
+// （utils.jsx 会传染桌面依赖、在 mobile 侧被整模块 shim 掉）。
+//
+// 见文件头 import：必须 import 再 export，`export { X } from './x'` 是纯重导出、
+// 不建立本地绑定，而本文件内部还要调用它（下面三处）。
+export { formatPriceWithCeiling };
 
 export const getModelPricingCurrencyConfig = () => {
   const quotaDisplayType = localStorage.getItem('quota_display_type') || 'USD';
@@ -1140,20 +1151,11 @@ export const formatDynamicPriceSummary = (billingExpr, t, groupRatio = 1) => {
   );
 };
 
-/**
- * 把视频计费矩阵的所有格子摊平成 [{resolution, column, priceUSD}]，并乘上分组倍率。
- *
- * 供定价页展示复用。列的语义随 mode 变：token 模式是「输入是否含视频」，
- * per_call 模式是秒数。
- */
 // 矩阵的纯计算部分拆到 ./videoMatrix，好让手机端直接复用而不是抄一份
-// （utils.jsx 会传染桌面依赖、在 mobile 侧被整模块 shim 掉）。此处重导出，
-// 既有从 helpers barrel 引用的地方不受影响。
-export {
-  videoResolutionRank,
-  videoSecondsRank,
-  flattenVideoMatrix,
-} from './videoMatrix';
+// （utils.jsx 会传染桌面依赖、在 mobile 侧被整模块 shim 掉）。
+//
+// 见文件头 import：formatVideoMatrixSummary 要调 flattenVideoMatrix，理由同上。
+export { videoResolutionRank, videoSecondsRank, flattenVideoMatrix };
 
 /**
  * 卡片/表格视图的紧凑摘要：矩阵有多格，列表里放不下，显示价格区间。
