@@ -15,6 +15,7 @@ import { API } from '@classic/helpers/api';
 // 直接引纯计算模块——helpers/utils.jsx 会传染桌面依赖、在 mobile 侧被整模块 shim，
 // videoMatrix.js 不引 UI 依赖，两端共用同一份，不必再手抄同步。
 import { flattenVideoMatrix } from '@classic/helpers/videoMatrix';
+import { formatPriceWithCeiling } from '@classic/helpers/priceFormat';
 import {
   MODEL_CATEGORIES,
   buildModelCategoryIndex,
@@ -151,15 +152,9 @@ const Models = () => {
   const videoMatrixCells = (m) =>
     flattenVideoMatrix(m.video_pricing, groupRatio);
 
-  const formatPrice = (value) => {
-    const numericValue = Number(value);
-    if (!Number.isFinite(numericValue)) return '-';
-
-    const factor = 100;
-    const scaled = numericValue * factor;
-    const tolerance = Number.EPSILON * Math.max(1, Math.abs(scaled));
-    return (Math.ceil(scaled - tolerance) / factor).toFixed(2);
-  };
+  // 与 PC 端共用同一份格式化（含「≥0.001 向上取整、更小则四舍五入」的规则）。
+  // 原先这里是手抄的一份拷贝，两端各改一次就会漂移。
+  const formatPrice = formatPriceWithCeiling;
 
   const inputPricePerM = (m) => m.model_ratio * 2 * groupRatio;
   const displayPrice = (usdValue) =>

@@ -645,15 +645,10 @@ export const selectFilter = (input, option) => {
 
 // -------------------------------
 // 模型定价计算工具函数
-export const formatPriceWithCeiling = (value, precision = 2) => {
-  const numericValue = Number(value);
-  if (!Number.isFinite(numericValue)) return '-';
-
-  const factor = 10 ** precision;
-  const scaled = numericValue * factor;
-  const tolerance = Number.EPSILON * Math.max(1, Math.abs(scaled));
-  return (Math.ceil(scaled - tolerance) / factor).toFixed(precision);
-};
+// 实现挪到 ./priceFormat，好让手机端直接复用而不是抄一份
+// （utils.jsx 会传染桌面依赖、在 mobile 侧被整模块 shim 掉）。此处重导出，
+// 既有从 helpers barrel 引用的地方不受影响。
+export { formatPriceWithCeiling } from './priceFormat';
 
 export const getModelPricingCurrencyConfig = () => {
   const quotaDisplayType = localStorage.getItem('quota_display_type') || 'USD';
