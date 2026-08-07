@@ -256,8 +256,9 @@ const SiderBar = ({ onNavigate = () => {} }) => {
         text: t('体验区管理'),
         itemKey: 'playgroundAdmin',
         to: '/console/playground-admin',
-        // 页面读写 /api/option/（RootAuth），与「系统设置」一致仅超管可见
-        className: isRoot() ? '' : 'tableHiddle',
+        // 页面走 /api/playground_admin/*（AdminAuth，仅体验区那几个键），
+        // 与用户/渠道/兑换码等管理页一致对管理员可见
+        className: isAdmin() ? '' : 'tableHiddle',
       },
       {
         text: t('兑换码管理'),

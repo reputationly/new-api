@@ -18,20 +18,6 @@ const GlobalPanel = ({ draft }) => {
   const { t } = useTranslation();
   const global = getPromptOptimizeGlobal(draft.tabConfig);
 
-  // 只列 chat 能力的模型：优化请求固定打 /pg/chat/completions，选了视频/图像模型
-  // 这里看不出异常（有值 → 各 tab 的按钮照常显示），用户每次点都会在上游炸。
-  // allowCreate 保留：/api/pricing 拉不到时 allModels 为空，手填是唯一退路。
-  const modelOptions = useMemo(
-    () =>
-      (draft.allModels || [])
-        .filter((m) => isChatModel(m.supported_endpoint_types))
-        .map((m) => m.model_name)
-        .filter(Boolean)
-        .sort()
-        .map((n) => ({ label: n, value: n })),
-    [draft.allModels],
-  );
-
   // 「用户可用分组」表（运营设置里那张）——它决定一个分组是不是「所有人都能访问」。
   // GetUserUsableGroups(userGroup) 就是从这张表出发，再叠加各分组的 +:/-: 特殊增删。
   const universalGroups = useMemo(() => {
@@ -43,34 +29,42 @@ const GlobalPanel = ({ draft }) => {
     }
   }, [draft.options]);
 
-  const pickedModel = useMemo(
-    () => (draft.allModels || []).find((m) => m.model_name === global.model),
-    [draft.allModels, global.model],
-  );
-
-  // 'all' 是后端的哨兵（controller/pricing.go:23），语义是「该模型不限分组」。
-  // 此时任何分组都能服务它，**不能**做「该分组挂没挂这个模型」的校验——
-  // 把 'all' 塌成通用表会让手填的受限分组被误报成「每次优化都会失败」，
-  // 那会吓得运营去删掉一个本来正确、只是限定给部分人的配置。
-  const modelServesAnyGroup = !!pickedModel?.enable_groups?.includes('all');
-
-  // 候选分组跟着**已选模型**走。取全部模型 enable_groups 的并集会让运营选到一个
-  // 根本不挂优化模型的分组，保存后每次请求都在选渠道时炸。
-  // 'all' 时给通用分组当**建议值**（非穷举，靠 allowCreate 手填其余）。
-  const modelGroups = useMemo(() => {
-    if (!pickedModel) return null; // 没选模型 / 拉不到候选：不给候选，靠手填
-    return modelServesAnyGroup
-      ? universalGroups
-      : (pickedModel.enable_groups || []).filter(Boolean);
-  }, [pickedModel, modelServesAnyGroup, universalGroups]);
-
+  // 分组候选 = 分组倍率表全集（draft.allGroups，来自 /api/group/）。
+  // 标注哪些在「用户可用分组」表里：不在的分组只有本身属于它、或被 +: 显式授予的
+  // 用户才用得了，配上去等于把这个功能限定给一部分人。
   const groupOptions = useMemo(
     () =>
-      [...new Set(modelGroups || [])].sort().map((g) => ({
+      [...new Set(draft.allGroups || [])].sort().map((g) => ({
         label: universalGroups.includes(g) ? g : `${g}${t('（非通用）')}`,
         value: g,
       })),
-    [modelGroups, universalGroups, t],
+    [draft.allGroups, universalGroups, t],
+  );
+
+  // 模型候选跟着**已选分组**走——与用户原来在体验区的操作顺序、以及运行时
+  // distributor 按 (group, model) 找渠道的顺序都一致，选出来的组合天然有效。
+  // 'all' 是后端哨兵（controller/pricing.go:23），语义是「该模型不限分组」，任何分组都放行。
+  // 分组留空 = 按用户自己的分组走，此时给不出确定的分组，列全集。
+  //
+  // 再叠一层 chat 过滤：优化请求固定打 /pg/chat/completions，选了视频/图像模型这里
+  // 看不出异常（有值 → 各 tab 的按钮照常显示），用户每次点都会在上游炸。
+  // allowCreate 保留：接口拉不到时候选为空，手填是唯一退路。
+  const modelOptions = useMemo(
+    () =>
+      (draft.allModels || [])
+        .filter((m) => isChatModel(m.supported_endpoint_types))
+        .filter(
+          (m) =>
+            !global.group ||
+            (m.enable_groups || []).some(
+              (g) => g === global.group || g === 'all',
+            ),
+        )
+        .map((m) => m.model_name)
+        .filter(Boolean)
+        .sort()
+        .map((n) => ({ label: n, value: n })),
+    [draft.allModels, global.group],
   );
 
   // 配了分组但它不在通用表里 → 只有被特殊配置显式加过该分组的用户才用得了。
@@ -78,14 +72,25 @@ const GlobalPanel = ({ draft }) => {
   const groupNotUniversal =
     !!global.group && !universalGroups.includes(global.group);
 
-  // 换过模型之后，原来选的分组可能已经不在新模型的可用分组里。不自动清空
-  // （避免运营手滑丢配置），只提醒——这种组合下每次优化请求都会失败。
-  const groupNotServingModel =
-    !!global.group &&
+  // 候选可信与否只看**源数据**拉到没有。
+  // 不能拿 modelOptions.length > 0 当哨兵：它为空有两种成因——接口没拉到（不该判），
+  // 与该分组下确实没有 chat 模型（正该判）。用过滤结果做哨兵会把后者一起吞掉，
+  // 而那恰恰是唯一会在运行时炸、页面上又再无别处提示的错误配置
+  // （usePromptOptimize 的 available 判据刻意不含分组校验，前端判不了分组权限）。
+  const candidatesLoaded = (draft.allModels || []).length > 0;
+
+  // 分组下一个能做优化的 chat 模型都没有 → 换模型无济于事，得换分组。
+  const groupHasNoChatModel =
+    !!global.group && candidatesLoaded && modelOptions.length === 0;
+
+  // 分组下有 chat 模型，只是当前选的这个不在其中（多见于换过分组之后）→ 换模型即可。
+  // 不自动清空（避免运营手滑丢配置），只提醒。
+  const modelNotInGroup =
     !!global.model &&
-    !modelServesAnyGroup &&
-    Array.isArray(modelGroups) &&
-    !modelGroups.includes(global.group);
+    !!global.group &&
+    candidatesLoaded &&
+    modelOptions.length > 0 &&
+    !modelOptions.some((o) => o.value === global.model);
 
   // 各 tab 的开关状态一览：全局开着但某个 tab 单独关了，这里能一眼看出来。
   const tabStates = useMemo(() => {
@@ -130,6 +135,40 @@ const GlobalPanel = ({ draft }) => {
           <Text>{t('总开关')}</Text>
         </div>
         <div style={{ maxWidth: 360 }}>
+          <Text size='small'>{t('优化用的分组')}</Text>
+          <Select
+            filter
+            allowCreate
+            showClear
+            value={global.group || undefined}
+            optionList={groupOptions}
+            onChange={(v) => patchGlobal({ group: v || '' })}
+            placeholder={t('留空则按用户自己的分组')}
+            style={{ width: '100%', marginTop: 4 }}
+          />
+          <Text type='tertiary' size='small' className='block mt-1'>
+            {t(
+              '统一指定优化请求走哪个分组，用户端不再自己选。建议挑一个所有用户都能访问的：优化模型通常是便宜的小模型、挂在通用分组上，而专用分组往往只挂业务模型 —— 留空走用户自己的分组时，分组越专用的用户反而越用不了这个功能。',
+            )}
+          </Text>
+          {groupHasNoChatModel && (
+            <Text type='danger' size='small' className='block mt-1'>
+              {t(
+                '分组「{{group}}」下没有任何支持 chat completions 的模型：这样配的话每次优化都会失败，请换一个分组。',
+                { group: global.group },
+              )}
+            </Text>
+          )}
+          {groupNotUniversal && (
+            <Text type='warning' size='small' className='block mt-1'>
+              {t(
+                '「{{group}}」不在「用户可用分组」表中：只有本身就在该分组、或在分组特殊配置里被显式授予的用户才能使用。',
+                { group: global.group },
+              )}
+            </Text>
+          )}
+        </div>
+        <div style={{ maxWidth: 360 }} className='mt-4'>
           <Text size='small'>{t('优化用的语言模型')}</Text>
           <Select
             filter
@@ -141,49 +180,20 @@ const GlobalPanel = ({ draft }) => {
             style={{ width: '100%', marginTop: 4 }}
           />
           <Text type='tertiary' size='small' className='block mt-1'>
-            {t(
-              '只列出支持 chat completions 的模型 —— 优化请求固定走 /pg/chat/completions。',
-            )}
-          </Text>
-        </div>
-        <div style={{ maxWidth: 360 }} className='mt-4'>
-          <Text size='small'>{t('优化用的分组')}</Text>
-          <Select
-            filter
-            allowCreate
-            showClear
-            value={global.group || undefined}
-            optionList={groupOptions}
-            onChange={(v) => patchGlobal({ group: v || '' })}
-            placeholder={
-              global.model
-                ? t('留空则按用户自己的分组')
-                : t('请先选择优化用的语言模型')
-            }
-            style={{ width: '100%', marginTop: 4 }}
-          />
-          <Text type='tertiary' size='small' className='block mt-1'>
-            {modelServesAnyGroup
+            {global.group
               ? t(
-                  '该模型不限分组，下拉里只是建议值，可直接输入任意分组。建议挑一个所有用户都能访问的。',
+                  '只列出在分组「{{group}}」下已启用、且支持 chat completions 的模型 —— 优化请求固定走 /pg/chat/completions。',
+                  { group: global.group },
                 )
               : t(
-                  '候选来自所选模型实际启用的分组。建议挑一个所有用户都能访问的：优化模型通常是便宜的小模型、挂在通用分组上，而专用分组往往只挂业务模型 —— 留空走用户自己的分组时，分组越专用的用户反而越用不了这个功能。',
+                  '只列出支持 chat completions 的模型 —— 优化请求固定走 /pg/chat/completions。分组留空时无法确定范围，这里列的是全部。',
                 )}
           </Text>
-          {groupNotServingModel && (
+          {modelNotInGroup && (
             <Text type='danger' size='small' className='block mt-1'>
               {t(
-                '模型「{{model}}」未在分组「{{group}}」启用：这样配的话每次优化都会失败，请重选分组。',
+                '模型「{{model}}」未在分组「{{group}}」启用：这样配的话每次优化都会失败，请重选。',
                 { model: global.model, group: global.group },
-              )}
-            </Text>
-          )}
-          {groupNotUniversal && (
-            <Text type='warning' size='small' className='block mt-1'>
-              {t(
-                '「{{group}}」不在「用户可用分组」表中：只有本身就在该分组、或在分组特殊配置里被显式授予的用户才能使用。',
-                { group: global.group },
               )}
             </Text>
           )}

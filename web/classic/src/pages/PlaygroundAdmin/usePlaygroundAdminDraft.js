@@ -100,8 +100,14 @@ export const usePlaygroundAdminDraft = () => {
   const [tabConfig, setTabConfig] = useState({});
   const [stores, setStores] = useState({});
   const [dirty, setDirty] = useState(() => new Set());
-  // 模型选择器的候选：上架模型全集（/api/pricing）。拉不到就退化成手填。
+  // 模型选择器的候选：上架模型全集。走管理员专用的 /api/models/pricing 而**不是**
+  // /api/pricing —— 后者按调用者自己的分组裁剪（模型广场语义），配置页拿它当候选，
+  // 管理员一旦在专用分组里下拉就整个空掉。拉不到就退化成手填。
   const [allModels, setAllModels] = useState([]);
+  // 分组候选：/api/group/（AdminAuth）给的是分组倍率表的全部键。用户侧
+  // /api/user/self/groups 是它再 ∩ GetUserUsableGroups(自己分组) 的结果——配置页
+  // 要的是裁剪之前那个上界，运营配的是给全体用户用的东西，不是自己能用什么。
+  const [allGroups, setAllGroups] = useState([]);
 
   const hydrate = useCallback((opts) => {
     setTabConfig(parsePlaygroundTabConfig(opts[TAB_CONFIG_KEY]));
@@ -116,7 +122,9 @@ export const usePlaygroundAdminDraft = () => {
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const res = await API.get('/api/option/');
+      // 走专属的 AdminAuth 接口而不是 RootAuth 的 /api/option/：后者能写任意键
+      // （SMTP 凭据、OAuth secret 等），放给管理员等于交出超管权限。
+      const res = await API.get('/api/playground_admin/options');
       const { success, message, data } = res.data;
       if (!success) {
         showError(message);
@@ -142,11 +150,20 @@ export const usePlaygroundAdminDraft = () => {
   useEffect(() => {
     (async () => {
       try {
-        const res = await API.get('/api/pricing', { skipErrorHandler: true });
+        const res = await API.get('/api/models/pricing', {
+          skipErrorHandler: true,
+        });
         const { success, data } = res.data || {};
         if (success && Array.isArray(data)) setAllModels(data);
       } catch (e) {
         // 拉不到就不给候选列表，模型名仍可手填
+      }
+      try {
+        const res = await API.get('/api/group/', { skipErrorHandler: true });
+        const { success, data } = res.data || {};
+        if (success && Array.isArray(data)) setAllGroups(data.filter(Boolean));
+      } catch (e) {
+        // 同上：分组名仍可手填
       }
     })();
   }, []);
@@ -291,7 +308,10 @@ export const usePlaygroundAdminDraft = () => {
         }
       });
       for (const [key, value] of Object.entries(payload)) {
-        const res = await API.put('/api/option/', { key, value });
+        const res = await API.put('/api/playground_admin/option', {
+          key,
+          value,
+        });
         if (!res.data.success) {
           showError(res.data.message);
           return;
@@ -322,6 +342,7 @@ export const usePlaygroundAdminDraft = () => {
     tabConfig,
     stores,
     allModels,
+    allGroups,
     patchTabConfig,
     setDefaultField,
     addModelToTab,

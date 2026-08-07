@@ -503,12 +503,22 @@ func SetApiRouter(router *gin.Engine) {
 			modelsRoute.GET("/sync_upstream/preview", controller.SyncUpstreamPreview)
 			modelsRoute.POST("/sync_upstream", controller.SyncUpstreamModels)
 			modelsRoute.GET("/missing", controller.GetMissingModels)
+			modelsRoute.GET("/pricing", controller.GetAllPricing)
 			modelsRoute.GET("/", controller.GetAllModelsMeta)
 			modelsRoute.GET("/search", controller.SearchModelsMeta)
 			modelsRoute.GET("/:id", controller.GetModelMeta)
 			modelsRoute.POST("/", controller.CreateModelMeta)
 			modelsRoute.PUT("/", controller.UpdateModelMeta)
 			modelsRoute.DELETE("/:id", controller.DeleteModelMeta)
+		}
+
+		// 体验区管理：只读写体验区那几个 option 键，故可开放到 AdminAuth
+		// （对比 /api/option/ 的 RootAuth——那组能写任意键，见 controller/playground_admin.go）
+		playgroundAdminRoute := apiRouter.Group("/playground_admin")
+		playgroundAdminRoute.Use(middleware.AdminAuth())
+		{
+			playgroundAdminRoute.GET("/options", controller.GetPlaygroundAdminOptions)
+			playgroundAdminRoute.PUT("/option", controller.UpdatePlaygroundAdminOption)
 		}
 
 		// Deployments (model deployment management)

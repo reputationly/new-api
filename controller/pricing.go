@@ -91,6 +91,22 @@ func GetPricing(c *gin.Context) {
 	})
 }
 
+// GetAllPricing 返回**未按调用者分组过滤**的模型全集，仅管理员可用。
+//
+// 与 GetPricing 的分工：那份是模型广场用的——问的是「我这个用户能买什么」，
+// 按 GetUserUsableGroups 裁剪天经地义。而运营配置页（体验区管理）问的是
+// 「站点上有哪些模型可以配给用户用」，跟配置者本人在哪个分组无关：管理员若在
+// 某个专用分组里，用那份接口会把挂在其他分组上的模型整个藏掉，下拉直接空。
+//
+// 只回 pricing 数组：group_ratio / usable_group / 积分那几项都是按调用者裁剪的
+// 用户视角数据，配置页不需要，也不该在这里给出一份没裁剪的。
+func GetAllPricing(c *gin.Context) {
+	c.JSON(200, gin.H{
+		"success": true,
+		"data":    model.GetPricing(),
+	})
+}
+
 func ResetModelRatio(c *gin.Context) {
 	defaultStr := ratio_setting.DefaultModelRatio2JSONString()
 	err := model.UpdateOption("ModelRatio", defaultStr)
