@@ -193,6 +193,7 @@ const EditChannelModal = (props) => {
     thinking_to_content: false,
     proxy: '',
     pass_through_body_enabled: false,
+    pass_through_result_url: false,
     system_prompt: '',
     system_prompt_override: false,
     settings: '',
@@ -516,6 +517,7 @@ const EditChannelModal = (props) => {
     thinking_to_content: false,
     proxy: '',
     pass_through_body_enabled: false,
+    pass_through_result_url: false,
     system_prompt: '',
   });
   const showApiConfigCard = true; // 控制是否显示 API 配置卡片
@@ -881,6 +883,8 @@ const EditChannelModal = (props) => {
           data.proxy = parsedSettings.proxy || '';
           data.pass_through_body_enabled =
             parsedSettings.pass_through_body_enabled || false;
+          data.pass_through_result_url =
+            parsedSettings.pass_through_result_url || false;
           data.system_prompt = parsedSettings.system_prompt || '';
           data.system_prompt_override =
             parsedSettings.system_prompt_override || false;
@@ -890,6 +894,7 @@ const EditChannelModal = (props) => {
           data.thinking_to_content = false;
           data.proxy = '';
           data.pass_through_body_enabled = false;
+          data.pass_through_result_url = false;
           data.system_prompt = '';
           data.system_prompt_override = false;
         }
@@ -898,6 +903,7 @@ const EditChannelModal = (props) => {
         data.thinking_to_content = false;
         data.proxy = '';
         data.pass_through_body_enabled = false;
+        data.pass_through_result_url = false;
         data.system_prompt = '';
         data.system_prompt_override = false;
       }
@@ -1007,6 +1013,7 @@ const EditChannelModal = (props) => {
         thinking_to_content: data.thinking_to_content,
         proxy: data.proxy,
         pass_through_body_enabled: data.pass_through_body_enabled,
+        pass_through_result_url: data.pass_through_result_url,
         system_prompt: data.system_prompt,
         system_prompt_override: data.system_prompt_override || false,
       });
@@ -1049,6 +1056,7 @@ const EditChannelModal = (props) => {
         (data.system_prompt && data.system_prompt.trim()) ||
         data.thinking_to_content ||
         data.pass_through_body_enabled ||
+        data.pass_through_result_url ||
         data.force_format ||
         data.claude_beta_query ||
         data.system_prompt_override;
@@ -1396,6 +1404,7 @@ const EditChannelModal = (props) => {
       thinking_to_content: false,
       proxy: '',
       pass_through_body_enabled: false,
+      pass_through_result_url: false,
       system_prompt: '',
       system_prompt_override: false,
     });
@@ -1766,6 +1775,7 @@ const EditChannelModal = (props) => {
       thinking_to_content: localInputs.thinking_to_content || false,
       proxy: localInputs.proxy || '',
       pass_through_body_enabled: localInputs.pass_through_body_enabled || false,
+      pass_through_result_url: localInputs.pass_through_result_url || false,
       system_prompt: localInputs.system_prompt || '',
       system_prompt_override: localInputs.system_prompt_override || false,
     };
@@ -2539,6 +2549,7 @@ const EditChannelModal = (props) => {
 
                   <Form.Switch field='thinking_to_content' label={t('思考内容转换')} checkedText={t('开')} uncheckedText={t('关')} onChange={(value) => handleChannelSettingsChange('thinking_to_content', value)} extraText={t('将 reasoning_content 转换为 <think> 标签拼接到内容中')} />
                   <Form.Switch field='pass_through_body_enabled' label={t('透传请求体')} checkedText={t('开')} uncheckedText={t('关')} onChange={(value) => handleChannelSettingsChange('pass_through_body_enabled', value)} extraText={t('启用请求体透传功能')} />
+                  <Form.Switch field='pass_through_result_url' label={t('透传成品地址')} checkedText={t('开')} uncheckedText={t('关')} onChange={(value) => handleChannelSettingsChange('pass_through_result_url', value)} extraText={t('图片/视频成品直接返回上游原始 URL，不中转到本站存储。省带宽，但上游地址通常有有效期（如 24 小时），过期后历史记录中的成品将无法打开。上游只返回 base64 时不受影响，仍会转存。')} />
 
                   <Form.Input field='proxy' label={t('代理地址')} placeholder={t('例如: socks5://user:pass@host:port')} onChange={(value) => handleChannelSettingsChange('proxy', value)} showClear extraText={t('用于配置网络代理，支持 socks5 协议')} />
 

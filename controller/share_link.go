@@ -21,6 +21,19 @@ import (
 // 分享链接上这句引导才成立，在需要登录的页面上说这句话是把用户支进死胡同。
 var weChatUARegex = regexp.MustCompile(`(?i)micromessenger`)
 
+// isExternalDirectResultURL 判断 ResultURL 是不是一条「拿去就能打开」的外部地址。
+//
+// 必须排除 taskcommon.BuildProxyURL 生成的我方代理路径（/v1/videos/<id>/content）：
+// 那条路要鉴权、且会带渠道 Key 回源上游，当成直链发出去等于把上游代理送人。
+// 非 OBS 的 ResultURL 有两类，正是「上游直链」与「我方代理」，这里只放行前者。
+func isExternalDirectResultURL(raw, taskID string) bool {
+	raw = strings.TrimSpace(raw)
+	if !strings.HasPrefix(raw, "http://") && !strings.HasPrefix(raw, "https://") {
+		return false
+	}
+	return !isTaskProxyContentURL(raw, taskID)
+}
+
 // CreateTaskShareLink 为自己的任务成品签发免登录分享 token。
 //
 // 按 user_id + task_id 查库，查不到就发不出 token；签出的 token 里也带着这个
@@ -45,10 +58,22 @@ func CreateTaskShareLink(c *gin.Context) {
 		common.ApiErrorMsg(c, "任务尚未完成，暂不能分享")
 		return
 	}
-	// 只有落到我方 OBS 的成品才可分享：公开端点必须能用「签名 key → 302」这一条
-	// 简单路径服务完，绝不能为免登录访问去复刻 VideoProxy 里带渠道 Key 回源上游
-	// 的那套逻辑（等于把上游代理暴露给匿名用户）。
-	if !mediastore.IsOBSRef(task.GetResultURL()) {
+	// 只有落到我方 OBS 的成品才签得出 /s/ token：那个端点是**匿名**的，必须能用
+	// 「签名 key → 302」这一条简单路径服务完，绝不能为免登录访问去复刻 VideoProxy
+	// 里带渠道 Key 回源上游的那套逻辑（等于把上游代理暴露给匿名用户）。
+	raw := task.GetResultURL()
+	if !mediastore.IsOBSRef(raw) {
+		// 渠道开了「透传成品地址」时成品本就是公网直链（见 dto.ChannelSettings
+		// .PassThroughResultURL）。这个端点是 UserAuth + self/:id，把该 URL 交给
+		// 任务主人不新增任何暴露面——他在自己的任务列表里本来就看得到。不签 token：
+		// 上面那条匿名端点的约束一点不动。
+		//
+		// 这一支对微信是刚需：ShareBar 在微信里只有「复制分享链接」一条路（平台
+		// 不给音视频任何本地保存途径），拒了就等于成品彻底拿不到。
+		if isExternalDirectResultURL(raw, task.TaskID) {
+			common.ApiSuccess(c, gin.H{"url": raw, "expires_at": 0})
+			return
+		}
 		common.ApiErrorMsg(c, "该结果未落对象存储，暂不支持分享")
 		return
 	}

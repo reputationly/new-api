@@ -7,6 +7,16 @@ type ChannelSettings struct {
 	PassThroughBodyEnabled bool   `json:"pass_through_body_enabled,omitempty"`
 	SystemPrompt           string `json:"system_prompt,omitempty"`
 	SystemPromptOverride   bool   `json:"system_prompt_override,omitempty"`
+	// PassThroughResultURL 异步任务成品直接透传上游 URL，不搬进 OBS。
+	// 覆盖全局的 media_storage.ingest_upstream_url（仅本渠道、仅收紧方向）。
+	//
+	// 用途：第三方渠道的成品本来就有公网可直达的地址，中转一道既费我们的带宽，
+	// 用户看到的域名也不是供应商的、容易以为被我们动过手脚。
+	//
+	// 代价：上游 URL 大多带过期时间（如火山 TOS 的 X-Tos-Expires=86400），到期后
+	// 历史记录里的成品就打不开了——搬 OBS 正是在解决这个。所以默认关，按渠道单开。
+	// base64 / data: URI 不受影响：那条路本来就不走这里，必须落盘才有 URL 可给。
+	PassThroughResultURL bool `json:"pass_through_result_url,omitempty"`
 }
 
 type VertexKeyType string

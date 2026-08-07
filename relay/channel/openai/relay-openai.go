@@ -580,7 +580,7 @@ func OpenaiHandlerWithUsage(c *gin.Context, info *relaycommon.RelayInfo, resp *h
 		if imgReq, ok := info.Request.(*dto.ImageRequest); ok {
 			responseFormat = imgReq.ResponseFormat
 		}
-		responseBody = service.RewriteImageResponseToOBS(c.Request.Context(), info.UserId, info.OriginModelName, responseFormat, responseBody)
+		responseBody = service.RewriteImageResponseToOBS(c.Request.Context(), info.UserId, info.ChannelId, info.OriginModelName, responseFormat, responseBody)
 	}
 
 	// 写入新的 response body

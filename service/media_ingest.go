@@ -46,7 +46,8 @@ func PersistTaskResultToOBS(ctx context.Context, task *model.Task, nfsPath, rawU
 			if ok := persistToOBS(ctx, task, key, mediastore.PersistSource{NFSPath: rawURL}); ok {
 				return mediastore.WrapKey(key), true
 			}
-		case s.IngestUpstreamURL && (strings.HasPrefix(rawURL, "http://") || strings.HasPrefix(rawURL, "https://")):
+		case s.IngestUpstreamURL && !channelPassThroughResultURL(task.ChannelId) &&
+			(strings.HasPrefix(rawURL, "http://") || strings.HasPrefix(rawURL, "https://")):
 			key := buildTaskObjectKey(task, rawURL)
 			if key != "" {
 				if ok := persistToOBS(ctx, task, key, mediastore.PersistSource{UpstreamURL: rawURL}); ok {
@@ -56,6 +57,24 @@ func PersistTaskResultToOBS(ctx context.Context, task *model.Task, nfsPath, rawU
 		}
 	}
 	return "", false
+}
+
+// channelPassThroughResultURL 该渠道是否配置了「成品 URL 直接透传，不搬 OBS」。
+//
+// 只对 rawURL 这一支生效，nfsPath 那一支不看它：自建模型的成品只在 SFS 上，
+// 不落盘就没有任何对外可用的 URL，透传无从谈起（task_polling.go 会判失败退款）。
+//
+// 查不到渠道时返回 false —— 保持搬 OBS 的既有行为。透传是「少做一件事」，
+// 出错时宁可多做（成品能长期访问），不能因为一次查询失败就把成品的生命周期缩到 24 小时。
+func channelPassThroughResultURL(channelId int) bool {
+	if channelId <= 0 {
+		return false
+	}
+	channel, err := model.CacheGetChannel(channelId)
+	if err != nil || channel == nil {
+		return false
+	}
+	return channel.GetSetting().PassThroughResultURL
 }
 
 // isUnderRoot 判断 p 是否落在 root 目录之下（简单前缀，最终越权校验在 mediastore.ValidateNFSPath）。
@@ -120,11 +139,14 @@ func PersistImageNFSToOBS(ctx context.Context, userID int, nfsPath string) (stri
 // 改写走 map[string]json.RawMessage 外科手术式替换，只动 data[i].url / data[i].b64_json
 // 两个字段——顶层 usage、逐项 revised_prompt 等未建模字段原样保留，不因重编码丢失。
 // 返回改写后的响应体；若总开关关闭 / 无可搬项 / 解析失败，原样返回入参。
-func RewriteImageResponseToOBS(ctx context.Context, userID int, modelName, responseFormat string, body []byte) []byte {
+func RewriteImageResponseToOBS(ctx context.Context, userID, channelID int, modelName, responseFormat string, body []byte) []byte {
 	if !mediastore.Enabled() || len(body) == 0 {
 		return body
 	}
 	wantB64 := strings.EqualFold(responseFormat, "b64_json")
+	// 渠道配了透传：上游给的是公网可直达的 URL，原样交给客户端，不中转。
+	// **只挡 url 分支**——b64 项没有 URL 可透传，不落盘就只能把 base64 原样吐回去。
+	passThroughURL := channelPassThroughResultURL(channelID)
 
 	var envelope map[string]json.RawMessage
 	if err := common.Unmarshal(body, &envelope); err != nil || len(envelope["data"]) == 0 {
@@ -141,6 +163,9 @@ func RewriteImageResponseToOBS(ctx context.Context, userID int, modelName, respo
 		b64Str := jsonRawString(item["b64_json"])
 		switch {
 		case urlStr != "":
+			if passThroughURL {
+				continue // 渠道配了透传：保留上游原始 url
+			}
 			if mediastore.IsOwnOBSURL(urlStr) {
 				continue // 已是我方 OBS，跳过
 			}

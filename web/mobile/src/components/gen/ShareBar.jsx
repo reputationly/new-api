@@ -30,11 +30,15 @@ const ShareBar = ({ url, filename, hint, taskId }) => {
       if (!success) {
         throw new Error(message || '生成分享链接失败');
       }
-      // /s/* 由 Go 二进制直出，外置前端部署下它跟着后端走而不是当前页面的 origin，
-      // 所以基址要和 API 客户端保持同一套解析规则。
+      // 两种形态：
+      // - data.url：渠道开了「透传成品地址」，成品本就是公网直链，后端原样给回，
+      //   不经我方中转（也因此继承上游有效期，通常 24 小时）。
+      // - data.path：常规的 /s/<token> 免登录落地页。/s/* 由 Go 二进制直出，
+      //   外置前端部署下它跟着后端走而不是当前页面的 origin，基址要和 API 客户端
+      //   保持同一套解析规则。
       const base =
         import.meta.env.VITE_REACT_APP_SERVER_URL || window.location.origin;
-      const link = base.replace(/\/$/, '') + data.path;
+      const link = data.url || base.replace(/\/$/, '') + data.path;
       if (await copyToClipboard(link)) {
         Toast.show({ content: '链接已复制，粘到浏览器打开或发给好友' });
         return;
