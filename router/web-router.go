@@ -40,10 +40,15 @@ func SetWebRouter(router *gin.Engine, assets ThemeAssets) {
 			return
 		}
 		c.Header("Cache-Control", "no-cache")
+		// 下面的浮条按 UA 与 prefer_desktop cookie 决定是否注入，同一地址会有两种产物。
+		// 必须 Add 不能 Set：gzip 中间件跑在前面，已经写过 Vary: Accept-Encoding，
+		// 用 c.Header 会把它整个覆盖掉，中间层就可能把压缩过的 HTML 发给不收 gzip 的客户端。
+		c.Writer.Header().Add("Vary", "User-Agent, Cookie")
+		page := assets.DefaultIndexPage
 		if common.GetTheme() == "classic" {
-			c.Data(http.StatusOK, "text/html; charset=utf-8", BrandIndexHTML(assets.ClassicIndexPage))
-		} else {
-			c.Data(http.StatusOK, "text/html; charset=utf-8", BrandIndexHTML(assets.DefaultIndexPage))
+			page = assets.ClassicIndexPage
 		}
+		c.Data(http.StatusOK, "text/html; charset=utf-8",
+			withMobileSwitchBar(BrandIndexHTML(page), mobileSwitchBarHref(c)))
 	})
 }
