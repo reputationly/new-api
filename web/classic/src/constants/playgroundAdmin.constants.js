@@ -420,14 +420,21 @@ export const isPlaygroundTabVisibleOnMobile = (
 // 跨分类的全局项挂在保留键 __global 下（它不是分类 key，分类查询天然不受影响）。
 export const PLAYGROUND_GLOBAL_KEY = '__global';
 
-// 「AI 优化提示词」的全局配置：用哪个语言模型、总开关。
-// 刻意只配模型不配分组：分组是用户维度的（运营选的分组用户未必有权限），留空即走
-// 用户自己的默认分组，与体验区其它调用一致。
+// 「AI 优化提示词」的全局配置：总开关、用哪个语言模型、用哪个分组。
+//
+// group 留空 = 走用户自己的分组（早先唯一的行为）。但优化模型通常是个便宜小模型、
+// 被放在通用分组里，而 VIP/内部用户反而在只挂业务模型的专用分组——于是「分组越专用
+// 越用不了优化功能」，正好反了。所以分组要能单独配。
+//
+// 带 group 的请求由 middleware/distributor.go 校验权限（GroupInUserUsableGroups），
+// 不存在越权：运营配了用户无权访问的分组时请求会被 403，前端据此给一句
+// 「请联系管理员」的提示（不藏按钮——见 usePromptOptimize 头部注释）。
 export const getPromptOptimizeGlobal = (tabConfig) => {
   const g = tabConfig?.[PLAYGROUND_GLOBAL_KEY]?.promptOptimize;
   return {
     enabled: g?.enabled === true,
     model: typeof g?.model === 'string' ? g.model.trim() : '',
+    group: typeof g?.group === 'string' ? g.group.trim() : '',
   };
 };
 

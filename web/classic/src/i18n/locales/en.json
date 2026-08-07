@@ -4520,6 +4520,16 @@
     "见上方场景计费价目表": "See the scenario price list above",
     "{{count}} 档": "{{count}} tiers",
     "单位": "Unit",
-    "{{tokens}} × {{price}} / 1M tokens × {{ratio}} = {{amount}}": "{{tokens}} × {{price}} / 1M tokens × {{ratio}} = {{amount}}"
+    "{{tokens}} × {{price}} / 1M tokens × {{ratio}} = {{amount}}": "{{tokens}} × {{price}} / 1M tokens × {{ratio}} = {{amount}}",
+    "优化用的分组": "Group for optimization",
+    "留空则按用户自己的分组": "Leave blank to use the user's own group",
+    "请先选择优化用的语言模型": "Select the optimization model first",
+    "候选来自所选模型实际启用的分组。建议挑一个所有用户都能访问的：优化模型通常是便宜的小模型、挂在通用分组上，而专用分组往往只挂业务模型 —— 留空走用户自己的分组时，分组越专用的用户反而越用不了这个功能。": "Options come from the groups the selected model is actually enabled in. Prefer one every user can access: the optimization model is usually a cheap small model hosted in a shared group, while dedicated groups tend to host only business models — leaving this blank means the more specialized a user's group, the less likely they can use this feature.",
+    "模型「{{model}}」未在分组「{{group}}」启用：这样配的话每次优化都会失败，请重选分组。": "Model \"{{model}}\" is not enabled in group \"{{group}}\": with this configuration every optimization will fail. Please pick another group.",
+    "未开总开关、未选模型或该 tab 单独关掉时，「AI 优化提示词」按钮一律不出现（而不是点了报错）。分组权限则无法在前端可靠判断，配错时用户会收到一句「请联系管理员」的提示。每次优化是一次普通的非流式对话请求，按所选分组的倍率正常计费到用户头上。": "When the master switch is off, no model is selected, or the tab has it turned off, the \"AI optimize prompt\" button simply does not appear (rather than erroring on click). Group permission cannot be reliably determined on the frontend, so a misconfiguration shows the user a \"contact the administrator\" message. Each optimization is one ordinary non-streaming chat request, billed to the user at the selected group's ratio.",
+    "该模型不限分组，下拉里只是建议值，可直接输入任意分组。建议挑一个所有用户都能访问的。": "This model is not restricted to any group; the dropdown only offers suggestions and you can type any group. Prefer one every user can access.",
+    "AI 优化暂不可用，请联系管理员": "AI optimization is unavailable, please contact an administrator",
+    "「{{group}}」不在「用户可用分组」表中：只有本身就在该分组、或在分组特殊配置里被显式授予的用户才能使用。": "\"{{group}}\" is not in the \"user usable groups\" table: only users already in that group, or explicitly granted it via group-specific settings, can use it.",
+    "（非通用）": " (not universal)"
   }
 }

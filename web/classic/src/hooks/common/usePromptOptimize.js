@@ -13,9 +13,17 @@ import { defaultOptimizeSystemPrompt } from '../../constants/promptOptimize.cons
 // 「AI 优化提示词」共用 hook(图像/视频/音效体验区共用一份)。
 //
 // 与文生音乐的「AI 帮我写词」同一条链路(单次非流式打 /pg/chat/completions,后端按
-// 会话身份注入上游 key),但刻意不给用户模型选择器:优化用哪个语言模型是运营的事,
-// 配在「体验区管理 → 通用设置」,用户只看到一个按钮。没配模型 / 没开总开关 / 该 tab
-// 单独关掉时 available=false,调用方据此不渲染按钮 —— 而不是渲染一个点了报错的按钮。
+// 会话身份注入上游 key),但刻意不给用户模型选择器:优化用哪个语言模型、走哪个分组
+// 都是运营的事,配在「体验区管理 → 通用设置」,用户只看到一个按钮。
+//
+// available=false 时调用方不渲染按钮 —— 而不是渲染一个点了报错的按钮。三个理由:
+// 没开总开关 / 没配模型 / 该 tab 单独关掉。
+//
+// **刻意不判「用户对配置分组有没有权限」**:唯一能拿到的判据 /api/user/self/groups
+// 只列出**有倍率配置**的分组(controller/group.go:32),而后端放行的 GetUserUsableGroups
+// 还包含 +: 特殊授予与用户自己的分组。前者是后者的子集,「不在列表里」推不出
+// 「不可用」——照它藏按钮会把功能从本来能用的人眼前拿走,那比报个错糟得多。
+// 分组配错时改为在 catch 里给一句能行动的提示。
 //
 // 系统提示词优先用运营为该 tab 改写的版本,留空则用内置默认
 // (constants/promptOptimize.constants.js,按 tab 分开写)。
@@ -28,7 +36,7 @@ export const usePromptOptimize = (category, tabKey) => {
   const [optimizing, setOptimizing] = useState(false);
   const raw = statusState?.status?.PlaygroundTabConfig;
 
-  const { available, model, systemPrompt } = useMemo(() => {
+  const { available, model, group, systemPrompt } = useMemo(() => {
     const cfg = parsePlaygroundTabConfig(raw);
     const global = getPromptOptimizeGlobal(cfg);
     const tab = getTabPromptOptimize(cfg, category, tabKey);
@@ -39,6 +47,7 @@ export const usePromptOptimize = (category, tabKey) => {
     return {
       available: declared && global.enabled && !!global.model && tab.enabled,
       model: global.model,
+      group: global.group,
       systemPrompt:
         (tab.systemPrompt || '').trim() || defaultOptimizeSystemPrompt(tabKey),
     };
@@ -57,11 +66,17 @@ export const usePromptOptimize = (category, tabKey) => {
       if (!available) return null;
       setOptimizing(true);
       try {
-        // group 不下发:分组是用户维度的,让后端按用户默认分组走,与体验区其它调用一致。
+        // group 由运营在「体验区管理 → 通用设置」里配。留空则不下发,后端按用户
+        // 自己的分组走(早先唯一的行为)。/pg/ 路由本就支持请求体带 group,并由
+        // middleware/distributor.go 校验 GroupInUserUsableGroups——不存在越权。
+        //
+        // 之所以要能配:优化模型通常是便宜小模型、挂在通用分组上,而 VIP/内部用户
+        // 反而在只挂业务模型的专用分组里,不配分组就会「分组越专用越用不了」。
         const res = await API.post(
           '/pg/chat/completions',
           {
             model,
+            ...(group ? { group } : {}),
             stream: false,
             messages: [
               { role: 'system', content: systemPrompt },
@@ -83,16 +98,35 @@ export const usePromptOptimize = (category, tabKey) => {
         }
         return out;
       } catch (e) {
+        const msg = e?.response?.data?.error?.message || e?.message || '';
+        // 只认「分组权限 / 无可用渠道」这两类配置问题。**不能按 403 一刀切**:
+        // /pg 这条路上 distributor.go 还有渠道禁用(:51)、亲和渠道禁用(:108)、
+        // 令牌 ACL(:62,:72) 等多种 403,把它们也指向「检查模型与分组配置」
+        // 等于给出错误的排查方向。
+        //
+        // 这几处 abortWithOpenAiMessage 都没传 ErrorCode,没有稳定的机器可读标识,
+        // 只能匹配文案。下面这些串**逐字来自 i18n/locales/{en,zh-CN,zh-TW}.yaml
+        // 的 distributor.group_access_denied 与 distributor.no_available_channel**
+        // (`_with_hint` 变体含同样关键词,一并覆盖)。注意繁体用「管道」不是「渠道」、
+        // 英文是 "No permission to access this group" —— 凭印象写正则会漏掉它们。
+        // 后端哪天改了文案这里就失效,根治办法是给那几处补上 ErrorCode 再按 code 判。
+        const isConfigIssue =
+          /无权访问该分组|無權存取該分組|No permission to access this group|无可用渠道|無可用管道|No available channel/i.test(
+            msg,
+          );
         showError(
-          t('提示词优化失败:') +
-            (e?.response?.data?.error?.message || e?.message || ''),
+          isConfigIssue
+            ? // 前缀 + 原文,而不是替换:普通用户看开头知道找谁,管理员看后半段
+              // 知道去哪查。原始报错正是定位问题的唯一线索,不能吞掉。
+              t('AI 优化暂不可用，请联系管理员') + ' — ' + msg
+            : t('提示词优化失败:') + msg,
         );
         return null;
       } finally {
         setOptimizing(false);
       }
     },
-    [available, model, systemPrompt, t],
+    [available, model, group, systemPrompt, t],
   );
 
   return { available, optimizing, optimize };

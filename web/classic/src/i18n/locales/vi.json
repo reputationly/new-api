@@ -4587,6 +4587,16 @@
     "见上方场景计费价目表": "Xem bảng giá theo kịch bản ở trên",
     "{{count}} 档": "{{count}} mức",
     "单位": "Đơn vị",
-    "{{tokens}} × {{price}} / 1M tokens × {{ratio}} = {{amount}}": "{{tokens}} × {{price}} / 1M tokens × {{ratio}} = {{amount}}"
+    "{{tokens}} × {{price}} / 1M tokens × {{ratio}} = {{amount}}": "{{tokens}} × {{price}} / 1M tokens × {{ratio}} = {{amount}}",
+    "优化用的分组": "Nhóm dùng để tối ưu",
+    "留空则按用户自己的分组": "Để trống thì dùng nhóm của chính người dùng",
+    "请先选择优化用的语言模型": "Hãy chọn mô hình tối ưu trước",
+    "候选来自所选模型实际启用的分组。建议挑一个所有用户都能访问的：优化模型通常是便宜的小模型、挂在通用分组上，而专用分组往往只挂业务模型 —— 留空走用户自己的分组时，分组越专用的用户反而越用不了这个功能。": "Danh sách lấy từ các nhóm mà mô hình đã chọn thực sự được bật. Nên chọn một nhóm mọi người đều truy cập được: mô hình tối ưu thường là mô hình nhỏ giá rẻ đặt ở nhóm dùng chung, còn nhóm chuyên biệt thường chỉ có mô hình nghiệp vụ — để trống và dùng nhóm của người dùng thì nhóm càng chuyên biệt càng không dùng được tính năng này.",
+    "模型「{{model}}」未在分组「{{group}}」启用：这样配的话每次优化都会失败，请重选分组。": "Mô hình \"{{model}}\" chưa được bật ở nhóm \"{{group}}\": cấu hình như vậy thì mỗi lần tối ưu đều thất bại, hãy chọn nhóm khác.",
+    "未开总开关、未选模型或该 tab 单独关掉时，「AI 优化提示词」按钮一律不出现（而不是点了报错）。分组权限则无法在前端可靠判断，配错时用户会收到一句「请联系管理员」的提示。每次优化是一次普通的非流式对话请求，按所选分组的倍率正常计费到用户头上。": "Khi tắt công tắc tổng, chưa chọn mô hình, hoặc tab đó tắt riêng, nút \"AI tối ưu prompt\" sẽ không xuất hiện (thay vì bấm vào rồi báo lỗi). Quyền nhóm không thể xác định đáng tin cậy ở frontend, nên khi cấu hình sai người dùng sẽ nhận được thông báo \"liên hệ quản trị viên\". Mỗi lần tối ưu là một yêu cầu hội thoại không streaming thông thường, tính phí cho người dùng theo hệ số của nhóm đã chọn.",
+    "该模型不限分组，下拉里只是建议值，可直接输入任意分组。建议挑一个所有用户都能访问的。": "Mô hình này không giới hạn nhóm; danh sách chỉ là gợi ý, bạn có thể nhập bất kỳ nhóm nào. Nên chọn nhóm mọi người đều truy cập được.",
+    "AI 优化暂不可用，请联系管理员": "Tính năng tối ưu AI hiện không khả dụng, vui lòng liên hệ quản trị viên",
+    "「{{group}}」不在「用户可用分组」表中：只有本身就在该分组、或在分组特殊配置里被显式授予的用户才能使用。": "\"{{group}}\" không có trong bảng \"nhóm người dùng có thể dùng\": chỉ những người vốn đã ở nhóm đó, hoặc được cấp rõ ràng qua cấu hình riêng của nhóm, mới dùng được.",
+    "（非通用）": " (không phổ dụng)"
   }
 }
