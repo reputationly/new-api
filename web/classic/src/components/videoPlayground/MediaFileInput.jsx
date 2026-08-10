@@ -9,12 +9,15 @@ import VideoRecorderModal from './VideoRecorderModal';
 import { isVideoRecordSupported } from '../../hooks/videoPlayground/useVideoRecorder';
 import { AUDIO_DURATION_TOLERANCE_SEC } from '../../constants/videoPlayground.constants';
 
-// 探测音频时长(秒)。拿不到就 resolve(null) —— 浏览器解不了的容器不该因此挡住上传,
+// 探测媒体时长(秒)。拿不到就 resolve(null) —— 浏览器解不了的容器不该因此挡住上传,
 // 与后端 nfsinput.checkAudioDuration「解析失败即放行」同策略。
-const probeAudioSeconds = (file) =>
+//
+// 元素按 kind 建:虽然 <audio> 多数情况下也能读出视频容器的 duration,但那是在赌浏览器
+// 的解复用实现,换个编码就 resolve(null) 静默失去这道闸。<video> 是它该用的元素。
+const probeMediaSeconds = (file, kind) =>
   new Promise((resolve) => {
     const url = URL.createObjectURL(file);
-    const el = document.createElement('audio');
+    const el = document.createElement(kind === 'video' ? 'video' : 'audio');
     let settled = false;
     const done = (sec) => {
       if (settled) return;
@@ -36,7 +39,8 @@ const probeAudioSeconds = (file) =>
 // 音频/视频单文件上传:读成 base64 data-url 交给上层(new-api 侧渠道会物化到 NFS,与
 // 图生视频的帧图同机制)。支持点击选择与拖拽上传,带体积上限 + 试听/预览。
 // kind: 'audio' | 'video'。
-// maxSec: 音频时长上限(秒;0=不限)。与 maxMB 正交——体积挡不住时长。
+// maxSec: 时长上限(秒;0=不限),音频与视频同用。与 maxMB 正交——体积挡不住时长
+//   (低码率的长视频体积可以很小),两道闸缺一不可。
 const MediaFileInput = ({
   label,
   required = false,
@@ -72,14 +76,22 @@ const MediaFileInput = ({
     //
     // 容差必须与后端同值,见 AUDIO_DURATION_TOLERANCE_SEC:这边更严就会出现"后端放行了、
     // 界面却不让选"——用户眼里的一分钟音频常是 60.024 秒,卡死整数会把它当场弹回。
-    if (kind === 'audio' && maxSec > 0) {
-      const sec = await probeAudioSeconds(file);
+    //
+    // 视频同样走这道闸(参考生视频的单段参考视频有时长上限):容差沿用同一个常量,
+    // 理由一样——真实时长几乎从不是整数,卡死整数会把用户眼里合法的素材当场弹回。
+    if (maxSec > 0) {
+      const sec = await probeMediaSeconds(file, kind);
       if (sec != null && sec > maxSec + AUDIO_DURATION_TOLERANCE_SEC) {
         showError(
-          t('音频时长 {{sec}} 秒，超过上限 {{max}} 秒', {
-            sec: sec.toFixed(2),
-            max: maxSec,
-          }),
+          kind === 'video'
+            ? t('视频时长 {{sec}} 秒，超过上限 {{max}} 秒', {
+                sec: sec.toFixed(2),
+                max: maxSec,
+              })
+            : t('音频时长 {{sec}} 秒，超过上限 {{max}} 秒', {
+                sec: sec.toFixed(2),
+                max: maxSec,
+              }),
         );
         return;
       }

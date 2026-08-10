@@ -503,6 +503,19 @@ const normalizeVideoTabEntry = (cfg) => {
   if (mb != null) out.maxInputMB = mb;
   const sec = toAudioSec(cfg?.maxAudioSec);
   if (sec != null) out.maxAudioSec = sec;
+  // 参考素材三模态各配各的。**这里同样是白名单式重建,漏一个键 = 管理页保存一次就把
+  // 运营刚配的值删掉**(与模型级 engine 是同一类坑)。
+  // 注意 0 与「未配」必须区分,所以用 != null 判而不是 truthy:
+  //   未配 → 不落键 → 读取时降级到内置默认;
+  //   显式 0 → 落键 0 → 该模态不开放,上传框不渲染。
+  const refImages = toInputMB(cfg?.maxRefImages);
+  if (refImages != null) out.maxRefImages = refImages;
+  const refVideos = toInputMB(cfg?.maxRefVideos);
+  if (refVideos != null) out.maxRefVideos = refVideos;
+  const refVideoMB = toInputMB(cfg?.refVideoMaxMB);
+  if (refVideoMB != null) out.refVideoMaxMB = refVideoMB;
+  const refVideoSec = toAudioSec(cfg?.refVideoMaxSec);
+  if (refVideoSec != null) out.refVideoMaxSec = refVideoSec;
   // taskType:该 tab 覆盖多个门面 task_type 时(「关键帧」= i2v/flf2v),由运营在体验区
   // 管理里指明这个模型属于哪一个。不是参数,是玩法声明——所以不进 tab.fields,
   // 也就不会被 recomputeModelLevel 反推到模型级。
@@ -625,6 +638,40 @@ export const getAspectRatiosForVideoModel = (config, model, tabKey) => {
 // 引擎族:模型级声明,不随 tab 变(与 pipeline 同层)。未配即空串 = LightX2V 系。
 export const getEngineForVideoModel = (config, model) =>
   config?.models?.[model]?.engine || '';
+
+// ── 参考素材的三模态上限(纯 tab 级,不做模型级/全局降级)────────────────
+// 为什么不降级:这几项描述的是「这个玩法开放什么」,同一个模型在图生视频里给 3 张图、
+// 在参考生视频里给 9 张图 + 3 个视频是完全正常的,往模型级兜底只会把两边串在一起。
+//
+// **0 与未配是两回事**,调用方必须按 fallback 区分:
+//   未配(undefined)→ 用调用方给的内置默认;
+//   显式 0        → 该模态不开放,上传框不渲染。
+
+// 参考图张数。fallback 由调用方按玩法给(参考生视频 9 / 图生视频 3 / 其余 5)。
+export const getMaxRefImagesForModel = (config, model, tabKey, fallback) => {
+  const v = tabScopedValue(config?.models?.[model], tabKey, 'maxRefImages');
+  return v != null ? v : fallback;
+};
+
+// 参考视频个数。默认 0 = 不开放(纯 opt-in:运营没配就当这个玩法不收参考视频,
+// 与 sizes/aspectRatios 留空即不展示选择器是同一套风格)。
+export const getMaxRefVideosForModel = (config, model, tabKey) => {
+  const v = tabScopedValue(config?.models?.[model], tabKey, 'maxRefVideos');
+  return v != null ? v : 0;
+};
+
+// 单个参考视频体积上限(MB);0=不限。刻意与 maxInputMB 分开——参考图与参考视频的
+// 合理体积差一个量级,共用一个旋钮必然误伤一边。
+export const getRefVideoMaxMBForModel = (config, model, tabKey) => {
+  const v = tabScopedValue(config?.models?.[model], tabKey, 'refVideoMaxMB');
+  return v != null ? v : 0;
+};
+
+// 单段参考视频时长上限(秒);0=不限。与体积正交:低码率的长视频体积可以很小。
+export const getRefVideoMaxSecForModel = (config, model, tabKey) => {
+  const v = tabScopedValue(config?.models?.[model], tabKey, 'refVideoMaxSec');
+  return v != null ? v : 0;
+};
 
 // 兼容多种状态取值：OpenAIVideo(queued/in_progress/completed/failed)
 // 与内部任务状态(QUEUED/IN_PROGRESS/SUCCESS/FAILURE 等)、各供应商状态。

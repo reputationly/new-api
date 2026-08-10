@@ -61,6 +61,7 @@ export const buildH3OptimizeContext = ({
   hasFirstFrame = false,
   hasLastFrame = false,
   refImageCount = 0,
+  refVideoCount = 0,
   hasRefAudio = false,
 } = {}) => {
   let assets = '';
@@ -69,6 +70,11 @@ export const buildH3OptimizeContext = ({
     if (refImageCount > 0) {
       parts.push(
         `${refImageCount} reference image(s), labelled <Picture 1>${refImageCount > 1 ? `..<Picture ${refImageCount}>` : ''}`,
+      );
+    }
+    if (refVideoCount > 0) {
+      parts.push(
+        `${refVideoCount} reference video(s), labelled <Video 1>${refVideoCount > 1 ? `..<Video ${refVideoCount}>` : ''}`,
       );
     }
     if (hasRefAudio) {

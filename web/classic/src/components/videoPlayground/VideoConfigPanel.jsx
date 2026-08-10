@@ -49,6 +49,12 @@ const VideoConfigPanel = ({
   // 其余渠道原样透传，故那两处 UI 也只对它展示（见 useVideoGeneration 的 pipelineModel）。
   pipelineModel = false,
   maxRefImages = 5,
+  // 参考视频三项各自可配(见 playgroundAdmin 的 FIELD_META)。
+  // maxRefVideos = 0 是**默认且有意义的取值**:运营没开放这个模态,上传框整个不渲染
+  // —— 与 sizes/aspectRatios 留空即不展示选择器同一套「纯 opt-in」风格。
+  maxRefVideos = 0,
+  refVideoMaxMB = 0,
+  refVideoMaxSec = 0,
   maxInputMB = 0,
   maxAudioSec = 0,
   inputs,
@@ -65,6 +71,21 @@ const VideoConfigPanel = ({
 
   // 尾帧槽:flf2v 必填、auto(H3 这类单 checkpoint 全能模型)可选、i2v 不渲染。
   const needsLastFrame = allowLastFrame;
+
+  // 参考视频这一模态是否开放。0 不是「不限」而是「不开放」——与 maxInputMB 的
+  // 「0=不限」相反,这两类字段的 0 语义必须分清:数量闸的 0 关掉整个控件,
+  // 体积/时长闸的 0 才是不限。
+  const refVideosOpen = isR2VA && maxRefVideos > 0;
+  // 槽位按下标定位,中间允许留空(用户可能先传第 2 个)。提交侧统一 filter(Boolean),
+  // 所以这里不必压紧数组——压紧会让正在编辑的槽位跳位。
+  const setRefVideoAt = (i, v) => {
+    const next = Array.from(
+      { length: maxRefVideos },
+      (_, j) => (inputs.refVideos || [])[j] || '',
+    );
+    next[i] = v || '';
+    onInputChange('refVideos', next);
+  };
   // auto(全态,H3):首尾两槽都可选,至少填一个 ——「只给尾帧」是合法玩法。
   // auto_fl(Seedance):首帧必填、尾帧可选 —— 它不支持仅尾帧。
   const firstFrameOptional = isKeyframeAutoFull;
@@ -324,14 +345,24 @@ const VideoConfigPanel = ({
         )}
 
         {/* 图生视频(Bernini r2v):参考图 1~3 张(必填),定义主体/服装/道具/场景。
-            参考生视频(r2va):同一组控件,上限 9 张(H3 ∩ Seedance 的交集)。 */}
+            参考生视频(r2va):同一组控件,张数与是否展示都由运营配(默认 9 张)。
+            运营把张数配成 0 = 这个玩法不收参考图,控件整个不渲染。 */}
         {(isI2V || isR2VA) && (
           <>
-            {!disabled && (
+            {!disabled && maxRefImages > 0 && (
               <ImageUrlInput
-                label={t('上传参考图（必填，最多 {{count}} 张）', {
-                  count: maxRefImages,
-                })}
+                label={
+                  // 开放了参考视频之后参考图就不再是「必填」——视觉参考图或视频至少
+                  // 其一即可(与 hook 里的提交校验同一条判据)。标错会让用户以为
+                  // 只传视频发不出去。
+                  refVideosOpen
+                    ? t('上传参考图（最多 {{count}} 张）', {
+                        count: maxRefImages,
+                      })
+                    : t('上传参考图（必填，最多 {{count}} 张）', {
+                        count: maxRefImages,
+                      })
+                }
                 maxMB={uploadMaxMB}
                 {...imageConstraints}
                 maxCount={maxRefImages}
@@ -344,11 +375,55 @@ const VideoConfigPanel = ({
                 disabled={false}
               />
             )}
+            {/* 锁定态的只读预览**不受当前上限约束**:运营事后把张数调小(甚至调成 0),
+                不该让历史会话里已经用过的素材凭空消失 —— 它们仍存在会话里、仍会随
+                「重新生成」原样发出去,界面却不显示等于骗人。上限只管可编辑态。 */}
             {disabled &&
               (inputs.refImages || []).length > 0 &&
               renderImagePreview(t('参考图'), inputs.refImages)}
           </>
         )}
+
+        {/* 参考生视频的参考视频:纯 opt-in —— 运营没配个数就整个不渲染。
+            体积与时长走**参考视频自己的**上限(refVideoMaxMB / refVideoMaxSec),
+            不跟参考图共用 maxInputMB:两者的合理体积差一个量级,共用一个旋钮必然
+            有一边被误伤。 */}
+        {/* 锁定态按会话里**实际存了几个**渲染,不按当前上限:上限调小之后,老会话里
+            用过的第 2、3 个视频不该从界面上消失(理由同上面参考图那段)。 */}
+        {isR2VA &&
+          disabled &&
+          (inputs.refVideos || [])
+            .filter(Boolean)
+            .map((val, i) => (
+              <MediaFileInput
+                key={`refVideo-view-${i}`}
+                label={t('参考视频 {{n}}', { n: i + 1 })}
+                kind='video'
+                value={val}
+                disabled
+                onChange={() => {}}
+              />
+            ))}
+        {refVideosOpen &&
+          !disabled &&
+          Array.from({ length: maxRefVideos }, (_, i) => (
+            <MediaFileInput
+              key={`refVideo-${i}`}
+              label={
+                maxRefVideos > 1
+                  ? t('上传参考视频 {{n}}（可选，最多 {{count}} 个）', {
+                      n: i + 1,
+                      count: maxRefVideos,
+                    })
+                  : t('上传参考视频（可选）')
+              }
+              kind='video'
+              maxMB={refVideoMaxMB}
+              maxSec={refVideoMaxSec}
+              value={(inputs.refVideos || [])[i] || ''}
+              onChange={(v) => setRefVideoAt(i, v)}
+            />
+          ))}
 
         {/* 视频编辑(Bernini):≥1 源视频(必填),1 视频=v2v、1 视频+参考图=rv2v、
             2 视频=mv2v(广告植入 ads2v 走示例显式指定);仅参考图的 r2v 已迁到图生视频。 */}

@@ -7,6 +7,7 @@ import {
   VideoOutline,
 } from 'antd-mobile-icons';
 
+import { AUDIO_DURATION_TOLERANCE_SEC } from '@classic/constants/videoPlayground.constants';
 import VoiceRecorder from './VoiceRecorder';
 import { showError } from '../../shims/classic-utils';
 import {
@@ -37,10 +38,32 @@ const CAPTURE_ICON = {
 const PICK_LABEL = { image: '从相册选', video: '从相册选', audio: '选择文件' };
 
 // 校验并转换成 data-url。fromCapture=true 时额外卡录像时长。
-const acceptFile = async (file, { kind, label, maxMB, fromCapture }) => {
+// maxSec>0 则不论来源都卡时长（参考视频这类有引擎侧硬约束的输入要用）：体积挡不住
+// 时长，低码率的长视频体积可以很小。解不出时长按放行处理，与桌面端同策略。
+//
+// ⚠️ 容差必须与桌面端、后端同用 AUDIO_DURATION_TOLERANCE_SEC，**别在这里另起一个值、
+// 更别省掉**：真实时长几乎从不是整数（编码器帧对齐、mp3 的 encoder delay/padding 会让
+// 15 秒变成 15.02 秒）。手机端更严就会出现「同一个文件桌面端能传、手机端弹回」——
+// 这个缺口 2026-08 因为只改了后端容差踩过一次，见 videoPlayground.constants.js 的注释。
+const acceptFile = async (
+  file,
+  { kind, label, maxMB, maxSec, fromCapture },
+) => {
   if (maxMB > 0 && file.size > maxMB * 1024 * 1024) {
     showError(`${label}不能超过 ${maxMB}MB，请压缩或裁剪后再上传`);
     return null;
+  }
+  if (maxSec > 0 && (kind === 'video' || kind === 'audio')) {
+    const duration = await readMediaDuration(file, kind);
+    if (
+      Number.isFinite(duration) &&
+      duration > maxSec + AUDIO_DURATION_TOLERANCE_SEC
+    ) {
+      showError(
+        `${label}不能超过 ${maxSec} 秒（本次 ${Math.round(duration)} 秒）`,
+      );
+      return null;
+    }
   }
   if (kind === 'video' && fromCapture) {
     const duration = await readMediaDuration(file, 'video');
@@ -69,6 +92,7 @@ const PickerActions = ({
   kind,
   label,
   maxMB,
+  maxSec,
   disabled,
   compact,
   onPicked,
@@ -85,6 +109,7 @@ const PickerActions = ({
       kind,
       label,
       maxMB,
+      maxSec,
       fromCapture,
     });
     if (dataUrl) onPicked(dataUrl, file.name);
@@ -145,6 +170,7 @@ const MediaSlot = ({
   name,
   onChange,
   maxMB = 0,
+  maxSec = 0,
   disabled = false,
   readOnly = false,
   required = false,
@@ -157,6 +183,7 @@ const MediaSlot = ({
       kind={kind}
       label={label}
       maxMB={maxMB}
+      maxSec={maxSec}
       disabled={disabled}
       compact={!!value}
       onPicked={onChange}

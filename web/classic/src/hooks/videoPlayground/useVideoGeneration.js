@@ -58,6 +58,10 @@ import {
   getMaxInputMBForModel,
   getMaxAudioSecForModel,
   getEngineForVideoModel,
+  getMaxRefImagesForModel,
+  getMaxRefVideosForModel,
+  getRefVideoMaxMBForModel,
+  getRefVideoMaxSecForModel,
   resolveVideoStrategy,
   normalizeVideoSize,
   normalizeVideoStatus,
@@ -119,6 +123,9 @@ const MAX_R2V_REF_IMAGES = 3;
 // 超限由上游报错)。与 Bernini r2v 的 3 张不同:那是「验证报告 5 张可控、8 张难控」的
 // 产品档位,不是技术限制,两者不该共用一个常量。
 const MAX_R2VA_REF_IMAGES = 9;
+// 参考视频个数的引擎上限(与 adaptor 的 maxR2VARefVideos、门面 _TASK_INPUT_CAPS 对齐)。
+// 运营配得再大也没意义:多出来的槽发出去必被拒,不如就地钳住。
+const MAX_R2VA_REF_VIDEOS = 3;
 const modeMeta = (mode) => VIDEO_MODES[mode] || VIDEO_MODES.text2video;
 const storageKeyFor = (mode) =>
   `${CONV_STORAGE_KEY_BASE}${modeMeta(mode).suffix}`;
@@ -134,12 +141,17 @@ const loadConversations = (storageKey) => {
 };
 
 // 视频体验区的媒体字段 schema(哪些字段是 base64 媒体):
-//   续问要发后端的(hydrate 回 data:):帧图/人物图 images、vace 参考图 refImages(数组);
-//     s2v 音频 audioData、sr 源视频 sourceVideo、vace 源视频 srcVideo(单值);
+//   续问要发后端的(hydrate 回 data:):帧图/人物图 images、vace 参考图 refImages、
+//     r2va 参考视频 refVideos(数组);s2v 音频 audioData、sr 源视频 sourceVideo、
+//     vace 源视频 srcVideo(单值);
 //   仅展示的(hydrate 成 objectURL):消息级 images。
 // 媒体以 Blob 存 IndexedDB,localStorage 只留短引用,刷新后可恢复、可续问、可回看。
+//
+// ⚠️ **新增媒体字段必须登记到这里**,尤其是视频这种大件:漏登记不是「历史差点意思」,
+// 而是 base64 原样进 localStorage —— 一个 50 MB 的视频转 base64 约 67 MB,直接顶爆
+// 配额,整条会话历史都写不进去。
 const VIDEO_MEDIA_SCHEMA = {
-  convArrayFields: ['images', 'refImages'],
+  convArrayFields: ['images', 'refImages', 'refVideos'],
   convStringFields: ['audioData', 'sourceVideo', 'srcVideo', 'srcVideo2'],
   msgArrayFields: ['images'],
   // 生成的视频结果(原为 /v1/videos/{id}/content 实时下载):抓 Blob 缓存进 IDB,刷新后
@@ -274,6 +286,7 @@ export const useVideoGeneration = ({
     srcVideo: '', // 视频编辑(Bernini)源视频(base64 data-url)
     srcVideo2: '', // 视频编辑(Bernini)第二源视频(mv2v/ads2v 双视频,可选)
     refImages: [], // 视频编辑 rv2v / 图生视频 r2v 参考图(base64 data-url 数组)
+    refVideos: [], // 参考生视频 r2va 参考视频(base64 data-url 数组;运营未开放则恒为空)
   });
   const [groups, setGroups] = useState([]);
   const [models, setModels] = useState([]);
@@ -397,6 +410,7 @@ export const useVideoGeneration = ({
           srcVideo: '',
           srcVideo2: '',
           refImages: [],
+          refVideos: [],
           taskType: '',
           ...(ex.params || {}),
         };
@@ -465,6 +479,77 @@ export const useVideoGeneration = ({
     [videoConfig, inputs.model, mode],
   );
 
+  // 参考素材三模态各自的闸,全部可由运营按 tab 配(见 playgroundAdmin 的 FIELD_META)。
+  //
+  // **刻意不做跨模态总数闸**:引擎那边确实还有一道(H3 是 12),但由服务端兜底
+  // (adaptor 的 maxR2VARefTotal),前端重复实现只会让运营去凑一个他并不关心的总数。
+  //
+  // **配置只能收窄,不能突破内置上限**:下面一律 Math.min。内置值就是引擎/产品的
+  // 天花板,配得更大不会让请求通过,只会开出一批发出去必被拒的槽位 —— 那种错要等到
+  // 用户传满了才暴露,比当场少给一个槽难查得多。
+  const maxRefImages = useMemo(() => {
+    // 未配时的内置默认:各玩法本来就不同,不能共用一个常量。
+    const ceiling = isI2V
+      ? MAX_R2V_REF_IMAGES
+      : isR2VA
+        ? MAX_R2VA_REF_IMAGES
+        : MAX_REF_IMAGES;
+    const configured = Math.min(
+      getMaxRefImagesForModel(videoConfig, inputs.model, mode, ceiling),
+      ceiling,
+    );
+    // 「0=不开放该模态」对参考生视频(可以纯参考视频)和视频编辑(参考图本就可选)成立,
+    // 但对图生视频不成立 —— 参考图是它**唯一**的视觉输入,配成 0 不是「关掉一个模态」,
+    // 而是把整个玩法变成死胡同:控件不渲染、missingRequiredImage 又要求必须有图,
+    // 发送键从此永远灰着且没有任何上传入口。要停用这个玩法应该去关 tab,不是把上限填 0。
+    return isI2V ? Math.max(1, configured) : configured;
+  }, [videoConfig, inputs.model, mode, isI2V, isR2VA]);
+  // 参考视频个数:0 = 运营没开放,上传框整个不渲染(纯 opt-in)。
+  const maxRefVideos = useMemo(
+    () =>
+      Math.min(
+        getMaxRefVideosForModel(videoConfig, inputs.model, mode),
+        MAX_R2VA_REF_VIDEOS,
+      ),
+    [videoConfig, inputs.model, mode],
+  );
+  const refVideoMaxMB = useMemo(
+    () => getRefVideoMaxMBForModel(videoConfig, inputs.model, mode),
+    [videoConfig, inputs.model, mode],
+  );
+  const refVideoMaxSec = useMemo(
+    () => getRefVideoMaxSecForModel(videoConfig, inputs.model, mode),
+    [videoConfig, inputs.model, mode],
+  );
+
+  // 上限变小时裁掉超出的参考素材。
+  //
+  // **不裁的后果是「看不见却照发」**:参考视频的槽位按 maxRefVideos 逐个渲染,cap 一降
+  // 超出的那几个就只是不再显示,而提交侧拿的是整个数组(filter(Boolean)),照样发给后端 ——
+  // 用户看不见的素材在参与生成,报错也指不到地方。参考图在 cap=0(控件整个不渲染)时同理。
+  //
+  // 盯 cap 而不是盯「换模型」:这两个值现在是**模型级**的(以前只随 tab 变,所以同一个
+  // tab 内换模型不会出问题,这是本轮新引入的面),而让它们变化的路不止模型下拉——配置
+  // 晚到、运营改完配置刷新回来都算。盯着结果比枚举原因可靠。
+  //
+  // 先 filter 再 slice:用户可能只填了第 3 个槽,直接截断会把它切掉,压紧后再截才留得住。
+  useEffect(() => {
+    // 锁定态是在看历史会话,裁剪等于改写记录。
+    if (lockedRef.current) return;
+    setInputs((prev) => {
+      const imgs = (prev.refImages || []).filter(Boolean);
+      const vids = (prev.refVideos || []).filter(Boolean);
+      if (imgs.length <= maxRefImages && vids.length <= maxRefVideos) {
+        return prev;
+      }
+      return {
+        ...prev,
+        refImages: imgs.slice(0, maxRefImages),
+        refVideos: vids.slice(0, maxRefVideos),
+      };
+    });
+  }, [maxRefImages, maxRefVideos]);
+
   // 「AI 优化提示词」要知道的两件事:所选模型属哪个引擎族(H3 换一套分段结构的系统
   // 提示词),以及本次请求的输入形态与时长(H3 靠它区分 I2VA / L2VA / FL2VA,并写出
   // 对齐指令里那个两位小数的时长)。非 H3 模型 context 为空,行为与改动前一致。
@@ -478,6 +563,7 @@ export const useVideoGeneration = ({
             hasFirstFrame: !!(inputs.firstFrame || '').trim(),
             hasLastFrame: !!(inputs.lastFrame || '').trim(),
             refImageCount: (inputs.refImages || []).filter(Boolean).length,
+            refVideoCount: (inputs.refVideos || []).filter(Boolean).length,
             hasRefAudio: !!(inputs.audioData || '').trim(),
           })
         : '',
@@ -488,6 +574,7 @@ export const useVideoGeneration = ({
       inputs.firstFrame,
       inputs.lastFrame,
       inputs.refImages,
+      inputs.refVideos,
       inputs.audioData,
     ],
   );
@@ -970,6 +1057,7 @@ export const useVideoGeneration = ({
         srcVideo: '',
         srcVideo2: '',
         refImages: [],
+        refVideos: [],
       };
       let convId = currentConvId;
       let params;
@@ -1023,17 +1111,25 @@ export const useVideoGeneration = ({
           showError(t('视频配音需要上传待配音视频'));
           return;
         }
+        if (isI2V && !(inputs.refImages || []).filter(Boolean).length) {
+          // 与 r2va 分开写:两个玩法共用参考图控件,但张数上限不同(r2v 3 张是产品
+          // 档位,r2va 9 张是 H3 ∩ Seedance 的交集),文案不能共用。
+          showError(t('图生视频需要上传 1~3 张参考图'));
+          return;
+        }
+        // 参考生视频:视觉参考「图或视频至少其一」——引擎允许纯参考视频(adaptor 的
+        // materializeR2VAInputs 判的正是 len(images)==0 && len(videos)==0)。
+        // 音色参考是可选的,但**不能单独出现**:两家引擎的规则一致(独立音频必须搭配
+        // 视觉参考),这里就地拦下,免得写完 NFS 占了队列槽才被拒。
         if (
-          (isI2V || isR2VA) &&
-          !(inputs.refImages || []).filter(Boolean).length
+          isR2VA &&
+          !(inputs.refImages || []).filter(Boolean).length &&
+          !(inputs.refVideos || []).filter(Boolean).length
         ) {
-          // 两个玩法共用参考图控件,但张数上限不同(r2v 3 张是产品档位,r2va 9 张是
-          // H3 ∩ Seedance 的交集),文案不能共用 —— 在参考生视频里报「1~3 张」,
-          // 数字和玩法名都是错的。
           showError(
-            isR2VA
-              ? t('参考生视频需要上传至少 1 张参考图')
-              : t('图生视频需要上传 1~3 张参考图'),
+            maxRefVideos > 0
+              ? t('参考生视频需要上传至少 1 张参考图或 1 个参考视频')
+              : t('参考生视频需要上传至少 1 张参考图'),
           );
           return;
         }
@@ -1048,6 +1144,7 @@ export const useVideoGeneration = ({
           srcVideo: (inputs.srcVideo || '').trim(),
           srcVideo2: (inputs.srcVideo2 || '').trim(),
           refImages: (inputs.refImages || []).filter(Boolean),
+          refVideos: (inputs.refVideos || []).filter(Boolean),
         };
         convId = genId();
         params = {
@@ -1102,6 +1199,7 @@ export const useVideoGeneration = ({
               srcVideo: conv.srcVideo || '',
               srcVideo2: conv.srcVideo2 || '',
               refImages: conv.refImages || [],
+              refVideos: conv.refVideos || [],
               taskTypeOverride: conv.taskTypeOverride || '',
               keyframeTaskType: conv.keyframeTaskType || '',
               interpolation: !!conv.interpolation,
@@ -1151,6 +1249,7 @@ export const useVideoGeneration = ({
       params.srcVideo = cleanMedia(params.srcVideo);
       params.srcVideo2 = cleanMedia(params.srcVideo2);
       params.refImages = cleanArr(params.refImages);
+      params.refVideos = cleanArr(params.refVideos);
       if (isS2V && !(params.audioData || '').trim()) {
         showError(t('驱动音频已失效,请开启新对话并重新上传'));
         return;
@@ -1163,8 +1262,18 @@ export const useVideoGeneration = ({
         showError(t('源视频已失效,请开启新对话并重新上传'));
         return;
       }
-      if ((isI2V || isR2VA) && !(params.refImages || []).length) {
+      if (isI2V && !(params.refImages || []).length) {
         showError(t('参考图已失效,请开启新对话并重新上传'));
+        return;
+      }
+      // 参考生视频:与提交时同一条判据(图或视频至少其一)。**这里最容易漏**——它走
+      // params 而不是 inputs,只改提交侧的话,纯参考视频的历史会话点「重新生成」必被拒。
+      if (
+        isR2VA &&
+        !(params.refImages || []).length &&
+        !(params.refVideos || []).length
+      ) {
+        showError(t('参考素材已失效,请开启新对话并重新上传'));
         return;
       }
 
@@ -1206,13 +1315,20 @@ export const useVideoGeneration = ({
               seed: params.seed,
               aspectRatio: params.aspectRatio,
               images: params.images || [],
-              // 新增能力媒体输入(base64):锁进对话供续问复用,落盘前 stripFramesForPersist 剥离。
+              // 新增能力媒体输入(base64):锁进对话供续问复用,落盘时按
+              // VIDEO_MEDIA_SCHEMA 换成 IDB 引用。
+              //
+              // ⚠️ **媒体字段在本 hook 里有三处逐字段白名单**,加字段必须三处一起过:
+              //   1. 这里(新建会话)  2. 上面续问时从 conv 重建 params  3. openHistoryItem
+              // 漏任意一处都不报错,只会让素材在某一步悄悄消失 —— 漏 1 或 2 的表现是
+              // 「第二轮起参考素材没了」,漏 3 是「打开历史看不到用过什么」。
               audioData: params.audioData || '',
               sourceVideo: params.sourceVideo || '',
               srRatio: params.srRatio != null ? params.srRatio : 2,
               srcVideo: params.srcVideo || '',
               srcVideo2: params.srcVideo2 || '',
               refImages: params.refImages || [],
+              refVideos: params.refVideos || [],
               taskTypeOverride: params.taskTypeOverride || '',
               keyframeTaskType: params.keyframeTaskType || '',
               // 插帧/配音随会话锁定：刷新/续会话按此判定流水线，不受当前开关影响。
@@ -1425,6 +1541,17 @@ export const useVideoGeneration = ({
             src_ref_images: params.refImages,
           };
         }
+        // 参考生视频的参考视频(可选,运营 opt-in 才有)。键名 reference_videos(复数),
+        // 后端 metadataStringListAny 单复数都收,doubao 侧同名。
+        // **不要复用 metadata.video**:那个键现有语义是「被加工的源视频」(SeedVR2 超分 /
+        // v2a 配音的素材),而这里是「参考」——重载会让 taskTypesCompatibleWithInputs
+        // 的输入形态判定失准。
+        if (isR2VA && (params.refVideos || []).length > 0) {
+          body.metadata = {
+            ...(body.metadata || {}),
+            reference_videos: params.refVideos,
+          };
+        }
         // 参考生视频的音色参考(可选)。键名是 reference_audios(复数)而**不是** audio:
         // metadata.audio 现有语义是 InfiniteTalk 的「驱动音轨」(决定输出时长),
         // 而这里是「音色/说话风格参考」(长度与输出无关,台词写在 prompt 里)。
@@ -1617,6 +1744,7 @@ export const useVideoGeneration = ({
         srcVideo: conv.srcVideo || '',
         srcVideo2: conv.srcVideo2 || '',
         refImages: conv.refImages || [],
+        refVideos: conv.refVideos || [],
         // 恢复插帧/配音开关显示（锁定态下只读展示，续会话仍读 params 里的会话值）
         interpolation: !!conv.interpolation,
         dubbing: !!conv.dubbing,
@@ -1657,7 +1785,12 @@ export const useVideoGeneration = ({
         isKeyframeAutoFull &&
         (inputs.firstFrame || '').trim() === '' &&
         (inputs.lastFrame || '').trim() === '') ||
-      ((isI2V || isR2VA) && !(inputs.refImages || []).filter(Boolean).length) ||
+      (isI2V && !(inputs.refImages || []).filter(Boolean).length) ||
+      // 参考生视频:视觉参考「图或视频至少其一」。只判图会让纯参考视频的组合一直灰着
+      // 发送键 —— 与提交侧那条判据必须同步,改一处不改另一处等于白改。
+      (isR2VA &&
+        !(inputs.refImages || []).filter(Boolean).length &&
+        !(inputs.refVideos || []).filter(Boolean).length) ||
       (isS2V && (inputs.audioData || '').trim() === '') ||
       ((isSR || isDub) && (inputs.sourceVideo || '').trim() === '') ||
       (isVACE && (inputs.srcVideo || '').trim() === ''));
@@ -1679,11 +1812,11 @@ export const useVideoGeneration = ({
     followsInput,
     dubAvailable,
     pipelineModel,
-    maxRefImages: isI2V
-      ? MAX_R2V_REF_IMAGES
-      : isR2VA
-        ? MAX_R2VA_REF_IMAGES
-        : MAX_REF_IMAGES,
+    // 三个模态各自的闸,已在上面读过运营配置(未配才回落到内置默认)。
+    maxRefImages,
+    maxRefVideos,
+    refVideoMaxMB,
+    refVideoMaxSec,
     maxInputMB,
     maxAudioSec,
     optimizeEngine,

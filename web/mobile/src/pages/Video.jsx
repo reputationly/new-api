@@ -43,6 +43,9 @@ export const VideoBody = ({ mode, category = 'video' }) => {
     isKeyframeAuto,
     isKeyframeAutoFull,
     maxRefImages,
+    maxRefVideos,
+    refVideoMaxMB,
+    refVideoMaxSec,
     maxInputMB,
     inputs,
     handleInputChange,
@@ -85,6 +88,9 @@ export const VideoBody = ({ mode, category = 'video' }) => {
   // 拿不到「只给尾帧」(l2va) 与首尾帧两种玩法。校验与派生都在共享 hook 里，这里只管渲染。
   const needsLastFrame = isFLF2V && allowLastFrame;
   const needsVideoUpload = isVACE || isSR || isDub;
+  // 参考视频这一模态是否开放（运营配的个数 >0）。开放之后参考图就不再是必填——
+  // 视觉参考「图或视频至少其一」，判据在共享 hook 的 missingRequiredImage 里。
+  const refVideosOpen = isR2VA && maxRefVideos > 0;
   // 锁定态（选中了某条会话）参数与素材都改不动，见 useVideoGeneration 的 handleInputChange。
   const editDisabled = generating || locked;
   // 哪些参数控件出现在本 tab，统一读中央元数据的 fields（playgroundAdmin.constants.js），
@@ -120,6 +126,48 @@ export const VideoBody = ({ mode, category = 'video' }) => {
       value: inputs.lastFrame,
       onChange: (v) => handleInputChange('lastFrame', v),
     },
+    // 参考生视频：参考视频（可选，纯 opt-in）。运营没配个数就整个不出——手机端
+    // 的 MediaListSlot 是图片专用的（accept 与查看器都写死 image/*），所以这里用
+    // 多个单文件槽拼，而不是塞进 refImages 那种 list 槽。
+    // 体积/时长走参考视频自己的上限，不跟参考图共用 imageMaxMB。
+    // 锁定态（看历史会话）按会话里**实际存了几个**渲染，不按当前上限：运营事后把
+    // 上限调小，不该让老会话里用过的素材从界面上消失——它们仍会随「重新生成」发出去。
+    ...(isR2VA && locked
+      ? (inputs.refVideos || []).filter(Boolean).map((val, i) => ({
+          type: 'single',
+          key: `refVideo-view-${i}`,
+          kind: 'video',
+          label: `参考视频 ${i + 1}`,
+          value: val,
+          onChange: () => {},
+        }))
+      : []),
+    ...(isR2VA && !locked && maxRefVideos > 0
+      ? Array.from({ length: maxRefVideos }, (_, i) => ({
+          type: 'single',
+          key: `refVideo-${i}`,
+          kind: 'video',
+          label:
+            maxRefVideos > 1 ? `参考视频 ${i + 1}（可选）` : '参考视频（可选）',
+          // videoMaxMB 是 Math.min(maxInputMB, MOBILE_MAX_VIDEO_MB) 的结果，
+          // 是**天花板不是默认值**：运营为桌面端配的 50MB 直接拿来用，正好绕开
+          // 移动端那道闸（整段 base64 塞进请求体，弱网下必挂）。所以要取二者较小。
+          maxMB:
+            refVideoMaxMB > 0
+              ? Math.min(refVideoMaxMB, videoMaxMB)
+              : videoMaxMB,
+          maxSec: refVideoMaxSec,
+          value: (inputs.refVideos || [])[i] || '',
+          onChange: (v) => {
+            const next = Array.from(
+              { length: maxRefVideos },
+              (_, j) => (inputs.refVideos || [])[j] || '',
+            );
+            next[i] = v || '';
+            handleInputChange('refVideos', next);
+          },
+        }))
+      : []),
     // 参考生视频：音色参考（可选）。与数字人的「驱动音频」是两回事——它只提供音色/
     // 说话风格，长度与输出时长无关；要说什么写在提示词里。
     isR2VA && {
@@ -175,21 +223,25 @@ export const VideoBody = ({ mode, category = 'video' }) => {
     // **加 tab 时这里必须一起加**：手机端 tab 的 mobile 开关默认是开的
     // （getTabDisplay 的 mobile: v.mobile !== false），漏了不会隐藏、只会得到一个
     // 没有任何上传入口却又被 missingRequiredImage 灰着发送键的死胡同。
-    (isI2V || isR2VA || isVACE) && {
-      type: 'list',
-      key: 'refImages',
-      label: isVACE ? '参考图（可选）' : '参考图',
-      required: isI2V || isR2VA,
-      max: maxRefImages,
-      maxMB: imageMaxMB,
-      values: inputs.refImages || [],
-      onChange: (v) => handleInputChange('refImages', v),
-    },
+    // maxRefImages 只管可编辑态；锁定态照旧展示会话里存的那些（理由同参考视频）。
+    (isI2V || isR2VA || isVACE) &&
+      (locked || maxRefImages > 0) && {
+        type: 'list',
+        key: 'refImages',
+        label: isVACE || refVideosOpen ? '参考图（可选）' : '参考图',
+        required: isI2V || (isR2VA && !refVideosOpen),
+        max: maxRefImages,
+        maxMB: imageMaxMB,
+        values: inputs.refImages || [],
+        onChange: (v) => handleInputChange('refImages', v),
+      },
   ];
 
   const missingHint =
     isI2V || isR2VA
-      ? '请先上传参考图'
+      ? refVideosOpen
+        ? '请先上传参考图或参考视频'
+        : '请先上传参考图'
       : needsLastFrame && !(inputs.lastFrame || '').trim()
         ? '请先上传尾帧'
         : isS2V && !(inputs.audioData || '').trim()
@@ -205,7 +257,9 @@ export const VideoBody = ({ mode, category = 'video' }) => {
       : isS2V
         ? '上传人物图与驱动音频，再描述画面'
         : isI2V || isR2VA
-          ? '上传参考图并输入提示词开始生成'
+          ? refVideosOpen
+            ? '上传参考图或参考视频，并输入提示词开始生成'
+            : '上传参考图并输入提示词开始生成'
           : needsImage
             ? '上传帧图并输入提示词开始生成'
             : '输入提示词开始生成视频';

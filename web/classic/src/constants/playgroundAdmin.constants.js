@@ -65,6 +65,30 @@ export const PLAYGROUND_FIELD_META = {
     type: 'int',
     help: '0 或留空=不限制。同时用作数字人 video_duration 的下发默认值。',
   },
+  // ── 参考素材：三个模态各配各的，不合并成一个总数闸 ────────────────────
+  // 引擎那边确实还有一道跨模态总数上限（H3 是 12），但它由服务端兜底
+  // （adaptor.go 的 maxR2VARefTotal），前端不重复实现：运营真正要调的是「这个玩法
+  // 开放几张图 / 几个视频」，而不是去凑一个总数。
+  maxRefImages: {
+    label: '参考图张数上限',
+    type: 'int',
+    help: '留空=用内置默认（参考生视频 9 张、图生视频 3 张）。填 0=不展示参考图上传框——仅对「参考生视频」（可改用参考视频）与「视频编辑」（参考图本就可选）有意义；「图生视频」的参考图是唯一输入，填 0 会被当作 1，要停用该玩法请在上方关掉这个 tab。填得比内置默认大无效（只能收窄）。',
+  },
+  maxRefVideos: {
+    label: '参考视频个数上限',
+    type: 'int',
+    help: '0 或留空=不展示参考视频上传框（纯 opt-in，与尺寸/宽高比同风格）。填 N 则展示 N 个上传槽。引擎上限 3，填更大也按 3 生效。',
+  },
+  refVideoMaxMB: {
+    label: '单个参考视频上限（MB）',
+    type: 'int',
+    help: '0 或留空=不限制。与「上传文件上限」分开配：参考图与参考视频的合理体积差一个量级，共用一个旋钮必然有一边被误伤。',
+  },
+  refVideoMaxSec: {
+    label: '单段参考视频时长上限（秒）',
+    type: 'int',
+    help: '0 或留空=不限制。体积挡不住时长——几 MB 的低码率视频也可能很长。选完文件当场校验，浏览器解不出时长则放行。⚠️ 引擎另有「所有参考视频加起来 ≤15 秒」的硬约束，这条前后端都不校验：开 N 个槽位时请把本项配到 15/N 以内（如 3 个槽配 5 秒），否则用户能把槽位传满、却在提交时才被引擎拒。另：引擎要求每段 ≥2 秒，下限同样无人校验。',
+  },
   maxChars: {
     label: '文本字数上限',
     type: 'int',
@@ -170,7 +194,8 @@ export const PLAYGROUND_CATEGORIES = [
         label: '图生视频',
         capability: '图生视频',
         // 画幅跟随输入图，尺寸/宽高比不可选。
-        fields: ['durations', 'maxInputMB'],
+        // 不给参考视频三项：Bernini r2v 只吃参考图，开了框也无处可发。
+        fields: ['durations', 'maxInputMB', 'maxRefImages'],
         promptOptimize: true,
       },
       {
@@ -198,7 +223,16 @@ export const PLAYGROUND_CATEGORIES = [
         label: '参考生视频',
         capability: '参考生视频',
         // 画幅跟随参考素材，尺寸/宽高比不可选；参考音频有长度闸（2-15s）。
-        fields: ['durations', 'maxInputMB', 'maxAudioSec'],
+        // 参考视频三项默认全空 = 不开放视频上传，运营按需 opt-in。
+        fields: [
+          'durations',
+          'maxInputMB',
+          'maxAudioSec',
+          'maxRefImages',
+          'maxRefVideos',
+          'refVideoMaxMB',
+          'refVideoMaxSec',
+        ],
         promptOptimize: true,
         hint: '参考图/视频/音频 → 带语音的视频。挂 MiniMax H3 Ref2VA 与 Seedance 2.0 两类模型，输入字段已在后端统一，前端不按渠道分支。⚠️ 两家规格取最小交集：图片边长 [300,5760]（Seedance 下限更严）、单参考视频 ≤50MB（H3 更严）、参考视频 ≤3 个且总时长 ≤15s。独立音频必须搭配至少一个视觉参考，两家规则一致。',
       },

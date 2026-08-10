@@ -32,6 +32,9 @@ export const VideoPlaygroundBody = ({ mode, category = 'video' }) => {
     pipelineModel,
     needsImage,
     maxRefImages,
+    maxRefVideos,
+    refVideoMaxMB,
+    refVideoMaxSec,
     maxInputMB,
     maxAudioSec,
     optimizeEngine,
@@ -83,6 +86,9 @@ export const VideoPlaygroundBody = ({ mode, category = 'video' }) => {
           dubAvailable={dubAvailable}
           pipelineModel={pipelineModel}
           maxRefImages={maxRefImages}
+          maxRefVideos={maxRefVideos}
+          refVideoMaxMB={refVideoMaxMB}
+          refVideoMaxSec={refVideoMaxSec}
           maxInputMB={maxInputMB}
           maxAudioSec={maxAudioSec}
           inputs={inputs}
