@@ -56,7 +56,8 @@ web/             — Frontend themes container
 - Library: `i18next` + `react-i18next` + `i18next-browser-languagedetector`
 - Languages: en, zh-CN (fallback), zh-TW, fr, ru, ja, vi
 - Translation files: `web/classic/src/i18n/locales/{lang}.json` (+ `locales/custom/{lang}.json`) — keys are **Chinese** source strings; usage `t('中文 key')`
-- **All translations MUST live inside the top-level `translation` object**, e.g. `{ "translation": { "对账管理": "Rapprochement" } }`. `i18n.js` builds resources via `merge(base, custom) => ({ translation: { ...base.translation, ...custom.translation } })`, so any key placed at the JSON top level (outside `translation`) is silently dropped — at runtime it is missing and falls back to `zh-CN`, showing Chinese even after switching language. When adding strings for a new feature, append them inside `translation`, not at the file root.
+- **Production currently ships Chinese only.** The other locale files still exist and the switcher still works, but nothing outside zh-CN is maintained. **New features do NOT need to add entries to the six non-Chinese locale files** — keys are Chinese source strings, so `t('上传尾帧')` already renders correctly with no locale entry at all. Do not spend effort translating new strings unless multi-language support is explicitly being revived.
+- **If you do touch a locale file: all translations MUST live inside the top-level `translation` object**, e.g. `{ "translation": { "对账管理": "Rapprochement" } }`. `i18n.js` builds resources via `merge(base, custom) => ({ translation: { ...base.translation, ...custom.translation } })`, so any key placed at the JSON top level (outside `translation`) is silently dropped — at runtime it is missing and falls back to `zh-CN`, showing Chinese even after switching language. Append inside `translation`, not at the file root.
 
 ## Rules
 
