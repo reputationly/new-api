@@ -355,12 +355,35 @@ func buildArkContent(req *relaycommon.TaskSubmitReq, metadata map[string]any) []
 	return items
 }
 
-// imageRole 决定第 index 张图的 role。
-// metadata.image_role 显式指定时一律听它(例如 2.0 只给 1 张参考图,不想被当成首帧);
-// 否则按张数推断:1 张=首帧、2 张=首尾帧、≥3 张=多模态参考图(2.0 支持 1~9 张)。
+// imageRole 决定第 index 张图的 role。优先级:
+//
+//	metadata.image_role(显式)  >  metadata.task_type(统一契约)  >  张数推断
+//
+// **张数推断有个致命盲区**:1 张图既可能是首帧也可能是尾帧,推断只会给出 first_frame。
+// 体验区「关键帧」tab 的「只给尾帧」玩法(门面 task_type=l2va)正是 1 张图,落到张数
+// 推断上会被静默当成首帧渲染 —— 用户要的是"从尾帧反推开头",拿到的是从错误一端生成
+// 的、看起来完全正常的视频,全链路无任何报错。
+//
+// 所以这里认 task_type:它是 new-api 的跨渠道统一玩法词表,前端对所有视频模型都会下发
+// (见 useVideoGeneration 的关键帧三态派生)。让 doubao 读它,前端就不必按渠道分支发
+// 不同字段 —— 那才是"传了却不生效"的温床。自建链路的等价物是门面回填
+// extra_params.frame_indices(gpustack routes/videos.py 的 _H3_TASK_MAP)。
 func imageRole(total, index int, metadata map[string]any) string {
 	if explicit := metadataString(metadata, "image_role"); explicit != "" {
 		return explicit
+	}
+	switch metadataString(metadata, "task_type") {
+	case "l2va": // 只给尾帧,反推开头
+		return "last_frame"
+	case "i2v": // 只给首帧
+		return "first_frame"
+	case "flf2v": // 首帧 + 尾帧
+		if index == 0 {
+			return "first_frame"
+		}
+		return "last_frame"
+	case "r2va": // 多模态参考(顶层 images 走这条时按参考图处理,不是帧约束)
+		return "reference_image"
 	}
 	switch {
 	case total == 1:

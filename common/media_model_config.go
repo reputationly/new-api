@@ -439,6 +439,50 @@ func VideoMaxAudioSecForModel(taskType string, candidates ...string) (maxSec flo
 	return 0, false
 }
 
+// 引擎族标识:自建视频链路上不同引擎对参数的读法差别很大(帧数约定、时长字段、
+// 画布推导),必须能在 adaptor 里区分。已知值见下方常量。
+const VideoEngineMinimaxH3 = "minimax-h3"
+
+// VideoEngineFamilyForModel 返回该模型声明的引擎族(VideoModelConfig.models[name].engine),
+// 未声明返回空串。
+//
+// **判据必须是配置声明,不能用模型名 substring** —— 这条是踩过的坑:前端拿到的是对外
+// 模型名、后端拿到的是渠道重定向后的上游名,靠名字判断两边必然分叉(同 tabs[x].taskType
+// 那次改造的教训,见 web/classic/src/constants/videoPlayground.constants.js 的注释)。
+// 所以这里接受多个候选名(公开名 + 上游名),任一命中即可。
+//
+// 与 inferTaskType 里的 fl2va/ref2va 名字分支是两回事,别混淆:那条只服务「没配进体验区
+// 的纯直连模型」的兜底推断,配了体验区的根本走不到。引擎族则是**每次请求都要知道**的,
+// 不能靠兜底。
+//
+// 注意本函数是**模型级**,没有 tab 层:一个部署跑的是哪个引擎与用户选哪个玩法无关。
+func VideoEngineFamilyForModel(candidates ...string) string {
+	OptionMapRWMutex.RLock()
+	raw := OptionMap["VideoModelConfig"]
+	OptionMapRWMutex.RUnlock()
+	if strings.TrimSpace(raw) == "" {
+		return ""
+	}
+	var cfg struct {
+		Models map[string]struct {
+			Engine string `json:"engine"`
+		} `json:"models"`
+	}
+	if err := UnmarshalJsonStr(raw, &cfg); err != nil {
+		return ""
+	}
+	for _, name := range candidates {
+		m, ok := cfg.Models[name]
+		if !ok {
+			continue
+		}
+		if e := strings.ToLower(strings.TrimSpace(m.Engine)); e != "" {
+			return e
+		}
+	}
+	return ""
+}
+
 // AudioRefAudioMaxBytesForModel 返回该模型参考音大小上限(字节;0=不限制)及是否已配置。
 // 优先 tab 级,其次模型级,再次全局 default。用于服务端物化参考音时兜底(前端上传限制可被直连绕过)。
 // 注:语音四个玩法共用 task_type=tts,解析不出 tab,实际总是走模型级。

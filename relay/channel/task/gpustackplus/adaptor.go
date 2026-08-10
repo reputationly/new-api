@@ -63,6 +63,16 @@ var validTaskTypes = map[string]bool{
 	"t2i": true, "i2i": true, "t2v": true, "i2v": true, "flf2v": true,
 	"tts": true, "s2v": true, "sr": true, "v2v": true, "rv2v": true, "r2v": true,
 	"mv2v": true, "ads2v": true,
+	// 关键帧「只给尾帧」(MiniMax H3 的 L2VA):H3 的一个 FL2VA checkpoint 同时吃
+	// 首帧/尾帧/首尾帧,由 extra_params.frame_indices([0] / [-1] / [0,-1])区分,
+	// 门面负责把 l2va 翻成 fl2va + [-1]。与 i2v 输入形态相同(都是 1 张图),
+	// 只有语义不同,所以必须独立成值——靠张数推不出"这张是尾帧"。
+	// 须与门面 _VALID_TASK_TYPES、gpustack-ui task-inputs.ts 同步。
+	"l2va": true,
+	// 参考生视频(MiniMax H3 Ref2VA):参考图(+可选音色参考)→ 带语音的视频。
+	// 与 s2v(InfiniteTalk 音频驱动口型)、r2v(Bernini 纯参考图、无音频)都不同,
+	// 故独立成值 —— 三者的 maxAudioSec 语义与计费口径都不一样。
+	"r2va": true,
 	// 视频配乐(LTX-2.3 v2a):输入视频 + 可选 prompt → 原画面逐帧不动 + AI 音轨的
 	// mp4。2026-07 契约改判:v2a 原属 AudioX(出 .wav 纯音频),该产品线下线,
 	// v2a 现为「视频→配好音的视频」任务形态(可挂多模型,LTX-2.3 首发);tv2a
@@ -280,7 +290,7 @@ func (a *TaskAdaptor) BuildRequestBody(c *gin.Context, info *relaycommon.RelayIn
 	// task_type 白名单校验(§N2):它可能来自 metadata,非法值既会让 NFS 写盘路径异常,
 	// 也会被门面拒;就地本地 400,不进后续物化 / 提交。
 	if !validTaskTypes[taskType] {
-		return nil, localBadRequest(fmt.Errorf("不支持的 task_type: %q(允许:t2i/i2i/t2v/i2v/flf2v/tts/s2v/sr/v2a/v2v/rv2v/r2v/mv2v/ads2v/t2m/cover/repaint/t2a/v2m/tv2m/svs)", taskType))
+		return nil, localBadRequest(fmt.Errorf("不支持的 task_type: %q(允许:t2i/i2i/t2v/i2v/l2va/flf2v/tts/s2v/r2va/sr/v2a/v2v/rv2v/r2v/mv2v/ads2v/t2m/cover/repaint/t2a/v2m/tv2m/svs)", taskType))
 	}
 	// SoulX svs 的文本仅占位(引擎按 prompt_audio/target_audio 生成歌声),但引擎 input 需非空、
 	// 且真机验证过的请求带 "soulx-singer" 标签。ValidateBasicTaskRequest 已豁免 svs 的空 prompt,
@@ -328,7 +338,7 @@ func (a *TaskAdaptor) BuildRequestBody(c *gin.Context, info *relaycommon.RelayIn
 		return nil, localBadRequest(fmt.Errorf("模型 %s 的任务类型 %s 需要图片输入,必须提供 image/input_reference", modelName, taskType))
 	}
 	if textOnlyTaskTypes[taskType] && req.HasImage() {
-		return nil, localBadRequest(fmt.Errorf("模型 %s 的任务类型 %s 不接受图片输入;图生视频请改用 i2v 模型(如 wan2.2-i2v)", modelName, taskType))
+		return nil, localBadRequest(fmt.Errorf("模型 %s 的任务类型 %s 不接受图片输入;要按图生成请改用支持图片输入的任务类型(i2v/l2va/flf2v)或对应模型", modelName, taskType))
 	}
 	if taskType == "flf2v" && len(req.Images) < 2 {
 		return nil, localBadRequest(fmt.Errorf("模型 %s 的任务类型 flf2v(首尾帧)需要首帧和尾帧两张图:请提供 images=[首帧,尾帧]", modelName))
@@ -339,6 +349,12 @@ func (a *TaskAdaptor) BuildRequestBody(c *gin.Context, info *relaycommon.RelayIn
 	// 毫无提示。宁可 400 也不要静默降级。
 	if taskType == "i2v" && len(req.Images) > 1 {
 		return nil, localBadRequest(fmt.Errorf("模型 %s 的任务类型 i2v(图生视频)只接受首帧一张图,多传的图不会生效;首尾帧请显式指定 metadata.task_type=flf2v 并提供 images=[首帧,尾帧]", modelName))
+	}
+	// 同上,l2va(只给尾帧)也只物化 images[0]。引擎侧 frame_indices 的索引数量必须与
+	// 图片数量相等(fl2va 只接受 [0] / [-1] / [0,-1] 三种),门面给 l2va 回填的是
+	// 单元素 [-1],多传的图会让两者对不上而被引擎拒——与其让它烂在下游,不如就地 400。
+	if taskType == "l2va" && len(req.Images) > 1 {
+		return nil, localBadRequest(fmt.Errorf("模型 %s 的任务类型 l2va(只给尾帧)只接受尾帧一张图,多传的图不会生效;首尾帧请显式指定 metadata.task_type=flf2v 并提供 images=[首帧,尾帧]", modelName))
 	}
 	// 同上:s2v 只物化 images[0](materializeS2VInputs),多传的人物图静默丢弃。
 	// 这条防呆不能靠 taskTypesCompatibleWithInputs 收紧谓词代劳 —— 单玩法模型走
@@ -402,6 +418,9 @@ func (a *TaskAdaptor) BuildRequestBody(c *gin.Context, info *relaycommon.RelayIn
 	case "s2v":
 		// 数字人:人物图(image/input_reference)+ 驱动音频(metadata.audio)。
 		refs, err = materializeS2VInputs(c, info, taskType, modelName, req)
+	case "r2va":
+		// 参考生视频(H3 Ref2VA):参考图 1~N + 可选音色参考(metadata.audio)。
+		refs, err = materializeR2VAInputs(c, info, taskType, modelName, req)
 	case "sr":
 		// 超分:源视频(metadata.video);倍率 sr_ratio 随 metadata 透传,不物化。
 		refs, err = materializeSRInputs(c, info, taskType, modelName, req)
@@ -427,8 +446,10 @@ func (a *TaskAdaptor) BuildRequestBody(c *gin.Context, info *relaycommon.RelayIn
 		// SoulX-Singer 集成 preprocess:物化 prompt_audio(音色参考)+ target_audio(目标曲/伴奏)。
 		refs, err = materializeSingingInputs(c, info, taskType, modelName, req)
 	default:
-		// t2v/i2v/flf2v/i2i/t2i:有图才物化(纯文本 t2v/t2i 无输入)。
+		// t2v/i2v/l2va/flf2v/i2i/t2i:有图才物化(纯文本 t2v/t2i 无输入)。
 		// 首尾帧(flf2v):images[0]=首帧→image,images[1]=尾帧→last_frame;其余只取首帧。
+		// l2va(只给尾帧)同样只取 images[0] 写 image —— 帧位置由门面回填的
+		// extra_params.frame_indices=[-1] 表达,不靠字段名,见 materializeVideoInputs。
 		if req.HasImage() {
 			refs, err = materializeVideoInputs(c, info, taskType, modelName, req)
 		}
@@ -446,9 +467,19 @@ func (a *TaskAdaptor) BuildRequestBody(c *gin.Context, info *relaycommon.RelayIn
 			durationSec = v
 		}
 	}
+	// MiniMax H3 是另一套约定,整体绕开下面的 wan/InfiniteTalk 帧数与时长逻辑:
+	// 24fps + 17n+5 帧栅格 + extra_params.duration(float 秒),且画布要 width/height。
+	// 判据是**配置声明的引擎族**而不是模型名 —— 前端拿公开名、后端拿重定向后的上游名,
+	// 靠名字判必然分叉(见 common.VideoEngineFamilyForModel 的注释)。
+	isMiniMaxH3 := common.VideoEngineFamilyForModel(req.Model, info.OriginModelName, modelName) == common.VideoEngineMinimaxH3
+	if isMiniMaxH3 {
+		// durationLocked 必须传进去:上游那道 durationOverrideKeys 只剥顶层键,
+		// 剥不到 H3 走的 extra_params 嵌套时长,不在这里补就是一条白名单绕过口。
+		applyMiniMaxH3Request(body, taskType, durationSec, durationLocked)
+	}
 	// s2v(数字人)除外:引擎不读 target_video_length,下发它没有任何效果,只会让人误以为
 	// 时长可控。s2v 的时长走下面的 video_duration。别恢复。
-	if durationSec > 0 && taskType != "s2v" {
+	if durationSec > 0 && taskType != "s2v" && !isMiniMaxH3 {
 		if _, ok := body["target_video_length"]; !ok {
 			body["target_video_length"] = durationSec*16 + 1
 		}
@@ -474,7 +505,11 @@ func (a *TaskAdaptor) BuildRequestBody(c *gin.Context, info *relaycommon.RelayIn
 	//     也吃不到更多算力。往小传只是少生成,更无危害。
 	// 别改成无条件覆盖:上面那句「与物化层同一阈值」约束的是我们下发的默认值,不是
 	// "任何来源的 video_duration 都得等于这个数"。
-	if taskType == "s2v" {
+	//
+	// H3 除外(isMiniMaxH3):它的音频是**音色样本**,引擎按 prompt 里的台词文本生成语音、
+	// 音色向参考靠拢,音频长度与输出时长毫无关系 —— 下发 video_duration 会把输出错误地
+	// 卡在音频时长配置上。这与 InfiniteTalk「用现成音轨驱动口型」不是同一件事。
+	if taskType == "s2v" && !isMiniMaxH3 {
 		if _, ok := body["video_duration"]; !ok {
 			if maxSec, cfgOK := common.VideoMaxAudioSecForModel(taskType, req.Model, info.OriginModelName, modelName); cfgOK && maxSec > 0 {
 				body["video_duration"] = maxSec + nfsinput.AudioDurationToleranceSec
@@ -500,7 +535,9 @@ func (a *TaskAdaptor) BuildRequestBody(c *gin.Context, info *relaycommon.RelayIn
 // s2v(数字人)也需要人物图,故列入 imageRequiredTaskTypes;它额外需要驱动音频,由
 // materializeS2VInputs 校验。sr / v2v/rv2v/r2v 的输入是视频或参考图(走 metadata,非
 // image 字段),各自的 materialize 函数校验,不进这两张表。
-var imageRequiredTaskTypes = map[string]bool{"i2v": true, "flf2v": true, "i2i": true, "s2v": true}
+// 注:r2va 不在此表 —— 它的参考图走 metadata.src_ref_images 而非顶层 images,
+// 且允许"纯参考视频、无图"。它自己的必填校验在 materializeR2VAInputs 里。
+var imageRequiredTaskTypes = map[string]bool{"i2v": true, "l2va": true, "flf2v": true, "i2i": true, "s2v": true}
 var textOnlyTaskTypes = map[string]bool{"t2v": true, "t2i": true}
 
 // 时长白名单锁定时需剔除的引擎原生别名键——metadata 里这些键会绕过顶层 duration
@@ -572,8 +609,9 @@ func foldEmotionParamsIntoExtra(body map[string]any) {
 // videoFamilyTaskTypes 视频链路的 task_type 全集;只有候选集完全落在这里面时才做输入
 // 形态推导(见 taskTypesCompatibleWithInputs)。
 var videoFamilyTaskTypes = map[string]bool{
-	"t2v": true, "i2v": true, "flf2v": true, "s2v": true,
-	"sr": true, "v2a": true,
+	"t2v": true, "i2v": true, "l2va": true, "flf2v": true, "s2v": true,
+	"r2va": true,
+	"sr":   true, "v2a": true,
 	"v2v": true, "rv2v": true, "r2v": true, "mv2v": true, "ads2v": true,
 }
 
@@ -615,6 +653,18 @@ func taskTypesCompatibleWithInputs(req *relaycommon.TaskSubmitReq) []string {
 	add(images == 0 && !hasAudio && !hasVideo && noBernini, "t2v")
 	add(images >= 1 && !hasAudio && !hasVideo && noBernini, "i2v")
 	add(images >= 2 && !hasAudio && !hasVideo && noBernini, "flf2v")
+	// ⚠️ **l2va(只给尾帧)故意不在这里** —— 别"补全"它。
+	//
+	// l2va 与 i2v 的输入形态**完全相同**(1 张图、无音频无视频),区别纯在语义:
+	// 这张图是首帧还是尾帧。本函数只看输入形态,从形态上推不出语义,加进来只会让
+	// 候选集永远二义。
+	//
+	// 后果是实打实的回归:关键帧 tab 的候选集(见 constant/playground_tab.go 的反向
+	// 索引)现在是 {i2v, flf2v, l2va},若 l2va 也"兼容 1 张图",现有 wan 关键帧模型
+	// 收到 1 张图就会从「收敛到 i2v」变成「i2v/l2va 分不开 → 400」。
+	//
+	// 正确的来源是**显式 metadata.task_type**(taskTypeOfRequest 第 1 级直接短路):
+	// 前端关键帧三态按用户填了哪个槽派生,直连调用方自己声明。
 	add(images >= 1 && hasAudio && !hasVideo && noBernini, "s2v")
 	// 整段视频输入:sr 与 v2a 同形,靠显式 task_type 或 tab 声明分。
 	add(hasVideo && noFrames && noBernini, "sr")
@@ -720,6 +770,30 @@ func inferTaskType(modelName string) string {
 		strings.Contains(m, "voxcpm") || strings.Contains(m, "cosyvoice") ||
 		strings.Contains(m, "moss"):
 		return "tts"
+	// MiniMax H3:按 checkpoint 分区名匹配(部署名如 minimax-h3-fl2va /
+	// minimax-h3-ref2va),**不要匹配裸 "h3"** —— 误伤面太大(任何带 h3 的名字都会中)。
+	// 与 gpustack-ui task-inputs.ts 的 inferVideoTaskType 保持镜像。
+	//
+	// fl2va 分区同时服务 t2va + fl2va 两种玩法,名字给不出是哪一种,只能给兜底默认
+	// t2v ——(与不加分支时的 default 同值,写出来是为了"这是想清楚的选择"而非巧合)。
+	// 带图的直连请求**必须**显式声明 metadata.task_type:i2v / l2va / flf2v 三者中
+	// i2v 与 l2va 输入形态相同,名字和输入形态都裁决不了(见 taskTypesCompatibleWithInputs)。
+	// 配进体验区的走第 2/3 级,到不了这里。
+	case strings.Contains(m, "fl2va"):
+		return "t2v"
+	// ref2va 分区只服务引擎的 ref2va 任务,门面词表里对应 r2va(「参考生视频」)。
+	//
+	// ⚠️ 注意两层命名别搞混:**ref2va 是引擎的** checkpoint 分区名与 extra_params.task
+	// 取值(也是权重目录名),**r2va 是我们门面的** task_type(与 MiniMax 公开 API 的命名
+	// 一致)。翻译在门面完成(_H3_TASK_MAP: r2va → ref2va),与 t2v→t2va、
+	// i2v/l2va/flf2v→fl2va 是同一套分层。这里匹配的是**模型名里的分区 token**,
+	// 返回的是**门面词表值**。
+	//
+	// 早前这里返回 s2v —— 那是「参考生视频」tab 还不存在、Ref2VA 只能挂数字人时的写法。
+	// 现在返回 s2v 会让直连请求走 InfiniteTalk 的物化路径(1 图 + 单值音频),
+	// 拿不到多参考能力。gpustack-ui 的同名镜像返回的也是 r2va,两处必须一致。
+	case strings.Contains(m, "ref2va"):
+		return "r2va"
 	// 数字人 / 超分 / 编辑放在通用 i2v/i2i 之前:InfiniteTalk 名里常含 "talk",
 	// SeedVR2 含 "seedvr"/"sr",Bernini 视频编辑含 "bernini" —— 显式匹配免落到 t2v 兜底。
 	case strings.Contains(m, "infinitetalk") || strings.Contains(m, "s2v"):
@@ -758,6 +832,12 @@ func materializeVideoInputs(c *gin.Context, info *relaycommon.RelayInfo, taskTyp
 	ctx := c.Request.Context()
 
 	// 首帧(image),单值。多输入中途失败时回滚已写文件,避免孤儿(§N2 复审)。
+	//
+	// l2va(只给尾帧)也走这里,同样写 FieldImage —— **不要改成 FieldLastFrame**。
+	// H3 的 FL2VA checkpoint 吃的是「图片列表 + frame_indices」,帧位置由门面回填的
+	// extra_params.frame_indices 表达([0] / [-1] / [0,-1]),不靠字段名;而且引擎要求
+	// 索引数量与图片数量相等,l2va 是单图单索引 [-1],把它写进 last_frame 反而会变成
+	// 「有尾帧没首帧」的畸形输入。
 	if err := m.AddString(ctx, nfsinput.FieldImage, 0, false, req.Images[0]); err != nil {
 		m.Cleanup()
 		return nil, err
@@ -769,6 +849,108 @@ func materializeVideoInputs(c *gin.Context, info *relaycommon.RelayInfo, taskTyp
 			return nil, fmt.Errorf("模型 %s 的任务类型 flf2v(首尾帧)需要首帧和尾帧两张图", modelName)
 		}
 		if err := m.AddString(ctx, nfsinput.FieldLastFrame, 0, false, req.Images[1]); err != nil {
+			m.Cleanup()
+			return nil, err
+		}
+	}
+	return m.Refs(), nil
+}
+
+// 「参考生视频」(MiniMax H3 Ref2VA)的参考上限,取引擎的真实能力
+// (pipeline_minimax_h3._validate_ref2va_reference_counts:≤9 图 + ≤3 视频 +
+// ≤3 独立音频,总计 ≤12)。
+//
+// **对外 API 给全量,体验区自己收窄**:体验区本期只暴露「图 + 单音频」那一档,
+// 但那是产品选择,不该把公开接口一起卡死在引擎能力之下。体验区的收窄靠 tab 配置
+// 与前端槽位实现,不靠这里。
+//
+// 与门面 _TASK_INPUT_CAPS["r2va"] 是成对约定,抬上限必须两边同时改 ——
+// 只改一边会让请求在另一边被拒。
+const (
+	maxR2VARefImages = 9
+	maxR2VARefVideos = 3
+	maxR2VARefAudios = 3
+	maxR2VARefTotal  = 12
+)
+
+// metadataStringListAny 按给定顺序取第一个非空的多值键。
+// metadataStringList 只认单个键,而参考视频/音频要同时兼容单复数两种写法。
+func metadataStringListAny(metadata map[string]any, keys ...string) []string {
+	for _, k := range keys {
+		if v := metadataStringList(metadata, k); len(v) > 0 {
+			return v
+		}
+	}
+	return nil
+}
+
+// materializeR2VAInputs 物化「参考生视频」(MiniMax H3 Ref2VA)的输入。
+//
+// **字段名与 doubao/Ark(Seedance 2.0)保持一致,这是刻意的**:体验区的「参考生视频」
+// tab 会同时挂自建 H3 与 Seedance 这类第三方模型,若两边各用一套键名,前端就得按渠道
+// 分支发不同字段 —— 那是"用户传了音频却静默没生效"的典型来源。统一为:
+//
+//	metadata.src_ref_images  参考图   (与「图生视频」r2v 同键,doubao 亦读)
+//	metadata.reference_videos 参考视频 (doubao 同名,兼容单数 reference_video)
+//	metadata.reference_audios 参考音频 (doubao 同名,兼容单数 reference_audio)
+//
+// 特别不要复用 metadata.video / metadata.audio:那两个键现有的语义是**被加工的素材**
+// (SeedVR2 的源视频、InfiniteTalk 的驱动音轨),而这里是**参考**。重载会让两种语义在
+// 同一个键上打架,也会让 taskTypesCompatibleWithInputs 的输入形态判定失准。
+//
+// 也不用顶层 images:doubao 侧对顶层 images 按张数推断 role(1 张 = 首帧),单张参考图
+// 会被误判成首帧;src_ref_images 的 role 是固定的 reference_image,无歧义。
+//
+// 音频语义:H3 的参考音频是**音色/说话风格参考**,不是要逐字复制的现成对白 ——
+// 目标台词要在 prompt 里用 <d>[语言] ...</d> 显式写出(vllm-omni 交接文档 §Ref2VA)。
+// 这与 s2v(InfiniteTalk 用现成音轨驱动口型)不是一回事,故两者不能合并成一个 task_type。
+func materializeR2VAInputs(c *gin.Context, info *relaycommon.RelayInfo, taskType, modelName string, req relaycommon.TaskSubmitReq) (map[string][]string, error) {
+	images := metadataStringList(req.Metadata, "src_ref_images")
+	// 兼容单复数两种键名:doubao 侧两者都收,这里保持一致,免得同一个 tab 下换个模型
+	// 就得改键名。复数优先(它是多值语义的规范形态)。
+	videos := metadataStringListAny(req.Metadata, "reference_videos", "reference_video")
+	audios := metadataStringListAny(req.Metadata, "reference_audios", "reference_audio")
+
+	if len(images) == 0 && len(videos) == 0 {
+		return nil, fmt.Errorf("模型 %s 的任务类型 r2va(参考生视频)需要至少 1 张参考图(metadata.src_ref_images)或 1 个参考视频(metadata.reference_videos)", modelName)
+	}
+	if len(images) > maxR2VARefImages {
+		return nil, fmt.Errorf("模型 %s 的任务类型 r2va(参考生视频)最多 %d 张参考图,收到 %d 张", modelName, maxR2VARefImages, len(images))
+	}
+	if len(videos) > maxR2VARefVideos {
+		return nil, fmt.Errorf("模型 %s 的任务类型 r2va(参考生视频)最多 %d 个参考视频,收到 %d 个", modelName, maxR2VARefVideos, len(videos))
+	}
+	if len(audios) > maxR2VARefAudios {
+		return nil, fmt.Errorf("模型 %s 的任务类型 r2va(参考生视频)最多 %d 段参考音频,收到 %d 段", modelName, maxR2VARefAudios, len(audios))
+	}
+	// 引擎另有一道跨模态总数闸(≤12)。就地拦下,免得写完 NFS、占了队列槽才被引擎拒。
+	if total := len(images) + len(videos) + len(audios); total > maxR2VARefTotal {
+		return nil, fmt.Errorf("模型 %s 的任务类型 r2va(参考生视频)参考素材总数最多 %d 个(图+视频+音频),收到 %d 个", modelName, maxR2VARefTotal, total)
+	}
+
+	m := newVideoMaterializer(info, taskType, modelName, req)
+	ctx := c.Request.Context()
+
+	// 三类都按多值写(multi=true),即便只有 1 个 —— 否则"1 个走单值路径、2 个走多值
+	// 路径"会产生两种文件名形态,门面与引擎两边都要分别处理。
+	//
+	// 落到门面的字段:image→image_path、video→video_path、audio→audio_path,
+	// 多值逗号拼接(门面 _MULTI_INPUT_FIELDS + _TASK_INPUT_CAPS["r2va"])。
+	for i, img := range images {
+		if err := m.AddString(ctx, nfsinput.FieldImage, i, true, img); err != nil {
+			m.Cleanup()
+			return nil, err
+		}
+	}
+	for i, v := range videos {
+		if err := m.AddString(ctx, nfsinput.FieldVideo, i, true, v); err != nil {
+			m.Cleanup()
+			return nil, err
+		}
+	}
+	// 音色参考可选:不给就由模型自行决定音色(引擎允许纯图/纯视频参考,0024 实测通过)。
+	for i, a := range audios {
+		if err := m.AddString(ctx, nfsinput.FieldAudio, i, true, a); err != nil {
 			m.Cleanup()
 			return nil, err
 		}

@@ -30,6 +30,7 @@ import {
   VIDEO_I2V_CAPABILITY,
   VIDEO_FLF2V_CAPABILITY,
   VIDEO_S2V_CAPABILITY,
+  VIDEO_R2VA_CAPABILITY,
   VIDEO_SR_CAPABILITY,
   VIDEO_VACE_CAPABILITY,
   VIDEO_DUB_CAPABILITY,
@@ -44,7 +45,8 @@ import {
   VIDEO_PIPELINE_SR_RATIO,
   isPipelineTargetSize,
   isPipelineModel,
-  isFlf2vModel,
+  keyframeModeOf,
+  deriveKeyframeTaskType,
   findCapabilityModelIn,
   DUB_PIPELINE_MODES,
   DUB_PIPELINE_ENABLED,
@@ -55,12 +57,15 @@ import {
   getDurationsForVideoModel,
   getMaxInputMBForModel,
   getMaxAudioSecForModel,
+  getEngineForVideoModel,
   resolveVideoStrategy,
   normalizeVideoSize,
   normalizeVideoStatus,
   parseProgress,
   buildVideoContentUrl,
+  VIDEO_ENGINE_MINIMAX_H3,
 } from '../../constants/videoPlayground.constants';
+import { buildH3OptimizeContext } from '../../constants/h3Prompt.constants';
 
 // 文生视频 / 图生视频 / 首尾帧 / 数字人 / 视频超分 / 视频编辑共用本 hook,按 mode
 // 区分能力过滤、需要哪些输入(帧图 / 音频 / 视频 / 蒙版 / 参考图)。
@@ -83,6 +88,14 @@ const VIDEO_MODES = {
   // 关键帧(原「首尾帧」):同一 tab 承载 wan2.2 的 i2v 与 flf2v 两个模型(同权重、不同
   // --task 的两个实例)。task_type 按所选模型显式下发(见 isFlf2vModel),故不设静态 taskType。
   flf2v: { capability: VIDEO_FLF2V_CAPABILITY, suffix: '_flf2v' },
+  // 参考生视频(r2va):参考图/视频/音频 → 带语音的视频。与 s2v 的关键差别是音频语义 ——
+  // s2v 的音频是驱动音轨(决定输出时长),r2va 的是音色/说话风格参考(长度与输出无关,
+  // 台词写在 prompt 里)。故两者不能合并成一个 task_type。
+  r2va: {
+    capability: VIDEO_R2VA_CAPABILITY,
+    suffix: '_r2va',
+    taskType: 'r2va',
+  },
   // 门面 task_type：s2v(音频生视频)/ sr(视频超分)。
   s2v: { capability: VIDEO_S2V_CAPABILITY, suffix: '_s2v', taskType: 's2v' },
   sr: { capability: VIDEO_SR_CAPABILITY, suffix: '_sr', taskType: 'sr' },
@@ -101,6 +114,11 @@ const VIDEO_MODES = {
 // (与 adaptor maxR2VRefImages 对齐)。
 const MAX_REF_IMAGES = 5;
 const MAX_R2V_REF_IMAGES = 3;
+// 「参考生视频」(r2va) 的参考图上限。取 MiniMax H3 与 Seedance 2.0 的最小交集 —— 两家
+// 都是 9(H3 核实自引擎 _validate_ref2va_reference_counts;Seedance 官方文档未声明上限,
+// 超限由上游报错)。与 Bernini r2v 的 3 张不同:那是「验证报告 5 张可控、8 张难控」的
+// 产品档位,不是技术限制,两者不该共用一个常量。
+const MAX_R2VA_REF_IMAGES = 9;
 const modeMeta = (mode) => VIDEO_MODES[mode] || VIDEO_MODES.text2video;
 const storageKeyFor = (mode) =>
   `${CONV_STORAGE_KEY_BASE}${modeMeta(mode).suffix}`;
@@ -228,6 +246,7 @@ export const useVideoGeneration = ({
   const isS2V = mode === 's2v';
   const isSR = mode === 'sr';
   const isVACE = mode === 'vace';
+  const isR2VA = mode === 'r2va';
   const isDub = mode === 'dub';
   // 需要上传一张「主图」的模式:关键帧首帧、s2v 人物图(都复用 inputs.firstFrame)。
   // 图生视频(Bernini r2v)改用参考图 refImages,不再走 firstFrame。
@@ -350,7 +369,12 @@ export const useVideoGeneration = ({
       const next = { ...prev, [key]: value };
       // 切模型时清尾帧:关键帧 tab 下 i2v/flf2v 两类模型共用这一组输入框,从 flf2v 切到
       // i2v 后尾帧槽不再渲染,残留值会变成看不见却仍在 state 里的脏数据。
-      if (key === 'model' && !isFlf2vModel(value, videoConfigRef.current))
+      // 只有明确「不吃尾帧」的 i2v 模型才清:auto(H3 这类单 checkpoint 全能模型)
+      // 的尾帧槽照样渲染,清掉等于用户切个模型就丢输入。
+      if (
+        key === 'model' &&
+        keyframeModeOf(value, videoConfigRef.current) === 'i2v'
+      )
         next.lastFrame = '';
       return next;
     });
@@ -404,9 +428,19 @@ export const useVideoGeneration = ({
   const videoConfigRef = useRef(videoConfig);
   videoConfigRef.current = videoConfig;
 
-  // 关键帧 tab 下选中的是不是首尾帧模型。i2v 与 flf2v 是同权重、不同 --task 的两个引擎
-  // 实例,尾帧的取舍只能由模型决定(判据见 isFlf2vModel:先读运营声明,再退回名字)。
-  const isFlf2vSelected = isFlf2vModel(inputs.model, videoConfig);
+  // 关键帧 tab 的三态(判据见 keyframeModeOf:先读运营声明,再退回名字):
+  //   'flf2v' 尾帧必填 | 'i2v' 尾帧不可传 | 'auto' 两槽都可选、至少填一个
+  // wan 的两态是硬约束(task 由引擎实例启动参数定死);'auto' 是 MiniMax H3 这类一个
+  // checkpoint 同时吃首帧/尾帧/首尾帧的模型,靠 frame_indices 区分。
+  const keyframeMode = keyframeModeOf(inputs.model, videoConfig);
+  const isFlf2vSelected = keyframeMode === 'flf2v';
+  // 两种「按输入派生」:auto 首尾两槽都可选(H3);auto_fl 首帧必填、尾帧可选
+  // (Seedance 2.0 不支持仅尾帧)。
+  const isKeyframeAutoFull = keyframeMode === 'auto';
+  const isKeyframeAutoFirstOrBoth = keyframeMode === 'auto_fl';
+  const isKeyframeAuto = isKeyframeAutoFull || isKeyframeAutoFirstOrBoth;
+  // 尾帧槽渲染与否:flf2v 必填、两种 auto 可选,i2v 不渲染。
+  const allowLastFrame = isFlf2vSelected || isKeyframeAuto;
 
   const availableSizes = useMemo(
     () => getSizesForVideoModel(videoConfig, inputs.model, mode),
@@ -429,6 +463,33 @@ export const useVideoGeneration = ({
   const maxAudioSec = useMemo(
     () => getMaxAudioSecForModel(videoConfig, inputs.model, mode),
     [videoConfig, inputs.model, mode],
+  );
+
+  // 「AI 优化提示词」要知道的两件事:所选模型属哪个引擎族(H3 换一套分段结构的系统
+  // 提示词),以及本次请求的输入形态与时长(H3 靠它区分 I2VA / L2VA / FL2VA,并写出
+  // 对齐指令里那个两位小数的时长)。非 H3 模型 context 为空,行为与改动前一致。
+  const optimizeEngine = getEngineForVideoModel(videoConfig, inputs.model);
+  const optimizeContext = useMemo(
+    () =>
+      optimizeEngine === VIDEO_ENGINE_MINIMAX_H3
+        ? buildH3OptimizeContext({
+            tabKey: mode,
+            seconds: inputs.seconds,
+            hasFirstFrame: !!(inputs.firstFrame || '').trim(),
+            hasLastFrame: !!(inputs.lastFrame || '').trim(),
+            refImageCount: (inputs.refImages || []).filter(Boolean).length,
+            hasRefAudio: !!(inputs.audioData || '').trim(),
+          })
+        : '',
+    [
+      optimizeEngine,
+      mode,
+      inputs.seconds,
+      inputs.firstFrame,
+      inputs.lastFrame,
+      inputs.refImages,
+      inputs.audioData,
+    ],
   );
 
   // 视频模型集合 = 管理员在「视频模型配置」里声明、且能力含「文生视频」的模型。
@@ -919,14 +980,24 @@ export const useVideoGeneration = ({
         }
         if (needsImage) {
           const first = (inputs.firstFrame || '').trim();
-          if (!first) {
+          const last = (inputs.lastFrame || '').trim();
+          if (isFLF2V && isKeyframeAutoFull) {
+            // 单 checkpoint 全能模型(H3):首尾两槽都可选,至少填一个。
+            // **首帧不再是必填** —— 只给尾帧(l2va)是合法玩法,引擎按
+            // frame_indices=[-1] 反推开头。所以这里不能套用下面那条「必须有首帧」。
+            if (!first && !last) {
+              showError(t('请至少上传首帧或尾帧其中一张'));
+              return;
+            }
+            // 只给尾帧时 images 只有一张,由 metadata.task_type=l2va 表明它是尾帧
+            // (输入形态与 i2v 完全一样,后端靠张数分不出来)。
+            convImages = [first, last].filter(Boolean);
+          } else if (!first) {
             showError(isS2V ? t('请先上传人物图') : t('请先上传首帧图片'));
             return;
-          }
-          if (isFLF2V && isFlf2vSelected) {
+          } else if (isFLF2V && isFlf2vSelected) {
             // 首尾帧模型:尾帧必填。引擎实例的 task 由启动期 --task 定死,缺尾帧发过去
             // 会读空路径直接崩,不能就地降级成 i2v(那是另一个实例、另一档 shift/插帧配置)。
-            const last = (inputs.lastFrame || '').trim();
             if (!last) {
               showError(t('该模型是首尾帧模型,需要上传尾帧图片'));
               return;
@@ -952,8 +1023,18 @@ export const useVideoGeneration = ({
           showError(t('视频配音需要上传待配音视频'));
           return;
         }
-        if (isI2V && !(inputs.refImages || []).filter(Boolean).length) {
-          showError(t('图生视频需要上传 1~3 张参考图'));
+        if (
+          (isI2V || isR2VA) &&
+          !(inputs.refImages || []).filter(Boolean).length
+        ) {
+          // 两个玩法共用参考图控件,但张数上限不同(r2v 3 张是产品档位,r2va 9 张是
+          // H3 ∩ Seedance 的交集),文案不能共用 —— 在参考生视频里报「1~3 张」,
+          // 数字和玩法名都是错的。
+          showError(
+            isR2VA
+              ? t('参考生视频需要上传至少 1 张参考图')
+              : t('图生视频需要上传 1~3 张参考图'),
+          );
           return;
         }
         if (isVACE && !(inputs.srcVideo || '').trim()) {
@@ -979,6 +1060,15 @@ export const useVideoGeneration = ({
           images: convImages,
           // ads2v 等无法自动分流的玩法由示例 params.taskType 显式带入(落在 inputs 上)。
           taskTypeOverride: (inputs.taskType || '').trim(),
+          // 关键帧 auto 的派生结果**随会话锁定**:images 数组分不出「这 1 张是首帧
+          // 还是尾帧」(l2va 与 i2v 输入形态相同),续问时重新推必然推错。
+          keyframeTaskType:
+            isFLF2V && isKeyframeAuto
+              ? deriveKeyframeTaskType(
+                  !!(inputs.firstFrame || '').trim(),
+                  !!(inputs.lastFrame || '').trim(),
+                )
+              : '',
           // 插帧/配音随会话锁定：续会话或刷新后按会话原设置而非当前开关判定流水线。
           interpolation: !!inputs.interpolation,
           dubbing: !!inputs.dubbing,
@@ -1013,6 +1103,7 @@ export const useVideoGeneration = ({
               srcVideo2: conv.srcVideo2 || '',
               refImages: conv.refImages || [],
               taskTypeOverride: conv.taskTypeOverride || '',
+              keyframeTaskType: conv.keyframeTaskType || '',
               interpolation: !!conv.interpolation,
               dubbing: !!conv.dubbing,
             }
@@ -1024,6 +1115,13 @@ export const useVideoGeneration = ({
               seed: inputs.seed,
               aspectRatio: inputs.aspectRatio,
               images: convImages,
+              keyframeTaskType:
+                isFLF2V && isKeyframeAuto
+                  ? deriveKeyframeTaskType(
+                      !!(inputs.firstFrame || '').trim(),
+                      !!(inputs.lastFrame || '').trim(),
+                    )
+                  : '',
               interpolation: !!inputs.interpolation,
               dubbing: !!inputs.dubbing,
               ...media,
@@ -1040,6 +1138,8 @@ export const useVideoGeneration = ({
       if (needsImage) {
         params.images = cleanArr(params.images);
         // 首尾帧模型续问需要首帧+尾帧都在;i2v 模型只需首帧。
+        // auto 模式下 1 张(仅首帧 / 仅尾帧)与 2 张(首尾)都合法,只要求至少 1 张;
+        // flf2v 模型固定要 2 张。
         const need = isFLF2V && isFlf2vSelected ? 2 : 1;
         if (params.images.length < need) {
           showError(t('帧图已失效,请开启新对话并重新上传'));
@@ -1063,7 +1163,7 @@ export const useVideoGeneration = ({
         showError(t('源视频已失效,请开启新对话并重新上传'));
         return;
       }
-      if (isI2V && !(params.refImages || []).length) {
+      if ((isI2V || isR2VA) && !(params.refImages || []).length) {
         showError(t('参考图已失效,请开启新对话并重新上传'));
         return;
       }
@@ -1114,6 +1214,7 @@ export const useVideoGeneration = ({
               srcVideo2: params.srcVideo2 || '',
               refImages: params.refImages || [],
               taskTypeOverride: params.taskTypeOverride || '',
+              keyframeTaskType: params.keyframeTaskType || '',
               // 插帧/配音随会话锁定：刷新/续会话按此判定流水线，不受当前开关影响。
               interpolation: !!params.interpolation,
               dubbing: !!params.dubbing,
@@ -1154,10 +1255,16 @@ export const useVideoGeneration = ({
         // 关键帧:task_type 按所选模型下发,不再按输入张数派生。后端 inferTaskType 其实
         // 也能从模型名判出同样的结果,但显式下发才能保证前后端判据一次对齐、不靠巧合。
         if (isFLF2V) {
-          body.metadata = {
-            ...(body.metadata || {}),
-            task_type: isFlf2vSelected ? 'flf2v' : 'i2v',
-          };
+          // 三态:wan 的两类按所选模型定死(引擎实例的 task 在启动期就固定);
+          // auto(H3)按用户实际填了哪个槽派生 i2v / l2va / flf2v ——
+          // 「只给尾帧」(l2va)在输入形态上与 i2v 完全一样(都是 1 张图),
+          // 后端靠张数推不出来,必须由这里显式下发。
+          // auto 的派生结果随会话锁定(params.keyframeTaskType):续问/刷新后必须与
+          // 首次提交同解 —— images 数组本身分不出「1 张是首帧还是尾帧」,这正是
+          // l2va 存在的理由,重新推只会推错。
+          const kfTaskType =
+            params.keyframeTaskType || (isFlf2vSelected ? 'flf2v' : 'i2v');
+          body.metadata = { ...(body.metadata || {}), task_type: kfTaskType };
         }
         // 尺寸/分辨率仅文生视频、且该值仍在当前模型允许集内才下发（对齐宽高比的闸门，
         // 避免切到未配尺寸的模型时把残留旧值误发）；其余模式输出跟随上传输入，不发 size。
@@ -1310,10 +1417,22 @@ export const useVideoGeneration = ({
         }
         // 图生视频(Bernini r2v):参考图(1~3)→ metadata.src_ref_images,
         // 门面物化后引擎按参考图组合主体/服装/道具/场景生成视频。
-        if (isI2V && (params.refImages || []).length > 0) {
+        // 参考生视频(r2va)复用同一个键:后端 materializeR2VAInputs 与 doubao adaptor
+        // 读的都是 src_ref_images —— 两家渠道字段名已统一,前端不按渠道分支。
+        if ((isI2V || isR2VA) && (params.refImages || []).length > 0) {
           body.metadata = {
             ...(body.metadata || {}),
             src_ref_images: params.refImages,
+          };
+        }
+        // 参考生视频的音色参考(可选)。键名是 reference_audios(复数)而**不是** audio:
+        // metadata.audio 现有语义是 InfiniteTalk 的「驱动音轨」(决定输出时长),
+        // 而这里是「音色/说话风格参考」(长度与输出无关,台词写在 prompt 里)。
+        // 重载同一个键会让两种语义打架。doubao 侧读的也是 reference_audios。
+        if (isR2VA && (params.audioData || '').trim()) {
+          body.metadata = {
+            ...(body.metadata || {}),
+            reference_audios: [params.audioData],
           };
         }
         // 数字人:驱动音频 → metadata.audio(门面物化到 audio_path 喂 InfiniteTalk)。
@@ -1532,26 +1651,43 @@ export const useVideoGeneration = ({
     !locked &&
     ((needsImage && (inputs.firstFrame || '').trim() === '') ||
       (isFLF2V && isFlf2vSelected && (inputs.lastFrame || '').trim() === '') ||
-      (isI2V && !(inputs.refImages || []).filter(Boolean).length) ||
+      // auto:首尾两槽至少填一个。首帧那条通用校验(needsImage)对 auto 不适用 ——
+      // 只给尾帧是合法玩法(l2va),不能要求必须有首帧。
+      (isFLF2V &&
+        isKeyframeAutoFull &&
+        (inputs.firstFrame || '').trim() === '' &&
+        (inputs.lastFrame || '').trim() === '') ||
+      ((isI2V || isR2VA) && !(inputs.refImages || []).filter(Boolean).length) ||
       (isS2V && (inputs.audioData || '').trim() === '') ||
       ((isSR || isDub) && (inputs.sourceVideo || '').trim() === '') ||
       (isVACE && (inputs.srcVideo || '').trim() === ''));
 
   return {
     isI2V,
+    isR2VA,
     isFLF2V,
     isS2V,
     isSR,
     isVACE,
     isDub,
     isFlf2vSelected,
+    keyframeMode,
+    allowLastFrame,
+    isKeyframeAuto,
+    isKeyframeAutoFull,
     needsImage,
     followsInput,
     dubAvailable,
     pipelineModel,
-    maxRefImages: isI2V ? MAX_R2V_REF_IMAGES : MAX_REF_IMAGES,
+    maxRefImages: isI2V
+      ? MAX_R2V_REF_IMAGES
+      : isR2VA
+        ? MAX_R2VA_REF_IMAGES
+        : MAX_REF_IMAGES,
     maxInputMB,
     maxAudioSec,
+    optimizeEngine,
+    optimizeContext,
     inputs,
     handleInputChange,
     applyExample,

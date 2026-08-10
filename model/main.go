@@ -323,6 +323,9 @@ func migrateDB() error {
 	if err := migratePlaygroundTabConfig(); err != nil {
 		return err
 	}
+	if err := migrateVideoR2VACapabilityRename(); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -523,6 +526,106 @@ func selfHostedVideoModelNames() (map[string]bool, error) {
 		names[r.Model] = true
 	}
 	return names, nil
+}
+
+// migrateVideoR2VACapabilityRename 把存量 VideoModelConfig 里的能力标签
+// 「参考生视频」改写成它的正名「视频编辑」。
+//
+// 「参考生视频」曾经是「视频编辑」的旧名(2026-07 那轮能力标签重命名前的叫法)。
+// 2026-08 新增了正式的「参考生视频」tab(MiniMax H3 Ref2VA),这个词从此有了自己的
+// 含义,旧标签必须清掉——否则留着它的模型会**同时踩两个坑**:
+//
+//	体验区的 videoModelSet 判据是 caps.includes(pageCapability),于是
+//	  · 「视频编辑」tab —— 旧标签不再命中(前端那条 legacy alias 已随本轮摘除),模型消失
+//	  · 「参考生视频」tab —— 旧标签**直接命中新 tab 的 capability**,模型错误地出现在这里
+//
+// 后者才是真正危险的:一个 Bernini 视频编辑模型跑到参考生视频 tab 里,用户提交就是
+// 拿 task_type=r2va 打给一个不认识它的模型。
+//
+// **不能指望 migratePlaygroundTabConfig 顺手规整**:它的 vace 规格虽然认
+// aliases:["参考生视频"],但只用来决定往哪个 tab 扇出,全程只写 m["tabs"]、
+// 从不改 m["capabilities"](见 migrate_playground_tabs.go),而体验区读的正是
+// capabilities。它自己还有一次性 marker,已迁移过的部署不会再跑第二遍。
+//
+// 改写方向是安全的:本轮之前这个字段里的「参考生视频」只可能是视频编辑的旧名——
+// 新 tab 本轮才出现,而本迁移在升级时就跑完,那时还没有人能配出真正的 r2va 模型。
+// 与 migratePlaygroundTabConfig 的先后无所谓:先扇出则按 alias 命中 vace,先改名则
+// 按正名命中 vace,两种顺序结果相同。
+//
+// 幂等:一次性标记守卫。无该配置或解析失败则只落标记、绝不破坏原值。
+func migrateVideoR2VACapabilityRename() error {
+	const markerKey = "video_r2va_capability_renamed"
+	const legacyTag = "参考生视频" // 本轮起改指新 tab,故存量值必须改名
+	const canonicalTag = "视频编辑"
+	var marker Option
+	if err := DB.Where(Option{Key: markerKey}).First(&marker).Error; err == nil {
+		return nil // 已迁移
+	}
+	// 配置改写 + 写标记放同一事务:崩溃不会留下"已改未标"或"已标未改"的半状态。
+	return DB.Transaction(func(tx *gorm.DB) error {
+		var option Option
+		if err := tx.Where(Option{Key: "VideoModelConfig"}).First(&option).Error; err == nil {
+			raw := strings.TrimSpace(option.Value)
+			if raw != "" {
+				var cfg map[string]interface{}
+				if common.UnmarshalJsonStr(raw, &cfg) == nil {
+					changed := false
+					if models, ok := cfg["models"].(map[string]interface{}); ok {
+						for name, v := range models {
+							m, ok := v.(map[string]interface{})
+							if !ok {
+								continue // 旧形态(值曾是尺寸数组):没有 capabilities,无可改
+							}
+							caps, ok := m["capabilities"].([]interface{})
+							if !ok {
+								continue
+							}
+							// 先看有没有正名:两个都在时旧标签直接删,不能改成重复项。
+							hasCanonical := false
+							for _, c := range caps {
+								if s, _ := c.(string); strings.TrimSpace(s) == canonicalTag {
+									hasCanonical = true
+									break
+								}
+							}
+							out := make([]interface{}, 0, len(caps))
+							hit := false
+							for _, c := range caps {
+								s, _ := c.(string)
+								if strings.TrimSpace(s) != legacyTag {
+									out = append(out, c)
+									continue
+								}
+								hit = true
+								if !hasCanonical {
+									out = append(out, canonicalTag)
+									hasCanonical = true
+								}
+							}
+							if !hit {
+								continue
+							}
+							m["capabilities"] = out
+							changed = true
+							common.SysLog(fmt.Sprintf("VideoModelConfig: renamed legacy capability %q to %q on %s", legacyTag, canonicalTag, name))
+						}
+					}
+					if changed {
+						out, err := common.Marshal(cfg)
+						if err != nil {
+							return err
+						}
+						option.Value = string(out)
+						if err := tx.Save(&option).Error; err != nil {
+							return err
+						}
+					}
+				}
+			}
+		}
+		// 落一次性标记(无论有没有可迁移的数据都标,保证只在首次运行迁移)。
+		return tx.Create(&Option{Key: markerKey, Value: "true"}).Error
+	})
 }
 
 func migrateDBFast() error {

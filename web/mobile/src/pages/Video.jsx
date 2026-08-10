@@ -30,6 +30,7 @@ import ShareBar from '../components/gen/ShareBar';
 export const VideoBody = ({ mode, category = 'video' }) => {
   const {
     isI2V,
+    isR2VA,
     isFLF2V,
     isS2V,
     isSR,
@@ -38,6 +39,9 @@ export const VideoBody = ({ mode, category = 'video' }) => {
     pipelineModel,
     needsImage,
     isFlf2vSelected,
+    allowLastFrame,
+    isKeyframeAuto,
+    isKeyframeAutoFull,
     maxRefImages,
     maxInputMB,
     inputs,
@@ -72,9 +76,14 @@ export const VideoBody = ({ mode, category = 'video' }) => {
   const videoMaxMB = maxInputMB
     ? Math.min(maxInputMB, MOBILE_MAX_VIDEO_MB)
     : MOBILE_MAX_VIDEO_MB;
-  // 关键帧 tab 下 i2v 与 flf2v 是两个引擎实例，只有后者认尾帧（判据见 isFlf2vModel，
-  // 由 useVideoGeneration 统一算好：要读运营配置里的 taskType 声明，不能只看名字）。
-  const needsLastFrame = isFLF2V && isFlf2vSelected;
+  // 关键帧三态（判据见 keyframeModeOf，由 useVideoGeneration 统一算好：要读运营配置里的
+  // taskType 声明，不能只看名字）：
+  //   flf2v 尾帧必填 | i2v 不认尾帧（两个引擎实例，task 启动期定死）
+  //   auto  两槽都可选、至少填一个 —— MiniMax H3 这类一个 checkpoint 同时吃
+  //         首帧/尾帧/首尾帧的模型，靠 frame_indices 区分
+  // 用 allowLastFrame 而不是 isFlf2vSelected：后者在 auto 下为 false，会让手机端
+  // 拿不到「只给尾帧」(l2va) 与首尾帧两种玩法。校验与派生都在共享 hook 里，这里只管渲染。
+  const needsLastFrame = isFLF2V && allowLastFrame;
   const needsVideoUpload = isVACE || isSR || isDub;
   // 锁定态（选中了某条会话）参数与素材都改不动，见 useVideoGeneration 的 handleInputChange。
   const editDisabled = generating || locked;
@@ -93,7 +102,9 @@ export const VideoBody = ({ mode, category = 'video' }) => {
       key: 'firstFrame',
       kind: 'image',
       label: isS2V ? '人物图' : '首帧',
-      required: true,
+      // 关键帧 auto 下首帧也是可选的 —— 只给尾帧(l2va)是合法玩法，引擎按
+      // frame_indices=[-1] 反推开头。其余玩法首帧仍必填。
+      required: !(isFLF2V && isKeyframeAutoFull),
       maxMB: imageMaxMB,
       value: inputs.firstFrame,
       onChange: (v) => handleInputChange('firstFrame', v),
@@ -103,10 +114,22 @@ export const VideoBody = ({ mode, category = 'video' }) => {
       key: 'lastFrame',
       kind: 'image',
       label: '尾帧',
-      required: true,
+      // auto 下首尾两槽都是可选的（至少填一个，由 hook 的 missingRequiredImage 校验）。
+      required: !isKeyframeAuto,
       maxMB: imageMaxMB,
       value: inputs.lastFrame,
       onChange: (v) => handleInputChange('lastFrame', v),
+    },
+    // 参考生视频：音色参考（可选）。与数字人的「驱动音频」是两回事——它只提供音色/
+    // 说话风格，长度与输出时长无关；要说什么写在提示词里。
+    isR2VA && {
+      type: 'single',
+      key: 'audioData',
+      kind: 'audio',
+      label: '音色参考（可选）',
+      maxMB: imageMaxMB,
+      value: inputs.audioData,
+      onChange: (v) => handleInputChange('audioData', v),
     },
     isS2V && {
       type: 'single',
@@ -148,11 +171,15 @@ export const VideoBody = ({ mode, category = 'video' }) => {
       onChange: (v) => handleInputChange('srcVideo2', v),
     },
     // 图生视频(Bernini r2v)：参考图必填，定义主体/服装/道具/场景；视频编辑里则是可选。
-    (isI2V || isVACE) && {
+    // 参考生视频(r2va)：同一组控件，上限由 hook 给到 9（H3 ∩ Seedance 的交集）。
+    // **加 tab 时这里必须一起加**：手机端 tab 的 mobile 开关默认是开的
+    // （getTabDisplay 的 mobile: v.mobile !== false），漏了不会隐藏、只会得到一个
+    // 没有任何上传入口却又被 missingRequiredImage 灰着发送键的死胡同。
+    (isI2V || isR2VA || isVACE) && {
       type: 'list',
       key: 'refImages',
-      label: isI2V ? '参考图' : '参考图（可选）',
-      required: isI2V,
+      label: isVACE ? '参考图（可选）' : '参考图',
+      required: isI2V || isR2VA,
       max: maxRefImages,
       maxMB: imageMaxMB,
       values: inputs.refImages || [],
@@ -160,15 +187,16 @@ export const VideoBody = ({ mode, category = 'video' }) => {
     },
   ];
 
-  const missingHint = isI2V
-    ? '请先上传参考图'
-    : needsLastFrame && !(inputs.lastFrame || '').trim()
-      ? '请先上传尾帧'
-      : isS2V && !(inputs.audioData || '').trim()
-        ? '请先上传驱动音频'
-        : needsVideoUpload
-          ? '请先上传视频'
-          : '请先上传图片';
+  const missingHint =
+    isI2V || isR2VA
+      ? '请先上传参考图'
+      : needsLastFrame && !(inputs.lastFrame || '').trim()
+        ? '请先上传尾帧'
+        : isS2V && !(inputs.audioData || '').trim()
+          ? '请先上传驱动音频'
+          : needsVideoUpload
+            ? '请先上传视频'
+            : '请先上传图片';
 
   const emptyHint = isDub
     ? '上传视频后描述画面里什么在发声，如「脚步踩过落叶」'
@@ -176,7 +204,7 @@ export const VideoBody = ({ mode, category = 'video' }) => {
       ? '上传源视频并描述你想要的改动'
       : isS2V
         ? '上传人物图与驱动音频，再描述画面'
-        : isI2V
+        : isI2V || isR2VA
           ? '上传参考图并输入提示词开始生成'
           : needsImage
             ? '上传帧图并输入提示词开始生成'

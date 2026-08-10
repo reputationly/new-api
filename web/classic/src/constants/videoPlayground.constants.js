@@ -17,6 +17,7 @@ export const VIDEO_CAPABILITIES = [
   '文生视频',
   '图生视频',
   '关键帧',
+  '参考生视频',
   '数字人',
   '视频超分',
   '视频编辑',
@@ -153,27 +154,73 @@ export const VIDEO_EXAMPLES = {
 //
 // 未声明时仍受原约束:GPUStack 上游名与对外名**都**要带 flf2v,做了模型重定向的别名也
 // 要保留这个标识(体验区管理「关键帧」一格的说明里同步了这条)。
-export const isFlf2vModel = (model, config) => {
+// ── 三态（2026-08，MiniMax H3）────────────────────────────────────────────
+// 上面那段约束是 wan 的：task 在实例启动期定死，所以尾帧「能不能传」只能由模型决定。
+// H3 不一样：一个 FL2VA checkpoint 同时吃首帧 / 尾帧 / 首尾帧，由 extra_params
+// .frame_indices（[0] / [-1] / [0,-1]）区分，二选一对它是过度约束——「只给尾帧」
+// （L2VA）这个玩法在二选一下根本表达不出来。
+//
+// 故返回值由 boolean 改为四态：
+//   'flf2v'   尾帧必填（wan flf2v 实例）
+//   'i2v'     尾帧不可传（wan i2v 实例）
+//   'auto'    首帧/尾帧/首尾帧全支持，两槽都可选、至少填一个（MiniMax H3）
+//   'auto_fl' 首帧 或 首尾帧，首帧必填、尾帧可选（Seedance 2.0，不支持仅尾帧）
+//
+// **刻意改了函数名**：老名字 isFlf2vModel 会让调用方写 `if (isFlf2vModel(...))`，
+// 而三态下 'i2v' 和 'auto' 都是 truthy，那种写法会静默地把两者都当成首尾帧模式。
+// 改名逼编译期暴露所有调用点。
+export const keyframeModeOf = (model, config) => {
   const declared =
     config?.models?.[String(model || '').trim()]?.tabs?.flf2v?.taskType;
-  if (declared) return declared === 'flf2v';
+  if (declared === 'auto') return 'auto';
+  // Seedance 2.0 支持首帧与首尾帧,但**不支持只给尾帧** —— 官方文档的互斥场景只列了
+  // 「首帧、首尾帧、多模态参考」三种,last_frame 只作为首尾帧的一半出现。
+  // 它两种都支持,所以选 i2v 或 flf2v 都会砍掉一半能力;选 auto 又会开出它做不了的
+  // 仅尾帧。故需要这第四档。
+  if (declared === 'auto_fl') return 'auto_fl';
+  if (declared) return declared === 'flf2v' ? 'flf2v' : 'i2v';
   return String(model || '')
     .toLowerCase()
-    .includes('flf2v');
+    .includes('flf2v')
+    ? 'flf2v'
+    : 'i2v';
+};
+
+// 提交时按用户实际填了哪个槽派生门面 task_type。仅 'auto' 模式走这里；
+// wan 的两态仍按所选模型下发，不看输入（见上方注释）。
+//
+// 与后端 constant/playground_tab.go 的 l2va → 关键帧 tab 映射、以及门面
+// _H3_TASK_MAP 的 l2va → fl2va + frame_indices=[-1] 是同一条链，三处须同步。
+export const deriveKeyframeTaskType = (hasFirst, hasLast) => {
+  if (hasFirst && hasLast) return 'flf2v';
+  if (hasLast) return 'l2va';
+  return 'i2v';
 };
 
 // 一键示例按 mode 取;「关键帧」下再按所选模型过滤——i2v 模型只能用仅首帧的示例,
 // flf2v 模型只能用带尾帧的示例,否则点了示例反而凑不出该模型要求的输入组合。
 // 判断结果由调用方传入(isFlf2vModel 现在要配合配置声明读,见上),这里不再自己推。
-export const videoExamplesForMode = (mode, isFlf2vSelected) => {
+export const videoExamplesForMode = (mode, keyframeMode) => {
   const list = VIDEO_EXAMPLES[mode] || [];
   if (mode !== 'flf2v') return list;
-  const wantLast = Boolean(isFlf2vSelected);
+  // auto(单 checkpoint 全能模型):首帧示例与首尾帧示例都能跑,不过滤。
+  if (keyframeMode === 'auto') return list;
+  const wantLast = keyframeMode === 'flf2v';
   return list.filter((ex) => Boolean(ex?.files?.lastFrame) === wantLast);
 };
 
 // 视频宽高比(文生视频):可在运营后台按模型配置允许集,未配置默认全集。
-export const VIDEO_ASPECT_RATIOS = ['16:9', '9:16', '1:1', '4:3', '3:4'];
+// 21:9 是 MiniMax H3 与 Seedance 2.0 都支持的具名比例(H3:
+// MINIMAX_H3_SUPPORTED_ASPECT_RATIOS;Seedance: ratio 枚举含 21:9),原表缺它。
+// 这只是全集,各模型实际可选由运营配的 aspectRatios 收窄。
+export const VIDEO_ASPECT_RATIOS = [
+  '21:9',
+  '16:9',
+  '9:16',
+  '1:1',
+  '4:3',
+  '3:4',
+];
 // 默认选中的宽高比(minimax 无宽高比可参考;取 16:9 = wan 引擎默认 1280×720)。
 export const VIDEO_DEFAULT_ASPECT_RATIO = '16:9';
 // 宽高比 → 引擎 target_shape:[height,width](720p 级,均为 16 的倍数)。
@@ -213,6 +260,40 @@ export const VIDEO_FLF2V_CAPABILITY = '关键帧';
 export const VIDEO_S2V_CAPABILITY = '数字人';
 export const VIDEO_SR_CAPABILITY = '视频超分';
 export const VIDEO_VACE_CAPABILITY = '视频编辑';
+// 参考生视频(门面 task_type=r2va):参考图/视频/音频 → 带语音的视频。
+// 挂 MiniMax H3 Ref2VA(自建)与 Seedance 2.0(doubao 渠道)两类模型 —— 输入字段名
+// 已在后端统一(src_ref_images / reference_videos / reference_audios),前端不分支。
+export const VIDEO_R2VA_CAPABILITY = '参考生视频';
+
+// 各 tab 的参考图像素约束(前置校验用)。**按 tab 取,不要写成一个全局常量** ——
+// 多模型共享的 tab 必须用各模型的最小交集,写死一个值要么误拒、要么放行了会被上游拒的。
+//
+//   MiniMax H3 : 短边 ≥256、长边 ≤5760、宽高比 [0.4, 2.5]
+//                (pipeline_minimax_h3:463-471)
+//   Seedance2.0: 边长 300–6000、宽高比 [0.4, 2.5](火山官方文档「素材限制」)
+//
+// 交集 = 短边 ≥300、长边 ≤5760、宽高比 [0.4, 2.5]。
+// 三个视频 tab 现在都挂了 Seedance,故都用交集值;文生视频无图片输入,不涉及。
+// 依据与来源见 docs/minimax-h3-playground-design.md §5.3.1。
+export const VIDEO_IMAGE_CONSTRAINTS = {
+  flf2v: {
+    minShortEdge: 300,
+    maxLongEdge: 5760,
+    minAspect: 0.4,
+    maxAspect: 2.5,
+  },
+  r2va: {
+    minShortEdge: 300,
+    maxLongEdge: 5760,
+    minAspect: 0.4,
+    maxAspect: 2.5,
+  },
+  // 图生视频(Bernini r2v)与数字人(InfiniteTalk)未声明像素约束,不校验。
+};
+
+// 取该 tab 的图片像素约束;未声明返回空对象(= 不校验)。
+export const imageConstraintsForMode = (mode) =>
+  VIDEO_IMAGE_CONSTRAINTS[mode] || {};
 // 视频配音(dub → 门面 task_type=v2a):上传视频 + 声音描述,产物=配好音的视频。
 // 2026-07 由「视频配乐」改名为「视频配音」;旧配置靠下方 legacy alias 兼容。
 export const VIDEO_DUB_CAPABILITY = '视频配音';
@@ -222,7 +303,11 @@ export const VIDEO_DUB_CAPABILITY = '视频配音';
 export const VIDEO_CAPABILITY_LEGACY_ALIASES = {
   [VIDEO_S2V_CAPABILITY]: '音频驱动',
   [VIDEO_SR_CAPABILITY]: '视频转视频',
-  [VIDEO_VACE_CAPABILITY]: '参考生视频',
+  // ⚠️ 原来这里有一条 [VIDEO_VACE_CAPABILITY]: '参考生视频'(视频编辑的旧名)。
+  // 2026-08 新增了正式的「参考生视频」tab,这条别名必须摘掉 —— 否则声明了
+  // 「参考生视频」的模型会**同时命中新 tab 与视频编辑**。
+  // 上线前检查:若还有模型的 capabilities 里留着旧标签,在管理页重存一次即可
+  // (deriveCapabilities 会按 tabs 重算),或手工改成「视频编辑」。
   [VIDEO_FLF2V_CAPABILITY]: '首尾帧',
   [VIDEO_DUB_CAPABILITY]: '视频配乐',
 };
@@ -345,6 +430,17 @@ export const normalizeList = (list) =>
     : [];
 
 // 尺寸列表规范化（解析与设置页保存共用）
+// 引擎族标识。定义在 playgroundAdmin.constants.js（避免与本文件成环，见那边的注释），
+// 这里转出一份给体验区侧用。与后端 common.VideoEngineFamilyForModel 读同一个键。
+export { VIDEO_ENGINE_MINIMAX_H3 } from './playgroundAdmin.constants';
+
+// 归一：后端比较前会 lower + trim，这里做同样处理，避免运营输入 " MiniMax-H3 "
+// 时前后端判据分叉。
+export const normalizeEngine = (v) =>
+  String(v || '')
+    .trim()
+    .toLowerCase();
+
 export const normalizeSizeList = (list) =>
   Array.isArray(list)
     ? Array.from(new Set(list.map(normalizeVideoSize).filter(Boolean)))
@@ -455,6 +551,11 @@ export const parseVideoModelConfig = (raw) => {
           maxInputMB: toInputMB(cfg?.maxInputMB),
           maxAudioSec: toAudioSec(cfg?.maxAudioSec),
           pipeline: !!cfg?.pipeline,
+          // 引擎族声明。**这是白名单式重建，漏一个字段就等于每次管理页保存都把它删掉**——
+          // engine 决定后端走不走 MiniMax H3 那套请求整形(帧数约定/时长字段/画布推导),
+          // 丢了不会报错,只会让 H3 悄悄退回 wan 的形态。
+          // 序列化侧不用管:recomputeModelLevel 是 {...model} 整体展开,只要 parse 保住就能往返。
+          engine: normalizeEngine(cfg?.engine),
           tabs: normalizeTabsMap(cfg?.tabs, normalizeVideoTabEntry),
         };
       });
@@ -520,6 +621,10 @@ export const getAspectRatiosForVideoModel = (config, model, tabKey) => {
   if (config?.default?.aspectRatios?.length) return config.default.aspectRatios;
   return [];
 };
+
+// 引擎族:模型级声明,不随 tab 变(与 pipeline 同层)。未配即空串 = LightX2V 系。
+export const getEngineForVideoModel = (config, model) =>
+  config?.models?.[model]?.engine || '';
 
 // 兼容多种状态取值：OpenAIVideo(queued/in_progress/completed/failed)
 // 与内部任务状态(QUEUED/IN_PROGRESS/SUCCESS/FAILURE 等)、各供应商状态。

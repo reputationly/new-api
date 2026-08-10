@@ -9,6 +9,12 @@
 //
 // 输出契约对所有 tab 统一:只回优化后的提示词正文,不要解释、不要引号、不要围栏 ——
 // 返回值直接回填输入框,多一个字都是脏数据。这条约束写在每份模板的末尾。
+//
+// **唯一的例外是 MiniMax H3**:它要的是带字段名的分段结构(见 h3Prompt.constants.js),
+// 与下面这条契约形状相反,故按引擎族整份换掉模板 —— 不靠模型名 substring,读的是运营
+// 在「视频模型配置」里声明的 engine(与后端 common.VideoEngineFamilyForModel 同一个键)。
+import { VIDEO_ENGINE_MINIMAX_H3 } from './playgroundAdmin.constants';
+import { h3OptimizeSystemPrompt } from './h3Prompt.constants';
 
 const OUTPUT_CONTRACT = `\n\nOutput ONLY the rewritten prompt itself. No explanation, no preface, no quotes, no markdown fence. Keep the user's original language unless the target model requires English.`;
 
@@ -111,5 +117,9 @@ export const DEFAULT_OPTIMIZE_SYSTEM_PROMPTS = {
 };
 
 // 取某个 tab 的默认系统提示词(运营未改写时用它)。
-export const defaultOptimizeSystemPrompt = (tabKey) =>
-  DEFAULT_OPTIMIZE_SYSTEM_PROMPTS[tabKey] || GENERIC_OPTIMIZE_SYSTEM_PROMPT;
+// engine 是所选模型的引擎族声明,只有 minimax-h3 会换模板;传空即维持原行为
+// (手机端与图像/音乐体验区都不传,行为不变)。
+export const defaultOptimizeSystemPrompt = (tabKey, engine) =>
+  engine === VIDEO_ENGINE_MINIMAX_H3
+    ? h3OptimizeSystemPrompt(tabKey)
+    : DEFAULT_OPTIMIZE_SYSTEM_PROMPTS[tabKey] || GENERIC_OPTIMIZE_SYSTEM_PROMPT;

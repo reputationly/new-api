@@ -14,10 +14,15 @@ import { showError, getLogo, stringToColor } from '../../helpers';
 import { UserContext } from '../../context/User';
 import { blockChatDrag } from '../playground/blockChatDrag';
 import PromptOptimizeButton from '../playground/PromptOptimizeButton';
+import OptimizedPromptSections from './OptimizedPromptSections';
 import {
   VIDEO_STATUS,
   videoExamplesForMode,
 } from '../../constants/videoPlayground.constants';
+import {
+  parseH3Prompt,
+  joinH3Prompt,
+} from '../../constants/h3Prompt.constants';
 
 const WELCOME_ID = '__welcome__';
 const MAX_PROMPT_LEN = 5000;
@@ -160,9 +165,11 @@ const VideoChatArea = ({
   // 提示词优化配置按「分类 + tab」读:视频配音(dub)的入口在语音页,配置也存在 audio 下。
   category = 'video',
   selectedModel = '',
+  optimizeEngine = '',
+  optimizeContext = '',
   isSR = false,
   isDub = false,
-  isFlf2vSelected = false,
+  keyframeMode = 'i2v',
   onApplyExample,
   onSend,
   onRegenerate,
@@ -175,9 +182,13 @@ const VideoChatArea = ({
   const [inputValue, setInputValue] = useState('');
   // AI 优化提示词在途:此刻允许发送等于把没优化的原文发出去,故一并灰掉发送按钮。
   const [optimizing, setOptimizing] = useState(false);
+  // 结构化的优化结果(MiniMax H3 的分段提示词)。非空时提交的是它回拼出来的文本,
+  // 上方输入框退回「你的想法」的角色,只用来重新优化。切不出结构就一直是 null,
+  // 优化结果照旧回填输入框——降级路径必须存在:模型偶尔不按格式返回是常态。
+  const [sections, setSections] = useState(null);
   // 一键示例(按 mode):text2video 纯文本;i2v/flf2v/s2v/vace/sr 带预置文件。
   // 关键帧还要按所选模型过滤:i2v 模型只出仅首帧的示例,flf2v 模型只出带尾帧的。
-  const presets = videoExamplesForMode(mode, isFlf2vSelected);
+  const presets = videoExamplesForMode(mode, keyframeMode);
   const hasPresets = presets.length > 0;
 
   const roleConfig = useMemo(
@@ -400,14 +411,16 @@ const VideoChatArea = ({
         </div>
       );
     }
+    // 有结构化优化结果时发的是它,没有就发输入框原文——所见即所发。
+    const outgoing = sections ? joinH3Prompt(sections) : inputValue.trim();
     // 视频配乐(dub)提示词可选:空文本=让模型按画面自由配环境音(hook/网关/引擎
     // 全链路已放行)。缺视频仍由 blockSend 里的 missingRequiredImage 拦住。
-    const canSend =
-      !blockSend && !optimizing && (inputValue.trim().length > 0 || isDub);
+    const canSend = !blockSend && !optimizing && (outgoing.length > 0 || isDub);
     const doSend = () => {
       if (!canSend) return;
-      onSend(inputValue.trim());
+      onSend(outgoing);
       setInputValue('');
+      setSections(null);
     };
     return (
       <div className='p-2 sm:p-4'>
@@ -448,9 +461,20 @@ const VideoChatArea = ({
           category={category}
           tabKey={mode}
           value={inputValue}
-          onChange={setInputValue}
+          onChange={(out) => {
+            // 能切出 H3 的分段结构就折叠展示(输入框保留原想法,方便改一改再优化
+            // 一次);切不出来就退回原来的行为——把原文回填输入框。
+            const parsed = parseH3Prompt(out);
+            if (parsed) setSections(parsed);
+            else {
+              setSections(null);
+              setInputValue(out);
+            }
+          }}
           disabled={generating}
           onOptimizingChange={setOptimizing}
+          engine={optimizeEngine}
+          optimizeContext={optimizeContext}
         />
         <div className='relative'>
           <TextArea
@@ -492,6 +516,12 @@ const VideoChatArea = ({
             }}
           />
         </div>
+        <OptimizedPromptSections
+          sections={sections}
+          onChange={setSections}
+          onDiscard={() => setSections(null)}
+          disabled={generating}
+        />
       </div>
     );
   }, [
@@ -505,9 +535,12 @@ const VideoChatArea = ({
     isDub,
     inputValue,
     optimizing,
+    sections,
     onSend,
     category,
     mode,
+    optimizeEngine,
+    optimizeContext,
     t,
   ]);
 

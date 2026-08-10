@@ -90,6 +90,21 @@ export const PLAYGROUND_FIELD_META = {
   },
 };
 
+// 引擎族标识与可选值。**定义在这里而不是 videoPlayground.constants.js**：后者已经
+// import 本文件的 tabScopedValue，反向再 import 就成环了。videoPlayground 从这里再导出，
+// 依赖方向保持单向。
+//
+// 取值必须与后端 common.VideoEngineMinimaxH3 一致（后端比较前 lower+trim）。
+export const VIDEO_ENGINE_MINIMAX_H3 = 'minimax-h3';
+
+export const VIDEO_ENGINE_OPTIONS_INLINE = [
+  {
+    value: '',
+    label: '默认（LightX2V 系：wan / seedvr2 / infinitetalk / bernini）',
+  },
+  { value: VIDEO_ENGINE_MINIMAX_H3, label: 'MiniMax H3（vLLM-Omni）' },
+];
+
 // 模型级（不随 tab 变化）的字段：单独渲染在模型行上，不进 tabs 子层。
 export const PLAYGROUND_MODEL_LEVEL_FIELDS = {
   VideoModelConfig: [
@@ -98,6 +113,13 @@ export const PLAYGROUND_MODEL_LEVEL_FIELDS = {
       label: '两段流水线（1080P 超分插帧）',
       type: 'bool',
       help: '该模型是否配有配套超分模型，用于 1080P 档位的两段流水线。属模型能力，与 tab 无关。',
+    },
+    {
+      key: 'engine',
+      label: '引擎族',
+      type: 'select',
+      options: VIDEO_ENGINE_OPTIONS_INLINE,
+      help: '决定后端按哪套约定整形请求（帧数约定 / 时长字段 / 画布推导）。MiniMax H3 与 LightX2V 系在这三处完全不同，选错不会报错、只会静默出错档。属模型能力，与 tab 无关。',
     },
   ],
 };
@@ -160,8 +182,25 @@ export const PLAYGROUND_CATEGORIES = [
         taskTypeChoices: [
           { value: 'flf2v', label: '首尾帧（flf2v，尾帧必填）' },
           { value: 'i2v', label: '只吃首帧（i2v）' },
+          {
+            value: 'auto',
+            label: '按输入派生·三态全支持（如 MiniMax H3）',
+          },
+          {
+            value: 'auto_fl',
+            label: '按输入派生·不支持仅尾帧（如 Seedance 2.0）',
+          },
         ],
-        hint: '「关键帧」同时承载两类模型：首尾帧（flf2v，尾帧必填）与只吃首帧（i2v）。两者是同权重、不同启动参数的两个引擎实例，认错就会静默丢尾帧或直接崩，所以请给每个模型显式选一个。留「自动」则回退到看模型名里含不含 flf2v——那要求上游名与对外名都带这个标识，做了模型重定向时容易错配。',
+        hint: '「关键帧」承载三类模型。wan 那两类是同权重、不同启动参数的两个引擎实例，task 在实例启动期就定死，认错会静默丢尾帧或直接崩，所以必须显式选：首尾帧（flf2v，尾帧必填）或只吃首帧（i2v）。第三类是 MiniMax H3 这种一个 checkpoint 同时吃首帧/尾帧/首尾帧的模型（靠 frame_indices 区分），选「按输入派生」后首尾两槽都可选、至少填一个，提交时按实际填了哪个派生 i2v / l2va / flf2v。第四类是 Seedance 2.0：首帧与首尾帧都支持，但官方互斥场景里没有「仅尾帧」，选「不支持仅尾帧」后首帧必填、尾帧可选。留空则回退到看模型名里含不含 flf2v——那要求上游名与对外名都带这个标识，做了模型重定向时容易错配。',
+      },
+      {
+        key: 'r2va',
+        label: '参考生视频',
+        capability: '参考生视频',
+        // 画幅跟随参考素材，尺寸/宽高比不可选；参考音频有长度闸（2-15s）。
+        fields: ['durations', 'maxInputMB', 'maxAudioSec'],
+        promptOptimize: true,
+        hint: '参考图/视频/音频 → 带语音的视频。挂 MiniMax H3 Ref2VA 与 Seedance 2.0 两类模型，输入字段已在后端统一，前端不按渠道分支。⚠️ 两家规格取最小交集：图片边长 [300,5760]（Seedance 下限更严）、单参考视频 ≤50MB（H3 更严）、参考视频 ≤3 个且总时长 ≤15s。独立音频必须搭配至少一个视觉参考，两家规则一致。',
       },
       {
         key: 's2v',

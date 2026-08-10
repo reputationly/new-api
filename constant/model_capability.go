@@ -21,6 +21,10 @@ var VideoCapabilities = []string{
 	// 2026-07 由「首尾帧」改名:wan2.2 i2v 仅首帧 / 首+尾帧都可(task_type 按输入
 	// 派生 i2v/flf2v)。前端有 legacy alias 兼容旧标签配置。
 	"关键帧",
+	// 2026-08 新增(MiniMax H3 Ref2VA / Seedance 2.0):参考图/视频/音频 → 带语音的视频。
+	// **这个词以前是「视频编辑」的旧名**,本轮起改指这个独立玩法;存量配置由
+	// model.migrateVideoR2VACapabilityRename 一次性改名,不再有二义。
+	"参考生视频",
 	"数字人",
 	"视频超分",
 	"视频编辑",

@@ -15,6 +15,7 @@ import {
 import { Trash2 } from 'lucide-react';
 import {
   PLAYGROUND_MODEL_LEVEL_FIELDS,
+  VIDEO_ENGINE_MINIMAX_H3,
   getTabDisplay,
   getTabPromptOptimize,
   getTabStoreKey,
@@ -48,6 +49,23 @@ const TabPanel = ({ category, tab, draft }) => {
         .sort((a, b) => a.name.localeCompare(b.name)),
     [store, tab.key],
   );
+
+  // 默认系统提示词要按引擎族取:H3 要的是带字段名的分段结构,与通用模板形状相反。
+  // **占位符与「填入默认内容」两处都必须传 engine** —— 不传的话,挂着 H3 模型的 tab 上
+  // 展示的是通用散文模板,按钮还会把这份错的直接填进输入框、邀请运营保存。那不是
+  // 「运营可能配错」,是界面主动把错的递过去。
+  const tabEngines = useMemo(
+    () => new Set(rows.map((r) => r.model?.engine || '')),
+    [rows],
+  );
+  const hasH3 = tabEngines.has(VIDEO_ENGINE_MINIMAX_H3);
+  const defaultSystemPrompt = defaultOptimizeSystemPrompt(
+    tab.key,
+    hasH3 ? VIDEO_ENGINE_MINIMAX_H3 : '',
+  );
+  // 系统提示词是 tab 级的、只有一份,混挂两个引擎族时必然有一半模型拿到形状不对的
+  // 模板 —— 这个只能提示,没法在这里替运营决定。
+  const mixedEngines = hasH3 && tabEngines.size > 1;
 
   const candidates = useMemo(() => {
     const taken = new Set(rows.map((r) => r.name));
@@ -169,7 +187,7 @@ const TabPanel = ({ category, tab, draft }) => {
                 promptOptimize: { ...optimize, systemPrompt: v },
               })
             }
-            placeholder={defaultOptimizeSystemPrompt(tab.key)}
+            placeholder={defaultSystemPrompt}
             className='mt-1'
           />
           <div className='flex items-center gap-3 mt-2'>
@@ -192,7 +210,7 @@ const TabPanel = ({ category, tab, draft }) => {
                 draft.patchTabConfig(category, tab.key, {
                   promptOptimize: {
                     ...optimize,
-                    systemPrompt: defaultOptimizeSystemPrompt(tab.key),
+                    systemPrompt: defaultSystemPrompt,
                   },
                 })
               }
@@ -205,6 +223,20 @@ const TabPanel = ({ category, tab, draft }) => {
               '留空即使用内置默认（占位符里就是它），后续版本调优默认值时会自动跟随；改写后则以此为准。用哪个语言模型在「通用设置」里配，用户端不出模型选择器。',
             )}
           </Text>
+          {hasH3 && !mixedEngines && (
+            <Text type='tertiary' size='small' className='block mt-1'>
+              {t(
+                '本 tab 下都是 MiniMax H3 模型，占位符与「填入默认内容」给的已经是 H3 那套带字段名的分段模板。',
+              )}
+            </Text>
+          )}
+          {mixedEngines && (
+            <Text type='warning' size='small' className='block mt-1'>
+              {t(
+                '⚠️ 本 tab 同时挂着 MiniMax H3 与其它引擎族的模型，而系统提示词只有一份（tab 级）。占位符与「填入默认内容」给的是 H3 的分段模板，一旦写进去，非 H3 的模型也会用它——两种模板形状相反，混用不报错、只是效果变差。要么留空（此时各模型按自己的引擎族取内置默认），要么把它们拆到不同 tab。',
+              )}
+            </Text>
+          )}
         </Card>
       )}
 
@@ -318,13 +350,28 @@ const TabPanel = ({ category, tab, draft }) => {
                 <div className='mt-3 pt-3 border-t border-gray-100 flex flex-wrap items-center gap-6'>
                   {modelLevelFields.map((f) => (
                     <div key={f.key} className='flex items-center gap-2'>
-                      <Switch
-                        size='small'
-                        checked={model[f.key] === true}
-                        onChange={(v) =>
-                          draft.setModelField(storeKey, name, f.key, v)
-                        }
-                      />
+                      {/* 按 f.type 渲染。原来这里硬编码 Switch、完全忽略 type，
+                          加一个非布尔字段（如引擎族 select）会渲染成一个永远
+                          不勾选的开关，且写回 true/false 把配置写坏。 */}
+                      {f.type === 'select' ? (
+                        <Select
+                          size='small'
+                          style={{ minWidth: 260 }}
+                          value={model[f.key] || ''}
+                          optionList={f.options || []}
+                          onChange={(v) =>
+                            draft.setModelField(storeKey, name, f.key, v || '')
+                          }
+                        />
+                      ) : (
+                        <Switch
+                          size='small'
+                          checked={model[f.key] === true}
+                          onChange={(v) =>
+                            draft.setModelField(storeKey, name, f.key, v)
+                          }
+                        />
+                      )}
                       <Text size='small'>{t(f.label)}</Text>
                       <Text type='tertiary' size='small'>
                         {t('（模型级，对该模型的所有玩法生效）')}

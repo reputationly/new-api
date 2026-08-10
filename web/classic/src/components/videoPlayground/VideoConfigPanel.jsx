@@ -22,6 +22,7 @@ import { renderGroupOption, selectFilter } from '../../helpers';
 import ImageUrlInput from '../playground/ImageUrlInput';
 import MediaFileInput from './MediaFileInput';
 import { tabHasField } from '../../constants/playgroundAdmin.constants';
+import { imageConstraintsForMode } from '../../constants/videoPlayground.constants';
 
 const VideoConfigPanel = ({
   needsImage = false,
@@ -31,6 +32,7 @@ const VideoConfigPanel = ({
   category = 'video',
   mode = 'text2video',
   isI2V = false,
+  isR2VA = false,
   isFLF2V = false,
   isS2V = false,
   isSR = false,
@@ -39,6 +41,9 @@ const VideoConfigPanel = ({
   // 关键帧 tab 里 i2v / flf2v 两类模型共存,尾帧是否可传完全由所选模型决定。判断在
   // useVideoGeneration 里做(要读运营配置里的 taskType 声明),这里只消费结果。
   isFlf2vSelected = false,
+  allowLastFrame = false,
+  isKeyframeAuto = false,
+  isKeyframeAutoFull = false,
   dubAvailable = false,
   // 选中模型是否跑在自建 gpustackplus 引擎上：1080P 两段流水线与插帧都只对它成立，
   // 其余渠道原样透传，故那两处 UI 也只对它展示（见 useVideoGeneration 的 pipelineModel）。
@@ -58,11 +63,18 @@ const VideoConfigPanel = ({
 }) => {
   const { t } = useTranslation();
 
-  const needsLastFrame = isFlf2vSelected;
+  // 尾帧槽:flf2v 必填、auto(H3 这类单 checkpoint 全能模型)可选、i2v 不渲染。
+  const needsLastFrame = allowLastFrame;
+  // auto(全态,H3):首尾两槽都可选,至少填一个 ——「只给尾帧」是合法玩法。
+  // auto_fl(Seedance):首帧必填、尾帧可选 —— 它不支持仅尾帧。
+  const firstFrameOptional = isKeyframeAutoFull;
+  const lastFrameOptional = isKeyframeAuto;
 
   // 输入大小上限(MB):直接透传 maxInputMB。0/未配 = 不限(与配置页「留空/0 不限」及
   // 后端一致);>0 时各上传控件按它拦。不再套前端兜底默认,避免和「显式不限」冲突。
   const uploadMaxMB = maxInputMB;
+  // 参考图像素约束按 tab 取(多模型共享的 tab 用最小交集),见常量处的说明。
+  const imageConstraints = imageConstraintsForMode(mode);
 
   // 驱动音频时长上限(秒),同样 0/未配 = 不限。只作用于数字人的音频槽:该任务的产出
   // 长度就是音频长度,这是唯一需要按时长兜成本的输入。
@@ -103,6 +115,7 @@ const VideoConfigPanel = ({
         label={label}
         required={!opts.optional}
         maxMB={uploadMaxMB}
+        {...imageConstraints}
         maxCount={1}
         imageUrls={inputs[key] ? [inputs[key]] : []}
         imageEnabled={true}
@@ -233,13 +246,33 @@ const VideoConfigPanel = ({
                 ? t('上传首帧')
                 : t('上传首帧/参考图'),
             'firstFrame',
+            { optional: isFLF2V && firstFrameOptional },
           )}
-        {/* 关键帧:尾帧槽只对 flf2v 模型渲染,且必填。i2v 模型压根不给这个框——它的引擎
-            实例会静默丢弃尾帧(见 isFlf2vModel 注释),给了框等于骗用户。 */}
+        {/* 关键帧尾帧槽,三态(见 keyframeModeOf):
+            - flf2v:渲染且必填;
+            - auto :渲染但可选 —— 一个 checkpoint 同时吃首帧/尾帧/首尾帧,只给尾帧
+                    (l2va)由引擎按 frame_indices=[-1] 反推开头;
+            - i2v  :压根不给这个框 —— 它的引擎实例会静默丢弃尾帧,给了框等于骗用户。 */}
         {isFLF2V &&
           needsLastFrame &&
           (!disabled || inputs.lastFrame) &&
-          renderFrameSlot(t('上传尾帧'), 'lastFrame')}
+          renderFrameSlot(t('上传尾帧'), 'lastFrame', {
+            optional: lastFrameOptional,
+          })}
+
+        {/* 参考生视频:音色参考(可选)。与数字人的「驱动音频」是两回事 ——
+            这段音频只提供音色/说话风格,长度与输出时长无关;要说什么写在提示词里。 */}
+        {isR2VA && (!disabled || inputs.audioData) && (
+          <MediaFileInput
+            label={t('上传音色参考（可选）')}
+            kind='audio'
+            maxMB={uploadMaxMB}
+            maxSec={uploadMaxAudioSec}
+            value={inputs.audioData}
+            onChange={(v) => onInputChange('audioData', v)}
+            disabled={disabled}
+          />
+        )}
 
         {/* 数字人:驱动音频(必填) */}
         {isS2V && (!disabled || inputs.audioData) && (
@@ -290,8 +323,9 @@ const VideoConfigPanel = ({
           </>
         )}
 
-        {/* 图生视频(Bernini r2v):参考图 1~3 张(必填),定义主体/服装/道具/场景。 */}
-        {isI2V && (
+        {/* 图生视频(Bernini r2v):参考图 1~3 张(必填),定义主体/服装/道具/场景。
+            参考生视频(r2va):同一组控件,上限 9 张(H3 ∩ Seedance 的交集)。 */}
+        {(isI2V || isR2VA) && (
           <>
             {!disabled && (
               <ImageUrlInput
@@ -299,6 +333,7 @@ const VideoConfigPanel = ({
                   count: maxRefImages,
                 })}
                 maxMB={uploadMaxMB}
+                {...imageConstraints}
                 maxCount={maxRefImages}
                 imageUrls={inputs.refImages || []}
                 imageEnabled={true}

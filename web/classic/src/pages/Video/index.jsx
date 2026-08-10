@@ -17,18 +17,25 @@ export const VideoPlaygroundBody = ({ mode, category = 'video' }) => {
   const styleState = { isMobile };
   const {
     isI2V,
+    isR2VA,
     isFLF2V,
     isS2V,
     isSR,
     isVACE,
     isDub,
     isFlf2vSelected,
+    keyframeMode,
+    allowLastFrame,
+    isKeyframeAuto,
+    isKeyframeAutoFull,
     dubAvailable,
     pipelineModel,
     needsImage,
     maxRefImages,
     maxInputMB,
     maxAudioSec,
+    optimizeEngine,
+    optimizeContext,
     inputs,
     handleInputChange,
     applyExample,
@@ -63,12 +70,16 @@ export const VideoPlaygroundBody = ({ mode, category = 'video' }) => {
           category={category}
           mode={mode}
           isI2V={isI2V}
+          isR2VA={isR2VA}
           isFLF2V={isFLF2V}
           isS2V={isS2V}
           isSR={isSR}
           isVACE={isVACE}
           isDub={isDub}
           isFlf2vSelected={isFlf2vSelected}
+          allowLastFrame={allowLastFrame}
+          isKeyframeAuto={isKeyframeAuto}
+          isKeyframeAutoFull={isKeyframeAutoFull}
           dubAvailable={dubAvailable}
           pipelineModel={pipelineModel}
           maxRefImages={maxRefImages}
@@ -95,9 +106,11 @@ export const VideoPlaygroundBody = ({ mode, category = 'video' }) => {
           mode={mode}
           category={category}
           selectedModel={inputs.model}
+          optimizeEngine={optimizeEngine}
+          optimizeContext={optimizeContext}
           isSR={isSR}
           isDub={isDub}
-          isFlf2vSelected={isFlf2vSelected}
+          keyframeMode={keyframeMode}
           onApplyExample={applyExample}
           styleState={styleState}
           onSend={generate}

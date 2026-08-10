@@ -28,9 +28,18 @@ var taskTypeToPlaygroundTab = map[string]string{
 	"r2v": "image2video", // Bernini 参考图生视频 = 体验区「图生视频」
 	// 关键帧 tab 同时覆盖两种模型:flf2v 模型发 flf2v(首帧+尾帧),
 	// 只吃首帧的 i2v 模型发 i2v —— 都属同一个玩法,配置也应共用一格。
+	// l2va(只给尾帧,反推开头)是 MiniMax H3 带来的第三态:H3 的一个 FL2VA
+	// checkpoint 同时吃首帧/尾帧/首尾帧,靠 extra_params.frame_indices 区分
+	// ([0] / [-1] / [0,-1]),不像 wan 那样要靠两个启动参数不同的实例。
+	// 它与 i2v 的输入形态完全一样(都是 1 张图),只有语义不同,所以必须是独立的
+	// task_type —— 靠张数推不出"这张是尾帧"。
 	"i2v":   "flf2v",
+	"l2va":  "flf2v",
 	"flf2v": "flf2v",
 	"s2v":   "s2v",
+	// 参考生视频(MiniMax H3 Ref2VA):参考图(+可选音色参考)→ 带语音的视频。
+	// 独立于 s2v(InfiniteTalk 音频驱动)与 r2v(Bernini 纯参考图,归「图生视频」)。
+	"r2va": "r2va",
 	// Bernini 一个模型出四种编辑玩法,体验区合并为「视频编辑」一个 tab。
 	"v2v":   "vace",
 	"rv2v":  "vace",
@@ -64,9 +73,15 @@ func PlaygroundTabForTaskType(taskType string) string {
 // 由 init 从正向表构建而非手写第二份,两者永不漂移。
 //
 // 反向是「一对多」的:同一个 tab 可能覆盖多个 task_type ——
-//   flf2v(关键帧)→ {flf2v, i2v}:两类模型共用一个玩法格;
-//   vace(视频编辑)→ {v2v, rv2v, mv2v, ads2v}:Bernini 一个模型出四种编辑。
+//
+//	flf2v(关键帧)→ {flf2v, i2v, l2va}:三类玩法共用一个玩法格;
+//	vace(视频编辑)→ {v2v, rv2v, mv2v, ads2v}:Bernini 一个模型出四种编辑。
+//
 // 所以它给出的是「候选集」,不是答案;还要靠请求的输入形态或显式 task_type 收敛到一个。
+//
+// ⚠️ 关键帧这一格的候选集**无法只靠输入形态收敛**:i2v 与 l2va 都是 1 张图,
+// 区别纯在语义(首帧 / 尾帧)。这两者之间必须由显式 task_type 定夺 ——
+// 见 taskTypesCompatibleWithInputs 与前端关键帧三态的派生逻辑。
 var playgroundTabTaskTypes = map[string][]string{}
 
 func init() {

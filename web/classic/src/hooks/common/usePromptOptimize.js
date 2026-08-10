@@ -28,9 +28,19 @@ import { defaultOptimizeSystemPrompt } from '../../constants/promptOptimize.cons
 // 系统提示词优先用运营为该 tab 改写的版本,留空则用内置默认
 // (constants/promptOptimize.constants.js,按 tab 分开写)。
 //
+// 第三个参数是可选的模型上下文,只有视频体验区传:
+//   engine  —— 所选模型的引擎族(minimax-h3 要的是分段结构,与通用契约形状相反);
+//   context —— 本次请求的既成事实(传了首帧还是尾帧、选了几秒、有几张参考图)。
+//              优化模型看不到左侧面板,不喂它就只能猜,猜错同样不报错、只是默默变差。
+// 两者都留空即维持原行为(手机端 PromptBar、图像/音乐体验区都不传)。
+//
 // 返回 { available, optimizing, optimize }。optimize(text) 成功返回优化后的字符串,
 // 失败返回 null 并已弹过错误提示 —— 调用方只需判空后回填输入框。
-export const usePromptOptimize = (category, tabKey) => {
+export const usePromptOptimize = (
+  category,
+  tabKey,
+  { engine, context } = {},
+) => {
   const { t } = useTranslation();
   const [statusState] = useContext(StatusContext);
   const [optimizing, setOptimizing] = useState(false);
@@ -48,10 +58,13 @@ export const usePromptOptimize = (category, tabKey) => {
       available: declared && global.enabled && !!global.model && tab.enabled,
       model: global.model,
       group: global.group,
+      // context 无条件追加在末尾:它不是模板而是本次请求的事实,运营改写过模板时
+      // 同样需要(改写的多半也是 H3 模板,少了这段照样分不清 I2VA / L2VA)。
       systemPrompt:
-        (tab.systemPrompt || '').trim() || defaultOptimizeSystemPrompt(tabKey),
+        ((tab.systemPrompt || '').trim() ||
+          defaultOptimizeSystemPrompt(tabKey, engine)) + (context || ''),
     };
-  }, [raw, category, tabKey]);
+  }, [raw, category, tabKey, engine, context]);
 
   const optimize = useCallback(
     async (rawText) => {

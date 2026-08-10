@@ -39,6 +39,17 @@ const readFileAsBase64 = (file) =>
     reader.readAsDataURL(file);
   });
 
+// 读出 base64 图的像素尺寸。用于视频体验区的前置校验:引擎对参考图有硬性像素约束,
+// 不在这里拦就要等到引擎侧才报错(自建 H3 是 400,第三方是上游报错),用户已经等了几十秒。
+const readImageSize = (dataUrl) =>
+  new Promise((resolve) => {
+    const img = new window.Image();
+    img.onload = () => resolve({ w: img.naturalWidth, h: img.naturalHeight });
+    // 读不出尺寸时放行:宁可交给引擎判,也不要因为浏览器解不了某种格式就误拒。
+    img.onerror = () => resolve(null);
+    img.src = dataUrl;
+  });
+
 const ImageUrlInput = ({
   imageUrls,
   imageEnabled,
@@ -51,6 +62,12 @@ const ImageUrlInput = ({
   required = false,
   // 单文件大小上限(MB;0/未传=不限)。视频体验区按 maxInputMB 兜住上传成本。
   maxMB = 0,
+  // 像素约束(0/未传 = 不校验)。取值按 tab 定 —— 多模型共享的 tab 要用各模型的最小交集,
+  // 见 docs/minimax-h3-playground-design.md §5.3.1。
+  minShortEdge = 0,
+  maxLongEdge = 0,
+  minAspect = 0,
+  maxAspect = 0,
   // 最多可上传张数(0/未传=不限)。达到上限后隐藏拖拽框(单帧槽=1,参考图=1~3)。
   maxCount = 0,
 }) => {
@@ -91,6 +108,49 @@ const ImageUrlInput = ({
         }
         try {
           const base64 = await readFileAsBase64(file);
+          const size =
+            minShortEdge || maxLongEdge || minAspect || maxAspect
+              ? await readImageSize(base64)
+              : null;
+          if (size) {
+            const short = Math.min(size.w, size.h);
+            const long = Math.max(size.w, size.h);
+            const ratio = size.w / size.h;
+            if (minShortEdge > 0 && short < minShortEdge) {
+              Toast.error({
+                content: t('图片短边不能小于 {{n}} 像素（当前 {{cur}}）', {
+                  n: minShortEdge,
+                  cur: short,
+                }),
+                duration: 3,
+              });
+              continue;
+            }
+            if (maxLongEdge > 0 && long > maxLongEdge) {
+              Toast.error({
+                content: t('图片长边不能大于 {{n}} 像素（当前 {{cur}}）', {
+                  n: maxLongEdge,
+                  cur: long,
+                }),
+                duration: 3,
+              });
+              continue;
+            }
+            if (
+              (minAspect > 0 && ratio < minAspect) ||
+              (maxAspect > 0 && ratio > maxAspect)
+            ) {
+              Toast.error({
+                content: t('图片宽高比需在 {{lo}}~{{hi}} 之间（当前 {{cur}}）', {
+                  lo: minAspect,
+                  hi: maxAspect,
+                  cur: ratio.toFixed(2),
+                }),
+                duration: 3,
+              });
+              continue;
+            }
+          }
           results.push(base64);
         } catch {
           Toast.error({ content: t('图片读取失败'), duration: 2 });
@@ -107,7 +167,19 @@ const ImageUrlInput = ({
         });
       }
     },
-    [imageEnabled, disabled, imageUrls, onImageUrlsChange, maxMB, maxCount, t],
+    [
+      imageEnabled,
+      disabled,
+      imageUrls,
+      onImageUrlsChange,
+      maxMB,
+      maxCount,
+      minShortEdge,
+      maxLongEdge,
+      minAspect,
+      maxAspect,
+      t,
+    ],
   );
 
   const { getRootProps, getInputProps, isDragActive } = useDropzone({
