@@ -1,6 +1,13 @@
 // Package minimaxv2 实现 MiniMax v2 官方视频协议(platform.minimax.io 的
-// /v2/video_generation 系列)的兼容层:官方 API 用户改 base_url + key 就能切到我们,
-// 连模型名都不用改(渠道里把对外名注册成 MiniMax-H3、重定向到上游 minimax-h3-fl2va)。
+// /v2/video_generation 系列)的兼容层:官方 API 用户改 base_url + key + model 就能切过来,
+// 请求体、响应体、错误信封与官方逐字段一致。
+//
+// **model 要改**:官方那边 model 只有 MiniMax-H3 一个值、一个名字覆盖全部玩法,而我们
+// 按玩法拆成两套部署 —— minimax-h3-fl2va(纯文本 / 首帧 / 尾帧 / 首尾帧)与
+// minimax-h3-ref2va(多模态参考)。这是刻意的产品选择(2026-08-11 决策):
+// 用一个对外名 + 渠道重定向做不到按 task_type 分流,ModelMappedHelper 是静态的
+// name→name 映射,而 GPUStack 门面是按 model 选实例的 —— 硬凑只会让其中一类玩法
+// 在引擎侧失败。本层不校验模型名(原样透传),选错由引擎拒绝。
 //
 // 边界(设计见 docs/minimax-h3-playground-design.md §七の二):
 //

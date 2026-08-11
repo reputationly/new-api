@@ -42,7 +42,8 @@ func SetVideoRouter(router *gin.Engine) {
 	}
 
 	// MiniMax v2 官方视频协议兼容层（docs/minimax-h3-playground-design.md §七の二）。
-	// 目标：官方 API 用户改 base_url + key 就能切到我们，连模型名都不用改。
+	// 目标：官方 API 用户改 base_url + key + model 就能切过来。model 要改是因为我们按
+	// 玩法拆成了 minimax-h3-fl2va / minimax-h3-ref2va 两套部署，见 relay/minimaxv2 包注释。
 	// 与上面的 OpenAI 兼容端点是**并存**关系：同一批任务两套协议都能提交与查询。
 	// 范围是主流程 + 任务管理，不含 callback_url 回调。
 	//
