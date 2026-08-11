@@ -19,6 +19,7 @@ import (
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	relayconstant "github.com/QuantumNous/new-api/relay/constant"
 	"github.com/QuantumNous/new-api/relay/helper"
+	"github.com/QuantumNous/new-api/relay/minimaxv2"
 	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/types"
 	"github.com/gin-gonic/gin"
@@ -411,6 +412,26 @@ func videoFetchByIDRespBodyBuilder(c *gin.Context) (respBody []byte, taskResp *d
 	}
 	if !exist {
 		taskResp = service.TaskErrorWrapperLocal(errors.New("task_not_exist"), "task_not_exist", http.StatusBadRequest)
+		return
+	}
+
+	// MiniMax v2 官方协议:按原始 RequestURI 前缀分流(中间件改写的是 URL.Path,
+	// RequestURI 保留客户端实际请求的路径)。放在实时拉取之前——v2 只服务自建 H3
+	// (gpustackplus),那条 Gemini/Vertex 专用的实时分支对它恒不成立。
+	if strings.HasPrefix(c.Request.RequestURI, "/v2/query/video_generation/") {
+		// 非 v2 提交的任务在本协议下就是不存在。放行的话会给一个从没走过这条协议的任务
+		// 编出 task_type=generation / modality=video / content.url —— 而 gpustackplus
+		// 一个 platform 底下同时跑 TTS、音乐、超分,那条 url 后面很可能是段音频。
+		// 「回显与实际产物不符」正是本兼容层反复要避免的东西。
+		if !minimaxv2.IsV2Task(originTask) {
+			taskResp = service.TaskErrorWrapperLocal(
+				fmt.Errorf("invalid task_id: %s", taskId), "task_not_exist", http.StatusBadRequest)
+			return
+		}
+		respBody, err = minimaxv2.BuildQueryBody(originTask)
+		if err != nil {
+			taskResp = service.TaskErrorWrapper(err, "marshal_response_failed", http.StatusInternalServerError)
+		}
 		return
 	}
 

@@ -41,6 +41,41 @@ func SetVideoRouter(router *gin.Engine) {
 		klingV1Router.GET("/videos/image2video/:task_id", controller.RelayTaskFetch)
 	}
 
+	// MiniMax v2 官方视频协议兼容层（docs/minimax-h3-playground-design.md §七の二）。
+	// 目标：官方 API 用户改 base_url + key 就能切到我们，连模型名都不用改。
+	// 与上面的 OpenAI 兼容端点是**并存**关系：同一批任务两套协议都能提交与查询。
+	// 范围是主流程 + 任务管理，不含 callback_url 回调。
+	//
+	// ⚠️ 依赖 router/main.go 里 SetRelayRouter 先于 SetVideoRouter 调用：engine 级的
+	// BodyStorageCleanup 只对其后注册的路由生效，而提交端点会 ReplaceRequestBody
+	// 新建一份 body storage，靠它收尾。顺序反过来会在 64MB 级 base64 请求体上漏临时文件。
+	minimaxV2Router := router.Group("/v2")
+	minimaxV2Router.Use(middleware.RouteTag("relay"))
+	{
+		// 提交：官方 content[]+role → 统一任务契约，随后复用 controller.RelayTask。
+		minimaxV2Router.POST("/video_generation",
+			middleware.MiniMaxV2CreateConvert(), middleware.TokenAuth(), middleware.Distribute(),
+			controller.RelayTask)
+		// 查询：只读本地任务表，不需要选渠道，故不挂 Distribute，relay_mode 显式指定。
+		minimaxV2Router.GET("/query/video_generation/:task_id",
+			middleware.MiniMaxV2Envelope(), middleware.TokenAuth(), middleware.MiniMaxV2FetchMode(),
+			controller.RelayTaskFetch)
+		minimaxV2Router.GET("/query/video_generation",
+			middleware.MiniMaxV2Envelope(), middleware.TokenAuth(),
+			controller.MiniMaxV2ListTasks)
+		minimaxV2Router.DELETE("/video_generation/:task_id",
+			middleware.MiniMaxV2Envelope(), middleware.TokenAuth(),
+			controller.MiniMaxV2DeleteTask)
+
+		// 官方有、我们做不到的两个端点：如实 501，不假装支持。
+		minimaxV2Router.POST("/video_regeneration",
+			middleware.MiniMaxV2Envelope(), middleware.TokenAuth(),
+			controller.MiniMaxV2NotImplemented("video regeneration is not available on this gateway: it upgrades 768P output to 2K via the closed-source H3-Regenerate-2K model, which the self-hosted deployment does not have"))
+		minimaxV2Router.POST("/h3_context_ir",
+			middleware.MiniMaxV2Envelope(), middleware.TokenAuth(),
+			controller.MiniMaxV2NotImplemented("h3_context_ir is not available on this gateway: structured prompt enrichment is served by MiniMax's own hosted model, which requires a MiniMax API key"))
+	}
+
 	// Jimeng official API routes - direct mapping to official API format
 	jimengOfficialGroup := router.Group("jimeng")
 	jimengOfficialGroup.Use(middleware.RouteTag("relay"))

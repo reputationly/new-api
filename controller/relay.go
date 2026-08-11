@@ -20,6 +20,7 @@ import (
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	relayconstant "github.com/QuantumNous/new-api/relay/constant"
 	"github.com/QuantumNous/new-api/relay/helper"
+	"github.com/QuantumNous/new-api/relay/minimaxv2"
 	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/setting"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
@@ -595,6 +596,9 @@ func RelayTask(c *gin.Context) {
 		}
 
 		task := model.InitTask(result.Platform, relayInfo)
+		// MiniMax v2 兼容层的回显 / 用量快照。这些值只存在于提交请求里，而查询发生在
+		// 几百秒后的轮询之后，那时请求体早已不在。非 v2 端点提交的任务是 no-op。
+		minimaxv2.ApplyTaskSnapshot(c, task)
 		task.PrivateData.UpstreamTaskID = result.UpstreamTaskID
 		task.PrivateData.BillingSource = relayInfo.BillingSource
 		task.PrivateData.SubscriptionId = relayInfo.SubscriptionId

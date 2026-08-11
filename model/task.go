@@ -54,17 +54,26 @@ type Task struct {
 	Group     string                `json:"group" gorm:"type:varchar(50)"` // 修正计费用
 	ChannelId int                   `json:"channel_id" gorm:"index"`
 	// TokenId 由 BeforeSave 钩子从 PrivateData.TokenId 镜像而来，作为真列用于企业子账户「仅看绑定 key 的任务」过滤（设计 §4.5）。
-	TokenId    int        `json:"token_id" gorm:"index;column:token_id"`
-	Quota      int        `json:"quota"`
-	Action     string     `json:"action" gorm:"type:varchar(40);index"` // 任务类型, song, lyrics, description-mode
-	Status     TaskStatus `json:"status" gorm:"type:varchar(20);index"` // 任务状态
-	FailReason string     `json:"fail_reason"`
-	SubmitTime int64      `json:"submit_time" gorm:"index"`
-	StartTime  int64      `json:"start_time" gorm:"index"`
-	FinishTime int64      `json:"finish_time" gorm:"index"`
-	Progress   string     `json:"progress" gorm:"type:varchar(20);index"`
-	Properties Properties `json:"properties" gorm:"type:json"`
-	Username   string     `json:"username,omitempty" gorm:"-"`
+	TokenId int `json:"token_id" gorm:"index;column:token_id"`
+	// APIProtocol 同样由 BeforeSave 从 Properties 镜像而来（手法与上面的 TokenId 一致）：
+	// 记录这条任务是经哪套对外协议提交的，空值表示本仓原生 / OpenAI 兼容那条路。
+	//
+	// 为什么必须是真列：MiniMax v2 的列表接口要按「是否经该协议提交」过滤并给出精确的
+	// total 与分页，而这个标记本身存在 Properties 这个 JSON 列里，三种数据库的 JSON
+	// 查询语法互不兼容（PostgreSQL 的 json 列连 LIKE 都不支持）。没有真列就只能
+	// 「取最近 N 行回来在 Go 里筛」，而那个 N 会被该用户的**全部**任务（体验区 / Suno /
+	// MJ …）消耗掉——混用账号下 v2 任务全部落在窗口之外时，列表会静默返回空。
+	APIProtocol string     `json:"api_protocol,omitempty" gorm:"type:varchar(20);index;column:api_protocol"`
+	Quota       int        `json:"quota"`
+	Action      string     `json:"action" gorm:"type:varchar(40);index"` // 任务类型, song, lyrics, description-mode
+	Status      TaskStatus `json:"status" gorm:"type:varchar(20);index"` // 任务状态
+	FailReason  string     `json:"fail_reason"`
+	SubmitTime  int64      `json:"submit_time" gorm:"index"`
+	StartTime   int64      `json:"start_time" gorm:"index"`
+	FinishTime  int64      `json:"finish_time" gorm:"index"`
+	Progress    string     `json:"progress" gorm:"type:varchar(20);index"`
+	Properties  Properties `json:"properties" gorm:"type:json"`
+	Username    string     `json:"username,omitempty" gorm:"-"`
 	// 禁止返回给用户，内部可能包含key等隐私信息
 	PrivateData TaskPrivateData `json:"-" gorm:"column:private_data;type:json"`
 	Data        json.RawMessage `json:"data" gorm:"type:json"`
@@ -78,8 +87,24 @@ func (t *Task) BeforeSave(tx *gorm.DB) error {
 	if t.PrivateData.TokenId != 0 {
 		t.TokenId = t.PrivateData.TokenId
 	}
+	// api_protocol 同理：只在 Properties 里确实带了协议快照时才动它，没有快照就不碰。
+	//
+	// 软删是三态里最容易写错的一态：**必须在这里把列清空**。只在删除处清列是不够的——
+	// 快照还在 Properties 里，下一次落盘会被这个钩子照着 `!= nil` 重新写回去，
+	// 任务就从 v2 列表里「复活」了。
+	if t.Properties.MiniMaxV2 != nil {
+		if t.Properties.MiniMaxV2.Deleted {
+			t.APIProtocol = ""
+		} else {
+			t.APIProtocol = TaskAPIProtocolMiniMaxV2
+		}
+	}
 	return nil
 }
+
+// TaskAPIProtocolMiniMaxV2 是 api_protocol 列在「经 MiniMax v2 官方协议提交」时的取值。
+// 定义在 model 包是为了让 BeforeSave 用得上——relay/minimaxv2 依赖 model，反向依赖不成立。
+const TaskAPIProtocolMiniMaxV2 = "minimax_v2"
 
 func (t *Task) SetData(data any) {
 	b, _ := common.Marshal(data)
@@ -94,6 +119,34 @@ type Properties struct {
 	Input             string `json:"input"`
 	UpstreamModelName string `json:"upstream_model_name,omitempty"`
 	OriginModelName   string `json:"origin_model_name,omitempty"`
+	// MiniMaxV2 是 MiniMax v2 官方协议兼容层的提交快照，仅经 /v2/video_generation 提交的
+	// 任务写入（其存在本身就是「这是一个 v2 任务」的判据，列表接口据此筛选）。
+	// Properties 是 gorm:"type:json" 列，加字段无需迁移，老行反序列化成零值。
+	MiniMaxV2 *MiniMaxV2Properties `json:"minimax_v2,omitempty"`
+}
+
+// MiniMaxV2Properties 冻结 v2 查询接口要回显的请求维度与用量。
+//
+// 必须在提交时冻结：查询发生在几百秒后的轮询之后，那时请求体早已不在，Task.Data 里
+// 存的是**上游提交响应**（task_id/status），不含分辨率、比例、时长。
+//
+// Duration 一个字段同时服务两处：task.duration 的回显，以及 usage.output_seconds
+// （两者对我们恒等——官方把 17n+5 帧对齐藏起来，回填的就是请求值）。
+// usage.input_seconds 不落盘：它只有 0 与「未知」两种取值，由 InputVideoCount 推出。
+type MiniMaxV2Properties struct {
+	Resolution      string `json:"resolution,omitempty"`
+	Ratio           string `json:"ratio,omitempty"`
+	Duration        int    `json:"duration,omitempty"`
+	InputImageCount int    `json:"input_image_count,omitempty"`
+	InputVideoCount int    `json:"input_video_count,omitempty"`
+	// Deleted 是 v2 协议侧的软删标记：任务从 v2 的查询与列表里消失（与官方 DELETE 的
+	// 可观测行为一致），但**行本身保留**。
+	//
+	// 不能硬删：同一行还背着六个与 v2 协议无关的功能——`/v1/videos/{id}/content`
+	// （我们自己发出去的 content.url）、任务下载、分享链接的公开解析、remix 的原任务、
+	// 以及 `task:<task_id>` 产物引用展开。删行等于替用户把这些一并掐断，而官方那边
+	// 「删记录」只是从他们的任务列表里移除，两者的爆炸半径完全不是一回事。
+	Deleted bool `json:"deleted,omitempty"`
 }
 
 func (m *Properties) Scan(val interface{}) error {
@@ -403,6 +456,55 @@ func GetByTaskIds(userId int, taskIds []any) ([]*Task, error) {
 		return nil, err
 	}
 	return task, nil
+}
+
+// ListTasksByProtocol 按 api_protocol 真列取某用户的任务，返回该条件下的总数与一页数据。
+//
+// statuses 为空表示不限状态；非空时取交集（官方状态词与内部 TaskStatus 是一对多的，
+// 换算由调用方做）。分页与计数都在 SQL 里完成，结果精确，没有扫描窗口。
+func ListTasksByProtocol(userId int, protocol string, statuses []TaskStatus, offset, limit int) ([]*Task, int64, error) {
+	// 每次重新构建条件，而不是复用同一个 *gorm.DB 链：Count 与 Find 共用一条链时
+	// GORM 会把上一次的语句状态带进来。
+	scoped := func() *gorm.DB {
+		q := DB.Model(&Task{}).Where("user_id = ? and api_protocol = ?", userId, protocol)
+		if len(statuses) > 0 {
+			q = q.Where("status in ?", statuses)
+		}
+		return q
+	}
+
+	var total int64
+	if err := scoped().Count(&total).Error; err != nil {
+		return nil, 0, err
+	}
+	if total == 0 || limit <= 0 || int64(offset) >= total {
+		return nil, total, nil
+	}
+	var tasks []*Task
+	if err := scoped().Order("id desc").Offset(offset).Limit(limit).Find(&tasks).Error; err != nil {
+		return nil, 0, err
+	}
+	return tasks, total, nil
+}
+
+// ListAllTasksByProtocol 取某用户该协议下的任务（最多 limit 条，id 倒序）。
+//
+// 只服务「还要按模型名过滤」那条路径——模型名在 Properties 这个 JSON 列里，跨库筛不了，
+// 只能取回来在 Go 里筛。候选集已被 api_protocol 收窄到该协议自己的任务，量级与
+// 「该用户的全部任务」不是一回事；即便如此，取满 limit 仍由调用方显式报错，不静默截断。
+func ListAllTasksByProtocol(userId int, protocol string, statuses []TaskStatus, limit int) ([]*Task, error) {
+	if limit <= 0 {
+		return nil, nil
+	}
+	q := DB.Where("user_id = ? and api_protocol = ?", userId, protocol)
+	if len(statuses) > 0 {
+		q = q.Where("status in ?", statuses)
+	}
+	var tasks []*Task
+	if err := q.Order("id desc").Limit(limit).Find(&tasks).Error; err != nil {
+		return nil, err
+	}
+	return tasks, nil
 }
 
 func (Task *Task) Insert() error {
