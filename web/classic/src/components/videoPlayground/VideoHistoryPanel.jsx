@@ -44,6 +44,7 @@ const collectInputMedia = (conv) => {
   (conv.refImages || []).forEach(
     (u) => u && out.push({ type: 'image', url: u }),
   );
+  // srcVideo2 只有收口之前的老双视频会话才有(见 useVideoGeneration 的 VIDEO_MODES.vace)。
   [conv.sourceVideo, conv.srcVideo, conv.srcVideo2].forEach(
     (u) => u && out.push({ type: 'video', url: u }),
   );

@@ -69,6 +69,7 @@ import {
   buildVideoContentUrl,
   VIDEO_ENGINE_MINIMAX_H3,
 } from '../../constants/videoPlayground.constants';
+import { tabHasField } from '../../constants/playgroundAdmin.constants';
 import { buildH3OptimizeContext } from '../../constants/h3Prompt.constants';
 
 // 文生视频 / 图生视频 / 首尾帧 / 数字人 / 视频超分 / 视频编辑共用本 hook,按 mode
@@ -107,8 +108,17 @@ const VIDEO_MODES = {
   // 的声音:音效/环境音/BGM/台词),输出=原画面 + AI 音轨的 mp4。task_type 显式 v2a。
   dub: { capability: VIDEO_DUB_CAPABILITY, suffix: '_dub', taskType: 'v2a' },
   // 「视频编辑」mode 键沿用 vace(避免动 localStorage 历史键 / 示例 key),但现驱动 Bernini:
-  // 必须 ≥1 源视频,task_type 提交时按输入分流 v2v/rv2v/mv2v(2视频),ads2v 由示例
-  // 显式带 taskType(见 isVACE 提交块);仅参考图的 r2v 已迁到「图生视频」模式。
+  // 必须有 1 个源视频,task_type 提交时按有无参考图分流 v2v/rv2v(见 isVACE 提交块);
+  // 仅参考图的 r2v 已迁到「图生视频」模式。
+  //
+  // ⚠️ **srcVideo2 / taskTypeOverride 是「只读遗留字段」,不是死代码,别顺手删。**
+  // 双视频玩法(mv2v 多源编辑 / ads2v 广告植入)后端与门面仍全量支持,只是体验区收了
+  // 第二个上传口(与「参考生视频」同一套处理:体验区收窄、API 给全量),故**没有写入源**
+  // ——新会话恒无这两个字段。但 2026-08 之前存下来的双视频会话仍在用户本地(localStorage
+  // + IDB,Blob 不会被孤儿清理误删:runCleanup 扫的是原始串,与字段 schema 无关),这些
+  // 会话的续问/重新生成必须仍按原 task_type 原样发出、锁定态也照旧展示第二个视频 ——
+  // 否则就是 VideoConfigPanel 里警告过的那个形状:素材仍在会话里、仍会被发出去,界面
+  // 却不显示。所以读路径(schema/续问重建/提交分流/openHistoryItem)全部保留,只关写路径。
   vace: {
     capability: VIDEO_VACE_CAPABILITY,
     suffix: '_vace',
@@ -152,6 +162,8 @@ const loadConversations = (storageKey) => {
 // 配额,整条会话历史都写不进去。
 const VIDEO_MEDIA_SCHEMA = {
   convArrayFields: ['images', 'refImages', 'refVideos'],
+  // srcVideo2 只剩老会话会有(见 VIDEO_MODES.vace 的说明),但**必须留在 schema 里**:
+  // 摘掉它,老会话续问时拿到的就是没 hydrate 的 idb-media: 裸串,而不是可提交的 data-url。
   convStringFields: ['audioData', 'sourceVideo', 'srcVideo', 'srcVideo2'],
   msgArrayFields: ['images'],
   // 生成的视频结果(原为 /v1/videos/{id}/content 实时下载):抓 Blob 缓存进 IDB,刷新后
@@ -247,6 +259,11 @@ const extractApiErrMsg = (error, fallback) => {
 // 也不会再接配音段)——只删 UI 开关堵不住后者。
 export const useVideoGeneration = ({
   mode = 'text2video',
+  // 尺寸/宽高比「发不发」与「展不展示」必须同源:两者都读中央元数据的 fields 声明
+  // (tabHasField),而 tab 是按 category + mode 定位的 —— 「视频配乐」(dub)的 tab
+  // 就挂在 audio 分类下。缺省 'video' 只是兜底:查不到 tab → fields 为空 → 一律不发,
+  // 与改动前的行为一致,不会误发。
+  category = 'video',
   allowDub = true,
 } = {}) => {
   const { t } = useTranslation();
@@ -263,8 +280,17 @@ export const useVideoGeneration = ({
   // 需要上传一张「主图」的模式:关键帧首帧、s2v 人物图(都复用 inputs.firstFrame)。
   // 图生视频(Bernini r2v)改用参考图 refImages,不再走 firstFrame。
   const needsImage = isFLF2V || isS2V;
-  // 输出跟随上传输入的模式(非文生视频):不展示/不下发尺寸与宽高比。
+  // 1080P 两段流水线(生成 → 超分)只对文生视频成立,其余玩法的画幅由输入决定。
+  //
+  // ⚠️ 这个标记**不再**兼任「要不要下发尺寸/宽高比」的判据。它以前是,结果是个陷阱:
+  // 展示侧早已改成读中央元数据(tabHasField),运营给某个 tab 声明了 sizes 就会出选择器,
+  // 而下发侧还卡在 mode !== 'text2video' —— 参考生视频(r2va)正好撞上:后端 h3ApplyCanvas
+  // 认了 r2va、管理页也能配了,前端却一个字段都不发,480P 档位形同虚设(引擎按
+  // short_edge=768 自推,每条多花一倍时间)。下发侧现在与展示侧同读 tabHasField。
   const followsInput = mode !== 'text2video';
+  // 尺寸/宽高比下发闸,与 VideoConfigPanel 的展示闸同一判据(见上)。
+  const sendsSize = tabHasField(category, mode, 'sizes');
+  const sendsAspectRatio = tabHasField(category, mode, 'aspectRatios');
   const taskType = modeMeta(mode).taskType; // s2v/sr 显式下发;vace(Bernini)按输入分流(见 isVACE 提交块),其余靠模型名推断
   const pageCapability = modeMeta(mode).capability;
   const storageKey = storageKeyFor(mode);
@@ -284,7 +310,9 @@ export const useVideoGeneration = ({
     interpolation: false, // 插帧开关(默认关):开启才透传 metadata.target_fps,超分/配乐不适用
     dubbing: false, // 配音开关(默认关):开启则生成后接 v2a 配音段(文生/图生/视频编辑)
     srcVideo: '', // 视频编辑(Bernini)源视频(base64 data-url)
-    srcVideo2: '', // 视频编辑(Bernini)第二源视频(mv2v/ads2v 双视频,可选)
+    // 老会话的第二源视频(mv2v/ads2v)。只由 openHistoryItem 写入、只在锁定态展示,
+    // 没有上传口(见 VIDEO_MODES.vace);新会话恒为空。
+    srcVideo2: '',
     refImages: [], // 视频编辑 rv2v / 图生视频 r2v 参考图(base64 data-url 数组)
     refVideos: [], // 参考生视频 r2va 参考视频(base64 data-url 数组;运营未开放则恒为空)
   });
@@ -408,10 +436,11 @@ export const useVideoGeneration = ({
           audioData: '',
           sourceVideo: '',
           srcVideo: '',
+          // 老会话看完再点示例时,把只读的第二源视频一并清掉(它没有上传口,留着只会
+          // 在本次新会话锁定后冒出来一个不属于它的只读视频)。
           srcVideo2: '',
           refImages: [],
           refVideos: [],
-          taskType: '',
           ...(ex.params || {}),
         };
         const entries = await Promise.all(
@@ -1055,7 +1084,6 @@ export const useVideoGeneration = ({
         sourceVideo: '',
         srRatio: 2,
         srcVideo: '',
-        srcVideo2: '',
         refImages: [],
         refVideos: [],
       };
@@ -1134,7 +1162,7 @@ export const useVideoGeneration = ({
           return;
         }
         if (isVACE && !(inputs.srcVideo || '').trim()) {
-          showError(t('视频编辑需要上传源视频(至少 1 个)'));
+          showError(t('视频编辑需要上传源视频'));
           return;
         }
         media = {
@@ -1142,7 +1170,6 @@ export const useVideoGeneration = ({
           sourceVideo: (inputs.sourceVideo || '').trim(),
           srRatio: inputs.srRatio,
           srcVideo: (inputs.srcVideo || '').trim(),
-          srcVideo2: (inputs.srcVideo2 || '').trim(),
           refImages: (inputs.refImages || []).filter(Boolean),
           refVideos: (inputs.refVideos || []).filter(Boolean),
         };
@@ -1155,8 +1182,6 @@ export const useVideoGeneration = ({
           seed: inputs.seed,
           aspectRatio: inputs.aspectRatio,
           images: convImages,
-          // ads2v 等无法自动分流的玩法由示例 params.taskType 显式带入(落在 inputs 上)。
-          taskTypeOverride: (inputs.taskType || '').trim(),
           // 关键帧 auto 的派生结果**随会话锁定**:images 数组分不出「这 1 张是首帧
           // 还是尾帧」(l2va 与 i2v 输入形态相同),续问时重新推必然推错。
           keyframeTaskType:
@@ -1197,10 +1222,12 @@ export const useVideoGeneration = ({
               sourceVideo: conv.sourceVideo || '',
               srRatio: conv.srRatio != null ? conv.srRatio : 2,
               srcVideo: conv.srcVideo || '',
+              // 老双视频会话的两个只读字段:续问要原样带上,否则同一个会话第二轮起
+              // 会静默从 mv2v/ads2v 降级成 v2v/rv2v(见 VIDEO_MODES.vace)。
               srcVideo2: conv.srcVideo2 || '',
+              taskTypeOverride: conv.taskTypeOverride || '',
               refImages: conv.refImages || [],
               refVideos: conv.refVideos || [],
-              taskTypeOverride: conv.taskTypeOverride || '',
               keyframeTaskType: conv.keyframeTaskType || '',
               interpolation: !!conv.interpolation,
               dubbing: !!conv.dubbing,
@@ -1322,14 +1349,14 @@ export const useVideoGeneration = ({
               //   1. 这里(新建会话)  2. 上面续问时从 conv 重建 params  3. openHistoryItem
               // 漏任意一处都不报错,只会让素材在某一步悄悄消失 —— 漏 1 或 2 的表现是
               // 「第二轮起参考素材没了」,漏 3 是「打开历史看不到用过什么」。
+              // 例外:srcVideo2 / taskTypeOverride **只在 2 和 3 里有**,这里故意不写 ——
+              // 它们是老会话的只读遗留字段,新会话没有写入源(见 VIDEO_MODES.vace)。
               audioData: params.audioData || '',
               sourceVideo: params.sourceVideo || '',
               srRatio: params.srRatio != null ? params.srRatio : 2,
               srcVideo: params.srcVideo || '',
-              srcVideo2: params.srcVideo2 || '',
               refImages: params.refImages || [],
               refVideos: params.refVideos || [],
-              taskTypeOverride: params.taskTypeOverride || '',
               keyframeTaskType: params.keyframeTaskType || '',
               // 插帧/配音随会话锁定：刷新/续会话按此判定流水线，不受当前开关影响。
               interpolation: !!params.interpolation,
@@ -1464,7 +1491,7 @@ export const useVideoGeneration = ({
         }
         if (
           !wantUpscale &&
-          !followsInput &&
+          sendsSize &&
           availableSizes.includes(videoSizeVal)
         ) {
           body.size = videoSizeVal;
@@ -1507,11 +1534,11 @@ export const useVideoGeneration = ({
         //   优先采用它,不认识 aspect_ratio。
         // - 其他渠道:ratio("16:9" 这种原生形态)。Ark/Seedance 只认 ratio,收到 target_shape
         //   会整个忽略、只能出默认比例——界面上摆着宽高比选择器却不生效。
-        // 纯 opt-in:仅 t2v、且该值仍在当前模型的允许集内才下发(续问历史会话时
-        // conv.aspectRatio 可能是后台已改/删的旧值,校验一遍避免绕过白名单)。
-        // i2v/flf2v 跟随输入图故不发。
+        // 纯 opt-in:该 tab 在中央元数据里声明了 aspectRatios、且该值仍在当前模型的允许集
+        // 内才下发(续问历史会话时 conv.aspectRatio 可能是后台已改/删的旧值,校验一遍避免
+        // 绕过白名单)。i2v/flf2v 的画幅永远跟随输入图,故它们的 tab 不声明这个字段。
         if (
-          !followsInput &&
+          sendsAspectRatio &&
           params.aspectRatio &&
           availableAspectRatios.includes(params.aspectRatio)
         ) {
@@ -1587,10 +1614,10 @@ export const useVideoGeneration = ({
             video: params.sourceVideo,
           };
         }
-        // 视频编辑(Bernini):必有 ≥1 源视频,按输入自动分流 task_type ——
-        // 1 视频无参考图=v2v、1 视频+参考图=rv2v、2 视频=mv2v(多源编辑)。
-        // ads2v(广告植入)与 mv2v 输入相同,自动分流分不出,由示例 params.taskType
-        // (taskTypeOverride)显式指定。仅参考图的 r2v 已迁到「图生视频」模式。
+        // 视频编辑(Bernini):必有 1 源视频,按输入自动分流 task_type ——
+        // 无参考图=v2v、带参考图=rv2v。仅参考图的 r2v 已迁到「图生视频」模式。
+        // v2(第二源视频)只可能来自老会话:体验区已收掉那个上传口,新会话到不了这两个
+        // 分支;老会话续问仍按 mv2v / ads2v(override)原样发出(见 VIDEO_MODES.vace)。
         if (isVACE) {
           const md = { ...(body.metadata || {}) };
           const v1 = (params.srcVideo || '').trim();
@@ -1599,7 +1626,7 @@ export const useVideoGeneration = ({
           md.src_video = v2 ? [v1, v2] : v1;
           if (hasRefs && !v2) md.src_ref_images = params.refImages;
           const override = (params.taskTypeOverride || '').trim();
-          // override(ads2v)只在真双视频时生效:删掉第二视频后回落自动分流,
+          // override(ads2v)只在真双视频时生效:第二视频丢失(Blob 被清)时回落自动分流,
           // 避免残留 override 让 1 视频提交被后端「需要恰好 2 个视频」拒掉。
           md.task_type = v2 ? override || 'mv2v' : hasRefs ? 'rv2v' : 'v2v';
           body.metadata = md;
@@ -1692,6 +1719,10 @@ export const useVideoGeneration = ({
 
   const newConversation = useCallback(() => {
     setCurrentConvId(null);
+    // 其余输入刻意保留(用户常拿同一批素材再发一次),只清 srcVideo2:它是老会话的
+    // 只读遗留字段,没有上传口也不会被新会话提交,留着会在新会话锁定后显示出一个
+    // 不属于它的第二视频。
+    setInputs((prev) => (prev.srcVideo2 ? { ...prev, srcVideo2: '' } : prev));
   }, []);
 
   const clearHistory = useCallback(() => {
@@ -1742,6 +1773,8 @@ export const useVideoGeneration = ({
         audioData: conv.audioData || '',
         sourceVideo: conv.sourceVideo || '',
         srcVideo: conv.srcVideo || '',
+        // 老双视频会话:恢复第二源视频供锁定态只读展示(新会话恒为 '',顺带把上一条
+        // 老会话残留的值清掉 —— 它没有上传口,留着会显示在不相干的会话里)。
         srcVideo2: conv.srcVideo2 || '',
         refImages: conv.refImages || [],
         refVideos: conv.refVideos || [],

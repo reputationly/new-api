@@ -93,12 +93,12 @@ export const VIDEO_EXAMPLES = {
       files: { sourceVideo: '/playground-samples/video/seedvr2-lowres.mp4' },
     },
   ],
-  // 视频编辑(Bernini):至少上传 1 个源视频,玩法由输入组合自动分流——
-  //   1 视频 → v2v(纯提示词编辑)、1 视频+参考图 → rv2v、2 视频 → mv2v(多源编辑)。
-  //   ads2v(广告植入)与 mv2v 输入相同(引擎侧 system prompt/guidance 不同),自动
-  //   分流分不出,只能由示例的 params.taskType 显式指定。仅参考图的 r2v 已迁到
-  //   「图生视频」模式,本模式必须有视频。
-  // 示例素材取自 Bernini 官方 testcases（v2v/rv2v/ads2v），提示词按其真实用例翻译。
+  // 视频编辑(Bernini):上传 1 个源视频,玩法由是否带参考图自动分流——
+  //   1 视频 → v2v(纯提示词编辑)、1 视频+参考图 → rv2v。
+  //   仅参考图的 r2v 已迁到「图生视频」模式,本模式必须有视频。
+  // 双视频玩法(mv2v 多源编辑 / ads2v 广告植入)后端仍全量支持,只是体验区不给第二个
+  // 上传口,故这里也没有对应示例——要跑它们走 API 直连。
+  // 示例素材取自 Bernini 官方 testcases（v2v/rv2v），提示词按其真实用例翻译。
   vace: [
     {
       label: '视频编辑(纯提示词 · v2v)',
@@ -115,25 +115,6 @@ export const VIDEO_EXAMPLES = {
       files: {
         srcVideo: '/playground-samples/video/bernini-rv2v-person.mp4',
         refImages: ['/playground-samples/images/bernini-rv2v-shirt.jpg'],
-      },
-    },
-    {
-      label: '双视频编辑(mv2v)',
-      prompt:
-        '把第二个视频的画面风格与色调迁移到第一个视频上,保持第一个视频的主体动作与镜头运动不变,过渡自然。',
-      files: {
-        srcVideo: '/playground-samples/video/bernini-v2v-robot.mp4',
-        srcVideo2: '/playground-samples/video/bernini-mv2v-hiker.mp4',
-      },
-    },
-    {
-      label: '广告植入(ads2v)',
-      prompt:
-        '把第二个视频自然地叠加显示在第一个视频画面里的电脑屏幕上,透视、光影与遮挡关系正确,融合无痕。',
-      params: { taskType: 'ads2v' },
-      files: {
-        srcVideo: '/playground-samples/video/bernini-ads-scene.mp4',
-        srcVideo2: '/playground-samples/video/bernini-ads-content.mp4',
       },
     },
   ],

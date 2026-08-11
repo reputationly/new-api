@@ -10,7 +10,7 @@ const CONV_MEDIA_FIELDS = [
   'audioData',
   'sourceVideo',
   'srcVideo',
-  'srcVideo2',
+  'srcVideo2', // 只有收口前的老双视频会话有(仍在 VIDEO_MEDIA_SCHEMA 里,会被正常 hydrate)
   'videoData',
   'promptAudioData',
   'targetAudioData',

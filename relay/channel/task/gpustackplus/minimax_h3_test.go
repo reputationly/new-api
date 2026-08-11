@@ -405,3 +405,16 @@ func TestVideoEngineFamilyIsDeclarationNotName(t *testing.T) {
 		t.Fatalf("候选名任一命中即可,得到 %q", got)
 	}
 }
+
+// 参考生视频要推画布:Ref2VA 接受具名 aspect_ratio(不传默认 16:9),与关键帧不同。
+// 不推的话引擎按 short_edge=768 自算,每条多花一倍时间。
+func TestH3AppliesCanvasForR2VA(t *testing.T) {
+	body := map[string]any{"size": "480P", "aspect_ratio": "16:9"}
+	applyMiniMaxH3Request(body, "r2va", 5, false)
+	if body["width"] != 864 || body["height"] != 480 {
+		t.Fatalf("r2va 应推出 480P 画布,得到 %vx%v", body["width"], body["height"])
+	}
+	if _, exists := body["size"]; exists {
+		t.Fatal("档位词应被清掉")
+	}
+}

@@ -222,9 +222,15 @@ export const PLAYGROUND_CATEGORIES = [
         key: 'r2va',
         label: '参考生视频',
         capability: '参考生视频',
-        // 画幅跟随参考素材，尺寸/宽高比不可选；参考音频有长度闸（2-15s）。
-        // 参考视频三项默认全空 = 不开放视频上传，运营按需 opt-in。
+        // 参考音频有长度闸（2-15s）。参考视频三项默认全空 = 不开放视频上传，运营按需 opt-in。
+        //
+        // sizes / aspectRatios：Ref2VA **接受具名 aspect_ratio**（不传默认 16:9），
+        // 与「关键帧」不同（那边画幅永远跟随第一张图、传了也被忽略）。所以这里能算画布，
+        // 也就能出 480P 档 —— 不配的话引擎按 short_edge=768 自推，每条多花一倍时间
+        // （768p 约 190s vs 480p 量级）。
         fields: [
+          'sizes',
+          'aspectRatios',
           'durations',
           'maxInputMB',
           'maxAudioSec',

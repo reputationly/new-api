@@ -139,11 +139,9 @@ const VideoConfigPanel = ({
         {...imageConstraints}
         maxCount={1}
         imageUrls={inputs[key] ? [inputs[key]] : []}
-        imageEnabled={true}
         onImageUrlsChange={(v) =>
           onInputChange(key, (v && v.length ? v[v.length - 1] : '') || '')
         }
-        onImageEnabledChange={() => {}}
         disabled={false}
       />
     );
@@ -367,11 +365,9 @@ const VideoConfigPanel = ({
                 {...imageConstraints}
                 maxCount={maxRefImages}
                 imageUrls={inputs.refImages || []}
-                imageEnabled={true}
                 onImageUrlsChange={(v) =>
                   onInputChange('refImages', (v || []).slice(0, maxRefImages))
                 }
-                onImageEnabledChange={() => {}}
                 disabled={false}
               />
             )}
@@ -425,8 +421,10 @@ const VideoConfigPanel = ({
             />
           ))}
 
-        {/* 视频编辑(Bernini):≥1 源视频(必填),1 视频=v2v、1 视频+参考图=rv2v、
-            2 视频=mv2v(广告植入 ads2v 走示例显式指定);仅参考图的 r2v 已迁到图生视频。 */}
+        {/* 视频编辑(Bernini):1 源视频(必填),无参考图=v2v、带参考图=rv2v;
+            仅参考图的 r2v 已迁到图生视频。
+            体验区只给一个源视频口——双视频玩法(mv2v/ads2v)后端与门面仍全量支持,
+            走 API 直连即可(与「参考生视频」同一套处理:体验区收窄、API 给全量)。 */}
         {isVACE && (
           <>
             {(!disabled || inputs.srcVideo) && (
@@ -440,14 +438,16 @@ const VideoConfigPanel = ({
                 onChange={(v) => onInputChange('srcVideo', v)}
               />
             )}
-            {(!disabled || inputs.srcVideo2) && (
+            {/* 第二源视频只在锁定态出现,且只有收口之前存下来的老会话才有值:它们仍会
+                随续问/重新生成按 mv2v/ads2v 原样发出去,界面不显示就等于骗人(与参考图
+                「上限只管可编辑态」同一条理由)。新会话恒为空,这里不会渲染。 */}
+            {disabled && inputs.srcVideo2 && (
               <MediaFileInput
-                label={t('上传第二视频（可选，双视频=多源编辑）')}
+                label={t('第二视频')}
                 kind='video'
                 value={inputs.srcVideo2}
-                maxMB={uploadMaxMB}
-                disabled={disabled}
-                onChange={(v) => onInputChange('srcVideo2', v)}
+                disabled
+                onChange={() => {}}
               />
             )}
             {!disabled && (
@@ -458,11 +458,9 @@ const VideoConfigPanel = ({
                 maxMB={uploadMaxMB}
                 maxCount={maxRefImages}
                 imageUrls={inputs.refImages || []}
-                imageEnabled={true}
                 onImageUrlsChange={(v) =>
                   onInputChange('refImages', (v || []).slice(0, maxRefImages))
                 }
-                onImageEnabledChange={() => {}}
                 disabled={false}
               />
             )}

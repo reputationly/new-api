@@ -223,7 +223,12 @@ func applyMiniMaxH3Request(body map[string]any, taskType string, durationSec int
 	// 传来的 aspect_ratio 被静默忽略),而网关这层拿到的图是 URL/base64,不解码就不知道
 	// 宽高比。由前端按已加载的图算好经 metadata.width/height 透传(前端本来就要读图的
 	// 像素尺寸做 256/5760/[0.4,2.5] 的前置校验);直连调用方不传则由引擎自算,出 768p。
-	if taskType == "t2v" {
+	//
+	// r2va(参考生视频)也算:Ref2VA **接受具名 aspect_ratio**(不传默认 16:9),
+	// 与关键帧不同 —— 关键帧的画幅永远跟随第一张图,传了比例也被静默忽略,所以那边
+	// 算不出、也不该算。不给 r2va 算画布的话,引擎按 short_edge=768 自推,每条多花
+	// 一倍时间(实测 768p 约 190s)。
+	if taskType == "t2v" || taskType == "r2va" {
 		h3ApplyCanvas(body)
 	} else {
 		// 关键帧不推画布,但档位词仍不能漏给引擎(SizeStr 只认 "WxH")。

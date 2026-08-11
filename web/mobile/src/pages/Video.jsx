@@ -70,7 +70,7 @@ export const VideoBody = ({ mode, category = 'video' }) => {
     clearHistory,
     // allowDub:false —— 手机端不做「生成后自动配音」：要多排一次 v2a，等待更久、
     // 失败面更大，统一去桌面端做。它也堵住历史会话里存了 dubbing:true 的续问。
-  } = useVideoGeneration({ mode, allowDub: false });
+  } = useVideoGeneration({ mode, category, allowDub: false });
 
   useAutoOpenLatest(conversations, currentConvId, openHistoryItem);
 
@@ -209,15 +209,19 @@ export const VideoBody = ({ mode, category = 'video' }) => {
       value: inputs.srcVideo,
       onChange: (v) => handleInputChange('srcVideo', v),
     },
-    isVACE && {
-      type: 'single',
-      key: 'srcVideo2',
-      kind: 'video',
-      label: '第二视频（可选，双视频=多源编辑）',
-      maxMB: videoMaxMB,
-      value: inputs.srcVideo2,
-      onChange: (v) => handleInputChange('srcVideo2', v),
-    },
+    // 第二源视频只在锁定态出现，且只有收口之前存下来的老会话才有值——它们仍会随
+    // 续问/重新生成按 mv2v/ads2v 原样发出去，界面不显示等于骗人（同上一段的理由，
+    // 详见 classic useVideoGeneration 的 VIDEO_MODES.vace）。新会话恒为空。
+    isVACE &&
+      locked &&
+      inputs.srcVideo2 && {
+        type: 'single',
+        key: 'srcVideo2',
+        kind: 'video',
+        label: '第二视频',
+        value: inputs.srcVideo2,
+        onChange: () => {},
+      },
     // 图生视频(Bernini r2v)：参考图必填，定义主体/服装/道具/场景；视频编辑里则是可选。
     // 参考生视频(r2va)：同一组控件，上限由 hook 给到 9（H3 ∩ Seedance 的交集）。
     // **加 tab 时这里必须一起加**：手机端 tab 的 mobile 开关默认是开的

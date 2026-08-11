@@ -60,7 +60,7 @@ export const VideoPlaygroundBody = ({ mode, category = 'video' }) => {
     clearHistory,
     deleteHistoryItem,
     openHistoryItem,
-  } = useVideoGeneration({ mode });
+  } = useVideoGeneration({ mode, category });
 
   return (
     <div

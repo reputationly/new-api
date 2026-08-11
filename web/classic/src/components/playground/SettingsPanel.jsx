@@ -206,6 +206,7 @@ const SettingsPanel = ({
         <div className={customRequestMode ? 'opacity-50' : ''}>
           <ImageUrlInput
             imageUrls={inputs.imageUrls}
+            switchable
             imageEnabled={inputs.imageEnabled}
             onImageUrlsChange={(urls) => onInputChange('imageUrls', urls)}
             onImageEnabledChange={(enabled) =>

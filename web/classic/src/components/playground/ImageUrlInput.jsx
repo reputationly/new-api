@@ -52,11 +52,17 @@ const readImageSize = (dataUrl) =>
 
 const ImageUrlInput = ({
   imageUrls,
-  imageEnabled,
+  // 「本控件是否可用」。组件内有四处读它(拖拽闸、dropzone disabled、isActive),
+  // 默认必须是 true:除文本体验区外的调用点都不带这个开关,给 false 会让上传直接失效。
+  imageEnabled = true,
   onImageUrlsChange,
   onImageEnabledChange,
+  // 是否给「启用/停用」开关。刻意与 required 解耦:开关以前挂在 !required 上,
+  // 于是关键帧尾帧槽改成可选(required=false)后,那些没有真实 state 的调用点上
+  // 冒出一个点不动的假开关。只有文本体验区(传图开关)传 true。
+  switchable = false,
   disabled = false,
-  // 复用于图片/视频体验区:自定义标题、问号提示、必填(红星+隐藏启用开关)。
+  // 复用于图片/视频体验区:自定义标题、问号提示、必填(红星)。
   label,
   tooltip,
   required = false,
@@ -230,8 +236,8 @@ const ImageUrlInput = ({
             </Typography.Text>
           )}
         </div>
-        {/* 必填(图生图/图生视频/首尾帧)不给启用开关——上传是硬性要求 */}
-        {!required && (
+        {/* 只有显式声明可开关的调用点才给开关;必填时也不给——上传是硬性要求 */}
+        {switchable && !required && (
           <Switch
             checked={imageEnabled}
             onChange={onImageEnabledChange}
