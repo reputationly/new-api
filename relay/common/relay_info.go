@@ -796,6 +796,11 @@ type TaskInfo struct {
 	Progress         string `json:"progress,omitempty"`
 	CompletionTokens int    `json:"completion_tokens,omitempty"` // 用于按倍率计费
 	TotalTokens      int    `json:"total_tokens,omitempty"`      // 用于按倍率计费
+	// Resolution 上游回执里的**实际**出片档位（如 720p）。视频计费矩阵在提交时
+	// 定不出分辨率（图生视频不下发 size、ratio=adaptive 画幅跟随输入、draft 强制 480p）
+	// 时用它补查单价，见 service.RecalculateTaskQuotaByVideoMatrix。
+	// 上游不回该字段时为空，结算侧自行回退。
+	Resolution string `json:"resolution,omitempty"`
 }
 
 func FailTaskInfo(reason string) *TaskInfo {

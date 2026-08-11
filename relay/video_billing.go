@@ -69,6 +69,19 @@ func applyVideoPricing(c *gin.Context, info *relaycommon.RelayInfo) bool {
 	case ratio_setting.VideoPriceModeToken:
 		price, hit := entry.LookupToken(resolution, hasVideoInput)
 		if !hit {
+			// 提交时定不出档位——图生视频 / 参考生视频按设计就不下发 size(画幅跟随
+			// 输入图),而 Ark 的 resolution 本就是可选参数、ratio=adaptive 时画幅跟随
+			// 输入、draft 还会强制 480p。请求侧的期望值对这些玩法根本不存在。
+			//
+			// 仍然冻结 Mode=token:它才是 IsDeferredUsageBilling 的判据。不冻的话整单
+			// 退回改造前的路径,使用日志又变回「一条消费 + 一条退款」,且按 ModelRatio
+			// 而非矩阵单价收费——正是这次要消除的两个症状。单价留 0,由结算侧按上游
+			// 回执的实际分辨率补查(RecalculateTaskQuotaByVideoMatrix)。
+			//
+			// 返回 false 是刻意的:单价未知时预扣必须继续走 EstimateBilling + OtherRatios
+			// 那条老锚点,否则预扣会塌成一个不含时长维度的数,余额闸门形同虚设。
+			frozen.UnitPrice = 0
+			info.VideoBilling = frozen
 			return false
 		}
 		frozen.UnitPrice = price

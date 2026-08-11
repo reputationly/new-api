@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"math"
 	"net/http/httptest"
 	"strconv"
@@ -74,7 +75,7 @@ func TestVideoMatrix_ReconcilesWithSupplierBill(t *testing.T) {
 		Resolution: "720p",
 	})
 
-	require.True(t, RecalculateTaskQuotaByVideoMatrix(context.Background(), task, seedanceTokens))
+	require.True(t, RecalculateTaskQuotaByVideoMatrix(context.Background(), task, seedanceTokens, ""))
 
 	// 供应商账单：216900 / 1M × ¥46 = ¥9.9774
 	supplierCNY := float64(seedanceTokens) / 1e6 * seedanceCNYRate
@@ -99,7 +100,7 @@ func TestVideoMatrix_ResolutionChangesPrice(t *testing.T) {
 		task := makeVideoTask(t, 9002, 1, 0, &model.TaskVideoBilling{
 			Mode: "token", UnitPrice: cny / testRate, Resolution: resolution,
 		})
-		require.True(t, RecalculateTaskQuotaByVideoMatrix(context.Background(), task, seedanceTokens))
+		require.True(t, RecalculateTaskQuotaByVideoMatrix(context.Background(), task, seedanceTokens, ""))
 		return task.Quota
 	}
 
@@ -118,7 +119,7 @@ func TestVideoMatrix_GroupRatioScales(t *testing.T) {
 		Mode: "token", UnitPrice: seedanceCNYRate / testRate, Resolution: "720p",
 	})
 	task.PrivateData.BillingContext.GroupRatio = 0.5
-	require.True(t, RecalculateTaskQuotaByVideoMatrix(context.Background(), task, seedanceTokens))
+	require.True(t, RecalculateTaskQuotaByVideoMatrix(context.Background(), task, seedanceTokens, ""))
 
 	full := float64(seedanceTokens) / 1e6 * (seedanceCNYRate / testRate) * common.QuotaPerUnit
 	require.InDelta(t, full*0.5, float64(task.Quota), 1.0)
@@ -143,7 +144,7 @@ func TestVideoMatrix_UsesFrozenGroupRatioNotCurrentConfig(t *testing.T) {
 	// 结算前把配置改成完全不同的值——不该影响这一单
 	setGroupRatio(t, "default", 2.0)
 
-	require.True(t, RecalculateTaskQuotaByVideoMatrix(context.Background(), task, seedanceTokens))
+	require.True(t, RecalculateTaskQuotaByVideoMatrix(context.Background(), task, seedanceTokens, ""))
 
 	full := float64(seedanceTokens) / 1e6 * (seedanceCNYRate / testRate) * common.QuotaPerUnit
 	require.InDelta(t, full*0.3, float64(task.Quota), 1.0)
@@ -165,7 +166,7 @@ func TestVideoMatrix_ZeroGroupRatioStaysFree(t *testing.T) {
 	})
 	task.PrivateData.BillingContext.GroupRatio = 0 // 免费分组
 
-	require.True(t, RecalculateTaskQuotaByVideoMatrix(context.Background(), task, seedanceTokens))
+	require.True(t, RecalculateTaskQuotaByVideoMatrix(context.Background(), task, seedanceTokens, ""))
 	require.Equal(t, 0, task.Quota, "提交时免费的任务不该在结算时被补扣")
 }
 
@@ -178,7 +179,7 @@ func TestVideoMatrix_LoggedGroupRatioMatchesCharged(t *testing.T) {
 		Mode: "token", UnitPrice: seedanceCNYRate / testRate, Resolution: "720p",
 	})
 	task.PrivateData.BillingContext.GroupRatio = 0.8
-	require.True(t, RecalculateTaskQuotaByVideoMatrix(context.Background(), task, seedanceTokens))
+	require.True(t, RecalculateTaskQuotaByVideoMatrix(context.Background(), task, seedanceTokens, ""))
 
 	other := taskBillingOther(task)
 	loggedRatio := other["group_ratio"].(float64)
@@ -202,7 +203,7 @@ func TestVideoMatrix_MissesFallThrough(t *testing.T) {
 	for name, vb := range cases {
 		t.Run(name, func(t *testing.T) {
 			task := makeVideoTask(t, 9004, 1, 123, vb)
-			require.False(t, RecalculateTaskQuotaByVideoMatrix(context.Background(), task, seedanceTokens))
+			require.False(t, RecalculateTaskQuotaByVideoMatrix(context.Background(), task, seedanceTokens, ""))
 			require.Equal(t, 123, task.Quota, "未命中时不该改动额度")
 		})
 	}
@@ -211,7 +212,7 @@ func TestVideoMatrix_MissesFallThrough(t *testing.T) {
 		task := makeVideoTask(t, 9004, 1, 123, &model.TaskVideoBilling{
 			Mode: "token", UnitPrice: 1, Resolution: "720p",
 		})
-		require.False(t, RecalculateTaskQuotaByVideoMatrix(context.Background(), task, 0))
+		require.False(t, RecalculateTaskQuotaByVideoMatrix(context.Background(), task, 0, ""))
 		require.Equal(t, 123, task.Quota)
 	})
 }
@@ -226,7 +227,7 @@ func TestVideoMatrix_WorksWithoutModelRatio(t *testing.T) {
 	task := makeVideoTask(t, 9005, 1, 0, &model.TaskVideoBilling{
 		Mode: "token", UnitPrice: seedanceCNYRate / testRate, Resolution: "1080p",
 	})
-	require.True(t, RecalculateTaskQuotaByVideoMatrix(context.Background(), task, seedanceTokens))
+	require.True(t, RecalculateTaskQuotaByVideoMatrix(context.Background(), task, seedanceTokens, ""))
 	require.Greater(t, task.Quota, 0)
 }
 
@@ -257,7 +258,7 @@ func TestVideoMatrix_RateCancelsWhenReentered(t *testing.T) {
 		task := makeVideoTask(t, 9007, 1, 0, &model.TaskVideoBilling{
 			Mode: "token", UnitPrice: seedanceCNYRate / rate, Resolution: "720p",
 		})
-		require.True(t, RecalculateTaskQuotaByVideoMatrix(context.Background(), task, seedanceTokens))
+		require.True(t, RecalculateTaskQuotaByVideoMatrix(context.Background(), task, seedanceTokens, ""))
 		require.InDeltaf(t, supplierCNY, quotaToCNY(task.Quota, rate), 0.0001, "rate=%v", rate)
 	}
 }
@@ -514,7 +515,7 @@ func TestDeferredBilling_RecordsFinalAmountOnce(t *testing.T) {
 	task.PrivateData.BillingContext.GroupRatio = 1.0
 	require.Equal(t, 0, getUserUsedQuota(t, uid), "前置：提交时未记账")
 
-	require.True(t, RecalculateTaskQuotaByVideoMatrix(context.Background(), task, 50638))
+	require.True(t, RecalculateTaskQuotaByVideoMatrix(context.Background(), task, 50638, ""))
 
 	require.Equal(t, task.Quota, getUserUsedQuota(t, uid), "已用额度 = 实收")
 	require.Equal(t, 1, getUserRequestCount(t, uid), "次数在这里才计，且只计一次")
@@ -539,7 +540,7 @@ func TestVideoMatrix_LogCarriesCompletionTokens(t *testing.T) {
 	})
 	task.PrivateData.BillingContext.GroupRatio = 1.0
 
-	require.True(t, RecalculateTaskQuotaByVideoMatrix(context.Background(), task, 50638))
+	require.True(t, RecalculateTaskQuotaByVideoMatrix(context.Background(), task, 50638, ""))
 
 	var log model.Log
 	require.NoError(t, model.DB.Order("id desc").First(&log).Error)
@@ -566,7 +567,7 @@ func TestDeferredBilling_RecordsEvenWhenDeltaIsZero(t *testing.T) {
 	})
 	task.PrivateData.BillingContext.GroupRatio = 1.0
 
-	require.True(t, RecalculateTaskQuotaByVideoMatrix(context.Background(), task, 50638))
+	require.True(t, RecalculateTaskQuotaByVideoMatrix(context.Background(), task, 50638, ""))
 	require.Equal(t, int64(1), countLogs(t))
 	require.Equal(t, task.Quota, getUserUsedQuota(t, uid))
 }
@@ -584,7 +585,7 @@ func TestDeferredBilling_ZeroQuotaStillRecords(t *testing.T) {
 	})
 	task.PrivateData.BillingContext.GroupRatio = 0
 
-	require.True(t, RecalculateTaskQuotaByVideoMatrix(context.Background(), task, 50638))
+	require.True(t, RecalculateTaskQuotaByVideoMatrix(context.Background(), task, 50638, ""))
 
 	require.Equal(t, int64(1), countLogs(t), "免费任务也要有一条记录")
 	var log model.Log
@@ -609,7 +610,7 @@ func TestDeferredBilling_TruncatedToZeroRefundsPreConsumed(t *testing.T) {
 	task.PrivateData.BillingContext.GroupRatio = 0.001
 
 	// 100 tokens × 6.3 × 500000 / 1e6 × 0.001 = 0.315 → int() → 0
-	require.True(t, RecalculateTaskQuotaByVideoMatrix(context.Background(), task, 100))
+	require.True(t, RecalculateTaskQuotaByVideoMatrix(context.Background(), task, 100, ""))
 
 	require.Equal(t, 0, task.Quota)
 	require.Equal(t, initQuota+preConsumed, getUserQuota(t, uid), "预扣必须退回")
@@ -710,6 +711,182 @@ func TestNonDeferred_TopUpKeepsRequestCount(t *testing.T) {
 
 	require.Equal(t, actual, getUserUsedQuota(t, uid))
 	require.Equal(t, 1, getUserRequestCount(t, uid), "一次请求只该计一次数")
+}
+
+// ===========================================================================
+// 上游回执分辨率补查：提交时定不出档位的玩法（图生视频 / 参考生视频）
+// ===========================================================================
+
+// 供应商价目表里 720p 的两列。含视频输入那一列单价不同，方向由供应商定，
+// 我们只负责取对格子。
+const seedanceWithVideoUSD = 4.6027
+
+func seedVideoMatrix(t *testing.T) {
+	t.Helper()
+	cfg := fmt.Sprintf(
+		`{"doubao-seedance-2-0-260128":{"mode":"token","token":{"720p":{"with_video":%v,"without_video":%v}}}}`,
+		seedanceWithVideoUSD, seedanceCNYRate/testRate)
+	require.NoError(t, ratio_setting.UpdateVideoPricingByJSONString(cfg))
+	t.Cleanup(func() { _ = ratio_setting.UpdateVideoPricingByJSONString("") })
+}
+
+// 图生视频按设计不下发 size（画幅跟随输入图），提交时冻结不下单价。
+// 回执里的实际档位补上后，必须落到与同参数文生视频**完全相同**的金额，
+// 且只留一条消费日志——这正是「一条 ¥12.75 消费 + 一条 ¥1.69 退款」那个症状的回归。
+func TestVideoMatrix_ResolvesPriceFromUpstreamResolution(t *testing.T) {
+	truncate(t)
+	seedVideoMatrix(t)
+	const uid = 9501
+	seedUser(t, uid, 10_000_000)
+
+	task := makeVideoTask(t, uid, uid, 873287, &model.TaskVideoBilling{Mode: "token"})
+	task.PrivateData.BillingContext.GroupRatio = 1.0
+
+	require.True(t, RecalculateTaskQuotaByVideoMatrix(context.Background(), task, seedanceTokens, "720p"))
+
+	require.Equal(t, expectedSeedanceQuota(), task.Quota, "与同参数的文生视频同价")
+	require.Equal(t, int64(1), countLogs(t), "只有一条日志，不是「消费 + 退款」两条")
+
+	var log model.Log
+	require.NoError(t, model.DB.Order("id desc").First(&log).Error)
+	require.Equal(t, model.LogTypeConsume, log.Type)
+	require.Equal(t, task.Quota, log.Quota, "日志金额 = 实收")
+
+	// 补查到的档位要回写进日志，否则运营对着一条金额无从判断取的是哪一格
+	var other map[string]interface{}
+	require.NoError(t, json.Unmarshal([]byte(log.Other), &other))
+	require.Equal(t, "720p", other["video_resolution"])
+	require.InDelta(t, seedanceCNYRate/testRate, other["video_unit_price"].(float64), 1e-9)
+}
+
+// 参考生视频带参考视频时，补查必须落在 with_video 那一列——
+// has_video_input 是提交时冻结的（reference_videos），回执只补分辨率这一维。
+func TestVideoMatrix_UpstreamResolutionKeepsVideoInputColumn(t *testing.T) {
+	truncate(t)
+	seedVideoMatrix(t)
+	const uid = 9502
+	seedUser(t, uid, 10_000_000)
+
+	task := makeVideoTask(t, uid, uid, 873287, &model.TaskVideoBilling{
+		Mode: "token", HasVideoInput: true,
+	})
+	task.PrivateData.BillingContext.GroupRatio = 1.0
+
+	require.True(t, RecalculateTaskQuotaByVideoMatrix(context.Background(), task, seedanceTokens, "720p"))
+
+	other := taskBillingOther(task)
+	require.Equal(t, true, other["video_has_input"])
+	require.InDelta(t, seedanceWithVideoUSD, other["video_unit_price"].(float64), 1e-9)
+
+	expected := int(float64(seedanceTokens) / 1e6 * seedanceWithVideoUSD * common.QuotaPerUnit)
+	require.Equal(t, expected, task.Quota)
+}
+
+// 回执也补不上时回退，让调用方继续找别的结算路径（延迟记账仍会兜底记一条）。
+func TestVideoMatrix_UpstreamResolutionMisses(t *testing.T) {
+	truncate(t)
+	seedVideoMatrix(t)
+	const uid = 9503
+	seedUser(t, uid, 10_000_000)
+
+	cases := map[string]string{
+		"回执没给分辨率":  "",
+		"回执档位未配价":  "1080p",
+		"回执分辨率无法识别": "adaptive",
+	}
+	for name, resolution := range cases {
+		t.Run(name, func(t *testing.T) {
+			task := makeVideoTask(t, uid, uid, 123, &model.TaskVideoBilling{Mode: "token"})
+			require.False(t, RecalculateTaskQuotaByVideoMatrix(
+				context.Background(), task, seedanceTokens, resolution))
+			require.Equal(t, 123, task.Quota, "未命中时不该改动额度")
+		})
+	}
+}
+
+// 补查不到单价时，日志不能带矩阵字段。前端只看 video_price_mode 在不在就切到
+// 矩阵展示，会渲染出一条算得 0 的算式，还把真正参与计算的 model_ratio 那行屏蔽掉。
+func TestVideoMatrix_UnresolvedPriceKeepsMatrixFieldsOutOfLog(t *testing.T) {
+	truncate(t)
+	seedVideoMatrix(t)
+	const uid = 9505
+	seedUser(t, uid, 10_000_000)
+
+	task := makeVideoTask(t, uid, uid, 873287, &model.TaskVideoBilling{Mode: "token"})
+	task.PrivateData.BillingContext.ModelRatio = 25.5
+
+	other := taskBillingOther(task)
+	require.NotContains(t, other, "video_price_mode", "没走矩阵就不该按矩阵展示")
+	require.NotContains(t, other, "video_unit_price")
+	require.Contains(t, other, "model_ratio", "真正参与计算的倍率必须留在日志里")
+}
+
+// 混扣任务的积分实付必须落进结算日志。延迟记账下这一条是唯一的记录——缺了的话
+// 使用日志会把用积分抵扣的视频单一律显示成纯余额扣费（前端按 points_consumed>0
+// 才显示「积分抵扣」标签）。
+func TestDeferredBilling_LogCarriesPointsConsumed(t *testing.T) {
+	truncate(t)
+	const uid = 9506
+	const points = 500_000
+	seedUser(t, uid, 10_000_000)
+
+	task := makeVideoTask(t, uid, uid, 873287, &model.TaskVideoBilling{
+		Mode: "token", UnitPrice: seedanceCNYRate / testRate, Resolution: "720p",
+	})
+	task.PrivateData.BillingSource = BillingSourceHybrid
+	task.PrivateData.PointsConsumed = points
+	task.PrivateData.BillingContext.GroupRatio = 1.0
+
+	require.True(t, RecalculateTaskQuotaByVideoMatrix(context.Background(), task, seedanceTokens, ""))
+
+	var log model.Log
+	require.NoError(t, model.DB.Order("id desc").First(&log).Error)
+	require.Equal(t, task.PrivateData.PointsConsumed, log.PointsConsumed,
+		"日志里的积分实付要与多退少补之后的值一致")
+	require.Equal(t, points, log.PointsConsumed)
+}
+
+// 非延迟记账的差额日志不能挂整单积分：那条日志的 Quota 是增量，两者对不上。
+func TestNonDeferred_DeltaLogHasNoPoints(t *testing.T) {
+	truncate(t)
+	const uid = 9507
+	seedUser(t, uid, 10_000_000)
+
+	task := makeVideoTask(t, uid, uid, 873287, nil) // 无 VideoBilling → 非延迟
+	task.PrivateData.BillingSource = BillingSourceHybrid
+	task.PrivateData.PointsConsumed = 500_000
+	task.PrivateData.BillingContext.GroupRatio = 1.0
+	model.UpdateUserUsedQuotaAndRequestCount(uid, 873287)
+
+	RecalculateTaskQuota(context.Background(), task, 159544, "测试差额退还")
+
+	var log model.Log
+	require.NoError(t, model.DB.Order("id desc").First(&log).Error)
+	require.Equal(t, model.LogTypeRefund, log.Type)
+	require.Zero(t, log.PointsConsumed)
+}
+
+// 端到端：从轮询的结算入口进，覆盖「提交时没有分辨率」这条完整链路。
+func TestSettle_VideoMatrix_UsesUpstreamResolution(t *testing.T) {
+	truncate(t)
+	seedVideoMatrix(t)
+	const uid = 9504
+	seedUser(t, uid, 10_000_000)
+	seedToken(t, uid, uid, "sk-video-upstream-res", 10_000_000)
+	seedChannel(t, uid)
+
+	task := makeVideoTask(t, uid, uid, 873287, &model.TaskVideoBilling{Mode: "token"})
+	task.PrivateData.TokenId = uid
+	task.PrivateData.BillingContext.GroupRatio = 1.0
+
+	settleTaskBillingOnComplete(context.Background(), &mockAdaptor{}, task, &relaycommon.TaskInfo{
+		Status:      model.TaskStatusSuccess,
+		TotalTokens: seedanceTokens,
+		Resolution:  "720p", // 上游回执里的实际出片档位
+	})
+
+	require.Equal(t, expectedSeedanceQuota(), task.Quota)
+	require.Equal(t, int64(1), countLogs(t))
 }
 
 func TestQuotaTruncationBoundIsNegligible(t *testing.T) {

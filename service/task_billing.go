@@ -261,7 +261,12 @@ func taskBillingOther(task *model.Task) map[string]interface{} {
 		}
 		// 视频计费矩阵命中时把查到哪一格也记进日志——否则运营对着一条金额
 		// 无从判断是取了 720p 还是 1080p、含不含视频输入，对账就没法追。
-		if vb := bc.VideoBilling; vb != nil {
+		//
+		// 单价为 0 = 提交时定不出档位、上游回执也没能补上（见 applyVideoPricing 的
+		// 未命中分支），这一单的金额其实是 token 重算或兜底算出来的，没走矩阵。
+		// 此时**不能**写这组字段：前端只按 video_price_mode 是否存在就切到矩阵展示，
+		// 会渲染出一条算得 0 的算式，还把真正参与计算的 model_ratio 那行屏蔽掉。
+		if vb := bc.VideoBilling; vb != nil && vb.UnitPrice > 0 {
 			fillVideoBillingOther(other, vb.Mode, vb.Resolution, vb.UnitPrice, vb.HasVideoInput, vb.Seconds)
 		}
 	}
@@ -398,6 +403,13 @@ func recalculateTaskQuota(ctx context.Context, task *model.Task, actualQuota, co
 
 	var logType int
 	var logQuota int
+	// 积分实付只跟着「整单终值」那条日志走。差额日志的 Quota 是增量，挂上整单的
+	// 积分数对不上；而延迟记账下这一条就是整单，不填的话混扣的视频单在使用日志里
+	// 一律显示成纯余额扣费（前端按 points_consumed>0 才显示「积分抵扣」标签）。
+	//
+	// 取值放在 taskAdjustFunding 之后：多退少补会改写 PointsConsumed（退款按实付
+	// 封顶原路退、补扣走积分优先），这里要的是调整**之后**的实付额。
+	var logPoints int
 	if deferred {
 		// 「上游返回用量计费」：提交时既没记 used_quota 也没记次数，这里一次记终值。
 		// 使用日志里这一单因此只有一条、金额就是实收，与供应商账单同形。
@@ -405,6 +417,7 @@ func recalculateTaskQuota(ctx context.Context, task *model.Task, actualQuota, co
 		model.UpdateChannelUsedQuota(task.ChannelId, actualQuota)
 		logType = model.LogTypeConsume
 		logQuota = actualQuota
+		logPoints = task.PrivateData.PointsConsumed
 	} else {
 		// 差额结算只调整**额度**，不碰请求次数——那一次请求在提交时（LogTaskConsumption）
 		// 已经计过数了。用 UpdateUserUsedQuotaAndRequestCount 会把同一次请求计成两次。
@@ -438,6 +451,7 @@ func recalculateTaskQuota(ctx context.Context, task *model.Task, actualQuota, co
 		TokenName:        task.PrivateData.TokenName,
 		Group:            task.Group,
 		CompletionTokens: completionTokens,
+		PointsConsumed:   logPoints,
 		Other:            other,
 	})
 	return true
@@ -528,7 +542,9 @@ func taskGroupRatio(task *model.Task) (float64, bool) {
 //     那条路径会直接 return，导致 480p 与 1080p 收一样的钱。
 //   - **不乘 OtherRatios**：矩阵单价已是终价，再乘一遍适配器的 video_input 折扣是二次计费。
 //   - **不碰汇率**：单价是美元，货币换算只发生在管理端编辑器里。
-func RecalculateTaskQuotaByVideoMatrix(ctx context.Context, task *model.Task, totalTokens int) bool {
+//
+// upstreamResolution 是上游回执里的**实际**出片档位，只在提交时没查到单价时用到。
+func RecalculateTaskQuotaByVideoMatrix(ctx context.Context, task *model.Task, totalTokens int, upstreamResolution string) bool {
 	if totalTokens <= 0 {
 		return false
 	}
@@ -537,7 +553,10 @@ func RecalculateTaskQuotaByVideoMatrix(ctx context.Context, task *model.Task, to
 		return false
 	}
 	vb := bc.VideoBilling
-	if vb.Mode != ratio_setting.VideoPriceModeToken || vb.UnitPrice <= 0 {
+	if vb.Mode != ratio_setting.VideoPriceModeToken {
+		return false
+	}
+	if vb.UnitPrice <= 0 && !resolveUnitPriceFromUpstream(ctx, task, vb, upstreamResolution) {
 		return false
 	}
 
@@ -566,6 +585,38 @@ func RecalculateTaskQuotaByVideoMatrix(ctx context.Context, task *model.Task, to
 	// 透传是否真的结算了：算出 0 且非延迟记账时 recalculateTaskQuota 会拒绝，
 	// 无条件 return true 会让调用方误以为结算完了，跳过兜底。
 	return recalculateTaskQuota(ctx, task, actualQuota, totalTokens, reason)
+}
+
+// resolveUnitPriceFromUpstream 用上游回执里的实际分辨率补查矩阵单价，命中则就地
+// 回写冻结值并返回 true。
+//
+// 提交时查不到单价是**常态**而非异常：图生视频、参考生视频按设计不下发 size
+// （画幅跟随输入图），而供应商的 resolution 本就是可选参数、ratio=adaptive 时画幅
+// 跟随输入、draft 还会强制 480p。这些玩法在提交时根本不存在「期望档位」这个东西。
+//
+// 回写 vb 而不是只用局部变量：taskBillingOther 从 BillingContext 取分辨率与单价写进
+// 日志，不回写的话日志里会是一个空分辨率 + 0 单价，前端算式拼不出来、对账也追不到
+// 是哪一格。资金动作用的也是同一份值，两者因此自洽。
+func resolveUnitPriceFromUpstream(ctx context.Context, task *model.Task, vb *model.TaskVideoBilling, upstreamResolution string) bool {
+	if strings.TrimSpace(upstreamResolution) == "" {
+		return false
+	}
+	entry, ok := ratio_setting.GetVideoPricing(taskModelName(task))
+	if !ok {
+		return false
+	}
+	price, hit := entry.LookupToken(upstreamResolution, vb.HasVideoInput)
+	if !hit {
+		// 最常见的成因是矩阵里 with_video 那一列没配：lookupCell 对 0 一律当「未配置」，
+		// 于是同一个模型不传参考视频时正常结算、一传就掉队。喊出来，别静默按预扣收费。
+		logger.LogWarn(ctx, fmt.Sprintf(
+			"任务 %s 按上游回执分辨率 %s/%s 仍查不到矩阵单价，请检查该模型这一格是否配价。",
+			task.TaskID, upstreamResolution, videoInputLabel(vb.HasVideoInput)))
+		return false
+	}
+	vb.Resolution = upstreamResolution
+	vb.UnitPrice = price
+	return true
 }
 
 func videoInputLabel(hasVideo bool) string {

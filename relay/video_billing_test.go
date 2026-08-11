@@ -189,8 +189,6 @@ func TestApplyVideoPricing_Misses(t *testing.T) {
 		req   relaycommon.TaskSubmitReq
 	}{
 		{"模型未配置", "sora-2", relaycommon.TaskSubmitReq{Size: "720p"}},
-		{"分辨率未配置", "doubao-seedance-2-0-260128", relaycommon.TaskSubmitReq{Size: "4k"}},
-		{"取不到分辨率", "doubao-seedance-2-0-260128", relaycommon.TaskSubmitReq{Size: "16:9"}},
 		{"按次表缺该秒数", "kling-v2-master", relaycommon.TaskSubmitReq{Size: "720p", Duration: 7}},
 		{"按次缺 duration", "kling-v2-master", relaycommon.TaskSubmitReq{Size: "720p"}},
 	}
@@ -201,6 +199,45 @@ func TestApplyVideoPricing_Misses(t *testing.T) {
 			require.Nil(t, info.VideoBilling)
 		})
 	}
+}
+
+// token 模式查不到单价时仍要冻结 Mode——它是「上游返回用量计费」的判据。
+//
+// 图生视频、参考生视频按设计不下发 size（画幅跟随输入图），供应商的 resolution
+// 本就是可选参数、ratio=adaptive 时画幅跟随输入、draft 还会强制 480p。不冻的话
+// 这些玩法整单退回改造前的路径：使用日志变回「一条消费 + 一条退款」，且按
+// ModelRatio 而非矩阵单价收费，与供应商账单对不上。
+func TestApplyVideoPricing_TokenModeFreezesWithoutResolution(t *testing.T) {
+	cases := map[string]relaycommon.TaskSubmitReq{
+		"不下发 size（图生视频）": {},
+		"只有宽高比":           {Size: "16:9"},
+		"档位未配价":           {Size: "4k"},
+	}
+	for name, req := range cases {
+		t.Run(name, func(t *testing.T) {
+			c, info := videoPricingCtx(t, "doubao-seedance-2-0-260128", req)
+
+			// 返回 false 是刻意的：单价未知，预扣必须继续走 EstimateBilling + OtherRatios
+			// 那条老锚点，否则预扣会塌成一个不含时长维度的数。
+			require.False(t, applyVideoPricing(c, info))
+
+			require.NotNil(t, info.VideoBilling, "必须冻结，否则延迟记账不生效")
+			require.Equal(t, ratio_setting.VideoPriceModeToken, info.VideoBilling.Mode)
+			require.Zero(t, info.VideoBilling.UnitPrice, "单价留 0，由结算侧按回执补查")
+		})
+	}
+}
+
+// 参考生视频带参考视频时，冻结的 has_video_input 必须为真——结算侧靠它选
+// with_video 那一列。判据与豆包适配器拼 video_url 的键完全同源。
+func TestApplyVideoPricing_TokenModeFreezesVideoInputWithoutResolution(t *testing.T) {
+	c, info := videoPricingCtx(t, "doubao-seedance-2-0-260128", relaycommon.TaskSubmitReq{
+		Metadata: map[string]any{"reference_videos": []any{"https://a/v.mp4"}},
+	})
+
+	require.False(t, applyVideoPricing(c, info))
+	require.NotNil(t, info.VideoBilling)
+	require.True(t, info.VideoBilling.HasVideoInput)
 }
 
 func TestApplyVideoPricing_NoTaskRequestIsSafe(t *testing.T) {

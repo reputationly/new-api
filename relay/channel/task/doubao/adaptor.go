@@ -486,6 +486,10 @@ func (a *TaskAdaptor) ParseTaskResult(respBody []byte) (*relaycommon.TaskInfo, e
 		// 解析 usage 信息用于按倍率计费
 		taskResult.CompletionTokens = resTask.Usage.CompletionTokens
 		taskResult.TotalTokens = resTask.Usage.TotalTokens
+		// 实际出片档位。提交时定不出分辨率的玩法(图生视频 / 参考生视频不下发 size)
+		// 靠它查视频计费矩阵的单价——请求侧的 resolution 是可选参数,ratio=adaptive
+		// 时画幅还跟随输入图,只有回执才是上游真正计价的那一档。
+		taskResult.Resolution = resTask.Resolution
 	case "failed":
 		taskResult.Status = model.TaskStatusFailure
 		taskResult.Progress = "100%"

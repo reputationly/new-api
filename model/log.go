@@ -272,6 +272,11 @@ type RecordTaskBillingLogParams struct {
 	// TokenName 提交时冻结的令牌名。给了就用它，不再按 TokenId 回查——体验区的临时令牌
 	// 没有库里的行（见 TaskPrivateData.TokenName）。留空才退回回查，兼容存量任务。
 	TokenName string
+	// PointsConsumed 这一单里积分抵扣掉的 quota。「上游返回用量计费」的任务提交时
+	// 不写消费日志，结算这一条是唯一的记录——不填的话前端（按 points_consumed>0 显示
+	// 「积分抵扣」标签）会把混扣的单一律显示成纯余额扣费。
+	// 只在记录整单终值时填；差额日志的 Quota 是增量，填整单积分会对不上。
+	PointsConsumed int
 }
 
 func RecordTaskBillingLog(params RecordTaskBillingLogParams) {
@@ -298,6 +303,7 @@ func RecordTaskBillingLog(params RecordTaskBillingLogParams) {
 		TokenId:          params.TokenId,
 		Group:            params.Group,
 		CompletionTokens: params.CompletionTokens,
+		PointsConsumed:   params.PointsConsumed,
 		Other:            common.MapToJsonStr(params.Other),
 	}
 	err := LOG_DB.Create(log).Error

@@ -590,7 +590,7 @@ func settleTaskBillingOnComplete(ctx context.Context, adaptor TaskPollingAdaptor
 	}
 	// 1.5 视频计费矩阵（运营可配）优先于通用的 token 重算：矩阵单价已含分辨率与
 	//     视频输入两维，且不依赖 ModelRatio（模型可能配的是固定价格）。
-	if RecalculateTaskQuotaByVideoMatrix(ctx, task, videoBillableTokens(taskResult)) {
+	if RecalculateTaskQuotaByVideoMatrix(ctx, task, videoBillableTokens(taskResult), videoUpstreamResolution(taskResult)) {
 		return
 	}
 	// 2. 回退到 token 重算
@@ -621,6 +621,15 @@ func videoBillableTokens(taskResult *relaycommon.TaskInfo) int {
 	return taskResult.CompletionTokens
 }
 
+// videoUpstreamResolution 上游回执里的实际出片档位，提交时定不出分辨率的任务
+// （图生视频 / 参考生视频）靠它补查矩阵单价。
+func videoUpstreamResolution(taskResult *relaycommon.TaskInfo) string {
+	if taskResult == nil {
+		return ""
+	}
+	return taskResult.Resolution
+}
+
 // warnVideoMatrixSkipped 冻结了视频计费矩阵、结算却没走矩阵分支时喊一声。
 //
 // 从「矩阵已配置」到「矩阵真的结算」中间有十来道守卫（见
@@ -630,6 +639,15 @@ func videoBillableTokens(taskResult *relaycommon.TaskInfo) int {
 func warnVideoMatrixSkipped(ctx context.Context, task *model.Task, reason string) {
 	bc := task.PrivateData.BillingContext
 	if bc == nil || bc.VideoBilling == nil || bc.VideoBilling.Mode != ratio_setting.VideoPriceModeToken {
+		return
+	}
+	// 单价为 0 = 提交时定不出分辨率（图生视频 / 参考生视频不下发 size），本该由上游
+	// 回执补查。走到这里说明回执也没给出可用档位，与「矩阵配了却没生效」是两回事，
+	// 分开说才知道该去查哪一头。
+	if bc.VideoBilling.UnitPrice <= 0 {
+		logger.LogWarn(ctx, fmt.Sprintf(
+			"任务 %s 提交时未定出视频档位、上游回执也未给出分辨率，结算未走矩阵：%s。请核对对账差额。",
+			task.TaskID, reason))
 		return
 	}
 	logger.LogWarn(ctx, fmt.Sprintf(
