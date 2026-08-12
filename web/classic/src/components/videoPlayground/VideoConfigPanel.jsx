@@ -63,6 +63,9 @@ const VideoConfigPanel = ({
   refVideoMaxSec = 0,
   maxInputMB = 0,
   maxAudioSec = 0,
+  // 所选模型的引擎族。目前只用来给提示词建议分岔（H3 的提示词区是三段式，与通用
+  // 单框写法对不上）。
+  engine = '',
   inputs,
   groups,
   models,
@@ -197,7 +200,7 @@ const VideoConfigPanel = ({
         </Typography.Title>
         {/* 该玩法的提示词写作建议，悬停向右展开（没配也没内置默认时整体不渲染） */}
         <div className='ml-auto flex-shrink-0 whitespace-nowrap'>
-          <PromptGuideTip category={category} tabKey={mode} />
+          <PromptGuideTip category={category} tabKey={mode} engine={engine} />
         </div>
       </div>
 

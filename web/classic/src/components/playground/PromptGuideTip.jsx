@@ -24,7 +24,10 @@ import { defaultPromptGuide } from '../../constants/promptGuide.constants';
 // （promptGuide.constants.js）。两处都空 = 整体不渲染，而不是给一个点开是空的问号。
 //
 // 光一个问号图标没人会去悬停，所以旁边带一句灰字点题；整块都是悬停区。
-const PromptGuideTip = ({ category, tabKey }) => {
+//
+// engine 只有视频体验区传（所选模型的引擎族）：MiniMax H3 的提示词区是三段式、还有几段
+// 系统自动生成，与通用的单框写法对不上，故建议文案也跟着分岔。不传即通用版。
+const PromptGuideTip = ({ category, tabKey, engine }) => {
   const { t } = useTranslation();
   const [statusState] = useContext(StatusContext);
   const [copied, setCopied] = useState(false);
@@ -36,8 +39,8 @@ const PromptGuideTip = ({ category, tabKey }) => {
       category,
       tabKey,
     ).trim();
-    return custom || defaultPromptGuide(tabKey).trim();
-  }, [raw, category, tabKey]);
+    return custom || defaultPromptGuide(tabKey, engine).trim();
+  }, [raw, category, tabKey, engine]);
 
   const handleCopy = async () => {
     if (await copy(guide)) {

@@ -583,6 +583,19 @@ export const useVideoGeneration = ({
   // 提示词),以及本次请求的输入形态与时长(H3 靠它区分 I2VA / L2VA / FL2VA,并写出
   // 对齐指令里那个两位小数的时长)。非 H3 模型 context 为空,行为与改动前一致。
   const optimizeEngine = getEngineForVideoModel(videoConfig, inputs.model);
+  // 对齐指令要用到的原始事实(不是给模型看的文本,是给前端本地拼接用的)。用户不点
+  // 「AI 优化」直接发送时,提示词框那边靠它本地拼出 I2VA / FL2VA / L2VA 的对齐指令
+  // —— 那几句是纯模板 + 已知时长,前端能 100% 拼对,而它恰恰是错了代价最大、用户最
+  // 不可能自己写对的一段。
+  const h3AlignContext = useMemo(
+    () => ({
+      tabKey: mode,
+      seconds: inputs.seconds,
+      hasFirstFrame: !!(inputs.firstFrame || '').trim(),
+      hasLastFrame: !!(inputs.lastFrame || '').trim(),
+    }),
+    [mode, inputs.seconds, inputs.firstFrame, inputs.lastFrame],
+  );
   const optimizeContext = useMemo(
     () =>
       optimizeEngine === VIDEO_ENGINE_MINIMAX_H3
@@ -1854,6 +1867,7 @@ export const useVideoGeneration = ({
     maxAudioSec,
     optimizeEngine,
     optimizeContext,
+    h3AlignContext,
     inputs,
     handleInputChange,
     applyExample,

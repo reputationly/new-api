@@ -15,13 +15,18 @@ import { UserContext } from '../../context/User';
 import { blockChatDrag } from '../playground/blockChatDrag';
 import PromptOptimizeButton from '../playground/PromptOptimizeButton';
 import OptimizedPromptSections from './OptimizedPromptSections';
+import H3PromptFields, { H3MainFieldLabel } from './H3PromptFields';
 import {
   VIDEO_STATUS,
   videoExamplesForMode,
+  VIDEO_ENGINE_MINIMAX_H3,
 } from '../../constants/videoPlayground.constants';
 import {
   parseH3Prompt,
   joinH3Prompt,
+  buildLocalH3Prompt,
+  h3HasField,
+  h3MainKey,
 } from '../../constants/h3Prompt.constants';
 
 const WELCOME_ID = '__welcome__';
@@ -167,6 +172,7 @@ const VideoChatArea = ({
   selectedModel = '',
   optimizeEngine = '',
   optimizeContext = '',
+  h3AlignContext = null,
   isSR = false,
   isDub = false,
   keyframeMode = 'i2v',
@@ -186,6 +192,12 @@ const VideoChatArea = ({
   // 上方输入框退回「你的想法」的角色,只用来重新优化。切不出结构就一直是 null,
   // 优化结果照旧回填输入框——降级路径必须存在:模型偶尔不按格式返回是常态。
   const [sections, setSections] = useState(null);
+  // MiniMax H3 的另外两段中文输入(音景 / 背景音乐)。画面描述沿用下面那个输入框。
+  // 判据用运营在「视频模型配置」里声明的引擎族,不按模型名前缀猜 —— 后端的请求整形
+  // (帧数约定/时长字段/画布推导)也是认这个字段,两边必须同源,否则自建部署把模型
+  // 改个名就会「后端按 H3 发、前端给通用界面」。
+  const isH3 = optimizeEngine === VIDEO_ENGINE_MINIMAX_H3 && !isSR && !isDub;
+  const [h3Fields, setH3Fields] = useState({});
   // 一键示例(按 mode):text2video 纯文本;i2v/flf2v/s2v/vace/sr 带预置文件。
   // 关键帧还要按所选模型过滤:i2v 模型只出仅首帧的示例,flf2v 模型只出带尾帧的。
   const presets = videoExamplesForMode(mode, keyframeMode);
@@ -411,15 +423,39 @@ const VideoChatArea = ({
         </div>
       );
     }
+    // 三段中文合成一份(画面描述就是输入框本身)。
+    const h3All = { ...h3Fields, main: inputValue.trim() };
+    const h3Ctx = h3AlignContext || { tabKey: mode };
     // 有结构化优化结果时发的是它,没有就发输入框原文——所见即所发。
-    const outgoing = sections ? joinH3Prompt(sections) : inputValue.trim();
+    //
+    // H3 多一条兜底:没优化过就按字段名本地拼一份再发,而不是把一句中文散文裸发上去
+    // (改动前的行为)。引擎对 prompt 完全不解析,裸发不会报错、只会默默出差档;而
+    // 优化按钮可能根本不存在(运营没配优化模型时 usePromptOptimize 不渲染它),所以
+    // 这条路必须自己站得住,不能指望用户先去点优化。
+    const outgoing = sections
+      ? joinH3Prompt(sections)
+      : isH3
+        ? buildLocalH3Prompt(h3All, h3Ctx)
+        : inputValue.trim();
     // 视频配乐(dub)提示词可选:空文本=让模型按画面自由配环境音(hook/网关/引擎
     // 全链路已放行)。缺视频仍由 blockSend 里的 missingRequiredImage 拦住。
-    const canSend = !blockSend && !optimizing && (outgoing.length > 0 || isDub);
+    //
+    // H3 未优化时**不能拿 outgoing 判空**:本地兜底会在没写画面描述时也拼出非空文本
+    // ——传了首帧就有一句自动补的对齐指令,只填了音景就有一段 overall_soundscape。
+    // 那种提示词缺主字段,发出去必然是废的,而且照样扣额度跑几分钟。故这一支单独按
+    // 「画面描述非空」判。优化过(sections 非空)则不必:parseH3Prompt 判空的依据就是
+    // 有没有主字段,降级路径拼出来的那份也是以主字段打头。
+    const canSend =
+      !blockSend &&
+      !optimizing &&
+      (isH3 && !sections
+        ? inputValue.trim().length > 0
+        : outgoing.length > 0 || isDub);
     const doSend = () => {
       if (!canSend) return;
       onSend(outgoing);
       setInputValue('');
+      setH3Fields({});
       setSections(null);
     };
     return (
@@ -447,6 +483,11 @@ const VideoChatArea = ({
                   title={promptText || label}
                   onClick={() => {
                     setInputValue(promptText || '');
+                    // 换示例 = 从头来过。上一次的优化结果必须一并清掉:outgoing 优先
+                    // 取 sections,不清的话点了新示例、发出去的还是上一条优化结果,
+                    // 而界面上看不出任何异样。另外两段中文同理,留着会串到新示例上。
+                    setSections(null);
+                    setH3Fields({});
                     if (isObj) onApplyExample?.(ex);
                   }}
                   className='flex-1 min-w-0 truncate text-xs text-gray-600 bg-gray-100 hover:bg-gray-200 rounded-full px-3 py-1.5 transition-colors'
@@ -460,22 +501,59 @@ const VideoChatArea = ({
         <PromptOptimizeButton
           category={category}
           tabKey={mode}
-          value={inputValue}
+          // H3 送去优化的是三段中文按字段名拼好的一份,而不是光秃秃一句话:优化模型
+          // 这样才知道哪句归哪段,音景与配乐也就不会被它按自己的想象重写一遍。
+          // 画面描述为空时传空串,以便沿用「先写个大概方向」那句提示。
+          value={
+            isH3
+              ? inputValue.trim()
+                ? buildLocalH3Prompt(h3All, h3Ctx)
+                : ''
+              : inputValue
+          }
           onChange={(out) => {
             // 能切出 H3 的分段结构就折叠展示(输入框保留原想法,方便改一改再优化
-            // 一次);切不出来就退回原来的行为——把原文回填输入框。
+            // 一次)。模型偶尔不按格式返回是常态,降级路径必须存在。
             const parsed = parseH3Prompt(out);
-            if (parsed) setSections(parsed);
-            else {
+            if (parsed) {
+              setSections(parsed);
+              return;
+            }
+            // 降级:非 H3 玩法退回原来的行为——把原文回填输入框。
+            //
+            // H3 不能这么做:那个框现在装的是「画面描述」的中文原文,灌英文进去等于
+            // 把用户写的中文连同下方的中英对照一起冲掉。改为把整段结果当成正文那一段
+            // 收进来,中文原封不动留着,用户照样能改、能重新优化。
+            if (!isH3) {
               setSections(null);
               setInputValue(out);
+              return;
             }
+            // 另外两段中文要跟着带上,否则一次「优化没按格式返回」就把用户填的音景与
+            // 配乐一起吞掉了 —— 提交走的是 sections,不再看 h3Fields。
+            // 但结果里已经自带该字段名时不重复追加:parseH3Prompt 判空的依据是缺主
+            // 字段,「有音景、没主字段」正是常见的失败形态,再追加就成了同一字段出现
+            // 两次。
+            setSections([
+              { key: h3MainKey(mode), value: out, sep: ' ' },
+              ...['overall_soundscape', 'non_diegetic_music']
+                .filter(
+                  (key) =>
+                    (h3Fields[key] || '').trim() && !h3HasField(out, key),
+                )
+                .map((key) => ({
+                  key,
+                  value: h3Fields[key].trim(),
+                  sep: ' ',
+                })),
+            ]);
           }}
           disabled={generating}
           onOptimizingChange={setOptimizing}
           engine={optimizeEngine}
           optimizeContext={optimizeContext}
         />
+        {isH3 && <H3MainFieldLabel />}
         <div className='relative'>
           <TextArea
             value={inputValue}
@@ -483,7 +561,9 @@ const VideoChatArea = ({
             placeholder={t(
               isDub
                 ? '描述画面里什么在发声:动作、接触材质、环境音(只做音效,不生成音乐与台词)'
-                : '请输入视频生成提示词',
+                : isH3
+                  ? '用大白话写画面:谁、在哪、做什么、怎么运镜;有台词就用引号原样写'
+                  : '请输入视频生成提示词',
             )}
             maxLength={MAX_PROMPT_LEN}
             autosize={{ minRows: 2, maxRows: 6 }}
@@ -516,8 +596,28 @@ const VideoChatArea = ({
             }}
           />
         </div>
+        {isH3 && (
+          <H3PromptFields
+            values={h3Fields}
+            onChange={(key, v) =>
+              setH3Fields((prev) => ({ ...prev, [key]: v }))
+            }
+            disabled={generating}
+          />
+        )}
         <OptimizedPromptSections
           sections={sections}
+          // 中英对照:每段英文上面摆用户当初填的那段中文。画面描述在 base 与 ref 两套
+          // 格式里字段名不同(h3MainKey),但界面上是同一段。
+          sourceByKey={
+            isH3
+              ? {
+                  [h3MainKey(mode)]: inputValue,
+                  overall_soundscape: h3Fields.overall_soundscape,
+                  non_diegetic_music: h3Fields.non_diegetic_music,
+                }
+              : null
+          }
           onChange={setSections}
           onDiscard={() => setSections(null)}
           disabled={generating}
@@ -536,6 +636,9 @@ const VideoChatArea = ({
     inputValue,
     optimizing,
     sections,
+    isH3,
+    h3Fields,
+    h3AlignContext,
     onSend,
     category,
     mode,

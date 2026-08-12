@@ -39,6 +39,7 @@ export const VideoPlaygroundBody = ({ mode, category = 'video' }) => {
     maxAudioSec,
     optimizeEngine,
     optimizeContext,
+    h3AlignContext,
     inputs,
     handleInputChange,
     applyExample,
@@ -91,6 +92,7 @@ export const VideoPlaygroundBody = ({ mode, category = 'video' }) => {
           refVideoMaxSec={refVideoMaxSec}
           maxInputMB={maxInputMB}
           maxAudioSec={maxAudioSec}
+          engine={optimizeEngine}
           inputs={inputs}
           groups={groups}
           models={models}
@@ -114,6 +116,7 @@ export const VideoPlaygroundBody = ({ mode, category = 'video' }) => {
           selectedModel={inputs.model}
           optimizeEngine={optimizeEngine}
           optimizeContext={optimizeContext}
+          h3AlignContext={h3AlignContext}
           isSR={isSR}
           isDub={isDub}
           keyframeMode={keyframeMode}
