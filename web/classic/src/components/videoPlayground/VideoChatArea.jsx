@@ -200,7 +200,10 @@ const VideoChatArea = ({
   const [h3Fields, setH3Fields] = useState({});
   // 一键示例(按 mode):text2video 纯文本;i2v/flf2v/s2v/vace/sr 带预置文件。
   // 关键帧还要按所选模型过滤:i2v 模型只出仅首帧的示例,flf2v 模型只出带尾帧的。
-  const presets = videoExamplesForMode(mode, keyframeMode);
+  // H3 另换一整张表(视听一体,示例要连音景与配乐一起给),故把引擎族也传进去。
+  // 传原始 optimizeEngine 而不是 isH3:超分与配音在 H3 表里没有对应键,函数内部本来
+  // 就会回退到通用表,不必在这里先滤一道。
+  const presets = videoExamplesForMode(mode, keyframeMode, optimizeEngine);
   const hasPresets = presets.length > 0;
 
   const roleConfig = useMemo(
@@ -485,9 +488,11 @@ const VideoChatArea = ({
                     setInputValue(promptText || '');
                     // 换示例 = 从头来过。上一次的优化结果必须一并清掉:outgoing 优先
                     // 取 sections,不清的话点了新示例、发出去的还是上一条优化结果,
-                    // 而界面上看不出任何异样。另外两段中文同理,留着会串到新示例上。
+                    // 而界面上看不出任何异样。
                     setSections(null);
-                    setH3Fields({});
+                    // 另外两段:H3 示例自带就填上,否则清空(留着会串到新示例上)。
+                    // 整体赋值而不是 merge —— merge 会让上一条示例的音景活到这一条。
+                    setH3Fields(isObj && ex.h3 ? { ...ex.h3 } : {});
                     if (isObj) onApplyExample?.(ex);
                   }}
                   className='flex-1 min-w-0 truncate text-xs text-gray-600 bg-gray-100 hover:bg-gray-200 rounded-full px-3 py-1.5 transition-colors'

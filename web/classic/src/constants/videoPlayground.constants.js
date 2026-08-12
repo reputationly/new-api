@@ -1,6 +1,7 @@
 // 视频模型相关常量
 
 import {
+  VIDEO_ENGINE_MINIMAX_H3,
   normalizeModelNote,
   tabScopedValue,
 } from './playgroundAdmin.constants';
@@ -123,6 +124,121 @@ export const VIDEO_EXAMPLES = {
   ],
 };
 
+// ── MiniMax H3 专属示例 ─────────────────────────────────────────────────
+// 整张表换掉,不在上面那份里混一个 engine 字段。同 defaultOptimizeSystemPrompt 的
+// 处置:H3 与通用系的形状是**相反**的,打补丁只会两边都不像。另外关键帧那条过滤已经
+// 占用了 keyframeMode 这个轴,再塞一个 engine 判据进同一个列表,两个条件会绞在一起。
+//
+// 多出来的 h3 字段承载另外两段(音景 / 背景音乐),点示例时一并填进 H3PromptFields。
+// 不加这个字段的话示例就只填画面描述那一格 —— 而 H3 是**视听一体**模型
+// (T2VA = video + audio,输出必带 overall_soundscape / non_diegetic_music),
+// 只示范画面等于当着用户的面演了一半,剩下两段丢给优化模型凭空编。
+//
+// 提示词写中文:H3 下输入框的角色是「你的想法」(H3_INPUT_FIELDS 的 placeholder 也是
+// 中文),点了「AI 优化」由 Context-IR 那层译成英文分段结构;不点则由 buildLocalH3Prompt
+// 包上字段名发出去。
+//
+// 素材一律复用现有的 wan / Bernini 样例图,不新增二进制资产 —— 都在 H3 的校验范围内
+// (短边 ≥256、长边 ≤5760、宽高比 [0.4,2.5];实测 832×1104、1024×1024、730×1024)。
+export const VIDEO_EXAMPLES_H3 = {
+  text2video: [
+    {
+      label: '有台词 · 咖啡馆',
+      prompt:
+        '中景,一位穿米色针织衫的年轻女性坐在临窗的咖啡馆座位上,端起咖啡抿了一口,抬头看向镜头轻声说「今天天气真好」。晨光透过百叶窗在她脸上投下条纹光影,镜头缓慢左移。',
+      h3: {
+        overall_soundscape:
+          '咖啡馆的环境底噪:邻桌低声交谈、咖啡机蒸汽、瓷杯轻碰桌面;她说话时人声清晰靠前,咬字自然。',
+        non_diegetic_music: '轻柔的钢琴独奏,节奏舒缓,音量始终压在人声之下。',
+      },
+    },
+    {
+      label: '纯环境音 · 雨夜街头',
+      prompt:
+        '低角度仰拍,一位穿着发光机能外套的女性走过雨夜的未来都市街头,身后是层层叠叠的全息广告牌与飞行器航线。她转身走入霓虹小巷,外套光纹随步伐流动,镜头跟随移动。',
+      h3: {
+        overall_soundscape:
+          '大雨打在地面与雨棚上,脚步踩碎积水的水花声,远处车辆驶过的胎噪与低频轰鸣,广告牌持续的电流嗡鸣。',
+        // 「不要配乐」与「留空」是两回事:留空是让模型自己看着办,明确说不要才会落成
+        // guide 里的 N/A(无配乐)。这条示例就是来示范后者的。
+        non_diegetic_music: '不要配乐,只留现场环境声。',
+      },
+    },
+    {
+      label: '音效特写 · 煎牛排',
+      prompt:
+        '特写,一块厚切牛排在铸铁锅中煎烤,黄油在肉块边缘融化冒泡。厨师用勺子将热黄油缓缓淋在牛排表面。固定镜头微距,侧光突出油脂光泽,浅景深。',
+      h3: {
+        overall_soundscape:
+          '油脂在高温铸铁锅里持续滋滋作响,黄油浇淋时细密的气泡声,金属勺碰到锅沿清脆的一声。',
+        non_diegetic_music: '轻快的爵士鼓刷与贝斯,音量克制,衬托而不抢戏。',
+      },
+    },
+  ],
+  // 三条正好覆盖 H3 关键帧的三态(靠 extra_params.frame_indices 区分):
+  // 仅首帧 I2VA / 首尾帧 FL2VA / 仅尾帧 L2VA。第三条尤其要有 —— 「只给尾帧」是 H3
+  // 独有的玩法,wan 的两类模型都表达不出来,没有示例用户基本发现不了它的存在。
+  flf2v: [
+    {
+      label: '仅首帧(I2VA)',
+      prompt:
+        '画面中的人物微微转头并露出微笑,发丝随微风轻轻飘动,背景虚化的光斑缓慢晃动,镜头缓缓向前推进。',
+      h3: {
+        overall_soundscape:
+          '户外轻风拂过,远处隐约的鸟鸣与树叶摩擦声,环境安静、混响很少。',
+        non_diegetic_music: '温柔的弦乐衬底,从很轻开始缓慢渐强。',
+      },
+      files: { firstFrame: '/playground-samples/images/wan-i2v-first.jpg' },
+    },
+    {
+      label: '首尾帧(FL2VA)',
+      prompt:
+        '从首帧的场景平滑过渡到尾帧,运动连贯自然,光影随时间流畅变化,保持单镜头不切。',
+      h3: {
+        overall_soundscape: '环境声随画面一起渐变,不要出现突兀的切换点。',
+        non_diegetic_music: '一条连贯的合成器长音,随画面变化缓慢起伏。',
+      },
+      files: {
+        firstFrame: '/playground-samples/images/wan-flf2v-first.png',
+        lastFrame: '/playground-samples/images/wan-flf2v-last.png',
+      },
+    },
+    {
+      label: '仅尾帧(L2VA)',
+      prompt:
+        '由一个合理的前置状态自然演变到尾帧画面,最后一帧稳稳落在给定的构图上,单镜头,运动收束平缓。',
+      h3: {
+        overall_soundscape: '环境声由稀疏渐渐充实,结尾归于安静。',
+        non_diegetic_music: '极简的钢琴单音,末尾收在一个长音上。',
+      },
+      files: { lastFrame: '/playground-samples/images/wan-flf2v-last.png' },
+    },
+  ],
+  // 参考生视频在此之前一条示例都没有(VIDEO_EXAMPLES 根本没有 r2va 键),按钮整排不渲染。
+  // 素材沿用 Bernini r2v 那三张:参考图定义主体/道具/场景,由提示词组合成片,这套用法
+  // 与 H3 Ref2VA 一致。
+  r2va: [
+    {
+      label: '参考图生视频',
+      prompt:
+        '以第一张参考图中的大理石雕像为主体,给他戴上第二张参考图里的粉色猫耳耳机,坐在第三张参考图的海边落日长椅上,正对镜头、中景固定机位,随音乐轻轻点头晃动身体。保持雕像的白色石质与卷曲雕刻发型,以及海滩长椅、棕榈树与橙粉紫落日天空的场景不变。',
+      h3: {
+        overall_soundscape:
+          '海浪一层层拍上沙滩,海风掠过棕榈叶,远处偶尔有海鸟叫声。',
+        non_diegetic_music:
+          '慵懒的 lo-fi 嘻哈节拍,鼓点轻缓,与他点头的节奏合拍。',
+      },
+      files: {
+        refImages: [
+          '/playground-samples/images/bernini-r2v-statue.jpg',
+          '/playground-samples/images/bernini-r2v-headphones.jpg',
+          '/playground-samples/images/bernini-r2v-beach.jpg',
+        ],
+      },
+    },
+  ],
+};
+
 // 「关键帧」tab 同时承载两类 wan 模型:--task i2v 的「首帧生视频」和 --task flf2v 的
 // 「首尾帧」。它们是同一份权重、不同启动参数的两个引擎实例,task 在实例启动期就定死了:
 // i2v 实例收到尾帧会静默丢弃(I2VInputInfo 没有 last_frame_path 字段),flf2v 实例缺尾帧
@@ -184,8 +300,14 @@ export const deriveKeyframeTaskType = (hasFirst, hasLast) => {
 // 一键示例按 mode 取;「关键帧」下再按所选模型过滤——i2v 模型只能用仅首帧的示例,
 // flf2v 模型只能用带尾帧的示例,否则点了示例反而凑不出该模型要求的输入组合。
 // 判断结果由调用方传入(isFlf2vModel 现在要配合配置声明读,见上),这里不再自己推。
-export const videoExamplesForMode = (mode, keyframeMode) => {
-  const list = VIDEO_EXAMPLES[mode] || [];
+//
+// engine 是所选模型声明的引擎族:H3 换整张表(见 VIDEO_EXAMPLES_H3)。
+// **落空必须回退到通用表**而不是返回空数组 —— 超分/视频编辑/配音不走 H3,H3 表里不会
+// 有它们的键,不兜底就是「选了 H3 模型,超分那一排示例按钮整个消失」。
+export const videoExamplesForMode = (mode, keyframeMode, engine) => {
+  const h3List =
+    engine === VIDEO_ENGINE_MINIMAX_H3 ? VIDEO_EXAMPLES_H3[mode] : null;
+  const list = h3List?.length ? h3List : VIDEO_EXAMPLES[mode] || [];
   if (mode !== 'flf2v') return list;
   // auto(单 checkpoint 全能模型):首帧示例与首尾帧示例都能跑,不过滤。
   if (keyframeMode === 'auto') return list;
