@@ -23,6 +23,7 @@ import {
   getPromptOptimizeGlobal,
 } from '../../constants/playgroundAdmin.constants';
 import { defaultOptimizeSystemPrompt } from '../../constants/promptOptimize.constants';
+import { defaultPromptGuide } from '../../constants/promptGuide.constants';
 import FieldInput from './FieldInput';
 
 const { Text, Title } = Typography;
@@ -39,6 +40,7 @@ const TabPanel = ({ category, tab, draft }) => {
   const display = getTabDisplay(draft.tabConfig, category, tab.key);
   const optimize = getTabPromptOptimize(draft.tabConfig, category, tab.key);
   const promptGuide = getTabPromptGuide(draft.tabConfig, category, tab.key);
+  const defaultGuide = defaultPromptGuide(tab.key);
   const globalOptimize = getPromptOptimizeGlobal(draft.tabConfig);
   const modelLevelFields = PLAYGROUND_MODEL_LEVEL_FIELDS[storeKey] || [];
 
@@ -161,19 +163,51 @@ const TabPanel = ({ category, tab, draft }) => {
           但「声线描述该写哪些维度」同样要有地方讲。 */}
       <Card title={t('提示词写作建议')}>
         <TextArea
-          rows={6}
+          rows={8}
           value={promptGuide}
           onChange={(v) =>
             draft.patchTabConfig(category, tab.key, { promptGuide: v })
           }
-          placeholder={t(
-            '如：主体 + 动作 + 镜头 + 光线 + 风格，一句话一个要素；少用「唯美」「大片感」这类抽象形容词，多写看得见的东西',
-          )}
+          placeholder={
+            defaultGuide ||
+            t(
+              '如：主体 + 动作 + 镜头 + 光线 + 风格，一句话一个要素；少用「唯美」「大片感」这类抽象形容词，多写看得见的东西',
+            )
+          }
         />
+        {defaultGuide && (
+          <div className='flex items-center gap-3 mt-2'>
+            <Button
+              size='small'
+              theme='borderless'
+              disabled={!promptGuide}
+              onClick={() =>
+                draft.patchTabConfig(category, tab.key, { promptGuide: '' })
+              }
+            >
+              {t('恢复默认')}
+            </Button>
+            <Button
+              size='small'
+              theme='borderless'
+              onClick={() =>
+                draft.patchTabConfig(category, tab.key, {
+                  promptGuide: defaultGuide,
+                })
+              }
+            >
+              {t('填入默认内容以便修改')}
+            </Button>
+          </div>
+        )}
         <Text type='tertiary' size='small' className='block mt-2'>
-          {t(
-            '留空=体验区不显示这个问号。填了以后展示在本玩法的提示词输入框上方，鼠标移上去展开，换行会原样保留，可以分条写。',
-          )}
+          {defaultGuide
+            ? t(
+                '本玩法有内置建议（占位符里就是它），留空即用它，后续版本调优会自动跟随；改写后则以此为准。展示在提示词输入框上方的问号里，鼠标移上去展开，换行原样保留。',
+              )
+            : t(
+                '本玩法没有内置建议，留空=体验区不显示这个问号。填了以后展示在提示词输入框上方，鼠标移上去展开，换行原样保留，可以分条写。',
+              )}
         </Text>
       </Card>
 
