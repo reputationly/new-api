@@ -24,6 +24,7 @@ import {
 } from '../../helpers';
 import ImageUrlInput from '../playground/ImageUrlInput';
 import { useModelNotes } from '../../hooks/common/useModelNotes';
+import PromptGuideTip from '../playground/PromptGuideTip';
 import { IMAGE_MAX_EDIT_IMAGES } from '../../constants/imagePlayground.constants';
 
 const ImageConfigPanel = ({
@@ -96,6 +97,10 @@ const ImageConfigPanel = ({
         <Typography.Title heading={5} className='mb-0'>
           {t('模型配置')}
         </Typography.Title>
+        {/* 该玩法的提示词写作建议，悬停向右展开（没配也没内置默认时整体不渲染） */}
+        <div className='ml-auto flex-shrink-0 whitespace-nowrap'>
+          <PromptGuideTip category='image' tabKey={mode} />
+        </div>
       </div>
 
       <div className='space-y-6 overflow-y-auto flex-1 pr-2'>

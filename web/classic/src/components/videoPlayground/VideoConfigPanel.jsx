@@ -26,6 +26,7 @@ import {
 import ImageUrlInput from '../playground/ImageUrlInput';
 import MediaFileInput from './MediaFileInput';
 import { useModelNotes } from '../../hooks/common/useModelNotes';
+import PromptGuideTip from '../playground/PromptGuideTip';
 import { tabHasField } from '../../constants/playgroundAdmin.constants';
 import { imageConstraintsForMode } from '../../constants/videoPlayground.constants';
 
@@ -194,6 +195,10 @@ const VideoConfigPanel = ({
         <Typography.Title heading={5} className='mb-0'>
           {t('模型配置')}
         </Typography.Title>
+        {/* 该玩法的提示词写作建议，悬停向右展开（没配也没内置默认时整体不渲染） */}
+        <div className='ml-auto flex-shrink-0 whitespace-nowrap'>
+          <PromptGuideTip category={category} tabKey={mode} />
+        </div>
       </div>
 
       <div className='space-y-6 overflow-y-auto flex-1 pr-2'>

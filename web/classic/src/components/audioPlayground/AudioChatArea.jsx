@@ -13,7 +13,6 @@ import { useTranslation } from 'react-i18next';
 import { showError, getLogo, stringToColor } from '../../helpers';
 import { UserContext } from '../../context/User';
 import { blockChatDrag } from '../playground/blockChatDrag';
-import PromptGuideTip from '../playground/PromptGuideTip';
 import { AUDIO_STATUS } from '../../constants/audioPlayground.constants';
 
 // 语音合成对话区,镜像 VideoChatArea:成品渲染 <audio> 播放器 + 下载 wav。
@@ -123,7 +122,6 @@ const AudioProgress = ({ status, progress, t }) => {
 };
 
 const AudioChatArea = ({
-  mode = 'emotion',
   messages,
   generating,
   turnLimitReached = false,
@@ -354,7 +352,6 @@ const AudioChatArea = ({
             })}
           </div>
         )}
-        <PromptGuideTip category='audio' tabKey={mode} />
         <div className='relative'>
           <TextArea
             value={inputValue}
@@ -403,7 +400,6 @@ const AudioChatArea = ({
     onApplyExample,
     inputValue,
     onSend,
-    mode,
     t,
   ]);
 

@@ -135,7 +135,6 @@ const AudioPlaygroundBody = ({ mode }) => {
 
       <div className='flex-1 min-w-0'>
         <AudioChatArea
-          mode={mode}
           messages={messages}
           generating={generating}
           turnLimitReached={turnLimitReached}
