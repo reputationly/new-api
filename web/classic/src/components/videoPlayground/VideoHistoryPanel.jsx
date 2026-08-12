@@ -196,10 +196,10 @@ const VideoHistoryPanel = ({
                     }}
                   />
                 </div>
-                <Typography.Text
-                  className='text-xs text-gray-500 block mt-1 truncate'
-                  ellipsis={{ showTooltip: true }}
-                >
+                {/* 只用 className 的 truncate 截断，不挂 Semi 的 ellipsis：那个要靠
+                    JS 量宽度才能决定显不显 tooltip，提示词一长就反复重算、黑框跟着闪。
+                    整条本来就可以点开看全文，悬停浮层没有存在的必要。 */}
+                <Typography.Text className='text-xs text-gray-500 block mt-1 truncate'>
                   {summary.title}
                 </Typography.Text>
                 <InputMediaStrip media={collectInputMedia(item)} />
