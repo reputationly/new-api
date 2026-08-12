@@ -14,6 +14,7 @@ import { showError, getLogo, stringToColor } from '../../helpers';
 import { UserContext } from '../../context/User';
 import { blockChatDrag } from '../playground/blockChatDrag';
 import PromptOptimizeButton from '../playground/PromptOptimizeButton';
+import PromptGuideTip from '../playground/PromptGuideTip';
 import {
   MUSIC_STATUS,
   musicExamplesForMode,
@@ -480,6 +481,7 @@ const MusicChatArea = ({
             })}
           </div>
         )}
+        <PromptGuideTip category='music' tabKey={mode} />
         {/* 「AI 帮我写词」= 官方 Simple Mode 的【Create Sample】那一步:据这句描述拟出
             caption/歌词/BPM/调式/时长,caption 回填到输入框、其余回填到左侧面板,由用户
             过目再改。这一步不只是省事 —— 填了歌词之后提交就不再走 sample_mode,引擎那边

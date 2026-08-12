@@ -14,6 +14,7 @@ import { showError, getLogo, stringToColor } from '../../helpers';
 import { UserContext } from '../../context/User';
 import { blockChatDrag } from '../playground/blockChatDrag';
 import PromptOptimizeButton from '../playground/PromptOptimizeButton';
+import PromptGuideTip from '../playground/PromptGuideTip';
 import OptimizedPromptSections from './OptimizedPromptSections';
 import {
   VIDEO_STATUS,
@@ -457,6 +458,7 @@ const VideoChatArea = ({
             })}
           </div>
         )}
+        <PromptGuideTip category={category} tabKey={mode} />
         <PromptOptimizeButton
           category={category}
           tabKey={mode}

@@ -17,6 +17,7 @@ import {
 import { UserContext } from '../../context/User';
 import { blockChatDrag } from '../playground/blockChatDrag';
 import PromptOptimizeButton from '../playground/PromptOptimizeButton';
+import PromptGuideTip from '../playground/PromptGuideTip';
 import ImagePreviewModal from './ImagePreviewModal';
 
 const WELCOME_ID = '__welcome__';
@@ -267,6 +268,7 @@ const ImageChatArea = ({
             ))}
           </div>
         )}
+        <PromptGuideTip category='image' tabKey={mode} />
         <PromptOptimizeButton
           category='image'
           tabKey={mode}

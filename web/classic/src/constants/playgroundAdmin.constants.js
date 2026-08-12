@@ -528,6 +528,25 @@ export const getTabPromptOptimize = (tabConfig, category, tabKey) => {
   };
 };
 
+// 某 tab 的「提示词写作建议」：运营写的一段「这个玩法的提示词该怎么写」，体验区在
+// 提示词框上方挂个问号，鼠标移上去就是它。留空=不展示（不给内置默认——写不出一条
+// 对六个视频玩法都成立的建议，硬凑只会是句废话）。
+//
+// 粒度是 tab 级而非模型级：怎么写主要由场景决定（文生视频要写镜头运动、数字人写的
+// 是台词情绪、声音设计写的是声线描述），与选哪个模型关系小得多。模型这一维已经有
+// 「模型备注」（models[x].tabs[y].note，展示在模型下拉里）——一个说选哪个，一个说
+// 怎么写，各管一头。
+//
+// 存在 PlaygroundTabConfig 而不是四份 ModelConfig：它跟 promptOptimize.systemPrompt
+// 同类——tab 级、纯文案、与模型无关。
+//
+// 原样返回不 trim：admin 页拿它当受控输入框的值，trim 会把运营正在敲的换行/缩进
+// 吞掉。「有没有配」由展示端自己 trim 后判断。
+export const getTabPromptGuide = (tabConfig, category, tabKey) => {
+  const v = tabConfig?.[category]?.[tabKey]?.promptGuide;
+  return typeof v === 'string' ? v : '';
+};
+
 // 按运营配置排序 + 应用显示名覆盖，返回带 display 的 tab 列表（不做显隐过滤）。
 // order 未配置的排在已配置的之后，同 order 按声明顺序稳定。
 export const resolvePlaygroundTabs = (category, tabConfig) => {
