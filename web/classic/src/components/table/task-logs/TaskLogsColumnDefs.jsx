@@ -108,20 +108,55 @@ const facadeTaskType = (record) => {
   return typeof d.task_type === 'string' ? d.task_type : '';
 };
 
-// 门面 task_type → 展示标签/颜色。tts 用紫色与视频(蓝)、图片(青)区分。
+// 门面 task_type → 展示标签/颜色。标签词必须落在能力标签词表内(后端
+// constant/model_capability.go 的 Image/Video/Audio/MusicCapabilities,归属见
+// constant/playground_tab.go 的 task_type→tab 表),否则日志里的「类型」与模型广场
+// 的能力标签、体验区玩法三者对不上号。新增 task_type 时三处同步。
+// 颜色分大类:视频蓝、图片青、语音紫、音乐橙。
 const FACADE_TASK_TYPE_META = {
-  tts: { label: '语音合成', color: 'purple' },
+  // 图片。i2i 覆盖「图生图/图像编辑/局部重绘/扩图/高清放大」五个能力标签,任务数据
+  // 里无从区分,取大类泛称。
   t2i: { label: '文生图', color: 'cyan' },
   i2i: { label: '图生图', color: 'cyan' },
+
+  // 视频
   t2v: { label: '文生视频', color: 'blue' },
-  i2v: { label: '图生视频', color: 'blue' },
-  flf2v: { label: '首尾生视频', color: 'blue' },
+  // 关键帧一格覆盖三态(i2v 首帧 / flf2v 首尾帧 / l2va 尾帧),输入形态不同、排障时
+  // 要分得开,故在能力标签「关键帧」后缀细分,而不是三条都显示「关键帧」。
+  i2v: { label: '关键帧·首帧', color: 'blue' },
+  flf2v: { label: '关键帧·首尾帧', color: 'blue' },
+  l2va: { label: '关键帧·尾帧', color: 'blue' },
+  // r2v 是 Bernini 纯参考图,归体验区「图生视频」;r2va 是 MiniMax H3 Ref2VA,
+  // 归「参考生视频」—— 两者都不是视频编辑。
+  r2v: { label: '图生视频', color: 'blue' },
+  r2va: { label: '参考生视频', color: 'blue' },
   s2v: { label: '数字人', color: 'blue' },
-  sr: { label: '视频超分', color: 'blue' },
-  // 视频编辑(Bernini):按输入分流的三种玩法,统一显示「视频编辑」。
+  // 视频编辑(Bernini):按输入分流的四种玩法,统一显示「视频编辑」。
   v2v: { label: '视频编辑', color: 'blue' },
   rv2v: { label: '视频编辑', color: 'blue' },
-  r2v: { label: '视频编辑', color: 'blue' },
+  mv2v: { label: '视频编辑', color: 'blue' },
+  ads2v: { label: '视频编辑', color: 'blue' },
+  // 超分不单独开玩法(只作 1080P 两段流水线的内部一段),故能力词表里没有这一项;
+  // 但 sr 是有效 task_type,直连与流水线都会落记录,据实显示。
+  sr: { label: '视频超分', color: 'blue' },
+
+  // 语音。四个能力标签(情感合成/语音合成/双人对话/声音设计)共用 task_type=tts,
+  // 无从区分,取大类泛称。
+  tts: { label: '语音合成', color: 'purple' },
+  // 视频配音产物是视频,但能力标签归在语音模型下(入口挂语音页,模型配在
+  // VideoModelConfig),故跟语音同色。
+  v2a: { label: '视频配音', color: 'purple' },
+
+  // 音乐
+  t2m: { label: '文生音乐', color: 'orange' },
+  cover: { label: '音乐改编', color: 'orange' },
+  repaint: { label: '音乐重绘', color: 'orange' },
+  t2a: { label: '文生音效', color: 'orange' },
+  svs: { label: '歌声合成', color: 'orange' },
+  // AudioX 视频生音:已无前端入口,但 task_type 仍有效,直连仍可能产生记录。
+  // 能力词表里没有对应标签(已随产品线下线),按其契约据实显示。
+  v2m: { label: '视频生音乐', color: 'orange' },
+  tv2m: { label: '视频生音乐', color: 'orange' },
 };
 
 const renderType = (type, t, taskType) => {
