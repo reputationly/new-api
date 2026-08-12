@@ -107,16 +107,20 @@ const Models = () => {
 
   // 价格口径与 PC 端一致（helpers/utils.jsx getPriceData）：
   // 按量:输入价 = model_ratio × 2 × 分组倍率 → $/1M tokens；按次:价格 × 分组倍率。
-  // 分组倍率跟随筛选胶囊选中的分组；未筛选时用当前用户自己的分组。
-  const userGroup = (() => {
-    try {
-      return JSON.parse(localStorage.getItem('user') || '{}').group || '';
-    } catch (e) {
-      return '';
-    }
-  })();
-  const effectiveGroup = group || userGroup;
-  const groupRatio = groupRatioMap[effectiveGroup] ?? 1;
+  //
+  // 分组倍率：选中胶囊时就用该分组；「全部分组」时与 PC 的「最优倍率视图」同源
+  // （calculateModelPrice 里 selectedGroup === 'all' 的分支）——逐个模型在它自己的
+  // enable_groups 里取最低倍率，而不是拿当前登录用户的分组去套：后者在用户分组倍率
+  // 为 0 时，会把该分组根本挂不到渠道、压根用不了的模型也一并乘成 0 元。
+  // 0 是合法倍率（免费分组），照常参与比较，不做剔除——同 helpers/videoMatrix.js 的结论。
+  const resolveGroupRatio = (m) => {
+    if (group) return { group, ratio: groupRatioMap[group] ?? 1 };
+    const candidates = (m.enable_groups || [])
+      .map((g) => ({ group: g, ratio: groupRatioMap[g] }))
+      .filter((c) => typeof c.ratio === 'number');
+    if (!candidates.length) return { group: '', ratio: 1 };
+    return candidates.reduce((a, b) => (b.ratio < a.ratio ? b : a));
+  };
   const currencyConfig = useMemo(() => {
     const displayType =
       siteStatus?.quota_display_type ||
@@ -150,13 +154,13 @@ const Models = () => {
   // 「按折算前的原始价过滤未配置格子」两个坑，抄一份就意味着以后要修两遍
   // ——排序那个 bug 就是因为抄了三份才出现三次。
   const videoMatrixCells = (m) =>
-    flattenVideoMatrix(m.video_pricing, groupRatio);
+    flattenVideoMatrix(m.video_pricing, resolveGroupRatio(m).ratio);
 
   // 与 PC 端共用同一份格式化（含「≥0.001 向上取整、更小则四舍五入」的规则）。
   // 原先这里是手抄的一份拷贝，两端各改一次就会漂移。
   const formatPrice = formatPriceWithCeiling;
 
-  const inputPricePerM = (m) => m.model_ratio * 2 * groupRatio;
+  const inputPricePerM = (m) => m.model_ratio * 2 * resolveGroupRatio(m).ratio;
   const displayPrice = (usdValue) =>
     `${currencyConfig.symbol}${formatPrice(usdValue * currencyConfig.rate)}`;
 
@@ -175,9 +179,12 @@ const Models = () => {
         : `${displayPrice(lo)}~${displayPrice(hi)}${unit}`;
     }
     return m.quota_type === 1
-      ? `${displayPrice(m.model_price * groupRatio)}/次`
+      ? `${displayPrice(m.model_price * resolveGroupRatio(m).ratio)}/次`
       : `${displayPrice(inputPricePerM(m))}/1M`;
   };
+  const detailPricingGroup = detail
+    ? resolveGroupRatio(detail)
+    : { group: '', ratio: 1 };
   const activeFilterCount = Number(Boolean(group)) + Number(Boolean(category));
   const selectedCategoryLabel =
     MODEL_CATEGORIES.find((c) => c.key === category)?.label || '全部大类';
@@ -478,12 +485,16 @@ const Models = () => {
                 {isDynamic(detail)
                   ? '动态计费：按用量阶梯表达式实时计算，详细规则请在电脑端模型广场查看'
                   : detail.quota_type === 1
-                    ? `单次价格：${displayPrice(detail.model_price * groupRatio)}`
+                    ? `单次价格：${displayPrice(detail.model_price * detailPricingGroup.ratio)}`
                     : `输入 ${displayPrice(inputPricePerM(detail))} / 1M Tokens · 输出 ${displayPrice(inputPricePerM(detail) * (detail.completion_ratio || 1))} / 1M Tokens`}
               </div>
             )}
             <div style={{ fontSize: 12, color: '#9aa1ad', marginTop: 6 }}>
-              按「{effectiveGroup || '默认'}」分组倍率 ×{groupRatio} 计算
+              按「{detailPricingGroup.group || '默认'}」分组倍率 ×
+              {detailPricingGroup.ratio} 计算
+              {!group && detailPricingGroup.group
+                ? '（全部分组取最优倍率）'
+                : ''}
             </div>
             {detail.description && (
               <div style={{ fontSize: 13, color: '#6b7280', marginTop: 8 }}>
