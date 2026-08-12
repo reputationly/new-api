@@ -108,8 +108,23 @@ jobs:
           # (type=registry,ref=<ACR>/...:buildcache,mode=max):没有配额、且每次覆盖
           # 同一个 tag,不会像 GHA 缓存这样无限累积。
           cache-to: type=gha,mode=min
-          provenance: mode=max
-          sbom: true
+          # 必须关掉,别"顺手补上供应链证明"——补回去出包立刻再挂一次。
+          #
+          # 开着的话 buildx 会额外导出 attestation manifest,其 config 用 OCI 空描述符
+          # application/vnd.oci.empty.v1+json。Docker Hub 认,阿里云 ACR 不认:
+          #   denied: unknown manifest class for application/vnd.oci.empty.v1+json
+          # 镜像本身构建成功、Docker Hub 三个 tag 也全推上去了,倒在推 ACR 那一步。
+          #
+          # 这不是我们改坏的:2026-08-12 09:46 那次成功跑的是一模一样的 buildx 参数,
+          # 10:02 起开始失败,期间 .github/workflows/ 没有任何提交 —— ACR 侧对 OCI 1.1
+          # artifact 的支持变了。想恢复证明就得拆成两个 build-push step(Docker Hub 带、
+          # ACR 不带),为一份当前没人验的声明换构建复杂度,不值。
+          #
+          # 丢的不是镜像完整性(digest 照常校验),是两份旁挂声明:provenance 用于准入
+          # 控制(cosign / Kyverno 验"是不是我们 CI 构建的"),当前没有任何一环在验;
+          # SBOM 只是让扫描器省掉解包,Trivy / Grype / Scout 不依赖它,照样能扫。
+          provenance: false
+          sbom: false
 
       - name: Output digest
         run: |
