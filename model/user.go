@@ -60,6 +60,12 @@ type User struct {
 	StripeCustomer   string         `json:"stripe_customer" gorm:"type:varchar(64);column:stripe_customer;index"`
 	CreatedAt        int64          `json:"created_at" gorm:"autoCreateTime;column:created_at"`
 	LastLoginAt      int64          `json:"last_login_at" gorm:"default:0;column:last_login_at"`
+
+	// 本次注册实际发放的积分数（不是 quota unit），由 InsertWithTx 写入、
+	// FinalizeOAuthUserCreation 读出记日志。未导出 => GORM 不解析、JSON 不序列化，
+	// 只在这两步之间传值。不从 PointsBalance 反算：反算走的是实时 quota_per_point，
+	// 两步之间配置若被改，日志数字就和实际发放数对不上。
+	newUserPointsGranted int
 }
 
 func (user *User) ToBaseUser() *UserBase {
@@ -583,6 +589,11 @@ func (user *User) Insert(inviterId int) error {
 		}
 	}
 	user.Quota = common.QuotaForNewUser
+	// 注册礼额度与积分两路独立：额度是真金白银的钱包，积分是营销赠送钱包（白名单分组下
+	// 优先抵扣）。运营可只发其一、都发或都不发，互不影响。随 Create 一起落库而不是建完
+	// 再 Increase——新号还没有缓存，一次写入即最终态，省掉一次写和一次缓存失效。
+	newUserPoints, newUserPointsQuota := NewUserPointsGrant()
+	user.PointsBalance = newUserPointsQuota
 	//user.SetAccessToken(common.GetUUID())
 	user.AffCode = common.GetRandomString(4)
 	// 持久化邀请关系：邮箱注册由 controller 预设 InviterId，但 GitHub/LinuxDO 走本函数时未预设。
@@ -619,6 +630,10 @@ func (user *User) Insert(inviterId int) error {
 	if common.QuotaForNewUser > 0 {
 		RecordLog(user.Id, LogTypeSystem, fmt.Sprintf("新用户注册赠送 %s", logger.LogQuota(common.QuotaForNewUser)))
 	}
+	// 额度与积分各记一条：两者是两个钱包，合成一条反而看不出哪份进了哪边。
+	if newUserPoints > 0 {
+		RecordLog(user.Id, LogTypeSystem, fmt.Sprintf("新用户注册赠送 %d 积分", newUserPoints))
+	}
 	// 只要存在邀请人就记录邀请关系（aff_count++），与奖励解耦。
 	// 邀请奖励改为被邀请人实名后发放积分（service.GrantKycPoints），此处不再发放任何额度。
 	if inviterId != 0 {
@@ -639,6 +654,11 @@ func (user *User) InsertWithTx(tx *gorm.DB, inviterId int) error {
 		}
 	}
 	user.Quota = common.QuotaForNewUser
+	// 注册礼见 Insert 处注释；OAuth 路径同样随 tx.Create 一起落库，
+	// 积分数带给提交后的 FinalizeOAuthUserCreation 记日志
+	newUserPoints, newUserPointsQuota := NewUserPointsGrant()
+	user.PointsBalance = newUserPointsQuota
+	user.newUserPointsGranted = newUserPoints
 	user.AffCode = common.GetRandomString(4)
 	// 持久化邀请关系：OAuth 注册路径构造 user 时未设 InviterId，须在此落库，
 	// 否则被邀请人 inviter_id=0，既不出现在「我邀请的用户」，邀请人也拿不到实名后的邀请积分。
@@ -676,6 +696,10 @@ func (user *User) FinalizeOAuthUserCreation(inviterId int) {
 
 	if common.QuotaForNewUser > 0 {
 		RecordLog(user.Id, LogTypeSystem, fmt.Sprintf("新用户注册赠送 %s", logger.LogQuota(common.QuotaForNewUser)))
+	}
+	// 用 InsertWithTx 带过来的发放数（user 就是写库时那个实例），与 Insert 路径同源
+	if user.newUserPointsGranted > 0 {
+		RecordLog(user.Id, LogTypeSystem, fmt.Sprintf("新用户注册赠送 %d 积分", user.newUserPointsGranted))
 	}
 	// 只要存在邀请人就记录邀请关系（aff_count++），与奖励解耦。
 	// 邀请奖励改为被邀请人实名后发放积分（service.GrantKycPoints），此处不再发放任何额度。

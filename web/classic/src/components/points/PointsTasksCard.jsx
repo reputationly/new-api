@@ -56,7 +56,7 @@ const PointsTasksCard = () => {
       case 'kyc':
         icon = <Gift size={16} />;
         title = t('完成实名认证');
-        desc = t('实名后可参与签到得分，并用积分抵扣消费');
+        desc = t('实名后可参与签到、邀请等积分活动');
         pointsText = `+${task.points}`;
         ctaText = t('去实名');
         onCta = goKyc;

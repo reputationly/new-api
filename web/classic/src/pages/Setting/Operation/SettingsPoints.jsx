@@ -28,6 +28,7 @@ export default function SettingsPoints(props) {
     'points_setting.enabled_groups': '[]', // 以 JSON 字符串存储，避免 compareObjects 误判
     'points_setting.kyc_verified_points': 0,
     'points_setting.kyc_inviter_points': 0,
+    'points_setting.new_user_points': 0,
   });
   const refForm = useRef();
   const [inputsRow, setInputsRow] = useState(inputs);
@@ -117,8 +118,10 @@ export default function SettingsPoints(props) {
               <Col xs={24} sm={12} md={8} lg={8} xl={8}>
                 <Form.Switch
                   field={'points_setting.require_kyc'}
-                  label={t('未实名用户不参加积分')}
-                  extraText={t('发放与使用双卡：未实名不发、积分冻结，实名后解冻')}
+                  label={t('未实名用户不参加积分活动')}
+                  extraText={t(
+                    '只卡发放：签到、邀请人赠分需先实名；已到账的积分随时可花',
+                  )}
                   size='default'
                   checkedText='｜'
                   uncheckedText='〇'
@@ -139,6 +142,16 @@ export default function SettingsPoints(props) {
               </Col>
             </Row>
             <Row gutter={16}>
+              <Col xs={24} sm={12} md={8} lg={8} xl={8}>
+                <Form.InputNumber
+                  field={'points_setting.new_user_points'}
+                  label={t('新用户注册赠送积分')}
+                  extraText={t('0 = 关闭；注册即到账，不受实名开关约束')}
+                  onChange={handleFieldChange('points_setting.new_user_points')}
+                  min={0}
+                  disabled={!inputs['points_setting.enabled']}
+                />
+              </Col>
               <Col xs={24} sm={12} md={8} lg={8} xl={8}>
                 <Form.InputNumber
                   field={'points_setting.kyc_verified_points'}

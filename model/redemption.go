@@ -152,9 +152,8 @@ func Redeem(key string, userId int) (quota int, rewardType string, err error) {
 		if redemption.RewardType == RedemptionRewardPoints && !operation_setting.GetPointsSetting().Enabled {
 			return errors.New("积分系统已关闭，无法兑换积分码")
 		}
-		// 注意：此处刻意不做 RequireKyc/IsUserPointsEligible 检查——设计 §8ter.1 规定
-		// 未实名用户「可兑入、使用受冻结」：码是用户主动持有的，拒兑等于没收；防薅羊毛
-		// 由使用侧 useHybrid 的资格门保证（未实名积分冻结、实名后解冻），兑入侧不设门。
+		// 注意：此处刻意不做 RequireKyc/IsUserPointsEligible 检查——码是用户主动持有的，
+		// 拒兑等于没收。RequireKyc 只是发放侧（签到、邀请人赠分）的门，兑入与使用都不设门。
 		// 按奖励类型分支充值（面值同为 quota unit，同单位直接相加）
 		if redemption.RewardType == RedemptionRewardPoints {
 			err = tx.Model(&User{}).Where("id = ?", userId).Update("points_balance", gorm.Expr("points_balance + ?", redemption.Quota)).Error

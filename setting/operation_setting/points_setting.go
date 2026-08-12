@@ -9,11 +9,12 @@ import (
 // 内部以 quota unit 记账（与 Quota 同单位），1 积分 = 1 分钱（初始值）。
 type PointsSetting struct {
 	Enabled           bool     `json:"enabled"`             // 积分系统总开关
-	RequireKyc        bool     `json:"require_kyc"`         // 未实名用户不得参加积分（发放+使用双卡）
+	RequireKyc        bool     `json:"require_kyc"`         // 未实名用户不得参加积分活动（只卡发放：签到、邀请人赠分；不卡消费）
 	QuotaPerPoint     float64  `json:"quota_per_point"`     // 1 积分对应 quota unit，默认 ≈684.93
 	EnabledGroups     []string `json:"enabled_groups"`      // 允许积分抵扣的分组白名单（空=所有分组只扣余额）
 	KycVerifiedPoints int      `json:"kyc_verified_points"` // 实名通过赠送积分数（本人），0=关闭
 	KycInviterPoints  int      `json:"kyc_inviter_points"`  // 被邀请用户实名通过时邀请人赠送积分数，0=关闭
+	NewUserPoints     int      `json:"new_user_points"`     // 新用户注册赠送积分数，0=关闭；不受 RequireKyc 约束
 }
 
 // 默认配置：总开关关闭、要求实名（fail-safe 防薅羊毛）、白名单空（采购分组零配置即安全）。
@@ -24,6 +25,7 @@ var pointsSetting = PointsSetting{
 	EnabledGroups:     []string{},
 	KycVerifiedPoints: 0,
 	KycInviterPoints:  0,
+	NewUserPoints:     0,
 }
 
 func init() {

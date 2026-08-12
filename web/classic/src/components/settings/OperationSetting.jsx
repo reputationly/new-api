@@ -102,6 +102,7 @@ const OperationSetting = () => {
     'points_setting.enabled_groups': '[]',
     'points_setting.kyc_verified_points': 0,
     'points_setting.kyc_inviter_points': 0,
+    'points_setting.new_user_points': 0,
 
     /* 令牌设置 */
     'token_setting.max_user_tokens': 1000,

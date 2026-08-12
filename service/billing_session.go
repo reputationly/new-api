@@ -404,11 +404,14 @@ func NewBillingSession(c *gin.Context, relayInfo *relaycommon.RelayInfo, preCons
 			return nil, types.NewError(err, types.ErrorCodeQueryDataError, types.ErrOptionWithSkipRetry())
 		}
 
-		// 积分混扣判定：总开关开 + 使用分组在白名单 + （不要求实名 or 已实名）。
+		// 积分混扣判定：总开关开 + 使用分组在白名单。
 		// UsingGroup 此时已是 auto 解析后的真实分组（§2.3）。
+		//
+		// 刻意不判实名：RequireKyc 只是「发放侧」的门（签到、邀请人赠分），进了账的积分
+		// 一律可花。手里有余额却因为没实名花不掉，对用户是没收；防薅羊毛的位置在发放侧
+		// 与白名单分组，不在这里。
 		useHybrid := operation_setting.GetPointsSetting().Enabled &&
-			operation_setting.IsPointsEnabledForGroup(relayInfo.UsingGroup) &&
-			model.IsUserPointsEligible(relayInfo.UserId)
+			operation_setting.IsPointsEnabledForGroup(relayInfo.UsingGroup)
 		userPoints := 0
 		if useHybrid {
 			if p, perr := model.GetUserPoints(relayInfo.UserId, false); perr == nil {

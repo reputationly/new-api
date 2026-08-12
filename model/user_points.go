@@ -10,10 +10,12 @@ import (
 	"gorm.io/gorm"
 )
 
-// IsUserPointsEligible 判断用户是否有资格参加积分（发放 + 使用双卡的统一判定）。
+// IsUserPointsEligible 判断用户是否有资格参加积分**活动**（发放侧的门）。
 // RequireKyc 关闭时恒 true；开启时要求「个人 KYC 通过 或 企业认证通过」（二者其一），
 // 与 middleware/kyc.go 的强制实名判定口径一致。查不到用户时保守拒绝。
-// 放在 model 层以便发放（checkin/kyc_points）与扣费（billing_session）两侧共用。
+//
+// 只管「能不能赚」，不管「能不能花」：签到、邀请人赠分走这道门，而兑换码兑入、注册礼
+// 发放、以及扣费侧的积分抵扣都刻意不走——进了账的积分一律可花，否则等于没收用户资产。
 func IsUserPointsEligible(userId int) bool {
 	if !operation_setting.GetPointsSetting().RequireKyc {
 		return true
@@ -23,6 +25,19 @@ func IsUserPointsEligible(userId int) bool {
 		return false
 	}
 	return cache.KycStatus == KYCStatusApproved || cache.EnterpriseStatus == EnterpriseStatusApproved
+}
+
+// NewUserPointsGrant 返回新用户注册应发放的积分数与对应 quota unit（未配置则两个 0）。
+//
+// 只受积分系统总开关约束，**不受 RequireKyc 约束**：注册礼是拉新钩子，注册那一刻就要
+// 落进账户、在使用日志里看得见、并且能直接花，跟着实名门走就没有钩子可言。规模由积分
+// 数额与注册门槛（邮箱验证/Turnstile）控制，损失面由白名单分组兜底。
+func NewUserPointsGrant() (points int, quota int) {
+	ps := operation_setting.GetPointsSetting()
+	if !ps.Enabled || ps.NewUserPoints <= 0 {
+		return 0, 0
+	}
+	return ps.NewUserPoints, common.PointsToQuota(ps.NewUserPoints)
 }
 
 // 积分账户原子增减，镜像 user.go 的 quota 操作（Redis Hash 异步缓存 + 可选批量更新）。
