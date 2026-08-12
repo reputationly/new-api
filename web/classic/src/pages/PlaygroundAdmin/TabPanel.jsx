@@ -439,6 +439,24 @@ const TabPanel = ({ category, tab, draft }) => {
                             draft.setModelField(storeKey, name, f.key, v || '')
                           }
                         />
+                      ) : f.type === 'int' ? (
+                        <InputNumber
+                          size='small'
+                          min={1}
+                          style={{ width: 150 }}
+                          value={
+                            model[f.key] == null ? undefined : model[f.key]
+                          }
+                          placeholder={t(f.placeholder || '留空=默认')}
+                          onChange={(v) =>
+                            draft.setModelField(
+                              storeKey,
+                              name,
+                              f.key,
+                              v === '' || v == null ? null : Number(v),
+                            )
+                          }
+                        />
                       ) : (
                         <Switch
                           size='small'

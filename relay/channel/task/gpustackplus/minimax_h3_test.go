@@ -96,7 +96,7 @@ func TestPixelSizeWouldPoisonAspectRatio(t *testing.T) {
 
 func TestH3AppliesDurationAndStepsAndCanvas(t *testing.T) {
 	body := map[string]any{"size": "768P", "aspect_ratio": "16:9"}
-	applyMiniMaxH3Request(body, "t2v", 8, false)
+	applyMiniMaxH3Request(body, "t2v", 8, false, 0)
 
 	extra, ok := body["extra_params"].(map[string]any)
 	if !ok {
@@ -125,7 +125,7 @@ func TestH3DropsWanAndInfiniteTalkFields(t *testing.T) {
 		"target_video_length": 129, // wan 的 4n+1 @16fps
 		"video_duration":      15,  // InfiniteTalk 的输出时长上限
 	}
-	applyMiniMaxH3Request(body, "t2v", 8, false)
+	applyMiniMaxH3Request(body, "t2v", 8, false, 0)
 	for _, k := range []string{"target_video_length", "video_duration"} {
 		if _, exists := body[k]; exists {
 			t.Fatalf("%s 是 wan/InfiniteTalk 专属,H3 请求里不该出现", k)
@@ -141,7 +141,7 @@ func TestH3DoesNotOverrideExplicitValues(t *testing.T) {
 		"width":               1280, "height": 720,
 		"extra_params": map[string]any{"duration": 12.5},
 	}
-	applyMiniMaxH3Request(body, "t2v", 8, false)
+	applyMiniMaxH3Request(body, "t2v", 8, false, 0)
 
 	if body["num_inference_steps"] != 50 {
 		t.Fatalf("用户显式给的步数被覆盖了:%v", body["num_inference_steps"])
@@ -161,7 +161,7 @@ func TestH3SkipsCanvasForKeyframeTaskTypes(t *testing.T) {
 	for _, tt := range []string{"i2v", "l2va", "flf2v"} {
 		t.Run(tt, func(t *testing.T) {
 			body := map[string]any{"size": "480P", "aspect_ratio": "16:9"}
-			applyMiniMaxH3Request(body, tt, 5, false)
+			applyMiniMaxH3Request(body, tt, 5, false, 0)
 			if _, exists := body["width"]; exists {
 				t.Fatalf("%s 不该由网关推画布", tt)
 			}
@@ -176,7 +176,7 @@ func TestH3SkipsCanvasForKeyframeTaskTypes(t *testing.T) {
 // 比例不是具名值时不猜:引擎会就此报 400,它的错误信息比我们瞎猜清楚。
 func TestH3SkipsCanvasOnNonNamedRatio(t *testing.T) {
 	body := map[string]any{"size": "480P", "aspect_ratio": "26:15"}
-	applyMiniMaxH3Request(body, "t2v", 5, false)
+	applyMiniMaxH3Request(body, "t2v", 5, false, 0)
 	if _, exists := body["width"]; exists {
 		t.Fatal("非具名比例不该推出画布")
 	}
@@ -199,7 +199,7 @@ func TestH3StripsNestedDurationWhenLocked(t *testing.T) {
 			"target":           map[string]any{"duration_seconds": 15.0},
 		},
 	}
-	applyMiniMaxH3Request(body, "t2v", 5, true) // durationLocked
+	applyMiniMaxH3Request(body, "t2v", 5, true, 0) // durationLocked
 
 	extra := body["extra_params"].(map[string]any)
 	if extra["duration"] != 5.0 {
@@ -220,7 +220,7 @@ func TestH3KeepsOtherTargetKeysWhenLocked(t *testing.T) {
 			"target": map[string]any{"duration_seconds": 15.0, "short_edge": 768},
 		},
 	}
-	applyMiniMaxH3Request(body, "t2v", 5, true)
+	applyMiniMaxH3Request(body, "t2v", 5, true, 0)
 
 	target := body["extra_params"].(map[string]any)["target"].(map[string]any)
 	if _, exists := target["duration_seconds"]; exists {
@@ -235,7 +235,7 @@ func TestH3KeepsOtherTargetKeysWhenLocked(t *testing.T) {
 // 直接下发引擎旋钮,无端剥掉是另一种错。
 func TestH3KeepsNestedDurationWhenUnlocked(t *testing.T) {
 	body := map[string]any{"extra_params": map[string]any{"duration": 12.5}}
-	applyMiniMaxH3Request(body, "t2v", 5, false)
+	applyMiniMaxH3Request(body, "t2v", 5, false, 0)
 	if got := body["extra_params"].(map[string]any)["duration"]; got != 12.5 {
 		t.Fatalf("未锁定时不该动用户的嵌套时长,得到 %v", got)
 	}
@@ -252,7 +252,7 @@ func TestH3KeepsNestedDurationWhenUnlocked(t *testing.T) {
 func TestH3AcceptsUIRatioField(t *testing.T) {
 	// 体验区 pipeline=false 时的真实形态。
 	body := map[string]any{"size": "768P", "ratio": "16:9"}
-	applyMiniMaxH3Request(body, "t2v", 8, false)
+	applyMiniMaxH3Request(body, "t2v", 8, false, 0)
 
 	if body["width"] != 1344 || body["height"] != 768 {
 		t.Fatalf("UI 的 ratio 字段没被采纳,画布 = %vx%v", body["width"], body["height"])
@@ -268,7 +268,7 @@ func TestH3AcceptsUIRatioField(t *testing.T) {
 
 func TestH3AspectRatioWinsOverRatioAlias(t *testing.T) {
 	body := map[string]any{"size": "768P", "aspect_ratio": "4:3", "ratio": "16:9"}
-	applyMiniMaxH3Request(body, "t2v", 8, false)
+	applyMiniMaxH3Request(body, "t2v", 8, false, 0)
 	if body["aspect_ratio"] != "4:3" {
 		t.Fatalf("显式 aspect_ratio 应优先,得到 %v", body["aspect_ratio"])
 	}
@@ -281,7 +281,7 @@ func TestH3DropsWanTargetShape(t *testing.T) {
 	// pipeline=true 时体验区发的是 wan 的 720p 级固定值表,对 H3 既非 32 的倍数
 	// 也不是我们要的档位,拿它反推只会得到错尺寸。
 	body := map[string]any{"size": "768P", "ratio": "16:9", "target_shape": []int{720, 1280}}
-	applyMiniMaxH3Request(body, "t2v", 8, false)
+	applyMiniMaxH3Request(body, "t2v", 8, false, 0)
 	if _, exists := body["target_shape"]; exists {
 		t.Fatal("target_shape 是 wan 专属,不该带到 H3")
 	}
@@ -303,7 +303,7 @@ func TestH3AlwaysDropsResolutionToken(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			applyMiniMaxH3Request(tc.body, tc.task, 5, false)
+			applyMiniMaxH3Request(tc.body, tc.task, 5, false, 0)
 			if _, exists := tc.body["size"]; exists {
 				t.Fatalf("档位词 size 必须清掉,残留 %v", tc.body["size"])
 			}
@@ -314,7 +314,7 @@ func TestH3AlwaysDropsResolutionToken(t *testing.T) {
 // 像素串是引擎认的合法 SizeStr,不该被误删。
 func TestH3KeepsPixelSizeString(t *testing.T) {
 	body := map[string]any{"size": "832x480", "aspect_ratio": "16:9"}
-	applyMiniMaxH3Request(body, "t2v", 5, false)
+	applyMiniMaxH3Request(body, "t2v", 5, false, 0)
 	if body["size"] != "832x480" {
 		t.Fatalf("像素串 size 应保留,得到 %v", body["size"])
 	}
@@ -406,11 +406,52 @@ func TestVideoEngineFamilyIsDeclarationNotName(t *testing.T) {
 	}
 }
 
+// 步数必须与引擎族正交:蒸馏版(Turbo8,标定 8 步)要照样声明 engine 才能拿到请求整形
+// (时长下发 / 17n+5 栅格 / aspect_ratio 归一 / 时长白名单加固),若步数按引擎族一刀切,
+// 它就会被强塞基座的 20 步 —— 速度优势全丢,还会跑到远超标定步数。
+func TestVideoInferenceStepsIsPerModel(t *testing.T) {
+	setVideoConfig(t, `{"models":{
+		"video-h3":{"engine":"minimax-h3"},
+		"video-h3-turbo8":{"engine":"minimax-h3","defaultSteps":8},
+		"video-h3-zero":{"engine":"minimax-h3","defaultSteps":0}
+	}}`)
+	if got := common.VideoInferenceStepsForModel("video-h3-turbo8"); got != 8 {
+		t.Fatalf("蒸馏版步数 = %d, want 8", got)
+	}
+	// 没配 → 0,由调用方回落引擎族基座档。
+	if got := common.VideoInferenceStepsForModel("video-h3"); got != 0 {
+		t.Fatalf("未配 defaultSteps 应返回 0,得到 %d", got)
+	}
+	// 0/负数当没配:步数不存在「0 = 不限」的语义,别套 maxInputMB 那套。
+	if got := common.VideoInferenceStepsForModel("video-h3-zero"); got != 0 {
+		t.Fatalf("defaultSteps=0 应当没配处理,得到 %d", got)
+	}
+	// 候选名(公开名 + 重定向后的上游名)任一命中即可,与引擎族同一组候选。
+	if got := common.VideoInferenceStepsForModel("public-alias", "video-h3-turbo8"); got != 8 {
+		t.Fatalf("候选名任一命中即可,得到 %d", got)
+	}
+}
+
+// 模型配了步数就按它下发;没配才回落基座档;调用方显式给的仍然最优先。
+func TestH3StepsFollowModelConfig(t *testing.T) {
+	body := map[string]any{"size": "480P", "aspect_ratio": "16:9"}
+	applyMiniMaxH3Request(body, "t2v", 5, false, 8)
+	if body["num_inference_steps"] != 8 {
+		t.Fatalf("步数 = %v, want 8(蒸馏版按模型配置走)", body["num_inference_steps"])
+	}
+
+	body = map[string]any{"num_inference_steps": 50}
+	applyMiniMaxH3Request(body, "t2v", 5, false, 8)
+	if body["num_inference_steps"] != 50 {
+		t.Fatalf("调用方显式给的步数被模型配置覆盖了:%v", body["num_inference_steps"])
+	}
+}
+
 // 参考生视频要推画布:Ref2VA 接受具名 aspect_ratio(不传默认 16:9),与关键帧不同。
 // 不推的话引擎按 short_edge=768 自算,每条多花一倍时间。
 func TestH3AppliesCanvasForR2VA(t *testing.T) {
 	body := map[string]any{"size": "480P", "aspect_ratio": "16:9"}
-	applyMiniMaxH3Request(body, "r2va", 5, false)
+	applyMiniMaxH3Request(body, "r2va", 5, false, 0)
 	if body["width"] != 864 || body["height"] != 480 {
 		t.Fatalf("r2va 应推出 480P 画布,得到 %vx%v", body["width"], body["height"])
 	}

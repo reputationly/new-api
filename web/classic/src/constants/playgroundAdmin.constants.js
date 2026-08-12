@@ -145,6 +145,15 @@ export const PLAYGROUND_MODEL_LEVEL_FIELDS = {
       options: VIDEO_ENGINE_OPTIONS_INLINE,
       help: '决定后端按哪套约定整形请求（帧数约定 / 时长字段 / 画布推导）。MiniMax H3 与 LightX2V 系在这三处完全不同，选错不会报错、只会静默出错档。属模型能力，与 tab 无关。',
     },
+    {
+      key: 'defaultSteps',
+      label: '采样步数',
+      type: 'int',
+      placeholder: '留空=引擎族默认（H3 为 20）',
+      // 与引擎族正交的理由见后端 common.VideoInferenceStepsForModel：蒸馏版必须照样
+      // 声明 engine 才能拿到请求整形，若步数只能按引擎族给，它就会被强塞基座档。
+      help: '蒸馏版（如 Turbo8 标定 8 步）与基座共用引擎族但步数不同，须按模型单独配。留空则按引擎族默认。属模型能力，与 tab 无关。',
+    },
   ],
 };
 

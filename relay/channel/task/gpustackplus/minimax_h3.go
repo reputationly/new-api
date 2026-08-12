@@ -28,12 +28,16 @@ const (
 	// 画布两轴都必须对齐到 32(pipeline:889-890 的 int(x)//32*32)。
 	h3CanvasMultiple = 32
 
-	// 生产档步数。引擎自身兜底是 50(pipeline 的 `num_inference_steps or 50`),
-	// 即 2.5 倍耗时(480p:70s → 117-165s)。
+	// 基座的生产档步数,**仅在模型没配 defaultSteps 时兜底**。引擎自身兜底是 50
+	// (pipeline 的 `num_inference_steps or 50`),即 2.5 倍耗时(480p:70s → 117-165s)。
 	//
 	// 注:vllm-omni #57 之后 deploy-configs/minimax_h3_a100_40g.yaml 的
 	// default_sampling_params 也设了 20,但**我们仍要显式下发** —— 部署档 §3 那条裸 CLI
 	// 启动命令不带 --deploy-config(引擎会回落 50 步),不该把"跑多快"押在对方的启动参数上。
+	//
+	// ⚠️ 别再把它当成"H3 就该跑 20 步"的常量往回改成硬编码:蒸馏版(Turbo8)标定 8 步,
+	// 按引擎族一刀切就等于逼蒸馏模型在"丢速度"和"丢请求整形"之间二选一。
+	// 详见 common.VideoInferenceStepsForModel 的注释。
 	h3DefaultInferenceSteps = 20
 
 	// 时长硬区间(pipeline MINIMAX_H3_MIN/MAX_OUTPUT_SECONDS)。超界引擎 400。
@@ -154,9 +158,12 @@ func h3EnsureExtraParams(body map[string]any) map[string]any {
 // durationSec 为 0 表示本次请求没给时长,此时不写 duration,由引擎按任务默认帧数决定
 // (t2va/fl2va 是 209 帧 ≈ 8.708 s)。
 //
+// steps 为该模型配置的采样步数(common.VideoInferenceStepsForModel),0 表示没配、
+// 回落到基座档 h3DefaultInferenceSteps。
+//
 // **调用方已有的显式取值一律优先**:metadata 是开放透传的(API 用户可直接下发
 // extra_params / num_inference_steps 等引擎旋钮),这里只补默认,不覆盖用户意图。
-func applyMiniMaxH3Request(body map[string]any, taskType string, durationSec int, durationLocked bool) {
+func applyMiniMaxH3Request(body map[string]any, taskType string, durationSec int, durationLocked bool, steps int) {
 	extra := h3EnsureExtraParams(body)
 
 	// ── 时长白名单加固 ─────────────────────────────────────────────────────
@@ -205,8 +212,13 @@ func applyMiniMaxH3Request(body map[string]any, taskType string, durationSec int
 	delete(body, "video_duration")
 
 	// ── 步数 ───────────────────────────────────────────────────────────────
+	// 按模型取,没配才回落基座档。蒸馏版(Turbo8,标定 8 步)与基座共用引擎族,
+	// 但步数必须各按各的,见 h3DefaultInferenceSteps 处的注释。
 	if _, ok := body["num_inference_steps"]; !ok {
-		body["num_inference_steps"] = h3DefaultInferenceSteps
+		if steps <= 0 {
+			steps = h3DefaultInferenceSteps
+		}
+		body["num_inference_steps"] = steps
 	}
 
 	// ── 宽高比字段归一 ─────────────────────────────────────────────────────

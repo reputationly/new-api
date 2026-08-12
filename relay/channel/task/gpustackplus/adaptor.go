@@ -475,7 +475,11 @@ func (a *TaskAdaptor) BuildRequestBody(c *gin.Context, info *relaycommon.RelayIn
 	if isMiniMaxH3 {
 		// durationLocked 必须传进去:上游那道 durationOverrideKeys 只剥顶层键,
 		// 剥不到 H3 走的 extra_params 嵌套时长,不在这里补就是一条白名单绕过口。
-		applyMiniMaxH3Request(body, taskType, durationSec, durationLocked)
+		//
+		// 步数按模型取(蒸馏版与基座共用引擎族但标定步数不同),取不到回落基座档。
+		// 候选名与引擎族用同一组:公开名与重定向后的上游名都可能是配置里的键。
+		steps := common.VideoInferenceStepsForModel(req.Model, info.OriginModelName, modelName)
+		applyMiniMaxH3Request(body, taskType, durationSec, durationLocked, steps)
 	}
 	// s2v(数字人)除外:引擎不读 target_video_length,下发它没有任何效果,只会让人误以为
 	// 时长可控。s2v 的时长走下面的 video_duration。别恢复。

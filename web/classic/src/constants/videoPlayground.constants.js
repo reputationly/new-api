@@ -473,6 +473,13 @@ const toAudioSec = (v) => {
   return Number.isFinite(n) && n >= 0 ? n : null;
 };
 
+// 采样步数:必须 > 0，0/负数/非数一律当没配（后端回落引擎族的基座档），
+// 与 maxInputMB 那种「0 = 不限」的语义相反，别套用 toInputMB。
+const toSteps = (v) => {
+  const n = parseInt(v, 10);
+  return Number.isFinite(n) && n > 0 ? n : null;
+};
+
 // tab 子层规范化：只保留声明过的字段，值的清洗规则与模型级一致。
 // 未配的字段一律不落键（undefined），这样 tabScopedValue 才能正确地"落空即降级"。
 const normalizeVideoTabEntry = (cfg) => {
@@ -556,6 +563,8 @@ export const parseVideoModelConfig = (raw) => {
           // 丢了不会报错,只会让 H3 悄悄退回 wan 的形态。
           // 序列化侧不用管:recomputeModelLevel 是 {...model} 整体展开,只要 parse 保住就能往返。
           engine: normalizeEngine(cfg?.engine),
+          // 同上,白名单式重建:漏了它每次保存都会把步数抹掉,蒸馏模型悄悄退回基座档。
+          defaultSteps: toSteps(cfg?.defaultSteps),
           tabs: normalizeTabsMap(cfg?.tabs, normalizeVideoTabEntry),
         };
       });

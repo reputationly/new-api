@@ -483,6 +483,45 @@ func VideoEngineFamilyForModel(candidates ...string) string {
 	return ""
 }
 
+// VideoInferenceStepsForModel 返回该模型声明的采样步数
+// (VideoModelConfig.models[name].defaultSteps),未声明或非正数返回 0。
+//
+// 存在的理由是蒸馏模型:同一个引擎族下,基座与蒸馏版的标定步数可以差一个数量级
+// (H3 基座 20 步,Turbo8 蒸馏版 8 步)。而引擎族是**每次请求都要下发的**整形依据 ——
+// 蒸馏模型必须照样声明 engine 才能拿到时长下发、17n+5 帧栅格、aspect_ratio 归一和那道
+// 时长白名单加固,于是它也一并吃到引擎族的默认步数。步数若只能按引擎族给一个常量,
+// 结局是二选一:要么声明 engine 让蒸馏版被强塞 20 步(速度优势全丢,还会跑到远超标定
+// 步数导致画面劣化),要么不声明 engine 换取实例侧 deploy-config 的 8 步生效、代价是
+// 上面那四项整形全部失效。所以步数必须与引擎族正交,单独按模型配。
+//
+// 与 engine 同为**模型级**,没有 tab 层:部署跑多少步与用户选哪个玩法无关。
+func VideoInferenceStepsForModel(candidates ...string) int {
+	OptionMapRWMutex.RLock()
+	raw := OptionMap["VideoModelConfig"]
+	OptionMapRWMutex.RUnlock()
+	if strings.TrimSpace(raw) == "" {
+		return 0
+	}
+	var cfg struct {
+		Models map[string]struct {
+			DefaultSteps *int `json:"defaultSteps"`
+		} `json:"models"`
+	}
+	if err := UnmarshalJsonStr(raw, &cfg); err != nil {
+		return 0
+	}
+	for _, name := range candidates {
+		m, ok := cfg.Models[name]
+		if !ok {
+			continue
+		}
+		if m.DefaultSteps != nil && *m.DefaultSteps > 0 {
+			return *m.DefaultSteps
+		}
+	}
+	return 0
+}
+
 // AudioRefAudioMaxBytesForModel 返回该模型参考音大小上限(字节;0=不限制)及是否已配置。
 // 优先 tab 级,其次模型级,再次全局 default。用于服务端物化参考音时兜底(前端上传限制可被直连绕过)。
 // 注:语音四个玩法共用 task_type=tts,解析不出 tab,实际总是走模型级。
