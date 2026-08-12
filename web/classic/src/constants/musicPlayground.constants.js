@@ -6,7 +6,10 @@
 // 通用状态机/轮询/内容地址等工具直接复用 videoPlayground.constants;结果播放/下载按返回的
 // content-url + media-type 处理,格式无关(见 MusicChatArea)。
 
-import { tabScopedValue } from './playgroundAdmin.constants';
+import {
+  normalizeModelNote,
+  tabScopedValue,
+} from './playgroundAdmin.constants';
 
 export {
   VIDEO_API_ENDPOINTS as MUSIC_API_ENDPOINTS,
@@ -338,6 +341,8 @@ const normalizeMusicTabs = (raw) => {
     if (cfg?.translation && typeof cfg.translation === 'object') {
       entry.translation = parseTranslationCfg(cfg.translation);
     }
+    const note = normalizeModelNote(cfg?.note);
+    if (note) entry.note = note;
     out[tabKey] = entry;
   });
   return out;

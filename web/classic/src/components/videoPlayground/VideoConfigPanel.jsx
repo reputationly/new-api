@@ -18,9 +18,14 @@ import {
   Proportions,
 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
-import { renderGroupOption, selectFilter } from '../../helpers';
+import {
+  makeModelOptionRenderer,
+  renderGroupOption,
+  selectFilter,
+} from '../../helpers';
 import ImageUrlInput from '../playground/ImageUrlInput';
 import MediaFileInput from './MediaFileInput';
+import { useModelNotes } from '../../hooks/common/useModelNotes';
 import { tabHasField } from '../../constants/playgroundAdmin.constants';
 import { imageConstraintsForMode } from '../../constants/videoPlayground.constants';
 
@@ -155,6 +160,9 @@ const VideoConfigPanel = ({
 
   const groupOptions = ensureOption(groups || [], inputs.group);
   const modelOptions = ensureOption(models || [], inputs.model);
+  // 运营给该模型在本玩法下写的备注（体验区管理里配），下拉选项与选中项下方都展示。
+  const noteOf = useModelNotes(category, mode);
+  const selectedNote = noteOf(inputs.model);
   const sizeOptions = ensureOption(
     (availableSizes || []).map((s) => ({ label: s, value: s })),
     inputs.size,
@@ -245,12 +253,22 @@ const VideoConfigPanel = ({
             onChange={(value) => onInputChange('model', value)}
             value={inputs.model}
             optionList={modelOptions}
+            renderOptionItem={makeModelOptionRenderer(noteOf)}
             emptyContent={t('当前分组下暂无视频模型')}
             disabled={disabled}
             style={{ width: '100%' }}
             dropdownStyle={{ width: '100%', maxWidth: '100%' }}
             className='!rounded-lg'
           />
+          {selectedNote && (
+            <Typography.Text
+              type='tertiary'
+              size='small'
+              className='block mt-1'
+            >
+              {selectedNote}
+            </Typography.Text>
+          )}
         </div>
 
         {/* 主图上传(图生视频:首帧;首尾帧:首帧+尾帧;数字人:人物图)。锁定/历史态改为

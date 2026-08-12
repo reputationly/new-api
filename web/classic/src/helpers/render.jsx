@@ -947,6 +947,43 @@ export function truncateText(text, maxWidth = 200) {
   }
 }
 
+// 体验区模型下拉的选项渲染：模型名 + 运营在体验区管理里写的备注（该模型在当前玩法下
+// 适合什么场景）。noteOf 见 hooks/common/useModelNotes；没有备注的模型只显示名字，
+// 与默认渲染视觉一致。
+export const makeModelOptionRenderer =
+  (noteOf) =>
+  ({ disabled, selected, focused, value, label, onClick, onMouseEnter }) => {
+    const note = noteOf ? noteOf(value) : '';
+    return (
+      <div
+        style={{
+          display: 'flex',
+          flexDirection: 'column',
+          gap: '2px',
+          padding: '8px 16px',
+          cursor: disabled ? 'not-allowed' : 'pointer',
+          opacity: disabled ? 0.5 : 1,
+          backgroundColor: selected
+            ? 'var(--semi-color-primary-light-default)'
+            : focused
+              ? 'var(--semi-color-fill-0)'
+              : 'transparent',
+        }}
+        onClick={() => !disabled && onClick && onClick()}
+        onMouseEnter={(e) => !disabled && onMouseEnter && onMouseEnter(e)}
+      >
+        <Typography.Text strong type={disabled ? 'tertiary' : undefined}>
+          {label ?? value}
+        </Typography.Text>
+        {note && (
+          <Typography.Text type='secondary' size='small'>
+            {note}
+          </Typography.Text>
+        )}
+      </div>
+    );
+  };
+
 export const renderGroupOption = (item) => {
   const {
     disabled,

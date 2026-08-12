@@ -306,6 +306,25 @@ const TabPanel = ({ category, tab, draft }) => {
                   {t('从本 tab 移除')}
                 </Button>
               </div>
+              {/* 模型备注:这个模型在**本 tab 下**适合什么场景,直接显示在体验区的模型
+                  下拉里。tab 级而非模型级 —— 同一模型在文生视频与图生视频下的适用场景
+                  本就不同,合成一条只会写成放之四海皆准的废话。 */}
+              <div className='mb-3'>
+                <Text size='small'>{t('模型备注')}</Text>
+                <Input
+                  value={entry.note || ''}
+                  onChange={(v) =>
+                    draft.setTabField(storeKey, tab.key, name, 'note', v)
+                  }
+                  placeholder={t('如：写实人像效果好，出图快，适合批量试稿')}
+                  className='mt-1'
+                />
+                <Text type='tertiary' size='small' className='block mt-1'>
+                  {t(
+                    '留空=不展示。填了以后展示在体验区的模型下拉选项与选中项下方，帮用户判断该用哪个模型。',
+                  )}
+                </Text>
+              </div>
               {/* 玩法声明:本 tab 覆盖多个门面 task_type 时,由运营指明这个模型是哪一个。
                   不走 fields —— 它不是参数,不该被 recomputeModelLevel 反推到模型级。 */}
               {tab.taskTypeChoices && (

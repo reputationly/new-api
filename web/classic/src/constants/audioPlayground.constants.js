@@ -2,7 +2,10 @@
 // (POST /pg/videos, task_type=tts),仅参数与结果形态不同(音频 .wav)。
 // 状态机/轮询/内容地址等通用工具直接复用 videoPlayground.constants。
 
-import { tabScopedValue } from './playgroundAdmin.constants';
+import {
+  normalizeModelNote,
+  tabScopedValue,
+} from './playgroundAdmin.constants';
 
 export {
   VIDEO_API_ENDPOINTS as AUDIO_API_ENDPOINTS,
@@ -436,6 +439,8 @@ const normalizeAudioTabs = (raw) => {
     if (chars != null) entry.maxChars = chars;
     const mb = toPositiveInt(cfg?.refAudioMaxMB);
     if (mb != null) entry.refAudioMaxMB = mb;
+    const note = normalizeModelNote(cfg?.note);
+    if (note) entry.note = note;
     out[tabKey] = entry;
   });
   return out;

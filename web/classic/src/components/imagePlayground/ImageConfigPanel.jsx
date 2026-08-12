@@ -17,12 +17,18 @@ import {
   Gauge,
 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
-import { renderGroupOption, selectFilter } from '../../helpers';
+import {
+  makeModelOptionRenderer,
+  renderGroupOption,
+  selectFilter,
+} from '../../helpers';
 import ImageUrlInput from '../playground/ImageUrlInput';
+import { useModelNotes } from '../../hooks/common/useModelNotes';
 import { IMAGE_MAX_EDIT_IMAGES } from '../../constants/imagePlayground.constants';
 
 const ImageConfigPanel = ({
   isI2I = false,
+  mode = 'text2image',
   inputs,
   groups,
   models,
@@ -43,6 +49,9 @@ const ImageConfigPanel = ({
 
   const groupOptions = ensureOption(groups || [], inputs.group);
   const modelOptions = ensureOption(models || [], inputs.model);
+  // 运营给该模型在本玩法下写的备注（体验区管理里配），下拉选项与选中项下方都展示。
+  const noteOf = useModelNotes('image', mode);
+  const selectedNote = noteOf(inputs.model);
   const sizeOptions = ensureOption(
     (availableSizes || []).map((s) => ({ label: s, value: s })),
     inputs.size,
@@ -146,12 +155,22 @@ const ImageConfigPanel = ({
             onChange={(value) => onInputChange('model', value)}
             value={inputs.model}
             optionList={modelOptions}
+            renderOptionItem={makeModelOptionRenderer(noteOf)}
             emptyContent={t('当前分组下暂无图片模型')}
             disabled={disabled}
             style={{ width: '100%' }}
             dropdownStyle={{ width: '100%', maxWidth: '100%' }}
             className='!rounded-lg'
           />
+          {selectedNote && (
+            <Typography.Text
+              type='tertiary'
+              size='small'
+              className='block mt-1'
+            >
+              {selectedNote}
+            </Typography.Text>
+          )}
         </div>
 
         {/* 底图上传（仅图生图）：新对话可编辑，锁定/历史态显示只读缩略图。 */}

@@ -115,6 +115,7 @@ const AudioPlaygroundBody = ({ mode }) => {
           models={models}
           onInputChange={handleInputChange}
           disabled={locked}
+          mode={mode}
           engine={engine}
           needsVoice={needsVoice}
           needsEmotion={needsEmotion}

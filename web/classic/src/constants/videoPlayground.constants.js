@@ -1,6 +1,9 @@
 // 视频模型相关常量
 
-import { tabScopedValue } from './playgroundAdmin.constants';
+import {
+  normalizeModelNote,
+  tabScopedValue,
+} from './playgroundAdmin.constants';
 
 export const VIDEO_API_ENDPOINTS = {
   VIDEO_GENERATIONS: '/pg/videos', // POST 提交任务
@@ -504,6 +507,9 @@ const normalizeVideoTabEntry = (cfg) => {
     .trim()
     .toLowerCase();
   if (taskType) out.taskType = taskType;
+  // 模型备注：纯展示项(体验区模型下拉里给用户看)，与 taskType 同理不进 tab.fields。
+  const note = normalizeModelNote(cfg?.note);
+  if (note) out.note = note;
   return out;
 };
 

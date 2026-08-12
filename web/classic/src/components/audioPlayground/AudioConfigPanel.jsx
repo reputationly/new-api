@@ -23,9 +23,15 @@ import {
   Wand2,
 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
-import { renderGroupOption, selectFilter, showError } from '../../helpers';
+import {
+  makeModelOptionRenderer,
+  renderGroupOption,
+  selectFilter,
+  showError,
+} from '../../helpers';
 import MediaFileInput from '../videoPlayground/MediaFileInput';
 import VoiceRecorderModal from './VoiceRecorderModal';
+import { useModelNotes } from '../../hooks/common/useModelNotes';
 import {
   PRESET_VOICES,
   VOICE_UPLOAD_VALUE,
@@ -49,6 +55,7 @@ const AudioConfigPanel = ({
   models,
   onInputChange,
   disabled = false,
+  mode = 'emotion',
   engine = 'indextts',
   needsVoice = true,
   needsEmotion = true,
@@ -78,6 +85,9 @@ const AudioConfigPanel = ({
 
   const groupOptions = ensureOption(groups || [], inputs.group);
   const modelOptions = ensureOption(models || [], inputs.model);
+  // 运营给该模型在本玩法下写的备注（体验区管理里配），下拉选项与选中项下方都展示。
+  const noteOf = useModelNotes('audio', mode);
+  const selectedNote = noteOf(inputs.model);
 
   const voiceOptions = [
     ...PRESET_VOICES.map((v) => ({ label: t(v.label), value: v.id })),
@@ -208,12 +218,22 @@ const AudioConfigPanel = ({
             onChange={(value) => onInputChange('model', value)}
             value={inputs.model}
             optionList={modelOptions}
+            renderOptionItem={makeModelOptionRenderer(noteOf)}
             emptyContent={t('当前分组下暂无语音模型')}
             disabled={disabled}
             style={{ width: '100%' }}
             dropdownStyle={{ width: '100%', maxWidth: '100%' }}
             className='!rounded-lg'
           />
+          {selectedNote && (
+            <Typography.Text
+              type='tertiary'
+              size='small'
+              className='block mt-1'
+            >
+              {selectedNote}
+            </Typography.Text>
+          )}
         </div>
 
         {/* 参考音色(情感合成,IndexTTS zero-shot 克隆源,必选):预置或上传,可试听 */}

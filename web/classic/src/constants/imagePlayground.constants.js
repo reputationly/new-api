@@ -1,6 +1,9 @@
 // 图片模型相关常量
 
-import { tabScopedValue } from './playgroundAdmin.constants';
+import {
+  normalizeModelNote,
+  tabScopedValue,
+} from './playgroundAdmin.constants';
 
 // 提示词预设:点击对应按钮清空输入框并填入该提示词(体验区快速试玩,仅文生图展示)。
 export const IMAGE_PROMPT_PRESETS = [
@@ -104,6 +107,8 @@ const normalizeImageTabs = (raw) => {
     const entry = {};
     const sizes = normalizeSizeList(cfg?.sizes);
     if (sizes.length) entry.sizes = sizes;
+    const note = normalizeModelNote(cfg?.note);
+    if (note) entry.note = note;
     out[tabKey] = entry;
   });
   return out;

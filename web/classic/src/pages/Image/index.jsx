@@ -43,6 +43,7 @@ const ImagePlaygroundBody = ({ mode }) => {
       <div style={{ width: isMobile ? '100%' : 300, flexShrink: 0 }}>
         <ImageConfigPanel
           isI2I={isI2I}
+          mode={mode}
           inputs={inputs}
           groups={groups}
           models={models}

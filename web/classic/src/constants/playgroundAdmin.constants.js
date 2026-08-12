@@ -569,6 +569,35 @@ export const tabScopedValue = (modelEntry, tabKey, field) => {
   return v;
 };
 
+// ---------------------------------------------------------------------------
+// 模型备注（tab 级）
+// ---------------------------------------------------------------------------
+// 运营在体验区管理的模型卡片里写一句「这个模型在这个玩法下适合什么场景」，体验区的
+// 模型下拉直接展示，省得用户对着一堆模型名瞎猜。
+//
+// 粒度是 tab 级（存在 models[name].tabs[tabKey].note）而不是模型级：同一个模型挂在
+// 文生视频与图生视频下，适用场景本来就不是一句话——模型级只能写一条，等于逼运营写
+// 一句放之四海皆准的废话。tab 级各写各的，缺省=不展示。
+//
+// 它是纯展示项，不进 tab.fields：fields 是「参数」，会被 recomputeModelLevel 反推到
+// 模型级供直连请求兜底，备注没有这层语义。
+export const normalizeModelNote = (v) =>
+  typeof v === 'string' ? v.trim() : '';
+
+// 由 /api/status 里的原始 option（字符串或对象）建「模型名 -> 该 tab 备注」索引。
+// 体验区侧只要备注这一个字段，走通用 JSON 解析即可，不必把四份配置各自的规范化函数
+// 都拖进用户端。
+export const buildModelNoteIndex = (raw, tabKey) => {
+  const index = new Map();
+  if (!tabKey) return index;
+  const parsed = parseModelConfig(raw);
+  Object.entries(parsed?.models || {}).forEach(([name, cfg]) => {
+    const note = normalizeModelNote(cfg?.tabs?.[tabKey]?.note);
+    if (note) index.set(name, note);
+  });
+  return index;
+};
+
 // 由 tabs 的键派生能力标签（模型广场展示用）。运营把模型加进哪个 tab，它就有哪个
 // 能力——不再单独勾一遍能力标签，避免「勾了能力却没配参数」两处对不上。
 // extra：配置里已存在、但当前没有对应 tab 的能力标签（如图像的「图像编辑」等尚未
