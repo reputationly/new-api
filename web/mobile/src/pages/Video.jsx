@@ -10,7 +10,14 @@ import {
 } from 'antd-mobile';
 
 import { useVideoGeneration } from '@classic/hooks/videoPlayground/useVideoGeneration';
-import { tabHasField } from '@classic/constants/playgroundAdmin.constants';
+import {
+  VIDEO_ENGINE_MINIMAX_H3,
+  tabHasField,
+} from '@classic/constants/playgroundAdmin.constants';
+import {
+  buildLocalH3Prompt,
+  parseH3Prompt,
+} from '@classic/constants/h3Prompt.constants';
 import { useVisibleModes, useDesktopOnlyHint } from '../hooks/useVisibleModes';
 import { useAutoOpenLatest } from '../hooks/useAutoOpenLatest';
 
@@ -54,6 +61,12 @@ export const VideoBody = ({ mode, category = 'video' }) => {
     availableSizes,
     availableDurations,
     availableAspectRatios,
+    // 「AI 优化提示词」要知道的两件事,与桌面端同源(hook 已经算好):所选模型属哪个
+    // 引擎族,以及本次请求的输入形态与时长。h3AlignContext 另供不点优化直接发时本地
+    // 拼对齐指令用。
+    optimizeEngine,
+    optimizeContext,
+    h3AlignContext,
     messages,
     generating,
     locked,
@@ -267,6 +280,36 @@ export const VideoBody = ({ mode, category = 'video' }) => {
           : needsImage
             ? '上传帧图并输入提示词开始生成'
             : '输入提示词开始生成视频';
+
+  // MiniMax H3 不点「AI 优化」直接发时的本地兜底,与桌面端 buildLocalH3Prompt 同源。
+  //
+  // 这条路必须自己站得住:优化按钮可能**根本不存在**（运营没配优化模型时
+  // usePromptOptimize 的 available 为 false,按钮不渲染),不能指望用户先去点优化。
+  // 而引擎对 prompt 完全不解析,一句中文散文裸发上去不会报错、只会默默出差档。
+  //
+  // 判「是不是已经是 H3 结构」用 parseH3Prompt（不像 H3 就返回 null）而不是自己记一个
+  // 「优化过了」的标志位：点完优化的结果会回填进同一个输入框,用标志位的话用户手改一
+  // 个字就得同步维护它,而 parseH3Prompt 是对着文本本身判的,手写、手改、优化过三种
+  // 情况一视同仁。漏判的后果是二次包裹成
+  // integrated_multimodal_description: integrated_multimodal_description: …
+  //
+  // 手机端只有一个输入框,音景与背景音乐没有对应控件,故只给 main —— 空段整段省略
+  // （不补 N/A，那是「明确要求静音」的意思），两段交给模型自己配。
+  //
+  // 超分与配音一并排除,与桌面端 isH3 的判据保持一致:那两个玩法的提示词根本不是画面
+  // 描述（配音写的是「画面里什么在发声」，超分压根没有提示词），包成
+  // integrated_multimodal_description 是把一段话塞进不属于它的字段。
+  const sendPrompt = (text) => {
+    const value = String(text || '');
+    const useH3 = optimizeEngine === VIDEO_ENGINE_MINIMAX_H3 && !isSR && !isDub;
+    if (!useH3 || !value.trim()) {
+      return generate(text);
+    }
+    if (parseH3Prompt(value)) return generate(text);
+    return generate(
+      buildLocalH3Prompt({ main: value }, h3AlignContext || { tabKey: mode }),
+    );
+  };
 
   const renderAssistant = (m) => {
     if (m.status === 'completed' && m.videoUrl) {
@@ -486,10 +529,12 @@ export const VideoBody = ({ mode, category = 'video' }) => {
         />
       </div>
       <PromptBar
-        onSend={generate}
+        onSend={sendPrompt}
         generating={generating}
         optimizeCategory={category}
         optimizeTab={mode}
+        optimizeEngine={optimizeEngine}
+        optimizeContext={optimizeContext}
         disabled={turnLimitReached || missingRequiredImage}
         // 配乐的提示词是可选的（留空=按画面自动配），别拦住只上传视频就想发的用户。
         allowEmpty={isDub}

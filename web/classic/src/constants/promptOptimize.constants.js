@@ -118,7 +118,11 @@ export const DEFAULT_OPTIMIZE_SYSTEM_PROMPTS = {
 
 // 取某个 tab 的默认系统提示词(运营未改写时用它)。
 // engine 是所选模型的引擎族声明,只有 minimax-h3 会换模板;传空即维持原行为
-// (手机端与图像/音乐体验区都不传,行为不变)。
+// (图像/音乐体验区不传,行为不变)。
+//
+// **视频体验区两端都要传**:手机端一度没传,于是选了 H3 模型点优化拿到的是通用模板 ——
+// 那份输出契约要求「只回正文、不要字段名」,恰是 H3 要的反面,而引擎不解析 prompt,
+// 不报错、只默默出差档。别再照着「手机端不用传」的旧结论办。
 export const defaultOptimizeSystemPrompt = (tabKey, engine) =>
   engine === VIDEO_ENGINE_MINIMAX_H3
     ? h3OptimizeSystemPrompt(tabKey)
