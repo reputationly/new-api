@@ -27,6 +27,25 @@ export const safeRedirectTarget = (value) =>
     ? value
     : '';
 
+// 把浏览器绝对路径转成 react-router 的 navigate() 能吃的路径，即剥掉 basename。
+//
+// **手机端必须过这一道**：它的 router 是 createBrowserRouter(..., { basename: '/m' })，
+// navigate() 收到的路径会被自动补上 /m。而 buildLoginUrl 存进 ?redirect= 的是
+// window.location.pathname —— 那是含 basename 的完整浏览器路径（/m/console），
+// 直接丢给 navigate() 就成了 /m/m/console。
+//
+// ?redirect= 里存完整路径是有意的：它是 URL 参数，语义上就该是一个浏览器能直接用的
+// 地址（整页跳转、复制粘贴都成立）。basename 是 react-router 的私事，在消费端剥。
+//
+// 前缀必须后跟 / 或到头才算命中，否则 /mystuff 会被误剥成 ystuff。
+export const toRouterPath = (target, basename) => {
+  if (!target || !basename || basename === '/') return target;
+  const base = basename.replace(/\/$/, '');
+  if (target === base) return '/';
+  if (target.startsWith(base + '/')) return target.slice(base.length);
+  return target;
+};
+
 // 构造带回跳与过期标记的登录地址。loginPath 由调用方给：桌面端 /login，
 // 手机端 /m/login（手机端本就在 /m 下，直接给终点省掉 mobile-router 的 UA 跳转）。
 export const buildLoginUrl = (loginPath) => {

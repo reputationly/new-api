@@ -9,7 +9,9 @@ import { API, updateAPI } from '@classic/helpers/api';
 import {
   LOGIN_REDIRECT_PARAM,
   safeRedirectTarget,
+  toRouterPath,
 } from '@classic/helpers/authRedirect';
+import { MOBILE_BASENAME } from '../utils/basename';
 import { setUserData } from '@classic/helpers/data';
 
 import {
@@ -53,13 +55,19 @@ const Login = () => {
   const turnstileSiteKey = status.turnstile_site_key || '';
 
   // 回跳目标的两个来源：
-  //   - location.state.from：AuthRoute 在 SPA 内跳登录页时带的，信息最全，优先；
+  //   - location.state.from：AuthRoute 在 SPA 内跳登录页时带的，信息最全，优先。
+  //     它的 pathname 已被 react-router 剥过 basename（/console），可直接用；
   //   - ?redirect=：会话过期被 handleUnauthorized 整页跳回来的，state 在整页跳转下
-  //     活不下来，只能走 query。必须过 safeRedirectTarget 挡开放重定向。
+  //     活不下来，只能走 query。里面存的是完整浏览器路径（/m/console），**必须过
+  //     toRouterPath 剥掉 basename**，否则 navigate() 会再补一次 /m，跳成 /m/m/console。
+  //     safeRedirectTarget 则是挡开放重定向。
   const from =
     location.state?.from?.pathname ||
-    safeRedirectTarget(
-      new URLSearchParams(location.search).get(LOGIN_REDIRECT_PARAM),
+    toRouterPath(
+      safeRedirectTarget(
+        new URLSearchParams(location.search).get(LOGIN_REDIRECT_PARAM),
+      ),
+      MOBILE_BASENAME,
     ) ||
     '/';
 
