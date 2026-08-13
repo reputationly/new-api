@@ -58,6 +58,30 @@ const showDownloadLink = (url) => {
 // navigator.share —— 音视频在微信里没有任何本地保存路径，这是平台限制。所以传了
 // taskId 的音视频在微信下改走「复制免登录分享链接」：链接粘到外部浏览器即可观看
 // 下载，也能直接发给好友。图片不受此限（微信原生支持长按保存/转发），保持原提示。
+// 拿这条任务成品的签名直链（带 Content-Disposition: attachment）。
+// 拿不到不是致命错——调用方后面还有 blob 兜底，所以吞掉异常返回空串即可。
+const fetchDownloadUrl = async (taskId) => {
+  try {
+    const res = await API.get(
+      `/api/task/self/${encodeURIComponent(taskId)}/download`,
+    );
+    const { success, data } = res.data;
+    return success && data.attachment ? data.url : '';
+  } catch (e) {
+    return '';
+  }
+};
+
+// 走 a[download] 之后的提示。不能报「已保存」：夸克/UC/微信这类 WebView 直接忽略
+// download 属性，不报错也不下载，谎报成功比什么都不说更糟——用户会以为文件已在相册
+// 里而不再去找。所以只说「已触发」，并给出下一步。
+const showDownloadTriggeredHint = () => {
+  Toast.show({
+    content: '已触发下载；若没有反应，请长按视频保存或用系统浏览器打开本页',
+    duration: 4000,
+  });
+};
+
 const ShareBar = ({ url, filename, hint, taskId }) => {
   const [busy, setBusy] = useState(false);
 
@@ -127,37 +151,47 @@ const ShareBar = ({ url, filename, hint, taskId }) => {
 
     setBusy(true);
     try {
-      // 能把文件本体交给系统分享面板的（iOS 等）优先走它——「存到相册 / 直接发好友」
-      // 值得为此把文件读进内存，这是纯下载给不了的能力。
-      //
-      // 其余环境（桌面、多数 Android）只需要下载，就没必要读内存：几十 MB 的成品走
-      // fetch→blob 既有 OOM 风险，过程中也只有一个 loading、没有进度。改为给出带
-      // attachment 的直链让用户点。但只有落了 OBS 的成品才签得出 attachment，媒体存储
-      // 没开、落盘失败或老数据拿到的是裸链，点过去只会当场播放——那种情况必须退回 blob。
-      if (taskId && !canShareFiles()) {
-        const res = await API.get(
-          `/api/task/self/${encodeURIComponent(taskId)}/download`,
-        );
-        const { success, data } = res.data;
-        if (success && data.attachment) {
-          showDownloadLink(data.url);
+      // **这个函数的每一条路径都必须留下可见结果**。此前夸克上点了毫无反应，就是因为
+      // 下面这个 canShareFiles() 探针返回 true（夸克是 Chromium 内核，canShare({files})
+      // 认），于是签名直链那条路被整个跳过；可真调 navigator.share() 时 WebView 并没有
+      // 对接系统分享，直接 reject，我们把它当「用户取消」就静默结束了——用户唯一感知
+      // 到的只有几秒 loading。探针不可信，那就别让它决定成败。
+      const canShare = canShareFiles();
+
+      // 系统分享面板仍然优先试：「存到相册 / 直接发好友」是纯下载给不了的能力
+      // （iOS 等），值得为它把文件读进内存。
+      if (canShare) {
+        const result = await shareMediaUrl(url, filename);
+        if (result === 'shared') return; // 系统面板已弹过，用户看得见
+        if (result === 'downloaded') {
+          showDownloadTriggeredHint();
           return;
         }
+        // 'cancelled'：可能是用户真按了取消，也可能是 WebView 假装支持。分不出来，
+        // 那就往下走给一条明确的路——多一个框，好过什么都没有。
       }
 
-      const result = await shareMediaUrl(url, filename);
-      if (result === 'downloaded') {
-        // 别报「已保存」：这条路走的是 a[download]，而夸克/UC/微信这类 WebView 会直接
-        // 忽略 download 属性——不报错、也不下载。谎报成功比什么都不说更糟，用户会以为
-        // 文件在相册里而不再去找。所以只说「已触发」，并给出下一步。
-        Toast.show({
-          content:
-            '已触发下载；若没有反应，请长按视频保存或用系统浏览器打开本页',
-          duration: 4000,
-        });
+      // 带 attachment 的签名直链：公网直链、不需要 cookie、不占内存，是最可靠的一条路。
+      // 但只有落了 OBS 的成品才签得出来；媒体存储没开、落盘失败或老数据拿到的是裸链，
+      // 点过去只会当场播放，那种情况得退回 blob。
+      const downloadUrl = taskId ? await fetchDownloadUrl(taskId) : '';
+      if (downloadUrl) {
+        showDownloadLink(downloadUrl);
+        return;
       }
+
+      // 能分享却取消了、又没有直链可给：如实说取消，不再装作什么都没发生。
+      if (canShare) {
+        Toast.show({ content: '已取消保存' });
+        return;
+      }
+
+      // 最后的兜底：读 blob 走 a[download]。成不成取决于浏览器，故提示只说「已触发」。
+      const result = await shareMediaUrl(url, filename);
+      if (result === 'shared') return;
+      showDownloadTriggeredHint();
     } catch (e) {
-      Toast.show({ icon: 'fail', content: '分享失败，请重试' });
+      Toast.show({ icon: 'fail', content: '保存失败，请重试' });
     } finally {
       setBusy(false);
     }
