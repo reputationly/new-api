@@ -7,9 +7,50 @@ import {
   canShareFiles,
   copyToClipboard,
   isWeChatBrowser,
-  navigateToDownload,
   shareMediaUrl,
 } from '../../utils/share';
+
+// 弹一个只放「真实 <a href>」的框，让用户自己点那一下触发下载。
+//
+// 不能拿到直链就 window.location.href 跳过去：那已经在 await 之后，没有用户手势，
+// 夸克/UC 会静默拦掉（点了毫无反应，不报错也不下载）。用户点这个链接是全新的手势，
+// 任何浏览器都拦不住。
+//
+// 不加 download 属性：签名直链是跨域的，download 本就会被浏览器忽略；真正让它「保存」
+// 而不是「播放」的是后端签 URL 时带上的 Content-Disposition: attachment
+// （controller/task_download.go 的 WithDownloadName）。
+const showDownloadLink = (url) => {
+  const handler = Dialog.show({
+    title: '保存到本地',
+    content: (
+      <div style={{ textAlign: 'center', padding: '4px 0' }}>
+        <a
+          href={url}
+          rel='noopener'
+          onClick={() => handler.close()}
+          style={{
+            display: 'inline-block',
+            padding: '10px 20px',
+            fontSize: 16,
+          }}
+        >
+          点此下载
+        </a>
+        <div
+          style={{
+            marginTop: 6,
+            fontSize: 12,
+            color: 'var(--adm-color-weak)',
+          }}
+        >
+          点上面的链接开始下载
+        </div>
+      </div>
+    ),
+    closeOnMaskClick: true,
+    actions: [{ key: 'cancel', text: '取消' }],
+  });
+};
 
 // 生成结果下方的分享/保存操作条。
 //
@@ -90,23 +131,30 @@ const ShareBar = ({ url, filename, hint, taskId }) => {
       // 值得为此把文件读进内存，这是纯下载给不了的能力。
       //
       // 其余环境（桌面、多数 Android）只需要下载，就没必要读内存：几十 MB 的成品走
-      // fetch→blob 既有 OOM 风险，过程中也只有一个 loading、没有进度。改为导航到带
-      // attachment 的直链。但只有落了 OBS 的成品才签得出 attachment，媒体存储没开、
-      // 落盘失败或老数据拿到的是裸链，导航过去只会当场播放——那种情况必须退回 blob。
+      // fetch→blob 既有 OOM 风险，过程中也只有一个 loading、没有进度。改为给出带
+      // attachment 的直链让用户点。但只有落了 OBS 的成品才签得出 attachment，媒体存储
+      // 没开、落盘失败或老数据拿到的是裸链，点过去只会当场播放——那种情况必须退回 blob。
       if (taskId && !canShareFiles()) {
         const res = await API.get(
           `/api/task/self/${encodeURIComponent(taskId)}/download`,
         );
         const { success, data } = res.data;
         if (success && data.attachment) {
-          navigateToDownload(data.url);
+          showDownloadLink(data.url);
           return;
         }
       }
 
       const result = await shareMediaUrl(url, filename);
       if (result === 'downloaded') {
-        Toast.show({ content: '已保存，可在微信中发送' });
+        // 别报「已保存」：这条路走的是 a[download]，而夸克/UC/微信这类 WebView 会直接
+        // 忽略 download 属性——不报错、也不下载。谎报成功比什么都不说更糟，用户会以为
+        // 文件在相册里而不再去找。所以只说「已触发」，并给出下一步。
+        Toast.show({
+          content:
+            '已触发下载；若没有反应，请长按视频保存或用系统浏览器打开本页',
+          duration: 4000,
+        });
       }
     } catch (e) {
       Toast.show({ icon: 'fail', content: '分享失败，请重试' });

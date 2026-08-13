@@ -21,17 +21,17 @@ export function canShareFiles() {
   }
 }
 
-// 导航到一条带 Content-Disposition: attachment 的直链来触发下载，全程不读文件内容。
+// 「拿到签名直链后直接 window.location.href 跳过去」这条路**已经废弃**，别再加回来。
 //
-// 用 location 赋值而不是 a[download]：程序化下载会被 iOS/Safari 按用户手势门控，
-// 跨过 await 就失效；而导航不受此限制，可以放心在拿到签名 URL 之后再调用。
-// attachment 保证浏览器把它当下载处理，不会真的离开当前页面。
+// 原先的理由是「程序化下载会被 iOS/Safari 按用户手势门控，跨过 await 就失效；而导航
+// 不受此限制」。前半句对，后半句在夸克/UC 这类国产 WebView 上不成立：它们对「非用户
+// 手势触发的下载类导航」同样拦截，而我们恰恰是在 await 完 /download 之后才跳的，那时
+// 手势上下文早没了。表现是点了按钮**毫无反应**——不报错、不下载，最难查的一种。
 //
-// 调用前必须确认该 URL 确实带 attachment（后端 /download 的 attachment 字段），
-// 否则会当场播放媒体、甚至在 data: URL 上被浏览器拦截。
-export function navigateToDownload(url) {
-  window.location.href = url;
-}
+// 现在的做法见 ShareBar：拿到直链后弹一个框，里面放真实的 <a href>，用户点那一下是
+// 全新的手势，任何浏览器都拦不住。多一次点击，换掉一整类静默失败。
+// (同一招在本文件的 copyToClipboard 兜底里也用过：await 之后写剪贴板会被拒，
+//  所以退回让用户点按钮再复制。)
 
 // 返回 'shared' | 'downloaded' | 'cancelled'
 export async function shareMediaUrl(url, filename) {
