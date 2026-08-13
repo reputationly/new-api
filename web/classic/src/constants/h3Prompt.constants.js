@@ -18,7 +18,21 @@ import REF_GUIDE from './h3/ref-en.txt?raw';
 
 // 角色框定。两份 guide 本身写的是「产出长什么样」,没写「你在干什么」,补这两句让
 // 优化模型知道输入是用户的一句大白话、输出是改写结果,而不是让它去点评这份指南。
-const ROLE_HEADER = `You are H3-Context-IR, the prompt-rewriting front end of the MiniMax H3 audiovisual generation model. The user gives you a rough idea — often one short sentence, usually in Chinese. Rewrite it into ONE H3 prompt that follows the guide below exactly. Keep the user's subject, action, and intent faithfully; fill in the concrete visual and audio detail the format requires.\n\n`;
+const ROLE_HEADER = `You are H3-Context-IR, the prompt-rewriting front end of the MiniMax H3 audiovisual generation model. The user gives you a rough idea — often one short sentence, usually in Chinese, sometimes in English or a mix of both. Rewrite it into ONE H3 prompt that follows the guide below exactly. Keep the user's subject, action, and intent faithfully; fill in the concrete visual and audio detail the format requires.\n\n`;
+
+// 语言 与「不要这层声音」两条,base / ref 共用。两条 guide 里都写了,但都压不住 few-shot:
+//
+// 1. 台词语言(guide §4.4)。规则写的是「`<d>` 内逐字保留用户原话,不翻译不改写」,可
+//    §5 那几个 case 清一色 `[English]` —— 优化模型照着例子走,用户写的中文台词被译成
+//    英文。H3 是音画一起出的,译了就等于画面里的人开口说英文,而引擎不解析 prompt,
+//    不会报错。所以必须把「例子只是例子」这句挑明。
+//
+// 2. 不要音景 / 不要配乐(guide §4.6 / §4.7)。这两段「没有」的写法是 `N/A`,不是不写、
+//    更不是写一句话解释。而输入侧那两个框收到的是「不要背景音乐」这类中文否定句,不点
+//    破的话模型会把这句否定**翻译成英文**填进字段——那是在描述一段声音,语义正好反了。
+const SHARED_OUTPUT_RULES = `- Write everything in English, with two exceptions. (a) Spoken content inside \`<d>\`: copy the user's words character for character and set the language tag to the language they actually wrote that line in — \`<d>[Chinese] 我明天就走了。</d>\` for a Chinese line, \`<d>[English] I leave tomorrow.</d>\` for an English one. Never translate, transliterate, re-punctuate, or paraphrase a spoken line — H3 renders the speech you write, so a translated line makes the character speak the wrong language. The guide's examples all show \`[English]\` because their sample inputs were English; treat the tag as following the input, not as a fixed value. Tag each line independently when different characters speak different languages, and when one line itself mixes languages, keep it verbatim and tag it with the language most of that line is in. (b) Text visibly present on screen, which likewise keeps its original language verbatim inside the double quotes.
+- When the user's soundscape or music input says they do NOT want that layer (不要 / 不需要 / 无 / 没有 / 静音 / none / no music / silent …), output exactly \`N/A\` as that field's entire value. Do not translate the refusal into an English sound description — that describes the very sound they asked you to drop. A refusal often carries a clarifier and is still a refusal: \`不要配乐,只留现场环境声。\` means \`non_diegetic_music: N/A\`, and the clarifier belongs to \`overall_soundscape\` instead. But a qualified request is NOT a refusal — \`不要太吵的配乐\` still asks for music, only quieter. Judge by whether the negation governs the layer itself. An input the user left empty is not a refusal either; it still gets a written description.
+- Never echo back the user's original sentence as the prompt.`;
 
 // H3 专用输出契约。**与通用契约冲突,不能复用**:通用契约要求「只回提示词正文,不要
 // 字段名」,H3 要的恰恰是带字段名的分段结构——回一段光溜溜的散文等于白优化。
@@ -27,15 +41,13 @@ const BASE_OUTPUT_CONTRACT = `\n\n---\n\nOutput rules (these override any habit 
 - Output ONLY the rewritten prompt. No explanation, no preface, no closing remark, no markdown fence, no surrounding quotes.
 - Keep the field names verbatim and lowercase, in this order, separated by one blank line: \`integrated_multimodal_description:\`, \`overall_soundscape:\`, \`non_diegetic_music:\`.
 - If the task has reference frames, the alignment instruction is the first line, followed by one blank line, before the three fields.
-- Write everything in English. The only exceptions are the spoken content inside \`<d>\` and text visibly present on screen, which keep their original language verbatim.
-- Never echo back the user's original sentence as the prompt.`;
+${SHARED_OUTPUT_RULES}`;
 
 const REF_OUTPUT_CONTRACT = `\n\n---\n\nOutput rules (these override any habit of answering conversationally):
 
 - Output ONLY the rewritten prompt. No explanation, no preface, no closing remark, no markdown fence, no surrounding quotes.
 - Keep the field names verbatim and lowercase, in this order, separated by one blank line: \`subject_definitions:\`, \`summary:\`, \`retention_analysis:\`, \`detailed_description:\`, \`overall_soundscape:\`, \`non_diegetic_music:\`.
-- Write everything in English. The only exceptions are the spoken content inside \`<d>\` and text visibly present on screen, which keep their original language verbatim.
-- Never echo back the user's original sentence as the prompt.`;
+${SHARED_OUTPUT_RULES}`;
 
 const H3_BASE_SYSTEM_PROMPT = ROLE_HEADER + BASE_GUIDE + BASE_OUTPUT_CONTRACT;
 const H3_REF_SYSTEM_PROMPT = ROLE_HEADER + REF_GUIDE + REF_OUTPUT_CONTRACT;
@@ -121,14 +133,15 @@ export const H3_INPUT_FIELDS = [
   {
     key: 'overall_soundscape',
     label: '音景',
-    placeholder: '现场声:风雨、脚步、器物碰撞、呼吸(留空则由模型自己配)',
+    placeholder:
+      '现场声:风雨、脚步、器物碰撞、呼吸(留空则由模型自己配;想全程静音就写「不要」)',
     defaultOpen: false,
   },
   {
     key: 'non_diegetic_music',
     label: '背景音乐',
     placeholder:
-      '只有观众听得见的那层配乐:乐器、速度、起伏(留空则由模型自己配)',
+      '只有观众听得见的那层配乐:乐器、速度、起伏(留空则由模型自己配;不想要配乐就写「不要」)',
     defaultOpen: false,
   },
 ];
@@ -178,6 +191,63 @@ export const h3AlignmentInstruction = ({
   return '';
 };
 
+// 「这层声音我不要」的判定。不做语义理解,只认一种形状:**否定词直接管住那一层的名词**。
+//
+// 判据落在「直接」两个字上,而不是「整段是否只有一句否定」:
+//   · 「不要配乐,只留现场环境声。」——「不要」紧跟「配乐」,后半句只是补充说明,是拒绝;
+//     (这正是 VIDEO_EXAMPLES_H3 里「纯环境音 · 雨夜街头」那条示例的写法)
+//   · 「不要太吵的配乐」—— 中间隔了修饰语,否定的是「太吵」不是「配乐」,是**要求**。
+// 两类的差别只在名词前有没有插东西,所以名词必须紧跟否定词;插了就一律按描述原样带过去。
+// 宁可漏判:漏判只是把中文原样发给 H3(改动前全部如此),误判则把用户明确要的那层声音
+// 整段抹成 N/A。
+//
+// 名词表**按字段分开**,不能合成一张:在「音景」框里写「不要音乐,只要环境音」的人,
+// 要的恰恰是环境音;共用名词表会让这句命中,把他要的东西写成 N/A。
+//
+// **中英两支的松紧刻意不同**,因为修饰语的位置正好相反:中文修饰在名词前
+// (`不要太吵的配乐`),名词一旦紧跟否定词,后面就只剩补充说明,可以放开;英文修饰在
+// 名词后(`no sound of traffic, just wind` / `no music except the ending`),同样放开
+// 尾巴立刻变成误判。所以英文支只允许接标点与 at all / please 这类无实义收尾。
+const H3_REFUSAL_NEGATOR =
+  '不要|不用|不需要|不想要|不加|不带|去掉|去除|没有|无|禁用';
+const H3_REFUSAL_NEGATOR_EN =
+  "don'?t want|do not want|there'?s no|there is no|without|no more|not|no|zero|skip|remove|drop|exclude";
+// 只有整段就是这几个词时才算(后面不接内容),它们本身就是「全程静音 / 无配乐」。
+const H3_SILENCE_WORDS =
+  '全程静音|静音|无声|默片|none|n/a|no|silent|silence|muted?';
+const H3_REFUSAL_TAIL = '[\\s的了吧呀啊!！。.，,、;；]*';
+// 英文支的收尾:只认标点与无实义的语气词。多一个实词就说明后面还有内容,不是拒绝。
+const H3_REFUSAL_TAIL_EN =
+  '(?:\\s|[,.;!]|at all|whatsoever|please|thank you|thanks?)*';
+const H3_SOUND_NOUNS = {
+  overall_soundscape: {
+    zh: '音景|环境音效|环境音|环境声|现场环境声|现场声|现场音|背景音|音效|声音',
+    en: 'ambient sounds?|ambient noise|ambient audio|ambient|ambien[ct]e|ambiance|room tone|soundscape|sound effects?|sfx|sound|audio|noise',
+  },
+  non_diegetic_music: {
+    zh: '背景音乐|配乐|音乐',
+    en: 'background music|non-?diegetic music|music|bgm|score|soundtrack|underscore',
+  },
+};
+
+// 中英名词在两支里都放:中文否定词后接英文名词(`不要 BGM`)与反过来都很常见。
+const H3_REFUSAL_RES = Object.fromEntries(
+  Object.entries(H3_SOUND_NOUNS).map(([key, { zh, en }]) => [
+    key,
+    new RegExp(
+      `^(?:` +
+        `(?:${H3_REFUSAL_NEGATOR})\\s*(?:任何|所有|一切|一点)?\\s*(?:(?:${zh}|${en})[\\s\\S]*|${H3_REFUSAL_TAIL})` +
+        `|(?:${H3_REFUSAL_NEGATOR_EN})\\s+(?:(?:any|the|all|an|a)\\s+)?(?:${en}|${zh})${H3_REFUSAL_TAIL_EN}` +
+        `|(?:${H3_SILENCE_WORDS})${H3_REFUSAL_TAIL}` +
+        `)$`,
+      'i',
+    ),
+  ]),
+);
+
+export const isH3SoundRefusal = (key, text) =>
+  H3_REFUSAL_RES[key]?.test(String(text || '').trim()) ?? false;
+
 // ── 不点「AI 优化」时的本地兜底 ─────────────────────────────────────────
 // 优化按钮可能**根本不存在**:usePromptOptimize 里 available 要求运营配了优化模型,
 // 没配就不渲染按钮。所以「不优化不让发」会把整个玩法对这些部署锁死,兜底必须存在。
@@ -189,6 +259,10 @@ export const h3AlignmentInstruction = ({
 // **空段省略,不补 N/A**:按 guide,`overall_soundscape: N/A` 的语义是「用户明确要求
 // 全程静音」,`non_diegetic_music: N/A` 是「无配乐」。用户留空想说的是「随便,你看着
 // 办」,补 N/A 等于替他下了一个他没下的指令。省略才是把这块交还给模型。
+//
+// 明确写了「不要」则相反:那正是 guide 说的 N/A,原样带过去会让 H3 收到
+// `non_diegetic_music: 不要` —— 一句它当描述读的中文。占位文案里把「不想要就写不要」
+// 教给了用户,这条路(运营没配优化模型)得同样兑现,不能只有 AI 优化那条认。
 export const buildLocalH3Prompt = (fields, ctx = {}) => {
   const parts = [];
   const align = h3AlignmentInstruction(ctx);
@@ -197,7 +271,7 @@ export const buildLocalH3Prompt = (fields, ctx = {}) => {
   if (main) parts.push(`${h3MainKey(ctx.tabKey)}: ${main}`);
   ['overall_soundscape', 'non_diegetic_music'].forEach((key) => {
     const v = (fields?.[key] || '').trim();
-    if (v) parts.push(`${key}: ${v}`);
+    if (v) parts.push(`${key}: ${isH3SoundRefusal(key, v) ? 'N/A' : v}`);
   });
   return parts.join('\n\n');
 };
