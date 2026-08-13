@@ -35,6 +35,7 @@ import { MOBILE_BREAKPOINT } from '../hooks/common/useIsMobile';
 // 纯计算部分拆出去的两个模块（不引 UI 依赖，手机端可直接 import，不必手抄）。
 // 必须 import 进来而不是 `export ... from`：本文件内部要调用它们，
 // 纯重导出不会在模块作用域建立绑定，运行时抛 ReferenceError 且构建期不报错。
+import { buildLoginUrl } from './authRedirect';
 import { formatPriceWithCeiling } from './priceFormat';
 import {
   videoResolutionRank,
@@ -162,8 +163,9 @@ export function handleUnauthorized() {
   if (redirectingToLogin) return;
   redirectingToLogin = true;
   // 手机端(basename /m)不用单独处理：/login 命中 mobile-router 的 UA 跳转规则，
-  // 会被送到 /m/login。?expired=true 由登录页读出来提示「登录已过期，请重新登录」。
-  window.location.href = '/login?expired=true';
+  // 会被送到 /m/login，query 也一并保留（mobile-router.go 的 :99-101）。
+  // ?expired=true 由登录页读出来提示「登录已过期」，?redirect= 用来登录后回到原页。
+  window.location.href = buildLoginUrl('/login');
 }
 
 export function showError(error) {

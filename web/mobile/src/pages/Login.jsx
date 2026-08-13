@@ -6,6 +6,10 @@ import Turnstile from 'react-turnstile';
 import { StatusContext } from '@classic/context/Status';
 import { UserContext } from '@classic/context/User';
 import { API, updateAPI } from '@classic/helpers/api';
+import {
+  LOGIN_REDIRECT_PARAM,
+  safeRedirectTarget,
+} from '@classic/helpers/authRedirect';
 import { setUserData } from '@classic/helpers/data';
 
 import {
@@ -48,7 +52,16 @@ const Login = () => {
   const turnstileEnabled = !!status.turnstile_check;
   const turnstileSiteKey = status.turnstile_site_key || '';
 
-  const from = location.state?.from?.pathname || '/';
+  // 回跳目标的两个来源：
+  //   - location.state.from：AuthRoute 在 SPA 内跳登录页时带的，信息最全，优先；
+  //   - ?redirect=：会话过期被 handleUnauthorized 整页跳回来的，state 在整页跳转下
+  //     活不下来，只能走 query。必须过 safeRedirectTarget 挡开放重定向。
+  const from =
+    location.state?.from?.pathname ||
+    safeRedirectTarget(
+      new URLSearchParams(location.search).get(LOGIN_REDIRECT_PARAM),
+    ) ||
+    '/';
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);

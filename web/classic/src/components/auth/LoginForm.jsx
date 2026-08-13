@@ -19,6 +19,10 @@ For commercial licensing, please contact support@quantumnous.com
 
 import React, { useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
+import {
+  LOGIN_REDIRECT_PARAM,
+  safeRedirectTarget,
+} from '../../helpers/authRedirect';
 import { UserContext } from '../../context/User';
 import { StatusContext } from '../../context/Status';
 import {
@@ -82,6 +86,14 @@ const LoginForm = () => {
   });
   const { username, password } = inputs;
   const [searchParams, setSearchParams] = useSearchParams();
+  // 会话过期被踢回来的用户，登录后应回到原来那页（?redirect= 由 handleUnauthorized
+  // 带上；整页跳转下 react-router 的 location.state 活不下来，只能走 query）。
+  // safeRedirectTarget 只放行站内相对路径，挡开放重定向。
+  // 没有 redirect 时保持各入口原本的落点：密码/Passkey/2FA 进 /console，
+  // 微信/Telegram 进 /——这几个入口的默认去处本就不同，不要顺手统一。
+  const redirectTarget = safeRedirectTarget(
+    searchParams.get(LOGIN_REDIRECT_PARAM),
+  );
   const [submitted, setSubmitted] = useState(false);
   const [userState, userDispatch] = useContext(UserContext);
   const [statusState] = useContext(StatusContext);
@@ -198,7 +210,7 @@ const LoginForm = () => {
         localStorage.setItem('user', JSON.stringify(data));
         setUserData(data);
         updateAPI();
-        navigate('/');
+        navigate(redirectTarget || '/');
         showSuccess('登录成功！');
         setShowWeChatLoginModal(false);
       } else {
@@ -255,7 +267,7 @@ const LoginForm = () => {
               centered: true,
             });
           }
-          navigate('/console');
+          navigate(redirectTarget || '/console');
         } else {
           showError(message);
         }
@@ -300,7 +312,7 @@ const LoginForm = () => {
         showSuccess('登录成功！');
         setUserData(data);
         updateAPI();
-        navigate('/');
+        navigate(redirectTarget || '/');
       } else {
         showError(message);
       }
@@ -456,7 +468,7 @@ const LoginForm = () => {
         setUserData(finish.data);
         updateAPI();
         showSuccess('登录成功！');
-        navigate('/console');
+        navigate(redirectTarget || '/console');
       } else {
         showError(finish.message || 'Passkey 登录失败，请重试');
       }
@@ -491,7 +503,7 @@ const LoginForm = () => {
     setUserData(data);
     updateAPI();
     showSuccess('登录成功！');
-    navigate('/console');
+    navigate(redirectTarget || '/console');
   };
 
   // 返回登录页面
@@ -958,8 +970,7 @@ const LoginForm = () => {
         style={{ top: '50%', left: '-120px' }}
       />
       <div className='w-full max-w-sm mt-[60px]'>
-        {showEmailLogin ||
-        !hasOAuthLoginOptions
+        {showEmailLogin || !hasOAuthLoginOptions
           ? renderEmailLoginForm()
           : renderOAuthOptions()}
         {renderWeChatLoginModal()}

@@ -8,6 +8,8 @@ import {
   MESSAGE_ROLES,
   THINK_TAG_REGEX,
 } from '@classic/constants/playground.constants';
+// 纯函数、无桌面依赖，两端直接共用同一份（不在 SHIM_MAP 里，不会被替换）。
+import { buildLoginUrl } from '@classic/helpers/authRedirect';
 
 const toastShow = (icon, content, durationMs = 3000) => {
   AmToast.show({ icon, content: String(content), duration: durationMs });
@@ -31,7 +33,7 @@ export function handleUnauthorized() {
   // 一个页面常并发多个请求，过期时会同时 401；只跳第一次。
   if (redirectingToLogin) return;
   redirectingToLogin = true;
-  window.location.href = '/m/login?expired=true';
+  window.location.href = buildLoginUrl('/m/login');
 }
 
 export function showError(error) {
