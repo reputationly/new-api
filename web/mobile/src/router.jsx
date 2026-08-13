@@ -3,6 +3,8 @@ import { createBrowserRouter } from 'react-router-dom';
 import { SpinLoading } from 'antd-mobile';
 
 import Root from './Root';
+import { lazyWithReload } from './utils/lazyWithReload';
+import { MOBILE_BASENAME } from './utils/basename';
 import AuthRoute from './components/AuthRoute';
 import TabLayout from './layouts/TabLayout';
 import Experience from './pages/Experience';
@@ -17,23 +19,33 @@ import Register from './pages/Register';
 //   Home / Experience / Profile —— 底部 tab 三兄弟，切换要即时，且本身很小。
 // 其余按需加载：体验区各页会牵出 classic 的整套生成 hooks（视频/音频/音乐/图片），
 // admin 页普通用户一辈子点不到 —— 这些以前全被静态 import 塞进首屏包。
-const Chat = lazy(() => import('./pages/Chat'));
-const Video = lazy(() => import('./pages/Video'));
-const Music = lazy(() => import('./pages/Music'));
-const Audio = lazy(() => import('./pages/Audio'));
-const ImagePage = lazy(() => import('./pages/Image'));
-const Models = lazy(() => import('./pages/Models'));
-const Tokens = lazy(() => import('./pages/Tokens'));
-const Logs = lazy(() => import('./pages/Logs'));
-const Setting = lazy(() => import('./pages/Setting'));
-const Tickets = lazy(() => import('./pages/Tickets'));
-const TicketDetail = lazy(() => import('./pages/TicketDetail'));
-const AdminTickets = lazy(() => import('./pages/admin/AdminTickets'));
-const AdminTicketDetail = lazy(() => import('./pages/admin/AdminTicketDetail'));
-const AdminKyc = lazy(() => import('./pages/admin/AdminKyc'));
-const AdminEnterprise = lazy(() => import('./pages/admin/AdminEnterprise'));
-const AdminTransfers = lazy(() => import('./pages/admin/AdminTransfers'));
-const AdminInvoices = lazy(() => import('./pages/admin/AdminInvoices'));
+const Chat = lazy(lazyWithReload(() => import('./pages/Chat')));
+const Video = lazy(lazyWithReload(() => import('./pages/Video')));
+const Music = lazy(lazyWithReload(() => import('./pages/Music')));
+const Audio = lazy(lazyWithReload(() => import('./pages/Audio')));
+const ImagePage = lazy(lazyWithReload(() => import('./pages/Image')));
+const Models = lazy(lazyWithReload(() => import('./pages/Models')));
+const Tokens = lazy(lazyWithReload(() => import('./pages/Tokens')));
+const Logs = lazy(lazyWithReload(() => import('./pages/Logs')));
+const Setting = lazy(lazyWithReload(() => import('./pages/Setting')));
+const Tickets = lazy(lazyWithReload(() => import('./pages/Tickets')));
+const TicketDetail = lazy(lazyWithReload(() => import('./pages/TicketDetail')));
+const AdminTickets = lazy(
+  lazyWithReload(() => import('./pages/admin/AdminTickets')),
+);
+const AdminTicketDetail = lazy(
+  lazyWithReload(() => import('./pages/admin/AdminTicketDetail')),
+);
+const AdminKyc = lazy(lazyWithReload(() => import('./pages/admin/AdminKyc')));
+const AdminEnterprise = lazy(
+  lazyWithReload(() => import('./pages/admin/AdminEnterprise')),
+);
+const AdminTransfers = lazy(
+  lazyWithReload(() => import('./pages/admin/AdminTransfers')),
+);
+const AdminInvoices = lazy(
+  lazyWithReload(() => import('./pages/admin/AdminInvoices')),
+);
 
 const chunkFallback = (
   <div
@@ -99,7 +111,7 @@ const router = createBrowserRouter(
       ],
     },
   ],
-  { basename: '/m' },
+  { basename: MOBILE_BASENAME },
 );
 
 export default router;
