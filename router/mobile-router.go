@@ -206,7 +206,12 @@ func SetMobileRouter(router *gin.Engine, assets ThemeAssets) {
 		// index 与 SPA fallback 都走内存字节并做品牌替换，
 		// 避免首屏闪现构建期的默认标题/图标
 		if p == "/" || p == "/index.html" || !canvasFileExists(httpFS, p) {
-			c.Header("Cache-Control", "no-cache")
+			// no-store 而不是 no-cache：后者的语义是「可以存，用之前回源校验」，
+			// 微信 X5 这类内核对它并不老实，会直接拿旧的用。而这份 HTML 里写死了带
+			// 内容 hash 的 chunk 文件名，上一版的那些文件在新部署后已经不存在——
+			// 拿旧 HTML 的结果就是 chunk 404、lazy import 抛错、整个应用白屏，
+			// 用户只能靠清缓存自救。HTML 本来就只有几 KB，不值得为它冒这个险。
+			c.Header("Cache-Control", "no-store")
 			c.Data(http.StatusOK, "text/html; charset=utf-8", BrandIndexHTML(assets.MobileIndexPage))
 			return
 		}

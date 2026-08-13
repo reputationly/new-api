@@ -39,7 +39,10 @@ func SetWebRouter(router *gin.Engine, assets ThemeAssets) {
 			controller.RelayNotFound(c)
 			return
 		}
-		c.Header("Cache-Control", "no-cache")
+		// no-store 而不是 no-cache：理由同 mobile-router 的 index 分支——no-cache 允许
+		// 存下来（只要求用前回源校验），而微信 X5 这类内核并不老实。这份 HTML 写死了带
+		// 内容 hash 的 chunk 名，拿旧的就会 404 到白屏，用户只能清缓存自救。
+		c.Header("Cache-Control", "no-store")
 		// 下面的浮条按 UA 与 prefer_desktop cookie 决定是否注入，同一地址会有两种产物。
 		// 必须 Add 不能 Set：gzip 中间件跑在前面，已经写过 Vary: Accept-Encoding，
 		// 用 c.Header 会把它整个覆盖掉，中间层就可能把压缩过的 HTML 发给不收 gzip 的客户端。
