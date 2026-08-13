@@ -54,6 +54,20 @@ var DefaultCollapseSidebar = false // default value of collapse sidebar
 var SessionSecret = uuid.New().String()
 var CryptoSecret = uuid.New().String()
 
+// SessionMaxAgeSeconds 登录会话 cookie 的有效期。
+//
+// **是「登录后 N 秒」而不是「闲置 N 秒」**:session.Save() 只在登录/OAuth 回调/2FA/
+// Passkey/安全验证这些地方调用,普通带鉴权的请求只读不写(见 middleware/auth.go 的
+// authHelper),cookie 不会因为在用而续期。所以这个值就是一次登录能连续用多久。
+//
+// 取 23 小时而不是整 24:每天同一时段上班的人,今天登录的会话到明天同一时刻恰好还没
+// 过期的话,会在当天工作中途断掉;差一小时就能保证「每天开工时重新登录一次」,断点落在
+// 人不在的时候。
+//
+// 定义在 common 而不是各自写死:main.go 的 session store 与 router/mobile-router.go 的
+// 「桌面版偏好」cookie 必须一致(偏好不该比登录态活得久),分开写迟早会漂。
+const SessionMaxAgeSeconds = 23 * 3600
+
 var OptionMap map[string]string
 var OptionMapRWMutex sync.RWMutex
 

@@ -8,6 +8,7 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/middleware"
 
 	"github.com/gin-gonic/gin"
@@ -34,13 +35,14 @@ const (
 	desktopPreferenceParam = "desktop"
 	// desktopPreferenceCookie 记住这个选择，避免用户每次导航都被弹回移动端。
 	desktopPreferenceCookie = "prefer_desktop"
-	// desktopPreferenceMaxAge cookie 有效期，与登录会话（main.go 的 session）同为 8 小时。
+	// desktopPreferenceMaxAge cookie 有效期，与登录会话取同一个常量（见
+	// common.SessionMaxAgeSeconds）——偏好不该比登录态活得久。
 	//
 	// 不用会话级 cookie：各家内置浏览器对「会话结束」的定义差别很大，微信的 WebView
 	// 常驻进程里 session cookie 可能跟着活很久，也可能每开一次链接就重置——前者等于没缩短，
 	// 后者会在 OAuth 跳第三方再跳回来的中途把偏好丢掉，用户被弹回 /m，登录做到一半断掉。
-	// 定死 8 小时既有确定的上限，语义也直白：这段登录会话内用桌面版。
-	desktopPreferenceMaxAge = 8 * 3600
+	// 定死一个确定的上限，语义也直白：这段登录会话内用桌面版。
+	desktopPreferenceMaxAge = common.SessionMaxAgeSeconds
 )
 
 // rememberDesktopPreference 按 ?desktop= 记录或撤销「要桌面版」的选择。

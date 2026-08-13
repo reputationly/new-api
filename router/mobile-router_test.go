@@ -6,6 +6,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/QuantumNous/new-api/common"
+
 	"github.com/gin-gonic/gin"
 )
 
@@ -178,8 +180,11 @@ func TestRememberDesktopPreferenceSetsCookie(t *testing.T) {
 		t.Fatalf("cookies = %#v, want %s=1", cookies, desktopPreferenceCookie)
 	}
 	// 偏好不该比登录态活得久:误点一次「前往电脑端」的代价必须是小时级,不是按周算。
-	if found.MaxAge <= 0 || found.MaxAge > 8*3600 {
-		t.Fatalf("MaxAge = %d, want a positive value no longer than the 8h login session", found.MaxAge)
+	if found.MaxAge <= 0 || found.MaxAge > common.SessionMaxAgeSeconds {
+		t.Fatalf(
+			"MaxAge = %d, want a positive value no longer than the login session (%ds)",
+			found.MaxAge, common.SessionMaxAgeSeconds,
+		)
 	}
 
 	// 没有开关时不该乱写 cookie。
