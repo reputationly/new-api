@@ -670,6 +670,17 @@ func (t *Task) ToOpenAIVideo() *dto.OpenAIVideo {
 	openAIVideo.SetProgressStr(t.Progress)
 	openAIVideo.CreatedAt = t.CreatedAt
 	openAIVideo.CompletedAt = t.UpdatedAt
+	if t.Status == TaskStatusFailure {
+		// 失败原因必须随查询回显：体验区（/pg/videos/:id）与 /v1/videos/:id 都只读这份
+		// OpenAI 格式响应，不带 error 的话前端只能退回「生成失败」这类通用文案，真正的
+		// 上游原因（参考音过长、文本超限……）就只剩任务日志里能看到。
+		if reason := t.FailReason; reason != "" {
+			openAIVideo.Error = &dto.OpenAIVideoError{Message: reason}
+		}
+		// GetResultURL 对老数据会回退到 FailReason（历史上这列兼作结果地址），
+		// 失败任务本就没有产物，别把错误文案当成 url 发出去。
+		return openAIVideo
+	}
 	// obs:// 占位符 → 实时签名 URL（§5.4）；非 obs 引用原样返回。
 	openAIVideo.SetMetadata("url", mediastore.ResolveResultURL(context.Background(), t.GetResultURL()))
 	return openAIVideo
