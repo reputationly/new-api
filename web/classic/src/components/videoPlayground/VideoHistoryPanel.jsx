@@ -44,6 +44,11 @@ const collectInputMedia = (conv) => {
   (conv.refImages || []).forEach(
     (u) => u && out.push({ type: 'image', url: u }),
   );
+  // 参考生视频的参考视频:与参考图同为该会话的视觉参考,只传视频不传图是合法用法,
+  // 漏了它这类会话在历史列表里就一个缩略图都没有。
+  (conv.refVideos || []).forEach(
+    (u) => u && out.push({ type: 'video', url: u }),
+  );
   // srcVideo2 只有收口之前的老双视频会话才有(见 useVideoGeneration 的 VIDEO_MODES.vace)。
   [conv.sourceVideo, conv.srcVideo, conv.srcVideo2].forEach(
     (u) => u && out.push({ type: 'video', url: u }),

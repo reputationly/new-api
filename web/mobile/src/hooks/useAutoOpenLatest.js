@@ -7,6 +7,9 @@ import { useEffect, useRef } from 'react';
 const CONV_MEDIA_FIELDS = [
   'images',
   'refImages',
+  // 参考生视频的参考视频:只传视频不传图是合法用法,漏了它这类会话会被判成「本就没有
+  // 输入媒体」,hydrate 完不再补开一次,锁定态的素材预览就永久空着。
+  'refVideos',
   'audioData',
   'sourceVideo',
   'srcVideo',

@@ -28,34 +28,17 @@ const resolvedUrlToKey = new Map(); // blob:/data: URL -> key(落盘换回引用
 const dataUrlToKey = new Map(); // data: 内容去重 -> key(同一 base64 只入库一次)
 const persistSeq = new Map(); // storageKey -> seq(异步落盘 latest-wins)
 
-// 已知 localStorage 会话 key(孤儿清理时扫其原始串)。新体验区接入时在此登记。
-const KNOWN_STORAGE_KEYS = [
-  'image_playground_conversations',
-  'image_playground_conversations_i2i',
-  'video_playground_conversations',
-  'video_playground_conversations_i2v',
-  'video_playground_conversations_flf2v',
-  'video_playground_conversations_s2v',
-  'video_playground_conversations_sr',
-  'video_playground_conversations_vace',
-  // 语音体验区:旧单键(遗留数据)+ 拆细后按 mode 分键(audioPlayground.constants.js
-  // audioHistoryStorageKey;AUDIO_TAB_ORDER=emotion/synthesis/dialogue/design)。
-  // 缺任一 key,孤儿清理会误删这些历史仍引用的上传/生成音频。
-  'audio_playground_conversations',
-  'audio_playground_conversations_emotion',
-  'audio_playground_conversations_synthesis',
-  'audio_playground_conversations_dialogue',
-  'audio_playground_conversations_design',
-  // 音乐体验区按 mode 分键(musicPlayground.constants.js musicHistoryStorageKey):
-  // 原 ACE-Step t2m/cover/repaint + 新 AudioX/SoulX t2a/v2a/v2m/svs。
-  'music_playground_conversations_t2m',
-  'music_playground_conversations_cover',
-  'music_playground_conversations_repaint',
-  'music_playground_conversations_t2a',
-  'music_playground_conversations_v2a',
-  'music_playground_conversations_v2m',
-  'music_playground_conversations_svs',
-];
+// 哪些 localStorage key 存的是体验区会话(孤儿清理要扫它们的原始串找 idb-media: 引用)。
+// 四个体验区的会话 key 都是 `<区>_playground_conversations[_<mode>]`,故按名匹配即可。
+//
+// **不要退回手写完整 key 的白名单**——这里原本就是那样,然后漏掉了 `_r2va`(参考生视频)
+// 与 `_dub`(视频配乐)。漏了不报错,后果是:那个玩法的 idb-media: 引用进不了 referenced
+// 集合,它上传的素材在 10 分钟安全期一过就被当孤儿从 IDB 删掉。表现为「历史会话点开,
+// 参考图/参考视频/源视频全空了」,而生成结果因为能按 taskId 重建反倒还在,看着像「只有
+// 输入丢了」;续问/重新生成则报「参考素材已失效」。会话按 mode 分键是常态,加一个玩法就
+// 得记得回来补一行的设计撑不住,改成按 key 名匹配后新增 mode 不必再动这里。
+const isPlaygroundConvKey = (k) =>
+  typeof k === 'string' && k.includes('playground_conversations');
 
 let rndSeq = 0;
 const genKey = () => {
@@ -143,13 +126,12 @@ export const stripUnresolvedMediaRefs = (list, opts = {}) => {
 const stripForSyncPersist = (list, s) => {
   const mapStr = (v) => {
     if (isMediaRef(v) || isDirectUrl(v)) return v;
-    if (isBlobUrl(v) && resolvedUrlToKey.has(v)) return refFromKey(resolvedUrlToKey.get(v));
+    if (isBlobUrl(v) && resolvedUrlToKey.has(v))
+      return refFromKey(resolvedUrlToKey.get(v));
     return ''; // data: 或未命中 blob:
   };
   const mapArr = (arr) =>
-    Array.isArray(arr)
-      ? arr.map(mapStr).filter((x) => x !== '')
-      : arr;
+    Array.isArray(arr) ? arr.map(mapStr).filter((x) => x !== '') : arr;
   return list.map((conv) => {
     const next = { ...conv };
     s.convArrayFields.forEach((f) => {
@@ -201,7 +183,8 @@ const externalizeDataUrl = async (dataUrl) => {
 const externalizeStr = async (v) => {
   if (!v || isMediaRef(v) || isDirectUrl(v)) return v || '';
   if (isDataUrl(v)) return await externalizeDataUrl(v);
-  if (isBlobUrl(v)) return resolvedUrlToKey.has(v) ? refFromKey(resolvedUrlToKey.get(v)) : '';
+  if (isBlobUrl(v))
+    return resolvedUrlToKey.has(v) ? refFromKey(resolvedUrlToKey.get(v)) : '';
   return '';
 };
 const externalizeArr = async (arr) => {
@@ -239,7 +222,10 @@ export const persistWithMedia = (storageKey, list, opts = {}) => {
   const capped = (Array.isArray(list) ? list : []).slice(0, limit);
   // 同步段:立刻落文本(不弱于旧行为)
   try {
-    localStorage.setItem(storageKey, JSON.stringify(stripForSyncPersist(capped, s)));
+    localStorage.setItem(
+      storageKey,
+      JSON.stringify(stripForSyncPersist(capped, s)),
+    );
   } catch (e) {
     // 忽略配额错误(理论上此时只剩引用+文本,不该超)
   }
@@ -396,21 +382,29 @@ const rescheduleCleanupLater = () => {
 
 const runCleanup = async () => {
   if (idbUnavailable) return;
-  // 引用集:扫已知 key 的原始串(结构无关,对字段变化免疫)
+  // 引用集:扫所有体验区会话 key 的原始串(结构无关,对字段变化与新增 mode 都免疫)。
+  // 收集失败(隐私模式下 localStorage 抛错)时直接放弃本轮:引用集不全就删,等于删掉
+  // 历史还在用的素材 —— 宁可留着孤儿,不能误删。
   const referenced = new Set();
-  KNOWN_STORAGE_KEYS.forEach((k) => {
-    const raw = localStorage.getItem(k);
-    if (!raw) return;
-    const m = raw.match(/idb-media:[\w-]+/g);
-    if (m) m.forEach((ref) => referenced.add(keyFromRef(ref)));
-  });
+  try {
+    for (let i = 0; i < localStorage.length; i++) {
+      const k = localStorage.key(i);
+      if (!isPlaygroundConvKey(k)) continue;
+      const raw = localStorage.getItem(k);
+      if (!raw) continue;
+      const m = raw.match(/idb-media:[\w-]+/g);
+      if (m) m.forEach((ref) => referenced.add(keyFromRef(ref)));
+    }
+  } catch (e) {
+    return;
+  }
   try {
     const stale = [];
     let skippedYoungOrphan = false;
     await store.iterate((_value, key) => {
       if (referenced.has(key)) return;
       // 跳过年龄 < 10min 的(封多 tab 竞态:B 已写 IDB 尚未落 localStorage 时 A 别删)
-      const ts = parseInt((key.split('-')[1] || '0'), 10);
+      const ts = parseInt(key.split('-')[1] || '0', 10);
       if (ts && Date.now() - ts < TEN_MIN) {
         skippedYoungOrphan = true; // 未引用但年轻 → 稍后重排一次
         return;
@@ -423,7 +417,8 @@ const runCleanup = async () => {
       if (url) URL.revokeObjectURL(url);
       objectUrls.delete(key);
       // 清反向表里指向该 key 的项
-      for (const [u, k] of resolvedUrlToKey) if (k === key) resolvedUrlToKey.delete(u);
+      for (const [u, k] of resolvedUrlToKey)
+        if (k === key) resolvedUrlToKey.delete(u);
       for (const [d, k] of dataUrlToKey) if (k === key) dataUrlToKey.delete(d);
     }
     if (skippedYoungOrphan) rescheduleCleanupLater();
