@@ -43,6 +43,11 @@ const (
 	// 时长硬区间(pipeline MINIMAX_H3_MIN/MAX_OUTPUT_SECONDS)。超界引擎 400。
 	h3MinDurationSec = 4.0
 	h3MaxDurationSec = 15.0
+
+	// t2va 缺省宽高比。取 16:9 不是随手挑的:引擎的 Ref2VA 分支缺省就是它
+	// (_resolve_minimax_h3_aspect_ratio 的注释 "Ref2VA defaults to 16:9"),
+	// 两处取同一个值,同一个模型才不会因为玩法不同出不同画幅。
+	h3DefaultAspectRatio = "16:9"
 )
 
 // h3NamedAspectRatios 是 H3 认的六个具名比例(pipeline:109-116
@@ -226,6 +231,34 @@ func applyMiniMaxH3Request(body map[string]any, taskType string, durationSec int
 	// 关键帧虽然会被引擎忽略 aspect_ratio,但把 wan 的 target_shape 一路带到 H3
 	// 同样没有意义,清掉更干净。
 	h3NormalizeAspectRatio(body)
+
+	// ── 缺省宽高比 ─────────────────────────────────────────────────────────
+	// 只给 t2v 补。这不是"顺手加个默认值",是补一个真实的线上失败:引擎对 t2va 的
+	// aspect_ratio 是硬校验(_resolve_minimax_h3_aspect_ratio:task=="t2va" 且值为空
+	// 直接 `OmniClientError: t2va requires an explicit aspect_ratio`),而同一个引擎里
+	// fl2va 永远跟随首图、r2va 缺省 16:9 —— 六种玩法里只有 t2va 会因为"没传"整条挂掉,
+	// 且报回调用方的是一句引擎内部术语,自助不了。2026-08-13 现网 12 条请求挂了 5 条,
+	// 全是直连侧没带比例的 t2va。
+	//
+	// **必须在 h3ApplyCanvas 之前**:那个函数取不到具名比例会走"清掉档位词、原样交给
+	// 引擎"的降级路径,结果是用户选了 480P 却按 short_edge=768 自推出 768p,GPU 时间翻倍。
+	//
+	// 显式传值一律不动,包括不在具名表内的值 —— 那种情况调用方是"传错"而不是"没传",
+	// 应该让引擎把 400 报回去,而不是被我们悄悄改成 16:9。
+	//
+	// ⚠️ 别"顺手"加上「已有 width/height 就不补」的判断:引擎的 _resolve_shape 是**先**
+	// 无条件解析比例(必填校验在这一步)、**再**判断 `if height is None or width is None`
+	// 才用它推画布。也就是说带了像素画布但不带比例的 t2va 同样是 400(实测 43 ms 返回
+	// `t2va requires an explicit aspect_ratio`),而直连调用方按像素下发画布恰恰是常态 ——
+	// 加了那个判断就是把要修的人群原样漏掉。
+	// 反过来,画布显式时这个比例对出片没有任何影响:它唯二的用途是 [0.25,4] 区间校验
+	// (16:9=1.778 恒过)和缺画布时的 _resolve_output_canvas。实测 832x480 配矛盾的 9:16
+	// 仍出 832x480,比例被完全忽略。
+	if taskType == "t2v" {
+		if ar, _ := body["aspect_ratio"].(string); strings.TrimSpace(ar) == "" {
+			body["aspect_ratio"] = h3DefaultAspectRatio
+		}
+	}
 
 	// ── 画布 ───────────────────────────────────────────────────────────────
 	// 只有 t2va 需要我们算:它的 aspect_ratio 是强制必填的具名值,且画幅完全由参数决定。

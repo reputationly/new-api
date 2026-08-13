@@ -459,3 +459,71 @@ func TestH3AppliesCanvasForR2VA(t *testing.T) {
 		t.Fatal("档位词应被清掉")
 	}
 }
+
+// t2va 不带任何比例字段时必须补上默认值,否则引擎硬校验直接 400
+// (`t2va requires an explicit aspect_ratio`)—— 六种玩法里只有它会因为"没传"整条挂掉。
+// 2026-08-13 现网 12 条请求挂了 5 条,全是直连侧没带比例的 t2va。
+//
+// 补默认还必须发生在推画布之前:否则 h3ApplyCanvas 取不到具名比例,走"清掉档位词交给
+// 引擎"的降级路径,用户选的 480P 会变成引擎自推的 768p,GPU 时间翻倍。
+func TestH3DefaultsAspectRatioForT2VA(t *testing.T) {
+	body := map[string]any{"size": "480P"}
+	applyMiniMaxH3Request(body, "t2v", 5, false, 0)
+	if body["aspect_ratio"] != "16:9" {
+		t.Fatalf("t2va 缺省比例 = %v, want 16:9", body["aspect_ratio"])
+	}
+	if body["width"] != 864 || body["height"] != 480 {
+		t.Fatalf("补了默认比例就该推得出 480P 画布,得到 %vx%v", body["width"], body["height"])
+	}
+}
+
+// 显式传值一律不动,包括不在具名表内的值:那是"传错"不是"没传",该让引擎把 400 报回去,
+// 而不是被我们悄悄改成 16:9 —— 用户会拿到一个自己没要过的画幅还不知道。
+func TestH3DoesNotOverrideExplicitAspectRatio(t *testing.T) {
+	body := map[string]any{"size": "480P", "aspect_ratio": "9:16"}
+	applyMiniMaxH3Request(body, "t2v", 5, false, 0)
+	if body["aspect_ratio"] != "9:16" {
+		t.Fatalf("显式比例被覆盖:%v", body["aspect_ratio"])
+	}
+
+	body = map[string]any{"size": "480P", "ratio": "4:3"}
+	applyMiniMaxH3Request(body, "t2v", 5, false, 0)
+	if body["aspect_ratio"] != "4:3" {
+		t.Fatalf("体验区的 ratio 归一后不该被默认值顶掉:%v", body["aspect_ratio"])
+	}
+
+	body = map[string]any{"size": "480P", "aspect_ratio": "26:15"}
+	applyMiniMaxH3Request(body, "t2v", 5, false, 0)
+	if body["aspect_ratio"] != "26:15" {
+		t.Fatalf("非具名比例应原样交给引擎去拒,得到 %v", body["aspect_ratio"])
+	}
+}
+
+// 关键帧不补:FL2VA 的画幅永远跟随第一张图,引擎静默忽略 aspect_ratio。补了不会报错,
+// 但会让排查时误以为画幅是这个比例决定的。
+func TestH3DoesNotDefaultAspectRatioForKeyframeTasks(t *testing.T) {
+	for _, tt := range []string{"i2v", "flf2v", "l2va"} {
+		body := map[string]any{"size": "480P"}
+		applyMiniMaxH3Request(body, tt, 5, false, 0)
+		if _, exists := body["aspect_ratio"]; exists {
+			t.Fatalf("%s 不该被补默认比例:%v", tt, body["aspect_ratio"])
+		}
+	}
+}
+
+// 调用方自己定了像素画布、但没给比例时,**照样要补**。这条钉的是一个容易被"优化"掉的
+// 行为:直觉上"有了 width/height 还补比例"是冗余,但引擎 _resolve_shape 先无条件做比例
+// 必填校验、再判断画布是否缺省,所以不补就是 400(实测 43ms 返回 t2va requires an
+// explicit aspect_ratio),而直连调用方按像素下发画布正是常态。
+// 补上的比例对出片无影响:画布显式时引擎只拿它过 [0.25,4] 区间校验(实测 832x480 配
+// 矛盾的 9:16 仍出 832x480)。
+func TestH3DefaultsAspectRatioEvenWithExplicitCanvas(t *testing.T) {
+	body := map[string]any{"width": 832, "height": 480}
+	applyMiniMaxH3Request(body, "t2v", 5, false, 0)
+	if body["aspect_ratio"] != "16:9" {
+		t.Fatalf("像素画布也要补比例,否则引擎必填校验直接 400;得到 %v", body["aspect_ratio"])
+	}
+	if body["width"] != 832 || body["height"] != 480 {
+		t.Fatalf("调用方的画布被改了:%vx%v", body["width"], body["height"])
+	}
+}
