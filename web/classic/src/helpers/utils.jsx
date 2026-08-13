@@ -139,16 +139,42 @@ if (isMobileScreen) {
   // showNoticeOptions.transition = 'flip';
 }
 
+// 登录已过期(会话 cookie 到期)时统一收口：清本地登录态并跳登录页。
+//
+// 前端的登录态是 localStorage['user']，而会话 cookie 是 HttpOnly——JS 感知不到它没了，
+// 于是页面看着还登着，一操作才冒一句「无权进行此操作，未登录且未提供 access token」
+// (i18n auth.not_logged_in，后端 401)。这句话对用户毫无信息量，直接送去重新登录才对。
+//
+// 抽成函数是因为有两个入口：axios 拦截器(所有请求，含 skipErrorHandler 的)与 showError
+// (少数直接拿着 AxiosError 调用的地方)。两处必须同一套行为，否则又会分叉。
+let redirectingToLogin = false;
+
+export function handleUnauthorized() {
+  // 本地登录态先清掉：即使下面因为已在登录页而不跳转，也不该留着一个假的已登录状态。
+  localStorage.removeItem('user');
+  // 登录/注册/找回/OAuth 回调页上的 401 是正常的(比如登录前探测身份)，再跳一次就成环了。
+  if (
+    /(^|\/)(login|register|reset|oauth)(\/|$)/.test(window.location.pathname)
+  ) {
+    return;
+  }
+  // 一个页面常常并发好几个请求，过期时会同时 401；只跳第一次。
+  if (redirectingToLogin) return;
+  redirectingToLogin = true;
+  // 手机端(basename /m)不用单独处理：/login 命中 mobile-router 的 UA 跳转规则，
+  // 会被送到 /m/login。?expired=true 由登录页读出来提示「登录已过期，请重新登录」。
+  window.location.href = '/login?expired=true';
+}
+
 export function showError(error) {
   console.error(error);
   if (error.message) {
     if (error.name === 'AxiosError') {
-      switch (error.response.status) {
+      // 网络错误(超时/断网)时没有 response，直接读 .status 会抛 TypeError，
+      // 把原本要展示的错误变成一个控制台异常。
+      switch (error.response?.status) {
         case 401:
-          // 清除用户状态
-          localStorage.removeItem('user');
-          // toast.error('错误：未登录或登录已过期，请重新登录！', showErrorOptions);
-          window.location.href = '/login?expired=true';
+          handleUnauthorized();
           break;
         case 429:
           Toast.error('错误：请求次数过多，请稍后再试！');

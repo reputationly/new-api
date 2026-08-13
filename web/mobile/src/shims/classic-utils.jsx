@@ -13,14 +13,34 @@ const toastShow = (icon, content, durationMs = 3000) => {
   AmToast.show({ icon, content: String(content), duration: durationMs });
 };
 
+// 与 classic 的 handleUnauthorized 对应（那边跳 /login 靠 mobile-router 的 UA 规则转到
+// /m/login，这里本就在移动端，直接跳 /m/login 省一次往返）。
+//
+// **必须导出**：@classic/helpers/api 的拦截器 import 了它，而 vite.config.js 的 SHIM_MAP
+// 会把那句 './utils' 整模块重定向到本文件——漏了不是行为退化，是构建直接失败。
+let redirectingToLogin = false;
+
+export function handleUnauthorized() {
+  localStorage.removeItem('user');
+  // 登录/注册页上的 401 是正常的，再跳一次就成环了。
+  if (
+    /(^|\/)(login|register|reset|oauth)(\/|$)/.test(window.location.pathname)
+  ) {
+    return;
+  }
+  // 一个页面常并发多个请求，过期时会同时 401；只跳第一次。
+  if (redirectingToLogin) return;
+  redirectingToLogin = true;
+  window.location.href = '/m/login?expired=true';
+}
+
 export function showError(error) {
   console.error(error);
   if (error && error.message) {
     if (error.name === 'AxiosError' && error.response) {
       switch (error.response.status) {
         case 401:
-          localStorage.removeItem('user');
-          window.location.href = '/m/login?expired=true';
+          handleUnauthorized();
           break;
         case 429:
           toastShow('fail', '错误：请求次数过多，请稍后再试！');
@@ -244,7 +264,10 @@ const stripThinkForAPI = (content) => {
   if (Array.isArray(content)) {
     return content.map((item) =>
       item?.type === 'text'
-        ? { ...item, text: processIncompleteThinkTags(item.text || '', '').content }
+        ? {
+            ...item,
+            text: processIncompleteThinkTags(item.text || '', '').content,
+          }
         : item,
     );
   }

@@ -19,6 +19,7 @@ For commercial licensing, please contact support@quantumnous.com
 
 import {
   getUserIdFromLocalStorage,
+  handleUnauthorized,
   showError,
   formatMessageForAPI,
   isValidMessage,
@@ -95,6 +96,16 @@ export function updateAPI() {
 API.interceptors.response.use(
   (response) => response,
   (error) => {
+    // 401 = 会话过期，无条件先处理，**放在 skipErrorHandler 之前**。
+    //
+    // skipErrorHandler 的语义是「这次错误我自己渲染，别弹全局 toast」，不是「登录失效
+    // 也别管」。原先 401 只在 showError 里处理，而体验区所有请求都带 skipErrorHandler
+    // 并把 message 渲染成对话气泡——正好绕开了它。表现就是会话过期后页面看着还登着，
+    // 生成时冒一句「无权进行此操作，未登录且未提供 access token」，用户不知道该干嘛。
+    if (error.response?.status === 401) {
+      handleUnauthorized();
+      return Promise.reject(error);
+    }
     // 如果请求配置中显式要求跳过全局错误处理，则不弹出默认错误提示
     if (error.config && error.config.skipErrorHandler) {
       return Promise.reject(error);
