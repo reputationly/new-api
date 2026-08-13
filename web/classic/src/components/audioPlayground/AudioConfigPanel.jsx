@@ -39,6 +39,7 @@ import {
   VOICE_UPLOAD_MAX_MB,
   EMOTION_PRESETS,
   AUDIO_SPEAKER_PRESETS,
+  speakerSampleUrl,
   AUDIO_LANGUAGES,
 } from '../../constants/audioPlayground.constants';
 
@@ -76,6 +77,9 @@ const AudioConfigPanel = ({
   const fileInputRef = useRef(null);
   const emotionAudioRef = useRef(null);
   const [recorderVisible, setRecorderVisible] = useState(false);
+  // 样音加载失败的 speaker(文件还没放进 public/audio-presets/speakers/)。按音色记,
+  // 不是一个布尔 —— 否则第一个缺文件的音色会把其余音色的播放器一并藏掉。
+  const [brokenSamples, setBrokenSamples] = useState(() => new Set());
 
   const ensureOption = (options, value) => {
     if (!value) return options;
@@ -140,10 +144,49 @@ const AudioConfigPanel = ({
   const showEmotionWeight = !!inputs.emotion;
 
   // 预设音色下拉:内置常用列表 + 允许自由输入(自定义 speaker 名)。
+  // 选项带上官方的音色描述与母语 —— 只给一个英文名,用户分不出 Sohee 与 Serena,
+  // 只能挨个合成去试。自由输入的自定义音色没有描述,渲染器按 desc 有无分支。
   const speakerOptions = ensureOption(
-    AUDIO_SPEAKER_PRESETS.map((s) => ({ label: s.label, value: s.value })),
+    AUDIO_SPEAKER_PRESETS.map((s) => ({
+      label: s.label,
+      value: s.value,
+      desc: s.desc,
+      native: s.native,
+    })),
     inputs.speaker,
   );
+  const selectedSpeaker = AUDIO_SPEAKER_PRESETS.find(
+    (s) => s.value === inputs.speaker,
+  );
+  // 试听样音:静态文件,缺失时 <audio> 触发 onError → 收起播放器(见 speakerSampleBroken)。
+  // 换音色要把失败标记清掉,否则一个缺文件的音色会把后面所有音色的播放器一起藏了。
+  const speakerSample = selectedSpeaker ? speakerSampleUrl(inputs.speaker) : '';
+
+  // 下拉项:音色名 + 官方描述 + 母语。自由输入的自定义音色只有名字,不占第二行。
+  const renderSpeakerOption = (renderProps) => {
+    const { label, value, desc, native, selected, onClick } = renderProps;
+    return (
+      <div
+        role='option'
+        aria-selected={selected}
+        onClick={onClick}
+        className={`px-3 py-2 cursor-pointer ${
+          selected ? 'bg-blue-50' : 'hover:bg-gray-50'
+        }`}
+      >
+        <Typography.Text className='text-sm'>{label || value}</Typography.Text>
+        {desc && (
+          <Typography.Text
+            type='tertiary'
+            size='small'
+            className='block leading-tight'
+          >
+            {t('{{desc}} · 母语 {{native}}', { desc, native })}
+          </Typography.Text>
+        )}
+      </div>
+    );
+  };
 
   return (
     <Card
@@ -511,11 +554,44 @@ const AudioConfigPanel = ({
               onChange={(value) => onInputChange('speaker', value)}
               value={inputs.speaker}
               optionList={speakerOptions}
+              renderOptionItem={renderSpeakerOption}
               disabled={disabled}
               style={{ width: '100%' }}
               dropdownStyle={{ width: '100%', maxWidth: '100%' }}
               className='!rounded-lg'
             />
+            {/* 选中项的描述:下拉收起后 Select 只显示音色名,描述看不到了 */}
+            {selectedSpeaker && (
+              <Typography.Text
+                type='tertiary'
+                size='small'
+                className='block mt-1'
+              >
+                {t('{{desc}} · 母语 {{native}}', {
+                  desc: selectedSpeaker.desc,
+                  native: selectedSpeaker.native,
+                })}
+              </Typography.Text>
+            )}
+            {/* 试听:静态样音,与情感合成的预置音色同一套路。样音文件还没放进
+                public/audio-presets/speakers/ 时 onError 收起播放器,不留空壳。 */}
+            {speakerSample && !brokenSamples.has(inputs.speaker) && (
+              <audio
+                key={speakerSample}
+                src={speakerSample}
+                controls
+                preload='none'
+                className='mt-2 w-full'
+                style={{ height: 32 }}
+                onError={() =>
+                  setBrokenSamples((prev) => {
+                    const next = new Set(prev);
+                    next.add(inputs.speaker);
+                    return next;
+                  })
+                }
+              />
+            )}
           </div>
         )}
 

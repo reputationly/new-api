@@ -253,18 +253,73 @@ export const AUDIO_TAB_ORDER = [
 // 物化、引擎按 voice/speaker 别名读。提供常用列表 + 允许自由输入。
 // 预设音色 = Qwen3-TTS CustomVoice checkpoint 内置的 9 个说话人(与引擎
 // /v1/audio/voices 返回一致;此前只列 6 个且含引擎不存在的 chelsie/ethan,已修正)。
+//
+// desc/native 逐字来自官方仓 README 的 speaker 表(QwenLM/Qwen3-TTS,§Supported Speakers)。
+// 光给一个英文名,用户根本不知道 Sohee 和 Serena 差在哪,只能挨个合成去试。
+//
+// sample 是试听样音,放在 public/audio-presets/speakers/ 下(与情感合成的预置参考音同一
+// 套路:静态文件,<audio> 直接播,不花额度、不等异步任务)。**官方仓与引擎都不提供这些
+// 样音**,得拿现网 Qwen3-TTS 容器按 SPEAKER_SAMPLE_TEXT 各合成一条导出。文件不存在时
+// 播放器会自行隐藏(见 AudioConfigPanel 的 onError),不会留一个点不响的空壳。
+//
+// native 只是「母语」建议,不是限制:每个音色都能说模型支持的任一语言,只是母语最自然。
 export const AUDIO_SPEAKER_PRESETS = [
-  { value: 'vivian', label: 'Vivian' },
-  { value: 'ryan', label: 'Ryan' },
-  { value: 'aiden', label: 'Aiden' },
-  { value: 'serena', label: 'Serena' },
-  { value: 'dylan', label: 'Dylan' },
-  { value: 'eric', label: 'Eric' },
-  { value: 'ono_anna', label: 'Ono Anna' },
-  { value: 'sohee', label: 'Sohee' },
-  { value: 'uncle_fu', label: 'Uncle Fu' },
+  {
+    value: 'vivian',
+    label: 'Vivian',
+    desc: '明亮、略带锋芒的年轻女声',
+    native: '中文',
+  },
+  { value: 'ryan', label: 'Ryan', desc: '节奏感强的活力男声', native: '英文' },
+  {
+    value: 'aiden',
+    label: 'Aiden',
+    desc: '阳光的美式男声,中频清晰',
+    native: '英文',
+  },
+  {
+    value: 'serena',
+    label: 'Serena',
+    desc: '温暖柔和的年轻女声',
+    native: '中文',
+  },
+  {
+    value: 'dylan',
+    label: 'Dylan',
+    desc: '清亮自然的北京年轻男声',
+    native: '中文(北京话)',
+  },
+  {
+    value: 'eric',
+    label: 'Eric',
+    desc: '明快、略带沙哑的成都男声',
+    native: '中文(四川话)',
+  },
+  {
+    value: 'ono_anna',
+    label: 'Ono Anna',
+    desc: '俏皮轻盈的日语女声',
+    native: '日语',
+  },
+  {
+    value: 'sohee',
+    label: 'Sohee',
+    desc: '温暖、情感饱满的韩语女声',
+    native: '韩语',
+  },
+  {
+    value: 'uncle_fu',
+    label: 'Uncle Fu',
+    desc: '低沉醇厚的成熟男声',
+    native: '中文',
+  },
 ];
 export const AUDIO_DEFAULT_SPEAKER = 'vivian';
+
+// 试听样音的静态目录。文件名即 speaker 的 value(vivian.wav / ono_anna.wav …)。
+export const AUDIO_SPEAKER_SAMPLE_DIR = '/audio-presets/speakers';
+export const speakerSampleUrl = (value) =>
+  value ? `${AUDIO_SPEAKER_SAMPLE_DIR}/${value}.wav` : '';
 
 // 口音(语音融合):TTS 不翻译,文本什么语言就念什么,引擎 Auto 自动识别语言,故不让用户选
 // 语言(英文文本选日文无意义)。用户唯一有意义的主动选择是「中文方言口音」——同一段中文用

@@ -61,8 +61,13 @@ const AudioPlaygroundBody = ({ mode }) => {
   // 各玩法欢迎语。
   const welcomeText =
     mode === 'synthesis'
-      ? t(
-          '欢迎使用 AI 语音合成,请在左侧选择音色来源(上传克隆或预设音色),并在下方输入要合成的文本',
+      ? // 本玩法只做预设音色:当前挂的 Qwen3-TTS CustomVoice checkpoint 没有 speaker
+        // encoder 权重,克隆请求会让引擎维度不匹配崩溃(见 AUDIO_MODES.synthesis)。
+        // 面板上 needsVoiceSource/needsRefAudio 都是 false,连「音色来源」开关都不存在,
+        // 欢迎语却写着「选择音色来源(上传克隆或预设音色)」—— 指了个不存在的控件,
+        // 也承诺了做不到的事。要克隆自己的声音得去「情感合成」。
+        t(
+          '欢迎使用 AI 语音合成,请在左侧选择音色与口音,并在下方输入要合成的文本。本玩法不支持上传克隆,要克隆自己的声音请用「情感合成」',
         )
       : mode === 'dialogue'
         ? t(
