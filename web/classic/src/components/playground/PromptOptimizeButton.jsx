@@ -1,10 +1,9 @@
 import React, { useEffect } from 'react';
-import { Button, Typography } from '@douyinfe/semi-ui';
-import { Sparkles } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { usePromptOptimize } from '../../hooks/common/usePromptOptimize';
+import AiAssistButton from './AiAssistButton';
 
-// 「AI 优化提示词」按钮。挂在各体验区提示词输入框上方，样式对齐音乐页的「AI 帮我写词」。
+// 「AI 优化提示词」按钮。外观与交互来自 AiAssistButton，与音乐页的「AI 帮我写词」共用一份。
 //
 // 运营没开总开关 / 没配优化模型 / 单独关掉了这个 tab 时整体不渲染 —— 与其给一个点了
 // 报「未配置」的按钮，不如让它不存在。配置读取与调用都在 usePromptOptimize 里，这里
@@ -37,30 +36,18 @@ const PromptOptimizeButton = ({
   }, [optimizing, onOptimizingChange]);
   if (!available) return null;
   return (
-    <div className='flex items-center gap-2 mb-2'>
-      <Button
-        theme='borderless'
-        type='primary'
-        size='small'
-        icon={<Sparkles size={14} />}
-        loading={optimizing}
-        disabled={disabled || optimizing}
-        onClick={async () => {
-          const out = await optimize(value);
-          if (out) onChange(out);
-        }}
-      >
-        {optimizing ? t('优化中…') : t('AI 优化提示词')}
-      </Button>
-      <Typography.Text
-        type={optimizing ? 'warning' : 'tertiary'}
-        className='text-xs'
-      >
-        {optimizing
-          ? t('正在优化，请勿刷新或切换页面，否则要重新来一次')
-          : t('把大白话补全成模型认的描述，结果会填回输入框，可再改')}
-      </Typography.Text>
-    </div>
+    <AiAssistButton
+      label={t('AI 优化提示词')}
+      busyLabel={t('优化中…')}
+      hint={t('把大白话补全成模型认的描述，结果会填回输入框，可再改')}
+      busyHint={t('正在优化，请勿刷新或切换页面，否则要重新来一次')}
+      busy={optimizing}
+      disabled={disabled}
+      onClick={async () => {
+        const out = await optimize(value);
+        if (out) onChange(out);
+      }}
+    />
   );
 };
 

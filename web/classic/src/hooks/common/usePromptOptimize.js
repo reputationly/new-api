@@ -2,6 +2,7 @@ import { useCallback, useContext, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { StatusContext } from '../../context/Status';
 import { API, showError, showInfo } from '../../helpers';
+import { isPlaygroundConfigIssue } from '../../helpers/playground';
 import {
   parsePlaygroundTabConfig,
   getPlaygroundTab,
@@ -112,23 +113,10 @@ export const usePromptOptimize = (
         return out;
       } catch (e) {
         const msg = e?.response?.data?.error?.message || e?.message || '';
-        // 只认「分组权限 / 无可用渠道」这两类配置问题。**不能按 403 一刀切**:
-        // /pg 这条路上 distributor.go 还有渠道禁用(:51)、亲和渠道禁用(:108)、
-        // 令牌 ACL(:62,:72) 等多种 403,把它们也指向「检查模型与分组配置」
-        // 等于给出错误的排查方向。
-        //
-        // 这几处 abortWithOpenAiMessage 都没传 ErrorCode,没有稳定的机器可读标识,
-        // 只能匹配文案。下面这些串**逐字来自 i18n/locales/{en,zh-CN,zh-TW}.yaml
-        // 的 distributor.group_access_denied 与 distributor.no_available_channel**
-        // (`_with_hint` 变体含同样关键词,一并覆盖)。注意繁体用「管道」不是「渠道」、
-        // 英文是 "No permission to access this group" —— 凭印象写正则会漏掉它们。
-        // 后端哪天改了文案这里就失效,根治办法是给那几处补上 ErrorCode 再按 code 判。
-        const isConfigIssue =
-          /无权访问该分组|無權存取該分組|No permission to access this group|无可用渠道|無可用管道|No available channel/i.test(
-            msg,
-          );
+        // 只认「分组权限 / 无可用渠道」这两类配置问题(判据见 helpers/playground.js,
+        // 与音乐页的「AI 帮我写词」共用一份)。
         showError(
-          isConfigIssue
+          isPlaygroundConfigIssue(msg)
             ? // 前缀 + 原文,而不是替换:普通用户看开头知道找谁,管理员看后半段
               // 知道去哪查。原始报错正是定位问题的唯一线索,不能吞掉。
               t('AI 优化暂不可用，请联系管理员') + ' — ' + msg

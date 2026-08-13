@@ -35,11 +35,10 @@ const MusicPlaygroundBody = ({ mode, initialSrcTaskId = '', onSendToSrc }) => {
     needsDualAudio,
     needsText,
     showTranslation,
-    showAssistModel,
+    englishOnlyNoTranslate,
+    draftAvailable,
     drafting,
     draftPlan,
-    translationGroups,
-    translationModels,
     refAudioMaxMB,
     videoMaxMB,
     generate,
@@ -90,10 +89,6 @@ const MusicPlaygroundBody = ({ mode, initialSrcTaskId = '', onSendToSrc }) => {
           needsAudio={needsAudio}
           needsVideo={needsVideo}
           needsDualAudio={needsDualAudio}
-          showTranslation={showTranslation}
-          showAssistModel={showAssistModel}
-          translationGroups={translationGroups}
-          translationModels={translationModels}
           audioLabel={audioLabel}
           refAudioMaxMB={refAudioMaxMB}
           videoMaxMB={videoMaxMB}
@@ -114,14 +109,13 @@ const MusicPlaygroundBody = ({ mode, initialSrcTaskId = '', onSendToSrc }) => {
           needsVideo={needsVideo}
           needsDualAudio={needsDualAudio}
           showTranslation={showTranslation}
+          englishOnlyNoTranslate={englishOnlyNoTranslate}
           welcomeText={welcomeText}
           onApplyExample={applyExample}
           styleState={styleState}
           onSend={generate}
           drafting={drafting}
-          onDraftPlan={
-            showAssistModel && !showTranslation ? draftPlan : undefined
-          }
+          onDraftPlan={draftAvailable ? draftPlan : undefined}
           onSendToSrc={onSendToSrc}
           onRegenerate={regenerate}
           onRefetch={refetch}

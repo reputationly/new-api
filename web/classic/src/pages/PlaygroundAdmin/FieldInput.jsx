@@ -54,29 +54,17 @@ const FieldInput = ({ field, value, onChange, compact = false }) => {
             style={{ width: '100%' }}
           />
         );
-      case 'translation': {
-        const cfg = value || { enabled: false, defaultModel: '' };
+      // 只剩一个开关：翻译用哪个语言模型已统一到「通用设置」里的那一个（与「AI 优化
+      // 提示词」共用），不再逐模型配 defaultModel。值仍存成对象而非布尔，是为了不动
+      // 已有配置的形状（读侧只看 enabled）。
+      case 'translation':
         return (
-          <div className='flex items-center gap-2'>
-            <Switch
-              size='small'
-              checked={cfg.enabled === true}
-              onChange={(v) =>
-                onChange(v ? { ...cfg, enabled: true } : undefined)
-              }
-            />
-            <Input
-              value={cfg.defaultModel || ''}
-              disabled={cfg.enabled !== true}
-              onChange={(v) =>
-                onChange({ ...cfg, enabled: true, defaultModel: v })
-              }
-              placeholder={t('翻译用的语言模型')}
-              style={{ flex: 1, minWidth: 140 }}
-            />
-          </div>
+          <Switch
+            size='small'
+            checked={value?.enabled === true}
+            onChange={(v) => onChange(v ? { enabled: true } : undefined)}
+          />
         );
-      }
       case 'bool':
         return (
           <Switch

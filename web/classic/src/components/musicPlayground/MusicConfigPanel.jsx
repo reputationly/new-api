@@ -67,10 +67,6 @@ const MusicConfigPanel = ({
   needsAudio = false,
   needsVideo = false,
   needsDualAudio = false,
-  showTranslation = false,
-  showAssistModel = false,
-  translationGroups = [],
-  translationModels = [],
   audioLabel = '',
   refAudioMaxMB = MUSIC_AUDIO_UPLOAD_MAX_MB,
   videoMaxMB = MUSIC_VIDEO_UPLOAD_MAX_MB,
@@ -93,15 +89,6 @@ const MusicConfigPanel = ({
   // 运营给该模型在本玩法下写的备注（体验区管理里配），下拉选项与选中项下方都展示。
   const noteOf = useModelNotes('music', mode);
   const selectedNote = noteOf(inputs.model);
-  const translationGroupOptions = ensureOption(
-    translationGroups || [],
-    inputs.translationGroup,
-  );
-  const translationModelOptions = ensureOption(
-    translationModels || [],
-    inputs.translationModel,
-  );
-
   // 时长下拉:'' → 「自动(引擎默认)」,其余为秒数。
   const durationOptions = MUSIC_DURATIONS.map((d) =>
     d === ''
@@ -240,58 +227,6 @@ const MusicConfigPanel = ({
             </Typography.Text>
           )}
         </div>
-
-        {/* 辅助语言模型:两个用途共用一套选择 —— 音效的中译英,和文生音乐的「AI 帮我写词」。
-            都是单次非流式打 /pg/chat/completions,没必要让用户选两次。
-            先选分组再选模型,其余参数(temperature 等)后端默认,不暴露。 */}
-        {(showTranslation || showAssistModel) && (
-          <div>
-            <div className='flex items-center gap-2 mb-2'>
-              <Languages size={16} className='text-gray-500' />
-              <Typography.Text strong className='text-sm'>
-                {showTranslation ? t('语言模型') : t('辅助语言模型')}
-              </Typography.Text>
-              <Tooltip
-                content={
-                  showTranslation
-                    ? t('中文将自动翻译为英文后生成')
-                    : t('用于「AI 帮我写词」:据你的描述拟出歌词与曲式参数')
-                }
-                position='top'
-              >
-                <HelpCircle size={14} className='text-gray-400 cursor-help' />
-              </Tooltip>
-            </div>
-            <Select
-              placeholder={t('请选择分组')}
-              selection
-              filter={selectFilter}
-              autoClearSearchValue={false}
-              onChange={(value) => onInputChange('translationGroup', value)}
-              value={inputs.translationGroup}
-              optionList={translationGroupOptions}
-              renderOptionItem={renderGroupOption}
-              disabled={disabled}
-              style={{ width: '100%' }}
-              dropdownStyle={{ width: '100%', maxWidth: '100%' }}
-              className='!rounded-lg mb-2'
-            />
-            <Select
-              placeholder={t('请选择模型')}
-              selection
-              filter={selectFilter}
-              autoClearSearchValue={false}
-              onChange={(value) => onInputChange('translationModel', value)}
-              value={inputs.translationModel}
-              optionList={translationModelOptions}
-              emptyContent={t('当前分组下暂无可用语言模型')}
-              disabled={disabled}
-              style={{ width: '100%' }}
-              dropdownStyle={{ width: '100%', maxWidth: '100%' }}
-              className='!rounded-lg'
-            />
-          </div>
-        )}
 
         {/* 驱动音频(ACE-Step cover=参考音频 / repaint=源音频,必选):上传后可试听 */}
         {needsAudio && (

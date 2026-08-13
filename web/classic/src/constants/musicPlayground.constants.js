@@ -405,10 +405,13 @@ export const getMusicModelSet = (config, capability, matchCaps) => {
 };
 
 // 某模型的翻译配置(是否启用中译英 + 默认语言模型):tab 级 → 模型级。无全局兜底。
+// 只回「这个模型要不要中译英」。原先还带一个 defaultModel(体验区那个语言模型下拉的
+// 默认选项),下拉已撤 —— 翻译改用运营在「体验区管理 → 通用设置」里配的那个语言模型,
+// 与「AI 优化提示词」「AI 帮我写词」同一个。老配置里残留的 defaultModel 读不到就是了。
 export const getTranslationForModel = (config, model, tabKey) => {
   const m = config?.models?.[model];
   const t = tabScopedValue(m, tabKey, 'translation') || m?.translation;
-  return { enabled: t?.enabled === true, defaultModel: t?.defaultModel || '' };
+  return { enabled: t?.enabled === true };
 };
 
 // 字数上限:tab 级 → 模型级 → 全局默认 → 兜底常量。0 表示不限制。

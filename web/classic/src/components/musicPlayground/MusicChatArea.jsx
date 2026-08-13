@@ -13,6 +13,7 @@ import { useTranslation } from 'react-i18next';
 import { showError, getLogo, stringToColor } from '../../helpers';
 import { UserContext } from '../../context/User';
 import { blockChatDrag } from '../playground/blockChatDrag';
+import AiAssistButton from '../playground/AiAssistButton';
 import PromptOptimizeButton from '../playground/PromptOptimizeButton';
 import {
   MUSIC_STATUS,
@@ -173,6 +174,7 @@ const MusicChatArea = ({
   needsVideo = false,
   needsDualAudio = false,
   showTranslation = false,
+  englishOnlyNoTranslate = false,
   welcomeText = '',
   onApplyExample,
   onSend,
@@ -413,7 +415,10 @@ const MusicChatArea = ({
       missingRequiredAudio ||
       missingRequiredVideo;
     const hasText = inputValue.trim().length > 0;
-    const canSend = !blockSend && !optimizing && (needsText ? hasText : true);
+    // 优化 / 拟稿在途时同样不能发:此刻发出去的还是没经 AI 处理的原文,而拟稿更狠 ——
+    // 歌词还没落到左侧,提交就会命中 sample_mode,选好的时长/BPM 又被引擎覆盖掉。
+    const canSend =
+      !blockSend && !optimizing && !drafting && (needsText ? hasText : true);
     const doSend = () => {
       if (!canSend) return;
       onSend(inputValue.trim());
@@ -427,6 +432,16 @@ const MusicChatArea = ({
             className='text-xs block mb-2 text-center'
           >
             {t('当前模型仅支持英文,已开启语言模型自动翻译')}
+          </Typography.Text>
+        )}
+        {/* 模型只认英文、但运营没配翻译模型:这句得在写之前说。写完中文再发,只会
+            吃一句「请直接用英文描述」的报错,白写一遍。 */}
+        {englishOnlyNoTranslate && (
+          <Typography.Text
+            type='warning'
+            className='text-xs block mb-2 text-center'
+          >
+            {t('当前模型仅支持英文,请直接用英文描述')}
           </Typography.Text>
         )}
         {turnLimitReached && (
@@ -483,28 +498,24 @@ const MusicChatArea = ({
         {/* 「AI 帮我写词」= 官方 Simple Mode 的【Create Sample】那一步:据这句描述拟出
             caption/歌词/BPM/调式/时长,caption 回填到输入框、其余回填到左侧面板,由用户
             过目再改。这一步不只是省事 —— 填了歌词之后提交就不再走 sample_mode,引擎那边
-            「用 LM 自己推的时长覆盖用户值」的逻辑不触发,时长/BPM 才真正生效。 */}
+            「用 LM 自己推的时长覆盖用户值」的逻辑不触发,时长/BPM 才真正生效。
+            外观与交互走 AiAssistButton,与各体验区的「AI 优化提示词」同一份:空输入不置灰
+            (点了给提示),在途转圈换文案。 */}
         {onDraftPlan && (
-          <div className='flex items-center gap-2 mb-2'>
-            <Button
-              theme='borderless'
-              type='primary'
-              size='small'
-              loading={drafting}
-              disabled={generating || !hasText}
-              onClick={async () => {
-                const caption = await onDraftPlan(inputValue.trim());
-                if (typeof caption === 'string' && caption) {
-                  setInputValue(caption);
-                }
-              }}
-            >
-              {t('AI 帮我写词')}
-            </Button>
-            <Typography.Text type='tertiary' className='text-xs'>
-              {t('先拟好歌词与曲式再生成,左侧的时长/速度才会生效')}
-            </Typography.Text>
-          </div>
+          <AiAssistButton
+            label={t('AI 帮我写词')}
+            busyLabel={t('拟稿中…')}
+            hint={t('先拟好歌词与曲式再生成,左侧的时长/速度才会生效')}
+            busyHint={t('正在拟稿，请勿刷新或切换页面，否则要重新来一次')}
+            busy={drafting}
+            disabled={generating}
+            onClick={async () => {
+              const caption = await onDraftPlan(inputValue.trim());
+              if (typeof caption === 'string' && caption) {
+                setInputValue(caption);
+              }
+            }}
+          />
         )}
         {/* 「AI 优化提示词」只在文生音效(t2a)出现:它的输入是一句声音描述,补全成
             声源/包络/声学空间的完整描述能直接提升出音质量。ACE-Step 系玩法的输入是
@@ -562,6 +573,7 @@ const MusicChatArea = ({
     missingRequiredAudio,
     missingRequiredVideo,
     showTranslation,
+    englishOnlyNoTranslate,
     needsText,
     needsDualAudio,
     showPresets,

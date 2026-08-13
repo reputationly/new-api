@@ -38,6 +38,27 @@ export function isChatModel(types) {
   return hasChat && !hasNonChat;
 }
 
+// 体验区里那些「单次非流式打 /pg/chat/completions」的辅助调用（AI 优化提示词、
+// AI 帮我写词、音效中译英）失败时，判断报错是不是「模型/分组配错了」这一类 ——
+// 是的话给用户一句能行动的提示，而不是把原始报错甩出去。
+//
+// **不能按 403 一刀切**：/pg 这条路上 distributor.go 还有渠道禁用（:51）、亲和渠道
+// 禁用（:108）、令牌 ACL（:62,:72）等多种 403，把它们也指向「检查模型与分组配置」
+// 等于给出错误的排查方向。
+//
+// 这几处 abortWithOpenAiMessage 都没传 ErrorCode，没有稳定的机器可读标识，只能匹配
+// 文案。下面这些串**逐字来自 i18n/locales/{en,zh-CN,zh-TW}.yaml 的
+// distributor.group_access_denied 与 distributor.no_available_channel**（`_with_hint`
+// 变体含同样关键词，一并覆盖）。注意繁体用「管道」不是「渠道」、英文是
+// "No permission to access this group" —— 凭印象写正则会漏掉它们。后端哪天改了文案
+// 这里就失效，根治办法是给那几处补上 ErrorCode 再按 code 判。
+const PLAYGROUND_CONFIG_ISSUE_RE =
+  /无权访问该分组|無權存取該分組|No permission to access this group|无可用渠道|無可用管道|No available channel/i;
+
+export function isPlaygroundConfigIssue(message) {
+  return PLAYGROUND_CONFIG_ISSUE_RE.test(String(message || ''));
+}
+
 // 一个模型挂多个非 chat 端点时，按 priority 选第一个用于弹框展示。
 export function pickPrimaryUnsupportedEndpoint(modelEndpointTypes, model) {
   const types = modelEndpointTypes?.get?.(model) || [];

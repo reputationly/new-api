@@ -318,10 +318,15 @@ export const PLAYGROUND_CATEGORIES = [
       {
         // 文生音乐不挂通用「AI 优化提示词」：它已有更专的「AI 帮我写词」（一次产出
         // caption/歌词/BPM/调式/时长并回填各控件），两个按钮并排只会让人选错。
+        // 但「AI 帮我写词」用的语言模型就是下面 __global.promptOptimize 里配的那个 ——
+        // 不声明 promptOptimize 只是不出那个按钮，不代表这个 tab 与那份配置无关。
+        //
+        // 没有 translation 字段：ACE-Step 的文本编码器认中文，本就不需要中译英；此前
+        // 挂它是因为「AI 帮我写词」曾借用中译英那个下拉挑模型，现在不借了。
         key: 't2m',
         label: '文生音乐',
         capability: '文生音乐',
-        fields: ['maxChars', 'translation'],
+        fields: ['maxChars'],
       },
       {
         key: 'cover',
@@ -717,13 +722,10 @@ export const recomputeModelLevel = (storeKey, model) => {
         break;
       }
       case 'translation': {
-        const on = entries.filter((v) => v && v.enabled === true);
-        if (on.length) {
-          out[field] = {
-            enabled: true,
-            defaultModel: on.find((v) => v.defaultModel)?.defaultModel || '',
-          };
-        } else delete out[field];
+        // 任一 tab 开了就算开(字段只剩 enabled,翻译模型走「通用设置」的优化模型)。
+        if (entries.some((v) => v && v.enabled === true))
+          out[field] = { enabled: true };
+        else delete out[field];
         break;
       }
       default:

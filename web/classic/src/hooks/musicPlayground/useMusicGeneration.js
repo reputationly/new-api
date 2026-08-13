@@ -14,11 +14,16 @@ import {
   hydrateConversationsFromStorage,
   stripUnresolvedMediaRefs,
 } from '../../helpers/playgroundMediaStorage';
-import { isChatModel } from '../../helpers/playground';
+import { isPlaygroundConfigIssue } from '../../helpers/playground';
+import {
+  parsePlaygroundTabConfig,
+  getPromptOptimizeGlobal,
+} from '../../constants/playgroundAdmin.constants';
 import { urlToDataUrl } from '../../utils/playgroundMedia';
 import {
   API,
   showError,
+  showInfo,
   processGroupsData,
   processModelsData,
   getUserModelsCached,
@@ -33,6 +38,7 @@ import {
   MUSIC_CONV_TURN_LIMIT,
   MUSIC_POLL_INTERVAL_MS,
   MUSIC_POLL_MAX_TIMES,
+  MUSIC_DURATIONS,
   MUSIC_DEFAULT_DURATION,
   MUSIC_DEFAULT_SECONDS_TOTAL,
   MUSIC_AUDIOX_DEFAULT_STEPS,
@@ -54,9 +60,6 @@ import {
 
 // 中译英走体验区聊天门面(单次非流式);后端按会话身份注入上游 key。
 const MUSIC_TRANSLATE_ENDPOINT = '/pg/chat/completions';
-
-// 语言模型下拉过滤:判据见 helpers/playground.js#isChatModel(提示词 AI 优化的
-// 模型选择器共用同一份 —— 两处都固定打 /pg/chat/completions)。
 
 // 内置翻译模板(设计 §8):把用户输入转成一句 AudioCaps 风格英文音频描述。
 const TRANSLATE_SYSTEM_BASE = `You convert a user's sound request into ONE concise English caption for an audio generator (AudioX, trained on AudioCaps-style natural-language captions).
@@ -84,8 +87,13 @@ const TRANSLATE_SYSTEM_VIDEO = `${TRANSLATE_SYSTEM_BASE}
 // 给的写 caption 方法之一,所以这条路是被认可的;若实测音乐性不足,再考虑接 5Hz LM。
 // 每个字段的取值域都照 ACE-Step 1.5 引擎侧的硬约束写(acestep/constants.py):
 //   VALID_LANGUAGES / VALID_KEYSCALES(注意 major|minor 小写、"A minor" 而非 "Am")/
-//   BPM_MIN..MAX=30..300 / DURATION_MIN..MAX=10..600。
+//   BPM_MIN..MAX=30..300。
 // 写错格式引擎会静默忽略该字段,退回自动推断 —— 用户以为设了,其实没生效。
+//
+// 时长是唯一一个不按引擎上限(10..600)写的字段:体验区的下拉只给 30/60/90/120,拟稿要是
+// 回个 180,下拉里根本没有这一项,面板显示的和实际下发的就对不上了。所以提示词里直接把
+// 取值域收成这四档,回填前再 snapMusicDuration 兜一次底(模型不听话是常态)。歌词篇幅也据此
+// 定量 —— 词写多了引擎不会报错,只会把后面的段落唱没或整首赶着唱完。
 const DRAFT_SYSTEM = `You are a music production assistant for ACE-Step 1.5, a text-to-music diffusion model. Given a user's one-line song idea, produce a complete production plan that the model can consume directly.
 
 Return ONLY a JSON object. No markdown fence, no explanation, no preface:
@@ -96,18 +104,46 @@ Field rules — these are hard constraints from the engine; a malformed value is
 - caption: ENGLISH only. This is the single most important input. Cover these dimensions: genre/style, instrumentation, mood and atmosphere, timbre and production texture, vocal gender and delivery, arrangement or progression. Be concrete ("dreamy shoegaze with reverb-heavy guitars and whispered female vocals"), not generic ("nice music"). Comma-separated tags and natural prose both work.
   NEVER put tempo, BPM, key, or time signature in the caption — the model gets confused when the caption contradicts the dedicated fields. Put them in bpm / keyScale only.
 
-- lyrics: actual singable lyrics in the language the user asked for (default: the language of the user's own request). Structure with section tags on their own line: [Verse 1], [Chorus], [Verse 2], [Bridge], [Outro]. Also available: [Interlude], [Instrumental] for non-vocal sections. Keep verses 4-8 lines; make the chorus memorable and repetitive.
+- lyrics: actual singable lyrics in the language the user asked for (default: the language of the user's own request). Structure with section tags on their own line: [Verse 1], [Chorus], [Verse 2], [Bridge], [Outro]. Also available: [Interlude], [Instrumental] for non-vocal sections. Make the chorus memorable and repetitive.
   For a purely instrumental piece output exactly "[Instrumental]" and nothing else.
+  THE AMOUNT OF LYRICS MUST FIT \`duration\` — decide duration first, then write to that budget. A sung line runs roughly 4 seconds, so the whole song gets about duration/4 lines (section tags are not lines). Concretely:
+    30s  -> ~7 lines total, one short pair such as [Verse 1] + [Chorus]
+    60s  -> ~15 lines, e.g. [Verse 1] [Chorus] [Verse 2] [Chorus]
+    90s  -> ~22 lines, add a [Bridge] or an [Interlude]
+    120s -> ~30 lines, a full [Verse] [Chorus] [Verse] [Chorus] [Bridge] [Chorus] [Outro]
+  Writing too many lines is the usual failure: the generation runs out of time, so the last sections are cut off or the whole song is rushed and unintelligible. When torn between two lengths, write the shorter one.
 
 - bpm: integer, 30-300. Typical: slow ballad 60-80, mid-tempo 90-120, fast 130-180. Must not contradict the mood described in the caption.
 
 - keyScale: EXACTLY the format "<note><accidental> <mode>" where note is A-G, accidental is empty / # / b, and mode is lowercase "major" or "minor". Valid: "C major", "A minor", "F# minor", "Bb major". INVALID: "C Major", "Am", "F#m", "C". Common keys (C, G, D, A minor, E minor) are the most stable.
 
-- duration: integer seconds, 10-600. Prefer 30-60 for a short piece or 120-240 for a full song — those ranges are the most stable; very long generations tend to repeat or lose structure.
+- duration: integer seconds, and MUST be exactly one of 30, 60, 90, 120 — the playground's duration control offers no other value, and anything else gets snapped to the nearest of these before it reaches the engine.
+  If the user states or hints at a target length ("两分钟", "90 秒左右", "a minute or so", "短一点"), honour it: pick the nearest of the four. Anything longer than 120 seconds is capped at 120 — this playground generates at most two minutes, so treat "五分钟的完整歌曲" as a 120-second piece and write the lyrics for 120 seconds, not for five minutes.
+  If the user says nothing about length, choose from the material: a loop or jingle 30, a single verse-chorus 60, a compact song 90, a full song 120.
 
 - vocalLanguage: one BCP-47-ish code from the engine's list. Common: zh (Mandarin), yue (Cantonese), en, ja, ko, es, fr, de, ru, pt, it, ar, hi, th, vi. Use "unknown" for instrumental tracks. Must match the language the lyrics are actually written in.
 
 Keep the user's intent faithfully. Do not substitute a different genre, mood, or language than the one asked for.`;
+
+// 拟稿回来的时长收敛到「目标时长」下拉真有的那几档(MUSIC_DURATIONS,去掉 '' 自动档)。
+// 提示词里已经写死了这四档,这里是兜底 —— 模型回个 180 的话,下拉里没有这一项,面板显示
+// 的和实际下发的就对不上。取最近的一档,于是超过 120 的一律落到 120(体验区上限);
+// 正好卡在两档中间时(45)取小的那档,与提示词里「拿不准就写短的」同向。
+// 非法值返回 '' → 调用方不动原值。
+const MUSIC_DURATION_CHOICES = MUSIC_DURATIONS.map(Number).filter(
+  (n) => Number.isFinite(n) && n > 0,
+);
+
+const snapMusicDuration = (value) => {
+  const n = Number(value);
+  if (!Number.isFinite(n) || n <= 0 || !MUSIC_DURATION_CHOICES.length)
+    return '';
+  return String(
+    MUSIC_DURATION_CHOICES.reduce((best, cur) =>
+      Math.abs(cur - n) < Math.abs(best - n) ? cur : best,
+    ),
+  );
+};
 
 // 音乐模型体验区 hook。一个 hook 覆盖全部 7 个玩法(mode),同一异步任务门面
 // (/pg/videos)、同一轮询/历史/锁定模式;按 mode 的 engine 分支输入形态与 metadata:
@@ -222,9 +258,6 @@ const PARAM_FIELDS = [
   'seed',
   'guidanceScale',
   'inferenceSteps',
-  // 中译英语言模型:随会话持久化,保证锁定会话后续轮次/刷新后仍用同一语言模型。
-  'translationGroup',
-  'translationModel',
 ];
 
 const pickParams = (src) => {
@@ -296,16 +329,10 @@ export const useMusicGeneration = (mode = 't2m') => {
     seed: '', // 指定后可复现;空 = 随机
     guidanceScale: '', // 贴合描述程度;空 = 引擎默认
     inferenceSteps: '', // 采样步数;空 = 引擎默认
-    // 中译英用的语言模型(分组+模型两级);仅 needsTranslation 且模型启用译文时使用。
-    translationGroup: '',
-    translationModel: '',
   });
   const [groups, setGroups] = useState([]);
   const [models, setModels] = useState([]);
   const [modelGroupsMap, setModelGroupsMap] = useState(new Map());
-  const [modelEndpointTypes, setModelEndpointTypes] = useState(new Map());
-  const [translationGroups, setTranslationGroups] = useState([]);
-  const [translationModels, setTranslationModels] = useState([]);
 
   const initialConvsRef = useRef(null);
   const [conversations, setConversations] = useState(() => {
@@ -337,8 +364,6 @@ export const useMusicGeneration = (mode = 't2m') => {
   lockedRef.current = locked;
   const groupRef = useRef(inputs.group);
   groupRef.current = inputs.group;
-  const translationGroupRef = useRef(inputs.translationGroup);
-  translationGroupRef.current = inputs.translationGroup;
   const activePollRef = useRef(null);
 
   // mount 后从 IDB 还原上传的音频/视频,按初始对象引用逐条合并(不整体覆盖)。
@@ -424,16 +449,51 @@ export const useMusicGeneration = (mode = 't2m') => {
     [modelConfig, capability, matchCapabilities],
   );
 
-  // 当前模型的译文配置(是否启用中译英 + 默认语言模型)。
+  // 当前模型要不要中译英。
   const translationCfg = useMemo(
     () => getTranslationForModel(modelConfig, inputs.model, mode),
     [modelConfig, inputs.model, mode],
   );
-  // 是否在面板展示「语言模型」下拉:玩法需翻译 且 当前模型启用译文。
-  const showTranslation = !!needsTranslation && translationCfg.enabled;
-  // 文生音乐的「AI 帮我写词」也要挑一个语言模型,与中译英共用同一套下拉。
-  const isT2M = resolveTaskType(true) === 't2m';
-  const showAssistModel = showTranslation || isT2M;
+  // 中译英是**针对 AudioX 这一个引擎的特殊处理**,不是文生音效这个玩法的固有属性:
+  // AudioX 的文本编码器只认英文,中文进去会塌成 <unk>。所以判据是「玩法可能需要 +
+  // 当前模型声明了需要」两层,换成认中文的模型时运营把那个开关关掉即可,代码不用动
+  // (同视频页按引擎族给 MiniMax H3 换提示词模板的处理)。
+  //
+  // 早先这里还控制左侧一个「语言模型」下拉,让用户自己挑翻译模型;现已撤掉 ——
+  // 翻译、AI 优化提示词、AI 帮我写词都是同一类辅助调用,统一用运营在「体验区管理 →
+  // 通用设置」里配的那个模型(见下面的 promptOptimizeGlobal)。
+  const needsEnglishOnly = !!needsTranslation && translationCfg.enabled;
+
+  // 音乐体验区所有辅助语言模型调用(中译英、AI 帮我写词)共用的运营配置:与各体验区
+  // 「AI 优化提示词」同一份(总开关 + 模型 + 分组)。原先让用户在左侧自己挑一个,但这
+  // 三者都是「单次非流式打 /pg/chat/completions」的同一类调用,却要两套配置面、两个
+  // 模型、两种可用性判断 —— 运营那边配好了优化模型,用户这边还得再选一遍,选错就报
+  // 「当前分组下暂无可用语言模型」。
+  //
+  // 刻意只读 __global,不读 tab 级 promptOptimize:t2m 在中央元数据里没声明
+  // promptOptimize(不出「AI 优化提示词」按钮,免得两个按钮并排让人选错),按 tab 判就把
+  // 写词一起判没了。系统提示词同理不走运营改写的那份 —— 写词的输出是 JSON、翻译的输出
+  // 是一行英文 caption,拿优化提示词那套模板去改都会把解析打挂,故各自固定用内置模板。
+  const promptOptimizeGlobal = useMemo(
+    () =>
+      getPromptOptimizeGlobal(
+        parsePlaygroundTabConfig(statusState?.status?.PlaygroundTabConfig),
+      ),
+    [statusState?.status?.PlaygroundTabConfig],
+  );
+  // 辅助模型到底能不能用。三处调用都要看它:没配就是没得调。
+  const assistModelReady =
+    promptOptimizeGlobal.enabled && !!promptOptimizeGlobal.model;
+
+  // 未开总开关 / 没配模型时按钮整体不渲染,与 PromptOptimizeButton 同一条规矩:
+  // 与其给一个点了报「未配置」的按钮,不如让它不存在。
+  const draftAvailable = resolveTaskType(true) === 't2m' && assistModelReady;
+
+  // 「会自动帮你翻成英文」这句提示只有真翻得动才能说。运营关掉总开关或没配模型时,
+  // 模型只认英文这个事实不变、但自动翻译没了,此时要换一句「请直接写英文」——
+  // 照旧说「已开启自动翻译」是在承诺一件做不到的事,用户照写中文,发出去才报错。
+  const showTranslation = needsEnglishOnly && assistModelReady;
+  const englishOnlyNoTranslate = needsEnglishOnly && !assistModelReady;
 
   // 当前模型的字数上限(0=不限制)。
   const maxChars = useMemo(
@@ -459,23 +519,6 @@ export const useMusicGeneration = (mode = 't2m') => {
     return set;
   }, [musicModelSet, modelGroupsMap]);
 
-  // chat 模型集合(可作翻译语言模型)= supported_endpoint_types 命中 chat 过滤。
-  const chatModelSet = useMemo(() => {
-    const set = new Set();
-    modelEndpointTypes.forEach((types, model) => {
-      if (isChatModel(types)) set.add(model);
-    });
-    return set;
-  }, [modelEndpointTypes]);
-  // 含 chat 模型的分组集合。
-  const chatGroups = useMemo(() => {
-    const set = new Set();
-    chatModelSet.forEach((model) => {
-      (modelGroupsMap.get(model) || []).forEach((g) => set.add(g));
-    });
-    return set;
-  }, [chatModelSet, modelGroupsMap]);
-
   const loadPricing = useCallback(async () => {
     try {
       const payload = await cachedGet(MUSIC_API_ENDPOINTS.PRICING, {
@@ -484,14 +527,11 @@ export const useMusicGeneration = (mode = 't2m') => {
       const { success, data } = payload || {};
       if (!success || !Array.isArray(data)) return;
       const groupsMap = new Map();
-      const endpointMap = new Map();
       data.forEach((item) => {
         if (!item || !item.model_name) return;
         groupsMap.set(item.model_name, item.enable_groups || []);
-        endpointMap.set(item.model_name, item.supported_endpoint_types || []);
       });
       setModelGroupsMap(groupsMap);
-      setModelEndpointTypes(endpointMap);
     } catch (e) {
       // 留空:分组不按 enable_groups 收窄
     }
@@ -548,79 +588,6 @@ export const useMusicGeneration = (mode = 't2m') => {
     }
   }, [inputs.group, inputs.model, musicModelSet, t]);
 
-  // 翻译语言模型的分组下拉:仅含 chat 模型的分组。
-  const loadTranslationGroups = useCallback(async () => {
-    try {
-      const { success, data } = await cachedGet(
-        MUSIC_API_ENDPOINTS.USER_GROUPS,
-      );
-      if (!success) return;
-      const userGroup =
-        userState?.user?.group ||
-        JSON.parse(localStorage.getItem('user') || '{}')?.group;
-      let opts = processGroupsData(data, userGroup);
-      const allowAll = chatGroups.has('all');
-      if (chatGroups.size > 0 && !allowAll) {
-        opts = opts.filter(
-          (g) => chatGroups.has(g.value) || g.value === 'auto',
-        );
-      }
-      setTranslationGroups(opts);
-      setInputs((prev) => {
-        const has = opts.some((g) => g.value === prev.translationGroup);
-        if (has) return prev;
-        // 未选定分组时:优先选包含默认语言模型的分组,让管理员配的 defaultModel 可命中;
-        // 匹配不到再退回第一个可用分组。
-        let target = opts[0]?.value || '';
-        const wantModel = translationCfg.defaultModel;
-        if (wantModel) {
-          const groupsOfModel = modelGroupsMap.get(wantModel) || [];
-          const hit = opts.find((g) => groupsOfModel.includes(g.value));
-          if (hit) target = hit.value;
-        }
-        return { ...prev, translationGroup: target };
-      });
-    } catch (e) {
-      // 静默:翻译分组加载失败不阻塞主流程
-    }
-  }, [userState, chatGroups, modelGroupsMap, translationCfg.defaultModel]);
-
-  // 翻译语言模型下拉:所选翻译分组下的 chat 模型;默认优先取模型配置的 defaultModel。
-  const loadTranslationModels = useCallback(async () => {
-    const requestedGroup = inputs.translationGroup;
-    try {
-      const { success, data } = await getUserModelsCached(requestedGroup);
-      if (!success) return;
-      // 陈旧响应守卫:请求在途时若已切换翻译分组,丢弃旧组结果(同 loadModels)。
-      if (requestedGroup !== translationGroupRef.current) return;
-      let list = Array.isArray(data) ? data : [];
-      // pricing 就绪时按 chat 端点精确过滤;若 pricing 未就绪(端点信息缺失),
-      // 无从判断则 fail open——保留全部模型,避免下拉全空导致翻译整条不可用。
-      if (modelEndpointTypes.size > 0) {
-        list = list.filter((m) => chatModelSet.has(m));
-      }
-      const { modelOptions } = processModelsData(list, inputs.translationModel);
-      setTranslationModels(modelOptions);
-      setInputs((prev) => {
-        const has = modelOptions.some((o) => o.value === prev.translationModel);
-        if (has) return prev;
-        const wanted = translationCfg.defaultModel;
-        const fallback = modelOptions.some((o) => o.value === wanted)
-          ? wanted
-          : modelOptions[0]?.value || '';
-        return { ...prev, translationModel: fallback };
-      });
-    } catch (e) {
-      // 静默
-    }
-  }, [
-    inputs.translationGroup,
-    inputs.translationModel,
-    chatModelSet,
-    modelEndpointTypes,
-    translationCfg.defaultModel,
-  ]);
-
   useEffect(() => {
     if (userState?.user) loadPricing();
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -633,16 +600,6 @@ export const useMusicGeneration = (mode = 't2m') => {
     if (userState?.user) loadModels();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [userState?.user, inputs.group, musicModelSet]);
-  // 辅助语言模型下拉:两个用途共用一套选择 —— 音效的中译英,和文生音乐的「AI 帮我写词」。
-  // 都是「单次非流式打 /pg/chat/completions」,没必要让用户选两次。
-  useEffect(() => {
-    if (userState?.user && showAssistModel) loadTranslationGroups();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [userState?.user, showAssistModel, chatGroups]);
-  useEffect(() => {
-    if (userState?.user && showAssistModel) loadTranslationModels();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [userState?.user, showAssistModel, inputs.translationGroup, chatModelSet]);
 
   const patchConvMessage = useCallback(
     (convId, msgId, patch) => {
@@ -804,12 +761,15 @@ export const useMusicGeneration = (mode = 't2m') => {
     [currentConvId, resumePoll],
   );
 
-  // 单次非流式调用选中的语言模型,把中文 rawText 转成一句英文音频描述。
+  // 单次非流式调用语言模型,把中文 rawText 转成一句英文音频描述。
   // forVideo=true 时用带"贴合画面"约束的模板(tv2a)。失败抛错,交由 generate 走降级。
+  //
+  // 用哪个模型不再让用户在左侧挑,而是与「AI 优化提示词」「AI 帮我写词」共用运营在
+  // 「体验区管理 → 通用设置」里配的那一个 —— 三者都是「单次非流式打 /pg/chat/completions
+  // 的辅助调用」,没道理一个体验区里摆两套模型配置。
   const translatePrompt = useCallback(
     async (rawText, forVideo) => {
-      const model = inputs.translationModel;
-      const group = inputs.translationGroup;
+      const model = promptOptimizeGlobal.model;
       if (!model) throw new Error('no-translation-model');
       // 复用 axios API 实例:自动带 baseURL(分离部署时打到 API 而非前端 origin)与
       // New-API-User 认证头,与 /pg/videos 提交同构。skipErrorHandler 交由本地 catch 降级。
@@ -817,7 +777,10 @@ export const useMusicGeneration = (mode = 't2m') => {
         MUSIC_TRANSLATE_ENDPOINT,
         {
           model,
-          group,
+          // 分组留空则不下发,后端按用户自己的分组走(同 usePromptOptimize)。
+          ...(promptOptimizeGlobal.group
+            ? { group: promptOptimizeGlobal.group }
+            : {}),
           stream: false,
           messages: [
             {
@@ -835,7 +798,7 @@ export const useMusicGeneration = (mode = 't2m') => {
       if (!out) throw new Error('translate-empty');
       return out;
     },
-    [inputs.translationModel, inputs.translationGroup],
+    [promptOptimizeGlobal.model, promptOptimizeGlobal.group],
   );
 
   // 「AI 帮我写词」= 官方 Simple Mode 里【Create Sample】那一步:据一句话描述拟出
@@ -843,65 +806,87 @@ export const useMusicGeneration = (mode = 't2m') => {
   //
   // 这一步的意义不只是省事:填了歌词之后提交就不再命中 sample_mode 分支,引擎那边
   // "用 LM 自己推的时长覆盖用户值"的逻辑也就不会触发,时长/BPM 才真正生效。
+  //
+  // 空输入 / 报错的处理与「AI 优化提示词」(hooks/common/usePromptOptimize.js)对齐:
+  // 空输入不是错误而是「还没轮到我」,给 info 指个方向;报错要把上游原文带出来,
+  // 只在识别出是分组/渠道配错时加一句「找管理员」的前缀 —— 原来一律吞成
+  // 「生成方案失败,请重试或换一个语言模型」,分组配错的人换几个模型也换不出来。
   const draftPlan = useCallback(
     async (rawText) => {
       const text = (rawText || '').trim();
       if (!text) {
-        showError(t('请先在下方输入框描述你想要的音乐'));
+        showInfo(
+          t(
+            '先写一句大概方向，比如「一首深情的中文抒情歌曲」，AI 再帮你拟歌词与曲式',
+          ),
+        );
         return false;
       }
-      const model = inputs.translationModel;
-      if (!model) {
-        showError(t('请先在「辅助语言模型」里选择一个模型'));
-        return false;
-      }
+      if (!draftAvailable) return false;
       setDrafting(true);
       try {
-        const res = await API.post(
-          MUSIC_TRANSLATE_ENDPOINT,
-          {
-            model,
-            group: inputs.translationGroup,
-            stream: false,
-            messages: [
-              { role: 'system', content: DRAFT_SYSTEM },
-              { role: 'user', content: text },
-            ],
-          },
-          { skipErrorHandler: true },
-        );
-        let out = (res?.data?.choices?.[0]?.message?.content || '').trim();
+        let out;
+        try {
+          const res = await API.post(
+            MUSIC_TRANSLATE_ENDPOINT,
+            {
+              model: promptOptimizeGlobal.model,
+              // 分组留空则不下发,后端按用户自己的分组走(同 usePromptOptimize)。
+              ...(promptOptimizeGlobal.group
+                ? { group: promptOptimizeGlobal.group }
+                : {}),
+              stream: false,
+              messages: [
+                { role: 'system', content: DRAFT_SYSTEM },
+                { role: 'user', content: text },
+              ],
+            },
+            { skipErrorHandler: true },
+          );
+          out = (res?.data?.choices?.[0]?.message?.content || '').trim();
+        } catch (e) {
+          const msg = e?.response?.data?.error?.message || e?.message || '';
+          showError(
+            isPlaygroundConfigIssue(msg)
+              ? t('AI 写词暂不可用，请联系管理员') + ' — ' + msg
+              : t('生成方案失败:') + msg,
+          );
+          return false;
+        }
         // 模型常自作主张包一层 ```json 围栏,剥掉再解析。
         out = out
           .replace(/^```(?:json)?\s*/i, '')
           .replace(/\s*```$/, '')
           .trim();
-        const plan = JSON.parse(out);
+        let plan;
+        try {
+          plan = JSON.parse(out);
+        } catch (e) {
+          // 与请求失败分开报:这条能行动的建议是「换个模型」,小模型经常吐不出合法
+          // JSON;请求失败时给这句反而会把人引到错误方向。
+          showError(t('模型没有返回可用的方案,请重试或换一个语言模型'));
+          return false;
+        }
         setInputs((prev) => {
           const next = { ...prev };
           if (plan.lyrics) next.lyrics = String(plan.lyrics).trim();
           if (Number.isFinite(Number(plan.bpm)) && Number(plan.bpm) > 0)
             next.bpm = String(Math.round(Number(plan.bpm)));
           if (plan.keyScale) next.keyScale = String(plan.keyScale).trim();
-          if (
-            Number.isFinite(Number(plan.duration)) &&
-            Number(plan.duration) > 0
-          )
-            next.duration = String(Math.round(Number(plan.duration)));
+          // 收敛到下拉真有的那几档;>120 秒一律落到 120(体验区上限)。
+          const duration = snapMusicDuration(plan.duration);
+          if (duration) next.duration = duration;
           if (plan.vocalLanguage)
             next.vocalLanguage = String(plan.vocalLanguage).trim();
           return next;
         });
         // caption 单独返回:它要替换输入框里的描述,由调用方决定怎么用。
         return typeof plan.caption === 'string' ? plan.caption.trim() : true;
-      } catch (e) {
-        showError(t('生成方案失败,请重试或换一个语言模型'));
-        return false;
       } finally {
         setDrafting(false);
       }
     },
-    [inputs.translationModel, inputs.translationGroup, t],
+    [draftAvailable, promptOptimizeGlobal.model, promptOptimizeGlobal.group, t],
   );
 
   const generate = useCallback(
@@ -1012,11 +997,20 @@ export const useMusicGeneration = (mode = 't2m') => {
       // 失败降级(设计 §11):视频生音 → 丢文字改纯视频 v2a;文生音效 → 报错不提交。
       // 时序:消息先建(点发送即可见),翻译放在建消息之后 —— 译文回填 userMsg 展示对照,
       // 助手气泡在拿到 taskId 前先显示「翻译中…」,避免翻译那几秒聊天区空白。
-      const willTranslate =
-        needsTranslation &&
+      //
+      // 翻译模型没配时在这里就拦掉,不建消息、不提交、不计费。**不能改成「翻不了就把
+      // 中文原样发上去」**:AudioX 的文本编码器会把中文塌成 <unk>,那是静默出一段跟
+      // 描述无关的音频还照扣额度,比明着报错更糟。
+      if (
+        needsEnglishOnly &&
         !!text &&
         containsCJK(text) &&
-        translationCfg.enabled;
+        !assistModelReady
+      ) {
+        showError(t('当前模型仅支持英文,且未配置翻译模型,请直接用英文描述'));
+        return;
+      }
+      const willTranslate = needsEnglishOnly && !!text && containsCJK(text);
 
       const reqId = genId();
       const now = new Date().toISOString();
@@ -1300,8 +1294,8 @@ export const useMusicGeneration = (mode = 't2m') => {
       needsVideo,
       needsDualAudio,
       needsText,
-      needsTranslation,
-      translationCfg.enabled,
+      needsEnglishOnly,
+      assistModelReady,
       translatePrompt,
       videoMetaKey,
       promptAudioMetaKey,
@@ -1410,11 +1404,10 @@ export const useMusicGeneration = (mode = 't2m') => {
     needsText,
     needsTranslation,
     showTranslation,
-    showAssistModel,
+    englishOnlyNoTranslate,
+    draftAvailable,
     drafting,
     draftPlan,
-    translationGroups,
-    translationModels,
     maxChars,
     refAudioMaxMB,
     videoMaxMB,
