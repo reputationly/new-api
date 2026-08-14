@@ -68,14 +68,17 @@ export function AgentLogView({
         setShowScrollToBottom(false);
         setNewLogCount(0);
     }, []);
-    const handleLastLogToggle = useCallback((open: boolean) => {
-        if (!open) {
-            requestAnimationFrame(updateScrollState);
-            return;
-        }
-        if (!followLogsRef.current) return;
-        requestAnimationFrame(() => requestAnimationFrame(() => scrollToBottom("auto")));
-    }, [scrollToBottom, updateScrollState]);
+    const handleLastLogToggle = useCallback(
+        (open: boolean) => {
+            if (!open) {
+                requestAnimationFrame(updateScrollState);
+                return;
+            }
+            if (!followLogsRef.current) return;
+            requestAnimationFrame(() => requestAnimationFrame(() => scrollToBottom("auto")));
+        },
+        [scrollToBottom, updateScrollState],
+    );
     useEffect(() => {
         if (mode !== "text") return;
         const frame = requestAnimationFrame(() => scrollToBottom("auto"));
@@ -212,7 +215,15 @@ function LogActions({ logs, lastError, context, onClear, onCopy }: { logs: Agent
                 <Button type="text" size="small" shape="circle" aria-label={t("agent.logs.copyAll")} icon={<Copy className="size-3.5" />} onClick={() => onCopy()} />
             </Tooltip>
             <Tooltip title={t("agent.logs.copyLastError")}>
-                <Button type="text" size="small" shape="circle" aria-label={t("agent.logs.copyLastError")} disabled={!lastError} icon={<CircleAlert className="size-3.5" />} onClick={() => lastError && onCopy(formatLogText([lastError], context), t("agent.logs.lastErrorCopied"))} />
+                <Button
+                    type="text"
+                    size="small"
+                    shape="circle"
+                    aria-label={t("agent.logs.copyLastError")}
+                    disabled={!lastError}
+                    icon={<CircleAlert className="size-3.5" />}
+                    onClick={() => lastError && onCopy(formatLogText([lastError], context), t("agent.logs.lastErrorCopied"))}
+                />
             </Tooltip>
             <Tooltip title={t("agent.logs.clear")}>
                 <Button danger type="text" size="small" shape="circle" aria-label={t("agent.logs.clear")} disabled={!logs.length} icon={<Trash2 className="size-3.5" />} onClick={onClear} />
@@ -328,7 +339,7 @@ function declaredLogLevel(value: unknown): DisplayLog["level"] | "" {
 }
 
 function logTitle(fallback: string, value: unknown) {
-    if (fallback !== "日志" && fallback !== "Log" || !value || typeof value !== "object" || Array.isArray(value)) return fallback;
+    if ((fallback !== "日志" && fallback !== "Log") || !value || typeof value !== "object" || Array.isArray(value)) return fallback;
     const target = String((value as Record<string, unknown>).target || "").toLowerCase();
     if (target.includes("skill")) return i18n.t("agent.logs.skillLoading");
     if (target.includes("plugin")) return i18n.t("agent.logs.plugin");

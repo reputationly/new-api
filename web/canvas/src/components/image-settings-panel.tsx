@@ -30,7 +30,12 @@ const aspectOptions = [
     { value: "auto", label: "auto", width: 0, height: 0, icon: "auto" },
 ];
 
-export const imageQualityOptions = qualityOptions.map((item) => ({ value: item.value, get label() { return i18n.t(`settingsPanels.common.${item.labelKey}`); } }));
+export const imageQualityOptions = qualityOptions.map((item) => ({
+    value: item.value,
+    get label() {
+        return i18n.t(`settingsPanels.common.${item.labelKey}`);
+    },
+}));
 export const imageAspectOptions = aspectOptions.map((item) => ({ value: item.size || item.value, label: item.label }));
 
 type ImageSettingsPanelProps = {
@@ -162,7 +167,7 @@ export function ImageSettingsTheme({ theme, children }: { theme: CanvasTheme; ch
 }
 
 export function imageQualityLabel(value: string) {
-    return (["auto", "high", "medium", "low"].includes(value) ? i18n.t(`settingsPanels.common.${value}`) : value);
+    return ["auto", "high", "medium", "low"].includes(value) ? i18n.t(`settingsPanels.common.${value}`) : value;
 }
 
 export function imageSizeLabel(size: string) {

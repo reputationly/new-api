@@ -12,15 +12,22 @@ import { resolveAgentMessageAssetUrl, revealAgentLocalFile } from "@/services/ap
 import { AgentCanvasReferencePreview, canvasReferenceIcon, canvasReferenceKindLabel } from "./agent-canvas-reference-preview";
 import { agentInlineTokenClass, agentInlineTokenIconClass, agentInlineTokenMediaClass, agentReferenceMarker, parseAgentInlineTokens } from "./agent-chat-inline-tokens";
 
-const streamdownProps = () => ({
-    className: "agent-streamdown",
-    controls: { code: { copy: true, download: false }, table: { copy: true, download: false, fullscreen: false } },
-    linkSafety: { enabled: true, renderModal: (props: LinkSafetyModalProps) => <AgentLinkModal {...props} /> },
-    lineNumbers: false,
-    translations: {
-        close: tr("close"), copied: tr("copied"), copyCode: tr("copyCode"), copyLink: tr("copyLink"), externalLinkWarning: tr("externalWarning"), openExternalLink: tr("openExternal"), openLink: tr("continueOpen"),
-    },
-} as const);
+const streamdownProps = () =>
+    ({
+        className: "agent-streamdown",
+        controls: { code: { copy: true, download: false }, table: { copy: true, download: false, fullscreen: false } },
+        linkSafety: { enabled: true, renderModal: (props: LinkSafetyModalProps) => <AgentLinkModal {...props} /> },
+        lineNumbers: false,
+        translations: {
+            close: tr("close"),
+            copied: tr("copied"),
+            copyCode: tr("copyCode"),
+            copyLink: tr("copyLink"),
+            externalLinkWarning: tr("externalWarning"),
+            openExternalLink: tr("openExternal"),
+            openLink: tr("continueOpen"),
+        },
+    }) as const;
 const streamdownAnimation = { duration: 20, stagger: 0, sep: "word" } as const;
 
 function AgentLinkModal({ isOpen, onClose, onConfirm, url }: LinkSafetyModalProps) {
@@ -45,9 +52,7 @@ function AgentLinkModal({ isOpen, onClose, onConfirm, url }: LinkSafetyModalProp
     };
     return (
         <Modal open={isOpen} onCancel={onClose} footer={null} centered width={420} title={t(localPath ? "agent.message.openLocal" : "agent.message.openExternal")}>
-            <div className="text-sm text-black/55 dark:text-white/55">
-                {t(localPath ? "agent.message.localDescription" : "agent.message.externalDescription")}
-            </div>
+            <div className="text-sm text-black/55 dark:text-white/55">{t(localPath ? "agent.message.localDescription" : "agent.message.externalDescription")}</div>
             <div className="mt-4 max-h-32 overflow-auto break-all rounded-lg bg-black/[.035] px-3 py-2.5 font-mono text-xs leading-5 dark:bg-white/[.06]">{localPath || url}</div>
             <div className="mt-5 flex justify-end gap-2">
                 <Button type="text" icon={<Copy className="size-4" />} onClick={() => copyText(localPath || url, t(localPath ? "agent.message.pathCopied" : "agent.message.linkCopied"))}>
@@ -122,14 +127,13 @@ export function AgentChatMessage({ item, theme, onRejectTool, onApproveTool }: {
     }
     return (
         <div className={`flex ${isUser ? "justify-end" : "justify-start"}`}>
-            <div
-                className={isUser ? "min-w-0 max-w-[82%] py-1 text-right text-sm leading-6" : "min-w-0 w-full text-left text-sm leading-6"}
-                style={{ color }}
-            >
+            <div className={isUser ? "min-w-0 max-w-[82%] py-1 text-right text-sm leading-6" : "min-w-0 w-full text-left text-sm leading-6"} style={{ color }}>
                 {isUser ? (
                     <AgentUserMessageContent text={item.text} references={item.canvasReferences || []} skill={item.skill} theme={theme} />
                 ) : (
-                    <Streamdown {...streamdownProps()} animated={streamdownAnimation} isAnimating={!!item.streamId}>{item.text}</Streamdown>
+                    <Streamdown {...streamdownProps()} animated={streamdownAnimation} isAnimating={!!item.streamId}>
+                        {item.text}
+                    </Streamdown>
                 )}
                 {item.attachments?.length ? <AgentMessageAttachments attachments={item.attachments} alignRight={isUser} /> : null}
                 {item.meta ? <div className={`mt-1 text-[11px] tabular-nums opacity-55 ${isUser ? "text-right" : ""}`}>{item.meta}</div> : null}
@@ -142,17 +146,25 @@ function AgentUserMessageContent({ text, references, skill, theme }: { text: str
     const tokens = parseAgentInlineTokens(text, references, skill);
     return (
         <div className="whitespace-pre-wrap break-words">
-            {tokens.map((token, index) => token.type === "text"
-                ? token.value
-                : token.type === "skill"
-                    ? <AgentSkillMention key={`skill:${index}`} skill={token.skill} theme={theme} />
-                    : <AgentCanvasMention key={`${token.reference.nodeId}:${index}`} reference={token.reference} theme={theme} />)}
+            {tokens.map((token, index) =>
+                token.type === "text" ? (
+                    token.value
+                ) : token.type === "skill" ? (
+                    <AgentSkillMention key={`skill:${index}`} skill={token.skill} theme={theme} />
+                ) : (
+                    <AgentCanvasMention key={`${token.reference.nodeId}:${index}`} reference={token.reference} theme={theme} />
+                ),
+            )}
         </div>
     );
 }
 
 function AgentSkillMention({ skill, theme }: { skill: AgentSkillReference; theme: (typeof canvasThemes)[keyof typeof canvasThemes] }) {
-    return <span className={agentInlineTokenClass} style={{ background: theme.toolbar.panel, borderColor: theme.node.stroke, color: theme.node.text }} title={skill.path}>/{skill.displayName || skill.name}</span>;
+    return (
+        <span className={agentInlineTokenClass} style={{ background: theme.toolbar.panel, borderColor: theme.node.stroke, color: theme.node.text }} title={skill.path}>
+            /{skill.displayName || skill.name}
+        </span>
+    );
 }
 
 function AgentCanvasMention({ reference, theme }: { reference: AgentCanvasReference; theme: (typeof canvasThemes)[keyof typeof canvasThemes] }) {
@@ -163,21 +175,14 @@ function AgentCanvasMention({ reference, theme }: { reference: AgentCanvasRefere
     const previewText = reference.text || node?.metadata?.content || node?.metadata?.prompt;
     const Icon = canvasReferenceIcon(reference.kind);
     return (
-        <Popover
-            trigger={["hover", "focus"]}
-            placement="top"
-            mouseEnterDelay={0.15}
-            content={<AgentCanvasReferencePreview reference={reference} previewUrl={previewUrl} previewText={previewText} theme={theme} />}
-        >
+        <Popover trigger={["hover", "focus"]} placement="top" mouseEnterDelay={0.15} content={<AgentCanvasReferencePreview reference={reference} previewUrl={previewUrl} previewText={previewText} theme={theme} />}>
             <span
                 tabIndex={0}
                 className={`${agentInlineTokenClass} max-w-56 cursor-default focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-black/10 dark:focus-visible:ring-white/15`}
                 style={{ background: theme.toolbar.panel, borderColor: theme.node.stroke, color: theme.node.text }}
                 aria-label={i18n.t("agent.composer.mentions.referenceLabel", { kind: canvasReferenceKindLabel(reference.kind), title: reference.title })}
             >
-                {reference.kind === "image" && previewUrl
-                    ? <img src={previewUrl} alt="" className={agentInlineTokenMediaClass} />
-                    : <Icon className={agentInlineTokenIconClass} />}
+                {reference.kind === "image" && previewUrl ? <img src={previewUrl} alt="" className={agentInlineTokenMediaClass} /> : <Icon className={agentInlineTokenIconClass} />}
                 <span>{agentReferenceMarker(reference)}</span>
             </span>
         </Popover>
@@ -190,15 +195,26 @@ export function AgentPendingToolCard({ summary, detail, theme, onReject, onAppro
     return (
         <div className="min-w-0 rounded-xl border px-3 py-3" style={{ borderColor: "rgba(217,119,6,.28)", background: "rgba(217,119,6,.025)", color: theme.node.text }}>
             <details className="group">
-                <summary className={`list-none ${view ? "cursor-pointer" : "cursor-default"}`} onClick={(event) => { if (!view) event.preventDefault(); }}>
+                <summary
+                    className={`list-none ${view ? "cursor-pointer" : "cursor-default"}`}
+                    onClick={(event) => {
+                        if (!view) event.preventDefault();
+                    }}
+                >
                     <div className="flex min-w-0 items-center gap-2 text-sm font-medium leading-5">
                         <CircleAlert className="size-4 shrink-0 text-amber-600" />
                         <span className="min-w-0 flex-1">{t("agent.message.awaitingConfirmation")}</span>
                         {view ? <ChevronDown className="size-3.5 shrink-0 transition-transform group-open:rotate-180" style={{ color: theme.node.muted }} /> : null}
                     </div>
-                    <div className="mt-1 pl-6 text-sm leading-5" style={{ color: theme.node.muted }}>{summary}</div>
+                    <div className="mt-1 pl-6 text-sm leading-5" style={{ color: theme.node.muted }}>
+                        {summary}
+                    </div>
                 </summary>
-                {view ? <div className="ml-6"><AgentDetailBlock detail={view} theme={theme} /></div> : null}
+                {view ? (
+                    <div className="ml-6">
+                        <AgentDetailBlock detail={view} theme={theme} />
+                    </div>
+                ) : null}
             </details>
             {onReject || onApprove ? (
                 <div className="mt-3 flex justify-end gap-2 border-t pt-3" style={{ borderColor: theme.node.stroke }}>
@@ -226,14 +242,28 @@ export function AgentApprovalCard({ approval, theme, onDecision }: { approval: A
                 <ShieldAlert className="mt-0.5 size-4 shrink-0 text-orange-600" />
                 <div className="min-w-0 flex-1">
                     <div className="text-sm font-medium">{title}</div>
-                    {approval.reason ? <div className="mt-1 text-xs leading-5" style={{ color: theme.node.muted }}>{approval.reason}</div> : null}
-                    {target ? <div className="mt-1.5 break-all rounded-lg px-2.5 py-2 font-mono text-[11px] leading-4" style={{ background: theme.toolbar.panel, color: theme.node.text }}>{target}</div> : null}
+                    {approval.reason ? (
+                        <div className="mt-1 text-xs leading-5" style={{ color: theme.node.muted }}>
+                            {approval.reason}
+                        </div>
+                    ) : null}
+                    {target ? (
+                        <div className="mt-1.5 break-all rounded-lg px-2.5 py-2 font-mono text-[11px] leading-4" style={{ background: theme.toolbar.panel, color: theme.node.text }}>
+                            {target}
+                        </div>
+                    ) : null}
                 </div>
             </div>
             <div className="mt-3 flex flex-wrap justify-end gap-1.5 border-t pt-3" style={{ borderColor: theme.node.stroke }}>
-                <Button danger type="text" className="!h-8" disabled={Boolean(approval.deciding)} loading={approval.deciding === "decline"} onClick={() => onDecision("decline")}>{t("agent.message.decline")}</Button>
-                <Button type="text" className="!h-8" disabled={Boolean(approval.deciding)} loading={approval.deciding === "accept"} onClick={() => onDecision("accept")}>{t("agent.message.allowOnce")}</Button>
-                <Button type="text" className="!h-8" disabled={Boolean(approval.deciding)} loading={approval.deciding === "acceptForSession"} style={{ color: "#ea580c" }} onClick={() => onDecision("acceptForSession")}>{t("agent.message.allowSession")}</Button>
+                <Button danger type="text" className="!h-8" disabled={Boolean(approval.deciding)} loading={approval.deciding === "decline"} onClick={() => onDecision("decline")}>
+                    {t("agent.message.decline")}
+                </Button>
+                <Button type="text" className="!h-8" disabled={Boolean(approval.deciding)} loading={approval.deciding === "accept"} onClick={() => onDecision("accept")}>
+                    {t("agent.message.allowOnce")}
+                </Button>
+                <Button type="text" className="!h-8" disabled={Boolean(approval.deciding)} loading={approval.deciding === "acceptForSession"} style={{ color: "#ea580c" }} onClick={() => onDecision("acceptForSession")}>
+                    {t("agent.message.allowSession")}
+                </Button>
             </div>
         </div>
     );
@@ -253,9 +283,13 @@ export function AgentToolCard({ title, text, detail, theme }: { title: string; t
     const content = (
         <>
             <div className="flex min-w-0 items-center gap-2 text-sm leading-5">
-                <span className="shrink-0" style={{ color: state.color }}>{toolIcon(kind, state.icon)}</span>
+                <span className="shrink-0" style={{ color: state.color }}>
+                    {toolIcon(kind, state.icon)}
+                </span>
                 <span className="min-w-0 truncate font-medium">{title}</span>
-                <span className="shrink-0 text-[11px]" style={{ color: state.color }}>{state.label}</span>
+                <span className="shrink-0 text-[11px]" style={{ color: state.color }}>
+                    {state.label}
+                </span>
                 {view ? <ChevronDown className="ml-auto size-3.5 shrink-0 transition-transform group-open:rotate-180" style={{ color: theme.node.muted }} /> : null}
             </div>
             {showText ? (
@@ -265,11 +299,18 @@ export function AgentToolCard({ title, text, detail, theme }: { title: string; t
             ) : null}
         </>
     );
-    if (!view) return <div className={className} style={style}>{content}</div>;
+    if (!view)
+        return (
+            <div className={className} style={style}>
+                {content}
+            </div>
+        );
     return (
         <details className={className} style={style}>
             <summary className="list-none cursor-pointer">{content}</summary>
-            <div className="ml-6"><AgentDetailBlock detail={view} theme={theme} /></div>
+            <div className="ml-6">
+                <AgentDetailBlock detail={view} theme={theme} />
+            </div>
         </details>
     );
 }
@@ -288,7 +329,9 @@ function AgentReasoningSummary({ text, detail, theme }: { text: string; detail?:
                 </div>
             </summary>
             <div className="break-words pb-1 pl-6 pr-2 text-xs leading-5 [&_code]:rounded [&_code]:px-1 [&_p]:my-1 [&_pre]:my-2" style={{ color: theme.node.muted }}>
-                <Streamdown {...streamdownProps()} animated={streamdownAnimation} isAnimating={running}>{text}</Streamdown>
+                <Streamdown {...streamdownProps()} animated={streamdownAnimation} isAnimating={running}>
+                    {text}
+                </Streamdown>
             </div>
         </details>
     );
@@ -303,7 +346,9 @@ export function AgentCommandGroup({ items, theme }: { items: AgentCommandItem[];
     const failed = states.filter((state) => state.failed).length;
     const expandable = items.some((item) => Boolean(item.text.trim() || userDetail(item.detail)));
     const color = running ? "#d97706" : failed ? "#dc2626" : theme.node.muted;
-    const label = running ? t(items.length > 1 ? "agent.message.commandsRunning" : "agent.message.commandRunning", { count: items.length }) : t("agent.message.commandsCompleted", { count: items.length, failed: failed ? t("agent.message.commandsFailed", { count: failed }) : "" });
+    const label = running
+        ? t(items.length > 1 ? "agent.message.commandsRunning" : "agent.message.commandRunning", { count: items.length })
+        : t("agent.message.commandsCompleted", { count: items.length, failed: failed ? t("agent.message.commandsFailed", { count: failed }) : "" });
     const header = (
         <div className="flex min-w-0 items-center gap-2 text-sm" style={{ color }}>
             {running ? <LoaderCircle className="size-4 shrink-0 animate-spin" /> : <TerminalSquare className="size-4 shrink-0" />}
@@ -315,10 +360,15 @@ export function AgentCommandGroup({ items, theme }: { items: AgentCommandItem[];
     return (
         <details className="group min-w-0 text-left">
             <summary className="cursor-pointer list-none py-1">{header}</summary>
-            {items.length === 1
-                ? <AgentSingleCommand item={items[0]} theme={theme} />
-                : <div className="ml-6 mt-1">{items.map((item, index) => <AgentCommandEntry key={item.id} item={item} index={index} theme={theme} />)}</div>
-            }
+            {items.length === 1 ? (
+                <AgentSingleCommand item={items[0]} theme={theme} />
+            ) : (
+                <div className="ml-6 mt-1">
+                    {items.map((item, index) => (
+                        <AgentCommandEntry key={item.id} item={item} index={index} theme={theme} />
+                    ))}
+                </div>
+            )}
         </details>
     );
 }
@@ -327,7 +377,11 @@ function AgentSingleCommand({ item, theme }: { item: AgentCommandItem; theme: (t
     const view = userDetail(item.detail);
     return (
         <div className="ml-6 pb-1">
-            {item.text ? <div className="mt-1.5 whitespace-pre-wrap break-all font-mono text-[11px] leading-5" style={{ color: theme.node.text }}>{item.text}</div> : null}
+            {item.text ? (
+                <div className="mt-1.5 whitespace-pre-wrap break-all font-mono text-[11px] leading-5" style={{ color: theme.node.text }}>
+                    {item.text}
+                </div>
+            ) : null}
             {view ? <AgentDetailBlock detail={view} theme={theme} /> : null}
         </div>
     );
@@ -343,8 +397,12 @@ function AgentCommandEntry({ item, index, theme }: { item: AgentCommandItem; ind
     const color = state.failed ? "#dc2626" : state.running ? "#d97706" : "#16a34a";
     const content = (
         <>
-            <span className="w-4 shrink-0 text-center text-[10px] tabular-nums opacity-50" style={{ color: theme.node.muted }}>{index + 1}</span>
-            <code className="min-w-0 flex-1 truncate text-[11px] leading-5" style={{ color: theme.node.text }} title={item.text}>{item.text || t("agent.message.command")}</code>
+            <span className="w-4 shrink-0 text-center text-[10px] tabular-nums opacity-50" style={{ color: theme.node.muted }}>
+                {index + 1}
+            </span>
+            <code className="min-w-0 flex-1 truncate text-[11px] leading-5" style={{ color: theme.node.text }} title={item.text}>
+                {item.text || t("agent.message.command")}
+            </code>
             <span className="shrink-0" style={{ color }} title={status} aria-label={status}>
                 {state.running ? <LoaderCircle className="size-3.5 animate-spin" /> : state.failed ? <XCircle className="size-3.5" /> : <CheckCircle2 className="size-3.5" />}
             </span>
@@ -353,10 +411,18 @@ function AgentCommandEntry({ item, index, theme }: { item: AgentCommandItem; ind
     );
     return (
         <div className={index ? "border-t" : ""} style={{ borderColor: theme.node.stroke }}>
-            {view
-                ? <button type="button" className="flex w-full min-w-0 items-center gap-2 py-2 text-left" aria-expanded={open} aria-controls={detailId} onClick={() => setOpen((value) => !value)}>{content}</button>
-                : <div className="flex min-w-0 items-center gap-2 py-2 text-left">{content}</div>}
-            {view && open ? <div id={detailId} className="pb-2 pl-6"><AgentDetailBlock detail={view} theme={theme} /></div> : null}
+            {view ? (
+                <button type="button" className="flex w-full min-w-0 items-center gap-2 py-2 text-left" aria-expanded={open} aria-controls={detailId} onClick={() => setOpen((value) => !value)}>
+                    {content}
+                </button>
+            ) : (
+                <div className="flex min-w-0 items-center gap-2 py-2 text-left">{content}</div>
+            )}
+            {view && open ? (
+                <div id={detailId} className="pb-2 pl-6">
+                    <AgentDetailBlock detail={view} theme={theme} />
+                </div>
+            ) : null}
         </div>
     );
 }
@@ -378,19 +444,33 @@ function AgentPlanCard({ title, plan, theme }: { title: string; plan: PlanDetail
             <summary className="flex min-w-0 cursor-pointer list-none items-center gap-2.5">
                 <ListChecks className="size-4 shrink-0" style={{ color: state.color }} />
                 <span className="min-w-0 flex-1 truncate text-sm font-medium">{title}</span>
-                <span className="shrink-0 text-[11px]" style={{ color: state.color }}>{state.label}</span>
-                <span aria-live="polite" className="shrink-0 text-[11px] tabular-nums" style={{ color: theme.node.muted }}>{completed}/{plan.tasks.length}</span>
+                <span className="shrink-0 text-[11px]" style={{ color: state.color }}>
+                    {state.label}
+                </span>
+                <span aria-live="polite" className="shrink-0 text-[11px] tabular-nums" style={{ color: theme.node.muted }}>
+                    {completed}/{plan.tasks.length}
+                </span>
                 <ChevronDown className="size-3.5 shrink-0 transition-transform group-open:rotate-180" style={{ color: theme.node.muted }} />
             </summary>
-            {plan.explanation ? <div className="mt-1.5 text-xs leading-5" style={{ color: theme.node.muted }}>{plan.explanation}</div> : null}
+            {plan.explanation ? (
+                <div className="mt-1.5 text-xs leading-5" style={{ color: theme.node.muted }}>
+                    {plan.explanation}
+                </div>
+            ) : null}
             <div className="mt-2.5 space-y-2 border-t pt-2.5" style={{ borderColor: theme.node.stroke }}>
                 {plan.tasks.map((item, index) => {
                     const task = planTaskState(item.status, theme.node.muted);
                     return (
                         <div key={`${index}-${item.step}`} className="flex items-start gap-2 text-sm leading-5">
-                            <span className="mt-0.5 shrink-0" style={{ color: task.color }}>{task.icon}</span>
-                            <span className={`min-w-0 flex-1 ${item.status === "completed" ? "opacity-55" : item.status === "inProgress" ? "font-medium" : ""}`} style={{ color: item.status === "inProgress" ? theme.node.text : theme.node.muted }}>{item.step}</span>
-                            <span className="shrink-0 text-[11px]" style={{ color: task.color }}>{task.label}</span>
+                            <span className="mt-0.5 shrink-0" style={{ color: task.color }}>
+                                {task.icon}
+                            </span>
+                            <span className={`min-w-0 flex-1 ${item.status === "completed" ? "opacity-55" : item.status === "inProgress" ? "font-medium" : ""}`} style={{ color: item.status === "inProgress" ? theme.node.text : theme.node.muted }}>
+                                {item.step}
+                            </span>
+                            <span className="shrink-0 text-[11px]" style={{ color: task.color }}>
+                                {task.label}
+                            </span>
                         </div>
                     );
                 })}
@@ -399,7 +479,21 @@ function AgentPlanCard({ title, plan, theme }: { title: string; plan: PlanDetail
     );
 }
 
-export function AgentWorkingMessage({ text, detail, status = "running", mcpStatuses = [], activityKey, theme }: { text: string; detail?: string; status?: "running" | "ready" | "error"; mcpStatuses?: Array<{ name: string; status: "running" | "ready" | "error"; detail: string }>; activityKey: string; theme: (typeof canvasThemes)[keyof typeof canvasThemes] }) {
+export function AgentWorkingMessage({
+    text,
+    detail,
+    status = "running",
+    mcpStatuses = [],
+    activityKey,
+    theme,
+}: {
+    text: string;
+    detail?: string;
+    status?: "running" | "ready" | "error";
+    mcpStatuses?: Array<{ name: string; status: "running" | "ready" | "error"; detail: string }>;
+    activityKey: string;
+    theme: (typeof canvasThemes)[keyof typeof canvasThemes];
+}) {
     const { t } = useTranslation();
     const [elapsed, setElapsed] = useState(0);
     useEffect(() => {
@@ -415,21 +509,37 @@ export function AgentWorkingMessage({ text, detail, status = "running", mcpStatu
                 <span className="min-w-0">{text}</span>
                 {status === "running" && elapsed >= 5 ? <span className="shrink-0 text-[11px] tabular-nums opacity-60">{waitingTime(elapsed)}</span> : null}
             </div>
-            {detail ? <div className="ml-5.5 mt-1 text-xs leading-5 opacity-65" style={{ color: theme.node.muted }}>{detail}</div> : null}
+            {detail ? (
+                <div className="ml-5.5 mt-1 text-xs leading-5 opacity-65" style={{ color: theme.node.muted }}>
+                    {detail}
+                </div>
+            ) : null}
             {mcpStatuses.length ? (
                 <div className="ml-5.5 mt-3 space-y-2">
                     {mcpStatuses.map((item) => (
                         <div key={item.name} className="flex min-w-0 items-start gap-2 text-xs leading-5" style={{ color: theme.node.muted }}>
-                            {item.status === "running" ? <LoaderCircle className="mt-0.5 size-3.5 shrink-0 animate-spin" /> : item.status === "ready" ? <CheckCircle2 className="mt-0.5 size-3.5 shrink-0 text-emerald-600" /> : <XCircle className="mt-0.5 size-3.5 shrink-0 text-red-600" />}
+                            {item.status === "running" ? (
+                                <LoaderCircle className="mt-0.5 size-3.5 shrink-0 animate-spin" />
+                            ) : item.status === "ready" ? (
+                                <CheckCircle2 className="mt-0.5 size-3.5 shrink-0 text-emerald-600" />
+                            ) : (
+                                <XCircle className="mt-0.5 size-3.5 shrink-0 text-red-600" />
+                            )}
                             <div className="min-w-0">
-                                <div className="font-medium" style={{ color: theme.node.text }}>{item.name}</div>
+                                <div className="font-medium" style={{ color: theme.node.text }}>
+                                    {item.name}
+                                </div>
                                 <div className="opacity-65">{item.detail}</div>
                             </div>
                         </div>
                     ))}
                 </div>
             ) : null}
-            {status === "running" && elapsed >= 30 ? <div className="mt-1 text-xs leading-5 opacity-65" style={{ color: theme.node.muted }}>{t("agent.message.slowResponse")}</div> : null}
+            {status === "running" && elapsed >= 30 ? (
+                <div className="mt-1 text-xs leading-5 opacity-65" style={{ color: theme.node.muted }}>
+                    {t("agent.message.slowResponse")}
+                </div>
+            ) : null}
         </div>
     );
 }
@@ -465,7 +575,9 @@ function AgentDetailBlock({ detail, theme }: { detail: UserDetail; theme: (typeo
                     {detail.rows.map((row) => (
                         <div key={`${row.label}-${row.value}`} className="grid grid-cols-[64px_minmax(0,1fr)] gap-2">
                             <dt className="opacity-60">{row.label}</dt>
-                            <dd className="min-w-0 break-words" style={{ color: theme.node.text }}>{row.value}</dd>
+                            <dd className="min-w-0 break-words" style={{ color: theme.node.text }}>
+                                {row.value}
+                            </dd>
                         </div>
                     ))}
                 </dl>
@@ -476,7 +588,9 @@ function AgentDetailBlock({ detail, theme }: { detail: UserDetail; theme: (typeo
                     {detail.files.map((file) => (
                         <div key={`${file.action}-${file.path}`} className="flex items-start gap-2">
                             <FileText className="mt-0.5 size-3.5 shrink-0" />
-                            <span className="min-w-0 flex-1 break-all" style={{ color: theme.node.text }}>{file.path}</span>
+                            <span className="min-w-0 flex-1 break-all" style={{ color: theme.node.text }}>
+                                {file.path}
+                            </span>
                             {file.action ? <span className="shrink-0 opacity-60">{file.action}</span> : null}
                         </div>
                     ))}
@@ -485,7 +599,9 @@ function AgentDetailBlock({ detail, theme }: { detail: UserDetail; theme: (typeo
             {detail.output ? (
                 <div className="space-y-1.5">
                     <div className="opacity-60">{t(detail.status === "failed" || detail.status === "error" ? "agent.message.errorInfo" : "agent.message.output")}</div>
-                    <pre className="thin-scrollbar max-h-56 overflow-auto whitespace-pre-wrap break-words rounded-lg px-3 py-2 font-mono text-[11px] leading-4" style={{ background: theme.toolbar.panel, color: theme.node.text }}>{detail.output}</pre>
+                    <pre className="thin-scrollbar max-h-56 overflow-auto whitespace-pre-wrap break-words rounded-lg px-3 py-2 font-mono text-[11px] leading-4" style={{ background: theme.toolbar.panel, color: theme.node.text }}>
+                        {detail.output}
+                    </pre>
                 </div>
             ) : null}
         </div>
@@ -499,15 +615,7 @@ function AgentMessageAttachments({ attachments, alignRight }: { attachments: Age
         <>
             <div className={`mt-1.5 flex flex-wrap gap-1.5 ${alignRight ? "justify-end" : "justify-start"}`}>
                 {attachments.map((item) => (
-                    <img
-                        key={item.id}
-                        src={item.url}
-                        alt={item.name}
-                        title={t("agent.message.viewLarge")}
-                        className="size-10 cursor-zoom-in rounded-lg object-cover"
-                        draggable={false}
-                        onClick={() => setPreviewUrl(item.url)}
-                    />
+                    <img key={item.id} src={item.url} alt={item.name} title={t("agent.message.viewLarge")} className="size-10 cursor-zoom-in rounded-lg object-cover" draggable={false} onClick={() => setPreviewUrl(item.url)} />
                 ))}
             </div>
             {previewUrl ? (

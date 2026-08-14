@@ -19,15 +19,7 @@ export const seedanceResolutionOptions = [
     { value: "1080p", label: "1080p" },
 ] as const;
 
-export const seedanceRatioOptions = [
-    { value: "16:9" },
-    { value: "9:16" },
-    { value: "1:1" },
-    { value: "4:3" },
-    { value: "3:4" },
-    { value: "21:9" },
-    { value: "adaptive" },
-] as const;
+export const seedanceRatioOptions = [{ value: "16:9" }, { value: "9:16" }, { value: "1:1" }, { value: "4:3" }, { value: "3:4" }, { value: "21:9" }, { value: "adaptive" }] as const;
 
 export const seedanceDurationOptions = [-1, 4, 5, 6, 8, 10, 12, 15] as const;
 
@@ -119,11 +111,7 @@ export function seedanceReferenceLabel(kind: "image" | "video" | "audio", index:
 }
 
 export function buildSeedancePromptText(prompt: string, images: ReferenceImage[], videos: ReferenceVideo[], audios: ReferenceAudio[]) {
-    const labels = [
-        ...images.map((_, index) => seedanceReferenceLabel("image", index)),
-        ...videos.map((_, index) => seedanceReferenceLabel("video", index)),
-        ...audios.map((_, index) => seedanceReferenceLabel("audio", index)),
-    ];
+    const labels = [...images.map((_, index) => seedanceReferenceLabel("image", index)), ...videos.map((_, index) => seedanceReferenceLabel("video", index)), ...audios.map((_, index) => seedanceReferenceLabel("audio", index))];
     const text = prompt.trim();
     if (!labels.length) return text;
     return i18n.t("seedance.promptPrefix", { labels: labels.join(i18n.t("seedance.separator")), prompt: text });

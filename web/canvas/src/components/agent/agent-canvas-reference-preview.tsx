@@ -22,7 +22,11 @@ export function AgentCanvasReferencePreview({ reference, previewUrl, previewText
                     {previewText}
                 </div>
             ) : null}
-            {!previewUrl && !(reference.kind === "text" && previewText) ? <div className="py-3 text-center text-xs" style={{ color: theme.node.muted }}>{t("agent.composer.mentions.previewUnavailable")}</div> : null}
+            {!previewUrl && !(reference.kind === "text" && previewText) ? (
+                <div className="py-3 text-center text-xs" style={{ color: theme.node.muted }}>
+                    {t("agent.composer.mentions.previewUnavailable")}
+                </div>
+            ) : null}
         </div>
     );
 }

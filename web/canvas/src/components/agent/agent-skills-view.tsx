@@ -5,7 +5,20 @@ import { Check, ChevronDown, CircleAlert, FilePenLine, LoaderCircle, LockKeyhole
 import { useTranslation } from "react-i18next";
 
 import { canvasThemes } from "@/lib/canvas-theme";
-import { createCodexSkill, createCodexSkillDraft, deleteCodexSkill, fetchCodexSkill, postState, setCodexSkillEnabled, updateCodexSkill, type AgentSkillDetail, type AgentSkillDraft, type AgentSkillInterface, type AgentSkillScope, type AgentSkillSummary } from "@/services/api/canvas-agent";
+import {
+    createCodexSkill,
+    createCodexSkillDraft,
+    deleteCodexSkill,
+    fetchCodexSkill,
+    postState,
+    setCodexSkillEnabled,
+    updateCodexSkill,
+    type AgentSkillDetail,
+    type AgentSkillDraft,
+    type AgentSkillInterface,
+    type AgentSkillScope,
+    type AgentSkillSummary,
+} from "@/services/api/canvas-agent";
 import { useAgentSkillStore } from "@/stores/use-agent-skill-store";
 import { useAgentStore, type AgentChatItem } from "@/stores/use-agent-store";
 import { useThemeStore } from "@/stores/use-theme-store";
@@ -232,7 +245,9 @@ export function AgentSkillsView({ clientId }: { clientId: string }) {
                 label: (
                     <div className="py-0.5">
                         <div className="text-sm">{t("agent.skillManager.fromConversation")}</div>
-                        <div className="mt-0.5 text-xs" style={{ color: theme.node.muted }}>{t(codexBusy ? "agent.skillManager.availableAfterRun" : hasConversation ? "agent.skillManager.conversationDescription" : activeThreadId ? "agent.skillManager.noCompletedContent" : "agent.skillManager.startConversation")}</div>
+                        <div className="mt-0.5 text-xs" style={{ color: theme.node.muted }}>
+                            {t(codexBusy ? "agent.skillManager.availableAfterRun" : hasConversation ? "agent.skillManager.conversationDescription" : activeThreadId ? "agent.skillManager.noCompletedContent" : "agent.skillManager.startConversation")}
+                        </div>
                     </div>
                 ),
             },
@@ -243,7 +258,9 @@ export function AgentSkillsView({ clientId }: { clientId: string }) {
                 label: (
                     <div className="py-0.5">
                         <div className="text-sm">{t("agent.skillManager.fromCanvas")}</div>
-                        <div className="mt-0.5 text-xs" style={{ color: theme.node.muted }}>{t(codexBusy ? "agent.skillManager.availableAfterRun" : hasCanvas ? "agent.skillManager.canvasDescription" : "agent.skillManager.canvasUnavailable")}</div>
+                        <div className="mt-0.5 text-xs" style={{ color: theme.node.muted }}>
+                            {t(codexBusy ? "agent.skillManager.availableAfterRun" : hasCanvas ? "agent.skillManager.canvasDescription" : "agent.skillManager.canvasUnavailable")}
+                        </div>
                     </div>
                 ),
             },
@@ -254,7 +271,9 @@ export function AgentSkillsView({ clientId }: { clientId: string }) {
                 label: (
                     <div className="py-0.5">
                         <div className="text-sm">{t("agent.skillManager.blankCreate")}</div>
-                        <div className="mt-0.5 text-xs" style={{ color: theme.node.muted }}>{t("agent.skillManager.blankDescription")}</div>
+                        <div className="mt-0.5 text-xs" style={{ color: theme.node.muted }}>
+                            {t("agent.skillManager.blankDescription")}
+                        </div>
                     </div>
                 ),
             },
@@ -263,8 +282,7 @@ export function AgentSkillsView({ clientId }: { clientId: string }) {
             if (key === "manual") {
                 setDraft(null);
                 setEditor({ mode: "create" });
-            }
-            else void generateDraft(key as SkillDraftSource);
+            } else void generateDraft(key as SkillDraftSource);
         },
     };
 
@@ -274,11 +292,21 @@ export function AgentSkillsView({ clientId }: { clientId: string }) {
                 <div className="flex items-center justify-between gap-3">
                     <div>
                         <div className="text-sm font-semibold">{t("agent.skillManager.localSkills")}</div>
-                        <div className="mt-0.5 text-xs" style={{ color: theme.node.muted }}>{t("agent.skillManager.localDescription")}</div>
+                        <div className="mt-0.5 text-xs" style={{ color: theme.node.muted }}>
+                            {t("agent.skillManager.localDescription")}
+                        </div>
                     </div>
                     <div className="flex items-center gap-1">
                         <Tooltip title={t("agent.skillManager.reload")}>
-                            <Button type="text" shape="circle" className="!h-8 !w-8 !min-w-8" aria-label={t("agent.skillManager.reloadSkill")} disabled={!connected || loading} icon={<RefreshCw className={`size-4 ${loading ? "animate-spin" : ""}`} />} onClick={() => void refresh()} />
+                            <Button
+                                type="text"
+                                shape="circle"
+                                className="!h-8 !w-8 !min-w-8"
+                                aria-label={t("agent.skillManager.reloadSkill")}
+                                disabled={!connected || loading}
+                                icon={<RefreshCw className={`size-4 ${loading ? "animate-spin" : ""}`} />}
+                                onClick={() => void refresh()}
+                            />
                         </Tooltip>
                         <Dropdown trigger={["click"]} placement="bottomRight" open={createMenuOpen} onOpenChange={setCreateMenuOpen} disabled={!connected || !clientId || Boolean(generatingSource)} menu={createMenu}>
                             <Button type="text" className="!h-8 !px-2" aria-haspopup="menu" aria-expanded={createMenuOpen} disabled={!connected || !clientId} loading={Boolean(generatingSource)} icon={<Plus className="size-4" />}>
@@ -288,7 +316,16 @@ export function AgentSkillsView({ clientId }: { clientId: string }) {
                     </div>
                 </div>
                 <div className="mt-3 flex gap-2">
-                    <Input aria-label={t("agent.skills.search")} className="min-w-0 flex-1" allowClear disabled={!connected} value={query} onChange={(event) => setQuery(event.target.value)} prefix={<Search className="size-3.5" />} placeholder={t("agent.skills.search")} />
+                    <Input
+                        aria-label={t("agent.skills.search")}
+                        className="min-w-0 flex-1"
+                        allowClear
+                        disabled={!connected}
+                        value={query}
+                        onChange={(event) => setQuery(event.target.value)}
+                        prefix={<Search className="size-3.5" />}
+                        placeholder={t("agent.skills.search")}
+                    />
                     <Select<ScopeFilter>
                         size="small"
                         variant="borderless"
@@ -301,12 +338,17 @@ export function AgentSkillsView({ clientId }: { clientId: string }) {
                     />
                 </div>
                 {errors.length ? (
-                    <Button danger type="text" size="small" className="!mt-1 !h-7 !px-1 text-xs" icon={<CircleAlert className="size-3.5" />} onClick={() => setErrorsOpen(true)}>{t("agent.skillManager.loadErrors", { count: errors.length })}</Button>
+                    <Button danger type="text" size="small" className="!mt-1 !h-7 !px-1 text-xs" icon={<CircleAlert className="size-3.5" />} onClick={() => setErrorsOpen(true)}>
+                        {t("agent.skillManager.loadErrors", { count: errors.length })}
+                    </Button>
                 ) : null}
             </div>
             <div className="thin-scrollbar min-h-0 flex-1 overflow-y-auto px-4">
                 {loading && !loaded ? (
-                    <div className="flex h-40 items-center justify-center gap-2 text-sm" style={{ color: theme.node.muted }}><LoaderCircle className="size-4 animate-spin" />{t("agent.skills.loading")}</div>
+                    <div className="flex h-40 items-center justify-center gap-2 text-sm" style={{ color: theme.node.muted }}>
+                        <LoaderCircle className="size-4 animate-spin" />
+                        {t("agent.skills.loading")}
+                    </div>
                 ) : filteredSkills.length ? (
                     <div className="divide-y" style={{ borderColor: theme.node.stroke }}>
                         {filteredSkills.map((skill) => {
@@ -319,11 +361,19 @@ export function AgentSkillsView({ clientId }: { clientId: string }) {
                                         <div className="min-w-0 flex-1">
                                             <div className="flex min-w-0 items-center gap-2">
                                                 <span className="truncate text-sm font-medium">{skill.interface?.displayName || skill.name}</span>
-                                                {!skill.managed ? <Tooltip title={t("agent.skillManager.externalReadonly")}><LockKeyhole className="size-3.5 shrink-0" style={{ color: theme.node.faint }} /></Tooltip> : null}
+                                                {!skill.managed ? (
+                                                    <Tooltip title={t("agent.skillManager.externalReadonly")}>
+                                                        <LockKeyhole className="size-3.5 shrink-0" style={{ color: theme.node.faint }} />
+                                                    </Tooltip>
+                                                ) : null}
                                             </div>
-                                            <div className="mt-1 line-clamp-2 text-xs leading-5" style={{ color: theme.node.muted }}>{skill.interface?.shortDescription || skill.shortDescription || skill.description || t("agent.skillManager.noDescription")}</div>
+                                            <div className="mt-1 line-clamp-2 text-xs leading-5" style={{ color: theme.node.muted }}>
+                                                {skill.interface?.shortDescription || skill.shortDescription || skill.description || t("agent.skillManager.noDescription")}
+                                            </div>
                                             <Tooltip title={skill.path}>
-                                                <div className="mt-1.5 truncate text-[11px]" style={{ color: theme.node.faint }}>{t(`agent.skillManager.scopes.${skill.scope}`)} · {skill.name}</div>
+                                                <div className="mt-1.5 truncate text-[11px]" style={{ color: theme.node.faint }}>
+                                                    {t(`agent.skillManager.scopes.${skill.scope}`)} · {skill.name}
+                                                </div>
                                             </Tooltip>
                                         </div>
                                     </div>
@@ -333,11 +383,40 @@ export function AgentSkillsView({ clientId }: { clientId: string }) {
                                             {t(skill.enabled ? "agent.skillManager.enabled" : "agent.skillManager.disabled")}
                                         </label>
                                         <div className="flex items-center gap-0.5">
-                                            <Button type="text" size="small" disabled={!connected || !skill.enabled || Boolean(busySkill)} icon={selected ? <Check className="size-3.5" /> : <Sparkles className="size-3.5" />} onClick={() => useSkill(skill)}>{t(selected ? "agent.skillManager.selected" : "agent.skillManager.use")}</Button>
+                                            <Button
+                                                type="text"
+                                                size="small"
+                                                disabled={!connected || !skill.enabled || Boolean(busySkill)}
+                                                icon={selected ? <Check className="size-3.5" /> : <Sparkles className="size-3.5" />}
+                                                onClick={() => useSkill(skill)}
+                                            >
+                                                {t(selected ? "agent.skillManager.selected" : "agent.skillManager.use")}
+                                            </Button>
                                             {skill.managed ? (
                                                 <>
-                                                    <Tooltip title={t("common.edit")}><Button type="text" shape="circle" size="small" aria-label={t("agent.skillManager.editNamed", { name: skill.interface?.displayName || skill.name })} disabled={!connected || Boolean(busySkill) || Boolean(generatingSource)} icon={<FilePenLine className="size-3.5" />} onClick={() => void openEdit(skill)} /></Tooltip>
-                                                    <Tooltip title={t("common.delete")}><Button danger type="text" shape="circle" size="small" aria-label={t("agent.skillManager.deleteNamed", { name: skill.interface?.displayName || skill.name })} disabled={!connected || Boolean(busySkill) || Boolean(generatingSource)} icon={<Trash2 className="size-3.5" />} onClick={() => confirmDelete(skill)} /></Tooltip>
+                                                    <Tooltip title={t("common.edit")}>
+                                                        <Button
+                                                            type="text"
+                                                            shape="circle"
+                                                            size="small"
+                                                            aria-label={t("agent.skillManager.editNamed", { name: skill.interface?.displayName || skill.name })}
+                                                            disabled={!connected || Boolean(busySkill) || Boolean(generatingSource)}
+                                                            icon={<FilePenLine className="size-3.5" />}
+                                                            onClick={() => void openEdit(skill)}
+                                                        />
+                                                    </Tooltip>
+                                                    <Tooltip title={t("common.delete")}>
+                                                        <Button
+                                                            danger
+                                                            type="text"
+                                                            shape="circle"
+                                                            size="small"
+                                                            aria-label={t("agent.skillManager.deleteNamed", { name: skill.interface?.displayName || skill.name })}
+                                                            disabled={!connected || Boolean(busySkill) || Boolean(generatingSource)}
+                                                            icon={<Trash2 className="size-3.5" />}
+                                                            onClick={() => confirmDelete(skill)}
+                                                        />
+                                                    </Tooltip>
                                                 </>
                                             ) : null}
                                         </div>
@@ -350,14 +429,20 @@ export function AgentSkillsView({ clientId }: { clientId: string }) {
                     <div className="flex h-48 flex-col items-center justify-center text-center">
                         <Sparkles className="size-5" style={{ color: theme.node.faint }} />
                         <div className="mt-3 text-sm font-medium">{t(!connected ? "agent.skillManager.connectToView" : skills.length ? "agent.skillManager.noMatch" : "agent.skillManager.none")}</div>
-                        <div className="mt-1 text-xs" style={{ color: theme.node.muted }}>{t(!connected ? "agent.skillManager.connectDescription" : skills.length ? "agent.skillManager.tryAnotherFilter" : "agent.skillManager.createOrInstall")}</div>
+                        <div className="mt-1 text-xs" style={{ color: theme.node.muted }}>
+                            {t(!connected ? "agent.skillManager.connectDescription" : skills.length ? "agent.skillManager.tryAnotherFilter" : "agent.skillManager.createOrInstall")}
+                        </div>
                     </div>
                 )}
             </div>
 
             <Modal title={t("agent.skillManager.loadErrors", { count: errors.length })} open={errorsOpen} footer={null} width={720} onCancel={() => setErrorsOpen(false)}>
                 <div className="thin-scrollbar mt-4 max-h-[60vh] overflow-y-auto rounded-md border px-3 py-2 text-xs leading-5" style={{ borderColor: theme.node.stroke }}>
-                    {errors.map((error, index) => <div key={`${index}:${error}`} className="break-all py-1" style={{ color: theme.node.muted }}>{error}</div>)}
+                    {errors.map((error, index) => (
+                        <div key={`${index}:${error}`} className="break-all py-1" style={{ color: theme.node.muted }}>
+                            {error}
+                        </div>
+                    ))}
                 </div>
             </Modal>
 
@@ -379,34 +464,76 @@ export function AgentSkillsView({ clientId }: { clientId: string }) {
                 }}
                 onOk={() => void saveSkill()}
             >
-                <div className="mb-5 text-xs" style={{ color: theme.node.muted }}>{t("agent.skillManager.saveLocation")} · <span className="font-mono">.agents/skills</span></div>
+                <div className="mb-5 text-xs" style={{ color: theme.node.muted }}>
+                    {t("agent.skillManager.saveLocation")} · <span className="font-mono">.agents/skills</span>
+                </div>
                 <Form key={editor?.mode === "edit" ? editor.detail.revision : `create:${editor?.values?.name || "blank"}`} form={form} initialValues={editorValues} layout="vertical" requiredMark="optional" preserve={false}>
-                    <div className="mb-3 text-xs font-medium" style={{ color: theme.node.muted }}>{t("agent.skillManager.basicInfo")}</div>
+                    <div className="mb-3 text-xs font-medium" style={{ color: theme.node.muted }}>
+                        {t("agent.skillManager.basicInfo")}
+                    </div>
                     <div className="grid grid-cols-1 gap-x-4 sm:grid-cols-2">
-                        <Form.Item name="name" label={t("agent.skillManager.identifier")} extra={t("agent.skillManager.identifierExtra")} rules={[{ required: true, message: t("agent.skillManager.identifierRequired") }, { max: 64, message: t("agent.skillManager.identifierMax") }, { pattern: skillNamePattern, message: t("agent.skillManager.identifierPattern") }]}>
+                        <Form.Item
+                            name="name"
+                            label={t("agent.skillManager.identifier")}
+                            extra={t("agent.skillManager.identifierExtra")}
+                            rules={[
+                                { required: true, message: t("agent.skillManager.identifierRequired") },
+                                { max: 64, message: t("agent.skillManager.identifierMax") },
+                                { pattern: skillNamePattern, message: t("agent.skillManager.identifierPattern") },
+                            ]}
+                        >
                             <Input maxLength={64} disabled={editor?.mode === "edit"} placeholder={t("agent.skillManager.identifierPlaceholder")} />
                         </Form.Item>
-                        <Form.Item name="displayName" label={t("agent.skillManager.displayName")} rules={[{ max: 64, message: t("agent.skillManager.displayNameMax") }]}><Input maxLength={64} placeholder={t("agent.skillManager.displayNamePlaceholder")} /></Form.Item>
+                        <Form.Item name="displayName" label={t("agent.skillManager.displayName")} rules={[{ max: 64, message: t("agent.skillManager.displayNameMax") }]}>
+                            <Input maxLength={64} placeholder={t("agent.skillManager.displayNamePlaceholder")} />
+                        </Form.Item>
                     </div>
-                    <Form.Item name="description" label={t("agent.skillManager.whenToUse")} extra={t("agent.skillManager.whenToUseExtra")} rules={[{ required: true, message: t("agent.skillManager.whenToUseRequired") }, { max: 1024, message: t("agent.skillManager.whenToUseMax") }, { validator: (_, value) => typeof value === "string" && /[<>]/.test(value) ? Promise.reject(new Error(t("agent.skillManager.noAngleBrackets"))) : Promise.resolve() }]}><Input.TextArea maxLength={1024} autoSize={{ minRows: 2, maxRows: 4 }} placeholder={t("agent.skillManager.whenToUsePlaceholder")} /></Form.Item>
-                    <Form.Item name="instructions" label={t("agent.skillManager.instructions")} extra={t("agent.skillManager.instructionsExtra")} rules={[{ required: true, message: t("agent.skillManager.instructionsRequired") }]}><Input.TextArea className="!leading-6" autoSize={{ minRows: 6, maxRows: 10 }} placeholder={t("agent.skillManager.instructionsPlaceholder")} /></Form.Item>
+                    <Form.Item
+                        name="description"
+                        label={t("agent.skillManager.whenToUse")}
+                        extra={t("agent.skillManager.whenToUseExtra")}
+                        rules={[
+                            { required: true, message: t("agent.skillManager.whenToUseRequired") },
+                            { max: 1024, message: t("agent.skillManager.whenToUseMax") },
+                            { validator: (_, value) => (typeof value === "string" && /[<>]/.test(value) ? Promise.reject(new Error(t("agent.skillManager.noAngleBrackets"))) : Promise.resolve()) },
+                        ]}
+                    >
+                        <Input.TextArea maxLength={1024} autoSize={{ minRows: 2, maxRows: 4 }} placeholder={t("agent.skillManager.whenToUsePlaceholder")} />
+                    </Form.Item>
+                    <Form.Item name="instructions" label={t("agent.skillManager.instructions")} extra={t("agent.skillManager.instructionsExtra")} rules={[{ required: true, message: t("agent.skillManager.instructionsRequired") }]}>
+                        <Input.TextArea className="!leading-6" autoSize={{ minRows: 6, maxRows: 10 }} placeholder={t("agent.skillManager.instructionsPlaceholder")} />
+                    </Form.Item>
                     <Collapse
                         ghost
                         size="small"
                         activeKey={advancedOpen ? ["advanced"] : []}
                         expandIconPlacement="end"
                         onChange={(keys) => setAdvancedOpen((Array.isArray(keys) ? keys : [keys]).includes("advanced"))}
-                        items={[{
-                            key: "advanced",
-                            forceRender: true,
-                            label: <span className="text-sm font-medium">{t("agent.skillManager.advanced")}</span>,
-                            children: (
-                                <>
-                                    <Form.Item name="shortDescription" label={t("agent.skillManager.shortDescription")} extra={t("agent.skillManager.shortDescriptionExtra")} rules={[{ min: 25, message: t("agent.skillManager.shortDescriptionMin") }, { max: 64, message: t("agent.skillManager.shortDescriptionMax") }]}><Input maxLength={64} showCount placeholder={t("agent.skillManager.shortDescriptionPlaceholder")} /></Form.Item>
-                                    <Form.Item name="defaultPrompt" label={t("agent.skillManager.defaultPrompt")} extra={t("agent.skillManager.defaultPromptExtra")} rules={[{ max: 1024, message: t("agent.skillManager.defaultPromptMax") }]}><Input.TextArea maxLength={1024} autoSize={{ minRows: 2, maxRows: 4 }} placeholder={t("agent.skillManager.defaultPromptPlaceholder")} /></Form.Item>
-                                </>
-                            ),
-                        }]}
+                        items={[
+                            {
+                                key: "advanced",
+                                forceRender: true,
+                                label: <span className="text-sm font-medium">{t("agent.skillManager.advanced")}</span>,
+                                children: (
+                                    <>
+                                        <Form.Item
+                                            name="shortDescription"
+                                            label={t("agent.skillManager.shortDescription")}
+                                            extra={t("agent.skillManager.shortDescriptionExtra")}
+                                            rules={[
+                                                { min: 25, message: t("agent.skillManager.shortDescriptionMin") },
+                                                { max: 64, message: t("agent.skillManager.shortDescriptionMax") },
+                                            ]}
+                                        >
+                                            <Input maxLength={64} showCount placeholder={t("agent.skillManager.shortDescriptionPlaceholder")} />
+                                        </Form.Item>
+                                        <Form.Item name="defaultPrompt" label={t("agent.skillManager.defaultPrompt")} extra={t("agent.skillManager.defaultPromptExtra")} rules={[{ max: 1024, message: t("agent.skillManager.defaultPromptMax") }]}>
+                                            <Input.TextArea maxLength={1024} autoSize={{ minRows: 2, maxRows: 4 }} placeholder={t("agent.skillManager.defaultPromptPlaceholder")} />
+                                        </Form.Item>
+                                    </>
+                                ),
+                            },
+                        ]}
                     />
                 </Form>
             </Modal>

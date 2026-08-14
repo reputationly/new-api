@@ -48,8 +48,17 @@ export function CanvasTextSettingsPopover({ config, onConfigChange, buttonClassN
     return (
         <>
             <span ref={buttonRef} className="inline-flex min-w-0">
-                <Button size="small" type="text" className={buttonClassName || "!h-8 !max-w-[170px] !justify-start !rounded-full !px-2.5"} style={{ background: theme.node.fill, color: theme.node.text }} icon={<Settings2 className="size-3.5" />} onClick={() => setOpen((current) => !current)}>
-                    <span className="truncate">{t("canvas.controls.reasoning")} · {reasoningEffortLabel(config.reasoningEffort)}</span>
+                <Button
+                    size="small"
+                    type="text"
+                    className={buttonClassName || "!h-8 !max-w-[170px] !justify-start !rounded-full !px-2.5"}
+                    style={{ background: theme.node.fill, color: theme.node.text }}
+                    icon={<Settings2 className="size-3.5" />}
+                    onClick={() => setOpen((current) => !current)}
+                >
+                    <span className="truncate">
+                        {t("canvas.controls.reasoning")} · {reasoningEffortLabel(config.reasoningEffort)}
+                    </span>
                 </Button>
             </span>
             {panel}
@@ -57,7 +66,14 @@ export function CanvasTextSettingsPopover({ config, onConfigChange, buttonClassN
     );
 }
 
-function TextSettingsPortal({ buttonRect, panelRef, placement, theme, config, onConfigChange }: {
+function TextSettingsPortal({
+    buttonRect,
+    panelRef,
+    placement,
+    theme,
+    config,
+    onConfigChange,
+}: {
     buttonRect: DOMRect;
     panelRef: RefObject<HTMLDivElement | null>;
     placement: CanvasTextSettingsPopoverProps["placement"];

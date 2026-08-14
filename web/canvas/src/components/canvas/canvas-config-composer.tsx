@@ -16,9 +16,7 @@ type CanvasConfigComposerProps = {
     onClose: () => void;
 };
 
-type Token =
-    | { type: "text"; value: string }
-    | { type: "reference"; nodeId: string };
+type Token = { type: "text"; value: string } | { type: "reference"; nodeId: string };
 
 type MentionState = {
     query: string;
@@ -124,7 +122,11 @@ export function CanvasConfigComposer({ value, inputs, onChange, onClose }: Canva
                 <Button size="small" type="text" className="!h-7 !w-7 !min-w-7 !p-0" icon={<X className="size-3.5" />} onClick={onClose} />
             </div>
             <div className="relative rounded-xl">
-                {!value.trim() ? <div className="pointer-events-none absolute left-3 top-2 text-sm leading-7" style={{ color: theme.node.placeholder }}>{t("canvas.composer.placeholder")}</div> : null}
+                {!value.trim() ? (
+                    <div className="pointer-events-none absolute left-3 top-2 text-sm leading-7" style={{ color: theme.node.placeholder }}>
+                        {t("canvas.composer.placeholder")}
+                    </div>
+                ) : null}
                 <div
                     ref={editorRef}
                     contentEditable
@@ -179,10 +181,21 @@ export function CanvasConfigComposer({ value, inputs, onChange, onClose }: Canva
             {imagePreview ? <Image src={imagePreview} alt={t("canvas.composer.imagePreview")} style={{ display: "none" }} preview={{ visible: true, src: imagePreview, onVisibleChange: (visible) => !visible && setImagePreview(null) }} /> : null}
         </div>
     );
-
 }
 
-function MentionMenu({ inputs, allInputs, activeIndex, theme, onSelect }: { inputs: NodeGenerationInput[]; allInputs: NodeGenerationInput[]; activeIndex: number; theme: (typeof canvasThemes)[keyof typeof canvasThemes]; onSelect: (input: NodeGenerationInput) => void }) {
+function MentionMenu({
+    inputs,
+    allInputs,
+    activeIndex,
+    theme,
+    onSelect,
+}: {
+    inputs: NodeGenerationInput[];
+    allInputs: NodeGenerationInput[];
+    activeIndex: number;
+    theme: (typeof canvasThemes)[keyof typeof canvasThemes];
+    onSelect: (input: NodeGenerationInput) => void;
+}) {
     const selectedRef = useRef(false);
     const activeItemRef = useRef<HTMLButtonElement | null>(null);
 
@@ -362,7 +375,10 @@ function parseComposerTokens(value: string): Token[] {
 
 function resourceLabel(input: NodeGenerationInput, inputs: NodeGenerationInput[]) {
     const sameTypeInputs = inputs.filter((item) => item.type === input.type);
-    const index = Math.max(0, sameTypeInputs.findIndex((item) => item.nodeId === input.nodeId));
+    const index = Math.max(
+        0,
+        sameTypeInputs.findIndex((item) => item.nodeId === input.nodeId),
+    );
     return i18n.t(`canvas.composer.resources.${input.type}`, { index: index + 1 });
 }
 

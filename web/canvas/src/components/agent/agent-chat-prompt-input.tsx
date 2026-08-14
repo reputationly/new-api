@@ -16,7 +16,15 @@ type ComposerCommand = { type: "skill" | "resource"; query: string; length: numb
 type ComposerCandidate = { type: "skill"; skill: AgentSkillSummary } | { type: "resource"; reference: CanvasResourceReference };
 type ReferenceHover = { reference: AgentCanvasReference; left: number; top: number; width: number; height: number };
 
-export function AgentChatPromptInput({ value, disabled, placeholder, theme, onChange, onSubmit, onAddFiles }: {
+export function AgentChatPromptInput({
+    value,
+    disabled,
+    placeholder,
+    theme,
+    onChange,
+    onSubmit,
+    onAddFiles,
+}: {
     value: string;
     disabled?: boolean;
     placeholder: string;
@@ -38,11 +46,17 @@ export function AgentChatPromptInput({ value, disabled, placeholder, theme, onCh
     const [resourceCandidates, setResourceCandidates] = useState<CanvasResourceReference[]>([]);
     const [referenceHover, setReferenceHover] = useState<ReferenceHover | null>(null);
 
-    const messageSkill = useMemo<AgentSkillReference | undefined>(() => selectedSkill ? {
-        name: selectedSkill.name,
-        path: selectedSkill.path,
-        displayName: selectedSkill.interface?.displayName || undefined,
-    } : undefined, [selectedSkill]);
+    const messageSkill = useMemo<AgentSkillReference | undefined>(
+        () =>
+            selectedSkill
+                ? {
+                      name: selectedSkill.name,
+                      path: selectedSkill.path,
+                      displayName: selectedSkill.interface?.displayName || undefined,
+                  }
+                : undefined,
+        [selectedSkill],
+    );
     const tokens = useMemo(() => parseAgentInlineTokens(value, canvasReferences, messageSkill), [canvasReferences, messageSkill, value]);
     const selectedReferenceIds = useMemo(() => new Set(canvasReferences.map((item) => item.nodeId)), [canvasReferences]);
     const candidates = useMemo<ComposerCandidate[]>(() => {
@@ -60,13 +74,13 @@ export function AgentChatPromptInput({ value, disabled, placeholder, theme, onCh
 
     useEffect(() => {
         const editor = editorRef.current;
-        if (!editor || document.activeElement === editor && value === lastEmittedRef.current) return;
-        editor.replaceChildren(...tokens.map((token) => {
-            if (token.type === "text") return document.createTextNode(token.value);
-            return token.type === "skill"
-                ? createSkillToken(token.skill, theme)
-                : createReferenceToken(token.reference, theme);
-        }));
+        if (!editor || (document.activeElement === editor && value === lastEmittedRef.current)) return;
+        editor.replaceChildren(
+            ...tokens.map((token) => {
+                if (token.type === "text") return document.createTextNode(token.value);
+                return token.type === "skill" ? createSkillToken(token.skill, theme) : createReferenceToken(token.reference, theme);
+            }),
+        );
         lastEmittedRef.current = value;
     }, [theme, tokens, value]);
 
@@ -169,7 +183,11 @@ export function AgentChatPromptInput({ value, disabled, placeholder, theme, onCh
 
     return (
         <div ref={containerRef} className="relative">
-            {!value.trim() ? <div className="pointer-events-none absolute left-1 top-1 text-sm leading-6" style={{ color: theme.node.placeholder }}>{placeholder}</div> : null}
+            {!value.trim() ? (
+                <div className="pointer-events-none absolute left-1 top-1 text-sm leading-6" style={{ color: theme.node.placeholder }}>
+                    {placeholder}
+                </div>
+            ) : null}
             <div
                 ref={editorRef}
                 contentEditable={!disabled}
@@ -182,7 +200,9 @@ export function AgentChatPromptInput({ value, disabled, placeholder, theme, onCh
                 onInput={() => {
                     if (!composingRef.current) syncFromEditor();
                 }}
-                onCompositionStart={() => { composingRef.current = true; }}
+                onCompositionStart={() => {
+                    composingRef.current = true;
+                }}
                 onCompositionEnd={() => {
                     composingRef.current = false;
                     syncFromEditor();
@@ -225,45 +245,89 @@ export function AgentChatPromptInput({ value, disabled, placeholder, theme, onCh
                 }}
             />
             {referenceHover ? (
-                <Popover
-                    open
-                    placement="top"
-                    content={<AgentCanvasReferencePreview reference={referenceHover.reference} previewUrl={referenceHover.reference.previewUrl} previewText={referenceHover.reference.text} theme={theme} />}
-                >
-                    <span
-                        aria-hidden
-                        className="pointer-events-none absolute"
-                        style={{ left: referenceHover.left, top: referenceHover.top, width: referenceHover.width, height: referenceHover.height }}
-                    />
+                <Popover open placement="top" content={<AgentCanvasReferencePreview reference={referenceHover.reference} previewUrl={referenceHover.reference.previewUrl} previewText={referenceHover.reference.text} theme={theme} />}>
+                    <span aria-hidden className="pointer-events-none absolute" style={{ left: referenceHover.left, top: referenceHover.top, width: referenceHover.width, height: referenceHover.height }} />
                 </Popover>
             ) : null}
-            {command ? <AgentCommandMenu command={command} candidates={candidates} activeIndex={Math.min(activeIndex, Math.max(candidates.length - 1, 0))} loading={command.type === "skill" && skillsLoading} theme={theme} onSelect={insertCandidate} /> : null}
+            {command ? (
+                <AgentCommandMenu command={command} candidates={candidates} activeIndex={Math.min(activeIndex, Math.max(candidates.length - 1, 0))} loading={command.type === "skill" && skillsLoading} theme={theme} onSelect={insertCandidate} />
+            ) : null}
         </div>
     );
 }
-function AgentCommandMenu({ command, candidates, activeIndex, loading, theme, onSelect }: { command: ComposerCommand; candidates: ComposerCandidate[]; activeIndex: number; loading: boolean; theme: (typeof canvasThemes)[keyof typeof canvasThemes]; onSelect: (candidate: ComposerCandidate) => void }) {
+function AgentCommandMenu({
+    command,
+    candidates,
+    activeIndex,
+    loading,
+    theme,
+    onSelect,
+}: {
+    command: ComposerCommand;
+    candidates: ComposerCandidate[];
+    activeIndex: number;
+    loading: boolean;
+    theme: (typeof canvasThemes)[keyof typeof canvasThemes];
+    onSelect: (candidate: ComposerCandidate) => void;
+}) {
     const { t } = useTranslation();
     const activeItemRef = useRef<HTMLButtonElement | null>(null);
-    useEffect(() => { activeItemRef.current?.scrollIntoView({ block: "nearest" }); }, [activeIndex]);
+    useEffect(() => {
+        activeItemRef.current?.scrollIntoView({ block: "nearest" });
+    }, [activeIndex]);
     const stopPropagation = (event: PointerEvent | MouseEvent) => event.stopPropagation();
     return (
-        <div data-agent-command-menu className="absolute bottom-[calc(100%+8px)] left-0 z-[120] w-full min-w-64 overflow-hidden rounded-xl border shadow-xl" style={{ background: theme.toolbar.panel, borderColor: theme.toolbar.border, color: theme.node.text }} onPointerDown={stopPropagation} onMouseDown={stopPropagation}>
+        <div
+            data-agent-command-menu
+            className="absolute bottom-[calc(100%+8px)] left-0 z-[120] w-full min-w-64 overflow-hidden rounded-xl border shadow-xl"
+            style={{ background: theme.toolbar.panel, borderColor: theme.toolbar.border, color: theme.node.text }}
+            onPointerDown={stopPropagation}
+            onMouseDown={stopPropagation}
+        >
             <div className="border-b px-3 py-2 text-xs" style={{ borderColor: theme.toolbar.border, color: theme.node.muted }}>
-                {t(command.type === "skill" ? "agent.composer.mentions.selectSkill" : "agent.composer.mentions.selectResource")}{command.query ? ` · ${command.query}` : ""}
+                {t(command.type === "skill" ? "agent.composer.mentions.selectSkill" : "agent.composer.mentions.selectResource")}
+                {command.query ? ` · ${command.query}` : ""}
             </div>
             <div className="thin-scrollbar max-h-[min(21rem,52vh)] overflow-y-auto p-1">
-                {candidates.length ? candidates.map((candidate, index) => {
-                    const skill = candidate.type === "skill" ? candidate.skill : null;
-                    const reference = candidate.type === "resource" ? candidate.reference : null;
-                    const title = skill ? skill.interface?.displayName || skill.name : reference?.title || "";
-                    const description = skill ? skill.interface?.shortDescription || skill.shortDescription || skill.description : reference ? `${agentReferenceMarker(reference)} · ${canvasReferenceKindLabel(reference.kind)}` : "";
-                    return (
-                        <button key={skill ? `${skill.name}:${skill.path}` : reference?.nodeId} ref={index === activeIndex ? activeItemRef : undefined} type="button" className="flex w-full min-w-0 items-center gap-2.5 rounded-lg px-2 py-2 text-left transition hover:bg-black/5 dark:hover:bg-white/10" style={{ background: index === activeIndex ? theme.toolbar.activeBg : undefined, color: index === activeIndex ? theme.toolbar.activeText : theme.node.text }} onPointerDown={(event) => { event.preventDefault(); onSelect(candidate); }}>
-                            {skill ? <span className="grid size-9 shrink-0 place-items-center"><Sparkles className="size-4" /></span> : reference ? <ReferencePreview reference={reference} /> : null}
-                            <span className="min-w-0 flex-1"><span className="block truncate text-sm font-medium">{title}</span><span className="mt-0.5 block truncate text-xs" style={{ color: theme.node.muted }}>{description}</span></span>
-                        </button>
-                    );
-                }) : <div className="px-3 py-6 text-center text-xs" style={{ color: theme.node.muted }}>{t(loading ? "agent.composer.mentions.loadingSkills" : command.type === "skill" ? "agent.composer.mentions.noSkills" : "agent.composer.mentions.noResources")}</div>}
+                {candidates.length ? (
+                    candidates.map((candidate, index) => {
+                        const skill = candidate.type === "skill" ? candidate.skill : null;
+                        const reference = candidate.type === "resource" ? candidate.reference : null;
+                        const title = skill ? skill.interface?.displayName || skill.name : reference?.title || "";
+                        const description = skill ? skill.interface?.shortDescription || skill.shortDescription || skill.description : reference ? `${agentReferenceMarker(reference)} · ${canvasReferenceKindLabel(reference.kind)}` : "";
+                        return (
+                            <button
+                                key={skill ? `${skill.name}:${skill.path}` : reference?.nodeId}
+                                ref={index === activeIndex ? activeItemRef : undefined}
+                                type="button"
+                                className="flex w-full min-w-0 items-center gap-2.5 rounded-lg px-2 py-2 text-left transition hover:bg-black/5 dark:hover:bg-white/10"
+                                style={{ background: index === activeIndex ? theme.toolbar.activeBg : undefined, color: index === activeIndex ? theme.toolbar.activeText : theme.node.text }}
+                                onPointerDown={(event) => {
+                                    event.preventDefault();
+                                    onSelect(candidate);
+                                }}
+                            >
+                                {skill ? (
+                                    <span className="grid size-9 shrink-0 place-items-center">
+                                        <Sparkles className="size-4" />
+                                    </span>
+                                ) : reference ? (
+                                    <ReferencePreview reference={reference} />
+                                ) : null}
+                                <span className="min-w-0 flex-1">
+                                    <span className="block truncate text-sm font-medium">{title}</span>
+                                    <span className="mt-0.5 block truncate text-xs" style={{ color: theme.node.muted }}>
+                                        {description}
+                                    </span>
+                                </span>
+                            </button>
+                        );
+                    })
+                ) : (
+                    <div className="px-3 py-6 text-center text-xs" style={{ color: theme.node.muted }}>
+                        {t(loading ? "agent.composer.mentions.loadingSkills" : command.type === "skill" ? "agent.composer.mentions.noSkills" : "agent.composer.mentions.noResources")}
+                    </div>
+                )}
             </div>
         </div>
     );
@@ -272,7 +336,11 @@ function AgentCommandMenu({ command, candidates, activeIndex, loading, theme, on
 function ReferencePreview({ reference }: { reference: CanvasResourceReference }) {
     if (reference.kind === "image" && reference.previewUrl) return <img src={reference.previewUrl} alt="" className="size-9 rounded-md object-cover" />;
     const Icon = canvasReferenceIcon(reference.kind);
-    return <span className="grid size-9 shrink-0 place-items-center"><Icon className="size-4" /></span>;
+    return (
+        <span className="grid size-9 shrink-0 place-items-center">
+            <Icon className="size-4" />
+        </span>
+    );
 }
 
 function createSkillToken(skill: AgentSkillReference, theme: (typeof canvasThemes)[keyof typeof canvasThemes]) {

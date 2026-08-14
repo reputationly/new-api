@@ -100,11 +100,28 @@ export function formatAgentActivity(event: AgentEventPayload): Omit<AgentChatIte
     if (item.type === "web_search") {
         return { role: "tool", title: tr("searchWeb"), text: item.error?.message || webSearchSummary(item), detail: { kind: "search", status: itemStatus, rows: webSearchDetailRows(item), ...(item.error?.message ? { output: item.error.message } : {}) } };
     }
-    if (item.type === "image_view") return { role: "tool", title: tr("viewImage"), text: item.error?.message || stringText(item.path) || tr(completed ? "imageViewed" : "viewingImage"), detail: { kind: "image", status: itemStatus, ...(item.error?.message ? { output: item.error.message } : {}) } };
+    if (item.type === "image_view")
+        return {
+            role: "tool",
+            title: tr("viewImage"),
+            text: item.error?.message || stringText(item.path) || tr(completed ? "imageViewed" : "viewingImage"),
+            detail: { kind: "image", status: itemStatus, ...(item.error?.message ? { output: item.error.message } : {}) },
+        };
     if (item.type === "image_generation") {
-        return { role: "tool", title: tr("imageGeneration"), text: item.error?.message || tr(completed ? failed ? "imageFailed" : "imageCompleted" : "generatingImage"), detail: { kind: "image", status: itemStatus, savedPath: item.savedPath, ...(item.error?.message ? { output: item.error.message } : {}) } };
+        return {
+            role: "tool",
+            title: tr("imageGeneration"),
+            text: item.error?.message || tr(completed ? (failed ? "imageFailed" : "imageCompleted") : "generatingImage"),
+            detail: { kind: "image", status: itemStatus, savedPath: item.savedPath, ...(item.error?.message ? { output: item.error.message } : {}) },
+        };
     }
-    if (item.type === "context_compaction") return { role: "tool", title: tr("compactContext"), text: item.error?.message || tr(completed ? "contextCompacted" : "compactingContext"), detail: { kind: "context", status: itemStatus, ...(item.error?.message ? { output: item.error.message } : {}) } };
+    if (item.type === "context_compaction")
+        return {
+            role: "tool",
+            title: tr("compactContext"),
+            text: item.error?.message || tr(completed ? "contextCompacted" : "compactingContext"),
+            detail: { kind: "context", status: itemStatus, ...(item.error?.message ? { output: item.error.message } : {}) },
+        };
     if (isMcpToolItem(item)) {
         const name = String(item.tool || "");
         return { role: "tool", title: toolName(name), text: completed ? item.error?.message || toolSummary(item) : tr("toolRunning", { action: toolAction(name) }), detail: toolDetail(item, itemStatus) };
@@ -119,7 +136,13 @@ export function formatAgentActivity(event: AgentEventPayload): Omit<AgentChatIte
             detail: toolDetail(item, itemStatus),
         };
     }
-    if (item.type === "collab_tool_call") return { role: "tool", title: tr("collaboration"), text: item.error?.message || tr(completed ? failed ? "collaborationFailed" : "collaborationCompleted" : "collaborating"), detail: { kind: "tool", status: itemStatus, ...(item.error?.message ? { output: item.error.message } : {}) } };
+    if (item.type === "collab_tool_call")
+        return {
+            role: "tool",
+            title: tr("collaboration"),
+            text: item.error?.message || tr(completed ? (failed ? "collaborationFailed" : "collaborationCompleted") : "collaborating"),
+            detail: { kind: "tool", status: itemStatus, ...(item.error?.message ? { output: item.error.message } : {}) },
+        };
     return null;
 }
 
@@ -188,7 +211,10 @@ function activityFiles(value: unknown) {
 function fileActivitySummary(files: Array<{ path: string; action?: string }>, completed: boolean) {
     if (!files.length) return tr(completed ? "filesCompleted" : "preparingFiles");
     if (files.length === 1) return tr(completed ? "fileCompleted" : "editingFile", { action: files[0].action || tr("edit"), path: files[0].path });
-    const names = files.slice(0, 3).map((file) => file.path).join(", ");
+    const names = files
+        .slice(0, 3)
+        .map((file) => file.path)
+        .join(", ");
     return tr(completed ? "filesEdited" : "editingFiles", { count: files.length, names, more: files.length > 3 ? tr("andMore") : "" });
 }
 
@@ -240,11 +266,7 @@ export function isCurrentThreadEvent(event: { threadId?: string; thread_id?: str
     return Boolean(threadId) && threadId === useAgentStore.getState().activeThreadId;
 }
 
-export function registerLiveAgentTurn(
-    event: { replayed?: boolean; threadId?: string; thread_id?: string; turnId?: string; turn_id?: string },
-    authoritativeTurns: ReadonlySet<string>,
-    liveTurns: Set<string>,
-) {
+export function registerLiveAgentTurn(event: { replayed?: boolean; threadId?: string; thread_id?: string; turnId?: string; turn_id?: string }, authoritativeTurns: ReadonlySet<string>, liveTurns: Set<string>) {
     const threadId = event.threadId || event.thread_id || "";
     const turnId = event.turnId || event.turn_id || "";
     const key = threadId && turnId ? `${threadId}\0${turnId}` : "";
@@ -328,7 +350,31 @@ export function toolName(name: string) {
 }
 
 const toolTranslationKeys: Record<string, string> = {
-    canvas_apply_ops: "canvasOps", canvas_get_state: "readCanvas", canvas_get_selection: "readSelection", canvas_export_snapshot: "exportSnapshot", canvas_create_node: "createNode", canvas_create_attachment_nodes: "addAttachments", canvas_create_text_node: "createText", canvas_create_text_nodes: "createTexts", canvas_create_config_node: "createConfig", canvas_create_image_prompt_flow: "createImageFlow", canvas_create_generation_flow: "createGenerationFlow", canvas_generate_text: "generateText", canvas_generate_image: "generateImage", canvas_generate_video: "generateVideo", canvas_generate_audio: "generateAudio", canvas_update_node: "updateNode", canvas_update_node_text: "updateText", canvas_move_nodes: "moveNodes", canvas_resize_node: "resizeNode", canvas_delete_nodes: "deleteNodes", canvas_connect_nodes: "connectNodes", canvas_select_nodes: "selectNodes", canvas_set_viewport: "setViewport", canvas_run_generation: "runGeneration", site_navigate: "openPage",
+    canvas_apply_ops: "canvasOps",
+    canvas_get_state: "readCanvas",
+    canvas_get_selection: "readSelection",
+    canvas_export_snapshot: "exportSnapshot",
+    canvas_create_node: "createNode",
+    canvas_create_attachment_nodes: "addAttachments",
+    canvas_create_text_node: "createText",
+    canvas_create_text_nodes: "createTexts",
+    canvas_create_config_node: "createConfig",
+    canvas_create_image_prompt_flow: "createImageFlow",
+    canvas_create_generation_flow: "createGenerationFlow",
+    canvas_generate_text: "generateText",
+    canvas_generate_image: "generateImage",
+    canvas_generate_video: "generateVideo",
+    canvas_generate_audio: "generateAudio",
+    canvas_update_node: "updateNode",
+    canvas_update_node_text: "updateText",
+    canvas_move_nodes: "moveNodes",
+    canvas_resize_node: "resizeNode",
+    canvas_delete_nodes: "deleteNodes",
+    canvas_connect_nodes: "connectNodes",
+    canvas_select_nodes: "selectNodes",
+    canvas_set_viewport: "setViewport",
+    canvas_run_generation: "runGeneration",
+    site_navigate: "openPage",
 };
 
 function siteToolSummary(name: string, result: unknown, input: unknown) {
@@ -532,7 +578,7 @@ export function scopeChatItem(item: AgentChatItem, threadId: string, turnId: str
 export function bindPendingTurnMessages(messages: AgentChatItem[], threadId: string, turnId: string) {
     const index = messages.findLastIndex((item) => item.role === "user" && item.threadId === threadId && !item.turnId);
     if (index < 0) return messages;
-    return messages.map((item, itemIndex) => itemIndex === index ? scopeChatItem(item, threadId, turnId) : item);
+    return messages.map((item, itemIndex) => (itemIndex === index ? scopeChatItem(item, threadId, turnId) : item));
 }
 
 export function upsertAgentMessage(messages: AgentChatItem[], item: AgentChatItem) {
@@ -540,23 +586,25 @@ export function upsertAgentMessage(messages: AgentChatItem[], item: AgentChatIte
     if (index < 0) return [...messages, item];
     const current = messages[index];
     const next = { ...current, ...item, ...mergeLocalMessageMetadata(current, item) };
-    return messages.map((message, itemIndex) => itemIndex === index ? next : message);
+    return messages.map((message, itemIndex) => (itemIndex === index ? next : message));
 }
 
 export function mergeAgentMessages(snapshot: AgentChatItem[], current: AgentChatItem[], threadId: string, liveTurnKeys: ReadonlySet<string>) {
     let messages = [...snapshot];
-    current.filter((item) => item.threadId === threadId).forEach((item) => {
-        const live = Boolean(item.turnId && liveTurnKeys.has(`${threadId}\0${item.turnId}`));
-        const index = messages.findIndex((message) => message.id === item.id);
-        if (index < 0) {
-            if (!item.turnId || live) messages = upsertAgentMessage(messages, item);
-            return;
-        }
-        const history = messages[index];
-        const metadata = mergeLocalMessageMetadata(history, item);
-        const next = live ? { ...history, ...item, ...metadata } : { ...history, ...metadata };
-        messages = messages.map((message, itemIndex) => itemIndex === index ? next : message);
-    });
+    current
+        .filter((item) => item.threadId === threadId)
+        .forEach((item) => {
+            const live = Boolean(item.turnId && liveTurnKeys.has(`${threadId}\0${item.turnId}`));
+            const index = messages.findIndex((message) => message.id === item.id);
+            if (index < 0) {
+                if (!item.turnId || live) messages = upsertAgentMessage(messages, item);
+                return;
+            }
+            const history = messages[index];
+            const metadata = mergeLocalMessageMetadata(history, item);
+            const next = live ? { ...history, ...item, ...metadata } : { ...history, ...metadata };
+            messages = messages.map((message, itemIndex) => (itemIndex === index ? next : message));
+        });
     return messages;
 }
 
@@ -575,7 +623,9 @@ function mergeLocalMessageMetadata(current: AgentChatItem, incoming: AgentChatIt
 }
 
 export function reasoningActivityText(items: Record<string, string>, fallback = "") {
-    const summaries = Object.values(items).map((item) => item.trim()).filter(isReasoningSummary);
+    const summaries = Object.values(items)
+        .map((item) => item.trim())
+        .filter(isReasoningSummary);
     return summaries.join("\n\n") || fallback || REASONING_PLACEHOLDER;
 }
 

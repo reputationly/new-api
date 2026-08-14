@@ -4,10 +4,7 @@ export const agentInlineTokenClass = "mx-0.5 inline-block h-7 whitespace-nowrap 
 export const agentInlineTokenMediaClass = "mr-1 inline-block size-5 rounded object-cover align-middle";
 export const agentInlineTokenIconClass = "mr-1 inline-block size-4 align-middle opacity-65";
 
-export type AgentInlineToken =
-    | { type: "text"; value: string }
-    | { type: "skill"; skill: AgentSkillReference }
-    | { type: "reference"; reference: AgentCanvasReference };
+export type AgentInlineToken = { type: "text"; value: string } | { type: "skill"; skill: AgentSkillReference } | { type: "reference"; reference: AgentCanvasReference };
 
 export function agentSkillMarker(skill: Pick<AgentSkillReference, "name">) {
     return `$${skill.name}`;

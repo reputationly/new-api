@@ -25,9 +25,7 @@ type MentionState = {
     rect: DOMRect | null;
 };
 
-type Token =
-    | { type: "text"; value: string }
-    | { type: "reference"; label: string };
+type Token = { type: "text"; value: string } | { type: "reference"; label: string };
 
 // Prompt-panel contentEditable input: @ references embed thumbnail chips instead of plain label text.
 // Serialization converts chips back to reference labels so the generated value matches the former textarea semantics.
@@ -190,15 +188,25 @@ export function CanvasPromptChipInput({ value, references, onChange, onSubmit, c
                 }}
                 onBlur={() => window.setTimeout(closeMention, 120)}
             />
-            {mention && candidates.length ? (
-                <MentionMenu rect={mention.rect} references={candidates} activeIndex={Math.min(activeIndex, candidates.length - 1)} theme={theme} onSelect={insertReference} />
-            ) : null}
+            {mention && candidates.length ? <MentionMenu rect={mention.rect} references={candidates} activeIndex={Math.min(activeIndex, candidates.length - 1)} theme={theme} onSelect={insertReference} /> : null}
             {imagePreview ? <Image src={imagePreview} alt={i18n.t("canvas.composer.imagePreview")} style={{ display: "none" }} preview={{ visible: true, src: imagePreview, onVisibleChange: (visible) => !visible && setImagePreview(null) }} /> : null}
         </div>
     );
 }
 
-function MentionMenu({ rect, references, activeIndex, theme, onSelect }: { rect: DOMRect | null; references: CanvasResourceReference[]; activeIndex: number; theme: (typeof canvasThemes)[keyof typeof canvasThemes]; onSelect: (reference: CanvasResourceReference) => void }) {
+function MentionMenu({
+    rect,
+    references,
+    activeIndex,
+    theme,
+    onSelect,
+}: {
+    rect: DOMRect | null;
+    references: CanvasResourceReference[];
+    activeIndex: number;
+    theme: (typeof canvasThemes)[keyof typeof canvasThemes];
+    onSelect: (reference: CanvasResourceReference) => void;
+}) {
     const selectedRef = useRef(false);
     const activeItemRef = useRef<HTMLButtonElement | null>(null);
 

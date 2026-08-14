@@ -119,18 +119,11 @@ export function CanvasNodeCropDialog({ dataUrl, open, onClose, onConfirm }: { da
                     <div className="flex flex-wrap items-center gap-3 text-sm opacity-80">
                         <span>{t("canvas.editors.cropSize", { size: cropSize ? `${cropSize.width} x ${cropSize.height}` : t("canvas.editors.unknown") })}</span>
                         <span>{t("canvas.editors.ratio", { ratio: cropSize ? formatRatio(cropSize.width, cropSize.height) : t("canvas.editors.unknown") })}</span>
-                        {image ? (
-                            <span>{t("canvas.editors.original", { width: image.width, height: image.height })}</span>
-                        ) : null}
+                        {image ? <span>{t("canvas.editors.original", { width: image.width, height: image.height })}</span> : null}
                     </div>
                     <Segmented
                         size="small"
-                        options={[
-                            { label: t("canvas.editors.free"), value: "free" },
-                            { label: t("canvas.editors.fixed"), value: "fixed" },
-                            { label: t("canvas.editors.originalMode"), value: "original" },
-                            ...["1:1", "4:3", "16:9", "9:16"],
-                        ]}
+                        options={[{ label: t("canvas.editors.free"), value: "free" }, { label: t("canvas.editors.fixed"), value: "fixed" }, { label: t("canvas.editors.originalMode"), value: "original" }, ...["1:1", "4:3", "16:9", "9:16"]]}
                         value={ratioPreset}
                         onChange={(value) => {
                             const preset = String(value);

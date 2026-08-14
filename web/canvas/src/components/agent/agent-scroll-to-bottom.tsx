@@ -3,19 +3,7 @@ import { ChevronDown } from "lucide-react";
 
 import { canvasThemes } from "@/lib/canvas-theme";
 
-export function AgentScrollToBottom({
-    theme,
-    title,
-    ariaLabel = title,
-    className = "",
-    onClick,
-}: {
-    theme: (typeof canvasThemes)[keyof typeof canvasThemes];
-    title: string;
-    ariaLabel?: string;
-    className?: string;
-    onClick: () => void;
-}) {
+export function AgentScrollToBottom({ theme, title, ariaLabel = title, className = "", onClick }: { theme: (typeof canvasThemes)[keyof typeof canvasThemes]; title: string; ariaLabel?: string; className?: string; onClick: () => void }) {
     return (
         <Tooltip title={title} placement="top">
             <Button
