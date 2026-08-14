@@ -21,7 +21,8 @@ export enum CanvasNodeType {
 // Node types are open strings: built-ins use CanvasNodeType and plugins use "<pluginId>:<name>".
 export type CanvasNodeTypeId = CanvasNodeType | (string & {});
 
-export type CanvasNodeStatus = "idle" | "success" | "loading" | "error";
+// stalled:能力任务轮询超时但任务仍在服务端运行(≠error),节点可「继续等待」恢复
+export type CanvasNodeStatus = "idle" | "success" | "loading" | "error" | "stalled";
 export type CanvasGenerationMode = "text" | "image" | "video" | "audio";
 export type CanvasImageGenerationType = "generation" | "edit";
 
@@ -72,6 +73,23 @@ export type CanvasNodeMetadata = {
     durationMs?: number;
     groupId?: string;
     interactive?: boolean; // Plugin node interaction/move state; see CanvasNodeDefinition.interactionToggle.
+
+    // ── BUILTIN_MODE: 能力编排(见 docs/canvas-orchestration-design.md) ──
+    // capability = 能力注册表 key(t2i/i2v/flf2v/sr/tts_synth/...);缺省 = 上游原有的
+    // 「生成配置节点」行为。能力节点的媒体类型 = 该能力的产物类型。
+    capability?: string;
+    capabilityParams?: Record<string, string | number>;
+    // 该节点请求使用的 new-api 分组;缺省不下发,由 Distribute 回落用户默认分组
+    group?: string;
+    // 同类多输入槽位指定:InputSlot.key → 上游节点 id 列表;未绑定的上游按连线顺序自动分配。
+    // 例如双人对话要区分「说话人1/2」的参考音,关键帧要区分首帧/尾帧。
+    slotBindings?: Record<string, string[]>;
+    // gpustackplus 异步任务 id;下游节点以 task:<id> 引用(后端 NFS 直读,前端零搬运),
+    // 刷新后据此恢复轮询
+    taskId?: string;
+    // 任务产物落 IndexedDB 时的 storageKey:与 storageKey 一致才允许 task: 引用。
+    // 节点媒体被上传/替换后 storageKey 变化即失配,防止下游消费旧任务产物。
+    taskMediaKey?: string;
 };
 
 export type CanvasNodeData = {

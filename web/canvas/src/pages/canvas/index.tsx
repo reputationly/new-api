@@ -1,7 +1,7 @@
 import { useEffect, useRef } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
-import { App, Button } from "antd";
-import { Download, FileUp, Plus } from "lucide-react";
+import { App, Button, Dropdown } from "antd";
+import { Download, FileUp, Plus, Sparkles } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
 import { readZip } from "@/lib/zip";
@@ -10,6 +10,10 @@ import { setImageBlob } from "@/services/image-storage";
 import { CanvasDeleteProjectsDialog } from "@/components/canvas/canvas-delete-projects-dialog";
 import { CanvasProjectCard } from "@/components/canvas/canvas-project-card";
 import type { CanvasExportFile } from "@/types/canvas-export";
+import { BUILTIN_MODE } from "@/stores/use-config-store";
+import { capabilitySpec } from "@/services/capabilities/registry";
+import { modelsForCapability, useMediaConfigStore } from "@/stores/use-media-config-store";
+import { usableTemplates } from "@/lib/canvas/canvas-templates";
 import { useCanvasStore } from "@/stores/canvas/use-canvas-store";
 import { useCanvasUiStore } from "@/stores/canvas/use-canvas-ui-store";
 import { exportCanvasProjects } from "@/lib/canvas/canvas-export";
@@ -35,6 +39,26 @@ export default function CanvasPage() {
         navigate(`/canvas/${id}${agentQuery}`);
     };
     const createAndEnter = () => enterProject(createProject(t("canvas.defaultTitle", { count: projects.length + 1 })));
+
+    // BUILTIN_MODE: 官方模板 —— 预连线的能力链,模型按当前用户可用集合自动选;
+    // 选不到时留空,由节点面板提示用户手动挑(链路结构不受影响)。
+    const createFromTemplate = async (templateKey: string) => {
+        const template = usableTemplates().find((item) => item.key === templateKey);
+        if (!template) return;
+        await useMediaConfigStore
+            .getState()
+            .ensureLoaded()
+            .catch(() => undefined);
+        const { configs, availableModels } = useMediaConfigStore.getState();
+        const pickModel = (capabilityKey: string) => {
+            const spec = capabilitySpec(capabilityKey);
+            return spec ? modelsForCapability({ configs, availableModels }, spec)[0] || "" : "";
+        };
+        const missing = template.capabilities.filter((key) => !pickModel(key)).map((key) => capabilitySpec(key)?.label || key);
+        if (missing.length) message.info(`「${missing.join("、")}」暂无可用模型，进入后请在对应节点手动选择`);
+        const { nodes, connections } = template.build(pickModel);
+        enterProject(importProject({ title: template.title, nodes, connections }));
+    };
     const importCanvas = async (file?: File) => {
         if (!file) return;
         try {
@@ -80,7 +104,16 @@ export default function CanvasPage() {
                     <div className="flex items-center gap-2">
                         {selectedIds.length ? (
                             <>
-                                <Button disabled={!hydrated} icon={<Download className="size-4" />} onClick={() => void exportCanvasProjects(projects.filter((project) => selectedIds.includes(project.id)), `${t("canvas.title")}-${selectedIds.length}`)}>
+                                <Button
+                                    disabled={!hydrated}
+                                    icon={<Download className="size-4" />}
+                                    onClick={() =>
+                                        void exportCanvasProjects(
+                                            projects.filter((project) => selectedIds.includes(project.id)),
+                                            `${t("canvas.title")}-${selectedIds.length}`,
+                                        )
+                                    }
+                                >
                                     {t("canvas.exportSelected")}
                                 </Button>
                                 <Button disabled={!hydrated} onClick={() => setDeleteIds(selectedIds)}>
@@ -96,6 +129,26 @@ export default function CanvasPage() {
                         <Button disabled={!hydrated} icon={<FileUp className="size-4" />} onClick={() => inputRef.current?.click()}>
                             {t("canvas.import")}
                         </Button>
+                        {BUILTIN_MODE && usableTemplates().length ? (
+                            <Dropdown
+                                menu={{
+                                    items: usableTemplates().map((template) => ({
+                                        key: template.key,
+                                        label: (
+                                            <div className="max-w-[320px] py-0.5">
+                                                <div className="text-sm">{template.title}</div>
+                                                <div className="mt-0.5 text-xs opacity-60">{template.description}</div>
+                                            </div>
+                                        ),
+                                    })),
+                                    onClick: ({ key }) => void createFromTemplate(key),
+                                }}
+                            >
+                                <Button disabled={!hydrated} icon={<Sparkles className="size-4" />}>
+                                    从模板新建
+                                </Button>
+                            </Dropdown>
+                        ) : null}
                         <Button disabled={!hydrated} type="primary" icon={<Plus className="size-4" />} onClick={createAndEnter}>
                             {t("canvas.create")}
                         </Button>

@@ -3,6 +3,8 @@ import { useEffect, useRef, useState } from "react";
 import { Button, Segmented, Switch } from "antd";
 import { CircleDot, Eraser, Grid2x2, Group, Hand, Image as ImageIcon, Info, MousePointer2, Music2, Palette, Puzzle, Redo2, Settings2, Square, Trash2, Type, Undo2, Upload, Video } from "lucide-react";
 
+import { BUILTIN_MODE } from "@/stores/use-config-store";
+import { capabilitiesByModality } from "@/services/capabilities/registry";
 import { canvasThemes, type CanvasBackgroundMode, type CanvasColorTheme, type CanvasTheme } from "@/lib/canvas-theme";
 import { getNodePluginId, listNodeDefinitions, useNodeRegistryVersion } from "@/lib/canvas/node-registry";
 import { useThemeStore } from "@/stores/use-theme-store";
@@ -21,6 +23,7 @@ export function CanvasToolbar({
     onAddText,
     onAddConfig,
     onAddGroup,
+    onAddCapability,
     onAddExtensionNode,
     onUndo,
     onRedo,
@@ -43,6 +46,8 @@ export function CanvasToolbar({
     onAddText: () => void;
     onAddConfig: () => void;
     onAddGroup: () => void;
+    /** BUILTIN_MODE: 新建能力节点 */
+    onAddCapability: (capabilityKey: string) => void;
     onAddExtensionNode: (type: string) => void;
     onUndo: () => void;
     onRedo: () => void;
@@ -128,10 +133,12 @@ export function CanvasToolbar({
                 <ToolbarButton id="tool-group" label={t("canvas.toolbar.group")} hovered={hovered} hoverStyle={hoverStyle} wrapRef={wrapRef} onTipX={setTipX} onHover={setHovered} onClick={onAddGroup}>
                     <Group className="size-4.5" />
                 </ToolbarButton>
-                {extensionDefs.length ? (
+                {/* BUILTIN_MODE: 复用上游「扩展」面板的位置与交互,内容换成能力节点菜单。
+                    插件已移除,extensionDefs 恒为空,这个槽位空着也是空着。 */}
+                {BUILTIN_MODE || extensionDefs.length ? (
                     <ToolbarButton
                         id="tool-extensions"
-                        label={t("canvas.toolbar.extensions")}
+                        label={BUILTIN_MODE ? "生成节点" : t("canvas.toolbar.extensions")}
                         active={extensionsOpen}
                         hovered={hovered}
                         activeStyle={activeStyle}
@@ -184,7 +191,37 @@ export function CanvasToolbar({
                 </ToolbarButton>
             </div>
 
-            {extensionsOpen && extensionDefs.length ? (
+            {extensionsOpen && BUILTIN_MODE ? (
+                <div
+                    className="thin-scrollbar pointer-events-auto absolute bottom-[72px] z-30 max-h-[50vh] w-[260px] -translate-x-1/2 overflow-y-auto rounded-xl border p-2 shadow-xl backdrop-blur"
+                    style={{ left: extPanelX || "50%", background: theme.toolbar.panel, borderColor: theme.toolbar.border, color: theme.toolbar.item }}
+                >
+                    {capabilitiesByModality().map((group) => (
+                        <div key={group.modality} className="mb-1.5 last:mb-0">
+                            <div className="px-1.5 pb-1 text-[11px] font-medium opacity-50">{group.label}</div>
+                            <div className="grid gap-0.5">
+                                {group.items.map((item) => (
+                                    <button
+                                        key={item.key}
+                                        type="button"
+                                        className="flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left text-sm transition"
+                                        style={{ color: theme.toolbar.item }}
+                                        onMouseEnter={(event) => (event.currentTarget.style.background = theme.toolbar.itemHover)}
+                                        onMouseLeave={(event) => (event.currentTarget.style.background = "transparent")}
+                                        onClick={() => {
+                                            onAddCapability(item.key);
+                                            setExtensionsOpen(false);
+                                        }}
+                                    >
+                                        <span className="min-w-0 flex-1 truncate">{item.label}</span>
+                                        <span className="shrink-0 text-[10px] opacity-40">{item.key}</span>
+                                    </button>
+                                ))}
+                            </div>
+                        </div>
+                    ))}
+                </div>
+            ) : extensionsOpen && extensionDefs.length ? (
                 <div
                     className="thin-scrollbar pointer-events-auto absolute bottom-[72px] z-30 max-h-[50vh] w-[240px] -translate-x-1/2 overflow-y-auto rounded-xl border p-2 shadow-xl backdrop-blur"
                     style={{ left: extPanelX || "50%", background: theme.toolbar.panel, borderColor: theme.toolbar.border, color: theme.toolbar.item }}

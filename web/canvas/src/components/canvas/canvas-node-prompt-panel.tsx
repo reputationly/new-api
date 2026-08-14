@@ -4,9 +4,11 @@ import { Button, Modal, Tooltip } from "antd";
 import { useTranslation } from "react-i18next";
 
 import { ModelPicker } from "@/components/model-picker";
+import { capabilitySpec, type CapabilitySpec } from "@/services/capabilities/registry";
 import { defaultConfig, resolveModelForCapability, useConfigStore, useEffectiveConfig, type AiConfig } from "@/stores/use-config-store";
 import { canvasThemes } from "@/lib/canvas-theme";
 import { useThemeStore } from "@/stores/use-theme-store";
+import { CanvasCapabilitySettingsPopover, type UpstreamMediaNode } from "./canvas-capability-settings-popover";
 import { CanvasImageSettingsPopover } from "./canvas-image-settings-popover";
 import { CanvasPromptLibrary } from "./canvas-prompt-library";
 import { CanvasAudioSettingsPopover, type CanvasAudioSettingKey } from "./canvas-audio-settings-popover";
@@ -28,14 +30,20 @@ type CanvasNodePromptPanelProps = {
     mentionReferences?: CanvasResourceReference[];
     onImageSettingsOpenChange?: (open: boolean) => void;
     modeOverride?: CanvasNodeGenerationMode; // Plugin nodes set their generation type through useBuiltinPanel.mode.
+    /** BUILTIN_MODE: 上游媒体节点(能力节点的槽位指定用) */
+    upstreamMedia?: UpstreamMediaNode[];
 };
 
-export function CanvasNodePromptPanel({ node, isRunning, onPromptChange, onConfigChange, onGenerate, onStop, mentionReferences = [], onImageSettingsOpenChange, modeOverride }: CanvasNodePromptPanelProps) {
+export function CanvasNodePromptPanel({ node, isRunning, onPromptChange, onConfigChange, onGenerate, onStop, mentionReferences = [], onImageSettingsOpenChange, modeOverride, upstreamMedia = [] }: CanvasNodePromptPanelProps) {
     const { t } = useTranslation();
     const globalConfig = useEffectiveConfig();
     const openConfigDialog = useConfigStore((state) => state.openConfigDialog);
     const theme = canvasThemes[useThemeStore((state) => state.theme)];
-    const mode = modeOverride ?? defaultMode(node.type);
+    // BUILTIN_MODE: 能力节点的生成模式由能力产物类型决定,不按节点类型推断
+    const capSpec = capabilitySpec(node.metadata?.capability);
+    const mode = modeOverride ?? (capSpec ? capabilityMode(capSpec) : defaultMode(node.type));
+    const promptOptional = Boolean(capSpec && capSpec.inputs.find((slot) => slot.key === "prompt")?.required === false);
+    const isStalled = Boolean(capSpec && node.metadata?.status === "stalled" && node.metadata?.taskId);
     const config = buildNodeConfig(globalConfig, node, mode);
     const hasTextContent = node.type === CanvasNodeType.Text && Boolean(node.metadata?.content?.trim());
     const hasImageContent = node.type === CanvasNodeType.Image && Boolean(node.metadata?.content);
@@ -57,7 +65,9 @@ export function CanvasNodePromptPanel({ node, isRunning, onPromptChange, onConfi
 
     const submit = () => {
         const text = prompt.trim();
-        if (!text || isRunning) return;
+        // 能力节点的提示词槽位可为 optional(如视频超分无需提示词),允许空提交;
+        // stalled 节点点一下 = 继续等待(按 taskId 恢复轮询),同样不要求提示词
+        if ((!text && !promptOptional && !isStalled) || isRunning) return;
         onGenerate(node.id, mode, text);
     };
 
@@ -87,10 +97,21 @@ export function CanvasNodePromptPanel({ node, isRunning, onPromptChange, onConfi
             <div className="mt-2 flex min-w-0 items-center justify-between gap-2">
                 <div className="flex min-w-0 items-center gap-2">
                     <Tooltip title={t("canvas.promptPanel.expandEditor")}>
-                        <Button type="text" className="!h-8 !w-8 !min-w-8 shrink-0 !rounded-full !bg-transparent !p-0" style={{ color: theme.node.text }} icon={<Maximize2 className="size-3.5" />} onClick={openExpandedEditor} aria-label={t("canvas.promptPanel.expandEditor")} />
+                        <Button
+                            type="text"
+                            className="!h-8 !w-8 !min-w-8 shrink-0 !rounded-full !bg-transparent !p-0"
+                            style={{ color: theme.node.text }}
+                            icon={<Maximize2 className="size-3.5" />}
+                            onClick={openExpandedEditor}
+                            aria-label={t("canvas.promptPanel.expandEditor")}
+                        />
                     </Tooltip>
                     <CanvasPromptLibrary onSelect={updatePrompt} />
-                    {mode === "image" ? (
+                    {/* BUILTIN_MODE: 能力节点由注册表驱动模型下拉与参数面板,不走上游按 mode
+                        分支的那套(mode 只有粗粒度四类,能力有 19 种且各有输入槽位与参数白名单) */}
+                    {capSpec ? (
+                        <CanvasCapabilitySettingsPopover node={node} spec={capSpec} onConfigChange={onConfigChange} upstreamMedia={upstreamMedia} />
+                    ) : mode === "image" ? (
                         <>
                             <ModelPicker config={config} value={config.model} onChange={(model) => onConfigChange(node.id, { model })} capability="image" onMissingConfig={() => openConfigDialog(true)} className="max-w-[190px]" />
                             <CanvasImageSettingsPopover
@@ -192,4 +213,11 @@ function audioConfigPatch(key: CanvasAudioSettingKey, value: string) {
     if (key === "audioFormat") return { audioFormat: value };
     if (key === "audioSpeed") return { audioSpeed: value };
     return { audioInstructions: value };
+}
+
+/** 能力产物类型 → 画布生成模式 */
+function capabilityMode(spec: CapabilitySpec): CanvasGenerationMode {
+    if (spec.output === CanvasNodeType.Video) return "video";
+    if (spec.output === CanvasNodeType.Audio) return "audio";
+    return "image";
 }
