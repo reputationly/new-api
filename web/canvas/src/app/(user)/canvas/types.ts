@@ -15,12 +15,28 @@ export enum CanvasNodeType {
     Config = "config",
     Video = "video",
     Audio = "audio",
+    // 分组:只表达「同属一个角色/场景/章节」,不参与生成也不传递输入(生产依赖用连线)
+    Group = "group",
 }
 
 // stalled:能力任务轮询超时但任务仍在服务端运行(≠error),节点可「继续等待」恢复(§3.4)
 export type CanvasNodeStatus = "idle" | "success" | "loading" | "error" | "stalled";
 export type CanvasGenerationMode = "text" | "image" | "video" | "audio";
 export type CanvasImageGenerationType = "generation" | "edit";
+
+// 节点级摄像机配置:机身/镜头/焦距/光圈,启用后由 appendCameraPrompt() 拼进生成提示词
+// (utils/canvas-camera.ts)。导演台机位面板复用同一套字段,截图节点继承所属机位的配置。
+export type CameraControlOptions = {
+    enabled: boolean;
+    /** CAMERA_PROFILES[].id */
+    camera: string;
+    /** LENS_PROFILES[].id */
+    lens: string;
+    /** 焦距(mm),取值见 FOCAL_LENGTHS */
+    focalLength: number;
+    /** 光圈 f 值,取值见 APERTURES */
+    aperture: number;
+};
 
 export type CanvasNodeMetadata = {
     content?: string;
@@ -63,6 +79,16 @@ export type CanvasNodeMetadata = {
     capabilityParams?: Record<string, string | number>;
     // 该节点请求使用的分组;缺省不下发,由 Distribute 回落用户默认分组(§3.2)
     group?: string;
+    // 节点级摄像机配置;enabled 时在生成前拼进提示词,复制节点与失败重试均继承
+    camera?: CameraControlOptions;
+    // 所属分组节点 id。几何包含判定(节点中心落在分组矩形内)的结果缓存,拖拽后重算;
+    // 真值是几何位置,这里只为渲染标注与快速查询(见 utils/canvas-group.ts)
+    groupId?: string;
+    // 分组节点自身的配色(仅 CanvasNodeType.Group 使用)
+    groupColor?: string;
+    // 素材语义角色(角色/场景/道具/风格/首帧/音色),从素材库插入时带入。
+    // 决定这份素材挂到下游时担任什么职责,Agent 据此判断该把它填进哪个槽位。
+    assetRole?: string;
     // 同类多输入槽位指定:InputSlot.key → 上游节点 id 列表(§3.5);未绑定的上游按连线顺序自动分配
     slotBindings?: Record<string, string[]>;
     // 异步任务 id(gpustackplus 产物;下游节点以 task:<id> 引用,刷新恢复轮询用)

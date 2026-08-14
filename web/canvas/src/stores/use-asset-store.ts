@@ -10,6 +10,25 @@ import { cleanupUnusedMedia, resolveMediaUrl } from "@/services/file-storage";
 import { deleteServerAsset, isServerAssetKey, serverAssetId } from "@/services/api/canvas-assets";
 
 export type AssetKind = "text" | "image" | "video";
+
+// 素材的语义角色:回答「这份素材在创作里担任什么」,与 kind(媒体类型)正交。
+// 挂参考图时它决定每张图的职责——3 张图分别是角色、场景、道具,和 3 张都叫「参考图」
+// 是两回事,后者只能靠猜。tags 是自由文本,承担不了这个判定,所以单独立字段。
+export type AssetRole = "character" | "location" | "prop" | "style" | "start_frame" | "voice" | "reference";
+
+export const ASSET_ROLES: Array<{ value: AssetRole; label: string; hint: string }> = [
+    { value: "character", label: "角色", hint: "人物身份依据，跨镜头保持同一个人靠它" },
+    { value: "location", label: "场景", hint: "环境、地点、背景" },
+    { value: "prop", label: "道具", hint: "物件、产品、服装" },
+    { value: "style", label: "风格", hint: "色调、材质、美术参考，不提供具体内容" },
+    { value: "start_frame", label: "首帧", hint: "画面从这一帧开始动（flf2v）" },
+    { value: "voice", label: "音色", hint: "语音克隆或情感参考音" },
+    { value: "reference", label: "通用参考", hint: "没有更具体职责时的缺省值" },
+];
+
+export function assetRoleLabel(role?: AssetRole) {
+    return ASSET_ROLES.find((item) => item.value === role)?.label || "";
+}
 export type TextAsset = AssetBase<"text"> & { data: { content: string } };
 export type ImageAsset = AssetBase<"image"> & { data: { dataUrl: string; storageKey?: string; width: number; height: number; bytes: number; mimeType: string } };
 export type VideoAsset = AssetBase<"video"> & { data: { url: string; storageKey?: string; width: number; height: number; bytes: number; mimeType: string } };
@@ -21,6 +40,8 @@ type AssetBase<T extends AssetKind> = {
     title: string;
     coverUrl: string;
     tags: string[];
+    /** 语义角色;历史素材没有此字段,读取处一律按 "reference" 兜底 */
+    role?: AssetRole;
     source?: string;
     note?: string;
     createdAt: string;
