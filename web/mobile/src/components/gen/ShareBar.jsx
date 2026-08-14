@@ -48,6 +48,11 @@ const showDownloadLink = (url) => {
       </div>
     ),
     closeOnMaskClick: true,
+    // **closeOnAction 必须显式开**：antd-mobile 的 Dialog 默认是 false，actions 里的
+    // 按钮点了只触发 onClick、不关框 —— 而这里的「取消」没有 onClick，于是点了毫无
+    // 反应，用户被困在弹框里（遮罩点击是唯一出路，但没人猜得到）。
+    // 仓库里其他带自定义 actions 的 Dialog（Tokens.jsx、AdminKyc.jsx 等）都显式写了这条。
+    closeOnAction: true,
     actions: [{ key: 'cancel', text: '取消' }],
   });
 };
