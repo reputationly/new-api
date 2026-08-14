@@ -236,6 +236,36 @@ export const CanvasNode = React.memo(function CanvasNode({
         };
     }, [handleResizeMove, handleResizeUp]);
 
+    // 分组走独立外壳:它是一块背景区域,不该有卡片底色、底部渐变和连线接点。
+    // z-0 保证永远压在普通节点下面(渲染顺序另见 utils/canvas-group.ts sortNodesForRender)。
+    if (data.type === CanvasNodeType.Group) {
+        const groupColor = data.metadata?.groupColor || theme.node.muted;
+        return (
+            <div
+                data-node-id={data.id}
+                className="node-element absolute z-0 select-none"
+                style={{ transform: `translate(${data.position.x}px, ${data.position.y}px)`, width: data.width, height: data.height, contain: "layout style" }}
+                onMouseEnter={() => onHoverStart(data.id)}
+                onMouseLeave={() => onHoverEnd(data.id)}
+                onContextMenu={(event) => onContextMenu(event, data.id)}
+            >
+                <div
+                    className="relative h-full w-full rounded-3xl border-2 border-dashed"
+                    style={{ background: `${groupColor}0f`, borderColor: isSelected ? theme.node.activeStroke : `${groupColor}66` }}
+                    onMouseDown={(event) => onMouseDown(event, data.id)}
+                >
+                    <div className="pointer-events-none absolute left-4 top-2.5 max-w-[calc(100%-2rem)] truncate text-sm font-medium" style={{ color: groupColor }}>
+                        {data.title || "分组"}
+                    </div>
+                    <ResizeHandle corner="top-left" onMouseDown={handleResizeMouseDown} />
+                    <ResizeHandle corner="top-right" onMouseDown={handleResizeMouseDown} />
+                    <ResizeHandle corner="bottom-left" onMouseDown={handleResizeMouseDown} />
+                    <ResizeHandle corner="bottom-right" onMouseDown={handleResizeMouseDown} />
+                </div>
+            </div>
+        );
+    }
+
     return (
         <div
             data-node-id={data.id}
@@ -344,13 +374,14 @@ function NodeContent(props: NodeContentRendererProps) {
     return Renderer ? <Renderer {...props} /> : <UnknownNodeContent theme={props.theme} />;
 }
 
-const nodeContentRenderers = {
+// Partial:Group 在 CanvasNode 里走独立外壳早退,不经过内容渲染表
+const nodeContentRenderers: Partial<Record<CanvasNodeType, (props: NodeContentRendererProps) => ReactNode>> = {
     [CanvasNodeType.Text]: TextContent,
     [CanvasNodeType.Image]: ImageNodeContent,
     [CanvasNodeType.Config]: EmptyImageContent,
     [CanvasNodeType.Video]: VideoNodeContent,
     [CanvasNodeType.Audio]: AudioNodeContent,
-} satisfies Record<CanvasNodeType, (props: NodeContentRendererProps) => ReactNode>;
+};
 
 function LoadingContent({ theme }: Pick<NodeContentRendererProps, "theme">) {
     return (

@@ -40,9 +40,17 @@ import { CanvasNodeMaskEditDialog, type CanvasImageMaskEditPayload } from "../co
 import { CanvasNodeSplitDialog, type CanvasImageSplitParams } from "../components/canvas-node-split-dialog";
 import { CanvasNodeUpscaleDialog, type CanvasImageUpscaleParams } from "../components/canvas-node-upscale-dialog";
 import { buildNodeGenerationContext, buildNodeGenerationInputs, buildNodeResponseMessages, hydrateNodeGenerationContext, type NodeGenerationInput } from "../components/canvas-node-generation";
+import { appendCameraPrompt } from "../utils/canvas-camera";
+import { expandDragIdsWithGroupMembers, groupRectFor, reassignGroups, sortNodesForRender } from "../utils/canvas-group";
+import { extractWorkflow, instantiateWorkflow, stripStaleGroupIds, type CanvasWorkflow } from "../utils/canvas-workflow";
+import { useWorkflowStore } from "@/stores/use-workflow-store";
+import { CanvasWorkflowModal } from "../components/canvas-workflow-modal";
+import { concatVideos, toConcatSources } from "../utils/canvas-video-concat";
+import { extractVideoFrame } from "../utils/canvas-video-frame";
 import { CanvasNodeHoverToolbar, CanvasNodeInfoModal } from "../components/canvas-node-hover-toolbar";
 import { InfiniteCanvas } from "../components/infinite-canvas";
 import { Minimap } from "../components/canvas-mini-map";
+import { CanvasSidePanel } from "../components/canvas-side-panel";
 import { CanvasNode } from "../components/canvas-node";
 import { CanvasNodePromptPanel, type CanvasNodeGenerationMode } from "../components/canvas-node-prompt-panel";
 import { CanvasToolbar } from "../components/canvas-toolbar";
@@ -290,6 +298,9 @@ function InfiniteCanvasPage() {
     const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
     const [runningNodeId, setRunningNodeId] = useState<string | null>(null);
     const [isMiniMapOpen, setIsMiniMapOpen] = useState(false);
+    // 侧边节点树默认收起:老用户的画布不该突然被面板占掉左侧
+    const [sidePanelOpen, setSidePanelOpen] = useState(false);
+    const [workflowOpen, setWorkflowOpen] = useState(false);
     const [backgroundMode, setBackgroundMode] = useState<CanvasBackgroundMode>("lines");
     const [showImageInfo, setShowImageInfo] = useState(false);
     const [clearConfirmOpen, setClearConfirmOpen] = useState(false);
@@ -705,7 +716,8 @@ function InfiniteCanvasPage() {
         const viewRight = viewLeft + width / viewport.k + padding * 2;
         const viewBottom = viewTop + height / viewport.k + padding * 2;
 
-        return nodes.filter((node) => !isHiddenBatchChild(node, nodes, collapsingBatchIds) && node.position.x + node.width > viewLeft && node.position.x < viewRight && node.position.y + node.height > viewTop && node.position.y < viewBottom);
+        // 分组排到最前 = 渲染在最底层,否则分组矩形会盖住它自己的成员
+        return sortNodesForRender(nodes.filter((node) => !isHiddenBatchChild(node, nodes, collapsingBatchIds) && node.position.x + node.width > viewLeft && node.position.x < viewRight && node.position.y + node.height > viewTop && node.position.y < viewBottom));
     }, [collapsingBatchIds, nodes, size.height, size.width, viewport.k, viewport.x, viewport.y]);
 
     const nodeById = useMemo(() => new Map(nodes.map((node) => [node.id, node])), [nodes]);
@@ -842,6 +854,107 @@ function InfiniteCanvasPage() {
         },
         [effectiveConfig.canvasImageCount, effectiveConfig.count, effectiveConfig.imageModel, effectiveConfig.model, effectiveConfig.size, getCanvasCenter],
     );
+
+    // 工作流:存选中子图 / 插回画布
+    const saveSelectionAsWorkflow = useCallback(
+        (title: string, description: string) => {
+            const picked = nodesRef.current.filter((node) => selectedNodeIdsRef.current.has(node.id));
+            try {
+                useWorkflowStore.getState().saveWorkflow(extractWorkflow(picked, connectionsRef.current, title, description));
+                message.success(`已保存工作流「${title.trim()}」`);
+            } catch (error) {
+                message.error(error instanceof Error ? error.message : "保存失败");
+            }
+        },
+        [message],
+    );
+
+    const insertWorkflow = useCallback(
+        (workflow: CanvasWorkflow, values: Record<string, string>) => {
+            const { nodes: fresh, connections: freshConnections } = instantiateWorkflow(workflow, getCanvasCenter(), values);
+            // 旧 groupId 在新画布里没有对应分组,清掉后由几何包含重算
+            const cleaned = stripStaleGroupIds(fresh);
+            setNodes((prev) => reassignGroups([...prev, ...cleaned], new Set(cleaned.map((node) => node.id))));
+            setConnections((prev) => [...prev, ...freshConnections]);
+            setSelectedNodeIds(new Set(cleaned.map((node) => node.id)));
+            message.success(`已插入「${workflow.title}」（${cleaned.length} 个节点）`);
+        },
+        [getCanvasCenter, message],
+    );
+
+    // 拼接成片:把选中的多个视频节点按「从左到右、再从上到下」的画布顺序首尾相接。
+    // 用画布顺序而不是选中顺序——用户框选时没有顺序概念,但空间排列就是他心里的镜头顺序。
+    const concatSelectedVideos = useCallback(async () => {
+        const picked = nodesRef.current
+            .filter((node) => selectedNodeIdsRef.current.has(node.id) && node.type === CanvasNodeType.Video && node.metadata?.content)
+            .sort((a, b) => a.position.x - b.position.x || a.position.y - b.position.y);
+        if (picked.length < 2) {
+            message.warning("请先选中至少 2 个已生成的视频节点");
+            return;
+        }
+        const hide = message.loading(`正在拼接 ${picked.length} 段视频…`, 0);
+        try {
+            const result = await concatVideos(toConcatSources(picked));
+            const stored = await uploadMediaFile(result.blob, "concat");
+            const last = picked[picked.length - 1];
+            const nodeSize = fitNodeSize(result.width || last.width, result.height || last.height, VIDEO_NODE_MAX_WIDTH, VIDEO_NODE_MAX_HEIGHT);
+            const id = `video-${nanoid()}`;
+            setNodes((prev) => [
+                ...prev,
+                {
+                    id,
+                    type: CanvasNodeType.Video,
+                    title: `成片（${result.clips} 段）`,
+                    position: { x: last.position.x + last.width + 96, y: last.position.y },
+                    width: nodeSize.width,
+                    height: nodeSize.height,
+                    metadata: { content: stored.url, storageKey: stored.storageKey, status: NODE_STATUS_SUCCESS, mimeType: "video/mp4", bytes: stored.bytes, naturalWidth: result.width, naturalHeight: result.height },
+                },
+            ]);
+            setConnections((prev) => [...prev, ...picked.map((node) => ({ id: nanoid(), fromNodeId: node.id, toNodeId: id }))]);
+            setSelectedNodeIds(new Set([id]));
+            message.success(`已拼接 ${result.clips} 段，共 ${result.durationSeconds.toFixed(1)} 秒`);
+        } catch (error) {
+            message.error(error instanceof Error ? error.message : "拼接失败");
+        } finally {
+            hide();
+        }
+    }, [message]);
+
+    // 侧边节点树:点条目把该节点移到视口中心并选中,保持当前缩放不变
+    const focusNode = useCallback(
+        (nodeId: string) => {
+            const node = nodesRef.current.find((item) => item.id === nodeId);
+            if (!node) return;
+            const rect = containerRef.current?.getBoundingClientRect();
+            const width = rect?.width || size.width;
+            const height = rect?.height || size.height;
+            const k = viewportRef.current.k;
+            setViewport({ x: width / 2 - (node.position.x + node.width / 2) * k, y: height / 2 - (node.position.y + node.height / 2) * k, k });
+            setSelectedNodeIds(new Set([nodeId]));
+            setSelectedConnectionId(null);
+        },
+        [size.height, size.width],
+    );
+
+    // 建分组:有选中节点就把它们框起来并入组,没有就在视图中心放一个空框让用户往里拖。
+    // 归属是几何包含,所以这里只要把框摆对位置,成员关系交给 reassignGroups 算。
+    const createGroupNode = useCallback(() => {
+        const selected = nodesRef.current.filter((node) => selectedNodeIdsRef.current.has(node.id) && node.type !== CanvasNodeType.Group);
+        const rect = selected.length ? groupRectFor(selected) : { position: getCanvasCenter(), width: NODE_DEFAULT_SIZE[CanvasNodeType.Group].width, height: NODE_DEFAULT_SIZE[CanvasNodeType.Group].height };
+        const group: CanvasNodeData = {
+            id: `group-${nanoid(8)}`,
+            type: CanvasNodeType.Group,
+            title: "分组",
+            position: rect.position,
+            width: rect.width,
+            height: rect.height,
+            metadata: { status: NODE_STATUS_IDLE },
+        };
+        setNodes((prev) => reassignGroups([...prev, group], new Set(selected.map((node) => node.id))));
+        setSelectedNodeIds(new Set([group.id]));
+        setSelectedConnectionId(null);
+    }, [getCanvasCenter]);
 
     // 能力节点(编排):节点媒体类型 = 能力产物类型,模型/参数由能力设置面板按运营配置白名单驱动
     const ensureMediaConfigLoaded = useMediaConfigStore((state) => state.ensureLoaded);
@@ -1159,10 +1272,12 @@ function InfiniteCanvasPage() {
         }
 
         setSelectedNodeIds(nextSelected);
-        const dragIds = new Set(nextSelected);
+        const rawDragIds = new Set(nextSelected);
         currentNodes.forEach((node) => {
-            if (nextSelected.has(node.id)) node.metadata?.batchChildIds?.forEach((childId) => dragIds.add(childId));
+            if (nextSelected.has(node.id)) node.metadata?.batchChildIds?.forEach((childId) => rawDragIds.add(childId));
         });
+        // 拖分组 = 拖整组:成员跟着走,否则分组框会从成员身上滑开
+        const dragIds = expandDragIdsWithGroupMembers(rawDragIds, currentNodes);
         dragRef.current = {
             isDraggingNode: true,
             hasMoved: false,
@@ -1193,13 +1308,16 @@ function InfiniteCanvasPage() {
         nodeDraggingRef.current = false;
         setIsNodeDragging(false);
         if (dragRef.current.hasMoved && clientX != null && clientY != null) {
-            setNodes((prev) =>
-                prev.map((node) => {
+            const movedIds = new Set(initialPositions.map((item) => item.id));
+            setNodes((prev) => {
+                const moved = prev.map((node) => {
                     const initial = initialPositions.find((item) => item.id === node.id);
                     if (!initial) return node;
                     return { ...node, position: { x: initial.x + dx, y: initial.y + dy } };
-                }),
-            );
+                });
+                // 落点决定归属:拖进分组框就入组,拖出就出组(几何包含,见 utils/canvas-group.ts)
+                return reassignGroups(moved, movedIds);
+            });
         }
 
         dragRef.current.isDraggingNode = false;
@@ -1718,6 +1836,45 @@ function InfiniteCanvasPage() {
         setCropNodeId(null);
     }, []);
 
+    // 视频截帧 → 图片节点。主要用于视频续接:取尾帧作下一段 flf2v 的首帧。
+    const extractVideoFrameNode = useCallback(
+        async (node: CanvasNodeData, at: "first" | "last") => {
+            if (node.type !== CanvasNodeType.Video || !node.metadata?.content) {
+                message.warning("该节点没有可截帧的视频");
+                return;
+            }
+            const label = at === "last" ? "尾帧" : "首帧";
+            const hide = message.loading(`正在截取${label}…`, 0);
+            try {
+                const frame = await extractVideoFrame({ content: node.metadata.content, storageKey: node.metadata.storageKey }, at);
+                const image = await uploadImage(frame.dataUrl);
+                const size = fitNodeSize(image.width, image.height, NODE_DEFAULT_SIZE[CanvasNodeType.Image].width, NODE_DEFAULT_SIZE[CanvasNodeType.Image].height);
+                const childId = nanoid();
+                setNodes((prev) => [
+                    ...prev,
+                    {
+                        id: childId,
+                        type: CanvasNodeType.Image,
+                        title: `${node.title || "视频"} ${label}`,
+                        position: { x: node.position.x + node.width + 96, y: node.position.y },
+                        width: size.width,
+                        height: size.height,
+                        metadata: { ...imageMetadata(image), status: NODE_STATUS_SUCCESS },
+                    },
+                ]);
+                setConnections((prev) => [...prev, { id: nanoid(), fromNodeId: node.id, toNodeId: childId }]);
+                setSelectedNodeIds(new Set([childId]));
+                setSelectedConnectionId(null);
+                message.success(`已截取${label}（${frame.time.toFixed(2)}s / 共 ${frame.duration.toFixed(2)}s）`);
+            } catch (error) {
+                message.error(error instanceof Error ? error.message : "截帧失败");
+            } finally {
+                hide();
+            }
+        },
+        [message],
+    );
+
     const splitImageNode = useCallback(
         async (node: CanvasNodeData, params: CanvasImageSplitParams) => {
             if (!node.metadata?.content) return;
@@ -2027,6 +2184,10 @@ function InfiniteCanvasPage() {
                 buildNodeGenerationContext(nodeId, nodesRef.current, connectionsRef.current, editingTextNode ? `请根据要求修改以下文本。\n\n原文：\n${sourceTextContent}\n\n修改要求：\n${prompt}` : prompt),
             );
             const effectivePrompt = generationContext.prompt.trim();
+            // 摄像机提示词只进请求体,不写回 metadata.prompt:否则节点上显示的提示词、
+            // 失败重试读回的提示词都会被这段数百字的镜头描述污染,且重试会重复叠加。
+            // 只对图片/视频生效——文本问答与音频合成没有镜头语言可言。
+            const requestPrompt = mode === "image" || mode === "video" ? appendCameraPrompt(effectivePrompt, sourceNode?.metadata?.camera) : effectivePrompt;
             if (runController.signal.aborted) {
                 finishGenerationRequest(nodeId, runController);
                 setRunningNodeId(null);
@@ -2116,8 +2277,11 @@ function InfiniteCanvasPage() {
                         failNode(problems.join("；"));
                         return;
                     }
-                    if (entry.maxChars && capPrompt.length > entry.maxChars) {
-                        failNode(`文本超过模型字数上限 ${entry.maxChars}(当前 ${capPrompt.length})`);
+                    // 摄像机提示词在必填校验之后拼接:镜头参数不该替用户凑满「提示词非空」;
+                    // 但要计入字数上限,因为它确实占用模型的提示词预算。
+                    const capRequestPrompt = taskCapability.modality === "image" || taskCapability.modality === "video" ? appendCameraPrompt(capPrompt, sourceNode.metadata?.camera) : capPrompt;
+                    if (entry.maxChars && capRequestPrompt.length > entry.maxChars) {
+                        failNode(`文本超过模型字数上限 ${entry.maxChars}(当前 ${capRequestPrompt.length})`);
                         return;
                     }
                     // fps 方案A(§3.9bis,2026-07-21 拍板):视频生成节点存在 sr 下游连线 → 传
@@ -2134,7 +2298,7 @@ function InfiniteCanvasPage() {
                     try {
                         const result = await runTaskCapability(taskCapability, {
                             model,
-                            prompt: capPrompt,
+                            prompt: capRequestPrompt,
                             params,
                             slots,
                             group: sourceNode.metadata?.group,
@@ -2269,8 +2433,8 @@ function InfiniteCanvasPage() {
                         targetIds.map(async (targetId) => {
                             try {
                                 const image = referenceImages.length
-                                    ? await requestEdit({ ...generationConfig, count: "1" }, effectivePrompt, referenceImages, undefined, { signal: controller.signal, group: isImageCapabilityNode ? sourceNode?.metadata?.group : undefined }).then((items) => items[0])
-                                    : await requestGeneration({ ...generationConfig, count: "1" }, effectivePrompt, { signal: controller.signal, group: isImageCapabilityNode ? sourceNode?.metadata?.group : undefined }).then((items) => items[0]);
+                                    ? await requestEdit({ ...generationConfig, count: "1" }, requestPrompt, referenceImages, undefined, { signal: controller.signal, group: isImageCapabilityNode ? sourceNode?.metadata?.group : undefined }).then((items) => items[0])
+                                    : await requestGeneration({ ...generationConfig, count: "1" }, requestPrompt, { signal: controller.signal, group: isImageCapabilityNode ? sourceNode?.metadata?.group : undefined }).then((items) => items[0]);
                                 const uploaded = await uploadImage(image.dataUrl);
                                 const imageSize = fitNodeSize(uploaded.width, uploaded.height, imageConfig.width, imageConfig.height);
                                 setNodes((prev) => {
@@ -2350,7 +2514,7 @@ function InfiniteCanvasPage() {
                     if (!isEmptyVideoNode) setConnections((prev) => [...prev, { id: nanoid(), fromNodeId: nodeId, toNodeId: videoId }]);
                     const controller = startGenerationRequest(videoId, nodeId, nodeId, runController);
                     try {
-                        const video = await storeGeneratedVideo(await requestVideoGeneration(generationConfig, effectivePrompt, generationContext.referenceImages, generationContext.referenceVideos, generationContext.referenceAudios, { signal: controller.signal }));
+                        const video = await storeGeneratedVideo(await requestVideoGeneration(generationConfig, requestPrompt, generationContext.referenceImages, generationContext.referenceVideos, generationContext.referenceAudios, { signal: controller.signal }));
                         const videoSize = fitNodeSize(video.width || spec.width, video.height || spec.height, VIDEO_NODE_MAX_WIDTH, VIDEO_NODE_MAX_HEIGHT);
                         setNodes((prev) => prev.map((node) => (node.id === videoId ? { ...node, width: videoSize.width, height: videoSize.height, position: { x: node.position.x + node.width / 2 - videoSize.width / 2, y: node.position.y + node.height / 2 - videoSize.height / 2 }, metadata: { ...node.metadata, ...videoMetadata(video), prompt: effectivePrompt, model: generationConfig.model, size: generationConfig.size, seconds: generationConfig.videoSeconds, vquality: generationConfig.vquality, generateAudio: generationConfig.videoGenerateAudio, watermark: generationConfig.videoWatermark, references: generationReferenceUrls(generationContext) } } : node)));
                     } finally {
@@ -2483,6 +2647,9 @@ function InfiniteCanvasPage() {
                 message.warning("找不到提示词，无法重试");
                 return;
             }
+            // 重试同样只把镜头描述加进请求体,节点保存的 prompt 保持干净(否则每次重试都会再叠一层)。
+            // 产物节点自身可能继承过摄像机配置(如导演台截图节点),源节点没有时回落到它。
+            const retryRequestPrompt = node.type === CanvasNodeType.Text || node.type === CanvasNodeType.Audio ? prompt : appendCameraPrompt(prompt, sourceNode.metadata?.camera || node.metadata?.camera);
             const generationType = savedImageMetadata?.generationType;
             const useReferenceImages = generationType ? generationType === "edit" : Boolean(context?.referenceImages.length);
             const retryReferenceImages =
@@ -2510,7 +2677,7 @@ function InfiniteCanvasPage() {
                     return;
                 }
                 if (node.type === CanvasNodeType.Video) {
-                    const video = await storeGeneratedVideo(await requestVideoGeneration(generationConfig, prompt, retryImages, context?.referenceVideos || [], context?.referenceAudios || [], { signal: controller.signal }));
+                    const video = await storeGeneratedVideo(await requestVideoGeneration(generationConfig, retryRequestPrompt, retryImages, context?.referenceVideos || [], context?.referenceAudios || [], { signal: controller.signal }));
                     const videoSize = fitNodeSize(video.width || node.width, video.height || node.height, VIDEO_NODE_MAX_WIDTH, VIDEO_NODE_MAX_HEIGHT);
                     setNodes((prev) => prev.map((item) => (item.id === node.id ? { ...item, width: videoSize.width, height: videoSize.height, position: { x: item.position.x + item.width / 2 - videoSize.width / 2, y: item.position.y + item.height / 2 - videoSize.height / 2 }, metadata: { ...item.metadata, ...videoMetadata(video), prompt, model: generationConfig.model, size: generationConfig.size, seconds: generationConfig.videoSeconds, vquality: generationConfig.vquality, generateAudio: generationConfig.videoGenerateAudio, watermark: generationConfig.videoWatermark } } : item)));
                     return;
@@ -2521,7 +2688,7 @@ function InfiniteCanvasPage() {
                     return;
                 }
 
-                const image = useReferenceImages ? await requestEdit(generationConfig, prompt, retryImages, undefined, { signal: controller.signal }).then((items) => items[0]) : await requestGeneration(generationConfig, prompt, { signal: controller.signal }).then((items) => items[0]);
+                const image = useReferenceImages ? await requestEdit(generationConfig, retryRequestPrompt, retryImages, undefined, { signal: controller.signal }).then((items) => items[0]) : await requestGeneration(generationConfig, retryRequestPrompt, { signal: controller.signal }).then((items) => items[0]);
                 const uploadedImage = await uploadImage(image.dataUrl);
                 const imageConfig = NODE_DEFAULT_SIZE[CanvasNodeType.Image];
                 const imageSize = fitNodeSize(uploadedImage.width, uploadedImage.height, imageConfig.width, imageConfig.height);
@@ -2592,7 +2759,7 @@ function InfiniteCanvasPage() {
     );
 
     const insertAssistantImage = useCallback(
-        async (image: CanvasAssistantImage) => {
+        async (image: CanvasAssistantImage, assetRole?: string) => {
             const storedImage = image.storageKey ? { url: image.dataUrl, storageKey: image.storageKey, width: 1, height: 1, bytes: 0, mimeType: "image/png" } : await uploadImage(image.dataUrl);
             const meta = storedImage.width === 1 && storedImage.height === 1 ? await readImageMeta(storedImage.url) : storedImage;
             const config = fitNodeSize(meta.width, meta.height);
@@ -2605,7 +2772,7 @@ function InfiniteCanvasPage() {
                 position: { x: center.x - config.width / 2, y: center.y - config.height / 2 },
                 width: config.width,
                 height: config.height,
-                metadata: { ...imageMetadata({ ...storedImage, width: meta.width, height: meta.height }), prompt: image.prompt },
+                metadata: { ...imageMetadata({ ...storedImage, width: meta.width, height: meta.height }), prompt: image.prompt, assetRole },
             };
 
             setNodes((prev) => [...prev, node]);
@@ -2640,10 +2807,10 @@ function InfiniteCanvasPage() {
                 const center = screenToCanvas((containerRef.current?.getBoundingClientRect().left || 0) + size.width / 2, (containerRef.current?.getBoundingClientRect().top || 0) + size.height / 2);
                 const id = `video-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
                 const nextSize = fitNodeSize(payload.width || spec.width, payload.height || spec.height, VIDEO_NODE_MAX_WIDTH, VIDEO_NODE_MAX_HEIGHT);
-                setNodes((prev) => [...prev, { id, type: CanvasNodeType.Video, title: payload.title, position: { x: center.x - nextSize.width / 2, y: center.y - nextSize.height / 2 }, width: nextSize.width, height: nextSize.height, metadata: { content: payload.url, storageKey: payload.storageKey, status: NODE_STATUS_SUCCESS, naturalWidth: payload.width, naturalHeight: payload.height } }]);
+                setNodes((prev) => [...prev, { id, type: CanvasNodeType.Video, title: payload.title, position: { x: center.x - nextSize.width / 2, y: center.y - nextSize.height / 2 }, width: nextSize.width, height: nextSize.height, metadata: { content: payload.url, storageKey: payload.storageKey, status: NODE_STATUS_SUCCESS, naturalWidth: payload.width, naturalHeight: payload.height, assetRole: payload.role } }]);
                 setSelectedNodeIds(new Set([id]));
             } else {
-                insertAssistantImage({ id: `asset-${Date.now()}`, prompt: payload.title, dataUrl: payload.dataUrl, storageKey: payload.storageKey });
+                insertAssistantImage({ id: `asset-${Date.now()}`, prompt: payload.title, dataUrl: payload.dataUrl, storageKey: payload.storageKey }, payload.role);
             }
             setAssetPickerOpen(false);
         },
@@ -2861,6 +3028,7 @@ function InfiniteCanvasPage() {
                     onToggleDialog={(node) => setDialogNodeId((current) => (current === node.id ? null : node.id))}
                     onGenerateImage={generateImageFromTextNode}
                     onUpload={(node) => handleUploadRequest(node.id)}
+                    onExtractFrame={(node, at) => void extractVideoFrameNode(node, at)}
                     onDownload={downloadNodeImage}
                     onSaveAsset={(node) => void saveNodeAsset(node)}
                     onMaskEdit={(node) => setMaskEditNodeId(node.id)}
@@ -2887,6 +3055,10 @@ function InfiniteCanvasPage() {
                     onAddAudio={() => createNode(CanvasNodeType.Audio)}
                     onAddText={() => createNode(CanvasNodeType.Text)}
                     onAddConfig={() => createNode(CanvasNodeType.Config)}
+                    onAddGroup={createGroupNode}
+                    onConcatVideos={() => void concatSelectedVideos()}
+                    onOpenWorkflows={() => setWorkflowOpen(true)}
+                    concatReady={nodes.filter((node) => selectedNodeIds.has(node.id) && node.type === CanvasNodeType.Video && node.metadata?.content).length >= 2}
                     onAddCapability={(capabilityKey) => createCapabilityNode(capabilityKey)}
                     onUndo={undoCanvas}
                     onRedo={redoCanvas}
@@ -2900,6 +3072,8 @@ function InfiniteCanvasPage() {
                         setAssetPickerOpen(true);
                     }}
                 />
+
+                <CanvasSidePanel nodes={nodes} selectedNodeIds={selectedNodeIds} open={sidePanelOpen} onToggle={() => setSidePanelOpen((value) => !value)} onFocusNode={focusNode} />
 
                 {isMiniMapOpen ? <Minimap nodes={nodes} viewport={viewport} viewportSize={size} onViewportChange={setViewport} /> : null}
 
@@ -2979,6 +3153,8 @@ function InfiniteCanvasPage() {
                 </Modal>
 
                 <AssetPickerModal open={assetPickerOpen} onInsert={handleAssetInsert} onClose={() => setAssetPickerOpen(false)} />
+
+                <CanvasWorkflowModal open={workflowOpen} selectedCount={selectedNodeIds.size} onClose={() => setWorkflowOpen(false)} onSave={saveSelectionAsWorkflow} onInsert={insertWorkflow} />
                 {codexCompactAgent && !assistantMounted ? <CanvasLocalAgentPanel headless snapshot={agentSnapshot} canUndoOps={Boolean(agentUndoSnapshot)} onApplyOps={applyAgentOps} onUndoOps={undoAgentOps} autoConnect={codexAutoConnect} /> : null}
             </section>
             {assistantMounted ? (

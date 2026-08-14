@@ -5,9 +5,14 @@ import { Empty, Input, Modal, Pagination, Tag } from "antd";
 import { Search } from "lucide-react";
 
 import { cn } from "@/lib/utils";
-import { useAssetStore, type Asset } from "@/stores/use-asset-store";
+import { useAssetStore, type Asset, type AssetRole } from "@/stores/use-asset-store";
 
-export type InsertAssetPayload = { kind: "text"; content: string; title: string } | { kind: "image"; dataUrl: string; title: string; storageKey?: string } | { kind: "video"; url: string; title: string; storageKey?: string; width?: number; height?: number };
+// role 一路带到节点 metadata:插进画布后仍然知道这张图是角色还是场景,
+// 挂参考时(以及 Agent 判断槽位职责时)才有依据。
+export type InsertAssetPayload =
+    | { kind: "text"; content: string; title: string; role?: AssetRole }
+    | { kind: "image"; dataUrl: string; title: string; storageKey?: string; role?: AssetRole }
+    | { kind: "video"; url: string; title: string; storageKey?: string; width?: number; height?: number; role?: AssetRole };
 
 type Props = {
     open: boolean;
@@ -78,9 +83,13 @@ function MyAssetsTab({ onInsert }: { onInsert: (payload: InsertAssetPayload) => 
 
     const handleInsert = (asset: Asset) => {
         if (asset.kind === "text") {
-            onInsert({ kind: "text", content: asset.data.content, title: asset.title });
+            onInsert({ kind: "text", content: asset.data.content, title: asset.title, role: asset.role });
         } else {
-            onInsert(asset.kind === "video" ? { kind: "video", url: asset.data.url, storageKey: asset.data.storageKey, title: asset.title, width: asset.data.width, height: asset.data.height } : { kind: "image", dataUrl: asset.data.dataUrl, storageKey: asset.data.storageKey, title: asset.title });
+            onInsert(
+                asset.kind === "video"
+                    ? { kind: "video", url: asset.data.url, storageKey: asset.data.storageKey, title: asset.title, width: asset.data.width, height: asset.data.height, role: asset.role }
+                    : { kind: "image", dataUrl: asset.data.dataUrl, storageKey: asset.data.storageKey, title: asset.title, role: asset.role },
+            );
         }
     };
 

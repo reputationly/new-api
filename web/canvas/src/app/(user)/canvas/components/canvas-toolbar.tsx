@@ -1,7 +1,7 @@
 import type { CSSProperties, MouseEvent as ReactMouseEvent, ReactNode, RefObject } from "react";
 import { useRef, useState } from "react";
 import { Button, Segmented, Switch } from "antd";
-import { CircleDot, Eraser, FolderOpen, Grid2x2, Hand, Image as ImageIcon, Info, Moon, Music2, Palette, Redo2, Settings2, Sparkles, Square, Sun, Trash2, Type, Undo2, Upload, Video } from "lucide-react";
+import { Workflow, Film, CircleDot, Eraser, FolderOpen, Grid2x2, Hand, Image as ImageIcon, Info, Moon, Music2, Palette, Redo2, Frame, Settings2, Sparkles, Square, Sun, Trash2, Type, Undo2, Upload, Video } from "lucide-react";
 
 import { canvasThemes, type CanvasBackgroundMode, type CanvasColorTheme, type CanvasTheme } from "@/lib/canvas-theme";
 import { useThemeStore } from "@/stores/use-theme-store";
@@ -19,6 +19,10 @@ export function CanvasToolbar({
     onAddAudio,
     onAddText,
     onAddConfig,
+    onAddGroup,
+    onConcatVideos,
+    onOpenWorkflows,
+    concatReady,
     onAddCapability,
     onUndo,
     onRedo,
@@ -40,6 +44,11 @@ export function CanvasToolbar({
     onAddAudio: () => void;
     onAddText: () => void;
     onAddConfig: () => void;
+    onAddGroup: () => void;
+    onConcatVideos: () => void;
+    onOpenWorkflows: () => void;
+    /** 选中的已生成视频节点是否 >= 2 */
+    concatReady: boolean;
     onAddCapability: (capabilityKey: string) => void;
     onUndo: () => void;
     onRedo: () => void;
@@ -94,6 +103,12 @@ export function CanvasToolbar({
                 <ToolbarButton id="tool-config" label="生成配置" hovered={hovered} hoverStyle={hoverStyle} wrapRef={wrapRef} onTipX={setTipX} onHover={setHovered} onClick={onAddConfig}>
                     <Settings2 className="size-4.5" />
                 </ToolbarButton>
+                <ToolbarButton id="tool-concat" label="拼接成片" disabled={!concatReady} hovered={hovered} hoverStyle={hoverStyle} wrapRef={wrapRef} onTipX={setTipX} onHover={setHovered} onClick={onConcatVideos}>
+                    <Film className="size-4.5" />
+                </ToolbarButton>
+                <ToolbarButton id="tool-group" label="分组" hovered={hovered} hoverStyle={hoverStyle} wrapRef={wrapRef} onTipX={setTipX} onHover={setHovered} onClick={onAddGroup}>
+                    <Frame className="size-4.5" />
+                </ToolbarButton>
                 <ToolbarButton
                     id="tool-capability"
                     label="生成节点"
@@ -111,6 +126,9 @@ export function CanvasToolbar({
                     }}
                 >
                     <Sparkles className="size-4.5" />
+                </ToolbarButton>
+                <ToolbarButton id="tool-workflow" label="工作流" hovered={hovered} hoverStyle={hoverStyle} wrapRef={wrapRef} onTipX={setTipX} onHover={setHovered} onClick={onOpenWorkflows}>
+                    <Workflow className="size-4.5" />
                 </ToolbarButton>
                 <ToolbarButton id="tool-upload" label="上传素材" hovered={hovered} hoverStyle={hoverStyle} wrapRef={wrapRef} onTipX={setTipX} onHover={setHovered} onClick={onUpload}>
                     <Upload className="size-4.5" />
@@ -335,6 +353,9 @@ function toolLabel(id: string) {
     if (id === "tool-video") return "视频";
     if (id === "tool-audio") return "音频";
     if (id === "tool-config") return "生成配置";
+    if (id === "tool-group") return "分组";
+    if (id === "tool-concat") return "拼接成片";
+    if (id === "tool-workflow") return "工作流";
     if (id === "tool-capability") return "生成节点";
     if (id === "tool-upload") return "上传素材";
     if (id === "tool-assets") return "我的素材";

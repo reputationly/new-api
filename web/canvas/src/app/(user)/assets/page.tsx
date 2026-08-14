@@ -10,7 +10,7 @@ import { formatBytes, readFileAsDataUrl } from "@/lib/image-utils";
 import { uploadImage } from "@/services/image-storage";
 import { cn } from "@/lib/utils";
 import { CanvasStorageBar } from "@/components/canvas-storage-bar";
-import { useAssetStore, type Asset, type AssetKind, type ImageAsset } from "@/stores/use-asset-store";
+import { ASSET_ROLES, useAssetStore, type Asset, type AssetKind, type AssetRole, type ImageAsset } from "@/stores/use-asset-store";
 import { exportAssets, readAssetPackage } from "./asset-transfer";
 
 type AssetFormValues = {
@@ -18,6 +18,7 @@ type AssetFormValues = {
     title: string;
     coverUrl: string;
     tags: string[];
+    role?: AssetRole;
     source?: string;
     note?: string;
     content?: string;
@@ -82,7 +83,7 @@ export default function AssetsPage() {
         setEditingAsset(null);
         setImageDraft(null);
         setFormKind("text");
-        form.setFieldsValue({ kind: "text", title: "", coverUrl: "", tags: [], source: "手动添加", note: "", content: "" });
+        form.setFieldsValue({ kind: "text", title: "", coverUrl: "", tags: [], role: "reference", source: "手动添加", note: "", content: "" });
         setIsAssetOpen(true);
     };
 
@@ -95,6 +96,7 @@ export default function AssetsPage() {
             title: asset.title,
             coverUrl: asset.coverUrl,
             tags: asset.tags || [],
+            role: asset.role || "reference",
             source: asset.source,
             note: asset.note,
             content: asset.kind === "text" ? asset.data.content : "",
@@ -108,6 +110,7 @@ export default function AssetsPage() {
             title: values.title.trim(),
             coverUrl: values.coverUrl?.trim() || (values.kind === "image" && imageDraft ? imageDraft.dataUrl : ""),
             tags: values.tags || [],
+            role: values.role || "reference",
             source: values.source?.trim(),
             note: values.note?.trim(),
             metadata: editingAsset?.metadata || { source: "manual" },
@@ -252,11 +255,7 @@ export default function AssetsPage() {
                                 >
                                     导入素材
                                 </button>
-                                <button
-                                    type="button"
-                                    className="cursor-pointer text-sm font-medium text-stone-700 underline-offset-4 hover:underline focus-visible:outline-none focus-visible:underline dark:text-stone-300"
-                                    onClick={openCreate}
-                                >
+                                <button type="button" className="cursor-pointer text-sm font-medium text-stone-700 underline-offset-4 hover:underline focus-visible:outline-none focus-visible:underline dark:text-stone-300" onClick={openCreate}>
                                     新增素材
                                 </button>
                             </div>
@@ -314,6 +313,9 @@ export default function AssetsPage() {
                         </Form.Item>
                         <Form.Item name="tags" label="标签">
                             <Select mode="tags" tokenSeparators={[",", "，"]} placeholder="输入标签后回车" />
+                        </Form.Item>
+                        <Form.Item name="role" label="角色" tooltip="这份素材在创作里担任什么职责。挂参考图时决定它是角色、场景还是道具——比标签更明确，Agent 也据此判断。">
+                            <Select placeholder="通用参考" options={ASSET_ROLES.map((item) => ({ value: item.value, label: `${item.label} · ${item.hint}` }))} optionRender={(option) => <span>{option.label}</span>} />
                         </Form.Item>
                         <div className="grid gap-4 sm:grid-cols-2">
                             <Form.Item name="source" label="来源">
