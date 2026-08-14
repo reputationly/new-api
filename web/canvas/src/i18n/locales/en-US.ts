@@ -805,6 +805,7 @@ export default {
         image: "Image Studio",
         video: "Video Studio",
         prompts: "Prompt Library",
+        workflows: "Workflows",
         assets: "My Assets",
         config: "Settings",
     },

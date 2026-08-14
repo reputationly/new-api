@@ -784,6 +784,7 @@ export default {
         image: "生图工作台",
         video: "视频创作台",
         prompts: "提示词库",
+        workflows: "创作工作流",
         assets: "我的资产",
         config: "配置",
     },
