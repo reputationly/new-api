@@ -218,11 +218,7 @@ export const CAPABILITIES: CapabilitySpec[] = [
         output: CanvasNodeType.Audio,
         channel: "task",
         taskType: "tts",
-        inputs: [
-            PROMPT_SLOT,
-            { key: "metadata.voice", kind: "audio", required: true, role: "参考音色" },
-            { key: "metadata.emotion_audio", kind: "audio", required: false, role: "情感参考音" },
-        ],
+        inputs: [PROMPT_SLOT, { key: "metadata.voice", kind: "audio", required: true, role: "参考音色" }, { key: "metadata.emotion_audio", kind: "audio", required: false, role: "情感参考音" }],
         params: [
             // 维度次序与 IndexTTS-2 一致:[喜,怒,哀,惧,厌恶,低落,惊喜,平静](体验区 EMOTION_PRESETS)
             {
@@ -396,36 +392,49 @@ export const CAPABILITIES: CapabilitySpec[] = [
         ],
     },
     {
+        // 视频配音(门面 task_type=v2a):上传视频 + 声音描述 → **配好音的视频**。
+        // 2026-07 契约改判:AudioX 的 v2a/tv2a(出 .wav、带扩散采样参数)已下线,该玩法
+        // 移交 LTX-2.3,产物变成视频,标签从音乐词表迁入 VideoCapabilities。因此:
+        //   modality 必须是 video —— 模型配在 VideoModelConfig(见 classic
+        //   playgroundAdmin.constants.js 的 storeIn),按 music 桶查恒为空;
+        //   output 必须是 Video —— 产物不再是音频;
+        //   不再下发 tv2a / audiox_task —— 那是 AudioX 专有。
+        // 请求体只有 { task_type: "v2a", video: "task:<id>" } + 可选 prompt
+        //(classic useVideoGeneration.js:909),故无参数。
+        // key 沿用 "v2a"(稳定标识,不破坏已保存画布);legacyLabels 兼容旧配置。
         key: "v2a",
-        label: "视频配音效",
-        modality: "music",
-        output: CanvasNodeType.Audio,
+        label: "视频配音",
+        legacyLabels: ["视频配乐", "视频配音效"],
+        modality: "video",
+        output: CanvasNodeType.Video,
         channel: "task",
         taskType: "v2a",
-        taskTypeWithPrompt: "tv2a",
-        mirrorTaskTypeAs: "audiox_task",
         inputs: [OPTIONAL_PROMPT_SLOT, { key: "metadata.video", kind: "video", required: true, role: "源视频" }],
-        params: [
-            { key: "metadata.seconds_total", label: "时长(秒)", type: "number", min: 1, max: 60, step: 1, defaultValue: 10, placeholder: "默认 10" },
-            { key: "metadata.num_inference_steps", label: "采样步数", type: "number", min: 50, max: 500, step: 10, defaultValue: 250, placeholder: "默认 250" },
-            { key: "metadata.guidance_scale", label: "引导系数", type: "number", min: 1, max: 20, step: 0.5, defaultValue: 7.0, placeholder: "默认 7.0" },
-            { key: "metadata.seed", label: "随机种子", type: "number", placeholder: "留空随机" },
-        ],
+        params: [],
     },
     {
-        key: "v2m",
-        label: "视频配乐",
-        modality: "music",
-        output: CanvasNodeType.Audio,
+        // 参考生视频(门面 task_type=r2va,MiniMax H3 Ref2VA / Seedance 2.0):
+        // 参考图/视频/音频 → 带语音的视频。输入字段名后端已统一,前端不分支。
+        // 引擎上限 ≤9 图 + ≤3 视频 + ≤3 音频、总计 ≤12(adaptor.go maxR2VA*)。
+        // 与「图生视频」(Bernini r2v)的区别:那条只吃参考图且产物无语音。
+        key: "r2va",
+        label: "参考生视频",
+        modality: "video",
+        output: CanvasNodeType.Video,
         channel: "task",
-        taskType: "v2m",
-        taskTypeWithPrompt: "tv2m",
-        mirrorTaskTypeAs: "audiox_task",
-        inputs: [OPTIONAL_PROMPT_SLOT, { key: "metadata.video", kind: "video", required: true, role: "源视频" }],
+        taskType: "r2va",
+        inputs: [
+            PROMPT_SLOT,
+            { key: "metadata.src_ref_images", kind: "image", required: false, max: 9, role: "参考图(≤9 张)" },
+            { key: "metadata.reference_videos", kind: "video", required: false, max: 3, role: "参考视频(≤3 个)" },
+            { key: "metadata.reference_audios", kind: "audio", required: false, max: 3, role: "参考音频(≤3 个,2~15 秒)" },
+        ],
+        // 引擎要求至少一个视觉参考;音频只做音色/语音参考,单独给音频不成立
+        atLeastOne: { keys: ["metadata.src_ref_images", "metadata.reference_videos"], message: "参考生视频至少需要 1 张参考图或 1 个参考视频" },
         params: [
-            { key: "metadata.seconds_total", label: "时长(秒)", type: "number", min: 1, max: 60, step: 1, defaultValue: 10, placeholder: "默认 10" },
-            { key: "metadata.num_inference_steps", label: "采样步数", type: "number", min: 50, max: 500, step: 10, defaultValue: 250, placeholder: "默认 250" },
-            { key: "metadata.guidance_scale", label: "引导系数", type: "number", min: 1, max: 20, step: 0.5, defaultValue: 7.0, placeholder: "默认 7.0" },
+            // Ref2VA 接受具名 aspect_ratio(不传默认 16:9),与「关键帧」画幅跟随首图不同
+            { key: "size", label: "尺寸", type: "select", options: "sizes" },
+            { key: "seconds", label: "时长(秒)", type: "select", options: "durations" },
             { key: "metadata.seed", label: "随机种子", type: "number", placeholder: "留空随机" },
         ],
     },

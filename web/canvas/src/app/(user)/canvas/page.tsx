@@ -15,7 +15,7 @@ import { CanvasProjectCard } from "./components/canvas-project-card";
 import type { CanvasExportFile } from "./export-types";
 import { useCanvasStore } from "./stores/use-canvas-store";
 import { useCanvasUiStore } from "./stores/use-canvas-ui-store";
-import { CANVAS_TEMPLATES } from "./templates";
+import { usableTemplates } from "./templates";
 import { exportCanvasProjects } from "./utils/canvas-export";
 
 export default function CanvasPage() {
@@ -48,7 +48,7 @@ function CanvasPageInner() {
     const createAndEnter = () => enterProject(createProject(`无限画布 ${projects.length + 1}`));
     // 官方模板:预连线的能力链,模型按当前用户可用集合自动选;选不到时留空由节点面板提示
     const createFromTemplate = async (templateKey: string) => {
-        const template = CANVAS_TEMPLATES.find((item) => item.key === templateKey);
+        const template = usableTemplates().find((item) => item.key === templateKey);
         if (!template) return;
         await useMediaConfigStore
             .getState()
@@ -64,7 +64,7 @@ function CanvasPageInner() {
         const { nodes, connections } = template.build(pickModel);
         enterProject(importProject({ title: template.title, nodes, connections }));
     };
-    const templateMenuItems = CANVAS_TEMPLATES.map((template) => ({
+    const templateMenuItems = usableTemplates().map((template) => ({
         key: template.key,
         label: (
             <div className="max-w-[320px] py-0.5">

@@ -32,7 +32,10 @@ function templateNode(type: CanvasNodeType, position: { x: number; y: number }, 
 
 /** 能力节点:媒体类型 = 能力产物类型,与编辑器 createCapabilityNode 的 metadata 语义一致 */
 function capabilityNode(capabilityKey: string, position: { x: number; y: number }, pickModel: (key: string) => string, extra?: CanvasNodeMetadata): CanvasNodeData {
-    const spec = capabilitySpec(capabilityKey)!;
+    // 能力可能被下线(如 2026-07 的 AudioX v2m)。这里显式抛,配合 usableTemplates()
+    // 的过滤,让模板消失而不是把整个模板列表连带打挂。
+    const spec = capabilitySpec(capabilityKey);
+    if (!spec) throw new Error(`模板引用了已下线的能力：${capabilityKey}`);
     const generationMode = spec.output === CanvasNodeType.Video ? ("video" as const) : spec.output === CanvasNodeType.Audio ? ("audio" as const) : ("image" as const);
     return templateNode(spec.output, position, spec.label, { capability: spec.key, generationMode, model: pickModel(capabilityKey) || undefined, ...extra });
 }
@@ -67,9 +70,9 @@ export const CANVAS_TEMPLATES: CanvasTemplate[] = [
     },
     {
         key: "cyberpunk-score",
-        title: "赛博朋克·夜城短片+自动配乐",
-        description: "文生图 → 图生视频 → 视频配乐:出片后按画面自动生成背景音乐",
-        capabilities: ["t2i", "i2v", "v2m"],
+        title: "赛博朋克·夜城短片+自动配音",
+        description: "文生图 → 图生视频 → 视频配音:出片后按画面自动配上声音",
+        capabilities: ["t2i", "i2v", "v2a"],
         build: (pickModel) => {
             const promptNode = templateNode(CanvasNodeType.Text, { x: 0, y: 150 }, "提示词", {
                 content: "赛博朋克雨夜都市,霓虹灯牌倒映在湿漉漉的街面,飞行器穿梭于摩天楼之间,蒸汽从下水道升起,青紫色调,电影级构图",
@@ -78,13 +81,14 @@ export const CANVAS_TEMPLATES: CanvasTemplate[] = [
             const i2v = capabilityNode("i2v", { x: 920, y: 140 }, pickModel, {
                 prompt: "镜头低空穿行,雨滴划过霓虹光晕,飞行器从头顶掠过,灯牌闪烁",
             });
-            // 有提示词 → tv2m(文本引导配乐);清空提示词则退回 v2m 纯画面配乐
-            const v2m = capabilityNode("v2m", { x: 1440, y: 170 }, pickModel, {
-                prompt: "黑暗合成器浪潮,低音鼓点渐强,冷冽电子氛围",
+            // 视频配音(LTX-2.3):产物是配好音的视频,不是独立音频轨。
+            // 原先这里挂的是 AudioX v2m 视频配乐,该玩法 2026-07 已下线(见 registry v2a 注释)。
+            const v2a = capabilityNode("v2a", { x: 1440, y: 170 }, pickModel, {
+                prompt: "雨声、远处车流、霓虹电流嗡鸣,低沉的城市底噪",
             });
             return {
-                nodes: [promptNode, t2i, i2v, v2m],
-                connections: [connect(promptNode, t2i), connect(t2i, i2v), connect(i2v, v2m)],
+                nodes: [promptNode, t2i, i2v, v2a],
+                connections: [connect(promptNode, t2i), connect(t2i, i2v), connect(i2v, v2a)],
             };
         },
     },
@@ -156,3 +160,8 @@ export const CANVAS_TEMPLATES: CanvasTemplate[] = [
         },
     },
 ];
+
+/** 过滤掉引用了已下线能力的模板:能力表变动时模板静默消失,不打挂模板列表 */
+export function usableTemplates(): CanvasTemplate[] {
+    return CANVAS_TEMPLATES.filter((template) => template.capabilities.every((key) => capabilitySpec(key)));
+}
