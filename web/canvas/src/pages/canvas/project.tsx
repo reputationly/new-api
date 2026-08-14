@@ -251,6 +251,9 @@ function InfiniteCanvasPage() {
     const viewportRef = useRef(viewport);
     const focusAnimRef = useRef<number | null>(null);
     const generateNodeRef = useRef<((nodeId: string, mode: CanvasNodeGenerationMode, prompt: string) => Promise<void>) | null>(null);
+    // BUILTIN_MODE: 在线 Agent 的贴图入口。insertAssistantImage 定义在文件后半段,
+    // bridge 在前面就要拿到回调,故用 ref 转发(与 generateNodeRef 同一模式)。
+    const pasteImageRef = useRef<((file: File) => void) | null>(null);
     const connectingParamsRef = useRef(connectingParams);
     const connectionTargetNodeIdRef = useRef(connectionTargetNodeId);
     const selectionBoxRef = useRef(selectionBox);
@@ -662,6 +665,16 @@ function InfiniteCanvasPage() {
         setSelectedConnectionId,
         setViewport,
         setContextMenu,
+        // BUILTIN_MODE: 在线 Agent 所需的额外通道 —— 会话历史随画布项目持久化,
+        // 选区与贴图要能反向作用回画布
+        sessions: chatSessions,
+        activeSessionId: activeChatId,
+        onSessionsChange: (sessions, activeId) => {
+            setChatSessions(sessions);
+            setActiveChatId(activeId);
+        },
+        onSelectNodeIds: setSelectedNodeIds,
+        onPasteImage: (file: File) => pasteImageRef.current?.(file),
     });
 
     const { pluginHost, renderPluginPanel, buildNodeToolbarItems } = usePluginHost({
@@ -2539,6 +2552,11 @@ function InfiniteCanvasPage() {
     );
     useEffect(() => {
         generateNodeRef.current = handleGenerateNode;
+        pasteImageRef.current = (file: File) => {
+            const reader = new FileReader();
+            reader.onload = () => void insertAssistantImage({ id: `paste-${Date.now()}`, prompt: file.name, dataUrl: String(reader.result || "") });
+            reader.readAsDataURL(file);
+        };
     }, [handleGenerateNode]);
 
     const handleRetryNode = useCallback(

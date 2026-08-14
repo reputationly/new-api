@@ -30,6 +30,7 @@
         "localforage": "^1.10.0",
         "lucide-react": "^1.16.0",
         "motion": "^12.38.0",
+        "mp4box": "^2.4.1",
         "nanoid": "^5.1.11",
         "radix-ui": "^1.4.3",
         "react": "19.2.5",

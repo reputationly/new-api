@@ -90,6 +90,9 @@ export type CanvasNodeMetadata = {
     // 任务产物落 IndexedDB 时的 storageKey:与 storageKey 一致才允许 task: 引用。
     // 节点媒体被上传/替换后 storageKey 变化即失配,防止下游消费旧任务产物。
     taskMediaKey?: string;
+    // 素材语义角色(角色/场景/道具/风格/首帧/音色),从素材库插入时带入。
+    // 决定这份素材挂到下游时担任什么职责,Agent 据此判断该填进哪个输入槽位。
+    assetRole?: string;
 };
 
 export type CanvasNodeData = {

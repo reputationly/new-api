@@ -12,6 +12,20 @@ export function nodeBounds(nodes: CanvasNodeData[]) {
     );
 }
 
+// BUILTIN_MODE: 把一批节点包起来的分组矩形。留白与 snapNodesIntoGroup 的 pad 保持
+// 一致(24),否则新建的组框一放进去就会立刻触发吸附位移。顶部多留一点给标题。
+export const GROUP_PADDING = 24;
+export const GROUP_HEADER = 28;
+
+export function groupRectFor(members: CanvasNodeData[]) {
+    const bounds = nodeBounds(members);
+    return {
+        position: { x: bounds.left - GROUP_PADDING, y: bounds.top - GROUP_PADDING - GROUP_HEADER },
+        width: bounds.right - bounds.left + GROUP_PADDING * 2,
+        height: bounds.bottom - bounds.top + GROUP_PADDING * 2 + GROUP_HEADER,
+    };
+}
+
 export function findGroupDropTarget(movedIds: Set<string>, nodes: CanvasNodeData[]) {
     if (nodes.some((node) => movedIds.has(node.id) && node.type === CanvasNodeType.Group)) return null;
     const movingNodes = nodes.filter((node) => movedIds.has(node.id) && node.type !== CanvasNodeType.Group);

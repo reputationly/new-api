@@ -1,3 +1,4 @@
+import type { CanvasAssistantSession } from "@/types/canvas";
 import { create } from "zustand";
 import i18n from "@/i18n";
 
@@ -53,7 +54,19 @@ export type AgentPendingApproval = {
     permissions?: unknown;
     deciding?: AgentApprovalDecision;
 };
-export type AgentCanvasContext = { snapshot: CanvasAgentSnapshot; applyOps: (ops?: CanvasAgentOp[]) => CanvasAgentSnapshot; undoOps: () => CanvasAgentSnapshot | null; canUndo: boolean };
+export type AgentCanvasContext = {
+    snapshot: CanvasAgentSnapshot;
+    applyOps: (ops?: CanvasAgentOp[]) => CanvasAgentSnapshot;
+    undoOps: () => CanvasAgentSnapshot | null;
+    canUndo: boolean;
+    // BUILTIN_MODE: 在线 Agent(走 /pg)另需的通道 —— 会话历史随画布项目持久化,
+    // 选区与贴图要能反向作用回画布。本地 Codex 面板不用这几项。
+    sessions?: CanvasAssistantSession[];
+    activeSessionId?: string | null;
+    onSessionsChange?: (sessions: CanvasAssistantSession[], activeSessionId: string | null) => void;
+    onSelectNodeIds?: (ids: Set<string>) => void;
+    onPasteImage?: (file: File) => void;
+};
 export type AgentThreadSummary = { id: string; preview: string; name?: string | null; cwd?: string; status?: string; source?: unknown; createdAt?: number; updatedAt?: number };
 export type AgentTokenUsage = { input: number; cached: number; output: number };
 export type AgentBootstrapStatus = { key: string; text: string; detail: string; status: "running" | "ready" | "error" };

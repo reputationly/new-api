@@ -17,16 +17,16 @@ export type AiTextMessage = {
     content: string | Array<{ type: "text"; text: string } | { type: "image_url"; image_url: { url: string } }>;
 };
 
-type ResponseToolCall = {
+export type ResponseToolCall = {
     id: string;
     type: "function";
     function: { name: string; arguments: string };
     thoughtSignature?: string;
 };
 
-type ResponseInputMessage = AiTextMessage | { type: "function_call"; call_id: string; name: string; arguments: string; thoughtSignature?: string } | { role: "tool"; tool_call_id: string; content: string };
+export type ResponseInputMessage = AiTextMessage | { type: "function_call"; call_id: string; name: string; arguments: string; thoughtSignature?: string } | { role: "tool"; tool_call_id: string; content: string };
 
-type ResponseFunctionTool = {
+export type ResponseFunctionTool = {
     type: "function";
     function: {
         name: string;
@@ -36,7 +36,7 @@ type ResponseFunctionTool = {
     };
 };
 
-type ToolResponseResult = {
+export type ToolResponseResult = {
     content: string;
     toolCalls: ResponseToolCall[];
 };
@@ -882,6 +882,33 @@ export async function requestImageQuestion(config: AiConfig, messages: AiTextMes
             ).content || apiText("noContent");
         if (answer === apiText("noContent")) onDelta(answer);
         return answer;
+    } catch (error) {
+        throw new Error(readAxiosError(error, apiText("requestFailed")));
+    }
+}
+
+// BUILTIN_MODE: 上游 v0.7.0「移除仅前端调用 OpenAI responses 接口,统一走 MCP + 本地
+// Codex」时删掉了这个出口。new-api 是 SaaS,用户浏览器里没有 Codex CLI,在线 Agent
+// 只能走 /pg —— 所以恢复它。底层设施(toResponseInput / requestStreamingResponse /
+// parseToolResponse / Gemini 分支)上游都还在,这里只是把出口接回来。
+export async function requestToolResponse(config: AiConfig, messages: ResponseInputMessage[], tools: ResponseFunctionTool[], toolChoice: ToolChoice = "auto", onDelta?: (text: string) => void, options?: RequestOptions): Promise<ToolResponseResult> {
+    const requestConfig = resolveModelRequestConfig(config, config.model || config.textModel);
+    try {
+        if (requestConfig.apiFormat === "gemini") {
+            return await requestGeminiStreamingResponse(requestConfig, toGeminiBody(requestConfig, messages, toGeminiToolOptions(tools, toolChoice)), onDelta, options);
+        }
+        return await requestStreamingResponse(
+            requestConfig,
+            {
+                model: requestConfig.model,
+                input: toResponseInput(withSystemMessage(requestConfig, messages)),
+                tools: tools.map(toResponseTool),
+                tool_choice: toolChoice,
+                parallel_tool_calls: false,
+            },
+            onDelta,
+            options,
+        );
     } catch (error) {
         throw new Error(readAxiosError(error, apiText("requestFailed")));
     }

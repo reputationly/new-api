@@ -4,11 +4,17 @@ import i18n from "@/i18n";
 import { useAgentStore } from "@/stores/use-agent-store";
 import { applyCanvasAgentOps, type CanvasAgentOp, type CanvasAgentSnapshot } from "@/lib/canvas/canvas-agent-ops";
 import type { CanvasNodeGenerationMode } from "@/components/canvas/canvas-node-prompt-panel";
-import type { CanvasConnection, CanvasNodeData, ContextMenuState, ViewportTransform } from "@/types/canvas";
+import type { CanvasAssistantSession, CanvasConnection, CanvasNodeData, ContextMenuState, ViewportTransform } from "@/types/canvas";
 
 type GenerateNodeRef = MutableRefObject<((nodeId: string, mode: CanvasNodeGenerationMode, prompt: string) => Promise<void>) | null>;
 
 type AgentBridgeParams = {
+    // BUILTIN_MODE: 在线 Agent 所需(本地 Codex 面板不用)
+    sessions?: CanvasAssistantSession[];
+    activeSessionId?: string | null;
+    onSessionsChange?: (sessions: CanvasAssistantSession[], activeSessionId: string | null) => void;
+    onSelectNodeIds?: (ids: Set<string>) => void;
+    onPasteImage?: (file: File) => void;
     projectId: string;
     title: string | undefined;
     nodes: CanvasNodeData[];
@@ -90,9 +96,20 @@ export function useAgentBridge(params: AgentBridgeParams) {
     }, [agentUndoSnapshot, projectTitle, projectId]);
 
     useEffect(() => {
-        setAgentCanvasContext({ snapshot: agentSnapshot, applyOps: applyAgentOps, undoOps: undoAgentOps, canUndo: Boolean(agentUndoSnapshot) });
+        setAgentCanvasContext({
+            snapshot: agentSnapshot,
+            applyOps: applyAgentOps,
+            undoOps: undoAgentOps,
+            canUndo: Boolean(agentUndoSnapshot),
+            // BUILTIN_MODE: 在线 Agent 另需的通道
+            sessions: params.sessions,
+            activeSessionId: params.activeSessionId,
+            onSessionsChange: params.onSessionsChange,
+            onSelectNodeIds: params.onSelectNodeIds,
+            onPasteImage: params.onPasteImage,
+        });
         return () => setAgentCanvasContext(null);
-    }, [agentSnapshot, applyAgentOps, agentUndoSnapshot, setAgentCanvasContext, undoAgentOps]);
+    }, [agentSnapshot, applyAgentOps, agentUndoSnapshot, setAgentCanvasContext, undoAgentOps, params.sessions, params.activeSessionId, params.onSessionsChange, params.onSelectNodeIds, params.onPasteImage]);
 
     return { applyAgentOps };
 }
