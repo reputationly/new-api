@@ -20,6 +20,9 @@ import { Select, SelectContent, SelectItem, SelectTrigger } from "@/components/u
 import { CanvasPromptLibrary } from "./canvas-prompt-library";
 import { AgentChatComposer, AgentChatMessage, AgentModeSwitch, AgentPanelTabs, AgentWorkingMessage, type CanvasAgentChatMessage, type CanvasAgentMode } from "./canvas-agent-chat-ui";
 import { CanvasLocalAgentPanel } from "./canvas-local-agent-panel";
+import { buildCanvasAgentSkillPrompt } from "../agent/canvas-agent-skills";
+import { CAPABILITY_AGENT_TOOLS, capabilityNodeOps, concatVideosOps, extractVideoFrameOps, listCapabilitiesResult } from "../agent/capability-tools";
+import { GRAPH_AGENT_TOOLS, arrangeNodesOps, collectWaitTargets, createGroupOps, getNodeResult, summarizeWaitResult, traverseResult } from "../agent/graph-tools";
 import { NODE_DEFAULT_SIZE } from "../constants";
 import { CanvasNodeType, type CanvasAssistantMessage, type CanvasAssistantReference, type CanvasAssistantSession, type CanvasNodeData } from "../types";
 import { useCanvasAgentStore } from "../stores/use-canvas-agent-store";
@@ -27,9 +30,12 @@ import { summarizeCanvasAgentOps, type CanvasAgentOp, type CanvasAgentSnapshot }
 
 export const CANVAS_AGENT_PANEL_MOTION_MS = 500;
 const PANEL_MOTION_SECONDS = CANVAS_AGENT_PANEL_MOTION_MS / 1000;
-const ONLINE_AGENT_MAX_STEPS = 4;
+// 工具循环步数上限。能力编排是多步的(读能力 → 建链 → 等任务 → 接下游),4 步走不完一条
+// 「文生图 → 图生视频 → 超分」的链;放宽到 12 与技能手册里的批次约定一致(见 agent/skills/core.ts §7)。
+const ONLINE_AGENT_MAX_STEPS = 12;
+// 运行环境说明。创作规则由 agent/skills 下的技能手册承载,这里只讲工具协议。
 const ONLINE_AGENT_PROMPT =
-    "你是 Infinite Canvas 网页内置在线画布助手。当前画布 JSON 会随用户消息提供。首轮必须调用工具：只读问题调用 canvas_get_state，需要改动画布时调用和本地 Agent 一致的 infinite-canvas 工具。需要生成内容时直接调用 canvas_generate_text、canvas_generate_image、canvas_generate_video、canvas_generate_audio 或 canvas_create_generation_flow；需要精确批量操作时调用 canvas_apply_ops。不要输出 JSON ops，不要编造执行结果。工具参数涉及已有节点时必须使用当前画布 JSON 中真实存在的 id；缺少必要 id 或用户意图不明确时直接说明需要用户明确选择或说明，不要猜测。工具返回结果后，再根据真实结果回答用户。";
+    "你是网页内置画布助手。当前画布 JSON 会随用户消息提供。首轮必须调用工具：只读问题调用 canvas_get_state。需要生成媒体时，先调用 canvas_list_capabilities 确认能力的输入槽位、参数取值和可用模型，再用 canvas_create_capability_node 建能力节点——这是画布编排的正式方式。canvas_generate_text/image/video/audio 与 canvas_create_generation_flow 是旧的生成配置节点链路，只在用户明确要求或需求落不到任何能力上时才用。需要精确批量操作时调用 canvas_apply_ops。不要输出 JSON ops，不要编造执行结果。工具参数涉及已有节点时必须使用当前画布 JSON 中真实存在的 id；缺少必要 id 或用户意图不明确时直接说明，不要猜测。工具返回结果后，再根据真实结果回答用户。";
 const JSON_RECORD_SCHEMA = { type: "object", additionalProperties: true };
 const POSITION_SCHEMA = { type: "object", properties: { x: { type: "number" }, y: { type: "number" } }, required: ["x", "y"], additionalProperties: false };
 const VIEWPORT_SCHEMA = { type: "object", properties: { x: { type: "number" }, y: { type: "number" }, k: { type: "number" } }, required: ["x", "y", "k"], additionalProperties: false };
@@ -114,12 +120,17 @@ const ONLINE_AGENT_TOOLS: ResponseFunctionTool[] = [
     toolDefinition("canvas_select_nodes", "设置当前选中节点。", { ids: { type: "array", items: { type: "string" } } }, ["ids"]),
     toolDefinition("canvas_set_viewport", "调整画布视口。", { viewport: VIEWPORT_SCHEMA }, ["viewport"]),
     toolDefinition("canvas_run_generation", "触发指定节点生成，通常用于配置节点或文本/图片/视频/音频节点。", { nodeId: { type: "string" }, mode: GENERATION_MODE_SCHEMA, prompt: { type: "string" } }, ["nodeId"]),
+    // 能力编排:让 Agent 够得着注册表里的 20 个能力标签,而不是只有旧的四种 mode
+    ...CAPABILITY_AGENT_TOOLS,
+    // 图结构:定向上下游遍历(省 token)、拓扑排版、等待异步任务落地
+    ...GRAPH_AGENT_TOOLS,
 ];
 type OnlineAgentTab = "setup" | "chat" | "history" | "log";
 type OnlineAgentLog = { id: string; time: string; title: string; data?: unknown };
 type OnlineAgentLogContext = { model: string; running: boolean; confirmTools: boolean; messages: number; nodes: number; connections: number };
 type OnlineLoopContext = { step: number };
-type OnlineToolResult = { ok: true; message: string; data?: unknown } | { ok: false; message: string };
+// 失败分支也带 data:等待超时/部分失败时,Agent 需要逐节点明细才能决定重试哪个、放弃哪个
+type OnlineToolResult = { ok: true; message: string; data?: unknown } | { ok: false; message: string; data?: unknown };
 type OnlineExecutedToolCall = { toolCallId: string; name: string; result: OnlineToolResult };
 type PendingOnlineToolContext = { messages: ResponseInputMessage[]; toolCalls: ResponseToolCall[]; assistantId: string; step: number };
 
@@ -311,7 +322,7 @@ export function CanvasAssistantPanel({ nodes, selectedNodeIds, snapshot, session
     };
 
     const continueOnlineToolLoop = async (sessionId: string, assistantId: string, messages: ResponseInputMessage[], result: { content: string; toolCalls: ResponseToolCall[] }, step: number) => {
-        const toolResults = executeOnlineToolCalls(result.toolCalls);
+        const toolResults = await executeOnlineToolCalls(result.toolCalls);
         addOnlineLog("工具执行结果", toolResults);
         appendMessage(sessionId, {
             id: nanoid(),
@@ -368,7 +379,25 @@ export function CanvasAssistantPanel({ nodes, selectedNodeIds, snapshot, session
         return { changed, ops, ranGeneration, noopReason, before: JSON.parse(before), after: JSON.parse(snapshotSignature(next)) };
     };
 
-    const executeOnlineTool = (name: string, args: Record<string, unknown>): OnlineToolResult => {
+    // 等异步生成任务落地。snapshotRef 由 useEffect 从 snapshot prop 同步(见上方),
+    // 节点状态变化会传导到这里,所以轮询它即可观察到任务完成。
+    const waitGeneration = async (nodeIds: string[], timeoutSeconds: number): Promise<OnlineToolResult> => {
+        const deadline = Date.now() + Math.min(Math.max(timeoutSeconds, 5), 600) * 1000;
+        for (;;) {
+            const { pending, settled } = collectWaitTargets(snapshotRef.current, nodeIds);
+            if (!pending.length) {
+                const failed = settled.some((item) => item.status === "error");
+                return { ok: !failed, message: summarizeWaitResult(settled, false), data: { nodes: settled } };
+            }
+            if (Date.now() >= deadline) {
+                return { ok: false, message: summarizeWaitResult([...settled, ...pending], true), data: { nodes: [...settled, ...pending] } };
+            }
+            await new Promise((resolve) => setTimeout(resolve, 1500));
+        }
+    };
+
+    // 异步:截帧要读视频、seek、解码,拿不到同步结果
+    const executeOnlineTool = async (name: string, args: Record<string, unknown>): Promise<OnlineToolResult> => {
         const current = snapshotRef.current;
         try {
             if (name === "canvas_get_state") return { ok: true, message: describeCanvasSnapshot(current), data: compactSnapshot(current) };
@@ -376,6 +405,25 @@ export function CanvasAssistantPanel({ nodes, selectedNodeIds, snapshot, session
             if (name === "canvas_get_selection") {
                 const ids = new Set(current.selectedNodeIds || []);
                 return { ok: true, message: `当前选中 ${ids.size} 个节点。`, data: { nodes: compactSnapshot({ ...current, nodes: current.nodes.filter((node) => ids.has(node.id)) }).nodes } };
+            }
+            if (name === "canvas_list_capabilities") return listCapabilitiesResult(stringOptional(args.capability));
+            if (name === "canvas_get_node") return getNodeResult(current, requireString(args.nodeId, "nodeId"));
+            if (name === "canvas_get_upstream_nodes") return traverseResult(current, requireString(args.nodeId, "nodeId"), "up", numberOr(args.depth, 1));
+            if (name === "canvas_get_downstream_nodes") return traverseResult(current, requireString(args.nodeId, "nodeId"), "down", numberOr(args.depth, 1));
+            if (name === "canvas_get_connected_nodes") return traverseResult(current, requireString(args.nodeId, "nodeId"), "both");
+            if (name === "canvas_wait_generation") return await waitGeneration(requireStringArray(args.nodeIds, "nodeIds"), numberOr(args.timeoutSeconds, 180));
+            if (name === "canvas_concat_videos") {
+                const ops = await concatVideosOps(args, current);
+                const result = executeOps(ops);
+                const created = ops.find((op) => op.type === "add_node");
+                return { ok: result.changed, message: result.changed ? `已拼接成片，节点 ${created?.id}` : result.noopReason, data: { nodeId: created?.id, ...result } };
+            }
+            if (name === "canvas_extract_video_frame") {
+                // 帧数据要先解码再上传,拿到 dataUrl 才能组 add_node,所以不走同步 ops 分支
+                const ops = await extractVideoFrameOps(args, current);
+                const result = executeOps(ops);
+                const created = ops.find((op) => op.type === "add_node");
+                return { ok: result.changed, message: result.changed ? `已截帧并创建图片节点 ${created?.id}` : result.noopReason, data: { nodeId: created?.id, ...result } };
             }
             const ops = onlineToolToOps(name, args, current, effectiveConfig);
             const result = executeOps(ops);
@@ -385,27 +433,28 @@ export function CanvasAssistantPanel({ nodes, selectedNodeIds, snapshot, session
         }
     };
 
-    const executeOnlineToolCall = (toolCall: ResponseToolCall): OnlineExecutedToolCall => {
+    const executeOnlineToolCall = async (toolCall: ResponseToolCall): Promise<OnlineExecutedToolCall> => {
         try {
-            const result = executeOnlineTool(toolCall.function.name, parseToolArguments(toolCall.function.arguments));
+            const result = await executeOnlineTool(toolCall.function.name, parseToolArguments(toolCall.function.arguments));
             return { toolCallId: toolCall.id, name: toolCall.function.name, result };
         } catch (error) {
             return { toolCallId: toolCall.id, name: toolCall.function.name, result: { ok: false, message: error instanceof Error ? error.message : "工具参数错误" } };
         }
     };
 
-    const executeOnlineToolCalls = (toolCalls: ResponseToolCall[]) => {
+    // 顺序执行(不是 Promise.all):工具之间可能有依赖,且失败要能中断后续调用
+    const executeOnlineToolCalls = async (toolCalls: ResponseToolCall[]) => {
         const results: OnlineExecutedToolCall[] = [];
         let stopped = false;
-        toolCalls.forEach((toolCall) => {
+        for (const toolCall of toolCalls) {
             if (stopped) {
                 results.push({ toolCallId: toolCall.id, name: toolCall.function.name, result: { ok: false, message: "前一个工具调用失败，未继续执行。" } });
-                return;
+                continue;
             }
-            const result = executeOnlineToolCall(toolCall);
+            const result = await executeOnlineToolCall(toolCall);
             results.push(result);
             if (!result.result.ok) stopped = true;
-        });
+        }
         return results;
     };
 
@@ -425,7 +474,7 @@ export function CanvasAssistantPanel({ nodes, selectedNodeIds, snapshot, session
         }
         try {
             setIsRunning(true);
-            const results = executeOnlineToolCalls(toolCalls);
+            const results = await executeOnlineToolCalls(toolCalls);
             addOnlineLog("工具执行结果", results);
             upsertMessage(session.id, { id: messageId, role: "tool", title: "工具执行完成", text: results.map((item) => toolResultText(item.result)).join("\n"), detail: { ...detail, results, status: "completed" } });
             pendingToolContextRef.current.delete(messageId);
@@ -982,6 +1031,9 @@ function onlineToolToOps(name: string, input: Record<string, unknown>, snapshot:
     if (name === "canvas_select_nodes") return [{ type: "select_nodes", ids: requireStringArray(input.ids, "ids") }];
     if (name === "canvas_set_viewport") return [{ type: "set_viewport", viewport: requireViewport(input.viewport) }];
     if (name === "canvas_run_generation") return [runGenerationOp(requireString(input.nodeId, "nodeId"), generationMode(input.mode), stringOptional(input.prompt))];
+    if (name === "canvas_create_capability_node") return capabilityNodeOps(input, snapshot, nextCanvasX(snapshot));
+    if (name === "canvas_arrange_nodes") return arrangeNodesOps(input, snapshot);
+    if (name === "canvas_create_group") return createGroupOps(input, snapshot);
     throw new Error(`不支持的工具：${name}`);
 }
 
@@ -1265,7 +1317,8 @@ function buildAssistantReferences(nodes: CanvasNodeData[], selectedNodeIds: Set<
 async function buildToolAgentMessages(snapshot: CanvasAgentSnapshot, history: CanvasAssistantMessage[], userMessage: CanvasAssistantMessage): Promise<ResponseInputMessage[]> {
     const refs = userMessage.references || [];
     return [
-        { role: "system", content: ONLINE_AGENT_PROMPT },
+        // 按本轮意图挂载技能手册(core + 命中的领域技能),而不是一段通用提示词
+        { role: "system", content: `${ONLINE_AGENT_PROMPT}\n\n${buildCanvasAgentSkillPrompt(userMessage.text, snapshot.nodes, snapshot.selectedNodeIds)}` },
         ...history
             .filter((message): message is CanvasAssistantMessage & { role: "user" | "assistant" | "system" } => message.role === "user" || message.role === "assistant" || message.role === "system")
             .slice(-8)
@@ -1304,6 +1357,7 @@ function compactMetadata(metadata: CanvasNodeData["metadata"]) {
         content: String(metadata?.content || "").slice(0, 500),
         prompt: String(metadata?.prompt || metadata?.composerContent || "").slice(0, 500),
         status: metadata?.status,
+        assetRole: metadata?.assetRole,
         generationMode: metadata?.generationMode,
         model: metadata?.model,
         size: metadata?.size,
