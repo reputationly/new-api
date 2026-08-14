@@ -73,6 +73,10 @@ import {
     sourceNodeReferenceImages,
 } from "@/lib/canvas/canvas-generation-helpers";
 import { getNodeDefinition, isBuiltinNodeType as isBuiltinType, useNodeRegistryVersion } from "@/lib/canvas/node-registry";
+import { appendCameraPrompt } from "@/lib/canvas/canvas-camera";
+import { extractWorkflow, instantiateWorkflow, stripStaleGroupIds, type CanvasWorkflow } from "@/lib/canvas/canvas-workflow";
+import { CanvasWorkflowModal } from "@/components/canvas/canvas-workflow-modal";
+import { useWorkflowStore } from "@/stores/use-workflow-store";
 import { registerBuiltinNodes } from "@/components/canvas/nodes/builtin-nodes";
 import { CanvasRefreshShell } from "@/components/canvas/canvas-refresh-shell";
 import { CanvasTopBar } from "@/components/canvas/canvas-top-bar";
@@ -222,6 +226,7 @@ function InfiniteCanvasPage() {
     const [backgroundMode, setBackgroundMode] = useState<CanvasBackgroundMode>("lines");
     const [showImageInfo, setShowImageInfo] = useState(false);
     const [clearConfirmOpen, setClearConfirmOpen] = useState(false);
+    const [workflowOpen, setWorkflowOpen] = useState(false);
     const [assetPickerOpen, setAssetPickerOpen] = useState(false);
     const [projectLoaded, setProjectLoaded] = useState(false);
     const [toolbarNodeId, setToolbarNodeId] = useState<string | null>(null);
@@ -483,6 +488,37 @@ function InfiniteCanvasPage() {
         const rect = containerRef.current?.getBoundingClientRect();
         return screenToCanvas((rect?.left || 0) + (rect?.width || size.width) / 2, (rect?.top || 0) + (rect?.height || size.height) / 2);
     }, [screenToCanvas, size.height, size.width]);
+
+    // BUILTIN_MODE: 工作流 —— 存的是「怎么做」(结构/能力/参数/提示词),不含已生成的产物
+    const saveSelectionAsWorkflow = useCallback(
+        (title: string, description: string) => {
+            const picked = nodesRef.current.filter((node) => selectedNodeIdsRef.current.has(node.id));
+            try {
+                useWorkflowStore.getState().saveWorkflow(extractWorkflow(picked, connectionsRef.current, title, description));
+                message.success(`已保存工作流「${title.trim()}」`);
+            } catch (error) {
+                message.error(error instanceof Error ? error.message : "保存失败");
+            }
+        },
+        [message],
+    );
+
+    const insertWorkflow = useCallback(
+        (workflow: CanvasWorkflow, values: Record<string, string>) => {
+            const { nodes: fresh, connections: freshConnections } = instantiateWorkflow(workflow, getCanvasCenter(), values);
+            // 旧 groupId 指向的是导出时那张画布里的分组,插回来必须清掉,
+            // 由 findContainingGroupId 按几何包含在新画布上重算归属。
+            const cleaned = stripStaleGroupIds(fresh);
+            setNodes((prev) => {
+                const merged = [...prev, ...cleaned];
+                return merged.map((node) => (cleaned.some((item) => item.id === node.id) ? { ...node, metadata: { ...node.metadata, groupId: findContainingGroupId(node, merged) } } : node));
+            });
+            setConnections((prev) => [...prev, ...freshConnections]);
+            setSelectedNodeIds(new Set(cleaned.map((node) => node.id)));
+            message.success(`已插入「${workflow.title}」(${cleaned.length} 个节点)`);
+        },
+        [getCanvasCenter, message],
+    );
 
     const setConnecting = useCallback((next: ConnectionHandle | null) => {
         connectingParamsRef.current = next;
@@ -2105,6 +2141,9 @@ function InfiniteCanvasPage() {
                 buildNodeGenerationContext(nodeId, nodesRef.current, connectionsRef.current, editingTextNode ? t("canvas.projectPage.editTextPrompt", { source: sourceTextContent, prompt }) : prompt),
             );
             const effectivePrompt = generationContext.prompt.trim();
+            // 摄像机参数只拼进上游请求体,不写回节点:节点里 metadata.prompt 保持用户原文,
+            // 否则重试/续接会把镜头描述反复叠加进提示词。
+            const requestPrompt = mode === "image" || mode === "video" ? appendCameraPrompt(effectivePrompt, sourceNode?.metadata?.camera) : effectivePrompt;
             if (runController.signal.aborted) {
                 finishGenerationRequest(nodeId, runController);
                 setRunningNodeId(null);
@@ -2186,6 +2225,8 @@ function InfiniteCanvasPage() {
                     // 参数收敛进模型白名单(尺寸/时长等硬约束在此兜底)
                     const entry = paramOptionsForModel(useMediaConfigStore.getState().configs, taskCapability.modality, model);
                     const params: CapabilityParams = conformParamsToEntry(taskCapability, sourceNode.metadata?.capabilityParams || {}, entry);
+                    // 同上:校验与落盘用 capPrompt,发给上游的用 capRequestPrompt
+                    const capRequestPrompt = taskCapability.modality === "image" || taskCapability.modality === "video" ? appendCameraPrompt(capPrompt, sourceNode.metadata?.camera) : capPrompt;
                     const problems = validateCapabilityInputs(taskCapability, capPrompt, slots, params);
                     if (problems.length) {
                         failNode(problems.join("；"));
@@ -2198,7 +2239,7 @@ function InfiniteCanvasPage() {
                     try {
                         const result = await runTaskCapability(taskCapability, {
                             model,
-                            prompt: capPrompt,
+                            prompt: capRequestPrompt,
                             params,
                             slots,
                             group: sourceNode.metadata?.group,
@@ -2299,8 +2340,8 @@ function InfiniteCanvasPage() {
                         imageIds.map(async (imageId) => {
                             try {
                                 const image = referenceImages.length
-                                    ? await requestEdit({ ...generationConfig, count: "1" }, effectivePrompt, referenceImages, undefined, { signal: controller.signal }).then((items) => items[0])
-                                    : await requestGeneration({ ...generationConfig, count: "1" }, effectivePrompt, { signal: controller.signal }).then((items) => items[0]);
+                                    ? await requestEdit({ ...generationConfig, count: "1" }, requestPrompt, referenceImages, undefined, { signal: controller.signal }).then((items) => items[0])
+                                    : await requestGeneration({ ...generationConfig, count: "1" }, requestPrompt, { signal: controller.signal }).then((items) => items[0]);
                                 const uploaded = await uploadImage(image.dataUrl);
                                 const imageSize = fitNodeSize(uploaded.width, uploaded.height, imageConfig.width, imageConfig.height);
                                 const item: CanvasNodeImage = {
@@ -2408,7 +2449,7 @@ function InfiniteCanvasPage() {
                     const controller = startGenerationRequest(videoId, nodeId, nodeId, runController);
                     try {
                         const video = await storeGeneratedVideo(
-                            await requestVideoGeneration(generationConfig, effectivePrompt, generationContext.referenceImages, generationContext.referenceVideos, generationContext.referenceAudios, { signal: controller.signal }),
+                            await requestVideoGeneration(generationConfig, requestPrompt, generationContext.referenceImages, generationContext.referenceVideos, generationContext.referenceAudios, { signal: controller.signal }),
                         );
                         const videoSize = fitNodeSize(video.width || spec.width, video.height || spec.height, VIDEO_NODE_MAX_WIDTH, VIDEO_NODE_MAX_HEIGHT);
                         setNodes((prev) =>
@@ -2586,6 +2627,8 @@ function InfiniteCanvasPage() {
                 message.warning(t("canvas.projectPage.retryPromptMissing"));
                 return;
             }
+            // 重试同样只在请求体里带摄像机参数;文本与音频没有镜头语言,原样透传
+            const retryRequestPrompt = node.type === CanvasNodeType.Text || node.type === CanvasNodeType.Audio ? prompt : appendCameraPrompt(prompt, sourceNode.metadata?.camera || node.metadata?.camera);
             const generationType = savedImageMetadata?.generationType;
             const useReferenceImages = generationType ? generationType === "edit" : Boolean(context?.referenceImages.length);
             const retryReferenceImages =
@@ -2646,7 +2689,7 @@ function InfiniteCanvasPage() {
                     return;
                 }
                 if (node.type === CanvasNodeType.Video) {
-                    const video = await storeGeneratedVideo(await requestVideoGeneration(generationConfig, prompt, retryImages, context?.referenceVideos || [], context?.referenceAudios || [], { signal: controller.signal }));
+                    const video = await storeGeneratedVideo(await requestVideoGeneration(generationConfig, retryRequestPrompt, retryImages, context?.referenceVideos || [], context?.referenceAudios || [], { signal: controller.signal }));
                     const videoSize = fitNodeSize(video.width || node.width, video.height || node.height, VIDEO_NODE_MAX_WIDTH, VIDEO_NODE_MAX_HEIGHT);
                     setNodes((prev) =>
                         prev.map((item) =>
@@ -2674,14 +2717,14 @@ function InfiniteCanvasPage() {
                     return;
                 }
                 if (node.type === CanvasNodeType.Audio) {
-                    const audio = await storeGeneratedAudio(await requestAudioGeneration(generationConfig, prompt, { signal: controller.signal }), generationConfig.audioFormat);
+                    const audio = await storeGeneratedAudio(await requestAudioGeneration(generationConfig, retryRequestPrompt, { signal: controller.signal }), generationConfig.audioFormat);
                     setNodes((prev) => prev.map((item) => (item.id === node.id ? { ...item, metadata: { ...item.metadata, ...audioMetadata(audio), prompt, ...buildAudioGenerationMetadata(generationConfig) } } : item)));
                     return;
                 }
 
                 const image = useReferenceImages
-                    ? await requestEdit(generationConfig, prompt, retryImages, undefined, { signal: controller.signal }).then((items) => items[0])
-                    : await requestGeneration(generationConfig, prompt, { signal: controller.signal }).then((items) => items[0]);
+                    ? await requestEdit(generationConfig, retryRequestPrompt, retryImages, undefined, { signal: controller.signal }).then((items) => items[0])
+                    : await requestGeneration(generationConfig, retryRequestPrompt, { signal: controller.signal }).then((items) => items[0]);
                 const uploadedImage = await uploadImage(image.dataUrl);
                 const imageConfig = NODE_DEFAULT_SIZE[CanvasNodeType.Image];
                 const retryImage: CanvasNodeImage = {
@@ -3137,6 +3180,7 @@ function InfiniteCanvasPage() {
                     onAddConfig={() => createNode(CanvasNodeType.Config)}
                     onAddCapability={createCapabilityNode}
                     onAddGroup={() => createNode(CanvasNodeType.Group)}
+                    onOpenWorkflows={() => setWorkflowOpen(true)}
                     onAddExtensionNode={(type) => createNode(type)}
                     onUndo={undoCanvas}
                     onRedo={redoCanvas}
@@ -3147,6 +3191,8 @@ function InfiniteCanvasPage() {
                     onBackgroundModeChange={setBackgroundMode}
                     onShowImageInfoChange={setShowImageInfo}
                 />
+
+                <CanvasWorkflowModal open={workflowOpen} selectedCount={selectedNodeIds.size} onClose={() => setWorkflowOpen(false)} onSave={saveSelectionAsWorkflow} onInsert={insertWorkflow} />
 
                 {isMiniMapOpen ? <Minimap nodes={nodes} viewport={viewport} viewportSize={size} onViewportChange={setViewport} /> : null}
 

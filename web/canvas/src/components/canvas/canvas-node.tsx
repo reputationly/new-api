@@ -481,18 +481,21 @@ const nodeContentRenderers = {
 
 function GroupNodeContent({ node, theme, groupChildCount }: NodeContentRendererProps) {
     const { t } = useTranslation();
+    // BUILTIN_MODE: 上游固定显示「分组」并忽略 node.title,但分组的意义就在于命名
+    // (「主角参考」「第二幕」),Agent 建组时也会给名字,这里改为有名字就显示名字。
+    const groupColor = node.metadata?.groupColor;
     return (
         <div className="pointer-events-none flex h-full w-full flex-col p-4">
             <div className="flex items-center gap-2 text-sm font-semibold" style={{ color: theme.node.text }}>
-                <span className="grid size-8 place-items-center rounded-xl" style={{ background: theme.toolbar.activeBg, color: theme.node.muted }}>
+                <span className="grid size-8 place-items-center rounded-xl" style={{ background: groupColor || theme.toolbar.activeBg, color: groupColor ? "#fff" : theme.node.muted }}>
                     <Group className="size-4" />
                 </span>
-                <span>{t("canvas.node.group")}</span>
+                <span className="truncate">{node.title?.trim() || t("canvas.node.group")}</span>
                 <span className="ml-auto rounded-full px-2 py-1 text-[11px] font-medium" style={{ background: theme.node.fill, color: theme.node.muted }}>
                     {t("canvas.node.nodeCount", { count: groupChildCount })}
                 </span>
             </div>
-            <div className="mt-3 flex-1 rounded-2xl border border-dashed" style={{ borderColor: theme.node.stroke, background: `${theme.node.fill}55` }} />
+            <div className="mt-3 flex-1 rounded-2xl border border-dashed" style={{ borderColor: groupColor || theme.node.stroke, background: `${theme.node.fill}55` }} />
         </div>
     );
 }

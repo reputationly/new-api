@@ -10,6 +10,7 @@ import { canvasThemes } from "@/lib/canvas-theme";
 import { useThemeStore } from "@/stores/use-theme-store";
 import { CanvasCapabilitySettingsPopover, type UpstreamMediaNode } from "./canvas-capability-settings-popover";
 import { CanvasImageSettingsPopover } from "./canvas-image-settings-popover";
+import { CanvasCameraControl } from "@/components/canvas/canvas-camera-control";
 import { CanvasPromptLibrary } from "./canvas-prompt-library";
 import { CanvasAudioSettingsPopover, type CanvasAudioSettingKey } from "./canvas-audio-settings-popover";
 import { CanvasPromptChipInput } from "./canvas-prompt-chip-input";
@@ -56,6 +57,10 @@ export function CanvasNodePromptPanel({ node, isRunning, onPromptChange, onConfi
         setPrompt(node.metadata?.composerContent ?? node.metadata?.prompt ?? "");
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [node.id]);
+
+    // 摄像机只对出图/出视频的节点有意义:音频与纯文本没有镜头语言,能力节点按其 modality 判断
+    const supportsCamera = capSpec ? capSpec.modality === "image" || capSpec.modality === "video" : mode === "image" || mode === "video";
+    const cameraControl = supportsCamera ? <CanvasCameraControl value={node.metadata?.camera} buttonClassName="!h-10 !max-w-[150px] !justify-start !rounded-full !px-3" onChange={(camera) => onConfigChange(node.id, { camera })} /> : null;
 
     const updatePrompt = (value: string) => {
         setPrompt(value);
@@ -110,7 +115,10 @@ export function CanvasNodePromptPanel({ node, isRunning, onPromptChange, onConfi
                     {/* BUILTIN_MODE: 能力节点由注册表驱动模型下拉与参数面板,不走上游按 mode
                         分支的那套(mode 只有粗粒度四类,能力有 19 种且各有输入槽位与参数白名单) */}
                     {capSpec ? (
-                        <CanvasCapabilitySettingsPopover node={node} spec={capSpec} onConfigChange={onConfigChange} upstreamMedia={upstreamMedia} />
+                        <>
+                            <CanvasCapabilitySettingsPopover node={node} spec={capSpec} onConfigChange={onConfigChange} upstreamMedia={upstreamMedia} />
+                            {cameraControl}
+                        </>
                     ) : mode === "image" ? (
                         <>
                             <ModelPicker config={config} value={config.model} onChange={(model) => onConfigChange(node.id, { model })} capability="image" onMissingConfig={() => openConfigDialog(true)} className="max-w-[190px]" />
@@ -122,11 +130,13 @@ export function CanvasNodePromptPanel({ node, isRunning, onPromptChange, onConfi
                                 onMissingConfig={() => openConfigDialog(true)}
                                 onOpenChange={onImageSettingsOpenChange}
                             />
+                            {cameraControl}
                         </>
                     ) : mode === "video" ? (
                         <>
                             <ModelPicker config={config} value={config.model} onChange={(model) => onConfigChange(node.id, { model })} capability="video" onMissingConfig={() => openConfigDialog(true)} className="max-w-[190px]" />
                             <CanvasVideoSettingsPopover config={config} buttonClassName="!h-10 !max-w-[170px] !justify-start !rounded-full !px-3" onConfigChange={(key, value) => onConfigChange(node.id, videoConfigPatch(key, value))} />
+                            {cameraControl}
                         </>
                     ) : mode === "audio" ? (
                         <>

@@ -26,6 +26,20 @@ export type CanvasNodeStatus = "idle" | "success" | "loading" | "error" | "stall
 export type CanvasGenerationMode = "text" | "image" | "video" | "audio";
 export type CanvasImageGenerationType = "generation" | "edit";
 
+// 节点级摄像机配置:机身/镜头/焦距/光圈。启用后由 appendCameraPrompt() 在构造上游
+// 请求时拼进提示词,不写回 metadata.prompt——节点里用户看到和编辑的提示词保持干净。
+export type CameraControlOptions = {
+    enabled: boolean;
+    /** CAMERA_PROFILES[].id */
+    camera: string;
+    /** LENS_PROFILES[].id */
+    lens: string;
+    /** 焦距(mm),取值见 FOCAL_LENGTHS */
+    focalLength: number;
+    /** 光圈 f 值,取值见 APERTURES */
+    aperture: number;
+};
+
 export type CanvasNodeImage = {
     id: string;
     status: CanvasNodeStatus;
@@ -72,6 +86,8 @@ export type CanvasNodeMetadata = {
     bytes?: number;
     durationMs?: number;
     groupId?: string;
+    // 分组节点自身的配色(仅 CanvasNodeType.Group 使用),缺省用主题色
+    groupColor?: string;
     interactive?: boolean; // Plugin node interaction/move state; see CanvasNodeDefinition.interactionToggle.
 
     // ── BUILTIN_MODE: 能力编排(见 docs/canvas-orchestration-design.md) ──
@@ -90,6 +106,8 @@ export type CanvasNodeMetadata = {
     // 任务产物落 IndexedDB 时的 storageKey:与 storageKey 一致才允许 task: 引用。
     // 节点媒体被上传/替换后 storageKey 变化即失配,防止下游消费旧任务产物。
     taskMediaKey?: string;
+    // 摄像机参数(机身/镜头/焦距/光圈);仅图片与视频能力使用
+    camera?: CameraControlOptions;
     // 素材语义角色(角色/场景/道具/风格/首帧/音色),从素材库插入时带入。
     // 决定这份素材挂到下游时担任什么职责,Agent 据此判断该填进哪个输入槽位。
     assetRole?: string;
