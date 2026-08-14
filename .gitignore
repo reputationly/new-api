@@ -47,8 +47,8 @@ tmp/
 build-errors.log
 
 # 画布(vendored infinite-canvas)构建产物
-web/canvas/out
-web/canvas/.next
+web/canvas/dist
+
 web/canvas/node_modules
 web/canvas/tsconfig.tsbuildinfo
 

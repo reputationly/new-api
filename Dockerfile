@@ -25,7 +25,7 @@ COPY web/canvas/package.json .
 COPY web/canvas/bun.lock .
 RUN bun install
 COPY ./web/canvas .
-RUN NEXT_PUBLIC_BUILTIN_MODE=1 bun run build
+RUN VITE_BUILTIN_MODE=1 VITE_BASE=/canvas-app/ bun run build
 
 FROM oven/bun:1@sha256:0733e50325078969732ebe3b15ce4c4be5082f18c4ac1a0f0ca4839c2e4e42a7 AS builder-mobile
 
@@ -55,7 +55,7 @@ RUN go mod download
 COPY . .
 COPY --from=builder /build/dist ./web/default/dist
 COPY --from=builder-classic /build/dist ./web/classic/dist
-COPY --from=builder-canvas /build/out ./web/canvas/out
+COPY --from=builder-canvas /build/dist ./web/canvas/dist
 COPY --from=builder-mobile /build/web/mobile/dist ./web/mobile/dist
 RUN go build -ldflags "-s -w -X 'github.com/QuantumNous/new-api/common.Version=$(cat VERSION)'" -o new-api
 

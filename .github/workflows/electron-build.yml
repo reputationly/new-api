@@ -57,7 +57,7 @@ jobs:
         run: |
           cd web/canvas
           bun install
-          NEXT_PUBLIC_BUILTIN_MODE=1 bun run build
+          VITE_BUILTIN_MODE=1 VITE_BASE=/canvas-app/ bun run build
           cd ../..
 
       # - name: Build Go binary (macos/Linux)

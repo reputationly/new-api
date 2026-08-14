@@ -3,6 +3,7 @@ package router
 import (
 	"io/fs"
 	"net/http"
+	"path"
 	"strings"
 
 	"github.com/QuantumNous/new-api/middleware"
@@ -17,25 +18,32 @@ import (
 // 使用显式 catch-all 路由(而非引擎级中间件),保证 CanvasStaticAuth 先于
 // 静态伺服执行,且不受 gin trailing-slash 内部重定向影响。
 func SetCanvasRouter(router *gin.Engine, assets ThemeAssets) {
-	canvasFS, err := fs.Sub(assets.CanvasBuildFS, "web/canvas/out")
+	canvasFS, err := fs.Sub(assets.CanvasBuildFS, "web/canvas/dist")
 	if err != nil {
 		panic(err)
 	}
 	httpFS := http.FS(canvasFS)
 	fileServer := http.StripPrefix("/canvas-app", http.FileServer(httpFS))
 
-	// 静态导出无 SPA fallback 语义:未知深链返回导出的 404.html,
-	// 不回落到画布 index.html 以免路由错乱。
-	notFoundPage, _ := assets.CanvasBuildFS.ReadFile("web/canvas/out/404.html")
+	// 画布是 Vite 单页应用(react-router createBrowserRouter),路由在客户端。
+	// /canvas-app/canvas/<id> 这类深链在磁盘上没有对应文件,必须回落到 index.html
+	// 交给前端路由,否则用户在项目页刷新就 404。
+	indexPage, err := assets.CanvasBuildFS.ReadFile("web/canvas/dist/index.html")
+	if err != nil {
+		panic(err)
+	}
 
 	handler := func(c *gin.Context) {
 		c.Set(middleware.RouteTagKey, "web")
 		if !canvasFileExists(httpFS, strings.TrimPrefix(c.Request.URL.Path, "/canvas-app")) {
-			if len(notFoundPage) > 0 {
-				c.Data(http.StatusNotFound, "text/html; charset=utf-8", notFoundPage)
-			} else {
+			// 只有真实静态资源(带扩展名的 js/css/图片等)缺失才算 404;其余一律当作
+			// 前端路由。否则拼错的资源路径会返回一份 HTML,浏览器把 HTML 当 JS 解析,
+			// 报错信息会非常难查。
+			if path.Ext(c.Request.URL.Path) != "" {
 				c.Status(http.StatusNotFound)
+				return
 			}
+			c.Data(http.StatusOK, "text/html; charset=utf-8", indexPage)
 			return
 		}
 		fileServer.ServeHTTP(c.Writer, c.Request)

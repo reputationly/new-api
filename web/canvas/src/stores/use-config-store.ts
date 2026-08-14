@@ -1,11 +1,19 @@
-"use client";
-
 import { useMemo } from "react";
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
 import { nanoid } from "nanoid";
 
-export type ApiCallFormat = "openai" | "gemini";
+import i18n from "@/i18n";
+
+export type ApiCallFormat = "openai" | "gemini" | "ark";
+export type ModelCapability = "image" | "video" | "text" | "audio";
+export type ReasoningEffort = "auto" | "low" | "medium" | "high" | "xhigh";
+
+export type ChannelModel = {
+    name: string;
+    capability: ModelCapability;
+    script?: string;
+};
 
 export type ModelChannel = {
     id: string;
@@ -13,7 +21,7 @@ export type ModelChannel = {
     baseUrl: string;
     apiKey: string;
     apiFormat: ApiCallFormat;
-    models: string[];
+    models: ChannelModel[];
 };
 
 export type AiConfig = {
@@ -36,79 +44,29 @@ export type AiConfig = {
     videoGenerateAudio: string;
     videoWatermark: string;
     systemPrompt: string;
+    reasoningEffort: ReasoningEffort;
     models: string[];
-    imageModels: string[];
-    videoModels: string[];
-    textModels: string[];
-    audioModels: string[];
     quality: string;
     size: string;
+    background: string;
     count: string;
     canvasImageCount: string;
-    modelEndpointTypes: Record<string, string[]>;
 };
 
 export type WebdavSyncConfig = {
-    proxyMode: "direct" | "nextjs";
     url: string;
     username: string;
     password: string;
     directory: string;
     lastSyncedAt: string;
 };
+export type ConfigTabKey = "channels" | "preferences" | "prompt-sources" | "webdav" | "local-storage";
 
 export const CONFIG_STORE_KEY = "infinite-canvas:ai_config_store";
-export type ModelCapability = "image" | "video" | "text" | "audio";
 const CHANNEL_MODEL_SEPARATOR = "::";
 const OPENAI_BASE_URL = "https://api.openai.com";
 const GEMINI_BASE_URL = "https://generativelanguage.googleapis.com";
-
-// BUILTIN_MODE: new-api 内置模式。锁定唯一「站内」渠道(baseUrl=/pg,免 API key),
-// 禁止外部渠道与 BYO key;模型能力按 new-api /pg/models 返回的 supported_endpoint_types 分类。
-export const BUILTIN_MODE = process.env.NEXT_PUBLIC_BUILTIN_MODE === "1";
-export const BUILTIN_CHANNEL_ID = "newapi-builtin";
-
-export function createBuiltinChannel(models: string[] = []): ModelChannel {
-    return { id: BUILTIN_CHANNEL_ID, name: "站内", baseUrl: "/pg", apiKey: "", apiFormat: "openai", models };
-}
-
-export function isBuiltinChannelId(channelId: string | undefined) {
-    return BUILTIN_MODE && channelId === BUILTIN_CHANNEL_ID;
-}
-
-// 内置模式下站内渠道是唯一渠道且 apiKey 恒为空,以此识别经 resolve 后的请求配置
-export function isBuiltinRequestConfig(config: Pick<AiConfig, "apiKey">) {
-    return BUILTIN_MODE && !config.apiKey.trim();
-}
-
-// BUILTIN_MODE: 模型 -> supported_endpoint_types 元数据(来自 /pg/models),
-// persist 存于 AiConfig.modelEndpointTypes;模块级镜像供无 config 上下文的能力判断函数使用。
-let builtinEndpointTypesMirror: Record<string, string[]> = {};
-
-export function setBuiltinEndpointTypesMirror(map: Record<string, string[]> | undefined) {
-    builtinEndpointTypesMirror = map || {};
-}
-
-function builtinEndpointTypes(model: string): string[] | null {
-    const types = builtinEndpointTypesMirror[modelOptionName(model)];
-    return Array.isArray(types) && types.length ? types : null;
-}
-
-function builtinModelMatchesCapability(model: string, capability: ModelCapability) {
-    const types = builtinEndpointTypes(model);
-    if (!types) {
-        // 无元数据(如用户手输的模型名)时回退关键词推断
-        if (capability === "image") return isImageModelName(model);
-        if (capability === "video") return isVideoModelName(model);
-        if (capability === "audio") return isAudioModelName(model);
-        return isTextModelName(model);
-    }
-    if (capability === "image") return types.includes("image-generation");
-    if (capability === "video") return types.includes("openai-video");
-    if (capability === "audio") return types.includes("audio-speech");
-    // text/助手:responses 优先;仅 openai 的模型排除纯图片/视频/音频模型
-    return types.includes("openai-response") || (types.includes("openai") && !types.includes("image-generation") && !types.includes("openai-video") && !types.includes("audio-speech"));
-}
+const ARK_BASE_URL = "https://ark.cn-beijing.volces.com/api/v3";
 
 export const defaultConfig: AiConfig = {
     channelMode: "local",
@@ -118,11 +76,16 @@ export const defaultConfig: AiConfig = {
     channels: [
         {
             id: "default",
-            name: "默认渠道",
+            name: i18n.t("config.channels.defaultName"),
             baseUrl: OPENAI_BASE_URL,
             apiKey: "",
             apiFormat: "openai",
-            models: ["gpt-image-2", "grok-imagine-video", "gpt-5.5", "gpt-4o-mini-tts"],
+            models: [
+                { name: "gpt-image-2", capability: "image" },
+                { name: "grok-imagine-video", capability: "video" },
+                { name: "gpt-5.5", capability: "text" },
+                { name: "gpt-4o-mini-tts", capability: "audio" },
+            ],
         },
     ],
     model: "default::gpt-image-2",
@@ -139,35 +102,16 @@ export const defaultConfig: AiConfig = {
     videoGenerateAudio: "true",
     videoWatermark: "false",
     systemPrompt: "",
+    reasoningEffort: "auto",
     models: ["default::gpt-image-2", "default::grok-imagine-video", "default::gpt-5.5", "default::gpt-4o-mini-tts"],
-    imageModels: ["default::gpt-image-2"],
-    videoModels: ["default::grok-imagine-video"],
-    textModels: ["default::gpt-5.5"],
-    audioModels: ["default::gpt-4o-mini-tts"],
     quality: "auto",
     size: "1:1",
+    background: "",
     count: "1",
     canvasImageCount: "3",
-    modelEndpointTypes: {},
 };
 
-if (BUILTIN_MODE) {
-    // 内置模式:唯一「站内」渠道,模型列表由 /pg/models 拉取,无预置模型
-    defaultConfig.channels = [createBuiltinChannel()];
-    defaultConfig.model = "";
-    defaultConfig.imageModel = "";
-    defaultConfig.videoModel = "";
-    defaultConfig.textModel = "";
-    defaultConfig.audioModel = "";
-    defaultConfig.models = [];
-    defaultConfig.imageModels = [];
-    defaultConfig.videoModels = [];
-    defaultConfig.textModels = [];
-    defaultConfig.audioModels = [];
-}
-
 export const defaultWebdavSyncConfig: WebdavSyncConfig = {
-    proxyMode: "direct",
     url: "",
     username: "",
     password: "",
@@ -179,61 +123,67 @@ type ConfigStore = {
     config: AiConfig;
     webdav: WebdavSyncConfig;
     isConfigOpen: boolean;
+    configTab: ConfigTabKey;
     shouldPromptContinue: boolean;
     updateConfig: <K extends keyof AiConfig>(key: K, value: AiConfig[K]) => void;
     updateWebdavConfig: <K extends keyof WebdavSyncConfig>(key: K, value: WebdavSyncConfig[K]) => void;
     isAiConfigReady: (config: AiConfig, model: string) => boolean;
-    openConfigDialog: (shouldPromptContinue?: boolean) => void;
+    openConfigDialog: (shouldPromptContinue?: boolean, tab?: ConfigTabKey) => void;
     setConfigDialogOpen: (isOpen: boolean) => void;
     clearPromptContinue: () => void;
 };
 
-function isVideoModelName(model: string) {
-    const value = modelOptionName(model).toLowerCase();
-    return value.includes("seedance") || value.includes("video") || value.includes("sora") || value.includes("veo") || value.includes("kling") || value.includes("wan") || value.includes("hailuo");
+const VIDEO_KEYWORDS = ["seedance", "video", "sora", "veo", "kling", "wan", "hailuo"];
+const AUDIO_KEYWORDS = ["audio", "tts", "speech", "voice", "music", "sound"];
+const IMAGE_KEYWORDS = ["seedream", "gpt-image", "image", "dall-e", "dalle", "imagen", "flux", "sdxl", "stable-diffusion", "midjourney"];
+
+/** Best-effort default capability for a freshly fetched model name; user can override in the channel editor. */
+export function guessCapability(name: string): ModelCapability {
+    const value = name.toLowerCase();
+    if (VIDEO_KEYWORDS.some((keyword) => value.includes(keyword))) return "video";
+    if (AUDIO_KEYWORDS.some((keyword) => value.includes(keyword))) return "audio";
+    if (IMAGE_KEYWORDS.some((keyword) => value.includes(keyword))) return "image";
+    return "text";
 }
 
-function isImageModelName(model: string) {
-    const value = modelOptionName(model).toLowerCase();
-    return !isVideoModelName(model) && !isAudioModelName(model) && (value.includes("seedream") || value.includes("gpt-image") || value.includes("image") || value.includes("dall-e") || value.includes("dalle") || value.includes("imagen") || value.includes("flux") || value.includes("sdxl") || value.includes("stable-diffusion") || value.includes("midjourney"));
+function findChannelModel(config: AiConfig, value: string): { channel: ModelChannel; model: ChannelModel } | null {
+    const decoded = decodeChannelModel(value);
+    const name = decoded?.model || value;
+    const channel = decoded ? config.channels.find((item) => item.id === decoded.channelId) : config.channels.find((item) => item.models.some((model) => model.name === name));
+    const model = channel?.models.find((item) => item.name === name);
+    return channel && model ? { channel, model } : null;
 }
 
-function isAudioModelName(model: string) {
-    const value = modelOptionName(model).toLowerCase();
-    return value.includes("audio") || value.includes("tts") || value.includes("speech") || value.includes("voice") || value.includes("music") || value.includes("sound");
+export function modelCapabilityOf(config: AiConfig, value: string): ModelCapability | undefined {
+    return findChannelModel(config, value)?.model.capability;
 }
 
-function isTextModelName(model: string) {
-    return !isImageModelName(model) && !isVideoModelName(model) && !isAudioModelName(model);
-}
-
-export function modelMatchesCapability(model: string, capability?: ModelCapability) {
+export function modelMatchesCapability(config: AiConfig, value: string, capability?: ModelCapability) {
     if (!capability) return true;
-    if (BUILTIN_MODE) return builtinModelMatchesCapability(model, capability);
-    if (capability === "image") return isImageModelName(model);
-    if (capability === "video") return isVideoModelName(model);
-    if (capability === "audio") return isAudioModelName(model);
-    return isTextModelName(model);
+    return modelCapabilityOf(config, value) === capability;
 }
 
-export function filterModelsByCapability(models: string[], capability?: ModelCapability) {
-    return capability ? models.filter((model) => modelMatchesCapability(model, capability)) : models;
+export function resolveModelForCapability(config: AiConfig, currentModel: string | undefined, capability: ModelCapability) {
+    const defaultModel = capability === "image" ? config.imageModel : capability === "video" ? config.videoModel : capability === "audio" ? config.audioModel : config.textModel;
+    const fallbackModel = capability === "image" ? defaultConfig.imageModel : capability === "video" ? defaultConfig.videoModel : capability === "audio" ? defaultConfig.audioModel : defaultConfig.textModel;
+    if (currentModel && modelMatchesCapability(config, currentModel, capability)) return currentModel;
+    if (defaultModel && modelMatchesCapability(config, defaultModel, capability)) return defaultModel;
+    return fallbackModel;
 }
 
 export function selectableModelsByCapability(config: AiConfig, capability?: ModelCapability) {
     if (!capability) return config.models;
-    return config[modelListKey(capability)];
+    return config.channels.flatMap((channel) => channel.models.filter((model) => model.capability === capability).map((model) => encodeChannelModel(channel.id, model.name)));
 }
 
-function modelListKey(capability: ModelCapability) {
-    return `${capability}Models` as "imageModels" | "videoModels" | "textModels" | "audioModels";
+/** The user script (if any) attached to a model; empty string means use the system default call. */
+export function resolveModelScript(config: AiConfig, value: string) {
+    return findChannelModel(config, value)?.model.script?.trim() || "";
 }
 
 function isAiConfigReady(config: AiConfig, model: string) {
     const channel = resolveModelChannel(config, model);
-    // BUILTIN_MODE: 站内渠道走 session 鉴权,无需 API key
-    const apiKeyReady = isBuiltinChannelId(channel.id) || Boolean(channel.apiKey.trim());
-    return Boolean(model.trim() && channel.baseUrl.trim() && apiKeyReady);
+    return Boolean(model.trim() && channel.baseUrl.trim() && channel.apiKey.trim());
 }
 
 export const useConfigStore = create<ConfigStore>()(
@@ -242,23 +192,15 @@ export const useConfigStore = create<ConfigStore>()(
             config: defaultConfig,
             webdav: defaultWebdavSyncConfig,
             isConfigOpen: false,
+            configTab: "channels",
             shouldPromptContinue: false,
             updateConfig: (key, value) =>
-                set((state) => {
-                    // BUILTIN_MODE: 渠道结构锁定,仅允许更新站内渠道的模型列表
-                    if (BUILTIN_MODE && key === "channels") {
-                        value = sanitizeBuiltinChannels(value as ModelChannel[]) as AiConfig[typeof key];
-                    }
-                    if (BUILTIN_MODE && key === "modelEndpointTypes") {
-                        setBuiltinEndpointTypesMirror(value as Record<string, string[]>);
-                    }
-                    return {
-                        config: {
-                            ...state.config,
-                            [key]: value,
-                        },
-                    };
-                }),
+                set((state) => ({
+                    config: {
+                        ...state.config,
+                        [key]: value,
+                    },
+                })),
             updateWebdavConfig: (key, value) =>
                 set((state) => ({
                     webdav: {
@@ -267,7 +209,7 @@ export const useConfigStore = create<ConfigStore>()(
                     },
                 })),
             isAiConfigReady: (config, model) => isAiConfigReady(config, model),
-            openConfigDialog: (shouldPromptContinue = false) => set({ isConfigOpen: true, shouldPromptContinue }),
+            openConfigDialog: (shouldPromptContinue = false, configTab = "channels") => set({ isConfigOpen: true, shouldPromptContinue, configTab }),
             setConfigDialogOpen: (isConfigOpen) => set({ isConfigOpen }),
             clearPromptContinue: () => set({ shouldPromptContinue: false }),
         }),
@@ -280,13 +222,6 @@ export const useConfigStore = create<ConfigStore>()(
                 const persistedWebdav = (persistedState.webdav || {}) as Partial<WebdavSyncConfig>;
                 const config = { ...defaultConfig, ...persistedConfig };
                 if (!Array.isArray(persistedConfig.channels)) config.channels = [];
-                if (BUILTIN_MODE) {
-                    // 强制重播种:只保留站内渠道并锁定其 baseUrl/apiKey/apiFormat,
-                    // 丢弃所有持久化的外部渠道与 BYO key;保留已拉取的模型列表与能力元数据
-                    config.channels = sanitizeBuiltinChannels(config.channels);
-                    config.modelEndpointTypes = persistedConfig.modelEndpointTypes && typeof persistedConfig.modelEndpointTypes === "object" ? persistedConfig.modelEndpointTypes : {};
-                    setBuiltinEndpointTypesMirror(config.modelEndpointTypes);
-                }
                 const channels = normalizeChannels(config);
                 const models = modelOptionsFromChannels(channels);
                 return {
@@ -299,22 +234,19 @@ export const useConfigStore = create<ConfigStore>()(
                         channels,
                         models,
                         imageModel: normalizeModelOptionValue(config.imageModel || config.model, channels),
-                        videoModel: normalizeModelOptionValue(config.videoModel || "grok-imagine-video", channels),
+                        videoModel: normalizeModelOptionValue(config.videoModel, channels),
                         textModel: normalizeModelOptionValue(config.textModel || config.model, channels),
                         audioModel: normalizeModelOptionValue(config.audioModel || defaultConfig.audioModel, channels),
                         audioVoice: config.audioVoice || defaultConfig.audioVoice,
                         audioFormat: config.audioFormat || defaultConfig.audioFormat,
                         audioSpeed: config.audioSpeed || defaultConfig.audioSpeed,
                         audioInstructions: config.audioInstructions || "",
+                        reasoningEffort: config.reasoningEffort || "auto",
                         videoSeconds: config.videoSeconds || "6",
                         vquality: config.vquality || "720",
                         videoGenerateAudio: config.videoGenerateAudio || "true",
                         videoWatermark: config.videoWatermark || "false",
                         canvasImageCount: config.canvasImageCount || "3",
-                        imageModels: Array.isArray(persistedConfig.imageModels) ? mergeCapabilityModels(config.imageModels, channels, "image") : filterModelsByCapability(models, "image"),
-                        videoModels: Array.isArray(persistedConfig.videoModels) ? mergeCapabilityModels(config.videoModels, channels, "video") : filterModelsByCapability(models, "video"),
-                        textModels: Array.isArray(persistedConfig.textModels) ? mergeCapabilityModels(config.textModels, channels, "text") : filterModelsByCapability(models, "text"),
-                        audioModels: Array.isArray(persistedConfig.audioModels) ? mergeCapabilityModels(config.audioModels, channels, "audio") : filterModelsByCapability(models, "audio"),
                     },
                 };
             },
@@ -322,40 +254,35 @@ export const useConfigStore = create<ConfigStore>()(
     ),
 );
 
-// BUILTIN_MODE: 持久化的能力列表也要按 supported_endpoint_types 重新过滤,
-// 防止旧 localStorage 中按关键词分类的结果绕过端点类型分类
-function mergeCapabilityModels(models: string[], channels: ModelChannel[], capability: ModelCapability) {
-    const normalized = normalizeModelList(models, channels);
-    return BUILTIN_MODE ? filterModelsByCapability(normalized, capability) : normalized;
-}
-
-// BUILTIN_MODE: 渠道列表清洗——只保留站内渠道且锁定其连接字段,仅模型列表可变
-function sanitizeBuiltinChannels(channels: ModelChannel[] | undefined) {
-    const builtin = (Array.isArray(channels) ? channels : []).find((channel) => channel && channel.id === BUILTIN_CHANNEL_ID);
-    return [createBuiltinChannel(uniqueRawModels(builtin?.models || []))];
-}
-
-function normalizeModelList(models: string[], channels: ModelChannel[]) {
-    const allModelOptions = channels.flatMap((channel) => channel.models.map((model) => encodeChannelModel(channel.id, model)));
-    return Array.from(new Set((models || []).map((model) => model.trim()).filter(Boolean)))
-        .map((model) => normalizeModelOptionValue(model, channels))
-        .filter((model) => !allModelOptions.length || allModelOptions.includes(model) || !isChannelModelValue(model));
-}
-
 export function useEffectiveConfig() {
     const config = useConfigStore((state) => state.config);
     return useMemo(() => ({ ...config, channelMode: "local" as const }), [config]);
+}
+
+/** Normalize a mixed list of raw model names or model objects into deduped ChannelModel entries. */
+export function normalizeChannelModels(models: Array<string | ChannelModel> | undefined): ChannelModel[] {
+    const seen = new Set<string>();
+    const result: ChannelModel[] = [];
+    for (const item of models || []) {
+        const name = (typeof item === "string" ? item : item?.name || "").trim();
+        if (!name || seen.has(name)) continue;
+        seen.add(name);
+        const capability = typeof item === "string" ? guessCapability(name) : item.capability || guessCapability(name);
+        const script = typeof item === "string" ? undefined : item.script?.trim() || undefined;
+        result.push({ name, capability, script });
+    }
+    return result;
 }
 
 export function createModelChannel(channel?: Partial<ModelChannel>): ModelChannel {
     const apiFormat = normalizeApiFormat(channel?.apiFormat);
     return {
         id: channel?.id?.trim() || nanoid(),
-        name: channel?.name?.trim() || "新渠道",
+        name: channel?.name?.trim() || i18n.t("config.channels.newName"),
         baseUrl: channel?.baseUrl?.trim() || defaultBaseUrlForApiFormat(apiFormat),
         apiKey: channel?.apiKey || "",
         apiFormat,
-        models: uniqueRawModels(channel?.models || []),
+        models: normalizeChannelModels(channel?.models),
     };
 }
 
@@ -385,7 +312,7 @@ export function modelOptionLabel(config: AiConfig, value: string) {
 }
 
 export function modelOptionsFromChannels(channels: ModelChannel[]) {
-    return uniqueModelOptions(channels.flatMap((channel) => channel.models.map((model) => encodeChannelModel(channel.id, model))));
+    return uniqueModelOptions(channels.flatMap((channel) => channel.models.map((model) => encodeChannelModel(channel.id, model.name))));
 }
 
 export function normalizeModelOptionValue(value: string | undefined, channels: ModelChannel[]) {
@@ -394,18 +321,17 @@ export function normalizeModelOptionValue(value: string | undefined, channels: M
     const decoded = decodeChannelModel(model);
     if (decoded) {
         const channel = channels.find((item) => item.id === decoded.channelId);
-        return channel && channel.models.includes(decoded.model) ? model : "";
+        return channel && channel.models.some((item) => item.name === decoded.model) ? model : "";
     }
-    // 此分支 decoded 必为 null(上方 if (decoded) 已 return),直接用裸模型名
-    const channel = channels.find((item) => item.models.includes(model)) || channels[0];
-    return channel && channel.models.includes(model) ? encodeChannelModel(channel.id, model) : model;
+    const channel = channels.find((item) => item.models.some((entry) => entry.name === model)) || channels[0];
+    return channel && channel.models.some((item) => item.name === model) ? encodeChannelModel(channel.id, model) : model;
 }
 
 export function resolveModelChannel(config: AiConfig, value: string) {
     const decoded = decodeChannelModel(value);
     const model = decoded?.model || value;
-    const matched = decoded ? config.channels.find((channel) => channel.id === decoded.channelId) : config.channels.find((channel) => channel.models.includes(model));
-    return matched || config.channels[0] || createModelChannel({ id: "default", name: "默认渠道", baseUrl: config.baseUrl, apiKey: config.apiKey, apiFormat: config.apiFormat, models: config.models.map(modelOptionName) });
+    const matched = decoded ? config.channels.find((channel) => channel.id === decoded.channelId) : config.channels.find((channel) => channel.models.some((item) => item.name === model));
+    return matched || config.channels[0] || createModelChannel({ id: "default", name: i18n.t("config.channels.defaultName"), baseUrl: config.baseUrl, apiKey: config.apiKey, apiFormat: config.apiFormat, models: config.models.map(modelOptionName).map((name) => ({ name, capability: guessCapability(name) })) });
 }
 
 export function resolveModelRequestConfig(config: AiConfig, value: string) {
@@ -416,7 +342,6 @@ export function resolveModelRequestConfig(config: AiConfig, value: string) {
         baseUrl: channel.baseUrl,
         apiKey: channel.apiKey,
         apiFormat: channel.apiFormat,
-        channelId: channel.id,
     };
 }
 
@@ -426,42 +351,33 @@ function normalizeChannels(config: AiConfig) {
         createModelChannel({
             ...channel,
             id: channel.id || (index === 0 ? "default" : `channel-${index + 1}`),
-            name: channel.name || (index === 0 ? "默认渠道" : `渠道 ${index + 1}`),
-            models: uniqueRawModels(channel.models || []),
+            name: channel.name || (index === 0 ? i18n.t("config.channels.defaultName") : i18n.t("config.channels.indexedName", { index: index + 1 })),
+            models: normalizeChannelModels(channel.models),
         }),
     );
     if (!channels.length) {
         channels.push(
             createModelChannel({
                 id: "default",
-                name: "默认渠道",
+                name: i18n.t("config.channels.defaultName"),
                 baseUrl: config.baseUrl || defaultConfig.baseUrl,
                 apiKey: config.apiKey || "",
                 apiFormat: config.apiFormat || defaultConfig.apiFormat,
-                models: uniqueRawModels([
-                    ...(config.models || []),
-                    config.model,
-                    config.imageModel,
-                    config.videoModel,
-                    config.textModel,
-                    config.audioModel,
-                ]),
+                models: normalizeChannelModels([config.model, config.imageModel, config.videoModel, config.textModel, config.audioModel].map(modelOptionName)),
             }),
         );
     }
-    return channels.map((channel) => ({ ...channel, models: uniqueRawModels(channel.models) }));
+    return channels;
 }
 
 export function defaultBaseUrlForApiFormat(apiFormat: ApiCallFormat) {
-    return apiFormat === "gemini" ? GEMINI_BASE_URL : OPENAI_BASE_URL;
+    if (apiFormat === "gemini") return GEMINI_BASE_URL;
+    if (apiFormat === "ark") return ARK_BASE_URL;
+    return OPENAI_BASE_URL;
 }
 
 function normalizeApiFormat(apiFormat: unknown): ApiCallFormat {
-    return apiFormat === "gemini" ? "gemini" : "openai";
-}
-
-function uniqueRawModels(models: string[]) {
-    return Array.from(new Set((models || []).map((model) => modelOptionName(model).trim()).filter(Boolean)));
+    return apiFormat === "gemini" || apiFormat === "ark" ? apiFormat : "openai";
 }
 
 function uniqueModelOptions(models: string[]) {
@@ -472,7 +388,7 @@ export function buildApiUrl(baseUrl: string, path: string) {
     let normalizedBaseUrl = baseUrl.trim().replace(/\/+$/, "");
     normalizedBaseUrl = normalizeArkPlanBaseUrl(normalizedBaseUrl);
     const lowerBaseUrl = normalizedBaseUrl.toLowerCase();
-    const apiBaseUrl = lowerBaseUrl.endsWith("/v1") || lowerBaseUrl.endsWith("/api/v3") || lowerBaseUrl.endsWith("/api/plan/v3") || lowerBaseUrl.endsWith("/pg") ? normalizedBaseUrl : `${normalizedBaseUrl}/v1`;
+    const apiBaseUrl = lowerBaseUrl.endsWith("/v1") || lowerBaseUrl.endsWith("/api/v3") || lowerBaseUrl.endsWith("/api/plan/v3") ? normalizedBaseUrl : `${normalizedBaseUrl}/v1`;
     return `${apiBaseUrl}${path}`;
 }
 
