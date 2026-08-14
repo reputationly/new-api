@@ -3,6 +3,7 @@ import { useQueryClient } from "@tanstack/react-query";
 
 import { refreshDueSources } from "@/services/api/prompts";
 import { usePromptSourceStore } from "@/stores/use-prompt-source-store";
+import { BUILTIN_MODE } from "@/stores/use-config-store";
 
 const CHECK_INTERVAL_MS = 60_000;
 
@@ -12,6 +13,8 @@ export function usePromptSourceScheduler() {
     const intervalMinutes = usePromptSourceStore((state) => state.schedule.intervalMinutes);
 
     useEffect(() => {
+        // BUILTIN_MODE: 提示词由服务端 /api/prompts 提供,不需要浏览器定时拉 GitHub 来源
+        if (BUILTIN_MODE) return;
         if (!intervalMinutes) return;
         let running = false;
         const tick = async () => {
@@ -22,11 +25,7 @@ export function usePromptSourceScheduler() {
                 const result = await refreshDueSources(intervalMinutes * 60_000);
                 if (!result.results.length) return;
                 updateSchedule("lastFetchedAt", new Date().toISOString());
-                await Promise.all([
-                    queryClient.invalidateQueries({ queryKey: ["prompts"] }),
-                    queryClient.invalidateQueries({ queryKey: ["side-panel-prompts"] }),
-                    queryClient.invalidateQueries({ queryKey: ["prompt-source-statuses"] }),
-                ]);
+                await Promise.all([queryClient.invalidateQueries({ queryKey: ["prompts"] }), queryClient.invalidateQueries({ queryKey: ["side-panel-prompts"] }), queryClient.invalidateQueries({ queryKey: ["prompt-source-statuses"] })]);
             } catch {
                 // Per-source errors are stored in source state and retried during the next check cycle.
             } finally {

@@ -1,3 +1,6 @@
+import { builtinHeaders } from "@/lib/builtin-auth";
+import { BUILTIN_MODE } from "@/stores/use-config-store";
+import { compactApiParams, serializeApiParams } from "@/services/api/request";
 import localforage from "localforage";
 
 import { runPromptSource, type RawPrompt } from "./prompt-source-runtime";
@@ -137,6 +140,10 @@ async function getAllPrompts(): Promise<Prompt[]> {
 }
 
 export async function fetchPrompts({ keyword = "", tag = [], category = ALL_PROMPTS_OPTION, page = 1, pageSize = 20 }: { keyword?: string; tag?: string[]; category?: string; page?: number; pageSize?: number } = {}) {
+    // BUILTIN_MODE: 上游改成了浏览器直接拉多个 GitHub 来源。内置版走 new-api 的
+    // /api/prompts —— 数据来自服务端 canvas_prompts 表(由 admin 同步),不出网,
+    // 也不受用户网络环境影响。返回结构与上游一致,页面无需改。
+    if (BUILTIN_MODE) return fetchBuiltinPrompts({ keyword, tag, category, page, pageSize });
     const items = await getAllPrompts();
     const normalizedKeyword = keyword.trim().toLowerCase();
     const normalizedPage = Math.max(1, page);
@@ -153,7 +160,49 @@ export async function fetchPrompts({ keyword = "", tag = [], category = ALL_PROM
     };
 }
 
+/** BUILTIN_MODE: 从 new-api 服务端取提示词,补齐上游 RawPrompt 里的额外字段 */
+async function fetchBuiltinPrompts(params: { keyword: string; tag: string[]; category: string; page: number; pageSize: number }): Promise<PromptListResponse> {
+    const query = serializeApiParams(
+        compactApiParams({
+            keyword: params.keyword.trim(),
+            tag: params.tag,
+            category: params.category === ALL_PROMPTS_OPTION ? undefined : params.category,
+            page: params.page,
+            page_size: params.pageSize,
+        }),
+    );
+    const response = await fetch(`/api/prompts?${query}`, { headers: builtinHeaders() });
+    if (!response.ok) throw new Error(`获取提示词失败（${response.status}）`);
+    const payload = (await response.json()) as { success?: boolean; message?: string; data?: Partial<PromptListResponse> };
+    if (payload.success === false) throw new Error(payload.message || "获取提示词失败");
+    const data = payload.data || {};
+    return {
+        // 服务端返回的字段优先,缺失的补空(上游 RawPrompt 比我们的表多几个字段)
+        items: (data.items || []).map((item) => ({
+            description: "",
+            referenceImageUrls: [],
+            sourceId: "builtin",
+            ...(item as Partial<Prompt>),
+        })) as Prompt[],
+        tags: data.tags || [],
+        categories: data.categories || [],
+        total: data.total || 0,
+    };
+}
+
+/** BUILTIN_MODE: 服务端提示词的分类列表,充当侧边栏的「来源」分组 */
+export async function fetchBuiltinPromptCategories(): Promise<string[]> {
+    const { categories } = await fetchBuiltinPrompts({ keyword: "", tag: [], category: ALL_PROMPTS_OPTION, page: 1, pageSize: 1 });
+    return categories;
+}
+
 export async function fetchSourcePrompts(sourceId: string): Promise<Prompt[]> {
+    // BUILTIN_MODE: 画布侧边栏的提示词分区会按「来源」调这里(canvas-side-panel.tsx)。
+    // 内置版没有客户端来源概念,统一从服务端按分类取,sourceId 即分类名。
+    if (BUILTIN_MODE) {
+        const { items } = await fetchBuiltinPrompts({ keyword: "", tag: [], category: sourceId, page: 1, pageSize: 200 });
+        return items;
+    }
     const source = usePromptSourceStore.getState().sources.find((item) => item.id === sourceId);
     if (!source) throw new Error(i18n.t("prompts.sourceMissing"));
     return getSourcePrompts(source);

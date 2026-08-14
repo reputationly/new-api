@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { App } from "antd";
 import { useTranslation } from "react-i18next";
 import { APP_VERSION } from "@/constant/env";
+import { BUILTIN_MODE } from "@/stores/use-config-store";
 import { parseChangelog, type ReleaseInfo } from "@/lib/release";
 
 const latestVersionUrl = "https://raw.githubusercontent.com/basketikun/infinite-canvas/main/VERSION";
@@ -35,6 +36,8 @@ export function useVersionCheck() {
     const hasNewVersion = isNewerVersion(latestVersion, currentVersion);
 
     const checkLatestVersion = useCallback(async () => {
+        // BUILTIN_MODE: 这个在挂载时自动跑,不堵会每次进画布都打一次 GitHub
+        if (BUILTIN_MODE) return false;
         try {
             const response = await fetch(latestVersionUrl);
             if (!response.ok) return false;
@@ -48,6 +51,8 @@ export function useVersionCheck() {
 
     const checkLatestRelease = useCallback(
         async (showMessage = false) => {
+            // BUILTIN_MODE: 不打 GitHub —— 内置版跟随 new-api 镜像发布
+            if (BUILTIN_MODE) return;
             setChecking(true);
             try {
                 const [versionResponse, changelogResponse] = await Promise.all([fetch(latestVersionUrl), fetch(latestChangelogUrl)]);

@@ -8,6 +8,7 @@ import { useCopyText } from "@/hooks/use-copy-text";
 import { formatBytes, readFileAsDataUrl } from "@/lib/image-utils";
 import { uploadImage } from "@/services/image-storage";
 import { cn } from "@/lib/utils";
+import { CanvasStorageBar } from "@/components/canvas-storage-bar";
 import { useAssetStore, type Asset, type AssetKind, type ImageAsset } from "@/stores/use-asset-store";
 import { exportAssets, readAssetPackage } from "./asset-transfer";
 
@@ -191,6 +192,12 @@ export default function AssetsPage() {
                         <p className="mt-3 text-sm text-stone-500 dark:text-stone-400">{t("assets.description")}</p>
                     </div>
 
+                    {/* BUILTIN_MODE: 素材存服务端 OBS 并按用户限额,这里展示占用与配额;
+                        refreshToken 跟着素材数变化,增删后自动刷新 */}
+                    <div className="mx-auto mt-6 w-full max-w-2xl">
+                        <CanvasStorageBar refreshToken={assets.length} />
+                    </div>
+
                     <div className="mx-auto mt-8 w-full max-w-2xl">
                         <Input.Search
                             className="w-full"
@@ -245,11 +252,7 @@ export default function AssetsPage() {
                                 >
                                     {t("assets.import")}
                                 </button>
-                                <button
-                                    type="button"
-                                    className="cursor-pointer text-sm font-medium text-stone-700 underline-offset-4 hover:underline focus-visible:outline-none focus-visible:underline dark:text-stone-300"
-                                    onClick={openCreate}
-                                >
+                                <button type="button" className="cursor-pointer text-sm font-medium text-stone-700 underline-offset-4 hover:underline focus-visible:outline-none focus-visible:underline dark:text-stone-300" onClick={openCreate}>
                                     {t("assets.add")}
                                 </button>
                             </div>
@@ -413,7 +416,9 @@ function AssetCard({ asset, onOpen, onEdit, onCopy, onDownload, onDelete }: { as
                     {cover ? (
                         <img src={cover} alt={asset.title} className="aspect-[4/3] w-full object-cover" />
                     ) : (
-                        <div className="flex aspect-[4/3] items-center justify-center bg-stone-100 p-5 text-center text-sm leading-6 text-stone-600 dark:bg-stone-900 dark:text-stone-300">{asset.kind === "text" ? asset.data.content : t("assets.noCover")}</div>
+                        <div className="flex aspect-[4/3] items-center justify-center bg-stone-100 p-5 text-center text-sm leading-6 text-stone-600 dark:bg-stone-900 dark:text-stone-300">
+                            {asset.kind === "text" ? asset.data.content : t("assets.noCover")}
+                        </div>
                     )}
                 </button>
             }
@@ -479,7 +484,9 @@ function AssetDrawer({ asset, onClose, onCopy, onDownload }: { asset: Asset | nu
                     {cover ? (
                         <Image src={cover} alt={asset.title} className="rounded-lg" />
                     ) : (
-                        <div className="rounded-lg border border-stone-200 bg-stone-50 p-5 text-sm leading-6 text-stone-600 dark:border-stone-800 dark:bg-stone-900 dark:text-stone-300">{asset.kind === "text" ? asset.data.content : t("assets.noCover")}</div>
+                        <div className="rounded-lg border border-stone-200 bg-stone-50 p-5 text-sm leading-6 text-stone-600 dark:border-stone-800 dark:bg-stone-900 dark:text-stone-300">
+                            {asset.kind === "text" ? asset.data.content : t("assets.noCover")}
+                        </div>
                     )}
                     <div>
                         <Typography.Title level={4} className="!mb-2">

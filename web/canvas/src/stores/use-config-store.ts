@@ -64,11 +64,45 @@ export type ConfigTabKey = "channels" | "preferences" | "prompt-sources" | "webd
 
 export const CONFIG_STORE_KEY = "infinite-canvas:ai_config_store";
 const CHANNEL_MODEL_SEPARATOR = "::";
+
+// BUILTIN_MODE: new-api 内置模式。锁定唯一「站内」渠道(baseUrl=/pg,免 API key),
+// 禁止外部渠道与 BYO key。所有 AI 请求经 /pg 走 new-api 的鉴权、渠道分发与计费链路。
+// 模型能力不再靠模型名关键词猜(guessCapability),改用 /pg/models 返回的
+// supported_endpoint_types —— 那是运营在后台的真实配置。
+export const BUILTIN_MODE = __BUILTIN_MODE__;
+export const BUILTIN_CHANNEL_ID = "newapi-builtin";
+
+export function builtinChannel(models: ChannelModel[] = []): ModelChannel {
+    return { id: BUILTIN_CHANNEL_ID, name: "站内", baseUrl: "/pg", apiKey: "", apiFormat: "openai", models };
+}
+
+export function isBuiltinChannel(channelId: string | undefined) {
+    return BUILTIN_MODE && channelId === BUILTIN_CHANNEL_ID;
+}
+
+// BUILTIN_MODE: 模型 → 能力,来自 /pg/models 的 supported_endpoint_types(运营在后台的
+// 真实配置),取代上游按模型名关键词猜的 guessCapability。
+// 拉取模型时填充;一旦用户确认选中,capability 会写进 ChannelModel 并随 persist 落盘,
+// 所以刷新后不依赖这份内存映射。
+let builtinCapabilityByModel: Record<string, ModelCapability> = {};
+
+export function setBuiltinCapabilityMap(map: Record<string, ModelCapability>) {
+    builtinCapabilityByModel = { ...builtinCapabilityByModel, ...map };
+}
+
+/** supported_endpoint_types → 画布的四类能力 */
+export function capabilityFromEndpointTypes(types: string[]): ModelCapability {
+    if (types.includes("image-generation")) return "image";
+    if (types.includes("openai-video")) return "video";
+    if (types.includes("audio-speech")) return "audio";
+    return "text";
+}
+
 const OPENAI_BASE_URL = "https://api.openai.com";
 const GEMINI_BASE_URL = "https://generativelanguage.googleapis.com";
 const ARK_BASE_URL = "https://ark.cn-beijing.volces.com/api/v3";
 
-export const defaultConfig: AiConfig = {
+const upstreamDefaultConfig: AiConfig = {
     channelMode: "local",
     baseUrl: OPENAI_BASE_URL,
     apiKey: "",
@@ -110,6 +144,24 @@ export const defaultConfig: AiConfig = {
     count: "1",
     canvasImageCount: "3",
 };
+
+// BUILTIN_MODE: 内置模式只有「站内」一个渠道,模型列表由 /pg/models 拉取,
+// 故无预置模型、各能力默认模型留空(用户在模型选择器里挑)。
+export const defaultConfig: AiConfig = BUILTIN_MODE
+    ? {
+          ...upstreamDefaultConfig,
+          baseUrl: "/pg",
+          apiKey: "",
+          apiFormat: "openai",
+          channels: [builtinChannel()],
+          model: "",
+          imageModel: "",
+          videoModel: "",
+          textModel: "",
+          audioModel: "",
+          models: [],
+      }
+    : upstreamDefaultConfig;
 
 export const defaultWebdavSyncConfig: WebdavSyncConfig = {
     url: "",
@@ -183,6 +235,8 @@ export function resolveModelScript(config: AiConfig, value: string) {
 
 function isAiConfigReady(config: AiConfig, model: string) {
     const channel = resolveModelChannel(config, model);
+    // BUILTIN_MODE: 站内渠道靠 session cookie + New-Api-User 头鉴权,没有也不需要 apiKey
+    if (isBuiltinChannel(channel.id)) return Boolean(model.trim() && channel.baseUrl.trim());
     return Boolean(model.trim() && channel.baseUrl.trim() && channel.apiKey.trim());
 }
 
@@ -267,7 +321,9 @@ export function normalizeChannelModels(models: Array<string | ChannelModel> | un
         const name = (typeof item === "string" ? item : item?.name || "").trim();
         if (!name || seen.has(name)) continue;
         seen.add(name);
-        const capability = typeof item === "string" ? guessCapability(name) : item.capability || guessCapability(name);
+        // BUILTIN_MODE: 优先用 /pg/models 给的真实能力;没有(如用户手输的模型名)才回退关键词推断
+        const known = BUILTIN_MODE ? builtinCapabilityByModel[name] : undefined;
+        const capability = known || (typeof item === "string" ? guessCapability(name) : item.capability || guessCapability(name));
         const script = typeof item === "string" ? undefined : item.script?.trim() || undefined;
         result.push({ name, capability, script });
     }
@@ -331,7 +387,18 @@ export function resolveModelChannel(config: AiConfig, value: string) {
     const decoded = decodeChannelModel(value);
     const model = decoded?.model || value;
     const matched = decoded ? config.channels.find((channel) => channel.id === decoded.channelId) : config.channels.find((channel) => channel.models.some((item) => item.name === model));
-    return matched || config.channels[0] || createModelChannel({ id: "default", name: i18n.t("config.channels.defaultName"), baseUrl: config.baseUrl, apiKey: config.apiKey, apiFormat: config.apiFormat, models: config.models.map(modelOptionName).map((name) => ({ name, capability: guessCapability(name) })) });
+    return (
+        matched ||
+        config.channels[0] ||
+        createModelChannel({
+            id: "default",
+            name: i18n.t("config.channels.defaultName"),
+            baseUrl: config.baseUrl,
+            apiKey: config.apiKey,
+            apiFormat: config.apiFormat,
+            models: config.models.map(modelOptionName).map((name) => ({ name, capability: guessCapability(name) })),
+        })
+    );
 }
 
 export function resolveModelRequestConfig(config: AiConfig, value: string) {
@@ -347,6 +414,13 @@ export function resolveModelRequestConfig(config: AiConfig, value: string) {
 
 function normalizeChannels(config: AiConfig) {
     const persistedChannels = Array.isArray(config.channels) ? config.channels : [];
+    // BUILTIN_MODE: 渠道结构锁死为「站内」一条,连接字段(baseUrl/apiKey/apiFormat)不可变,
+    // 只有模型列表跟着 /pg/models 走。老用户 localStorage 里可能存着外部渠道与 API key,
+    // 这里一并丢弃 —— 内置版不允许 BYO key。
+    if (BUILTIN_MODE) {
+        const existing = persistedChannels.find((channel) => channel && channel.id === BUILTIN_CHANNEL_ID);
+        return [builtinChannel(normalizeChannelModels(existing?.models))];
+    }
     const channels = persistedChannels.map((channel, index) =>
         createModelChannel({
             ...channel,
@@ -388,7 +462,8 @@ export function buildApiUrl(baseUrl: string, path: string) {
     let normalizedBaseUrl = baseUrl.trim().replace(/\/+$/, "");
     normalizedBaseUrl = normalizeArkPlanBaseUrl(normalizedBaseUrl);
     const lowerBaseUrl = normalizedBaseUrl.toLowerCase();
-    const apiBaseUrl = lowerBaseUrl.endsWith("/v1") || lowerBaseUrl.endsWith("/api/v3") || lowerBaseUrl.endsWith("/api/plan/v3") ? normalizedBaseUrl : `${normalizedBaseUrl}/v1`;
+    // BUILTIN_MODE: /pg 是 new-api 的体验区门面前缀,本身就等价于 /v1,不能再拼一层
+    const apiBaseUrl = lowerBaseUrl.endsWith("/v1") || lowerBaseUrl.endsWith("/api/v3") || lowerBaseUrl.endsWith("/api/plan/v3") || lowerBaseUrl.endsWith("/pg") ? normalizedBaseUrl : `${normalizedBaseUrl}/v1`;
     return `${apiBaseUrl}${path}`;
 }
 

@@ -5,6 +5,7 @@ import { nanoid } from "nanoid";
 import { localForageStorage } from "@/lib/localforage-storage";
 import { cleanupUnusedImages, resolveImageUrl, uploadImage } from "@/services/image-storage";
 import { cleanupUnusedMedia, resolveMediaUrl } from "@/services/file-storage";
+import { deleteServerAsset, isServerAssetKey, serverAssetId } from "@/services/api/canvas-assets";
 
 export type AssetKind = "text" | "image" | "video";
 export type TextAsset = AssetBase<"text"> & { data: { content: string } };
@@ -80,7 +81,16 @@ export const useAssetStore = create<AssetStore>()(
                 })),
             removeAsset: (id) =>
                 set((state) => {
+                    const removed = state.assets.find((asset) => asset.id === id);
                     const assets = state.assets.filter((asset) => asset.id !== id);
+                    // BUILTIN_MODE: 从素材库删除即释放服务端 OBS 对象与容量配额。
+                    // 只有素材库删除走这里 —— 画布里删节点不释放,因为同一份素材可能还被
+                    // 别的项目引用,那是「用完即弃」与「资产管理」的区别。
+                    if (removed && removed.kind !== "text" && isServerAssetKey(removed.data.storageKey)) {
+                        void deleteServerAsset(serverAssetId(removed.data.storageKey as string)).catch((error) => {
+                            console.warn("[canvas-assets] 删除服务端素材失败:", error);
+                        });
+                    }
                     get().cleanupImages({ assets });
                     return { assets };
                 }),

@@ -35,9 +35,7 @@ export const usePromptSourceStore = create<PromptSourceStore>()(
             addSource: () => createPromptSource(),
             saveSource: (source) =>
                 set((state) => ({
-                    sources: state.sources.some((item) => item.id === source.id)
-                        ? state.sources.map((item) => (item.id === source.id && !item.builtIn ? createPromptSource(source) : item))
-                        : [...state.sources, createPromptSource(source)],
+                    sources: state.sources.some((item) => item.id === source.id) ? state.sources.map((item) => (item.id === source.id && !item.builtIn ? createPromptSource(source) : item)) : [...state.sources, createPromptSource(source)],
                 })),
             removeSource: (id) => set((state) => ({ sources: state.sources.filter((item) => item.id !== id || item.builtIn) })),
             toggleSource: (id, enabled) => set((state) => ({ sources: state.sources.map((item) => (item.id === id ? { ...item, enabled } : item)) })),

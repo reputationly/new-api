@@ -4,7 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 
 import { fetchChannelModels } from "@/services/api/image";
-import type { ModelChannel } from "@/stores/use-config-store";
+import { BUILTIN_MODE, type ModelChannel } from "@/stores/use-config-store";
 
 // Channel model selector: fetch upstream models or add them manually, then include checked models in the channel list.
 export function ModelSelectModal({ open, channel, selectedNames, onConfirm, onClose }: { open: boolean; channel: ModelChannel | null; selectedNames: string[]; onConfirm: (names: string[]) => void; onClose: () => void }) {
@@ -61,7 +61,8 @@ export function ModelSelectModal({ open, channel, selectedNames, onConfirm, onCl
 
     const fetchModels = async () => {
         if (!channel) return;
-        if (!channel.baseUrl.trim() || !channel.apiKey.trim()) {
+        // BUILTIN_MODE: 站内渠道无 apiKey,只校验 baseUrl
+        if (!channel.baseUrl.trim() || (!BUILTIN_MODE && !channel.apiKey.trim())) {
             message.error(t("config.modelSelect.missingConfig"));
             return;
         }

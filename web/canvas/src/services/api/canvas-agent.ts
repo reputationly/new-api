@@ -6,7 +6,10 @@ type AgentConfigResponse = { ok?: boolean; protocolVersion?: number; url?: strin
 const AGENT_MESSAGE_ASSET_PATTERN = /^agent-asset:([a-f0-9]{64})\/([a-f0-9]{64}\.(?:gif|jpe?g|png|webp))$/;
 
 export class AgentApiError<T = unknown> extends Error {
-    constructor(readonly status: number, readonly response: T & { code?: string; error?: string; msg?: string }) {
+    constructor(
+        readonly status: number,
+        readonly response: T & { code?: string; error?: string; msg?: string },
+    ) {
         super(response.error || response.msg || i18n.t("agent.state.requestFailed"));
         this.name = "AgentApiError";
     }

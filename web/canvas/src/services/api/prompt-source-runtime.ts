@@ -92,7 +92,12 @@ function stringValue(value: unknown) {
 }
 
 function stringArray(value: unknown) {
-    return Array.isArray(value) ? value.map(stringValue).map((item) => item.trim()).filter(Boolean) : [];
+    return Array.isArray(value)
+        ? value
+              .map(stringValue)
+              .map((item) => item.trim())
+              .filter(Boolean)
+        : [];
 }
 
 function optionalString(value: unknown) {

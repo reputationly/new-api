@@ -10,7 +10,8 @@ import { exportCanvasNodes } from "@/lib/canvas/canvas-export";
 import { getNodeDefinition } from "@/lib/canvas/node-registry";
 import { cn } from "@/lib/utils";
 import { PromptDetailDialog } from "@/pages/prompts/components/prompt-detail-dialog";
-import { fetchSourcePrompts, type Prompt } from "@/services/api/prompts";
+import { fetchBuiltinPromptCategories, fetchSourcePrompts, type Prompt } from "@/services/api/prompts";
+import { BUILTIN_MODE } from "@/stores/use-config-store";
 import { uploadMediaFile } from "@/services/file-storage";
 import { uploadImage } from "@/services/image-storage";
 import { useAssetStore, type Asset, type AssetKind } from "@/stores/use-asset-store";
@@ -198,7 +199,16 @@ function CanvasNodesTab({ nodes, selectedNodeIds, onFocusNode, onPreviewNode, th
                     <ListChecks className="size-3.5" />
                     {selectMode ? t("common.cancel") : t("canvas.sidePanel.select")}
                 </button>
-                {selectMode ? null : <Select size="small" variant="borderless" className="w-20" value={typeFilter} onChange={setTypeFilter} options={NODE_FILTER_VALUES.map((value) => ({ value, label: value === "all" ? t("common.all") : t(`canvas.sidePanel.filter.${value}`) }))} />}
+                {selectMode ? null : (
+                    <Select
+                        size="small"
+                        variant="borderless"
+                        className="w-20"
+                        value={typeFilter}
+                        onChange={setTypeFilter}
+                        options={NODE_FILTER_VALUES.map((value) => ({ value, label: value === "all" ? t("common.all") : t(`canvas.sidePanel.filter.${value}`) }))}
+                    />
+                )}
             </div>
             <div className="px-3 pb-2.5">
                 <Input size="small" allowClear prefix={<Search className="size-3.5 text-stone-400" />} placeholder={t("canvas.sidePanel.searchNodes")} value={keyword} onChange={(e) => setKeyword(e.target.value)} />
@@ -213,7 +223,12 @@ function CanvasNodesTab({ nodes, selectedNodeIds, onFocusNode, onPreviewNode, th
                             const active = selectMode ? isChecked : selectedNodeIds.has(node.id);
                             return (
                                 <div key={node.id} className={cn("group flex w-full items-center rounded-lg transition", active ? "" : "hover:bg-black/5 dark:hover:bg-white/5")} style={active ? { background: theme.toolbar.activeBg } : undefined}>
-                                    <button type="button" onClick={() => (selectMode ? toggleChecked(node.id) : onFocusNode(node.id))} className="flex min-w-0 flex-1 items-center gap-3 px-2 py-2 text-left" title={selectMode ? undefined : t("canvas.sidePanel.focusNode")}>
+                                    <button
+                                        type="button"
+                                        onClick={() => (selectMode ? toggleChecked(node.id) : onFocusNode(node.id))}
+                                        className="flex min-w-0 flex-1 items-center gap-3 px-2 py-2 text-left"
+                                        title={selectMode ? undefined : t("canvas.sidePanel.focusNode")}
+                                    >
                                         {selectMode ? <CheckMark checked={isChecked} theme={theme} /> : null}
                                         <span className="grid size-10 shrink-0 place-items-center overflow-hidden rounded-md">
                                             {isImage ? <img src={node.metadata!.content} alt={node.title} className="size-full object-cover" /> : <Icon className="size-5 opacity-60" />}
@@ -226,7 +241,13 @@ function CanvasNodesTab({ nodes, selectedNodeIds, onFocusNode, onPreviewNode, th
                                     </button>
                                     {selectMode || !isImage ? null : (
                                         <div className="flex shrink-0 flex-col items-center gap-0.5 pr-1.5">
-                                            <button type="button" onClick={() => onPreviewNode(node.id)} className="grid size-7 place-items-center rounded-md opacity-55 transition hover:bg-black/10 hover:opacity-100 dark:hover:bg-white/10" aria-label={t("canvas.sidePanel.preview")} title={t("canvas.sidePanel.preview")}>
+                                            <button
+                                                type="button"
+                                                onClick={() => onPreviewNode(node.id)}
+                                                className="grid size-7 place-items-center rounded-md opacity-55 transition hover:bg-black/10 hover:opacity-100 dark:hover:bg-white/10"
+                                                aria-label={t("canvas.sidePanel.preview")}
+                                                title={t("canvas.sidePanel.preview")}
+                                            >
                                                 <Eye className="size-3.5" />
                                             </button>
                                         </div>
@@ -316,11 +337,23 @@ const CanvasAssetsTab = memo(function CanvasAssetsTab({ onInsert, theme }: { onI
             for (const file of files) {
                 if (file.type.startsWith("image/")) {
                     const image = await uploadImage(file);
-                    addAsset({ kind: "image", title: file.name || t("assets.kinds.image"), coverUrl: image.url, tags: [], data: { dataUrl: image.url, storageKey: image.storageKey, width: image.width, height: image.height, bytes: image.bytes, mimeType: image.mimeType } });
+                    addAsset({
+                        kind: "image",
+                        title: file.name || t("assets.kinds.image"),
+                        coverUrl: image.url,
+                        tags: [],
+                        data: { dataUrl: image.url, storageKey: image.storageKey, width: image.width, height: image.height, bytes: image.bytes, mimeType: image.mimeType },
+                    });
                     added += 1;
                 } else if (file.type.startsWith("video/")) {
                     const media = await uploadMediaFile(file, "video");
-                    addAsset({ kind: "video", title: file.name || t("assets.kinds.video"), coverUrl: "", tags: [], data: { url: media.url, storageKey: media.storageKey, width: media.width || 0, height: media.height || 0, bytes: media.bytes, mimeType: media.mimeType } });
+                    addAsset({
+                        kind: "video",
+                        title: file.name || t("assets.kinds.video"),
+                        coverUrl: "",
+                        tags: [],
+                        data: { url: media.url, storageKey: media.storageKey, width: media.width || 0, height: media.height || 0, bytes: media.bytes, mimeType: media.mimeType },
+                    });
                     added += 1;
                 }
             }
@@ -445,7 +478,10 @@ const CanvasPromptsTab = memo(function CanvasPromptsTab({ onInsert, theme }: { o
     const { message } = App.useApp();
     const { t } = useTranslation();
     const sources = usePromptSourceStore((state) => state.sources);
-    const enabledSources = useMemo(() => sources.filter((source) => source.enabled), [sources]);
+    // BUILTIN_MODE: 上游的「来源」是用户配置的多个 GitHub 仓库;内置版提示词都来自
+    // new-api 服务端,这里改用服务端返回的分类做分组(sourceId 即分类名)。
+    const builtinCategories = useQuery({ queryKey: ["builtin-prompt-categories"], queryFn: fetchBuiltinPromptCategories, enabled: BUILTIN_MODE, staleTime: 1000 * 60 * 60 });
+    const enabledSources = useMemo(() => (BUILTIN_MODE ? (builtinCategories.data || []).map((name) => ({ id: name, name, enabled: true })) : sources.filter((source) => source.enabled)), [builtinCategories.data, sources]);
     const [keyword, setKeyword] = useState("");
     const [expanded, setExpanded] = useState<Record<string, boolean>>({});
     const [detail, setDetail] = useState<Prompt | null>(null);
@@ -466,19 +502,23 @@ const CanvasPromptsTab = memo(function CanvasPromptsTab({ onInsert, theme }: { o
             </div>
             <div className="min-h-0 flex-1 overflow-y-auto px-2 pb-3">
                 <div className="space-y-1">
-                    {enabledSources.length ? enabledSources.map((source) => (
-                        <PromptSourceGroup
-                            key={source.id}
-                            sourceId={source.id}
-                            sourceName={source.name}
-                            keyword={keyword}
-                            open={!!expanded[source.id]}
-                            theme={theme}
-                            onToggle={() => setExpanded((prev) => ({ ...prev, [source.id]: !prev[source.id] }))}
-                            onInsert={onInsert}
-                            onView={setDetail}
-                        />
-                    )) : <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={t("canvas.sidePanel.noPrompts")} className="pt-12" />}
+                    {enabledSources.length ? (
+                        enabledSources.map((source) => (
+                            <PromptSourceGroup
+                                key={source.id}
+                                sourceId={source.id}
+                                sourceName={source.name}
+                                keyword={keyword}
+                                open={!!expanded[source.id]}
+                                theme={theme}
+                                onToggle={() => setExpanded((prev) => ({ ...prev, [source.id]: !prev[source.id] }))}
+                                onInsert={onInsert}
+                                onView={setDetail}
+                            />
+                        ))
+                    ) : (
+                        <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={t("canvas.sidePanel.noPrompts")} className="pt-12" />
+                    )}
                 </div>
             </div>
             <PromptDetailDialog prompt={detail} onClose={() => setDetail(null)} onCopy={(prompt) => void copyPrompt(prompt)} />
@@ -568,7 +608,13 @@ function PromptRow({ item, theme, onInsert, onView }: { item: Prompt; theme: Can
                 <div className="mt-0.5 truncate text-xs leading-snug opacity-50">{item.prompt}</div>
             </button>
             <div className="flex shrink-0 flex-col items-center gap-0.5">
-                <button type="button" onClick={onView} className="grid size-6 place-items-center rounded-md opacity-60 transition hover:bg-black/10 hover:opacity-100 dark:hover:bg-white/10" aria-label={t("canvas.sidePanel.viewDetails")} title={t("canvas.sidePanel.viewDetails")}>
+                <button
+                    type="button"
+                    onClick={onView}
+                    className="grid size-6 place-items-center rounded-md opacity-60 transition hover:bg-black/10 hover:opacity-100 dark:hover:bg-white/10"
+                    aria-label={t("canvas.sidePanel.viewDetails")}
+                    title={t("canvas.sidePanel.viewDetails")}
+                >
                     <Eye className="size-3.5" />
                 </button>
                 <button

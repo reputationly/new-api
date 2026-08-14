@@ -13,7 +13,19 @@ import { exportAppConfig, importAppConfig } from "@/services/config-file";
 import { syncAppDataToWebdav, type AppSyncDomainKey, type AppSyncProgressEvent } from "@/services/app-sync";
 import { testWebdavConnection, WEBDAV_MANIFEST_FILE_NAME } from "@/services/webdav-sync";
 import { audioFormatOptions, audioVoiceOptions, normalizeAudioSpeedValue } from "@/lib/audio-generation";
-import { createModelChannel, modelOptionsFromChannels, normalizeModelOptionValue, selectableModelsByCapability, useConfigStore, type AiConfig, type ApiCallFormat, type ConfigTabKey, type ModelCapability, type ModelChannel } from "@/stores/use-config-store";
+import {
+    BUILTIN_MODE,
+    createModelChannel,
+    modelOptionsFromChannels,
+    normalizeModelOptionValue,
+    selectableModelsByCapability,
+    useConfigStore,
+    type AiConfig,
+    type ApiCallFormat,
+    type ConfigTabKey,
+    type ModelCapability,
+    type ModelChannel,
+} from "@/stores/use-config-store";
 
 type ModelGroup = {
     capability: ModelCapability;
@@ -185,10 +197,13 @@ export function AppConfigPanel({ showDoneButton = false, initialTab = "channels"
                         children: (
                             <div>
                                 <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
-                                    <div className="text-xs text-stone-500">{t("config.channels.description")}</div>
-                                    <Button type="primary" icon={<Plus className="size-4" />} onClick={addChannel}>
-                                        {t("config.channels.add")}
-                                    </Button>
+                                    {/* BUILTIN_MODE: 渠道固定为「站内」一条,不允许新增外部渠道 */}
+                                    <div className="text-xs text-stone-500">{BUILTIN_MODE ? "画布使用站内渠道，按你的账号权限与计费规则调用平台已配置的模型。" : t("config.channels.description")}</div>
+                                    {BUILTIN_MODE ? null : (
+                                        <Button type="primary" icon={<Plus className="size-4" />} onClick={addChannel}>
+                                            {t("config.channels.add")}
+                                        </Button>
+                                    )}
                                 </div>
                                 <div className="space-y-2">
                                     {config.channels.map((channel) => (
@@ -203,7 +218,7 @@ export function AppConfigPanel({ showDoneButton = false, initialTab = "channels"
                                                 <Button size="small" icon={<Pencil className="size-3.5" />} onClick={() => setEditingChannelId(channel.id)}>
                                                     {t("common.edit")}
                                                 </Button>
-                                                <Button size="small" danger icon={<Trash2 className="size-3.5" />} onClick={() => deleteChannel(channel.id)} />
+                                                {BUILTIN_MODE ? null : <Button size="small" danger icon={<Trash2 className="size-3.5" />} onClick={() => deleteChannel(channel.id)} />}
                                             </div>
                                         </div>
                                     ))}
@@ -263,55 +278,10 @@ export function AppConfigPanel({ showDoneButton = false, initialTab = "channels"
                             </Form>
                         ),
                     },
-                    {
-                        key: "prompt-sources",
-                        label: t("config.tabs.promptSources"),
-                        children: <ConfigPromptSources />,
-                    },
-                    {
-                        key: "webdav",
-                        label: "WebDAV",
-                        children: (
-                            <Form layout="vertical" requiredMark={false}>
-                                <section className="rounded-lg border border-stone-200 p-3 dark:border-stone-800">
-                                    <div className="mb-3 flex flex-wrap items-start justify-between gap-3">
-                                        <div>
-                                            <div className="flex items-center gap-2 text-sm font-semibold">
-                                                <Cloud className="size-4" />
-                                                {t("config.webdav.title")}
-                                            </div>
-                                            <div className="mt-1 text-xs text-stone-500">{t("config.webdav.description")}</div>
-                                        </div>
-                                        <div className="text-xs text-stone-500">{webdav.lastSyncedAt ? t("config.webdav.lastSynced", { time: formatWebdavTime(webdav.lastSyncedAt, locale) }) : t("config.webdav.neverSynced")}</div>
-                                    </div>
-                                    <div className="grid gap-4 md:grid-cols-2">
-                                        <Form.Item label={t("config.webdav.url")} className="mb-4">
-                                            <Input value={webdav.url} placeholder="https://nas.example.com/webdav" onChange={(event) => updateWebdavConfig("url", event.target.value)} />
-                                        </Form.Item>
-                                        <Form.Item label={t("config.webdav.directory")} extra={t("config.webdav.directoryDescription", { manifest: WEBDAV_MANIFEST_FILE_NAME })} className="mb-4">
-                                            <Input value={webdav.directory} placeholder="infinite-canvas" onChange={(event) => updateWebdavConfig("directory", event.target.value)} />
-                                        </Form.Item>
-                                        <Form.Item label={t("config.webdav.username")} className="mb-0">
-                                            <Input value={webdav.username} autoComplete="username" onChange={(event) => updateWebdavConfig("username", event.target.value)} />
-                                        </Form.Item>
-                                        <Form.Item label={t("config.webdav.password")} className="mb-0">
-                                            <Input.Password value={webdav.password} autoComplete="current-password" onChange={(event) => updateWebdavConfig("password", event.target.value)} />
-                                        </Form.Item>
-                                    </div>
-                                    <div className="mt-4 flex flex-wrap items-center gap-2">
-                                        <Button icon={<Wifi className="size-4" />} disabled={!webdavReady || syncingWebdav} loading={testingWebdav} onClick={() => void testWebdav()}>
-                                            {t("config.webdav.test")}
-                                        </Button>
-                                        <Button type="primary" icon={<RefreshCw className="size-4" />} disabled={!webdavReady || testingWebdav} loading={syncingWebdav} onClick={() => void syncWebdav()}>
-                                            {t(syncingWebdav ? "config.webdav.syncing" : "config.webdav.syncNow")}
-                                        </Button>
-                                        {webdavSyncStatus ? <span className="text-xs text-stone-500">{syncStageLabel(webdavSyncStatus, t)}</span> : null}
-                                    </div>
-                                    {syncingWebdav || webdavSyncStatus ? <WebdavProgressGrid progress={webdavDomainProgress} t={t} /> : null}
-                                </section>
-                            </Form>
-                        ),
-                    },
+                    // BUILTIN_MODE: 提示词来源配置隐藏 —— 内置版由服务端 /api/prompts 供数,不走客户端多来源
+
+                    // BUILTIN_MODE: WebDAV 同步整块隐藏 —— 画布项目与素材由 new-api 服务端持久化
+
                     {
                         key: "local-storage",
                         label: t("config.tabs.localStorage"),

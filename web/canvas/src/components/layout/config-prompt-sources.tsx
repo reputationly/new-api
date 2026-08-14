@@ -33,11 +33,7 @@ export function ConfigPromptSources() {
     const intervalOptions = PROMPT_SOURCE_INTERVALS.map((value) => ({ value, label: t(`config.promptSources.intervals.${intervalKey(value)}`) }));
 
     const invalidatePrompts = async () => {
-        await Promise.all([
-            queryClient.invalidateQueries({ queryKey: ["prompts"] }),
-            queryClient.invalidateQueries({ queryKey: ["side-panel-prompts"] }),
-            queryClient.invalidateQueries({ queryKey: STATUS_QUERY_KEY }),
-        ]);
+        await Promise.all([queryClient.invalidateQueries({ queryKey: ["prompts"] }), queryClient.invalidateQueries({ queryKey: ["side-panel-prompts"] }), queryClient.invalidateQueries({ queryKey: STATUS_QUERY_KEY })]);
     };
 
     const handleSave = (source: PromptSource) => {
@@ -101,7 +97,14 @@ export function ConfigPromptSources() {
                     const status = statusQuery.data?.[source.id];
                     return (
                         <div key={source.id} className="flex flex-wrap items-center gap-3 rounded-lg border border-stone-200 px-4 py-3 dark:border-stone-800">
-                            <Switch size="small" checked={source.enabled} onChange={(checked) => { toggleSource(source.id, checked); void invalidatePrompts(); }} />
+                            <Switch
+                                size="small"
+                                checked={source.enabled}
+                                onChange={(checked) => {
+                                    toggleSource(source.id, checked);
+                                    void invalidatePrompts();
+                                }}
+                            />
                             <div className="min-w-[220px] flex-1">
                                 <div className="flex min-w-0 items-center gap-2">
                                     <span className="truncate text-sm font-semibold">{source.name}</span>
@@ -112,7 +115,17 @@ export function ConfigPromptSources() {
                                         {source.homepage || source.url}
                                     </a>
                                     <span className="tabular-nums">{t("config.promptSources.itemCount", { count: status?.count ?? 0 })}</span>
-                                    {status?.lastError ? <Tag color="error" className="m-0 text-[10px]" title={status.lastError}>{t("config.promptSources.failed")}</Tag> : status?.lastSuccessAt ? <Tag color="success" className="m-0 text-[10px]">{t("config.promptSources.healthy")}</Tag> : <Tag className="m-0 text-[10px]">{t("config.promptSources.unsynced")}</Tag>}
+                                    {status?.lastError ? (
+                                        <Tag color="error" className="m-0 text-[10px]" title={status.lastError}>
+                                            {t("config.promptSources.failed")}
+                                        </Tag>
+                                    ) : status?.lastSuccessAt ? (
+                                        <Tag color="success" className="m-0 text-[10px]">
+                                            {t("config.promptSources.healthy")}
+                                        </Tag>
+                                    ) : (
+                                        <Tag className="m-0 text-[10px]">{t("config.promptSources.unsynced")}</Tag>
+                                    )}
                                     <span>{status?.lastSuccessAt ? t("config.promptSources.lastSuccess", { time: formatTime(status.lastSuccessAt, i18n.resolvedLanguage) }) : t("config.promptSources.neverFetched")}</span>
                                 </div>
                             </div>
@@ -123,8 +136,16 @@ export function ConfigPromptSources() {
                                 <Button size="small" icon={<RefreshCw className="size-3.5" />} loading={refreshingId === source.id} onClick={() => void handleRefreshOne(source)}>
                                     {t("config.promptSources.refresh")}
                                 </Button>
-                                {!source.builtIn ? <Button size="small" icon={<Pencil className="size-3.5" />} onClick={() => setEditingSource(source)}>{t("config.promptSources.edit")}</Button> : null}
-                                {!source.builtIn ? <Button size="small" danger icon={<Trash2 className="size-3.5" />} onClick={() => handleDelete(source)}>{t("common.delete")}</Button> : null}
+                                {!source.builtIn ? (
+                                    <Button size="small" icon={<Pencil className="size-3.5" />} onClick={() => setEditingSource(source)}>
+                                        {t("config.promptSources.edit")}
+                                    </Button>
+                                ) : null}
+                                {!source.builtIn ? (
+                                    <Button size="small" danger icon={<Trash2 className="size-3.5" />} onClick={() => handleDelete(source)}>
+                                        {t("common.delete")}
+                                    </Button>
+                                ) : null}
                             </div>
                         </div>
                     );

@@ -3,7 +3,7 @@ import { ListPlus, Trash2 } from "lucide-react";
 import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 
-import { defaultBaseUrlForApiFormat, guessCapability, normalizeChannelModels, type ApiCallFormat, type ChannelModel, type ModelCapability, type ModelChannel } from "@/stores/use-config-store";
+import { BUILTIN_MODE, defaultBaseUrlForApiFormat, guessCapability, normalizeChannelModels, type ApiCallFormat, type ChannelModel, type ModelCapability, type ModelChannel } from "@/stores/use-config-store";
 import { ModelScriptEditor } from "./model-script-editor";
 import { ModelSelectModal } from "./model-select-modal";
 
@@ -65,24 +65,30 @@ export function ChannelEditorDrawer({ open, channel, onSave, onClose }: { open: 
                 </Space>
             }
         >
-            <div className="grid gap-4 md:grid-cols-2">
-                <label className="block">
-                    <span className="mb-1 block text-sm font-medium">{t("config.channelEditor.name")}</span>
-                    <Input value={draft.name} onChange={(event) => patch({ name: event.target.value })} />
-                </label>
-                <label className="block">
-                    <span className="mb-1 block text-sm font-medium">{t("config.channelEditor.protocol")}</span>
-                    <Select className="w-full" value={draft.apiFormat} options={apiFormatOptions} onChange={changeApiFormat} />
-                </label>
-                <label className="block md:col-span-2">
-                    <span className="mb-1 block text-sm font-medium">{t("config.channelEditor.baseUrl")}</span>
-                    <Input value={draft.baseUrl} onChange={(event) => patch({ baseUrl: event.target.value })} placeholder="https://api.example.com" />
-                </label>
-                <label className="block md:col-span-2">
-                    <span className="mb-1 block text-sm font-medium">API Key</span>
-                    <Input.Password value={draft.apiKey} onChange={(event) => patch({ apiKey: event.target.value })} placeholder="sk-..." />
-                </label>
-            </div>
+            {/* BUILTIN_MODE: 站内渠道的连接字段(名称/协议/地址/Key)全部锁死,只允许改模型列表。
+                不允许 BYO key —— 画布只能用平台已配置的渠道,走统一鉴权与计费。 */}
+            {BUILTIN_MODE ? (
+                <div className="rounded-lg border border-stone-200 px-4 py-3 text-xs text-stone-500 dark:border-stone-800">画布使用站内渠道，无需填写地址与 API Key。下方可挑选你的账号有权限使用的模型。</div>
+            ) : (
+                <div className="grid gap-4 md:grid-cols-2">
+                    <label className="block">
+                        <span className="mb-1 block text-sm font-medium">{t("config.channelEditor.name")}</span>
+                        <Input value={draft.name} onChange={(event) => patch({ name: event.target.value })} />
+                    </label>
+                    <label className="block">
+                        <span className="mb-1 block text-sm font-medium">{t("config.channelEditor.protocol")}</span>
+                        <Select className="w-full" value={draft.apiFormat} options={apiFormatOptions} onChange={changeApiFormat} />
+                    </label>
+                    <label className="block md:col-span-2">
+                        <span className="mb-1 block text-sm font-medium">{t("config.channelEditor.baseUrl")}</span>
+                        <Input value={draft.baseUrl} onChange={(event) => patch({ baseUrl: event.target.value })} placeholder="https://api.example.com" />
+                    </label>
+                    <label className="block md:col-span-2">
+                        <span className="mb-1 block text-sm font-medium">API Key</span>
+                        <Input.Password value={draft.apiKey} onChange={(event) => patch({ apiKey: event.target.value })} placeholder="sk-..." />
+                    </label>
+                </div>
+            )}
 
             <div className="mt-6 mb-3 flex flex-wrap items-center justify-between gap-2">
                 <div>

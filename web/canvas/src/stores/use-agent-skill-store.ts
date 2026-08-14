@@ -48,9 +48,7 @@ export const useAgentSkillStore = create<AgentSkillStore>((set, get) => ({
             const selectedSkill = selected ? skills.find((item) => item.name === selected.name && item.path === selected.path && item.enabled) || null : null;
             const selectionChanged = Boolean(selected && !selectedSkill);
             if (selectionChanged) clearSelectedSkillPrompt(current);
-            const autoPrompt = selectedSkill
-                ? replaceAutoPrompt(current.autoPrompt, selectedSkill.interface?.defaultPrompt?.trim() || `$${selectedSkill.name}`, false)
-                : "";
+            const autoPrompt = selectedSkill ? replaceAutoPrompt(current.autoPrompt, selectedSkill.interface?.defaultPrompt?.trim() || `$${selectedSkill.name}`, false) : "";
             set({ skills, selectedSkill, autoPrompt, selectionRevision: current.selectionRevision + (selectionChanged ? 1 : 0), loading: false, loaded: true, errors: (response.errors || []).map(skillErrorText) });
         } catch (error) {
             if (sequence !== loadSequence) return;

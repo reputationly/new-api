@@ -9,7 +9,7 @@ import { VersionReleaseModal } from "@/components/layout/version-release-modal";
 import { DOCS_URL } from "@/constant/env";
 import { cn } from "@/lib/utils";
 import { canvasThemes } from "@/lib/canvas-theme";
-import { useConfigStore } from "@/stores/use-config-store";
+import { BUILTIN_MODE, useConfigStore } from "@/stores/use-config-store";
 import { useThemeStore } from "@/stores/use-theme-store";
 
 type UserStatusActionsProps = {
@@ -40,7 +40,9 @@ export function UserStatusActions({ showConfig = true, variant = "default", onOp
                     <Settings2 className="size-4" />
                 </button>
             ) : null}
-            <VersionReleaseModal style={versionStyle} />
+            {/* BUILTIN_MODE: 版本检查入口隐藏 —— 画布版本跟随 new-api 镜像发布,
+                用户既升不了级,也不该为此打一次 GitHub 请求 */}
+            {BUILTIN_MODE ? null : <VersionReleaseModal style={versionStyle} />}
             <GitHubLink className={cn("bg-transparent hover:bg-transparent dark:hover:bg-transparent", gitHubClassName)} style={gitHubStyle} />
             {onOpenShortcuts ? (
                 <button type="button" className={naturalIconClass} style={iconStyle} onClick={onOpenShortcuts} aria-label={t("topNav.shortcuts")} title={t("topNav.shortcuts")}>

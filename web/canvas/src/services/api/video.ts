@@ -1,6 +1,7 @@
 import axios from "axios";
 import { nanoid } from "nanoid";
 
+import { builtinHeaders } from "@/lib/builtin-auth";
 import i18n from "@/i18n";
 import { dataUrlToFile } from "@/lib/image-utils";
 import { getMediaBlob, uploadMediaFile, type UploadedFile } from "@/services/file-storage";
@@ -37,9 +38,13 @@ function aiApiUrl(config: AiConfig, path: string) {
     return buildApiUrl(config.baseUrl, path);
 }
 
+// BUILTIN_MODE: 站内渠道(baseUrl=/pg)靠 session cookie 鉴权,但 new-api 的 UserAuth
+// 中间件还强制要求 New-Api-User 头(缺失直接 401),故在此统一注入。
+// 非内置模式 builtinHeaders() 返回空对象,上游行为不变。
 function aiHeaders(config: AiConfig, contentType?: string) {
     return {
         Authorization: `Bearer ${config.apiKey}`,
+        ...builtinHeaders(),
         ...(contentType ? { "Content-Type": contentType } : {}),
     };
 }
@@ -203,7 +208,8 @@ async function pollSeedanceTask(config: AiConfig, task: VideoGenerationTask, opt
         const url = videoResultUrl(state);
         if (url) return { status: "completed", result: await videoResultFromUrl(url, options) };
         if (state.status === "succeeded" || state.status === "completed") return { status: "failed", error: apiText("seedanceNoVideoUrl") };
-        if (state.status === "failed" || state.status === "cancelled" || state.status === "expired") return { status: "failed", error: readApiErrorMessage(state.error?.message) || apiText(state.status === "expired" ? "seedanceVideoTimeout" : "seedanceVideoFailed") };
+        if (state.status === "failed" || state.status === "cancelled" || state.status === "expired")
+            return { status: "failed", error: readApiErrorMessage(state.error?.message) || apiText(state.status === "expired" ? "seedanceVideoTimeout" : "seedanceVideoFailed") };
         return { status: "pending" };
     } catch (error) {
         throw new Error(readAxiosError(error, apiText("seedanceTaskQueryFailed")));
@@ -353,17 +359,8 @@ function readApiErrorMessage(value: unknown): string {
     if (typeof value !== "object") return "";
     const payload = value as { msg?: unknown; message?: unknown; error?: unknown; detail?: unknown };
     // error may be a string or an object containing a message.
-    const errorMsg =
-        typeof payload.error === "string"
-            ? payload.error
-            : (payload.error as { message?: unknown })?.message;
-    return (
-        readApiErrorMessage(payload.msg) ||
-        readApiErrorMessage(payload.message) ||
-        readApiErrorMessage(errorMsg) ||
-        readApiErrorMessage(payload.detail) ||
-        ""
-    );
+    const errorMsg = typeof payload.error === "string" ? payload.error : (payload.error as { message?: unknown })?.message;
+    return readApiErrorMessage(payload.msg) || readApiErrorMessage(payload.message) || readApiErrorMessage(errorMsg) || readApiErrorMessage(payload.detail) || "";
 }
 
 function readAxiosError(error: unknown, fallback: string) {

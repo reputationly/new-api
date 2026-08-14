@@ -1,3 +1,7 @@
+import { fetchServerAssetUrl, isServerAssetKey, serverAssetId, SERVER_ASSET_PREFIX, uploadAssetToServer } from "@/services/api/canvas-assets";
+
+// BUILTIN_MODE: 图片二进制优先入服务端素材库(OBS),本地 IndexedDB 仅作缓存
+const BUILTIN = __BUILTIN_MODE__;
 import localforage from "localforage";
 
 import { nanoid } from "nanoid";
@@ -20,7 +24,18 @@ const objectUrls = new Map<string, string>();
 
 export async function uploadImage(input: string | Blob): Promise<UploadedImage> {
     const blob = typeof input === "string" ? await (await fetch(input)).blob() : input;
-    const storageKey = `image:${nanoid()}`;
+    let storageKey = `image:${nanoid()}`;
+    // BUILTIN_MODE: 二进制优先入服务端素材库(OBS),本地 IndexedDB 只当缓存 ——
+    // 否则换设备/清缓存就丢图,画布项目里存的 storageKey 全部失效。
+    if (BUILTIN) {
+        try {
+            const asset = await uploadAssetToServer(blob);
+            storageKey = `${SERVER_ASSET_PREFIX}${asset.asset_id}`;
+        } catch (error) {
+            // 服务端不可用或超配额时回退纯本地,不阻塞创作
+            console.warn("[canvas-assets] 图片上传服务端素材库失败,回退本地存储:", error);
+        }
+    }
     await store.setItem(storageKey, blob);
     const url = URL.createObjectURL(blob);
     objectUrls.set(storageKey, url);
@@ -33,7 +48,17 @@ export async function resolveImageUrl(storageKey?: string, fallback = "") {
     const cached = objectUrls.get(storageKey);
     if (cached) return cached;
     const blob = await store.getItem<Blob>(storageKey);
-    if (!blob) return fallback;
+    if (!blob) {
+        // BUILTIN_MODE: 本地缓存缺失(换设备/清缓存)时,服务端素材经短期签名 URL 恢复
+        if (BUILTIN && isServerAssetKey(storageKey)) {
+            try {
+                return await fetchServerAssetUrl(serverAssetId(storageKey));
+            } catch {
+                return fallback;
+            }
+        }
+        return fallback;
+    }
     const url = URL.createObjectURL(blob);
     objectUrls.set(storageKey, url);
     return url;
