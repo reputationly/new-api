@@ -73,7 +73,14 @@ import {
     sourceNodeReferenceImages,
 } from "@/lib/canvas/canvas-generation-helpers";
 import { getNodeDefinition, isBuiltinNodeType as isBuiltinType, useNodeRegistryVersion } from "@/lib/canvas/node-registry";
+import { lazy, Suspense } from "react";
+
 import { appendCameraPrompt } from "@/lib/canvas/canvas-camera";
+import { createDirectorProject, normalizeDirectorProject, type DirectorProject } from "@/lib/director/project";
+import type { DirectorCapture } from "@/components/director/director-stage";
+
+// three.js 约 600KB,只有真的打开导演台才值得下载
+const DirectorStage = lazy(() => import("@/components/director/director-stage").then((module) => ({ default: module.DirectorStage })));
 import { extractWorkflow, instantiateWorkflow, stripStaleGroupIds, type CanvasWorkflow } from "@/lib/canvas/canvas-workflow";
 import { CanvasWorkflowModal } from "@/components/canvas/canvas-workflow-modal";
 import { useWorkflowStore } from "@/stores/use-workflow-store";
@@ -227,6 +234,7 @@ function InfiniteCanvasPage() {
     const [showImageInfo, setShowImageInfo] = useState(false);
     const [clearConfirmOpen, setClearConfirmOpen] = useState(false);
     const [workflowOpen, setWorkflowOpen] = useState(false);
+    const [directorNodeId, setDirectorNodeId] = useState<string | null>(null);
     const [assetPickerOpen, setAssetPickerOpen] = useState(false);
     const [projectLoaded, setProjectLoaded] = useState(false);
     const [toolbarNodeId, setToolbarNodeId] = useState<string | null>(null);
@@ -499,6 +507,55 @@ function InfiniteCanvasPage() {
             } catch (error) {
                 message.error(error instanceof Error ? error.message : "保存失败");
             }
+        },
+        [message],
+    );
+
+    // ── 3D 导演台 ──────────────────────────────────────────────────────────
+    const directorNode = useMemo(() => nodes.find((node) => node.id === directorNodeId) || null, [directorNodeId, nodes]);
+    const directorProject = useMemo<DirectorProject | null>(() => {
+        if (!directorNode) return null;
+        const raw = directorNode.metadata?.director;
+        const makeId = () => `d${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
+        return raw ? normalizeDirectorProject(raw, makeId) : createDirectorProject(makeId);
+    }, [directorNode]);
+
+    const saveDirectorProject = useCallback(
+        (project: DirectorProject) => {
+            if (!directorNodeId) return;
+            setNodes((prev) => prev.map((node) => (node.id === directorNodeId ? { ...node, metadata: { ...node.metadata, director: project } } : node)));
+        },
+        [directorNodeId],
+    );
+
+    // 截图落成独立图片节点,不自动连线:导演台本身不产出媒体,连过去的下游
+    // 读不到任何东西,反而误导。要接给谁由用户自己拉线。
+    const receiveDirectorCaptures = useCallback(
+        async (nodeId: string, captures: DirectorCapture[]) => {
+            const anchor = nodesRef.current.find((node) => node.id === nodeId);
+            const originX = (anchor?.position.x ?? 0) + (anchor?.width ?? 420) + 60;
+            const originY = anchor?.position.y ?? 0;
+            const created: CanvasNodeData[] = [];
+            for (const [index, capture] of captures.entries()) {
+                const stored = await uploadImage(capture.dataUrl);
+                const meta = stored.width === 1 && stored.height === 1 ? await readImageMeta(stored.url) : stored;
+                const config = fitNodeSize(meta.width, meta.height);
+                const column = index % 4;
+                const row = Math.floor(index / 4);
+                created.push({
+                    id: `image-${Date.now()}-${index}-${Math.random().toString(36).slice(2, 6)}`,
+                    type: CanvasNodeType.Image,
+                    title: capture.fileName.replace(/\.png$/, ""),
+                    position: { x: originX + column * (config.width + 24), y: originY + row * (config.height + 24) },
+                    width: config.width,
+                    height: config.height,
+                    metadata: { ...imageMetadata({ ...stored, width: meta.width, height: meta.height }), prompt: capture.fileName },
+                });
+            }
+            if (!created.length) return;
+            setNodes((prev) => [...prev, ...created]);
+            setSelectedNodeIds(new Set(created.map((node) => node.id)));
+            message.success(`已插入 ${created.length} 张导演台截图`);
         },
         [message],
     );
@@ -3108,6 +3165,7 @@ function InfiniteCanvasPage() {
                             onRetry={handleNodeRetry}
                             onGenerateImage={generateImageFromTextNode}
                             onViewImage={handleNodeViewImage}
+                            onOpenDirector={setDirectorNodeId}
                             onContextMenu={handleNodeContextMenu}
                         />
                     ))}
@@ -3181,6 +3239,7 @@ function InfiniteCanvasPage() {
                     onAddCapability={createCapabilityNode}
                     onAddGroup={() => createNode(CanvasNodeType.Group)}
                     onOpenWorkflows={() => setWorkflowOpen(true)}
+                    onAddDirector={() => createNode(CanvasNodeType.Director)}
                     onAddExtensionNode={(type) => createNode(type)}
                     onUndo={undoCanvas}
                     onRedo={redoCanvas}
@@ -3191,6 +3250,12 @@ function InfiniteCanvasPage() {
                     onBackgroundModeChange={setBackgroundMode}
                     onShowImageInfoChange={setShowImageInfo}
                 />
+
+                {directorNodeId && directorProject ? (
+                    <Suspense fallback={null}>
+                        <DirectorStage project={directorProject} onChange={saveDirectorProject} onSendCaptures={(captures) => void receiveDirectorCaptures(directorNodeId, captures)} onClose={() => setDirectorNodeId(null)} />
+                    </Suspense>
+                ) : null}
 
                 <CanvasWorkflowModal open={workflowOpen} selectedCount={selectedNodeIds.size} onClose={() => setWorkflowOpen(false)} onSave={saveSelectionAsWorkflow} onInsert={insertWorkflow} />
 

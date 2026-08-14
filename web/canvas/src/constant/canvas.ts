@@ -53,6 +53,13 @@ export const NODE_DEFAULT_SIZE = {
             return i18n.t("canvas.nodeTypes.group");
         },
     },
+    [CanvasNodeType.Director]: {
+        width: 420,
+        height: 300,
+        get title() {
+            return "3D 导演台";
+        },
+    },
 } satisfies Record<CanvasNodeType, { width: number; height: number; title: string }>;
 
 export const NODE_SPECS = {
@@ -101,6 +108,14 @@ export const NODE_SPECS = {
         height: 480,
         get title() {
             return NODE_DEFAULT_SIZE[CanvasNodeType.Group].title;
+        },
+        metadata: { status: "idle" },
+    },
+    [CanvasNodeType.Director]: {
+        width: 420,
+        height: 300,
+        get title() {
+            return NODE_DEFAULT_SIZE[CanvasNodeType.Director].title;
         },
         metadata: { status: "idle" },
     },

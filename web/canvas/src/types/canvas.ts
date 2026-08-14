@@ -16,6 +16,7 @@ export enum CanvasNodeType {
     Video = "video",
     Audio = "audio",
     Group = "group",
+    Director = "director",
 }
 
 // Node types are open strings: built-ins use CanvasNodeType and plugins use "<pluginId>:<name>".
@@ -106,6 +107,9 @@ export type CanvasNodeMetadata = {
     // 任务产物落 IndexedDB 时的 storageKey:与 storageKey 一致才允许 task: 引用。
     // 节点媒体被上传/替换后 storageKey 变化即失配,防止下游消费旧任务产物。
     taskMediaKey?: string;
+    // 3D 导演台工程(仅 CanvasNodeType.Director 使用)。整包纯 JSON 随节点走,
+    // 里面没有二进制——人体是程序化生成的,不需要存模型。
+    director?: unknown;
     // 摄像机参数(机身/镜头/焦距/光圈);仅图片与视频能力使用
     camera?: CameraControlOptions;
     // 素材语义角色(角色/场景/道具/风格/首帧/音色),从素材库插入时带入。

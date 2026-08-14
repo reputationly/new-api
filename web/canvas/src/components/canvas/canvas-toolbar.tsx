@@ -1,7 +1,7 @@
 import type { CSSProperties, MouseEvent as ReactMouseEvent, ReactNode, RefObject } from "react";
 import { useEffect, useRef, useState } from "react";
 import { Button, Segmented, Switch } from "antd";
-import { CircleDot, Eraser, Grid2x2, Group, Hand, Image as ImageIcon, Info, MousePointer2, Music2, Palette, Puzzle, Redo2, Settings2, Square, Trash2, Type, Undo2, Upload, Video, Workflow } from "lucide-react";
+import { CircleDot, Clapperboard, Eraser, Grid2x2, Group, Hand, Image as ImageIcon, Info, MousePointer2, Music2, Palette, Puzzle, Redo2, Settings2, Square, Trash2, Type, Undo2, Upload, Video, Workflow } from "lucide-react";
 
 import { BUILTIN_MODE } from "@/stores/use-config-store";
 import { capabilitiesByModality } from "@/services/capabilities/registry";
@@ -24,6 +24,7 @@ export function CanvasToolbar({
     onAddConfig,
     onAddGroup,
     onOpenWorkflows,
+    onAddDirector,
     onAddCapability,
     onAddExtensionNode,
     onUndo,
@@ -49,6 +50,8 @@ export function CanvasToolbar({
     onAddGroup: () => void;
     /** BUILTIN_MODE: 打开工作流面板(保存选中子图 / 插入已存工作流) */
     onOpenWorkflows: () => void;
+    /** BUILTIN_MODE: 新建 3D 导演台节点 */
+    onAddDirector: () => void;
     /** BUILTIN_MODE: 新建能力节点 */
     onAddCapability: (capabilityKey: string) => void;
     onAddExtensionNode: (type: string) => void;
@@ -137,6 +140,10 @@ export function CanvasToolbar({
                     <Group className="size-4.5" />
                 </ToolbarButton>
                 {/* BUILTIN_MODE: 工作流 —— 把选中子图存成可复用模板,或插回一个已存的 */}
+                {/* BUILTIN_MODE: 3D 导演台 —— 摆姿势与机位,截图当生成参考 */}
+                <ToolbarButton id="tool-director" label="3D 导演台" hovered={hovered} hoverStyle={hoverStyle} wrapRef={wrapRef} onTipX={setTipX} onHover={setHovered} onClick={onAddDirector}>
+                    <Clapperboard className="size-4.5" />
+                </ToolbarButton>
                 <ToolbarButton id="tool-workflow" label="工作流" hovered={hovered} hoverStyle={hoverStyle} wrapRef={wrapRef} onTipX={setTipX} onHover={setHovered} onClick={onOpenWorkflows}>
                     <Workflow className="size-4.5" />
                 </ToolbarButton>

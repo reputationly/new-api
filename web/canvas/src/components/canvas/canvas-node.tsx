@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
-import { ChevronRight, Copy, Download, Group, Image as ImageIcon, Music2, Puzzle, RefreshCw, Star, Trash2, Video } from "lucide-react";
+import { ChevronRight, Clapperboard, Copy, Download, Group, Image as ImageIcon, Music2, Puzzle, RefreshCw, Star, Trash2, Video } from "lucide-react";
 
 import { canvasThemes } from "@/lib/canvas-theme";
 import { formatBytes } from "@/lib/image-utils";
@@ -54,6 +54,8 @@ type CanvasNodeProps = {
     onRetry?: (node: CanvasNodeData) => void;
     onGenerateImage?: (node: CanvasNodeData) => void;
     onViewImage?: (node: CanvasNodeData) => void;
+    /** 打开 3D 导演台全屏面板(仅 Director 节点) */
+    onOpenDirector?: (nodeId: string) => void;
     onContextMenu: (event: React.MouseEvent, nodeId: string) => void;
 };
 
@@ -78,6 +80,7 @@ type NodeContentRendererProps = {
     onDownloadBatchImage?: (imageId: string) => void;
     onRetryBatchImage?: (imageId: string) => void;
     onDeleteBatchImage?: (imageId: string) => void;
+    onOpenDirector?: (nodeId: string) => void;
     groupChildCount: number;
 };
 
@@ -118,6 +121,7 @@ export const CanvasNode = React.memo(function CanvasNode({
     onRetry,
     onGenerateImage,
     onViewImage,
+    onOpenDirector,
     onContextMenu,
 }: CanvasNodeProps) {
     const theme = canvasThemes[useThemeStore((state) => state.theme)];
@@ -427,6 +431,7 @@ export const CanvasNode = React.memo(function CanvasNode({
                         onRetryBatchImage={(imageId) => onRetryBatchImage?.(data, imageId)}
                         onDeleteBatchImage={(imageId) => onDeleteBatchImage?.(data.id, imageId)}
                         groupChildCount={groupChildCount}
+                        onOpenDirector={onOpenDirector}
                     />
                 </div>
 
@@ -477,7 +482,35 @@ const nodeContentRenderers = {
     [CanvasNodeType.Video]: VideoNodeContent,
     [CanvasNodeType.Audio]: AudioNodeContent,
     [CanvasNodeType.Group]: GroupNodeContent,
+    [CanvasNodeType.Director]: DirectorNodeContent,
 } satisfies Record<CanvasNodeType, (props: NodeContentRendererProps) => ReactNode>;
+
+// 导演台节点在画布上只是一个入口卡片:3D 编辑发生在全屏面板里。
+// 这里展示工程摘要,让用户不打开也知道这个节点里搭了什么。
+function DirectorNodeContent({ node, theme, onOpenDirector }: NodeContentRendererProps) {
+    const project = node.metadata?.director as { objects?: unknown[]; aspect?: string } | undefined;
+    const objectCount = Array.isArray(project?.objects) ? project.objects.length : 0;
+    return (
+        <div className="flex h-full w-full flex-col items-center justify-center gap-4 px-6 text-center" style={{ color: theme.node.text }}>
+            <Clapperboard className="size-10" strokeWidth={1.6} style={{ color: theme.node.muted }} />
+            <div className="text-sm" style={{ color: theme.node.placeholder }}>
+                {objectCount ? `场景内 ${objectCount} 个对象 · 画幅 ${project?.aspect || "16:9"}` : "在 3D 空间里摆姿势与机位,截图直接进画布"}
+            </div>
+            <button
+                type="button"
+                className="rounded-xl border px-5 py-1.5 text-sm font-medium transition"
+                style={{ background: theme.toolbar.itemHover, borderColor: theme.node.stroke, color: theme.node.text }}
+                onMouseDown={(event) => event.stopPropagation()}
+                onClick={(event) => {
+                    event.stopPropagation();
+                    onOpenDirector?.(node.id);
+                }}
+            >
+                打开导演台
+            </button>
+        </div>
+    );
+}
 
 function GroupNodeContent({ node, theme, groupChildCount }: NodeContentRendererProps) {
     const { t } = useTranslation();
