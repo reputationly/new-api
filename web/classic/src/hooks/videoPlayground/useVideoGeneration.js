@@ -1132,6 +1132,13 @@ export const useVideoGeneration = ({
               return;
             }
             convImages = [first, last];
+          } else if (isFLF2V && isKeyframeAutoFirstOrBoth) {
+            // auto_fl(Seedance 2.0):首帧必填(上面那条 !first 已挡)、尾帧可选。
+            // **这条分支不能省** —— 少了它 auto_fl 会掉进下面的 i2v 兜底,尾帧被静默
+            // 丢弃,而 keyframeTaskType 那侧照旧按 isKeyframeAuto 派生出 flf2v:
+            // 上游收到的是「task_type=flf2v + 只有一张 first_frame」,合法、不报错、
+            // 只按首帧生成 —— 用户传了尾帧却看不出没生效。
+            convImages = [first, last].filter(Boolean);
           } else {
             // i2v 模型(含关键帧 tab 下选中的 i2v 模型):只发首帧。切模型时 lastFrame 已被
             // 清空,这里再兜一道——多发的尾帧会被门面 400 拒(adaptor.go 的 i2v 反向防呆)。
