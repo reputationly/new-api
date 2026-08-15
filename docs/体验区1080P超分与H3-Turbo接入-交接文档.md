@@ -1,6 +1,7 @@
 # 体验区 1080P 超分链路改造 + MiniMax-H3 Turbo 接入 — 交接文档
 
 > 日期：2026-08-15 · 跨三个仓（new-api / LightX2V / vllm-omni）· 已全部推送
+> 修订：2026-08-15 代码复核后订正 §4.1 / §5.3 / §7（原 §4.1 的方向是错的，详见该节说明）
 >
 > 这份文档写给下一个接手的人（或 agent）。目标是让你**不必重跑我做过的实验**就能继续，
 > 并且知道哪些结论是实测的、哪些还只是推断。
@@ -153,14 +154,41 @@
 
 > 以下是分析结论，**没有实测数据**，接手时请先验证再采信。
 
-### 4.1 参考图分辨率（优先级最高）
+### 4.1 参考图短边被硬编码成 2048（优先级最高，已定位到代码）
 
-我用的参考图是 **1344×768，与输出同分辨率**。参考图进 packed sequence，token 数正比于像素数。
-降到 448×256（1/9 像素）理论上能把参考 token 砍掉近 9 倍。
+> **修订说明（2026-08-15，代码复核后）**：本节初版建议「在 new-api 物化输入时限制参考图尺寸」，
+> **那是错的**。`materializeR2VAInputs`（`adaptor.go:911`）只把 URL/base64 原样落 NFS，不解码
+> 也不缩放；而服务端会把参考图**重新归一**，所以在 new-api 侧压缩尺寸完全无效。下面是订正后的分析。
 
-- **不改代码、不改拓扑、不重启**，只需在 new-api 物化输入时限制上限尺寸
-- 与 i9 的失败位置（编码阶段、20 秒）完全吻合
-- **验证方法**：9 张 448×256 跑同档位，看是否通过
+**真正的机制**（`pipeline_minimax_h3.py`）：
+
+```python
+MINIMAX_H3_REFERENCE_IMAGE_SHORT_EDGE = 2048          # :113
+scale = MINIMAX_H3_REFERENCE_IMAGE_SHORT_EDGE / min(width, height)   # :540
+prepared_images.append(item.resize((ref_w, ref_h), LANCZOS))         # :1760  ref2va 路径
+```
+
+`scale` **没有 `min(1.0, …)` 上限**，所以小图会被**放大**：喂 448×256 得到 `scale = 8`，
+最终仍是 3584×2048。参考图的实际尺寸与调用方给什么无关，恒等于「短边 2048」。
+
+**量级核算**（config 里 `vae_ratio: 16`、`patch_size: [1,2,2]`）：
+
+| | 尺寸 | rows |
+|---|---|---|
+| 单张参考图 | 3584×2048 | `112 × 64 = 7,168` |
+| 9 张参考图 | — | **64,512** |
+| 目标视频（1344×768 / 362 帧） | — | ~107,856 |
+
+**9 张参考图约占目标序列的 60%**。这与实测的 OOM 位置完全吻合：i9 在 **20 秒**、还没进 denoise
+的编码阶段就炸，而 `MiniMaxH3VideoVAE.encode_image`（`vae.py:212`）对单图是**关掉 parallel
+tiling 后单卡编码**的。
+
+**还有个不对称值得注意**：参考**视频**用的是 `MINIMAX_H3_BASE_SHORT_EDGE = 768`
+（`reference_video.py:21`），唯独参考**图**是 2048，差 2.67 倍。
+
+**建议动作**：把 `MINIMAX_H3_REFERENCE_IMAGE_SHORT_EDGE` 下调（与参考视频对齐到 768），
+或做成请求级 / 环境变量可配。这是 **vllm-omni 侧的代码改动**，不是 new-api 的配置项。
+改动会影响参考图的信息量，**需要重做画质 A/B**，不能只看 OOM 是否消失。
 
 ### 4.2 四张卡为什么没发挥作用（已查清，非配置问题）
 
@@ -178,7 +206,31 @@ packed sequence 的激活。日志确认 `sp_size=1, ulysses=1, ring=1`，序列
 H3 的 `num_attention_heads = 56`，约束是 `(56 / tp) % ulysses_degree == 0`，tp2sp2 数学上可行，
 **但宿主内存扛不住**。出路见全局方案 :647（编码器量化 / 双机 8 卡 / 换 80 GB 卡）。
 
-### 4.3 参考 token 的 K/V 缓存（理论可行，收益存疑）
+### 4.3 两处代码级优化（已定位，改动很小）
+
+**① `denoise_loop.py:253` 的 `.float()[mask]` 顺序**
+
+```python
+mv_video_t = v_video.float()[update]        # 先给整条序列分配 fp32，再索引
+mv_audio_t = v_audio.float()[audio_update]
+```
+
+`update` 掩码只覆盖目标帧，但 `.float()` 在索引**之前**执行，会为**整条 packed sequence**
+分配一份 fp32 临时副本。按 107,856 rows × 5376 hidden × 4B ≈ **2.2 GB**。改成
+`v_video[update].float()` 即可，纯收益、无行为变化。在当前显存余量只有 1～3 GB 的水位下，
+这个量级足以决定成败。
+
+**② `condition_noise.py:89` 的 `full_t` 噪声**
+
+```python
+full_t = max(target_latent_t + imgvid_cond_num_frames, latent_t)
+noise = torch.randn(1, 24, full_t, latent_h, latent_w, ...)[:, :, :latent_t]   # 生成后立刻切掉
+```
+
+先按 `full_t` 分配再切到 `latent_t`，浪费真实存在。但它在 **CPU / fp32**、逐个参考项串行分配、
+用完即释放，**对 GPU OOM 没有帮助**，只减 CPU 峰值与分配开销。优先级低于上面几条。
+
+### 4.4 参考 token 的 K/V 缓存（理论可行，收益存疑）
 
 `denoise_loop.py:227-290` 每步把整条 packed sequence 过 50 层，而参考行每步被重置回锚点
 （`video_rows[~update] = cond_anchor`）——**输入不变却重算 20 遍**。
@@ -198,13 +250,24 @@ H3 的 `num_attention_heads = 56`，约束是 `(56 / tp) % ulysses_degree == 0`�
    环境变量**（`vllm_omni.py:366`），在模型实例的 Environment Variables 里配**无效**。
    直接在 backend_parameters 里传 `--allowed-local-media-path=/nfs-output`（先例见
    `lightx2v-节点运维手册.md:383`）。**绝不能填 `/`**。
-3. **`DELETE /v1/tasks/{id}` 会把引擎留在脏状态**：取消后 `is_processing=false` 但
-   `active_count=1`，后续任务永远 pending、显存不释放，**必须重启实例**。
-   生产影响：用户点一次取消，那个实例可能就废了。**这是个未修的真实缺陷。**
+3. **在 vLLM-Omni H3 上，`DELETE /v1/tasks/{id}` 之后实例卡死（实测现象，根因未定位）**：
+   2026-08-15 取消三台的在跑任务后，`10.0.0.90:40058` 与 `10.0.0.24:40039` 持续处于
+   `is_processing=false` 但 `active_count=1`，新任务 pending 三分钟不动、显存不释放
+   （38.1 / 37.3 GiB），**重启实例才恢复**；同批的 `10.0.0.53:40043`（取消时任务已接近完成）
+   正常回落到 18.2 GiB。
+   ⚠️ 复核提示：有人引用 LightX2V 的 `task_manager.py` / `api/server.py` 的 `check_stop` +
+   `finally` 释放锁来质疑这条——**那是另一个引擎的代码**，本现象出在 vLLM-Omni 的 H3 实例上，
+   两者不通用。要否证/定位需查 vllm-omni 的任务生命周期，尚未做。
+   生产影响：用户点一次取消，那个实例可能就废了，值得优先定位。
 4. **`--omni` 会重复**：GPUStack 的 vLLMOmni backend 自己会加，backend_parameters 里不要再写。
 5. **步数是请求级的**，yaml 里的 `num_inference_steps` 只是兜底默认值。turbo 权重不配
    new-api 的 `defaultSteps` 就会跑 20 步，加速全丢且画质劣化。
 6. **`scripts/` 在 vllm-omni 的 .gitignore 里**（`:184`），下载脚本不进版本库。
+7. **参考图在服务端会被重新归一到短边 2048**，调用方给什么尺寸都一样（见 §4.1）。
+   任何「在 new-api 侧压缩参考图来省显存」的想法都是无效的，别再试。
+8. **`h3MinDurationSec = 4.0` / `h3MaxDurationSec = 15.0`（`minimax_h3.go:44-45`）是死代码**：
+   全 relay 只有定义、没有任何引用，且已落后于 vllm-omni 当前的 `[2.0, 16.0]`
+   （`pipeline_minimax_h3.py:136`）。建议直接删掉而不是改数值——留着下次还会漂移。
 
 ---
 
@@ -233,10 +296,22 @@ H3 的 `num_attention_heads = 56`，约束是 `(56 / tp) % ulysses_degree == 0`�
 
 ---
 
-## 7. 如果你只有时间做一件事
+## 7. 建议的接手顺序
 
-**验证参考图分辨率对 OOM 的影响**（§4.1）。它是唯一不碰代码、不碰拓扑、不碰硬件就能把
-「9 图 OOM」变成「9 图可用」的候选解法，而且验证成本只有一次 35 分钟的请求。
+> 本节已按 2026-08-15 的代码复核修订。初版把「在 new-api 物化层压缩参考图」列为第一优先级，
+> 那是**错的**（§4.1 有订正说明）——真正的杠杆在 vllm-omni 侧。
 
-其次是**接单图超分**（§2.2）——同一个部署、同一个模型、61 秒、4.2 GB 显存，
-图像玩法白捡一个能力，只差一个 task_type 分支。
+1. **下调 `MINIMAX_H3_REFERENCE_IMAGE_SHORT_EDGE`**（2048 → 768，与参考视频对齐），
+   或做成请求级 / env 可配。**这是把 9 图 OOM 变成可用的最短路径**：9 张图目前占目标序列 60%，
+   降到 768 后约减少 7 倍。⚠️ 改动影响参考图信息量，**必须重做画质 A/B**，不能只看 OOM 消失。
+2. **修 `denoise_loop.py:253` 的 `.float()[mask]` 顺序**（§4.3①）。一行改动，省约 2.2 GB
+   显存峰值，无行为变化。在余量只有 1～3 GB 的水位下值得先做。
+3. **回测 BF16 Turbo4**（前两条落地后显存可能已经够）；仍紧再走 **Turbo4 + W8A8 离线量化**
+   （`bake_turbo_lora.py` 烘 BF16 → `quantize_minimax_h3_int8.py` 量化）。
+   ⚠️ 但注意：基座 INT8（38,103 MiB）与 Turbo4 BF16（40,175 MiB）**只差 2 GB**，而权重差是
+   62 GB vs 44 GB——说明显存大头是激活不是权重（权重被 offload 了），**量化的收益可能远小于直觉**。
+4. **补 i7 / i8** 夹出确切的图数临界（每点约 35 分钟）。
+5. 顺手清理：`condition_noise.py:89` 的 `full_t` 分配（CPU 侧，§4.3②）、new-api 那两个
+   未被引用的时长常量（§5.8）。
+6. **接单图超分**（§2.2）——同一个部署、同一个模型、61 秒、4.2 GB 显存，图像玩法白捡一个能力，
+   只差一个 task_type 分支。与上面几条正交，随时可做。
