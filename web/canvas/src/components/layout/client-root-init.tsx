@@ -6,6 +6,7 @@ import { useTranslation } from "react-i18next";
 import { BUILTIN_MODE, createModelChannel, useConfigStore } from "@/stores/use-config-store";
 import { usePromptSourceScheduler } from "@/hooks/use-prompt-source-scheduler";
 import { initCanvasServerSync } from "@/services/canvas-server-sync";
+import { syncBuiltinModels } from "@/services/builtin-model-sync";
 
 export function ClientRootInit({ children }: { children: ReactNode }) {
     const { message } = App.useApp();
@@ -21,6 +22,14 @@ export function ClientRootInit({ children }: { children: ReactNode }) {
     // 自身早退,上游行为不变。
     useEffect(() => {
         initCanvasServerSync();
+    }, []);
+
+    // BUILTIN_MODE: 站内渠道的模型列表来自服务端,进应用时拉一次。
+    // 上游要用户手动「获取模型」是 BYO-key 的设计,内置模式下渠道就是平台本身,
+    // 可用模型随分组权限变,不该让用户自己去点。
+    useEffect(() => {
+        if (!BUILTIN_MODE) return;
+        void syncBuiltinModels();
     }, []);
 
     useEffect(() => {

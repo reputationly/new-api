@@ -926,12 +926,16 @@ export async function fetchImageModels(config: Pick<AiConfig, "baseUrl" | "apiKe
         }
         // BUILTIN_MODE: /pg/models 每个模型还带 supported_endpoint_types(运营在后台按模型
         // 配置的真实能力)。收下并登记,normalizeChannelModels 会优先用它而不是按模型名猜。
-        const response = await axios.get<{ data?: Array<{ id?: string; supported_endpoint_types?: string[] }>; error?: { message?: string } }>(buildApiUrl(config.baseUrl, "/models"), {
+        const response = await axios.get<{ success?: boolean; message?: string; data?: Array<{ id?: string; supported_endpoint_types?: string[] }>; error?: { message?: string } }>(buildApiUrl(config.baseUrl, "/models"), {
             headers: {
                 Authorization: `Bearer ${config.apiKey}`,
                 ...builtinHeaders(),
             },
         });
+        // 站内 /pg/models 拿不到用户分组时返回的是 HTTP 200 + success:false 且没有 data,
+        // 不判信封就会被下面的 `|| []` 吞成空列表 —— 对整份覆盖模型表的调用方来说,
+        // 那等价于「服务端一个模型都没有」。只认显式的 false,OpenAI 官方响应没这个字段。
+        if (response.data.success === false) throw new Error(response.data.message || apiText("modelReadFailed"));
         const items = response.data.data || [];
         if (BUILTIN_MODE) {
             const map: Record<string, ModelCapability> = {};

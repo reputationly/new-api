@@ -7,6 +7,7 @@ export default {
     common: {
         cancel: "取消",
         save: "保存",
+        refresh: "刷新",
         edit: "编辑",
         done: "完成",
         delete: "删除",

@@ -7,6 +7,7 @@ export default {
     common: {
         cancel: "Cancel",
         save: "Save",
+        refresh: "Refresh",
         edit: "Edit",
         done: "Done",
         delete: "Delete",

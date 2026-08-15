@@ -90,11 +90,17 @@ export function setBuiltinCapabilityMap(map: Record<string, ModelCapability>) {
     builtinCapabilityByModel = { ...builtinCapabilityByModel, ...map };
 }
 
-/** supported_endpoint_types → 画布的四类能力 */
+/**
+ * supported_endpoint_types → 画布的四类能力。
+ *
+ * 判定顺序有讲究:TTS 模型同时声明 audio-speech 与 openai-video(它们的产物是音频,
+ * 但提交走的是异步任务子系统,复用了 video 端点)。若先判 openai-video,qwen3-tts /
+ * indextts-2 / moss-ttsd 会全部落进视频桶,音频下拉恒为空。所以 audio-speech 优先。
+ */
 export function capabilityFromEndpointTypes(types: string[]): ModelCapability {
     if (types.includes("image-generation")) return "image";
-    if (types.includes("openai-video")) return "video";
     if (types.includes("audio-speech")) return "audio";
+    if (types.includes("openai-video")) return "video";
     return "text";
 }
 
@@ -365,6 +371,35 @@ export function modelOptionLabel(config: AiConfig, value: string) {
     if (!decoded) return value;
     const channel = config.channels.find((item) => item.id === decoded.channelId);
     return channel ? `${decoded.model}（${channel.name}）` : decoded.model;
+}
+
+/**
+ * 用一组新渠道重算整份配置:models 列表、连接字段、以及各能力的默认模型。
+ * 渠道一变这几项就得跟着走,散在各处手拼必然漏 —— 配置弹窗与站内模型自动同步
+ * 共用这一个入口。
+ */
+export function withChannels(config: AiConfig, channels: ModelChannel[]): AiConfig {
+    const next: AiConfig = {
+        ...config,
+        channels,
+        models: modelOptionsFromChannels(channels),
+        baseUrl: channels[0]?.baseUrl || config.baseUrl,
+        apiKey: channels[0]?.apiKey || config.apiKey,
+        apiFormat: channels[0]?.apiFormat || config.apiFormat,
+    };
+    return {
+        ...next,
+        imageModel: pickDefaultModel(next, "image", config.imageModel),
+        videoModel: pickDefaultModel(next, "video", config.videoModel),
+        textModel: pickDefaultModel(next, "text", config.textModel),
+        audioModel: pickDefaultModel(next, "audio", config.audioModel),
+    };
+}
+
+function pickDefaultModel(config: AiConfig, capability: ModelCapability, current: string) {
+    const options = selectableModelsByCapability(config, capability);
+    const normalized = normalizeModelOptionValue(current, config.channels);
+    return options.includes(normalized) ? normalized : options[0] || "";
 }
 
 export function modelOptionsFromChannels(channels: ModelChannel[]) {
