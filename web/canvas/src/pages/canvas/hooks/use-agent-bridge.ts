@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState, type Dispatch, type MutableRefObject, type SetStateAction } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type Dispatch, type MutableRefObject, type SetStateAction } from "react";
 
 import i18n from "@/i18n";
 import { useAgentStore } from "@/stores/use-agent-store";
@@ -95,6 +95,16 @@ export function useAgentBridge(params: AgentBridgeParams) {
         return { ...agentUndoSnapshot, projectId, title: projectTitle };
     }, [agentUndoSnapshot, projectTitle, projectId]);
 
+    // BUILTIN_MODE: 这几个回调由调用方内联传入,每次渲染都是新身份。若直接进 effect
+    // 依赖,会形成「effect 写 store → 订阅方重渲染 → 回调改 state → 本组件重渲染 →
+    // 回调换身份 → effect 再跑」的死循环(React #185)。用 ref 转发:发布出去的是稳定
+    // 包装函数,内部始终读到最新回调,effect 不再因它们重跑。
+    const channelsRef = useRef(params);
+    channelsRef.current = params;
+    const publishSessionsChange = useCallback((sessions: CanvasAssistantSession[], activeSessionId: string | null) => channelsRef.current.onSessionsChange?.(sessions, activeSessionId), []);
+    const publishSelectNodeIds = useCallback((ids: Set<string>) => channelsRef.current.onSelectNodeIds?.(ids), []);
+    const publishPasteImage = useCallback((file: File) => channelsRef.current.onPasteImage?.(file), []);
+
     useEffect(() => {
         setAgentCanvasContext({
             snapshot: agentSnapshot,
@@ -104,12 +114,12 @@ export function useAgentBridge(params: AgentBridgeParams) {
             // BUILTIN_MODE: 在线 Agent 另需的通道
             sessions: params.sessions,
             activeSessionId: params.activeSessionId,
-            onSessionsChange: params.onSessionsChange,
-            onSelectNodeIds: params.onSelectNodeIds,
-            onPasteImage: params.onPasteImage,
+            onSessionsChange: publishSessionsChange,
+            onSelectNodeIds: publishSelectNodeIds,
+            onPasteImage: publishPasteImage,
         });
         return () => setAgentCanvasContext(null);
-    }, [agentSnapshot, applyAgentOps, agentUndoSnapshot, setAgentCanvasContext, undoAgentOps, params.sessions, params.activeSessionId, params.onSessionsChange, params.onSelectNodeIds, params.onPasteImage]);
+    }, [agentSnapshot, applyAgentOps, agentUndoSnapshot, setAgentCanvasContext, undoAgentOps, params.sessions, params.activeSessionId, publishSessionsChange, publishSelectNodeIds, publishPasteImage]);
 
     return { applyAgentOps };
 }

@@ -412,7 +412,7 @@ export function resolveModelRequestConfig(config: AiConfig, value: string) {
     };
 }
 
-function normalizeChannels(config: AiConfig) {
+export function normalizeChannels(config: AiConfig) {
     const persistedChannels = Array.isArray(config.channels) ? config.channels : [];
     // BUILTIN_MODE: 渠道结构锁死为「站内」一条,连接字段(baseUrl/apiKey/apiFormat)不可变,
     // 只有模型列表跟着 /pg/models 走。老用户 localStorage 里可能存着外部渠道与 API key,

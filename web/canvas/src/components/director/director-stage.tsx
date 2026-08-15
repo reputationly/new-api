@@ -8,7 +8,7 @@
 // 工程状态只在这一层维护,向上以 onChange 整包回吐(由画布节点持久化),
 // 向下拆成 props 给视口与面板。
 
-import { useCallback, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { App, Button, InputNumber, Segmented, Select, Slider, Tooltip } from "antd";
 import { Box, Camera, Copy, Eye, EyeOff, Grid3x3, Lock, LockOpen, Maximize, Send, Trash2, User, X } from "lucide-react";
 
@@ -144,6 +144,17 @@ export function DirectorStage({ project, onChange, onSendCaptures, onClose }: { 
         }
     };
 
+    // 全屏面板必须能用 Esc 退出:否则唯一出口是右上角一个无文字的图标。
+    // 必须挂在**捕获阶段**——打开导演台后焦点还停在画布节点里的那个按钮上,
+    // 而画布节点的 keydown 处理器会 stopPropagation,冒泡阶段根本收不到。
+    useEffect(() => {
+        const onKey = (event: KeyboardEvent) => {
+            if (event.key === "Escape") onClose();
+        };
+        window.addEventListener("keydown", onKey, true);
+        return () => window.removeEventListener("keydown", onKey, true);
+    }, [onClose]);
+
     const sendCaptures = () => {
         if (!captures.length) {
             message.warning("还没有截图");
@@ -178,7 +189,7 @@ export function DirectorStage({ project, onChange, onSendCaptures, onClose }: { 
                     <Button size="small" type="primary" icon={<Send className="size-3.5" />} disabled={!captures.length} onClick={sendCaptures}>
                         发送到画布{captures.length ? ` (${captures.length})` : ""}
                     </Button>
-                    <Button size="small" type="text" icon={<X className="size-4" />} onClick={onClose} />
+                    <Button size="small" type="text" aria-label="关闭导演台" icon={<X className="size-4" />} onClick={onClose} />
                 </div>
             </header>
 
