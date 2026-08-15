@@ -455,8 +455,23 @@ export const VIDEO_CONV_TURN_LIMIT = 10; // 单段对话生成次数上限
 // 轮询参数
 // 插帧(RIFE 帧率翻倍):开启时随 metadata 透传 target_fps 给引擎(gpustack 门面
 // 对该字段免验证直通)。LightX2V 生成默认 16fps;Bernini RIFE v1 仅支持 16→32。
-// 统一按 32 下发;超分(sr)引擎侧不插帧,不适用。
+// 统一按 32 下发。
 export const VIDEO_INTERPOLATION_TARGET_FPS = 32;
+
+// 「插帧」总闸门。与 DUB_PIPELINE_ENABLED 同类：当前部署没有可用的插帧能力，置
+// false 后开关在桌面端与移动端都不渲染，历史会话里存了 interpolation:true 的续问
+// 也不会再下发 target_fps —— 生成段与超分段两处都读它。
+//
+// 能力缺口在引擎侧，两条链路各有各的：生成段的 target_fps 要求该引擎装了 RIFE
+// 权重（H3 走的 vLLM-Omni 这条没有）；超分段的插帧要求 SR 节点 config 里有
+// video_frame_interpolation 块，而只有 seedvr2_3b_seg121.json 一份挂了它，别的
+// 配置收到 target_fps 会静默丢弃（worker 只打一条 warning）。发一个不生效的参数
+// 比不发更糟：用户勾了开关、付了钱，产物却和没勾一样。
+//
+// 恢复时把这里改回 true 即可，无需动别处。但先掂量一个实测代价：超分段插帧会让
+// seg_parallel 强制退回串行（跨段有全局帧栅格依赖），2026-08-15 实测同一条 362 帧
+// 素材从 207s 涨到 673s、慢 3.25 倍，且另外三张卡全程闲置。
+export const INTERPOLATION_ENABLED = false;
 
 // 超分段下发的倍率。引擎算的是 min(源面积开方 × sr_ratio, config target 面积开方)
 // （seedvr_runner.py:119），发大只会被 target 封顶、不会过冲，发小了却会静默掉档 ——

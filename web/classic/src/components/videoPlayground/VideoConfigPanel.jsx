@@ -29,7 +29,10 @@ import MediaFileInput from './MediaFileInput';
 import { useModelNotes } from '../../hooks/common/useModelNotes';
 import PromptGuideTip from '../playground/PromptGuideTip';
 import { tabHasField } from '../../constants/playgroundAdmin.constants';
-import { imageConstraintsForMode } from '../../constants/videoPlayground.constants';
+import {
+  imageConstraintsForMode,
+  INTERPOLATION_ENABLED,
+} from '../../constants/videoPlayground.constants';
 
 const VideoConfigPanel = ({
   needsImage = false,
@@ -643,8 +646,10 @@ const VideoConfigPanel = ({
         </div>
 
         {/* 插帧(RIFE 帧率翻倍)——自建引擎特有(target_fps),第三方渠道不展示;
-            超分/配乐不适用;默认关,开启才透传 target_fps */}
-        {pipelineModel && !isSR && !isDub && (
+            超分/配乐不适用;默认关,开启才透传 target_fps。
+            INTERPOLATION_ENABLED 是总闸门:当前部署没有可用的插帧能力,整个开关
+            不渲染(见常量处的注释)。 */}
+        {INTERPOLATION_ENABLED && pipelineModel && !isSR && !isDub && (
           <div className='flex items-center justify-between'>
             <div className='flex items-center gap-2'>
               <Typography.Text strong className='text-sm'>

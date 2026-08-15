@@ -493,13 +493,17 @@ export const useVideoGeneration = ({
   // 超分档带着 srModel / fromSize，选择器的标识文案与提交时的起步档位读同一个推导结果，
   // 两处各推一次迟早推出不同答案。
   //
-  // 只有文生视频长超分档：其余玩法的画幅跟随输入、提交时本就不发 size（见 sendsSize），
-  // 给它长一个超分档出来只会点了不生效。
+  // 两个前提缺一不可，否则只出原生档：
+  //   - 文生视频。其余玩法的画幅跟随输入、提交时本就不发 size（见 sendsSize），
+  //     给它长一个超分档出来只会点了不生效。
+  //   - 模型勾了「自建引擎」。提交侧 maybeUpscale 的第一个条件就是 usePipeline，
+  //     没勾却把超分档摆出来，用户选中后会被静默降级成普通档位 —— 界面承诺了一件
+  //     提交时不会发生的事，比不显示更糟。
   // groupUsableModels 为空表示还没取到分组可用列表（初次渲染/切分组期间），此时传 null
   // 表示"不过滤"，避免超分档先闪一下再出现。
   const sizeChoices = useMemo(() => {
     const native = getSizesForVideoModel(videoConfig, inputs.model, mode);
-    if (followsInput) {
+    if (followsInput || !isPipelineModel(videoConfig, inputs.model)) {
       return native.map((s) => ({ value: s, label: s, isUpscale: false }));
     }
     return buildVideoSizeChoices(
@@ -930,7 +934,7 @@ export const useVideoGeneration = ({
               video: `task:${prevTaskId}`,
               sr_ratio: VIDEO_SR_RATIO_UNCAPPED,
               resize_mode: VIDEO_SR_RESIZE_MODE,
-              ...(pipeline.upscale?.interpolation
+              ...(INTERPOLATION_ENABLED && pipeline.upscale?.interpolation
                 ? { target_fps: VIDEO_INTERPOLATION_TARGET_FPS }
                 : {}),
             }
@@ -1585,7 +1589,10 @@ export const useVideoGeneration = ({
         // 插帧(默认关):按提交时的开关状态透传 target_fps(引擎 RIFE 帧率翻倍)。
         // 仅自建引擎认这个字段,第三方渠道不下发(usePipeline);超分/配乐不适用;
         // 有超分段时插帧后移到超分段(stage1 不发),仅配音段无超分时插帧仍作用于生成任务。
+        // INTERPOLATION_ENABLED 是总闸门:当前部署没有可用的插帧能力,历史会话里存了
+        // interpolation:true 的续问也不会再下发(见常量处的注释)。
         if (
+          INTERPOLATION_ENABLED &&
           params.interpolation &&
           usePipeline &&
           !isSR &&
