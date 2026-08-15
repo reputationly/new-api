@@ -1,0 +1,133 @@
+import React from 'react';
+import { useTranslation } from 'react-i18next';
+import { Button, Select, Typography } from '@douyinfe/semi-ui';
+import { Plus, Trash2 } from 'lucide-react';
+import {
+  getSizesForVideoModel,
+  resolveUpscaleFrom,
+  videoSizeShortEdge,
+} from '../../constants/videoPlayground.constants';
+
+const { Text } = Typography;
+
+// 超分档位配置（模型级）。一行 = 一条「用哪个超分模型、放大到哪一档、从哪一档起步」，
+// 体验区据此在尺寸下拉里多出一个带标识的档位。
+//
+// 三个下拉的候选各有来源：
+//   超分模型 —— 列出全部视频模型，**不做模型名校验**。task_type 是显式下发的
+//     （adaptor.go 的四级解析里 metadata.task_type 排第一、直接短路名字推断），配错的
+//     后果是门面明确拒绝，而不是静默按 t2v 跑掉。
+//   目标档位 —— 所选超分模型声明的 sizes（tab 级 / 模型级 / 分类默认值三层取并集，与
+//     体验区同口径）。它是引擎侧部署 config 的目标尺寸（这份是部署事实，new-api 无从
+//     校验），运营给超分模型登记一次即可。
+//   起步档位 —— 本模型的原生档，且只列**小于目标**的那些，与自动推导同口径。
+//
+// 倍率不出现在这里：引擎按 min(源面积×倍率, config target 面积) 封顶，前端固定发一个
+// 足够大的值即可，起步档差异被封顶自动抹平。让运营填倍率只会填错——同一个「到 1080」，
+// 480P 起步要 2.28、720P 起步要 1.5、768P 起步要 1.4，而且算错了不报错、只是悄悄掉档。
+const UpscaleField = ({ value, onChange, models, defaults, nativeSizes }) => {
+  const { t } = useTranslation();
+  const rules = Array.isArray(value) ? value : [];
+  const modelNames = Object.keys(models || {}).sort();
+
+  const patch = (idx, key, v) =>
+    onChange(rules.map((r, i) => (i === idx ? { ...r, [key]: v } : r)));
+  const remove = (idx) => {
+    const next = rules.filter((_, i) => i !== idx);
+    onChange(next.length ? next : undefined);
+  };
+  const add = () => onChange([...rules, { model: '', to: '', from: '' }]);
+
+  return (
+    <div className='w-full'>
+      {rules.map((r, i) => {
+        // 目标档位要覆盖 sizes 的全部三个来源：tab 级、模型级、分类默认值。只读模型级
+        // 会让「sizes 落在别处」的超分模型在这里显示空下拉，运营根本配不出规则，而体验区
+        // 运行时用 getSizesForVideoModel 照样取得到值 —— 两边判据分叉。
+        // 超分模型通常不挂任何 tab（sizes 落模型级、入口在 CategoryPanel 的孤儿字段区），
+        // 但没有任何机制保证它不被挂进 tab，所以取并集。
+        const srSizes = Array.from(
+          new Set([
+            ...Object.values(models?.[r.model]?.tabs || {}).flatMap(
+              (e) => e?.sizes || [],
+            ),
+            ...getSizesForVideoModel(
+              { models, default: defaults },
+              r.model,
+              '',
+            ),
+          ]),
+        );
+        const targetEdge = videoSizeShortEdge(r.to);
+        // 起步候选与自动推导同口径：只有比目标小的档位才是合法起步档。
+        const fromChoices = (nativeSizes || []).filter((s) => {
+          const edge = videoSizeShortEdge(s);
+          return edge > 0 && (!targetEdge || edge < targetEdge);
+        });
+        const auto = resolveUpscaleFrom({ ...r, from: '' }, nativeSizes);
+        return (
+          <div key={i} className='flex flex-wrap items-center gap-2 mb-2'>
+            <Text type='tertiary' size='small'>
+              {t('超分模型')}
+            </Text>
+            <Select
+              size='small'
+              filter
+              style={{ minWidth: 200 }}
+              placeholder={t('选择超分模型')}
+              value={r.model || ''}
+              optionList={modelNames.map((m) => ({ label: m, value: m }))}
+              onChange={(v) => patch(i, 'model', v || '')}
+            />
+            <Text type='tertiary' size='small'>
+              {t('超分至')}
+            </Text>
+            <Select
+              size='small'
+              style={{ minWidth: 130 }}
+              placeholder={r.model ? t('该模型未登记档位') : t('先选超分模型')}
+              value={r.to || ''}
+              optionList={srSizes.map((s) => ({ label: s, value: s }))}
+              onChange={(v) => patch(i, 'to', v || '')}
+            />
+            <Text type='tertiary' size='small'>
+              {t('起步分辨率')}
+            </Text>
+            <Select
+              size='small'
+              style={{ minWidth: 190 }}
+              value={r.from || ''}
+              optionList={[
+                {
+                  label: auto
+                    ? `${t('自动')}（${auto}）`
+                    : t('自动（无可用起步档）'),
+                  value: '',
+                },
+                ...fromChoices.map((s) => ({ label: s, value: s })),
+              ]}
+              onChange={(v) => patch(i, 'from', v || '')}
+            />
+            <Button
+              size='small'
+              theme='borderless'
+              type='danger'
+              icon={<Trash2 size={14} />}
+              onClick={() => remove(i)}
+            />
+          </div>
+        );
+      })}
+      <Button
+        size='small'
+        theme='borderless'
+        icon={<Plus size={14} />}
+        onClick={add}
+      >
+        {t('添加超分档位')}
+      </Button>
+    </div>
+  );
+};
+
+export default UpscaleField;

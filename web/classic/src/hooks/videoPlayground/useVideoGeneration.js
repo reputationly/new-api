@@ -42,8 +42,9 @@ import {
   VIDEO_HISTORY_LIMIT,
   VIDEO_CONV_TURN_LIMIT,
   VIDEO_INTERPOLATION_TARGET_FPS,
-  VIDEO_PIPELINE_SR_RATIO,
-  isPipelineTargetSize,
+  VIDEO_SR_RATIO_UNCAPPED,
+  VIDEO_SR_RESIZE_MODE,
+  buildVideoSizeChoices,
   isPipelineModel,
   keyframeModeOf,
   deriveKeyframeTaskType,
@@ -188,24 +189,22 @@ const genId = () => `vid-${Date.now()}-${idSeq++}`;
 // videoUrl 为空」的消息用 taskId 重建直连 URL:内存里始终非空,persist 落的是可重建的直连
 // URL(isDirectUrl 原样保留),localStorage 自愈;已损坏的历史数据加载即恢复。identity 保持:
 // 无改动的 conv/message 原样返回,不破坏 hydrate 的引用比对。
-// 旧版（两段流水线）持久化的 pipeline 结构为 { srModel, interpolation, ... }，
-// 新版（N 段）为 { upscale:{srModel,interpolation}, dub }。加载时归一，否则旧版
-// 遗留的进行中 1080P 任务在新版恢复时，stage1 完成后取不到下一段而停在 480P。
-// 无需迁移（新结构/无 pipeline）时返回原引用，保持 identity 不触发多余克隆。
+
+// 持久化 pipeline 的兼容归一，两条。无需归一时返回原引用，保持 identity 不触发多余克隆。
+//
+// 一条是长期的：配音段的提示词字段在「配音改为复用视频提示词」那次改动里由 dubPrompt
+// 更名为 prompt，改动前存下、且此刻仍在跑的流水线要在这里补一次，否则刷新后续跑配音段
+// 会把用户当初填的提示词丢成空串。
+//
+// 另一条是**过渡期兜底**：更早那版两段流水线把结构存成 { srModel, interpolation }，
+// 而现在下游只认 pipeline.upscale —— 不归一的话，那种数据在刷新后取不到下一段，会
+// 停在低分辨率的第一段成品上。该特性未曾上线，理论上不存在这种数据，但 localStorage
+// 在用户浏览器里、我们无从验证（开发/测试环境用过旧版的浏览器就可能残留），十行的
+// 兜底比一个查不了的风险划算。**历史会话滚动淘汰（VIDEO_HISTORY_LIMIT=10 段）之后
+// 即可连同这段注释一起删。**
 const migratePipeline = (pipeline) => {
   if (!pipeline) return pipeline;
-  if ('upscale' in pipeline || 'dub' in pipeline) {
-    // 已是分段结构。但配音段的提示词字段在「配音改为复用视频提示词」那次改动里
-    // 由 dubPrompt 更名为 prompt：改动前存下、且此刻仍在跑的流水线要在这里补一次，
-    // 否则刷新后续跑配音段会把用户当初填的提示词丢成空串。
-    const dub = pipeline.dub;
-    if (dub && dub.prompt === undefined && dub.dubPrompt !== undefined) {
-      const { dubPrompt, ...rest } = dub;
-      return { ...pipeline, dub: { ...rest, prompt: dubPrompt } };
-    }
-    return pipeline;
-  }
-  if (pipeline.srModel) {
+  if (!('upscale' in pipeline) && !('dub' in pipeline) && pipeline.srModel) {
     return {
       group: pipeline.group,
       upscale: {
@@ -214,6 +213,11 @@ const migratePipeline = (pipeline) => {
       },
       dub: null,
     };
+  }
+  const dub = pipeline.dub;
+  if (dub && dub.prompt === undefined && dub.dubPrompt !== undefined) {
+    const { dubPrompt, ...rest } = dub;
+    return { ...pipeline, dub: { ...rest, prompt: dubPrompt } };
   }
   return pipeline;
 };
@@ -485,9 +489,29 @@ export const useVideoGeneration = ({
   // 尾帧槽渲染与否:flf2v 必填、两种 auto 可选,i2v 不渲染。
   const allowLastFrame = isFlf2vSelected || isKeyframeAuto;
 
+  // 尺寸档位 = 原生档 + 超分档（运营在模型级 upscale 里配）。合成一份供 UI 与编排共用：
+  // 超分档带着 srModel / fromSize，选择器的标识文案与提交时的起步档位读同一个推导结果，
+  // 两处各推一次迟早推出不同答案。
+  //
+  // 只有文生视频长超分档：其余玩法的画幅跟随输入、提交时本就不发 size（见 sendsSize），
+  // 给它长一个超分档出来只会点了不生效。
+  // groupUsableModels 为空表示还没取到分组可用列表（初次渲染/切分组期间），此时传 null
+  // 表示"不过滤"，避免超分档先闪一下再出现。
+  const sizeChoices = useMemo(() => {
+    const native = getSizesForVideoModel(videoConfig, inputs.model, mode);
+    if (followsInput) {
+      return native.map((s) => ({ value: s, label: s, isUpscale: false }));
+    }
+    return buildVideoSizeChoices(
+      videoConfig,
+      inputs.model,
+      native,
+      groupUsableModels.length ? groupUsableModels : null,
+    );
+  }, [videoConfig, inputs.model, mode, followsInput, groupUsableModels]);
   const availableSizes = useMemo(
-    () => getSizesForVideoModel(videoConfig, inputs.model, mode),
-    [videoConfig, inputs.model, mode],
+    () => sizeChoices.map((c) => c.value),
+    [sizeChoices],
   );
   const availableDurations = useMemo(
     () => getDurationsForVideoModel(videoConfig, inputs.model, mode),
@@ -895,13 +919,17 @@ export const useVideoGeneration = ({
   // 成功则把轮询槽切到新任务继续轮询。失败返回 false，由调用方降级展示上一段成品。
   const submitPipelineStage = useCallback(
     async (convId, msgId, prevTaskId, pipeline, stage) => {
-      // 超分段：sr_ratio + 可选插帧 target_fps；配音段：v2a，透传源视频。
+      // 超分段：倍率发定值（靠引擎按部署 config 的目标尺寸封顶）+ resize_mode 让输出
+      // 落在精确目标尺寸上 + 可选插帧 target_fps；配音段：v2a，透传源视频。
+      // 两个字段都随 metadata 展开成请求体顶层，门面原样转交引擎（既不在它的控制键里，
+      // 也不属于它自己拥有的路径字段）。
       const metadata =
         stage === 'upscaling'
           ? {
               task_type: 'sr',
               video: `task:${prevTaskId}`,
-              sr_ratio: VIDEO_PIPELINE_SR_RATIO,
+              sr_ratio: VIDEO_SR_RATIO_UNCAPPED,
+              resize_mode: VIDEO_SR_RESIZE_MODE,
               ...(pipeline.upscale?.interpolation
                 ? { target_fps: VIDEO_INTERPOLATION_TARGET_FPS }
                 : {}),
@@ -913,10 +941,11 @@ export const useVideoGeneration = ({
           : pipeline.dub?.dubModel;
       // 配音段沿用生成该视频的提示词（见 pipeline.dub 构造处）。超分段无提示词。
       const stagePrompt = stage === 'dubbing' ? pipeline.dub?.prompt || '' : '';
+      // 面向用户不说「超分」这个行话，与进度条的阶段名（画质增强）保持同一个词。
       const failMsg =
         stage === 'upscaling'
-          ? t('超分任务提交失败，已展示原始分辨率结果')
-          : t('配音任务提交失败，已展示无配音成品');
+          ? t('画质增强未能开始，已为你保留原始分辨率的视频')
+          : t('配音未能开始，已为你保留无配音的视频');
       try {
         const res = await API.post(
           VIDEO_API_ENDPOINTS.VIDEO_GENERATIONS,
@@ -952,7 +981,14 @@ export const useVideoGeneration = ({
         }
         return true;
       } catch (e) {
-        showError(failMsg);
+        // 把后端的具体原因带出来：额度/积分不足是这一步最常见的失败，只说「未能开始」
+        // 用户会以为是系统故障，看到「额度不足」才知道该去充值。
+        const detail =
+          e?.response?.data?.message ||
+          e?.response?.data?.error?.message ||
+          e?.message ||
+          '';
+        showError(detail ? `${failMsg}（${detail}）` : failMsg);
         return false;
       }
     },
@@ -1433,26 +1469,34 @@ export const useVideoGeneration = ({
         // 避免切到未配尺寸的模型时把残留旧值误发）；其余模式输出跟随上传输入，不发 size。
         const videoSizeVal = normalizeVideoSize(params.size);
         // 流水线（前端编排）：生成 →[超分]→[配音]。后置段用 task:<id> 引用上一段产物，
-        // 在 pollOnce 里自动提交。超分（仅文生视频 1080P，stage1 降 480P）与配音
-        // （文生/图生/视频编辑，开关开启）可各自独立启用，也可叠加成三段。
+        // 在 pollOnce 里自动提交。超分（选中的是运营配的超分档时，stage1 降到该档的起步
+        // 分辨率）与配音（文生/图生/视频编辑，开关开启）可各自独立启用，也可叠加成三段。
         // 后置段模型是否可用统一查后端「该分组可用模型」列表（GetUserModels：auto→
         // GetUserAutoGroup、显式→该组已启用模型），与生成模型同一套判定，缓存命中即时。
         //
         // 总前提：生成模型跑在自建 gpustackplus 引擎上（后台按模型勾选）。第三方渠道
-        // 原生支持 1080P 直出、也没有我们的 sr/v2a 模型可接，参数必须原样透传，不能替
-        // 用户把 1080P 改写成 480P 再拼两段。判据按 params.model（随会话锁定）而非当前
-        // 选中模型，续会话/刷新后与首次提交同解，见 isPipelineModel 的注释。
+        // 原生直出高分辨率、也没有我们的 sr/v2a 模型可接，参数必须原样透传，不能替用户
+        // 改写档位再拼两段。判据按 params.model（随会话锁定）而非当前选中模型，续会话/
+        // 刷新后与首次提交同解，见 isPipelineModel 的注释。
         const usePipeline = isPipelineModel(videoConfig, params.model);
-        // 超分段：仅文生视频选 1080P、模型配了 480P 档位时可能启用。
-        const srLowSize = availableSizes.find((s) => /480/.test(s));
-        const maybeUpscale =
-          usePipeline &&
-          !isSR &&
-          !isDub &&
-          !followsInput &&
-          isPipelineTargetSize(videoSizeVal) &&
-          availableSizes.includes(videoSizeVal) &&
-          !!srLowSize;
+        // 选中的档位是不是超分档：用 params.model 的 upscale 规则重新解一次，与选择器
+        // 那次走同一个 buildVideoSizeChoices，保证续问/刷新后推出同一个答案——重新推却
+        // 推出别的答案，正是 keyframeTaskType 当初的教训。
+        // 分组可用性留到下面拿到权威列表再判，这里传 null 表示先不过滤。
+        const paramNativeSizes = getSizesForVideoModel(
+          videoConfig,
+          params.model,
+          mode,
+        );
+        const upscaleChoice = followsInput
+          ? null
+          : buildVideoSizeChoices(
+              videoConfig,
+              params.model,
+              paramNativeSizes,
+              null,
+            ).find((c) => c.isUpscale && c.value === videoSizeVal) || null;
+        const maybeUpscale = usePipeline && !isSR && !isDub && !!upscaleChoice;
         // 配音段：文生/图生/视频编辑，会话配音开关开时可能启用。
         // 读 params.dubbing（随会话锁定）而非当前开关，续会话/刷新后仍按原设置。
         const maybeDub =
@@ -1475,13 +1519,13 @@ export const useVideoGeneration = ({
             usableModels = [];
           }
         }
-        const srModel = maybeUpscale
-          ? findCapabilityModelIn(
-              videoConfig,
-              usableModels,
-              VIDEO_SR_CAPABILITY,
-            )
-          : '';
+        // 超分模型由运营在规则里显式指定，不再按能力标签猜第一个；这里只校验它对
+        // 当前分组确实可用（选择器已按同一份列表过滤过，但那是渲染时的快照，提交时
+        // 以权威列表为准）。
+        const srModel =
+          maybeUpscale && usableModels.includes(upscaleChoice.srModel)
+            ? upscaleChoice.srModel
+            : '';
         const dubModel = maybeDub
           ? findCapabilityModelIn(
               videoConfig,
@@ -1504,15 +1548,19 @@ export const useVideoGeneration = ({
             // 用户不填就下发空串——而空 prompt 恰恰是该模型配出无关背景音乐的主因。
             dub: wantDub ? { dubModel, prompt: text } : null,
           };
-          // 有超分段 → stage1 降 480P；无超分段（仅配音）→ stage1 按选中尺寸正常生成。
+          // 有超分段 → stage1 降到该超分档的起步分辨率（运营指定或自动推出的那一档）；
+          // 无超分段（仅配音）→ stage1 按选中尺寸正常生成。
           if (wantUpscale) {
-            body.size = normalizeVideoSize(srLowSize);
+            body.size = normalizeVideoSize(upscaleChoice.fromSize);
           }
         }
+        // 未走超分段时只认**原生**档位：档位列表里现在混着超分档，若超分因故没启用
+        // （运营改了规则、超分模型对该分组停用、或续问时规则已变），把超分档的值直接
+        // 发给生成模型，等于发了一个它并不支持的档位。宁可不发 size 让引擎走默认。
         if (
           !wantUpscale &&
           sendsSize &&
-          availableSizes.includes(videoSizeVal)
+          paramNativeSizes.includes(videoSizeVal)
         ) {
           body.size = videoSizeVal;
         }
@@ -1881,6 +1929,9 @@ export const useVideoGeneration = ({
     groups,
     models,
     availableSizes,
+    // 带超分语义的档位（value/isUpscale/srModel/fromSize），供选择器加标识与副文案。
+    // availableSizes 是它的纯值投影，保留给只关心「有哪些档位」的既有消费方。
+    sizeChoices,
     availableDurations,
     availableAspectRatios,
     messages,

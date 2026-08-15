@@ -3,6 +3,7 @@ import {
   Card,
   Select,
   Switch,
+  Tag,
   Typography,
   Tooltip,
   InputNumber,
@@ -70,6 +71,8 @@ const VideoConfigPanel = ({
   groups,
   models,
   availableSizes,
+  // 带超分语义的档位。未传时退化成 availableSizes 的纯值渲染（移动端等旧调用方）。
+  sizeChoices,
   availableDurations,
   availableAspectRatios,
   onInputChange,
@@ -167,9 +170,34 @@ const VideoConfigPanel = ({
   // 运营给该模型在本玩法下写的备注（体验区管理里配），下拉选项与选中项下方都展示。
   const noteOf = useModelNotes(category, mode);
   const selectedNote = noteOf(inputs.model);
+  // 档位选项：只给超分档加标识，原生档保持裸样式——「没标识 = 模型直出」是个稳定的
+  // 读法，用户不必去记哪些档位是原生的。
+  // 面向用户的措辞一律用「画质增强」而非「超分」：后者是模型侧的行话，与进度条的阶段
+  // 名（VideoChatArea 的 stages）保持同一个词，用户才不会以为是两回事。
+  const choices =
+    sizeChoices && sizeChoices.length
+      ? sizeChoices
+      : (availableSizes || []).map((s) => ({ value: s, label: s }));
   const sizeOptions = ensureOption(
-    (availableSizes || []).map((s) => ({ label: s, value: s })),
+    choices.map((c) => ({
+      value: c.value,
+      label: c.isUpscale ? (
+        <span className='flex items-center gap-1.5'>
+          {c.value}
+          <Tag size='small' color='violet' shape='circle'>
+            {t('画质增强')}
+          </Tag>
+        </span>
+      ) : (
+        c.value
+      ),
+    })),
     inputs.size,
+  );
+  // 选中的是超分档时，把「谁来超、从哪一档起步」摆出来：用户选的是一个会多跑一个模型
+  // 的档位，不该让他从档位名里猜。
+  const selectedUpscale = choices.find(
+    (c) => c.isUpscale && c.value === inputs.size,
   );
   const durationOptions = ensureOption(
     (availableDurations || []).map((s) => ({ label: `${s}s`, value: s })),
@@ -518,10 +546,15 @@ const VideoConfigPanel = ({
                 dropdownStyle={{ width: '100%', maxWidth: '100%' }}
                 className='!rounded-lg'
               />
-              {pipelineModel && /1080/i.test(inputs.size || '') && (
-                <Typography.Text className='text-xs text-amber-600 mt-1 block'>
+              {selectedUpscale && (
+                <Typography.Text className='text-xs text-gray-500 mt-1 block'>
                   {t(
-                    '1080P 将先生成再调用超分模型提升画质：耗时更久，且会同时产生本模型与超分模型的额度/积分消耗',
+                    '先按 {{from}} 生成，再由 {{model}} 提升到 {{to}}，耗时更久',
+                    {
+                      from: selectedUpscale.fromSize,
+                      model: selectedUpscale.srModel,
+                      to: selectedUpscale.value,
+                    },
                   )}
                 </Typography.Text>
               )}

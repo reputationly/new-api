@@ -22,9 +22,11 @@ import {
   getTabStoreKey,
   getPromptOptimizeGlobal,
 } from '../../constants/playgroundAdmin.constants';
+import { getSizesForVideoModel } from '../../constants/videoPlayground.constants';
 import { defaultOptimizeSystemPrompt } from '../../constants/promptOptimize.constants';
 import { defaultPromptGuide } from '../../constants/promptGuide.constants';
 import FieldInput from './FieldInput';
+import UpscaleField from './UpscaleField';
 
 const { Text, Title } = Typography;
 
@@ -424,54 +426,98 @@ const TabPanel = ({ category, tab, draft }) => {
               )}
               {modelLevelFields.length > 0 && (
                 <div className='mt-3 pt-3 border-t border-gray-100 flex flex-wrap items-center gap-6'>
-                  {modelLevelFields.map((f) => (
-                    <div key={f.key} className='flex items-center gap-2'>
-                      {/* 按 f.type 渲染。原来这里硬编码 Switch、完全忽略 type，
-                          加一个非布尔字段（如引擎族 select）会渲染成一个永远
-                          不勾选的开关，且写回 true/false 把配置写坏。 */}
-                      {f.type === 'select' ? (
-                        <Select
-                          size='small'
-                          style={{ minWidth: 260 }}
-                          value={model[f.key] || ''}
-                          optionList={f.options || []}
-                          onChange={(v) =>
-                            draft.setModelField(storeKey, name, f.key, v || '')
-                          }
-                        />
-                      ) : f.type === 'int' ? (
-                        <InputNumber
-                          size='small'
-                          min={1}
-                          style={{ width: 150 }}
-                          value={
-                            model[f.key] == null ? undefined : model[f.key]
-                          }
-                          placeholder={t(f.placeholder || '留空=默认')}
-                          onChange={(v) =>
-                            draft.setModelField(
-                              storeKey,
-                              name,
-                              f.key,
-                              v === '' || v == null ? null : Number(v),
-                            )
-                          }
-                        />
-                      ) : (
-                        <Switch
-                          size='small'
-                          checked={model[f.key] === true}
+                  {modelLevelFields.map((f) =>
+                    // 超分档位是复合结构（多行、每行三个联动下拉），塞不进这排
+                    // 单控件的 flex 行，独占一行渲染。
+                    f.type === 'upscale' ? (
+                      <div key={f.key} className='w-full'>
+                        <div className='flex items-center gap-2 mb-1'>
+                          <Text size='small'>{t(f.label)}</Text>
+                          <Text type='tertiary' size='small'>
+                            {t('（模型级，对该模型的所有玩法生效）')}
+                          </Text>
+                        </div>
+                        <UpscaleField
+                          value={model[f.key]}
                           onChange={(v) =>
                             draft.setModelField(storeKey, name, f.key, v)
                           }
+                          models={store?.models}
+                          defaults={store?.defaults}
+                          // 起步档候选必须与体验区完全同口径（tab 级 → 模型级 →
+                          // 分类默认值），所以直接用体验区那支取值函数。手写
+                          // entry.sizes || model.sizes 会漏掉分类默认值那一层：
+                          // 管理端显示「无可用起步档」而体验区照样推得出来。
+                          nativeSizes={getSizesForVideoModel(
+                            { models: store?.models, default: store?.defaults },
+                            name,
+                            tab.key,
+                          )}
                         />
-                      )}
-                      <Text size='small'>{t(f.label)}</Text>
-                      <Text type='tertiary' size='small'>
-                        {t('（模型级，对该模型的所有玩法生效）')}
-                      </Text>
-                    </div>
-                  ))}
+                        {f.help && (
+                          <Text
+                            type='tertiary'
+                            size='small'
+                            className='block mt-1'
+                          >
+                            {t(f.help)}
+                          </Text>
+                        )}
+                      </div>
+                    ) : (
+                      <div key={f.key} className='flex items-center gap-2'>
+                        {/* 按 f.type 渲染。原来这里硬编码 Switch、完全忽略 type，
+                          加一个非布尔字段（如引擎族 select）会渲染成一个永远
+                          不勾选的开关，且写回 true/false 把配置写坏。 */}
+                        {f.type === 'select' ? (
+                          <Select
+                            size='small'
+                            style={{ minWidth: 260 }}
+                            value={model[f.key] || ''}
+                            optionList={f.options || []}
+                            onChange={(v) =>
+                              draft.setModelField(
+                                storeKey,
+                                name,
+                                f.key,
+                                v || '',
+                              )
+                            }
+                          />
+                        ) : f.type === 'int' ? (
+                          <InputNumber
+                            size='small'
+                            min={1}
+                            style={{ width: 150 }}
+                            value={
+                              model[f.key] == null ? undefined : model[f.key]
+                            }
+                            placeholder={t(f.placeholder || '留空=默认')}
+                            onChange={(v) =>
+                              draft.setModelField(
+                                storeKey,
+                                name,
+                                f.key,
+                                v === '' || v == null ? null : Number(v),
+                              )
+                            }
+                          />
+                        ) : (
+                          <Switch
+                            size='small'
+                            checked={model[f.key] === true}
+                            onChange={(v) =>
+                              draft.setModelField(storeKey, name, f.key, v)
+                            }
+                          />
+                        )}
+                        <Text size='small'>{t(f.label)}</Text>
+                        <Text type='tertiary' size='small'>
+                          {t('（模型级，对该模型的所有玩法生效）')}
+                        </Text>
+                      </div>
+                    ),
+                  )}
                 </div>
               )}
             </div>

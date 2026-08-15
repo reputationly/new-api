@@ -148,7 +148,7 @@ const VideoProgress = ({ status, progress, stage, pipeline, t }) => {
           <div className='flex items-center gap-2 text-gray-500 text-sm'>
             <Spin size='small' />
             {stage === 'upscaling'
-              ? t('画质增强中（超分）…')
+              ? t('画质增强中…')
               : stage === 'dubbing'
                 ? t('配音中…')
                 : status === VIDEO_STATUS.QUEUED

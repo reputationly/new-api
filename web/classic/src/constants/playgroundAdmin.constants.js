@@ -134,9 +134,15 @@ export const PLAYGROUND_MODEL_LEVEL_FIELDS = {
   VideoModelConfig: [
     {
       key: 'pipeline',
-      label: '两段流水线（1080P 超分插帧）',
+      label: '自建引擎（可编排超分/配音/插帧）',
       type: 'bool',
-      help: '该模型是否配有配套超分模型，用于 1080P 档位的两段流水线。属模型能力，与 tab 无关。',
+      help: '该模型是否跑在自建 gpustackplus 引擎上。超分、配音、插帧都是自建引擎特有的玩法：第三方渠道（Sora/MiniMax 等）原生直出、也不认识 target_fps，参数必须原样透传。未勾选 = 一律透传，新接入的第三方模型天然安全。属模型能力，与 tab 无关。',
+    },
+    {
+      key: 'upscale',
+      label: '超分档位',
+      type: 'upscale',
+      help: '给这个模型额外提供「先低档位生成、再交超分模型放大」的尺寸档位。留空=不提供（纯 opt-in）。起步档位留「自动」时取小于目标的最大原生档——原生就能直出该档位的话这条规则自动失效。倍率不用填：引擎按部署 config 的目标尺寸封顶，前端固定发一个足够大的值。',
     },
     {
       key: 'engine',

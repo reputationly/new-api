@@ -458,11 +458,20 @@ export const VIDEO_CONV_TURN_LIMIT = 10; // 单段对话生成次数上限
 // 统一按 32 下发;超分(sr)引擎侧不插帧,不适用。
 export const VIDEO_INTERPOLATION_TARGET_FPS = 32;
 
-// 1080P 两段流水线（前端编排）：选中 1080P 档位时 stage1 先按低档位生成，
-// 完成后自动提交 sr 任务（metadata.video 用 task:<id> 引用 stage1 产物）。
-// 480P(854x480) → 1080P 需要 2.25 倍超分。
-export const VIDEO_PIPELINE_SR_RATIO = 2.25;
-export const isPipelineTargetSize = (s) => /1080/i.test(s || '');
+// 超分段下发的倍率。引擎算的是 min(源面积开方 × sr_ratio, config target 面积开方)
+// （seedvr_runner.py:119），发大只会被 target 封顶、不会过冲，发小了却会静默掉档 ——
+// 所以这里给一个足够大的定值，让输出分辨率完全由引擎侧部署 config 决定，起步档位
+// 的差异被封顶自动抹平，运营不必为每个起步档算一个倍率。
+//
+// 曾经按标称档位算出的 2.25 就栽在这：标称 854x480 与 wan 实际生成的 832x480 差
+// 1.3%，min() 取不到 target，输出落在 1872x1072，标着 1080P 却不是。
+export const VIDEO_SR_RATIO_UNCAPPED = 4.0;
+
+// 超分段固定下发 resize_mode。引擎按 DivisibleCrop(16) 对齐，1080 不是 16 的倍数，
+// 默认的 adaptive 会出 1920x1104（_restore_target_size 在 adaptive 下直接 return），
+// 属性与界面承诺的 1080P 对不上。fixed_shape 让引擎中心裁到 config 的精确 target，
+// 代价是上下各裁 12 像素（约 1.1% 画面）—— 2026-08-15 实测确认，已取得确认。
+export const VIDEO_SR_RESIZE_MODE = 'fixed_shape';
 
 // 该模型是否跑在自建 gpustackplus 引擎上（「视频模型配置」里按模型勾选）。
 // 自动超分/自动配音/插帧(target_fps)都是自建引擎特有的玩法：超分要把 1080P 拆成
@@ -472,6 +481,77 @@ export const isPipelineTargetSize = (s) => /1080/i.test(s || '');
 // 只按模型判，不设 default 层兜底——兜底会让新模型默认被编排，正是要消除的行为。
 export const isPipelineModel = (config, model) =>
   !!config?.models?.[model]?.pipeline;
+
+// 模型级超分规则：[{ to, model, from }]。运营在「视频模型配置」的模型级字段里填，
+// to=目标档位、model=超分模型名、from 留空=自动推起步档。留空整体 = 不提供超分档位
+// （纯 opt-in，与 sizes 同惯例：不给未配置的模型凭空长出一个档位）。
+export const getUpscaleRulesForModel = (config, model) =>
+  normalizeUpscaleList(config?.models?.[model]?.upscale);
+
+// 起步档位：运营指定优先（且必须仍在该模型原生档里，防止改了 sizes 之后留下悬空值），
+// 否则自动取原生档里**小于**目标的最大一档。
+//
+// 取「小于」而非「小于等于」是有意的：模型原生就能直出该档位时，这条规则自然失效 ——
+// 能直出就不该绕一趟超分。没有任何合法起步档时返回 ''，调用方据此整档不渲染。
+export const resolveUpscaleFrom = (rule, nativeSizes) => {
+  const sizes = nativeSizes || [];
+  const explicit = normalizeVideoSize(rule?.from);
+  if (explicit) return sizes.includes(explicit) ? explicit : '';
+  const target = videoSizeShortEdge(rule?.to);
+  if (!target) return '';
+  let best = '';
+  let bestEdge = 0;
+  sizes.forEach((s) => {
+    const edge = videoSizeShortEdge(s);
+    if (edge && edge < target && edge > bestEdge) {
+      bestEdge = edge;
+      best = s;
+    }
+  });
+  return best;
+};
+
+// 尺寸下拉的完整选项 = 原生档（保持运营配置的顺序）+ 超分档（按输出分辨率升序追加在后）。
+// 超分档带上 srModel / fromSize，让 UI 的标识文案与提交时的编排读同一份推导结果 ——
+// 两处各推一次迟早推出不同答案，keyframeTaskType 当初就是这么栽的。
+//
+// usableModels = 当前分组的可用模型列表；超分模型对该分组不可用时整档不产出（不置灰）：
+// 分组权限在体验区解释不清，给个点不动的选项只会招来「为什么我不能选」。
+// 传 null/undefined 表示尚未取到列表，此时不做可用性过滤（避免加载期档位闪烁）。
+export const buildVideoSizeChoices = (
+  config,
+  model,
+  nativeSizes,
+  usableModels,
+) => {
+  const native = (nativeSizes || []).map((s) => ({
+    value: s,
+    label: s,
+    isUpscale: false,
+  }));
+  const taken = new Set(native.map((o) => o.value));
+  const upscale = [];
+  getUpscaleRulesForModel(config, model).forEach((rule) => {
+    // 原生已有同档 → 原生优先，超分规则让位（配置侧的冗余，不该让用户看见两个 1080P）
+    if (taken.has(rule.to)) return;
+    if (Array.isArray(usableModels) && !usableModels.includes(rule.model))
+      return;
+    const from = resolveUpscaleFrom(rule, nativeSizes);
+    if (!from) return;
+    taken.add(rule.to);
+    upscale.push({
+      value: rule.to,
+      label: rule.to,
+      isUpscale: true,
+      srModel: rule.model,
+      fromSize: from,
+    });
+  });
+  upscale.sort(
+    (a, b) => videoSizeShortEdge(a.value) - videoSizeShortEdge(b.value),
+  );
+  return [...native, ...upscale];
+};
 
 // 从给定「可用模型列表」中取首个声明了指定能力的模型名（超分/配音流水线模型识别）。
 // 按分组可用列表挑而非全局取首个：多模型同能力、按分组分别启用时，避免钉死在
@@ -529,6 +609,24 @@ export const normalizeVideoSize = (s) => {
   return /^\d+p$/.test(v) ? v.toUpperCase() : v;
 };
 
+// 档位 → 短边像素。sizes 是混形态的：档位词(480P/768P)、像素串(1280x720)、以及
+// H3 专有的自定义档位词(n)。超分档要按「实际输出分辨率」排序、并自动挑出「小于目标
+// 的最大一档」作起步，两件事都需要一个统一口径的可比数值。
+//
+// 与后端 minimax_h3.go:82 的 h3ShortEdgeFromSizeToken 同口径("n"→480 那条后端也硬
+// 编码了同一个值)。两边漂移的后果是静默的 —— 选错起步档、不报错，所以这里是前端的
+// 单一来源，不要在别处再写一份。解析不出返回 0，调用方据此让它不参与排序与推导。
+export const videoSizeShortEdge = (s) => {
+  const v = normalizeVideoSize(s);
+  if (!v) return 0;
+  const wh = v.match(/^(\d+)x(\d+)$/);
+  if (wh) return Math.min(Number(wh[1]), Number(wh[2]));
+  const p = v.match(/^(\d+)P$/);
+  if (p) return Number(p[1]);
+  if (v === 'n') return 480;
+  return 0;
+};
+
 // 通用列表规范化（时长/能力）：去空格、去空、去重（解析与设置页保存共用，避免两条路径分叉）
 export const normalizeList = (list) =>
   Array.isArray(list)
@@ -551,6 +649,23 @@ export const normalizeSizeList = (list) =>
   Array.isArray(list)
     ? Array.from(new Set(list.map(normalizeVideoSize).filter(Boolean)))
     : [];
+
+// 超分规则列表规范化（解析与管理端保存共用，避免两条路径分叉）。
+// 丢弃缺 to / model 的行；同一个 to 只留第一条 —— 多条同 to 会在尺寸下拉里出现两个
+// 同名档位，只能靠 label 区分，等于把心智负担还给用户，不如在配置侧就收敛。
+export const normalizeUpscaleList = (list) => {
+  if (!Array.isArray(list)) return [];
+  const seen = new Set();
+  const out = [];
+  list.forEach((r) => {
+    const to = normalizeVideoSize(r?.to);
+    const model = String(r?.model || '').trim();
+    if (!to || !model || seen.has(to)) return;
+    seen.add(to);
+    out.push({ to, model, from: normalizeVideoSize(r?.from) || '' });
+  });
+  return out;
+};
 
 // 现场拍摄档位。存在的理由见 hooks/videoPlayground/useVideoRecorder.js 顶部注释:
 // 系统相机的分辨率/帧率网页管不着(华为 4K30 约 5-7 MB/s,录十几秒就顶穿 maxInputMB),
@@ -680,6 +795,9 @@ export const parseVideoModelConfig = (raw) => {
           maxInputMB: toInputMB(cfg?.maxInputMB),
           maxAudioSec: toAudioSec(cfg?.maxAudioSec),
           pipeline: !!cfg?.pipeline,
+          // 同上,白名单式重建:漏了它每次保存都会把整条超分链配置抹掉,而症状是
+          // 「体验区的 1080P 档位莫名消失」,查起来要绕一大圈。
+          upscale: normalizeUpscaleList(cfg?.upscale),
           // 引擎族声明。**这是白名单式重建，漏一个字段就等于每次管理页保存都把它删掉**——
           // engine 决定后端走不走 MiniMax H3 那套请求整形(帧数约定/时长字段/画布推导),
           // 丢了不会报错,只会让 H3 悄悄退回 wan 的形态。

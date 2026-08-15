@@ -46,6 +46,7 @@ export const VideoPlaygroundBody = ({ mode, category = 'video' }) => {
     groups,
     models,
     availableSizes,
+    sizeChoices,
     availableDurations,
     availableAspectRatios,
     messages,
@@ -97,6 +98,7 @@ export const VideoPlaygroundBody = ({ mode, category = 'video' }) => {
           groups={groups}
           models={models}
           availableSizes={availableSizes}
+          sizeChoices={sizeChoices}
           availableDurations={availableDurations}
           availableAspectRatios={availableAspectRatios}
           onInputChange={handleInputChange}
