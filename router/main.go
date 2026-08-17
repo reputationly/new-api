@@ -13,6 +13,9 @@ import (
 )
 
 func SetRouter(router *gin.Engine, assets ThemeAssets) {
+	// 站点根目录验证文件必须最先挂载：早于全局限流 / gzip / 移动端重定向中间件注册，
+	// 这些路由的中间件链才是干净的。理由详见 wellknown-router.go 的注释。
+	SetWellKnownRouter(router)
 	SetApiRouter(router)
 	SetDashboardRouter(router)
 	SetRelayRouter(router)
