@@ -269,8 +269,14 @@ func SendEmailVerification(c *gin.Context) {
 	domainPart := parts[1]
 	if common.EmailDomainRestrictionEnabled {
 		allowed := false
+		lowerDomain := strings.ToLower(domainPart)
 		for _, domain := range common.EmailDomainWhitelist {
-			if domainPart == domain {
+			// 白名单条目同时匹配自身及其子域，例如 edu.cn 可放行 whu.edu.cn
+			d := strings.ToLower(strings.TrimSpace(domain))
+			if d == "" {
+				continue
+			}
+			if lowerDomain == d || strings.HasSuffix(lowerDomain, "."+d) {
 				allowed = true
 				break
 			}
