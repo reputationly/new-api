@@ -329,6 +329,9 @@ func PostTextConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, us
 	}
 
 	adminRejectReason := common.GetContextKeyString(ctx, constant.ContextKeyAdminRejectReason)
+	// 注意：上游拒绝的 moderation_log 收口不在这里，在 controller.Relay 的 defer 里。
+	// 挂在这个函数上会漏掉三类路径：判违规后直接返回错误的（Gemini prompt blocked）、
+	// 走 PostAudioConsumeQuota 的音频计费分支、以及 rerank/embedding 等其它 handler。
 	summary := calculateTextQuotaSummary(ctx, relayInfo, usage)
 
 	var tieredResult *billingexpr.TieredResult

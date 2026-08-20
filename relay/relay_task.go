@@ -190,6 +190,19 @@ func RelayTaskSubmit(c *gin.Context, info *relaycommon.RelayInfo) (*TaskSubmitRe
 		info.PublicTaskID = model.GenerateTaskID()
 	}
 
+	// 3.5 内容审核(挂载点 A)。
+	//
+	// 位置的三个约束：
+	//   - 在 rewriteTaskMedia(1.5) 之后——那一步把 task:<id> 引用展开成实际值，
+	//     审核要看的是展开后的内容；
+	//   - 在第 2/3 步之后——OriginModelName 对「模型由 action 推导」的端点要到第 2 步
+	//     才有值，PublicTaskID 要到第 3 步才生成。放在它们前面会让审核记录的 task_id
+	//     恒为空，且 ModelFilter 拿空模型名去匹配，可能套用错误的 mode；
+	//   - 在 ModelPriceHelperPerCall(4) 与预扣费之前——拒绝不该产生扣费/退款往返。
+	if taskErr := moderateTaskRequest(c, info); taskErr != nil {
+		return nil, taskErr
+	}
+
 	// 4. 价格计算：基础模型价格
 	info.OriginModelName = modelName
 	priceData, err := helper.ModelPriceHelperPerCall(c, info)

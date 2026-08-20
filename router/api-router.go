@@ -448,6 +448,14 @@ func SetApiRouter(router *gin.Engine) {
 		logRoute.GET("/export", middleware.AdminAuth(), controller.ExportAllLogs)
 		logRoute.GET("/self/export", middleware.UserAuth(), controller.ExportUserLogs)
 
+		// 内容审核记录。原文查看单独一条路由：列表拿不到密文，看原文必须留痕。
+		moderationRoute := apiRouter.Group("/moderation")
+		moderationRoute.Use(middleware.AdminAuth())
+		{
+			moderationRoute.GET("/logs", controller.GetModerationLogs)
+			moderationRoute.GET("/logs/:id/content", controller.GetModerationLogContent)
+		}
+
 		dataRoute := apiRouter.Group("/data")
 		dataRoute.GET("/", middleware.AdminAuth(), controller.GetAllQuotaDates)
 		dataRoute.GET("/users", middleware.AdminAuth(), controller.GetQuotaDatesByUser)

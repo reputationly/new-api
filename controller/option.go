@@ -90,6 +90,12 @@ func GetOptions(c *gin.Context) {
 		if isSensitiveKey && !isVisiblePublicKeyOption(k) {
 			continue
 		}
+		// moderation.endpoints 是个 JSON 数组，凭证藏在数组元素的 api_key 里，
+		// 命不中上面按后缀做的过滤。整条不返回又不行——同一个键里还装着
+		// base_url / model / enabled 这些配置页要渲染的字段，只能逐条抹。
+		if k == system_setting.ModerationEndpointsOptionKey {
+			value = system_setting.RedactModerationEndpoints(value)
+		}
 		options = append(options, &model.Option{
 			Key:   k,
 			Value: value,
@@ -340,6 +346,15 @@ func UpdateOption(c *gin.Context) {
 			return
 		}
 		enc, encErr := common.EncryptOBSSecret(plain)
+		if encErr != nil {
+			common.ApiError(c, encErr)
+			return
+		}
+		option.Value = enc
+	case system_setting.ModerationEndpointsOptionKey:
+		// 审核节点凭证加密入库（GET 已抹掉不回显）。空 api_key 表示「保持不变」，
+		// 由 EncryptModerationEndpoints 按 name 从已存配置里取回原密文。
+		enc, encErr := system_setting.EncryptModerationEndpoints(option.Value.(string))
 		if encErr != nil {
 			common.ApiError(c, encErr)
 			return

@@ -93,8 +93,22 @@ func RecordLog(userId int, logType int, content string) {
 
 // RecordLogWithAdminInfo 记录操作日志，并将管理员相关信息存入 Other.admin_info，
 func RecordLogWithAdminInfo(userId int, logType int, content string, adminInfo map[string]interface{}) {
+	if err := recordLogWithAdminInfo(userId, logType, content, adminInfo); err != nil {
+		common.SysLog("failed to record log: " + err.Error())
+	}
+}
+
+// RecordAuditLogWithAdminInfo 与 RecordLogWithAdminInfo 相同，但把写入失败暴露给调用方。
+//
+// 给「留痕失败就不该让操作继续」的场景用：日志库故障时，吞掉错误等于把
+// 一次本该留痕的敏感操作变成无痕操作，而这类操作的全部约束就是那条痕。
+func RecordAuditLogWithAdminInfo(userId int, logType int, content string, adminInfo map[string]interface{}) error {
+	return recordLogWithAdminInfo(userId, logType, content, adminInfo)
+}
+
+func recordLogWithAdminInfo(userId int, logType int, content string, adminInfo map[string]interface{}) error {
 	if logType == LogTypeConsume && !common.LogConsumeEnabled {
-		return
+		return nil
 	}
 	username, _ := GetUsernameById(userId, false)
 	log := &Log{
@@ -110,9 +124,7 @@ func RecordLogWithAdminInfo(userId int, logType int, content string, adminInfo m
 		}
 		log.Other = common.MapToJsonStr(other)
 	}
-	if err := LOG_DB.Create(log).Error; err != nil {
-		common.SysLog("failed to record log: " + err.Error())
-	}
+	return LOG_DB.Create(log).Error
 }
 
 func RecordTopupLog(userId int, content string, callerIp string, paymentMethod string, callbackPaymentMethod string) {

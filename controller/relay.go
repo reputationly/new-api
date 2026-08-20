@@ -22,7 +22,7 @@ import (
 	"github.com/QuantumNous/new-api/relay/helper"
 	"github.com/QuantumNous/new-api/relay/minimaxv2"
 	"github.com/QuantumNous/new-api/service"
-	"github.com/QuantumNous/new-api/setting"
+	"github.com/QuantumNous/new-api/service/moderation"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
 	"github.com/QuantumNous/new-api/types"
 
@@ -128,26 +128,41 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 		return
 	}
 
-	needSensitiveCheck := setting.ShouldCheckPromptSensitive()
+	// 是否需要送审由 moderation 包自己回答，不能在这里拼条件。
+	// 之前这里用的是 legacy 的 setting.ShouldCheckPromptSensitive()，结果运营把
+	// 审核模式调成 blocking 之后，同步链路依然一条记录都不产生（legacy 开关关着），
+	// 而任务链路照跑——两条路对同一份配置给出不同结果，且没有任何提示。
+	needModeration := moderation.Active(relayInfo.UsingGroup, relayInfo.OriginModelName)
 	needCountToken := constant.CountToken
-	// Avoid building huge CombineText (strings.Join) when token counting and sensitive check are both disabled.
+	// Avoid building huge CombineText (strings.Join) when token counting and moderation are both disabled.
 	var meta *types.TokenCountMeta
-	if needSensitiveCheck || needCountToken {
+	if needModeration || needCountToken {
 		meta = request.GetTokenCountMeta()
 	} else {
 		meta = fastTokenCountMetaForPricing(request)
 	}
 
-	if needSensitiveCheck && meta != nil {
-		contains, words := service.CheckSensitiveText(meta.CombineText)
-		if contains {
-			logger.LogWarn(c, fmt.Sprintf("user sensitive words detected: %s", strings.Join(words, ", ")))
-			if service.WriteSensitiveRefusal(c, relayFormat, relayInfo, request) {
+	// 内容审核。必须留在预扣费之前——这不是顺手，是「审核拒绝不扣款」的结构性保证（§9.1）。
+	if needModeration && meta != nil {
+		modResult := moderation.Moderate(c, &moderation.Request{
+			Texts:     []string{meta.CombineText},
+			UserId:    relayInfo.UserId,
+			TokenId:   relayInfo.TokenId,
+			Username:  common.GetContextKeyString(c, constant.ContextKeyUserName),
+			Group:     relayInfo.UsingGroup,
+			ModelName: relayInfo.OriginModelName,
+			RequestId: relayInfo.RequestId,
+			Stage:     moderation.StagePrompt,
+		})
+		if modResult.Blocked {
+			logger.LogWarn(c, fmt.Sprintf("content moderation blocked: provider=%s categories=%s",
+				modResult.Provider, strings.Join(modResult.Categories, ",")))
+			if service.WriteSensitiveRefusal(c, relayFormat, relayInfo, request, modResult.Reason) {
 				return
 			}
 			// fallback: unsupported format, return explicit 400 refusal
 			newAPIError = types.NewErrorWithStatusCode(
-				errors.New(service.GetSensitiveRefusalText()),
+				errors.New(service.SensitiveRefusalTextWithReason(modResult.Reason)),
 				types.ErrorCodeSensitiveWordsDetected,
 				http.StatusBadRequest,
 				types.ErrOptionWithSkipRetry(),
@@ -182,6 +197,15 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 	}
 
 	defer func() {
+		// 上游判违规的唯一收口（§9.3）。
+		//
+		// 放这里而不是挂在 PostTextConsumeQuota 上：结算函数有 Text / Audio 多个变体，
+		// handler 有十几个，而判违规后直接返回错误的路径（Gemini prompt blocked）
+		// 一个结算函数都不经过。挂在其中任何一个上都等于漏掉其余全部。
+		// 这个 defer 是所有 relay 路径成功与失败的共同必经点，函数内部幂等。
+		service.RecordUpstreamRejection(c, relayInfo,
+			common.GetContextKeyString(c, constant.ContextKeyAdminRejectReason))
+
 		// Only return quota if downstream failed and quota was actually pre-consumed
 		if newAPIError != nil {
 			newAPIError = service.NormalizeViolationFeeError(newAPIError)

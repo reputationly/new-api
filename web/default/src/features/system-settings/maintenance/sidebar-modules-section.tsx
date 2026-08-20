@@ -144,6 +144,10 @@ export function SidebarModulesSection({
         title: t('Subscription Management'),
         description: t('Manage subscription plans and pricing.'),
       },
+      moderation: {
+        title: t('Content Moderation'),
+        description: t('Review moderation decisions and blocked content.'),
+      },
     },
   }
   const formDefaults = useMemo(() => config, [config])

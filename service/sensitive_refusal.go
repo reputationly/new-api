@@ -24,11 +24,25 @@ func GetSensitiveRefusalText() string {
 	return defaultSensitiveRefusalText
 }
 
+// SensitiveRefusalTextWithReason 在配置的拒绝文案后追加审核原因。
+//
+// reason 只能是类别级措辞（如「输入内容涉及色情内容」），不能带命中的具体词句——
+// 那等于给用户一个探测器，改一个字再试一次就能定位是哪条规则（§9.2.2）。
+func SensitiveRefusalTextWithReason(reason string) string {
+	text := GetSensitiveRefusalText()
+	if reason == "" {
+		return text
+	}
+	return text + "（" + reason + "）"
+}
+
 // WriteSensitiveRefusal writes a well-formed refusal response (200 OK) when sensitive
 // words are detected. Returns true when the response was written successfully; false
 // means the caller should fall back to returning a 400 error instead.
-func WriteSensitiveRefusal(c *gin.Context, relayFormat types.RelayFormat, relayInfo *relaycommon.RelayInfo, request dto.Request) bool {
-	text := GetSensitiveRefusalText()
+//
+// reason 为空时行为与改造前完全一致（只输出配置的拒绝文案）。
+func WriteSensitiveRefusal(c *gin.Context, relayFormat types.RelayFormat, relayInfo *relaycommon.RelayInfo, request dto.Request, reason string) bool {
+	text := SensitiveRefusalTextWithReason(reason)
 
 	switch relayFormat {
 	case types.RelayFormatOpenAI:

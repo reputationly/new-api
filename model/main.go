@@ -298,6 +298,7 @@ func migrateDB() error {
 		&CanvasProject{},
 		&CanvasAsset{},
 		&CanvasStorageUsage{},
+		&ModerationLog{},
 	)
 	if err != nil {
 		return err
@@ -673,6 +674,7 @@ func migrateDBFast() error {
 		{&FeedbackMessage{}, "FeedbackMessage"},
 		{&FeedbackImage{}, "FeedbackImage"},
 		{&PerfMetric{}, "PerfMetric"},
+		{&ModerationLog{}, "ModerationLog"},
 	}
 	// 动态计算migration数量，确保errChan缓冲区足够大
 	errChan := make(chan error, len(migrations))

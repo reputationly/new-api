@@ -78,6 +78,8 @@ func main() {
 	common.InitKYCKeys()
 	// Surface OBS media-store key (mis)configuration warnings at startup too.
 	common.InitOBSKeys()
+	// 内容审核原文加密密钥。缺失只警告不致命——审核照跑，只是 block 记录不留原文。
+	common.InitModerationKey()
 
 	// LightX2V NFS 输入盘启动探测(§6):启用媒体存储 + NFS 落盘搬运时,<NFSRoot>/inputs
 	// 必须可读写,且与 gpustack lightx2v_output_root 指向同一 SFS(同一绝对挂载路径),
@@ -156,6 +158,20 @@ func main() {
 
 	// Media storage (OBS) bucket usage snapshot + threshold alert cron
 	service.StartMediaStorageStatsTask()
+
+	// 内容审核日志：异步落库 worker + 分档清理。
+	model.InitModerationLogWorker()
+	if common.IsMasterNode {
+		// 只在主节点清理：多节点同时跑 DELETE 除了互相锁等待没有任何好处。
+		gopool.Go(func() {
+			for {
+				if err := model.CleanupModerationLogs(); err != nil {
+					common.SysError("moderation_log 清理失败: " + err.Error())
+				}
+				time.Sleep(6 * time.Hour)
+			}
+		})
+	}
 
 	// Wire task polling adaptor factory (breaks service -> relay import cycle)
 	service.GetTaskAdaptorFunc = func(platform constant.TaskPlatform) service.TaskPollingAdaptor {
