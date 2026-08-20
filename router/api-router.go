@@ -454,6 +454,7 @@ func SetApiRouter(router *gin.Engine) {
 		{
 			moderationRoute.GET("/logs", controller.GetModerationLogs)
 			moderationRoute.GET("/logs/:id/content", controller.GetModerationLogContent)
+			moderationRoute.GET("/status", controller.GetModerationStatus)
 		}
 
 		dataRoute := apiRouter.Group("/data")

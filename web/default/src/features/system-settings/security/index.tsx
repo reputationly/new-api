@@ -32,6 +32,16 @@ const defaultSecuritySettings: SecuritySettings = {
   CheckSensitiveEnabled: false,
   CheckSensitiveOnPromptEnabled: false,
   SensitiveWords: '',
+  // 这里的默认值必须与 setting/system_setting/moderation.go 的 moderationSettings
+  // 保持一致：getOptionValue 用默认值的**类型**决定怎么解析后端返回的字符串，
+  // 类型对不上会静默退回默认值，页面显示的就不是库里那份了。
+  'moderation.mode': 'off',
+  'moderation.keyword_enabled': true,
+  'moderation.log_pass_sample_rate': 0.01,
+  'moderation.log_queue_size': 2048,
+  'moderation.retention_block_days': 180,
+  'moderation.retention_pass_days': 3,
+  'moderation.model_filter': '',
   'fetch_setting.enable_ssrf_protection': true,
   'fetch_setting.allow_private_ip': false,
   'fetch_setting.domain_filter_mode': false,

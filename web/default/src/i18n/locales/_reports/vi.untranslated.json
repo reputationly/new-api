@@ -7,5 +7,16 @@
   "Original content not retained: only blocked records are stored encrypted, and only when the encryption key was configured at write time.": "Original content not retained: only blocked records are stored encrypted, and only when the encryption key was configured at write time.",
   "No moderation logs in the selected time range. Records appear here once content is moderated.": "No moderation logs in the selected time range. Records appear here once content is moderated.",
   "Viewing original content is recorded in the operation log.": "Viewing original content is recorded in the operation log.",
-  "Observe mode: the verdict was recorded but the request was not actually blocked.": "Observe mode: the verdict was recorded but the request was not actually blocked."
+  "Observe mode: the verdict was recorded but the request was not actually blocked.": "Observe mode: the verdict was recorded but the request was not actually blocked.",
+  "Configure moderation mode, scope and record retention": "Configure moderation mode, scope and record retention",
+  "Decide whether prompts are moderated, and how moderation records are kept.": "Decide whether prompts are moderated, and how moderation records are kept.",
+  "Off: keyword blocking behaves as before. Observe: verdicts are recorded but nothing is blocked. Block: the full chain rejects violations.": "Off: keyword blocking behaves as before. Observe: verdicts are recorded but nothing is blocked. Block: the full chain rejects violations.",
+  "In observe mode keyword hits are recorded but NOT blocked, and only a 160-character preview is retained instead of the full content.": "In observe mode keyword hits are recorded but NOT blocked, and only a 160-character preview is retained instead of the full content.",
+  "Also requires the sensitive word switches above; either one turns it off.": "Also requires the sensitive word switches above; either one turns it off.",
+  "Models outside the scope fall back to keyword-only checking, they are not left unmoderated.": "Models outside the scope fall back to keyword-only checking, they are not left unmoderated.",
+  "Fraction of clean requests recorded (0-1). Blocked records are always kept in full. No pass records are written while the mode is Off.": "Fraction of clean requests recorded (0-1). Blocked records are always kept in full. No pass records are written while the mode is Off.",
+  "Records are written asynchronously. When the queue is full they are dropped rather than delaying the request. Takes effect after a restart.": "Records are written asynchronously. When the queue is full they are dropped rather than delaying the request. Takes effect after a restart.",
+  "Cleanup is a hard delete with no second copy, so only increase this value unless you are certain.": "Cleanup is a hard delete with no second copy, so only increase this value unless you are certain.",
+  "Pass records carry no content, only a hash and metadata.": "Pass records carry no content, only a hash and metadata.",
+  "MODERATION_ENCRYPT_KEY is not configured. Moderation still runs, but blocked content is not retained and cannot be reviewed later.": "MODERATION_ENCRYPT_KEY is not configured. Moderation still runs, but blocked content is not retained and cannot be reviewed later."
 }

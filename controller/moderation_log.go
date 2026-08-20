@@ -48,6 +48,23 @@ func GetModerationLogs(c *gin.Context) {
 	common.ApiSuccess(c, pageInfo)
 }
 
+// GetModerationStatus 审核运行态（§8.4）。
+//
+// 存在的理由是「为什么我看不到原文」这类问题在配置页上答不了：
+// 原文留存取决于一个只在环境变量里的密钥，配没配、配错没配错，
+// 从任何界面都看不出来，只能去翻服务日志。
+func GetModerationStatus(c *gin.Context) {
+	common.ApiSuccess(c, gin.H{
+		// 分三态而不是一个布尔：「没配」和「配错了」的处置完全不同，
+		// 前者是没启用这个能力，后者是有人以为启用了但其实没有。
+		"encrypt_key_ready":         common.ModerationKeyReady(),
+		"encrypt_key_misconfigured": common.ModerationKeyMisconfigured(),
+		// 队列满时丢的审核记录数。不展示的话，审核记录里的空洞无法解释——
+		// 而「记录里没有」和「没发生过」在事后排查时是分不清的（§9.2）。
+		"dropped_logs": model.ModerationDroppedCount(),
+	})
+}
+
 // GetModerationLogContent 解密查看被拦内容的原文（管理员）。
 //
 // 这个动作本身要留痕：谁、什么时候、看了哪条记录。不留痕的话「管理员能看原文」

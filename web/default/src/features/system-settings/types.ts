@@ -305,6 +305,15 @@ export type SecuritySettings = {
   CheckSensitiveEnabled: boolean
   CheckSensitiveOnPromptEnabled: boolean
   SensitiveWords: string
+  // 内容审核（docs/content-moderation-design.md §8）。键名即 options 表里的键：
+  // 配置管理器把结构体按 "模块名.json tag" 拍扁，嵌套字段整体存成一个 JSON 串。
+  'moderation.mode': string
+  'moderation.keyword_enabled': boolean
+  'moderation.log_pass_sample_rate': number
+  'moderation.log_queue_size': number
+  'moderation.retention_block_days': number
+  'moderation.retention_pass_days': number
+  'moderation.model_filter': string
   'fetch_setting.enable_ssrf_protection': boolean
   'fetch_setting.allow_private_ip': boolean
   'fetch_setting.domain_filter_mode': boolean

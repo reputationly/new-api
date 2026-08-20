@@ -16,6 +16,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
+import { ModerationSection } from '../request-limits/moderation-section'
 import { RateLimitSection } from '../request-limits/rate-limit-section'
 import { SensitiveWordsSection } from '../request-limits/sensitive-words-section'
 import { SSRFSection } from '../request-limits/ssrf-section'
@@ -51,6 +52,28 @@ const SECURITY_SECTIONS = [
           CheckSensitiveEnabled: settings.CheckSensitiveEnabled,
           CheckSensitiveOnPromptEnabled: settings.CheckSensitiveOnPromptEnabled,
           SensitiveWords: settings.SensitiveWords,
+        }}
+      />
+    ),
+  },
+  {
+    // 紧跟屏蔽词：关键词层同时受两边开关约束，分开放会让人以为它们互不相干。
+    id: 'moderation',
+    titleKey: 'Content Moderation',
+    descriptionKey: 'Configure moderation mode, scope and record retention',
+    build: (settings: SecuritySettings) => (
+      <ModerationSection
+        defaultValues={{
+          'moderation.mode': settings['moderation.mode'],
+          'moderation.keyword_enabled': settings['moderation.keyword_enabled'],
+          'moderation.log_pass_sample_rate':
+            settings['moderation.log_pass_sample_rate'],
+          'moderation.log_queue_size': settings['moderation.log_queue_size'],
+          'moderation.retention_block_days':
+            settings['moderation.retention_block_days'],
+          'moderation.retention_pass_days':
+            settings['moderation.retention_pass_days'],
+          'moderation.model_filter': settings['moderation.model_filter'],
         }}
       />
     ),
