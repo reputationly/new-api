@@ -52,9 +52,12 @@ export default function GroupExtraSettings({
   //
   // topup / rateLimit 每次敲键都会变——它们由 parseJSON(inputs.xxx) 算出，而
   // inputs 正是被本次 onChange 刚更新过的那份。写进依赖，setTopup / setRateLimit
-  // 就会换身份，columns 的 useMemo 跟着重建，Semi Table 重建单元格，
-  // InputNumber 光标跳到末尾。同一个坑 GroupTable.jsx 与 ModelRatioEditor.jsx
-  // 各踩过一次，注释都在。
+  // 就会换身份，columns 的 useMemo 跟着重建，Semi Table 每敲一个字重建一遍单元格。
+  //
+  // 这张表现在全是 InputNumber，实测它在这种情况下光标**不会**跳
+  // （对照实验：同样条件下 Input 跳到末尾、InputNumber 不动），所以当下只是白费
+  // 渲染。留住这个写法是因为一旦这里加一个文本输入框（比如给分组配个备注），
+  // 症状会立刻变成 GroupTable.jsx 与 ModelRatioEditor.jsx 已经踩过两次的光标跳。
   const topupRef = useRef(topup);
   topupRef.current = topup;
   const rateLimitRef = useRef(rateLimit);

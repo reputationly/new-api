@@ -24,3 +24,7 @@ yarn-error.log*
 .idea
 package-lock.json
 yarn.lock
+# Playwright / vitest 产物
+playwright-report/
+test-results/
+coverage/

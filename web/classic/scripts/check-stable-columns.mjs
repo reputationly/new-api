@@ -12,12 +12,27 @@
  * 判据：`columns` 的依赖里出现的每个 useCallback/useMemo，其依赖链必须最终
  * 收敛到空数组。允许直接依赖 ALLOWED_DIRECT 里的值——它们不会在打字过程中变化。
  *
+ * 它是**便宜的兜底**，不是权威判据。真正的判据是
+ * src/pages/GroupManagement/__tests__/cursorStability.test.jsx：那里在真实的
+ * Semi Table 里往输入框中间插字、断言光标不动。两者的分工：
+ *   - 组件测试能证明症状不存在，但只覆盖写了测试的组件
+ *   - 这个脚本覆盖所有文件，但只能证明「依赖链稳定」这一个必要条件
+ *
+ * 实测还发现症状与控件有关：同样条件下 Semi `Input` 光标跳到末尾，而
+ * `InputNumber` 不受影响。所以纯 InputNumber 的表格即使被这个脚本判为不稳定，
+ * 用户当下也感觉不到——但那只是运气，一旦加个文本框症状立刻出现，所以照样要修。
+ *
  * 用法：node scripts/check-stable-columns.mjs [目录...]
  */
 import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { join, relative } from 'node:path';
 
-// 这些值不会在打字过程中改变，作为 columns 的直接依赖是安全的
+// 这些值不会在打字过程中改变，作为 columns 的直接依赖是安全的。
+//
+// `t` 在这里成立**有前提**：应用启动时初始化过 i18n（src/index.jsx 里
+// `import './i18n/i18n'`）。未初始化时 react-i18next 每次渲染都会返回新的 t，
+// 那样 columns 必然重建。测试环境曾经因为漏了这一步，让光标用例以「产品有 bug」
+// 的样子失败——见 src/test/setup.js 里的说明。
 const ALLOWED_DIRECT = new Set(['t', 'selected', 'selectedRowKeys']);
 
 /** 取 `const NAME = useCallback(...)` / `useMemo(...)` 的依赖数组，返回 null 表示不是这两种 */

@@ -97,6 +97,7 @@ export default function RatioSimulator({ groupNames = [] }) {
             {t('用户分组')}
           </Text>
           <Select
+            data-testid='sim-user-group'
             style={{ width: '100%' }}
             placeholder={t('（不限）')}
             value={userGroup || null}
@@ -111,6 +112,7 @@ export default function RatioSimulator({ groupNames = [] }) {
             {t('令牌分组')}
           </Text>
           <Select
+            data-testid='sim-using-group'
             style={{ width: '100%' }}
             placeholder={t('必选')}
             value={usingGroup || null}
@@ -124,6 +126,7 @@ export default function RatioSimulator({ groupNames = [] }) {
             {t('模型')}
           </Text>
           <Input
+            data-testid='sim-model'
             placeholder={t('如 GLM-5')}
             value={modelName}
             onChange={setModelName}
@@ -131,6 +134,7 @@ export default function RatioSimulator({ groupNames = [] }) {
         </Col>
         <Col xs={24} sm={3} className='flex items-end'>
           <Button
+            data-testid='sim-run'
             icon={<IconPlay />}
             theme='solid'
             loading={loading}
@@ -143,7 +147,10 @@ export default function RatioSimulator({ groupNames = [] }) {
       </Row>
 
       {result && (
-        <div className='rounded-lg bg-[var(--semi-color-fill-0)] p-3'>
+        <div
+          data-testid='sim-result'
+          className='rounded-lg bg-[var(--semi-color-fill-0)] p-3'
+        >
           {!result.usable && (
             <Tag color='orange' shape='circle' className='mb-2'>
               {t('该用户分组当前用不到这个令牌分组')}
