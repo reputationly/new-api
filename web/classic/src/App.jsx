@@ -42,6 +42,7 @@ import Midjourney from './pages/Midjourney';
 import Pricing from './pages/Pricing';
 import Task from './pages/Task';
 import ModelPage from './pages/Model';
+import GroupManagementPage from './pages/GroupManagement';
 import ModelDeploymentPage from './pages/ModelDeployment';
 import PlaygroundAdminPage from './pages/PlaygroundAdmin';
 import Playground from './pages/Playground';
@@ -119,6 +120,14 @@ function App() {
           }
         />
         <Route path='/forbidden' element={<Forbidden />} />
+        <Route
+          path='/console/group'
+          element={
+            <AdminRoute>
+              <GroupManagementPage />
+            </AdminRoute>
+          }
+        />
         <Route
           path='/console/models'
           element={

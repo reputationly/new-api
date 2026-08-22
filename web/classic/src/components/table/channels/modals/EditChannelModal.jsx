@@ -3932,14 +3932,20 @@ const EditChannelModal = (props) => {
                       />
 
                       {/* Groups - Core Config */}
+                      {/*
+                        刻意不开 allowAdditions：分组的出生地是「分组管理」页。
+                        在这里随手打一个新名字，分组配置里并不会有它，
+                        middleware/auth.go 会判「分组已被弃用」直接拒绝——
+                        这个渠道就成了死渠道，而且没有任何页面会提示。
+                        真要新分组，先去分组管理建，那里会检查健康状态。
+                      */}
                       <Form.Select
                         field='groups'
                         label={t('分组')}
                         placeholder={t('请选择可以使用该渠道的分组')}
                         multiple
-                        allowAdditions
-                        additionLabel={t(
-                          '请在系统设置页面编辑分组倍率以添加新的分组：',
+                        extraText={t(
+                          '分组需先在「分组管理」中创建。挂到未配置的分组上，该渠道对用户不可用。',
                         )}
                         optionList={groupOptions}
                         style={{ width: '100%' }}

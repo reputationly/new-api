@@ -105,6 +105,16 @@ func CheckGroupModelRatio(jsonStr string) error {
 	return nil
 }
 
+// MatchModelPattern 报告模式串是否匹配模型名。
+//
+// 导出是给管理端用的：分组管理页要标出「配了折扣但匹配不到任何模型」的失效规则，
+// 那里必须复用同一份匹配规则——另写一份判定，两边一旦分叉，页面就会把生效的规则
+// 报成失效、或者反过来。
+func MatchModelPattern(pattern, modelName string) bool {
+	_, ok := matchModelPattern(pattern, modelName)
+	return ok
+}
+
 // matchModelPattern 报告模式串是否匹配模型名，并返回特异性权重。
 // 只支持尾部 '*' 通配。权重：精确 2 > 前缀通配 1；不匹配返回 0, false。
 func matchModelPattern(pattern, modelName string) (int, bool) {

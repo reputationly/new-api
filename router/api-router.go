@@ -469,7 +469,13 @@ func SetApiRouter(router *gin.Engine) {
 		groupRoute := apiRouter.Group("/group")
 		groupRoute.Use(middleware.AdminAuth())
 		{
+			// GET "/" 是既有接口（渠道编辑、订阅计划编辑等多处在用），保持不动，
+			// 分组管理页的新接口一律挂子路径避让
 			groupRoute.GET("/", controller.GetGroups)
+			groupRoute.GET("/overview", controller.GetGroupOverview)
+			groupRoute.GET("/models", controller.GetGroupModels)
+			groupRoute.GET("/references", controller.GetGroupReferences)
+			groupRoute.POST("/resolve", controller.ResolveGroupRatioPreview)
 		}
 
 		prefillGroupRoute := apiRouter.Group("/prefill_group")

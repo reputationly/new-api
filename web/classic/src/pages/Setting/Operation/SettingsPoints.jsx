@@ -7,7 +7,6 @@ import {
   Spin,
   Typography,
   Banner,
-  TagInput,
 } from '@douyinfe/semi-ui';
 import {
   compareObjects,
@@ -17,15 +16,16 @@ import {
   showWarning,
 } from '../../../helpers';
 import { useTranslation } from 'react-i18next';
+import { useNavigate } from 'react-router-dom';
 
 export default function SettingsPoints(props) {
   const { t } = useTranslation();
+  const navigate = useNavigate();
   const [loading, setLoading] = useState(false);
   const [inputs, setInputs] = useState({
     'points_setting.enabled': false,
     'points_setting.require_kyc': true,
     'points_setting.quota_per_point': 684.93,
-    'points_setting.enabled_groups': '[]', // 以 JSON 字符串存储，避免 compareObjects 误判
     'points_setting.kyc_verified_points': 0,
     'points_setting.kyc_inviter_points': 0,
     'points_setting.new_user_points': 0,
@@ -37,15 +37,6 @@ export default function SettingsPoints(props) {
     return (value) => {
       setInputs((inputs) => ({ ...inputs, [fieldName]: value }));
     };
-  }
-
-  // enabled_groups 在 inputs 里是 JSON 字符串，TagInput 需要数组，边界处转换
-  function getGroupsArray() {
-    try {
-      return JSON.parse(inputs['points_setting.enabled_groups'] || '[]');
-    } catch {
-      return [];
-    }
   }
 
   function onSubmit() {
@@ -133,7 +124,9 @@ export default function SettingsPoints(props) {
                 <Form.InputNumber
                   field={'points_setting.quota_per_point'}
                   label={t('每积分对应额度(quota unit)')}
-                  extraText={t('1 积分 = 1 分钱时约为 684.93，上线后不建议修改')}
+                  extraText={t(
+                    '1 积分 = 1 分钱时约为 684.93，上线后不建议修改',
+                  )}
                   onChange={handleFieldChange('points_setting.quota_per_point')}
                   min={0}
                   step={0.001}
@@ -183,24 +176,21 @@ export default function SettingsPoints(props) {
                   <Typography.Text strong>
                     {t('允许积分抵扣的分组白名单')}
                   </Typography.Text>
-                  <Typography.Text
-                    type='tertiary'
-                    style={{ marginLeft: 8, fontSize: 12 }}
-                  >
-                    {t('留空 = 所有分组只扣余额（采购分组零配置即安全）')}
-                  </Typography.Text>
                 </div>
-                <TagInput
-                  placeholder={t('输入分组名后回车，如 vip、self-hosted')}
-                  value={getGroupsArray()}
-                  onChange={(arr) =>
-                    handleFieldChange('points_setting.enabled_groups')(
-                      JSON.stringify(arr),
-                    )
-                  }
-                  disabled={!inputs['points_setting.enabled']}
-                  style={{ width: '100%' }}
-                />
+                <div className='flex flex-wrap items-center gap-2'>
+                  <Typography.Text type='tertiary' size='small'>
+                    {t(
+                      '已迁移到「分组管理 → 充值 · 限流 · 积分」，与该分组的其他配置放在一起。',
+                    )}
+                  </Typography.Text>
+                  <Button
+                    size='small'
+                    theme='borderless'
+                    onClick={() => navigate('/console/group')}
+                  >
+                    {t('前往分组管理')}
+                  </Button>
+                </div>
               </Col>
             </Row>
             <Row style={{ marginTop: 16 }}>

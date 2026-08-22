@@ -18,19 +18,20 @@ For commercial licensing, please contact support@quantumnous.com
 */
 
 import React, { useEffect, useState, useRef } from 'react';
-import { Button, Col, Form, Row, Spin } from '@douyinfe/semi-ui';
+import { Button, Col, Form, Row, Spin, Typography } from '@douyinfe/semi-ui';
 import {
   compareObjects,
   API,
   showError,
   showSuccess,
   showWarning,
-  verifyJSON,
 } from '../../../helpers';
 import { useTranslation } from 'react-i18next';
+import { useNavigate } from 'react-router-dom';
 
 export default function RequestRateLimit(props) {
   const { t } = useTranslation();
+  const navigate = useNavigate();
 
   const [loading, setLoading] = useState(false);
   const [inputs, setInputs] = useState({
@@ -38,7 +39,6 @@ export default function RequestRateLimit(props) {
     ModelRequestRateLimitCount: -1,
     ModelRequestRateLimitSuccessCount: 1000,
     ModelRequestRateLimitDurationMinutes: 1,
-    ModelRequestRateLimitGroup: '',
   });
   const refForm = useRef();
   const [inputsRow, setInputsRow] = useState(inputs);
@@ -179,54 +179,22 @@ export default function RequestRateLimit(props) {
             </Row>
             <Row>
               <Col xs={24} sm={16}>
-                <Form.TextArea
-                  label={t('分组速率限制')}
-                  placeholder={t(
-                    '{\n  "default": [200, 100],\n  "vip": [0, 1000]\n}',
-                  )}
-                  field={'ModelRequestRateLimitGroup'}
-                  autosize={{ minRows: 5, maxRows: 15 }}
-                  trigger='blur'
-                  stopValidateWithError
-                  rules={[
-                    {
-                      validator: (rule, value) => verifyJSON(value),
-                      message: t('不是合法的 JSON 字符串'),
-                    },
-                  ]}
-                  extraText={
-                    <div>
-                      <p>{t('说明：')}</p>
-                      <ul>
-                        <li>
-                          {t(
-                            '使用 JSON 对象格式，格式为：{"组名": [最多请求次数, 最多请求完成次数]}',
-                          )}
-                        </li>
-                        <li>
-                          {t(
-                            '示例：{"default": [200, 100], "vip": [0, 1000]}。',
-                          )}
-                        </li>
-                        <li>
-                          {t(
-                            '[最多请求次数]必须大于等于0，[最多请求完成次数]必须大于等于1。',
-                          )}
-                        </li>
-                        <li>
-                          {t(
-                            '[最多请求次数]和[最多请求完成次数]的最大值为2147483647。',
-                          )}
-                        </li>
-                        <li>{t('分组速率配置优先级高于全局速率限制。')}</li>
-                        <li>{t('限制周期统一使用上方配置的“限制周期”值。')}</li>
-                      </ul>
-                    </div>
-                  }
-                  onChange={(value) => {
-                    setInputs({ ...inputs, ModelRequestRateLimitGroup: value });
-                  }}
-                />
+                <Form.Slot label={t('分组速率限制')}>
+                  <div className='flex flex-wrap items-center gap-2'>
+                    <Typography.Text type='tertiary' size='small'>
+                      {t(
+                        '已迁移到「分组管理 → 充值 · 限流 · 积分」，按分组一行铺开，与该分组的其他配置放在一起。限制周期仍沿用上方的全局配置。',
+                      )}
+                    </Typography.Text>
+                    <Button
+                      size='small'
+                      theme='borderless'
+                      onClick={() => navigate('/console/group')}
+                    >
+                      {t('前往分组管理')}
+                    </Button>
+                  </div>
+                </Form.Slot>
               </Col>
             </Row>
             <Row>

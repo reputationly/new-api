@@ -1,26 +1,9 @@
-/*
-Copyright (C) 2025 QuantumNous
-
-This program is free software: you can redistribute it and/or modify
-it under the terms of the GNU Affero General Public License as
-published by the Free Software Foundation, either version 3 of the
-License, or (at your option) any later version.
-
-This program is distributed in the hope that it will be useful,
-but WITHOUT ANY WARRANTY; without even the implied warranty of
-MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
-GNU Affero General Public License for more details.
-
-You should have received a copy of the GNU Affero General Public License
-along with this program. If not, see <https://www.gnu.org/licenses/>.
-
-For commercial licensing, please contact support@quantumnous.com
-*/
 import React, { useState, useCallback, useMemo } from 'react';
 import {
   Button,
   Collapsible,
   Input,
+  InputNumber,
   Select,
   Tag,
   Typography,
@@ -37,41 +20,27 @@ import { useTranslation } from 'react-i18next';
 const { Text } = Typography;
 
 let _idCounter = 0;
-const uid = () => `gsu_${++_idCounter}`;
-
-const OP_ADD = 'add';
-const OP_REMOVE = 'remove';
-const OP_APPEND = 'append';
-
-function parsePrefix(rawKey) {
-  if (rawKey.startsWith('+:')) return { op: OP_ADD, groupName: rawKey.slice(2) };
-  if (rawKey.startsWith('-:')) return { op: OP_REMOVE, groupName: rawKey.slice(2) };
-  return { op: OP_APPEND, groupName: rawKey };
-}
-
-function toRawKey(op, groupName) {
-  if (op === OP_ADD) return `+:${groupName}`;
-  if (op === OP_REMOVE) return `-:${groupName}`;
-  return groupName;
-}
+const uid = () => `ggr_${++_idCounter}`;
 
 function parseJSON(str) {
   if (!str || !str.trim()) return {};
-  try { return JSON.parse(str); } catch { return {}; }
+  try {
+    return JSON.parse(str);
+  } catch {
+    return {};
+  }
 }
 
 function flattenRules(nested) {
   const rules = [];
   for (const [userGroup, inner] of Object.entries(nested)) {
     if (typeof inner !== 'object' || inner === null) continue;
-    for (const [rawKey, desc] of Object.entries(inner)) {
-      const { op, groupName } = parsePrefix(rawKey);
+    for (const [usingGroup, ratio] of Object.entries(inner)) {
       rules.push({
         _id: uid(),
         userGroup,
-        op,
-        targetGroup: groupName,
-        description: op === OP_REMOVE ? 'remove' : (typeof desc === 'string' ? desc : ''),
+        usingGroup,
+        ratio: typeof ratio === 'number' ? ratio : 1,
       });
     }
   }
@@ -80,26 +49,30 @@ function flattenRules(nested) {
 
 function nestRules(rules) {
   const result = {};
-  rules.forEach(({ userGroup, op, targetGroup, description }) => {
-    if (!userGroup || !targetGroup) return;
+  rules.forEach(({ userGroup, usingGroup, ratio }) => {
+    if (!userGroup || !usingGroup) return;
     if (!result[userGroup]) result[userGroup] = {};
-    result[userGroup][toRawKey(op, targetGroup)] = description;
+    result[userGroup][usingGroup] = ratio;
   });
   return result;
 }
 
-export function serializeGroupSpecialUsable(rules) {
+export function serializeGroupGroupRatio(rules) {
   const nested = nestRules(rules);
-  return Object.keys(nested).length === 0 ? '' : JSON.stringify(nested, null, 2);
+  return Object.keys(nested).length === 0
+    ? ''
+    : JSON.stringify(nested, null, 2);
 }
 
-const OP_TAG_MAP = {
-  [OP_ADD]: { color: 'green', label: '添加 (+:)' },
-  [OP_REMOVE]: { color: 'red', label: '移除 (-:)' },
-  [OP_APPEND]: { color: 'blue', label: '追加' },
-};
-
-function UsableGroupSection({ groupName, items, opOptions, onUpdate, onRemove, onAdd, t }) {
+function GroupSection({
+  groupName,
+  items,
+  groupOptions,
+  onUpdate,
+  onRemove,
+  onAdd,
+  t,
+}) {
   const [open, setOpen] = useState(false);
 
   return (
@@ -119,11 +92,20 @@ function UsableGroupSection({ groupName, items, opOptions, onUpdate, onRemove, o
         onClick={() => setOpen(!open)}
       >
         <div className='flex items-center gap-2'>
-          {open ? <IconChevronUp size='small' /> : <IconChevronDown size='small' />}
+          {open ? (
+            <IconChevronUp size='small' />
+          ) : (
+            <IconChevronDown size='small' />
+          )}
           <Text strong>{groupName}</Text>
-          <Tag size='small' color='blue'>{items.length} {t('条规则')}</Tag>
+          <Tag size='small' color='blue'>
+            {items.length} {t('条规则')}
+          </Tag>
         </div>
-        <div className='flex items-center gap-1' onClick={(e) => e.stopPropagation()}>
+        <div
+          className='flex items-center gap-1'
+          onClick={(e) => e.stopPropagation()}
+        >
           <Button
             icon={<IconPlus />}
             size='small'
@@ -154,35 +136,23 @@ function UsableGroupSection({ groupName, items, opOptions, onUpdate, onRemove, o
             >
               <Select
                 size='small'
-                value={rule.op}
-                optionList={opOptions}
-                onChange={(v) => onUpdate(rule._id, 'op', v)}
-                style={{ width: 120 }}
-                renderSelectedItem={(optionNode) => {
-                  const info = OP_TAG_MAP[optionNode.value] || {};
-                  return <Tag size='small' color={info.color}>{optionNode.label}</Tag>;
-                }}
-              />
-              <Input
-                size='small'
-                value={rule.targetGroup}
-                placeholder={t('分组名称')}
-                onChange={(v) => onUpdate(rule._id, 'targetGroup', v)}
+                filter
+                value={rule.usingGroup || undefined}
+                placeholder={t('选择使用分组')}
+                optionList={groupOptions}
+                onChange={(v) => onUpdate(rule._id, 'usingGroup', v)}
                 style={{ flex: 1 }}
+                allowCreate
+                position='bottomLeft'
               />
-              {rule.op !== OP_REMOVE ? (
-                <Input
-                  size='small'
-                  value={rule.description}
-                  placeholder={t('分组描述')}
-                  onChange={(v) => onUpdate(rule._id, 'description', v)}
-                  style={{ flex: 1 }}
-                />
-              ) : (
-                <div style={{ flex: 1 }}>
-                  <Text type='tertiary' size='small'>-</Text>
-                </div>
-              )}
+              <InputNumber
+                size='small'
+                min={0}
+                step={0.1}
+                value={rule.ratio}
+                style={{ width: 100 }}
+                onChange={(v) => onUpdate(rule._id, 'ratio', v ?? 0)}
+              />
               <Popconfirm
                 title={t('确认删除该规则？')}
                 onConfirm={() => onRemove(rule._id)}
@@ -203,7 +173,7 @@ function UsableGroupSection({ groupName, items, opOptions, onUpdate, onRemove, o
   );
 }
 
-export default function GroupSpecialUsableRules({
+export default function GroupGroupRatioRules({
   value,
   groupNames = [],
   onChange,
@@ -215,30 +185,22 @@ export default function GroupSpecialUsableRules({
   const emitChange = useCallback(
     (newRules) => {
       setRules(newRules);
-      onChange?.(serializeGroupSpecialUsable(newRules));
+      onChange?.(serializeGroupGroupRatio(newRules));
     },
     [onChange],
   );
 
   const updateRule = useCallback(
     (id, field, val) => {
-      emitChange(
-        rules.map((r) => {
-          if (r._id !== id) return r;
-          const updated = { ...r, [field]: val };
-          if (field === 'op' && val === OP_REMOVE) updated.description = 'remove';
-          else if (field === 'op' && r.op === OP_REMOVE && val !== OP_REMOVE) {
-            if (updated.description === 'remove') updated.description = '';
-          }
-          return updated;
-        }),
-      );
+      emitChange(rules.map((r) => (r._id === id ? { ...r, [field]: val } : r)));
     },
     [rules, emitChange],
   );
 
   const removeRule = useCallback(
-    (id) => emitChange(rules.filter((r) => r._id !== id)),
+    (id) => {
+      emitChange(rules.filter((r) => r._id !== id));
+    },
     [rules, emitChange],
   );
 
@@ -246,7 +208,7 @@ export default function GroupSpecialUsableRules({
     (groupName) => {
       emitChange([
         ...rules,
-        { _id: uid(), userGroup: groupName, op: OP_APPEND, targetGroup: '', description: '' },
+        { _id: uid(), userGroup: groupName, usingGroup: '', ratio: 1 },
       ]);
     },
     [rules, emitChange],
@@ -257,7 +219,7 @@ export default function GroupSpecialUsableRules({
     if (!name) return;
     emitChange([
       ...rules,
-      { _id: uid(), userGroup: name, op: OP_APPEND, targetGroup: '', description: '' },
+      { _id: uid(), userGroup: name, usingGroup: '', ratio: 1 },
     ]);
     setNewGroupName('');
   }, [rules, emitChange, newGroupName]);
@@ -265,15 +227,6 @@ export default function GroupSpecialUsableRules({
   const groupOptions = useMemo(
     () => groupNames.map((n) => ({ value: n, label: n })),
     [groupNames],
-  );
-
-  const opOptions = useMemo(
-    () => [
-      { value: OP_ADD, label: t('添加 (+:)') },
-      { value: OP_REMOVE, label: t('移除 (-:)') },
-      { value: OP_APPEND, label: t('追加') },
-    ],
-    [t],
   );
 
   const grouped = useMemo(() => {
@@ -319,11 +272,11 @@ export default function GroupSpecialUsableRules({
   return (
     <div className='space-y-2'>
       {grouped.map((group) => (
-        <UsableGroupSection
+        <GroupSection
           key={group.name}
           groupName={group.name}
           items={group.items}
-          opOptions={opOptions}
+          groupOptions={groupOptions}
           onUpdate={updateRule}
           onRemove={removeRule}
           onAdd={addRuleToGroup}

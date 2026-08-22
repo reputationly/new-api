@@ -50,6 +50,7 @@ const routerMap = {
   pricing: '/pricing',
   task: '/console/task',
   models: '/console/models',
+  group: '/console/group',
   deployment: '/console/deployment',
   playgroundAdmin: '/console/playground-admin',
   playground: '/console/playground',
@@ -238,6 +239,12 @@ const SiderBar = ({ onNavigate = () => {} }) => {
         text: t('订阅管理'),
         itemKey: 'subscription',
         to: '/subscription',
+        className: isAdmin() ? '' : 'tableHiddle',
+      },
+      {
+        text: t('分组管理'),
+        itemKey: 'group',
+        to: '/console/group',
         className: isAdmin() ? '' : 'tableHiddle',
       },
       {

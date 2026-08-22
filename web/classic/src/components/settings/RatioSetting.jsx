@@ -18,11 +18,11 @@ For commercial licensing, please contact support@quantumnous.com
 */
 
 import React, { useEffect, useState } from 'react';
-import { Card, Spin, Tabs } from '@douyinfe/semi-ui';
+import { Banner, Button, Card, Spin, Tabs } from '@douyinfe/semi-ui';
 import { useTranslation } from 'react-i18next';
+import { useNavigate } from 'react-router-dom';
 
 import ModelPricingCombined from '../../pages/Setting/Ratio/ModelPricingCombined';
-import GroupRatioSettings from '../../pages/Setting/Ratio/GroupRatioSettings';
 import ModelRatioNotSetEditor from '../../pages/Setting/Ratio/ModelRationNotSetEditor';
 import UpstreamRatioSync from '../../pages/Setting/Ratio/UpstreamRatioSync';
 import ToolPriceSettings from '../../pages/Setting/Ratio/ToolPriceSettings';
@@ -31,6 +31,7 @@ import { API, showError, toBoolean } from '../../helpers';
 
 const RatioSetting = () => {
   const { t } = useTranslation();
+  const navigate = useNavigate();
 
   let [inputs, setInputs] = useState({
     ModelPrice: '',
@@ -38,16 +39,10 @@ const RatioSetting = () => {
     CacheRatio: '',
     CreateCacheRatio: '',
     CompletionRatio: '',
-    GroupRatio: '',
-    GroupGroupRatio: '',
     ImageRatio: '',
     AudioRatio: '',
     AudioCompletionRatio: '',
-    AutoGroups: '',
-    DefaultUseAutoGroup: false,
     ExposeRatioEnabled: false,
-    UserUsableGroups: '',
-    'group_ratio_setting.group_special_usable_group': '',
   });
 
   const [loading, setLoading] = useState(false);
@@ -65,7 +60,7 @@ const RatioSetting = () => {
             // 如果后端返回的不是合法 JSON，直接展示
           }
         }
-        if (['DefaultUseAutoGroup', 'ExposeRatioEnabled'].includes(item.key)) {
+        if (['ExposeRatioEnabled'].includes(item.key)) {
           newInputs[item.key] = toBoolean(item.value);
         } else {
           newInputs[item.key] = item.value;
@@ -96,12 +91,30 @@ const RatioSetting = () => {
   return (
     <Spin spinning={loading} size='large'>
       <Card style={{ marginTop: '10px' }}>
+        <Banner
+          type='info'
+          closeIcon={null}
+          className='mb-3'
+          description={
+            <div className='flex flex-wrap items-center gap-2'>
+              <span>
+                {t(
+                  '分组倍率、自动分组、跨分组规则等已迁移到「分组管理」页面。',
+                )}
+              </span>
+              <Button
+                size='small'
+                theme='borderless'
+                onClick={() => navigate('/console/group')}
+              >
+                {t('前往分组管理')}
+              </Button>
+            </div>
+          }
+        />
         <Tabs type='card' defaultActiveKey='pricing'>
           <Tabs.TabPane tab={t('模型定价设置')} itemKey='pricing'>
             <ModelPricingCombined options={inputs} refresh={onRefresh} />
-          </Tabs.TabPane>
-          <Tabs.TabPane tab={t('分组相关设置')} itemKey='group'>
-            <GroupRatioSettings options={inputs} refresh={onRefresh} />
           </Tabs.TabPane>
           <Tabs.TabPane tab={t('未设置价格模型')} itemKey='unset_models'>
             <ModelRatioNotSetEditor options={inputs} refresh={onRefresh} />

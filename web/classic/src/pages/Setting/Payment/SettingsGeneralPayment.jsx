@@ -18,7 +18,15 @@ For commercial licensing, please contact support@quantumnous.com
 */
 
 import React, { useEffect, useState, useRef } from 'react';
-import { Banner, Button, Col, Form, Row, Spin } from '@douyinfe/semi-ui';
+import {
+  Banner,
+  Button,
+  Col,
+  Form,
+  Row,
+  Spin,
+  Typography,
+} from '@douyinfe/semi-ui';
 import {
   API,
   removeTrailingSlash,
@@ -27,16 +35,17 @@ import {
   verifyJSON,
 } from '../../../helpers';
 import { useTranslation } from 'react-i18next';
+import { useNavigate } from 'react-router-dom';
 import { TriangleAlert } from 'lucide-react';
 
 export default function SettingsGeneralPayment(props) {
   const { t } = useTranslation();
+  const navigate = useNavigate();
   const sectionTitle = props.hideSectionTitle ? undefined : t('通用设置');
   const [loading, setLoading] = useState(false);
   const [inputs, setInputs] = useState({
     ServerAddress: '',
     CustomCallbackAddress: '',
-    TopupGroupRatio: '',
     PayMethods: '',
     AmountOptions: '',
     AmountDiscount: '',
@@ -49,7 +58,6 @@ export default function SettingsGeneralPayment(props) {
       const currentInputs = {
         ServerAddress: props.options.ServerAddress || '',
         CustomCallbackAddress: props.options.CustomCallbackAddress || '',
-        TopupGroupRatio: props.options.TopupGroupRatio || '',
         PayMethods: props.options.PayMethods || '',
         AmountOptions: props.options.AmountOptions || '',
         AmountDiscount: props.options.AmountDiscount || '',
@@ -65,14 +73,6 @@ export default function SettingsGeneralPayment(props) {
   };
 
   const submitGeneralSettings = async () => {
-    if (
-      originInputs.TopupGroupRatio !== inputs.TopupGroupRatio &&
-      !verifyJSON(inputs.TopupGroupRatio)
-    ) {
-      showError(t('充值分组倍率不是合法的 JSON 字符串'));
-      return;
-    }
-
     if (
       originInputs.PayMethods !== inputs.PayMethods &&
       !verifyJSON(inputs.PayMethods)
@@ -113,9 +113,6 @@ export default function SettingsGeneralPayment(props) {
           key: 'CustomCallbackAddress',
           value: removeTrailingSlash(inputs.CustomCallbackAddress),
         });
-      }
-      if (originInputs.TopupGroupRatio !== inputs.TopupGroupRatio) {
-        options.push({ key: 'TopupGroupRatio', value: inputs.TopupGroupRatio });
       }
       if (originInputs.PayMethods !== inputs.PayMethods) {
         options.push({ key: 'PayMethods', value: inputs.PayMethods });
@@ -190,12 +187,22 @@ export default function SettingsGeneralPayment(props) {
               />
             </Col>
             <Col xs={24} sm={24} md={12} lg={12} xl={12}>
-              <Form.TextArea
-                field='TopupGroupRatio'
-                label={t('充值分组倍率')}
-                placeholder={t('为一个 JSON 文本，键为组名称，值为倍率')}
-                autosize
-              />
+              <Form.Slot label={t('充值分组倍率')}>
+                <div className='flex flex-wrap items-center gap-2'>
+                  <Typography.Text type='tertiary' size='small'>
+                    {t(
+                      '已迁移到「分组管理 → 充值 · 限流 · 积分」，与该分组的其他配置放在一起。',
+                    )}
+                  </Typography.Text>
+                  <Button
+                    size='small'
+                    theme='borderless'
+                    onClick={() => navigate('/console/group')}
+                  >
+                    {t('前往分组管理')}
+                  </Button>
+                </div>
+              </Form.Slot>
             </Col>
           </Row>
           <Row

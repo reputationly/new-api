@@ -1,6 +1,6 @@
 # 分组管理改造设计（方案 C）
 
-> 状态：设计待确认，未开工
+> 状态：P0 / P1 / P2 / P3 已落地（commit 9f739cf45、a53874ed9 及本次）
 > 关联：`docs/group-model-isolation.md`（分组 × 模型 隔离，本次的业务前提）、`pkg/billingexpr/expr.md`
 
 ## 1. 问题
@@ -31,7 +31,7 @@
 | 自动分组 | `AutoGroups` / `DefaultUseAutoGroup` | 同上 |
 | 充值分组倍率 | `TopupGroupRatio` | 系统设置 → 支付设置 |
 | 分组请求速率限制 | `ModelRequestRateLimitGroup` | 系统设置 → 速率限制 |
-| 分组审核策略 | `moderation.group_policies` | 系统设置 → 内容审核 |
+| ~~分组审核策略~~ | `moderation.group_policies` | 后端有字段，**前端从未实现**（见 §7.1） |
 | 积分抵扣分组白名单 | `points_setting.enabled_groups` | 系统设置 → 运营设置 |
 
 新建一个分组要在五个页面之间来回跳，没有任何地方能一眼看全「premium 这个分组到底是什么配置」。
@@ -55,7 +55,7 @@ C 相比 A 唯一的实质损失是「多管理员同时编辑同一个 option �
 
 1. **存储**：沿用 option JSON，新增一个 key，不建表
 2. **折扣语义**：`multiply`（叠加）与 `override`（覆盖）两种模式，**按条选**
-3. **聚合范围**：分组倍率四件套 + 自动分组 + `TopupGroupRatio` + `ModelRequestRateLimitGroup` + `moderation.group_policies` + `points_setting.enabled_groups`，**聚合只搬 UI，不搬存储**
+3. **聚合范围**：分组倍率四件套 + 自动分组 + `TopupGroupRatio` + `ModelRequestRateLimitGroup` + `points_setting.enabled_groups`，**聚合只搬 UI，不搬存储**（原定还包含 `moderation.group_policies`，落地时发现前端从未实现它，见 §7.1）
 4. **前端**：管理页只做 classic（与 `group-model-isolation.md` 记录的「default 适配延后」约定一致）；但**价格展示三个主题都要改**（§6）
 5. **模型名匹配**：精确 + 前缀通配，**不复用** `GetModelRatio` 的模糊匹配
 
@@ -330,7 +330,7 @@ type GroupRatioInfo struct {
 
 **④ 同页其余 Tab，按需**
 
-充值倍率、限流、审核策略、积分白名单——都有合理缺省，不配也能跑，UI 上标「可选」，不阻塞主线。
+充值倍率、限流、积分白名单——都有合理缺省，不配也能跑，UI 上标「可选」，不阻塞主线。
 
 **⑤ 跨分组规则 Tab**
 
@@ -388,13 +388,14 @@ type GroupRatioInfo struct {
 ├─ 充值倍率        TopupGroupRatio                       （从支付设置页搬）
 ├─ 速率限制        ModelRequestRateLimitGroup            （从速率限制页搬）
 ├─ 积分白名单      points_setting.enabled_groups         （从运营设置页搬）
-├─ 审核策略        moderation.group_policies             （从内容审核页搬）
 └─ 倍率试算器  ★  纯前端计算，见 §7.3
 ```
 
 保存仍走现有的 `PUT /api/option/`（`GroupRatioSettings.jsx` 已有的 `compareObjects` + 批量 PUT 模式），**不新增任何管理接口**。
 
-原页面留跳转链接。审核策略那块刚上线，原页保留**只读展示**便于对照。
+原页面留跳转链接。
+
+**审核策略没有搬——因为它不存在。** 决策时把 `moderation.group_policies` 列进了聚合范围，但落地时才发现前端从来没有实现过这个配置项：内容审核第一期的提交（`c82c07881`）明确写了「policies / group_policies / endpoints 未纳入——它们服务于 L1 及以上的远程分类器，第一期没有消费方，做出来只会是没人填的空壳」。这里不去补那个空壳：真要做，它属于内容审核的 L1 期，而不是分组管理的搬家工作。
 
 ### 7.2 模型折扣编辑器（本次核心 UI）
 

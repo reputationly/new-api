@@ -33,6 +33,11 @@ func TestMain(m *testing.M) {
 	}
 	sqlDB.SetMaxOpenConns(1)
 
+	// 生产走 InitDB 时会调它。测试里不调的话 commonGroupCol 是空串，
+	// 任何用它拼保留字列名的查询（users/tokens/channels/abilities 的 group 列）
+	// 都会拼出 ` = ?` 直接语法错误。
+	initCol()
+
 	if err := db.AutoMigrate(
 		&Task{},
 		&User{},
@@ -45,6 +50,7 @@ func TestMain(m *testing.M) {
 		&UserSubscription{},
 		&Redemption{},
 		&Checkin{},
+		&Ability{},
 	); err != nil {
 		panic("failed to migrate: " + err.Error())
 	}
@@ -66,6 +72,7 @@ func truncateTables(t *testing.T) {
 		DB.Exec("DELETE FROM user_subscriptions")
 		DB.Exec("DELETE FROM redemptions")
 		DB.Exec("DELETE FROM checkins")
+		DB.Exec("DELETE FROM abilities")
 	})
 }
 
