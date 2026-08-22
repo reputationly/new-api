@@ -29,7 +29,6 @@ import { useTranslation } from 'react-i18next';
 import {
   processModelsData,
   processGroupsData,
-  showWarning,
   showError,
   getUserModelsCached,
   cachedGet,
@@ -106,15 +105,8 @@ export const useDataLoader = (
         setModels(modelOptions);
 
         if (selectedModel !== previousModel) {
+          // 切换分组时静默改用可用模型，不弹提示（移动端尤其打扰）
           handleInputChange('model', selectedModel);
-          if (previousModel) {
-            showWarning(
-              t('模型 {{model}} 在所选分组下不可用，已切换为 {{next}}', {
-                model: previousModel,
-                next: selectedModel || t('（无可用模型）'),
-              }),
-            );
-          }
         }
       } else {
         showError(t(message));

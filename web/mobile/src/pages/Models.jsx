@@ -34,6 +34,7 @@ const Models = () => {
   const [models, setModels] = useState([]);
   const [vendors, setVendors] = useState([]);
   const [groupRatioMap, setGroupRatioMap] = useState({});
+  const [usableGroupMap, setUsableGroupMap] = useState({});
   const [keyword, setKeyword] = useState('');
   const [group, setGroup] = useState('');
   const [category, setCategory] = useState('');
@@ -49,6 +50,7 @@ const Models = () => {
           setModels(res.data.data || []);
           setVendors(res.data.vendors || []);
           setGroupRatioMap(res.data.group_ratio || {});
+          setUsableGroupMap(res.data.usable_group || {});
         } else {
           showError(res.data.message);
         }
@@ -76,11 +78,21 @@ const Models = () => {
     [siteStatus],
   );
 
+  // 只列当前用户真能用的分组（/api/pricing 的 usable_group 已按用户分组裁剪）。
+  // 与 enable_groups 取交集是为了不出现「点了没结果」的空胶囊——后端只按「模型至少
+  // 命中一个可用分组」过滤模型，模型自身的 enable_groups 里仍可能带着用户无权的分组。
   const groups = useMemo(() => {
+    const usable = new Set(
+      Object.keys(usableGroupMap).filter((g) => g !== '' && g !== 'auto'),
+    );
     const set = new Set();
-    models.forEach((m) => (m.enable_groups || []).forEach((g) => set.add(g)));
+    models.forEach((m) =>
+      (m.enable_groups || []).forEach((g) => {
+        if (usable.has(g)) set.add(g);
+      }),
+    );
     return Array.from(set);
-  }, [models]);
+  }, [models, usableGroupMap]);
 
   // 只保留本站真有模型的大类，避免出现点了没结果的空胶囊。
   const categories = useMemo(() => {
@@ -185,6 +197,10 @@ const Models = () => {
   const detailPricingGroup = detail
     ? resolveGroupRatio(detail)
     : { group: '', ratio: 1 };
+  // 详情里的「可用分组」同样只列用户有权的那部分（同 PC ModelPricingTable 的取交集）
+  const detailUsableGroups = (detail?.enable_groups || []).filter(
+    (g) => g !== '' && g !== 'auto' && usableGroupMap[g] !== undefined,
+  );
   const activeFilterCount = Number(Boolean(group)) + Number(Boolean(category));
   const selectedCategoryLabel =
     MODEL_CATEGORIES.find((c) => c.key === category)?.label || '全部大类';
@@ -501,7 +517,7 @@ const Models = () => {
                 {detail.description}
               </div>
             )}
-            {(detail.enable_groups || []).length > 0 && (
+            {detailUsableGroups.length > 0 && (
               <div style={{ marginTop: 12 }}>
                 <div
                   style={{ fontSize: 12, color: '#9aa1ad', marginBottom: 6 }}
@@ -509,7 +525,7 @@ const Models = () => {
                   可用分组
                 </div>
                 <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-                  {detail.enable_groups.map((g) => (
+                  {detailUsableGroups.map((g) => (
                     <Tag key={g} color='default' fill='outline'>
                       {g}
                     </Tag>
