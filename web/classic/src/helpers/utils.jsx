@@ -708,10 +708,32 @@ export const getModelPricingCurrencyConfig = () => {
   return { symbol, rate };
 };
 
+/**
+ * 取某个分组下某个模型的**实际**倍率。
+ *
+ * 分组倍率不再是整组一个数：管理员可以给分组内单个模型配折扣（分组管理 → 模型折扣）。
+ * 后端在 /api/pricing 的 group_model_ratio 里下发**已展开通配、已算完三层**的终值，
+ * 前端只做这一步查表——通配匹配放在前端就要在 classic / default / mobile 各写一遍，
+ * 那是三份可能算错的价。
+ *
+ * @param {Record<string, number>} groupRatio 分组基础倍率
+ * @param {Record<string, Record<string, number>>} groupModelRatio 分组 → 模型 → 终值倍率
+ */
+export const getEffectiveGroupRatio = (
+  groupRatio,
+  groupModelRatio,
+  group,
+  modelName,
+) => {
+  const perModel = groupModelRatio?.[group]?.[modelName];
+  return perModel !== undefined ? perModel : groupRatio?.[group];
+};
+
 export const calculateModelPrice = ({
   record,
   selectedGroup,
   groupRatio,
+  groupModelRatio,
   tokenUnit,
   displayPrice,
   quotaDisplayType = 'USD',
@@ -722,17 +744,30 @@ export const calculateModelPrice = ({
 }) => {
   // 1. 选择实际使用的分组
   let usedGroup = selectedGroup;
-  let usedGroupRatio = groupRatio[selectedGroup];
+  let usedGroupRatio = getEffectiveGroupRatio(
+    groupRatio,
+    groupModelRatio,
+    selectedGroup,
+    record.model_name,
+  );
 
   if (selectedGroup === 'all' || usedGroupRatio === undefined) {
     // 在模型可用分组中选择倍率最小的分组，若无则使用 1
+    //
+    // 比的必须是**该模型在各分组下的实际倍率**而不是分组基础倍率：配了模型折扣后
+    // 两者会分叉，拿基础倍率挑出来的「最优分组」可能根本不是最便宜的那个。
     let minRatio = Number.POSITIVE_INFINITY;
     if (
       Array.isArray(record.enable_groups) &&
       record.enable_groups.length > 0
     ) {
       record.enable_groups.forEach((g) => {
-        const r = groupRatio[g];
+        const r = getEffectiveGroupRatio(
+          groupRatio,
+          groupModelRatio,
+          g,
+          record.model_name,
+        );
         if (r !== undefined && r < minRatio) {
           minRatio = r;
           usedGroup = g;

@@ -36,6 +36,7 @@ const ModelDetailSideSheet = ({
   onClose,
   modelData,
   groupRatio,
+  groupModelRatio,
   currency,
   siteDisplayType,
   tokenUnit,
@@ -97,17 +98,18 @@ const ModelDetailSideSheet = ({
                 t={t}
               />
             </div>
-            {modelData.billing_mode === 'tiered_expr' && modelData.billing_expr && (
-              <>
-                <Divider margin={16} />
-                <div style={{ padding: '0 24px' }}>
-                  <DynamicPricingBreakdown
-                    billingExpr={modelData.billing_expr}
-                    t={t}
-                  />
-                </div>
-              </>
-            )}
+            {modelData.billing_mode === 'tiered_expr' &&
+              modelData.billing_expr && (
+                <>
+                  <Divider margin={16} />
+                  <div style={{ padding: '0 24px' }}>
+                    <DynamicPricingBreakdown
+                      billingExpr={modelData.billing_expr}
+                      t={t}
+                    />
+                  </div>
+                </>
+              )}
             {modelData.video_pricing?.mode && (
               <>
                 <Divider margin={16} />
@@ -127,6 +129,7 @@ const ModelDetailSideSheet = ({
               <ModelPricingTable
                 modelData={modelData}
                 groupRatio={groupRatio}
+                groupModelRatio={groupModelRatio}
                 currency={currency}
                 siteDisplayType={siteDisplayType}
                 tokenUnit={tokenUnit}

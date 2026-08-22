@@ -283,6 +283,10 @@ type GroupRatioInfo struct {
 
 `PricingGroups.jsx` 的分组筛选器现在在分组名旁挂「×1.5」倍率标签——分组内倍率不再唯一后改为「基础倍率 + 部分模型专属价」角标。`controller/group.go:35` 的 `GetUserGroups`（令牌页分组下拉的倍率标签）同样加这个标记位。
 
+**倍率标签一共有四处，不是两处**——模型广场分组筛选器、模型详情的分组价格表、令牌列表的分组列、令牌创建/操练场的分组下拉。加了「有效倍率」这个概念之后，容易只排查「算价」的路径而漏掉「展示倍率数字」的路径：后两处走的是 `/api/user/self/groups`，与 `/api/pricing` 完全是两条链。
+
+**标签措辞必须方向中立。** 曾经标成「1.5x 起」/`x1.5+`，是错的：`multiply < 1` 的折扣会让实际倍率落在基础倍率**下方**，而「起」「+」都是下界断言，在最常见的打折场景下方向正好相反。`override` 更是可以落在任意一侧。现用「基准」/`base`——只说明这个数是什么，不断言实际值在哪一侧。`setting/ratio_setting` 的 `TestResolveGroupRatio_DiscountGoesBelowBase` 钉的就是这个方向事实，是该措辞约束的依据。
+
 ## 7. 管理端（classic）
 
 ### 7.0 交互主线

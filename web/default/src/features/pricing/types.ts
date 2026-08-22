@@ -95,6 +95,14 @@ export type PricingData = {
   data: PricingModel[]
   vendors: PricingVendor[]
   group_ratio: Record<string, number>
+  /**
+   * Per-model ratio overrides inside a group: group -> model -> final ratio.
+   * Sparse: only groups/models that actually hit a rule are present. Values are
+   * already fully resolved by the backend (base ratio, identity discount and the
+   * model rule are all applied), and wildcards are expanded server-side — the
+   * client must never re-implement pattern matching.
+   */
+  group_model_ratio?: Record<string, Record<string, number>>
   usable_group: Record<string, { desc: string; ratio: number }>
   supported_endpoint: Record<string, string>
   auto_groups: string[]

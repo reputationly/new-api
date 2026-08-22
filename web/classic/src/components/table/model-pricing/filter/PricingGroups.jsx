@@ -25,7 +25,8 @@ import SelectableButtonGroup from '../../../common/ui/SelectableButtonGroup';
  * @param {string} filterGroup 当前选中的分组，'all' 表示不过滤
  * @param {Function} setFilterGroup 设置选中分组
  * @param {Record<string, any>} usableGroup 后端返回的可用分组对象
- * @param {Record<string, number>} groupRatio 分组倍率对象
+ * @param {Record<string, number>} groupRatio 分组基础倍率对象
+ * @param {Record<string, Record<string, number>>} groupModelRatio 分组内按模型的倍率
  * @param {Array} models 模型列表
  * @param {boolean} loading 是否加载中
  * @param {Function} t i18n
@@ -35,6 +36,7 @@ const PricingGroups = ({
   setFilterGroup,
   usableGroup = {},
   groupRatio = {},
+  groupModelRatio = {},
   models = [],
   loading = false,
   t,
@@ -55,10 +57,15 @@ const PricingGroups = ({
       // ratioDisplay = t('全部');
     } else {
       const ratio = groupRatio[g];
-      if (ratio !== undefined && ratio !== null) {
-        ratioDisplay = `${ratio}x`;
-      } else {
-        ratioDisplay = '1x';
+      ratioDisplay = ratio !== undefined && ratio !== null ? `${ratio}x` : '1x';
+      // 该分组配了模型折扣时，倍率不再是整组一个数，标注它只是基准值，
+      // 否则用户会拿这个标签当准数去反算每个模型的价格。
+      //
+      // 用「基准」而不是「起」：折扣（multiply < 1）会让实际倍率**低于**基准，
+      // 「起」是下界断言，在最常见的打折场景下方向正好是反的。准确的逐模型
+      // 倍率在模型详情的分组价格表里。
+      if (Object.keys(groupModelRatio[g] || {}).length > 0) {
+        ratioDisplay = `${ratioDisplay}${t('基准')}`;
       }
     }
     return {

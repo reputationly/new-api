@@ -601,6 +601,11 @@ function GroupPricingSection(props: {
   const { t } = useTranslation()
   const showRechargePrice = props.showRechargePrice ?? false
 
+  // 分组倍率不再是整组一个数：use-pricing-data 已把该模型的专属折扣合并进
+  // model.group_ratio。这里若用 props.groupRatio（未合并的基础价），同一个模型
+  // 在卡片/表格页和详情页会报出两个不同的价。
+  const effectiveGroupRatio = props.model.group_ratio ?? props.groupRatio
+
   const availableGroups = useMemo(
     () => getAvailableGroups(props.model, props.usableGroup || {}),
     [props.model, props.usableGroup]
@@ -696,7 +701,7 @@ function GroupPricingSection(props: {
         <AutoGroupChain model={props.model} autoGroups={props.autoGroups} />
         <div className='space-y-3'>
           {availableGroups.map((group) => {
-            const ratio = props.groupRatio[group] || 1
+            const ratio = effectiveGroupRatio[group] || 1
             return (
               <div key={group} className='overflow-hidden rounded-lg border'>
                 <div className='bg-muted/20 flex items-center justify-between gap-3 border-b px-3 py-2'>
@@ -802,7 +807,7 @@ function GroupPricingSection(props: {
           </TableHeader>
           <TableBody>
             {availableGroups.map((group) => {
-              const ratio = props.groupRatio[group] || 1
+              const ratio = effectiveGroupRatio[group] || 1
               return (
                 <TableRow key={group}>
                   <TableCell className='py-2.5'>
@@ -822,7 +827,7 @@ function GroupPricingSection(props: {
                           showRechargePrice,
                           props.priceRate,
                           props.usdExchangeRate,
-                          props.groupRatio
+                          effectiveGroupRatio
                         )}
                       </TableCell>
                       <TableCell className='py-2.5 text-right font-mono'>
@@ -834,7 +839,7 @@ function GroupPricingSection(props: {
                           showRechargePrice,
                           props.priceRate,
                           props.usdExchangeRate,
-                          props.groupRatio
+                          effectiveGroupRatio
                         )}
                       </TableCell>
                       {extraPriceTypes.map((ep) => (
@@ -850,7 +855,7 @@ function GroupPricingSection(props: {
                             showRechargePrice,
                             props.priceRate,
                             props.usdExchangeRate,
-                            props.groupRatio
+                            effectiveGroupRatio
                           )}
                         </TableCell>
                       ))}
@@ -863,7 +868,7 @@ function GroupPricingSection(props: {
                         showRechargePrice,
                         props.priceRate,
                         props.usdExchangeRate,
-                        props.groupRatio
+                        effectiveGroupRatio
                       )}
                     </TableCell>
                   )}

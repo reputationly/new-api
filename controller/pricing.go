@@ -34,6 +34,39 @@ func filterPricingByUsableGroups(pricing []model.Pricing, usableGroup map[string
 	return filtered
 }
 
+// resolveGroupModelRatio 展开「分组内按模型折扣」，供前端逐模型查表。
+//
+// 为什么必须由后端展开成具体模型名、而不是把 wan2.2-* 这类通配规则直接下发：
+// 模型广场有 classic / default / mobile 三个实现，各写一遍通配匹配就是三份
+// 可能算错的价。这里给的值也已经是**最终倍率**（Layer 0/1/2 都算完），
+// 前端只做 groupModelRatio[g]?.[m] ?? groupRatio[g] 这一步查表。
+//
+// 稀疏：只回命中了模型规则的组合。未配置时返回空 map，前端一路走原来的分支。
+func resolveGroupModelRatio(userGroup string, groupRatio map[string]float64, pricing []model.Pricing) map[string]map[string]float64 {
+	result := make(map[string]map[string]float64)
+	allRules := ratio_setting.GetGroupModelRatioCopy()
+	if len(allRules) == 0 {
+		return result
+	}
+	for g := range groupRatio {
+		// 没配任何规则的分组直接跳过，避免在模型数三位数时白跑一遍全表
+		if len(allRules[g]) == 0 {
+			continue
+		}
+		for _, item := range pricing {
+			res := ratio_setting.ResolveGroupRatio(userGroup, g, item.ModelName)
+			if res.RuleMatch == "" {
+				continue
+			}
+			if result[g] == nil {
+				result[g] = make(map[string]float64)
+			}
+			result[g][item.ModelName] = res.Final
+		}
+	}
+	return result
+}
+
 func GetPricing(c *gin.Context) {
 	pricing := model.GetPricing()
 	userId, exists := c.Get("id")
@@ -65,6 +98,8 @@ func GetPricing(c *gin.Context) {
 		}
 	}
 
+	groupModelRatio := resolveGroupModelRatio(group, groupRatio, pricing)
+
 	// 积分展示：只回传「用户可见 ∩ 白名单」的分组，供模型广场追加积分单价（§8bis.2）
 	pointsSetting := operation_setting.GetPointsSetting()
 	pointsEnabledGroups := make([]string, 0)
@@ -81,6 +116,7 @@ func GetPricing(c *gin.Context) {
 		"data":                  pricing,
 		"vendors":               model.GetVendors(),
 		"group_ratio":           groupRatio,
+		"group_model_ratio":     groupModelRatio,
 		"usable_group":          usableGroup,
 		"supported_endpoint":    model.GetSupportedEndpointMap(),
 		"auto_groups":           service.GetUserAutoGroup(group),

@@ -853,7 +853,12 @@ export function renderGroup(group) {
   );
 }
 
-export function renderRatio(ratio) {
+// isBaseOnly：该分组配了「分组内按模型折扣」，倍率不再是整组一个数，
+// 这里给出的只是基准值，否则用户会拿它当准数去反算每个模型的价格。
+//
+// 刻意不用「起」这类下界措辞：折扣（multiply < 1）会让实际倍率低于基准，
+// 方向正好相反。
+export function renderRatio(ratio, isBaseOnly = false) {
   let color = 'green';
   if (ratio > 5) {
     color = 'red';
@@ -864,7 +869,7 @@ export function renderRatio(ratio) {
   }
   return (
     <Tag color={color}>
-      {ratio}x {i18next.t('倍率')}
+      {ratio}x {isBaseOnly ? i18next.t('基准倍率') : i18next.t('倍率')}
     </Tag>
   );
 }
@@ -1042,7 +1047,7 @@ export const renderGroupOption = (item) => {
           {label}
         </Typography.Text>
       </div>
-      {item.ratio && renderRatio(item.ratio)}
+      {item.ratio && renderRatio(item.ratio, item.hasModelRatio)}
     </div>
   );
 };

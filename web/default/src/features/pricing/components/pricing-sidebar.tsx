@@ -71,6 +71,8 @@ export interface PricingSidebarProps {
   vendors: PricingVendor[]
   groups: string[]
   groupRatios?: Record<string, number>
+  /** Groups that carry per-model ratio rules; their ratio label is only a baseline. */
+  groupsWithModelRatio?: string[]
   categoryIndex: Map<string, ModelCategoryKey>
   models: PricingModel[]
   hasActiveFilters: boolean
@@ -85,12 +87,19 @@ function countBy(
   return models.reduce((count, model) => count + (predicate(model) ? 1 : 0), 0)
 }
 
-function formatGroupRatio(ratio: number | undefined): string | undefined {
+function formatGroupRatio(
+  ratio: number | undefined,
+  isBaseOnly = false
+): string | undefined {
   if (ratio == null) return undefined
   const formatted = Number.isInteger(ratio)
     ? ratio.toString()
     : ratio.toFixed(3).replace(/0+$/, '').replace(/\.$/, '')
-  return `x${formatted}`
+  // A group with per-model rules has no single ratio, so flag the value as a
+  // baseline to stop users pricing against it as if it were exact. Deliberately
+  // not a bound marker such as `+`: a discount (multiply < 1) puts the effective
+  // ratio *below* this number, so any directional claim would be backwards.
+  return `x${formatted}${isBaseOnly ? ' base' : ''}`
 }
 
 function FilterChip(props: {
@@ -190,7 +199,10 @@ export function PricingSidebar(props: PricingSidebarProps) {
     ...props.groups.map((group) => ({
       value: group,
       label: group,
-      suffix: formatGroupRatio(props.groupRatios?.[group]),
+      suffix: formatGroupRatio(
+        props.groupRatios?.[group],
+        props.groupsWithModelRatio?.includes(group)
+      ),
     })),
   ]
 

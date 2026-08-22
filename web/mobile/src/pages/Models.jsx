@@ -34,6 +34,8 @@ const Models = () => {
   const [models, setModels] = useState([]);
   const [vendors, setVendors] = useState([]);
   const [groupRatioMap, setGroupRatioMap] = useState({});
+  // 分组内按模型的倍率。后端已展开通配并算完三层，这里只查表（同 PC getEffectiveGroupRatio）
+  const [groupModelRatioMap, setGroupModelRatioMap] = useState({});
   const [usableGroupMap, setUsableGroupMap] = useState({});
   const [keyword, setKeyword] = useState('');
   const [group, setGroup] = useState('');
@@ -50,6 +52,7 @@ const Models = () => {
           setModels(res.data.data || []);
           setVendors(res.data.vendors || []);
           setGroupRatioMap(res.data.group_ratio || {});
+          setGroupModelRatioMap(res.data.group_model_ratio || {});
           setUsableGroupMap(res.data.usable_group || {});
         } else {
           showError(res.data.message);
@@ -125,10 +128,18 @@ const Models = () => {
   // enable_groups 里取最低倍率，而不是拿当前登录用户的分组去套：后者在用户分组倍率
   // 为 0 时，会把该分组根本挂不到渠道、压根用不了的模型也一并乘成 0 元。
   // 0 是合法倍率（免费分组），照常参与比较，不做剔除——同 helpers/videoMatrix.js 的结论。
+  //
+  // 分组倍率不再是整组一个数：管理员可给分组内单个模型配折扣，后端在 group_model_ratio
+  // 里下发终值。比最低倍率时必须比**该模型在各分组下的实际倍率**，拿基础倍率挑出来的
+  // 「最优分组」配了折扣后可能根本不是最便宜的那个。
+  const effectiveRatio = (g, modelName) => {
+    const perModel = groupModelRatioMap[g]?.[modelName];
+    return perModel !== undefined ? perModel : groupRatioMap[g];
+  };
   const resolveGroupRatio = (m) => {
-    if (group) return { group, ratio: groupRatioMap[group] ?? 1 };
+    if (group) return { group, ratio: effectiveRatio(group, m.model_name) ?? 1 };
     const candidates = (m.enable_groups || [])
-      .map((g) => ({ group: g, ratio: groupRatioMap[g] }))
+      .map((g) => ({ group: g, ratio: effectiveRatio(g, m.model_name) }))
       .filter((c) => typeof c.ratio === 'number');
     if (!candidates.length) return { group: '', ratio: 1 };
     return candidates.reduce((a, b) => (b.ratio < a.ratio ? b : a));

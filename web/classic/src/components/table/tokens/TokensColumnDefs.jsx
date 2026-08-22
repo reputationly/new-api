@@ -104,13 +104,13 @@ const renderGroupColumn = (text, record, t, groupRatios = {}) => {
       </Tooltip>
     );
   }
-  const ratio = groupRatios[text];
+  const info = groupRatios[text];
   return (
     <span className='flex items-center gap-1'>
       {renderGroup(text)}
-      {ratio !== undefined && (
+      {info?.ratio !== undefined && (
         <Tag size='small' color='green' shape='circle'>
-          {ratio}x
+          {info.ratio}x{info.hasModelRatio ? t('基准') : ''}
         </Tag>
       )}
     </span>

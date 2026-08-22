@@ -186,3 +186,32 @@ func TestGroupRatioInfoModelRuleLog(t *testing.T) {
 	require.Equal(t, "wan2.2-*:×0.8", resolutionLog(t, "wan2.2-i2v"))
 	require.Empty(t, resolutionLog(t, "unmatched-model"))
 }
+
+// TestResolveGroupRatio_DiscountGoesBelowBase 钉住模型折扣相对分组基础倍率的**方向**。
+//
+// 这条不是为解析逻辑写的（那已被上面的用例覆盖），而是为**展示层**写的：
+// 模型广场与令牌页会在分组名旁挂一个基础倍率标签。曾经把它标成「1.5x起」，
+// 而 multiply < 1 的折扣会让实际倍率落在基础倍率**下方**——「起」是下界断言，
+// 在最常见的打折场景下方向正好相反，标签变成假信息。
+//
+// 只要 multiply 的语义还是「乘」，任何单侧的界断言就都不成立，展示层必须用
+// 方向中立的措辞。这条用例是那个约束的依据。
+func TestResolveGroupRatio_DiscountGoesBelowBase(t *testing.T) {
+	seedRatios(t, `{"premium":1.5}`, `{}`, `{"premium":{
+		"discounted": {"mode":"multiply","value":0.8},
+		"surcharged": {"mode":"multiply","value":1.2},
+		"repriced":   {"mode":"override","value":0.3}
+	}}`)
+
+	base := ResolveGroupRatio("default", "premium", "no-rule").Final
+	require.Equal(t, 1.5, base)
+
+	discounted := ResolveGroupRatio("default", "premium", "discounted").Final
+	require.Less(t, discounted, base, "multiply < 1 必须低于基准——基准不是下界")
+
+	surcharged := ResolveGroupRatio("default", "premium", "surcharged").Final
+	require.Greater(t, surcharged, base, "multiply > 1 必须高于基准——基准也不是上界")
+
+	repriced := ResolveGroupRatio("default", "premium", "repriced").Final
+	require.Less(t, repriced, base, "override 与基准无关，可落在任意一侧")
+}

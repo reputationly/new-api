@@ -306,8 +306,7 @@ export const useTokensData = (openFluentNotification, openCCSwitchModal) => {
   // Search tokens function
   const searchTokens = async (page = 1, size = pageSize) => {
     const normalizedPage = Number.isInteger(page) && page > 0 ? page : 1;
-    const normalizedSize =
-      Number.isInteger(size) && size > 0 ? size : pageSize;
+    const normalizedSize = Number.isInteger(size) && size > 0 ? size : pageSize;
 
     const { searchKeyword, searchToken } = getFormValues();
     if (searchKeyword === '' && searchToken === '') {
@@ -453,7 +452,12 @@ export const useTokensData = (openFluentNotification, openCCSwitchModal) => {
         if (res.data.success && res.data.data) {
           const ratios = {};
           for (const [name, info] of Object.entries(res.data.data)) {
-            ratios[name] = info.ratio;
+            // 保留 has_model_ratio：配了分组内模型折扣的分组，倍率不是整组一个数，
+            // 列表标签要标「起」而不是给一个会被当成准数的值
+            ratios[name] = {
+              ratio: info.ratio,
+              hasModelRatio: !!info.has_model_ratio,
+            };
           }
           setGroupRatios(ratios);
         }

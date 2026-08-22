@@ -106,9 +106,7 @@ const EditTokenModal = (props) => {
   };
 
   const loadModels = async (groupValue = '') => {
-    const params = groupValue
-      ? `?group=${encodeURIComponent(groupValue)}`
-      : '';
+    const params = groupValue ? `?group=${encodeURIComponent(groupValue)}` : '';
     let res = await API.get(`/api/user/models${params}`);
     const { success, message, data } = res.data;
     if (success) {
@@ -163,6 +161,7 @@ const EditTokenModal = (props) => {
         label: info.desc,
         value: group,
         ratio: info.ratio,
+        hasModelRatio: info.has_model_ratio,
       }));
       if (statusState?.status?.default_use_auto_group) {
         if (localGroupOptions.some((group) => group.value === 'auto')) {
@@ -599,7 +598,10 @@ const EditTokenModal = (props) => {
                         ? `▾ ${t('收起原生额度输入')}`
                         : `▸ ${t('使用原生额度输入')}`}
                     </div>
-                    <div style={{ display: showQuotaInput ? 'block' : 'none' }} className='mt-2'>
+                    <div
+                      style={{ display: showQuotaInput ? 'block' : 'none' }}
+                      className='mt-2'
+                    >
                       <Form.InputNumber
                         field='remain_quota'
                         label={t('额度')}

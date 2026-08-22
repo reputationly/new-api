@@ -49,6 +49,8 @@ export const useModelPricingData = () => {
   const [vendorsMap, setVendorsMap] = useState({});
   const [loading, setLoading] = useState(true);
   const [groupRatio, setGroupRatio] = useState({});
+  // 分组 → 模型 → 终值倍率。后端已展开通配并算完三层，前端只查表（见 getEffectiveGroupRatio）
+  const [groupModelRatio, setGroupModelRatio] = useState({});
   const [pointsConfig, setPointsConfig] = useState({
     enabled: false,
     quotaPerPoint: 0,
@@ -267,6 +269,7 @@ export const useModelPricingData = () => {
       data,
       vendors,
       group_ratio,
+      group_model_ratio,
       usable_group,
       supported_endpoint,
       auto_groups,
@@ -276,6 +279,7 @@ export const useModelPricingData = () => {
     } = res.data;
     if (success) {
       setGroupRatio(group_ratio);
+      setGroupModelRatio(group_model_ratio || {});
       setUsableGroup(usable_group);
       setSelectedGroup('all');
       // 构建供应商 Map 方便查找
@@ -334,10 +338,15 @@ export const useModelPricingData = () => {
     if (group === 'all') {
       showInfo(t('已切换至最优倍率视图，每个模型使用其最低倍率分组'));
     } else {
+      // 配了模型折扣时倍率不是整组一个数，标明它只是基准，与分组筛选器口径一致
+      const baseRatio = groupRatio[group] ?? 1;
+      const hasModelRule = Object.keys(groupModelRatio[group] || {}).length > 0;
       showInfo(
         t('当前查看的分组为：{{group}}，倍率为：{{ratio}}', {
           group: group,
-          ratio: groupRatio[group] ?? 1,
+          ratio: hasModelRule
+            ? `${baseRatio}${t('（基准，部分模型另有专属倍率）')}`
+            : baseRatio,
         }),
       );
     }
@@ -414,6 +423,7 @@ export const useModelPricingData = () => {
     models,
     loading,
     groupRatio,
+    groupModelRatio,
     usableGroup,
     endpointMap,
     autoGroups,

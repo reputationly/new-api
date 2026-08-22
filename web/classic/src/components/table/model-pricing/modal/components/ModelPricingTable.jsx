@@ -22,6 +22,7 @@ import { Avatar, Typography, Table, Tag } from '@douyinfe/semi-ui';
 import { IconCoinMoneyStroked } from '@douyinfe/semi-icons';
 import {
   calculateModelPrice,
+  getEffectiveGroupRatio,
   getModelPriceItems,
   formatVideoMatrixSummary,
 } from '../../../../../helpers';
@@ -31,6 +32,7 @@ const { Text } = Typography;
 const ModelPricingTable = ({
   modelData,
   groupRatio,
+  groupModelRatio,
   currency,
   siteDisplayType,
   tokenUnit,
@@ -60,6 +62,7 @@ const ModelPricingTable = ({
             record: modelData,
             selectedGroup: group,
             groupRatio,
+            groupModelRatio,
             tokenUnit,
             displayPrice,
             currency,
@@ -70,9 +73,15 @@ const ModelPricingTable = ({
           })
         : { inputPrice: '-', outputPrice: '-', price: '-' };
 
-      // 获取分组倍率
+      // 获取分组倍率。这张表逐分组列价，是模型折扣最该生效的地方——
+      // 用基础倍率的话，「倍率」列会和同一行的价格自相矛盾。
       const groupRatioValue =
-        groupRatio && groupRatio[group] ? groupRatio[group] : 1;
+        getEffectiveGroupRatio(
+          groupRatio,
+          groupModelRatio,
+          group,
+          modelData?.model_name,
+        ) ?? 1;
 
       return {
         key: group,

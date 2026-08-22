@@ -21,6 +21,34 @@ import { useQuery } from '@tanstack/react-query'
 import { useStatus } from '@/hooks/use-status'
 import { getPricing } from '../api'
 
+/**
+ * Fold a model's per-model group ratios into the flat `group -> ratio` map the
+ * pricing helpers already consume.
+ *
+ * Doing the merge here means `price.ts` / `dynamic-price.ts` keep working
+ * unchanged: they read `model.group_ratio[group]` and now transparently get the
+ * effective ratio for that specific model. Wildcards are already expanded by the
+ * backend, so this is a plain lookup — never re-implement pattern matching on
+ * the client, or the three themes end up with three ways to price a request.
+ *
+ * Returns the base map by reference when nothing overrides, so the common
+ * (unconfigured) case allocates nothing per model.
+ */
+function resolveModelGroupRatio(
+  base: Record<string, number>,
+  perModel: Record<string, Record<string, number>>,
+  modelName: string
+): Record<string, number> {
+  let merged = base
+  for (const group of Object.keys(perModel)) {
+    const ratio = perModel[group]?.[modelName]
+    if (ratio === undefined) continue
+    if (merged === base) merged = { ...base }
+    merged[group] = ratio
+  }
+  return merged
+}
+
 export function usePricingData() {
   const { status } = useStatus()
 
@@ -44,6 +72,7 @@ export function usePricingData() {
     if (!data?.data || !data?.vendors) return []
 
     const vendorMap = new Map(data.vendors.map((v) => [v.id, v]))
+    const groupModelRatio = data.group_model_ratio ?? {}
 
     return data.data.map((model) => {
       const vendor = model.vendor_id
@@ -55,7 +84,11 @@ export function usePricingData() {
         vendor_name: vendor?.name,
         vendor_icon: vendor?.icon,
         vendor_description: vendor?.description,
-        group_ratio: data.group_ratio,
+        group_ratio: resolveModelGroupRatio(
+          data.group_ratio,
+          groupModelRatio,
+          model.model_name
+        ),
       }
     })
   }, [data])
@@ -64,6 +97,8 @@ export function usePricingData() {
     models,
     vendors: data?.vendors ?? [],
     groupRatio: data?.group_ratio ?? {},
+    /** Groups whose ratio is no longer a single number (per-model rules exist). */
+    groupsWithModelRatio: Object.keys(data?.group_model_ratio ?? {}),
     usableGroup: data?.usable_group ?? {},
     endpointMap: data?.supported_endpoint ?? {},
     autoGroups: data?.auto_groups ?? [],

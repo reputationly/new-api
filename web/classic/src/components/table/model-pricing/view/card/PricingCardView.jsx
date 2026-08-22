@@ -65,6 +65,7 @@ const PricingCardView = ({
   setCurrentPage,
   selectedGroup,
   groupRatio,
+  groupModelRatio,
   copyText,
   setModalImageUrl,
   setIsModalOpenurl,
@@ -193,7 +194,12 @@ const PricingCardView = ({
         if (!c) return;
         capSet.add(c.toLowerCase());
         capabilityTags.push(
-          <Tag key={`cap-${idx}`} shape='circle' color='light-blue' size='small'>
+          <Tag
+            key={`cap-${idx}`}
+            shape='circle'
+            color='light-blue'
+            size='small'
+          >
             {t(c)}
           </Tag>,
         );
@@ -275,6 +281,7 @@ const PricingCardView = ({
             record: model,
             selectedGroup,
             groupRatio,
+            groupModelRatio,
             tokenUnit,
             displayPrice,
             currency,
@@ -301,13 +308,15 @@ const PricingCardView = ({
                         {model.model_name}
                       </h3>
                       <div className='flex flex-col gap-1 text-xs mt-1'>
-                        {priceData.isDynamicPricing ? (
-                          formatDynamicPriceSummary(priceData.billingExpr, t, priceData.usedGroupRatio)
-                        ) : priceData.isVideoMatrix ? (
-                          formatVideoMatrixSummary(priceData, t)
-                        ) : (
-                          formatPriceInfo(priceData, t, siteDisplayType)
-                        )}
+                        {priceData.isDynamicPricing
+                          ? formatDynamicPriceSummary(
+                              priceData.billingExpr,
+                              t,
+                              priceData.usedGroupRatio,
+                            )
+                          : priceData.isVideoMatrix
+                            ? formatVideoMatrixSummary(priceData, t)
+                            : formatPriceInfo(priceData, t, siteDisplayType)}
                       </div>
                     </div>
                   </div>

@@ -81,6 +81,7 @@ export interface PricingToolbarProps {
   vendors: PricingVendor[]
   groups: string[]
   groupRatios?: Record<string, number>
+  groupsWithModelRatio?: string[]
   categoryIndex: Map<string, ModelCategoryKey>
   models: PricingModel[]
   hasActiveFilters: boolean
@@ -295,6 +296,7 @@ export function PricingToolbar(props: PricingToolbarProps) {
               vendors={props.vendors}
               groups={props.groups}
               groupRatios={props.groupRatios}
+              groupsWithModelRatio={props.groupsWithModelRatio}
               categoryIndex={props.categoryIndex}
               models={props.models}
               hasActiveFilters={props.hasActiveFilters}
