@@ -2,10 +2,40 @@ package types
 
 import "fmt"
 
+// 分组内按模型折扣的两种模式。定义在 types 而非 ratio_setting，是因为 ModelRuleMode
+// 会随 GroupRatioInfo 一路流到日志与前端展示，属于共享词汇表。
+const (
+	// RatioModeMultiply final = base × value。促销折扣，跟随分组基础倍率变化。
+	RatioModeMultiply = "multiply"
+	// RatioModeOverride final = value。精确定价，与分组基础倍率、身份折扣脱钩。
+	RatioModeOverride = "override"
+)
+
 type GroupRatioInfo struct {
+	// GroupRatio 是解析后的**最终**倍率，下游一切计费只读这个字段。
+	// 加入模型级折扣后它可能已包含 GroupModelRatio 的影响，语义仍是「这一单用的倍率」。
 	GroupRatio        float64
 	GroupSpecialRatio float64
 	HasSpecialRatio   bool
+
+	// 以下为模型级折扣的解析痕迹（docs/group-management-redesign.md §5.4）。
+	// 只用于日志与展示：光看最终倍率无法反算它是怎么来的，运营对不上账。
+	BaseRatio      float64 // Layer 0/1 之后、套用模型规则之前的基准
+	ModelRuleMatch string  // 命中的模型模式串，如 "wan2.2-*"；"" = 未命中
+	ModelRuleMode  string  // multiply | override
+	ModelRuleValue float64
+}
+
+// ModelRuleLog 返回模型级折扣规则的紧凑表示，供日志 other 字段使用。
+// 未命中返回空串。
+func (g GroupRatioInfo) ModelRuleLog() string {
+	if g.ModelRuleMatch == "" {
+		return ""
+	}
+	if g.ModelRuleMode == RatioModeOverride {
+		return fmt.Sprintf("%s:=%g", g.ModelRuleMatch, g.ModelRuleValue)
+	}
+	return fmt.Sprintf("%s:×%g", g.ModelRuleMatch, g.ModelRuleValue)
 }
 
 type PriceData struct {

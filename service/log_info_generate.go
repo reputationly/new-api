@@ -33,6 +33,20 @@ func appendRequestPath(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, other
 	}
 }
 
+// appendGroupModelRule 把分组内模型级折扣的解析痕迹写进日志。
+//
+// other["group_ratio"] 恒为**最终值**，不受此函数影响——运营按日志上那个数反算
+// 金额必须永远自洽，这条不能破。这里补的是「最终值是怎么算出来的」：
+// group_base_ratio 是套模型规则之前的基准，group_model_rule 是命中的那条规则。
+// 未命中模型规则时两个字段都不写，存量日志的形状不变。
+func appendGroupModelRule(other map[string]interface{}, info types.GroupRatioInfo) {
+	if other == nil || info.ModelRuleMatch == "" {
+		return
+	}
+	other["group_base_ratio"] = info.BaseRatio
+	other["group_model_rule"] = info.ModelRuleLog()
+}
+
 func GenerateTextOtherInfo(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, modelRatio, groupRatio, completionRatio float64,
 	cacheTokens int, cacheRatio float64, modelPrice float64, userGroupRatio float64) map[string]interface{} {
 	other := make(map[string]interface{})
@@ -43,6 +57,7 @@ func GenerateTextOtherInfo(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, m
 	other["cache_ratio"] = cacheRatio
 	other["model_price"] = modelPrice
 	other["user_group_ratio"] = userGroupRatio
+	appendGroupModelRule(other, relayInfo.PriceData.GroupRatioInfo)
 	other["frt"] = float64(relayInfo.FirstResponseTime.UnixMilli() - relayInfo.StartTime.UnixMilli())
 	if relayInfo.ReasoningEffort != "" {
 		other["reasoning_effort"] = relayInfo.ReasoningEffort
@@ -261,6 +276,7 @@ func GenerateMjOtherInfo(relayInfo *relaycommon.RelayInfo, priceData types.Price
 	if priceData.GroupRatioInfo.HasSpecialRatio {
 		other["user_group_ratio"] = priceData.GroupRatioInfo.GroupSpecialRatio
 	}
+	appendGroupModelRule(other, priceData.GroupRatioInfo)
 	other["count_billing"] = true
 	appendRequestPath(nil, relayInfo, other)
 	return other

@@ -228,6 +228,15 @@ func UpdateOption(c *gin.Context) {
 			})
 			return
 		}
+	case "GroupModelRatio":
+		err = ratio_setting.CheckGroupModelRatio(option.Value.(string))
+		if err != nil {
+			c.JSON(http.StatusOK, gin.H{
+				"success": false,
+				"message": err.Error(),
+			})
+			return
+		}
 	case "ImageRatio":
 		err = ratio_setting.UpdateImageRatioByJSONString(option.Value.(string))
 		if err != nil {

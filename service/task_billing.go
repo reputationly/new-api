@@ -514,8 +514,23 @@ func DeferredBillingFallback(ctx context.Context, task *model.Task, reason strin
 	RecalculateTaskQuota(ctx, task, task.Quota, "延迟记账兜底："+reason)
 }
 
-// taskGroupRatio 解析任务的最终分组倍率。task.Group 为空时回查用户当前分组。
+// taskGroupRatio 解析任务的最终分组倍率。
+//
+// **优先用提交时冻结的值**，理由与 RecalculateTaskQuotaByVideoMatrix 里那段注释
+// 完全相同（跨分组信息会丢、期间改配置会前后两个价、日志反算要自洽），而这三条
+// 对模型级折扣只会更成立：促销规则的改动频率天然高于分组基础倍率。
+//
+// 改前这里是**结算时重新解析**，与视频矩阵那条路径用冻结值不一致——同一个任务
+// 走 token 重算还是走矩阵，管理员在执行期间改了倍率就会得到两个价。这次一并修掉。
+//
+// 回退分支只服务没有 BillingContext 的老任务：那时无从得知提交时的倍率，
+// 重新解析是唯一选择。此时传入 taskModelName(task) 让模型级折扣至少能生效，
+// 但它算的是**当前**配置，与预扣可能对不上——这是老数据的固有损失，不是本次引入。
 func taskGroupRatio(task *model.Task) (float64, bool) {
+	if bc := task.PrivateData.BillingContext; bc != nil && bc.GroupRatio > 0 {
+		return bc.GroupRatio, true
+	}
+
 	group := task.Group
 	if group == "" {
 		user, err := model.GetUserById(task.UserId, false)
@@ -526,10 +541,9 @@ func taskGroupRatio(task *model.Task) (float64, bool) {
 	if group == "" {
 		return 0, false
 	}
-	if userGroupRatio, ok := ratio_setting.GetGroupGroupRatio(group, group); ok {
-		return userGroupRatio, true
-	}
-	return ratio_setting.GetGroupRatio(group), true
+	// 这里把使用分组同时当用户分组传，是沿袭改造前的既有行为（查不到就退回基础倍率），
+	// 不借重构改语义。
+	return ratio_setting.ResolveGroupRatio(group, group, taskModelName(task)).Final, true
 }
 
 // RecalculateTaskQuotaByVideoMatrix 按提交时冻结的视频计费矩阵单价做差额结算。

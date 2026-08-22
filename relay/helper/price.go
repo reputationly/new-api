@@ -36,29 +36,34 @@ func modelPriceNotConfiguredError(modelName string, userId int) error {
 const claudeCacheCreation1hMultiplier = 6 / 3.75
 
 // HandleGroupRatio checks for "auto_group" in the context and updates the group ratio and relayInfo.UsingGroup if present
+//
+// 这是整条计费链路**唯一**的分组倍率产出点：文本 / 图像 / 音频 / 视频 / MJ / Task /
+// pkg/billingexpr 分段计费全部读 PriceData.GroupRatioInfo.GroupRatio 这一个标量。
+// 因此模型级折扣在这里接入一次，对所有计费模式都生效。
 func HandleGroupRatio(ctx *gin.Context, relayInfo *relaycommon.RelayInfo) types.GroupRatioInfo {
-	groupRatioInfo := types.GroupRatioInfo{
-		GroupRatio:        1.0, // default ratio
-		GroupSpecialRatio: -1,
-	}
-
 	// check auto group
+	//
+	// 必须先落定 UsingGroup 再解析：auto 是伪分组名，拿它去查 GroupModelRatio
+	// 永远查不到，模型级折扣会对所有 auto 令牌静默失效。
 	autoGroup, exists := ctx.Get("auto_group")
 	if exists {
 		logger.LogDebug(ctx, fmt.Sprintf("final group: %s", autoGroup))
 		relayInfo.UsingGroup = autoGroup.(string)
 	}
 
-	// check user group special ratio
-	userGroupRatio, ok := ratio_setting.GetGroupGroupRatio(relayInfo.UserGroup, relayInfo.UsingGroup)
-	if ok {
-		// user group special ratio
-		groupRatioInfo.GroupSpecialRatio = userGroupRatio
-		groupRatioInfo.GroupRatio = userGroupRatio
+	res := ratio_setting.ResolveGroupRatio(relayInfo.UserGroup, relayInfo.UsingGroup, relayInfo.OriginModelName)
+
+	groupRatioInfo := types.GroupRatioInfo{
+		GroupRatio:        res.Final,
+		GroupSpecialRatio: -1,
+		BaseRatio:         res.Base,
+		ModelRuleMatch:    res.RuleMatch,
+		ModelRuleMode:     res.RuleMode,
+		ModelRuleValue:    res.RuleValue,
+	}
+	if res.HasSpecialRatio {
 		groupRatioInfo.HasSpecialRatio = true
-	} else {
-		// normal group ratio
-		groupRatioInfo.GroupRatio = ratio_setting.GetGroupRatio(relayInfo.UsingGroup)
+		groupRatioInfo.GroupSpecialRatio = res.SpecialRatio
 	}
 
 	return groupRatioInfo
