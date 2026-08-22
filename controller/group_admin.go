@@ -20,6 +20,12 @@ import (
 // 承担写入。这几个接口回答的是配置文件里看不出来的东西：这个分组通不通、删了会
 // 影响谁、它下面到底有哪些模型可以配折扣。
 
+// pseudoGroupAuto 是「自动分组」这个伪分组名，在 middleware/auth.go、
+// middleware/distributor.go、controller/token.go 等处硬编码。它不对应任何渠道，
+// 运行时会被替换成 auto 池里的某个真实分组，所以拿真实分组的标准去判它的健康度
+// 必然误报——不特判的话页面会永远挂着一个红灯，而那正是它应有的样子。
+const pseudoGroupAuto = "auto"
+
 // GroupHealth 分组的健康判定结果。
 type GroupHealth struct {
 	Name         string  `json:"name"`
@@ -30,7 +36,7 @@ type GroupHealth struct {
 	ModelCount   int     `json:"model_count"`
 	RuleCount    int     `json:"rule_count"`
 
-	// Status: ok | no_channel | unreachable
+	// Status: ok | no_channel | unreachable | virtual
 	Status string `json:"status"`
 	// StaleRules 配了折扣、但该模型在本分组没有渠道覆盖的规则模式串
 	StaleRules []string `json:"stale_rules"`
@@ -95,16 +101,7 @@ func GetGroupOverview(c *gin.Context) {
 			reachableBySpecialRule[name] ||
 			common.StringsContains(autoGroups, name)
 
-		switch {
-		case cov.ChannelCount == 0:
-			// 用户一旦选中必然报「无可用渠道」，这是最硬的失配
-			item.Status = "no_channel"
-		case !reachable:
-			// 有渠道但没有任何路径能让用户用上它
-			item.Status = "unreachable"
-		default:
-			item.Status = "ok"
-		}
+		item.Status = groupStatus(name, cov.ChannelCount, reachable)
 		list = append(list, item)
 	}
 
@@ -120,6 +117,10 @@ func GetGroupOverview(c *gin.Context) {
 		if _, ok := ratios[name]; ok {
 			continue
 		}
+		if name == pseudoGroupAuto {
+			// 渠道理论上不该挂 auto；真挂了也不是「缺配置」，补建一个 auto 分组只会更乱
+			continue
+		}
 		unconfigured = append(unconfigured, gin.H{
 			"name":          name,
 			"channel_count": coverage[name].ChannelCount,
@@ -133,6 +134,27 @@ func GetGroupOverview(c *gin.Context) {
 			"unconfigured": unconfigured,
 		},
 	})
+}
+
+// groupStatus 判定一个分组的健康度。
+//
+// 抽成独立函数是为了能被测试直接调用——内联在 GetGroupOverview 里的话，
+// 要覆盖这四条分支就得起 gin context、造 DB、铺三份配置，代价高到没人会写，
+// 于是只能写一份逻辑的副本来「测」，而副本改不动真实现，等于没测。
+func groupStatus(name string, channelCount int, reachable bool) string {
+	switch {
+	case name == pseudoGroupAuto:
+		// 伪分组：不对应任何渠道，没渠道正是它应有的样子
+		return "virtual"
+	case channelCount == 0:
+		// 用户一旦选中必然报「无可用渠道」，这是最硬的失配
+		return "no_channel"
+	case !reachable:
+		// 有渠道，但没有任何路径能让用户用上它
+		return "unreachable"
+	default:
+		return "ok"
+	}
 }
 
 // staleRulePatterns 找出配了折扣、但在本分组匹配不到任何模型的规则。

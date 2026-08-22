@@ -1,5 +1,6 @@
 import React, { useCallback, useMemo, useRef } from 'react';
 import {
+  Button,
   Empty,
   InputNumber,
   Switch,
@@ -7,6 +8,7 @@ import {
   Typography,
 } from '@douyinfe/semi-ui';
 import { useTranslation } from 'react-i18next';
+import { useNavigate } from 'react-router-dom';
 import CardTable from '../../../components/common/ui/CardTable';
 
 const { Text, Title } = Typography;
@@ -34,6 +36,7 @@ export default function GroupExtraSettings({
   onChange,
 }) {
   const { t } = useTranslation();
+  const navigate = useNavigate();
 
   const topup = useMemo(
     () => parseJSON(inputs.TopupGroupRatio, {}),
@@ -188,12 +191,25 @@ export default function GroupExtraSettings({
       <Title heading={6} className='mb-1 mt-6'>
         {t('积分抵扣白名单')}
       </Title>
-      <div className='mb-2 flex items-center gap-2'>
-        <Switch
-          checked={!!inputs['points_setting.enabled']}
-          onChange={(v) => onChange('points_setting.enabled', v)}
-        />
-        <Text>{t('启用积分抵扣')}</Text>
+      {/*
+        总开关在这里**只读**。它归「运营设置 → 积分设置」管，控制的东西远不止分组
+        （抵扣比例、KYC 要求、赠送积分…）。两个页面都能改同一个 key 的话，
+        改完这边、那边还开着旧状态，谁后保存谁生效——这种双写不值得为省一次跳转而留。
+      */}
+      <div className='mb-2 flex flex-wrap items-center gap-2'>
+        <Switch checked={!!inputs['points_setting.enabled']} disabled />
+        <Text type={inputs['points_setting.enabled'] ? undefined : 'tertiary'}>
+          {inputs['points_setting.enabled']
+            ? t('积分抵扣已启用')
+            : t('积分抵扣未启用，白名单不生效')}
+        </Text>
+        <Button
+          size='small'
+          theme='borderless'
+          onClick={() => navigate('/console/setting?tab=operation')}
+        >
+          {t('去运营设置开关')}
+        </Button>
       </div>
       <Text type='tertiary' size='small' className='mb-2 block'>
         {t('留空 = 所有分组只扣余额。采购分组零配置即安全。')}

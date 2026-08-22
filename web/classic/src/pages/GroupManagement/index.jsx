@@ -66,6 +66,10 @@ const OPTION_KEYS = [
 
 const BOOLEAN_KEYS = ['DefaultUseAutoGroup', 'points_setting.enabled'];
 
+// 只读不写：积分总开关归「运营设置 → 积分设置」管，这里只用它决定白名单是否生效。
+// 放进保存队列的话，两个页面就都能改同一个 key，谁后保存谁生效。
+const READ_ONLY_KEYS = new Set(['points_setting.enabled']);
+
 function parseJSONSafe(str, fallback) {
   if (!str || !str.trim()) return fallback;
   try {
@@ -178,7 +182,9 @@ export default function GroupManagementPage() {
   );
 
   const onSubmit = useCallback(async () => {
-    const updateArray = compareObjects(inputs, originInputs);
+    const updateArray = compareObjects(inputs, originInputs).filter(
+      (item) => !READ_ONLY_KEYS.has(item.key),
+    );
     if (!updateArray.length) {
       showWarning(t('你似乎并没有修改什么'));
       return;
