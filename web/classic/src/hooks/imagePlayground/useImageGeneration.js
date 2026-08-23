@@ -32,6 +32,9 @@ import {
   IMAGE_HISTORY_LIMIT,
   IMAGE_CONV_TURN_LIMIT,
   getSizesForModel,
+  getExplicitTabSizes,
+  readImageDimensions,
+  pickClosestSize,
   parseImageSizeConfig,
   normalizeImageSize,
   IMAGE_QUALITY_BOT_TASK,
@@ -179,10 +182,49 @@ export const useImageGeneration = ({ mode = 'text2image' } = {}) => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // 图生图「输出尺寸」的白名单与开关。用 ref 让 handleInputChange 保持零依赖——
+  // 它被当回调传给 ImageUrlInput，每次重建都会让上传组件白白重渲染。
+  // 声明在此、赋值在下方算出选项之后。
+  const i2iSizesRef = useRef([]);
+  const canPickI2ISizeRef = useRef(false);
+  // 最近一次上传的那张底图的原生画幅：只在上传那一刻解析一次并记下，不随渲染重算。
+  // 连同被解析的那张图一起存（{ url, w, h }）——因为它只在「仍对应当前末张底图」时
+  // 才有意义：openHistoryItem 用 setInputs 直设 imageUrls、newConversation 又只清
+  // currentConvId 不清 inputs，两条路径都不经 handleInputChange，留着上一轮的画幅
+  // 去跟新恢复出来的 size 比，会报出张冠李戴的偏差。带上 url 就能识别并跳过。
+  const [sourceDim, setSourceDim] = useState(null);
+
   const handleInputChange = useCallback((key, value) => {
     // 锁定后不允许修改分组/模型/尺寸
     if (lockedRef.current) return;
     setInputs((prev) => ({ ...prev, [key]: value }));
+
+    // 底图每变动一次就解析一次「当次最后一张」的原生画幅，当场把「输出尺寸」
+    // 对到最接近的档位。取最后一张而不是第一张:上传是逐次触发的,连传三张会依次
+    // 收到 [a] / [a,b] / [a,b,c],每次都取末尾才等于"刚拖进来的那张说了算",
+    // 最终停在 c 上;取首张则三次都在解析 a,后两张形同虚设。删图时同理——数组
+    // 变短后仍以剩下的最后一张为准。
+    //
+    // 解析放在这里而不是 effect 里:上传是一次性动作,解析一次赋值一次即可;
+    // 挂在 imageUrls 上的 effect 会随每次渲染的引用变化重跑,把用户手动改过的
+    // 档位又拽回默认值。
+    if (key !== 'imageUrls') return;
+    const list = (value || []).filter(Boolean);
+    const latest = list[list.length - 1];
+    if (!latest) {
+      setSourceDim(null);
+      return;
+    }
+    readImageDimensions(latest).then((dim) => {
+      // 画幅无条件记下来。白名单还没就绪时（尚未选模型、或选的模型没配 sizes）
+      // 只是不动尺寸,不能连解析都跳过——下面那条合法性 effect 承诺的「先传图、
+      // 后选模型」兜底,靠的就是这里留下的 sourceDim;跳过解析会让它永远拿到 null,
+      // 退回白名单首档而不是最贴合的那一档,画幅偏差提示也不会出现。
+      setSourceDim(dim ? { url: latest, w: dim.w, h: dim.h } : null);
+      if (!dim || lockedRef.current || !canPickI2ISizeRef.current) return;
+      const picked = pickClosestSize(dim, i2iSizesRef.current);
+      if (picked) setInputs((prev) => ({ ...prev, size: picked }));
+    });
   }, []);
 
   // 解析按模型尺寸配置
@@ -195,6 +237,60 @@ export const useImageGeneration = ({ mode = 'text2image' } = {}) => {
     () => getSizesForModel(sizeConfig, inputs.model, mode),
     [sizeConfig, inputs.model, mode],
   );
+
+  // 图生图的输出尺寸：仅当运营给该模型在本 tab 下显式配了 sizes 才开放（见
+  // getExplicitTabSizes 的注释——gpt-image 这类只认固定档位，不能无差别下发）。
+  const explicitI2ISizes = useMemo(
+    () =>
+      isI2I ? getExplicitTabSizes(sizeConfig, inputs.model, mode) : undefined,
+    [isI2I, sizeConfig, inputs.model, mode],
+  );
+  const canPickI2ISize =
+    isI2I && Array.isArray(explicitI2ISizes) && explicitI2ISizes.length > 0;
+
+  // 选项只来自运营配的白名单——能选的一定是模型支持的档位。底图不进选项，
+  // 它只决定上传那一刻把哪一档填进框里。
+  const i2iSizeOptions = useMemo(() => {
+    if (!canPickI2ISize) return [];
+    const seen = new Set();
+    const opts = [];
+    (explicitI2ISizes || []).forEach((s) => {
+      const value = normalizeImageSize(s);
+      if (!value || seen.has(value)) return;
+      seen.add(value);
+      opts.push({ value, label: value });
+    });
+    return opts;
+  }, [canPickI2ISize, explicitI2ISizes]);
+
+  i2iSizesRef.current = i2iSizeOptions.map((o) => o.value);
+  canPickI2ISizeRef.current = canPickI2ISize;
+
+  // 已解析的画幅是否仍属于当前这批底图的末张。不匹配说明底图是被历史恢复 /
+  // 新对话残留带进来的、并非本轮上传，此时那份画幅与界面上的底图无关，宁可不提示
+  // 也不能拿它去比对。
+  const latestImageUrl =
+    (inputs.imageUrls || []).filter(Boolean).slice(-1)[0] || null;
+  const activeSourceDim =
+    sourceDim && sourceDim.url === latestImageUrl ? sourceDim : null;
+
+  // 选中档位与最近一次上传那张底图的画幅相差多少。运营没把该比例配进白名单时
+  // （例如只配了 16:9 却传了 1:1），输出画幅一定会变，这里算出偏差交给面板显式
+  // 提示——否则用户只会看到出图被改构图，却不知道是配置不全导致的。
+  const i2iAspectMismatch = useMemo(() => {
+    if (!canPickI2ISize || !activeSourceDim || !inputs.size) return null;
+    const m = /^(\d+)\s*[x×]\s*(\d+)$/i.exec(String(inputs.size));
+    if (!m) return null;
+    const selected = Number(m[1]) / Number(m[2]);
+    const source = activeSourceDim.w / activeSourceDim.h;
+    if (!selected || !source) return null;
+    // 2% 以内视作同一画幅（1664x928=1.793 与标称 16:9=1.778 差 0.8%，不该报）
+    if (Math.abs(Math.log(selected / source)) < 0.02) return null;
+    return {
+      sourceLabel: `${activeSourceDim.w}×${activeSourceDim.h}`,
+      selectedLabel: inputs.size,
+    };
+  }, [canPickI2ISize, activeSourceDim, inputs.size]);
 
   // 图片模型集合 = 管理员在「图片模型尺寸配置」里声明、且能力含「文生图」的模型。
   // 只认运营设置里的能力声明，不再按后端端点类型识别。
@@ -216,14 +312,30 @@ export const useImageGeneration = ({ mode = 'text2image' } = {}) => {
     return set;
   }, [imageModelSet, modelGroupsMap]);
 
-  // 选中模型变化或尺寸列表变化时，确保 size 合法（锁定时不改动）
+  // 选中模型变化或尺寸列表变化时，确保 size 合法（锁定时不改动）。
+  //
+  // 图生图要拿白名单（i2iSizeOptions）而不是 availableSizes 来校验:后者带
+  // 内置兜底，任何模型都非空，用它会把上传时刚对好的档位覆盖成兜底首档。
+  // 这一步同时兜住「先传图、后选模型」——那时上传回调因白名单尚未就绪只记下了
+  // 画幅、没动尺寸，等选项到位再用那份 sourceDim 就近补上。
   useEffect(() => {
     if (locked) return;
-    if (availableSizes.length === 0) return;
-    if (!availableSizes.includes(inputs.size)) {
-      setInputs((prev) => ({ ...prev, size: availableSizes[0] }));
-    }
-  }, [availableSizes, inputs.size, locked]);
+    const valid = canPickI2ISize
+      ? i2iSizeOptions.map((o) => o.value)
+      : availableSizes;
+    if (!valid || valid.length === 0) return;
+    if (valid.includes(inputs.size)) return;
+    const picked =
+      (canPickI2ISize && pickClosestSize(activeSourceDim, valid)) || valid[0];
+    setInputs((prev) => ({ ...prev, size: picked }));
+  }, [
+    availableSizes,
+    i2iSizeOptions,
+    canPickI2ISize,
+    activeSourceDim,
+    inputs.size,
+    locked,
+  ]);
 
   // 加载 pricing：构建 model -> 端点类型、model -> 分组 两个映射（覆盖全部模型）
   const loadPricing = useCallback(async () => {
@@ -481,8 +593,10 @@ export const useImageGeneration = ({ mode = 'text2image' } = {}) => {
           n: 1,
           // 不强制 response_format：各供应商返回原生格式（url 或 base64），前端均兼容
         };
-        // 尺寸/比例仅文生图下发；图生图跟随参考图，不发 size。
-        if (!isI2I) {
+        // 文生图一律下发；图生图只在运营为该模型显式开了输出尺寸时下发（此时
+        // 默认值已是底图的原生像素）。没开就沿用老行为一个字段都不带——引擎会
+        // 落到它自己的 aspect_ratio 默认档，第三方渠道也不会收到它不认的尺寸。
+        if (!isI2I || canPickI2ISize) {
           reqBody.size = normalizeImageSize(params.size);
         }
         // 随机种子:非空即下发(整数);留空则不发,由引擎自动随机。
@@ -544,7 +658,16 @@ export const useImageGeneration = ({ mode = 'text2image' } = {}) => {
         setGenerating(false);
       }
     },
-    [currentConvId, inputs, generating, patchConvMessage, storageKey, isI2I, t],
+    [
+      currentConvId,
+      inputs,
+      generating,
+      patchConvMessage,
+      storageKey,
+      isI2I,
+      canPickI2ISize,
+      t,
+    ],
   );
 
   const regenerate = useCallback((prompt) => generate(prompt), [generate]);
@@ -600,6 +723,9 @@ export const useImageGeneration = ({ mode = 'text2image' } = {}) => {
     groups,
     models,
     availableSizes,
+    canPickI2ISize,
+    i2iSizeOptions,
+    i2iAspectMismatch,
     messages,
     conversations,
     currentConvId,

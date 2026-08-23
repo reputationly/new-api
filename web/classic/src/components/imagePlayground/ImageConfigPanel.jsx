@@ -34,6 +34,9 @@ const ImageConfigPanel = ({
   groups,
   models,
   availableSizes,
+  canPickI2ISize = false,
+  i2iSizeOptions = [],
+  i2iAspectMismatch = null,
   onInputChange,
   disabled = false,
   styleState,
@@ -205,14 +208,25 @@ const ImageConfigPanel = ({
           </>
         )}
 
-        {/* 图片尺寸（图生图跟随参考图，不显示、不下发） */}
-        {!isI2I && (
+        {/* 图片尺寸。文生图一直有；图生图只在运营给该模型显式配了本 tab 的 sizes
+            时才出现（canPickI2ISize），每次上传底图后自动选中画幅最接近的那一档
+            ——不给这个框时输出画幅由引擎默认档决定，与底图无关。 */}
+        {(!isI2I || canPickI2ISize) && (
           <div>
             <div className='flex items-center gap-2 mb-2'>
               <Ruler size={16} className='text-gray-500' />
               <Typography.Text strong className='text-sm'>
-                {t('图片尺寸')}
+                {isI2I ? t('输出尺寸') : t('图片尺寸')}
               </Typography.Text>
+              {isI2I && (
+                <Tooltip
+                  content={t(
+                    '每次上传底图后，自动选中最接近该图画幅的档位；也可手动改成其它档位',
+                  )}
+                >
+                  <HelpCircle size={14} className='text-gray-400 cursor-help' />
+                </Tooltip>
+              )}
             </div>
             <Select
               placeholder={t('请选择尺寸')}
@@ -220,12 +234,30 @@ const ImageConfigPanel = ({
               selection
               onChange={(value) => onInputChange('size', value)}
               value={inputs.size}
-              optionList={sizeOptions}
+              optionList={
+                isI2I ? ensureOption(i2iSizeOptions, inputs.size) : sizeOptions
+              }
               disabled={disabled}
               style={{ width: '100%' }}
               dropdownStyle={{ width: '100%', maxWidth: '100%' }}
               className='!rounded-lg'
             />
+            {/* 白名单里没有与底图同画幅的档位时说清楚后果：出图会按所选档位重新构图，
+                而不是保持原样。不这么提示，用户只会看到构图被改却不知道原因。 */}
+            {isI2I && i2iAspectMismatch && (
+              <Typography.Text
+                type='warning'
+                className='text-xs block mt-1 leading-snug'
+              >
+                {t(
+                  '底图为 {{source}}，与所选 {{selected}} 画幅不同，出图会按所选尺寸重新构图',
+                  {
+                    source: i2iAspectMismatch.sourceLabel,
+                    selected: i2iAspectMismatch.selectedLabel,
+                  },
+                )}
+              </Typography.Text>
+            )}
           </div>
         )}
 

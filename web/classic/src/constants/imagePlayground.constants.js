@@ -132,6 +132,73 @@ export const getSizesForModel = (config, model, tabKey) => {
   return fallback;
 };
 
+// 只取运营在该 tab 下**显式**配置的 sizes，不走模型级/全局/内置兜底；没配返回 undefined。
+//
+// 图生图的「输出尺寸」框据此决定是否出现。不能像文生图那样对所有模型默认打开：
+// 下发的 size 会流向该 tab 下的所有渠道，而 gpt-image / dall-e 的 edits 只认
+// 1024x1024 / 1536x1024 / 1024x1536 / auto 这几档，收到底图的原生像素（如
+// 1472x1104）会被上游直接判错。所以这是个逐模型开启的能力：运营给自建模型
+// （qwen-image-edit / z-image）在 image2image 下配一份 sizes，框才出现、size 才下发。
+export const getExplicitTabSizes = (config, model, tabKey) => {
+  if (!config || typeof config !== 'object') return undefined;
+  return tabScopedValue(config.models && config.models[model], tabKey, 'sizes');
+};
+
+// 从档位白名单里挑一个最贴合底图画幅的。
+//
+// 白名单是运营配的、模型确实支持的档位；底图只用来决定默认选中哪一档，绝不会
+// 把底图的原生像素直接下发——那正是 gpt-image 这类只认固定档位的模型会报错的地方。
+// 先精确匹配像素（qwen 系生成的图往往本就落在档位上，此时能原样保持），否则按
+// 宽高比取最近的一档。比例距离用对数比值而不是差值：画幅是乘性的，log 让 16:9 与
+// 9:16 这种互为倒数的关系对称，不会偏向数值大的一侧。
+export const pickClosestSize = (dim, sizes) => {
+  if (!dim || !dim.w || !dim.h || !Array.isArray(sizes) || sizes.length === 0) {
+    return undefined;
+  }
+  const target = dim.w / dim.h;
+  let best;
+  let bestDiff = Infinity;
+  sizes.forEach((raw) => {
+    const value = normalizeImageSize(raw);
+    const m = /^(\d+)\s*[x×]\s*(\d+)$/i.exec(String(value || ''));
+    if (!m) return;
+    const w = Number(m[1]);
+    const h = Number(m[2]);
+    if (!w || !h) return;
+    if (w === dim.w && h === dim.h) {
+      best = value;
+      bestDiff = -1;
+      return;
+    }
+    if (bestDiff === -1) return;
+    const diff = Math.abs(Math.log(w / h / target));
+    if (diff < bestDiff) {
+      bestDiff = diff;
+      best = value;
+    }
+  });
+  return best;
+};
+
+// 读一张 data-url 图片的原生像素。图片已在内存里，浏览器解到头部就能给出尺寸，
+// 不产生网络请求；解不出（损坏/非图片）时返回 null 而不是抛错，让调用方跳过该张。
+export const readImageDimensions = (dataUrl) =>
+  new Promise((resolve) => {
+    if (!dataUrl) {
+      resolve(null);
+      return;
+    }
+    const img = new Image();
+    img.onload = () =>
+      resolve(
+        img.naturalWidth && img.naturalHeight
+          ? { w: img.naturalWidth, h: img.naturalHeight }
+          : null,
+      );
+    img.onerror = () => resolve(null);
+    img.src = dataUrl;
+  });
+
 // 解析 status 中的 ImageModelSizeConfig（字符串或对象）
 // models[name] 统一产出 { sizes:[], capabilities:[] }；兼容旧形态（值为尺寸数组）
 export const parseImageSizeConfig = (raw) => {

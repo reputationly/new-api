@@ -20,6 +20,9 @@ const ImagePlaygroundBody = ({ mode }) => {
     groups,
     models,
     availableSizes,
+    canPickI2ISize,
+    i2iSizeOptions,
+    i2iAspectMismatch,
     messages,
     conversations,
     generating,
@@ -48,6 +51,9 @@ const ImagePlaygroundBody = ({ mode }) => {
           groups={groups}
           models={models}
           availableSizes={availableSizes}
+          canPickI2ISize={canPickI2ISize}
+          i2iSizeOptions={i2iSizeOptions}
+          i2iAspectMismatch={i2iAspectMismatch}
           onInputChange={handleInputChange}
           disabled={locked}
           styleState={styleState}
