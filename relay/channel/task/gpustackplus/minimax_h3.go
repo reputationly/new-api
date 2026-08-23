@@ -1,6 +1,7 @@
 package gpustackplus
 
 import (
+	"encoding/json" // 仅取 json.Number 类型;marshal/unmarshal 一律走 common(见 CLAUDE.md Rule 1)
 	"math"
 	"strconv"
 	"strings"
@@ -70,6 +71,62 @@ var h3NamedAspectRatios = map[string]float64{
 func h3IsNamedAspectRatio(s string) bool {
 	_, ok := h3NamedAspectRatios[common.NormalizeAspectRatio(strings.ToLower(strings.TrimSpace(s)))]
 	return ok
+}
+
+// h3ShapeRatioTolerance 是 target_shape 反推具名比例时允许的相对误差。
+//
+// 3% 这个数不是拍的:体验区的 target_shape 表只对 5 个比例给了手调固定值,21:9 走的是
+// 「按 ~720p 面积等比算再对齐到 16 的倍数」那条路(aspectRatioToShape),对齐后得
+// [624,1472],1472/624=2.359 对真值 21/9=2.333 偏 1.1% —— 容差小于它就把 21:9 漏掉了。
+// 上限则由具名表里最挨近的两档决定:1:1(1.0) 与 3:4(0.75) 相距 25%,3% 离误判还远。
+const h3ShapeRatioTolerance = 0.03
+
+// h3AspectRatioFromTargetShape 从 wan 的 target_shape:[height,width] 反推 H3 的具名比例,
+// 推不出(解析失败 / 偏离所有具名值超过容差)返回空串。
+//
+// 只反推**比例**,不反推画布 —— 那些像素值是 wan 的 720p 级固定表,既非 32 的倍数也不是
+// 用户选的档位,当画布用必出错档(见 h3NormalizeAspectRatio 的注释)。比例则是无损的:
+// 表里的值本来就是按比例算出来的,除回去就还原。
+func h3AspectRatioFromTargetShape(v any) string {
+	shape, ok := v.([]any)
+	if !ok || len(shape) < 2 {
+		return ""
+	}
+	h, okH := h3ToFloat(shape[0])
+	w, okW := h3ToFloat(shape[1])
+	if !okH || !okW || h <= 0 || w <= 0 {
+		return ""
+	}
+	got := w / h
+	best, bestErr := "", math.Inf(1)
+	for name, want := range h3NamedAspectRatios {
+		if e := math.Abs(got-want) / want; e < bestErr {
+			best, bestErr = name, e
+		}
+	}
+	if bestErr > h3ShapeRatioTolerance {
+		return ""
+	}
+	return best
+}
+
+// h3ToFloat 把 JSON 反序列化出来的数字取成 float64。metadata 走 map[string]any,
+// 数字落地成 float64;直连调用方经其他路径进来也可能是整型,一并收下。
+func h3ToFloat(v any) (float64, bool) {
+	switch n := v.(type) {
+	case float64:
+		return n, true
+	case float32:
+		return float64(n), true
+	case int:
+		return float64(n), true
+	case int64:
+		return float64(n), true
+	case json.Number:
+		f, err := n.Float64()
+		return f, err == nil
+	}
+	return 0, false
 }
 
 // h3ShortEdgeFromSizeToken 从分辨率档位词取短边像素:"480P"/"768p" → 480/768;
@@ -292,10 +349,18 @@ func applyMiniMaxH3Request(body map[string]any, taskType string, durationSec int
 // 引擎契约本来就归这一层管;且直连调用方发 ratio 的同样能被救,不必等前端一起上线。
 //
 // target_shape 是 wan 的 720p 级固定值表([720,1280] 等),对 H3 既非 32 的倍数也不是
-// 我们要的档位,拿它反推画布只会得到错的尺寸,故直接丢弃(H3 本期 pipeline 恒为 false,
-// 正常不会出现)。
+// 我们要的档位,**当画布用**必出错档,所以这个键本身照旧丢弃 —— 但要先把比例从里面捞
+// 出来。
+//
+// ⚠️ 别再按「H3 恒 pipeline=false,收不到 target_shape」写这里:那个前提是错的,且错得
+// 完全静默。model/main.go 的 video_pipeline_flag_migrated 迁移会把**所有挂在自建
+// gpustackplus 渠道上**的视频模型自动标成 pipeline:true,而 H3 正是跑在 gpustackplus
+// 上的,于是它必然被标上;前端见 pipeline 就只发 target_shape、不发 ratio。原来这里
+// 直接删掉它,aspect_ratio 就一路缺到 t2v 的缺省分支,补成 16:9 —— 用户在体验区选任何
+// 比例都出 16:9,不报错、不告警,只有对着成片量宽高才看得出来。
 func h3NormalizeAspectRatio(body map[string]any) {
-	// wan 专属,引擎不读,留着只会在排查时误导。
+	// wan 专属,引擎不读,留着只会在排查时误导。取值后即删。
+	shape := body["target_shape"]
 	delete(body, "target_shape")
 	if _, ok := body["aspect_ratio"]; ok {
 		delete(body, "ratio") // 已有权威值:别名清掉,免得两个键打架
@@ -303,8 +368,15 @@ func h3NormalizeAspectRatio(body map[string]any) {
 	}
 	if r, ok := body["ratio"].(string); ok && strings.TrimSpace(r) != "" {
 		body["aspect_ratio"] = common.NormalizeAspectRatio(r)
+		delete(body, "ratio")
+		return
 	}
 	delete(body, "ratio")
+	// 两个别名都没有,才轮到 target_shape 兜底。优先级排最后是有意的:ratio 是调用方
+	// 直接表达的比例,target_shape 是反推来的,前者更权威。
+	if ar := h3AspectRatioFromTargetShape(shape); ar != "" {
+		body["aspect_ratio"] = ar
+	}
 }
 
 // h3ApplyCanvas 按 body 里的 size 档位词 + 具名 aspect_ratio 推出 width/height 并写回。

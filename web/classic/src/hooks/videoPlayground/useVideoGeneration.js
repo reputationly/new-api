@@ -60,6 +60,8 @@ import {
   getMaxInputMBForModel,
   getMaxAudioSecForModel,
   getEngineForVideoModel,
+  getDefaultStepsForVideoModel,
+  VIDEO_STEPS_MODES,
   getMaxRefImagesForModel,
   getMaxRefVideosForModel,
   getRefVideoMaxMBForModel,
@@ -296,6 +298,12 @@ export const useVideoGeneration = ({
   // 尺寸/宽高比下发闸,与 VideoConfigPanel 的展示闸同一判据(见上)。
   const sendsSize = tabHasField(category, mode, 'sizes');
   const sendsAspectRatio = tabHasField(category, mode, 'aspectRatios');
+  // 采样步数闸:文生视频 / 关键帧 / 参考生视频三个玩法开放,展示与下发同读它。
+  //
+  // 不走 tabHasField:那个读的是运营在每个 tab 上配的字段(sizes/aspectRatios 之类),
+  // 而步数是**模型级**的(defaultSteps 与 engine 同层,管理页上就没有 tab 维度),
+  // 借它判会得出「运营没配过这个 tab 的 sizes,步数框也跟着消失」这种毫无关系的联动。
+  const sendsSteps = VIDEO_STEPS_MODES.includes(mode);
   const taskType = modeMeta(mode).taskType; // s2v/sr 显式下发;vace(Bernini)按输入分流(见 isVACE 提交块),其余靠模型名推断
   const pageCapability = modeMeta(mode).capability;
   const storageKey = storageKeyFor(mode);
@@ -307,6 +315,9 @@ export const useVideoGeneration = ({
     seconds: '',
     seed: '', // 随机种子;'' 表示随机(不下发)
     aspectRatio: '', // 宽高比;仅当该模型在后台配了宽高比才由 effect 选中默认值并下发
+    // 采样步数(高级参数)。切模型时由 effect 填成该模型配的 defaultSteps,用户可改。
+    // '' = 不下发,由后端回落引擎族基座档 —— 运营没配 defaultSteps 时就是这个状态。
+    steps: '',
     firstFrame: '', // i2v/flf2v 首帧 / s2v 人物图(base64 data-url)
     lastFrame: '', // flf2v 尾帧
     audioData: '', // s2v 驱动音频(base64 data-url)
@@ -526,6 +537,11 @@ export const useVideoGeneration = ({
     () => getAspectRatiosForVideoModel(videoConfig, inputs.model, mode),
     [videoConfig, inputs.model, mode],
   );
+  // 该模型配的采样步数(模型级,不随 mode 变)。null = 运营没配。
+  const modelDefaultSteps = useMemo(
+    () => getDefaultStepsForVideoModel(videoConfig, inputs.model),
+    [videoConfig, inputs.model],
+  );
   // 输入文件大小上限(MB;0=不限)。i2v/flf2v/s2v/sr/vace 上传帧图/音频/视频的护栏。
   const maxInputMB = useMemo(
     () => getMaxInputMBForModel(videoConfig, inputs.model, mode),
@@ -741,6 +757,22 @@ export const useVideoGeneration = ({
       setInputs((prev) => ({ ...prev, aspectRatio: next }));
     }
   }, [availableAspectRatios, inputs.aspectRatio, locked]);
+
+  // 采样步数的默认值:切模型时填成该模型在「视频模型配置」里配的 defaultSteps
+  // (没配则留空 = 不下发,后端回落引擎族基座档)。
+  //
+  // 判据是「模型变了」而不是「当前值 != 默认值」:后者会在用户每次输入后立刻把值冲回
+  // 默认,框子根本改不动。用 ref 记住上次应用默认值的模型,同一模型内不再干预。
+  const stepsModelRef = useRef(null);
+  useEffect(() => {
+    if (locked) return;
+    if (stepsModelRef.current === inputs.model) return;
+    stepsModelRef.current = inputs.model;
+    setInputs((prev) => ({
+      ...prev,
+      steps: modelDefaultSteps == null ? '' : modelDefaultSteps,
+    }));
+  }, [inputs.model, modelDefaultSteps, locked]);
 
   // 配音开关不再可用（切到无配音模型的分组/模式）时关掉残留的 on 状态，
   // 避免开关隐藏后 inputs.dubbing 仍为 true 导致的困惑（锁定的会话不动）。
@@ -1242,6 +1274,7 @@ export const useVideoGeneration = ({
           seconds: inputs.seconds,
           seed: inputs.seed,
           aspectRatio: inputs.aspectRatio,
+          steps: inputs.steps,
           images: convImages,
           // 关键帧 auto 的派生结果**随会话锁定**:images 数组分不出「这 1 张是首帧
           // 还是尾帧」(l2va 与 i2v 输入形态相同),续问时重新推必然推错。
@@ -1278,6 +1311,7 @@ export const useVideoGeneration = ({
               seconds: conv.seconds,
               seed: conv.seed,
               aspectRatio: conv.aspectRatio,
+              steps: conv.steps != null ? conv.steps : '',
               images: conv.images || [],
               audioData: conv.audioData || '',
               sourceVideo: conv.sourceVideo || '',
@@ -1300,6 +1334,7 @@ export const useVideoGeneration = ({
               seconds: inputs.seconds,
               seed: inputs.seed,
               aspectRatio: inputs.aspectRatio,
+              steps: inputs.steps,
               images: convImages,
               keyframeTaskType:
                 isFLF2V && isKeyframeAuto
@@ -1402,6 +1437,9 @@ export const useVideoGeneration = ({
               seconds: params.seconds,
               seed: params.seed,
               aspectRatio: params.aspectRatio,
+              // 步数随会话锁定:续问/刷新后按会话原设置发,不受当前框里的值影响
+              // (与 seed / interpolation 同一处理)。
+              steps: params.steps != null ? params.steps : '',
               images: params.images || [],
               // 新增能力媒体输入(base64):锁进对话供续问复用,落盘时按
               // VIDEO_MEDIA_SCHEMA 换成 IDB 引用。
@@ -1484,6 +1522,9 @@ export const useVideoGeneration = ({
         // 改写档位再拼两段。判据按 params.model（随会话锁定）而非当前选中模型，续会话/
         // 刷新后与首次提交同解，见 isPipelineModel 的注释。
         const usePipeline = isPipelineModel(videoConfig, params.model);
+        // 引擎族按 params.model 重新解（随会话锁定，同 usePipeline 的理由）。宽高比
+        // 下发要用它：H3 与 wan 同挂自建引擎，但两边认的宽高比字段不同。
+        const paramEngine = getEngineForVideoModel(videoConfig, params.model);
         // 选中的档位是不是超分档：用 params.model 的 upscale 规则重新解一次，与选择器
         // 那次走同一个 buildVideoSizeChoices，保证续问/刷新后推出同一个答案——重新推却
         // 推出别的答案，正是 keyframeTaskType 当初的教训。
@@ -1587,6 +1628,22 @@ export const useVideoGeneration = ({
             seed: Number(params.seed),
           };
         }
+        // 采样步数:同样走 metadata(adaptor 把它平铺到 body 顶层)。后端
+        // applyMiniMaxH3Request 对 num_inference_steps 是「已有则不覆盖」,所以这里发了
+        // 就是最终值、不发才回落到运营配的 defaultSteps / 引擎族基座档。
+        //
+        // 只对展示步数框的玩法下发,与 sendsSteps 同一判据 —— 超分/配音/数字人这些
+        // 由源素材决定形态的玩法界面上没有这个框,却因为 inputs.steps 还留着上一个模型
+        // 的值而把它发出去,是典型的「看不见的参数在生效」。
+        if (sendsSteps) {
+          const stepsVal = parseInt(params.steps, 10);
+          if (Number.isFinite(stepsVal) && stepsVal > 0) {
+            body.metadata = {
+              ...(body.metadata || {}),
+              num_inference_steps: stepsVal,
+            };
+          }
+        }
         // 插帧(默认关):按提交时的开关状态透传 target_fps(引擎 RIFE 帧率翻倍)。
         // 仅自建引擎认这个字段,第三方渠道不下发(usePipeline);超分/配乐不适用;
         // 有超分段时插帧后移到超分段(stage1 不发),仅配音段无超分时插帧仍作用于生成任务。
@@ -1605,11 +1662,16 @@ export const useVideoGeneration = ({
             target_fps: VIDEO_INTERPOLATION_TARGET_FPS,
           };
         }
-        // 宽高比。两边认的字段不一样,按渠道分发:
-        // - 自建引擎:target_shape:[h,w]。wan t2v runner 的 get_latent_shape_with_target_hw
-        //   优先采用它,不认识 aspect_ratio。
-        // - 其他渠道:ratio("16:9" 这种原生形态)。Ark/Seedance 只认 ratio,收到 target_shape
-        //   会整个忽略、只能出默认比例——界面上摆着宽高比选择器却不生效。
+        // 宽高比。各家认的字段不一样,按**引擎族**分发(而不是只按 usePipeline):
+        // - wan(自建,未声明引擎族):target_shape:[h,w]。它的 t2v runner 的
+        //   get_latent_shape_with_target_hw 优先采用这个,不认识 aspect_ratio。
+        // - MiniMax H3(自建):具名 aspect_ratio。**它同样是自建引擎**(跑在
+        //   gpustackplus 上,还会被 video_pipeline_flag_migrated 迁移自动标成
+        //   pipeline:true),所以不能只看 usePipeline 就发 target_shape —— 那是 wan 的
+        //   720p 级固定值表,H3 侧读不到比例,一路缺到缺省分支补成 16:9,用户选什么都
+        //   出 16:9。发 ratio,由网关的 h3NormalizeAspectRatio 归一成 aspect_ratio。
+        // - 其他渠道:ratio("16:9" 这种原生形态)。Ark/Seedance 只认 ratio,收到
+        //   target_shape 会整个忽略、只能出默认比例——界面上摆着宽高比选择器却不生效。
         // 纯 opt-in:该 tab 在中央元数据里声明了 aspectRatios、且该值仍在当前模型的允许集
         // 内才下发(续问历史会话时 conv.aspectRatio 可能是后台已改/删的旧值,校验一遍避免
         // 绕过白名单)。i2v/flf2v 的画幅永远跟随输入图,故它们的 tab 不声明这个字段。
@@ -1618,7 +1680,9 @@ export const useVideoGeneration = ({
           params.aspectRatio &&
           availableAspectRatios.includes(params.aspectRatio)
         ) {
-          if (usePipeline) {
+          const usesTargetShape =
+            usePipeline && paramEngine !== VIDEO_ENGINE_MINIMAX_H3;
+          if (usesTargetShape) {
             const shape = aspectRatioToShape(params.aspectRatio);
             if (shape) {
               body.metadata = { ...(body.metadata || {}), target_shape: shape };
@@ -1840,6 +1904,7 @@ export const useVideoGeneration = ({
         seed: conv.seed != null ? conv.seed : prev.seed,
         aspectRatio:
           conv.aspectRatio != null ? conv.aspectRatio : prev.aspectRatio,
+        steps: conv.steps != null ? conv.steps : prev.steps,
         srRatio: conv.srRatio != null ? conv.srRatio : prev.srRatio,
         // 打开历史:恢复该会话上传过的输入媒体(已从 IDB hydrate),供只读查看/播放。
         // 帧图存为 images 数组(i2v/s2v 首帧=images[0];flf2v 首帧/尾帧=images[0/1])。
@@ -1942,6 +2007,10 @@ export const useVideoGeneration = ({
     sizeChoices,
     availableDurations,
     availableAspectRatios,
+    // 步数框:展不展示 + 占位文案里那个「默认 N」。默认值为 null 表示运营没配,
+    // 框子留空、提示按引擎族基座档。
+    sendsSteps,
+    defaultSteps: modelDefaultSteps,
     messages,
     conversations,
     currentConvId,

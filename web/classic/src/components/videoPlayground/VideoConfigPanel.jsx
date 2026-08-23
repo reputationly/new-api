@@ -1,6 +1,7 @@
 import React from 'react';
 import {
   Card,
+  Collapse,
   Select,
   Switch,
   Tag,
@@ -17,6 +18,7 @@ import {
   HelpCircle,
   Shuffle,
   Proportions,
+  SlidersHorizontal,
 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import {
@@ -78,6 +80,10 @@ const VideoConfigPanel = ({
   sizeChoices,
   availableDurations,
   availableAspectRatios,
+  // 采样步数：本 tab 开不开放（sendsSteps），以及运营给这个模型配的默认步数
+  // （defaultSteps，null = 没配，框子留空、按引擎族基座档跑）。
+  sendsSteps = false,
+  defaultSteps = null,
   onInputChange,
   disabled = false,
   styleState,
@@ -689,6 +695,74 @@ const VideoConfigPanel = ({
         )}
         {/* 配音不再有独立的提示词框：v2a 段直接复用生成这段视频的提示词
             （见 useVideoGeneration 里 pipeline.dub 的构造）。 */}
+
+        {/* 高级参数 —— 默认折叠，与文本模型体验区同一套写法（SettingsPanel.jsx）。
+            只对开放步数调节的玩法渲染（文生视频 / 关键帧 / 参考生视频）。 */}
+        {sendsSteps && (
+          <Collapse keepDOM>
+            <Collapse.Panel
+              itemKey='video-advanced-parameters'
+              header={
+                <div className='flex items-center gap-2'>
+                  <SlidersHorizontal size={16} className='text-gray-500' />
+                  <Typography.Text strong className='text-sm'>
+                    {t('高级参数')}
+                  </Typography.Text>
+                </div>
+              }
+            >
+              <div>
+                <div className='flex items-center gap-2 mb-2'>
+                  <Typography.Text strong className='text-sm'>
+                    {t('采样步数')}
+                  </Typography.Text>
+                  <Typography.Text className='text-xs text-gray-400'>
+                    (
+                    {defaultSteps == null
+                      ? t('留空按模型默认')
+                      : t('默认 {{n}}', { n: defaultSteps })}
+                    )
+                  </Typography.Text>
+                  <Tooltip
+                    content={t(
+                      '步数越高画面越精细、耗时越长。留空则按该模型配置的步数生成。蒸馏版模型（如 Turbo8）标定步数很低，调高不会更好。',
+                    )}
+                  >
+                    <HelpCircle
+                      size={14}
+                      className='text-gray-400 cursor-help'
+                    />
+                  </Tooltip>
+                </div>
+                <InputNumber
+                  placeholder={
+                    defaultSteps == null
+                      ? t('留空按模型默认')
+                      : String(defaultSteps)
+                  }
+                  name='steps'
+                  min={1}
+                  max={100}
+                  precision={0}
+                  value={
+                    inputs.steps === '' || inputs.steps == null
+                      ? undefined
+                      : inputs.steps
+                  }
+                  onChange={(value) =>
+                    onInputChange(
+                      'steps',
+                      value === '' || value == null ? '' : value,
+                    )
+                  }
+                  disabled={disabled}
+                  style={{ width: '100%' }}
+                  className='!rounded-lg'
+                />
+              </div>
+            </Collapse.Panel>
+          </Collapse>
+        )}
       </div>
     </Card>
   );

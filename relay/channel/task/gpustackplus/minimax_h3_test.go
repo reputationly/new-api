@@ -279,11 +279,75 @@ func TestH3AspectRatioWinsOverRatioAlias(t *testing.T) {
 
 func TestH3DropsWanTargetShape(t *testing.T) {
 	// pipeline=true 时体验区发的是 wan 的 720p 级固定值表,对 H3 既非 32 的倍数
-	// 也不是我们要的档位,拿它反推只会得到错尺寸。
-	body := map[string]any{"size": "768P", "ratio": "16:9", "target_shape": []int{720, 1280}}
+	// 也不是我们要的档位,拿它反推**画布**只会得到错尺寸,故这个键本身照旧丢弃。
+	body := map[string]any{"size": "768P", "ratio": "16:9", "target_shape": []any{720.0, 1280.0}}
 	applyMiniMaxH3Request(body, "t2v", 8, false, 0)
 	if _, exists := body["target_shape"]; exists {
 		t.Fatal("target_shape 是 wan 专属,不该带到 H3")
+	}
+}
+
+// 只发 target_shape、不发 ratio —— 这是 H3 在体验区的**真实**形态:H3 跑在自建
+// gpustackplus 渠道上,被 video_pipeline_flag_migrated 迁移标成 pipeline:true,前端
+// 于是走 target_shape 分支。原来这里直接删键,比例一路丢到 t2v 缺省分支补成 16:9,
+// 用户选什么都出 16:9。
+func TestH3RecoversAspectRatioFromTargetShape(t *testing.T) {
+	cases := []struct {
+		name  string
+		shape []any
+		want  string
+		w, h  int
+	}{
+		// 前端 VIDEO_ASPECT_RATIO_TO_SHAPE 的手调固定值([height,width])。
+		{"16:9", []any{720.0, 1280.0}, "16:9", 1344, 768},
+		{"9:16", []any{1280.0, 720.0}, "9:16", 768, 1344},
+		{"1:1", []any{960.0, 960.0}, "1:1", 768, 768},
+		{"4:3", []any{768.0, 1024.0}, "4:3", 1024, 768},
+		{"3:4", []any{1024.0, 768.0}, "3:4", 768, 1024},
+		// 21:9 不在固定值表里,前端 aspectRatioToShape 按 ~720p 面积等比算 + 对齐 16,
+		// 得 [624,1472],比真值偏 1.1% —— 容差必须容得下它。
+		// 画布 1536x672 而非 1792x768:21:9 在 768 短边上超了面积上限,先等比缩再对齐。
+		{"21:9", []any{624.0, 1472.0}, "21:9", 1536, 672},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			body := map[string]any{"size": "768P", "target_shape": c.shape}
+			applyMiniMaxH3Request(body, "t2v", 8, false, 0)
+			if body["aspect_ratio"] != c.want {
+				t.Fatalf("比例应从 target_shape 反推出 %s,得到 %v", c.want, body["aspect_ratio"])
+			}
+			if body["width"] != c.w || body["height"] != c.h {
+				t.Fatalf("画布应为 %dx%d,得到 %vx%v", c.w, c.h, body["width"], body["height"])
+			}
+		})
+	}
+}
+
+// ratio 是调用方直接表达的比例,target_shape 是反推来的,前者更权威。
+func TestH3RatioWinsOverTargetShape(t *testing.T) {
+	body := map[string]any{"size": "768P", "ratio": "4:3", "target_shape": []any{720.0, 1280.0}}
+	applyMiniMaxH3Request(body, "t2v", 8, false, 0)
+	if body["aspect_ratio"] != "4:3" {
+		t.Fatalf("显式 ratio 应优先于 target_shape 反推,得到 %v", body["aspect_ratio"])
+	}
+}
+
+// 反推不出来就别硬猜:偏离所有具名值超过容差时保持缺失,交给 t2v 的缺省分支补 16:9
+// (那是有意的兜底),而不是塞一个最近但明显不对的比例。
+func TestH3IgnoresOffGridTargetShape(t *testing.T) {
+	// 1000/500 = 2.0,离最近的 21:9(2.333) 偏 14%、离 16:9(1.778) 偏 12%,都超容差。
+	body := map[string]any{"size": "768P", "target_shape": []any{500.0, 1000.0}}
+	applyMiniMaxH3Request(body, "t2v", 8, false, 0)
+	if body["aspect_ratio"] != h3DefaultAspectRatio {
+		t.Fatalf("推不出比例时应回落缺省 %s,得到 %v", h3DefaultAspectRatio, body["aspect_ratio"])
+	}
+}
+
+func TestH3AspectRatioFromTargetShapeRejectsGarbage(t *testing.T) {
+	for _, v := range []any{nil, "16:9", []any{}, []any{720.0}, []any{0.0, 1280.0}, []any{"a", "b"}} {
+		if got := h3AspectRatioFromTargetShape(v); got != "" {
+			t.Fatalf("非法 target_shape %#v 不该推出比例,得到 %q", v, got)
+		}
 	}
 }
 

@@ -890,6 +890,24 @@ export const getAspectRatiosForVideoModel = (config, model, tabKey) => {
 export const getEngineForVideoModel = (config, model) =>
   config?.models?.[model]?.engine || '';
 
+// 开放「采样步数」调节的玩法(= 体验区 tab 的 mode)。
+//
+// 只给这三个:它们的画面完全由采样过程生成,步数直接换画质/耗时。其余玩法要么由源素材
+// 决定形态(超分 sr、配音 dub、视频编辑 vace),要么跟随驱动输入(数字人 s2v),给一个
+// 调不出所以然的旋钮只会误导。
+export const VIDEO_STEPS_MODES = ['text2video', 'flf2v', 'r2va'];
+
+// 采样步数:模型级声明(运营在「视频模型配置」里填的 defaultSteps),与 engine 同层、
+// 没有 tab 层 —— 跑多少步与用户选哪个玩法无关。未配返回 null,表示体验区的步数框留空、
+// 不下发,由后端回落引擎族基座档(H3 为 20)。
+//
+// 只是**默认值**:用户在高级参数里改了就按用户的发。后端 applyMiniMaxH3Request 对
+// num_inference_steps 是「已有则不覆盖」,所以下发即生效。
+export const getDefaultStepsForVideoModel = (config, model) => {
+  const v = config?.models?.[model]?.defaultSteps;
+  return typeof v === 'number' && v > 0 ? v : null;
+};
+
 // ── 参考素材的三模态上限(纯 tab 级,不做模型级/全局降级)────────────────
 // 为什么不降级:这几项描述的是「这个玩法开放什么」,同一个模型在图生视频里给 3 张图、
 // 在参考生视频里给 9 张图 + 3 个视频是完全正常的,往模型级兜底只会把两边串在一起。

@@ -49,6 +49,8 @@ export const VideoPlaygroundBody = ({ mode, category = 'video' }) => {
     sizeChoices,
     availableDurations,
     availableAspectRatios,
+    sendsSteps,
+    defaultSteps,
     messages,
     conversations,
     generating,
@@ -101,6 +103,8 @@ export const VideoPlaygroundBody = ({ mode, category = 'video' }) => {
           sizeChoices={sizeChoices}
           availableDurations={availableDurations}
           availableAspectRatios={availableAspectRatios}
+          sendsSteps={sendsSteps}
+          defaultSteps={defaultSteps}
           onInputChange={handleInputChange}
           disabled={locked}
           styleState={styleState}
