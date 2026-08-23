@@ -53,10 +53,18 @@ const PageLayout = () => {
 
   const shouldShowFooter = showFooterPages.includes(location.pathname);
 
+  // 体验区各页自己算高度（mt-[60px] h-[calc(100vh-66px)]，避让 fixed 的 HeaderBar），
+  // 是按**视口**算的绝对值，不认父容器的内边距。这里再套 24px，底部就会多出一截空白、
+  // 内容还被 overflow:hidden 裁掉同样高度。文本模型（playground）早就因此排除在外，
+  // 图像/视频/语音/音乐是同一套布局，一并排除。
   const shouldInnerPadding =
     location.pathname.includes('/console') &&
     !location.pathname.startsWith('/console/chat') &&
-    location.pathname !== '/console/playground';
+    location.pathname !== '/console/playground' &&
+    location.pathname !== '/console/image' &&
+    location.pathname !== '/console/video' &&
+    location.pathname !== '/console/audio' &&
+    location.pathname !== '/console/music';
 
   const isConsoleRoute = location.pathname.startsWith('/console');
   const showSider = isConsoleRoute && (!isMobile || drawerOpen);
