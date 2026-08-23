@@ -47,23 +47,11 @@ const PageLayout = () => {
   const [drawerOpen, setDrawerOpen] = useState(false);
   const location = useLocation();
 
-  const cardProPages = [
-    '/console/channel',
-    '/console/log',
-    '/console/redemption',
-    '/console/user',
-    '/console/kyc',
-    '/console/enterprise',
-    '/console/bank-transfer',
-    '/console/token',
-    '/console/midjourney',
-    '/console/task',
-    '/console/models',
-    '/console/reconcile',
-    '/pricing',
-  ];
+  // 页脚默认不显示，只在这里列出的页面显示 —— 反过来登记是为了新增页面不用改这里。
+  // 首页要保留：自定义页脚（系统设置 → 其他设置 → Footer）通常放 ICP 备案号，需在首页可见。
+  const showFooterPages = ['/'];
 
-  const shouldHideFooter = cardProPages.includes(location.pathname);
+  const shouldShowFooter = showFooterPages.includes(location.pathname);
 
   const shouldInnerPadding =
     location.pathname.includes('/console') &&
@@ -211,7 +199,7 @@ const PageLayout = () => {
               <App />
             </ErrorBoundary>
           </Content>
-          {!shouldHideFooter && (
+          {shouldShowFooter && (
             <Layout.Footer
               style={{
                 flex: '0 0 auto',
