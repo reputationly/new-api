@@ -239,11 +239,17 @@ func (a *Adaptor) ConvertImageRequest(c *gin.Context, info *relaycommon.RelayInf
 		}
 	}
 
-	switch info.RelayMode {
-	case relayconstant.RelayModeImagesGenerations:
-		body["task_type"] = "t2i"
-		// 纯比例(如 "16:9")直接透传 aspect_ratio(引擎按离散分辨率表出图);否则从精确
-		// 像素约分兜底 aspect_ratio。有 target_shape 时引擎会优先用后者。
+	// 画幅:纯比例(如 "16:9")直接透传 aspect_ratio(引擎按离散分辨率表出图);否则从
+	// 精确像素约分兜底 aspect_ratio。有 target_shape 时引擎会优先用后者。
+	//
+	// t2i 与 i2i 共用同一套:引擎的 ImageTaskRequest 两条路径读的是同一个
+	// aspect_ratio 字段,而它的默认值写死为 "16:9",不传就等于强制横屏 ——
+	// qwen_image_runner.get_custom_shape 拿默认值查表命中 [1664,928] 就返回,
+	// 那张表里"按原图尺寸算"的分支排在它后面,永远走不到。所以 i2i 曾出现 4:3
+	// 底图出 16:9 成品、构图被重排。i2i 尤其不能只接 target_shape:多图融合
+	// (hunyuan-image-3)时几张底图比例各异,输出画幅只能由调用方显式指定,而
+	// 运营惯用的填法正是比例词。
+	setImageShape := func() {
 		if common.IsAspectRatio(request.Size) {
 			body["aspect_ratio"] = common.NormalizeAspectRatio(request.Size)
 		} else if ar := common.AspectRatioFromSize(request.Size); ar != "" {
@@ -252,6 +258,12 @@ func (a *Adaptor) ConvertImageRequest(c *gin.Context, info *relaycommon.RelayInf
 		if targetShape != nil {
 			body["target_shape"] = targetShape
 		}
+	}
+
+	switch info.RelayMode {
+	case relayconstant.RelayModeImagesGenerations:
+		body["task_type"] = "t2i"
+		setImageShape()
 	case relayconstant.RelayModeImagesEdits:
 		taskType := "i2i"
 		body["task_type"] = taskType
@@ -260,9 +272,7 @@ func (a *Adaptor) ConvertImageRequest(c *gin.Context, info *relaycommon.RelayInf
 			return nil, err
 		}
 		body["input_refs"] = refs
-		if targetShape != nil {
-			body["target_shape"] = targetShape
-		}
+		setImageShape()
 	default:
 		return nil, errors.New("gpustackplus 图片链路仅支持 /v1/images/generations 与 /v1/images/edits")
 	}

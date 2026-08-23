@@ -35,6 +35,8 @@ import {
   getExplicitTabSizes,
   readImageDimensions,
   pickClosestSize,
+  sizeToRatio,
+  IMAGE_SIZE_AUTO,
   parseImageSizeConfig,
   normalizeImageSize,
   IMAGE_QUALITY_BOT_TASK,
@@ -248,22 +250,31 @@ export const useImageGeneration = ({ mode = 'text2image' } = {}) => {
   const canPickI2ISize =
     isI2I && Array.isArray(explicitI2ISizes) && explicitI2ISizes.length > 0;
 
-  // 选项只来自运营配的白名单——能选的一定是模型支持的档位。底图不进选项，
-  // 它只决定上传那一刻把哪一档填进框里。
+  // 选项 = 自动档 + 运营配的白名单。白名单之外不给别的：能选的一定是模型支持的
+  // 档位。底图不进选项，它只决定上传那一刻把哪一档填进框里。
   const i2iSizeOptions = useMemo(() => {
     if (!canPickI2ISize) return [];
     const seen = new Set();
-    const opts = [];
+    const opts = [{ value: IMAGE_SIZE_AUTO, label: t('自动（由模型决定）') }];
     (explicitI2ISizes || []).forEach((s) => {
       const value = normalizeImageSize(s);
-      if (!value || seen.has(value)) return;
+      if (!value || value === IMAGE_SIZE_AUTO || seen.has(value)) return;
       seen.add(value);
       opts.push({ value, label: value });
     });
     return opts;
-  }, [canPickI2ISize, explicitI2ISizes]);
+  }, [canPickI2ISize, explicitI2ISizes, t]);
 
-  i2iSizesRef.current = i2iSizeOptions.map((o) => o.value);
+  // 兜底用的具体档位（排除自动档）。默认必须落在具体档位上：对 qwen-image-edit
+  // 而言「自动」等于退回引擎写死的 16:9，正是要修的那个 bug。
+  const i2iConcreteSizes = useMemo(
+    () =>
+      i2iSizeOptions.map((o) => o.value).filter((v) => v !== IMAGE_SIZE_AUTO),
+    [i2iSizeOptions],
+  );
+
+  // 上传回调只在具体档位里挑，不会挑中自动档。
+  i2iSizesRef.current = i2iConcreteSizes;
   canPickI2ISizeRef.current = canPickI2ISize;
 
   // 已解析的画幅是否仍属于当前这批底图的末张。不匹配说明底图是被历史恢复 /
@@ -279,9 +290,9 @@ export const useImageGeneration = ({ mode = 'text2image' } = {}) => {
   // 提示——否则用户只会看到出图被改构图，却不知道是配置不全导致的。
   const i2iAspectMismatch = useMemo(() => {
     if (!canPickI2ISize || !activeSourceDim || !inputs.size) return null;
-    const m = /^(\d+)\s*[x×]\s*(\d+)$/i.exec(String(inputs.size));
-    if (!m) return null;
-    const selected = Number(m[1]) / Number(m[2]);
+    // 自动档由引擎/模型定画幅,谈不上"与底图不同",不提示。
+    if (inputs.size === IMAGE_SIZE_AUTO) return null;
+    const selected = sizeToRatio(inputs.size);
     const source = activeSourceDim.w / activeSourceDim.h;
     if (!selected || !source) return null;
     // 2% 以内视作同一画幅（1664x928=1.793 与标称 16:9=1.778 差 0.8%，不该报）
@@ -325,12 +336,17 @@ export const useImageGeneration = ({ mode = 'text2image' } = {}) => {
       : availableSizes;
     if (!valid || valid.length === 0) return;
     if (valid.includes(inputs.size)) return;
+    // 兜底落在具体档位而非自动档:自动对 qwen-image-edit 等于退回写死的 16:9。
+    const fallback = canPickI2ISize ? i2iConcreteSizes : valid;
     const picked =
-      (canPickI2ISize && pickClosestSize(activeSourceDim, valid)) || valid[0];
+      (canPickI2ISize && pickClosestSize(activeSourceDim, i2iConcreteSizes)) ||
+      fallback[0] ||
+      valid[0];
     setInputs((prev) => ({ ...prev, size: picked }));
   }, [
     availableSizes,
     i2iSizeOptions,
+    i2iConcreteSizes,
     canPickI2ISize,
     activeSourceDim,
     inputs.size,
@@ -593,10 +609,16 @@ export const useImageGeneration = ({ mode = 'text2image' } = {}) => {
           n: 1,
           // 不强制 response_format：各供应商返回原生格式（url 或 base64），前端均兼容
         };
-        // 文生图一律下发；图生图只在运营为该模型显式开了输出尺寸时下发（此时
-        // 默认值已是底图的原生像素）。没开就沿用老行为一个字段都不带——引擎会
-        // 落到它自己的 aspect_ratio 默认档，第三方渠道也不会收到它不认的尺寸。
-        if (!isI2I || canPickI2ISize) {
+        // 文生图一律下发；图生图只在运营为该模型显式开了输出尺寸、且用户没选
+        // 「自动」时下发。没开或选了自动就一个字段都不带,把画幅交回引擎——
+        // hunyuan-image-3 会用模型 AR 预测的 <img_ratio_*> 定画幅(多图融合时
+        // 常比人工指定更合适),而 qwen-image-edit 不传只会落到写死的 16:9,
+        // 所以它的默认值始终是具体档位、不是自动。第三方渠道(gpt-image 等)
+        // 因为运营不会给它配 sizes,同样一个字段都收不到。
+        if (
+          !isI2I ||
+          (canPickI2ISize && params.size && params.size !== IMAGE_SIZE_AUTO)
+        ) {
           reqBody.size = normalizeImageSize(params.size);
         }
         // 随机种子:非空即下发(整数);留空则不发,由引擎自动随机。

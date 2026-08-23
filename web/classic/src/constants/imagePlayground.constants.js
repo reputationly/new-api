@@ -144,6 +144,29 @@ export const getExplicitTabSizes = (config, model, tabKey) => {
   return tabScopedValue(config.models && config.models[model], tabKey, 'sizes');
 };
 
+// 图生图「输出尺寸」里的自动档：选中它就一个 size 字段都不下发，把画幅交回引擎。
+//
+// 两个自建引擎在"不传尺寸"时的行为正好相反,所以这一档不能省:
+//   - vllm-omni(hunyuan-image-3)不传 = auto,由模型 AR 预测的 <img_ratio_*> 定画幅
+//     (其 tests/entrypoints/test_image_task_request.py::test_no_size_hint_is_auto
+//     专门守着这个行为),多图融合时这往往比人工指定更合适;
+//   - lightx2v(qwen-image-edit)不传 = ImageTaskRequest.aspect_ratio 的默认值
+//     "16:9",等于强制横屏——正是 4:3 底图出 16:9 成品那个 bug。
+// 故默认仍选具体档位(qwen 需要),想要模型自己判断时手动切到这一档。
+export const IMAGE_SIZE_AUTO = 'auto';
+
+// 尺寸档位 → 宽高比数值。精确像素("1664x928")与比例词("16:9")两种写法都要认:
+// 运营两种都在用(文生图历来填比例词),少认一种就会让那一半配置在自动选档和画幅
+// 提示上变成哑弹。normalizeImageSize 已把 × 归一成 x,冒号原样保留。
+export const sizeToRatio = (raw) => {
+  const m = /^(\d+)\s*[x:]\s*(\d+)$/.exec(normalizeImageSize(raw));
+  if (!m) return null;
+  const a = Number(m[1]);
+  const b = Number(m[2]);
+  if (!a || !b) return null;
+  return a / b;
+};
+
 // 从档位白名单里挑一个最贴合底图画幅的。
 //
 // 白名单是运营配的、模型确实支持的档位；底图只用来决定默认选中哪一档，绝不会
@@ -160,18 +183,19 @@ export const pickClosestSize = (dim, sizes) => {
   let bestDiff = Infinity;
   sizes.forEach((raw) => {
     const value = normalizeImageSize(raw);
-    const m = /^(\d+)\s*[x×]\s*(\d+)$/i.exec(String(value || ''));
-    if (!m) return;
-    const w = Number(m[1]);
-    const h = Number(m[2]);
-    if (!w || !h) return;
-    if (w === dim.w && h === dim.h) {
+    if (!value || value === IMAGE_SIZE_AUTO) return;
+    // 精确像素且与底图完全一致时直接命中（qwen 系生成的图往往本就落在档位上，
+    // 此时能原样保持尺寸而不只是保持比例）。
+    const px = /^(\d+)x(\d+)$/.exec(value);
+    if (px && Number(px[1]) === dim.w && Number(px[2]) === dim.h) {
       best = value;
       bestDiff = -1;
       return;
     }
     if (bestDiff === -1) return;
-    const diff = Math.abs(Math.log(w / h / target));
+    const ratio = sizeToRatio(value);
+    if (!ratio) return;
+    const diff = Math.abs(Math.log(ratio / target));
     if (diff < bestDiff) {
       bestDiff = diff;
       best = value;
