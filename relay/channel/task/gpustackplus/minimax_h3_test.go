@@ -155,8 +155,9 @@ func TestH3DoesNotOverrideExplicitValues(t *testing.T) {
 	}
 }
 
-// 关键帧不在网关侧推画布:FL2VA 的画幅永远跟随第一张图(引擎静默忽略 aspect_ratio),
-// 而网关拿到的是 URL/base64,不解码就不知道宽高比。硬算只会算错。
+// 关键帧不在网关侧推画布:FL2VA 的画幅永远跟随 images[0](有首帧就是首帧,只给尾帧时
+// 那张尾帧就是 images[0]),引擎静默忽略 aspect_ratio;而网关拿到的是 URL/base64,
+// 不解码就不知道宽高比。硬算只会算错。
 func TestH3SkipsCanvasForKeyframeTaskTypes(t *testing.T) {
 	for _, tt := range []string{"i2v", "l2va", "flf2v"} {
 		t.Run(tt, func(t *testing.T) {

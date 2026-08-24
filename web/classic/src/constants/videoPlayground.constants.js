@@ -329,6 +329,15 @@ export const VIDEO_ASPECT_RATIOS = [
 ];
 // 默认选中的宽高比(minimax 无宽高比可参考;取 16:9 = wan 引擎默认 1280×720)。
 export const VIDEO_DEFAULT_ASPECT_RATIO = '16:9';
+
+// 「跟随上传素材」档。只出现在画幅由输入决定的玩法(关键帧)里,选中即完全不干预:
+// 既不改图也不下发比例字段,画幅就是上传那张图的比例。它是这些玩法一直以来的行为,
+// 所以是默认选中项。
+//
+// 这些玩法选具名比例时,比例**不经请求字段表达,而是把图改成那个比例**再提交
+// (composeImageToRatio)。理由见 helpers/imageCompose.js 顶部的实测记录:引擎按
+// images[0] 的比例推画布,想靠参数盖掉画幅只会让图被拉伸变形。
+export const VIDEO_ASPECT_RATIO_AUTO = 'auto';
 // 宽高比 → 引擎 target_shape:[height,width](720p 级,均为 16 的倍数)。
 // wan t2v runner 的 get_latent_shape_with_target_hw 优先采用 target_shape,不认识 aspect_ratio。
 export const VIDEO_ASPECT_RATIO_TO_SHAPE = {
@@ -498,32 +507,21 @@ export const isPipelineModel = (config, model) =>
   !!config?.models?.[model]?.pipeline;
 
 // 模型级超分规则：[{ to, model, from }]。运营在「视频模型配置」的模型级字段里填，
-// to=目标档位、model=超分模型名、from 留空=自动推起步档。留空整体 = 不提供超分档位
+// to=目标档位、model=超分模型名、from=起步档位（必填）。留空整体 = 不提供超分档位
 // （纯 opt-in，与 sizes 同惯例：不给未配置的模型凭空长出一个档位）。
 export const getUpscaleRulesForModel = (config, model) =>
   normalizeUpscaleList(config?.models?.[model]?.upscale);
 
-// 起步档位：运营指定优先（且必须仍在该模型原生档里，防止改了 sizes 之后留下悬空值），
-// 否则自动取原生档里**小于**目标的最大一档。
+// 起步档位：只认运营显式指定的那一档，且必须仍在该模型原生档里（防止改了 sizes 之后
+// 留下悬空值）。没填、或填的档位已不在原生档里时返回 ''，调用方据此整档不渲染。
 //
-// 取「小于」而非「小于等于」是有意的：模型原生就能直出该档位时，这条规则自然失效 ——
-// 能直出就不该绕一趟超分。没有任何合法起步档时返回 ''，调用方据此整档不渲染。
+// 曾经支持 from 留空=「自动取小于目标的最大原生档」，已删：管理端看不出最终会用哪一档，
+// 配完常常整档不出现（如目标档本身就在原生档里，或压根没有更小的档），排查成本远高于
+// 让运营在下拉里点一下。现在管理端列的候选就是运行时会用的值，两边同一份判据。
 export const resolveUpscaleFrom = (rule, nativeSizes) => {
-  const sizes = nativeSizes || [];
   const explicit = normalizeVideoSize(rule?.from);
-  if (explicit) return sizes.includes(explicit) ? explicit : '';
-  const target = videoSizeShortEdge(rule?.to);
-  if (!target) return '';
-  let best = '';
-  let bestEdge = 0;
-  sizes.forEach((s) => {
-    const edge = videoSizeShortEdge(s);
-    if (edge && edge < target && edge > bestEdge) {
-      bestEdge = edge;
-      best = s;
-    }
-  });
-  return best;
+  if (!explicit) return '';
+  return (nativeSizes || []).includes(explicit) ? explicit : '';
 };
 
 // 尺寸下拉的完整选项 = 原生档（保持运营配置的顺序）+ 超分档（按输出分辨率升序追加在后）。

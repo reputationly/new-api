@@ -320,16 +320,24 @@ func applyMiniMaxH3Request(body map[string]any, taskType string, durationSec int
 	// ── 画布 ───────────────────────────────────────────────────────────────
 	// 只有 t2va 需要我们算:它的 aspect_ratio 是强制必填的具名值,且画幅完全由参数决定。
 	//
-	// 关键帧(i2v/l2va/flf2v)不在这里算 —— FL2VA 的画幅**永远跟随第一张图**
+	// 关键帧(i2v/l2va/flf2v)不在这里算 —— FL2VA 的画幅**永远跟随 images[0]**
 	// (引擎 _resolve_minimax_h3_aspect_ratio 对 fl2va 直接返回 image.width/image.height,
 	// 传来的 aspect_ratio 被静默忽略),而网关这层拿到的图是 URL/base64,不解码就不知道
-	// 宽高比。由前端按已加载的图算好经 metadata.width/height 透传(前端本来就要读图的
-	// 像素尺寸做 256/5760/[0.4,2.5] 的前置校验);直连调用方不传则由引擎自算,出 768p。
+	// 宽高比。直连调用方不传画布则由引擎自算,出 768p。
 	//
-	// r2va(参考生视频)也算:Ref2VA **接受具名 aspect_ratio**(不传默认 16:9),
-	// 与关键帧不同 —— 关键帧的画幅永远跟随第一张图,传了比例也被静默忽略,所以那边
-	// 算不出、也不该算。不给 r2va 算画布的话,引擎按 short_edge=768 自推,每条多花
-	// 一倍时间(实测 768p 约 190s)。
+	// ⚠️ images[0] **不等于"首帧"**:有首帧时它是首帧,l2va(只给尾帧)整条请求只有
+	// 一张图,那张尾帧就是 images[0],画布跟的是尾帧。adaptor.go 的 l2va 分支正因如此
+	// 只接受一张图(多传即 400),门面回填的 frame_indices 是单元素 [-1]。
+	//
+	// 曾评估过"让调用方点比例、网关据此显式下发 width/height 盖掉它"(引擎确实只在
+	// width/height 都缺省时才按图推),已放弃:画布一旦不等于 images[0] 的比例,那张图
+	// 就会被**拉伸**到新画布(keyframes.py:87,index==0 在两种合同下都走 resize),
+	// 9:16 的图要 16:9 会横向拉开三倍多,根本不是用户要的。要跨比例只能裁切或 AI 扩图,
+	// 那是另一段流水线的成本,不做。所以关键帧的画幅就是跟随上传的图,不给比例入口。
+	//
+	// r2va(参考生视频)则要算:Ref2VA **接受具名 aspect_ratio**(不传默认 16:9),
+	// 与关键帧不同 —— 它的参考图不绑定输出画布。不给它算画布的话,引擎按
+	// short_edge=768 自推,每条多花一倍时间(实测 768p 约 190s)。
 	if taskType == "t2v" || taskType == "r2va" {
 		h3ApplyCanvas(body)
 	} else {

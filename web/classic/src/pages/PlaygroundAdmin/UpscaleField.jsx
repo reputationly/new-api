@@ -4,7 +4,6 @@ import { Button, Select, Typography } from '@douyinfe/semi-ui';
 import { Plus, Trash2 } from 'lucide-react';
 import {
   getSizesForVideoModel,
-  resolveUpscaleFrom,
   videoSizeShortEdge,
 } from '../../constants/videoPlayground.constants';
 
@@ -20,7 +19,8 @@ const { Text } = Typography;
 //   目标档位 —— 所选超分模型声明的 sizes（tab 级 / 模型级 / 分类默认值三层取并集，与
 //     体验区同口径）。它是引擎侧部署 config 的目标尺寸（这份是部署事实，new-api 无从
 //     校验），运营给超分模型登记一次即可。
-//   起步档位 —— 本模型的原生档，且只列**小于目标**的那些，与自动推导同口径。
+//   起步档位 —— 本模型已配的原生档，且只列**小于目标**的那些；必选，不再有「自动」。
+//     自动那一档看不出最终取值、配完常常整档不出现，改成运营在这里点定一档。
 //
 // 倍率不出现在这里：引擎按 min(源面积×倍率, config target 面积) 封顶，前端固定发一个
 // 足够大的值即可，起步档差异被封顶自动抹平。让运营填倍率只会填错——同一个「到 1080」，
@@ -59,12 +59,12 @@ const UpscaleField = ({ value, onChange, models, defaults, nativeSizes }) => {
           ]),
         );
         const targetEdge = videoSizeShortEdge(r.to);
-        // 起步候选与自动推导同口径：只有比目标小的档位才是合法起步档。
+        // 只有比目标小的档位才是合法起步档：目标档本身已在已配档位里时，体验区会让
+        // 原生档优先、这条规则整条让位（buildVideoSizeChoices 的 taken 判据）。
         const fromChoices = (nativeSizes || []).filter((s) => {
           const edge = videoSizeShortEdge(s);
           return edge > 0 && (!targetEdge || edge < targetEdge);
         });
-        const auto = resolveUpscaleFrom({ ...r, from: '' }, nativeSizes);
         return (
           <div key={i} className='flex flex-wrap items-center gap-2 mb-2'>
             <Text type='tertiary' size='small'>
@@ -96,16 +96,15 @@ const UpscaleField = ({ value, onChange, models, defaults, nativeSizes }) => {
             <Select
               size='small'
               style={{ minWidth: 190 }}
+              placeholder={
+                !r.to
+                  ? t('先选目标档位')
+                  : fromChoices.length
+                    ? t('选择起步档位')
+                    : t('无更低的可用档位')
+              }
               value={r.from || ''}
-              optionList={[
-                {
-                  label: auto
-                    ? `${t('自动')}（${auto}）`
-                    : t('自动（无可用起步档）'),
-                  value: '',
-                },
-                ...fromChoices.map((s) => ({ label: s, value: s })),
-              ]}
+              optionList={fromChoices.map((s) => ({ label: s, value: s }))}
               onChange={(v) => patch(i, 'from', v || '')}
             />
             <Button

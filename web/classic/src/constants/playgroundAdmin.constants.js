@@ -142,7 +142,7 @@ export const PLAYGROUND_MODEL_LEVEL_FIELDS = {
       key: 'upscale',
       label: '超分档位',
       type: 'upscale',
-      help: '给这个模型额外提供「先低档位生成、再交超分模型放大」的尺寸档位。留空=不提供（纯 opt-in）。起步档位留「自动」时取小于目标的最大原生档——原生就能直出该档位的话这条规则自动失效。倍率不用填：引擎按部署 config 的目标尺寸封顶，前端固定发一个足够大的值。',
+      help: '给这个模型额外提供「先低档位生成、再交超分模型放大」的尺寸档位。留空=不提供（纯 opt-in）。起步档位必选，候选取该模型已配的、比目标更低的档位——没选或目标档位本身已在已配档位里，这条规则不生效。倍率不用填：引擎按部署 config 的目标尺寸封顶，前端固定发一个足够大的值。',
     },
     {
       key: 'engine',
@@ -217,7 +217,14 @@ export const PLAYGROUND_CATEGORIES = [
         key: 'flf2v',
         label: '关键帧',
         capability: '关键帧',
-        fields: ['durations', 'maxInputMB'],
+        // 不给 sizes：画幅由上传的图决定（有首帧按首帧，只给尾帧就按尾帧），没有档位
+        // 可言。
+        //
+        // aspectRatios 给，但它在这个 tab 里的语义与文生视频**完全不同**：引擎对关键帧
+        // 静默忽略传来的比例，所以体验区不发比例字段，而是在提交前把图本身改成该比例
+        // （居中裁剪或虚化补边，纯浏览器 canvas，见 helpers/imageCompose.js）。选择器里
+        // 会自动多出「跟随上传素材」并默认选中 = 完全不干预。留空则整个选择器不出现。
+        fields: ['durations', 'maxInputMB', 'aspectRatios'],
         promptOptimize: true,
         taskTypeChoices: [
           { value: 'flf2v', label: '首尾帧（flf2v，尾帧必填）' },
@@ -239,8 +246,9 @@ export const PLAYGROUND_CATEGORIES = [
         capability: '参考生视频',
         // 参考音频有长度闸（2-15s）。参考视频三项默认全空 = 不开放视频上传，运营按需 opt-in。
         //
-        // sizes / aspectRatios：Ref2VA **接受具名 aspect_ratio**（不传默认 16:9），
-        // 与「关键帧」不同（那边画幅永远跟随第一张图、传了也被忽略）。所以这里能算画布，
+        // sizes / aspectRatios：Ref2VA **接受具名 aspect_ratio**（不传默认 16:9），参考图
+        // 不绑定输出画布，与「关键帧」不同 —— 那边画幅永远跟随上传的图、传比例也被引擎
+        // 静默忽略（见 flf2v tab 的注释）。所以这里能算画布，
         // 也就能出 480P 档 —— 不配的话引擎按 short_edge=768 自推，每条多花一倍时间
         // （768p 约 190s vs 480p 量级）。
         fields: [

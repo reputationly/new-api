@@ -34,7 +34,9 @@ import { tabHasField } from '../../constants/playgroundAdmin.constants';
 import {
   imageConstraintsForMode,
   INTERPOLATION_ENABLED,
+  VIDEO_ASPECT_RATIO_AUTO,
 } from '../../constants/videoPlayground.constants';
+import { FIT_BLUR, FIT_CROP } from '../../helpers/imageCompose';
 
 const VideoConfigPanel = ({
   needsImage = false,
@@ -203,8 +205,8 @@ const VideoConfigPanel = ({
     })),
     inputs.size,
   );
-  // 选中的是超分档时，把「谁来超、从哪一档起步」摆出来：用户选的是一个会多跑一个模型
-  // 的档位，不该让他从档位名里猜。
+  // 选中的是超分档时，提示这一档要多跑一段处理、更慢：用户选的是一个会多跑一个模型
+  // 的档位，不该让他从档位名里猜。具体用哪个模型、从哪一档起步属内部实现，不外露。
   const selectedUpscale = choices.find(
     (c) => c.isUpscale && c.value === inputs.size,
   );
@@ -212,10 +214,20 @@ const VideoConfigPanel = ({
     (availableDurations || []).map((s) => ({ label: `${s}s`, value: s })),
     inputs.seconds,
   );
+  // 「跟随上传素材」档的值是个标记而非比例,显示时换成人话。
   const aspectRatioOptions = ensureOption(
-    (availableAspectRatios || []).map((r) => ({ label: r, value: r })),
+    (availableAspectRatios || []).map((r) => ({
+      label: r === VIDEO_ASPECT_RATIO_AUTO ? t('跟随上传素材') : r,
+      value: r,
+    })),
     inputs.aspectRatio,
   );
+  // 画幅跟随素材的玩法里选了具名比例 → 图会被改成那个比例再提交,得让用户选怎么改、
+  // 并说清代价。其余玩法(文生视频等)不出现这个选择器:它们没有"原图"可言。
+  const composesImage =
+    (availableAspectRatios || []).includes(VIDEO_ASPECT_RATIO_AUTO) &&
+    inputs.aspectRatio &&
+    inputs.aspectRatio !== VIDEO_ASPECT_RATIO_AUTO;
 
   return (
     <Card
@@ -557,14 +569,7 @@ const VideoConfigPanel = ({
               />
               {selectedUpscale && (
                 <Typography.Text className='text-xs text-gray-500 mt-1 block'>
-                  {t(
-                    '先按 {{from}} 生成，再由 {{model}} 提升到 {{to}}，耗时更久',
-                    {
-                      from: selectedUpscale.fromSize,
-                      model: selectedUpscale.srModel,
-                      to: selectedUpscale.value,
-                    },
-                  )}
+                  {t('该档位需额外的增强处理，耗时更久')}
                 </Typography.Text>
               )}
             </div>
@@ -592,6 +597,29 @@ const VideoConfigPanel = ({
                 dropdownStyle={{ width: '100%', maxWidth: '100%' }}
                 className='!rounded-lg'
               />
+              {composesImage && (
+                <>
+                  <Select
+                    name='fitMode'
+                    selection
+                    onChange={(value) => onInputChange('fitMode', value)}
+                    value={inputs.fitMode}
+                    optionList={[
+                      { label: t('虚化补边（保留完整画面）'), value: FIT_BLUR },
+                      { label: t('居中裁剪（裁掉画面两侧）'), value: FIT_CROP },
+                    ]}
+                    disabled={disabled}
+                    style={{ width: '100%' }}
+                    dropdownStyle={{ width: '100%', maxWidth: '100%' }}
+                    className='!rounded-lg mt-2'
+                  />
+                  <Typography.Text className='text-xs text-gray-500 mt-1 block'>
+                    {inputs.fitMode === FIT_CROP
+                      ? t('上传的图会被裁到该比例，画面两侧的内容会丢失')
+                      : t('上传的图保持完整居中，两侧用虚化背景补满该比例')}
+                  </Typography.Text>
+                </>
+              )}
             </div>
           )}
 

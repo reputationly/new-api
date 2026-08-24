@@ -35,6 +35,7 @@ import {
   VIDEO_VACE_CAPABILITY,
   VIDEO_DUB_CAPABILITY,
   VIDEO_CAPABILITY_LEGACY_ALIASES,
+  VIDEO_ASPECT_RATIO_AUTO,
   VIDEO_DEFAULT_ASPECT_RATIO,
   aspectRatioToShape,
   getAspectRatiosForVideoModel,
@@ -73,6 +74,7 @@ import {
   buildVideoContentUrl,
   VIDEO_ENGINE_MINIMAX_H3,
 } from '../../constants/videoPlayground.constants';
+import { composeImageToRatio, FIT_BLUR } from '../../helpers/imageCompose';
 import { tabHasField } from '../../constants/playgroundAdmin.constants';
 import { buildH3OptimizeContext } from '../../constants/h3Prompt.constants';
 
@@ -286,15 +288,16 @@ export const useVideoGeneration = ({
   const isDub = mode === 'dub';
   // 需要上传一张「主图」的模式:关键帧首帧、s2v 人物图(都复用 inputs.firstFrame)。
   // 图生视频(Bernini r2v)改用参考图 refImages,不再走 firstFrame。
-  const needsImage = isFLF2V || isS2V;
-  // 1080P 两段流水线(生成 → 超分)只对文生视频成立,其余玩法的画幅由输入决定。
   //
-  // ⚠️ 这个标记**不再**兼任「要不要下发尺寸/宽高比」的判据。它以前是,结果是个陷阱:
-  // 展示侧早已改成读中央元数据(tabHasField),运营给某个 tab 声明了 sizes 就会出选择器,
-  // 而下发侧还卡在 mode !== 'text2video' —— 参考生视频(r2va)正好撞上:后端 h3ApplyCanvas
-  // 认了 r2va、管理页也能配了,前端却一个字段都不发,480P 档位形同虚设(引擎按
-  // short_edge=768 自推,每条多花一倍时间)。下发侧现在与展示侧同读 tabHasField。
-  const followsInput = mode !== 'text2video';
+  // ⚠️ 这个仓库里有过两次同一个坑:曾用 `mode !== 'text2video'` 当「要不要下发
+  // 尺寸/宽高比」的判据(叫 followsInput),覆盖面比实际需要的宽——它把参考生视频
+  // (r2va)也划进去了,而 r2va 明明会下发尺寸/宽高比(只是不改图、不需要主图上传)。
+  // 第一次是尺寸/宽高比的**展示与下发**闸门,已改用 tabHasField 产出的 sendsSize /
+  // sendsAspectRatio;第二次是关键帧改图(composeImageToRatio)要用哪个判据来决定
+  // "这个玩法会改图、所以宽高比不经参数下发",当时又写成了 followsInput,同一个洞
+  // 又把 r2va 的宽高比下发挡掉了一次。教训是:**判据要精确等于要控制的那件事**,
+  // "会改图/需要主图上传"就该用 needsImage,不能借用一个覆盖面更宽的相近概念。
+  const needsImage = isFLF2V || isS2V;
   // 尺寸/宽高比下发闸,与 VideoConfigPanel 的展示闸同一判据(见上)。
   const sendsSize = tabHasField(category, mode, 'sizes');
   const sendsAspectRatio = tabHasField(category, mode, 'aspectRatios');
@@ -315,6 +318,9 @@ export const useVideoGeneration = ({
     seconds: '',
     seed: '', // 随机种子;'' 表示随机(不下发)
     aspectRatio: '', // 宽高比;仅当该模型在后台配了宽高比才由 effect 选中默认值并下发
+    // 画幅适配方式:画幅跟随输入的玩法(关键帧)选了具名比例时,原图怎么变成那个比例。
+    // 只在那种情况下有意义,其余玩法这个值一直被忽略(见提交处 composeImageToRatio)。
+    fitMode: FIT_BLUR,
     // 采样步数(高级参数)。切模型时由 effect 填成该模型配的 defaultSteps,用户可改。
     // '' = 不下发,由后端回落引擎族基座档 —— 运营没配 defaultSteps 时就是这个状态。
     steps: '',
@@ -506,8 +512,11 @@ export const useVideoGeneration = ({
   // 两处各推一次迟早推出不同答案。
   //
   // 两个前提缺一不可，否则只出原生档：
-  //   - 文生视频。其余玩法的画幅跟随输入、提交时本就不发 size（见 sendsSize），
-  //     给它长一个超分档出来只会点了不生效。
+  //   - 该玩法真的会下发 size（sendsSize，即运营给这个 tab 配了尺寸档位）。画幅完全
+  //     跟随输入、提交时不发 size 的玩法，长一个超分档出来只会点了不生效。
+  //     ⚠️ 这里曾经卡的是 followsInput（mode !== 'text2video'），与下发侧的判据分叉：
+  //     参考生视频(r2va)配了尺寸档位、提交时照常发 size，超分档却一个都不出——运营在
+  //     后台配了超分规则，体验区看不到任何选项。判据统一为 sendsSize。
   //   - 模型勾了「自建引擎」。提交侧 maybeUpscale 的第一个条件就是 usePipeline，
   //     没勾却把超分档摆出来，用户选中后会被静默降级成普通档位 —— 界面承诺了一件
   //     提交时不会发生的事，比不显示更糟。
@@ -515,7 +524,7 @@ export const useVideoGeneration = ({
   // 表示"不过滤"，避免超分档先闪一下再出现。
   const sizeChoices = useMemo(() => {
     const native = getSizesForVideoModel(videoConfig, inputs.model, mode);
-    if (followsInput || !isPipelineModel(videoConfig, inputs.model)) {
+    if (!sendsSize || !isPipelineModel(videoConfig, inputs.model)) {
       return native.map((s) => ({ value: s, label: s, isUpscale: false }));
     }
     return buildVideoSizeChoices(
@@ -524,7 +533,7 @@ export const useVideoGeneration = ({
       native,
       groupUsableModels.length ? groupUsableModels : null,
     );
-  }, [videoConfig, inputs.model, mode, followsInput, groupUsableModels]);
+  }, [videoConfig, inputs.model, mode, sendsSize, groupUsableModels]);
   const availableSizes = useMemo(
     () => sizeChoices.map((c) => c.value),
     [sizeChoices],
@@ -533,10 +542,25 @@ export const useVideoGeneration = ({
     () => getDurationsForVideoModel(videoConfig, inputs.model, mode),
     [videoConfig, inputs.model, mode],
   );
-  const availableAspectRatios = useMemo(
-    () => getAspectRatiosForVideoModel(videoConfig, inputs.model, mode),
-    [videoConfig, inputs.model, mode],
-  );
+  // 宽高比档位。画幅由上传图决定的玩法(needsImage:关键帧/数字人)要在运营配的具名档前
+  // 补一个「跟随上传素材」档并默认选中:那些玩法选具名比例是靠**把图改成该比例**实现的
+  // (见提交处的 composeImageToRatio),会裁掉内容或加虚化边,得是用户主动点的,不能由
+  // 默认值替他打开。
+  //
+  // ⚠️ 判据必须是 needsImage,不是 followsInput —— 后者 = mode !== 'text2video',
+  // 覆盖面比"会改图的玩法"宽得多,参考生视频(r2va)也在其中。r2va 的画幅走的是原生
+  // aspect_ratio 直发(见下面提交处的注释),不改图、没有"跟随上传素材"这回事,补错了
+  // 会把它的宽高比选择器插进一个不存在的默认档。needsImage 精确等于会走 compose 的
+  // 那几个玩法(目前只有 flf2v 声明了 aspectRatios,s2v 没有)。
+  const availableAspectRatios = useMemo(() => {
+    const configured = getAspectRatiosForVideoModel(
+      videoConfig,
+      inputs.model,
+      mode,
+    );
+    if (!configured.length || !needsImage) return configured;
+    return [VIDEO_ASPECT_RATIO_AUTO, ...configured];
+  }, [videoConfig, inputs.model, mode, needsImage]);
   // 该模型配的采样步数(模型级,不随 mode 变)。null = 运营没配。
   const modelDefaultSteps = useMemo(
     () => getDefaultStepsForVideoModel(videoConfig, inputs.model),
@@ -751,9 +775,13 @@ export const useVideoGeneration = ({
       return;
     }
     if (!availableAspectRatios.includes(inputs.aspectRatio)) {
-      const next = availableAspectRatios.includes(VIDEO_DEFAULT_ASPECT_RATIO)
-        ? VIDEO_DEFAULT_ASPECT_RATIO
-        : availableAspectRatios[0];
+      // 有「跟随上传素材」档就选它:那些玩法的画幅本来就跟随上传的图,默认落到 16:9
+      // 会让每条任务都去改图(裁掉内容或加虚化边),而用户什么都没选。
+      const next = availableAspectRatios.includes(VIDEO_ASPECT_RATIO_AUTO)
+        ? VIDEO_ASPECT_RATIO_AUTO
+        : availableAspectRatios.includes(VIDEO_DEFAULT_ASPECT_RATIO)
+          ? VIDEO_DEFAULT_ASPECT_RATIO
+          : availableAspectRatios[0];
       setInputs((prev) => ({ ...prev, aspectRatio: next }));
     }
   }, [availableAspectRatios, inputs.aspectRatio, locked]);
@@ -1274,6 +1302,7 @@ export const useVideoGeneration = ({
           seconds: inputs.seconds,
           seed: inputs.seed,
           aspectRatio: inputs.aspectRatio,
+          fitMode: inputs.fitMode,
           steps: inputs.steps,
           images: convImages,
           // 关键帧 auto 的派生结果**随会话锁定**:images 数组分不出「这 1 张是首帧
@@ -1311,6 +1340,7 @@ export const useVideoGeneration = ({
               seconds: conv.seconds,
               seed: conv.seed,
               aspectRatio: conv.aspectRatio,
+              fitMode: conv.fitMode || FIT_BLUR,
               steps: conv.steps != null ? conv.steps : '',
               images: conv.images || [],
               audioData: conv.audioData || '',
@@ -1334,6 +1364,7 @@ export const useVideoGeneration = ({
               seconds: inputs.seconds,
               seed: inputs.seed,
               aspectRatio: inputs.aspectRatio,
+              fitMode: inputs.fitMode,
               steps: inputs.steps,
               images: convImages,
               keyframeTaskType:
@@ -1437,6 +1468,7 @@ export const useVideoGeneration = ({
               seconds: params.seconds,
               seed: params.seed,
               aspectRatio: params.aspectRatio,
+              fitMode: params.fitMode,
               // 步数随会话锁定:续问/刷新后按会话原设置发,不受当前框里的值影响
               // (与 seed / interpolation 同一处理)。
               steps: params.steps != null ? params.steps : '',
@@ -1534,7 +1566,9 @@ export const useVideoGeneration = ({
           params.model,
           mode,
         );
-        const upscaleChoice = followsInput
+        // 闸门与展示侧同为 sendsSize（见 sizeChoices 的注释）：只要这个玩法会下发
+        // size，超分档就成立，与是不是文生视频无关。
+        const upscaleChoice = !sendsSize
           ? null
           : buildVideoSizeChoices(
               videoConfig,
@@ -1594,7 +1628,7 @@ export const useVideoGeneration = ({
             // 用户不填就下发空串——而空 prompt 恰恰是该模型配出无关背景音乐的主因。
             dub: wantDub ? { dubModel, prompt: text } : null,
           };
-          // 有超分段 → stage1 降到该超分档的起步分辨率（运营指定或自动推出的那一档）；
+          // 有超分段 → stage1 降到该超分档的起步分辨率（运营在规则里指定的那一档）；
           // 无超分段（仅配音）→ stage1 按选中尺寸正常生成。
           if (wantUpscale) {
             body.size = normalizeVideoSize(upscaleChoice.fromSize);
@@ -1674,9 +1708,22 @@ export const useVideoGeneration = ({
         //   target_shape 会整个忽略、只能出默认比例——界面上摆着宽高比选择器却不生效。
         // 纯 opt-in:该 tab 在中央元数据里声明了 aspectRatios、且该值仍在当前模型的允许集
         // 内才下发(续问历史会话时 conv.aspectRatio 可能是后台已改/删的旧值,校验一遍避免
-        // 绕过白名单)。i2v/flf2v 的画幅永远跟随输入图,故它们的 tab 不声明这个字段。
+        // 绕过白名单)。
+        //
+        // ⚠️ **画幅由上传图决定的玩法(needsImage:关键帧)一个比例字段都不发**,它的
+        // 比例已经在下面通过改图表达了(composeImageToRatio)。两条路同时走会打架:引擎
+        // 按图推画布,而第三方渠道(Seedance 等)认 ratio —— 图已是 16:9 又发一个 9:16,
+        // 出片按谁的来取决于渠道,静默不一致。
+        //
+        // 判据是 needsImage,不是"非文生视频都不发"——参考生视频(r2va)的
+        // sendsAspectRatio 为 true 但 needsImage 为 false(它用 refImages 不是
+        // firstFrame,不走 compose),画幅由原生 aspect_ratio 直发决定(参考图不绑定
+        // 输出画布,与关键帧完全不同,见 playgroundAdmin.constants.js 里 r2va tab 的
+        // 注释)。needsImage 之外的判据都会连带挡住 r2va,见 needsImage 定义处注释
+        // 记录过的教训。
         if (
           sendsAspectRatio &&
+          !needsImage &&
           params.aspectRatio &&
           availableAspectRatios.includes(params.aspectRatio)
         ) {
@@ -1695,8 +1742,27 @@ export const useVideoGeneration = ({
           }
         }
         // i2v/flf2v/s2v:带主图。后端 gpustackplus:images[0]=首帧/人物图,flf2v 时 images[1]=尾帧。
+        //
+        // 画幅跟随输入的玩法选了具名比例时,在这里**把图改成那个比例**再发 —— 这是唯一
+        // 能让画幅生效又不毁画面的做法(引擎按 images[0] 的比例推画布,靠参数盖画布只会
+        // 把图拉伸变形;详见 helpers/imageCompose.js 顶部的现网实测记录)。
+        //
+        // 两张必须用同一比例同一模式:画布只跟首帧,尾帧比例不一致会被引擎裁切或拉伸。
+        // 合成失败(解不出图/编码被拒)时 composeImageToRatio 原样返回,画幅回落到跟随
+        // 原图 —— 那始终是个安全结果,不该为此把整条提交拦下来。
         if (needsImage && (params.images || []).length > 0) {
-          body.images = params.images;
+          const wantsCompose =
+            sendsAspectRatio &&
+            params.aspectRatio &&
+            params.aspectRatio !== VIDEO_ASPECT_RATIO_AUTO &&
+            availableAspectRatios.includes(params.aspectRatio);
+          body.images = wantsCompose
+            ? await Promise.all(
+                params.images.map((img) =>
+                  composeImageToRatio(img, params.aspectRatio, params.fitMode),
+                ),
+              )
+            : params.images;
         }
         // 图生视频(Bernini r2v):参考图(1~3)→ metadata.src_ref_images,
         // 门面物化后引擎按参考图组合主体/服装/道具/场景生成视频。
@@ -1839,7 +1905,7 @@ export const useVideoGeneration = ({
       pollOnce,
       storageKey,
       needsImage,
-      followsInput,
+      sendsSize,
       isFLF2V,
       isS2V,
       isSR,
@@ -1904,6 +1970,7 @@ export const useVideoGeneration = ({
         seed: conv.seed != null ? conv.seed : prev.seed,
         aspectRatio:
           conv.aspectRatio != null ? conv.aspectRatio : prev.aspectRatio,
+        fitMode: conv.fitMode != null ? conv.fitMode : prev.fitMode,
         steps: conv.steps != null ? conv.steps : prev.steps,
         srRatio: conv.srRatio != null ? conv.srRatio : prev.srRatio,
         // 打开历史:恢复该会话上传过的输入媒体(已从 IDB hydrate),供只读查看/播放。
@@ -1983,7 +2050,6 @@ export const useVideoGeneration = ({
     isKeyframeAuto,
     isKeyframeAutoFull,
     needsImage,
-    followsInput,
     dubAvailable,
     pipelineModel,
     // 三个模态各自的闸,已在上面读过运营配置(未配才回落到内置默认)。
