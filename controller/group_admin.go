@@ -89,7 +89,7 @@ func GetGroupOverview(c *gin.Context) {
 			Name:         name,
 			Ratio:        ratios[name],
 			Selectable:   selectable,
-			Description:  usable[name],
+			Description:  setting.GetGroupDescription(name),
 			ChannelCount: cov.ChannelCount,
 			ModelCount:   cov.ModelCount,
 			RuleCount:    len(rules[name]),

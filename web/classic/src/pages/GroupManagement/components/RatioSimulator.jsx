@@ -132,7 +132,10 @@ export default function RatioSimulator({ groupNames = [] }) {
             onChange={setModelName}
           />
         </Col>
-        <Col xs={24} sm={3} className='flex items-end'>
+        <Col xs={24} sm={3}>
+          <Text type='tertiary' size='small' className='mb-1 block'>
+            &nbsp;
+          </Text>
           <Button
             data-testid='sim-run'
             icon={<IconPlay />}

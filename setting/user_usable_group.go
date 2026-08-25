@@ -56,3 +56,44 @@ func GetUsableGroupDescription(groupName string) string {
 	}
 	return groupName
 }
+
+// groupDescriptions 独立存储分组描述，不依赖分组是否勾选「用户可选」。
+// 兼容历史数据：已勾选用户可选的分组，描述曾经唯一存在 userUsableGroups 里，
+// 这里没有值时要 fallback 过去，否则老数据在这次改造后会读出空值。
+var groupDescriptions = map[string]string{}
+var groupDescriptionsMutex sync.RWMutex
+
+func GroupDescriptions2JSONString() string {
+	groupDescriptionsMutex.RLock()
+	defer groupDescriptionsMutex.RUnlock()
+
+	jsonBytes, err := common.Marshal(groupDescriptions)
+	if err != nil {
+		common.SysLog("error marshalling group descriptions: " + err.Error())
+	}
+	return string(jsonBytes)
+}
+
+func UpdateGroupDescriptionsByJSONString(jsonStr string) error {
+	groupDescriptionsMutex.Lock()
+	defer groupDescriptionsMutex.Unlock()
+
+	groupDescriptions = make(map[string]string)
+	if strings.TrimSpace(jsonStr) == "" {
+		return nil
+	}
+	return common.Unmarshal([]byte(jsonStr), &groupDescriptions)
+}
+
+// GetGroupDescription 返回分组描述：优先取独立存储，没有则回退到用户可选分组表里
+// 历史遗留的描述值，最后兜底为分组名本身。
+func GetGroupDescription(groupName string) string {
+	groupDescriptionsMutex.RLock()
+	if desc, ok := groupDescriptions[groupName]; ok {
+		groupDescriptionsMutex.RUnlock()
+		return desc
+	}
+	groupDescriptionsMutex.RUnlock()
+
+	return GetUsableGroupDescription(groupName)
+}

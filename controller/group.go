@@ -32,10 +32,10 @@ func GetUserGroups(c *gin.Context) {
 	modelRules := ratio_setting.GetGroupModelRatioCopy()
 	for groupName, _ := range ratio_setting.GetGroupRatioCopy() {
 		// UserUsableGroups contains the groups that the user can use
-		if desc, ok := userUsableGroups[groupName]; ok {
+		if _, ok := userUsableGroups[groupName]; ok {
 			entry := map[string]interface{}{
 				"ratio": service.GetUserGroupRatio(userGroup, groupName),
-				"desc":  desc,
+				"desc":  setting.GetGroupDescription(groupName),
 			}
 			// 分组内倍率不再唯一：配了模型折扣后 ratio 只是基础价。前端据此把
 			// 「×1.5」的倍率标签降级为「×1.5 起」，否则用户会拿它当准数去反算。
@@ -48,7 +48,7 @@ func GetUserGroups(c *gin.Context) {
 	if _, ok := userUsableGroups["auto"]; ok {
 		usableGroups["auto"] = map[string]interface{}{
 			"ratio": "自动",
-			"desc":  setting.GetUsableGroupDescription("auto"),
+			"desc":  setting.GetGroupDescription("auto"),
 		}
 	}
 	c.JSON(http.StatusOK, gin.H{

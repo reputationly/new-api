@@ -53,6 +53,7 @@ const { Text, Title } = Typography;
 const OPTION_KEYS = [
   'GroupRatio',
   'UserUsableGroups',
+  'GroupDescription',
   'GroupGroupRatio',
   'GroupModelRatio',
   'group_ratio_setting.group_special_usable_group',
@@ -175,8 +176,13 @@ export default function GroupManagementPage() {
   }, []);
 
   const handleGroupTableChange = useCallback(
-    ({ GroupRatio, UserUsableGroups }) => {
-      setInputs((prev) => ({ ...prev, GroupRatio, UserUsableGroups }));
+    ({ GroupRatio, UserUsableGroups, GroupDescription }) => {
+      setInputs((prev) => ({
+        ...prev,
+        GroupRatio,
+        UserUsableGroups,
+        GroupDescription,
+      }));
     },
     [],
   );
@@ -228,163 +234,178 @@ export default function GroupManagementPage() {
   );
 
   return (
-    <Spin spinning={loading}>
-      <Card
-        className='!rounded-2xl'
-        title={
-          <div>
-            <Title heading={4}>{t('分组管理')}</Title>
-            <Text type='tertiary' size='small'>
-              {t(
-                '分组决定计费倍率与模型访问范围。新建分组后记得去渠道管理把渠道挂到该分组上，否则用户选中会报「无可用渠道」。',
-              )}
-            </Text>
-          </div>
-        }
-        headerExtraContent={
-          <Space>
-            <Button icon={<IconRefresh />} theme='borderless' onClick={refresh}>
-              {t('刷新')}
-            </Button>
-            <Button
-              icon={<IconSave />}
-              theme='solid'
-              loading={saving}
-              onClick={onSubmit}
-            >
-              {t('保存')}
-            </Button>
-          </Space>
-        }
-      >
-        <MismatchBanner
-          unconfigured={overview.unconfigured}
-          onCreateMissing={setSeedNames}
-        />
-
-        <Tabs type='line' activeKey={activeTab} onChange={setActiveTab}>
-          <Tabs.TabPane tab={t('分组')} itemKey='groups'>
-            <div className='pt-3'>
-              <Text type='tertiary' size='small' className='mb-3 block'>
+    <div className='mt-[60px] px-2'>
+      <Spin spinning={loading}>
+        <Card
+          className='!rounded-2xl'
+          title={
+            <div>
+              <Title heading={4}>{t('分组管理')}</Title>
+              <Text type='tertiary' size='small'>
                 {t(
-                  '倍率是计费乘数；勾选「用户可选」后该分组会出现在用户创建令牌的下拉里。未勾选的分组只能由管理员分配给用户。',
+                  '分组决定计费倍率与模型访问范围。新建分组后记得去渠道管理把渠道挂到该分组上，否则用户选中会报「无可用渠道」。',
                 )}
               </Text>
-              <GroupTable
-                key={`gt_${dv}`}
-                groupRatio={inputs.GroupRatio}
-                userUsableGroups={inputs.UserUsableGroups}
-                health={healthMap}
-                seedNames={seedNames}
-                onSelectGroup={jumpToRules}
-                onChange={handleGroupTableChange}
-              />
             </div>
-          </Tabs.TabPane>
+          }
+          headerExtraContent={
+            <Space>
+              <Button
+                icon={<IconRefresh />}
+                theme='borderless'
+                onClick={refresh}
+              >
+                {t('刷新')}
+              </Button>
+              <Button
+                icon={<IconSave />}
+                theme='solid'
+                loading={saving}
+                onClick={onSubmit}
+              >
+                {t('保存')}
+              </Button>
+            </Space>
+          }
+        >
+          <MismatchBanner
+            unconfigured={overview.unconfigured}
+            onCreateMissing={setSeedNames}
+          />
 
-          <Tabs.TabPane tab={t('模型折扣')} itemKey='model_ratio'>
-            <div className='pt-3'>
-              <Row gutter={12} className='mb-3'>
-                <Col xs={24} sm={8}>
-                  <Text type='tertiary' size='small' className='mb-1 block'>
-                    {t('配置哪个分组')}
-                  </Text>
-                  <Select
-                    style={{ width: '100%' }}
-                    value={activeGroup || null}
-                    optionList={groupNames.map((g) => ({ label: g, value: g }))}
-                    onChange={setActiveGroup}
-                    filter
-                    placeholder={t('选择分组')}
-                  />
-                </Col>
-              </Row>
-              <ModelRatioEditor
-                key={`mre_${dv}_${activeGroup}`}
-                group={activeGroup}
-                groupRatio={activeGroupRatio}
-                value={inputs.GroupModelRatio}
-                staleRules={healthMap[activeGroup]?.stale_rules || []}
-                onChange={(v) => setField('GroupModelRatio', v)}
-              />
-            </div>
-          </Tabs.TabPane>
-
-          <Tabs.TabPane tab={t('自动分组')} itemKey='auto'>
-            <div className='pt-3'>
-              <Text type='tertiary' size='small' className='mb-3 block'>
-                {t(
-                  '令牌分组设为 auto 时，按以下顺序依次尝试可用分组，排在前面的优先级更高。',
-                )}
-              </Text>
-              <div className='mb-4 flex items-center gap-2'>
-                <Switch
-                  checked={!!inputs.DefaultUseAutoGroup}
-                  onChange={(v) => setField('DefaultUseAutoGroup', v)}
+          <Tabs type='line' activeKey={activeTab} onChange={setActiveTab}>
+            <Tabs.TabPane tab={t('分组')} itemKey='groups'>
+              <div className='pt-3'>
+                <Text type='tertiary' size='small' className='mb-3 block'>
+                  {t(
+                    '倍率是计费乘数；勾选「用户可选」后该分组会出现在用户创建令牌的下拉里。未勾选的分组只能由管理员分配给用户。',
+                  )}
+                </Text>
+                <GroupTable
+                  key={`gt_${dv}`}
+                  groupRatio={inputs.GroupRatio}
+                  userUsableGroups={inputs.UserUsableGroups}
+                  groupDescription={inputs.GroupDescription}
+                  health={healthMap}
+                  seedNames={seedNames}
+                  onSelectGroup={jumpToRules}
+                  onChange={handleGroupTableChange}
                 />
-                <Text>{t('创建令牌时默认选择 auto 分组')}</Text>
               </div>
-              <AutoGroupList
-                key={`ag_${dv}`}
-                value={inputs.AutoGroups}
-                groupNames={groupNames}
-                onChange={(v) => setField('AutoGroups', v)}
-              />
-            </div>
-          </Tabs.TabPane>
+            </Tabs.TabPane>
 
-          <Tabs.TabPane tab={t('跨分组规则')} itemKey='cross'>
-            <div className='pt-3'>
-              <Title heading={6} className='mb-1'>
-                {t('身份折扣')}
-              </Title>
-              <Text type='tertiary' size='small' className='mb-3 block'>
-                {t(
-                  '某个分组的用户使用另一个分组的令牌时，用这里的倍率覆盖分组基础倍率。例如 vip 用户使用 premium 令牌时按 0.7 计费。',
-                )}
-              </Text>
-              <GroupGroupRatioRules
-                key={`ggr_${dv}`}
-                value={inputs.GroupGroupRatio}
-                groupNames={groupNames}
-                onChange={(v) => setField('GroupGroupRatio', v)}
-              />
+            <Tabs.TabPane tab={t('模型折扣')} itemKey='model_ratio'>
+              <div className='pt-3'>
+                <Row gutter={12} className='mb-3'>
+                  <Col xs={24} sm={8}>
+                    <Text type='tertiary' size='small' className='mb-1 block'>
+                      {t('配置哪个分组')}
+                    </Text>
+                    <Select
+                      style={{ width: '100%' }}
+                      value={activeGroup || null}
+                      optionList={groupNames.map((g) => ({
+                        label: g,
+                        value: g,
+                      }))}
+                      onChange={setActiveGroup}
+                      filter
+                      placeholder={t('选择分组')}
+                    />
+                  </Col>
+                </Row>
+                <ModelRatioEditor
+                  key={`mre_${dv}_${activeGroup}`}
+                  group={activeGroup}
+                  groupRatio={activeGroupRatio}
+                  value={inputs.GroupModelRatio}
+                  staleRules={healthMap[activeGroup]?.stale_rules || []}
+                  onChange={(v) => setField('GroupModelRatio', v)}
+                />
+              </div>
+            </Tabs.TabPane>
 
-              <Title heading={6} className='mb-1 mt-6'>
-                {t('可用分组增减')}
-              </Title>
-              <Text type='tertiary' size='small' className='mb-3 block'>
-                {t(
-                  '为特定用户分组增减可用分组。「添加」让该分组的用户额外能选某个分组，「移除」收回默认可选的分组。',
-                )}
-              </Text>
-              <GroupSpecialUsableRules
-                key={`gsu_${dv}`}
-                value={inputs['group_ratio_setting.group_special_usable_group']}
-                groupNames={groupNames}
-                onChange={(v) =>
-                  setField('group_ratio_setting.group_special_usable_group', v)
-                }
-              />
-            </div>
-          </Tabs.TabPane>
+            <Tabs.TabPane tab={t('自动分组')} itemKey='auto'>
+              <div className='pt-3'>
+                <Text type='tertiary' size='small' className='mb-3 block'>
+                  {t(
+                    '令牌分组设为 auto 时，按以下顺序依次尝试可用分组，排在前面的优先级更高。',
+                  )}
+                </Text>
+                <div className='mb-4 flex items-center gap-2'>
+                  <Switch
+                    checked={!!inputs.DefaultUseAutoGroup}
+                    onChange={(v) => setField('DefaultUseAutoGroup', v)}
+                  />
+                  <Text>{t('创建令牌时默认选择 auto 分组')}</Text>
+                </div>
+                <AutoGroupList
+                  key={`ag_${dv}`}
+                  value={inputs.AutoGroups}
+                  groupNames={groupNames}
+                  onChange={(v) => setField('AutoGroups', v)}
+                />
+              </div>
+            </Tabs.TabPane>
 
-          <Tabs.TabPane tab={t('充值 · 限流 · 积分')} itemKey='extra'>
-            <div className='pt-3'>
-              <GroupExtraSettings
-                key={`ge_${dv}`}
-                inputs={inputs}
-                groupNames={groupNames}
-                onChange={setField}
-              />
-            </div>
-          </Tabs.TabPane>
-        </Tabs>
-      </Card>
+            <Tabs.TabPane tab={t('跨分组规则')} itemKey='cross'>
+              <div className='pt-3'>
+                <Title heading={6} className='mb-1'>
+                  {t('身份折扣')}
+                </Title>
+                <Text type='tertiary' size='small' className='mb-3 block'>
+                  {t(
+                    '某个分组的用户使用另一个分组的令牌时，用这里的倍率覆盖分组基础倍率。例如 vip 用户使用 premium 令牌时按 0.7 计费。',
+                  )}
+                </Text>
+                <GroupGroupRatioRules
+                  key={`ggr_${dv}`}
+                  value={inputs.GroupGroupRatio}
+                  groupNames={groupNames}
+                  onChange={(v) => setField('GroupGroupRatio', v)}
+                />
 
-      <div className='mt-4'>
-        <RatioSimulator groupNames={groupNames} />
-      </div>
-    </Spin>
+                <Title heading={6} className='mb-1 mt-6'>
+                  {t('可用分组增减')}
+                </Title>
+                <Text type='tertiary' size='small' className='mb-3 block'>
+                  {t(
+                    '为特定用户分组增减可用分组。「添加」让该分组的用户额外能选某个分组，「移除」收回默认可选的分组。',
+                  )}
+                </Text>
+                <GroupSpecialUsableRules
+                  key={`gsu_${dv}`}
+                  value={
+                    inputs['group_ratio_setting.group_special_usable_group']
+                  }
+                  groupNames={groupNames}
+                  onChange={(v) =>
+                    setField(
+                      'group_ratio_setting.group_special_usable_group',
+                      v,
+                    )
+                  }
+                />
+              </div>
+            </Tabs.TabPane>
+
+            <Tabs.TabPane tab={t('充值 · 限流 · 积分')} itemKey='extra'>
+              <div className='pt-3'>
+                <GroupExtraSettings
+                  key={`ge_${dv}`}
+                  inputs={inputs}
+                  groupNames={groupNames}
+                  onChange={setField}
+                />
+              </div>
+            </Tabs.TabPane>
+          </Tabs>
+        </Card>
+
+        <div className='mt-4'>
+          <RatioSimulator groupNames={groupNames} />
+        </div>
+      </Spin>
+    </div>
   );
 }
