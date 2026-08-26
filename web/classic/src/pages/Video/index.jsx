@@ -53,7 +53,7 @@ export const VideoPlaygroundBody = ({ mode, category = 'video' }) => {
     defaultSteps,
     messages,
     conversations,
-    generating,
+    taskSlotsFull,
     locked,
     turnLimitReached,
     missingRequiredImage,
@@ -114,7 +114,7 @@ export const VideoPlaygroundBody = ({ mode, category = 'video' }) => {
       <div className='flex-1 min-w-0'>
         <VideoChatArea
           messages={messages}
-          generating={generating}
+          taskSlotsFull={taskSlotsFull}
           turnLimitReached={turnLimitReached}
           missingRequiredImage={missingRequiredImage}
           mode={mode}

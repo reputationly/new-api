@@ -404,6 +404,31 @@ func GetTimedOutUnfinishedTasks(cutoffUnix int64, limit int) []*Task {
 	return tasks
 }
 
+// videoTaskActions 视频类任务的 action 取值。tasks 表混装了视频、Suno 等多种任务
+// （Suno 是 MUSIC/LYRICS），platform 存的是渠道类型编号、区分不出玩法，所以按 action 筛。
+var videoTaskActions = []string{
+	constant.TaskActionGenerate,
+	constant.TaskActionTextGenerate,
+	constant.TaskActionFirstTailGenerate,
+	constant.TaskActionReferenceGenerate,
+	constant.TaskActionRemix,
+}
+
+// CountUserUnfinishedVideoTasks 统计该用户仍在途的视频任务数（已提交但未落终态）。
+//
+// 体验区的并发闸靠它：前端那道闸只在当前这个玩法 tab 内有效，切 tab（组件带 key
+// 重建）、开第二个浏览器标签页、刷新页面都会让它归零，唯有这里查库是准的。
+// user_id / status / action 三列都有索引。
+func CountUserUnfinishedVideoTasks(userId int) (int64, error) {
+	var count int64
+	err := DB.Model(&Task{}).
+		Where("user_id = ?", userId).
+		Where("status IN ?", []string{TaskStatusSubmitted, TaskStatusQueued, TaskStatusInProgress}).
+		Where("action IN ?", videoTaskActions).
+		Count(&count).Error
+	return count, err
+}
+
 func GetAllUnFinishSyncTasks(limit int) []*Task {
 	var tasks []*Task
 	var err error

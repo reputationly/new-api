@@ -461,6 +461,17 @@ export const VIDEO_HISTORY_STORAGE_KEY = 'video_playground_conversations';
 export const VIDEO_HISTORY_LIMIT = 10; // 对话段数上限
 export const VIDEO_CONV_TURN_LIMIT = 10; // 单段对话生成次数上限
 
+// 同一浏览器里最多同时在跑几个视频任务。
+//
+// 从 1 抬到 3：视频是异步任务（提交拿 task_id → 轮询），后端本来就支持并发，此前
+// 卡在 1 纯粹是前端只留了一个轮询槽——上一条没出结果就发不出下一条，也没法新建
+// 会话去发别的。抬到 3 让用户能并行几件事，又不至于一个人把 GPU 队列排满
+// （后端**没有**任何按用户的在途任务数限制，这里是唯一的闸）。
+//
+// 别和 VIDEO_HISTORY_LIMIT 搞混：那个是本地保留多少段历史会话（兼 IndexedDB 媒体
+// 的回收触发器），跟同时有几个任务在跑无关。
+export const VIDEO_MAX_CONCURRENT_TASKS = 3;
+
 // 轮询参数
 // 插帧(RIFE 帧率翻倍):开启时随 metadata 透传 target_fps 给引擎(gpustack 门面
 // 对该字段免验证直通)。LightX2V 生成默认 16fps;Bernini RIFE v1 仅支持 16→32。

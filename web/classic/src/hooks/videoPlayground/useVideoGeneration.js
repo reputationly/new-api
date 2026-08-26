@@ -42,6 +42,7 @@ import {
   VIDEO_STATUS,
   VIDEO_HISTORY_LIMIT,
   VIDEO_CONV_TURN_LIMIT,
+  VIDEO_MAX_CONCURRENT_TASKS,
   VIDEO_INTERPOLATION_TARGET_FPS,
   INTERPOLATION_ENABLED,
   VIDEO_SR_RATIO_UNCAPPED,
@@ -361,6 +362,10 @@ export const useVideoGeneration = ({
   });
   const [currentConvId, setCurrentConvId] = useState(null);
   const [generating, setGenerating] = useState(false);
+  // 在途任务数是否已顶到 VIDEO_MAX_CONCURRENT_TASKS。与 generating 分开是因为两者
+  // 含义已经不同：generating = 有任务在跑（进度条/停止按钮看它），taskSlotsFull =
+  // 不能再发了（发送键/重新生成看它）。合成一个的话，一跑起来就全锁死，等于没放开。
+  const [taskSlotsFull, setTaskSlotsFull] = useState(false);
 
   const messages = useMemo(() => {
     const conv = conversations.find((c) => c.id === currentConvId);
@@ -375,8 +380,21 @@ export const useVideoGeneration = ({
   lockedRef.current = locked;
   const groupRef = useRef(inputs.group);
   groupRef.current = inputs.group;
-  // 当前进行中的轮询：{ convId, msgId, taskId, timer, canceled }
-  const activePollRef = useRef(null);
+  // 进行中的轮询槽，按 msgId 索引：msgId → { convId, msgId, taskId, timer, canceled }。
+  //
+  // 曾经是单个 ref（一次只能跑一个任务），所以上一条没出结果就发不出下一条。改成 Map
+  // 后同时最多跑 VIDEO_MAX_CONCURRENT_TASKS 个，超了由 generate 提示。
+  //
+  // **键必须是 msgId 而不是 taskId**：流水线（生成→超分→配音）会在同一条消息上换 taskId
+  // （submitPipelineStage），用 taskId 当键的话换一次就多一个槽、旧槽永远回收不掉。
+  const activePollsRef = useRef(new Map());
+  // 槽位是 ref（轮询回调里要读最新值，不能走渲染），派生的两个布尔量要手动同步到
+  // state 供渲染用。每处增删槽位后都必须调它，否则界面会停在上一次的状态。
+  const syncPollState = useCallback(() => {
+    const n = activePollsRef.current.size;
+    setGenerating(n > 0);
+    setTaskSlotsFull(n >= VIDEO_MAX_CONCURRENT_TASKS);
+  }, []);
 
   // mount 后从 IDB 还原媒体,按初始对象引用逐条合并——只替换"挂载至今未被任何 setState
   // 换过引用"的 conv(hydrate 期间用户新建/正在生成被 patch 的会话原样保留)。不整体覆盖。
@@ -906,10 +924,14 @@ export const useVideoGeneration = ({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [userState?.user, inputs.group, videoModelSet]);
 
-  // 挂载后为最近一个仍在进行中的任务恢复轮询（刷新/重进页面不丢进度）
+  // 挂载后为仍在进行中的任务恢复轮询（刷新/重进页面不丢进度）。
+  //
+  // 从「只恢复最近一个」改成「按时间倒序恢复最多 VIDEO_MAX_CONCURRENT_TASKS 个」：
+  // 既然允许同时跑 3 个，刷新后只捡回一个的话，另外两个的进度会永久冻结在最后一次
+  // 写入的百分比上（任务其实还在后端跑，只是没人再问它）。
   useEffect(() => {
-    if (!userState?.user || activePollRef.current) return;
-    let best = null; // { convId, msgId, taskId, ts }
+    if (!userState?.user || activePollsRef.current.size) return;
+    const pending = []; // { convId, msgId, taskId, ts }
     conversationsRef.current.forEach((conv) => {
       (conv.messages || []).forEach((m) => {
         if (
@@ -919,13 +941,14 @@ export const useVideoGeneration = ({
             m.status === VIDEO_STATUS.IN_PROGRESS)
         ) {
           const ts = Number(String(m.id).split('-')[1]) || 0;
-          if (!best || ts > best.ts) {
-            best = { convId: conv.id, msgId: m.id, taskId: m.taskId, ts };
-          }
+          pending.push({ convId: conv.id, msgId: m.id, taskId: m.taskId, ts });
         }
       });
     });
-    if (best) resumePoll(best.convId, best.msgId, best.taskId);
+    pending
+      .sort((a, b) => b.ts - a.ts)
+      .slice(0, VIDEO_MAX_CONCURRENT_TASKS)
+      .forEach((p) => resumePoll(p.convId, p.msgId, p.taskId));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [userState?.user]);
 
@@ -952,11 +975,18 @@ export const useVideoGeneration = ({
   );
   const turnLimitReached = turnsUsed >= VIDEO_CONV_TURN_LIMIT;
 
-  const finishPoll = useCallback(() => {
-    if (activePollRef.current?.timer) clearTimeout(activePollRef.current.timer);
-    activePollRef.current = null;
-    setGenerating(false);
-  }, []);
+  // 收掉某一条消息的轮询槽。generating / taskSlotsFull 都由「还剩几个槽」派生，
+  // 不能再无脑置 false：三个任务在跑时，先完成的那个若把 generating 关掉，
+  // 界面会显示成全部结束。
+  const finishPoll = useCallback(
+    (msgId) => {
+      const slot = activePollsRef.current.get(msgId);
+      if (slot?.timer) clearTimeout(slot.timer);
+      activePollsRef.current.delete(msgId);
+      syncPollState();
+    },
+    [syncPollState],
+  );
 
   // submitPipelineStage 定义在 pollOnce 之前但要调度它，经 ref 间接引用
   const pollOnceRef = useRef(null);
@@ -1036,7 +1066,9 @@ export const useVideoGeneration = ({
           status: VIDEO_STATUS.IN_PROGRESS,
           progress: 0,
         });
-        const cur = activePollRef.current;
+        // 换 taskId 但**不换槽**：槽按 msgId 索引，流水线的下一段仍属同一条消息，
+        // 不占用新的并发名额。
+        const cur = activePollsRef.current.get(msgId);
         if (cur && !cur.canceled) {
           cur.taskId = nextTaskId;
           cur.timer = setTimeout(
@@ -1062,7 +1094,7 @@ export const useVideoGeneration = ({
 
   const pollOnce = useCallback(
     async (convId, msgId, taskId, count) => {
-      const active = activePollRef.current;
+      const active = activePollsRef.current.get(msgId);
       if (!active || active.canceled || active.taskId !== taskId) return;
       try {
         const res = await API.get(
@@ -1098,7 +1130,7 @@ export const useVideoGeneration = ({
             progress: 100,
             videoUrl: buildVideoContentUrl(taskId),
           });
-          finishPoll();
+          finishPoll(msgId);
           return;
         }
         if (status === VIDEO_STATUS.FAILED) {
@@ -1113,7 +1145,7 @@ export const useVideoGeneration = ({
             error: msg,
           });
           showError(msg);
-          finishPoll();
+          finishPoll(msgId);
           return;
         }
         // queued / in_progress
@@ -1125,18 +1157,18 @@ export const useVideoGeneration = ({
           // 客户端轮询超时：不判失败，保留可恢复状态，仅标记以便展示「继续获取」；
           // 任务可能仍在后端进行/已完成，用原 taskId 续查即可，无需重新提交。
           patchConvMessage(convId, msgId, { pollTimedOut: true });
-          finishPoll();
+          finishPoll(msgId);
           return;
         }
       } catch (e) {
         // 轮询瞬时错误：继续重试直至超时
         if (count >= VIDEO_POLL_MAX_TIMES) {
           patchConvMessage(convId, msgId, { pollTimedOut: true });
-          finishPoll();
+          finishPoll(msgId);
           return;
         }
       }
-      const cur = activePollRef.current;
+      const cur = activePollsRef.current.get(msgId);
       if (!cur || cur.canceled || cur.taskId !== taskId) return;
       cur.timer = setTimeout(
         () => pollOnce(convId, msgId, taskId, count + 1),
@@ -1149,28 +1181,33 @@ export const useVideoGeneration = ({
 
   // 为某个仍在进行中的任务（重新）启动轮询：刷新页面或切走再回来时用，
   // 避免进度冻结在最后一次写入的值。已在轮询同一任务则跳过。
+  //
+  // 只认这条消息自己的槽（按 msgId），不再看「有没有别的任务在跑」——同时轮询多个
+  // 正是要的行为。重复调用（如刷新恢复 + openHistoryItem 撞在一起）会先清掉旧定时器
+  // 再重建，不会留下两个定时器对同一条消息重复轮询。
   const resumePoll = useCallback(
     (convId, msgId, taskId) => {
       if (!taskId) return;
-      const active = activePollRef.current;
+      const active = activePollsRef.current.get(msgId);
       if (active && active.taskId === taskId && !active.canceled) return;
       if (active?.timer) clearTimeout(active.timer);
       // 重新轮询即回到「生成中」，清掉超时标记
       patchConvMessage(convId, msgId, { pollTimedOut: false });
-      activePollRef.current = {
+      const slot = {
         convId,
         msgId,
         taskId,
         timer: null,
         canceled: false,
       };
-      setGenerating(true);
-      activePollRef.current.timer = setTimeout(
+      activePollsRef.current.set(msgId, slot);
+      syncPollState();
+      slot.timer = setTimeout(
         () => pollOnce(convId, msgId, taskId, 1),
         VIDEO_POLL_INTERVAL_MS,
       );
     },
-    [pollOnce, patchConvMessage],
+    [pollOnce, patchConvMessage, syncPollState],
   );
 
   // 超时任务「继续获取」：用原 taskId 续查当前会话中的该消息（方案 A：直接顶掉当前轮询槽）
@@ -1187,7 +1224,18 @@ export const useVideoGeneration = ({
       // 视频超分无提示词框(输出完全由源视频决定),允许空提示词提交;视频配乐提示词
       // 可选(空提示词=让模型按画面自由配环境音);其余模式必填。
       const text = (prompt || '').trim();
-      if ((!text && !isSR && !isDub) || generating) return;
+      if (!text && !isSR && !isDub) return;
+      // 并发闸：此前是「有任务在跑就一律不让发」，现在按在途任务数放到
+      // VIDEO_MAX_CONCURRENT_TASKS。读 ref 而不是 taskSlotsFull state —— 连点两下
+      // 发送时第二下拿到的 state 还是上一次渲染的旧值，会漏放一个进来。
+      if (activePollsRef.current.size >= VIDEO_MAX_CONCURRENT_TASKS) {
+        showError(
+          t('最多同时进行 {{count}} 个视频任务，请等其中一个完成后再发', {
+            count: VIDEO_MAX_CONCURRENT_TASKS,
+          }),
+        );
+        return;
+      }
 
       // 关键帧:images=[首帧(,尾帧)];s2v:images=[人物图]。
       // 后续追问沿用对话首条锁定的帧图 / 媒体输入。
@@ -1512,7 +1560,18 @@ export const useVideoGeneration = ({
         return next;
       });
       if (currentConvId == null) setCurrentConvId(convId);
-      setGenerating(true);
+      // **先占名额再发请求**。taskId 要等响应回来才有，但名额必须在请求发出的那一刻
+      // 就占住：否则连点三下，三次都在第一个响应到达前跑到上面的并发闸，那时
+      // activePollsRef 还是空的，三个全放过去。占位槽的 taskId 先留 null，成功后补上，
+      // 失败/取消时由 finishPoll 收掉。
+      activePollsRef.current.set(asstId, {
+        convId,
+        msgId: asstId,
+        taskId: null,
+        timer: null,
+        canceled: false,
+      });
+      syncPollState();
 
       try {
         // 按模型类别只发对应的时长字段：sora→seconds(字符串)，minimax→duration(整数秒)
@@ -1867,7 +1926,7 @@ export const useVideoGeneration = ({
             error: msg,
           });
           showError(msg);
-          setGenerating(false);
+          finishPoll(asstId);
           return;
         }
         patchConvMessage(convId, asstId, {
@@ -1876,14 +1935,12 @@ export const useVideoGeneration = ({
           progress,
           ...(pipeline ? { pipeline, stage: 'generating' } : {}),
         });
-        activePollRef.current = {
-          convId,
-          msgId: asstId,
-          taskId,
-          timer: null,
-          canceled: false,
-        };
-        activePollRef.current.timer = setTimeout(
+        // 把 taskId 补进上面那个占位槽。槽可能已经不在了（等响应期间用户清空了历史
+        // 或删掉了这条会话），那就别再起轮询——重建槽等于让一个已被取消的任务复活。
+        const slot = activePollsRef.current.get(asstId);
+        if (!slot || slot.canceled) return;
+        slot.taskId = taskId;
+        slot.timer = setTimeout(
           () => pollOnce(convId, asstId, taskId, 1),
           VIDEO_POLL_INTERVAL_MS,
         );
@@ -1894,15 +1951,16 @@ export const useVideoGeneration = ({
           error: msg,
         });
         showError(msg);
-        setGenerating(false);
+        finishPoll(asstId);
       }
     },
     [
       currentConvId,
       inputs,
-      generating,
       patchConvMessage,
       pollOnce,
+      finishPoll,
+      syncPollState,
       storageKey,
       needsImage,
       sendsSize,
@@ -1932,22 +1990,31 @@ export const useVideoGeneration = ({
   }, []);
 
   const clearHistory = useCallback(() => {
-    // 清空历史时若有进行中的轮询，一并停止，避免 generating 卡住导致发送按钮一直禁用
-    if (activePollRef.current) activePollRef.current.canceled = true;
-    finishPoll();
+    // 清空历史时把**所有**进行中的轮询一并停掉，避免 generating/taskSlotsFull 卡住
+    // 导致发送按钮一直禁用。canceled 要逐个打上：请求还在飞的占位槽靠它拦住回填。
+    activePollsRef.current.forEach((slot) => {
+      slot.canceled = true;
+      if (slot.timer) clearTimeout(slot.timer);
+    });
+    activePollsRef.current.clear();
+    syncPollState();
     setConversations([]);
     persistConversations(storageKey, []);
     setCurrentConvId(null);
-  }, [finishPoll]);
+  }, [syncPollState]);
 
   const deleteHistoryItem = useCallback(
     (id) => {
-      // 删除的正是正在轮询的会话时，停止其轮询并复位 generating
-      const active = activePollRef.current;
-      if (active && active.convId === id) {
-        active.canceled = true;
-        finishPoll();
-      }
+      // 删掉的会话里可能有多个任务在轮询（同一会话可连发），逐个停掉。
+      // 边遍历边删同一个 Map 不安全，先收集 msgId 再收。
+      const doomed = [];
+      activePollsRef.current.forEach((slot, msgId) => {
+        if (slot.convId === id) {
+          slot.canceled = true;
+          doomed.push(msgId);
+        }
+      });
+      doomed.forEach((msgId) => finishPoll(msgId));
       setConversations((prev) => {
         const next = prev.filter((c) => c.id !== id);
         persistConversations(storageKey, next);
@@ -2004,12 +2071,14 @@ export const useVideoGeneration = ({
     [resumePoll],
   );
 
-  // 卸载时清理轮询
+  // 卸载时清理所有轮询
   useEffect(() => {
+    const polls = activePollsRef.current;
     return () => {
-      if (activePollRef.current?.timer)
-        clearTimeout(activePollRef.current.timer);
-      activePollRef.current = null;
+      polls.forEach((slot) => {
+        if (slot.timer) clearTimeout(slot.timer);
+      });
+      polls.clear();
     };
   }, []);
 
@@ -2081,6 +2150,9 @@ export const useVideoGeneration = ({
     conversations,
     currentConvId,
     generating,
+    // 在途任务已顶到并发上限：发送/重新生成按它置灰，而不是按 generating
+    // （按 generating 的话一跑起来就全锁死，等于并发没放开）。
+    taskSlotsFull,
     locked,
     turnLimitReached,
     missingRequiredImage,

@@ -20,6 +20,7 @@ import {
   VIDEO_STATUS,
   videoExamplesForMode,
   VIDEO_ENGINE_MINIMAX_H3,
+  VIDEO_MAX_CONCURRENT_TASKS,
 } from '../../constants/videoPlayground.constants';
 import {
   parseH3Prompt,
@@ -163,7 +164,7 @@ const VideoProgress = ({ status, progress, stage, pipeline, t }) => {
 
 const VideoChatArea = ({
   messages,
-  generating,
+  taskSlotsFull = false,
   turnLimitReached = false,
   missingRequiredImage = false,
   mode = 'text2video',
@@ -299,7 +300,7 @@ const VideoChatArea = ({
                 size='small'
                 icon={<RefreshCw size={14} />}
                 onClick={() => onRegenerate(m.prompt)}
-                disabled={generating}
+                disabled={taskSlotsFull}
                 className='!text-gray-500'
               />
             </div>
@@ -318,7 +319,7 @@ const VideoChatArea = ({
               size='small'
               icon={<RefreshCw size={14} />}
               onClick={() => onRegenerate(m.prompt)}
-              disabled={generating}
+              disabled={taskSlotsFull}
               className='!text-gray-500'
             />
           </div>
@@ -336,7 +337,7 @@ const VideoChatArea = ({
               size='small'
               icon={<RefreshCw size={14} />}
               onClick={() => onRegenerate(m.prompt)}
-              disabled={generating}
+              disabled={taskSlotsFull}
               className='!text-gray-500'
             />
           </div>
@@ -373,12 +374,12 @@ const VideoChatArea = ({
         />
       );
     },
-    [byId, generating, onRegenerate, onRefetch, t],
+    [byId, taskSlotsFull, onRegenerate, onRefetch, t],
   );
 
   const renderInputArea = useCallback(() => {
     // 缺必填帧图/生成中/达上限时置灰,回车与点击均不发送,提示词不丢。
-    const blockSend = generating || turnLimitReached || missingRequiredImage;
+    const blockSend = taskSlotsFull || turnLimitReached || missingRequiredImage;
     // 视频超分不需要提示词:只留一个生成按钮,上传源视频后可点,删除后再次置灰。
     // 常规比例的矩形按钮,对话框内水平居中、略上提,不做通栏扁条。
     if (isSR) {
@@ -390,6 +391,16 @@ const VideoChatArea = ({
               className='text-xs block mb-2 text-center'
             >
               {t('本轮对话已达生成上限，请点击右侧「新对话」继续')}
+            </Typography.Text>
+          )}
+          {taskSlotsFull && !turnLimitReached && (
+            <Typography.Text
+              type='warning'
+              className='text-xs block mb-2 text-center'
+            >
+              {t('最多同时进行 {{count}} 个视频任务，请等其中一个完成后再发', {
+                count: VIDEO_MAX_CONCURRENT_TASKS,
+              })}
             </Typography.Text>
           )}
           {/* 一键示例(超分无提示词):点击预置源视频到左侧,再点生成。 */}
@@ -469,6 +480,16 @@ const VideoChatArea = ({
             className='text-xs block mb-2 text-center'
           >
             {t('本轮对话已达生成上限，请点击右侧「新对话」继续')}
+          </Typography.Text>
+        )}
+        {taskSlotsFull && !turnLimitReached && (
+          <Typography.Text
+            type='warning'
+            className='text-xs block mb-2 text-center'
+          >
+            {t('最多同时进行 {{count}} 个视频任务，请等其中一个完成后再发', {
+              count: VIDEO_MAX_CONCURRENT_TASKS,
+            })}
           </Typography.Text>
         )}
         {/* 一键示例:纯文本(仅填输入框)或结构化对象({label,prompt,params,files}——
@@ -553,7 +574,7 @@ const VideoChatArea = ({
                 })),
             ]);
           }}
-          disabled={generating}
+          disabled={taskSlotsFull}
           onOptimizingChange={setOptimizing}
           engine={optimizeEngine}
           optimizeContext={optimizeContext}
@@ -607,7 +628,7 @@ const VideoChatArea = ({
             onChange={(key, v) =>
               setH3Fields((prev) => ({ ...prev, [key]: v }))
             }
-            disabled={generating}
+            disabled={taskSlotsFull}
           />
         )}
         <OptimizedPromptSections
@@ -625,12 +646,12 @@ const VideoChatArea = ({
           }
           onChange={setSections}
           onDiscard={() => setSections(null)}
-          disabled={generating}
+          disabled={taskSlotsFull}
         />
       </div>
     );
   }, [
-    generating,
+    taskSlotsFull,
     turnLimitReached,
     missingRequiredImage,
     hasPresets,

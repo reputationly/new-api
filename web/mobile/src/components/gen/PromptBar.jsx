@@ -17,6 +17,10 @@ import { usePromptOptimize } from '@classic/hooks/common/usePromptOptimize';
 const PromptBar = ({
   onSend,
   generating,
+  // 「有任务在跑」是否就不许再发。generating 一直身兼两职（转圈 + 置灰），视频体验区
+  // 放开并发后这两件事分家了：那边要的是「跑着也能发下一条，满 3 个才拦」，拦不拦由
+  // 调用方经 disabled 传进来。默认 true 保持图像/语音/音乐三页原样串行，不受影响。
+  blockWhileGenerating = true,
   disabled = false,
   placeholder = '输入提示词…',
   allowEmpty = false,
@@ -67,7 +71,7 @@ const PromptBar = ({
             fill='none'
             color='primary'
             loading={optimizing}
-            disabled={optimizing || generating}
+            disabled={optimizing || (blockWhileGenerating && generating)}
             onClick={async () => {
               const out = await optimize(text);
               if (out) setText(out);
@@ -107,7 +111,9 @@ const PromptBar = ({
         <Button
           color='primary'
           loading={generating}
-          disabled={disabled || generating || optimizing}
+          disabled={
+            disabled || (blockWhileGenerating && generating) || optimizing
+          }
           onClick={handleSend}
         >
           发送

@@ -69,6 +69,7 @@ export const VideoBody = ({ mode, category = 'video' }) => {
     h3AlignContext,
     messages,
     generating,
+    taskSlotsFull,
     locked,
     turnLimitReached,
     missingRequiredImage,
@@ -105,7 +106,10 @@ export const VideoBody = ({ mode, category = 'video' }) => {
   // 视觉参考「图或视频至少其一」，判据在共享 hook 的 missingRequiredImage 里。
   const refVideosOpen = isR2VA && maxRefVideos > 0;
   // 锁定态（选中了某条会话）参数与素材都改不动，见 useVideoGeneration 的 handleInputChange。
-  const editDisabled = generating || locked;
+  //
+  // 这里判 taskSlotsFull 而不是 generating：现在允许同时跑多个任务，用 generating 的话
+  // 第一个任务一起跑就把参数锁死，用户点了「新对话」也配不了下一条，等于并发没放开。
+  const editDisabled = taskSlotsFull || locked;
   // 哪些参数控件出现在本 tab，统一读中央元数据的 fields（playgroundAdmin.constants.js），
   // 不再在这里按 isSR/isDub/isS2V/followsInput 重写一遍——桌面端 VideoConfigPanel、
   // admin 页各有一份判断时，加一个玩法要改三处且极易漏。
@@ -531,11 +535,14 @@ export const VideoBody = ({ mode, category = 'video' }) => {
       <PromptBar
         onSend={sendPrompt}
         generating={generating}
+        // 视频任务可以同时跑多个（上限见 VIDEO_MAX_CONCURRENT_TASKS）：跑着也让发，
+        // 满了由下面的 taskSlotsFull 拦。generating 只留着转圈用。
+        blockWhileGenerating={false}
         optimizeCategory={category}
         optimizeTab={mode}
         optimizeEngine={optimizeEngine}
         optimizeContext={optimizeContext}
-        disabled={turnLimitReached || missingRequiredImage}
+        disabled={taskSlotsFull || turnLimitReached || missingRequiredImage}
         // 配乐的提示词是可选的（留空=按画面自动配），别拦住只上传视频就想发的用户。
         allowEmpty={isDub}
         placeholder={

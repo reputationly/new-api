@@ -3,7 +3,9 @@ package controller
 import (
 	"errors"
 	"fmt"
+	"net/http"
 
+	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/middleware"
 	"github.com/QuantumNous/new-api/model"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
@@ -41,9 +43,28 @@ func playgroundRelay(c *gin.Context, relayFormat types.RelayFormat) {
 	Relay(c, relayFormat)
 }
 
+// maxUserConcurrentVideoTasks 单个用户在体验区同时能有几个视频任务在跑。
+//
+// 只卡体验区这一个入口（/pg/videos），**不卡 /v1 的 API 用户**：那边是按 key 计费的
+// 集成方，批量提交是正常用法，拦下来等于把人家的流水线掐断。
+var maxUserConcurrentVideoTasks = common.GetEnvOrDefault("PLAYGROUND_MAX_CONCURRENT_VIDEO_TASKS", 3)
+
 // PlaygroundVideo submits a video generation task on behalf of the logged-in
 // user (session auth), mirroring Playground but delegating to the async task relay.
 func PlaygroundVideo(c *gin.Context) {
+	// 并发闸要在 playgroundSetupContext 之前：那一步会签临时 token、建 relay 上下文，
+	// 注定要被拒的请求没必要走这些。查库失败时放行——一次 DB 抖动不该让人发不出任务，
+	// 上限是产品护栏不是安全边界，宁可漏放一个。
+	if maxUserConcurrentVideoTasks > 0 {
+		if n, err := model.CountUserUnfinishedVideoTasks(c.GetInt("id")); err == nil &&
+			n >= int64(maxUserConcurrentVideoTasks) {
+			c.JSON(http.StatusTooManyRequests, gin.H{"error": gin.H{
+				"message": fmt.Sprintf("最多同时进行 %d 个视频任务，请等其中一个完成后再发", maxUserConcurrentVideoTasks),
+				"type":    "too_many_concurrent_tasks",
+			}})
+			return
+		}
+	}
 	if apiErr := playgroundSetupContext(c, types.RelayFormatTask); apiErr != nil {
 		c.JSON(apiErr.StatusCode, gin.H{"error": apiErr.ToOpenAIError()})
 		return
