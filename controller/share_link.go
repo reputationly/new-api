@@ -68,6 +68,10 @@ func CreateTaskShareLink(c *gin.Context) {
 		// 任务主人不新增任何暴露面——他在自己的任务列表里本来就看得到。不签 token：
 		// 上面那条匿名端点的约束一点不动。
 		//
+		// ⚠️ 已知缺口：这条支路交出去的是上游直链，加不了 Content-Disposition，
+		// 落不进下面 ShareContent 那条「站外只能下载」的策略（点开仍会在线播放）。
+		// 要堵只有两条路，都不在本次范围：拒绝这类任务的分享，或由 /s/ 回源代理成下载流。
+		//
 		// 这一支对微信是刚需：ShareBar 在微信里只有「复制分享链接」一条路（平台
 		// 不给音视频任何本地保存途径），拒了就等于成品彻底拿不到。
 		if isExternalDirectResultURL(raw, task.TaskID) {
@@ -120,8 +124,12 @@ func resolveShareTask(c *gin.Context, asHTML bool) (*model.Task, bool) {
 
 // ShareLandingPage 免登录落地页 GET /s/:token。
 //
-// 服务端渲染一页自包含 HTML，不走 SPA：收到链接的人多半不是本站用户，为一个播放
+// 服务端渲染一页自包含 HTML，不走 SPA：收到链接的人多半不是本站用户，为一个下载
 // 页拉整个 React 包不划算，且移动端 SPA 在微信里有过首屏白屏的前科。
+//
+// 页面**只给下载入口，不内嵌播放器**：内容审核尚不完善，站外任何人拿到链接就能
+// 当场播放的话，未审内容等于直接摆在浏览器里。在线浏览只保留在站内（需登录的
+// 控制台/移动端页面），站外一律落到「下载文件」这一个动作上。
 func ShareLandingPage(c *gin.Context) {
 	task, ok := resolveShareTask(c, true)
 	if !ok {
@@ -129,16 +137,44 @@ func ShareLandingPage(c *gin.Context) {
 	}
 
 	key := mediastore.KeyFromRef(task.GetResultURL())
+	// 过去「已过期」是靠媒体元素的 onerror 兜的（OBS 对象 7 天后由生命周期清除）。
+	// 播放器拿掉之后那条路没了，改成渲染前 HeadObject 一次。探测本身出错就放行：
+	// 宁可让用户点了下载再失败，也不能因为一次网络抖动把好链接判死。
+	if exists, err := mediastore.Exists(c.Request.Context(), key); err == nil && !exists {
+		writeShareError(c, true, http.StatusGone, "内容已过期", "生成结果保留 7 天，超期后会自动清理。")
+		return
+	}
+
 	renderSharePage(c, http.StatusOK, sharePageData{
 		Brand:    brandName(),
-		IsVideo:  strings.HasPrefix(mediastore.InferContentType(key), "video/"),
+		Kind:     mediaKindLabel(key),
 		Token:    c.Param("token"),
 		InWeChat: weChatUARegex.MatchString(c.Request.UserAgent()),
 	})
 }
 
+// mediaKindLabel 把对象的 content-type 折成一个中文名词，落地页只拿它拼说明文案。
+func mediaKindLabel(key string) string {
+	ct := mediastore.InferContentType(key)
+	switch {
+	case strings.HasPrefix(ct, "video/"):
+		return "视频"
+	case strings.HasPrefix(ct, "audio/"):
+		return "音频"
+	case strings.HasPrefix(ct, "image/"):
+		return "图片"
+	default:
+		return "文件"
+	}
+}
+
 // ShareContent 免登录取内容 GET /s/:token/content。
 // 与 VideoProxy 的 OBS 分支一致：实时签名后 302，流量直连 OBS 不经我方带宽。
+//
+// 签名**无条件带 Content-Disposition: attachment**。原先是 ?download=1 才带，不带
+// 就内联播放——只要留着那条路，随手把参数删掉就绕过了整条「站外只能下载」的策略，
+// 所以开关直接去掉，参数存不存在都按下载走。站内在线播放走的是另一套带鉴权的端点
+// （/v1/videos/:task_id/content 等），不受这里影响。
 func ShareContent(c *gin.Context) {
 	task, ok := resolveShareTask(c, false)
 	if !ok {
@@ -146,11 +182,7 @@ func ShareContent(c *gin.Context) {
 	}
 
 	key := mediastore.KeyFromRef(task.GetResultURL())
-	var opts []mediastore.SignOption
-	if c.Query("download") == "1" {
-		opts = append(opts, mediastore.WithDownloadName(buildDownloadName(task, key)))
-	}
-	signed, err := mediastore.Sign(c.Request.Context(), key, opts...)
+	signed, err := mediastore.Sign(c.Request.Context(), key, mediastore.WithDownloadName(buildDownloadName(task, key)))
 	if err != nil {
 		writeShareError(c, false, http.StatusBadGateway, "内容暂不可用", "媒体存储签名失败。")
 		return
@@ -173,7 +205,7 @@ func brandName() string {
 // 会正常施加 URL 转义，安全边界不依赖「token 一定只含 base64/hex 字符」这个前提。
 type sharePageData struct {
 	Brand     string
-	IsVideo   bool
+	Kind      string // 「视频」「音频」「图片」「文件」，只进文案
 	Token     string
 	InWeChat  bool
 	ErrTitle  string
@@ -208,8 +240,7 @@ func renderSharePage(c *gin.Context, status int, data sharePageData) {
 }
 
 // 落地页模板：无外部资源、无 JS 框架，弱网和微信内也能秒开。
-// 媒体元素挂 onerror —— OBS 对象 7 天后由生命周期清除，届时 302 过去会拿到
-// NoSuchKey，不提示的话用户只看到一个不动的播放器。
+// 页面上没有任何 <video>/<audio>/<img> —— 站外只给下载，见 ShareLandingPage 注释。
 var sharePageTmpl = template.Must(template.New("share").Parse(`<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
@@ -222,15 +253,15 @@ var sharePageTmpl = template.Must(template.New("share").Parse(`<!DOCTYPE html>
 body{margin:0;padding:24px 16px;font:15px/1.6 -apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei",sans-serif;background:#f5f5f7;color:#1d1d1f;-webkit-text-size-adjust:100%}
 .wrap{max-width:640px;margin:0 auto}
 .brand{font-size:13px;color:#86868b;margin-bottom:16px;text-align:center}
-.card{background:#fff;border-radius:14px;padding:16px;box-shadow:0 1px 3px rgba(0,0,0,.06)}
-video,audio{width:100%;display:block;border-radius:8px;background:#000}
-audio{background:transparent}
-.btn{display:block;margin-top:16px;padding:12px;border-radius:10px;background:#0071e3;color:#fff;text-align:center;text-decoration:none;font-weight:500}
+.card{background:#fff;border-radius:14px;padding:20px 16px;box-shadow:0 1px 3px rgba(0,0,0,.06)}
+.head{font-size:17px;font-weight:600;text-align:center}
+.desc{margin:10px 0 0;color:#86868b;font-size:13px;text-align:center}
+.btn{display:block;margin-top:18px;padding:12px;border-radius:10px;background:#0071e3;color:#fff;text-align:center;text-decoration:none;font-weight:500}
 .tip{margin-top:14px;padding:12px;border-radius:10px;background:#fff8e6;color:#8a6d00;font-size:13px}
+.note{margin-top:12px;color:#86868b;font-size:12px;text-align:center}
 .err{text-align:center;padding:40px 16px}
 .err h1{font-size:19px;margin:0 0 8px}
 .err p{color:#86868b;margin:0;font-size:14px}
-.hide{display:none}
 </style>
 </head>
 <body>
@@ -240,17 +271,13 @@ audio{background:transparent}
 <div class="card err"><h1>{{.ErrTitle}}</h1><p>{{.ErrDetail}}</p></div>
 {{else}}
 <div class="card">
-  {{if .IsVideo}}
-  <video controls playsinline preload="metadata" src="/s/{{.Token}}/content" onerror="document.getElementById('gone').className='tip'"></video>
-  {{else}}
-  <audio controls preload="metadata" src="/s/{{.Token}}/content" onerror="document.getElementById('gone').className='tip'"></audio>
-  {{end}}
-  <div id="gone" class="hide">内容可能已过期。生成结果保留 7 天，超期后将自动清理。</div>
+  <div class="head">{{.Kind}}文件</div>
+  <p class="desc">该链接仅提供下载，不支持在线播放。</p>
   {{if .InWeChat}}
-  <div class="tip">微信内无法直接保存。点右上角「···」选择「在浏览器打开」，即可下载到手机。</div>
-  {{else}}
-  <a class="btn" href="/s/{{.Token}}/content?download=1">下载到本地</a>
+  <div class="tip">微信内无法保存文件。请点右上角「···」，选择「在浏览器打开」，再点下面的按钮下载到手机。</div>
   {{end}}
+  <a class="btn" href="/s/{{.Token}}/content">下载到本地</a>
+  <div class="note">生成结果保留 7 天，超期后链接自动失效。</div>
 </div>
 {{end}}
 </div>

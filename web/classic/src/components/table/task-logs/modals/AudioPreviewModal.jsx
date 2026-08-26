@@ -18,8 +18,7 @@ For commercial licensing, please contact support@quantumnous.com
 */
 
 import React, { useState, useRef, useEffect } from 'react';
-import { Modal, Typography, Tag, Button } from '@douyinfe/semi-ui';
-import { IconExternalOpen, IconCopy } from '@douyinfe/semi-icons';
+import { Modal, Typography, Tag } from '@douyinfe/semi-ui';
 import { useTranslation } from 'react-i18next';
 
 const { Text, Title } = Typography;
@@ -82,7 +81,11 @@ const AudioClipCard = ({ clip }) => {
             marginBottom: '4px',
           }}
         >
-          <Text strong ellipsis={{ showTooltip: true }} style={{ fontSize: 15 }}>
+          <Text
+            strong
+            ellipsis={{ showTooltip: true }}
+            style={{ fontSize: 15 }}
+          >
             {title}
           </Text>
           {duration > 0 && (
@@ -105,6 +108,13 @@ const AudioClipCard = ({ clip }) => {
         )}
 
         {hasError ? (
+          // 原来这里给「在新标签页中打开」和「复制链接」，交出去的是 clip 的
+          // audio_url —— suno 的分轨只存在 task.Data 里，从没进过 OBS
+          // （service/media_ingest.go 只搬 taskResult.Url 那一条），所以它是上游
+          // 直链，有效期随上游，粘到站外任何地方都能在线播放。内容审核尚不完善，
+          // 在线浏览只保留在站内，所以两个按钮都拿掉。
+          // 上面的 <audio> 站内试听不受影响；后端没有按 clip 粒度的下载端点，
+          // 这里给不出「下载」，只能如实提示。
           <div
             style={{
               display: 'flex',
@@ -114,22 +124,8 @@ const AudioClipCard = ({ clip }) => {
             }}
           >
             <Text type='warning' size='small'>
-              {t('音频无法播放')}
+              {t('音频无法播放，请稍后重试')}
             </Text>
-            <Button
-              size='small'
-              icon={<IconExternalOpen />}
-              onClick={() => window.open(audioUrl, '_blank')}
-            >
-              {t('在新标签页中打开')}
-            </Button>
-            <Button
-              size='small'
-              icon={<IconCopy />}
-              onClick={() => navigator.clipboard.writeText(audioUrl)}
-            >
-              {t('复制链接')}
-            </Button>
           </div>
         ) : (
           <audio

@@ -19,7 +19,7 @@ For commercial licensing, please contact support@quantumnous.com
 
 import React, { useState, useEffect } from 'react';
 import { Modal, Button, Typography, Spin } from '@douyinfe/semi-ui';
-import { IconExternalOpen, IconCopy, IconDownload } from '@douyinfe/semi-icons';
+import { IconDownload } from '@douyinfe/semi-icons';
 import { useTranslation } from 'react-i18next';
 import { API, showError } from '../../../../helpers';
 
@@ -38,10 +38,12 @@ const ContentModal = ({
   const [isLoading, setIsLoading] = useState(false);
   const [downloading, setDownloading] = useState(false);
 
-  // 下载：优先走后端 /download 端点拿「带友好文件名」的签名 URL；无 taskId 时回退直下。
+  // 下载：走后端 /download 端点拿「带友好文件名」的签名 URL（带 attachment）。
+  // 无 taskId 时如实报错，不再回退成 window.open(原始 URL)——那等于在新标签页里
+  // 在线播放，且地址栏里就是一条可转发的直链。
   const handleDownload = async () => {
     if (!taskId) {
-      window.open(modalContent, '_blank');
+      showError(t('无法获取下载链接'));
       return;
     }
     setDownloading(true);
@@ -79,14 +81,6 @@ const ContentModal = ({
     setIsLoading(false);
   };
 
-  const handleCopyUrl = () => {
-    navigator.clipboard.writeText(modalContent);
-  };
-
-  const handleOpenInNewTab = () => {
-    window.open(modalContent, '_blank');
-  };
-
   const renderVideoContent = () => {
     if (videoError) {
       return (
@@ -116,41 +110,17 @@ const ContentModal = ({
             {t('• 防盗链保护机制')}
           </Text>
 
+          {/* 只留「下载」：原先的「在新标签页中打开」「复制链接」以及下面那块原样
+              摊出来的 URL，交出去的都是 7 天有效的签名直链，粘到站外任何地方都能
+              在线播放。内容审核尚不完善，在线浏览只保留在站内，站外一律走下载。 */}
           <div style={{ marginTop: '20px' }}>
-            <Button
-              icon={<IconExternalOpen />}
-              onClick={handleOpenInNewTab}
-              style={{ marginRight: '8px' }}
-            >
-              {t('在新标签页中打开')}
-            </Button>
-            <Button icon={<IconCopy />} onClick={handleCopyUrl}>
-              {t('复制链接')}
-            </Button>
             <Button
               icon={<IconDownload />}
               loading={downloading}
               onClick={handleDownload}
-              style={{ marginLeft: '8px' }}
             >
               {t('下载')}
             </Button>
-          </div>
-
-          <div
-            style={{
-              marginTop: '16px',
-              padding: '8px',
-              backgroundColor: '#f8f9fa',
-              borderRadius: '4px',
-            }}
-          >
-            <Text
-              type='tertiary'
-              style={{ fontSize: '10px', wordBreak: 'break-all' }}
-            >
-              {modalContent}
-            </Text>
           </div>
         </div>
       );
