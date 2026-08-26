@@ -28,6 +28,11 @@ var playgroundWritableOptions = map[string]bool{
 	"VideoModelConfig":     true,
 	"AudioModelConfig":     true,
 	"MusicModelConfig":     true,
+	// 「分类显示」区块（SettingsSidebarModulesAdmin）读写的侧边栏全局开关。漏加这条
+	// 时页面表现是：GET 拿不到它 → 组件回落到前端的 DEFAULT_ADMIN_CONFIG（图像/视频/
+	// 语音/音乐一律 false）→ 开关永远显示成默认态，而且下一次保存会把库里的真实配置
+	// 整个覆盖成默认值。它只控制侧边栏菜单的显隐，不改任何接口权限，交给 AdminAuth 合适。
+	"SidebarModulesAdmin": true,
 }
 
 // playgroundReadOnlyOptions 页面渲染需要、但不该让这页改的键。

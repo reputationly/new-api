@@ -81,10 +81,14 @@ export default function SettingsSidebarModulesAdmin(props) {
   }
 
   // 保存配置
+  //
+  // 走 /api/playground_admin/option 而不是 /api/option/：本组件只挂在「体验区管理」
+  // 页下，那页是 AdminRoute，而 /api/option/ 是 RootAuth——非 root 的管理员点保存
+  // 必然 403。白名单见 controller/playground_admin.go。
   async function onSubmit() {
     setLoading(true);
     try {
-      const res = await API.put('/api/option/', {
+      const res = await API.put('/api/playground_admin/option', {
         key: 'SidebarModulesAdmin',
         value: JSON.stringify(sidebarModulesAdmin),
       });
@@ -162,7 +166,9 @@ export default function SettingsSidebarModulesAdmin(props) {
         {
           key: 'music',
           title: t('音乐模型'),
-          description: t('文生音乐/音乐改编/音乐重绘/文生音效/视频生音/歌声合成'),
+          description: t(
+            '文生音乐/音乐改编/音乐重绘/文生音效/视频生音/歌声合成',
+          ),
         },
         { key: 'chat', title: t('聊天'), description: t('聊天会话管理') },
       ],
@@ -207,7 +213,11 @@ export default function SettingsSidebarModulesAdmin(props) {
       description: t('系统管理功能'),
       modules: [
         { key: 'channel', title: t('渠道管理'), description: t('API渠道配置') },
-        { key: 'group', title: t('分组管理'), description: t('用户分组与倍率配置') },
+        {
+          key: 'group',
+          title: t('分组管理'),
+          description: t('用户分组与倍率配置'),
+        },
         { key: 'models', title: t('模型管理'), description: t('AI模型配置') },
         {
           key: 'deployment',
