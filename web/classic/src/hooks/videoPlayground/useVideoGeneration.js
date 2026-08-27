@@ -76,7 +76,10 @@ import {
   VIDEO_ENGINE_MINIMAX_H3,
 } from '../../constants/videoPlayground.constants';
 import { composeImageToRatio, FIT_BLUR } from '../../helpers/imageCompose';
-import { tabHasField } from '../../constants/playgroundAdmin.constants';
+import {
+  getTabFieldLock,
+  tabHasField,
+} from '../../constants/playgroundAdmin.constants';
 import { buildH3OptimizeContext } from '../../constants/h3Prompt.constants';
 
 // 文生视频 / 图生视频 / 首尾帧 / 数字人 / 视频超分 / 视频编辑共用本 hook,按 mode
@@ -541,7 +544,13 @@ export const useVideoGeneration = ({
   // groupUsableModels 为空表示还没取到分组可用列表（初次渲染/切分组期间），此时传 null
   // 表示"不过滤"，避免超分档先闪一下再出现。
   const sizeChoices = useMemo(() => {
-    const native = getSizesForVideoModel(videoConfig, inputs.model, mode);
+    // 被引擎硬约束锁死的玩法（关键帧：short_edge 恒 768）直接用锁定值，**不读运营
+    // 配置**。不能只靠 admin 页锁住输入框：getSizesForVideoModel 是 tab 级 → 模型级
+    // → 分类默认值三级回落，运营为文生视频配的 480P 会顺着回落链漏到关键帧上——
+    // 那时关键帧的 tab 上一个字都没填，界面却摆出一个点了不生效的档位。
+    const lock = getTabFieldLock(category, mode, 'sizes');
+    const native =
+      lock?.value || getSizesForVideoModel(videoConfig, inputs.model, mode);
     if (!sendsSize || !isPipelineModel(videoConfig, inputs.model)) {
       return native.map((s) => ({ value: s, label: s, isUpscale: false }));
     }
@@ -551,7 +560,7 @@ export const useVideoGeneration = ({
       native,
       groupUsableModels.length ? groupUsableModels : null,
     );
-  }, [videoConfig, inputs.model, mode, sendsSize, groupUsableModels]);
+  }, [videoConfig, inputs.model, mode, category, sendsSize, groupUsableModels]);
   const availableSizes = useMemo(
     () => sizeChoices.map((c) => c.value),
     [sizeChoices],
@@ -1620,11 +1629,11 @@ export const useVideoGeneration = ({
         // 那次走同一个 buildVideoSizeChoices，保证续问/刷新后推出同一个答案——重新推却
         // 推出别的答案，正是 keyframeTaskType 当初的教训。
         // 分组可用性留到下面拿到权威列表再判，这里传 null 表示先不过滤。
-        const paramNativeSizes = getSizesForVideoModel(
-          videoConfig,
-          params.model,
-          mode,
-        );
+        // 锁定值优先，与展示侧 sizeChoices 同一份来源：两处各读各的，就会出现
+        // 「选择器按锁定值只给 768P，提交侧却按回落链认得 480P」这种分叉。
+        const paramNativeSizes =
+          getTabFieldLock(category, mode, 'sizes')?.value ||
+          getSizesForVideoModel(videoConfig, params.model, mode);
         // 闸门与展示侧同为 sendsSize（见 sizeChoices 的注释）：只要这个玩法会下发
         // size，超分档就成立，与是不是文生视频无关。
         const upscaleChoice = !sendsSize
@@ -1974,6 +1983,7 @@ export const useVideoGeneration = ({
       availableAspectRatios,
       videoConfig,
       mode,
+      category,
       allowDub,
       t,
     ],

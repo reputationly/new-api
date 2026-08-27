@@ -417,6 +417,7 @@ const TabPanel = ({ category, tab, draft }) => {
                       key={f}
                       field={f}
                       value={entry[f]}
+                      lock={tab.fieldLocks?.[f]}
                       onChange={(v) =>
                         draft.setTabField(storeKey, tab.key, name, f, v)
                       }

@@ -5,6 +5,7 @@ import {
   InputNumber,
   Select,
   Switch,
+  Tag,
   Typography,
 } from '@douyinfe/semi-ui';
 import { PLAYGROUND_FIELD_META } from '../../constants/playgroundAdmin.constants';
@@ -19,10 +20,39 @@ const SUGGESTIONS = { aspectRatios: VIDEO_ASPECT_RATIOS };
 // 按 PLAYGROUND_FIELD_META 的 type 渲染一个配置项。tab 配置、分类默认值共用，
 // 保证同一个字段在两处的控件与语义一致（这正是把 fields 抽成 schema 的目的）。
 // value=undefined 表示未配置，onChange(undefined) 表示清空回落兜底。
-const FieldInput = ({ field, value, onChange, compact = false }) => {
+//
+// lock：该字段被引擎硬约束锁死（来自 tab.fieldLocks，形如 { value, reason }）。
+// 渲染成只读的值 + 原因，不给编辑入口 —— 运营改了也不作数，给个能改的框只会让人
+// 以为改生效了。体验区读同一份 lock.value，见 getTabFieldLock 的注释。
+const FieldInput = ({ field, value, onChange, compact = false, lock }) => {
   const { t } = useTranslation();
   const meta = PLAYGROUND_FIELD_META[field];
   if (!meta) return null;
+
+  if (lock) {
+    const locked = (lock.value || []).join('、');
+    if (compact) return <Text type='tertiary'>{locked}</Text>;
+    return (
+      <div>
+        <Text strong className='text-sm'>
+          {t(meta.label)}
+        </Text>
+        <div className='mt-1'>
+          <Tag size='large' color='grey' shape='circle'>
+            {locked}
+          </Tag>
+          <Text type='tertiary' size='small' className='ml-2'>
+            {t('引擎固定，不可修改')}
+          </Text>
+        </div>
+        {lock.reason && (
+          <Text type='warning' size='small' className='block mt-1'>
+            {t(lock.reason)}
+          </Text>
+        )}
+      </div>
+    );
+  }
 
   const control = (() => {
     switch (meta.type) {

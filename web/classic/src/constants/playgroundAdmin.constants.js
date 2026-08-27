@@ -142,7 +142,7 @@ export const PLAYGROUND_MODEL_LEVEL_FIELDS = {
       key: 'upscale',
       label: '超分档位',
       type: 'upscale',
-      help: '给这个模型额外提供「先低档位生成、再交超分模型放大」的尺寸档位。留空=不提供（纯 opt-in）。起步档位必选，候选取该模型已配的、比目标更低的档位——没选或目标档位本身已在已配档位里，这条规则不生效。倍率不用填：引擎按部署 config 的目标尺寸封顶，前端固定发一个足够大的值。',
+      help: '给这个模型额外提供「先低档位生成、再交超分模型放大」的尺寸档位。留空=不提供（纯 opt-in）。起步档位必选，候选取该模型已配的、比目标更低的档位——没选或目标档位本身已在已配档位里，这条规则不生效。⚠️ 目标档位只是界面上的标签：超分模型按它自己部署配置里的分辨率档位出片（现网 seedvr2 各档均为 1920×1080），与这里填什么无关。所以目标档位要照着超分模型的实际部署填，填了别的不会改变出片分辨率、只会让界面标错。',
     },
     {
       key: 'engine',
@@ -217,14 +217,38 @@ export const PLAYGROUND_CATEGORIES = [
         key: 'flf2v',
         label: '关键帧',
         capability: '关键帧',
-        // 不给 sizes：画幅由上传的图决定（有首帧按首帧，只给尾帧就按尾帧），没有档位
-        // 可言。
+        // sizes 被 fieldLocks 锁死成 768P，运营改不了 —— 这不是产品策略，是引擎硬约束。
+        //
+        // H3 关键帧（i2va/l2va/fl2va）的画布**永远由引擎按 images[0] 推**：网关刻意不
+        // 下发 width/height（minimax_h3.go 的 h3ApplyCanvas 只对 t2v/r2va 生效），而引
+        // 擎那条自算路径把 short_edge 硬校验成 768。填别的档位不会报错：档位词会被
+        // h3DropResolutionToken 清掉、引擎照旧出 768 —— 静默失效，最难查的一类。
+        //
+        // 锁死而不是「填个默认值 + 写行提醒」，是因为光有提醒挡不住真正的漏法：
+        // getSizesForVideoModel 的取值是 tab 级 → 模型级 → 分类默认值三级回落，运营
+        // 为文生视频配的 480P 会顺着回落链漏到这个 tab 上 —— 关键帧一个字没填却冒出
+        // 失效档位，那种情况下提醒根本不会被看到。
+        //
+        // 那为什么还要保留 sizes 这个字段？因为超分档的闸门是 sendsSize（见
+        // useVideoGeneration 的 sizeChoices）：字段不在 fields 里，连 1080P 超分档都出
+        // 不来，关键帧永远用不上「先出 768P 再走 sr 模型」那条流水线。
+        //
+        // 于是两条路都不需要网关算画布，这正是关键帧能开放分辨率选择的原因：
+        // 选 768P 走原生（档位词被清掉＝引擎默认），选 1080P 走超分段（起步档同样是
+        // 768P，一样被清掉）。1080P 由模型级「超分档位」规则提供，运营可加可不加。
         //
         // aspectRatios 给，但它在这个 tab 里的语义与文生视频**完全不同**：引擎对关键帧
         // 静默忽略传来的比例，所以体验区不发比例字段，而是在提交前把图本身改成该比例
         // （居中裁剪或虚化补边，纯浏览器 canvas，见 helpers/imageCompose.js）。选择器里
         // 会自动多出「跟随上传素材」并默认选中 = 完全不干预。留空则整个选择器不出现。
-        fields: ['durations', 'maxInputMB', 'aspectRatios'],
+        fields: ['sizes', 'durations', 'maxInputMB', 'aspectRatios'],
+        fieldLocks: {
+          sizes: {
+            value: ['768P'],
+            reason:
+              '引擎按首图推画布、短边硬校验为 768，配其它档位不会报错也不会生效（仍出 768P），故此项锁定、不开放编辑。要额外提供 1080P，请在下方模型级「超分档位」加一条 768P → 1080P 的规则——先出 768P 再自动接超分模型；不加则只有 768P 一档。出片分辨率由超分模型的部署配置决定（现网 1920×1080），并自动跟随首图朝向：横图出 1920×1080、竖图出 1080×1920、方图出 1080×1080。',
+          },
+        },
         promptOptimize: true,
         taskTypeChoices: [
           { value: 'flf2v', label: '首尾帧（flf2v，尾帧必填）' },
@@ -392,6 +416,16 @@ export const getTabFields = (categoryKey, tabKey) =>
 // 体验区面板据此决定「这个玩法要不要显示某控件」，不再各自硬编码 mode 判断。
 export const tabHasField = (categoryKey, tabKey, field) =>
   getTabFields(categoryKey, tabKey).includes(field);
+
+// 该 tab 下被**引擎硬约束**锁死的字段：返回 { value, reason } 或 null。
+//
+// 与「运营没配」不是一回事：锁死的字段压根不接受配置，运营配了也不作数。admin 页据此
+// 渲染成只读并展示 reason，体验区据此绕过 getXxxForModel 的三级回落直接用 value。
+// 两侧读同一个函数是关键 —— 各写一份判断，迟早出现「管理端显示 A、体验区用 B」。
+//
+// 目前只有关键帧的 sizes（引擎按首图推画布、短边硬校验 768，见 flf2v tab 注释）。
+export const getTabFieldLock = (categoryKey, tabKey, field) =>
+  getPlaygroundTab(categoryKey, tabKey)?.fieldLocks?.[field] || null;
 
 // 落在同一份 option 的全部 tab（含跨分类的「视频配音」）。迁移、能力派生、
 // admin 保存都要按 option 维度遍历。返回 [{category, tab}]。
