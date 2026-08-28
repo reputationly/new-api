@@ -179,6 +179,10 @@ func ListModels(c *gin.Context, modelType int) {
 		} else {
 			models = model.GetGroupEnabledModels(group)
 		}
+		// 可见性裁剪（§6bis）：/v1/models 是 OpenAI 标准接口，任何客户端都会调它
+		// 列出可用模型。判据用 userGroup 而非 group——可见性绑用户身份，与令牌
+		// 指向哪个路由分组无关。
+		models = model.FilterModelsByVisibility(models, userGroup)
 		for _, modelName := range models {
 			if !acceptUnsetRatioModel {
 				if !helper.HasModelBillingConfig(modelName) {

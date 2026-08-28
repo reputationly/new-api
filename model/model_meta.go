@@ -39,6 +39,11 @@ type Model struct {
 	QuotaTypes    []int          `json:"quota_types,omitempty" gorm:"-"`
 	NameRule      int            `json:"name_rule" gorm:"default:0"`
 
+	// VisibleGroups 限制哪些**用户档**能看到并调用这个模型；空 = 所有人可见。
+	// 逗号分隔，语义是「默认允许、显式限制」——受限的是少数，公开的是多数。
+	// 见 docs/user-tier-pricing-and-topup-package-design.md §6bis。
+	VisibleGroups string `json:"visible_groups" gorm:"type:varchar(512);default:''"`
+
 	MatchedModels []string `json:"matched_models,omitempty" gorm:"-"`
 	MatchedCount  int      `json:"matched_count,omitempty" gorm:"-"`
 }
@@ -73,11 +78,23 @@ func IsModelNameDuplicated(id int, name string) (bool, error) {
 	return cnt > 0, err
 }
 
+// modelUpdateSelectFields 是 Update() 强制更新的字段白名单（含零值）。
+//
+// 提成函数是为了让「新增字段漏加进白名单」这个静默失效点可测：漏了的表现是**保存
+// 成功但没存上**——接口返回 200、页面显示已保存、刷新后配置消失，没有任何错误可查。
+func modelUpdateSelectFields() []string {
+	return []string{
+		"model_name", "description", "icon", "tags", "vendor_id",
+		"endpoints", "status", "sync_official", "name_rule",
+		"visible_groups", "updated_time",
+	}
+}
+
 func (mi *Model) Update() error {
 	mi.UpdatedTime = common.GetTimestamp()
 	// 使用 Select 强制更新所有字段，包括零值
 	return DB.Model(&Model{}).Where("id = ?", mi.Id).
-		Select("model_name", "description", "icon", "tags", "vendor_id", "endpoints", "status", "sync_official", "name_rule", "updated_time").
+		Select(modelUpdateSelectFields()).
 		Updates(mi).Error
 }
 

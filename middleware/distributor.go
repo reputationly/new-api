@@ -79,6 +79,27 @@ func Distribute() func(c *gin.Context) {
 					abortWithOpenAiMessage(c, http.StatusBadRequest, i18n.T(c, i18n.MsgDistributorModelNameRequired))
 					return
 				}
+
+				// 模型可见性拦截（设计 §6bis.3）。
+				//
+				// 这里是唯一的安全边界：模型广场、令牌页、操练场的过滤都只是展示层，
+				// 用户知道模型名就能直接调。只改展示不改这里，等于没做。
+				//
+				// 判据用 UserGroup 而非 UsingGroup：可见性绑的是**用户身份**，
+				// 与令牌指向哪个路由分组无关；企业子账号用主账号令牌，
+				// ContextKeyUserGroup 里已经是主账号的档（middleware/auth.go）。
+				//
+				// 返回「模型不存在」而非「无权访问」：对这个用户它确实不存在，
+				// 且不泄露隐藏模型的存在。
+				if !model.IsModelVisibleForGroup(modelRequest.Model, common.GetContextKeyString(c, constant.ContextKeyUserGroup)) {
+					abortWithOpenAiMessage(c, http.StatusNotFound,
+						i18n.T(c, i18n.MsgDistributorNoAvailableChannel, map[string]any{
+							"Group": common.GetContextKeyString(c, constant.ContextKeyUsingGroup),
+							"Model": modelRequest.Model,
+						}), types.ErrorCodeModelNotFound)
+					return
+				}
+
 				var selectGroup string
 				usingGroup := common.GetContextKeyString(c, constant.ContextKeyUsingGroup)
 				// playground 代理路由（/pg/chat/completions、/pg/images/generations 等）：

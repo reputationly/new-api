@@ -609,6 +609,9 @@ func GetUserModels(c *gin.Context) {
 			}
 		}
 	}
+	// 可见性裁剪（§6bis）：令牌页与操练场的模型下拉都读这个接口，用户档看不到的
+	// 模型不该出现在这里——否则会配出一个「选得了却调不通」的令牌白名单。
+	models = model.FilterModelsByVisibility(models, billingGroup)
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
 		"message": "",

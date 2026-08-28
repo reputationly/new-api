@@ -10,6 +10,23 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
+// filterPricingByVisibility 按用户档裁掉受限模型。
+//
+// group 传空（未登录）时按「无档位」判定：受限模型对匿名访客一律不可见——
+// 模型广场是公开页面，把内测模型或客户专属模型露给未登录用户没有任何理由。
+func filterPricingByVisibility(pricing []model.Pricing, userGroup string) []model.Pricing {
+	if !model.HasModelVisibilityRestrictions() {
+		return pricing
+	}
+	filtered := make([]model.Pricing, 0, len(pricing))
+	for _, item := range pricing {
+		if model.IsModelVisibleForGroup(item.ModelName, userGroup) {
+			filtered = append(filtered, item)
+		}
+	}
+	return filtered
+}
+
 func filterPricingByUsableGroups(pricing []model.Pricing, usableGroup map[string]string) []model.Pricing {
 	if len(pricing) == 0 {
 		return pricing
@@ -111,6 +128,9 @@ func GetPricing(c *gin.Context) {
 
 	usableGroup = service.GetUserUsableGroups(group)
 	pricing = filterPricingByUsableGroups(pricing, usableGroup)
+	// 可见性裁剪（§6bis）：按用户档隐藏受限模型。展示层过滤，真正的拦截在
+	// middleware/distributor.go——这里只保证用户不会看到一个自己调不了的模型。
+	pricing = filterPricingByVisibility(pricing, group)
 	// check groupRatio contains usableGroup
 	for group := range ratio_setting.GetGroupRatioCopy() {
 		if _, ok := usableGroup[group]; !ok {

@@ -174,16 +174,14 @@ func getConfiguredModelCapabilities(imgRaw, vidRaw, audRaw, musRaw string) map[s
 	return result
 }
 
-func updatePricing(imgRaw, vidRaw, audRaw, musRaw string) {
-	//modelRatios := common.GetModelRatios()
-	enableAbilities, err := GetAllEnableAbilityWithChannels()
-	if err != nil {
-		common.SysLog(fmt.Sprintf("GetAllEnableAbilityWithChannels error: %v", err))
-		return
-	}
-	// 预加载模型元数据与供应商一次，避免循环查询
-	var allMeta []Model
-	_ = DB.Find(&allMeta).Error
+// BuildModelMetaMap 把模型元数据按 NameRule 展开成「实际模型名 -> 元数据行」。
+//
+// 精确规则优先，其余按 前缀 / 后缀 / 包含 的顺序补齐，先到先得（已存在的键不覆盖）。
+//
+// 导出并抽成独立函数，是因为模型可见性缓存（model/model_visibility.go）必须用
+// **同一套**展开规则：运营在一条前缀规则上配了可见范围，却因为两处匹配逻辑不同而
+// 静默不生效，是这类权限功能最典型的失效方式——页面上配好了，实际没拦住。
+func BuildModelMetaMap(allMeta []Model, enableAbilities []AbilityWithChannel) map[string]*Model {
 	metaMap := make(map[string]*Model)
 	prefixList := make([]*Model, 0)
 	suffixList := make([]*Model, 0)
@@ -232,6 +230,20 @@ func updatePricing(imgRaw, vidRaw, audRaw, musRaw string) {
 			}
 		}
 	}
+	return metaMap
+}
+
+func updatePricing(imgRaw, vidRaw, audRaw, musRaw string) {
+	//modelRatios := common.GetModelRatios()
+	enableAbilities, err := GetAllEnableAbilityWithChannels()
+	if err != nil {
+		common.SysLog(fmt.Sprintf("GetAllEnableAbilityWithChannels error: %v", err))
+		return
+	}
+	// 预加载模型元数据与供应商一次，避免循环查询
+	var allMeta []Model
+	_ = DB.Find(&allMeta).Error
+	metaMap := BuildModelMetaMap(allMeta, enableAbilities)
 
 	// 预加载供应商
 	var vendors []Vendor

@@ -310,7 +310,10 @@ func validateTokenModelLimits(userId int, token *model.Token) error {
 
 	available := make(map[string]bool)
 	for _, g := range targetGroups {
-		for _, m := range model.GetGroupEnabledModels(g) {
+		// 可见性裁剪（§6bis）：用户档看不到的模型不能进令牌白名单，否则会存下一份
+		// 「配得上却调不通」的配置——真正的拦截在 distributor，这里是让错误提前到
+		// 保存时暴露，而不是等到调用时才报模型不存在
+		for _, m := range model.FilterModelsByVisibility(model.GetGroupEnabledModels(g), user.Group) {
 			available[m] = true
 		}
 	}

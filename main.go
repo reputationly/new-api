@@ -135,6 +135,10 @@ func main() {
 	model.InitChannelModelCostCache()
 	go model.SyncChannelModelCostCache(common.SyncFrequency)
 
+	// 模型可见性缓存：权限判定，任何部署形态都必须生效，同样与内存缓存开关无关
+	model.InitModelVisibilityCache()
+	go model.SyncModelVisibilityCache(common.SyncFrequency)
+
 	// 热更新配置
 	go model.SyncOptions(common.SyncFrequency)
 
