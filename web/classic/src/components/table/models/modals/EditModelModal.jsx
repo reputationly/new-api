@@ -124,6 +124,7 @@ const EditModelModal = (props) => {
     name_rule: props.editingModel?.model_name ? 0 : undefined, // 通过未配置模型过来的固定为精确匹配
     status: true,
     sync_official: true,
+    visible_groups: [],
   });
 
   const handleCancel = () => {
@@ -148,6 +149,10 @@ const EditModelModal = (props) => {
         if (!data.endpoints) {
           data.endpoints = '';
         }
+        // visible_groups 与 tags 同形：逗号分隔字符串 <-> 数组
+        data.visible_groups = data.visible_groups
+          ? data.visible_groups.split(',').filter(Boolean)
+          : [];
         // 处理status/sync_official，将数字转为布尔值
         data.status = data.status === 1;
         data.sync_official = (data.sync_official ?? 1) === 1;
@@ -195,6 +200,9 @@ const EditModelModal = (props) => {
       const submitData = {
         ...values,
         tags: Array.isArray(values.tags) ? values.tags.join(',') : values.tags,
+        visible_groups: Array.isArray(values.visible_groups)
+          ? values.visible_groups.join(',')
+          : values.visible_groups || '',
         endpoints: values.endpoints || '',
         status: values.status ? 1 : 0,
         sync_official: values.sync_official ? 1 : 0,
@@ -532,6 +540,20 @@ const EditModelModal = (props) => {
                         '关闭后，此模型将不会被“同步官方”自动覆盖或创建',
                       )}
                       size='large'
+                    />
+                  </Col>
+                  <Col span={24}>
+                    <Form.TagInput
+                      field='visible_groups'
+                      label={t('可见用户档')}
+                      placeholder={t(
+                        '留空 = 所有人可见；填写后仅这些用户档可见',
+                      )}
+                      addOnBlur
+                      showClear
+                      extraText={t(
+                        '按用户档限制谁能看到并调用此模型。留空表示不限制；填了就只有列出的档能用，其余用户会得到「模型不存在」。填了却一个都不填等于对所有人隐藏。',
+                      )}
                     />
                   </Col>
                   <Col span={24}>

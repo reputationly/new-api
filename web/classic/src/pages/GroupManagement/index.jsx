@@ -56,6 +56,7 @@ const OPTION_KEYS = [
   'GroupDescription',
   'GroupGroupRatio',
   'GroupModelRatio',
+  'UserGroupModelRatio',
   'group_ratio_setting.group_special_usable_group',
   'AutoGroups',
   'DefaultUseAutoGroup',
@@ -89,6 +90,7 @@ export default function GroupManagementPage() {
   const [originInputs, setOriginInputs] = useState({});
   const [overview, setOverview] = useState({ groups: [], unconfigured: [] });
   const [activeGroup, setActiveGroup] = useState('');
+  const [activeTier, setActiveTier] = useState('');
   const [activeTab, setActiveTab] = useState('groups');
   const [seedNames, setSeedNames] = useState(null);
   const dataVersionRef = useRef(0);
@@ -151,6 +153,20 @@ export default function GroupManagementPage() {
     () => Object.keys(parseJSONSafe(inputs.GroupRatio, {})),
     [inputs.GroupRatio],
   );
+
+  // 用户档来源有两处：已配过折扣的档，以及现有分组名（现网两者高度重叠）。
+  // 不能只取 GroupRatio ——谈判档位按设计 §6.4 不进 GroupRatio，那是路由维度，
+  // 客户越多列表越乱。所以下拉允许直接新建。
+  const tierNames = useMemo(() => {
+    const configured = Object.keys(
+      parseJSONSafe(inputs.UserGroupModelRatio, {}),
+    );
+    const merged = new Set([
+      ...configured,
+      ...Object.keys(parseJSONSafe(inputs.GroupRatio, {})),
+    ]);
+    return Array.from(merged).sort();
+  }, [inputs.UserGroupModelRatio, inputs.GroupRatio]);
 
   const healthMap = useMemo(() => {
     const map = {};
@@ -321,6 +337,61 @@ export default function GroupManagementPage() {
                   value={inputs.GroupModelRatio}
                   staleRules={healthMap[activeGroup]?.stale_rules || []}
                   onChange={(v) => setField('GroupModelRatio', v)}
+                />
+              </div>
+            </Tabs.TabPane>
+
+            <Tabs.TabPane tab={t('档位折扣')} itemKey='user_tier'>
+              <div className='pt-3'>
+                <Row gutter={12} className='mb-3'>
+                  <Col xs={24} sm={8}>
+                    <Text type='tertiary' size='small' className='mb-1 block'>
+                      {t('配置哪个用户档')}
+                    </Text>
+                    <Select
+                      style={{ width: '100%' }}
+                      value={activeTier || null}
+                      optionList={tierNames.map((g) => ({
+                        label: g,
+                        value: g,
+                      }))}
+                      onChange={setActiveTier}
+                      filter
+                      allowCreate
+                      placeholder={t('选择或输入用户档（如客户名）')}
+                    />
+                  </Col>
+                </Row>
+                <ModelRatioEditor
+                  key={`ugmr_${dv}_${activeTier}`}
+                  group={activeTier}
+                  groupRatio={1}
+                  value={inputs.UserGroupModelRatio}
+                  onChange={(v) => setField('UserGroupModelRatio', v)}
+                  modelsEndpoint='/api/group/models'
+                  allowOverride={false}
+                  texts={{
+                    emptyHint: t('请先选择或输入一个用户档'),
+                    banner: (
+                      <>
+                        <div>
+                          {t(
+                            '按「用户档 × 模型」打折，与用户走哪条供应链无关——同一个用户用哪个令牌都是这个折扣。',
+                          )}
+                        </div>
+                        <div>
+                          {t(
+                            '「*」是兜底规则，匹配所有模型；具体模型名与前缀通配优先级更高。',
+                          )}
+                        </div>
+                        <div>
+                          {t(
+                            '全线折扣务必用「*」而不是逐个勾选：逐个勾会漏掉模型名的大小写变体，新上线的模型也不会自动纳入。',
+                          )}
+                        </div>
+                      </>
+                    ),
+                  }}
                 />
               </div>
             </Tabs.TabPane>

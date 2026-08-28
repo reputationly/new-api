@@ -192,8 +192,18 @@ func staleRulePatterns(group string, rules map[string]ratio_setting.ModelRatioRu
 // 不该让人先配出来、再靠 stale_rules 去发现。
 func GetGroupModels(c *gin.Context) {
 	group := strings.TrimSpace(c.Query("group"))
+	// 不传 group = 全站模型，供「档位折扣」编辑器使用：用户档折扣与走哪条供应链
+	// 无关，按分组过滤会让运营配不出挂在别的分组上的模型。
 	if group == "" {
-		common.ApiErrorMsg(c, "缺少 group 参数")
+		models, err := model.GetAllEnabledModelNames()
+		if err != nil {
+			common.ApiError(c, err)
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{
+			"success": true,
+			"data":    models,
+		})
 		return
 	}
 	models, err := model.GetGroupModels(group)

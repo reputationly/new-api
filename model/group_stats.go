@@ -71,6 +71,20 @@ func GetGroupModels(group string) ([]string, error) {
 	return models, err
 }
 
+// GetAllEnabledModelNames 返回全站有渠道覆盖的模型名（去重、有序）。
+//
+// 供「档位折扣」编辑器用：用户档折扣按 (用户分组, 模型) 索引，与走哪条供应链无关，
+// 因此不能按分组过滤——否则运营在档位折扣里就配不出那些挂在别的分组上的模型。
+func GetAllEnabledModelNames() ([]string, error) {
+	var models []string
+	err := DB.Model(&Ability{}).
+		Distinct("model").
+		Where("enabled = ?", true).
+		Order("model").
+		Pluck("model", &models).Error
+	return models, err
+}
+
 // GroupReferences 一个分组被引用的次数，用于删除前的影响面提示。
 type GroupReferences struct {
 	Users    int64 `json:"users"`

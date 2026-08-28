@@ -42,6 +42,25 @@ function parseJSON(str) {
 const isWildcard = (pattern) => (pattern || '').endsWith('*');
 
 /**
+ * 模式下拉的选项。
+ *
+ * 档位折扣禁用 override（设计 §4）：它的语义是「打折」，一旦允许绝对值就会吃掉
+ * Layer 0/1/2 承载的全部成本信息，在成本高的模型上直接亏损且日志上看不出来。
+ * 下拉里直接不给这个选项，比保存时才报错早一步。
+ *
+ * 导出成纯函数而不是内联进组件：隔着 Semi 的 portal 断言下拉选项极易写出恒真的
+ * 假测试（本文件配套用例的第一版就是——点击没真正展开，queryByText 恒为 null，
+ * 变异验证时把 allowOverride 整个忽略掉测试依然全绿）。
+ */
+export function buildModeOptions(allowOverride, t) {
+  const multiply = { label: t('折扣 ×'), value: MODE_MULTIPLY };
+  if (!allowOverride) {
+    return [multiply];
+  }
+  return [multiply, { label: t('定价 ='), value: MODE_OVERRIDE }];
+}
+
+/**
  * 把 GroupModelRatio 的嵌套 JSON 摊平成某个分组下的规则行。
  *
  * 兼容裸数字写法（{"GLM-5": 0.5}）——后端也认它，编辑器不能把手工写的配置吃掉。
@@ -102,6 +121,18 @@ export default function ModelRatioEditor({
   value,
   staleRules = [],
   onChange,
+  // 以下三个用于「档位折扣」复用（设计 §8.2）。默认值保持分组折扣的原行为，
+  // 调用方不传时与参数化之前逐位相同。
+  //
+  // modelsEndpoint  分组折扣只列本分组有渠道的模型；档位折扣按用户档索引、
+  //                 与供应链无关，必须列全站模型
+  // allowOverride   档位折扣只允许 multiply：override 会吃掉 Layer 0/1/2 承载的
+  //                 全部成本信息，在成本高的模型上直接亏损且日志上看不出来
+  // texts           左轴语义不同（分组 / 用户档），提示文案必须跟着换，
+  //                 否则页面会指着用户档说「分组基础倍率」
+  modelsEndpoint,
+  allowOverride = true,
+  texts = {},
 }) {
   const { t } = useTranslation();
 
@@ -130,7 +161,9 @@ export default function ModelRatioEditor({
   useEffect(() => {
     if (!group) return;
     let cancelled = false;
-    API.get(`/api/group/models?group=${encodeURIComponent(group)}`)
+    const endpoint =
+      modelsEndpoint || `/api/group/models?group=${encodeURIComponent(group)}`;
+    API.get(endpoint)
       .then((res) => {
         if (cancelled) return;
         if (res.data?.success) {
@@ -141,7 +174,7 @@ export default function ModelRatioEditor({
     return () => {
       cancelled = true;
     };
-  }, [group]);
+  }, [group, modelsEndpoint]);
 
   // 下面三个 ref 都是「渲染期同步、事件回调里读」，**不能**进 useCallback 依赖。
   //
@@ -256,6 +289,11 @@ export default function ModelRatioEditor({
     [filtered],
   );
 
+  const modeOptions = useMemo(
+    () => buildModeOptions(allowOverride, t),
+    [allowOverride, t],
+  );
+
   const hasOverride = useMemo(
     () => rows.some((r) => r.mode === MODE_OVERRIDE),
     [rows],
@@ -316,10 +354,7 @@ export default function ModelRatioEditor({
             style={{ width: '100%' }}
             value={record.mode}
             onChange={(v) => updateRow(record._id, 'mode', v)}
-            optionList={[
-              { label: t('折扣 ×'), value: MODE_MULTIPLY },
-              { label: t('定价 ='), value: MODE_OVERRIDE },
-            ]}
+            optionList={modeOptions}
           />
         ),
       },
@@ -391,7 +426,7 @@ export default function ModelRatioEditor({
   );
 
   if (!group) {
-    return <Empty description={t('请先选择一个分组')} />;
+    return <Empty description={texts.emptyHint || t('请先选择一个分组')} />;
   }
 
   return (
@@ -401,19 +436,24 @@ export default function ModelRatioEditor({
         closeIcon={null}
         description={
           <div className='text-xs leading-6'>
-            <div>
-              {t(
-                '折扣 ×：在分组基础倍率上再乘，改分组倍率时所有模型的优惠自动跟随。',
-              )}
-            </div>
-            <div>
-              {t(
-                '定价 =：该模型就是这个倍率，与分组基础倍率、用户身份折扣全部脱钩。',
-              )}
-            </div>
-            <div>
-              {t('当前分组基础倍率')}：<Text strong>{groupRatio ?? 1}x</Text>
-            </div>
+            {texts.banner || (
+              <>
+                <div>
+                  {t(
+                    '折扣 ×：在分组基础倍率上再乘，改分组倍率时所有模型的优惠自动跟随。',
+                  )}
+                </div>
+                <div>
+                  {t(
+                    '定价 =：该模型就是这个倍率，与分组基础倍率、用户身份折扣全部脱钩。',
+                  )}
+                </div>
+                <div>
+                  {t('当前分组基础倍率')}：
+                  <Text strong>{groupRatio ?? 1}x</Text>
+                </div>
+              </>
+            )}
           </div>
         }
       />
@@ -466,10 +506,7 @@ export default function ModelRatioEditor({
             style={{ width: 110 }}
             value={batchMode}
             onChange={setBatchMode}
-            optionList={[
-              { label: t('折扣 ×'), value: MODE_MULTIPLY },
-              { label: t('定价 ='), value: MODE_OVERRIDE },
-            ]}
+            optionList={modeOptions}
           />
           <InputNumber
             size='small'
