@@ -35,6 +35,7 @@ import { UserContext } from '../../context/User';
 import { StatusContext } from '../../context/Status';
 
 import RechargeCard from './RechargeCard';
+import TopupPackagesCard from './TopupPackagesCard';
 import InvitationCard from './InvitationCard';
 import PointsTasksCard from '../points/PointsTasksCard';
 import BankTransferCard from './BankTransferCard';
@@ -255,27 +256,37 @@ const TopUp = () => {
     }, 5000);
   };
 
-  const handleDirectTopUp = async (payType) => {
+  // packageId > 0 时走充值套餐：金额由套餐定，最小充值额不适用（后端 resolveTopupPackage
+  // 同样绕开了散充的金额折扣与分组汇率，避免重复让利）。二维码与轮询逻辑完全复用。
+  const handleDirectTopUp = async (payType, packageId = 0) => {
     if (!checkKycBeforePay()) return;
-    const selectedMinTopUp = getPaymentMinTopUp(payType);
-    if (topUpCount < selectedMinTopUp) {
-      showError(t('充值数量不能小于 ') + selectedMinTopUp);
-      return;
+    if (!packageId) {
+      const selectedMinTopUp = getPaymentMinTopUp(payType);
+      if (topUpCount < selectedMinTopUp) {
+        showError(t('充值数量不能小于 ') + selectedMinTopUp);
+        return;
+      }
     }
     setPaymentLoading(true);
     try {
       const apiBase =
         payType === 'alipay_direct' ? '/api/user/alipay' : '/api/user/wxpay';
-      const res = await API.post(`${apiBase}/pay`, {
-        amount: parseInt(topUpCount),
-      });
+      const res = await API.post(
+        `${apiBase}/pay`,
+        packageId
+          ? { package_id: packageId }
+          : { amount: parseInt(topUpCount) },
+      );
       const { message, data } = res.data;
       if (message !== 'success') {
         showError(data || t('创建订单失败'));
         return;
       }
       if (data.qr_code) {
-        const fetched = await requestAmountByPayment(payType);
+        // 套餐的应付金额由后端按套餐售价算出并随下单返回；散充才需要再查一次
+        const fetched = packageId
+          ? data.money
+          : await requestAmountByPayment(payType);
         setDirectPayType(payType);
         setDirectPayQRCode(data.qr_code);
         setDirectPayMoney(typeof fetched === 'number' ? fetched : amount);
@@ -1098,6 +1109,13 @@ const TopUp = () => {
           <InvoiceCard userState={userState} />
         </div>
       )}
+
+      {/* 充值套餐：站点没配套餐时组件自身返回 null，不占位 */}
+      <TopupPackagesCard
+        payMethods={payMethods}
+        paymentLoading={paymentLoading}
+        onBuy={(payType, packageId) => handleDirectTopUp(payType, packageId)}
+      />
 
       {/* 主布局区域 */}
       <div className='grid grid-cols-1 lg:grid-cols-2 gap-6'>
