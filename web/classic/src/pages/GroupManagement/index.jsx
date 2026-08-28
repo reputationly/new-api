@@ -54,6 +54,7 @@ const OPTION_KEYS = [
   'GroupRatio',
   'UserUsableGroups',
   'GroupDescription',
+  'GroupEnabled',
   'GroupGroupRatio',
   'GroupModelRatio',
   'UserGroupModelRatio',
@@ -191,13 +192,17 @@ export default function GroupManagementPage() {
     setInputs((prev) => ({ ...prev, [key]: value }));
   }, []);
 
+  // 必须接住 serializeGroupTable 返回的**全部** key。少解构一个的表现是：
+  // 勾选框能动（rows 本地 state 变了）、保存提示成功、刷新回滚——因为
+  // inputs 里那个字段从未更新，compareObjects 检测不到变化，PUT 里就没有它。
   const handleGroupTableChange = useCallback(
-    ({ GroupRatio, UserUsableGroups, GroupDescription }) => {
+    ({ GroupRatio, UserUsableGroups, GroupDescription, GroupEnabled }) => {
       setInputs((prev) => ({
         ...prev,
         GroupRatio,
         UserUsableGroups,
         GroupDescription,
+        GroupEnabled,
       }));
     },
     [],
@@ -302,6 +307,7 @@ export default function GroupManagementPage() {
                   groupRatio={inputs.GroupRatio}
                   userUsableGroups={inputs.UserUsableGroups}
                   groupDescription={inputs.GroupDescription}
+                  groupEnabled={inputs.GroupEnabled}
                   health={healthMap}
                   seedNames={seedNames}
                   onSelectGroup={jumpToRules}

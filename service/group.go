@@ -33,6 +33,13 @@ func GetUserUsableGroups(userGroup string) map[string]string {
 			groupsCopy[userGroup] = "用户分组"
 		}
 	}
+	// 停用的分组对用户不可见、不可用（设计 §10.8）。管理端读的是 GroupRatio，
+	// 不走这里，所以管理员仍能看到并重新启用它们。
+	for name := range groupsCopy {
+		if setting.IsGroupDisabled(name) {
+			delete(groupsCopy, name)
+		}
+	}
 	return groupsCopy
 }
 
@@ -46,7 +53,10 @@ func GetUserAutoGroup(userGroup string) []string {
 	groups := GetUserUsableGroups(userGroup)
 	autoGroups := make([]string, 0)
 	for _, group := range setting.GetAutoGroups() {
-		if _, ok := groups[group]; ok {
+		// GetUserUsableGroups 已经滤掉了停用分组，这里天然不会命中它们；
+		// 保留这层判断是为了让「auto 池不会选中停用分组」这件事在本函数里自证，
+		// 而不必回溯上游实现
+		if _, ok := groups[group]; ok && !setting.IsGroupDisabled(group) {
 			autoGroups = append(autoGroups, group)
 		}
 	}

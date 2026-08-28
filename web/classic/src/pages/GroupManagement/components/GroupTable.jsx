@@ -53,10 +53,18 @@ function parseJSON(str, fallback) {
   }
 }
 
-function buildRows(groupRatioStr, userUsableGroupsStr, groupDescriptionStr) {
+function buildRows(
+  groupRatioStr,
+  userUsableGroupsStr,
+  groupDescriptionStr,
+  groupEnabledStr,
+) {
   const ratioMap = parseJSON(groupRatioStr, {});
   const usableMap = parseJSON(userUsableGroupsStr, {});
   const descriptionMap = parseJSON(groupDescriptionStr, {});
+  // GroupEnabled 存的是**被停用**的分组名，未列出即启用：默认值是「全部启用」，
+  // 新建分组不需要额外配置，空配置时行为与改造前逐位相同
+  const disabledSet = new Set(parseJSON(groupEnabledStr, []));
 
   const allNames = new Set([
     ...Object.keys(ratioMap),
@@ -69,6 +77,7 @@ function buildRows(groupRatioStr, userUsableGroupsStr, groupDescriptionStr) {
     name,
     ratio: ratioMap[name] ?? 1,
     selectable: name in usableMap,
+    enabled: !disabledSet.has(name),
     // 描述独立存在 GroupDescription 里；没有值时回退到 UserUsableGroups 里的
     // 历史描述，避免已勾选「用户可选」分组的老描述在这次改造后显示为空。
     description: descriptionMap[name] ?? usableMap[name] ?? '',
@@ -79,6 +88,7 @@ export function serializeGroupTable(rows) {
   const groupRatio = {};
   const userUsableGroups = {};
   const groupDescription = {};
+  const disabledGroups = [];
 
   rows.forEach((row) => {
     if (!row.name) return;
@@ -87,12 +97,17 @@ export function serializeGroupTable(rows) {
     if (row.selectable) {
       userUsableGroups[row.name] = row.description;
     }
+    // enabled 未定义时按启用处理：老数据没有这个字段，不能因为缺字段就把分组停掉
+    if (row.enabled === false) {
+      disabledGroups.push(row.name);
+    }
   });
 
   return {
     GroupRatio: JSON.stringify(groupRatio, null, 2),
     UserUsableGroups: JSON.stringify(userUsableGroups, null, 2),
     GroupDescription: JSON.stringify(groupDescription, null, 2),
+    GroupEnabled: JSON.stringify(disabledGroups, null, 2),
   };
 }
 
@@ -100,6 +115,7 @@ export default function GroupTable({
   groupRatio,
   userUsableGroups,
   groupDescription,
+  groupEnabled,
   health = {},
   onChange,
   onSelectGroup,
@@ -108,7 +124,7 @@ export default function GroupTable({
   const { t } = useTranslation();
 
   const [rows, setRows] = useState(() =>
-    buildRows(groupRatio, userUsableGroups, groupDescription),
+    buildRows(groupRatio, userUsableGroups, groupDescription, groupEnabled),
   );
 
   // Use functional setRows to keep updateRow/addRow/removeRow referentially
@@ -386,6 +402,19 @@ export default function GroupTable({
             </div>
           );
         },
+      },
+      {
+        title: t('启用'),
+        dataIndex: 'enabled',
+        key: 'enabled',
+        width: 90,
+        align: 'center',
+        render: (_, record) => (
+          <Checkbox
+            checked={record.enabled !== false}
+            onChange={(e) => updateRow(record._id, 'enabled', e.target.checked)}
+          />
+        ),
       },
       {
         title: t('用户可选'),

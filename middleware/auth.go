@@ -14,6 +14,7 @@ import (
 	"github.com/QuantumNous/new-api/logger"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/service"
+	"github.com/QuantumNous/new-api/setting"
 	"github.com/QuantumNous/new-api/setting/ratio_setting"
 	"github.com/QuantumNous/new-api/types"
 
@@ -402,7 +403,30 @@ func TokenAuth() func(c *gin.Context) {
 
 		userGroup := userCache.Group
 		tokenGroup := token.Group
+
+		// 停用检查要覆盖两条路径：令牌显式指定了分组，以及令牌没指定、回落到用户
+		// 自己的分组。只放在 `tokenGroup != ""` 块里的话，空 group 的老令牌会整个
+		// 绕过判断（现网有 9 个这样的令牌）——而 GetUserUsableGroups 那边已经把停用
+		// 分组滤掉了，结果是服务层认为不可用、auth 层却放行，一半拦一半放比单纯
+		// 放行更难排查。
+		//
+		// 也必须在「无权访问」之前判：那个检查读的正是已过滤的 GetUserUsableGroups，
+		// 放在它后面这段就成了死代码，用户看到的会是「无权访问」——而他其实有权限，
+		// 只是分组被运营暂停了。两种情况的处置完全不同：一个等活动重开，一个换令牌。
+		effectiveGroup := tokenGroup
+		if effectiveGroup == "" {
+			effectiveGroup = userGroup
+		}
+		if setting.IsGroupDisabled(effectiveGroup) {
+			abortWithOpenAiMessage(c, http.StatusForbidden, fmt.Sprintf("分组 %s 已停用", effectiveGroup))
+			return
+		}
+
 		if tokenGroup != "" {
+			// 以下两项只对**显式指定的**令牌分组判：
+			//   「无权访问」问的是「能不能用别人的分组」，用户自己的分组不适用；
+			//   「已弃用」（ContainsGroupRatio）留在块内是既有行为，提出来会把
+			//   user.Group 不在 GroupRatio 里的用户全部挡住，属于行为变更。
 			// check common.UserUsableGroups[userGroup]
 			if _, ok := service.GetUserUsableGroups(userGroup)[tokenGroup]; !ok {
 				abortWithOpenAiMessage(c, http.StatusForbidden, fmt.Sprintf("无权访问 %s 分组", tokenGroup))
