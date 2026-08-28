@@ -40,11 +40,18 @@ func appendRequestPath(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, other
 // group_base_ratio 是套模型规则之前的基准，group_model_rule 是命中的那条规则。
 // 未命中模型规则时两个字段都不写，存量日志的形状不变。
 func appendGroupModelRule(other map[string]interface{}, info types.GroupRatioInfo) {
-	if other == nil || info.ModelRuleMatch == "" {
+	if other == nil {
 		return
 	}
-	other["group_base_ratio"] = info.BaseRatio
-	other["group_model_rule"] = info.ModelRuleLog()
+	if info.ModelRuleMatch != "" {
+		other["group_base_ratio"] = info.BaseRatio
+		other["group_model_rule"] = info.ModelRuleLog()
+	}
+	// Layer 3 用户档折扣独立判断：它与 Layer 2 是两个正交维度，只配了用户档折扣
+	// 的请求同样要能反算（docs/user-tier-pricing-and-topup-package-design.md §4）。
+	if info.UserRuleMatch != "" {
+		other["user_group_model_rule"] = info.UserRuleLog()
+	}
 }
 
 func GenerateTextOtherInfo(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, modelRatio, groupRatio, completionRatio float64,

@@ -265,6 +265,12 @@ func ResolveGroupRatioPreview(c *gin.Context) {
 			"rule_match":        res.RuleMatch,
 			"rule_mode":         res.RuleMode,
 			"rule_value":        res.RuleValue,
+			// Layer 3 用户档折扣。必须一并返回：final 已经含它，只摊开前三层的话
+			// 页面上会出现「base × rule_value ≠ final」而看不出差在哪——试算器的
+			// 全部意义就是解释这个数怎么来的
+			"after_model_rule": res.AfterModelRule,
+			"user_rule_match":  res.UserRuleMatch,
+			"user_rule_value":  res.UserRuleValue,
 			// 该组合下用户实际能否用到这个分组，试算结果才有意义
 			"usable": service.GroupInUserUsableGroups(req.UserGroup, req.UsingGroup),
 		},

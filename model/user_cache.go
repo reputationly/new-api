@@ -278,3 +278,31 @@ func GetUserLanguage(userId int) string {
 	}
 	return userCache.GetSetting().Language
 }
+
+// GetBillingUserGroup 返回**计费主体**的用户分组。
+//
+// 企业子账号（ParentUserId > 0）自己不是计费主体：它用的是主账号的令牌，
+// `middleware/auth.go` 取 `token.UserId`（主账号）的分组写进上下文，于是折扣、
+// 模型可见性、扣费全部按主账号算（`User.ParentUserId` 的字段注释：「恒为只读视图，
+// 不参与计费」）。
+//
+// 展示侧必须跟着走同一个口径。否则子账号登录看到的是自己那档的价，实际扣的是
+// 主账号那档的钱——差多少折就差多少，而且方向是**显示价高于实扣**，用户不会投诉，
+// 只会默默觉得贵。详见 docs/user-tier-pricing-and-topup-package-design.md §6ter.2。
+//
+// 父账号查不到时回退到自身分组：宁可展示一个偏差值，也不让模型广场整个 500。
+func GetBillingUserGroup(userCache *UserBase) string {
+	if userCache == nil {
+		return ""
+	}
+	if userCache.ParentUserId <= 0 {
+		return userCache.Group
+	}
+	parent, err := GetUserCache(userCache.ParentUserId)
+	if err != nil || parent == nil {
+		common.SysLog(fmt.Sprintf("GetBillingUserGroup: parent user %d not found for sub-account %d, falling back to own group",
+			userCache.ParentUserId, userCache.Id))
+		return userCache.Group
+	}
+	return parent.Group
+}

@@ -134,7 +134,17 @@ func matchModelPattern(pattern, modelName string) (int, bool) {
 // 精确 > 前缀通配；同为通配时模式串长者优先（"wan2.2-t2v-*" 胜过 "wan2.2-*"）。
 func pickModelRule(group, modelName string) (string, ModelRatioRule, bool) {
 	rules, ok := groupModelRatioMap.Get(group)
-	if !ok || len(rules) == 0 || modelName == "" {
+	if !ok {
+		return "", ModelRatioRule{}, false
+	}
+	return pickRuleFrom(rules, modelName)
+}
+
+// pickRuleFrom 是 pickModelRule 的规则集无关版本，供 Layer 3（用户档折扣，
+// 见 user_group_model_ratio.go）复用。两层的模式串语义必须逐位一致——各写一份
+// 匹配逻辑，一旦分叉就会出现「Layer 2 命中而 Layer 3 不命中」这种没人能解释的价格。
+func pickRuleFrom(rules map[string]ModelRatioRule, modelName string) (string, ModelRatioRule, bool) {
+	if len(rules) == 0 || modelName == "" {
 		return "", ModelRatioRule{}, false
 	}
 	bestWeight := -1
@@ -172,21 +182,33 @@ type RatioResolution struct {
 	RuleMatch string  // Layer 2 命中的模式串，"" = 未命中
 	RuleMode  string  // Layer 2 模式
 	RuleValue float64 // Layer 2 配置值
+
+	AfterModelRule float64 // Layer 2 之后、套用用户档折扣之前的值
+
+	UserRuleMatch string  // Layer 3 命中的模式串，"" = 未命中
+	UserRuleValue float64 // Layer 3 配置值（恒为 multiply）
 }
 
-// ResolveGroupRatio 两层解析分组倍率。
+// ResolveGroupRatio 四层解析计费倍率。
 //
-//	Layer 0  base  = GroupRatio[usingGroup]
-//	Layer 1  base ← GroupGroupRatio[userGroup][usingGroup]   命中即覆盖
-//	Layer 2  final ← GroupModelRatio[usingGroup][modelName]  override 覆盖 / multiply 叠乘
+//	Layer 0  base  = GroupRatio[usingGroup]                   场景倍率
+//	Layer 1  base ← GroupGroupRatio[userGroup][usingGroup]    命中即覆盖
+//	Layer 2  final ← GroupModelRatio[usingGroup][modelName]   override 覆盖 / multiply 叠乘
+//	Layer 3  final × UserGroupModelRatio[userGroup][modelName] 恒为叠乘
 //
-// 为什么是两层、而不是把两类规则拍平成一个规则集「取最具体的一条」：
+// 为什么分层、而不是把各类规则拍平成一个规则集「取最具体的一条」：
 // 设 GroupGroupRatio{vip: {premium: 0.7}}（vip 全线 7 折）与
 // GroupModelRatio{premium: {GLM-5: ×0.5}}（GLM-5 半价）。拍平后模型精确匹配
 // 胜过分组级，只会命中后者 → 1.5 × 0.5 = 0.75，**vip 身份被静默丢掉，
-// vip 反而比预期贵**。分两层则 0.7 × 0.5 = 0.35，身份折扣与促销折扣正交叠加。
+// vip 反而比预期贵**。分层则 0.7 × 0.5 = 0.35，身份折扣与促销折扣正交叠加。
 //
-// modelName 传空（无模型上下文的调用点）时 Layer 2 恒不命中，
+// Layer 3 与 Layer 0/1/2 的分工是本次改造的核心：前三层按「使用分组」索引，
+// 描述的是成本（走哪条供应链、那条链上这个模型多少钱）；Layer 3 按「用户分组」
+// 索引，描述的是售价（这批用户打几折）。两个维度正交，所以 Layer 3 **一律叠乘**，
+// 包括 Layer 2 命中 override 时——override 说的是「这条链这个模型的成本就是这个
+// 价」，用户的身份折扣是另一回事，不该被它吃掉。
+//
+// modelName 传空（无模型上下文的调用点）时 Layer 2/3 恒不命中，
 // 结果与改造前逐位相同。
 func ResolveGroupRatio(userGroup, usingGroup, modelName string) RatioResolution {
 	res := RatioResolution{}
@@ -202,17 +224,24 @@ func ResolveGroupRatio(userGroup, usingGroup, modelName string) RatioResolution 
 
 	res.Final = res.Base
 
-	pattern, rule, ok := pickModelRule(usingGroup, modelName)
-	if !ok {
-		return res
+	if pattern, rule, ok := pickModelRule(usingGroup, modelName); ok {
+		res.RuleMatch = pattern
+		res.RuleMode = rule.Mode
+		res.RuleValue = rule.Value
+		if rule.Mode == RatioModeOverride {
+			res.Final = rule.Value
+		} else {
+			res.Final = res.Base * rule.Value
+		}
 	}
-	res.RuleMatch = pattern
-	res.RuleMode = rule.Mode
-	res.RuleValue = rule.Value
-	if rule.Mode == RatioModeOverride {
-		res.Final = rule.Value
-	} else {
-		res.Final = res.Base * rule.Value
+
+	res.AfterModelRule = res.Final
+
+	if pattern, rule, ok := pickUserModelRule(userGroup, modelName); ok {
+		res.UserRuleMatch = pattern
+		res.UserRuleValue = rule.Value
+		res.Final = res.Final * rule.Value
 	}
+
 	return res
 }

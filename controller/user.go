@@ -574,7 +574,11 @@ func GetUserModels(c *gin.Context) {
 		common.ApiError(c, err)
 		return
 	}
-	usableGroups := service.GetUserUsableGroups(user.Group)
+	// 计费主体的分组：企业子账号用主账号的令牌调用，实际能访问哪些分组由主账号
+	// 决定（middleware/auth.go 校验的是 token.UserId 的分组）。这里若按子账号
+	// 自己的分组过滤，会给出一份「看得到却调不了」或「调得了却看不到」的模型列表。
+	billingGroup := model.GetBillingUserGroup(user)
+	usableGroups := service.GetUserUsableGroups(billingGroup)
 	requested := strings.TrimSpace(c.Query("group"))
 
 	// 收集目标分组列表
@@ -585,7 +589,7 @@ func GetUserModels(c *gin.Context) {
 			targetGroups = append(targetGroups, g)
 		}
 	case "auto":
-		targetGroups = service.GetUserAutoGroup(user.Group)
+		targetGroups = service.GetUserAutoGroup(billingGroup)
 	default:
 		if _, ok := usableGroups[requested]; !ok {
 			c.JSON(http.StatusForbidden, gin.H{

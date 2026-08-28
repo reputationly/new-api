@@ -24,6 +24,11 @@ type GroupRatioInfo struct {
 	ModelRuleMatch string  // 命中的模型模式串，如 "wan2.2-*"；"" = 未命中
 	ModelRuleMode  string  // multiply | override
 	ModelRuleValue float64
+
+	// Layer 3 用户档折扣的解析痕迹
+	// （docs/user-tier-pricing-and-topup-package-design.md §4）。
+	UserRuleMatch string  // 命中的模式串；"" = 未命中
+	UserRuleValue float64 // 恒为 multiply 的乘数
 }
 
 // ModelRuleLog 返回模型级折扣规则的紧凑表示，供日志 other 字段使用。
@@ -36,6 +41,15 @@ func (g GroupRatioInfo) ModelRuleLog() string {
 		return fmt.Sprintf("%s:=%g", g.ModelRuleMatch, g.ModelRuleValue)
 	}
 	return fmt.Sprintf("%s:×%g", g.ModelRuleMatch, g.ModelRuleValue)
+}
+
+// UserRuleLog 返回用户档折扣规则的紧凑表示，供日志 other 字段使用。
+// Layer 3 恒为 multiply，故不区分模式。未命中返回空串。
+func (g GroupRatioInfo) UserRuleLog() string {
+	if g.UserRuleMatch == "" {
+		return ""
+	}
+	return fmt.Sprintf("%s:×%g", g.UserRuleMatch, g.UserRuleValue)
 }
 
 type PriceData struct {

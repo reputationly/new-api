@@ -45,17 +45,28 @@ func filterPricingByUsableGroups(pricing []model.Pricing, usableGroup map[string
 func resolveGroupModelRatio(userGroup string, groupRatio map[string]float64, pricing []model.Pricing) map[string]map[string]float64 {
 	result := make(map[string]map[string]float64)
 	allRules := ratio_setting.GetGroupModelRatioCopy()
-	if len(allRules) == 0 {
+	// Layer 3（用户档折扣）按 userGroup 索引、与使用分组无关，所以是每次调用一个
+	// 定值。它必须参与「跳不跳过」的判断：只看 GroupModelRatio 会漏掉「仅配了
+	// 用户档折扣」的情况，结果是模型广场显示价偏高、实扣正确——最难发现的那类
+	// 不一致（docs/user-tier-pricing-and-topup-package-design.md §8.0）。
+	hasUserRules := ratio_setting.HasUserGroupModelRules(userGroup)
+	if len(allRules) == 0 && !hasUserRules {
 		return result
 	}
 	for g := range groupRatio {
-		// 没配任何规则的分组直接跳过，避免在模型数三位数时白跑一遍全表
-		if len(allRules[g]) == 0 {
+		// 两层规则都没有的分组才跳过，避免在模型数三位数时白跑一遍全表
+		if len(allRules[g]) == 0 && !hasUserRules {
 			continue
 		}
 		for _, item := range pricing {
 			res := ratio_setting.ResolveGroupRatio(userGroup, g, item.ModelName)
-			if res.RuleMatch == "" {
+			// 保持稀疏：只回「靠 group_ratio 算不出来」的组合。
+			// Layer 3 的 "*" 兜底已折进 group_ratio（见 GetPricing），若把它也算作
+			// 命中，配一条 "*" 就会把三位数的模型全表展开——响应体积暴涨，且每一项
+			// 都与 fallback 值相同。故只认非 "*" 的用户档规则。
+			hitModelRule := res.RuleMatch != ""
+			hitSpecificUserRule := res.UserRuleMatch != "" && res.UserRuleMatch != "*"
+			if !hitModelRule && !hitSpecificUserRule {
 				continue
 			}
 			if result[g] == nil {
@@ -79,11 +90,20 @@ func GetPricing(c *gin.Context) {
 	if exists {
 		user, err := model.GetUserCache(userId.(int))
 		if err == nil {
-			group = user.Group
+			// 计费主体的分组：企业子账号用主账号的令牌调用，折扣按主账号算，
+			// 展示必须同口径，否则子账号看到的价与实扣不符（§6ter.2）
+			group = model.GetBillingUserGroup(user)
+			// Layer 3 的 "*" 兜底与模型无关，折进 group_ratio，让前端 fallback
+			// 分支（未命中 group_model_ratio 的模型）也拿到正确的价。逐模型的
+			// Layer 3 规则由 resolveGroupModelRatio 展开，不走这里。
+			userFallback := ratio_setting.GetUserGroupFallbackRatio(group)
 			for g := range groupRatio {
 				ratio, ok := ratio_setting.GetGroupGroupRatio(group, g)
 				if ok {
 					groupRatio[g] = ratio
+				}
+				if userFallback != 1 {
+					groupRatio[g] *= userFallback
 				}
 			}
 		}

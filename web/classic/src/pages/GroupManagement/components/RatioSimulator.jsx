@@ -185,6 +185,16 @@ export default function RatioSimulator({ groupNames = [] }) {
                 : `×${result.rule_value}`
               : '—',
           )}
+          {renderLayer(
+            t('用户档折扣'),
+            !!result.user_rule_match,
+            result.user_rule_match
+              ? `${userGroup} · ${result.user_rule_match} · ${t('折扣 ×')} ${
+                  result.user_rule_value
+                }`
+              : '',
+            result.user_rule_match ? `×${result.user_rule_value}` : '—',
+          )}
           <div className='mt-2 flex items-center justify-between border-t pt-2'>
             <Text strong>{t('最终倍率')}</Text>
             <Text strong style={{ fontSize: 18 }}>
