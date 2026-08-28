@@ -3,6 +3,7 @@ package model
 import (
 	"errors"
 	"fmt"
+	"math"
 	"math/rand"
 	"sort"
 	"strings"
@@ -103,12 +104,16 @@ func GetRandomSatisfiedChannel(group string, model string, retry int) (*Channel,
 	defer channelSyncLock.RUnlock()
 
 	// First, try to find channels with the exact model name.
+	// matchedModel 记住实际命中的那个 key：成本表按渠道挂载的模型名索引，
+	// 走了归一化分支后仍拿原始名去查会一律查不到，成本筛选静默退化成无操作。
+	matchedModel := model
 	channels := group2model2channels[group][model]
 
 	// If no channels found, try to find channels with the normalized model name.
 	if len(channels) == 0 {
 		normalizedModel := ratio_setting.FormatMatchingModelName(model)
 		channels = group2model2channels[group][normalizedModel]
+		matchedModel = normalizedModel
 	}
 
 	if len(channels) == 0 {
@@ -142,12 +147,10 @@ func GetRandomSatisfiedChannel(group string, model string, retry int) (*Channel,
 	targetPriority := int64(sortedUniquePriorities[retry])
 
 	// get the priority for the given retry number
-	var sumWeight = 0
 	var targetChannels []*Channel
 	for _, channelId := range channels {
 		if channel, ok := channelsIDM[channelId]; ok {
 			if channel.GetPriority() == targetPriority {
-				sumWeight += channel.GetWeight()
 				targetChannels = append(targetChannels, channel)
 			}
 		} else {
@@ -157,6 +160,18 @@ func GetRandomSatisfiedChannel(group string, model string, retry int) (*Channel,
 
 	if len(targetChannels) == 0 {
 		return nil, errors.New(fmt.Sprintf("no channel found, group: %s, model: %s, priority: %d", group, model, targetPriority))
+	}
+
+	// 同一优先级层内按成本收敛：Priority 表达「用哪一梯队」（人工运维语义，不动），
+	// 成本表达「梯队内选谁」。见设计文档 §5.4。
+	targetChannels = filterCheapestChannels(targetChannels, matchedModel)
+
+	// sumWeight 必须在成本筛选**之后**统计：它是下面加权随机的分母，用筛选前的总和
+	// 会让 randomWeight 落到已被筛掉的区间，循环走完选不中，最后返回
+	// "channel not found"——表现为随机的、只在配了成本之后才出现的偶发失败。
+	var sumWeight = 0
+	for _, channel := range targetChannels {
+		sumWeight += channel.GetWeight()
 	}
 
 	// smoothing factor and adjustment
@@ -262,4 +277,48 @@ func CacheUpdateChannel(channel *Channel) {
 	println("before:", channelsIDM[channel.Id].ChannelInfo.MultiKeyPollingIndex)
 	channelsIDM[channel.Id] = channel
 	println("after :", channelsIDM[channel.Id].ChannelInfo.MultiKeyPollingIndex)
+}
+
+// filterCheapestChannels 在同一优先级层内保留成本最低的那一档，供加权随机从中选。
+//
+// 「未配成本」不参与成本比较，而是与最便宜的一档**并列**保留。这是本函数唯一需要
+// 想清楚的地方，两个看似自然的做法都是错的：
+//
+//	未配当 1.0   → 配了 0.6 的渠道永远胜出，新加的渠道静默拿不到流量。
+//	              没有报错、没有日志，只有流量为零——这类故障的排查成本极高。
+//	未配当 0     → 反过来，未配的渠道独占流量，认真配了成本的渠道全部失效。
+//
+// 「不因成本未知而歧视」同时避开两侧：全未配时退化成改造前的纯 Weight 随机
+// （P2 上线时成本表是空的，这条保证行为零变化）；全配了时严格选最便宜；
+// 混合的过渡态里两边都拿得到流量，而管理页的红标（/api/channel/missing_cost）
+// 负责把「还没配完」这件事一直摆在运营眼前。
+//
+// 只在层内收敛，不跨层：Priority 是人工的主备语义，成本不该把它推翻。
+func filterCheapestChannels(channels []*Channel, modelName string) []*Channel {
+	if len(channels) <= 1 {
+		return channels
+	}
+
+	cheapest := math.Inf(1)
+	for _, channel := range channels {
+		if ratio, ok := GetChannelModelCostRatio(channel.Id, modelName); ok && ratio < cheapest {
+			cheapest = ratio
+		}
+	}
+	if math.IsInf(cheapest, 1) {
+		// 该模型在本层一个成本都没配，保持原有行为
+		return channels
+	}
+
+	filtered := make([]*Channel, 0, len(channels))
+	for _, channel := range channels {
+		ratio, ok := GetChannelModelCostRatio(channel.Id, modelName)
+		if !ok || ratio <= cheapest {
+			filtered = append(filtered, channel)
+		}
+	}
+	if len(filtered) == 0 {
+		return channels
+	}
+	return filtered
 }
