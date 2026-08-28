@@ -119,6 +119,7 @@ func SetApiRouter(router *gin.Engine) {
 				selfRoute.GET("/aff", middleware.SubAccountForbidden(), controller.GetAffCode)
 				selfRoute.GET("/aff/invitees", middleware.SubAccountForbidden(), controller.GetAffInvitees)
 				selfRoute.GET("/topup/info", controller.GetTopUpInfo)
+				selfRoute.GET("/topup/packages", controller.GetTopupPackages)
 				selfRoute.GET("/topup/self", controller.GetUserTopUps)
 				selfRoute.POST("/topup", middleware.SubAccountForbidden(), middleware.CriticalRateLimit(), controller.TopUp)
 				selfRoute.POST("/pay", middleware.SubAccountForbidden(), middleware.CriticalRateLimit(), middleware.KYCRequired(), controller.RequestEpay)
@@ -513,6 +514,15 @@ func SetApiRouter(router *gin.Engine) {
 			vendorRoute.POST("/", controller.CreateVendorMeta)
 			vendorRoute.PUT("/", controller.UpdateVendorMeta)
 			vendorRoute.DELETE("/:id", controller.DeleteVendorMeta)
+		}
+
+		topupPackageRoute := apiRouter.Group("/topup_package")
+		topupPackageRoute.Use(middleware.AdminAuth())
+		{
+			topupPackageRoute.GET("/", controller.GetAllTopupPackages)
+			topupPackageRoute.POST("/", controller.CreateTopupPackage)
+			topupPackageRoute.PUT("/", controller.UpdateTopupPackage)
+			topupPackageRoute.DELETE("/:id", controller.DeleteTopupPackageHandler)
 		}
 
 		modelsRoute := apiRouter.Group("/models")

@@ -300,6 +300,7 @@ func migrateDB() error {
 		&CanvasStorageUsage{},
 		&ModerationLog{},
 		&ChannelModelCost{},
+		&TopupPackage{},
 	)
 	if err != nil {
 		return err

@@ -78,12 +78,18 @@ func ResetAlipayClient() {
 
 type AlipayPayRequest struct {
 	Amount int64 `json:"amount"` // display units (same as epay)
+	// PackageId >0 表示购买充值套餐：金额由套餐决定，忽略 Amount，
+	// 且不走散充的金额折扣与分组汇率（见 resolveTopupPackage）
+	PackageId int `json:"package_id"`
 }
 
 type AlipayPayResponse struct {
 	QRCode  string `json:"qr_code,omitempty"`
 	PayURL  string `json:"pay_url,omitempty"`
 	TradeNo string `json:"trade_no"`
+	// Money 本单应付金额。套餐下单时前端拿不到售价（金额由后端按套餐算），
+	// 二维码弹窗要显示它
+	Money float64 `json:"money"`
 }
 
 // ---- handlers ----
@@ -99,12 +105,28 @@ func RequestAlipay(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"message": "error", "data": "参数错误"})
 		return
 	}
-	if req.Amount < int64(setting.AlipayMinTopUp) {
+	userId := c.GetInt("id")
+
+	// 套餐路径：金额与到账额度都由套餐定，最小充值额与分组汇率都不适用
+	var pkg *model.TopupPackage
+	var pkgPayMoney float64
+	var pkgQuota int64
+	if req.PackageId > 0 {
+		// 限购的「检查-写入」必须串行，且这把锁与支付渠道无关（见 LockPackagePurchase）
+		LockPackagePurchase(userId, req.PackageId)
+		defer UnlockPackagePurchase(userId, req.PackageId)
+
+		p, money, quota, perr := resolveTopupPackage(userId, req.PackageId)
+		if perr != nil {
+			c.JSON(http.StatusOK, gin.H{"message": "error", "data": perr.Error()})
+			return
+		}
+		pkg, pkgPayMoney, pkgQuota = p, money, quota
+	} else if req.Amount < int64(setting.AlipayMinTopUp) {
 		c.JSON(http.StatusOK, gin.H{"message": "error", "data": fmt.Sprintf("充值数量不能小于 %d", setting.AlipayMinTopUp)})
 		return
 	}
 
-	userId := c.GetInt("id")
 	group, err := model.GetUserGroup(userId, true)
 	if err != nil {
 		c.JSON(http.StatusOK, gin.H{"message": "error", "data": "获取用户分组失败"})
@@ -118,27 +140,38 @@ func RequestAlipay(c *gin.Context) {
 	defer UnlockUserPayCreation(userId, "alipay")
 	closePendingAlipayForUser(userId)
 
-	// Calculate CNY to charge (direct pay: skip Price for CNY display mode)
-	payMoney := getDirectPayMoney(req.Amount, group)
-	if payMoney < 0.01 {
-		c.JSON(http.StatusOK, gin.H{"message": "error", "data": "充值金额过低"})
-		return
-	}
-
-	// Calculate internal quota to credit based on display type
-	dAmount := decimal.NewFromInt(req.Amount)
-	dQPU := decimal.NewFromFloat(common.QuotaPerUnit)
+	// 两条路径彻底分开算，**不是**先按散充算完再覆盖：套餐请求的 req.Amount 为 0，
+	// getDirectPayMoney 会返回 0 并被 `payMoney < 0.01` 守卫直接拦下，覆盖那行永远
+	// 执行不到——套餐一单也下不出来。原实现就踩了这个，且守卫在两行之间，只看自己
+	// 插入的两处发现不了。
+	var payMoney float64
 	var internalQuota int64
-	switch operation_setting.GetQuotaDisplayType() {
-	case operation_setting.QuotaDisplayTypeCNY:
-		// ¥amount → internal units: amount × QuotaPerUnit ÷ Price
-		dPrice := decimal.NewFromFloat(operation_setting.Price)
-		internalQuota = dAmount.Mul(dQPU).Div(dPrice).IntPart()
-	case operation_setting.QuotaDisplayTypeTokens:
-		// tokens = internal quota directly
-		internalQuota = req.Amount
-	default: // USD, CUSTOM
-		internalQuota = dAmount.Mul(dQPU).IntPart()
+	if pkg != nil {
+		// 套餐：金额与到账额度都由套餐定，不走散充的金额折扣、分组汇率与展示单位换算
+		payMoney = pkgPayMoney
+		internalQuota = pkgQuota
+	} else {
+		// Calculate CNY to charge (direct pay: skip Price for CNY display mode)
+		payMoney = getDirectPayMoney(req.Amount, group)
+		if payMoney < 0.01 {
+			c.JSON(http.StatusOK, gin.H{"message": "error", "data": "充值金额过低"})
+			return
+		}
+
+		// Calculate internal quota to credit based on display type
+		dAmount := decimal.NewFromInt(req.Amount)
+		dQPU := decimal.NewFromFloat(common.QuotaPerUnit)
+		switch operation_setting.GetQuotaDisplayType() {
+		case operation_setting.QuotaDisplayTypeCNY:
+			// ¥amount → internal units: amount × QuotaPerUnit ÷ Price
+			dPrice := decimal.NewFromFloat(operation_setting.Price)
+			internalQuota = dAmount.Mul(dQPU).Div(dPrice).IntPart()
+		case operation_setting.QuotaDisplayTypeTokens:
+			// tokens = internal quota directly
+			internalQuota = req.Amount
+		default: // USD, CUSTOM
+			internalQuota = dAmount.Mul(dQPU).IntPart()
+		}
 	}
 
 	client, err := getAlipayClient()
@@ -152,12 +185,16 @@ func RequestAlipay(c *gin.Context) {
 	notifyURL := service.GetCallbackAddress() + "/api/alipay/notify"
 	returnURL := service.GetCallbackAddress() + "/console/log"
 	moneyStr := fmt.Sprintf("%.2f", payMoney)
+	orderSubject := "充值"
+	if pkg != nil {
+		orderSubject = packageOrderSubject(pkg)
+	}
 
 	var qrCode, payURL string
 	preParam := alipay.TradePreCreate{}
 	preParam.OutTradeNo = tradeNo
 	preParam.TotalAmount = moneyStr
-	preParam.Subject = "充值"
+	preParam.Subject = orderSubject
 	preParam.ProductCode = "FACE_TO_FACE_PAYMENT"
 	preParam.NotifyURL = notifyURL
 	preRsp, preErr := client.TradePreCreate(c.Request.Context(), preParam)
@@ -167,7 +204,7 @@ func RequestAlipay(c *gin.Context) {
 		pageParam := alipay.TradePagePay{}
 		pageParam.OutTradeNo = tradeNo
 		pageParam.TotalAmount = moneyStr
-		pageParam.Subject = "充值"
+		pageParam.Subject = orderSubject
 		pageParam.ProductCode = "FAST_INSTANT_TRADE_PAY"
 		pageParam.NotifyURL = notifyURL
 		pageParam.ReturnURL = returnURL
@@ -189,6 +226,7 @@ func RequestAlipay(c *gin.Context) {
 		PaymentProvider: model.PaymentProviderAlipayDirect,
 		CreateTime:      time.Now().Unix(),
 		Status:          common.TopUpStatusPending,
+		PackageId:       req.PackageId,
 	}
 	if err := topUp.Insert(); err != nil {
 		logger.LogError(c.Request.Context(), fmt.Sprintf("alipay insert topup failed user=%d trade=%s err=%v", userId, tradeNo, err))
@@ -202,6 +240,7 @@ func RequestAlipay(c *gin.Context) {
 			QRCode:  qrCode,
 			PayURL:  payURL,
 			TradeNo: tradeNo,
+			Money:   payMoney,
 		},
 	})
 }

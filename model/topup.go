@@ -22,6 +22,10 @@ type TopUp struct {
 	CreateTime      int64   `json:"create_time"`
 	CompleteTime    int64   `json:"complete_time"`
 	Status          string  `json:"status"`
+
+	// PackageId >0 表示这是一笔套餐充值，到账后要发放套餐赠品（见 GrantTopupPackageBonus）。
+	// 0 = 普通散充，是绝大多数订单。
+	PackageId int `json:"package_id" gorm:"type:int;default:0;index"`
 }
 
 const (
@@ -335,6 +339,9 @@ func ManualCompleteTopUp(tradeNo string, callerIp string) error {
 	var quotaToAdd int
 	var payMoney float64
 	var paymentMethod string
+	// 事务闭包内的 topUp 出不来，但发放套餐赠品必须在提交之后做
+	// （GrantTopupPackageBonus 会异步更新积分缓存，回滚也收不回），所以在这里留一份快照
+	var completed *TopUp
 
 	err := DB.Transaction(func(tx *gorm.DB) error {
 		topUp := &TopUp{}
@@ -382,6 +389,7 @@ func ManualCompleteTopUp(tradeNo string, callerIp string) error {
 		userId = topUp.UserId
 		payMoney = topUp.Money
 		paymentMethod = topUp.PaymentMethod
+		completed = topUp
 		return nil
 	})
 
@@ -391,6 +399,9 @@ func ManualCompleteTopUp(tradeNo string, callerIp string) error {
 
 	// 事务外记录日志，避免阻塞
 	RecordTopupLog(userId, fmt.Sprintf("管理员补单成功，充值金额: %v，支付金额：%f", logger.FormatQuota(quotaToAdd), payMoney), callerIp, paymentMethod, "admin")
+	// 补单是回调失败时的兜底路径，套餐赠品同样要发——否则用户付了钱、管理员补了额度，
+	// 唯独积分没到，而且不报任何错
+	GrantTopupPackageBonus(completed)
 	return nil
 }
 func RechargeCreem(referenceId string, customerEmail string, customerName string, callerIp string) (err error) {
@@ -571,6 +582,7 @@ func RechargeAlipay(tradeNo string, callerIp string) error {
 	}
 	if quotaToAdd > 0 {
 		RecordTopupLog(topUp.UserId, fmt.Sprintf("支付宝直连充值成功，充值额度: %v，支付金额: %.2f", logger.FormatQuotaShort(quotaToAdd), topUp.Money), callerIp, topUp.PaymentMethod, PaymentProviderAlipayDirect)
+		GrantTopupPackageBonus(topUp)
 	}
 	return nil
 }
@@ -615,6 +627,7 @@ func RechargeWxpay(tradeNo string, callerIp string) error {
 	}
 	if quotaToAdd > 0 {
 		RecordTopupLog(topUp.UserId, fmt.Sprintf("微信支付直连充值成功，充值额度: %v，支付金额: %.2f", logger.FormatQuotaShort(quotaToAdd), topUp.Money), callerIp, topUp.PaymentMethod, PaymentProviderWxpayDirect)
+		GrantTopupPackageBonus(topUp)
 	}
 	return nil
 }

@@ -422,6 +422,28 @@ func userPayCreationKey(userId int, provider string) string {
 	return fmt.Sprintf("createpay:%s:%d", provider, userId)
 }
 
+// LockPackagePurchase 串行化同一用户对同一套餐的下单，用于限购次数的检查-写入。
+//
+// 不能复用 LockUserPayCreation：那把锁的 key 带 provider
+// （createpay:alipay:<uid> vs createpay:wxpay:<uid>），同一用户走支付宝和微信并
+// **不互斥**，而限购是跨支付方式的——两边各下一单且都支付成功就能突破限制。
+//
+// ⚠️ LockOrder 是进程内锁（sync.Map + sync.Mutex），**多节点部署下跨节点无效**。
+// 这里不引入分布式锁：现有支付链路的防重复下单全是进程内的，只给套餐单独加一把
+// 分布式锁会造成「这里防住了、旁边没防住」的错觉。真正的兜底是
+// CountUserPackagePurchases 只统计已支付成功的订单——要突破限购，用户得真的付两次钱。
+func LockPackagePurchase(userId, packageId int) {
+	LockOrder(packagePurchaseKey(userId, packageId))
+}
+
+func UnlockPackagePurchase(userId, packageId int) {
+	UnlockOrder(packagePurchaseKey(userId, packageId))
+}
+
+func packagePurchaseKey(userId, packageId int) string {
+	return fmt.Sprintf("buypkg:%d:%d", userId, packageId)
+}
+
 func EpayNotify(c *gin.Context) {
 	if !isEpayWebhookEnabled() {
 		logger.LogWarn(c.Request.Context(), fmt.Sprintf("易支付 webhook 被拒绝 reason=webhook_disabled path=%q client_ip=%s", c.Request.RequestURI, c.ClientIP()))

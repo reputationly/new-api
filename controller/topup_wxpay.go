@@ -104,11 +104,17 @@ func formatWxpayPEM(key, keyType string) string {
 
 type WxpayPayRequest struct {
 	Amount int64 `json:"amount"` // display units (same as epay)
+	// PackageId >0 表示购买充值套餐：金额由套餐决定，忽略 Amount，
+	// 且不走散充的金额折扣与分组汇率（见 resolveTopupPackage）
+	PackageId int `json:"package_id"`
 }
 
 type WxpayPayResponse struct {
 	QRCode  string `json:"qr_code"`
 	TradeNo string `json:"trade_no"`
+	// Money 本单应付金额。套餐下单时前端拿不到售价（金额由后端按套餐算），
+	// 二维码弹窗要显示它
+	Money float64 `json:"money"`
 }
 
 // ---- handlers ----
@@ -124,12 +130,28 @@ func RequestWxpay(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"message": "error", "data": "参数错误"})
 		return
 	}
-	if req.Amount < int64(setting.WxpayMinTopUp) {
+	userId := c.GetInt("id")
+
+	// 套餐路径：金额与到账额度都由套餐定，最小充值额与分组汇率都不适用
+	var pkg *model.TopupPackage
+	var pkgPayMoney float64
+	var pkgQuota int64
+	if req.PackageId > 0 {
+		// 限购的「检查-写入」必须串行，且这把锁与支付渠道无关（见 LockPackagePurchase）
+		LockPackagePurchase(userId, req.PackageId)
+		defer UnlockPackagePurchase(userId, req.PackageId)
+
+		p, money, quota, perr := resolveTopupPackage(userId, req.PackageId)
+		if perr != nil {
+			c.JSON(http.StatusOK, gin.H{"message": "error", "data": perr.Error()})
+			return
+		}
+		pkg, pkgPayMoney, pkgQuota = p, money, quota
+	} else if req.Amount < int64(setting.WxpayMinTopUp) {
 		c.JSON(http.StatusOK, gin.H{"message": "error", "data": fmt.Sprintf("充值数量不能小于 %d", setting.WxpayMinTopUp)})
 		return
 	}
 
-	userId := c.GetInt("id")
 	group, err := model.GetUserGroup(userId, true)
 	if err != nil {
 		c.JSON(http.StatusOK, gin.H{"message": "error", "data": "获取用户分组失败"})
@@ -142,27 +164,38 @@ func RequestWxpay(c *gin.Context) {
 	defer UnlockUserPayCreation(userId, "wxpay")
 	closePendingWxpayForUser(userId)
 
-	// Calculate CNY to charge (direct pay: skip Price for CNY display mode)
-	payMoney := getDirectPayMoney(req.Amount, group)
-	if payMoney < 0.01 {
-		c.JSON(http.StatusOK, gin.H{"message": "error", "data": "支付金额无效"})
-		return
-	}
-
-	// Calculate internal quota to credit based on display type
-	dAmount := decimal.NewFromInt(req.Amount)
-	dQPU := decimal.NewFromFloat(common.QuotaPerUnit)
+	// 两条路径彻底分开算，**不是**先按散充算完再覆盖：套餐请求的 req.Amount 为 0，
+	// getDirectPayMoney 会返回 0 并被 `payMoney < 0.01` 守卫直接拦下，覆盖那行永远
+	// 执行不到——套餐一单也下不出来。原实现就踩了这个，且守卫在两行之间，只看自己
+	// 插入的两处发现不了。
+	var payMoney float64
 	var internalQuota int64
-	switch operation_setting.GetQuotaDisplayType() {
-	case operation_setting.QuotaDisplayTypeCNY:
-		// ¥amount → internal units: amount × QuotaPerUnit ÷ Price
-		dPrice := decimal.NewFromFloat(operation_setting.Price)
-		internalQuota = dAmount.Mul(dQPU).Div(dPrice).IntPart()
-	case operation_setting.QuotaDisplayTypeTokens:
-		// tokens = internal quota directly
-		internalQuota = req.Amount
-	default: // USD, CUSTOM
-		internalQuota = dAmount.Mul(dQPU).IntPart()
+	if pkg != nil {
+		// 套餐：金额与到账额度都由套餐定，不走散充的金额折扣、分组汇率与展示单位换算
+		payMoney = pkgPayMoney
+		internalQuota = pkgQuota
+	} else {
+		// Calculate CNY to charge (direct pay: skip Price for CNY display mode)
+		payMoney = getDirectPayMoney(req.Amount, group)
+		if payMoney < 0.01 {
+			c.JSON(http.StatusOK, gin.H{"message": "error", "data": "支付金额无效"})
+			return
+		}
+
+		// Calculate internal quota to credit based on display type
+		dAmount := decimal.NewFromInt(req.Amount)
+		dQPU := decimal.NewFromFloat(common.QuotaPerUnit)
+		switch operation_setting.GetQuotaDisplayType() {
+		case operation_setting.QuotaDisplayTypeCNY:
+			// ¥amount → internal units: amount × QuotaPerUnit ÷ Price
+			dPrice := decimal.NewFromFloat(operation_setting.Price)
+			internalQuota = dAmount.Mul(dQPU).Div(dPrice).IntPart()
+		case operation_setting.QuotaDisplayTypeTokens:
+			// tokens = internal quota directly
+			internalQuota = req.Amount
+		default: // USD, CUSTOM
+			internalQuota = dAmount.Mul(dQPU).IntPart()
+		}
 	}
 
 	clients, err := getWxpayClient()
@@ -185,12 +218,17 @@ func RequestWxpay(c *gin.Context) {
 	cur := "CNY"
 	svc := native.NativeApiService{Client: clients.client}
 	resp, _, err := svc.Prepay(c.Request.Context(), native.PrepayRequest{
-		Appid:       core.String(setting.WxpayAppId),
-		Mchid:       core.String(setting.WxpayMchId),
-		Description: core.String("充值"),
-		OutTradeNo:  core.String(tradeNo),
-		NotifyUrl:   core.String(notifyURL),
-		Amount:      &native.Amount{Total: core.Int64(totalFen), Currency: &cur},
+		Appid: core.String(setting.WxpayAppId),
+		Mchid: core.String(setting.WxpayMchId),
+		Description: core.String(func() string {
+			if pkg != nil {
+				return packageOrderSubject(pkg)
+			}
+			return "充值"
+		}()),
+		OutTradeNo: core.String(tradeNo),
+		NotifyUrl:  core.String(notifyURL),
+		Amount:     &native.Amount{Total: core.Int64(totalFen), Currency: &cur},
 	})
 	if err != nil {
 		logger.LogError(c.Request.Context(), fmt.Sprintf("wxpay native prepay failed user=%d trade=%s err=%v", userId, tradeNo, err))
@@ -216,6 +254,7 @@ func RequestWxpay(c *gin.Context) {
 		PaymentProvider: model.PaymentProviderWxpayDirect,
 		CreateTime:      time.Now().Unix(),
 		Status:          common.TopUpStatusPending,
+		PackageId:       req.PackageId,
 	}
 	if err := topUp.Insert(); err != nil {
 		logger.LogError(c.Request.Context(), fmt.Sprintf("wxpay insert topup failed user=%d trade=%s err=%v", userId, tradeNo, err))
@@ -228,6 +267,7 @@ func RequestWxpay(c *gin.Context) {
 		"data": WxpayPayResponse{
 			QRCode:  codeURL,
 			TradeNo: tradeNo,
+			Money:   payMoney,
 		},
 	})
 }
