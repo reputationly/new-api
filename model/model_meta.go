@@ -63,10 +63,19 @@ func (mi *Model) Insert() error {
 	}
 
 	// 使用保存的原始值进行更新，确保零值能正确保存
-	return DB.Model(&Model{}).Where("id = ?", mi.Id).Updates(map[string]interface{}{
+	if err := DB.Model(&Model{}).Where("id = ?", mi.Id).Updates(map[string]interface{}{
 		"status":        originalStatus,
 		"sync_official": originalSyncOfficial,
-	}).Error
+	}).Error; err != nil {
+		return err
+	}
+
+	// 补回结构体：上面只修了库里的行，而 Create 回调已经把这两个字段改成了 default
+	// 值。调用方 controller.CreateModelMeta 会用 ApiSuccess 把结构体直接序列化回
+	// 客户端，不同步就会出现「接口说已启用、库里是禁用」。
+	mi.Status = originalStatus
+	mi.SyncOfficial = originalSyncOfficial
+	return nil
 }
 
 func IsModelNameDuplicated(id int, name string) (bool, error) {

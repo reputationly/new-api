@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"testing"
 
+	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
@@ -70,4 +71,51 @@ func TestUpdateModelMetaPersistsVisibleGroups(t *testing.T) {
 		require.Equal(t, "", got.VisibleGroups,
 			"清空是正常操作（放开权限），非零字段更新做不到——Update 必须用 Select 强制写零值")
 	})
+}
+
+// TestCreateModelMetaResponseMatchesDB 接口响应必须与库里的实际状态一致。
+//
+// GORM 的 Create 回调在 INSERT **之前**就把零值字段改写成 `default` 标签的值
+// （bool 的 false → true、int 的 0 → 1）。Model.Insert 用一次补偿 Update 修正了
+// 库里的行，但结构体仍是被改写后的值——而 CreateModelMeta 会用 ApiSuccess 把这个
+// 结构体直接序列化回客户端。
+//
+// 症状是「接口说已启用、库里是禁用」。管理页保存后会重新拉列表，所以 UI 显示正确，
+// 这也正是它一直没被发现的原因——只测重查结果的用例同样看不见。
+func TestCreateModelMetaResponseMatchesDB(t *testing.T) {
+	db := setupModelListControllerTestDB(t)
+
+	body := `{
+		"model_name": "zz-disabled-on-create",
+		"name_rule": 0,
+		"status": 0,
+		"sync_official": 0
+	}`
+	recorder := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(recorder)
+	ctx.Request = httptest.NewRequest(http.MethodPost, "/api/models/",
+		bytes.NewBufferString(body))
+	ctx.Request.Header.Set("Content-Type", "application/json")
+
+	CreateModelMeta(ctx)
+
+	var resp struct {
+		Success bool `json:"success"`
+		Data    struct {
+			Id           int `json:"id"`
+			Status       int `json:"status"`
+			SyncOfficial int `json:"sync_official"`
+		} `json:"data"`
+	}
+	require.NoError(t, common.Unmarshal(recorder.Body.Bytes(), &resp))
+	require.True(t, resp.Success)
+
+	var saved model.Model
+	require.NoError(t, db.First(&saved, resp.Data.Id).Error)
+
+	require.Equal(t, saved.Status, resp.Data.Status,
+		"接口回的 status 与库里不一致——Create 回调改写了结构体而补偿 Update 只修了 DB")
+	require.Equal(t, saved.SyncOfficial, resp.Data.SyncOfficial,
+		"接口回的 sync_official 与库里不一致")
+	require.Equal(t, 0, saved.Status, "新建时选择「禁用」必须被保留")
 }
