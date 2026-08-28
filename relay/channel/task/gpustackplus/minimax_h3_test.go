@@ -447,6 +447,13 @@ func TestH3NameInferenceFallback(t *testing.T) {
 		"wan2.2-flf2v": "flf2v",
 		"ltx2-v2a":     "v2a",
 		"infinitetalk": "s2v",
+		// SwiftVR:三条老判据一条都不中(不含 "seedvr"、无 "-sr"、结尾是 "vr"),
+		// 不给它单独 token 就会静默落 t2v、源视频不物化。裸名 / 带部署后缀 /
+		// 大小写混合的权重目录名(现网就叫 SwiftVR_lightx2v)都要判成 sr。
+		"swiftvr":          "sr",
+		"swiftvr-segp4":    "sr",
+		"SwiftVR_lightx2v": "sr",
+		"seedvr2":          "sr",
 	}
 	for name, want := range cases {
 		if got := inferTaskType(name); got != want {

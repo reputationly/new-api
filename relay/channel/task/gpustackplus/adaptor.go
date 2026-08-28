@@ -802,7 +802,11 @@ func inferTaskType(modelName string) string {
 	// SeedVR2 含 "seedvr"/"sr",Bernini 视频编辑含 "bernini" —— 显式匹配免落到 t2v 兜底。
 	case strings.Contains(m, "infinitetalk") || strings.Contains(m, "s2v"):
 		return "s2v"
-	case strings.Contains(m, "seedvr") || strings.Contains(m, "-sr") || strings.HasSuffix(m, "sr"):
+	// SwiftVR 要单独一个 token:"swiftvr" 三条老判据一条都不中 —— 没有 "seedvr" 子串、
+	// 没有 "-sr"、结尾是 "vr" 不是 "sr"。漏了它不会报错,而是静默落到 t2v 兜底,
+	// materializeSRInputs 不被调用、源视频压根不物化,超分请求直接走不通。
+	case strings.Contains(m, "swiftvr") || strings.Contains(m, "seedvr") ||
+		strings.Contains(m, "-sr") || strings.HasSuffix(m, "sr"):
 		return "sr"
 	// Bernini 一个模型出 v2v/rv2v/r2v 三种玩法,模型名只能给兜底默认(v2v);
 	// 真实玩法由前端体验区按输入组合显式下发 metadata.task_type(优先于此推断)。
