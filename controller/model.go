@@ -132,7 +132,20 @@ func ListModels(c *gin.Context, modelType int) {
 		} else {
 			tokenModelLimit = map[string]bool{}
 		}
-		for allowModel, _ := range tokenModelLimit {
+		// 可见性裁剪（§6bis）：令牌白名单是**保存时的快照**，模型可能在那之后才被
+		// 限制。controller/token.go 的保存时校验拦不住这个时序——它只在新建/编辑
+		// 令牌时生效，而「模型先公开、后来才收紧」恰恰是限制模型的典型顺序。
+		allowModels := make([]string, 0, len(tokenModelLimit))
+		for m := range tokenModelLimit {
+			allowModels = append(allowModels, m)
+		}
+		// 空串 = 拿不到调用者身份（见 callerUserGroup），此时不过滤，
+		// 否则会把白名单里的受限模型全部滤光
+		if userGroup := callerUserGroup(c); userGroup != "" {
+			allowModels = model.FilterModelsByVisibility(allowModels, userGroup)
+		}
+
+		for _, allowModel := range allowModels {
 			if !acceptUnsetRatioModel {
 				if !helper.HasModelBillingConfig(allowModel) {
 					continue
@@ -263,9 +276,62 @@ func EnabledListModels(c *gin.Context) {
 	})
 }
 
+// isModelVisibleToCaller 按调用者的用户档判定模型可见性。
+//
+// 取不到用户身份时**放行**：可见性是营销与商务层面的限制，不是安全边界
+// （model.IsModelVisibleForGroup 的 fail-open 语义）。fail-closed 的后果是
+// userGroup 为空串，而受限模型对空档位一律不可见——一次取分组失败就会让模型接口
+// 对该调用者整个塌掉。
+//
+// ⚠️ 只判 err 不够：model.GetUserGroup 用的是 `Find(&group)` 而非 `First`，
+// 记录不存在时返回 ("", nil) 而不报错。所以必须显式判空串，否则这个守卫形同虚设。
+//
+// 与 filterPricingByVisibility 的差异是有意的：那里是公开的模型广场，空档位意味着
+// 未登录访客，受限模型本就不该露出；这里已经过 TokenAuth，空档位是异常而非匿名。
+func isModelVisibleToCaller(c *gin.Context, modelName string) bool {
+	if !model.HasModelVisibilityRestrictions() {
+		return true
+	}
+	userGroup := callerUserGroup(c)
+	if userGroup == "" {
+		return true
+	}
+	return model.IsModelVisibleForGroup(modelName, userGroup)
+}
+
+// callerUserGroup 取调用者的用户档；拿不到有效身份时返回空串，调用方据此跳过过滤。
+//
+// 三道守卫缺一不可：
+//   - id <= 0：没有用户上下文。**必须先判**——GetUserGroup 会走
+//     getUserGroupCache -> RedisHGetObj，在 RedisEnabled 为真而客户端未初始化时
+//     直接 panic，而不是返回错误。
+//   - err != nil：DB/缓存异常。
+//   - 空串：GetUserGroup 用的是 `Find(&group)` 而非 `First`，记录不存在时返回
+//     ("", nil) 并不报错，所以只判 err 这个守卫形同虚设。
+func callerUserGroup(c *gin.Context) string {
+	userId := c.GetInt("id")
+	if userId <= 0 {
+		return ""
+	}
+	userGroup, err := model.GetUserGroup(userId, false)
+	if err != nil {
+		return ""
+	}
+	return userGroup
+}
+
 func RetrieveModel(c *gin.Context, modelType int) {
 	modelId := c.Param("model")
-	if aiModel, ok := openAIModelsMap[modelId]; ok {
+	aiModel, exists := openAIModelsMap[modelId]
+	// 可见性裁剪（§6bis）：与 ListModels 保持同一口径。二者不一致时，客户端常用的
+	// 「先 list 再 retrieve」会拿到自相矛盾的结果——list 里没有、retrieve 却返回 200。
+	//
+	// 只补可见性这一维：本函数对分组隔离同样不生效（openAIModelsMap 是编译期的内置
+	// 模型清单，与站点挂载了什么无关），那是既有缺陷，不在本次范围内。
+	if exists && !isModelVisibleToCaller(c, modelId) {
+		exists = false
+	}
+	if exists {
 		switch modelType {
 		case constant.ChannelTypeAnthropic:
 			c.JSON(200, dto.AnthropicModel{
