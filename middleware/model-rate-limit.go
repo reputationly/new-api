@@ -177,10 +177,20 @@ func ModelRequestRateLimit() func(c *gin.Context) {
 		totalMaxCount := setting.ModelRequestRateLimitCount
 		successMaxCount := setting.ModelRequestRateLimitSuccessCount
 
-		// 获取分组
-		group := common.GetContextKeyString(c, constant.ContextKeyTokenGroup)
+		// 限流按**用户分组**判，不按令牌分组。
+		//
+		// 令牌分组是路由维度：渠道合并到公共池之后，所有令牌都指向同一个分组名，
+		// 按它查限流配置会让所有用户退化成同一档——按分组配的差异化限流当场失效，
+		// 而且没有任何症状，只是所有人被同一个阈值卡住。
+		//
+		// 用户分组才是身份维度（企业子账号用主账号令牌调用时，
+		// ContextKeyUserGroup 里已经是主账号的档，见 middleware/auth.go）。
+		//
+		// 令牌分组保留为兜底：用户分组取不到时（异常路径）仍按令牌分组判，
+		// 总比直接掉回全局默认档要好。
+		group := common.GetContextKeyString(c, constant.ContextKeyUserGroup)
 		if group == "" {
-			group = common.GetContextKeyString(c, constant.ContextKeyUserGroup)
+			group = common.GetContextKeyString(c, constant.ContextKeyTokenGroup)
 		}
 
 		//获取分组的限流配置
