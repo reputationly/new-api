@@ -116,6 +116,8 @@ export const useChannelsData = () => {
 
   // Multi-key management states
   const [showMultiKeyManageModal, setShowMultiKeyManageModal] = useState(false);
+  const [showCostModal, setShowCostModal] = useState(false);
+  const [costChannel, setCostChannel] = useState(null);
   const [currentMultiKeyChannel, setCurrentMultiKeyChannel] = useState(null);
 
   // Refs
@@ -1201,6 +1203,10 @@ export const useChannelsData = () => {
     // Multi-key management states
     showMultiKeyManageModal,
     setShowMultiKeyManageModal,
+    showCostModal,
+    setShowCostModal,
+    costChannel,
+    setCostChannel,
     currentMultiKeyChannel,
     setCurrentMultiKeyChannel,
     ...upstreamUpdates,

@@ -318,6 +318,8 @@ export const getChannelsColumns = ({
   setShowEdit,
   setShowEditTag,
   setEditingTag,
+  setShowCostModal,
+  setCostChannel,
   copySelectedChannel,
   refresh,
   activePage,
@@ -726,6 +728,18 @@ export const getChannelsColumns = ({
               },
             },
           ];
+
+          // 成本配置：成本参与选路与对账，「没配」没有任何运行时症状——
+          // 不报错、不进日志、只是流量为零，唯一能发现它的位置就是管理页
+          moreMenuItems.push({
+            node: 'item',
+            name: t('成本配置'),
+            type: 'tertiary',
+            onClick: () => {
+              setCostChannel?.(record);
+              setShowCostModal?.(true);
+            },
+          });
 
           if (upstreamUpdateMeta.supported) {
             moreMenuItems.push({

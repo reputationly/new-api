@@ -33,6 +33,7 @@ import ColumnSelectorModal from './modals/ColumnSelectorModal';
 import EditChannelModal from './modals/EditChannelModal';
 import EditTagModal from './modals/EditTagModal';
 import MultiKeyManageModal from './modals/MultiKeyManageModal';
+import ChannelCostModal from './modals/ChannelCostModal';
 import ChannelUpstreamUpdateModal from './modals/ChannelUpstreamUpdateModal';
 import { createCardProPagination } from '../../../helpers/utils';
 
@@ -58,6 +59,14 @@ const ChannelsPage = () => {
       />
       <BatchTagModal {...channelsData} />
       <ModelTestModal {...channelsData} />
+      <ChannelCostModal
+        visible={channelsData.showCostModal}
+        channel={channelsData.costChannel}
+        onClose={(saved) => {
+          channelsData.setShowCostModal(false);
+          if (saved) channelsData.refresh?.();
+        }}
+      />
       <MultiKeyManageModal
         visible={channelsData.showMultiKeyManageModal}
         onCancel={() => channelsData.setShowMultiKeyManageModal(false)}
