@@ -181,6 +181,20 @@ func upstreamAmountCNY(quota int, other map[string]interface{}) float64 {
 	if quota == 0 {
 		return 0
 	}
+
+	// 优先读请求时正算并落库的成本（model.appendUpstreamCost）。
+	//
+	// 这条路径比下面的反推更准，也更能扛住配置变化：反推假设「group_ratio 就是
+	// 售价/成本的比值」，而这个假设在两种情况下已经不成立——
+	//   1. GroupModelRatio 的 override 规则让最终倍率与供应链成本脱钩；
+	//   2. 售价与成本解耦后（设计 §3.2），group_ratio 描述的是场景与用户档，
+	//      跟走了哪家供应商彻底无关。
+	// 新日志一律走这里；下面的除法只为存量日志保留，不需要回填。
+	if cost := getFloat(other, "cost_quota"); cost > 0 {
+		v := cost / common.QuotaPerUnit * operation_setting.USDExchangeRate
+		return math.Round(v*1e6) / 1e6
+	}
+
 	upstreamQuota := float64(quota)
 	if r := getFloat(other, "group_ratio"); r > 0 {
 		upstreamQuota /= r

@@ -215,6 +215,40 @@ type RecordConsumeLogParams struct {
 	Other            map[string]interface{} `json:"other"`
 }
 
+// appendUpstreamCost 把本次请求的上游成本写进日志 other。
+//
+// 为什么在这里算、而不是在各个计费路径里：文本 / 图像 / 音频 / 视频 / MJ / Task /
+// 分段计费全都乘同一个 `PriceData.GroupRatioInfo.GroupRatio`
+// （docs/group-management-redesign.md §5.2 已验证这个性质），且全都汇到
+// RecordConsumeLog 这一个出口。在出口算一次，等于免费覆盖全部计费模式；在入口
+// 逐个算，七条路径漏一条就是一段对不上账的日志，而且不会报错。
+//
+//	quota = base × groupRatio        计费链已经算完
+//	cost  = base × costRatio
+//	     => cost = quota × costRatio / groupRatio
+//
+// groupRatio <= 0（免费体验区 free=0）时 base 无法反推，**不写 cost 字段**——
+// 对账端会回退到既有的 `quota ÷ group_ratio` 逻辑，行为与改造前一致。这不是遗漏：
+// 免费区走的是自建算力，不参与供应商对账。
+//
+// 成本未配置时同样不写：`service/reconcile_helpers.go` 需要区分「成本是 0」与
+// 「没配过成本」，把后者显示成零差异会让运营以为账已经对上了（§5.5）。
+func appendUpstreamCost(other map[string]interface{}, quota int, channelId int, modelName string) {
+	if other == nil || quota == 0 || channelId == 0 {
+		return
+	}
+	costRatio, ok := GetChannelModelCostRatio(channelId, modelName)
+	if !ok {
+		return
+	}
+	groupRatio, _ := other["group_ratio"].(float64)
+	if groupRatio <= 0 {
+		return
+	}
+	other["cost_quota"] = float64(quota) * costRatio / groupRatio
+	other["cost_ratio"] = costRatio
+}
+
 func RecordConsumeLog(c *gin.Context, userId int, params RecordConsumeLogParams) {
 	if !common.LogConsumeEnabled {
 		return
@@ -222,6 +256,7 @@ func RecordConsumeLog(c *gin.Context, userId int, params RecordConsumeLogParams)
 	logger.LogInfo(c, fmt.Sprintf("record consume log: userId=%d, params=%s", userId, common.GetJsonString(params)))
 	username := c.GetString("username")
 	requestId := c.GetString(common.RequestIdKey)
+	appendUpstreamCost(params.Other, params.Quota, params.ChannelId, params.ModelName)
 	otherStr := common.MapToJsonStr(params.Other)
 	// 判断是否需要记录 IP
 	needRecordIp := false

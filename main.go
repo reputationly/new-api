@@ -131,6 +131,10 @@ func main() {
 		go model.SyncChannelCache(common.SyncFrequency)
 	}
 
+	// 渠道成本缓存：记账与选路都依赖它，因此与内存缓存开关无关，无条件初始化 + 轮询
+	model.InitChannelModelCostCache()
+	go model.SyncChannelModelCostCache(common.SyncFrequency)
+
 	// 热更新配置
 	go model.SyncOptions(common.SyncFrequency)
 

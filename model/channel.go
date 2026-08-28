@@ -447,12 +447,20 @@ func BatchDeleteChannels(ids []int) error {
 			tx.Rollback()
 			return err
 		}
+		if err := tx.Where("channel_id in (?)", chunk).Delete(&ChannelModelCost{}).Error; err != nil {
+			tx.Rollback()
+			return err
+		}
 		if err := tx.Where("channel_id in (?)", chunk).Delete(&Ability{}).Error; err != nil {
 			tx.Rollback()
 			return err
 		}
 	}
-	return tx.Commit().Error
+	if err := tx.Commit().Error; err != nil {
+		return err
+	}
+	InitChannelModelCostCache()
+	return nil
 }
 
 func (channel *Channel) GetPriority() int64 {
@@ -579,8 +587,13 @@ func (channel *Channel) Delete() error {
 	if err != nil {
 		return err
 	}
-	err = channel.DeleteAbilities()
-	return err
+	if err = channel.DeleteAbilities(); err != nil {
+		return err
+	}
+	// 成本配置随渠道一起清，否则表会累积指向已不存在渠道的孤儿行。
+	// 放在 model 层而非各个 controller：删除有三条路径（单个 / 批量 / 清理禁用），
+	// 在调用侧逐个补必然漏一条。
+	return DeleteChannelModelCosts(channel.Id)
 }
 
 var channelStatusLock sync.Mutex
@@ -823,8 +836,24 @@ func DeleteChannelByStatus(status int64) (int64, error) {
 }
 
 func DeleteDisabledChannel() (int64, error) {
+	// 先取 id 再删：成本配置要按 channel_id 连带清理，渠道行删掉之后就查不到了
+	var ids []int
+	if err := DB.Model(&Channel{}).
+		Where("status = ? or status = ?", common.ChannelStatusAutoDisabled, common.ChannelStatusManuallyDisabled).
+		Pluck("id", &ids).Error; err != nil {
+		return 0, err
+	}
 	result := DB.Where("status = ? or status = ?", common.ChannelStatusAutoDisabled, common.ChannelStatusManuallyDisabled).Delete(&Channel{})
-	return result.RowsAffected, result.Error
+	if result.Error != nil {
+		return result.RowsAffected, result.Error
+	}
+	if len(ids) > 0 {
+		if err := DB.Where("channel_id in (?)", ids).Delete(&ChannelModelCost{}).Error; err != nil {
+			return result.RowsAffected, err
+		}
+		InitChannelModelCostCache()
+	}
+	return result.RowsAffected, nil
 }
 
 func GetPaginatedTags(offset int, limit int) ([]*string, error) {

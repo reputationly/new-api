@@ -299,6 +299,7 @@ func migrateDB() error {
 		&CanvasAsset{},
 		&CanvasStorageUsage{},
 		&ModerationLog{},
+		&ChannelModelCost{},
 	)
 	if err != nil {
 		return err
