@@ -228,6 +228,39 @@ export const usePlaygroundAdminDraft = () => {
     [updateStore],
   );
 
+  // 建一条「不挂任何玩法」的模型：体验区没有它的入口，但配置里必须有这条记录。
+  //
+  // 为什么需要单独一个入口:addModelToTab 是唯一的建条目途径,而它必须挂 tab;
+  // removeModelFromTab 又会在「没 tab 且没遗留能力标签」时把整条删掉。于是这类模型
+  // 在 UI 上无法创建 —— 超分模型正是这一类(它只被生成模型的「超分档位」引用,自己
+  // 不该在体验区露出入口)。原先 seedvr2 那条是直接写进 VideoModelConfig 的,新增
+  // 一个超分模型就只能再去改 option,这里把它补成页面能做的事。
+  //
+  // 两个字段都不能省:
+  //   capabilities —— 没有它,removeModelFromTab 的「无 tab 无能力即删除」会顺手删掉,
+  //                    而且模型广场也认不出这条属于哪一类;
+  //   sizes: []    —— orphanFields 只渲染「已存在(!== undefined)」的字段,不给个空数组
+  //                    的话新条目在「按模型交叉检查」里没有任何可编辑项,连档位都填不了,
+  //                    而「超分档位」的目标下拉正是从超分模型自己的 sizes 取候选。
+  const addBareModel = useCallback(
+    (storeKey, name, capability) => {
+      const model = (name || '').trim();
+      const cap = (capability || '').trim();
+      if (!model || !cap) return;
+      updateStore(storeKey, (s) => {
+        if (s.models[model]) return s; // 已存在就不动,避免覆盖既有配置
+        return {
+          ...s,
+          models: {
+            ...s.models,
+            [model]: { capabilities: [cap], tabs: {}, sizes: [] },
+          },
+        };
+      });
+    },
+    [updateStore],
+  );
+
   // 从 tab 摘掉模型；它若已不属于任何 tab、也没有遗留的无 tab 能力标签，整条删掉
   // ——否则模型广场还会按「配进了这份 ModelConfig」把它算进该大类。
   const removeModelFromTab = useCallback(
@@ -346,6 +379,7 @@ export const usePlaygroundAdminDraft = () => {
     patchTabConfig,
     setDefaultField,
     addModelToTab,
+    addBareModel,
     removeModelFromTab,
     setTabField,
     setModelField,

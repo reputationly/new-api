@@ -1,6 +1,6 @@
-import React, { useMemo } from 'react';
+import React, { useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Card, Empty, Tag, Typography } from '@douyinfe/semi-ui';
+import { Button, Card, Empty, Input, Tag, Typography } from '@douyinfe/semi-ui';
 import {
   capabilitiesWithoutTab,
   listTabsByStoreKey,
@@ -30,6 +30,10 @@ const CategoryPanel = ({ category, draft }) => {
     () => new Map(owned.map((x) => [x.tab.key, x.tab.label])),
     [owned],
   );
+
+  const [newName, setNewName] = useState('');
+  const [newCap, setNewCap] = useState('');
+  const exists = !!store?.models?.[newName.trim()];
 
   const rows = useMemo(
     () =>
@@ -73,6 +77,48 @@ const CategoryPanel = ({ category, draft }) => {
       </Card>
 
       <Card title={t('按模型交叉检查')}>
+        {/* 「不挂玩法的模型」唯一的创建入口。按 tab 编辑的页面建不出这种条目
+            (addModelToTab 必须挂 tab),而超分模型正需要它:只被生成模型的
+            「超分档位」引用,自己不该在体验区露出入口。 */}
+        <div className='mb-3 pb-3 border-b border-gray-100'>
+          <div className='flex flex-wrap items-center gap-2'>
+            <Input
+              size='small'
+              style={{ width: 220 }}
+              placeholder={t('模型名，如 swiftvr')}
+              value={newName}
+              onChange={setNewName}
+            />
+            <Input
+              size='small'
+              style={{ width: 180 }}
+              placeholder={t('能力标签，如 视频超分')}
+              value={newCap}
+              onChange={setNewCap}
+            />
+            <Button
+              size='small'
+              disabled={!newName.trim() || !newCap.trim() || exists}
+              onClick={() => {
+                draft.addBareModel(storeKey, newName, newCap);
+                setNewName('');
+                setNewCap('');
+              }}
+            >
+              {t('添加不挂玩法的模型')}
+            </Button>
+            {exists && (
+              <Text type='warning' size='small'>
+                {t('该模型已在这份配置里')}
+              </Text>
+            )}
+          </div>
+          <Text type='tertiary' size='small' className='block mt-1'>
+            {t(
+              '用于超分这类「有配置、无体验区入口」的模型：它不会出现在任何玩法里，只供生成模型的「超分档位」引用。建好后在下方给它填「尺寸 / 分辨率」（超分档位的目标下拉正是从这里取候选）。',
+            )}
+          </Text>
+        </div>
         {rows.length === 0 ? (
           <Empty
             description={

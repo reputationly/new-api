@@ -273,6 +273,26 @@ func applyMiniMaxH3Request(body map[string]any, taskType string, durationSec int
 	// H3 的音频是**音色样本**,长度与输出时长无关,照搬会把输出错误地卡在音频配置上。
 	delete(body, "video_duration")
 
+	// quality:H3 上这个键是**一发就废掉实例**的开关,必须在网关剥掉。
+	//
+	// 它不是画质档,是引擎的 Cache-DiT 安装开关(阶梯是 lossless=不缓存 > high=保守缓存)。
+	// 在 vllm-omni 里 quality=high 会给 transformer 装 cache-dit 钩子,而 H3 的部署都开着
+	// enable_cpu_offload —— 后者已经把 module.forward 换成了自己的包装对象。等到下一发请求
+	// 切换安装键时,cache-dit 的释放路径对那个对象调 .__get__ 抛 AttributeError,异常发生在
+	// 它清理内部状态**之前**,于是模块半释放:**该实例此后对所有请求恒 500,直到重启**。
+	// 2026-08-29 在 gpu41 实测复现,12 发里 10 发 500。
+	//
+	// metadata 是开放透传的(见函数头注释),所以调用方能自己塞这个键 —— 跟上面
+	// durationLocked 剥嵌套时长键是同一类绕过口,不剥就等于把重启开关暴露给 API 用户。
+	//
+	// 剥掉也不损失任何东西:同日实测 quality=high 在 H3 上是净负收益 ——
+	// Turbo8(8 步)产物与不缓存**逐字节相同**且慢 1.4%(缓存一步都没跳);
+	// 基座(20 步)慢 3.3%,画质无可辨别改善(清晰度指标两降一升,方向不一致)。
+	//
+	// 引擎侧的根因补丁(给包装对象补 __get__)已经写好但尚未进镜像;即便进了,
+	// 这一行也该留着 —— 这个键对 H3 没有正向用途。
+	delete(body, "quality")
+
 	// ── 步数 ───────────────────────────────────────────────────────────────
 	// 按模型取,没配才回落基座档。蒸馏版(Turbo8,标定 8 步)与基座共用引擎族,
 	// 但步数必须各按各的,见 h3DefaultInferenceSteps 处的注释。
