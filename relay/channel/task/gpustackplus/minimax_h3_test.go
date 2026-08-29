@@ -133,6 +133,28 @@ func TestH3DropsWanAndInfiniteTalkFields(t *testing.T) {
 	}
 }
 
+// quality 是唯一一个"调用方塞进来就能废掉实例"的键,必须无条件剥掉。
+//
+// 它不是画质档而是引擎的 Cache-DiT 安装开关。H3 的部署都开着 cpu_offload,两套 forward
+// 包装撞在一起,下一发切换安装键时 cache-dit 的释放路径会抛 AttributeError 并把模块留在
+// 半释放状态 —— 该实例此后恒 500 直到重启(2026-08-29 实测,12 发 10 失败)。
+// 因为 metadata 是开放透传的,这是个真实的绕过口,跟嵌套时长键同类。
+func TestH3AlwaysDropsQuality(t *testing.T) {
+	for _, v := range []any{"high", "lossless", ""} {
+		body := map[string]any{"quality": v}
+		applyMiniMaxH3Request(body, "t2v", 5, false, 0)
+		if _, exists := body["quality"]; exists {
+			t.Fatalf("quality=%v 没被剥掉:它能让 H3 实例恒 500 直到重启", v)
+		}
+	}
+	// 剥 quality 不能顺手动到别的键。
+	body := map[string]any{"quality": "high", "num_inference_steps": 20, "aspect_ratio": "16:9"}
+	applyMiniMaxH3Request(body, "t2v", 5, false, 0)
+	if body["num_inference_steps"] != 20 || body["aspect_ratio"] != "16:9" {
+		t.Fatalf("剥 quality 时误伤了其他字段: %v", body)
+	}
+}
+
 // metadata 是开放透传的(API 用户可直接下发引擎旋钮),这里只补默认、不覆盖用户意图。
 func TestH3DoesNotOverrideExplicitValues(t *testing.T) {
 	body := map[string]any{
