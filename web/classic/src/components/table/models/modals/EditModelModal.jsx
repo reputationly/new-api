@@ -59,6 +59,53 @@ const nameRuleOptions = [
   { label: '后缀名称匹配', value: 3 },
 ];
 
+/**
+ * 「可见用户档」是**白名单**：填谁谁能用，留空所有人可用。
+ *
+ * 这个语义极易被读反——字段往那一放，第一反应是填「要屏蔽的档」。填反了不会报错，
+ * 也不留任何痕迹：模型照常可见，只是可见范围恰好是原本要排除的那批人，通常要到
+ * 月底对账发现毛利异常才暴露。
+ *
+ * 所以不让人在脑子里做减法，直接把补集算出来摆在下面。
+ */
+export function describeVisibleGroups(allGroups = [], selected) {
+  const picked = pickVisibleGroups(selected);
+  if (picked.length === 0) {
+    return { unrestricted: true, excluded: [] };
+  }
+  return {
+    unrestricted: false,
+    excluded: (allGroups || []).filter((g) => !picked.includes(g)),
+  };
+}
+
+function pickVisibleGroups(selected) {
+  return Array.isArray(selected)
+    ? selected.map((s) => String(s).trim()).filter(Boolean)
+    : [];
+}
+
+/**
+ * 提交前必须把空白项滤掉，否则前后端对同一份配置的理解会正好相反。
+ *
+ * TagInput 开了 addOnBlur，输入框里剩个空格再失焦就会多出一个空白 tag。两个及以上
+ * 空白 tag 拼出来是 ",  "，而后端 parseVisibleGroups（model/model_visibility.go:85）
+ * 先 TrimSpace 再判空——逗号还在，非空，于是走进「配了但一个档都没勾」那条分支，
+ * 返回空集合，语义是**谁都看不到**。
+ *
+ * 而界面这边 describeVisibleGroups 把空白当没填，显示的是「不限制，所有人可见」。
+ * 两句话说的是相反的事，且模型会静默地对所有人消失。
+ *
+ * 修在提交侧而不是后端：后端那条「空集合 = 谁都看不到」是刻意设计的语义，
+ * 表达「这个模型暂时不对外」，不能为了这个边角改掉。
+ */
+export function serializeVisibleGroups(selected) {
+  if (Array.isArray(selected)) {
+    return pickVisibleGroups(selected).join(',');
+  }
+  return typeof selected === 'string' ? selected.trim() : '';
+}
+
 const EditModelModal = (props) => {
   const { t } = useTranslation();
   const [loading, setLoading] = useState(false);
@@ -73,6 +120,9 @@ const EditModelModal = (props) => {
   // 预填组（标签、端点）
   const [tagGroups, setTagGroups] = useState([]);
   const [endpointGroups, setEndpointGroups] = useState([]);
+
+  // 用户分组全集，用于把「可见用户档」白名单的补集算出来显示
+  const [allGroups, setAllGroups] = useState([]);
 
   // 获取供应商列表
   const fetchVendors = async () => {
@@ -105,10 +155,23 @@ const EditModelModal = (props) => {
     }
   };
 
+  // 拿不到分组只会让「哪些档会被挡」的提示退化成不显示，不影响配置本身
+  const fetchAllGroups = async () => {
+    try {
+      const res = await API.get('/api/group/');
+      if (res?.data?.success) {
+        setAllGroups(res.data.data || []);
+      }
+    } catch (error) {
+      // ignore
+    }
+  };
+
   useEffect(() => {
     if (props.visiable) {
       fetchVendors();
       fetchPrefillGroups();
+      fetchAllGroups();
     }
   }, [props.visiable]);
 
@@ -200,9 +263,7 @@ const EditModelModal = (props) => {
       const submitData = {
         ...values,
         tags: Array.isArray(values.tags) ? values.tags.join(',') : values.tags,
-        visible_groups: Array.isArray(values.visible_groups)
-          ? values.visible_groups.join(',')
-          : values.visible_groups || '',
+        visible_groups: serializeVisibleGroups(values.visible_groups),
         endpoints: values.endpoints || '',
         status: values.status ? 1 : 0,
         sync_official: values.sync_official ? 1 : 0,
@@ -545,15 +606,38 @@ const EditModelModal = (props) => {
                   <Col span={24}>
                     <Form.TagInput
                       field='visible_groups'
-                      label={t('可见用户档')}
-                      placeholder={t(
-                        '留空 = 所有人可见；填写后仅这些用户档可见',
-                      )}
+                      label={t('仅这些用户档可用')}
+                      placeholder={t('留空 = 所有人可用')}
                       addOnBlur
                       showClear
-                      extraText={t(
-                        '按用户档限制谁能看到并调用此模型。留空表示不限制；填了就只有列出的档能用，其余用户会得到「模型不存在」。填了却一个都不填等于对所有人隐藏。',
-                      )}
+                      extraText={(() => {
+                        const { unrestricted, excluded } =
+                          describeVisibleGroups(
+                            allGroups,
+                            values.visible_groups,
+                          );
+                        if (unrestricted) {
+                          return t(
+                            '留空表示不限制，所有用户档都能看到并调用此模型。',
+                          );
+                        }
+                        if (excluded.length === 0) {
+                          // 分组列表还没到（加载中或接口失败）时，excluded 恒为空，
+                          // 但那不代表「都列出了」——此时说「等同于不限制」是错的，
+                          // 限制其实正在生效，只是算不出补集
+                          return allGroups.length === 0
+                            ? t(
+                                '已限制为上列用户档；分组列表暂未加载，算不出哪些档会被挡。',
+                              )
+                            : t('当前所有用户档都已列出，等同于不限制。');
+                        }
+                        return (
+                          <span className='text-orange-600'>
+                            {t('以下用户档将无法使用，会得到「模型不存在」：')}
+                            {excluded.join('、')}
+                          </span>
+                        );
+                      })()}
                     />
                   </Col>
                   <Col span={24}>
