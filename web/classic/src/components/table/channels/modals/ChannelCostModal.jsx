@@ -135,6 +135,26 @@ export default function ChannelCostModal({ visible, channel, onClose }) {
     setSelected([]);
   }, [selected, batchValue]);
 
+  // 全选作用于**当前筛选结果**而不是全部行：这样「搜 Qwen → 全选 → 一键 0.7」
+  // 能一次配完一族模型。渠道挂几十个模型时，逐个勾选是纯粹的体力活，而供应商
+  // 每次调价都要重来一遍。
+  //
+  // 刻意放在工具栏而不是表头：表头 checkbox 的选中态依赖 filtered，而 filtered
+  // 由 rows 算出、每次敲键都变，把它写进 columns 的 useMemo 依赖会让 Semi Table
+  // 重建单元格、输入框光标跳到末尾（cursorStability.test.jsx 守的就是这个）。
+  const allFilteredSelected =
+    filtered.length > 0 && filtered.every((r) => selected.includes(r.model));
+
+  const toggleSelectAll = useCallback(() => {
+    const names = filtered.map((r) => r.model);
+    setSelected((prev) => {
+      const isAll = names.length > 0 && names.every((m) => prev.includes(m));
+      return isAll
+        ? prev.filter((m) => !names.includes(m))
+        : Array.from(new Set([...prev, ...names]));
+    });
+  }, [filtered]);
+
   // 未配的一次性按 1.0 填满：多数供应商只对部分模型给折扣，其余按目录价结算。
   // 先填满再改少数几个，比逐个填快得多。
   const fillMissing = useCallback(() => {
@@ -300,6 +320,15 @@ export default function ChannelCostModal({ visible, channel, onClose }) {
             onChange={setKeyword}
             showClear
           />
+          <Button
+            size='small'
+            disabled={filtered.length === 0}
+            onClick={toggleSelectAll}
+          >
+            {allFilteredSelected
+              ? t('取消全选')
+              : `${t('全选')} (${filtered.length})`}
+          </Button>
           <InputNumber
             size='small'
             min={0}
