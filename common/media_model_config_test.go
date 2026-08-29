@@ -178,3 +178,48 @@ func TestMusicEngineFamilyForModel(t *testing.T) {
 		t.Fatalf("empty config = %q, want empty", got)
 	}
 }
+
+func setAudioOpt(audio string) {
+	OptionMapRWMutex.Lock()
+	if OptionMap == nil {
+		OptionMap = map[string]string{}
+	}
+	OptionMap["AudioModelConfig"] = audio
+	OptionMapRWMutex.Unlock()
+}
+
+// 语音引擎族按**配置声明**取,不按模型名 substring。
+//
+// 锁这条是因为它两个方向都静默:声明了却不生效 → IndexTTS-2.5 的 lang /
+// text_normalization 留在 body 顶层,被引擎 AudioTaskRequest(extra=ignore)丢掉,
+// 用户看到的是"选了语种但没生效";反过来把没声明的模型误判成 2.5 → 会把别的 TTS
+// 引擎的顶层 lang 搬进 extra_params 并从顶层删掉。
+func TestAudioEngineFamilyForModel(t *testing.T) {
+	setAudioOpt(`{"models":{"my-tts":{"engine":"indextts2.5"},"plain":{"maxChars":500}}}`)
+
+	if got := AudioEngineFamilyForModel("my-tts"); got != AudioEngineIndexTTS25 {
+		t.Fatalf("declared engine = %q, want %q", got, AudioEngineIndexTTS25)
+	}
+	// 多候选名(公开名 + 渠道重定向后的上游名),任一命中即可
+	if got := AudioEngineFamilyForModel("public-alias", "my-tts"); got != AudioEngineIndexTTS25 {
+		t.Fatalf("second candidate = %q, want %q", got, AudioEngineIndexTTS25)
+	}
+	// 配了但没声明 engine → 空串
+	if got := AudioEngineFamilyForModel("plain"); got != "" {
+		t.Fatalf("model without engine = %q, want empty", got)
+	}
+	// 完全没配 / 配置为空 → 空串,不 panic
+	if got := AudioEngineFamilyForModel("unknown"); got != "" {
+		t.Fatalf("unconfigured model = %q, want empty", got)
+	}
+	setAudioOpt("")
+	if got := AudioEngineFamilyForModel("my-tts"); got != "" {
+		t.Fatalf("empty config = %q, want empty", got)
+	}
+
+	// **名字里带 2.5 但没声明 engine 的,不能被当成 IndexTTS-2.5**
+	setAudioOpt(`{"models":{"indextts-2.5-preview":{"maxChars":500}}}`)
+	if got := AudioEngineFamilyForModel("indextts-2.5-preview"); got != "" {
+		t.Fatalf("name-only match = %q, want empty(判据是声明不是模型名)", got)
+	}
+}

@@ -107,6 +107,118 @@ export const emotionToVector = (emotion, weight) => {
   return vec;
 };
 
+// ── IndexTTS-2.5 扩展能力 ──────────────────────────────────────────────────
+//
+// 以下全部在真实实例(dev-gpustack-a100-0011)上逐条验证过,不是照文档抄:
+//   speed=1.5 → 音频字节数 0.64x、speed=0.6 → 1.72x(与 1/speed 成正比,引擎把它
+//   映射成 duration_factor);speed=3.0 → 400。lang 非法值 → 400 并回列全部合法值。
+//   emo_vector 多维同时非零可用(悲0.7+低落0.4 正常出音),越界 1.5 → 400。
+//   use_emo_text 首次 10.4s、之后 5.3s(基线 1.5s)——QwenEmotion 推理开销。
+
+// 引擎族:模型级声明,不随 tab 变。判据是配置声明而非模型名 substring
+// (前端拿对外模型名、后端拿上游名,靠名字判两边必然分叉)。
+// 常量本体定义在 playgroundAdmin.constants.js(管理页下拉也要用它),这里再导出，
+// 依赖方向保持单向 —— 与 VIDEO_ENGINE_MINIMAX_H3 同一处理。
+export { AUDIO_ENGINE_INDEXTTS25 } from './playgroundAdmin.constants';
+export const getEngineForAudioModel = (config, model) =>
+  config?.models?.[model]?.engine || '';
+
+// 情感来源:引擎侧三者**互斥且有优先级**(indextts2_talker.py:832
+// use_emo_text > emo_vector > emo_audio),所以 UI 必须是单选,不能让用户以为可叠加。
+export const AUDIO_EMOTION_SOURCE_FOLLOW = 'follow';
+export const AUDIO_EMOTION_SOURCE_VECTOR = 'vector';
+export const AUDIO_EMOTION_SOURCE_AUDIO = 'audio';
+export const AUDIO_EMOTION_SOURCE_TEXT = 'text';
+
+export const AUDIO_EMOTION_SOURCES = [
+  {
+    value: AUDIO_EMOTION_SOURCE_FOLLOW,
+    label: '跟随音色',
+    hint: '不发情感参数',
+  },
+  {
+    value: AUDIO_EMOTION_SOURCE_VECTOR,
+    label: '手动调节',
+    hint: '八维情感可混合',
+  },
+  {
+    value: AUDIO_EMOTION_SOURCE_AUDIO,
+    label: '情感参考音',
+    hint: '另传一段音频定情绪',
+  },
+  {
+    value: AUDIO_EMOTION_SOURCE_TEXT,
+    label: '文本推断',
+    hint: '由模型读文本定情绪，慢 3~4 秒',
+  },
+];
+
+// 八维情感,次序必须与引擎的 _DESIRED_ORDER 一致
+// (indextts2_talker.py:934 ["高兴","愤怒","悲伤","恐惧","反感","低落","惊讶","自然"])。
+// 错位不会报错,只会让"选悲伤"出成愤怒。
+export const AUDIO_EMOTION_DIMENSIONS = [
+  { key: 'happy', label: '高兴' },
+  { key: 'angry', label: '愤怒' },
+  { key: 'sad', label: '悲伤' },
+  { key: 'afraid', label: '恐惧' },
+  { key: 'disgusted', label: '反感' },
+  { key: 'melancholic', label: '低落' },
+  { key: 'surprised', label: '惊讶' },
+  { key: 'calm', label: '自然' },
+];
+
+// 引擎硬校验 [0, 1.2](超出即 400)。UI 上限取 1.2,与引擎一致。
+export const AUDIO_EMOTION_DIM_MAX = 1.2;
+export const AUDIO_EMOTION_DIM_STEP = 0.05;
+
+// 全零向量视为"没选情绪",不下发 —— 发一个全零向量会让引擎按零情感合成,
+// 与"跟随音色"是不同结果,用户却分辨不出自己漏调了滑块。
+export const emotionVectorIsEmpty = (vec) =>
+  !Array.isArray(vec) || vec.every((v) => !(Number(v) > 0));
+
+export const makeEmptyEmotionVector = () =>
+  AUDIO_EMOTION_DIMENSIONS.map(() => 0);
+
+// 语速:2.5 原生支持(native_speed_control),映射引擎的 duration_factor。
+// 范围是引擎硬校验的 [0.5, 2.0],不是 OpenAI 通用的 [0.25, 4]。
+export const AUDIO_SPEED_MIN = 0.5;
+export const AUDIO_SPEED_MAX = 2.0;
+export const AUDIO_SPEED_STEP = 0.05;
+export const AUDIO_SPEED_DEFAULT = 1.0;
+
+// IndexTTS-2.5 的语种(extra_params.lang)。
+//
+// ⚠️ 这里只列**官方声明支持**的,不是引擎能接受的全集。三个口径必须分清:
+//   - tokenizer_v2_5.LANGUAGES 有 106 个槽位,但**前 99 个逐字逐序等于 Whisper 的
+//     语种表**(继承来的),槽位存在 ≠ 模型在该语言上训练过;
+//   - 模型卡 (README «Languages») 只声明五种:中、英、日、西、阿;
+//   - 分词器文件名 multilingual_zh_ja_yue_char_del.tiktoken 显示字符集覆盖 中/日/粤。
+//
+// 取交集并保守收敛:官方五种 + 粤语(分词器与槽位双重佐证) + 中英混合(槽位有 zh/en)。
+//
+// 2026-08-29 逐条实测(dev-gpustack-a100-0012),全部用同一段参考音、各发一条对应语言的
+// 文本:zh / en / es / ar / yue / zh-en混合 与不传 lang 都 200 且音频 4.7~5.6s(合理),
+// **只有 ja 报 400**"Japanese preprocessing requires fugashi and unidic" ——
+// 与 wetext 那次同根:pyproject 的 [indextts2] extra 整个没进镜像。fugashi 有
+// aarch64 wheel、unidic-lite 是纯词典,17s 就能装上(不像同 extra 的 pynini 要编
+// OpenFst),已加进 docker/Dockerfile.cuda 的 best-effort 安装块。
+// ⚠️ 所以 ja 需要 2026-08-29 之后出的镜像;更早的镜像上选日语会 400。
+// 别把 Whisper 的 99 语种表当成 TTS 的能力清单 —— 要开更多语种,先各测一条再加。
+// 引擎仍接受任意合法值,API 直连不受这个列表限制。不传时引擎默认 zh。
+//
+// 与下方的 AUDIO_LANGUAGES 是两回事:那个是**语音合成 tab 的方言**(自动/北京话/
+// 四川话,Qwen3-TTS 的 language 标量),两者不能互相复用。
+export const AUDIO_TTS25_LANGUAGES = [
+  { value: '', label: '默认（中文）' },
+  { value: 'zh', label: '中文' },
+  { value: 'en', label: 'English' },
+  { value: 'ja', label: '日本語' },
+  { value: 'es', label: 'Español' },
+  { value: 'ar', label: 'العربية' },
+  { value: 'yue', label: '粤语' },
+  { value: 'zh/en', label: '中英混合' },
+];
+
 // 情感强度(emo_alpha)默认值,与官方 demo 默认一致。
 export const AUDIO_DEFAULT_EMO_WEIGHT = 0.65;
 
@@ -456,6 +568,17 @@ export const parseAudioModelConfig = (raw) => {
     if (parsed.models && typeof parsed.models === 'object') {
       Object.entries(parsed.models).forEach(([name, cfg]) => {
         models[name] = {
+          // **白名单式重建，漏一个字段就等于每次管理页保存都把它删掉**——管理页草稿
+          // 正是用本函数水合(usePlaygroundAdminDraft 的 AudioModelConfig.toDraft)，
+          // 保存时 recomputeModelLevel 只是 {...model} 展开，所以 parse 保不住的字段
+          // 会被静默写没。engine 丢了有两重后果，且都不报错:
+          //   前端 getEngineForAudioModel 恒返回空 → 2.5 的语速/语种/文本归一化控件
+          //   整体不渲染;后端 AudioEngineFamilyForModel 读原始 JSON 本来还能工作，
+          //   但只要运营开一次语音配置页保存，声明就被抹掉，折 extra_params 也跟着失效。
+          // lower+trim 与后端比较口径一致(见 musicPlayground 同名处理)。
+          engine: String(cfg?.engine || '')
+            .trim()
+            .toLowerCase(),
           capabilities: normalizeList(cfg?.capabilities),
           maxChars: toPositiveInt(cfg?.maxChars),
           refAudioMaxMB: toPositiveInt(cfg?.refAudioMaxMB),

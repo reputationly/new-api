@@ -212,7 +212,7 @@ func h3Canvas(shortEdge int, ratio float64) (width, height int) {
 //
 // H3 的任务选择与时长都走**嵌套的** extra_params,顶层同名字段会被引擎的
 // VideoGenerationRequest(Pydantic,没有 extra="forbid")静默丢弃 —— 不报错、不生效,
-// 是最难查的一类问题。同 foldEmotionParamsIntoExtra 的处境。
+// 是最难查的一类问题。同 foldParamsIntoExtra 的处境。
 func h3EnsureExtraParams(body map[string]any) map[string]any {
 	if extra, ok := body["extra_params"].(map[string]any); ok && extra != nil {
 		return extra

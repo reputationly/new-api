@@ -129,6 +129,28 @@ export const VIDEO_ENGINE_OPTIONS_INLINE = [
   { value: VIDEO_ENGINE_MINIMAX_H3, label: 'MiniMax H3（vLLM-Omni）' },
 ];
 
+// 语音引擎族。同上，定义在这里、由 audioPlayground.constants.js 再导出。
+// 取值必须与后端 common.AudioEngineIndexTTS25 一致（后端比较前 lower+trim）。
+export const AUDIO_ENGINE_INDEXTTS25 = 'indextts2.5';
+
+export const AUDIO_ENGINE_OPTIONS_INLINE = [
+  { value: '', label: '默认（IndexTTS-2 及其他语音模型）' },
+  { value: AUDIO_ENGINE_INDEXTTS25, label: 'IndexTTS-2.5（vLLM-Omni）' },
+];
+
+// 音乐引擎族。同上，由 musicPlayground.constants.js 再导出。
+// 取值必须与后端 common.MusicEngineMinimaxMusic3 一致（后端比较前 lower+trim）。
+export const MUSIC_ENGINE_MINIMAX_MUSIC3 = 'minimax-music3';
+
+// 只列 MiniMax-Music3:玩法默认引擎（文生音乐恒 acestep、文生音效 audiox、歌声合成
+// soulx）已经覆盖其余模型，需要模型级覆盖的只有「与 ACE-Step 同挂文生音乐」的
+// MiniMax-Music3。多列几个只会让运营选到与玩法不匹配的引擎，而后果是静默的
+// （拿到该引擎不认的键、必需的键一个不发）。与视频侧同一取舍。
+export const MUSIC_ENGINE_OPTIONS_INLINE = [
+  { value: '', label: '默认（按玩法：ACE-Step / AudioX / SoulX）' },
+  { value: MUSIC_ENGINE_MINIMAX_MUSIC3, label: 'MiniMax-Music3（vLLM-Omni）' },
+];
+
 // 模型级（不随 tab 变化）的字段：单独渲染在模型行上，不进 tabs 子层。
 export const PLAYGROUND_MODEL_LEVEL_FIELDS = {
   VideoModelConfig: [
@@ -159,6 +181,24 @@ export const PLAYGROUND_MODEL_LEVEL_FIELDS = {
       // 与引擎族正交的理由见后端 common.VideoInferenceStepsForModel：蒸馏版必须照样
       // 声明 engine 才能拿到请求整形，若步数只能按引擎族给，它就会被强塞基座档。
       help: '蒸馏版（如 Turbo8 标定 8 步）与基座共用引擎族但步数不同，须按模型单独配。留空则按引擎族默认。属模型能力，与 tab 无关。',
+    },
+  ],
+  AudioModelConfig: [
+    {
+      key: 'engine',
+      label: '引擎族',
+      type: 'select',
+      options: AUDIO_ENGINE_OPTIONS_INLINE,
+      help: 'IndexTTS-2.5 是 2 的能力超集，额外支持语速、语种、文本归一化三项。声明后体验区才会展示这些控件、后端才会把 lang / text_normalization 折进 extra_params。选错不会报错，只会让 2.5 的独有能力整体不可见。属模型能力，与 tab 无关。',
+    },
+  ],
+  MusicModelConfig: [
+    {
+      key: 'engine',
+      label: '引擎族',
+      type: 'select',
+      options: MUSIC_ENGINE_OPTIONS_INLINE,
+      help: '玩法自带默认引擎（文生音乐=ACE-Step），同一玩法挂了别的引擎的模型时必须在这里声明。MiniMax-Music3 也是文生音乐，不声明就会走 ACE-Step 分支：拿到 lyrics/thinking 这些它不认的键，而它必需的 instructions 一个都不下发，引擎直接 400。属模型能力，与 tab 无关。',
     },
   ],
 };

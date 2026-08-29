@@ -288,6 +288,55 @@ func firstNonEmptyStr(vals ...string) string {
 	return "model"
 }
 
+// 语音引擎族标识。与视频/音乐侧同一套理由:同一个体验区玩法下可以挂多个引擎的模型,
+// 而它们能吃的参数不同,必须能区分。
+//
+// IndexTTS-2.5 相对 2 是**能力超集**(IndexTTS25Adapter 继承 IndexTTS2Adapter):情感参数
+// 全部继承,另有 speed(0.5~2.0 原生语速)、extra_params.lang、
+// extra_params.text_normalization 三项 2 不支持。给 2 发这三个不会报错,只会被忽略,
+// 但体验区不该给用户展示一个在当前模型上无效的控件。
+//
+// lang 的取值范围别照抄 tokenizer 里那张表:前 99 项与 Whisper 的语种表逐字同序,
+// 是拿来即用的,不是 TTS 实测能力;模型卡只声明 5 种。体验区下拉只放逐条实测过的
+// (见 web 侧 AUDIO_TTS25_LANGUAGES)。引擎仍接受任意合法值,API 直连不受限制。
+const AudioEngineIndexTTS25 = "indextts2.5"
+
+// AudioEngineFamilyForModel 返回该语音模型声明的引擎族
+// (AudioModelConfig.models[name].engine),未声明返回空串。
+//
+// 判据是**配置声明而非模型名 substring** —— 前端拿对外模型名、后端拿渠道重定向后的
+// 上游名,靠名字判断两边必然分叉(见 VideoEngineFamilyForModel 的注释)。
+func AudioEngineFamilyForModel(candidates ...string) string {
+	OptionMapRWMutex.RLock()
+	raw := OptionMap["AudioModelConfig"]
+	OptionMapRWMutex.RUnlock()
+	if strings.TrimSpace(raw) == "" {
+		return ""
+	}
+	var cfg struct {
+		Models map[string]struct {
+			Engine string `json:"engine"`
+		} `json:"models"`
+	}
+	if err := UnmarshalJsonStr(raw, &cfg); err != nil {
+		return ""
+	}
+	for _, name := range candidates {
+		name = strings.TrimSpace(name)
+		if name == "" {
+			continue
+		}
+		m, ok := cfg.Models[name]
+		if !ok {
+			continue
+		}
+		if e := strings.ToLower(strings.TrimSpace(m.Engine)); e != "" {
+			return e
+		}
+	}
+	return ""
+}
+
 // AudioMaxCharsForModel 返回该模型合成文本的字数上限(0=不限制)及是否配置了 AudioModelConfig。
 // 优先 tab 级,其次模型级,再次全局 default;都无返回 configured=false。
 // 注:语音四个玩法共用 task_type=tts,解析不出 tab,实际总是走模型级(见 constant/playground_tab.go)。

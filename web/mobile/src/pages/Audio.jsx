@@ -33,6 +33,7 @@ const AudioBody = ({ mode }) => {
     handleInputChange,
     groups,
     models,
+    isIndexTTS25,
     messages,
     generating,
     locked,
@@ -240,6 +241,43 @@ const AudioBody = ({ mode }) => {
                     value: inputs.emotion,
                     options: EMOTION_PRESETS,
                     onChange: (v) => handleInputChange('emotion', v),
+                  },
+                  // 「按文本推断」:让模型读正文自己定情绪,比拖滑块省事,手机上尤其。
+                  // 它与情感预设互斥(引擎侧 use_emo_text 优先级最高),所以做成独立开关
+                  // 而不是塞进上面的下拉 —— 塞进去会让"选了情绪又开推断"看起来合法。
+                  //
+                  // 桌面端给的是四选一 + 八维滑块,手机端刻意不做:8 个滑块在小屏上并排
+                  // 会误触,要混合情绪去桌面端调。
+                  {
+                    key: 'emotionSource',
+                    label: '按文本推断情感',
+                    type: 'switch',
+                    value: inputs.emotionSource === 'text',
+                    hint: '模型读文本定情绪，慢 3~4 秒',
+                    onChange: (v) =>
+                      handleInputChange('emotionSource', v ? 'text' : ''),
+                  },
+                ]
+              : []),
+            // 语速:仅 IndexTTS-2.5 支持(引擎 native_speed_control,范围 0.5~2.0)。
+            // 判据是配置声明的引擎族,不是模型名。放抽屉一级 —— 它是 2.5 最直观的
+            // 卖点,且只是一个滑块,不值得再点进二级页。
+            //
+            // needsVoice 这一半不能省(桌面端同款闸门是 needsEmotion && isIndexTTS25):
+            // isIndexTTS25 只看模型声明的引擎族、不看当前玩法,而 speed 只在情感合成
+            // 这条分支下发(useAudioGeneration 的 engine === 'indextts')。声明了 2.5
+            // 又同时挂了语音融合之类能力的模型,在那些玩法下会显示一个拖了没用的滑块。
+            ...(needsVoice && isIndexTTS25
+              ? [
+                  {
+                    key: 'speed',
+                    label: '语速',
+                    type: 'slider',
+                    min: 0.5,
+                    max: 2.0,
+                    step: 0.05,
+                    value: inputs.speed ?? 1.0,
+                    onChange: (v) => handleInputChange('speed', v),
                   },
                 ]
               : []),

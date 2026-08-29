@@ -38,6 +38,7 @@ const AudioPlaygroundBody = ({ mode }) => {
     engine,
     needsVoice,
     needsEmotion,
+    isIndexTTS25,
     needsVoiceSource,
     needsRefAudio,
     refAudioRequired,
@@ -124,6 +125,7 @@ const AudioPlaygroundBody = ({ mode }) => {
           engine={engine}
           needsVoice={needsVoice}
           needsEmotion={needsEmotion}
+          isIndexTTS25={isIndexTTS25}
           needsVoiceSource={needsVoiceSource}
           needsRefAudio={needsRefAudio}
           refAudioRequired={refAudioRequired}

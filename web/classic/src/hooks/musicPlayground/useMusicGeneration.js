@@ -57,6 +57,7 @@ import {
   getRefAudioMaxMBForModel,
   getVideoMaxMBForModel,
   getTranslationForModel,
+  MUSIC_ENGINE_MINIMAX_MUSIC3,
 } from '../../constants/musicPlayground.constants';
 
 // 中译英走体验区聊天门面(单次非流式);后端按会话身份注入上游 key。
@@ -1117,7 +1118,7 @@ export const useMusicGeneration = (mode = 't2m') => {
         // (adaptor 把上传物化 NFS → input_refs → 引擎)。
         const metadata = { task_type: resolvedTaskType };
 
-        if (resolvedEngine === 'minimax-music3') {
+        if (resolvedEngine === MUSIC_ENGINE_MINIMAX_MUSIC3) {
           // ── MiniMax-Music3:曲风描述(必填)+ 歌词 ──
           //
           // 引擎硬校验 instructions:不传直接 400

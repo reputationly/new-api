@@ -9,6 +9,7 @@ import {
   TextArea,
   RadioGroup,
   Radio,
+  Checkbox,
 } from '@douyinfe/semi-ui';
 import {
   Settings,
@@ -38,6 +39,19 @@ import {
   VOICE_UPLOAD_VALUE,
   VOICE_UPLOAD_MAX_MB,
   EMOTION_PRESETS,
+  AUDIO_EMOTION_SOURCES,
+  AUDIO_EMOTION_SOURCE_VECTOR,
+  AUDIO_EMOTION_SOURCE_AUDIO,
+  AUDIO_EMOTION_SOURCE_TEXT,
+  AUDIO_EMOTION_DIMENSIONS,
+  AUDIO_EMOTION_DIM_MAX,
+  AUDIO_EMOTION_DIM_STEP,
+  AUDIO_SPEED_MIN,
+  AUDIO_SPEED_MAX,
+  AUDIO_SPEED_STEP,
+  AUDIO_SPEED_DEFAULT,
+  AUDIO_TTS25_LANGUAGES,
+  makeEmptyEmotionVector,
   AUDIO_SPEAKER_PRESETS,
   speakerSampleUrl,
   AUDIO_LANGUAGES,
@@ -61,6 +75,7 @@ const AudioConfigPanel = ({
   engine = 'indextts',
   needsVoice = true,
   needsEmotion = true,
+  isIndexTTS25 = false,
   needsVoiceSource = false,
   needsRefAudio = false,
   refAudioRequired = false,
@@ -142,6 +157,11 @@ const AudioConfigPanel = ({
   };
 
   const showEmotionWeight = !!inputs.emotion;
+  // 老配置没有 emotionSource → 空串,走下面的旧预设路径,行为与改造前一致。
+  const emotionSource = inputs.emotionSource || '';
+  const emoVector = Array.isArray(inputs.emoVector)
+    ? inputs.emoVector
+    : makeEmptyEmotionVector();
 
   // 预设音色下拉:内置常用列表 + 允许自由输入(自定义 speaker 名)。
   // 选项带上官方的音色描述与母语 —— 只给一个英文名,用户分不出 Sohee 与 Serena,
@@ -378,8 +398,126 @@ const AudioConfigPanel = ({
           </div>
         )}
 
-        {/* 情感参考音(情感合成,可选):上传一段带目标情绪的音频 → metadata.emotion_audio */}
+        {/* 情感来源(四选一)。引擎侧 use_emo_text > emo_vector > emo_audio 是**互斥**的
+            (indextts2_talker.py:832),同时给只有优先级最高的生效、其余静默失效 ——
+            所以这里必须是单选,做成多个可同时填的输入框会让用户以为能叠加。 */}
         {needsEmotion && (
+          <div>
+            <div className='flex items-center gap-2 mb-2'>
+              <Smile size={16} className='text-gray-500' />
+              <Typography.Text strong className='text-sm'>
+                {t('情感来源')}
+              </Typography.Text>
+              <Tooltip
+                content={t(
+                  '四选一。引擎内部互斥:同时提供多种来源时只有一种生效,所以这里只能选一个。',
+                )}
+                position='top'
+              >
+                <HelpCircle size={14} className='text-gray-400 cursor-help' />
+              </Tooltip>
+            </div>
+            <RadioGroup
+              type='button'
+              value={emotionSource}
+              onChange={(e) => onInputChange('emotionSource', e.target.value)}
+              disabled={disabled}
+            >
+              {AUDIO_EMOTION_SOURCES.map((src) => (
+                <Radio key={src.value} value={src.value}>
+                  {t(src.label)}
+                </Radio>
+              ))}
+            </RadioGroup>
+            <Typography.Text className='text-xs text-gray-400 block mt-1'>
+              {t(
+                AUDIO_EMOTION_SOURCES.find((x) => x.value === emotionSource)
+                  ?.hint || '',
+              )}
+            </Typography.Text>
+          </div>
+        )}
+
+        {/* 八维情感(仅「手动调节」)。可混合 —— 实测悲伤0.7+低落0.4 正常出音,
+            旧的 one-hot 单选是前端的自我限制,不是引擎限制。
+            次序必须与引擎 _DESIRED_ORDER 一致,错位不报错只会出错情绪。 */}
+        {needsEmotion && emotionSource === AUDIO_EMOTION_SOURCE_VECTOR && (
+          <div>
+            <div className='flex items-center gap-2 mb-2'>
+              <Gauge size={16} className='text-gray-500' />
+              <Typography.Text strong className='text-sm'>
+                {t('情感调节')}
+              </Typography.Text>
+              <Button
+                theme='borderless'
+                type='tertiary'
+                size='small'
+                onClick={() =>
+                  onInputChange('emoVector', makeEmptyEmotionVector())
+                }
+                disabled={disabled}
+              >
+                {t('重置')}
+              </Button>
+            </div>
+            <div className='grid grid-cols-2 gap-x-3 gap-y-1'>
+              {AUDIO_EMOTION_DIMENSIONS.map((dim, i) => (
+                <div key={dim.key}>
+                  <div className='flex justify-between'>
+                    <Typography.Text className='text-xs'>
+                      {t(dim.label)}
+                    </Typography.Text>
+                    <Typography.Text className='text-xs text-gray-400'>
+                      {Number(emoVector[i] || 0).toFixed(2)}
+                    </Typography.Text>
+                  </div>
+                  <Slider
+                    min={0}
+                    max={AUDIO_EMOTION_DIM_MAX}
+                    step={AUDIO_EMOTION_DIM_STEP}
+                    value={emoVector[i] || 0}
+                    onChange={(v) => {
+                      const next = [...emoVector];
+                      next[i] = v;
+                      onInputChange('emoVector', next);
+                    }}
+                    disabled={disabled}
+                  />
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* 情感描述(仅「文本推断」)。留空 = 引擎按正文推断。
+            标注耗时是必要的:实测首次 10.4s、之后 5.3s(基线 1.5s),QwenEmotion 推理开销,
+            不提示会被当成卡死。 */}
+        {needsEmotion && emotionSource === AUDIO_EMOTION_SOURCE_TEXT && (
+          <div>
+            <div className='flex items-center gap-2 mb-2'>
+              <Smile size={16} className='text-gray-500' />
+              <Typography.Text strong className='text-sm'>
+                {t('情感描述')}
+              </Typography.Text>
+              <Typography.Text className='text-xs text-gray-400'>
+                {t('选填')}
+              </Typography.Text>
+            </div>
+            <TextArea
+              value={inputs.emoText || ''}
+              onChange={(v) => onInputChange('emoText', v)}
+              placeholder={t('留空则按正文推断，如「非常愤怒地质问」')}
+              autosize={{ minRows: 1, maxRows: 3 }}
+              disabled={disabled}
+            />
+            <Typography.Text className='text-xs text-gray-400 block mt-1'>
+              {t('模型需额外读一遍文本判断情绪，比其他方式慢 3~4 秒。')}
+            </Typography.Text>
+          </div>
+        )}
+
+        {/* 情感参考音(仅「情感参考音」来源):上传一段带目标情绪的音频 → metadata.emotion_audio */}
+        {needsEmotion && emotionSource === AUDIO_EMOTION_SOURCE_AUDIO && (
           <div>
             <div className='flex items-center gap-2 mb-2'>
               <Mic size={16} className='text-gray-500' />
@@ -439,8 +577,8 @@ const AudioConfigPanel = ({
           </div>
         )}
 
-        {/* 情感预设(情感合成,one-hot 情感向量;默认跟随参考音色) */}
-        {needsEmotion && (
+        {/* 情感预设(旧的 one-hot 路径)。仅在未选新来源时显示,保证老用户/老配置行为不变。 */}
+        {needsEmotion && !emotionSource && (
           <div>
             <div className='flex items-center gap-2 mb-2'>
               <Smile size={16} className='text-gray-500' />
@@ -473,26 +611,115 @@ const AudioConfigPanel = ({
           </div>
         )}
 
-        {/* 情感强度(emo_alpha;仅选了情绪时展示) */}
-        {needsEmotion && showEmotionWeight && (
+        {/* 情感强度(emo_alpha)。八维调节与旧预设都用它,所以两种情况都显示。 */}
+        {needsEmotion &&
+          (emotionSource === AUDIO_EMOTION_SOURCE_VECTOR ||
+            (!emotionSource && showEmotionWeight)) && (
+            <div>
+              <div className='flex items-center gap-2 mb-2'>
+                <Gauge size={16} className='text-gray-500' />
+                <Typography.Text strong className='text-sm'>
+                  {t('情感强度')}
+                </Typography.Text>
+                <Typography.Text className='text-xs text-gray-400'>
+                  {Number(inputs.emoWeight).toFixed(2)}
+                </Typography.Text>
+              </div>
+              <Slider
+                min={0}
+                max={1}
+                step={0.05}
+                value={inputs.emoWeight}
+                onChange={(value) => onInputChange('emoWeight', value)}
+                disabled={disabled}
+              />
+            </div>
+          )}
+
+        {/* ── IndexTTS-2.5 独有:语速 / 语种 / 文本归一化 ──
+            按**配置声明的引擎族**判(isIndexTTS25),不按模型名 —— 前端拿对外模型名、
+            后端拿渠道重定向后的上游名,靠名字判两边必然分叉。
+            切回 IndexTTS-2 时整段隐藏:那三个参数在 2 上会被 talker 静默忽略,
+            展示一个无效控件比不展示更糟。 */}
+        {needsEmotion && isIndexTTS25 && (
           <div>
             <div className='flex items-center gap-2 mb-2'>
               <Gauge size={16} className='text-gray-500' />
               <Typography.Text strong className='text-sm'>
-                {t('情感强度')}
+                {t('语速')}
               </Typography.Text>
               <Typography.Text className='text-xs text-gray-400'>
-                {Number(inputs.emoWeight).toFixed(2)}
+                {Number(inputs.speed ?? AUDIO_SPEED_DEFAULT).toFixed(2)}×
               </Typography.Text>
+              <Tooltip
+                content={t(
+                  '仅 IndexTTS-2.5 支持。范围 0.5~2.0，超出会被引擎拒绝。',
+                )}
+                position='top'
+              >
+                <HelpCircle size={14} className='text-gray-400 cursor-help' />
+              </Tooltip>
             </div>
             <Slider
-              min={0}
-              max={1}
-              step={0.05}
-              value={inputs.emoWeight}
-              onChange={(value) => onInputChange('emoWeight', value)}
+              min={AUDIO_SPEED_MIN}
+              max={AUDIO_SPEED_MAX}
+              step={AUDIO_SPEED_STEP}
+              value={inputs.speed ?? AUDIO_SPEED_DEFAULT}
+              onChange={(value) => onInputChange('speed', value)}
               disabled={disabled}
             />
+          </div>
+        )}
+
+        {needsEmotion && isIndexTTS25 && (
+          <div>
+            <div className='flex items-center gap-2 mb-2'>
+              <Typography.Text strong className='text-sm'>
+                {t('语种')}
+              </Typography.Text>
+              <Tooltip
+                content={t(
+                  '不选则按中文处理。引擎共支持 106 个语种，这里只列常用的，API 直连可传任意合法值。',
+                )}
+                position='top'
+              >
+                <HelpCircle size={14} className='text-gray-400 cursor-help' />
+              </Tooltip>
+            </div>
+            <Select
+              name='lang'
+              selection
+              value={inputs.lang || ''}
+              onChange={(value) => onInputChange('lang', value)}
+              optionList={AUDIO_TTS25_LANGUAGES.map((l) => ({
+                label: t(l.label),
+                value: l.value,
+              }))}
+              disabled={disabled}
+              style={{ width: '100%' }}
+              className='!rounded-lg'
+            />
+          </div>
+        )}
+
+        {needsEmotion && isIndexTTS25 && (
+          <div>
+            <Checkbox
+              checked={inputs.textNormalization !== false}
+              onChange={(e) =>
+                onInputChange('textNormalization', e.target.checked)
+              }
+              disabled={disabled}
+            >
+              <Typography.Text className='text-sm'>
+                {t('文本归一化')}
+              </Typography.Text>
+            </Checkbox>
+            <Typography.Text className='text-xs text-gray-400 block mt-1'>
+              {t(
+                '把数字、日期转成读法（1580 元 → 一千五百八十元）。关掉则按原文读。',
+              )}
+            </Typography.Text>
           </div>
         )}
 

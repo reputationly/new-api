@@ -45,6 +45,15 @@ import {
   getAudioModelSet,
   getMaxCharsForModel,
   getRefAudioMaxMBForModel,
+  AUDIO_EMOTION_SOURCE_TEXT,
+  AUDIO_EMOTION_SOURCE_AUDIO,
+  AUDIO_EMOTION_SOURCE_VECTOR,
+  AUDIO_ENGINE_INDEXTTS25,
+  AUDIO_SPEED_MIN,
+  AUDIO_SPEED_MAX,
+  AUDIO_SPEED_DEFAULT,
+  emotionVectorIsEmpty,
+  getEngineForAudioModel,
 } from '../../constants/audioPlayground.constants';
 
 // 语音合成体验区 hook。一个 hook 覆盖全部 4 个玩法(mode),同一异步任务门面
@@ -337,6 +346,19 @@ export const useAudioGeneration = (mode = 'emotion') => {
   const modelConfig = useMemo(
     () => parseAudioModelConfig(statusState?.status?.AudioModelConfig),
     [statusState?.status?.AudioModelConfig],
+  );
+
+  // 是否 IndexTTS-2.5:按**配置声明**判(AudioModelConfig.models[name].engine),
+  // 不按模型名 substring —— 前端拿对外名、后端拿上游名,靠名字判两边必然分叉。
+  // 2.5 是 2 的能力超集,只有它支持 speed / lang / text_normalization。
+  //
+  // 必须放在 modelConfig 声明**之后**:依赖数组是实参,求值早于 useMemo 调用,
+  // 放在前面会在每次渲染读到 TDZ 里的 modelConfig,整个体验区直接白屏。
+  const isIndexTTS25 = useMemo(
+    () =>
+      getEngineForAudioModel(modelConfig, inputs.model) ===
+      AUDIO_ENGINE_INDEXTTS25,
+    [modelConfig, inputs.model],
   );
 
   const audioModelSet = useMemo(
@@ -773,16 +795,69 @@ export const useAudioGeneration = (mode = 'emotion') => {
         const metadata = { task_type: 'tts' };
 
         if (engine === 'indextts') {
-          // ── 情感合成(IndexTTS-2):参考音色 + 情感参考音 + emo_vector/emo_alpha ──
+          // ── 情感合成(IndexTTS-2 / 2.5):参考音色 + 四选一的情感来源 ──
           metadata.voice = voiceDataURL;
-          if (emotionAudioURL) metadata.emotion_audio = emotionAudioURL;
-          const vec = emotionToVector(params.emotion, params.emoWeight);
-          if (vec) {
-            metadata.emo_vector = vec;
-            metadata.emo_alpha =
-              typeof params.emoWeight === 'number'
-                ? params.emoWeight
-                : AUDIO_DEFAULT_EMO_WEIGHT;
+
+          // 情感来源互斥:引擎侧优先级是 use_emo_text > emo_vector > emo_audio
+          // (indextts2_talker.py:832),同时下发只有优先级最高的那个生效,其余静默失效。
+          // 所以这里按单选下发,不做"能发的都发"。
+          // 老配置没有 emotionSource 字段 → 回落到既有的"预设情绪"行为,不改变现状。
+          const source = params.emotionSource || '';
+          if (source === AUDIO_EMOTION_SOURCE_TEXT) {
+            metadata.use_emo_text = true;
+            const et = (params.emoText || '').trim();
+            // 不填则引擎用正文本身推断(talker 里 emo_text=None → emo_text=main_text)。
+            if (et) metadata.emo_text = et;
+          } else if (source === AUDIO_EMOTION_SOURCE_AUDIO) {
+            if (emotionAudioURL) metadata.emotion_audio = emotionAudioURL;
+          } else if (source === AUDIO_EMOTION_SOURCE_VECTOR) {
+            // 八维可混合(实测悲0.7+低落0.4 正常出音),不再是 one-hot。
+            // 全零等于没调,不下发 —— 发全零向量会按"零情感"合成,与"跟随音色"结果不同,
+            // 用户却分辨不出自己漏拖了滑块。
+            const vec = Array.isArray(params.emoVector)
+              ? params.emoVector
+              : null;
+            if (vec && !emotionVectorIsEmpty(vec)) {
+              metadata.emo_vector = vec.map((v) => Number(v) || 0);
+              metadata.emo_alpha =
+                typeof params.emoWeight === 'number'
+                  ? params.emoWeight
+                  : AUDIO_DEFAULT_EMO_WEIGHT;
+            }
+          } else if (!source) {
+            // 兼容路径:旧的"预设情绪"单选(one-hot)。
+            if (emotionAudioURL) metadata.emotion_audio = emotionAudioURL;
+            const vec = emotionToVector(params.emotion, params.emoWeight);
+            if (vec) {
+              metadata.emo_vector = vec;
+              metadata.emo_alpha =
+                typeof params.emoWeight === 'number'
+                  ? params.emoWeight
+                  : AUDIO_DEFAULT_EMO_WEIGHT;
+            }
+          }
+
+          // ── IndexTTS-2.5 独有:语速 / 语种 / 文本归一化 ──
+          // 只在模型声明了 2.5 引擎族时下发。给 2 发这三个不会报错(talker 忽略),
+          // 但控件本身也只对 2.5 显示,这里再做一次保护,避免切模型后残留旧值。
+          if (isIndexTTS25) {
+            const sp = Number(params.speed);
+            if (
+              Number.isFinite(sp) &&
+              sp >= AUDIO_SPEED_MIN &&
+              sp <= AUDIO_SPEED_MAX &&
+              sp !== AUDIO_SPEED_DEFAULT
+            ) {
+              // speed 是引擎的**顶层**字段(OpenAICreateSpeechRequest),不是 extra_params。
+              // 门面不剥它(不在 _CONTROL_KEYS / _ENGINE_OWNED_FIELDS),原样到达引擎。
+              metadata.speed = sp;
+            }
+            const lang = (params.lang || '').trim();
+            if (lang) metadata.lang = lang;
+            // 只在用户显式关掉时下发:引擎默认就是 true,发一个 true 只是噪声。
+            if (params.textNormalization === false) {
+              metadata.text_normalization = false;
+            }
           }
         } else {
           // ── vLLM-Omni 家族:语音融合 / 双人对话 / 声音设计 ──
@@ -969,6 +1044,7 @@ export const useAudioGeneration = (mode = 'emotion') => {
 
   return {
     inputs,
+    isIndexTTS25,
     handleInputChange,
     applyExample,
     groups,

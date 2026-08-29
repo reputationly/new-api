@@ -358,6 +358,10 @@ const normalizeMusicTabs = (raw) => {
 export const getEngineForMusicModel = (config, model) =>
   config?.models?.[model]?.engine || '';
 
+// 常量本体定义在 playgroundAdmin.constants.js(管理页下拉也要用它),这里再导出，
+// 依赖方向保持单向 —— 与 VIDEO_ENGINE_MINIMAX_H3 / AUDIO_ENGINE_INDEXTTS25 同一处理。
+export { MUSIC_ENGINE_MINIMAX_MUSIC3 } from './playgroundAdmin.constants';
+
 // 解析 status 中的 MusicModelConfig(字符串或对象)。形如:
 //   { default: { maxChars, refAudioMaxMB, videoMaxMB },
 //     models: { <model>: { capabilities:[], maxChars, refAudioMaxMB, videoMaxMB } } }

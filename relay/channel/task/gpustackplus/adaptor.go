@@ -48,7 +48,7 @@ import (
 //
 // tts(语音合成,IndexTTS-2):文本走 prompt,参考音色 metadata.voice + 可选情感参考音
 // metadata.emotion_audio 物化到 input_refs,情感标量(emo_vector/emo_alpha/emo_text)收进
-// body.extra_params(引擎只从 extra_params 读)。见 materializeTTSInputs / foldEmotionParamsIntoExtra。
+// body.extra_params(引擎只从 extra_params 读)。见 materializeTTSInputs / foldParamsIntoExtra。
 //
 // s2v(数字人,InfiniteTalk):人物图走 image/input_reference,驱动音频 metadata.audio,
 // 一并物化到 input_refs(image + audio)。见 materializeS2VInputs。
@@ -532,7 +532,13 @@ func (a *TaskAdaptor) BuildRequestBody(c *gin.Context, info *relaycommon.RelayIn
 	// OpenAICreateSpeechRequest,extra=ignore)静默丢弃。前端经 metadata 平铺发来,
 	// 这里把它们从 body 顶层收进 body["extra_params"](门面非控制键,原样透传)。
 	if taskType == "tts" {
-		foldEmotionParamsIntoExtra(body)
+		keys := indexTTS2EmotionKeys
+		// 2.5 独有的两个键按**引擎族声明**加档,理由见 indexTTS25ExtraKeys 的注释:
+		// 本折叠对所有 tts 请求都跑,而 lang 是个通用键名。
+		if common.AudioEngineFamilyForModel(req.Model, info.OriginModelName, modelName) == common.AudioEngineIndexTTS25 {
+			keys = append(append([]string{}, keys...), indexTTS25ExtraKeys...)
+		}
+		foldParamsIntoExtra(body, keys)
 	}
 
 	data, err := common.Marshal(body)
@@ -560,17 +566,31 @@ var durationOverrideKeys = map[string]bool{
 // IndexTTS-2 情感标量键:vLLM-Omni 的 IndexTTS2 talker 只从 request.extra_params 读它们
 // (见 vllm-omni tts_adapters/indextts2.py 的 _INDEXTTS2_EMOTION_KEYS)。作为顶层字段下发
 // 会被引擎 AudioTaskRequest(继承 OpenAICreateSpeechRequest,Pydantic extra=ignore)丢弃。
+//
+// ⚠️ speed 不在这里:它是 OpenAICreateSpeechRequest 的**顶层**字段(2.5 的
+// native_speed_control 把它映射成 duration_factor),折进 extra_params 反而到不了。
+// 顶层透传即可 —— 它不在门面的 _CONTROL_KEYS / _ENGINE_OWNED_FIELDS 里(gpustack
+// routes/videos.py),原样到达引擎。
 var indexTTS2EmotionKeys = []string{
 	"emo_vector", "emo_alpha", "emo_text", "use_emo_text", "use_random",
 }
 
-// foldEmotionParamsIntoExtra 把 IndexTTS-2 情感标量从 body 顶层挪进 body["extra_params"]:
+// IndexTTS-**2.5** 新增的两个键(IndexTTS25Adapter._validate_extra_params),同样只从
+// extra_params 读。
+//
+// **必须按引擎族声明才折,不能像情感标量那样无条件折** —— 折叠对所有 taskType=="tts"
+// 的请求都跑(不止 IndexTTS 系),而 lang 是个足够通用的键名:无条件折等于把任何一个
+// 读顶层 lang 的 TTS 引擎的参数搬走并从顶层删掉,后果是静默的。情感标量不受此虑:
+// emo_* / use_emo_text 是 IndexTTS 家族专有名,且无条件折是本次之前就有的既有行为。
+var indexTTS25ExtraKeys = []string{"lang", "text_normalization"}
+
+// foldParamsIntoExtra 把 keys 里的键从 body 顶层挪进 body["extra_params"]:
 // 引擎只认 extra_params 里的这些键。已有 extra_params 保留、同名不覆盖(caller 显式值优先);
 // 顶层原键删除,避免"既顶层又嵌套"的歧义。门面 extra_params 非控制/引擎拥有/输入键,原样
 // 透传到引擎 body 顶层,而 AudioTaskRequest 有 extra_params 字段,故能完整到达 talker。
-func foldEmotionParamsIntoExtra(body map[string]any) {
+func foldParamsIntoExtra(body map[string]any, keys []string) {
 	extra, _ := body["extra_params"].(map[string]any)
-	for _, k := range indexTTS2EmotionKeys {
+	for _, k := range keys {
 		v, ok := body[k]
 		if !ok {
 			continue
@@ -1239,7 +1259,7 @@ func metadataString(md map[string]any, key string) string {
 // IndexTTS-2 现由 vLLM-Omni 引擎服务(取代独立 IndexTTS),引擎读 ref_audio/emo_audio,
 // 故:voice→ref_audio(门面映射 ref_audio→ref_audio_path)、emotion_audio→emo_audio_path
 // (引擎 AudioTaskRequest 折叠 emo_audio_path→emo_audio)。情感向量/强度(emo_vector/
-// emo_alpha)是标量,不在此物化——由 foldEmotionParamsIntoExtra 收进 body.extra_params。
+// emo_alpha)是标量,不在此物化——由 foldParamsIntoExtra 收进 body.extra_params。
 func materializeTTSInputs(c *gin.Context, info *relaycommon.RelayInfo, taskType, modelName string, req relaycommon.TaskSubmitReq) (map[string][]string, error) {
 	voice := metadataString(req.Metadata, "voice")
 	if voice == "" {
