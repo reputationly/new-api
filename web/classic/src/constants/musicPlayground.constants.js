@@ -348,6 +348,16 @@ const normalizeMusicTabs = (raw) => {
   return out;
 };
 
+// 引擎族:模型级声明,不随 tab 变。
+//
+// 必须按模型取而不是按 tab 取:MUSIC_MODES[mode].engine 是 tab 级的硬编码
+// (「文生音乐」恒为 acestep),而同一个 tab 完全可以挂多个引擎的模型 ——
+// MiniMax-Music3 也是文生音乐,按 tab 判就会走 ACE-Step 分支,拿到 lyrics/thinking
+// 这些它不认的键,而它必需的 instructions 一个都不下发,引擎侧直接 400。
+// 未声明返回空串,调用方回退到 tab 默认引擎(保持既有部署不变)。
+export const getEngineForMusicModel = (config, model) =>
+  config?.models?.[model]?.engine || '';
+
 // 解析 status 中的 MusicModelConfig(字符串或对象)。形如:
 //   { default: { maxChars, refAudioMaxMB, videoMaxMB },
 //     models: { <model>: { capabilities:[], maxChars, refAudioMaxMB, videoMaxMB } } }
@@ -368,6 +378,9 @@ export const parseMusicModelConfig = (raw) => {
     if (parsed.models && typeof parsed.models === 'object') {
       Object.entries(parsed.models).forEach(([name, cfg]) => {
         models[name] = {
+          engine: String(cfg?.engine || '')
+            .trim()
+            .toLowerCase(),
           capabilities: normalizeList(cfg?.capabilities),
           maxChars: toPositiveInt(cfg?.maxChars),
           refAudioMaxMB: toPositiveInt(cfg?.refAudioMaxMB),

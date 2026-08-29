@@ -579,6 +579,54 @@ func AudioRefAudioMaxBytesForModel(taskType string, candidates ...string) (maxBy
 //
 // capabilities ∈ 文生音乐(t2m)/音乐改编(cover)/音乐重绘(repaint),供前端体验区按能力过滤模型 + tab。
 
+// 音乐引擎族标识。与视频侧同一套理由:不同引擎读参数的方式差别很大,必须能在
+// 请求整形时区分。
+//
+// 为什么音乐侧也需要这个:体验区的音乐引擎此前**按 tab 硬编码**
+// (MUSIC_MODES[mode].engine,「文生音乐」恒为 acestep),而一个 tab 完全可以挂多个
+// 引擎的模型。MiniMax-Music3 同样是文生音乐,挂上去就会走 ACE-Step 分支,拿到
+// lyrics/thinking/batch_size 这些它不认的键,而它必需的 instructions 一个都不下发 ——
+// 引擎侧直接 400("requires 'instructions' describing the music")。
+// 引擎族必须跟模型走,不能跟 tab 走。
+const MusicEngineMinimaxMusic3 = "minimax-music3"
+
+// MusicEngineFamilyForModel 返回该音乐模型声明的引擎族
+// (MusicModelConfig.models[name].engine),未声明返回空串(= 沿用 tab 的默认引擎)。
+//
+// 判据与 VideoEngineFamilyForModel 一致:**配置声明,不是模型名 substring** ——
+// 前端拿对外模型名、后端拿渠道重定向后的上游名,靠名字判断两边必然分叉,所以接受
+// 多个候选名,任一命中即可。同样是模型级、没有 tab 层。
+func MusicEngineFamilyForModel(candidates ...string) string {
+	OptionMapRWMutex.RLock()
+	raw := OptionMap["MusicModelConfig"]
+	OptionMapRWMutex.RUnlock()
+	if strings.TrimSpace(raw) == "" {
+		return ""
+	}
+	var cfg struct {
+		Models map[string]struct {
+			Engine string `json:"engine"`
+		} `json:"models"`
+	}
+	if err := UnmarshalJsonStr(raw, &cfg); err != nil {
+		return ""
+	}
+	for _, name := range candidates {
+		name = strings.TrimSpace(name)
+		if name == "" {
+			continue
+		}
+		m, ok := cfg.Models[name]
+		if !ok {
+			continue
+		}
+		if e := strings.ToLower(strings.TrimSpace(m.Engine)); e != "" {
+			return e
+		}
+	}
+	return ""
+}
+
 // MusicMaxCharsForModel 返回该音乐模型歌词/描述文本的字数上限(0=不限制)及是否配置了 MusicModelConfig。
 // 优先 tab 级,其次模型级,再次全局 default;都无返回 configured=false。
 func MusicMaxCharsForModel(taskType string, candidates ...string) (maxChars int, configured bool) {

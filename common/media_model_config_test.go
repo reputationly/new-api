@@ -133,3 +133,48 @@ func TestSizeDoesNotAffectValidation(t *testing.T) {
 		t.Fatal("duration outside whitelist should still reject")
 	}
 }
+
+func setMusicOpt(music string) {
+	OptionMapRWMutex.Lock()
+	if OptionMap == nil {
+		OptionMap = map[string]string{}
+	}
+	OptionMap["MusicModelConfig"] = music
+	OptionMapRWMutex.Unlock()
+}
+
+// 音乐引擎族按**配置声明**取,不按模型名 substring。
+//
+// 锁这条是因为它写错了不报错:模型名里带 "music3" 但没声明 engine 时若被判成
+// minimax-music3,体验区就会给它下发 instructions 而不是 ACE-Step 的 lyrics/thinking;
+// 反过来声明了却不生效,则 Music3 拿不到 instructions —— 引擎侧直接 400。
+func TestMusicEngineFamilyForModel(t *testing.T) {
+	setMusicOpt(`{"models":{"my-music":{"engine":"minimax-music3"},"plain":{"maxChars":500}}}`)
+
+	// 声明了就返回,且大小写/空格归一
+	if got := MusicEngineFamilyForModel("my-music"); got != MusicEngineMinimaxMusic3 {
+		t.Fatalf("declared engine = %q, want %q", got, MusicEngineMinimaxMusic3)
+	}
+	// 多候选名(公开名 + 渠道重定向后的上游名),任一命中即可
+	if got := MusicEngineFamilyForModel("public-alias", "my-music"); got != MusicEngineMinimaxMusic3 {
+		t.Fatalf("second candidate = %q, want %q", got, MusicEngineMinimaxMusic3)
+	}
+	// 配了但没声明 engine → 空串(调用方回退 tab 默认引擎)
+	if got := MusicEngineFamilyForModel("plain"); got != "" {
+		t.Fatalf("model without engine = %q, want empty", got)
+	}
+	// 完全没配 → 空串
+	if got := MusicEngineFamilyForModel("unknown"); got != "" {
+		t.Fatalf("unconfigured model = %q, want empty", got)
+	}
+	// **名字里带 music3 但没声明 engine 的,不能被当成 minimax-music3**
+	setMusicOpt(`{"models":{"minimax-music3-turbo":{"maxChars":500}}}`)
+	if got := MusicEngineFamilyForModel("minimax-music3-turbo"); got != "" {
+		t.Fatalf("name-only match = %q, want empty (判据必须是配置声明而非模型名)", got)
+	}
+	// 没有 MusicModelConfig 时不 panic
+	setMusicOpt("")
+	if got := MusicEngineFamilyForModel("my-music"); got != "" {
+		t.Fatalf("empty config = %q, want empty", got)
+	}
+}

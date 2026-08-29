@@ -51,6 +51,7 @@ import {
   parseProgress,
   buildMusicContentUrl,
   parseMusicModelConfig,
+  getEngineForMusicModel,
   getMusicModelSet,
   getMaxCharsForModel,
   getRefAudioMaxMBForModel,
@@ -450,6 +451,16 @@ export const useMusicGeneration = (mode = 't2m') => {
   );
 
   // 当前模型要不要中译英。
+  // 实际引擎:模型声明优先,未声明才回退 tab 默认(modeDef.engine)。
+  //
+  // tab 默认是硬编码的(「文生音乐」恒为 acestep),而同一个 tab 可以挂多个引擎的模型。
+  // MiniMax-Music3 也是文生音乐,只按 tab 判会走 ACE-Step 分支拿到 lyrics/thinking
+  // 这些它不认的键,而它必需的 instructions 一个都不下发,引擎侧直接 400。
+  const resolvedEngine = useMemo(
+    () => getEngineForMusicModel(modelConfig, inputs.model) || engine,
+    [modelConfig, inputs.model, engine],
+  );
+
   const translationCfg = useMemo(
     () => getTranslationForModel(modelConfig, inputs.model, mode),
     [modelConfig, inputs.model, mode],
@@ -1106,7 +1117,20 @@ export const useMusicGeneration = (mode = 't2m') => {
         // (adaptor 把上传物化 NFS → input_refs → 引擎)。
         const metadata = { task_type: resolvedTaskType };
 
-        if (engine === 'acestep') {
+        if (resolvedEngine === 'minimax-music3') {
+          // ── MiniMax-Music3:曲风描述(必填)+ 歌词 ──
+          //
+          // 引擎硬校验 instructions:不传直接 400
+          // ("MiniMax Music 3 requires 'instructions' describing the music
+          //   (genre, instrumentation, tempo, mood); it is what decides the
+          //   arrangement")。这里把用户填的描述文本放 instructions、歌词放 lyrics,
+          // 与 ACE-Step 的「描述=caption(prompt)」不同 —— Music3 的 prompt 位是歌词。
+          const lyrics = (params.lyrics || '').trim();
+          if (lyrics) metadata.lyrics = lyrics;
+          // 描述为空时不下发空串:让引擎报它自己那句可自助的错,好过我们塞一个
+          // 空 instructions 让它生成一段无从解释的编曲。
+          if (text.trim()) metadata.instructions = text.trim();
+        } else if (resolvedEngine === 'acestep') {
           // ── ACE-Step:歌词/时长/驱动音频/BPM/演唱语言 ──
           const lyrics = (params.lyrics || '').trim();
           const dur = parseFloat(params.duration);
@@ -1178,7 +1202,8 @@ export const useMusicGeneration = (mode = 't2m') => {
         } else {
           // ── AudioX / SoulX:视频/双音频 + 标量 ──
           // AudioX 另需 audiox_task 与 task_type 同值。
-          if (engine === 'audiox') metadata.audiox_task = resolvedTaskType;
+          if (resolvedEngine === 'audiox')
+            metadata.audiox_task = resolvedTaskType;
 
           if (needsVideo && videoMetaKey) metadata[videoMetaKey] = videoDataURL;
           if (needsDualAudio) {
@@ -1189,7 +1214,7 @@ export const useMusicGeneration = (mode = 't2m') => {
           }
 
           // AudioX 专属:时长(秒);SoulX 无此参数,不下发。所见即所发:留空补 UI 默认 10。
-          if (engine === 'audiox') {
+          if (resolvedEngine === 'audiox') {
             const secs = parseFloat(params.secondsTotal);
             metadata.seconds_total =
               Number.isFinite(secs) && secs > 0
@@ -1203,7 +1228,7 @@ export const useMusicGeneration = (mode = 't2m') => {
           const steps = parseInt(params.inferenceSteps, 10);
           if (Number.isFinite(steps) && steps > 0) {
             metadata.num_inference_steps = steps;
-          } else if (engine === 'audiox') {
+          } else if (resolvedEngine === 'audiox') {
             metadata.num_inference_steps = MUSIC_AUDIOX_DEFAULT_STEPS;
           }
           // guidance:AudioX 留空补 UI 默认 7(所见即所发);SoulX 交给引擎 deploy-config
@@ -1211,7 +1236,7 @@ export const useMusicGeneration = (mode = 't2m') => {
           const gs = parseFloat(params.guidanceScale);
           if (Number.isFinite(gs) && gs > 0) {
             metadata.guidance_scale = gs;
-          } else if (engine === 'audiox') {
+          } else if (resolvedEngine === 'audiox') {
             metadata.guidance_scale = MUSIC_AUDIOX_DEFAULT_GUIDANCE;
           }
           const seedStr = String(params.seed ?? '').trim();
@@ -1221,7 +1246,7 @@ export const useMusicGeneration = (mode = 't2m') => {
           }
 
           // SoulX(svs)专属:演唱语言 + 控制方式。
-          if (engine === 'soulx') {
+          if (resolvedEngine === 'soulx') {
             const lang = (params.language || '').trim();
             if (lang) metadata.language = lang;
             const control = (params.control || '').trim();
