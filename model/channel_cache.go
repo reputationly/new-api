@@ -45,6 +45,14 @@ func InitChannelCache() {
 		}
 		groups := strings.Split(channel.Group, ",")
 		for _, group := range groups {
+			// 外层 map 的 key 集合是从 abilities 收集的，而这里遍历的是 channels。
+			// 两张表并非总是同步：abilities 只在保存渠道时由 UpdateAbilities() 重建，
+			// 直接改库（运维 SQL、数据迁移）后会短暂不一致。此时 group 只存在于
+			// channels 而不在 abilities，newGroup2model2channels[group] 是 nil map，
+			// 下面那行写入会 panic —— 缓存重建在启动路径与定时同步里，崩的是整个进程。
+			if newGroup2model2channels[group] == nil {
+				newGroup2model2channels[group] = make(map[string][]int)
+			}
 			models := strings.Split(channel.Models, ",")
 			for _, model := range models {
 				if _, ok := newGroup2model2channels[group][model]; !ok {
