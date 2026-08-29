@@ -47,6 +47,7 @@ import {
   INTERPOLATION_ENABLED,
   VIDEO_SR_RATIO_UNCAPPED,
   VIDEO_SR_RESIZE_MODE,
+  upscaleTargetShortEdge,
   buildVideoSizeChoices,
   isPipelineModel,
   keyframeModeOf,
@@ -1034,6 +1035,13 @@ export const useVideoGeneration = ({
               video: `task:${prevTaskId}`,
               sr_ratio: VIDEO_SR_RATIO_UNCAPPED,
               resize_mode: VIDEO_SR_RESIZE_MODE,
+              // 目标档位写成精确像素串时才有值(见 upscaleTargetShortEdge)。有它引擎
+              // 按源的真实画幅等比放大到该短边,没有就退回原来的「按部署 config 档位
+              // 封顶」——所以既有的 1080P 档位词规则行为不变,老会话(pipeline 里没这个
+              // 字段)也不受影响。
+              ...(pipeline.upscale?.targetShortEdge > 0
+                ? { target_short_edge: pipeline.upscale.targetShortEdge }
+                : {}),
               ...(INTERPOLATION_ENABLED && pipeline.upscale?.interpolation
                 ? { target_fps: VIDEO_INTERPOLATION_TARGET_FPS }
                 : {}),
@@ -1689,7 +1697,14 @@ export const useVideoGeneration = ({
           pipeline = {
             group: params.group,
             upscale: wantUpscale
-              ? { srModel, interpolation: !!params.interpolation }
+              ? {
+                  srModel,
+                  interpolation: !!params.interpolation,
+                  // 目标短边在这里算好存下,而不是提交超分段时再算:那时已经拿不到
+                  // 选中的档位(params 不随会话持久化),续问/刷新后会算出别的答案
+                  // ——与 keyframeTaskType 当初同一个教训。
+                  targetShortEdge: upscaleTargetShortEdge(upscaleChoice.value),
+                }
               : null,
             // 配音段直接复用本次生成视频的提示词：它本就是这段画面的描述,而 foley 模型
             // 要的正是「画面里什么在发声」。原来这里读的是一个独立的「配音提示词」输入框,

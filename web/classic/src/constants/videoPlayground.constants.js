@@ -514,6 +514,29 @@ export const VIDEO_SR_RATIO_UNCAPPED = 4.0;
 // 代价是上下各裁 12 像素（约 1.1% 画面）—— 2026-08-15 实测确认，已取得确认。
 export const VIDEO_SR_RESIZE_MODE = 'fixed_shape';
 
+// 超分段的目标短边：把「超分档位」规则里的目标档换算成一个像素数，交引擎按**源的真实
+// 画幅**等比放大到该短边（引擎字段 target_short_edge）。
+//
+// 为什么下发短边而不是完整的 target_shape：只有引擎知道源有多大。这里手里只有用户选的
+// 比例标签，而标签和实际画幅并不相等——H3 的 768P/16:9 实际出 1344×768（=1.75，它有面积
+// 钳位），wan 的 720P 是 1280×720（=1.778）——照标签算完整尺寸会带约 1.6% 的横向拉伸，
+// 且档位越高越明显。下发短边则画幅零形变、短边精确命中目标档。
+//
+// 为什么要下发而不是继续只靠引擎按部署 config 封顶：那条路一个部署只能出一档（config 里
+// 的 target_height/target_width），要同时提供 1080P/2K/4K 就得为每档单开一套部署、各吃一
+// 份卡。SwiftVR 一个实例就能覆盖所有档。对不读该字段的引擎（SeedVR2 只认 sr_ratio +
+// config 档位）这是个惰性字段，多发无害，所以规则仍指向旧模型时不会出错。
+//
+// **只有精确像素串（2560x1440 / 3840x2160）才走这条路，档位词（1080P）一律返回 0**、
+// 退回原来的「按部署 config 档位封顶」。这是刻意的：1080P 那档现网靠 resize_mode=
+// fixed_shape 出精确 1920×1080，是为修「标着 1080P 却不是」那个 bug 专门定的，不该被
+// 这里改掉。也别把目标档写成 2K/4K：videoSizeShortEdge 不认那两个词（它与后端
+// h3ShortEdgeFromSizeToken 是刻意同口径的一对，不能为超分单方面加词）。
+export const upscaleTargetShortEdge = (tier) => {
+  if (!/^\d+x\d+$/.test(normalizeVideoSize(tier))) return 0;
+  return videoSizeShortEdge(tier);
+};
+
 // 该模型是否跑在自建 gpustackplus 引擎上（「视频模型配置」里按模型勾选）。
 // 自动超分/自动配音/插帧(target_fps)都是自建引擎特有的玩法：超分要把 1080P 拆成
 // 「先低档位生成再走 sr 模型」两段，插帧是 gpustack 门面直通给引擎 RIFE 的字段。
