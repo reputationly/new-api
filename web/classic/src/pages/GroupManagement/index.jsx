@@ -188,6 +188,26 @@ export default function GroupManagementPage() {
     }
   }, [groupNames, activeGroup]);
 
+  // 档位折扣的默认选中项只取**已配过折扣的**档。
+  //
+  // 不能照搬上面 activeGroup 取 tierNames[0]：tierNames 把全部分组名也并了进来
+  // （free、bailian 这些基本都没配档位折扣），选中一个没配过的档，规则表是空的，
+  // 与「配置丢了」在视觉上无法区分。
+  //
+  // 这正是没有默认选中时的症状：配好保存成功、离开页面再回来，下拉框归零、表格
+  // 空白——看起来和从未保存过一模一样，人的第一反应是重配一遍。
+  const configuredTiers = useMemo(
+    () => Object.keys(parseJSONSafe(inputs.UserGroupModelRatio, {})).sort(),
+    [inputs.UserGroupModelRatio],
+  );
+
+  useEffect(() => {
+    // 只补空白，不抢已有选择：下拉允许直接输入新档名，那一刻 activeTier 还不在
+    // 任何列表里，若在这里重置就会把正在新建的档打断。
+    if (activeTier || configuredTiers.length === 0) return;
+    setActiveTier(configuredTiers[0]);
+  }, [configuredTiers, activeTier]);
+
   const setField = useCallback((key, value) => {
     setInputs((prev) => ({ ...prev, [key]: value }));
   }, []);
