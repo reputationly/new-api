@@ -481,9 +481,16 @@ func (a *TaskAdaptor) BuildRequestBody(c *gin.Context, info *relaycommon.RelayIn
 		steps := common.VideoInferenceStepsForModel(req.Model, info.OriginModelName, modelName)
 		applyMiniMaxH3Request(body, taskType, durationSec, durationLocked, steps)
 	}
+	// LTX-2.5 是第三套约定:24fps + 8k+1 帧栅格 + 顶层 num_frames,且 seconds 参数
+	// 对它恒不可用(整数秒 × 24 恒 ≡ 0 mod 8,取不到 8k+1 的余数 1)——不换算就是
+	// 每个带时长的请求都 500。判据同样是配置声明的引擎族,不是模型名。
+	isLTX25 := common.VideoEngineFamilyForModel(req.Model, info.OriginModelName, modelName) == common.VideoEngineLTX25
+	if isLTX25 {
+		applyLTX25Request(body, durationSec)
+	}
 	// s2v(数字人)除外:引擎不读 target_video_length,下发它没有任何效果,只会让人误以为
 	// 时长可控。s2v 的时长走下面的 video_duration。别恢复。
-	if durationSec > 0 && taskType != "s2v" && !isMiniMaxH3 {
+	if durationSec > 0 && taskType != "s2v" && !isMiniMaxH3 && !isLTX25 {
 		if _, ok := body["target_video_length"]; !ok {
 			body["target_video_length"] = durationSec*16 + 1
 		}

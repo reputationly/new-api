@@ -443,6 +443,11 @@ func VideoMaxAudioSecForModel(taskType string, candidates ...string) (maxSec flo
 // 画布推导),必须能在 adaptor 里区分。已知值见下方常量。
 const VideoEngineMinimaxH3 = "minimax-h3"
 
+// LTX-2.5:24fps + 8k+1 帧栅格,时长走顶层 num_frames。与 wan 的 4n+1 @16fps
+// (target_video_length)、H3 的 17n+5 @24fps(extra_params.duration)都不同。
+// 整形逻辑见 relay/channel/task/gpustackplus/ltx25.go。
+const VideoEngineLTX25 = "ltx-2.5"
+
 // VideoEngineFamilyForModel 返回该模型声明的引擎族(VideoModelConfig.models[name].engine),
 // 未声明返回空串。
 //
