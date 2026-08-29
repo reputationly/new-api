@@ -66,6 +66,9 @@ func TestH3ShortEdgeFromSizeToken(t *testing.T) {
 		"480P": 480, "768p": 768, " 720P ": 720,
 		// 像素串不是档位词:必须取不出,否则会走进画布推导并算出错的短边。
 		"832x480": 0, "1280x720": 0, "": 0, "P": 0, "abcP": 0,
+		// 2K/4K 是超分档位的「短边档」写法,前端 videoSizeShortEdge 有同一份映射,
+		// 两处必须一起改 —— 漂移了不报错,只会静默选错起步档。
+		"2K": 1440, "2k": 1440, " 4K ": 2160,
 	}
 	for in, want := range cases {
 		if got := h3ShortEdgeFromSizeToken(in); got != want {

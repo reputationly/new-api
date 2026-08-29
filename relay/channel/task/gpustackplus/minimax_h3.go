@@ -138,6 +138,15 @@ func h3ToFloat(v any) (float64, bool) {
 // 返回空串,于是不会覆盖。
 func h3ShortEdgeFromSizeToken(size string) int {
 	v := strings.ToLower(strings.TrimSpace(size))
+	// 2K / 4K 按消费端通行口径取短边(QHD 2560x1440、UHD 3840x2160)。超分档位用它们
+	// 表达「短边档」,比逼运营记 2560x1440 自然。⚠️ 前端 videoSizeShortEdge 必须同步
+	// 保有同一份映射 —— 两处是刻意同口径的一对,漂移的后果是静默的。
+	switch v {
+	case "2k":
+		return 1440
+	case "4k":
+		return 2160
+	}
 	if v == "" || !strings.HasSuffix(v, "p") {
 		return 0
 	}
