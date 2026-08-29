@@ -344,6 +344,7 @@ export default function GroupManagementPage() {
                       {t('配置哪个分组')}
                     </Text>
                     <Select
+                      key={groupNames.length ? 'ready' : 'empty'}
                       style={{ width: '100%' }}
                       value={activeGroup || null}
                       optionList={groupNames.map((g) => ({
@@ -374,7 +375,17 @@ export default function GroupManagementPage() {
                     <Text type='tertiary' size='small' className='mb-1 block'>
                       {t('配置哪个用户档')}
                     </Text>
+                    {/*
+                      key 是必须的：Semi Select 在 optionList 从空变非空后不更新
+                      内部选项，展开永远是「暂无数据」。而这里的时序恰好如此——
+                      首次渲染时 inputs 还没加载，tierNames 是空数组，选项到达时
+                      Select 已经挂载完了。
+
+                      只在空/非空之间切换 key（而不是 tierNames.join()），
+                      这样新建档位时不会重建组件、打断正在输入的档名。
+                    */}
                     <Select
+                      key={tierNames.length ? 'ready' : 'empty'}
                       style={{ width: '100%' }}
                       value={activeTier || null}
                       optionList={tierNames.map((g) => ({

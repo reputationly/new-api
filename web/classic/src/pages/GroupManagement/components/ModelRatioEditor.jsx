@@ -219,11 +219,19 @@ export default function ModelRatioEditor({
     [emitAndSet],
   );
 
+  // 新行插到最前面，不是追加到末尾。
+  //
+  // 精确规则表是分页的，追加到末尾时：规则一超过一页，新行就落在最后一页，而表格
+  // 数据一变又回到第一页——点了「添加」却什么都没发生，人会以为没加上，再点几次，
+  // 于是多出好几条空规则。逐条录入十几个模型时这个问题每次都撞上。
+  //
+  // 顺序只影响显示：匹配走 pickRuleFrom 的具体度优先（精确名 > 前缀 > "*"），
+  // 与数组顺序无关。
   const addRow = useCallback(
     (pattern = '') => {
       emitAndSet((prev) => [
-        ...prev,
         { _id: uid(), pattern, mode: MODE_MULTIPLY, value: 1, remark: '' },
+        ...prev,
       ]);
     },
     [emitAndSet],

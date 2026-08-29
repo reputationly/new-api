@@ -115,3 +115,45 @@ describe('档位折扣的默认选中', () => {
     ).toBeInTheDocument();
   });
 });
+
+/**
+ * 下拉框展开后必须能看到选项。
+ *
+ * Semi Select 在 optionList 从空变非空后不更新内部选项，展开永远是「暂无数据」。
+ * 这里的时序恰好命中：首次渲染时 inputs 还没加载，tierNames 是空数组，等
+ * /api/option/ 回来选项才有值，而那时 Select 已经挂载完了。
+ *
+ * 后果是运营根本换不了档位——只能靠 allowCreate 把档名重新敲一遍，而敲错一个字
+ * 就会创建出一个空档，看起来又像「配置丢了」。
+ */
+describe('档位下拉的选项', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('数据加载完成后展开，能看到所有档位', async () => {
+    mockAPIs();
+    await openTierTab();
+    await screen.findByText('batch2026q3');
+
+    // 必须精确定位到「档位折扣」那个 Select。页面上同时存在「模型折扣」的分组
+    // 下拉（Semi Tabs 会把未激活的 TabPane 也渲染进 DOM），
+    // document.querySelector('.semi-select') 拿到的是前者——测的就不是这个功能。
+    const tierSelect = screen
+      .getByText('配置哪个用户档')
+      .closest('.semi-col')
+      .querySelector('.semi-select');
+    expect(tierSelect).toBeTruthy();
+    await userEvent.click(tierSelect);
+
+    // 必须限定在下拉面板内断言。`aaa-free` 在「分组」Tab 的表格里也有，
+    // 用 screen.getAllByText 查全文档时，下拉框空不空都能找到它——
+    // 去掉 key 的变异下这条依然会绿，是一条测不出任何东西的断言。
+    await waitFor(() => {
+      const panel = document.querySelector('.semi-select-option-list');
+      expect(panel).toBeTruthy();
+      expect(panel.textContent).toContain('aaa-free');
+      expect(panel.textContent).not.toContain('暂无数据');
+    });
+  });
+});
