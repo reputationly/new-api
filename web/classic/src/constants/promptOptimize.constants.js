@@ -13,7 +13,10 @@
 // **唯一的例外是 MiniMax H3**:它要的是带字段名的分段结构(见 h3Prompt.constants.js),
 // 与下面这条契约形状相反,故按引擎族整份换掉模板 —— 不靠模型名 substring,读的是运营
 // 在「视频模型配置」里声明的 engine(与后端 common.VideoEngineFamilyForModel 同一个键)。
-import { VIDEO_ENGINE_MINIMAX_H3 } from './playgroundAdmin.constants';
+import {
+  VIDEO_ENGINE_MINIMAX_H3,
+  MUSIC_ENGINE_MINIMAX_MUSIC3,
+} from './playgroundAdmin.constants';
 import { h3OptimizeSystemPrompt } from './h3Prompt.constants';
 
 const OUTPUT_CONTRACT = `\n\nOutput ONLY the rewritten prompt itself. No explanation, no preface, no quotes, no markdown fence. Keep the user's original language unless the target model requires English.`;
@@ -102,6 +105,39 @@ Rules:
 - No music, melody, or lyrics — those belong to the music playground.
 - No speech.`;
 
+// MiniMax-Music3 的 instructions。**与 ACE-Step 的 caption 不是一回事**:
+// ACE-Step 的描述位是 prompt(与歌词并列的整体描述),而 Music3 的 prompt 位是歌词,
+// 描述走独立的 instructions。
+//
+// 结构照抄官方 README 的 Structured Caption 三段式(Global Metadata / Vocal Details /
+// Arrangement)与其字段清单,句式照抄官方 reproducible example 的
+// 「Genre: … BPM: … Key: … Vocals: … Arrangement: …」带标签句 —— 不是我们自拟的格式。
+// 官方另有一个 music-caption-rewriter skill 做同一件事,这里等价于把它内联成系统提示词。
+//
+// 特别注意**要写分段演进**:官方明说这套表示是为了让模型「不只跟随全局风格,还跟随
+// 歌曲随时间的音乐发展」,Arrangement 一节点名要 section-level instrument evolution。
+//
+// 不写歌词:歌词是左侧独立的输入框(下发到 input),这里只优化编曲描述。让优化模型
+// 顺手编一段歌词会覆盖用户自己写的那份 —— 官方 skill 也明确"保留歌词在 lyrics 输入里"。
+const MUSIC3_PROMPT = `You are a prompt engineer for MiniMax-Music3, a text-to-music model. Rewrite the user's rough idea into one Structured Caption for the model's "instructions" field.
+
+Write it as labelled sentences in this order:
+
+1. Global Metadata — genre and subgenre, BPM as a number, key and scale, the emotional progression, the listening scenario, and the production profile.
+2. Vocal Details — vocal gender, timbre, performance style, harmony and backing vocals, and any vocal effects. If the track is instrumental, say so here instead.
+3. Arrangement — primary and secondary instruments, how the instrumentation evolves section by section, groove, bass, percussion, textures, and spatial effects.
+
+Follow the official phrasing style, e.g.: "Genre: acoustic pop. BPM: 96. Key: C major. Warm and intimate, building gently into the chorus. Vocals: soft female lead, close and breathy, light stacked harmonies in the chorus. Arrangement: fingerpicked guitar and soft piano; brushed drums and upright bass enter in the chorus."
+
+Rules:
+- This field describes the MUSIC, never the words. Lyrics are a separate input the user fills in themselves — never write, quote, translate, or summarize lyrics here. If the user's text contains lines that are clearly lyrics, describe how they should be *sung* (delivery, phrasing, register) and drop the words themselves.
+- Do describe how the arrangement develops across sections ([Verse], [Chorus], [Bridge]) — that section-level evolution is what this field is for. Naming the sections is expected; quoting their words is not.
+- Be concrete about sound: "fingerpicked nylon guitar over brushed drums, upright bass, warm analog pad" beats "gentle instrumentation".
+- One coherent production, not a menu of alternatives.
+- Keep the user's intent, genre and mood faithfully — do not substitute a different style.
+- Write the caption in English: every example in the model card is English. This applies to the caption ONLY — it is never a licence to translate the user's lyrics, which are sung verbatim in whatever language they wrote them.
+- If the user names a language for the vocals (Mandarin, Cantonese, English …), state it in Vocal Details rather than switching the caption into that language.`;
+
 // tab key → 默认系统提示词。tab key 在全部分类里唯一(见 playgroundAdmin.constants.js),
 // 故不需要按分类再分一层。未列出的 tab 用 GENERIC_OPTIMIZE_SYSTEM_PROMPT。
 export const DEFAULT_OPTIMIZE_SYSTEM_PROMPTS = {
@@ -123,7 +159,14 @@ export const DEFAULT_OPTIMIZE_SYSTEM_PROMPTS = {
 // **视频体验区两端都要传**:手机端一度没传,于是选了 H3 模型点优化拿到的是通用模板 ——
 // 那份输出契约要求「只回正文、不要字段名」,恰是 H3 要的反面,而引擎不解析 prompt,
 // 不报错、只默默出差档。别再照着「手机端不用传」的旧结论办。
-export const defaultOptimizeSystemPrompt = (tabKey, engine) =>
-  engine === VIDEO_ENGINE_MINIMAX_H3
-    ? h3OptimizeSystemPrompt(tabKey)
-    : DEFAULT_OPTIMIZE_SYSTEM_PROMPTS[tabKey] || GENERIC_OPTIMIZE_SYSTEM_PROMPT;
+// **音乐体验区也要传 engine**:文生音乐这个 tab 同时挂着 ACE-Step 与 MiniMax-Music3,
+// 两者的描述位语义相反(ACE-Step 是 caption,Music3 是 instructions 编曲说明,歌词另走
+// 一路),按 tab 给一份模板必然对其中一个是错的。同上,判据是配置声明的引擎族。
+export const defaultOptimizeSystemPrompt = (tabKey, engine) => {
+  if (engine === VIDEO_ENGINE_MINIMAX_H3) return h3OptimizeSystemPrompt(tabKey);
+  if (engine === MUSIC_ENGINE_MINIMAX_MUSIC3)
+    return MUSIC3_PROMPT + OUTPUT_CONTRACT;
+  return (
+    DEFAULT_OPTIMIZE_SYSTEM_PROMPTS[tabKey] || GENERIC_OPTIMIZE_SYSTEM_PROMPT
+  );
+};

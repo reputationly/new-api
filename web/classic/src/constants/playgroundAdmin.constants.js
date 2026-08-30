@@ -394,8 +394,14 @@ export const PLAYGROUND_CATEGORIES = [
     configKey: 'MusicModelConfig',
     tabs: [
       {
-        // 文生音乐不挂通用「AI 优化提示词」：它已有更专的「AI 帮我写词」（一次产出
-        // caption/歌词/BPM/调式/时长并回填各控件），两个按钮并排只会让人选错。
+        // 文生音乐挂「AI 优化提示词」，但它与「AI 帮我写词」**按引擎族互斥**，不会并排
+        // 出现两个（原先不挂它，理由正是这个并排问题）：
+        //   ACE-Step → 只出「AI 帮我写词」（一次产出 caption/歌词/BPM/调式/时长并回填
+        //              各控件），它的描述位是 caption，通用优化帮不上；
+        //   MiniMax-Music3 → 只出「AI 优化提示词」。它没有 BPM/调式/时长这些位，
+        //              「帮我写词」回填的字段无处可去；而它的描述位是 instructions
+        //              （官方 Structured Caption），正是优化模板能发力的地方。
+        //   互斥在两处实现：draftAvailable 排除 Music3，优化模板按 engine 换。
         // 但「AI 帮我写词」用的语言模型就是下面 __global.promptOptimize 里配的那个 ——
         // 不声明 promptOptimize 只是不出那个按钮，不代表这个 tab 与那份配置无关。
         //
@@ -405,6 +411,7 @@ export const PLAYGROUND_CATEGORIES = [
         label: '文生音乐',
         capability: '文生音乐',
         fields: ['maxChars'],
+        promptOptimize: true,
       },
       {
         key: 'cover',

@@ -18,6 +18,7 @@ import PromptOptimizeButton from '../playground/PromptOptimizeButton';
 import {
   MUSIC_STATUS,
   musicExamplesForMode,
+  MUSIC_ENGINE_MINIMAX_MUSIC3,
 } from '../../constants/musicPlayground.constants';
 
 // 音乐模型对话区:成品渲染 <audio> 播放器 + 下载。格式无关(ACE-Step .mp3 / AudioX/SoulX
@@ -192,21 +193,29 @@ const MusicChatArea = ({
   const [optimizing, setOptimizing] = useState(false);
 
   const isAceStep = engine === 'acestep';
+  // Music3 的输入框语义与 ACE-Step 相反:这里写的是**编曲说明**(→ instructions),
+  // 歌词在左侧面板(→ 引擎 input)。文案必须说清,否则用户会把歌词写进这里,
+  // 而那样只会得到一段"按歌词描述编出来的伴奏",不报错。
+  const isMusic3 = engine === MUSIC_ENGINE_MINIMAX_MUSIC3;
   // 一键示例(按 mode):cover/repaint 带驱动音、svs 带双音频,故 svs 也展示(有素材)。
-  const presets = musicExamplesForMode(mode);
+  const presets = musicExamplesForMode(mode, engine);
   const showPresets = presets.length > 0;
 
-  const defaultWelcome = isAceStep
-    ? t('欢迎使用 AI 文生音乐,请在左侧选择模型,并在下方输入音乐风格描述')
-    : t('欢迎使用 AI 音频生成,请在左侧选择模型并配置输入');
+  const defaultWelcome = isMusic3
+    ? t('欢迎使用 AI 文生音乐,请在左侧填写歌词,并在下方描述曲风与编配')
+    : isAceStep
+      ? t('欢迎使用 AI 文生音乐,请在左侧选择模型,并在下方输入音乐风格描述')
+      : t('欢迎使用 AI 音频生成,请在左侧选择模型并配置输入');
 
-  const placeholder = isAceStep
-    ? t('请输入音乐风格描述')
-    : needsText
-      ? t('请输入音效/配乐描述')
-      : needsVideo
-        ? t('可选:补充描述(留空按纯视频生成)')
-        : t('点击右侧按钮开始生成');
+  const placeholder = isMusic3
+    ? t('描述曲风、乐器编配、速度与情绪(歌词写在左侧)')
+    : isAceStep
+      ? t('请输入音乐风格描述')
+      : needsText
+        ? t('请输入音效/配乐描述')
+        : needsVideo
+          ? t('可选:补充描述(留空按纯视频生成)')
+          : t('点击右侧按钮开始生成');
 
   const roleConfig = useMemo(
     () => ({
@@ -426,12 +435,17 @@ const MusicChatArea = ({
     };
     return (
       <div className='p-2 sm:p-4'>
+        {/* Music3 换一套说法。它不是「仅支持英文」——官方只是所有 caption 示例都用英文,
+            没说中文不行;而且照搬原句会让人以为歌词也被译了,那正好是要避免的误解:
+            歌词是唱出来的内容,任何情况下都保持原文(同 H3 对台词的处理)。 */}
         {showTranslation && (
           <Typography.Text
             type='tertiary'
             className='text-xs block mb-2 text-center'
           >
-            {t('当前模型仅支持英文,已开启语言模型自动翻译')}
+            {isMusic3
+              ? t('已开启自动翻译:曲风描述会译成英文，歌词保持原文')
+              : t('当前模型仅支持英文,已开启语言模型自动翻译')}
           </Typography.Text>
         )}
         {/* 模型只认英文、但运营没配翻译模型:这句得在写之前说。写完中文再发,只会
@@ -441,7 +455,11 @@ const MusicChatArea = ({
             type='warning'
             className='text-xs block mb-2 text-center'
           >
-            {t('当前模型仅支持英文,请直接用英文描述')}
+            {isMusic3
+              ? t(
+                  '未配置翻译模型:曲风描述建议直接写英文（歌词不受影响，照常写中文）',
+                )
+              : t('当前模型仅支持英文,请直接用英文描述')}
           </Typography.Text>
         )}
         {turnLimitReached && (
@@ -517,18 +535,32 @@ const MusicChatArea = ({
             }}
           />
         )}
-        {/* 「AI 优化提示词」只在文生音效(t2a)出现:它的输入是一句声音描述,补全成
-            声源/包络/声学空间的完整描述能直接提升出音质量。ACE-Step 系玩法的输入是
-            caption/歌词,已有上面的「AI 帮我写词」,不再叠一个按钮(由中央元数据的
-            promptOptimize 声明决定,这里无需 mode 判断)。 */}
-        <PromptOptimizeButton
-          category='music'
-          tabKey={mode}
-          value={inputValue}
-          onChange={setInputValue}
-          disabled={generating}
-          onOptimizingChange={setOptimizing}
-        />
+        {/* 「AI 优化提示词」出现在文生音效(t2a)与 MiniMax-Music3 的文生音乐上:
+            两者的输入都是一句"要什么声音/什么编曲"的描述,补全成结构化描述能直接
+            提升产出质量。
+
+            **`!onDraftPlan` 这个条件不能省**。promptOptimize 是 **tab 级**声明,
+            usePromptOptimize 的 available 只看 tab 不看引擎 —— 光靠 draftAvailable
+            排除 Music3 只做了一半:ACE-Step 那边「AI 帮我写词」照旧渲染,而优化按钮
+            也跟着渲染出来,两个并排。而且 ACE-Step 的 t2m 没有专用优化模板,点了走的是
+            通用兜底,对它的 caption 帮不上忙。
+            两个按钮是同一件事的两种做法,用同一个判据取反即可:写词按钮在
+            (onDraftPlan 由页面按 draftAvailable 传)就不出优化按钮,反之才出。
+
+            engine 必须传:文生音乐这个 tab 同时挂 ACE-Step 与 Music3,而两者的描述位
+            语义相反(caption vs 编曲说明 instructions),不传就会拿通用模板去优化,
+            产出一段 Music3 用不上的文案 —— 同视频页 H3 那次的教训。 */}
+        {!onDraftPlan && (
+          <PromptOptimizeButton
+            category='music'
+            tabKey={mode}
+            engine={engine}
+            value={inputValue}
+            onChange={setInputValue}
+            disabled={generating}
+            onOptimizingChange={setOptimizing}
+          />
+        )}
         <div className='relative'>
           <TextArea
             value={inputValue}
@@ -574,6 +606,10 @@ const MusicChatArea = ({
     missingRequiredVideo,
     showTranslation,
     englishOnlyNoTranslate,
+    // engine / isMusic3:翻译提示文案与「AI 优化提示词」的模板都按引擎族分叉,
+    // 漏进依赖会让切模型后这块仍按上一个引擎渲染(useCallback 的记忆值不刷新)。
+    engine,
+    isMusic3,
     needsText,
     needsDualAudio,
     showPresets,

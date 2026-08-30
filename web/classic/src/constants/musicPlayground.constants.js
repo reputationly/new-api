@@ -9,6 +9,7 @@
 import {
   normalizeModelNote,
   tabScopedValue,
+  MUSIC_ENGINE_MINIMAX_MUSIC3,
 } from './playgroundAdmin.constants';
 
 export {
@@ -207,7 +208,54 @@ export const MUSIC_EXAMPLES = {
   ],
 };
 
-export const musicExamplesForMode = (mode) => MUSIC_EXAMPLES[mode] || [];
+// MiniMax-Music3 的文生音乐示例。与 ACE-Step 的 t2m 示例是两套:
+//   - prompt 位在 Music3 上是**编曲说明**(→ instructions),不是 caption;
+//   - 必须连歌词一起给(歌词才是引擎的 input,空着提交不了);
+//   - 不带 vocalLanguage —— Music3 没有这个参数,给了也只是在 inputs 里留个死值。
+//
+// 描述照官方 README 的 Structured Caption 写法:带标签的英文句子
+// (Genre / BPM / Key / Vocals / Arrangement),官方 reproducible example 即此格式。
+// 歌词按官方要求把 [Verse] / [Chorus] 这类段落标签**单独占一行**。
+//
+// ⚠️ 歌词用中文是产品判断,不是官方背书:README 通篇示例都是英文,也没有关于歌词语种的
+// 任何说明。首次部署后要拿这三条各跑一次听结果,中文咬字不行就把示例换成英文。
+const MUSIC3_T2M_EXAMPLES = [
+  {
+    label: '深情抒情',
+    prompt:
+      'Genre: acoustic pop. BPM: 72. Key: C major. Warm and intimate, building gently into the chorus. Vocals: soft male lead, close and breathy, light stacked harmonies in the chorus. Arrangement: fingerpicked guitar and soft piano in the verse; brushed drums and upright bass enter in the chorus; wide reverb on the final chorus.',
+    params: {
+      lyrics:
+        '[Verse]\n晚风吹过安静的街\n路灯把影子拉得很长\n[Chorus]\n我还站在原地等你\n等一句没说出口的话',
+    },
+  },
+  {
+    label: '国风电子',
+    prompt:
+      'Genre: Chinese-style electronic dance. BPM: 128. Key: A minor. Bright and driving, with a cinematic lift into the chorus. Vocals: clear female lead, agile and forward, doubled octave in the chorus. Arrangement: guzheng and dizi carry the main melody; 808 kick and sub-bass with a warm analog pad underneath; filtered build in the pre-chorus, full drums and stacked synths in the chorus.',
+    params: {
+      lyrics:
+        '[Verse]\n灯火沿着长街淌\n我把心事折成纸船\n[Chorus]\n随风去了远方\n不必再问归期',
+    },
+  },
+  {
+    label: '史诗合唱',
+    // 这条**不能写成纯器乐**:歌词是必填的(门面对空 prompt 直接 400),写了词就一定会
+    // 被唱出来。描述里说「instrumental, no lead vocal」而歌词里给了词,等于一边告诉
+    // 引擎没有人声、一边给它词唱,出来的东西两头不靠。所以人声改成合唱团,与歌词对齐。
+    prompt:
+      'Genre: epic orchestral score with choir. BPM: 90. Key: D minor. Solemn and grand, rising to a triumphant final section. Vocals: full mixed choir, no solo lead; unison and open-vowel in the opening, wide four-part harmony in the final section. Arrangement: low strings and timpani establish the pulse; brass answers in the second section; full orchestra and choir with cymbal swells and wide hall reverb at the climax.',
+    params: {
+      lyrics: '[Intro]\n风起于荒原之上\n[Chorus]\n山河在身后\n我们向前',
+    },
+  },
+];
+
+// 示例按 mode 取;文生音乐这个 tab 挂着两个引擎,再按引擎族分一层。
+export const musicExamplesForMode = (mode, engine) =>
+  (mode === 't2m' && engine === MUSIC_ENGINE_MINIMAX_MUSIC3
+    ? MUSIC3_T2M_EXAMPLES
+    : MUSIC_EXAMPLES[mode]) || [];
 
 // 演唱语言(metadata.vocal_language)。'' = 不指定(sample 模式自动检测);
 // unknown = 纯器乐。取自 ACE-Step constants.py VALID_LANGUAGES 的常用子集。
@@ -360,7 +408,9 @@ export const getEngineForMusicModel = (config, model) =>
 
 // 常量本体定义在 playgroundAdmin.constants.js(管理页下拉也要用它),这里再导出，
 // 依赖方向保持单向 —— 与 VIDEO_ENGINE_MINIMAX_H3 / AUDIO_ENGINE_INDEXTTS25 同一处理。
-export { MUSIC_ENGINE_MINIMAX_MUSIC3 } from './playgroundAdmin.constants';
+// 用「import 再 export」而不是 `export ... from`:后者不产生本地绑定,本文件下面的
+// musicExamplesForMode 就用不到它了。
+export { MUSIC_ENGINE_MINIMAX_MUSIC3 };
 
 // 解析 status 中的 MusicModelConfig(字符串或对象)。形如:
 //   { default: { maxChars, refAudioMaxMB, videoMaxMB },

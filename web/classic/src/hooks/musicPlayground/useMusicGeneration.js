@@ -64,7 +64,7 @@ import {
 const MUSIC_TRANSLATE_ENDPOINT = '/pg/chat/completions';
 
 // 内置翻译模板(设计 §8):把用户输入转成一句 AudioCaps 风格英文音频描述。
-const TRANSLATE_SYSTEM_BASE = `You convert a user's sound request into ONE concise English caption for an audio generator (AudioX, trained on AudioCaps-style natural-language captions).
+export const TRANSLATE_SYSTEM_BASE = `You convert a user's sound request into ONE concise English caption for an audio generator (AudioX, trained on AudioCaps-style natural-language captions).
 Rules:
 - Output English only. One line. <= 40 words. No quotes, no brackets/tags, no music notation, no BPM, no [verse]/[chorus] style markers.
 - Output ONLY the caption text itself. Do NOT add any preface, explanation, notes, labels, headings, or markdown. Never begin with phrases like "Sure", "Here is", "Caption:", or "好的". Return the caption and nothing else.
@@ -74,6 +74,28 @@ Rules:
 // 视频生音(tv2a)追加:引导描述贴合视频画面(文字主导视频,见设计 §3 约束 3)。
 const TRANSLATE_SYSTEM_VIDEO = `${TRANSLATE_SYSTEM_BASE}
 - the sound should stay consistent with the video scene.`;
+
+// MiniMax-Music3 的中译英。**不能复用上面那份** —— 那份是给 AudioX 写的:
+// AudioCaps 风格的音景描述、≤40 词、明令去掉 BPM 与 [verse]/[chorus] 标记。
+// 而 Music3 的 instructions 要的正好是它禁掉的东西(Genre / BPM / Key / Vocals /
+// Arrangement 的 Structured Caption,官方示例本身就 50 词以上)。拿 AudioX 那份去译,
+// 引擎会收到一段被削平的 caption —— 不报错,只是编曲质量默默变差。
+//
+// 与「AI 优化提示词」的 MUSIC3_PROMPT 分工不同:那个是用户主动点的,可以扩写补全;
+// 这个是提交时自动跑的,必须**忠实**——只做语言转换与格式归位,绝不替用户补
+// 他没说的 BPM / 调式 / 乐器。
+//
+// 歌词不经过这里(它走 params.lyrics → prompt 位),所以无需在此声明保护;
+// 但仍加一条兜底:用户若把歌词误贴进描述框,译文里也不该出现整句词。
+export const TRANSLATE_SYSTEM_MUSIC3 = `You translate a user's music description into English for MiniMax-Music3's "instructions" field.
+Rules:
+- Output English only. Output ONLY the description itself — no preface, no explanation, no labels, no markdown. Never begin with "Sure", "Here is", "好的".
+- Keep every musical detail the user gave (genre, tempo/BPM, key, mood, instruments, vocal type, section changes) and keep their emphasis. Translate faithfully.
+- Do NOT invent details the user did not give. If they did not state a tempo or a key, leave it out rather than making one up.
+- Where the user's wording maps onto the model's caption structure, use its labelled style: "Genre: … BPM: … Key: … Vocals: … Arrangement: …". Otherwise keep their prose order.
+- Length follows the input: a one-line request stays one line. Do not pad it out.
+- If the user names a vocal language (Mandarin, Cantonese, English …), state it as a vocal attribute; never switch the description itself into that language.
+- This field describes the music, not the words. If the input contains lines that are clearly lyrics, describe how they should be sung and drop the words themselves — never translate lyrics into the description.`;
 
 // 拟方案(文生音乐两步流程的第一步)。
 //
@@ -474,7 +496,20 @@ export const useMusicGeneration = (mode = 't2m') => {
   // 早先这里还控制左侧一个「语言模型」下拉,让用户自己挑翻译模型;现已撤掉 ——
   // 翻译、AI 优化提示词、AI 帮我写词都是同一类辅助调用,统一用运营在「体验区管理 →
   // 通用设置」里配的那个模型(见下面的 promptOptimizeGlobal)。
-  const needsEnglishOnly = !!needsTranslation && translationCfg.enabled;
+  //
+  // MiniMax-Music3 也归进「玩法可能需要」这一层。它与 AudioX 的理由不同:不是中文会塌成
+  // <unk>,而是官方 README 里 Structured Caption 的示例清一色英文、对中文 caption 只字
+  // 未提 —— 属于"英文一定行、中文没说"。所以做成**运营可开可关的**(第二层
+  // translationCfg.enabled 仍是模型级开关),而不是写死。
+  //
+  // ⚠️ **翻译只碰描述,永远不碰歌词**。这里译的是输入框里的文本(→ instructions);
+  // 歌词是左侧独立字段(→ 引擎 input),不经过 translatePrompt。这条不是巧合而是必须:
+  // 歌词是要被唱出来的内容,译了就等于换一种语言演唱 —— 同 H3 把台词
+  // (`<d>` 内)排除在英文化之外的理由(见 h3Prompt.constants.js 的 SHARED_OUTPUT_RULES:
+  // "a translated line makes the character speak the wrong language")。
+  const needsEnglishOnly =
+    (!!needsTranslation || resolvedEngine === MUSIC_ENGINE_MINIMAX_MUSIC3) &&
+    translationCfg.enabled;
 
   // 音乐体验区所有辅助语言模型调用(中译英、AI 帮我写词)共用的运营配置:与各体验区
   // 「AI 优化提示词」同一份(总开关 + 模型 + 分组)。原先让用户在左侧自己挑一个,但这
@@ -482,9 +517,12 @@ export const useMusicGeneration = (mode = 't2m') => {
   // 模型、两种可用性判断 —— 运营那边配好了优化模型,用户这边还得再选一遍,选错就报
   // 「当前分组下暂无可用语言模型」。
   //
-  // 刻意只读 __global,不读 tab 级 promptOptimize:t2m 在中央元数据里没声明
-  // promptOptimize(不出「AI 优化提示词」按钮,免得两个按钮并排让人选错),按 tab 判就把
-  // 写词一起判没了。系统提示词同理不走运营改写的那份 —— 写词的输出是 JSON、翻译的输出
+  // 刻意只读 __global,不读 tab 级 promptOptimize:这里判的是「有没有可用的辅助语言
+  // 模型」,而 tab 级那个开关管的是「要不要出优化按钮」,两件事。按 tab 判会让运营关掉
+  // 优化按钮时连中译英和「AI 帮我写词」一起判没了。
+  //(t2m 现已声明 promptOptimize —— 它与「AI 帮我写词」按引擎族互斥,不会并排出现
+  // 两个按钮,见 playgroundAdmin.constants.js 该 tab 处的说明。)
+  // 系统提示词同理不走运营改写的那份 —— 写词的输出是 JSON、翻译的输出
   // 是一行英文 caption,拿优化提示词那套模板去改都会把解析打挂,故各自固定用内置模板。
   const promptOptimizeGlobal = useMemo(
     () =>
@@ -499,7 +537,16 @@ export const useMusicGeneration = (mode = 't2m') => {
 
   // 未开总开关 / 没配模型时按钮整体不渲染,与 PromptOptimizeButton 同一条规矩:
   // 与其给一个点了报「未配置」的按钮,不如让它不存在。
-  const draftAvailable = resolveTaskType(true) === 't2m' && assistModelReady;
+  //
+  // **Music3 上不给这个按钮**:「AI 帮我写词」产出的是 ACE-Step 那一套(caption +
+  // 歌词 + BPM + 调式 + 时长)并回填各控件,而 Music3 只有描述与歌词两个位、没有
+  // BPM/调式/时长。给它这个按钮等于回填一堆无处可去的字段。Music3 换成通用的
+  // 「AI 优化提示词」(模板已按引擎族换成编曲说明,见 promptOptimize.constants.js),
+  // 两个按钮仍是互斥的,不会并排出现两个。
+  const draftAvailable =
+    resolveTaskType(true) === 't2m' &&
+    resolvedEngine !== MUSIC_ENGINE_MINIMAX_MUSIC3 &&
+    assistModelReady;
 
   // 「会自动帮你翻成英文」这句提示只有真翻得动才能说。运营关掉总开关或没配模型时,
   // 模型只认英文这个事实不变、但自动翻译没了,此时要换一句「请直接写英文」——
@@ -779,8 +826,10 @@ export const useMusicGeneration = (mode = 't2m') => {
   // 用哪个模型不再让用户在左侧挑,而是与「AI 优化提示词」「AI 帮我写词」共用运营在
   // 「体验区管理 → 通用设置」里配的那一个 —— 三者都是「单次非流式打 /pg/chat/completions
   // 的辅助调用」,没道理一个体验区里摆两套模型配置。
+  // forMusic3 优先于 forVideo:两者互斥(Music3 没有视频输入),但显式写出优先级,
+  // 免得日后加参数时靠调用顺序碰运气。
   const translatePrompt = useCallback(
-    async (rawText, forVideo) => {
+    async (rawText, forVideo, forMusic3) => {
       const model = promptOptimizeGlobal.model;
       if (!model) throw new Error('no-translation-model');
       // 复用 axios API 实例:自动带 baseURL(分离部署时打到 API 而非前端 origin)与
@@ -797,9 +846,11 @@ export const useMusicGeneration = (mode = 't2m') => {
           messages: [
             {
               role: 'system',
-              content: forVideo
-                ? TRANSLATE_SYSTEM_VIDEO
-                : TRANSLATE_SYSTEM_BASE,
+              content: forMusic3
+                ? TRANSLATE_SYSTEM_MUSIC3
+                : forVideo
+                  ? TRANSLATE_SYSTEM_VIDEO
+                  : TRANSLATE_SYSTEM_BASE,
             },
             { role: 'user', content: rawText },
           ],
@@ -967,6 +1018,18 @@ export const useMusicGeneration = (mode = 't2m') => {
         params = conv ? pickParams(conv) : pickParams(inputs);
       }
 
+      // Music3 的歌词是必填 —— 它占的是 prompt 位(→ 引擎 input),而门面对
+      // task_type=tts 硬校验 prompt 非空(adaptor.go:371「需要合成文本(prompt)」)。
+      // 不在这里拦的话用户会拿到一句在音乐页毫无意义的「需要合成文本」。
+      // 放在 setGenerating(true) 之前,免得还要回滚状态。
+      if (
+        resolvedEngine === MUSIC_ENGINE_MINIMAX_MUSIC3 &&
+        !(params.lyrics || '').trim()
+      ) {
+        showError(t('MiniMax-Music3 需要歌词，请在左侧「歌词」框填写'));
+        return;
+      }
+
       // 上传的驱动/参考媒体:刷新后 localStorage 已剥离 → 提示重开对话重传。
       let audioDataURL = '';
       let videoDataURL = '';
@@ -1081,7 +1144,11 @@ export const useMusicGeneration = (mode = 't2m') => {
       let effectiveText = text;
       if (willTranslate) {
         try {
-          effectiveText = await translatePrompt(text, needsVideo);
+          effectiveText = await translatePrompt(
+            text,
+            needsVideo,
+            resolvedEngine === MUSIC_ENGINE_MINIMAX_MUSIC3,
+          );
           patchConvMessage(convId, userMsg.id, {
             translatedText: effectiveText,
           });
@@ -1107,11 +1174,43 @@ export const useMusicGeneration = (mode = 't2m') => {
       }
 
       // 解析 task_type:视频生音按是否带(译后)文本分支到 tv2a/v2a;其余与文本无关。
-      const resolvedTaskType = resolveTaskType(effectiveText.length > 0);
+      //
+      // **MiniMax-Music3 例外:发 tts 而不是 t2m**。task_type 在门面那边不只是标签,
+      // 它唯一决定打引擎的哪条路由(gpustack routes/videos.py 的 _engine_kind):
+      // t2m → kind "music" → POST /v1/tasks/music/,那是 ACE-Step-1.5 的路由,
+      // vLLM-Omni 根本没有(它只有 audio/audiogen/image/video 四条),发过去是 405
+      // ——405 而非 404 是因为带尾斜杠的请求被重定向后落到 DELETE /v1/tasks/{task_id}
+      // 上(task_id="music"),路径匹配、方法不匹配。
+      //
+      // tts → kind "audio" → POST /v1/tasks/audio/,用的是
+      // AudioTaskRequest(OpenAICreateSpeechRequest) + Omnispeech,正是 Music3 冒烟
+      // 走的 /v1/audio/speech 的异步孪生,instructions 原生就在那个 schema 里。
+      // 顺带把输出扩展名也修对了:kind "audio" 出 .wav(Music3 出的就是 wav),
+      // kind "music" 出 .mp3,本来就是错的。
+      //
+      // 名字叫 tts 而实为音乐,确实别扭 —— 但门面的 kind 只认 task_type,不认引擎族,
+      // 要让 t2m 也能指向 vLLM-Omni 得改 gpustack 并等 50 台节点全量升级。等那边铺开
+      // 后这里就该摘掉,改回 t2m。
+      // 已核过副作用:TTS 专属的输入物化(voice/ref_audio 等)只对 body 里存在的键生效,
+      // Music3 不发音频输入,是空转;adaptor 里 taskType=="tts" 的 extra_params 折叠
+      // 只搬 emo_* 那几个键,Music3 也没有。
+      const resolvedTaskType =
+        resolvedEngine === MUSIC_ENGINE_MINIMAX_MUSIC3
+          ? 'tts'
+          : resolveTaskType(effectiveText.length > 0);
       // 占位符仅用于 svs(歌声合成引擎需非空 input,文本仅占位);v2a 是纯视频输入,
       // 后端明确允许空 prompt —— 绝不能塞占位,否则会拿"歌声合成"去条件化 AudioX。
+      //
+      // **Music3 的 prompt 位放歌词,不是描述**。门面把 prompt 原样写成
+      // body["prompt"],而引擎 AudioTaskRequest.input 的 alias 就含 prompt ——
+      // 也就是 prompt → input。Music3 的 input 是歌词、描述走 instructions
+      // (冒烟即如此:input=歌词 / instructions=曲风编配)。与 ACE-Step 相反,后者的
+      // 描述才是 prompt(caption)、歌词是并列的 lyrics 字段。发反了不报错,只会把
+      // 曲风描述当歌词唱出来。
       const promptField =
-        effectiveText || (resolvedTaskType === 'svs' ? t('歌声合成') : '');
+        resolvedEngine === MUSIC_ENGINE_MINIMAX_MUSIC3
+          ? (params.lyrics || '').trim()
+          : effectiveText || (resolvedTaskType === 'svs' ? t('歌声合成') : '');
 
       try {
         // gpustackplus 门面契约:task_type + 输入(音频/视频)+ 标量参数经 metadata 透传
@@ -1119,18 +1218,25 @@ export const useMusicGeneration = (mode = 't2m') => {
         const metadata = { task_type: resolvedTaskType };
 
         if (resolvedEngine === MUSIC_ENGINE_MINIMAX_MUSIC3) {
-          // ── MiniMax-Music3:曲风描述(必填)+ 歌词 ──
+          // ── MiniMax-Music3:曲风描述(必填)+ 歌词(必填,已放在 prompt 位)──
           //
           // 引擎硬校验 instructions:不传直接 400
           // ("MiniMax Music 3 requires 'instructions' describing the music
           //   (genre, instrumentation, tempo, mood); it is what decides the
-          //   arrangement")。这里把用户填的描述文本放 instructions、歌词放 lyrics,
-          // 与 ACE-Step 的「描述=caption(prompt)」不同 —— Music3 的 prompt 位是歌词。
-          const lyrics = (params.lyrics || '').trim();
-          if (lyrics) metadata.lyrics = lyrics;
+          //   arrangement")。这里把用户填的描述文本放 instructions。
+          //
+          // 歌词**不再走 metadata.lyrics** —— 它已经是上面的 promptField(→ 引擎
+          // input)。lyrics 不是 AudioTaskRequest 的字段,再发一份只是噪声,还会让
+          // 后来者以为引擎读的是它。
+          //
+          // 用 effectiveText 而不是 text:运营给这个模型开了中译英时,要发的是译后的
+          // 英文 caption。歌词不受影响 —— 它走的是上面的 promptField,取自
+          // params.lyrics,从不经过翻译。
+          //
           // 描述为空时不下发空串:让引擎报它自己那句可自助的错,好过我们塞一个
           // 空 instructions 让它生成一段无从解释的编曲。
-          if (text.trim()) metadata.instructions = text.trim();
+          if (effectiveText.trim())
+            metadata.instructions = effectiveText.trim();
         } else if (resolvedEngine === 'acestep') {
           // ── ACE-Step:歌词/时长/驱动音频/BPM/演唱语言 ──
           const lyrics = (params.lyrics || '').trim();
@@ -1423,7 +1529,11 @@ export const useMusicGeneration = (mode = 't2m') => {
     turnLimitReached,
     missingRequiredAudio,
     missingRequiredVideo,
-    engine,
+    // 给 UI 的是 **resolvedEngine**(模型声明优先、未声明才回退 tab 默认),不是
+    // modeDef.engine。tab 默认是硬编码的(「文生音乐」恒 acestep),而同一个 tab 挂着
+    // 多个引擎的模型 —— 用 tab 默认的话,选了 MiniMax-Music3 时面板照样按 ACE-Step
+    // 渲染:时长/演唱语言/BPM 这些它根本不认的控件全在,而且拖了不报错、只是无效。
+    engine: resolvedEngine,
     needsAudio,
     needsVideo,
     needsDualAudio,

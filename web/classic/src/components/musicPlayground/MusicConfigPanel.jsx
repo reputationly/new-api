@@ -48,6 +48,7 @@ import {
   MUSIC_REPAINT_MAX_SEC,
   musicDefaultStepsForEngine,
   musicDefaultGuidanceForEngine,
+  MUSIC_ENGINE_MINIMAX_MUSIC3,
 } from '../../constants/musicPlayground.constants';
 
 // 音乐模型配置面板:分组/模型(同视频/语音)+ 按 mode 的输入:
@@ -75,7 +76,11 @@ const MusicConfigPanel = ({
   const { t } = useTranslation();
   const fileInputRef = useRef(null);
 
+  // engine 是**模型声明的引擎族**(useMusicGeneration 返回 resolvedEngine),不是 tab
+  // 默认值 —— 文生音乐这个 tab 同时挂着 ACE-Step 与 MiniMax-Music3,按 tab 判会把
+  // Music3 也当成 ACE-Step 渲染。
   const isAceStep = engine === 'acestep';
+  const isMusic3 = engine === MUSIC_ENGINE_MINIMAX_MUSIC3;
 
   const ensureOption = (options, value) => {
     if (!value) return options;
@@ -404,29 +409,44 @@ const MusicConfigPanel = ({
           </>
         )}
 
-        {/* 歌词(仅 ACE-Step,可选):留空则由模型按描述自动生成 */}
-        {isAceStep && (
+        {/* 歌词。ACE-Step:可选,留空由模型按描述自动生成。
+            MiniMax-Music3:**必填**,且它就是引擎的 input(描述另走 instructions);
+            门面对 task_type=tts 硬校验 prompt 非空,空着提交会被本地拦下。 */}
+        {(isAceStep || isMusic3) && (
           <div>
             <div className='flex items-center gap-2 mb-2'>
               <FileText size={16} className='text-gray-500' />
               <Typography.Text strong className='text-sm'>
-                {t('歌词')}
+                {isMusic3 ? t('歌词（必填）') : t('歌词')}
               </Typography.Text>
               <Tooltip
-                content={t(
-                  '可选。留空则由模型按描述自动生成歌词;填写则按此歌词演唱。支持 [verse]/[chorus]/[bridge] 等结构标签分段。',
-                )}
+                content={
+                  isMusic3
+                    ? t(
+                        '必填。这一栏就是模型要唱的内容,下方描述只决定编曲。可用 [Verse]/[Chorus]/[Bridge]/[Instrumental] 等段落标签,按官方要求每个标签单独占一行。留空无法提交。',
+                      )
+                    : t(
+                        '可选。留空则由模型按描述自动生成歌词;填写则按此歌词演唱。支持 [verse]/[chorus]/[bridge] 等结构标签分段。',
+                      )
+                }
                 position='top'
               >
                 <HelpCircle size={14} className='text-gray-400 cursor-help' />
               </Tooltip>
               {/* 「AI 帮我写词」按钮在对话区输入框旁边 —— 它要拿输入框里的描述当输入,
-                  而那个值在 MusicChatArea 的本地 state 里。 */}
+                  而那个值在 MusicChatArea 的本地 state 里。Music3 上没有那个按钮
+                  (它回填的 BPM/调式/时长 Music3 都没有),换成「AI 优化提示词」。 */}
             </div>
             <TextArea
-              placeholder={t(
-                '可选,输入歌词;留空则自动生成。可用 [verse] / [chorus] / [bridge] 分段',
-              )}
+              placeholder={
+                isMusic3
+                  ? t(
+                      '必填,输入要演唱的歌词。段落标签单独占一行,如\n[Verse]\n...\n[Chorus]\n...',
+                    )
+                  : t(
+                      '可选,输入歌词;留空则自动生成。可用 [verse] / [chorus] / [bridge] 分段',
+                    )
+              }
               value={inputs.lyrics}
               onChange={(value) => onInputChange('lyrics', value)}
               autosize={{ minRows: 5, maxRows: 14 }}
@@ -436,11 +456,13 @@ const MusicConfigPanel = ({
           </div>
         )}
 
-        {/* 时长(仅文生音乐)。改编/重绘不显示:引擎里
+        {/* 时长(仅 ACE-Step 的文生音乐)。改编/重绘不显示:引擎里
               if params.task_type in ("cover", "repaint", ...): audio_duration = None
             (inference.py:819)——产出长度锁死为源音频长度,下发多少都被静默忽略。
-            摆出来就是个假开关,同视频页 s2v 的处理。 */}
-        {mode === 't2m' && (
+            摆出来就是个假开关,同视频页 s2v 的处理。
+            MiniMax-Music3 同样不显示:它的下发分支里根本没有 audio_duration,
+            长度由歌词与编曲决定 —— 摆出来是同一类假开关。 */}
+        {mode === 't2m' && isAceStep && (
           <div>
             <div className='flex items-center gap-2 mb-2'>
               <Clock size={16} className='text-gray-500' />
@@ -634,168 +656,174 @@ const MusicConfigPanel = ({
           </div>
         )}
 
-        {/* 高级参数(默认折叠,全部选填;留空即走引擎默认) */}
-        <Collapse keepDOM className='!border-0'>
-          <Collapse.Panel
-            itemKey='advanced'
-            header={
-              <div className='flex items-center gap-2'>
-                <SlidersHorizontal size={16} className='text-gray-500' />
-                <Typography.Text strong className='text-sm'>
-                  {t('高级参数')}
-                </Typography.Text>
-                <Typography.Text className='text-xs text-gray-400'>
-                  {t('选填')}
-                </Typography.Text>
-              </div>
-            }
-          >
-            <div className='space-y-4'>
-              {/* 随机种子:指定后可复现;留空 = 随机 */}
-              <div>
-                <div className='flex items-center gap-2 mb-1'>
-                  <Typography.Text className='text-xs text-gray-600'>
-                    {t('随机种子 (seed)')}
+        {/* 高级参数(默认折叠,全部选填;留空即走引擎默认)。
+            MiniMax-Music3 整块不显示:里面的 seed / guidance / steps / 演唱语言 /
+            BPM / 调式,在 Music3 的下发分支里一个都没有(见 useMusicGeneration 的
+            引擎分支——那几项全在 acestep 分支内)。摆出来就是一排拖了不生效、
+            也不报错的假开关。 */}
+        {!isMusic3 && (
+          <Collapse keepDOM className='!border-0'>
+            <Collapse.Panel
+              itemKey='advanced'
+              header={
+                <div className='flex items-center gap-2'>
+                  <SlidersHorizontal size={16} className='text-gray-500' />
+                  <Typography.Text strong className='text-sm'>
+                    {t('高级参数')}
                   </Typography.Text>
-                  <Tooltip
-                    content={t('指定后可复现同一结果;留空 = 每次随机。')}
-                  >
-                    <HelpCircle
-                      size={13}
-                      className='text-gray-400 cursor-help'
-                    />
-                  </Tooltip>
+                  <Typography.Text className='text-xs text-gray-400'>
+                    {t('选填')}
+                  </Typography.Text>
                 </div>
-                <Input
-                  value={inputs.seed}
-                  onChange={(v) => onInputChange('seed', v)}
-                  placeholder={t('留空 = 随机')}
-                  disabled={disabled}
-                  className='!rounded-lg'
-                />
-              </div>
+              }
+            >
+              <div className='space-y-4'>
+                {/* 随机种子:指定后可复现;留空 = 随机 */}
+                <div>
+                  <div className='flex items-center gap-2 mb-1'>
+                    <Typography.Text className='text-xs text-gray-600'>
+                      {t('随机种子 (seed)')}
+                    </Typography.Text>
+                    <Tooltip
+                      content={t('指定后可复现同一结果;留空 = 每次随机。')}
+                    >
+                      <HelpCircle
+                        size={13}
+                        className='text-gray-400 cursor-help'
+                      />
+                    </Tooltip>
+                  </div>
+                  <Input
+                    value={inputs.seed}
+                    onChange={(v) => onInputChange('seed', v)}
+                    placeholder={t('留空 = 随机')}
+                    disabled={disabled}
+                    className='!rounded-lg'
+                  />
+                </div>
 
-              {/* 演唱语言 / 速度 BPM(仅 ACE-Step) */}
-              {isAceStep && (
-                <>
-                  <div>
-                    <Typography.Text className='text-xs text-gray-600 block mb-1'>
-                      {t('演唱语言')}
-                    </Typography.Text>
-                    <Select
-                      value={inputs.vocalLanguage}
-                      onChange={(v) => onInputChange('vocalLanguage', v)}
-                      optionList={MUSIC_VOCAL_LANGUAGES.map((l) => ({
-                        label: t(l.label),
-                        value: l.value,
-                      }))}
-                      disabled={disabled}
-                      style={{ width: '100%' }}
-                      dropdownStyle={{ width: '100%', maxWidth: '100%' }}
-                      className='!rounded-lg'
-                    />
-                  </div>
-                  <div>
-                    <Typography.Text className='text-xs text-gray-600 block mb-1'>
-                      {t('速度 (BPM)')}
-                    </Typography.Text>
-                    <InputNumber
-                      min={20}
-                      max={300}
-                      value={inputs.bpm === '' ? undefined : inputs.bpm}
-                      onChange={(v) => onInputChange('bpm', v ?? '')}
-                      placeholder={t('留空 = 自动')}
-                      disabled={disabled}
-                      style={{ width: '100%' }}
-                      className='!rounded-lg'
-                    />
-                  </div>
-                  {/* 调式:与 BPM 同类的曲式元数据,官方建议不要写进描述而走独立字段。
+                {/* 演唱语言 / 速度 BPM(仅 ACE-Step) */}
+                {isAceStep && (
+                  <>
+                    <div>
+                      <Typography.Text className='text-xs text-gray-600 block mb-1'>
+                        {t('演唱语言')}
+                      </Typography.Text>
+                      <Select
+                        value={inputs.vocalLanguage}
+                        onChange={(v) => onInputChange('vocalLanguage', v)}
+                        optionList={MUSIC_VOCAL_LANGUAGES.map((l) => ({
+                          label: t(l.label),
+                          value: l.value,
+                        }))}
+                        disabled={disabled}
+                        style={{ width: '100%' }}
+                        dropdownStyle={{ width: '100%', maxWidth: '100%' }}
+                        className='!rounded-lg'
+                      />
+                    </div>
+                    <div>
+                      <Typography.Text className='text-xs text-gray-600 block mb-1'>
+                        {t('速度 (BPM)')}
+                      </Typography.Text>
+                      <InputNumber
+                        min={20}
+                        max={300}
+                        value={inputs.bpm === '' ? undefined : inputs.bpm}
+                        onChange={(v) => onInputChange('bpm', v ?? '')}
+                        placeholder={t('留空 = 自动')}
+                        disabled={disabled}
+                        style={{ width: '100%' }}
+                        className='!rounded-lg'
+                      />
+                    </div>
+                    {/* 调式:与 BPM 同类的曲式元数据,官方建议不要写进描述而走独立字段。
                       格式必须是「音名[升降号] major|minor」且 mode 小写(引擎
                       constants.py VALID_KEYSCALES),写成 "Am" / "C Major" 都会被静默丢弃。 */}
-                  <div>
-                    <Typography.Text className='text-xs text-gray-600 block mb-1'>
-                      {t('调式')}
+                    <div>
+                      <Typography.Text className='text-xs text-gray-600 block mb-1'>
+                        {t('调式')}
+                      </Typography.Text>
+                      <Input
+                        value={inputs.keyScale}
+                        onChange={(v) => onInputChange('keyScale', v)}
+                        placeholder={t('如 C major / A minor;留空 = 自动')}
+                        disabled={disabled}
+                        style={{ width: '100%' }}
+                        className='!rounded-lg'
+                      />
+                    </div>
+                  </>
+                )}
+
+                {/* Guidance Scale */}
+                <div>
+                  <div className='flex items-center gap-2 mb-1'>
+                    <Typography.Text className='text-xs text-gray-600'>
+                      {t('贴合度 (guidance)')}
                     </Typography.Text>
-                    <Input
-                      value={inputs.keyScale}
-                      onChange={(v) => onInputChange('keyScale', v)}
-                      placeholder={t('如 C major / A minor;留空 = 自动')}
-                      disabled={disabled}
-                      style={{ width: '100%' }}
-                      className='!rounded-lg'
-                    />
+                    <Tooltip
+                      content={t('越高越贴合描述,越低越自由;留空 = 引擎默认。')}
+                    >
+                      <HelpCircle
+                        size={13}
+                        className='text-gray-400 cursor-help'
+                      />
+                    </Tooltip>
                   </div>
-                </>
-              )}
-
-              {/* Guidance Scale */}
-              <div>
-                <div className='flex items-center gap-2 mb-1'>
-                  <Typography.Text className='text-xs text-gray-600'>
-                    {t('贴合度 (guidance)')}
-                  </Typography.Text>
-                  <Tooltip
-                    content={t('越高越贴合描述,越低越自由;留空 = 引擎默认。')}
-                  >
-                    <HelpCircle
-                      size={13}
-                      className='text-gray-400 cursor-help'
-                    />
-                  </Tooltip>
+                  <InputNumber
+                    min={1}
+                    max={20}
+                    step={0.5}
+                    value={
+                      inputs.guidanceScale === ''
+                        ? undefined
+                        : inputs.guidanceScale
+                    }
+                    onChange={(v) => onInputChange('guidanceScale', v ?? '')}
+                    placeholder={t('留空 = 默认 {{v}}', {
+                      v: defaultGuidance,
+                    })}
+                    disabled={disabled}
+                    style={{ width: '100%' }}
+                    className='!rounded-lg'
+                  />
                 </div>
-                <InputNumber
-                  min={1}
-                  max={20}
-                  step={0.5}
-                  value={
-                    inputs.guidanceScale === ''
-                      ? undefined
-                      : inputs.guidanceScale
-                  }
-                  onChange={(v) => onInputChange('guidanceScale', v ?? '')}
-                  placeholder={t('留空 = 默认 {{v}}', {
-                    v: defaultGuidance,
-                  })}
-                  disabled={disabled}
-                  style={{ width: '100%' }}
-                  className='!rounded-lg'
-                />
-              </div>
 
-              {/* 采样步数 */}
-              <div>
-                <div className='flex items-center gap-2 mb-1'>
-                  <Typography.Text className='text-xs text-gray-600'>
-                    {t('采样步数 (steps)')}
-                  </Typography.Text>
-                  <Tooltip content={t('越大越精细但越慢;留空 = 引擎默认。')}>
-                    <HelpCircle
-                      size={13}
-                      className='text-gray-400 cursor-help'
-                    />
-                  </Tooltip>
+                {/* 采样步数 */}
+                <div>
+                  <div className='flex items-center gap-2 mb-1'>
+                    <Typography.Text className='text-xs text-gray-600'>
+                      {t('采样步数 (steps)')}
+                    </Typography.Text>
+                    <Tooltip content={t('越大越精细但越慢;留空 = 引擎默认。')}>
+                      <HelpCircle
+                        size={13}
+                        className='text-gray-400 cursor-help'
+                      />
+                    </Tooltip>
+                  </div>
+                  <InputNumber
+                    min={1}
+                    max={500}
+                    value={
+                      inputs.inferenceSteps === ''
+                        ? undefined
+                        : inputs.inferenceSteps
+                    }
+                    onChange={(v) => onInputChange('inferenceSteps', v ?? '')}
+                    placeholder={t('留空 = 默认 {{v}}', {
+                      v: defaultSteps,
+                    })}
+                    disabled={disabled}
+                    style={{ width: '100%' }}
+                    className='!rounded-lg'
+                  />
                 </div>
-                <InputNumber
-                  min={1}
-                  max={500}
-                  value={
-                    inputs.inferenceSteps === ''
-                      ? undefined
-                      : inputs.inferenceSteps
-                  }
-                  onChange={(v) => onInputChange('inferenceSteps', v ?? '')}
-                  placeholder={t('留空 = 默认 {{v}}', {
-                    v: defaultSteps,
-                  })}
-                  disabled={disabled}
-                  style={{ width: '100%' }}
-                  className='!rounded-lg'
-                />
               </div>
-            </div>
-          </Collapse.Panel>
-        </Collapse>
+            </Collapse.Panel>
+          </Collapse>
+        )}
       </div>
     </Card>
   );
