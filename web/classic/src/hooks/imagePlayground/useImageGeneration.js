@@ -24,6 +24,11 @@ import {
   cachedGet,
 } from '../../helpers';
 import {
+  PLAYGROUND_BATCH_DEFAULT,
+  normalizeBatchCount,
+  deriveSeeds,
+} from '../../constants/playgroundBatch.constants';
+import {
   IMAGE_API_ENDPOINTS,
   IMAGE_PAGE_CAPABILITY,
   IMAGE_I2I_CAPABILITY,
@@ -95,7 +100,22 @@ const markInterruptedAsFailed = (list, errText) =>
     ),
   }));
 
-export const useImageGeneration = ({ mode = 'text2image' } = {}) => {
+// allowBatch:是否允许一次生成多张(不同 seed 的候选)。**默认关,由调用方显式开**。
+// 两个前端应用共用这个 hook,但多并发只在 web/classic 提供。
+// **判据是"哪个应用",不是"屏幕多宽"**:web/mobile 是独立应用,它调这个 hook 时不传
+// allowBatch(默认 false);web/classic 传 true。classic 里也有个 useIsMobile,但那是
+// 实时媒体查询、只管响应式布局 —— **不能拿它当这个闸门**:拖窄窗口就会翻转,等于纯视觉
+// 操作改变了发出去的请求和计费,会话中途还会把已锁定的张数悄悄降到 1。
+// 手机 UA 的用户主动选「前往电脑端」时拿到的就是 classic,那是他自己要的桌面能力。
+//
+// 默认关不只是"web/mobile 不渲染控件"那么简单:续问时 batchCount 是从**会话**里读的
+// (与 model/size/seed 同一模式),在 classic 生成过多张的对话在 web/mobile 打开续问,
+// 会照着 conv.batchCount 并发多次 —— 那边没有这个控件,用户看不见也拦不住。
+// 所以闸门必须在 hook 里,不能只靠"那个应用不给控件"。
+export const useImageGeneration = ({
+  mode = 'text2image',
+  allowBatch = false,
+} = {}) => {
   const { t } = useTranslation();
   const [statusState] = useContext(StatusContext);
   const [userState] = useContext(UserContext);
@@ -109,6 +129,9 @@ export const useImageGeneration = ({ mode = 'text2image' } = {}) => {
     model: '',
     size: '',
     seed: '', // 随机种子;'' 表示随机(不下发,引擎自动随机)
+    // 一次生成几张:多张的意义是**给不同 seed 让用户挑**,见 playgroundBatch.constants。
+    // 默认 1 —— 多花钱的事不该是默认值。
+    batchCount: PLAYGROUND_BATCH_DEFAULT,
     qualityMode: false, // 提示词智能优化；默认关
     imageUrls: [], // 图生图底图（base64 data-url 数组,≤IMAGE_MAX_EDIT_IMAGES）
   });
@@ -497,6 +520,7 @@ export const useImageGeneration = ({ mode = 'text2image' } = {}) => {
           model: inputs.model,
           size: normalizeImageSize(inputs.size),
           seed: inputs.seed,
+          batchCount: inputs.batchCount,
           qualityMode: inputs.qualityMode,
           images: convImages,
         };
@@ -520,6 +544,8 @@ export const useImageGeneration = ({ mode = 'text2image' } = {}) => {
               model: conv.model,
               size: conv.size,
               seed: conv.seed,
+              // 老对话没有这个字段 → 归一成 1,与改造前行为一致。
+              batchCount: normalizeBatchCount(conv.batchCount),
               qualityMode: conv.qualityMode,
               images: conv.images || [],
             }
@@ -528,6 +554,7 @@ export const useImageGeneration = ({ mode = 'text2image' } = {}) => {
               model: inputs.model,
               size: normalizeImageSize(inputs.size),
               seed: inputs.seed,
+              batchCount: inputs.batchCount,
               qualityMode: inputs.qualityMode,
               images: convImages,
             };
@@ -577,6 +604,7 @@ export const useImageGeneration = ({ mode = 'text2image' } = {}) => {
               model: params.model,
               size: params.size,
               seed: params.seed,
+              batchCount: params.batchCount,
               qualityMode: params.qualityMode,
               images: params.images || [],
               title: text,
@@ -621,10 +649,7 @@ export const useImageGeneration = ({ mode = 'text2image' } = {}) => {
         ) {
           reqBody.size = normalizeImageSize(params.size);
         }
-        // 随机种子:非空即下发(整数);留空则不发,由引擎自动随机。
-        if (params.seed !== '' && params.seed != null) {
-          reqBody.seed = Number(params.seed);
-        }
+        // 随机种子见下方并发段:多张时由前端逐张下发,单张时维持原行为。
         // 提示词智能优化:开了才发,关闭时一个字段都不带。
         //
         // ⚠️ 关闭时不能发 use_prompt_enhancer: false ——这些未知字段落在
@@ -641,31 +666,93 @@ export const useImageGeneration = ({ mode = 'text2image' } = {}) => {
         if (isI2I) {
           reqBody.image = params.images || [];
         }
-        const res = await API.post(
-          isI2I
-            ? IMAGE_API_ENDPOINTS.IMAGE_EDITS
-            : IMAGE_API_ENDPOINTS.IMAGE_GENERATIONS,
-          reqBody,
-          { skipErrorHandler: true },
+        const endpoint = isI2I
+          ? IMAGE_API_ENDPOINTS.IMAGE_EDITS
+          : IMAGE_API_ENDPOINTS.IMAGE_GENERATIONS;
+        // 不允许多张时一律按 1 走,连带 seed 也回到"用户填了才发"的原口径。
+        const count = allowBatch ? normalizeBatchCount(params.batchCount) : 1;
+
+        // seed 的两种口径,**刻意不统一**:
+        //   count === 1 → 维持改造前:用户填了才发,留空不发。
+        //   count > 1  → 由前端逐张下发不同 seed(deriveSeeds),否则 N 张一模一样。
+        // 为什么单张不顺手也发一个:seed 不是 dto.ImageRequest 的声明字段,它落进
+        // Extra,而 replicate / siliconflow 这两个适配器会把 Extra **全量转发**给上游
+        // (见上面 use_prompt_enhancer 处的同一条警告)。今天 seed 只在用户手填时下发,
+        // 风险由用户自己担;改成每次都发,等于替所有第三方渠道担了这个风险。
+        // 代价是单张时结果上显示不出 seed —— 那与改造前一致,不是回退。
+        const seeds =
+          count > 1
+            ? deriveSeeds(params.seed, count)
+            : params.seed !== '' && params.seed != null
+              ? [Number(params.seed)]
+              : [null];
+
+        const extractImages = (res) => {
+          const items = Array.isArray(res?.data?.data) ? res.data.data : [];
+          return items
+            .map((it) =>
+              it.url
+                ? it.url
+                : it.b64_json
+                  ? `data:image/png;base64,${it.b64_json}`
+                  : null,
+            )
+            .filter(Boolean);
+        };
+
+        // allSettled 而不是 all:一路失败不该把已经出来的另外几张一起丢掉。
+        // 并发本身是这个功能的实现方式 —— 门面的任务契约是单产物,发 batch_size 没用
+        // (见 playgroundBatch.constants 的说明)。
+        const settled = await Promise.allSettled(
+          seeds.map((seed) =>
+            API.post(endpoint, seed == null ? reqBody : { ...reqBody, seed }, {
+              skipErrorHandler: true,
+            }),
+          ),
         );
-        const data = res.data || {};
-        const items = Array.isArray(data.data) ? data.data : [];
-        const images = items
-          .map((it) =>
-            it.url
-              ? it.url
-              : it.b64_json
-                ? `data:image/png;base64,${it.b64_json}`
-                : null,
-          )
-          .filter(Boolean);
+
+        const images = [];
+        const imageSeeds = [];
+        const failures = [];
+        settled.forEach((r, i) => {
+          if (r.status !== 'fulfilled') {
+            failures.push(
+              r.reason?.response?.data?.error?.message ||
+                r.reason?.message ||
+                t('图片生成失败'),
+            );
+            return;
+          }
+          const urls = extractImages(r.value);
+          if (urls.length === 0) {
+            failures.push(t('未返回图片数据'));
+            return;
+          }
+          // 一次请求理论上只回一张(n=1),但真回多张也照单收下,seed 按请求对齐。
+          urls.forEach((u) => {
+            images.push(u);
+            imageSeeds.push(seeds[i]);
+          });
+        });
+
+        // 全军覆没才算失败;部分成功仍展示已出的图,另给一句提示。
         if (images.length === 0) {
-          throw new Error(t('未返回图片数据'));
+          throw new Error(failures[0] || t('未返回图片数据'));
         }
         patchConvMessage(convId, `${reqId}-a`, {
           status: IMAGE_GEN_STATUS.SUCCESS,
           images,
+          // 与 images 等长、按下标对齐。单张且用户没填 seed 时是 [null],渲染侧不显示。
+          imageSeeds,
         });
+        if (failures.length > 0) {
+          showError(
+            t('已生成 {{ok}} 张，{{fail}} 张失败：', {
+              ok: images.length,
+              fail: failures.length,
+            }) + failures[0],
+          );
+        }
       } catch (error) {
         const msg =
           error?.response?.data?.error?.message ||
@@ -684,6 +771,7 @@ export const useImageGeneration = ({ mode = 'text2image' } = {}) => {
       currentConvId,
       inputs,
       generating,
+      allowBatch,
       patchConvMessage,
       storageKey,
       isI2I,
@@ -724,6 +812,7 @@ export const useImageGeneration = ({ mode = 'text2image' } = {}) => {
         model: conv.model != null ? conv.model : prev.model,
         size: conv.size != null ? conv.size : prev.size,
         seed: conv.seed != null ? conv.seed : prev.seed,
+        batchCount: normalizeBatchCount(conv.batchCount),
         qualityMode:
           conv.qualityMode != null ? conv.qualityMode : prev.qualityMode,
         // 图生图历史会话恢复底图，供左侧锁定态只读预览；媒体已由 IDB hydrate。
@@ -740,6 +829,9 @@ export const useImageGeneration = ({ mode = 'text2image' } = {}) => {
 
   return {
     isI2I,
+    // 页面据此决定要不要渲染「生成张数」控件 —— 与上面 count 处的闸门同一个开关,
+    // 不会出现"控件在但不生效"或"能生效却没控件"。
+    allowBatch,
     inputs,
     handleInputChange,
     groups,

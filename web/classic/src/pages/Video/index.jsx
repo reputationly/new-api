@@ -64,7 +64,8 @@ export const VideoPlaygroundBody = ({ mode, category = 'video' }) => {
     clearHistory,
     deleteHistoryItem,
     openHistoryItem,
-  } = useVideoGeneration({ mode, category });
+    supportsBatch,
+  } = useVideoGeneration({ mode, category, allowBatch: true });
 
   return (
     <div
@@ -73,6 +74,7 @@ export const VideoPlaygroundBody = ({ mode, category = 'video' }) => {
     >
       <div style={{ width: isMobile ? '100%' : 300, flexShrink: 0 }}>
         <VideoConfigPanel
+          supportsBatch={supportsBatch}
           needsImage={needsImage}
           category={category}
           mode={mode}

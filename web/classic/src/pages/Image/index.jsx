@@ -35,7 +35,8 @@ const ImagePlaygroundBody = ({ mode }) => {
     clearHistory,
     deleteHistoryItem,
     openHistoryItem,
-  } = useImageGeneration({ mode });
+    allowBatch,
+  } = useImageGeneration({ mode, allowBatch: true });
 
   return (
     <div
@@ -56,6 +57,7 @@ const ImagePlaygroundBody = ({ mode }) => {
           i2iAspectMismatch={i2iAspectMismatch}
           onInputChange={handleInputChange}
           disabled={locked}
+          allowBatch={allowBatch}
           styleState={styleState}
         />
       </div>

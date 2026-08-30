@@ -17,6 +17,7 @@ import {
   Clock,
   HelpCircle,
   Shuffle,
+  Images,
   Proportions,
   SlidersHorizontal,
 } from 'lucide-react';
@@ -28,6 +29,10 @@ import {
 } from '../../helpers';
 import ImageUrlInput from '../playground/ImageUrlInput';
 import MediaFileInput from './MediaFileInput';
+import {
+  PLAYGROUND_BATCH_COUNTS,
+  SEED_MAX,
+} from '../../constants/playgroundBatch.constants';
 import { useModelNotes } from '../../hooks/common/useModelNotes';
 import PromptGuideTip from '../playground/PromptGuideTip';
 import { tabHasField } from '../../constants/playgroundAdmin.constants';
@@ -39,6 +44,9 @@ import {
 import { FIT_BLUR, FIT_CROP } from '../../helpers/imageCompose';
 
 const VideoConfigPanel = ({
+  // 是否展示「生成条数」。由 hook 的 supportsBatch 决定(网页端 + 生成类玩法),
+  // 与下发侧同一个开关,不会出现"控件在但不生效"。
+  supportsBatch = false,
   needsImage = false,
   // 哪些控件出现在本 tab,统一由中央元数据的 fields 声明决定(见 playgroundAdmin.
   // constants.js)—— 以前这里按 isSR/isDub/isS2V/followsInput 各写一套 if,与 admin
@@ -649,6 +657,43 @@ const VideoConfigPanel = ({
           </div>
         )}
 
+        {/* 生成条数。多条 = 同一提示词、不同 seed 的候选,供用户挑。
+            只在 web/classic 的生成类玩法出现(文生视频 / 关键帧)——超分/配音/数字人
+            是对给定素材做变换,多跑几遍只是把同一件事做 N 遍。
+            判据是"哪个应用"而不是"屏幕多宽",理由见 useVideoGeneration 的 allowBatch
+            注释(classic 的 useIsMobile 是实时媒体查询,拿它当闸门会被窗口缩放翻转)。 */}
+        {supportsBatch && (
+          <div>
+            <div className='flex items-center gap-2 mb-2'>
+              <Images size={16} className='text-gray-500' />
+              <Typography.Text strong className='text-sm'>
+                {t('生成条数')}
+              </Typography.Text>
+              <Tooltip
+                content={t(
+                  '同一提示词生成多条候选,每条用不同的随机种子,生成后可看到各自的种子。按条计费:选 3 条就是 3 次。⚠️ 若同时开了超分或配音,流水线会对每条各跑一遍——3 条就是 3 次生成 + 3 次超分/配音,费用按整条流水线翻倍。多条还会占满"同时进行的视频任务"名额,期间发不了别的;慢档位并发多条可能被排队上限拒掉部分。',
+                )}
+                position='top'
+              >
+                <HelpCircle size={14} className='text-gray-400 cursor-help' />
+              </Tooltip>
+            </div>
+            <Select
+              name='batchCount'
+              value={inputs.batchCount}
+              onChange={(v) => onInputChange('batchCount', v)}
+              optionList={PLAYGROUND_BATCH_COUNTS.map((n) => ({
+                label: t('{{n}} 条', { n }),
+                value: n,
+              }))}
+              disabled={disabled}
+              style={{ width: '100%' }}
+              dropdownStyle={{ width: '100%', maxWidth: '100%' }}
+              className='!rounded-lg'
+            />
+          </div>
+        )}
+
         {/* 随机种子(seed)—— 常驻,留空为随机 */}
         <div>
           <div className='flex items-center gap-2 mb-2'>
@@ -664,6 +709,10 @@ const VideoConfigPanel = ({
             placeholder={t('留空为随机')}
             name='seed'
             min={0}
+            // 上界与 deriveSeeds / randomSeed 同一个常量:超出 32 位正整数安全区的
+            // seed,引擎要么拒、要么静默截断成另一个数,两种都表现为"结果跟我给的
+            // 种子对不上"。
+            max={SEED_MAX}
             precision={0}
             value={
               inputs.seed === '' || inputs.seed == null

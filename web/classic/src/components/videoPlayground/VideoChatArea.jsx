@@ -276,9 +276,26 @@ const VideoChatArea = ({
       if (m.status === VIDEO_STATUS.COMPLETED && m.videoUrl) {
         return (
           <div className='inline-block'>
+            {/* 多条候选时标出"第几条 · 种子",单条不显示(存量消息也没有这几个
+                字段)。种子可复制 —— 用户挑中哪条,拿着它才能复现、微调;不显示的话
+                "多生成几条让用户选"只完成了一半:选中了却回不去。 */}
             <Typography.Text className='text-sm text-gray-600 block mb-2'>
-              {t('视频已生成')}
+              {m.batchTotal > 1
+                ? t('视频已生成（第 {{i}}/{{n}} 条）', {
+                    i: (m.batchIndex ?? 0) + 1,
+                    n: m.batchTotal,
+                  })
+                : t('视频已生成')}
             </Typography.Text>
+            {m.seed != null && (
+              <Typography.Text
+                type='tertiary'
+                className='text-xs block mb-2'
+                copyable={{ content: String(m.seed) }}
+              >
+                {t('种子 {{seed}}', { seed: m.seed })}
+              </Typography.Text>
+            )}
             <video
               src={m.videoUrl}
               controls

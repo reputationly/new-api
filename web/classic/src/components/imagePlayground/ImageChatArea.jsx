@@ -176,35 +176,55 @@ const ImageChatArea = ({
           <Typography.Text className='text-sm text-gray-600 block mb-2'>
             {t('图像已生成')}
           </Typography.Text>
+          {/* 多张时每张各自带 seed 与复制/下载。
+              **复制/下载必须按张**:原来这两个按钮恒取 images[0],单张时看不出问题,
+              多张时后几张就没法单独拿走 —— 而"多生成几张让用户挑"的下一步正是
+              把选中的那张拿走。seed 同理:显示出来用户才能拿它复现、微调,否则
+              "挑中了却回不去"。单张且没显式给 seed 时 imageSeeds[idx] 为空,不显示。 */}
           <div className='flex flex-wrap gap-3'>
-            {(m.images || []).map((src, idx) => (
-              <img
-                key={idx}
-                src={src}
-                alt='generated'
-                onClick={() => setPreview({ visible: true, src })}
-                className='rounded-lg cursor-zoom-in object-cover'
-                style={{ maxWidth: 360, maxHeight: 360 }}
-              />
-            ))}
+            {(m.images || []).map((src, idx) => {
+              const seed = (m.imageSeeds || [])[idx];
+              return (
+                <div key={idx} className='flex flex-col gap-1'>
+                  <img
+                    src={src}
+                    alt='generated'
+                    onClick={() => setPreview({ visible: true, src })}
+                    className='rounded-lg cursor-zoom-in object-cover'
+                    style={{ maxWidth: 360, maxHeight: 360 }}
+                  />
+                  <div className='flex items-center gap-1'>
+                    {seed != null && (
+                      <Typography.Text
+                        type='tertiary'
+                        className='text-xs mr-1'
+                        copyable={{ content: String(seed) }}
+                      >
+                        {t('种子 {{seed}}', { seed })}
+                      </Typography.Text>
+                    )}
+                    <Button
+                      theme='borderless'
+                      type='tertiary'
+                      size='small'
+                      icon={<Copy size={14} />}
+                      onClick={() => copyImage(src, t)}
+                      className='!text-gray-500'
+                    />
+                    <Button
+                      theme='borderless'
+                      type='tertiary'
+                      size='small'
+                      icon={<Download size={14} />}
+                      onClick={() => downloadImage(src, t)}
+                      className='!text-gray-500'
+                    />
+                  </div>
+                </div>
+              );
+            })}
           </div>
           <div className='flex items-center gap-1 mt-2'>
-            <Button
-              theme='borderless'
-              type='tertiary'
-              size='small'
-              icon={<Copy size={14} />}
-              onClick={() => copyImage(m.images[0], t)}
-              className='!text-gray-500'
-            />
-            <Button
-              theme='borderless'
-              type='tertiary'
-              size='small'
-              icon={<Download size={14} />}
-              onClick={() => downloadImage(m.images[0], t)}
-              className='!text-gray-500'
-            />
             <Button
               theme='borderless'
               type='tertiary'

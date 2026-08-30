@@ -15,6 +15,7 @@ import {
   HelpCircle,
   Shuffle,
   Gauge,
+  Images,
 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import {
@@ -26,6 +27,10 @@ import ImageUrlInput from '../playground/ImageUrlInput';
 import { useModelNotes } from '../../hooks/common/useModelNotes';
 import PromptGuideTip from '../playground/PromptGuideTip';
 import { IMAGE_MAX_EDIT_IMAGES } from '../../constants/imagePlayground.constants';
+import {
+  PLAYGROUND_BATCH_COUNTS,
+  SEED_MAX,
+} from '../../constants/playgroundBatch.constants';
 
 const ImageConfigPanel = ({
   isI2I = false,
@@ -39,6 +44,7 @@ const ImageConfigPanel = ({
   i2iAspectMismatch = null,
   onInputChange,
   disabled = false,
+  allowBatch = false,
   styleState,
 }) => {
   const { t } = useTranslation();
@@ -293,6 +299,42 @@ const ImageConfigPanel = ({
           </Typography.Text>
         </div>
 
+        {/* 生成张数。多张 = 同一提示词、不同 seed 的候选,供用户挑。
+            **只在 web/classic 出现**:web/mobile 是独立应用,它不传 allowBatch,
+            hook 里也一并按 1 走。判据是"哪个应用"而不是"屏幕多宽"——理由见
+            useImageGeneration 的 allowBatch 注释。 */}
+        {allowBatch && (
+          <div>
+            <div className='flex items-center gap-2 mb-2'>
+              <Images size={16} className='text-gray-500' />
+              <Typography.Text strong className='text-sm'>
+                {t('生成张数')}
+              </Typography.Text>
+              <Tooltip
+                content={t(
+                  '同一提示词生成多张候选,每张用不同的随机种子,生成后可看到各自的种子。按张计费:选 3 张就是 3 次。慢模型并发多张可能被排队上限拒掉,此时会只返回成功的几张。',
+                )}
+                position='top'
+              >
+                <HelpCircle size={14} className='text-gray-400 cursor-help' />
+              </Tooltip>
+            </div>
+            <Select
+              name='batchCount'
+              value={inputs.batchCount}
+              onChange={(v) => onInputChange('batchCount', v)}
+              optionList={PLAYGROUND_BATCH_COUNTS.map((n) => ({
+                label: t('{{n}} 张', { n }),
+                value: n,
+              }))}
+              disabled={disabled}
+              style={{ width: '100%' }}
+              dropdownStyle={{ width: '100%', maxWidth: '100%' }}
+              className='!rounded-lg'
+            />
+          </div>
+        )}
+
         {/* 随机种子(seed)—— 常驻,留空为随机 */}
         <div>
           <div className='flex items-center gap-2 mb-2'>
@@ -308,6 +350,10 @@ const ImageConfigPanel = ({
             placeholder={t('留空为随机')}
             name='seed'
             min={0}
+            // 上界与 deriveSeeds / randomSeed 同一个常量:超出 32 位正整数安全区的
+            // seed,引擎要么拒、要么静默截断成另一个数,两种都表现为"结果跟我给的
+            // 种子对不上"。
+            max={SEED_MAX}
             precision={0}
             value={
               inputs.seed === '' || inputs.seed == null

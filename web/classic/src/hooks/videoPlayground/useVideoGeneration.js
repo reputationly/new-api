@@ -76,6 +76,11 @@ import {
   buildVideoContentUrl,
   VIDEO_ENGINE_MINIMAX_H3,
 } from '../../constants/videoPlayground.constants';
+import {
+  PLAYGROUND_BATCH_DEFAULT,
+  normalizeBatchCount,
+  deriveSeeds,
+} from '../../constants/playgroundBatch.constants';
 import { composeImageToRatio, FIT_BLUR } from '../../helpers/imageCompose';
 import {
   getTabFieldLock,
@@ -279,6 +284,17 @@ export const useVideoGeneration = ({
   // 与改动前的行为一致,不会误发。
   category = 'video',
   allowDub = true,
+  // allowBatch:是否允许一次生成多条(不同 seed 的候选)。**默认关,由调用方显式开**。
+  // 两个前端应用共用这个 hook,多并发只在 web/classic 提供。
+  // **判据是"哪个应用",不是"屏幕多宽"**:web/mobile 是独立应用,它调这个 hook 时不传
+  // allowBatch(默认 false);web/classic 传 true。classic 里也有个 useIsMobile,但那是
+  // 实时媒体查询、只管响应式布局 —— **不能拿它当这个闸门**:拖窄窗口就会翻转,等于纯
+  // 视觉操作改变了发出去的请求和计费,会话中途还会把已锁定的条数悄悄降到 1。
+  // 手机 UA 的用户主动选「前往电脑端」时拿到的就是 classic,那是他自己要的桌面能力。
+  // 闸门必须在 hook 里而不是只靠"那个应用不给控件":续问时 batchCount 从**会话**读
+  // (与 model/size/seed 同一模式),在 classic 生成过多条的对话在 web/mobile 打开续问
+  // 会照着 conv.batchCount 并发提交,那边没有这个控件,用户看不见也拦不住。
+  allowBatch = false,
 } = {}) => {
   const { t } = useTranslation();
   const [statusState] = useContext(StatusContext);
@@ -291,6 +307,10 @@ export const useVideoGeneration = ({
   const isVACE = mode === 'vace';
   const isR2VA = mode === 'r2va';
   const isDub = mode === 'dub';
+  // 多条候选只对**生成类**玩法有意义:文生视频与关键帧是"同一提示词能出不同结果",
+  // 换个 seed 就是另一个候选。超分/配音/数字人/VACE 是对给定素材做变换,多跑几遍
+  // 只是把同一件事做 N 遍,既无候选可挑又白花 N 倍的钱。
+  const supportsBatch = allowBatch && (mode === 'text2video' || isFLF2V);
   // 需要上传一张「主图」的模式:关键帧首帧、s2v 人物图(都复用 inputs.firstFrame)。
   // 图生视频(Bernini r2v)改用参考图 refImages,不再走 firstFrame。
   //
@@ -322,6 +342,8 @@ export const useVideoGeneration = ({
     size: '',
     seconds: '',
     seed: '', // 随机种子;'' 表示随机(不下发)
+    // 一次生成几条:多条 = 同一提示词、不同 seed 的候选。默认 1,与改造前一致。
+    batchCount: PLAYGROUND_BATCH_DEFAULT,
     aspectRatio: '', // 宽高比;仅当该模型在后台配了宽高比才由 effect 选中默认值并下发
     // 画幅适配方式:画幅跟随输入的玩法(关键帧)选了具名比例时,原图怎么变成那个比例。
     // 只在那种情况下有意义,其余玩法这个值一直被忽略(见提交处 composeImageToRatio)。
@@ -1245,11 +1267,32 @@ export const useVideoGeneration = ({
       // 并发闸：此前是「有任务在跑就一律不让发」，现在按在途任务数放到
       // VIDEO_MAX_CONCURRENT_TASKS。读 ref 而不是 taskSlotsFull state —— 连点两下
       // 发送时第二下拿到的 state 还是上一次渲染的旧值，会漏放一个进来。
-      if (activePollsRef.current.size >= VIDEO_MAX_CONCURRENT_TASKS) {
+      // 一次要占几个槽:多条候选每条各占一个。档位上限(3)= 这个闸,所以空闲时选
+      // 满档正好填满、不越界;但已有任务在跑时就会不够 —— 那时**整批拒掉**而不是
+      // 截断成能塞下的条数:用户选了 3 条,悄悄只发 2 条比直接说"发不了"更难查。
+      const wantSlots = supportsBatch
+        ? normalizeBatchCount(inputs.batchCount)
+        : 1;
+      if (
+        activePollsRef.current.size + wantSlots >
+        VIDEO_MAX_CONCURRENT_TASKS
+      ) {
         showError(
-          t('最多同时进行 {{count}} 个视频任务，请等其中一个完成后再发', {
-            count: VIDEO_MAX_CONCURRENT_TASKS,
-          }),
+          wantSlots > 1
+            ? t(
+                '最多同时进行 {{count}} 个视频任务，当前还剩 {{free}} 个空位，放不下这 {{want}} 条',
+                {
+                  count: VIDEO_MAX_CONCURRENT_TASKS,
+                  free: Math.max(
+                    0,
+                    VIDEO_MAX_CONCURRENT_TASKS - activePollsRef.current.size,
+                  ),
+                  want: wantSlots,
+                },
+              )
+            : t('最多同时进行 {{count}} 个视频任务，请等其中一个完成后再发', {
+                count: VIDEO_MAX_CONCURRENT_TASKS,
+              }),
         );
         return;
       }
@@ -1366,6 +1409,7 @@ export const useVideoGeneration = ({
           size: normalizeVideoSize(inputs.size),
           seconds: inputs.seconds,
           seed: inputs.seed,
+          batchCount: inputs.batchCount,
           aspectRatio: inputs.aspectRatio,
           fitMode: inputs.fitMode,
           steps: inputs.steps,
@@ -1404,6 +1448,8 @@ export const useVideoGeneration = ({
               size: conv.size,
               seconds: conv.seconds,
               seed: conv.seed,
+              // 老会话没有这个字段 → 归一成 1,与改造前行为一致。
+              batchCount: normalizeBatchCount(conv.batchCount),
               aspectRatio: conv.aspectRatio,
               fitMode: conv.fitMode || FIT_BLUR,
               steps: conv.steps != null ? conv.steps : '',
@@ -1428,6 +1474,7 @@ export const useVideoGeneration = ({
               size: normalizeVideoSize(inputs.size),
               seconds: inputs.seconds,
               seed: inputs.seed,
+              batchCount: inputs.batchCount,
               aspectRatio: inputs.aspectRatio,
               fitMode: inputs.fitMode,
               steps: inputs.steps,
@@ -1506,9 +1553,27 @@ export const useVideoGeneration = ({
         content: displayText,
         images: needsImage ? params.images || [] : undefined,
       };
-      const asstId = `${reqId}-a`;
-      const asstMsg = {
-        id: asstId,
+      // 一批多条:每条候选一条独立的助手消息,而**不是**一条消息挂 N 个任务。
+      // 不只是省事 —— 轮询槽按 msgId 索引,而流水线(生成→超分→配音)靠在同一条
+      // 消息上换 taskId 实现(submitPipelineStage),一条消息挂多个任务会同时破坏
+      // 这两处。N 条消息反而语义正确:用户挑中哪条候选,超分/配音就作用在那一条上,
+      // 现有流水线一行不用改。
+      const count = supportsBatch ? normalizeBatchCount(params.batchCount) : 1;
+      // seed 的两种口径,与图像侧一致:
+      //   count === 1 → 维持改造前:用户填了才发,留空不发。
+      //   count > 1  → 前端逐条派生不同 seed,否则 N 条一模一样。
+      const seeds =
+        count > 1
+          ? deriveSeeds(params.seed, count)
+          : params.seed !== '' && params.seed != null
+            ? [Number(params.seed)]
+            : [null];
+      // 单条时 id 保持 `${reqId}-a` 不变:历史恢复、流水线换 taskId、IDB 媒体引用
+      // 都按 msgId 索引,改 id 形态等于给存量会话换了一套键。
+      const asstIds =
+        count === 1 ? [`${reqId}-a`] : seeds.map((_, i) => `${reqId}-a${i}`);
+      const asstMsgs = asstIds.map((id, i) => ({
+        id,
         role: 'assistant',
         status: VIDEO_STATUS.QUEUED,
         model: params.model,
@@ -1518,7 +1583,12 @@ export const useVideoGeneration = ({
         progress: 0,
         taskId: null,
         videoUrl: null,
-      };
+        // 多条时记下各自的 seed 与序号,结果区据此显示"第 n/N 条 · 种子 x"。
+        // 单条不写这几个字段 —— 存量消息也没有,渲染侧一视同仁地按"没有就不显示"处理。
+        ...(count > 1
+          ? { seed: seeds[i], batchIndex: i, batchTotal: count }
+          : {}),
+      }));
 
       setConversations((prev) => {
         const idx = prev.findIndex((c) => c.id === convId);
@@ -1532,6 +1602,7 @@ export const useVideoGeneration = ({
               size: params.size,
               seconds: params.seconds,
               seed: params.seed,
+              batchCount: params.batchCount,
               aspectRatio: params.aspectRatio,
               fitMode: params.fitMode,
               // 步数随会话锁定:续问/刷新后按会话原设置发,不受当前框里的值影响
@@ -1560,7 +1631,7 @@ export const useVideoGeneration = ({
               title: displayText,
               createdAt: now,
               updatedAt: now,
-              messages: [userMsg, asstMsg],
+              messages: [userMsg, ...asstMsgs],
             },
             ...prev,
           ];
@@ -1568,7 +1639,7 @@ export const useVideoGeneration = ({
           const conv = {
             ...prev[idx],
             updatedAt: now,
-            messages: [...prev[idx].messages, userMsg, asstMsg],
+            messages: [...prev[idx].messages, userMsg, ...asstMsgs],
           };
           next = [conv, ...prev.filter((_, i) => i !== idx)];
         }
@@ -1581,12 +1652,14 @@ export const useVideoGeneration = ({
       // 就占住：否则连点三下，三次都在第一个响应到达前跑到上面的并发闸，那时
       // activePollsRef 还是空的，三个全放过去。占位槽的 taskId 先留 null，成功后补上，
       // 失败/取消时由 finishPoll 收掉。
-      activePollsRef.current.set(asstId, {
-        convId,
-        msgId: asstId,
-        taskId: null,
-        timer: null,
-        canceled: false,
+      asstIds.forEach((id) => {
+        activePollsRef.current.set(id, {
+          convId,
+          msgId: id,
+          taskId: null,
+          timer: null,
+          canceled: false,
+        });
       });
       syncPollState();
 
@@ -1737,14 +1810,10 @@ export const useVideoGeneration = ({
             body.duration = parseInt(params.seconds, 10) || undefined;
           }
         }
-        // 随机种子:塞进 metadata(gpustackplus task adaptor 整体透传 metadata 给引擎;
-        // TaskSubmitReq.Metadata 只从请求的 metadata 对象取,故不能放顶层)。留空则引擎随机。
-        if (params.seed !== '' && params.seed != null) {
-          body.metadata = {
-            ...(body.metadata || {}),
-            seed: Number(params.seed),
-          };
-        }
+        // 随机种子不在这里下发 —— 见下方 submitOne:一批多条时每条的 seed 不同,
+        // 塞进共享的 body 会让最后一次覆盖前面几次。塞进 metadata 的理由不变
+        // (gpustackplus task adaptor 整体透传 metadata 给引擎;TaskSubmitReq.Metadata
+        // 只从请求的 metadata 对象取,故不能放顶层)。留空则不发、由引擎随机。
         // 采样步数:同样走 metadata(adaptor 把它平铺到 body 顶层)。后端
         // applyMiniMaxH3Request 对 num_inference_steps 是「已有则不覆盖」,所以这里发了
         // 就是最终值、不发才回落到运营配的 defaultSteps / 引擎族基座档。
@@ -1920,67 +1989,107 @@ export const useVideoGeneration = ({
           md.task_type = v2 ? override || 'mv2v' : hasRefs ? 'rv2v' : 'v2v';
           body.metadata = md;
         }
-        const res = await API.post(
-          VIDEO_API_ENDPOINTS.VIDEO_GENERATIONS,
-          body,
-          {
-            skipErrorHandler: true,
-          },
-        );
-        const data = res.data || {};
-        // 兼容两种响应形态：OpenAIVideo（顶层 id/status）与通用 TaskResponse（data.task_id）
-        const inner = data.data || {};
-        const taskId = data.id || data.task_id || inner.task_id || inner.id;
-        if (!taskId) throw new Error(t('提交视频任务失败'));
-        const status = normalizeVideoStatus(data.status || inner.status);
-        const progress =
-          parseProgress(
-            data.progress != null ? data.progress : inner.progress,
-          ) || 0;
-        // 提交即失败：直接标记，不启动轮询
-        if (status === VIDEO_STATUS.FAILED) {
-          const msg =
-            data.error?.message ||
-            inner.error?.message ||
-            inner.fail_reason ||
-            data.fail_reason ||
-            t('视频生成失败');
-          patchConvMessage(convId, asstId, {
+        // 一条候选的提交 + 起轮询。body 只组一次(上面那 400 行),这里按 seed 分发 ——
+        // 每条**各自深拷 metadata**:共享同一个 body 对象再改 seed,会让最后一次覆盖
+        // 前面几次,N 条拿到同一个 seed,而且不报错。
+        const submitOne = async (asstId, seed) => {
+          try {
+            const oneBody =
+              seed == null
+                ? body
+                : { ...body, metadata: { ...(body.metadata || {}), seed } };
+            const res = await API.post(
+              VIDEO_API_ENDPOINTS.VIDEO_GENERATIONS,
+              oneBody,
+              {
+                skipErrorHandler: true,
+              },
+            );
+            const data = res.data || {};
+            // 兼容两种响应形态：OpenAIVideo（顶层 id/status）与通用 TaskResponse（data.task_id）
+            const inner = data.data || {};
+            const taskId = data.id || data.task_id || inner.task_id || inner.id;
+            if (!taskId) throw new Error(t('提交视频任务失败'));
+            const status = normalizeVideoStatus(data.status || inner.status);
+            const progress =
+              parseProgress(
+                data.progress != null ? data.progress : inner.progress,
+              ) || 0;
+            // 提交即失败：直接标记，不启动轮询
+            if (status === VIDEO_STATUS.FAILED) {
+              const msg =
+                data.error?.message ||
+                inner.error?.message ||
+                inner.fail_reason ||
+                data.fail_reason ||
+                t('视频生成失败');
+              patchConvMessage(convId, asstId, {
+                status: VIDEO_STATUS.FAILED,
+                error: msg,
+              });
+              finishPoll(asstId);
+              return msg;
+            }
+            patchConvMessage(convId, asstId, {
+              taskId,
+              status,
+              progress,
+              ...(pipeline ? { pipeline, stage: 'generating' } : {}),
+            });
+            // 把 taskId 补进上面那个占位槽。槽可能已经不在了（等响应期间用户清空了历史
+            // 或删掉了这条会话），那就别再起轮询——重建槽等于让一个已被取消的任务复活。
+            const slot = activePollsRef.current.get(asstId);
+            if (!slot || slot.canceled) return null;
+            slot.taskId = taskId;
+            slot.timer = setTimeout(
+              () => pollOnce(convId, asstId, taskId, 1),
+              VIDEO_POLL_INTERVAL_MS,
+            );
+            return null;
+          } catch (error) {
+            const msg = extractApiErrMsg(error, t('视频生成失败'));
+            patchConvMessage(convId, asstId, {
+              status: VIDEO_STATUS.FAILED,
+              error: msg,
+            });
+            finishPoll(asstId);
+            return msg;
+          }
+        };
+
+        // all 而不是 allSettled:submitOne 自己吞了异常并回错误文案,不会 reject。
+        // 一条失败不拖累其余 —— 后端准入控制在并发时正是"前几条过、后几条 429"。
+        const errs = (
+          await Promise.all(asstIds.map((id, i) => submitOne(id, seeds[i])))
+        ).filter(Boolean);
+        if (errs.length > 0) {
+          // 只弹一次:N 条都被 429 时弹 N 个一样的 toast 只会把界面刷满。
+          showError(
+            count > 1
+              ? t('{{fail}}/{{total}} 条提交失败：', {
+                  fail: errs.length,
+                  total: count,
+                }) + errs[0]
+              : errs[0],
+          );
+        }
+      } catch (error) {
+        // body 组装阶段就出错 → 整批都发不出去,N 条消息一起置失败。
+        const msg = extractApiErrMsg(error, t('视频生成失败'));
+        asstIds.forEach((id) => {
+          patchConvMessage(convId, id, {
             status: VIDEO_STATUS.FAILED,
             error: msg,
           });
-          showError(msg);
-          finishPoll(asstId);
-          return;
-        }
-        patchConvMessage(convId, asstId, {
-          taskId,
-          status,
-          progress,
-          ...(pipeline ? { pipeline, stage: 'generating' } : {}),
-        });
-        // 把 taskId 补进上面那个占位槽。槽可能已经不在了（等响应期间用户清空了历史
-        // 或删掉了这条会话），那就别再起轮询——重建槽等于让一个已被取消的任务复活。
-        const slot = activePollsRef.current.get(asstId);
-        if (!slot || slot.canceled) return;
-        slot.taskId = taskId;
-        slot.timer = setTimeout(
-          () => pollOnce(convId, asstId, taskId, 1),
-          VIDEO_POLL_INTERVAL_MS,
-        );
-      } catch (error) {
-        const msg = extractApiErrMsg(error, t('视频生成失败'));
-        patchConvMessage(convId, asstId, {
-          status: VIDEO_STATUS.FAILED,
-          error: msg,
+          finishPoll(id);
         });
         showError(msg);
-        finishPoll(asstId);
       }
     },
     [
       currentConvId,
       inputs,
+      supportsBatch,
       patchConvMessage,
       pollOnce,
       finishPoll,
@@ -2060,6 +2169,7 @@ export const useVideoGeneration = ({
         size: conv.size != null ? conv.size : prev.size,
         seconds: conv.seconds != null ? conv.seconds : prev.seconds,
         seed: conv.seed != null ? conv.seed : prev.seed,
+        batchCount: normalizeBatchCount(conv.batchCount),
         aspectRatio:
           conv.aspectRatio != null ? conv.aspectRatio : prev.aspectRatio,
         fitMode: conv.fitMode != null ? conv.fitMode : prev.fitMode,
@@ -2131,6 +2241,9 @@ export const useVideoGeneration = ({
       (isVACE && (inputs.srcVideo || '').trim() === ''));
 
   return {
+    // 页面据此决定要不要渲染「生成条数」控件 —— 与 generate 里的闸门同一个开关,
+    // 不会出现"控件在但不生效"或"能生效却没控件"。
+    supportsBatch,
     isI2V,
     isR2VA,
     isFLF2V,
