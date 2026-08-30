@@ -50,6 +50,8 @@ import {
   upscaleTargetShortEdge,
   buildVideoSizeChoices,
   isPipelineModel,
+  isNativeDeliveryModel,
+  VIDEO_DELIVERY_SHORT_EDGE_KEY,
   keyframeModeOf,
   deriveKeyframeTaskType,
   findCapabilityModelIn,
@@ -585,11 +587,16 @@ export const useVideoGeneration = ({
     if (!sendsSize || !isPipelineModel(videoConfig, inputs.model)) {
       return native.map((s) => ({ value: s, label: s, isUpscale: false }));
     }
+    // 可用性过滤只对**两段式**成立:它要真的去调那个超分模型,对当前分组不可用就
+    // 该整档不出。一段式(纯放大)整条路上没有第二个模型,放大由引擎在出片前做 ——
+    // 这时还按超分模型的可用性去筛,就会出现「运营把 SR 模型对某分组停用了,某个
+    // 压根不需要它的模型的 1080P 档跟着消失」,而且是静默的。传 null = 不过滤。
+    const filterBySrModel = !isNativeDeliveryModel(videoConfig, inputs.model);
     return buildVideoSizeChoices(
       videoConfig,
       inputs.model,
       native,
-      groupUsableModels.length ? groupUsableModels : null,
+      filterBySrModel && groupUsableModels.length ? groupUsableModels : null,
     );
   }, [videoConfig, inputs.model, mode, category, sendsSize, groupUsableModels]);
   const availableSizes = useMemo(
@@ -1735,7 +1742,15 @@ export const useVideoGeneration = ({
               paramNativeSizes,
               null,
             ).find((c) => c.isUpscale && c.value === videoSizeVal) || null;
-        const maybeUpscale = usePipeline && !isSR && !isDub && !!upscaleChoice;
+        // 选中了高分辨率档。它有两种实现方式,由模型级「纯放大」开关决定走哪条:
+        //   一段式(nativeDelivery) → 原生档生成 + 引擎出片前纯放大,不跑第二段;
+        //   两段式(默认)          → 原生档生成 + 接超分模型跑 task_type=sr。
+        // 判据按 params.model(随会话锁定)而非当前选中模型,续问/刷新后与首次提交同解,
+        // 与 usePipeline / paramEngine 同一个理由。
+        const maybeHighRes = usePipeline && !isSR && !isDub && !!upscaleChoice;
+        const nativeDelivery = isNativeDeliveryModel(videoConfig, params.model);
+        // 一段式不需要超分模型,也就不需要去查分组可用列表 —— 它整条路上没有第二个模型。
+        const maybeUpscale = maybeHighRes && !nativeDelivery;
         // 配音段：文生/图生/视频编辑，会话配音开关开时可能启用。
         // 读 params.dubbing（随会话锁定）而非当前开关，续会话/刷新后仍按原设置。
         const maybeDub =
@@ -1774,6 +1789,14 @@ export const useVideoGeneration = ({
           : '';
         const wantUpscale = maybeUpscale && !!srModel;
         const wantDub = maybeDub && !!dubModel;
+        // 一段式交付:没有第二段,所以不进 pipeline —— nextPipelineStage 见
+        // pipeline.upscale 为空就直接跳到配音或结束,不需要为它加分支。
+        const wantDelivery = maybeHighRes && nativeDelivery;
+        // 交付短边与两段式的目标短边取自同一个函数:档位语义(1080P/2K/4K 说的都是短边,
+        // 长边由画幅决定)两条路完全一致,只是执行者从超分模型换成了引擎的编码漏斗。
+        const deliveryShortEdge = wantDelivery
+          ? upscaleTargetShortEdge(upscaleChoice.value)
+          : 0;
 
         let pipeline = null;
         if (wantUpscale || wantDub) {
@@ -1798,6 +1821,26 @@ export const useVideoGeneration = ({
           // 无超分段（仅配音）→ stage1 按选中尺寸正常生成。
           if (wantUpscale) {
             body.size = normalizeVideoSize(upscaleChoice.fromSize);
+          }
+        }
+        // 一段式交付:生成仍然按起步档（= 该模型的原生档）下发，只是把交付短边一并
+        // 声明给引擎，由它在出片前缩放。
+        //
+        // **生成尺寸必须照常下发**，不能因为「不跑第二段了」就省掉：省掉之后下面那个
+        // `!wantUpscale && ...` 分支也不会命中（选中的是超分档、不在原生档列表里），
+        // 于是 size 一个都不发 —— 引擎按自己的默认档出片，用户选的档位彻底失效。
+        //
+        // ⚠️ 绝不能把交付短边当成生成尺寸下发：H3 显式给了 width/height 就会跳过引擎
+        // 侧的 768 校验与面积钳位，静默地真按 1080p 去生成 —— 那条路已实测更差更贵
+        // （耗时 2.68×、峰值显存 35.5/40 GiB、时序相干性反而降 30%），因为 Turbo8 是在
+        // 768p 上蒸馏的，跑出训练分辨率高频就不稳。生成档与交付档必须是两个值。
+        if (wantDelivery) {
+          body.size = normalizeVideoSize(upscaleChoice.fromSize);
+          if (deliveryShortEdge > 0) {
+            body.metadata = {
+              ...(body.metadata || {}),
+              [VIDEO_DELIVERY_SHORT_EDGE_KEY]: deliveryShortEdge,
+            };
           }
         }
         // 未走超分段时只认**原生**档位：档位列表里现在混着超分档，若超分因故没启用

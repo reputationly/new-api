@@ -853,6 +853,9 @@ export const parseVideoModelConfig = (raw) => {
           maxInputMB: toInputMB(cfg?.maxInputMB),
           maxAudioSec: toAudioSec(cfg?.maxAudioSec),
           pipeline: !!cfg?.pipeline,
+          // 同上,白名单式重建:漏了它每次保存都会把「一段式交付」的勾抹掉,
+          // 而症状是"某天起 1080P 又开始接超分模型了、画面又开始沸腾"。
+          nativeDelivery: !!cfg?.nativeDelivery,
           // 同上,白名单式重建:漏了它每次保存都会把整条超分链配置抹掉,而症状是
           // 「体验区的 1080P 档位莫名消失」,查起来要绕一大圈。
           upscale: normalizeUpscaleList(cfg?.upscale),
@@ -932,6 +935,46 @@ export const getAspectRatiosForVideoModel = (config, model, tabKey) => {
 // 引擎族:模型级声明,不随 tab 变(与 pipeline 同层)。未配即空串 = LightX2V 系。
 export const getEngineForVideoModel = (config, model) =>
   config?.models?.[model]?.engine || '';
+
+// 一段式交付:该模型按**原生档生成**,高分辨率档由引擎在出片前纯放大(lanczos+unsharp,
+// 挂在编码漏斗上),不再接超分模型跑第二段。
+//
+// 为什么要改掉两段式:超分模型在干净的 AIGC 素材上是**净负收益**,已实测 ——
+// 把一段 2beat 恒等 1.0000 的完美合成片喂进管线,H3 生成后 ~1.11(轻微),
+// 过 SwiftVR 之后掉到 0.5631(2beat = 帧间差奇偶比,偏离 1 即"两帧一顿")。
+// 根因在 SwiftVR 模型本体(TemporalGrow 把帧轴 unsqueeze 成 batch 轴,3 抽头
+// Conv3d 退化成同一特征帧的两个投影),官方权重原样跑指标重合,配置层面绕不过去。
+// 生产几何 1344×768→1920×1080 实测:纯放大 2beat 1.1059 / corr_all +0.5294,
+// SwiftVR 0.5954 / +0.3891 —— 它锐度高一倍,但高频时序相关性掉了、暗部幅度放大
+// 1.88×,"更锐"完全由沸腾贡献。成本上纯放大 8 核 CPU 6.32s(2.39× 实时、0 GPU),
+// SwiftVR 要 4×A100 跑 43~47s。两段式还额外付一次编解码代际损失。
+//
+// ⚠️ **纯 opt-in,且必须确认该模型所在镜像支持交付缩放后才能勾**:那是 vllm-omni 侧
+// _encode_video_bytes 上的能力,镜像没带时下发交付短边会被静默丢弃(引擎的 Pydantic
+// 模型没有 extra="forbid"),结果是用户选了 1080P、拿到原生档、还不报错 ——
+// 而网关这侧**看不出区别**,只能靠引擎在响应里同时回传「生成分辨率」与「交付分辨率」
+// 才能发现。未勾选 = 一律走原有的两段式,新接入模型天然安全。
+//
+// 用户上传真实素材的裸 task_type=sr 路径不受影响:那是真实退化素材,退化域里超分
+// 大概率是正收益(实测降清+crf38 重压后纯放大只剩 29.68 dB,已掉进 SwiftVR 的常数带)。
+export const isNativeDeliveryModel = (config, model) =>
+  !!config?.models?.[model]?.nativeDelivery;
+
+// 交付短边字段名。**与 short_edge / target_short_edge 都不是一回事**:
+//   short_edge         —— H3 自算生成画布用的(引擎只在 width/height 都缺省时才读)
+//   target_short_edge  —— SwiftVR 那条 task_type=sr 的超分段用的
+//   delivery_short_edge—— 本字段:生成请求里声明"出片前缩放到这个短边"
+// 三者混用不会报错,只会静默走错路径,所以刻意取一个不重名的键。
+//
+// 键名已与 vllm-omni 侧确认(2026-08-30),不是我们自拟的占位值,别"顺手"改成
+// 看起来更统一的 target_short_edge —— 那是 SwiftVR 超分段的键,撞名的后果是
+// 两条路径静默串线。
+//
+// ⚠️ 名字定了不等于每个部署都支持:引擎的 Pydantic 模型没有 extra="forbid",
+// 旧镜像收到这个键照样静默丢弃、请求仍然 200,只是视频是原生档的。所以
+// isNativeDeliveryModel 仍然默认关闭,由运营确认该模型跑在带交付缩放能力的镜像上
+// 之后再逐个勾 —— 这道闸拦的是镜像版本,与键名无关。
+export const VIDEO_DELIVERY_SHORT_EDGE_KEY = 'delivery_short_edge';
 
 // 开放「采样步数」调节的玩法(= 体验区 tab 的 mode)。
 //
