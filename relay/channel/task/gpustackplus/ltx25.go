@@ -3,6 +3,8 @@ package gpustackplus
 import (
 	"fmt"
 	"math"
+	"strconv"
+	"strings"
 
 	"github.com/QuantumNous/new-api/common"
 )
@@ -48,8 +50,11 @@ import (
 //     `W×H×num_frames ≤ 4.3×10⁸`。三条都是"进了队列也只会 500 或 OOM"的输入,
 //     挡在网关比让用户排队几分钟后失败好,所以在这里就地 400。
 //
-// 画布不在这里处理:引擎的 /v1/videos 直接认 OpenAI 风格的 size("WIDTHxHEIGHT"),
-// adaptor 已经透传,不需要像 H3 那样反推 width/height。
+//  6. **画布要在这里合成**:引擎只认 OpenAI 风格的 size("WIDTHxHEIGHT")或 width/height。
+//     它请求体里那个 aspect_ratio 字段是 **H3 专用**的,LTX 的 pipeline 从不读 ——
+//     所以体验区那套「分辨率档位 + 具名比例」必须由网关合成像素,见 ltx25ApplyCanvas。
+//     2026-08-31 现网就是在这里炸的:运营按字段提示填了档位词 "704P",原样透传到引擎,
+//     用户拿到的是一段 `String should match pattern '^\d+x\d+$'` 的 pydantic 报错。
 
 const (
 	ltx25FPS = 24
@@ -94,6 +99,12 @@ func applyLTX25Request(body map[string]any, durationSec int) error {
 	// 就是 500。清掉是唯一确定安全的做法。
 	delete(body, "seconds")
 
+	// 画布合成必须在尺寸准入之前:体验区下发的是档位词 + 具名比例(见文件头 §6),
+	// 合成完才有 W/H 可校验、可算栅格。
+	if err := ltx25ApplyCanvas(body); err != nil {
+		return err
+	}
+
 	// 尺寸准入必须在帧数换算之前:换算要读 W/H 算栅格,尺寸本身不合法时算出来的
 	// 帧数也没有意义,报"帧数超包络"更会把用户指向错误的方向。
 	w, h, hasSize := ltx25Dims(body)
@@ -129,6 +140,174 @@ func applyLTX25Request(body map[string]any, durationSec int) error {
 		}
 	}
 	return nil
+}
+
+// ltx25NamedAspectRatios 是体验区「宽高比」下拉的具名值 → 数值。
+//
+// 与 h3NamedAspectRatios 数值相同但**刻意各存一份**:那张表是引擎契约
+// (MINIMAX_H3_SUPPORTED_ASPECT_RATIOS,发表外的值 H3 直接 400),这张表是**网关自己**
+// 推画布用的枚举 —— LTX 的引擎根本不读 aspect_ratio。两者会因各自的原因变动,
+// 共用一张表会让改 H3 的人不知不觉改掉 LTX 的画布。
+//
+// 表里有的不等于菜单上有:实测跑过的是 16:9 / 4:3 / 1:1 及其竖版,21:9 只是能推出
+// 合法画布(1632×704),它的长时长会被 ltx25ValidateEnvelope 挡下。开不开由运营配置决定。
+var ltx25NamedAspectRatios = map[string]float64{
+	"21:9": 21.0 / 9.0,
+	"16:9": 16.0 / 9.0,
+	"4:3":  4.0 / 3.0,
+	"1:1":  1.0,
+	"3:4":  3.0 / 4.0,
+	"9:16": 9.0 / 16.0,
+}
+
+// ltx25ApplyCanvas 把体验区的「分辨率档位词 + 具名宽高比」合成引擎要的精确像素。
+//
+// 为什么 LTX 要有这一步而 wan 系不用:H3 的引擎自己吃 aspect_ratio + short_edge 并
+// 自算画布,体验区配档位词就够了;LTX 的引擎只认 width/height / size,档位词会原样撞上
+// SizeStr 的 `^\d+x\d+$`。把这层差异吃在网关里,两个模型在体验区的填法才能一致 ——
+// 否则运营得记住"这个模型填像素、那个模型填档位",而记错的代价是线上 400。
+//
+// 三种入参形态:
+//   - 已有 width/height:调用方自定画布,只把档位词从 size 上清掉(留着必被引擎拒);
+//   - size 是像素串:原样放行(API 直连的常规形态,也是运营改填精确像素后的形态);
+//   - size 是档位词:与具名比例合成像素串写回 size。
+//
+// 返回非 nil 时调用方就地 400。
+func ltx25ApplyCanvas(body map[string]any) error {
+	// 必须先归一:体验区**不发 aspect_ratio**(见 ltx25NormalizeAspectRatio)。
+	// 放在所有早退分支之前,像素串那条路也要把 wan 专属的 target_shape 清掉。
+	ltx25NormalizeAspectRatio(body)
+
+	size, _ := body["size"].(string)
+	size = strings.TrimSpace(size)
+
+	_, hasW := body["width"]
+	_, hasH := body["height"]
+	if hasW || hasH {
+		// 调用方自定画布,不覆盖。但档位词对引擎的 SizeStr 是非法值,仍要清掉。
+		if ltx25ShortEdgeFromSizeToken(size) > 0 {
+			delete(body, "size")
+		}
+		return nil
+	}
+	if size == "" {
+		return nil // 没给尺寸:引擎按 pipeline 默认画布(960×544)出片
+	}
+	if _, _, ok := common.DimsFromSize(size); ok {
+		return nil // 已经是像素串
+	}
+
+	shortEdge := ltx25ShortEdgeFromSizeToken(size)
+	if shortEdge <= 0 {
+		return fmt.Errorf(
+			"LTX-2.5 的 size 只接受精确像素(如 %dx%d)或分辨率档位词(如 %dP),收到 %q",
+			ltx25OfficialSizes[0][0], ltx25OfficialSizes[0][1], ltx25MaxShortEdge, size)
+	}
+	if shortEdge > ltx25MaxShortEdge || shortEdge%ltx25AlignMultiple != 0 {
+		// 挡的是 540P / 720P 这类"看起来是行业档位、实际不是本模型短边"的写法。
+		// 静默映射到最近的合法短边更糟:用户以为拿到 720,实际是 704,而这个差异
+		// 只在出片后量像素才看得出来。
+		return fmt.Errorf(
+			"LTX-2.5 的分辨率档位词短边必须是 %d 的倍数且不超过 %d,%q 不合规(如 544P、704P)",
+			ltx25AlignMultiple, ltx25MaxShortEdge, size)
+	}
+
+	ar, _ := body["aspect_ratio"].(string)
+	ratio, ok := ltx25NamedAspectRatios[common.NormalizeAspectRatio(strings.ToLower(strings.TrimSpace(ar)))]
+	if !ok {
+		// 推不出画布。**不能像 H3 那样清掉档位词降级**:H3 清掉后引擎按 short_edge=768
+		// 自算,出的还是同一档;LTX 清掉后引擎回落到 pipeline 默认的 960×544 —— 用户选的
+		// 704P 被静默换成另一档,那种错比 400 难查得多。
+		return fmt.Errorf(
+			"LTX-2.5 使用分辨率档位词(%q)时必须同时指定具名宽高比(16:9 / 9:16 / 4:3 / 3:4 / 1:1 / 21:9),收到 %q",
+			size, ar)
+	}
+
+	w, h := ltx25Canvas(shortEdge, ratio)
+	if w <= 0 || h <= 0 {
+		return fmt.Errorf("LTX-2.5 无法由档位词 %q 与宽高比 %q 推出合法画布", size, ar)
+	}
+	body["size"] = fmt.Sprintf("%dx%d", w, h)
+	return nil
+}
+
+// ltx25NormalizeAspectRatio 把体验区实际发出的宽高比字段归一到本文件要的 aspect_ratio。
+//
+// **体验区不发 aspect_ratio**,它按引擎族二选一(useVideoGeneration.js 的 usesTargetShape):
+//
+//	usePipeline 且非 H3 → metadata.target_shape = [h, w]   (wan 的 t2v runner 只认这个)
+//	其余                → metadata.ratio        = "16:9"
+//
+// LTX 跑在 gpustackplus 上,`video_pipeline_flag_migrated` 迁移会把它自动标成
+// pipeline:true,而它的引擎族又不是 H3 —— 于是**每一发文生视频都落进 target_shape 分支,
+// 一个比例字段都不带**。ltx25ApplyCanvas 只读 aspect_ratio 的话,运营一旦把 sizes 配成
+// 档位词,体验区就是发一次 400 一次。H3 在 h3NormalizeAspectRatio 里踩过同一个坑
+// (它漏了是静默出错档,我们漏了是硬 400),这里是同款补丁。
+//
+// target_shape 只用来反推**比例**,绝不当画布用:那是 wan 的 720p 级固定值表
+// ([720,1280] 等),既不是 32 的倍数也不是用户选的档位。取值后即删 —— 与
+// target_video_length / video_duration 同理,LTX 引擎不读,留着只会在排查时误导。
+func ltx25NormalizeAspectRatio(body map[string]any) {
+	shape := body["target_shape"]
+	delete(body, "target_shape")
+	if _, ok := body["aspect_ratio"]; ok {
+		delete(body, "ratio") // 已有权威值:别名清掉,免得两个键打架
+		return
+	}
+	if r, ok := body["ratio"].(string); ok && strings.TrimSpace(r) != "" {
+		body["aspect_ratio"] = common.NormalizeAspectRatio(r)
+		delete(body, "ratio")
+		return
+	}
+	delete(body, "ratio")
+	// 两个别名都没有,才轮到 target_shape 兜底 —— ratio 是调用方直接表达的,更权威。
+	//
+	// 复用 h3AspectRatioFromTargetShape:它是纯算术(shape → 具名比例名),不是 H3 的
+	// 引擎契约。⚠️ 它匹配用的是 h3NamedAspectRatios,与本文件的 ltx25NamedAspectRatios
+	// 目前值相同;哪天两张表分叉,这里要一起改(前端 videoSteps.test.js 守着
+	// aspectRatioToShape 与这个反推的容差契约)。
+	if ar := h3AspectRatioFromTargetShape(shape); ar != "" {
+		body["aspect_ratio"] = ar
+	}
+}
+
+// ltx25ShortEdgeFromSizeToken 从档位词取短边像素:"704P"/"544p" → 704/544;不是档位词返回 0。
+//
+// 不像 h3ShortEdgeFromSizeToken 那样收 2K/4K:LTX 的短边上限是 704,那两个词无论怎么
+// 解释都超界,与其解析出来再报"超界",不如让它落进"既不是像素串也不是档位词"那条
+// 更贴切的错误 —— 用户真正需要知道的是"这个模型没有 2K"。
+func ltx25ShortEdgeFromSizeToken(size string) int {
+	s := strings.ToLower(strings.TrimSpace(size))
+	if !strings.HasSuffix(s, "p") {
+		return 0
+	}
+	n, err := strconv.Atoi(strings.TrimSuffix(s, "p"))
+	if err != nil || n <= 0 {
+		return 0
+	}
+	return n
+}
+
+// ltx25Canvas 按 (短边, 宽高比) 推画布,两轴对齐到 32(四舍五入,与 h3Canvas 同法)。
+//
+// 不做 H3 那样的面积钳位:LTX 的闸门是 W×H×帧数(ltx25ValidateEnvelope),纯面积没有
+// 独立上限,提前按面积缩一次只会让推出来的画布与运营在菜单上看到的档位对不上。
+//
+// 四舍五入而不是向下取整,是为了让结果正好落在实测过的官方桶上:
+//
+//	544 × 4/3  = 725.3 → 736(向下取整会得 704,画幅偏 3%)   704 × 4/3  = 938.7 → 928
+//	544 × 16/9 = 967.1 → 960                                704 × 16/9 = 1251.6 → 1248
+//
+// 这六个值与 docs/ltx25-playground-and-api-design.md §三 里 4 卡实测过的尺寸一一对应。
+func ltx25Canvas(shortEdge int, ratio float64) (int, int) {
+	if shortEdge <= 0 || !(ratio > 0) || math.IsInf(ratio, 0) {
+		return 0, 0
+	}
+	short := float64(shortEdge)
+	if ratio >= 1.0 {
+		return h3AlignMultiple(short*ratio, ltx25AlignMultiple), h3AlignMultiple(short, ltx25AlignMultiple)
+	}
+	return h3AlignMultiple(short, ltx25AlignMultiple), h3AlignMultiple(short/ratio, ltx25AlignMultiple)
 }
 
 // ltx25Dims 从 body["size"]("WIDTHxHEIGHT",adaptor 已透传顶层 size)解析宽高。

@@ -1942,8 +1942,13 @@ export const useVideoGeneration = ({
           params.aspectRatio &&
           availableAspectRatios.includes(params.aspectRatio)
         ) {
-          const usesTargetShape =
-            usePipeline && paramEngine !== VIDEO_ENGINE_MINIMAX_H3;
+          // 判据是「**未声明**引擎族」,不是「非 H3」:target_shape 是 wan 专属的 720p
+          // 级固定值表,不是"自建引擎的通用形态"。声明了引擎族的自建模型各有自己的比例
+          // 契约(H3 要具名 aspect_ratio,LTX-2.5 要 ratio 或 aspect_ratio 来合成画布),
+          // 按「非 H3」写会把每一个新接入的自建引擎都默认丢进 wan 的形态里 ——
+          // LTX-2.5 就这样中过:配了档位词后每发必 400(网关读不到比例,推不出画布)。
+          // 网关侧对两者都留了 target_shape 反推兜底,但那是兜底,不该是常态路径。
+          const usesTargetShape = usePipeline && !paramEngine;
           if (usesTargetShape) {
             const shape = aspectRatioToShape(params.aspectRatio);
             if (shape) {

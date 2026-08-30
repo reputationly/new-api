@@ -56,9 +56,10 @@ func TestLTX25DurationToFrames(t *testing.T) {
 		{"704x704", 5, 121},
 		{"704x704", 10, 241},
 		{"704x704", 15, 361},
-		// size 缺失/档位词:退回 ≡9 (mod 16),对所有偶数 P 尺寸安全
+		// size 缺失(API 直连可能不给):退回 ≡9 (mod 16),对所有偶数 P 尺寸安全。
+		// 档位词不再走这条兜底 —— 它由 ltx25ApplyCanvas 合成成像素串或就地 400,
+		// 见 TestLTX25CanvasFromTokenAndRatio / TestLTX25RejectsIllegalSizeToken。
 		{"", 10, 249},
-		{"720P", 10, 249},
 	}
 	for _, tc := range cases {
 		body := map[string]any{}
@@ -331,5 +332,200 @@ func TestLTX25AcceptsFloatCallerFrames(t *testing.T) {
 	mustApply(t, body, 5)
 	if got := body["num_frames"]; got != float64(249) {
 		t.Fatalf("num_frames = %v, want 249(float 形态的调用方取值被覆盖了)", got)
+	}
+}
+
+// ── 画布合成(档位词 + 具名比例 → 精确像素) ────────────────────────────────
+
+// 体验区给 LTX 配的是「分辨率档位 + 宽高比」(与 H3 同一套填法),网关必须把它合成
+// 引擎认的像素串。推出来的六个值必须**正好落在 4 卡实测过的官方桶上** —— 这不是巧合
+// 而是选型时就按 round-to-32 反推的,一旦有人把对齐改成向下取整,4:3 会从 736 掉到 704
+// (画幅偏 3%),这里就会红。
+func TestLTX25CanvasFromTokenAndRatio(t *testing.T) {
+	cases := []struct {
+		token, ratio, want string
+	}{
+		{"704P", "16:9", "1248x704"},
+		{"704P", "9:16", "704x1248"},
+		{"704P", "4:3", "928x704"},
+		{"704P", "3:4", "704x928"},
+		{"704P", "1:1", "704x704"},
+		{"544P", "16:9", "960x544"},
+		{"544P", "9:16", "544x960"},
+		{"544P", "4:3", "736x544"},
+		{"544P", "3:4", "544x736"},
+		{"544P", "1:1", "544x544"},
+		// 大小写与空格都要收:运营手敲的值不保证规整
+		{"704p", "16 : 9", "1248x704"},
+	}
+	for _, c := range cases {
+		body := map[string]any{"size": c.token, "aspect_ratio": c.ratio}
+		mustApply(t, body, 5)
+		if got := body["size"]; got != c.want {
+			t.Errorf("%s + %s → size = %v, want %s", c.token, c.ratio, got, c.want)
+		}
+	}
+}
+
+// 合成出的画布要接着喂给按尺寸算的帧数栅格 —— 两段是串起来用的,分开测会漏掉
+// 「画布对了但栅格按旧的 mod 16 算」这种半截生效。
+//
+// 544x544 是 P=289(奇数)⇒ m=4 ⇒ F ≡ 25 (mod 32),15 秒必须落 377 而不是 361;
+// 361 正是 2026-08-30 实测报 seq_len=13294 的那一发。
+func TestLTX25CanvasFeedsFrameGrid(t *testing.T) {
+	cases := []struct {
+		token, ratio string
+		durationSec  int
+		wantSize     string
+		wantFrames   int
+	}{
+		{"544P", "1:1", 15, "544x544", 377},
+		{"544P", "1:1", 10, "544x544", 249},
+		{"544P", "16:9", 15, "960x544", 361},
+		{"704P", "16:9", 14, "1248x704", 345},
+		{"704P", "1:1", 14, "704x704", 337}, // m=1,栅格最细:24×14=336 → 337
+	}
+	for _, c := range cases {
+		body := map[string]any{"size": c.token, "aspect_ratio": c.ratio}
+		mustApply(t, body, c.durationSec)
+		if got := body["size"]; got != c.wantSize {
+			t.Errorf("%s + %s → size = %v, want %s", c.token, c.ratio, got, c.wantSize)
+		}
+		if got := body["num_frames"]; got != c.wantFrames {
+			t.Errorf("%s + %s @%ds → num_frames = %v, want %d", c.token, c.ratio, c.durationSec, got, c.wantFrames)
+		}
+	}
+}
+
+// 非法档位词就地 400,不放行到引擎。
+//
+// 放行的代价见 2026-08-31 现网:用户拿到的是引擎的 pydantic 报错
+// (`String should match pattern '^\d+x\d+$'`),既看不出该填什么,也不知道该找谁改。
+// 540P / 720P 这两个尤其要挡:它们是行业通行档位,但 720 不是 32 的倍数、也超短边上限,
+// 静默映射到 704 会让人以为拿到了 720p。
+func TestLTX25RejectsIllegalSizeToken(t *testing.T) {
+	for _, size := range []string{"720P", "540P", "1080P", "2K", "4k", "abc", "704"} {
+		body := map[string]any{"size": size, "aspect_ratio": "16:9"}
+		err := applyLTX25Request(body, 5)
+		if err == nil {
+			t.Errorf("size=%q 应被拒,却放行了(size 留在 body 上 = 引擎侧 400)", size)
+			continue
+		}
+		if !strings.Contains(err.Error(), "LTX-2.5") {
+			t.Errorf("size=%q 的错误文案没点名模型: %v", size, err)
+		}
+	}
+}
+
+// 档位词必须配具名比例:推不出画布时**宁可 400 也不降级**。
+// 清掉档位词让引擎回落默认画布(960×544)是静默换档,比报错难查得多。
+func TestLTX25TokenRequiresNamedRatio(t *testing.T) {
+	for _, ar := range []string{"", "30:17", "1.78", "16/9"} {
+		body := map[string]any{"size": "704P", "aspect_ratio": ar}
+		if err := applyLTX25Request(body, 5); err == nil {
+			t.Errorf("aspect_ratio=%q 时应拒绝(无法推出画布),却放行了", ar)
+		}
+	}
+}
+
+// 像素串这条路不受影响:API 直连与"运营改填精确像素"都走它。
+// adaptor 会用 AspectRatioFromSize 从像素串反推一个 aspect_ratio 覆盖进来(如 30:17),
+// 那不是具名比例 —— 若画布合成误把它当成"要合成"的信号,这条会红。
+func TestLTX25PixelSizeUntouchedByCanvas(t *testing.T) {
+	body := map[string]any{"size": "1248x704", "aspect_ratio": "30:17"}
+	mustApply(t, body, 10)
+	if got := body["size"]; got != "1248x704" {
+		t.Fatalf("像素串被改写成 %v", got)
+	}
+	if got := body["num_frames"]; got != 249 {
+		t.Fatalf("num_frames = %v, want 249", got)
+	}
+}
+
+// 调用方自带 width/height 时不推画布,但档位词仍要清掉 —— 留着就是引擎侧 400。
+func TestLTX25CallerCanvasDropsSizeToken(t *testing.T) {
+	body := map[string]any{"width": 1248, "height": 704, "size": "704P"}
+	mustApply(t, body, 10)
+	if _, ok := body["size"]; ok {
+		t.Fatalf("调用方自带画布时档位词没被清掉: %v", body["size"])
+	}
+	if body["width"] != 1248 || body["height"] != 704 {
+		t.Fatalf("调用方的 width/height 被改动: %v x %v", body["width"], body["height"])
+	}
+}
+
+// 体验区**不发 aspect_ratio**:它按引擎族二选一,LTX 落的是 wan 那条
+// `metadata.target_shape=[h,w]`(usePipeline 为 true 且引擎族不是 H3)。
+//
+// 这条是 P1 的回归锁:只读 aspect_ratio 的话,运营把 sizes 配成档位词之后,
+// 体验区每一发文生视频都是 400 —— 不是推断,是实跑复现过的。
+// 值取自前端的 VIDEO_ASPECT_RATIO_TO_SHAPE(手调过的固定表)。
+func TestLTX25CanvasFromTargetShape(t *testing.T) {
+	cases := []struct {
+		token string
+		shape []any
+		want  string
+	}{
+		{"704P", []any{720.0, 1280.0}, "1248x704"}, // 16:9
+		{"704P", []any{1280.0, 720.0}, "704x1248"}, // 9:16
+		{"704P", []any{960.0, 960.0}, "704x704"},   // 1:1
+		{"544P", []any{768.0, 1024.0}, "736x544"},  // 4:3
+		{"544P", []any{1024.0, 768.0}, "544x736"},  // 3:4
+	}
+	for _, c := range cases {
+		body := map[string]any{"size": c.token, "target_shape": c.shape}
+		mustApply(t, body, 5)
+		if got := body["size"]; got != c.want {
+			t.Errorf("%s + target_shape%v → size = %v, want %s", c.token, c.shape, got, c.want)
+		}
+		if _, ok := body["target_shape"]; ok {
+			t.Errorf("%s: target_shape 是 wan 专属键,取完比例必须删掉", c.token)
+		}
+	}
+}
+
+// ratio 是第三方渠道的原生形态,直连调用方也可能直接发它。与 H3 同一套优先级:
+// aspect_ratio > ratio > target_shape。
+func TestLTX25AspectRatioAliasPriority(t *testing.T) {
+	// ratio 别名生效
+	body := map[string]any{"size": "704P", "ratio": "4:3"}
+	mustApply(t, body, 5)
+	if got := body["size"]; got != "928x704" {
+		t.Fatalf("ratio 别名没生效: size = %v, want 928x704", got)
+	}
+	if _, ok := body["ratio"]; ok {
+		t.Fatal("ratio 归一后应删掉,免得与 aspect_ratio 两个键打架")
+	}
+
+	// 三者同在时,显式 aspect_ratio 最权威
+	body = map[string]any{
+		"size":         "704P",
+		"aspect_ratio": "1:1",
+		"ratio":        "4:3",
+		"target_shape": []any{720.0, 1280.0},
+	}
+	mustApply(t, body, 5)
+	if got := body["size"]; got != "704x704" {
+		t.Fatalf("显式 aspect_ratio 没压过别名: size = %v, want 704x704", got)
+	}
+}
+
+// wan 专属键在**像素串**这条路上同样要清掉 —— 早退分支容易漏。
+// 与 target_video_length / video_duration 同一个标准:引擎不读的键不留在 body 上。
+func TestLTX25DropsTargetShapeOnPixelPath(t *testing.T) {
+	body := map[string]any{
+		"size":         "1248x704",
+		"target_shape": []any{720.0, 1280.0},
+		"ratio":        "16:9",
+	}
+	mustApply(t, body, 10)
+	if _, ok := body["target_shape"]; ok {
+		t.Error("像素串路径上 target_shape 没被清掉")
+	}
+	if _, ok := body["ratio"]; ok {
+		t.Error("像素串路径上 ratio 没被清掉")
+	}
+	if got := body["size"]; got != "1248x704" {
+		t.Errorf("像素串被改写成 %v", got)
 	}
 }
