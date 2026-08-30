@@ -26,7 +26,21 @@ const { Text } = Typography;
 // min(源面积×倍率, config target 面积)，前端固定发一个足够大的值让它恒取右项即可，
 // 起步档差异自动抹平。让运营填倍率只会填错——同一个「到 1080」，480P 起步要 2.28、
 // 720P 起步要 1.5、768P 起步要 1.4，而且算错了不报错、只是悄悄掉档。
-const UpscaleField = ({ value, onChange, models, defaults, nativeSizes }) => {
+// srModelUnused：该模型走「高分辨率档用纯放大」，超分模型这一格不会被调用。
+//
+// 置灰而不是隐藏，更不是允许清空：规则行缺 model 会在保存时被 normalizeUpscaleList
+// 整行丢弃，而档位（1080P / 2K）正是由这些规则**定义**的 —— 清掉等于把用户的高分辨率
+// 档位一起删了，且症状是「体验区下拉里那两档莫名消失」，不会有任何报错。
+// 所以它必须留着一个合法值，只是不再生效；界面要把这件事说出来，否则下一个人一定会
+// 问「勾了纯放大为什么还要选超分模型」。
+const UpscaleField = ({
+  value,
+  onChange,
+  models,
+  defaults,
+  nativeSizes,
+  srModelUnused,
+}) => {
   const { t } = useTranslation();
   const rules = Array.isArray(value) ? value : [];
   const modelNames = Object.keys(models || {}).sort();
@@ -74,12 +88,18 @@ const UpscaleField = ({ value, onChange, models, defaults, nativeSizes }) => {
             <Select
               size='small'
               filter
+              disabled={srModelUnused}
               style={{ minWidth: 200 }}
               placeholder={t('选择超分模型')}
               value={r.model || ''}
               optionList={modelNames.map((m) => ({ label: m, value: m }))}
               onChange={(v) => patch(i, 'model', v || '')}
             />
+            {srModelUnused && (
+              <Text type='tertiary' size='small'>
+                {t('（本模型不调用它：已启用纯放大）')}
+              </Text>
+            )}
             <Text type='tertiary' size='small'>
               {t('超分至')}
             </Text>

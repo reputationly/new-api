@@ -475,6 +475,10 @@ const TabPanel = ({ category, tab, draft }) => {
                           }
                           models={store?.models}
                           defaults={store?.defaults}
+                          // 勾了「高分辨率档用纯放大」时，超分模型那一格不再被调用
+                          // （放大由引擎在出片前做）。置灰并标注，但**不能清空**：
+                          // 档位本身是由这些规则定义的，清了 1080P / 2K 会一起消失。
+                          srModelUnused={!!model.nativeDelivery}
                           // 起步档候选必须与体验区完全同口径（tab 级 → 模型级 →
                           // 分类默认值），所以直接用体验区那支取值函数。手写
                           // entry.sizes || model.sizes 会漏掉分类默认值那一层：

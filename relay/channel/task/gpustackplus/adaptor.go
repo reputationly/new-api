@@ -315,6 +315,18 @@ func (a *TaskAdaptor) BuildRequestBody(c *gin.Context, info *relaycommon.RelayIn
 	if !validTaskTypes[taskType] {
 		return nil, localBadRequest(fmt.Errorf("不支持的 task_type: %q(允许:t2i/i2i/t2v/i2v/l2va/flf2v/tts/s2v/r2va/sr/v2a/v2v/rv2v/r2v/mv2v/ads2v/t2m/cover/repaint)", taskType))
 	}
+	// 生图的画幅:比例词("1:1")与精确像素("1664x928")两种写法都要认,且必须与同步链路
+	// (relay/channel/gpustackplus/adaptor.go 的 setImageShape)同语义 —— 上面那段通用的
+	// size 转发只认 WxH,比例词到这里 aspect_ratio 一个字段都没有,而引擎的默认值写死
+	// "16:9",不补就是强制横屏。详见 image_shape.go。
+	if imageShapeTaskTypes[taskType] {
+		applyImageShape(body, strings.TrimSpace(req.Size))
+		// ERNIE Turbo 的生产采样参数同样要在这条链路上补 —— 它是**转换**不是转发,
+		// metadata 透传救不了(对外只有 use_prompt_enhancer,引擎要 extra_args.apply_pe;
+		// 步数与 guidance 根本不来自请求)。不补的话:50 步(慢 6.25 倍)、CFG 开、
+		// 提示词改写默认打开。详见 ernie_image.go。
+		applyErnieImageTurboDefaults(body, modelName)
+	}
 	// SoulX svs 的文本仅占位(引擎按 prompt_audio/target_audio 生成歌声),但引擎 input 需非空、
 	// 且真机验证过的请求带 "soulx-singer" 标签。ValidateBasicTaskRequest 已豁免 svs 的空 prompt,
 	// 这里为空时兜底一个 label,避免直连空 prompt 传到引擎(v2a/v2m 纯视频输入,空 prompt 是正确

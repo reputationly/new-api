@@ -992,10 +992,20 @@ export const useVideoGeneration = ({
         }
       });
     });
-    pending
+    const resumed = pending
       .sort((a, b) => b.ts - a.ts)
-      .slice(0, VIDEO_MAX_CONCURRENT_TASKS)
-      .forEach((p) => resumePoll(p.convId, p.msgId, p.taskId));
+      .slice(0, VIDEO_MAX_CONCURRENT_TASKS);
+    resumed.forEach((p) => resumePoll(p.convId, p.msgId, p.taskId));
+    // 有任务在跑就直接把用户放回**最新那条**会话(pending 已按 ts 降序,取第一条),
+    // 而不是落在「新对话」上让他自己去历史里翻 —— 切走再回来的人十有八九就是回来
+    // 看结果的。
+    //
+    // 只在这里做,不做成随 conversations 变化的常驻效果:否则用户在生成过程中主动点
+    // 「新对话」会被立刻拽回去,那个按钮就等于点不动。setCurrentConvId 用函数式更新
+    // 并只在仍为 null 时接管,避免与用户自己的选择打架。
+    if (resumed.length > 0) {
+      setCurrentConvId((cur) => cur ?? resumed[0].convId);
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [userState?.user]);
 

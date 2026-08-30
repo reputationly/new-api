@@ -83,6 +83,7 @@ const downloadImage = async (src, t) => {
 const ImageChatArea = ({
   messages,
   generating,
+  interruptible,
   turnLimitReached = false,
   missingRequiredImage = false,
   mode = 'text2image',
@@ -291,7 +292,7 @@ const ImageChatArea = ({
     };
     return (
       <div className='p-2 sm:p-4'>
-        {generating && (
+        {interruptible && (
           <Typography.Text
             type='warning'
             className='text-xs block mb-2 text-center'

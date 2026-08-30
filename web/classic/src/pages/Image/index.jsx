@@ -26,6 +26,7 @@ const ImagePlaygroundBody = ({ mode }) => {
     messages,
     conversations,
     generating,
+    interruptible,
     locked,
     turnLimitReached,
     missingRequiredImage,
@@ -68,6 +69,7 @@ const ImagePlaygroundBody = ({ mode }) => {
         <ImageChatArea
           messages={messages}
           generating={generating}
+          interruptible={interruptible}
           turnLimitReached={turnLimitReached}
           missingRequiredImage={missingRequiredImage}
           mode={mode}

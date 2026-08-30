@@ -103,6 +103,19 @@ const hasPendingTask = (m) =>
   Array.isArray(m?.imageTasks) &&
   m.imageTasks.some((t) => t && t.taskId && t.status === 'pending');
 
+// mount 时该把用户放回哪条会话:第一条「还有异步任务在跑」的。没有则返回 null
+// (维持「新对话」)。
+//
+// ⚠️ **依赖 conversations 是新在前**:两个写入分支都是前插 —— 新会话
+// `[{...}, ...prev]`,续问的会话 `[conv, ...prev.filter(...)]` 被移到队首。
+// 所以「第一个匹配」= 最新那条。曾经在这里写成 forEach 里无条件覆盖(取到最后一个
+// 匹配),多条并行时用户被放回**最旧**那条 —— 不丢数据、轮询照常,只是这个功能的意图
+// 整个反了,而且没有任何报错。提成纯函数就是为了让这个顺序约定能被测试锁住。
+export const pickResumeConvId = (conversations) =>
+  (conversations || []).find((conv) =>
+    (conv?.messages || []).some((m) => hasPendingTask(m)),
+  )?.id ?? null;
+
 const markInterruptedAsFailed = (list, errText) =>
   (Array.isArray(list) ? list : []).map((conv) => ({
     ...conv,
@@ -672,6 +685,20 @@ export const useImageGeneration = ({
   // 只看 submitting 会让输入框在图还没出来时就解锁，用户能连着发第二次。
   const generating = submitting || activePolls > 0;
 
+  // 本次等待「刷新就没了」吗？—— 决定要不要摆出「请勿刷新页面」那条警告。
+  //
+  // 异步任务一旦建起来就有 taskId（hasResumableTask），刷新后 mount 会按它续上轮询，
+  // 切走再回来也接得住 —— 这时还警告，等于把用户按在页面上干等本可以离开的几十秒。
+  // 手机端那条同名警告在异步化时已按同一理由删掉，网页端这条当时漏了。
+  //
+  // **不能无条件删**：异步只有自建渠道（GPUStackPlus）支持，第三方模型
+  // （gpt-image / replicate / siliconflow）会被 async_not_supported 打回、回落同步，
+  // 那条路上刷新确实会丢，警告仍然是对的。所以是「按本次是不是异步」显示，不是删。
+  //
+  // 复用 hasResumableTask 而不是另立判据（如 activePolls === 0）：那个值本来就是为这件
+  // 事算的（见它的注释），只是一直没有消费方。两处各写一份迟早分叉。
+  const interruptible = generating && !hasResumableTask;
+
   const resumedRef = useRef(false);
   useEffect(() => {
     if (resumedRef.current || conversations.length === 0) return;
@@ -684,6 +711,15 @@ export const useImageGeneration = ({
         startPolling(conv.id, m.id, m.imageTasks, IMAGE_POLL_INTERVAL_SEC);
       });
     });
+    // 有正在跑的任务时,直接把用户放回**最新**那条会话(见 pickResumeConvId:
+    // conversations 是新在前,取第一个匹配),而不是落在「新对话」上让他自己去历史里
+    // 翻 —— 切走再回来的人十有八九就是回来看结果的。
+    //
+    // **只在 mount 这一次做**(resumedRef 已经保证):否则用户在生成过程中主动点
+    // 「新对话」会被立刻拽回去,变成点不动的按钮。
+    // 只在用户还没自己选过会话时才接管(currentConvId 恒初始化为 null)。
+    const resumeConvId = pickResumeConvId(conversations);
+    if (resumeConvId != null) setCurrentConvId((cur) => cur ?? resumeConvId);
   }, [conversations, startPolling]);
 
   // 核心：生成图片（追加到当前对话；无当前对话则新建一个并锁定参数）
@@ -1059,6 +1095,7 @@ export const useImageGeneration = ({
       currentConvId,
       inputs,
       generating,
+      interruptible,
       allowBatch,
       patchConvMessage,
       storageKey,
@@ -1168,6 +1205,7 @@ export const useImageGeneration = ({
     conversations,
     currentConvId,
     generating,
+    interruptible,
     hasResumableTask,
     locked,
     turnLimitReached,
