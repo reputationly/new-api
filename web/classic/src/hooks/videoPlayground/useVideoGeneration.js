@@ -571,7 +571,15 @@ export const useVideoGeneration = ({
     // 配置**。不能只靠 admin 页锁住输入框：getSizesForVideoModel 是 tab 级 → 模型级
     // → 分类默认值三级回落，运营为文生视频配的 480P 会顺着回落链漏到关键帧上——
     // 那时关键帧的 tab 上一个字都没填，界面却摆出一个点了不生效的档位。
-    const lock = getTabFieldLock(category, mode, 'sizes');
+    // 锁按**引擎族**生效：H3/wan 的关键帧画布由引擎按首图推，锁死才对；LTX-2.5 认
+    // 请求里的 width/height，锁不解就会把 '768P' 这个档位词发给它（清档位词的
+    // h3DropResolutionToken 是 H3 专属的），引擎直接报错。见 flf2v tab 的注释。
+    const lock = getTabFieldLock(
+      category,
+      mode,
+      'sizes',
+      getEngineForVideoModel(videoConfig, inputs.model),
+    );
     const native =
       lock?.value || getSizesForVideoModel(videoConfig, inputs.model, mode);
     if (!sendsSize || !isPipelineModel(videoConfig, inputs.model)) {
@@ -1712,8 +1720,10 @@ export const useVideoGeneration = ({
         // 分组可用性留到下面拿到权威列表再判，这里传 null 表示先不过滤。
         // 锁定值优先，与展示侧 sizeChoices 同一份来源：两处各读各的，就会出现
         // 「选择器按锁定值只给 768P，提交侧却按回落链认得 480P」这种分叉。
+        // 锁按引擎族生效，且这里要用 paramEngine（随会话锁定）而不是当前选中模型的
+        // 引擎族——与 usePipeline / paramEngine 同一个理由，续问/刷新后才和首次提交同解。
         const paramNativeSizes =
-          getTabFieldLock(category, mode, 'sizes')?.value ||
+          getTabFieldLock(category, mode, 'sizes', paramEngine)?.value ||
           getSizesForVideoModel(videoConfig, params.model, mode);
         // 闸门与展示侧同为 sendsSize（见 sizeChoices 的注释）：只要这个玩法会下发
         // size，超分档就成立，与是不是文生视频无关。

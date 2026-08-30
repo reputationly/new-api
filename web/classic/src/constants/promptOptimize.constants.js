@@ -14,6 +14,7 @@
 // 与下面这条契约形状相反,故按引擎族整份换掉模板 —— 不靠模型名 substring,读的是运营
 // 在「视频模型配置」里声明的 engine(与后端 common.VideoEngineFamilyForModel 同一个键)。
 import {
+  VIDEO_ENGINE_LTX25,
   VIDEO_ENGINE_MINIMAX_H3,
   MUSIC_ENGINE_MINIMAX_MUSIC3,
 } from './playgroundAdmin.constants';
@@ -128,6 +129,46 @@ Rules:
 - Write the caption in English: every example in the model card is English. This applies to the caption ONLY — it is never a licence to translate the user's lyrics, which are sung verbatim in whatever language they wrote them.
 - If the user names a language for the vocals (Mandarin, Cantonese, English …), state it in Vocal Details rather than switching the caption into that language.`;
 
+// LTX-2.5 的视听描述。**与上面 VIDEO_PROMPT / I2V_PROMPT 的差别有两处,都是硬的**:
+//
+//  1. 它是音视频**联合**扩散,画面与音轨同步生成。通用模板一个字没提声音 —— 用它优化
+//     出来的提示词对音轨零指导,模型只能自由发挥,而用户是按次付了这段音轨的钱的。
+//  2. 模型卡明确"在长段单段落视听描述上训练,短提示词会明显劣化"。通用模板要求的是
+//     一句话镜头描述 + 去掉冗余,方向恰好相反 —— 越优化越短,越短越劣化。
+//
+// 所以这里反过来**要求写长、要求一整段**,并且把音轨列成必写项。这不是我们自拟的偏好,
+// 是模型卡的口径。⚠️ 别"顺手"给它加回「简洁」「去冗余」这类通用规则。
+//
+// 输出契约仍是通用那条(只回正文):LTX 要的是一段散文,与契约不冲突 —— 这点和 H3 相反,
+// H3 要带字段名的分段结构,才不得不整份换掉契约。
+const LTX25_PROMPT = `You are a prompt engineer for LTX-2.5, an audio-video joint diffusion model that generates picture and a synchronized soundtrack together. Rewrite the user's rough idea into ONE long, flowing paragraph of audiovisual description.
+
+Length and shape are part of the contract: this model was trained on long single-paragraph audiovisual captions and degrades noticeably on short prompts. Write densely and at length. Never output bullet points, line breaks, headings, field labels, or comma-separated keyword lists.
+
+Weave these through the paragraph in a natural reading order: the visual style and shot size → the subject and its appearance → a single continuous action → the camera movement (push-in, orbit, pan, handheld follow, or a locked-off hold) → the environment → lighting direction and quality → color and mood → and, in the same breath, what is HEARD: ambience, the sounds the on-screen action makes, and whether there is any music.
+
+Rules:
+- Audio is not optional. This model renders a soundtrack whether or not you describe one; leaving it unspecified wastes half the model. Name concrete sounds tied to what is on screen ("boots on wet gravel", "the dry click of a light switch"), the room tone, and either the musical bed or its explicit absence.
+- ONE continuous shot. Never describe cuts, scene changes, or "then the camera shows…".
+- Motion is the point: say what moves and how fast. A prompt with no motion produces a near-still clip.
+- Keep the user's subject, setting, and intent exactly. Elaborate on their idea; never substitute a different one.
+- If the user wrote spoken lines, keep the words verbatim in quotes and describe the delivery around them.
+- Do not emit duration, resolution, fps, aspect ratio, or any parameter — those are set by the controls next to the prompt box.`;
+
+// 首帧生视频版:底图已经定死主体、构图与风格,重复描述会与图打架。段落形状的要求不变。
+const LTX25_I2V_PROMPT = `You are a prompt engineer for LTX-2.5, an audio-video joint diffusion model that generates picture and a synchronized soundtrack together. The user has already uploaded the first frame; the image fixes the subject, framing, and style — your prompt describes what HAPPENS next, and what is heard.
+
+Rewrite the user's rough idea into ONE long, flowing paragraph. Length and shape are part of the contract: this model was trained on long single-paragraph audiovisual captions and degrades noticeably on short prompts. Never output bullet points, line breaks, headings, or keyword lists.
+
+Cover, woven together: the subject's single continuous action → the camera movement (or a deliberate hold) → the secondary motion that sells the shot (hair, cloth, steam, water, dust, foliage, light flicker) → and what is heard: ambience, the sounds that action makes, and either the musical bed or its explicit absence.
+
+Rules:
+- Do NOT re-describe the subject's appearance, the background, or the art style — the uploaded frame already fixes them, and restating them fights the image.
+- Audio is not optional; this model renders a soundtrack either way. Name concrete, on-screen-motivated sounds.
+- ONE continuous shot, no cuts.
+- Keep motion plausible for a shot that starts from this exact frame: large actions (the subject sprinting off, turning around, changing location) tend to deform.
+- Do not emit duration, resolution, fps, or aspect ratio.`;
+
 // tab key → 默认系统提示词。tab key 在全部分类里唯一(见 playgroundAdmin.constants.js),
 // 故不需要按分类再分一层。未列出的 tab 用 GENERIC_OPTIMIZE_SYSTEM_PROMPT。
 export const DEFAULT_OPTIMIZE_SYSTEM_PROMPTS = {
@@ -151,8 +192,18 @@ export const DEFAULT_OPTIMIZE_SYSTEM_PROMPTS = {
 // **音乐体验区也要传 engine**:文生音乐这个 tab 同时挂着 ACE-Step 与 MiniMax-Music3,
 // 两者的描述位语义相反(ACE-Step 是 caption,Music3 是 instructions 编曲说明,歌词另走
 // 一路),按 tab 给一份模板必然对其中一个是错的。同上,判据是配置声明的引擎族。
+// LTX-2.5 按玩法分两份:文生视频从头构建整条时间线,首帧生视频的底图已经定死了主体与
+// 构图。没列出的玩法(超分/配音等 LTX 不承担的)回落到通用版,与 H3 同一取舍。
+const LTX25_OPTIMIZE_PROMPTS = {
+  text2video: LTX25_PROMPT + OUTPUT_CONTRACT,
+  flf2v: LTX25_I2V_PROMPT + OUTPUT_CONTRACT,
+  image2video: LTX25_I2V_PROMPT + OUTPUT_CONTRACT,
+};
+
 export const defaultOptimizeSystemPrompt = (tabKey, engine) => {
   if (engine === VIDEO_ENGINE_MINIMAX_H3) return h3OptimizeSystemPrompt(tabKey);
+  if (engine === VIDEO_ENGINE_LTX25 && LTX25_OPTIMIZE_PROMPTS[tabKey])
+    return LTX25_OPTIMIZE_PROMPTS[tabKey];
   if (engine === MUSIC_ENGINE_MINIMAX_MUSIC3)
     return MUSIC3_PROMPT + OUTPUT_CONTRACT;
   return (

@@ -1,5 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
+  VIDEO_ENGINE_LTX25,
+  VIDEO_ENGINE_MINIMAX_H3,
   getTabFieldLock,
   tabHasField,
 } from '../playgroundAdmin.constants';
@@ -17,6 +19,40 @@ describe('关键帧 sizes 锁定', () => {
     expect(lock).toBeTruthy();
     expect(lock.value).toEqual(['768P']);
     expect(lock.reason).toBeTruthy();
+  });
+
+  it('H3 仍然锁死', () => {
+    const lock = getTabFieldLock(
+      'video',
+      'flf2v',
+      'sizes',
+      VIDEO_ENGINE_MINIMAX_H3,
+    );
+    expect(lock?.value).toEqual(['768P']);
+  });
+
+  // wan 的两类关键帧实例 engine 留空，自这把锁上线起就一直吃着它。改成「只对 H3 生效」
+  // 会顺手把它们解锁，让运营为文生视频配的档位顺着三级回落漏进关键帧——正是加锁要挡
+  // 的事，且症状静默。所以默认（不传 / 空引擎）必须仍然锁死。
+  it('引擎族留空（wan）仍然锁死', () => {
+    expect(getTabFieldLock('video', 'flf2v', 'sizes', '')?.value).toEqual([
+      '768P',
+    ]);
+  });
+
+  // LTX-2.5 认请求里的 width/height（首帧图由引擎等比放大后居中裁剪去适配画布），
+  // 不是按图推画布。锁不解，它会拿到 '768P' 这个档位词发给引擎——而清档位词的
+  // h3DropResolutionToken 是 H3 专属的，LTX 这条路上没有，引擎直接报错。
+  it('LTX-2.5 豁免这把锁，档位回到运营配置', () => {
+    expect(
+      getTabFieldLock('video', 'flf2v', 'sizes', VIDEO_ENGINE_LTX25),
+    ).toBeNull();
+  });
+
+  // 运营输入的引擎族可能带空格/大小写（后端比较前也是 lower+trim），
+  // 两边判据分叉的后果是静默的：管理端显示解锁、体验区仍按锁定值发。
+  it('引擎族比较前 lower+trim，与后端同口径', () => {
+    expect(getTabFieldLock('video', 'flf2v', 'sizes', '  LTX-2.5 ')).toBeNull();
   });
 
   // 锁定值只有在 sizes 仍是该 tab 的字段时才有用：字段被摘掉的话 sendsSize 变 false，
@@ -73,9 +109,12 @@ describe('1080P 超分档基于锁定的 768P 起步', () => {
   };
 
   it('起步档命中锁定值时产出 1080P 超分档', () => {
-    const choices = buildVideoSizeChoices(cfgWithRule, 'h3', ['768P'], [
-      'seedvr2',
-    ]);
+    const choices = buildVideoSizeChoices(
+      cfgWithRule,
+      'h3',
+      ['768P'],
+      ['seedvr2'],
+    );
     expect(choices.map((c) => c.value)).toEqual(['768P', '1080P']);
     const up = choices.find((c) => c.value === '1080P');
     expect(up.isUpscale).toBe(true);

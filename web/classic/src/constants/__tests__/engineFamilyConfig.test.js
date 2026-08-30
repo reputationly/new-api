@@ -8,7 +8,10 @@ import {
   recomputeModelLevel,
   PLAYGROUND_MODEL_LEVEL_FIELDS,
   MUSIC_ENGINE_MINIMAX_MUSIC3,
+  VIDEO_ENGINE_LTX25,
 } from '../playgroundAdmin.constants';
+import { parseVideoModelConfig } from '../videoPlayground.constants';
+import { defaultPromptGuide } from '../promptGuide.constants';
 import {
   parseMusicModelConfig,
   getEngineForMusicModel,
@@ -242,5 +245,91 @@ describe('Music3 中译英模板', () => {
     expect(TRANSLATE_SYSTEM_MUSIC3).not.toContain('no music notation, no BPM');
     expect(TRANSLATE_SYSTEM_MUSIC3).not.toContain('<= 40 words');
     expect(TRANSLATE_SYSTEM_MUSIC3).not.toContain('AudioCaps');
+  });
+});
+
+// LTX-2.5 是视频页的第三个引擎族(wan 系 / MiniMax H3 / LTX-2.5)。它的接入链路与前两者
+// 同构,但有一处**只在前端断掉、后端完全看不出来**的坑,这一组就是守它的:
+//
+//   后端 ltx25.go 那套整形(秒→帧换算、seconds 剥离、尺寸与显存包络准入)只在
+//   engine === 'ltx-2.5' 时才跑,而 engine 的唯一来源是运营在「引擎族」下拉里选的值。
+//   下拉里没有这一项 = 那套代码一次都不会被触发,而症状是每个带时长的请求 500
+//   (整数秒 × 24 恒 ≡ 0 mod 8,取不到 8k+1 需要的余数 1)。
+describe('LTX-2.5 引擎族的接入面', () => {
+  it('运营能在「引擎族」下拉里选到 LTX-2.5', () => {
+    const engine = PLAYGROUND_MODEL_LEVEL_FIELDS.VideoModelConfig.find(
+      (f) => f.key === 'engine',
+    );
+    expect(
+      engine.options.some((o) => o.value === VIDEO_ENGINE_LTX25),
+      '下拉里没有 LTX-2.5，后端整形永远不会被触发',
+    ).toBe(true);
+  });
+
+  it('取值与后端 common.VideoEngineLTX25 一致', () => {
+    // 后端比较前 lower+trim，这里必须是已经规范化的字面量
+    expect(VIDEO_ENGINE_LTX25).toBe('ltx-2.5');
+    expect(VIDEO_ENGINE_LTX25).toBe(VIDEO_ENGINE_LTX25.trim().toLowerCase());
+  });
+
+  it('engine 声明能在 parse 里活下来（白名单式重建的常见漏法）', () => {
+    const parsed = parseVideoModelConfig(
+      JSON.stringify({ models: { 'ltx2.5': { engine: '  LTX-2.5 ' } } }),
+    );
+    expect(parsed.models['ltx2.5'].engine).toBe(VIDEO_ENGINE_LTX25);
+  });
+
+  // 像素串档位必须原样活下来:LTX 的 sizes 配的是 "960x544" 这类精确画布(引擎认
+  // OpenAI 风格的 WIDTHxHEIGHT),被规范化成档位词或被丢掉都会让它拿不到画布。
+  it('像素串尺寸档位在 parse 里保持原样', () => {
+    const parsed = parseVideoModelConfig({
+      models: {
+        'ltx2.5': {
+          engine: VIDEO_ENGINE_LTX25,
+          tabs: { text2video: { sizes: ['960x544', '1248X704', '704x704'] } },
+        },
+      },
+    });
+    expect(parsed.models['ltx2.5'].tabs.text2video.sizes).toEqual([
+      '960x544',
+      '1248x704',
+      '704x704',
+    ]);
+  });
+
+  // 提示词模板按引擎族换整份。模型卡明确「在长段单段落视听描述上训练,短提示词会明显
+  // 劣化」,而通用模板要求的是一句话镜头描述 —— 方向相反,套用等于越优化越差。
+  // 且它是音视频联合生成,通用模板一个字没提声音。
+  it('AI 优化模板:LTX 单独一份，要求长段落且必须写声音', () => {
+    const ltx = defaultOptimizeSystemPrompt('text2video', VIDEO_ENGINE_LTX25);
+    const generic = defaultOptimizeSystemPrompt('text2video', '');
+    expect(ltx).not.toBe(generic);
+    // 段落形状是硬约束，不是风格偏好
+    expect(ltx).toContain('ONE long');
+    expect(ltx.toLowerCase()).toContain('never output bullet');
+    // 音轨是这个模型的一半能力，通用模板里一个字都没有
+    expect(ltx).toContain('Audio is not optional');
+    expect(generic).not.toContain('Audio is not optional');
+    // 首帧玩法同样有专版，且不能与文生视频那份混用
+    expect(defaultOptimizeSystemPrompt('flf2v', VIDEO_ENGINE_LTX25)).not.toBe(
+      ltx,
+    );
+    // 没声明引擎族时维持原行为
+    expect(defaultOptimizeSystemPrompt('text2video', '')).toBe(generic);
+  });
+
+  // 提示词建议(用户看的那个问号)同样按引擎族换,且必须点明两件用户自助不了的事:
+  // 要写整段、只吃首帧。
+  it('提示词建议:LTX 单独一份，点明整段写法与「只吃首帧」', () => {
+    const t2v = defaultPromptGuide('text2video', VIDEO_ENGINE_LTX25);
+    expect(t2v).not.toBe(defaultPromptGuide('text2video', ''));
+    expect(t2v).toContain('一整段');
+    const kf = defaultPromptGuide('flf2v', VIDEO_ENGINE_LTX25);
+    // 关键帧 tab 承载多种玩法，LTX 只支持首帧 —— 不写清楚用户会去找尾帧上传框
+    expect(kf).toContain('只吃首帧');
+    // LTX 没有专版建议的玩法要回落通用版，而不是变成空白
+    expect(defaultPromptGuide('vace', VIDEO_ENGINE_LTX25)).toBe(
+      defaultPromptGuide('vace', ''),
+    );
   });
 });

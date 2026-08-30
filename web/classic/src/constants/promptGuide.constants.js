@@ -9,7 +9,10 @@
 //
 // tab key 在全部分类里唯一（见 playgroundAdmin.constants.js），故不按分类再分一层，
 // 与 DEFAULT_OPTIMIZE_SYSTEM_PROMPTS 的索引方式一致。
-import { VIDEO_ENGINE_MINIMAX_H3 } from './playgroundAdmin.constants';
+import {
+  VIDEO_ENGINE_LTX25,
+  VIDEO_ENGINE_MINIMAX_H3,
+} from './playgroundAdmin.constants';
 
 // 文生图：公式与示例取自阿里云通义万相官方文档的提示词写法，去掉了原文里指向「提示词
 // 词典」的引用（我们没有那个页面，把常用词直接嵌进来），并补了三条本体验区特有的坑：
@@ -352,6 +355,49 @@ const h3Guide = (tabKey) => {
   return head ? `${head}\n\n${H3_SECTIONS_INTRO}\n\n${H3_OPTIMIZE_TAIL}` : '';
 };
 
+// LTX-2.5：22B 音视频联合扩散，画面与音轨同步生成。
+//
+// **单独写一份而不是复用通用版，理由只有一条，但它足够硬**：模型卡明确写了「在长段
+// 单段落视听描述上训练，短提示词会明显劣化」。通用版那套「主体 + 场景 + 风格 + 镜头
+// 语言」的分点公式恰恰是它不吃的形状——照着写出来的是一串短语，不是它训练分布里的
+// 连贯段落。这不是经验之谈，是模型卡的口径，所以按引擎族换整份建议。
+//
+// 与 H3 那份的分工也清楚：H3 要的是**带字段名的分段结构**（画面/音景/配乐三段），
+// LTX 要的是**一整段不分段的散文**。两者形状相反，共用一份必然坑掉其中一个。
+const LTX25_PARAGRAPH_RULE = `写成**一整段连贯的文字**，不要分点、不要列关键词。这个模型是在长段视听描述上训练的，短句和词组堆砌会明显掉效果——宁可啰嗦，也不要写成标签。一段里把画面和声音一起讲完：镜头怎么走、主体在做什么、光线和环境什么样、同时能听见什么声音。`;
+
+const LTX25_TAIL = `几条实用提醒：
+· 画面和声音是一起生成的，只写画面等于浪费一半能力。环境音、动作音、有没有配乐，都在同一段里顺着讲。
+· 一条片子一个镜头。要切镜头就明确写出来，别一段里塞三个场景。
+· 时长和分辨率在左侧选，不用写进提示词。
+· 写看得见听得见的东西。「电影感」「氛围拉满」模型接不住，换成光线方向、材质、镜头运动、具体的声响。
+· 别写「不要出现 XXX」，模型不吃否定句。
+· 写完可以点「AI 优化提示词」，它会把你的大白话扩写成这个模型要的长段落。`;
+
+const LTX25_GUIDE_HEADS = {
+  text2video: `文生视频：没有参考图，整条时间线都由提示词从头构建，画面和同步音轨一起生成。
+
+${LTX25_PARAGRAPH_RULE}
+
+示例（注意它是一整段，不是几行要点）：
+清晨的旧书店内景，实拍质感，镜头从门口缓慢推近到柜台，暖黄的顶灯和从百叶窗斜切进来的晨光在浮尘里划出光柱，店主俯身把一摞旧书从纸箱里搬到木台上、指尖拂过封面掸去薄灰，能听见纸页翻动的沙沙声、木箱底与地板摩擦的闷响、远处街道隐约的车流，没有配乐，只有房间本身安静的空气声。`,
+
+  flf2v: `首帧生视频：你传的那张图就是第一帧，提示词写的是「接下来发生什么」，不用把画面重新描述一遍。图里已有的东西只在需要锁住时才提一句。
+
+⚠️ 本模型**只吃首帧**，不支持再传一张尾帧。
+
+画幅由左侧选的尺寸决定，不是由你的图决定：引擎会把你的图等比放大到盖住所选画幅、再居中裁掉多出来的部分。所以边缘的内容可能被裁走——在左侧选一个和图接近的比例，能少裁一些。
+
+${LTX25_PARAGRAPH_RULE}
+
+动作幅度别太大：让静态图里的人跑起来、转身、换场景，容易崩形。`,
+};
+
+const ltx25Guide = (tabKey) => {
+  const head = LTX25_GUIDE_HEADS[tabKey];
+  return head ? `${head}\n\n${LTX25_TAIL}` : '';
+};
+
 // tab key → 内置建议。未列出的玩法没有内置默认，运营不填就不显示问号。
 export const DEFAULT_PROMPT_GUIDES = {
   text2image: TEXT2IMAGE_GUIDE,
@@ -372,10 +418,13 @@ export const DEFAULT_PROMPT_GUIDES = {
   dub: DUB_GUIDE,
 };
 
-// engine 只有视频体验区传得出来（运营在「视频模型配置」里声明的引擎族）。选中 H3 的
-// 模型且该玩法有 H3 版建议时用 H3 版，其余一律走通用版——包括 H3 挂在没写 H3 版的玩法
-// 上，那种时候通用版至少是对的。
+// engine 只有视频体验区传得出来（运营在「视频模型配置」里声明的引擎族）。选中的模型
+// 声明了引擎族、且该玩法有对应版本的建议时用专版，其余一律走通用版——包括专版引擎挂在
+// 没写专版建议的玩法上（如 LTX 挂到超分），那种时候通用版至少是对的。
+const ENGINE_PROMPT_GUIDES = {
+  [VIDEO_ENGINE_MINIMAX_H3]: h3Guide,
+  [VIDEO_ENGINE_LTX25]: ltx25Guide,
+};
+
 export const defaultPromptGuide = (tabKey, engine) =>
-  (engine === VIDEO_ENGINE_MINIMAX_H3 ? h3Guide(tabKey) : '') ||
-  DEFAULT_PROMPT_GUIDES[tabKey] ||
-  '';
+  ENGINE_PROMPT_GUIDES[engine]?.(tabKey) || DEFAULT_PROMPT_GUIDES[tabKey] || '';

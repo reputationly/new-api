@@ -15,8 +15,8 @@ import {
 import { Trash2 } from 'lucide-react';
 import {
   PLAYGROUND_MODEL_LEVEL_FIELDS,
-  VIDEO_ENGINE_MINIMAX_H3,
   getTabDisplay,
+  getTabFieldLock,
   getTabPromptGuide,
   getTabPromptOptimize,
   getTabStoreKey,
@@ -42,9 +42,14 @@ const TabPanel = ({ category, tab, draft }) => {
   const display = getTabDisplay(draft.tabConfig, category, tab.key);
   const optimize = getTabPromptOptimize(draft.tabConfig, category, tab.key);
   const promptGuide = getTabPromptGuide(draft.tabConfig, category, tab.key);
-  const defaultGuide = defaultPromptGuide(tab.key);
   const globalOptimize = getPromptOptimizeGlobal(draft.tabConfig);
   const modelLevelFields = PLAYGROUND_MODEL_LEVEL_FIELDS[storeKey] || [];
+  // 引擎族的展示名直接取「引擎族」下拉的 label —— 提示文案与运营刚刚选中的那一项
+  // 用同一份来源,不另写一张映射表(那种表迟早和下拉分叉)。
+  const engineLabel = (v) =>
+    modelLevelFields
+      .find((f) => f.key === 'engine')
+      ?.options?.find((o) => o.value === v)?.label || v;
 
   // 挂在本 tab 下的模型 = 在这份 ModelConfig 里显式声明了 tabs[tab.key] 的那些。
   const rows = useMemo(
@@ -56,22 +61,40 @@ const TabPanel = ({ category, tab, draft }) => {
     [store, tab.key],
   );
 
-  // 默认系统提示词要按引擎族取:H3 要的是带字段名的分段结构,与通用模板形状相反。
-  // **占位符与「填入默认内容」两处都必须传 engine** —— 不传的话,挂着 H3 模型的 tab 上
+  // 默认系统提示词与提示词建议都要按引擎族取:H3 要的是带字段名的分段结构、LTX-2.5 要
+  // 的是长段单段落视听描述,两者与通用模板的形状都不同(且彼此相反)。
+  // **占位符与「填入默认内容」两处都必须传 engine** —— 不传的话,挂着专版引擎的 tab 上
   // 展示的是通用散文模板,按钮还会把这份错的直接填进输入框、邀请运营保存。那不是
   // 「运营可能配错」,是界面主动把错的递过去。
   const tabEngines = useMemo(
     () => new Set(rows.map((r) => r.model?.engine || '')),
     [rows],
   );
-  const hasH3 = tabEngines.has(VIDEO_ENGINE_MINIMAX_H3);
-  const defaultSystemPrompt = defaultOptimizeSystemPrompt(
-    tab.key,
-    hasH3 ? VIDEO_ENGINE_MINIMAX_H3 : '',
+  // 本 tab 下唯一的专版引擎族。**只有专版引擎多于一个时**才取不到唯一值、回落空串
+  // (通用模板);专版引擎恰好一个时就用它,即使同 tab 还挂着 wan(engine 留空)——
+  // 这与本机制上线时的行为一致(旧代码是 hasH3 ? H3 : ''),不在本次改动范围内。
+  //
+  // 混挂场景没有一个「对所有模型都对」的答案,真正的解是**留空**:留空时每个模型在
+  // 运行时按自己的引擎族取内置默认(usePromptOptimize 传的是选中模型的 engine)。
+  // 这里摆出的只是给运营改写用的起点,由下面的 mixedEngines 告警负责让他知情。
+  const specialEngines = useMemo(
+    () => [...tabEngines].filter((e) => e && e !== ''),
+    [tabEngines],
   );
+  const tabEngine = specialEngines.length === 1 ? specialEngines[0] : '';
+  const defaultSystemPrompt = defaultOptimizeSystemPrompt(tab.key, tabEngine);
+  const defaultGuide = defaultPromptGuide(tab.key, tabEngine);
   // 系统提示词是 tab 级的、只有一份,混挂两个引擎族时必然有一半模型拿到形状不对的
   // 模板 —— 这个只能提示,没法在这里替运营决定。
-  const mixedEngines = hasH3 && tabEngines.size > 1;
+  const mixedEngines = specialEngines.length > 0 && tabEngines.size > 1;
+  // 告警里「现在摆出来的到底是哪一份」必须由 tabEngine 推出,不能写死。
+  //
+  // ⚠️ 写死过一次就是个真 bug:文案写"给的是通用模板",而 1 个专版引擎 + wan 时
+  // tabEngine 非空、摆出来的其实是专版模板 —— 运营照着文案判断必然判错,且不报错。
+  // 文案与取值同源之后,这一类分叉就不可能再发生。
+  const mixedShownTemplate = tabEngine
+    ? t('{{engine}} 的专用模板', { engine: engineLabel(tabEngine) })
+    : t('通用模板');
 
   const candidates = useMemo(() => {
     const taken = new Set(rows.map((r) => r.name));
@@ -282,17 +305,19 @@ const TabPanel = ({ category, tab, draft }) => {
               '留空即使用内置默认（占位符里就是它），后续版本调优默认值时会自动跟随；改写后则以此为准。用哪个语言模型在「通用设置」里配，用户端不出模型选择器。',
             )}
           </Text>
-          {hasH3 && !mixedEngines && (
+          {tabEngine && !mixedEngines && (
             <Text type='tertiary' size='small' className='block mt-1'>
               {t(
-                '本 tab 下都是 MiniMax H3 模型，占位符与「填入默认内容」给的已经是 H3 那套带字段名的分段模板。',
+                '本 tab 下都是 {{engine}} 模型，占位符与「填入默认内容」给的已经是该引擎族的专用模板。',
+                { engine: engineLabel(tabEngine) },
               )}
             </Text>
           )}
           {mixedEngines && (
             <Text type='warning' size='small' className='block mt-1'>
               {t(
-                '⚠️ 本 tab 同时挂着 MiniMax H3 与其它引擎族的模型，而系统提示词只有一份（tab 级）。占位符与「填入默认内容」给的是 H3 的分段模板，一旦写进去，非 H3 的模型也会用它——两种模板形状相反，混用不报错、只是效果变差。要么留空（此时各模型按自己的引擎族取内置默认），要么把它们拆到不同 tab。',
+                '⚠️ 本 tab 同时挂着多个引擎族的模型，而系统提示词只有一份（tab 级）。占位符与「填入默认内容」给的是{{shown}}，一旦写进去，其余引擎族的模型也会被迫用它——各家模板形状彼此相反（MiniMax H3 要带字段名的分段结构、LTX-2.5 要长段单段落视听描述、通用版要一句话镜头描述），混用不报错、只是效果变差。要么留空（此时各模型按自己的引擎族取内置默认），要么把它们拆到不同 tab。',
+                { shown: mixedShownTemplate },
               )}
             </Text>
           )}
@@ -417,7 +442,12 @@ const TabPanel = ({ category, tab, draft }) => {
                       key={f}
                       field={f}
                       value={entry[f]}
-                      lock={tab.fieldLocks?.[f]}
+                      lock={getTabFieldLock(
+                        category,
+                        tab.key,
+                        f,
+                        model?.engine,
+                      )}
                       onChange={(v) =>
                         draft.setTabField(storeKey, tab.key, name, f, v)
                       }

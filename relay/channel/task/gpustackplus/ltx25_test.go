@@ -1,58 +1,264 @@
 package gpustackplus
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
-// LTX-2.5 请求整形的回归测试。
+// LTX-2.5 请求整形与准入校验的回归测试。
 //
 // 这里锁住的每一条都是「写错了不会报错、只会默默 500 或默默不生效」的那类约定 ——
 // 帧数栅格发错引擎直接拒、seconds 留在 body 里就是一条恒失败的路径、
 // wan 的 target_video_length 混进来则是排查时的噪声。正因为静默,才必须由测试守住。
 
-// 时长换算:向上吸附到 `≡ 9 (mod 16)` 栅格。
+// mustApply 跑一遍整形并断言没被准入校验拒掉。
+func mustApply(t *testing.T, body map[string]any, durationSec int) {
+	t.Helper()
+	if err := applyLTX25Request(body, durationSec); err != nil {
+		t.Fatalf("applyLTX25Request 意外返回错误: %v", err)
+	}
+}
+
+// 时长换算:**按尺寸**向上吸附到该尺寸的合法栅格。
 //
-// 这条栅格同时扛两个约束,少一个都会在生产上炸:
+// 栅格同时扛两个约束,少一个都会在生产上炸:
 //   - 8k+1:引擎硬校验,发错直接 500;
-//   - T 为偶数:多卡 SP 整除,960×544 的 30×17=510 只含一个因子 2,T 为奇数时
-//     4 卡下去噪阶段直接报 "not evenly shardable"。
+//   - seq_len = P×T 被 SP(现网 4)整除:P=(W/32)×(H/32) 决定栅格粗细,
+//     m = 4/gcd(P,4),合法帧数 F ≡ 8(m-1)+1 (mod 8m)。
 //
-// 用例覆盖奇数秒(落 X.04)与偶数秒(落 X.375)两类,并逐条断言"实际时长不短于承诺" ——
-// 就近吸附会让 10 秒落到 233 帧(9.71 s),那是对外承诺的违约。
+// 曾经把 m=2 那一行(≡9 mod 16)当成全局常量,于是奇数 P 的尺寸一开放就 500 ——
+// 2026-08-30 4 卡实测 544×544 的 361 帧报 `seq_len=13294 not divisible by
+// sequence_parallel_size=4`,13294 = 289×46,与公式完全吻合。下面的 544x544/15s
+// 与 /16s 两条就是那两发 500 的回归锁。
 func TestLTX25DurationToFrames(t *testing.T) {
 	cases := []struct {
+		size        string
 		durationSec int
 		wantFrames  int
 	}{
-		{4, 105},
-		{5, 121},
-		{6, 153},
-		{7, 169},
-		{8, 201},
-		{9, 217},
-		{10, 249},
-		{15, 361},
+		// m=2(P≡2 mod 4):与按尺寸换算之前完全一致,纯增量不回归
+		{"960x544", 5, 121},
+		{"960x544", 10, 249},
+		{"960x544", 15, 361},
+		{"960x544", 18, 441},
+		{"1248x704", 5, 121},
+		{"1248x704", 10, 249},
+		{"1248x704", 14, 345},
+		{"928x704", 10, 249},
+		// m=4(P 为奇数):15/16 秒必须落到 377/409,按老栅格给的 361/393 是 500
+		{"544x544", 5, 121},
+		{"544x544", 10, 249},
+		{"544x544", 14, 345},
+		{"544x544", 15, 377},
+		{"544x544", 16, 409},
+		{"736x544", 15, 377},
+		// m=1(P≡0 mod 4):栅格最细,24d 向上取到最近的 8k+1
+		{"704x704", 5, 121},
+		{"704x704", 10, 241},
+		{"704x704", 15, 361},
+		// size 缺失/档位词:退回 ≡9 (mod 16),对所有偶数 P 尺寸安全
+		{"", 10, 249},
+		{"720P", 10, 249},
 	}
 	for _, tc := range cases {
 		body := map[string]any{}
-		applyLTX25Request(body, tc.durationSec)
+		if tc.size != "" {
+			body["size"] = tc.size
+		}
+		mustApply(t, body, tc.durationSec)
 
 		got, ok := body["num_frames"].(int)
 		if !ok || got != tc.wantFrames {
-			t.Fatalf("%ds: num_frames = %v, want %d", tc.durationSec, body["num_frames"], tc.wantFrames)
+			t.Fatalf("%s/%ds: num_frames = %v, want %d", tc.size, tc.durationSec, body["num_frames"], tc.wantFrames)
 		}
 		if (got-1)%8 != 0 {
-			t.Fatalf("%ds: num_frames %d 不在 8k+1 栅格上,引擎会 500", tc.durationSec, got)
+			t.Fatalf("%s/%ds: num_frames %d 不在 8k+1 栅格上,引擎会 500", tc.size, tc.durationSec, got)
 		}
-		// T = (n-1)/8+1 必须是偶数,否则多卡下 token 除不尽 SP
-		if tt := (got-1)/8 + 1; tt%2 != 0 {
-			t.Fatalf("%ds: num_frames %d 的 T=%d 是奇数,多卡会 500", tc.durationSec, got, tt)
+		// seq_len = P×T 必须被 SP 整除,否则多卡下去噪阶段直接 500。
+		// 只在能解析出尺寸时验得了 —— 这正是按尺寸换算的全部意义。
+		if w, h, okSize := ltx25DimsOf(tc.size); okSize {
+			p := (w / 32) * (h / 32)
+			if seq := p * ((got-1)/8 + 1); seq%ltx25SequenceParallelSize != 0 {
+				t.Fatalf("%s/%ds: num_frames %d 的 seq_len=%d 除不尽 SP=%d,引擎会 500",
+					tc.size, tc.durationSec, got, seq, ltx25SequenceParallelSize)
+			}
 		}
-		// 实际时长不得短于对外承诺
+		// 实际时长不得短于对外承诺 —— 就近吸附会让 10 秒落到 233 帧(9.71 s),那是违约
 		if float64(got)/24.0 < float64(tc.durationSec) {
-			t.Fatalf("%ds: %d 帧只有 %.3f s,短于承诺", tc.durationSec, got, float64(got)/24.0)
+			t.Fatalf("%s/%ds: %d 帧只有 %.3f s,短于承诺", tc.size, tc.durationSec, got, float64(got)/24.0)
 		}
 		if fps, ok := body["fps"].(int); !ok || fps != 24 {
-			t.Fatalf("%ds: fps = %v, want 24", tc.durationSec, body["fps"])
+			t.Fatalf("%s/%ds: fps = %v, want 24", tc.size, tc.durationSec, body["fps"])
 		}
+	}
+}
+
+// ltx25DimsOf 是测试侧的小工具,复用生产解析口径。
+func ltx25DimsOf(size string) (int, int, bool) {
+	return ltx25Dims(map[string]any{"size": size})
+}
+
+// 吸附必须是**向上**的:栅格上的值原样保留,栅格外的值只能往大了走。
+// 这条独立于具体尺寸,任何栅格都得成立。
+func TestLTX25FramesNeverRoundDown(t *testing.T) {
+	for _, size := range []string{"960x544", "544x544", "704x704", "1248x704"} {
+		w, h, _ := ltx25DimsOf(size)
+		step, first := ltx25FrameGrid(w, h)
+		for d := 1; d <= 20; d++ {
+			got := ltx25FramesForDuration(d, w, h, true)
+			if got < d*24 {
+				t.Fatalf("%s/%ds: %d 帧 < %d(向下吸附了)", size, d, got, d*24)
+			}
+			if (got-first)%step != 0 {
+				t.Fatalf("%s/%ds: %d 不在 %d+%dk 栅格上", size, d, got, first, step)
+			}
+			// 只能是「够用的最小一格」:再退一格就不够了
+			if got-step >= d*24 {
+				t.Fatalf("%s/%ds: %d 吸得太远,%d 已经够用", size, d, got, got-step)
+			}
+		}
+	}
+}
+
+// R2 准入:非 32 对齐的尺寸就地 400,且文案要给出最接近的合法尺寸。
+// 700x400 短边合规、只违对齐,单独锁住对齐这一条的报法。
+func TestLTX25RejectsUnalignedSize(t *testing.T) {
+	body := map[string]any{"size": "700x400"}
+	err := applyLTX25Request(body, 10)
+	if err == nil {
+		t.Fatal("700x400 应被拒(700 不是 32 的倍数)")
+	}
+	// 建议值指向菜单上的桶(700x400 的 1.75 最接近 16:9 那档),而不是
+	// 「就近对齐到 32」算出来的 704x416 —— 那是个没配过也没定过价的野值
+	if !strings.Contains(err.Error(), "1248x704") {
+		t.Fatalf("错误文案要给出菜单上最接近的画幅 1248x704,实际: %v", err)
+	}
+	if _, ok := body["num_frames"]; ok {
+		t.Fatal("尺寸不合法时不该再算帧数")
+	}
+}
+
+// R2 准入:短边超 704 就地 400。1080p 交超分链路,不在这个模型上开。
+func TestLTX25RejectsShortEdgeOverCap(t *testing.T) {
+	err := applyLTX25Request(map[string]any{"size": "1920x1080"}, 5)
+	if err == nil {
+		t.Fatal("1920x1080 应被拒(短边 1080 > 704)")
+	}
+	if !strings.Contains(err.Error(), "短边上限") {
+		t.Fatalf("两条全违时要报更根本的短边上限那条,实际: %v", err)
+	}
+}
+
+// 建议值必须落在**上线菜单的官方桶**上,而不只是「随便一个合法尺寸」。
+//
+// 两层要求,少一层都不够:
+//  1. 自己合法 —— 这条是踩出来的:只按 32 就近对齐时,1280x720 的 720 会被抬到 736,
+//     仍然超过 704 的短边上限,等于给了个假建议;
+//  2. 在菜单上 —— 就近对齐还会算出 704x416 这种引擎收得下、但没配过也没定过价的野值。
+//     运营只配 704P 的五个宽高比,建议值就该指向其中之一。
+//
+// 挑桶按**画幅**而不是面积:用户选的是构图。1280x720 要的是 16:9,给 1248x704(1.773)
+// 才是同一个画幅;按面积挑会给出一个画幅不对的桶,构图整个变了。
+func TestLTX25SuggestedSizeIsOfficialBucket(t *testing.T) {
+	// 上线菜单的五个桶(含转置),建议值只能是它们之一
+	menu := map[[2]int]bool{
+		{1248, 704}: true, {704, 1248}: true, // 16:9 / 9:16
+		{928, 704}: true, {704, 928}: true, // 4:3 / 3:4
+		{704, 704}: true, // 1:1
+	}
+	for _, tc := range []struct{ w, h, wantW, wantH int }{
+		{1280, 720, 1248, 704},  // 16:9 → 归到 16:9 的桶,不是把宽留在 1280
+		{1920, 1080, 1248, 704}, // 同一个画幅归到同一个桶
+		{720, 1280, 704, 1248},  // 竖版:跟随朝向自动转置
+		{1080, 1920, 704, 1248},
+		{1024, 768, 928, 704}, // 4:3
+		{768, 1024, 704, 928}, // 3:4
+		{1000, 1000, 704, 704},
+		{700, 400, 1248, 704}, // 短边合规但不对齐;1.75 最接近 16:9 那个桶
+	} {
+		sw, sh := ltx25SuggestSize(tc.w, tc.h)
+		if sw != tc.wantW || sh != tc.wantH {
+			t.Fatalf("%dx%d 的建议值 = %dx%d, want %dx%d", tc.w, tc.h, sw, sh, tc.wantW, tc.wantH)
+		}
+		if !menu[[2]int{sw, sh}] {
+			t.Fatalf("%dx%d 的建议值 %dx%d 不在上线菜单上", tc.w, tc.h, sw, sh)
+		}
+		if err := ltx25ValidateSize(sw, sh); err != nil {
+			t.Fatalf("%dx%d 的建议值 %dx%d 自己就不合法: %v", tc.w, tc.h, sw, sh, err)
+		}
+	}
+}
+
+// 菜单上的五个桶必须条条自洽:合法、且 18 秒(菜单最长档)不超包络。
+// 这是「上线菜单不会被自己的准入校验拒掉」的总闸 —— 破了就是配置一上线全站 400。
+func TestLTX25OfficialMenuPassesItsOwnGates(t *testing.T) {
+	for _, s := range [][2]int{
+		{1248, 704}, {704, 1248}, {928, 704}, {704, 928}, {704, 704},
+	} {
+		w, h := s[0], s[1]
+		if err := ltx25ValidateSize(w, h); err != nil {
+			t.Fatalf("菜单尺寸 %dx%d 过不了尺寸校验: %v", w, h, err)
+		}
+		for _, d := range []int{5, 6, 10, 14, 18} {
+			frames := ltx25FramesForDuration(d, w, h, true)
+			if err := ltx25ValidateEnvelope(w, h, frames); err != nil {
+				t.Fatalf("菜单组合 %dx%d / %ds(%d 帧)过不了包络: %v", w, h, d, frames, err)
+			}
+			// 顺带锁住多卡 SP 整除:菜单里每个组合都不能是那种「排队几分钟后 500」的
+			p := (w / 32) * (h / 32)
+			if seq := p * ((frames-1)/8 + 1); seq%ltx25SequenceParallelSize != 0 {
+				t.Fatalf("菜单组合 %dx%d / %ds 的 seq_len=%d 除不尽 SP=%d",
+					w, h, d, seq, ltx25SequenceParallelSize)
+			}
+		}
+	}
+}
+
+// R2 准入:面积×帧数超包络就地 400,而不是让它排队几分钟后 OOM。
+// 1248x704 的 30 秒是验收用例 #7。
+func TestLTX25RejectsPixelEnvelope(t *testing.T) {
+	err := applyLTX25Request(map[string]any{"size": "1248x704"}, 30)
+	if err == nil {
+		t.Fatal("1248x704 / 30s 应被拒(超显存包络)")
+	}
+	// 文案给出的「最长秒数」必须自己在包络内 —— 否则用户照着改还是失败
+	maxFrames := ltx25MaxFramesForArea(1248, 704)
+	if maxFrames <= 0 || 1248*704*maxFrames > ltx25MaxPixelFrames {
+		t.Fatalf("建议的最大帧数 %d 自己就超包络", maxFrames)
+	}
+	// 实测最大点 1248×704×489(20.375 s)必须仍在包络内 —— 这是包络常量的标定点
+	if 1248*704*489 > ltx25MaxPixelFrames {
+		t.Fatal("包络常量卡掉了实测跑通的 1248x704x489")
+	}
+}
+
+// 包络校验对**调用方自传帧数**这条路同样生效 —— 否则 API 用户能绕过体验区的档位
+// 限制发出必然 OOM 的组合(设计文档 §五)。
+func TestLTX25EnvelopeAppliesToCallerFrames(t *testing.T) {
+	err := applyLTX25Request(map[string]any{"size": "1248x704", "num_frames": 729}, 0)
+	if err == nil {
+		t.Fatal("自传 729 帧 @1248x704 应被包络拒掉")
+	}
+}
+
+// 反过来:合法的自传帧数不能被误伤,也不该被网关改写。
+// 栅格合法性(8k+1 / SP 整除)刻意**不校验** —— SP 是部署侧的数,网关只是抄了现网的 4,
+// 拿它硬拒调用方显式表达的意图误伤成本高于收益,真发错了引擎会拒。
+func TestLTX25KeepsCallerFrames(t *testing.T) {
+	body := map[string]any{"num_frames": 249}
+	mustApply(t, body, 5) // 5 秒本会算成 121
+	if got := body["num_frames"]; got != 249 {
+		t.Fatalf("num_frames = %v, want 249(调用方取值被覆盖了)", got)
+	}
+	// 没被接管的请求也不该被补上 fps
+	if _, ok := body["fps"]; ok {
+		t.Fatal("调用方自传帧数时不应再补 fps")
+	}
+	// 不在 SP 栅格上的自传帧数照样放行,交给引擎判定
+	body = map[string]any{"size": "544x544", "num_frames": 361}
+	mustApply(t, body, 0)
+	if got := body["num_frames"]; got != 361 {
+		t.Fatalf("num_frames = %v, want 361", got)
 	}
 }
 
@@ -64,21 +270,30 @@ func TestLTX25DurationToFrames(t *testing.T) {
 func TestLTX25DropsSecondsAlways(t *testing.T) {
 	// 有时长时
 	body := map[string]any{"seconds": "5"}
-	applyLTX25Request(body, 5)
+	mustApply(t, body, 5)
 	if _, ok := body["seconds"]; ok {
 		t.Fatal("seconds 未被清除(有时长)")
 	}
 	// 没时长时同样要清:提前 return 的分支也不能把它漏下
 	body = map[string]any{"seconds": "5"}
-	applyLTX25Request(body, 0)
+	mustApply(t, body, 0)
 	if _, ok := body["seconds"]; ok {
 		t.Fatal("seconds 未被清除(无时长)")
 	}
 	// 调用方自传帧数时同样要清
 	body = map[string]any{"seconds": "5", "num_frames": 121}
-	applyLTX25Request(body, 5)
+	mustApply(t, body, 5)
 	if _, ok := body["seconds"]; ok {
 		t.Fatal("seconds 未被清除(自传 num_frames)")
+	}
+	// 被准入校验拒掉的那条路也要清:错误路径上 body 不会被发出去,但留着会让
+	// 「先剥字段再校验」这个顺序悄悄反转,下一个人很容易把 delete 挪到 return 之后
+	body = map[string]any{"seconds": "5", "size": "1280x720"}
+	if err := applyLTX25Request(body, 5); err == nil {
+		t.Fatal("1280x720 应被拒")
+	}
+	if _, ok := body["seconds"]; ok {
+		t.Fatal("seconds 未被清除(校验失败路径)")
 	}
 }
 
@@ -89,7 +304,7 @@ func TestLTX25DropsForeignEngineFields(t *testing.T) {
 		"target_video_length": 81, // wan 的 4n+1 @16fps
 		"video_duration":      30, // InfiniteTalk 的输出时长上限
 	}
-	applyLTX25Request(body, 5)
+	mustApply(t, body, 5)
 	for _, key := range []string{"target_video_length", "video_duration"} {
 		if _, ok := body[key]; ok {
 			t.Fatalf("%s 未被清除", key)
@@ -97,28 +312,24 @@ func TestLTX25DropsForeignEngineFields(t *testing.T) {
 	}
 }
 
-// 调用方显式给的帧数优先,不被覆盖 —— metadata 是开放透传的,门面只补默认。
-// 合法性(8k+1)交由引擎判定,与本渠道对 size 的处理同一策略。
-func TestLTX25KeepsCallerFrames(t *testing.T) {
-	body := map[string]any{"num_frames": 249}
-	applyLTX25Request(body, 5) // 5 秒本会算成 121
-	if got := body["num_frames"]; got != 249 {
-		t.Fatalf("num_frames = %v, want 249(调用方取值被覆盖了)", got)
-	}
-	// 没被接管的请求也不该被补上 fps
-	if _, ok := body["fps"]; ok {
-		t.Fatal("调用方自传帧数时不应再补 fps")
-	}
-}
-
 // 没给时长就不写帧数:由引擎按 pipeline 默认帧数决定,门面不替它猜。
 func TestLTX25NoDurationLeavesFramesUnset(t *testing.T) {
 	body := map[string]any{}
-	applyLTX25Request(body, 0)
+	mustApply(t, body, 0)
 	if _, ok := body["num_frames"]; ok {
 		t.Fatal("没给时长却写了 num_frames")
 	}
 	if _, ok := body["fps"]; ok {
 		t.Fatal("没给时长却写了 fps")
+	}
+}
+
+// metadata 反序列化出来的数字是 float64,自传帧数这条路必须认它 ——
+// 只认 int 的话 API 用户传的 num_frames 会被当成「没传」而被网关覆盖,静默失效。
+func TestLTX25AcceptsFloatCallerFrames(t *testing.T) {
+	body := map[string]any{"num_frames": float64(249)}
+	mustApply(t, body, 5)
+	if got := body["num_frames"]; got != float64(249) {
+		t.Fatalf("num_frames = %v, want 249(float 形态的调用方取值被覆盖了)", got)
 	}
 }

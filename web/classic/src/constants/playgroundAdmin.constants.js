@@ -121,12 +121,23 @@ export const PLAYGROUND_FIELD_META = {
 // 取值必须与后端 common.VideoEngineMinimaxH3 一致（后端比较前 lower+trim）。
 export const VIDEO_ENGINE_MINIMAX_H3 = 'minimax-h3';
 
+// LTX-2.5：22B 音视频联合扩散（画面与音轨同步生成），24fps + 8k+1 帧栅格，时长走顶层
+// num_frames。与 wan 的 4n+1 @16fps、H3 的 17n+5 @24fps 都不同。
+// 取值必须与后端 common.VideoEngineLTX25 一致（后端比较前 lower+trim）。
+//
+// ⚠️ 这一项**必须出现在下拉里**，不是可选的补全：后端 ltx25.go 那套整形（秒→帧换算、
+// seconds 剥离、尺寸与显存包络准入）只在 engine === 'ltx-2.5' 时才跑，而 engine 的唯一
+// 来源就是运营在这个下拉里选的值。少了这一项，那套代码一次都不会被触发 —— 而症状是
+// 每个带时长的请求 500（整数秒 × 24 恒 ≡ 0 mod 8，取不到 8k+1 需要的余数 1）。
+export const VIDEO_ENGINE_LTX25 = 'ltx-2.5';
+
 export const VIDEO_ENGINE_OPTIONS_INLINE = [
   {
     value: '',
     label: '默认（LightX2V 系：wan / seedvr2 / infinitetalk / bernini）',
   },
   { value: VIDEO_ENGINE_MINIMAX_H3, label: 'MiniMax H3（vLLM-Omni）' },
+  { value: VIDEO_ENGINE_LTX25, label: 'LTX-2.5（vLLM-Omni，音视频同步生成）' },
 ];
 
 // 语音引擎族。同上，定义在这里、由 audioPlayground.constants.js 再导出。
@@ -287,6 +298,19 @@ export const PLAYGROUND_CATEGORIES = [
             value: ['768P'],
             reason:
               '引擎按首图推画布、短边硬校验为 768，配其它档位不会报错也不会生效（仍出 768P），故此项锁定、不开放编辑。要额外提供 1080P，请在下方模型级「超分档位」加一条 768P → 1080P 的规则——先出 768P 再自动接超分模型；不加则只有 768P 一档。出片分辨率由超分模型的部署配置决定（现网 1920×1080），并自动跟随首图朝向：横图出 1920×1080、竖图出 1080×1920、方图出 1080×1080。',
+            // 这把锁描述的是**某些引擎**的硬约束，不是关键帧这个玩法本身的性质。
+            // exemptEngines 列出「自己认 width/height、不需要被锁」的引擎族。
+            //
+            // 为什么是豁免名单而不是「只对 minimax-h3 生效」的适用名单：wan 的两类
+            // 关键帧实例（engine 留空）自这把锁上线起就一直吃着它，改成适用名单等于
+            // 顺手把它们解锁、让运营为文生视频配的档位顺着三级回落漏进关键帧——那正是
+            // 当初加锁要挡的事，且症状静默。要动 wan 得单独论证，不该搭这次的车。
+            //
+            // LTX-2.5 必须豁免：它**认请求里的 width/height**（首帧图由引擎等比放大到
+            // 覆盖后居中裁剪去适配画布），不是按图推画布。锁不解，它的关键帧会拿到
+            // '768P' 这个档位词发给引擎——而清档位词的 h3DropResolutionToken 是 H3 专属的
+            // （minimax_h3.go），LTX 这条路上没有，引擎收到非 WIDTHxHEIGHT 的 size 直接报错。
+            exemptEngines: [VIDEO_ENGINE_LTX25],
           },
         },
         promptOptimize: true,
@@ -457,9 +481,26 @@ export const tabHasField = (categoryKey, tabKey, field) =>
 // 渲染成只读并展示 reason，体验区据此绕过 getXxxForModel 的三级回落直接用 value。
 // 两侧读同一个函数是关键 —— 各写一份判断，迟早出现「管理端显示 A、体验区用 B」。
 //
-// 目前只有关键帧的 sizes（引擎按首图推画布、短边硬校验 768，见 flf2v tab 注释）。
-export const getTabFieldLock = (categoryKey, tabKey, field) =>
-  getPlaygroundTab(categoryKey, tabKey)?.fieldLocks?.[field] || null;
+// engine 是所选模型声明的引擎族（VideoModelConfig.models[name].engine）。**锁是按引擎
+// 生效的**：同一个 tab 下挂着两个引擎族的模型时，一方的硬约束不该套到另一方头上。
+// 锁在 exemptEngines 里列出自己认画布、不需要被锁的引擎族，命中即返回 null（回落到
+// 运营配置）。不传 engine 时按「不豁免」处理 —— 取不到引擎族就按更保守的那边走。
+//
+// 目前只有关键帧的 sizes（H3 与 wan 按首图推画布、短边硬校验 768；LTX-2.5 认
+// width/height 故豁免，见 flf2v tab 注释）。
+export const getTabFieldLock = (categoryKey, tabKey, field, engine) => {
+  const lock =
+    getPlaygroundTab(categoryKey, tabKey)?.fieldLocks?.[field] || null;
+  if (!lock) return null;
+  const exempt = lock.exemptEngines || [];
+  return exempt.includes(
+    String(engine || '')
+      .trim()
+      .toLowerCase(),
+  )
+    ? null
+    : lock;
+};
 
 // 落在同一份 option 的全部 tab（含跨分类的「视频配音」）。迁移、能力派生、
 // admin 保存都要按 option 维度遍历。返回 [{category, tab}]。

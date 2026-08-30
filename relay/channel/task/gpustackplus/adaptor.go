@@ -523,7 +523,12 @@ func (a *TaskAdaptor) BuildRequestBody(c *gin.Context, info *relaycommon.RelayIn
 	// 每个带时长的请求都 500。判据同样是配置声明的引擎族,不是模型名。
 	isLTX25 := common.VideoEngineFamilyForModel(req.Model, info.OriginModelName, modelName) == common.VideoEngineLTX25
 	if isLTX25 {
-		applyLTX25Request(body, durationSec)
+		// 尺寸与显存包络的准入校验也在里面:那三类输入(非 32 对齐 / 短边超 704 /
+		// 面积×帧数超包络)进了队列也只会 500 或 OOM,挡在网关比让用户排队几分钟后
+		// 失败好。本地 400,不触发跨渠道重试。
+		if err := applyLTX25Request(body, durationSec); err != nil {
+			return nil, localBadRequest(err)
+		}
 	}
 	// s2v(数字人)除外:引擎不读 target_video_length,下发它没有任何效果,只会让人误以为
 	// 时长可控。s2v 的时长走下面的 video_duration。别恢复。
