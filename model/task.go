@@ -106,6 +106,14 @@ func (t *Task) BeforeSave(tx *gorm.DB) error {
 // 定义在 model 包是为了让 BeforeSave 用得上——relay/minimaxv2 依赖 model，反向依赖不成立。
 const TaskAPIProtocolMiniMaxV2 = "minimax_v2"
 
+// TaskAPIProtocolImage 标记「经异步图片协议提交」的任务
+// （docs/image-async-task-design.md §7）。图片与视频共用同一个 platform（渠道类型
+// 数字），任务列表要区分二者只能靠这个带索引的真列。
+//
+// 与 MiniMaxV2 不同，它不经 BeforeSave 从 Properties 镜像：那套镜像是为了让软删能
+// 清空列（v2 的删除是协议侧软删），图片没有这个需求，提交时直接写列即可。
+const TaskAPIProtocolImage = "image"
+
 func (t *Task) SetData(data any) {
 	b, _ := common.Marshal(data)
 	t.Data = json.RawMessage(b)
@@ -182,6 +190,14 @@ type TaskPrivateData struct {
 	// PersistRetryCount 上游已完成但成品落 OBS 失败的重试次数（轮询阶段递增，
 	// 超限才判失败退款，避免瞬时 OBS 抖动丢弃已渲染成品）。见 task_polling.go。
 	PersistRetryCount int `json:"persist_retry_count,omitempty"`
+	// Cancelled 标记该任务是被用户主动取消的（异步图片的 DELETE 端点，见
+	// docs/image-async-task-design.md §5.5）。任务表本身没有 CANCELLED 状态——
+	// 加第八态要动状态机、ToOpenAIVideo 映射和前端所有状态展示，收益不抵改动面。
+	// 取消复用 FAILURE 终态，靠这个布尔在响应层渲染成 "cancelled"。
+	//
+	// 用布尔而不是比对 FailReason 文案：文案会因 i18n / 措辞调整而变，
+	// 比对字符串的判据会在某次无关改动后静默失效。
+	Cancelled bool `json:"cancelled,omitempty"`
 }
 
 // TaskBillingContext 记录任务提交时的计费参数，以便轮询阶段可以重新计算额度。

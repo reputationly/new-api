@@ -21,6 +21,7 @@ package gpustackplus
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"io"
 	"net/http"
@@ -36,6 +37,7 @@ import (
 	"github.com/QuantumNous/new-api/relay/channel/gpustackplus/nfsinput"
 	taskcommon "github.com/QuantumNous/new-api/relay/channel/task/taskcommon"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
+	relayconstant "github.com/QuantumNous/new-api/relay/constant"
 	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/service/mediastore"
 	"github.com/QuantumNous/new-api/types"
@@ -177,7 +179,7 @@ func (a *TaskAdaptor) ValidateRequestAndSetAction(c *gin.Context, info *relaycom
 			fmt.Errorf("媒体存储(OBS)未启用,gpustackplus 渠道无法对外提供成品 URL,请先在系统设置启用"),
 			"media_storage_disabled", http.StatusServiceUnavailable)
 	}
-	if taskErr := relaycommon.ValidateBasicTaskRequest(c, info, constant.TaskActionGenerate); taskErr != nil {
+	if taskErr := relaycommon.ValidateBasicTaskRequest(c, info, taskActionOf(c)); taskErr != nil {
 		return taskErr
 	}
 	// 若超管为该模型配置了时长白名单(系统设置→视频模型配置),按配置校验;未配置则
@@ -206,6 +208,22 @@ func (a *TaskAdaptor) ValidateRequestAndSetAction(c *gin.Context, info *relaycom
 		}
 	}
 	return nil
+}
+
+// taskActionOf 决定本次提交记进任务表的 action。
+//
+// 视频恒为 generate;异步图片要用自己的 imageGenerate / imageEdit —— 不区分的话
+// ValidateBasicTaskRequest 会把它们统一写成 generate,而图片与视频共用同一个 platform
+// (渠道类型数字),任务表里就无从区分了。
+//
+// 值由 middleware.ImageAsyncConvert 放进 c;读 c 里的 action 是既有手法,
+// 见 relay/channel/task/kling/adaptor.go:184。只认图片 action 白名单,
+// 避免别处塞进来的任意字符串污染这一列。
+func taskActionOf(c *gin.Context) string {
+	if a := c.GetString("action"); constant.IsImageTaskAction(a) {
+		return a
+	}
+	return constant.TaskActionGenerate
 }
 
 func (a *TaskAdaptor) BuildRequestURL(info *relaycommon.RelayInfo) (string, error) {
@@ -452,6 +470,11 @@ func (a *TaskAdaptor) BuildRequestBody(c *gin.Context, info *relaycommon.RelayIn
 		// 归视频大类 → 走 VideoModelConfig 上限(newVideoMaterializer),与下线的
 		// AudioX v2a(音乐大类上限)不同,故独立物化函数。
 		refs, err = materializeDubInputs(c, info, taskType, modelName, req)
+	case "i2i":
+		// 图片编辑(异步链路,见 docs/image-async-task-design.md)。
+		// 不能落到下面的 default(materializeVideoInputs):那支只取 images[0] 且
+		// 完全不认蒙版,会让多图融合退化成单图、蒙版被静默丢弃。
+		refs, err = materializeImageEditInputs(c, info, taskType, modelName, req)
 	default:
 		// t2v/i2v/l2va/flf2v/i2i/t2i:有图才物化(纯文本 t2v/t2i 无输入)。
 		// 首尾帧(flf2v):images[0]=首帧→image,images[1]=尾帧→last_frame;其余只取首帧。
@@ -883,6 +906,49 @@ func materializeVideoInputs(c *gin.Context, info *relaycommon.RelayInfo, taskTyp
 			return nil, fmt.Errorf("模型 %s 的任务类型 flf2v(首尾帧)需要首帧和尾帧两张图", modelName)
 		}
 		if err := m.AddString(ctx, nfsinput.FieldLastFrame, 0, false, req.Images[1]); err != nil {
+			m.Cleanup()
+			return nil, err
+		}
+	}
+	return m.Refs(), nil
+}
+
+// materializeImageEditInputs 物化图片编辑(i2i)的输入:底图 1~MaxImageRefs 张 +
+// 可选蒙版(单值)。
+//
+// 与同步链路的 gpustackplus.materializeEditInputs 是**成对实现**,语义必须一致 ——
+// 同一份请求在同步与异步两种模式下若出现"多图只生效一张"或"蒙版没生效"的差异,
+// 正是网关该抹平的东西。两处改动要同步。
+//
+// 蒙版来源是 metadata.mask:JSON 请求里客户端就写在这个键上,multipart 形态由
+// middleware.ImageAsyncConvert 把上传文件转成 data-uri 后也塞到这个键(那边不塞的话
+// 蒙版会被静默丢弃 —— 出图看起来"成功"却没生效,是最难被发现的那类缺陷)。
+func materializeImageEditInputs(c *gin.Context, info *relaycommon.RelayInfo, taskType, modelName string, req relaycommon.TaskSubmitReq) (map[string][]string, error) {
+	if len(req.Images) == 0 {
+		return nil, fmt.Errorf("图片编辑(i2i)必须提供底图:image / images 字段或 multipart 的 image 文件")
+	}
+	if len(req.Images) > nfsinput.MaxImageRefs {
+		return nil, fmt.Errorf("图片编辑最多支持 %d 张底图,当前 %d 张", nfsinput.MaxImageRefs, len(req.Images))
+	}
+
+	mask := strings.TrimSpace(metadataString(req.Metadata, "mask"))
+	// 引擎约束:带蒙版时底图必须恰好 1 张。与同步链路同一条防呆。
+	if mask != "" && len(req.Images) != 1 {
+		return nil, fmt.Errorf("带蒙版(mask)的图片编辑只允许 1 张底图,当前 %d 张", len(req.Images))
+	}
+
+	m := newVideoMaterializer(info, taskType, modelName, req)
+	ctx := c.Request.Context()
+	multi := len(req.Images) > 1
+	// 多输入中途失败时回滚已写文件,避免孤儿。
+	for i, s := range req.Images {
+		if err := m.AddString(ctx, nfsinput.FieldImage, i, multi, s); err != nil {
+			m.Cleanup()
+			return nil, err
+		}
+	}
+	if mask != "" {
+		if err := m.AddString(ctx, nfsinput.FieldImageMask, 0, false, mask); err != nil {
 			m.Cleanup()
 			return nil, err
 		}
@@ -1404,6 +1470,17 @@ func (a *TaskAdaptor) DoResponse(c *gin.Context, resp *http.Response, info *rela
 		return
 	}
 
+	// 异步图片:回 image.generation.job 而不是 video 对象(设计 §5.3)。
+	// 同一个 platform 底下同时跑图片与视频,回错形状的话客户端拿到的是一个
+	// object:"video" 的东西,而它在等 job —— 解析必崩。
+	if info.RelayMode == relayconstant.RelayModeImageSubmit {
+		c.Header("Location", "/v1/images/generations/"+info.PublicTaskID)
+		c.Header("Retry-After", imageRetryAfterSeconds(modelNameOf(info)))
+		c.JSON(http.StatusAccepted,
+			dto.NewImageJob(info.PublicTaskID, info.OriginModelName, time.Now().Unix()))
+		return sr.TaskID, responseBody, nil
+	}
+
 	// 返回给客户端 OpenAI 兼容 video 对象(用公开 task_xxxx ID)。
 	ov := dto.NewOpenAIVideo()
 	ov.ID = info.PublicTaskID
@@ -1413,6 +1490,34 @@ func (a *TaskAdaptor) DoResponse(c *gin.Context, resp *http.Response, info *rela
 	c.JSON(http.StatusOK, ov)
 
 	return sr.TaskID, responseBody, nil
+}
+
+// slowImageModels 慢图片模型清单,用于给出更长的建议轮询间隔。
+//
+// 与同步链路 relay/channel/gpustackplus 里的同名变量读**同一个环境变量**:两条链路对
+// 「哪些模型慢」的认知必须一致,运维只配一处。那边用它放宽阻塞轮询预算,这里用它
+// 决定 Retry-After —— 用途不同,判据同源。
+var slowImageModels = common.GetEnvOrDefaultString(
+	"GPUSTACKPLUS_SLOW_IMAGE_MODELS", "hunyuan-image-3,hunyuanimage-3")
+
+// imageRetryAfterSeconds 建议的轮询间隔。快模型(z-image ~8s)3 秒,
+// 慢模型(HunyuanImage-3.0 端到端 ~110s)10 秒——按 3 秒轮一个两分钟的任务,
+// 客户端要空打 30 多次。
+func imageRetryAfterSeconds(modelName string) string {
+	name := strings.ToLower(strings.TrimSpace(modelName))
+	if name != "" {
+		for _, key := range strings.Split(slowImageModels, ",") {
+			key = strings.ToLower(strings.TrimSpace(key))
+			if key != "" && strings.Contains(name, key) {
+				return "10"
+			}
+		}
+	}
+	return "3"
+}
+
+func modelNameOf(info *relaycommon.RelayInfo) string {
+	return firstNonEmpty(info.UpstreamModelName, info.OriginModelName)
 }
 
 func (a *TaskAdaptor) FetchTask(baseUrl, key string, body map[string]any, proxy string) (*http.Response, error) {
@@ -1433,6 +1538,50 @@ func (a *TaskAdaptor) FetchTask(baseUrl, key string, body map[string]any, proxy 
 		return nil, fmt.Errorf("new proxy http client failed: %w", err)
 	}
 	return client.Do(req)
+}
+
+// CancelTask 实现 channel.TaskCanceller:向门面请求取消任务。
+//
+// 门面语义(见 docs/gpustackplus-sync-image-backpressure.md §4.2):
+// QUEUED/ASSIGNED 从队列摘除;RUNNING 尽力通知 worker 中止;已终态幂等返回。
+//
+// 用独立的短超时:调用方(用户点了取消)在等 HTTP 响应,不能被一个卡住的门面拖住。
+// 同步图片链路里有一份同构实现(gpustackplus.Adaptor.cancelTask),那边是 fire-and-forget
+// 只记日志,这边要把错误交回给调用方决定 —— 两处用途不同,故未合并。
+func (a *TaskAdaptor) CancelTask(ctx context.Context, baseURL, key, upstreamTaskID, proxy string) error {
+	if strings.TrimSpace(upstreamTaskID) == "" {
+		return fmt.Errorf("empty upstream task id")
+	}
+	cctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+
+	uri := fmt.Sprintf("%s/v1/videos/%s/cancel", strings.TrimRight(baseURL, "/"), upstreamTaskID)
+	req, err := http.NewRequestWithContext(cctx, http.MethodPost, uri, nil)
+	if err != nil {
+		return err
+	}
+	if key != "" {
+		req.Header.Set("Authorization", "Bearer "+key)
+	}
+	client, err := service.GetHttpClientWithProxy(proxy)
+	if err != nil {
+		return fmt.Errorf("new proxy http client failed: %w", err)
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	// 404 = 门面已经不认识这个任务(早已完成并被清理)。对「取消」而言这与成功等价,
+	// 按幂等处理,否则用户会看到一个没有意义的失败。
+	if resp.StatusCode == http.StatusNotFound {
+		return nil
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		body, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("cancel endpoint %d: %s", resp.StatusCode, string(body))
+	}
+	return nil
 }
 
 func (a *TaskAdaptor) ParseTaskResult(respBody []byte) (*relaycommon.TaskInfo, error) {

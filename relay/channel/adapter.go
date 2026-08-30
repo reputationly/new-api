@@ -1,6 +1,7 @@
 package channel
 
 import (
+	"context"
 	"io"
 	"net/http"
 
@@ -112,4 +113,17 @@ type TaskAdaptor interface {
 
 type OpenAIVideoConverter interface {
 	ConvertToOpenAIVideo(originTask *model.Task) ([]byte, error)
+}
+
+// TaskCanceller 由能向上游取消任务的适配器可选实现（与 OpenAIVideoConverter 同样是
+// 可选接口，不进 TaskAdaptor 本体 —— 大多数上游没有 cancel 能力，逼它们实现一个
+// 恒返回「不支持」的方法只是噪音）。
+//
+// 调用方用类型断言探测；未实现即视为「上游不可取消」，此时网关侧仍会把任务标记为
+// 已取消并退款，只是 GPU 会把这次计算跑完（产物由上游的 janitor 按 TTL 清理）。
+//
+// 语义要求：best-effort 且幂等。任务已是终态时返回 nil，不要报错 —— 调用方会在
+// 「上游说取消成功」和「上游说本来就结束了」之间做同样的处理。
+type TaskCanceller interface {
+	CancelTask(ctx context.Context, baseURL, key, upstreamTaskID, proxy string) error
 }

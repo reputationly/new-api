@@ -210,6 +210,14 @@ func getModelRequest(c *gin.Context) (*ModelRequest, bool, error) {
 	var modelRequest ModelRequest
 	shouldSelectChannel := true
 	var err error
+	// 异步图片的查询 / 取消：只读本地任务表，没有模型可分发，也不该占渠道。
+	// 必须先于下面所有分支判断，且用带尾斜杠的前缀 —— 提交端点是
+	// /v1/images/generations（无尾斜杠），漏掉尾斜杠会把提交也误判成查询。
+	// 见 docs/image-async-task-design.md §5.2。
+	if strings.Contains(c.Request.URL.Path, "/v1/images/generations/") {
+		c.Set("relay_mode", relayconstant.RelayModeImageFetchByID)
+		return &modelRequest, false, nil
+	}
 	if strings.Contains(c.Request.URL.Path, "/mj/") {
 		relayMode := relayconstant.Path2RelayModeMidjourney(c.Request.URL.Path)
 		if relayMode == relayconstant.RelayModeMidjourneyTaskFetch ||

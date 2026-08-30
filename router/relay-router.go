@@ -126,13 +126,9 @@ func SetRelayRouter(router *gin.Engine) {
 		})
 
 		// image related routes
+		// 注意：/images/generations 与 /images/edits 不在这里——它们支持同步/异步
+		// 双模，需要转换中间件跑在 Distribute 之前，故独立成 imageRouter 分组（见下）。
 		httpRouter.POST("/edits", func(c *gin.Context) {
-			controller.Relay(c, types.RelayFormatOpenAIImage)
-		})
-		httpRouter.POST("/images/generations", func(c *gin.Context) {
-			controller.Relay(c, types.RelayFormatOpenAIImage)
-		})
-		httpRouter.POST("/images/edits", func(c *gin.Context) {
 			controller.Relay(c, types.RelayFormatOpenAIImage)
 		})
 
@@ -185,6 +181,25 @@ func SetRelayRouter(router *gin.Engine) {
 		httpRouter.DELETE("/models/:model", controller.RelayNotImplemented)
 	}
 
+	// 图片端点：同一路径支持同步与异步两种模式（docs/image-async-task-design.md）。
+	//
+	// 为什么要独立分组而不是复用上面的 httpRouter：ImageAsyncConvert 必须在
+	// Distribute 之前执行（它改写 body，而 Distribute 从 body 读 model），而 gin 的
+	// 分组中间件恒先于路由中间件执行——挂成路由级中间件是来不及的。
+	//
+	// 分组定义在 SetRelayRouter 内部、engine 级 BodyStorageCleanup（本函数开头
+	// router.Use）之后，所以 ImageAsyncConvert 里 ReplaceRequestBody 新建的 body
+	// storage 有人收尾。别把它挪到 SetRelayRouter 之外的新文件里再提前调用——
+	// router/video-router.go:50 记录过这个陷阱，代价是 64MB 级请求体的临时文件泄漏。
+	imageRouter := relayV1Router.Group("")
+	imageRouter.Use(middleware.ImageAsyncConvert(), middleware.Distribute())
+	{
+		imageRouter.POST("/images/generations", imageEntry)
+		imageRouter.POST("/images/edits", imageEntry)
+		imageRouter.GET("/images/generations/:task_id", controller.RelayTaskFetch)
+		imageRouter.DELETE("/images/generations/:task_id", controller.RelayTaskCancel)
+	}
+
 	relayMjRouter := router.Group("/mj")
 	relayMjRouter.Use(middleware.RouteTag("relay"))
 	relayMjRouter.Use(middleware.SystemPerformanceCheck())
@@ -219,6 +234,17 @@ func SetRelayRouter(router *gin.Engine) {
 			controller.Relay(c, types.RelayFormatGemini)
 		})
 	}
+}
+
+// imageEntry 图片端点的同步/异步分流。开关识别与请求体改写已由
+// middleware.ImageAsyncConvert 完成，这里只看它留下的标记。
+// 不带 async 的请求走的是与改造前完全相同的那一行。
+func imageEntry(c *gin.Context) {
+	if c.GetBool(middleware.CtxKeyImageAsync) {
+		controller.RelayTask(c)
+		return
+	}
+	controller.Relay(c, types.RelayFormatOpenAIImage)
 }
 
 func registerMjRouterGroup(relayMjRouter *gin.RouterGroup) {

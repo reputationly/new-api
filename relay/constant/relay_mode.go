@@ -43,6 +43,12 @@ const (
 	RelayModeVideoFetchByID
 	RelayModeVideoSubmit
 
+	// 异步图片任务(见 docs/image-async-task-design.md)。
+	// 与 RelayModeImagesGenerations/Edits 是「同一端点的两种模式」:
+	// 请求带 async 开关时由 middleware.ImageAsyncConvert 改写成这两个 mode。
+	RelayModeImageSubmit
+	RelayModeImageFetchByID
+
 	RelayModeRerank
 
 	RelayModeResponses

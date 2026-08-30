@@ -573,6 +573,20 @@ func GenRelayInfo(c *gin.Context, relayFormat types.RelayFormat, request dto.Req
 	case types.RelayFormatTask:
 		info = genBaseRelayInfo(c, nil)
 		info.TaskRelayInfo = &TaskRelayInfo{}
+		// 任务链路的 relay_mode 由中间件 / distributor 经 context 传递，必须压过
+		// genBaseRelayInfo 从 URL path 推出来的值。
+		//
+		// genBaseRelayInfo 里那条「Unknown 才读 context」的回落对本格式不够用：
+		// 它成立的前提是 Path2RelayMode 认不出任务端点的路径（视频、suno、kling、
+		// jimeng、minimax v2 恰好都返回 Unknown，所以一直没暴露问题）。异步图片打破了
+		// 这个前提——它与同步图片**共用同一个路径**，Path2RelayMode 必然返回
+		// RelayModeImagesGenerations，把 context 里的 RelayModeImageSubmit 盖掉，
+		// 于是提交回视频对象、查询因 fetchRespBuilders 查不到而空指针 panic。
+		//
+		// 对既有任务端点无行为变化：它们的 path 推不出 mode，两条路径取到的是同一个值。
+		if mode := c.GetInt("relay_mode"); mode != relayconstant.RelayModeUnknown {
+			info.RelayMode = mode
+		}
 	case types.RelayFormatMjProxy:
 		info = genBaseRelayInfo(c, nil)
 		info.TaskRelayInfo = &TaskRelayInfo{}

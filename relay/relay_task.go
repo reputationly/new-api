@@ -156,6 +156,11 @@ func RelayTaskSubmit(c *gin.Context, info *relaycommon.RelayInfo) (*TaskSubmitRe
 	if adaptor == nil {
 		return nil, service.TaskErrorWrapperLocal(fmt.Errorf("invalid api platform: %s", platform), "invalid_api_platform", http.StatusBadRequest)
 	}
+	// 异步图片:渠道能力判定。放在这里是因为 Distribute 之后才知道 channel_type,
+	// 而又必须早于预扣费——拒绝不该产生扣费/退款往返。见 image_async.go。
+	if taskErr := checkAsyncImageSupported(c, info); taskErr != nil {
+		return nil, taskErr
+	}
 	adaptor.Init(info)
 	// 复位成客户端原始 body 再重建 task_request:上一次尝试可能已把媒体字段改写过
 	// (ReplaceRequestBody 是持久替换),不复位则重试换渠道时会拿到上一轮的改写结果。
@@ -334,6 +339,7 @@ var fetchRespBuilders = map[int]func(c *gin.Context) (respBody []byte, taskResp 
 	relayconstant.RelayModeSunoFetchByID:  sunoFetchByIDRespBodyBuilder,
 	relayconstant.RelayModeSunoFetch:      sunoFetchRespBodyBuilder,
 	relayconstant.RelayModeVideoFetchByID: videoFetchByIDRespBodyBuilder,
+	relayconstant.RelayModeImageFetchByID: imageFetchByIDRespBodyBuilder,
 }
 
 func RelayTaskFetch(c *gin.Context, relayMode int) (taskResp *dto.TaskError) {
