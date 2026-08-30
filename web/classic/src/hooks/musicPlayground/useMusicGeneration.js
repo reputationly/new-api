@@ -53,6 +53,8 @@ import {
   getVideoMaxMBForModel,
   getTranslationForModel,
   MUSIC_ENGINE_MINIMAX_MUSIC3,
+  MUSIC3_DEFAULT_DURATION,
+  music3FramesForSeconds,
 } from '../../constants/musicPlayground.constants';
 
 // 中译英走体验区聊天门面(单次非流式);后端按会话身份注入上游 key。
@@ -253,6 +255,8 @@ const PARAM_FIELDS = [
   'srcTaskLabel',
   // 通用
   'seed',
+  // Music3 专属:最长时长(秒)→ 下发 max_new_tokens
+  'music3Duration',
   'guidanceScale',
   'inferenceSteps',
 ];
@@ -306,6 +310,9 @@ export const useMusicGeneration = (mode = 't2m') => {
     srcTaskLabel: '',
     // 通用高级参数:留空即不下发,走引擎默认。
     seed: '', // 指定后可复现;空 = 随机
+    // Music3 最长时长(秒);'' = 引擎默认。与 ACE-Step 的 duration **分开存**:
+    // 两者语义不同(锚点 vs 上限),共用一个字段会在切模型时把值带错。
+    music3Duration: MUSIC3_DEFAULT_DURATION,
     guidanceScale: '', // 贴合描述程度;空 = 引擎默认
     inferenceSteps: '', // 采样步数;空 = 引擎默认
   });
@@ -1106,9 +1113,15 @@ export const useMusicGeneration = (mode = 't2m') => {
       // 名字叫 tts 而实为音乐,确实别扭 —— 但门面的 kind 只认 task_type,不认引擎族,
       // 要让 t2m 也能指向 vLLM-Omni 得改 gpustack 并等 50 台节点全量升级。等那边铺开
       // 后这里就该摘掉,改回 t2m。
-      // 已核过副作用:TTS 专属的输入物化(voice/ref_audio 等)只对 body 里存在的键生效,
-      // Music3 不发音频输入,是空转;adaptor 里 taskType=="tts" 的 extra_params 折叠
-      // 只搬 emo_* 那几个键,Music3 也没有。
+      // 借道 tts 会连带撞上后端那条路径上的 tts 专属逻辑,共三处,已逐条核过:
+      //   · 图片/空文本校验 —— Music3 无图、歌词必填,不受影响;
+      //   · extra_params 折叠 —— 只搬 emo_* 那几个键,Music3 没有,空转;
+      //   · **参考音物化与字数上限** —— 这两处会误伤,后端已按引擎族让开
+      //     (见 adaptor.go 的 isMusic3)。物化那处曾经真的炸过:IndexTTS 分支硬要
+      //     metadata.voice,而界面上根本没有这个上传位。
+      // 教训记在这:我上一版在这里写"物化只对存在的键生效、是空转",那是没读代码就下的
+      // 断言 —— materializeTTSInputs 是无条件调用且硬校验 voice。借用别人的 task_type
+      // 时,必须把那条路径上的分支逐个列出来查,不能只查看起来相关的两处。
       const resolvedTaskType =
         resolvedEngine === MUSIC_ENGINE_MINIMAX_MUSIC3
           ? 'tts'
@@ -1152,6 +1165,22 @@ export const useMusicGeneration = (mode = 't2m') => {
           // 空 instructions 让它生成一段无从解释的编曲。
           if (effectiveText.trim())
             metadata.instructions = effectiveText.trim();
+
+          // 最长时长 → max_new_tokens(引擎 25 fps)。官方 curl 即此形态
+          // ("max_new_tokens": 750 = 30 秒)。是**上限**不是目标:模型吐出
+          // end-of-audio 会提前结束,所以成品通常短于这个数。
+          const frames = music3FramesForSeconds(params.music3Duration);
+          if (frames) metadata.max_new_tokens = frames;
+
+          // 随机种子。seed 与 max_new_tokens 都是引擎 OpenAICreateSpeechRequest 的
+          // **一等字段**(不是 extra_params),经 metadata 平铺到 body 顶层即可到达。
+          // 此前这两项一个都没发、面板上也不给控件 —— 那是拿"我们没实现"当成了
+          // "模型不支持",推理反了。
+          const music3Seed = String(params.seed ?? '').trim();
+          if (music3Seed !== '') {
+            const n = parseInt(music3Seed, 10);
+            if (Number.isFinite(n) && n >= 0) metadata.seed = n;
+          }
         } else if (resolvedEngine === 'acestep') {
           // ── ACE-Step:歌词/时长/驱动音频/BPM/演唱语言 ──
           const lyrics = (params.lyrics || '').trim();

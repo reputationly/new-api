@@ -361,6 +361,12 @@ func (a *TaskAdaptor) BuildRequestBody(c *gin.Context, info *relaycommon.RelayIn
 	if taskType == "s2v" && len(req.Images) > 1 {
 		return nil, localBadRequest(fmt.Errorf("模型 %s 的任务类型 s2v(数字人)只接受一张人物图,多传的图不会生效", modelName))
 	}
+	// MiniMax-Music3 借用 task_type=tts 抵达引擎的 /v1/tasks/audio/(它本就是
+	// /v1/audio/speech 的异步孪生),但**它不是语音模型** —— 下面几处 tts 专属逻辑
+	// 要按引擎族让开。判据是配置声明(MusicModelConfig.models[].engine)而不是模型名
+	// substring,与本仓其余引擎族判定同源。
+	isMusic3 := common.MusicEngineFamilyForModel(req.Model, info.OriginModelName, modelName) ==
+		common.MusicEngineMinimaxMusic3
 	if taskType == "tts" {
 		// 语音合成不接受图片输入(参考音走 metadata.voice,下面单独物化)。
 		if req.HasImage() {
@@ -369,8 +375,14 @@ func (a *TaskAdaptor) BuildRequestBody(c *gin.Context, info *relaycommon.RelayIn
 		if strings.TrimSpace(req.Prompt) == "" {
 			return nil, localBadRequest(fmt.Errorf("模型 %s 的任务类型 tts 需要合成文本(prompt)", modelName))
 		}
-		// 字数上限(AudioModelConfig,按模型/全局默认;0=不限制):就地本地 400,防前端绕过。
-		if err := common.ValidateAudioTextForModel(taskType, req.Prompt, req.Model, info.OriginModelName, modelName); err != nil {
+		// 字数上限:按模型归属的那份配置查,不按 task_type 猜。Music3 配在
+		// MusicModelConfig 里(体验区把它挂在音乐页),拿 AudioModelConfig 去查会查不到、
+		// 落到全局音频默认值 —— 运营在音乐配置里给它设的上限就成了摆设,且不报错。
+		if isMusic3 {
+			if err := common.ValidateMusicTextForModel(taskType, req.Prompt, req.Model, info.OriginModelName, modelName); err != nil {
+				return nil, localBadRequest(err)
+			}
+		} else if err := common.ValidateAudioTextForModel(taskType, req.Prompt, req.Model, info.OriginModelName, modelName); err != nil {
 			return nil, localBadRequest(err)
 		}
 	}
@@ -401,7 +413,13 @@ func (a *TaskAdaptor) BuildRequestBody(c *gin.Context, info *relaycommon.RelayIn
 	var refs map[string][]string
 	switch taskType {
 	case "tts":
-		if IsOmniTTSModel(modelName) {
+		if isMusic3 {
+			// Music3 没有任何音频输入:人声是它按歌词自己唱出来的,不需要参考音色。
+			// 走下面 IndexTTS 那支会撞上"必填 voice"的硬校验 —— 那道校验是给语音克隆
+			// 定的,而 IsOmniTTSModel 是模型名 substring 白名单(qwen3-tts/voxcpm/…),
+			// minimax-music3 一个都不匹配,就掉进了 IndexTTS 分支。
+			// 什么都不物化,refs 保持 nil。
+		} else if IsOmniTTSModel(modelName) {
 			// vLLM-Omni:参考音走 ref_audio(+ MOSS-TTSD 第二说话人 ref_audio_2),
 			// 均可选;预设音色走标量 speaker 透传(不物化)。VoiceGenerator/SoundEffect
 			// 纯文本无参考音。

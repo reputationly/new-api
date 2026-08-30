@@ -99,3 +99,34 @@ func TestFoldKeepsExistingExtra(t *testing.T) {
 		t.Fatal("顶层 lang 未删除")
 	}
 }
+
+// MiniMax-Music3 借用 task_type=tts 抵达引擎的 /v1/tasks/audio/,但它不是语音模型。
+// tts 路径上有三处专属逻辑,其中两处必须按引擎族让开 —— 这一组锁住"让开"这件事:
+//
+//  1. 参考音物化:IndexTTS 那支硬要 metadata.voice(语音克隆的必填项),而 Music3
+//     的人声是按歌词自己唱出来的。曾经这里就是照 IndexTTS 判的,现网报
+//     「任务类型 tts 需要参考音色」,界面上根本没有这个上传位。
+//  2. 字数上限:Music3 配在 MusicModelConfig 里(体验区挂在音乐页),拿
+//     AudioModelConfig 去查会查不到、落到全局默认 —— 运营设的上限成了摆设,且不报错。
+//
+// 判据是**配置声明的引擎族**,不是模型名 substring:IsOmniTTSModel 正是靠名字判的,
+// 而 minimax-music3 不含它白名单里的任何一个 token,这才掉进了 IndexTTS 分支。
+func TestIsOmniTTSModelDoesNotCoverMusic3(t *testing.T) {
+	// 锁住"名字判不出来"这个事实本身 —— 它是上面那条 bug 的成因。
+	// 哪天有人把 music3 加进那个白名单,这条会提醒他:那不是正确的修法,
+	// Music3 不该被当成 Omni TTS 模型(它没有 speaker 预设、也没有 ref_audio 语义)。
+	if IsOmniTTSModel("minimax-music3") {
+		t.Fatal("minimax-music3 不该被 IsOmniTTSModel 判为真 —— 它不是 TTS 模型;" +
+			"tts 路径上的让开应按引擎族(MusicEngineFamilyForModel)判")
+	}
+	// 反向:真正的 Omni TTS 家族仍要判得出来,别把白名单改坏了
+	for _, m := range []string{"qwen3-tts", "voxcpm2", "cosyvoice3", "glm-tts", "moss-ttsd"} {
+		if !IsOmniTTSModel(m) {
+			t.Fatalf("%s 应判为 Omni TTS", m)
+		}
+	}
+	// IndexTTS 仍走旧路径(必填 voice)
+	if IsOmniTTSModel("indextts-2.5") {
+		t.Fatal("indextts 系应走旧的必填参考音路径")
+	}
+}

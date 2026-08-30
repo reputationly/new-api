@@ -95,6 +95,40 @@ export const MUSIC_TAB_ORDER = ['t2m', 'cover', 'repaint'];
 export const MUSIC_DURATIONS = ['', '30', '60', '90', '120'];
 export const MUSIC_DEFAULT_DURATION = '';
 
+// ── MiniMax-Music3 参数 ────────────────────────────────────────
+// 时长与 ACE-Step 的语义**不同**,不能共用那个下拉。
+//   ACE-Step:audio_duration 是"参考锚点",成品在附近浮动。
+//   Music3  :max_new_tokens 是**帧数上限**(25 fps),模型吐出 end-of-audio 就提前结束。
+//            所以它是"最长不超过",不是"大约多长"。文案必须区分,否则用户会以为选 60
+//            就一定出 60 秒。
+// 官方 curl 即 "max_new_tokens": 750(= 30 秒);README 限制一节写明单次上限 9000 帧
+// (= 360 秒),模型卡称可出五分钟级的完整歌曲。
+export const MUSIC3_FRAMES_PER_SECOND = 25;
+export const MUSIC3_MAX_FRAMES = 9000;
+// 档位最高给到 300 秒 = **模型卡声明的五分钟**,不是引擎那个 9000 帧硬上限
+// (360 秒)。两个数字都真实,但含义不同:300 是厂商说它能写完整歌曲的长度,360 只是
+// 请求侧钳位的边界。给到 360 等于替厂商声明一个它没声明的能力;而 max_new_tokens
+// 是上限、模型唱完自己收尾,给不到 360 也不损失什么。
+export const MUSIC3_DURATIONS = [
+  '',
+  '30',
+  '60',
+  '90',
+  '120',
+  '180',
+  '240',
+  '300',
+];
+export const MUSIC3_DEFAULT_DURATION = '';
+
+// 秒 → max_new_tokens。留空/非法返回 null(不下发,由引擎按自己的默认走)。
+// 上限按 MUSIC3_MAX_FRAMES 封顶:发超了引擎侧要么拒、要么截断,都不如这里先钳住。
+export const music3FramesForSeconds = (seconds) => {
+  const sec = parseInt(seconds, 10);
+  if (!Number.isFinite(sec) || sec <= 0) return null;
+  return Math.min(sec * MUSIC3_FRAMES_PER_SECOND, MUSIC3_MAX_FRAMES);
+};
+
 // 提示词预设(风格/描述 caption,点击填入输入框)。取自 ACE-Step 官方
 // examples/simple_mode 的 description 风格(自然语言描述,sample 模式据此自动配词),
 // 刻意拉开风格分布:人声抒情 / 国风电子 / 影视器乐 / 冥想器乐,快慢与人声器乐都覆盖。
