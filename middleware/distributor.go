@@ -214,7 +214,8 @@ func getModelRequest(c *gin.Context) (*ModelRequest, bool, error) {
 	// 必须先于下面所有分支判断，且用带尾斜杠的前缀 —— 提交端点是
 	// /v1/images/generations（无尾斜杠），漏掉尾斜杠会把提交也误判成查询。
 	// 见 docs/image-async-task-design.md §5.2。
-	if strings.Contains(c.Request.URL.Path, "/v1/images/generations/") {
+	if strings.Contains(c.Request.URL.Path, "/v1/images/generations/") ||
+		strings.Contains(c.Request.URL.Path, "/pg/images/generations/") {
 		c.Set("relay_mode", relayconstant.RelayModeImageFetchByID)
 		return &modelRequest, false, nil
 	}

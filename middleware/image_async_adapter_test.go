@@ -402,3 +402,32 @@ func TestAsyncImageSubmitIsRecognizedDownstream(t *testing.T) {
 			"task.APIProtocol would never be set, and the fetch/cancel guards would reject the task")
 	}
 }
+
+// 体验区的分组选择必须活到 Distribute（code review P2）。
+//
+// distributor 在 /pg/ 路径下从请求体读 group（「统一让请求体里的 group 生效，否则
+// 图片生成会忽略用户选择的分组」）。转换后顶层丢了 group，Distribute 解出空值就回落
+// 默认分组 —— 同一个模型同步走对分组、异步走默认分组，是纯回归，且不报错、只体现在
+// 计费与可用渠道上，极难被发现。
+func TestImageAsyncConvertKeepsGroupAtTopLevel(t *testing.T) {
+	body := `{"model":"z-image","prompt":"a cat","async":true,"group":"vip"}`
+	_, probe := runImageAsync(t, "/pg/images/generations", "application/json", body, nil)
+
+	if !probe.isAsync {
+		t.Fatal("async:true was not recognized")
+	}
+	var got map[string]any
+	if err := common.Unmarshal([]byte(probe.body), &got); err != nil {
+		t.Fatalf("rewritten body is not valid json: %s", err)
+	}
+	if got["group"] != "vip" {
+		t.Errorf("group lost from top level: %+v", got)
+	}
+	// 同时必须从 metadata 剥掉：metadata 会被适配器整体透传给门面再转交引擎，
+	// 而 group 是网关自己的路由概念。同步路径下它落在 Extra 里且不外泄，
+	// 异步不该比同步多发字段给上游。
+	md, _ := got["metadata"].(map[string]any)
+	if _, leaked := md["group"]; leaked {
+		t.Errorf("group leaked into metadata (would be forwarded upstream): %+v", md)
+	}
+}

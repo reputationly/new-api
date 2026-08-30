@@ -33,11 +33,13 @@ const ImageBody = ({ mode }) => {
     availableSizes,
     messages,
     generating,
+    hasResumableTask,
     locked,
     turnLimitReached,
     missingRequiredImage,
     generate,
     regenerate,
+    refetchImage,
     newConversation,
     conversations,
     currentConvId,
@@ -107,6 +109,25 @@ const ImageBody = ({ mode }) => {
             onClick={() => regenerate(m.prompt)}
           >
             重试
+          </Button>
+        </div>
+      );
+    }
+    // 轮询撞上限：任务还在服务端跑（钱也扣了），给一个用原 taskId 续查的入口。
+    // 走 regenerate 会重新提交、再扣一次费，这里必须是 refetchImage。
+    if (m.pollTimedOut) {
+      return (
+        <div>
+          <div style={{ color: 'var(--adm-color-weak)' }}>
+            生成时间较长，任务仍在后台处理
+          </div>
+          <Button
+            size='mini'
+            fill='outline'
+            style={{ marginTop: 8 }}
+            onClick={() => refetchImage(m.id)}
+          >
+            继续获取
           </Button>
         </div>
       );
@@ -202,12 +223,15 @@ const ImageBody = ({ mode }) => {
               ? '请先上传底图'
               : '描述你想要的图片…'
         }
-        // 图片生成是一次同步请求,没有 taskId 可续查:切标签/返回都会卸载本页,在途请求
-        // 随之作废(下次进来只会看到「生成已中断」,见 useImageGeneration 的
-        // markInterruptedAsFailed)。视频/音乐那套「切走再回来接着轮询」在这里不成立,
-        // 只能把话说在前面 —— 仅生成中显示,平时不占位。
+        // 同步生图没有 taskId 可续查:切标签/返回会卸载本页,在途请求随之作废
+        // (下次进来只看到「生成已中断」,见 useImageGeneration 的 markInterruptedAsFailed),
+        // 只能把话说在前面。
+        //
+        // 异步任务不受这个限制 —— 它有 taskId,回来能接着轮询,此时再警告就是误导,
+        // 会把用户按在页面上干等本可以离开的几十秒。两种模式同时存在(第三方模型走同步、
+        // 自建模型走异步),所以判据是 hasResumableTask 而不是某个全局开关。
         extra={
-          generating ? (
+          generating && !hasResumableTask ? (
             <div className='m-locked-hint' style={{ padding: '0 4px 8px' }}>
               生成中，请勿切换标签或返回上一页，否则本次生成会中断。
             </div>

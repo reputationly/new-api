@@ -31,6 +31,7 @@ const ImagePlaygroundBody = ({ mode }) => {
     missingRequiredImage,
     generate,
     regenerate,
+    refetchImage,
     newConversation,
     clearHistory,
     deleteHistoryItem,
@@ -74,6 +75,7 @@ const ImagePlaygroundBody = ({ mode }) => {
           styleState={styleState}
           onSend={generate}
           onRegenerate={regenerate}
+          onRefetch={refetchImage}
           onClear={newConversation}
         />
       </div>

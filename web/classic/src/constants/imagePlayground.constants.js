@@ -70,6 +70,31 @@ export const IMAGE_HISTORY_LIMIT = 10;
 // 单段对话内最多生成次数
 export const IMAGE_CONV_TURN_LIMIT = 10;
 
+// ——— 异步生图（提交拿 task_id → 轮询）———
+//
+// 只有自建渠道（GPUStackPlus）支持异步；第三方渠道会返回 async_not_supported，
+// 前端据此按模型回落同步（见 useImageGeneration 的 asyncCapableRef）。
+// 异步的意义在慢模型：HunyuanImage-3.0 端到端约 110s、冷启可达 260s，
+// 同步模式下页面得一直挂着，刷一下就前功尽弃。
+
+// 提交异步任务的端点与同步同址，靠这个 body 字段区分。
+export const IMAGE_ASYNC_FIELD = 'async';
+
+// 查询 / 取消端点（:task_id 由调用方拼接）
+export const IMAGE_ASYNC_TASK_ENDPOINT = '/pg/images/generations';
+
+// 后端 402/400 的能力缺失码：收到即说明该模型所在渠道不支持异步。
+export const IMAGE_ASYNC_UNSUPPORTED_CODE = 'async_not_supported';
+
+// 轮询间隔兜底（秒）。正常走响应头 Retry-After —— 后端按模型快慢给 3 或 10，
+// 拿不到才用这个值。
+export const IMAGE_POLL_INTERVAL_SEC = 3;
+
+// 单个任务的轮询上限（次）。按最坏情况估：冷启 260s + 排队，留足余量。
+// 撞上限不判失败，只停轮并标记，允许用户手动「继续获取」——任务还在后台跑，
+// 判失败会让已经扣掉的钱看起来白花。
+export const IMAGE_POLL_MAX_TRIES = 200;
+
 export const IMAGE_GEN_STATUS = {
   PENDING: 'pending',
   SUCCESS: 'success',

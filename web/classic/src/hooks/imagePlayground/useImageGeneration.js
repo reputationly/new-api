@@ -34,6 +34,11 @@ import {
   IMAGE_I2I_CAPABILITY,
   IMAGE_MAX_EDIT_IMAGES,
   IMAGE_GEN_STATUS,
+  IMAGE_ASYNC_FIELD,
+  IMAGE_ASYNC_TASK_ENDPOINT,
+  IMAGE_ASYNC_UNSUPPORTED_CODE,
+  IMAGE_POLL_INTERVAL_SEC,
+  IMAGE_POLL_MAX_TRIES,
   IMAGE_HISTORY_LIMIT,
   IMAGE_CONV_TURN_LIMIT,
   getSizesForModel,
@@ -86,15 +91,25 @@ const persistConversations = (storageKey, list) => {
 let idSeq = 0;
 const genId = () => `img-${Date.now()}-${idSeq++}`;
 
-// 图片生成是一次同步请求,没有可续查的任务句柄(不像视频有 taskId)。切走页面会卸载本
-// 页,在途请求随之丢弃、其完成回调落在已卸载实例上失效 → 结果连 localStorage 都没落。
-// 因此初始加载时残留的 pending 助手消息一定是被打断的,判为失败(可重发),避免历史里永远
-// 卡在「生成中」。仅在 mount 载入时调用:此刻不可能有真正进行中的生成。
+// 同步生图是一次性请求,没有可续查的句柄:切走页面会卸载本页,在途请求随之丢弃、
+// 其完成回调落在已卸载实例上失效 → 结果连 localStorage 都没落。所以初始加载时残留的
+// pending 同步消息一定是被打断的,判为失败(可重发),避免历史里永远卡在「生成中」。
+//
+// **异步消息是例外,必须放过**:它有 imageTasks[].taskId,任务在服务端继续跑,刷新后
+// 可以接着轮询(resumeImagePolling)。把它一并判失败会让用户看到「失败」、而钱已经扣了、
+// 图其实几十秒后就好了 —— 比同步被打断更糟。判据是「有没有 taskId」,不是「是不是
+// pending」。仅在 mount 载入时调用。
+const hasPendingTask = (m) =>
+  Array.isArray(m?.imageTasks) &&
+  m.imageTasks.some((t) => t && t.taskId && t.status === 'pending');
+
 const markInterruptedAsFailed = (list, errText) =>
   (Array.isArray(list) ? list : []).map((conv) => ({
     ...conv,
     messages: (conv.messages || []).map((m) =>
-      m.role === 'assistant' && m.status === IMAGE_GEN_STATUS.PENDING
+      m.role === 'assistant' &&
+      m.status === IMAGE_GEN_STATUS.PENDING &&
+      !hasPendingTask(m)
         ? { ...m, status: IMAGE_GEN_STATUS.FAILED, error: errText }
         : m,
     ),
@@ -155,7 +170,9 @@ export const useImageGeneration = ({
     return stripped;
   });
   const [currentConvId, setCurrentConvId] = useState(null);
-  const [generating, setGenerating] = useState(false);
+  // submitting 只覆盖「请求在飞」那一小段；异步模式下提交完成 ≠ 生成完成，
+  // 对外的 generating 还要算上仍在轮询的任务（见下方 generating 的定义）。
+  const [submitting, setSubmitting] = useState(false);
 
   // 当前对话的消息（中间区显示）
   const messages = useMemo(() => {
@@ -165,6 +182,15 @@ export const useImageGeneration = ({
 
   // 一旦进入某个对话（已生成或打开了历史）即锁定参数，直到「新对话」
   const locked = currentConvId !== null;
+
+  // 当前会话是否有「切走再回来还能接着查」的异步任务。
+  // 给 UI 用：同步生成一断就没了，必须警告用户别切页；异步不用警告，切了也能恢复。
+  // 两种模式会同时存在（第三方模型走同步、自建模型走异步），所以不能按全局开关判，
+  // 只能看这条会话里实际有没有任务句柄。
+  const hasResumableTask = useMemo(
+    () => messages.some((m) => hasPendingTask(m)),
+    [messages],
+  );
 
   // 当前对话已生成次数 / 是否到达上限
   const turnsUsed = useMemo(
@@ -485,6 +511,181 @@ export const useImageGeneration = ({
     });
   }, []);
 
+  // ——— 异步生图：能力缓存 + 轮询 ———
+
+  // 模型 → 是否支持异步。前端拿不到「模型属于哪个渠道」（models 来自 /api/user/models，
+  // 不带渠道信息），所以只能试错：首次带 async 提交，收到 async_not_supported 就记下来，
+  // 之后这个模型直接走同步，不再白试。ref 而非 state：它不参与渲染，改它不该触发重渲。
+  const asyncCapableRef = useRef(new Map());
+
+  // 进行中的轮询槽：msgId → { convId, timer, canceled }。
+  // 与视频 hook 同一手法——轮询回调要读最新值，不能走渲染。
+  const pollSlotsRef = useRef(new Map());
+  // generating 由「还剩几个活跃槽」派生，槽是 ref 所以要手动同步到 state。
+  const [activePolls, setActivePolls] = useState(0);
+  const syncActivePolls = useCallback(() => {
+    setActivePolls(pollSlotsRef.current.size);
+  }, []);
+
+  const stopPolling = useCallback(
+    (msgId) => {
+      const slot = pollSlotsRef.current.get(msgId);
+      if (!slot) return;
+      slot.canceled = true;
+      if (slot.timer) clearTimeout(slot.timer);
+      pollSlotsRef.current.delete(msgId);
+      syncActivePolls();
+    },
+    [syncActivePolls],
+  );
+
+  // 卸载时清掉所有定时器：回调落在已卸载实例上除了报警告没有意义，
+  // 任务本身在服务端继续跑，下次进页面由 resume 接手。
+  useEffect(
+    () => () => {
+      pollSlotsRef.current.forEach((slot) => {
+        slot.canceled = true;
+        if (slot.timer) clearTimeout(slot.timer);
+      });
+      pollSlotsRef.current.clear();
+    },
+    [],
+  );
+
+  // pollOnce 要在自己的定时器回调里递归调度，经 ref 间接引用绕开 TDZ。
+  const pollOnceRef = useRef(null);
+
+  // 轮询一条消息名下的所有任务。每完成一个就写回一个（渐进展示）——
+  // 多候选是 N 个独立任务，等齐了再一次性显示会白白浪费先出来的那几张。
+  const pollOnce = useCallback(
+    async (convId, msgId, tries) => {
+      const slot = pollSlotsRef.current.get(msgId);
+      if (!slot || slot.canceled) return;
+
+      const snapshot = slot.tasks;
+      const pending = snapshot.filter((x) => x.status === 'pending');
+      if (pending.length === 0) return;
+
+      await Promise.allSettled(
+        pending.map(async (task) => {
+          try {
+            const res = await API.get(
+              `${IMAGE_ASYNC_TASK_ENDPOINT}/${task.taskId}`,
+              { skipErrorHandler: true },
+            );
+            const d = res?.data || {};
+            if (d.status === 'completed') {
+              const url = (d.data || [])[0]?.url || '';
+              task.status = url ? 'done' : 'failed';
+              task.url = url;
+              if (!url) task.error = t('未返回图片数据');
+            } else if (d.status === 'failed' || d.status === 'cancelled') {
+              task.status = 'failed';
+              task.error = d.error?.message || t('图片生成失败');
+            }
+            // queued / in_progress：保持 pending，下一轮再看
+          } catch (e) {
+            // 轮询瞬时错误不判失败，继续重试直到撞上限：网络抖一下就把任务判死，
+            // 用户会看到「失败」而服务端其实出图了。
+            void e;
+          }
+        }),
+      );
+
+      if (slot.canceled) return;
+
+      const done = snapshot.filter((x) => x.status === 'done');
+      const failed = snapshot.filter((x) => x.status === 'failed');
+      const stillPending = snapshot.filter((x) => x.status === 'pending');
+
+      const patch = {
+        imageTasks: snapshot.map((x) => ({ ...x })),
+        images: done.map((x) => x.url),
+        imageSeeds: done.map((x) => x.seed ?? null),
+      };
+
+      if (stillPending.length === 0) {
+        // 全部终态：有一张出来就算成功（与同步路径「部分成功仍展示」的口径一致）。
+        patch.status =
+          done.length > 0 ? IMAGE_GEN_STATUS.SUCCESS : IMAGE_GEN_STATUS.FAILED;
+        if (done.length === 0) {
+          patch.error = failed[0]?.error || t('图片生成失败');
+        }
+        patchConvMessage(convId, msgId, patch);
+        stopPolling(msgId);
+        if (done.length > 0 && failed.length > 0) {
+          showError(
+            t('已生成 {{ok}} 张，{{fail}} 张失败：', {
+              ok: done.length,
+              fail: failed.length,
+            }) + (failed[0]?.error || ''),
+          );
+        }
+        return;
+      }
+
+      patchConvMessage(convId, msgId, patch);
+
+      if (tries >= IMAGE_POLL_MAX_TRIES) {
+        // 撞上限只停轮 + 标记，不判失败：任务还在服务端跑，钱也扣了，
+        // 判失败等于告诉用户「白花了」。留 pollTimedOut 供 UI 提供「继续获取」。
+        patchConvMessage(convId, msgId, { pollTimedOut: true });
+        stopPolling(msgId);
+        return;
+      }
+
+      slot.timer = setTimeout(
+        () => pollOnceRef.current(convId, msgId, tries + 1),
+        slot.intervalMs,
+      );
+    },
+    [patchConvMessage, stopPolling, t],
+  );
+  pollOnceRef.current = pollOnce;
+
+  // 为一条消息（重新）开轮询。已在轮询同一条则跳过，避免重复定时器。
+  const startPolling = useCallback(
+    (convId, msgId, tasks, intervalSec) => {
+      if (pollSlotsRef.current.has(msgId)) return;
+      pollSlotsRef.current.set(msgId, {
+        convId,
+        canceled: false,
+        timer: null,
+        tasks: tasks.map((x) => ({ ...x })),
+        intervalMs: Math.max(1, intervalSec || IMAGE_POLL_INTERVAL_SEC) * 1000,
+      });
+      syncActivePolls();
+      const slot = pollSlotsRef.current.get(msgId);
+      slot.timer = setTimeout(
+        () => pollOnceRef.current(convId, msgId, 1),
+        slot.intervalMs,
+      );
+    },
+    [syncActivePolls],
+  );
+
+  // 挂载后为仍在进行中的异步任务恢复轮询：刷新 / 切走再回来不丢进度。
+  // 依赖 conversations 首次就绪即可，故只跑一次（跑多次会被 startPolling 的去重挡掉，
+  // 但没必要每次 conversations 变都扫一遍）。
+  // 对外的「生成中」：请求在飞，或还有任务在轮询。
+  // 异步下这两段是分离的——提交毫秒级返回，真正的等待发生在轮询阶段，
+  // 只看 submitting 会让输入框在图还没出来时就解锁，用户能连着发第二次。
+  const generating = submitting || activePolls > 0;
+
+  const resumedRef = useRef(false);
+  useEffect(() => {
+    if (resumedRef.current || conversations.length === 0) return;
+    resumedRef.current = true;
+    conversations.forEach((conv) => {
+      (conv.messages || []).forEach((m) => {
+        if (m.role !== 'assistant' || m.status !== IMAGE_GEN_STATUS.PENDING)
+          return;
+        if (!hasPendingTask(m)) return;
+        startPolling(conv.id, m.id, m.imageTasks, IMAGE_POLL_INTERVAL_SEC);
+      });
+    });
+  }, [conversations, startPolling]);
+
   // 核心：生成图片（追加到当前对话；无当前对话则新建一个并锁定参数）
   const generate = useCallback(
     async (prompt) => {
@@ -591,6 +792,9 @@ export const useImageGeneration = ({
         size: params.size,
         prompt: text,
         images: [],
+        // 异步任务槽（每个候选一个）。同步路径留空，markInterruptedAsFailed 据此
+        // 区分「同步被打断」与「异步可续查」。
+        imageTasks: [],
       };
 
       setConversations((prev) => {
@@ -627,7 +831,7 @@ export const useImageGeneration = ({
         return next;
       });
       if (currentConvId == null) setCurrentConvId(convId);
-      setGenerating(true);
+      setSubmitting(true);
 
       try {
         const reqBody = {
@@ -700,12 +904,96 @@ export const useImageGeneration = ({
             .filter(Boolean);
         };
 
+        const bodyFor = (seed, extra) => ({
+          ...reqBody,
+          ...(seed == null ? {} : { seed }),
+          ...extra,
+        });
+
+        // ——— 先试异步 ———
+        //
+        // 异步只有自建渠道（GPUStackPlus）支持，而前端不知道模型属于哪个渠道，
+        // 所以只能试错：收到 async_not_supported 就记下这个模型、当场改走同步。
+        // 代价是第三方模型首次多一次 400 往返（后端在选完渠道后立刻拒，不碰上游，
+        // 也不建任务、不扣费），之后由 asyncCapableRef 直接短路。
+        if (asyncCapableRef.current.get(params.model) !== false) {
+          const submits = await Promise.allSettled(
+            seeds.map((seed) =>
+              API.post(endpoint, bodyFor(seed, { [IMAGE_ASYNC_FIELD]: true }), {
+                skipErrorHandler: true,
+              }),
+            ),
+          );
+
+          // 判据是「有没有真的建起任务」，不是「有没有人报 unsupported」。
+          // 顺序反过来的话，一旦出现「部分成功 + 部分报不支持」，已建的任务会被
+          // 丢在服务端没人轮询 —— 那笔钱已经扣了，图也会照常生成，只是没人来取。
+          const tasks = [];
+          const submitFailures = [];
+          let intervalSec = IMAGE_POLL_INTERVAL_SEC;
+          submits.forEach((r, i) => {
+            if (r.status !== 'fulfilled') {
+              submitFailures.push(
+                r.reason?.response?.data?.error?.message ||
+                  r.reason?.response?.data?.message ||
+                  r.reason?.message ||
+                  t('图片生成失败'),
+              );
+              return;
+            }
+            const taskId = r.value?.data?.id;
+            if (!taskId) {
+              submitFailures.push(t('未返回任务 ID'));
+              return;
+            }
+            // Retry-After 由后端按模型快慢给（快模型 3s、慢模型 10s），
+            // 拿不到才退回默认值。慢模型用 3s 轮询等于空打三十多次。
+            const ra = Number(r.value?.headers?.['retry-after']);
+            if (Number.isFinite(ra) && ra > 0) intervalSec = ra;
+            tasks.push({
+              taskId,
+              seed: seeds[i],
+              status: 'pending',
+              url: '',
+              error: '',
+            });
+          });
+
+          if (tasks.length > 0) {
+            asyncCapableRef.current.set(params.model, true);
+            patchConvMessage(convId, `${reqId}-a`, { imageTasks: tasks });
+            startPolling(convId, `${reqId}-a`, tasks, intervalSec);
+            if (submitFailures.length > 0) {
+              showError(
+                t('{{fail}} 张提交失败：', {
+                  fail: submitFailures.length,
+                }) + submitFailures[0],
+              );
+            }
+            // 异步路径到此为止：消息保持 PENDING，由轮询接手推进。
+            return;
+          }
+
+          // 一个任务都没建起来。若是渠道不支持异步，记下这个模型，之后不再白试；
+          // 无论哪种原因都落到下面的同步路径再试一次，不让用户为一次探测白等。
+          if (
+            submits.some(
+              (r) =>
+                r.status === 'rejected' &&
+                r.reason?.response?.data?.code === IMAGE_ASYNC_UNSUPPORTED_CODE,
+            )
+          ) {
+            asyncCapableRef.current.set(params.model, false);
+          }
+        }
+
+        // ——— 同步路径（原行为，一字未改） ———
         // allSettled 而不是 all:一路失败不该把已经出来的另外几张一起丢掉。
         // 并发本身是这个功能的实现方式 —— 门面的任务契约是单产物,发 batch_size 没用
         // (见 playgroundBatch.constants 的说明)。
         const settled = await Promise.allSettled(
           seeds.map((seed) =>
-            API.post(endpoint, seed == null ? reqBody : { ...reqBody, seed }, {
+            API.post(endpoint, bodyFor(seed), {
               skipErrorHandler: true,
             }),
           ),
@@ -764,7 +1052,7 @@ export const useImageGeneration = ({
         });
         showError(msg);
       } finally {
-        setGenerating(false);
+        setSubmitting(false);
       }
     },
     [
@@ -782,25 +1070,61 @@ export const useImageGeneration = ({
 
   const regenerate = useCallback((prompt) => generate(prompt), [generate]);
 
+  // 轮询撞上限后手动续查：用原 taskId 接着轮，不重新提交。
+  // 重新提交会再扣一次费，而任务其实还在服务端跑着 —— 与视频的「继续获取」同一语义。
+  const refetchImage = useCallback(
+    (msgId) => {
+      const conv = conversationsRef.current.find((c) =>
+        (c.messages || []).some((m) => m.id === msgId),
+      );
+      if (!conv) return;
+      const msg = conv.messages.find((m) => m.id === msgId);
+      if (!msg || !hasPendingTask(msg)) return;
+      patchConvMessage(conv.id, msgId, { pollTimedOut: false });
+      startPolling(conv.id, msgId, msg.imageTasks, IMAGE_POLL_INTERVAL_SEC);
+    },
+    [patchConvMessage, startPolling],
+  );
+
   // 新对话：解锁参数，清空中间区
   const newConversation = useCallback(() => {
     setCurrentConvId(null);
   }, []);
 
+  // 删会话前必须先收掉它名下的轮询槽。
+  //
+  // 槽只在「任务全终态」或「撞轮询上限」时自己收，会话被删掉不在其列 —— 留下的孤儿
+  // 定时器会让 activePolls 一直大于 0，而 generating 由它派生、generate 又以
+  // generating 为闸门，结果是**新的生成被静默挡住**（连报错都没有），直到孤儿轮询
+  // 自然结束。慢模型下这可能是十几分钟。同步时代没有这个问题：那时没有后台定时器。
+  const stopPollingForConv = useCallback(
+    (convId) => {
+      Array.from(pollSlotsRef.current.entries()).forEach(([msgId, slot]) => {
+        if (slot.convId === convId) stopPolling(msgId);
+      });
+    },
+    [stopPolling],
+  );
+
   const clearHistory = useCallback(() => {
+    Array.from(pollSlotsRef.current.keys()).forEach(stopPolling);
     setConversations([]);
     persistConversations(storageKey, []);
     setCurrentConvId(null);
-  }, []);
+  }, [stopPolling]);
 
-  const deleteHistoryItem = useCallback((id) => {
-    setConversations((prev) => {
-      const next = prev.filter((c) => c.id !== id);
-      persistConversations(storageKey, next);
-      return next;
-    });
-    setCurrentConvId((cur) => (cur === id ? null : cur));
-  }, []);
+  const deleteHistoryItem = useCallback(
+    (id) => {
+      stopPollingForConv(id);
+      setConversations((prev) => {
+        const next = prev.filter((c) => c.id !== id);
+        persistConversations(storageKey, next);
+        return next;
+      });
+      setCurrentConvId((cur) => (cur === id ? null : cur));
+    },
+    [stopPollingForConv],
+  );
 
   // 点击历史：恢复整段对话，并带出当时锁定的分组/模型/尺寸/种子
   const openHistoryItem = useCallback(
@@ -844,11 +1168,13 @@ export const useImageGeneration = ({
     conversations,
     currentConvId,
     generating,
+    hasResumableTask,
     locked,
     turnLimitReached,
     missingRequiredImage,
     generate,
     regenerate,
+    refetchImage,
     newConversation,
     clearHistory,
     deleteHistoryItem,

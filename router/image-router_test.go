@@ -30,9 +30,13 @@ func TestSetRelayRouterRegistersImageRoutes(t *testing.T) {
 		// 异步（新增）
 		"GET /v1/images/generations/:task_id",
 		"DELETE /v1/images/generations/:task_id",
-		// 体验区同步端点不受影响
+		// 体验区：同步端点不受影响，并新增异步查询 / 取消。
+		// 图片路由被搬到独立的 playgroundImageRouter（要让 ImageAsyncConvert 排在
+		// Distribute 之前），搬迁同样有「漏一条就静默 404」的风险，逐条断言。
 		"POST /pg/images/generations",
 		"POST /pg/images/edits",
+		"GET /pg/images/generations/:task_id",
+		"DELETE /pg/images/generations/:task_id",
 	}
 	for _, route := range want {
 		if !registered[route] {

@@ -21,6 +21,17 @@ func Playground(c *gin.Context) {
 // PlaygroundImage relays an image generation request on behalf of the logged-in
 // user (session auth), mirroring Playground but targeting the OpenAI image format.
 func PlaygroundImage(c *gin.Context) {
+	// 异步图片走任务子系统，与 /v1 的 imageEntry 同一条分流。
+	// 上下文要按 RelayFormatTask 建：那条路径读的是 TaskRelayInfo，
+	// 按 OpenAIImage 建会让 PublicTaskID 等字段缺席。
+	if c.GetBool(middleware.CtxKeyImageAsync) {
+		if apiErr := playgroundSetupContext(c, types.RelayFormatTask); apiErr != nil {
+			c.JSON(apiErr.StatusCode, gin.H{"error": apiErr.ToOpenAIError()})
+			return
+		}
+		RelayTask(c)
+		return
+	}
 	playgroundRelay(c, types.RelayFormatOpenAIImage)
 }
 
@@ -79,6 +90,25 @@ func PlaygroundVideoFetch(c *gin.Context) {
 		return
 	}
 	RelayTaskFetch(c)
+}
+
+// PlaygroundImageFetch 查询体验区提交的异步图片任务（session 鉴权）。
+// 与 /v1/images/generations/{id} 走同一套响应构建，只是鉴权方式不同。
+func PlaygroundImageFetch(c *gin.Context) {
+	if apiErr := playgroundSetupContext(c, types.RelayFormatTask); apiErr != nil {
+		c.JSON(apiErr.StatusCode, gin.H{"error": apiErr.ToOpenAIError()})
+		return
+	}
+	RelayTaskFetch(c)
+}
+
+// PlaygroundImageCancel 取消体验区提交的异步图片任务（session 鉴权）。
+func PlaygroundImageCancel(c *gin.Context) {
+	if apiErr := playgroundSetupContext(c, types.RelayFormatTask); apiErr != nil {
+		c.JSON(apiErr.StatusCode, gin.H{"error": apiErr.ToOpenAIError()})
+		return
+	}
+	RelayTaskCancel(c)
 }
 
 // playgroundSetupContext 为登录用户签发临时 token 并写入用户上下文，供后续 relay 使用。

@@ -68,13 +68,29 @@ func SetRelayRouter(router *gin.Engine) {
 	playgroundRouter.Use(middleware.UserAuth(), middleware.KYCRequired(), middleware.Distribute())
 	{
 		playgroundRouter.POST("/chat/completions", controller.Playground)
-		playgroundRouter.POST("/images/generations", controller.PlaygroundImage)
-		playgroundRouter.POST("/images/edits", controller.PlaygroundImage)
+		// 图片路由不在这里，见下方 playgroundImageRouter：它需要 ImageAsyncConvert
+		// 跑在 Distribute 之前，而本组的 Distribute 是分组级中间件，插不进去。
 		playgroundRouter.POST("/responses", controller.PlaygroundResponses)
 		playgroundRouter.POST("/audio/speech", controller.PlaygroundAudioSpeech)
 		playgroundRouter.POST("/videos", controller.PlaygroundVideo)
 		playgroundRouter.GET("/videos/:task_id", controller.PlaygroundVideoFetch)
 	}
+	// 体验区图片：与 playgroundRouter 同一套鉴权，但把 Distribute 留到路由级，
+	// 好让 ImageAsyncConvert 排在它前面（gin 的分组中间件恒先于路由中间件，
+	// 挂在上面那组里是插不进 Distribute 之前的）。
+	// 与 /v1 的 imageRouter 是同一套转换 + 分流，只是鉴权从 token 换成 session。
+	playgroundImageRouter := router.Group("/pg")
+	playgroundImageRouter.Use(middleware.RouteTag("relay"))
+	playgroundImageRouter.Use(middleware.SystemPerformanceCheck())
+	playgroundImageRouter.Use(middleware.UserAuth(), middleware.KYCRequired())
+	playgroundImageRouter.Use(middleware.ImageAsyncConvert(), middleware.Distribute())
+	{
+		playgroundImageRouter.POST("/images/generations", controller.PlaygroundImage)
+		playgroundImageRouter.POST("/images/edits", controller.PlaygroundImage)
+		playgroundImageRouter.GET("/images/generations/:task_id", controller.PlaygroundImageFetch)
+		playgroundImageRouter.DELETE("/images/generations/:task_id", controller.PlaygroundImageCancel)
+	}
+
 	// 图片代理：仅需登录会话鉴权，不经过 Distribute（GET 无模型可分发）
 	playgroundUtilRouter := router.Group("/pg")
 	playgroundUtilRouter.Use(middleware.UserAuth())

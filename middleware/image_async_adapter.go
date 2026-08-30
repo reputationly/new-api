@@ -106,11 +106,27 @@ func ImageAsyncConvert() gin.HandlerFunc {
 			return
 		}
 
+		// group 必须留在顶层，且必须从 metadata 里剥掉。
+		//
+		// 留顶层：体验区的分组选择由 Distribute 从请求体读（见 distributor.go 的
+		// 「统一让请求体里的 group 生效，否则图片生成会忽略用户选择的分组」）。
+		// 改写后顶层没有 group，Distribute 解出空值就回落默认分组 —— 同一个模型，
+		// 同步走对分组、异步走默认分组，是纯回归。
+		//
+		// 从 metadata 剥掉：metadata 会被适配器整体透传给门面再转交引擎，而 group
+		// 是网关自己的路由概念，引擎不认。同步路径下它落在 dto.ImageRequest.Extra 里，
+		// 而 Extra 的 MarshalJSON 不外泄，上游从来收不到它 —— 异步不该比同步多发字段。
+		group := stringField(raw, "group")
+		delete(raw, "group")
+
 		unified := map[string]any{
 			"model":    stringField(raw, "model"),
 			"prompt":   stringField(raw, "prompt"),
 			"size":     stringField(raw, "size"),
 			"metadata": raw,
+		}
+		if group != "" {
+			unified["group"] = group
 		}
 		if len(images) > 0 {
 			unified["images"] = images

@@ -90,6 +90,7 @@ const ImageChatArea = ({
   onSend,
   onRegenerate,
   onClear,
+  onRefetch,
 }) => {
   const { t } = useTranslation();
   const [userState] = useContext(UserContext);
@@ -160,7 +161,38 @@ const ImageChatArea = ({
   const renderChatBoxContent = useCallback(
     ({ message, defaultContent }) => {
       const m = byId.get(message.id);
-      if (!m || m.role === 'user' || m.status !== IMAGE_GEN_STATUS.SUCCESS) {
+      if (!m || m.role === 'user') return defaultContent;
+      // 异步多候选是 N 个独立任务，先出来的先显示 —— 等齐了再一次性渲染，
+      // 会让先完成的那几张白白干等最慢的一张。
+      const partial =
+        m.status === IMAGE_GEN_STATUS.PENDING && (m.images || []).length > 0;
+      // 轮询撞上限：任务还在服务端跑，给一个用原 taskId 续查的入口，
+      // 而不是让用户重发（那会再扣一次费）。
+      //
+      // 抽成片段是因为它有两个落点：一张都没出来时单独成块；已经出了几张时要跟在
+      // 图片区标题下面。只放在「无图」那一支的话，「部分完成 + 超时」会既没有按钮、
+      // 又停着不动，界面上还写着「其余生成中…」—— 停了却说在生成，最难排查。
+      const timedOutHint =
+        m.status === IMAGE_GEN_STATUS.PENDING && m.pollTimedOut ? (
+          <div className='mb-2'>
+            <Typography.Text type='tertiary' className='text-sm block mb-1'>
+              {t('生成时间较长，任务仍在后台处理')}
+            </Typography.Text>
+            <Button
+              theme='borderless'
+              type='tertiary'
+              size='small'
+              onClick={() => onRefetch && onRefetch(m.id)}
+              className='!text-gray-500'
+            >
+              {t('继续获取')}
+            </Button>
+          </div>
+        ) : null;
+
+      if (m.status !== IMAGE_GEN_STATUS.SUCCESS && !partial) {
+        if (timedOutHint)
+          return <div className='inline-block'>{timedOutHint}</div>;
         return defaultContent;
       }
       // base64 图片不落盘，刷新后历史里这类图已不在
@@ -174,8 +206,14 @@ const ImageChatArea = ({
       return (
         <div className='inline-block'>
           <Typography.Text className='text-sm text-gray-600 block mb-2'>
-            {t('图像已生成')}
+            {partial
+              ? t('已出 {{done}}/{{total}} 张，其余生成中…', {
+                  done: (m.images || []).length,
+                  total: (m.imageTasks || []).length || (m.images || []).length,
+                })
+              : t('图像已生成')}
           </Typography.Text>
+          {timedOutHint}
           {/* 多张时每张各自带 seed 与复制/下载。
               **复制/下载必须按张**:原来这两个按钮恒取 images[0],单张时看不出问题,
               多张时后几张就没法单独拿走 —— 而"多生成几张让用户挑"的下一步正是
