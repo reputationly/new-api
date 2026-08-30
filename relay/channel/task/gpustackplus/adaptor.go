@@ -89,6 +89,13 @@ var validTaskTypes = map[string]bool{
 // 与门面 _INPUT_FIELDS + _ENGINE_OWNED_FIELDS 对齐(含 TTS 的 voice/emotion_audio)。
 var legacyInputKeys = map[string]bool{
 	"image": true, "last_frame": true, "image_mask": true, "audio": true,
+	// mask 是异步图片编辑(i2i)的蒙版入口键:客户端 JSON 里写 mask,multipart 上传的
+	// 蒙版文件也由 middleware.ImageAsyncConvert 转成 data-uri 塞到这个键。
+	// 物化后必须剥掉——它与 image_mask 是同一份输入的两种写法,残留下来既让门面
+	// 因「检测到原始输入字段」整单 400,又会把几 MB 的 base64 原样发给门面
+	// (NFS 物化方案的全部意义就是不发 base64)。
+	// 剥的是 body 这份拷贝,materializeImageEditInputs 读的是 req.Metadata,互不影响。
+	"mask":  true,
 	"voice": true, "emotion_audio": true,
 	"video": true, "src_video": true, "src_mask": true, "src_ref_images": true,
 	// 音乐(ACE-Step)原始输入 + 引擎原生路径字段。

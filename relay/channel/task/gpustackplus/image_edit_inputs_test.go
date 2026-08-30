@@ -1,12 +1,15 @@
 package gpustackplus
 
 import (
+	"io"
 	"net/http/httptest"
 	"strings"
 	"testing"
 
+	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
+	"github.com/QuantumNous/new-api/setting/system_setting"
 
 	"github.com/gin-gonic/gin"
 )
@@ -156,4 +159,70 @@ func TestTaskActionOf(t *testing.T) {
 			}
 		})
 	}
+}
+
+// 蒙版物化后，原始 mask 键必须从发往门面的 body 里剥掉。
+//
+// 这是端到端实测抓到的缺陷（单测与三轮 code review 都没发现）：legacyInputKeys 里原本
+// 只有 image_mask，没有 mask，于是异步 i2i 的提交体里残留一个裸的
+// "mask": "data:image/png;base64,...."。后果有两个，都不轻：
+//   - 门面见到原始输入字段会「整单 400」（见本文件头部的门面契约注释）；
+//   - 几 MB 的 base64 被原样发给门面，而 NFS 物化方案的全部意义就是不发 base64。
+func TestBuildRequestBodyStripsRawMaskKey(t *testing.T) {
+	c := newTestGinContext()
+	req := relaycommon.TaskSubmitReq{
+		Model:  "qwen-image-edit",
+		Prompt: "make it blue",
+		Images: []string{"data:image/png;base64,iVBORw0KGgoAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"},
+		Metadata: map[string]any{
+			"task_type": "i2i",
+			"mask":      "data:image/png;base64,iVBORw0KGgoAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+		},
+	}
+	c.Set("task_request", req)
+
+	// 物化会真写盘，指到临时目录（默认 /nfs-output 在测试机上不可写）。
+	setNFSRoot(t, t.TempDir())
+
+	info := &relaycommon.RelayInfo{
+		UserId:        1,
+		TaskRelayInfo: &relaycommon.TaskRelayInfo{PublicTaskID: "task_strip_mask"},
+		ChannelMeta:   &relaycommon.ChannelMeta{UpstreamModelName: "qwen-image-edit"},
+	}
+	info.OriginModelName = "qwen-image-edit"
+
+	a := &TaskAdaptor{}
+	reader, err := a.BuildRequestBody(c, info)
+	if err != nil {
+		t.Fatalf("BuildRequestBody: %s", err)
+	}
+	raw, err := io.ReadAll(reader)
+	if err != nil {
+		t.Fatalf("read body: %s", err)
+	}
+	var body map[string]any
+	if err := common.Unmarshal(raw, &body); err != nil {
+		t.Fatalf("body is not valid json: %s", err)
+	}
+
+	if _, leaked := body["mask"]; leaked {
+		t.Errorf("raw mask key leaked into the facade payload: %s", string(raw))
+	}
+	// 反向确认蒙版没有因为剥离而丢失 —— 它应该以 input_refs.image_mask 的形式在。
+	refs, ok := body["input_refs"].(map[string]any)
+	if !ok {
+		t.Fatalf("input_refs missing, mask would be lost entirely: %s", string(raw))
+	}
+	if _, ok := refs["image_mask"]; !ok {
+		t.Errorf("input_refs.image_mask missing; the mask was dropped instead of materialized: %+v", refs)
+	}
+}
+
+// setNFSRoot 把物化根指向可写目录，测试结束后还原。
+func setNFSRoot(t *testing.T, dir string) {
+	t.Helper()
+	s := system_setting.GetMediaStorageSettings()
+	old := s.NFSOutputRoot
+	s.NFSOutputRoot = dir
+	t.Cleanup(func() { s.NFSOutputRoot = old })
 }
