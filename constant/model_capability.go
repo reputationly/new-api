@@ -52,22 +52,21 @@ var AudioCapabilities = []string{
 	"声音设计",
 }
 
-// MusicCapabilities 涵盖 ACE-Step 文生音乐/音乐改编/音乐重绘，以及扩散音频生成
-// （vLLM-Omni：AudioX + SoulX-Singer）的音效/歌声合成 —— 归入体验区「音乐模型」下的
-// 子标签页,并在模型广场同归「音乐」能力分类。
+// MusicCapabilities 涵盖 ACE-Step 文生音乐/音乐改编/音乐重绘 —— 归入体验区
+// 「音乐模型」下的子标签页,并在模型广场同归「音乐」能力分类。
+// 文生音乐这个 tab 另可挂 MiniMax-Music3(按模型声明的引擎族分流,不占新能力词)。
 //
-//	文生音效   -> AudioX t2a
-//	歌声合成   -> SoulX-Singer svs
-//
-// 2026-07 下线:视频生音/视频配音效/视频配乐(AudioX v2a/tv2a,出 .wav)——视频配乐
-// 产品线移交 LTX-2.3(task_type=v2a 契约改判,产物为配好音的视频),标签迁入
-// VideoCapabilities;AudioX 的 v2m/tv2m 仍有效但暂无前端入口(去留待产品确认)。
+// 2026-07 下线:视频生音/视频配音效/视频配乐(AudioX v2a/tv2a)——视频配乐产品线移交
+// LTX-2.3(task_type=v2a 契约改判,产物为配好音的视频),标签迁入 VideoCapabilities。
+// 2026-08 下线:AudioX(文生音效 t2a、视频生音乐 v2m/tv2m)与 SoulX-Singer(歌声合成
+// svs),实例已收到 0。**这里删掉「文生音效」「歌声合成」只影响写入侧**:存量
+// MusicModelConfig 里若还挂着这两个标签,它们会掉出「模型能力」分类、变成普通标签,
+// 清理时把模型上的标签一并摘掉即可。任务日志对这几个 task_type 的中文标签是另一处,
+// 刻意保留(见 web TaskLogsColumnDefs)。
 var MusicCapabilities = []string{
 	"文生音乐",
 	"音乐改编",
 	"音乐重绘",
-	"文生音效",
-	"歌声合成",
 }
 
 // IsCapabilityTag 判断某个标签词是否属于能力词表（图片、视频、语音或音乐）。

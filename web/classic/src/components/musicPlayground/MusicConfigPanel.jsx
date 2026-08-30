@@ -38,9 +38,6 @@ import {
   MUSIC_AUDIO_UPLOAD_MAX_MB,
   MUSIC_VIDEO_UPLOAD_MAX_MB,
   MUSIC_VOCAL_LANGUAGES,
-  MUSIC_DEFAULT_SECONDS_TOTAL,
-  MUSIC_SVS_LANGUAGES,
-  MUSIC_SVS_CONTROLS,
   MUSIC_DEFAULT_COVER_STRENGTH,
   MUSIC_REPAINT_MODES,
   MUSIC_DEFAULT_REPAINT_STRENGTH,
@@ -53,8 +50,6 @@ import {
 
 // 音乐模型配置面板:分组/模型(同视频/语音)+ 按 mode 的输入:
 //   - acestep(cover/repaint):驱动音频上传(可试听)+ 歌词 + 时长 + BPM/演唱语言;
-//   - audiox(v2a/v2m):单视频上传器(metadata.video)+ 时长(秒);
-//   - soulx(svs):两个音频上传器(音色参考 + 目标曲/伴奏)+ 演唱语言/控制方式。
 // 标量参数(时长/步数/贴合度/种子)按引擎显示不同默认占位。
 // 对话锁定(disabled)后全部不可改,与视频/语音页一致。
 const MusicConfigPanel = ({
@@ -66,8 +61,6 @@ const MusicConfigPanel = ({
   mode = 't2m',
   engine = 'acestep',
   needsAudio = false,
-  needsVideo = false,
-  needsDualAudio = false,
   audioLabel = '',
   refAudioMaxMB = MUSIC_AUDIO_UPLOAD_MAX_MB,
   videoMaxMB = MUSIC_VIDEO_UPLOAD_MAX_MB,
@@ -101,8 +94,8 @@ const MusicConfigPanel = ({
       : { label: t('{{sec}} 秒', { sec: d }), value: d },
   );
 
-  // 占位默认按引擎:采样步数 ACE-Step 8 / AudioX 250 / SoulX 32;
-  // guidance AudioX·ACE-Step 7 / SoulX 3(与 deploy-config 一致,所见即所发)。
+  // 占位默认:采样步数 8 / guidance 7(ACE-Step,与 deploy-config 一致,所见即所发)。
+  // AudioX/SoulX 下线后只剩这一档,取值函数已退化成常量返回。
   const defaultSteps = musicDefaultStepsForEngine(engine);
   const defaultGuidance = musicDefaultGuidanceForEngine(engine);
 
@@ -313,100 +306,6 @@ const MusicConfigPanel = ({
               />
             )}
           </div>
-        )}
-
-        {/* 源视频(AudioX v2a/v2m,必选):视频条件输入 → metadata.video */}
-        {needsVideo && (
-          <MediaFileInput
-            label={t('源视频')}
-            required
-            kind='video'
-            value={inputs.videoData}
-            maxMB={videoMaxMB}
-            disabled={disabled}
-            onChange={(v) => {
-              onInputChange('videoData', v || '');
-              if (!v) onInputChange('videoName', '');
-            }}
-          />
-        )}
-
-        {/* 双音频(SoulX svs,均必选):音色参考 → prompt_audio,目标曲/伴奏 → target_audio */}
-        {needsDualAudio && (
-          <>
-            <MediaFileInput
-              label={t('音色参考(人声)')}
-              required
-              kind='audio'
-              value={inputs.promptAudioData}
-              maxMB={refAudioMaxMB}
-              disabled={disabled}
-              onChange={(v) => {
-                onInputChange('promptAudioData', v || '');
-                if (!v) onInputChange('promptAudioName', '');
-              }}
-            />
-            <MediaFileInput
-              label={t('目标曲/伴奏')}
-              required
-              kind='audio'
-              value={inputs.targetAudioData}
-              maxMB={refAudioMaxMB}
-              disabled={disabled}
-              onChange={(v) => {
-                onInputChange('targetAudioData', v || '');
-                if (!v) onInputChange('targetAudioName', '');
-              }}
-            />
-            <div>
-              <div className='flex items-center gap-2 mb-2'>
-                <Languages size={16} className='text-gray-500' />
-                <Typography.Text strong className='text-sm'>
-                  {t('演唱语言')}
-                </Typography.Text>
-              </div>
-              <Select
-                value={inputs.language}
-                onChange={(v) => onInputChange('language', v)}
-                optionList={MUSIC_SVS_LANGUAGES.map((l) => ({
-                  label: t(l.label),
-                  value: l.value,
-                }))}
-                disabled={disabled}
-                style={{ width: '100%' }}
-                dropdownStyle={{ width: '100%', maxWidth: '100%' }}
-                className='!rounded-lg'
-              />
-            </div>
-            <div>
-              <div className='flex items-center gap-2 mb-2'>
-                <Music2 size={16} className='text-gray-500' />
-                <Typography.Text strong className='text-sm'>
-                  {t('控制方式')}
-                </Typography.Text>
-                <Tooltip
-                  content={t(
-                    '旋律(melody):按目标曲旋律演唱;曲谱(score):按音符曲谱演唱。',
-                  )}
-                  position='top'
-                >
-                  <HelpCircle size={14} className='text-gray-400 cursor-help' />
-                </Tooltip>
-              </div>
-              <Select
-                value={inputs.control}
-                onChange={(v) => onInputChange('control', v)}
-                optionList={MUSIC_SVS_CONTROLS.map((c) => ({
-                  label: t(c.label),
-                  value: c.value,
-                }))}
-                disabled={disabled}
-                style={{ width: '100%' }}
-                dropdownStyle={{ width: '100%', maxWidth: '100%' }}
-                className='!rounded-lg'
-              />
-            </div>
-          </>
         )}
 
         {/* 歌词。ACE-Step:可选,留空由模型按描述自动生成。
@@ -620,40 +519,6 @@ const MusicConfigPanel = ({
               )}
             </div>
           </>
-        )}
-
-        {/* 时长(仅 AudioX;SoulX 歌声合成无此参数) */}
-        {engine === 'audiox' && (
-          <div>
-            <div className='flex items-center gap-2 mb-2'>
-              <Clock size={16} className='text-gray-500' />
-              <Typography.Text strong className='text-sm'>
-                {t('时长(秒)')}
-              </Typography.Text>
-              <Tooltip
-                content={t('生成音频的总时长(秒);留空 = 默认 {{v}}。', {
-                  v: MUSIC_DEFAULT_SECONDS_TOTAL,
-                })}
-                position='top'
-              >
-                <HelpCircle size={14} className='text-gray-400 cursor-help' />
-              </Tooltip>
-            </div>
-            <InputNumber
-              min={1}
-              max={60}
-              value={
-                inputs.secondsTotal === '' ? undefined : inputs.secondsTotal
-              }
-              onChange={(v) => onInputChange('secondsTotal', v ?? '')}
-              placeholder={t('留空 = 默认 {{v}}', {
-                v: MUSIC_DEFAULT_SECONDS_TOTAL,
-              })}
-              disabled={disabled}
-              style={{ width: '100%' }}
-              className='!rounded-lg'
-            />
-          </div>
         )}
 
         {/* 高级参数(默认折叠,全部选填;留空即走引擎默认)。

@@ -40,11 +40,6 @@ import {
   MUSIC_POLL_MAX_TIMES,
   MUSIC_DURATIONS,
   MUSIC_DEFAULT_DURATION,
-  MUSIC_DEFAULT_SECONDS_TOTAL,
-  MUSIC_AUDIOX_DEFAULT_STEPS,
-  MUSIC_AUDIOX_DEFAULT_GUIDANCE,
-  MUSIC_SVS_DEFAULT_LANGUAGE,
-  MUSIC_SVS_DEFAULT_CONTROL,
   MUSIC_DEFAULT_REPAINT_MODE,
   musicHistoryStorageKey,
   normalizeMusicStatus,
@@ -64,16 +59,6 @@ import {
 const MUSIC_TRANSLATE_ENDPOINT = '/pg/chat/completions';
 
 // 内置翻译模板(设计 §8):把用户输入转成一句 AudioCaps 风格英文音频描述。
-export const TRANSLATE_SYSTEM_BASE = `You convert a user's sound request into ONE concise English caption for an audio generator (AudioX, trained on AudioCaps-style natural-language captions).
-Rules:
-- Output English only. One line. <= 40 words. No quotes, no brackets/tags, no music notation, no BPM, no [verse]/[chorus] style markers.
-- Output ONLY the caption text itself. Do NOT add any preface, explanation, notes, labels, headings, or markdown. Never begin with phrases like "Sure", "Here is", "Caption:", or "好的". Return the caption and nothing else.
-- Describe the SOUND SCENE: sound sources + environment + acoustic qualities (distant / close / loud / faint / continuous / sudden ...). Comma-separated events.
-- If already English, lightly normalize; do not add unrelated content.
-- Preserve the user's intent faithfully; do not invent a different scene.`;
-// 视频生音(tv2a)追加:引导描述贴合视频画面(文字主导视频,见设计 §3 约束 3)。
-const TRANSLATE_SYSTEM_VIDEO = `${TRANSLATE_SYSTEM_BASE}
-- the sound should stay consistent with the video scene.`;
 
 // MiniMax-Music3 的中译英。**不能复用上面那份** —— 那份是给 AudioX 写的:
 // AudioCaps 风格的音景描述、≤40 词、明令去掉 BPM 与 [verse]/[chorus] 标记。
@@ -266,18 +251,6 @@ const PARAM_FIELDS = [
   // 引用上一首生成结果作为源音频(task:<task_id>);有值时不需要上传
   'srcTaskId',
   'srcTaskLabel',
-  // audiox / soulx 上传
-  'videoData',
-  'videoName',
-  'promptAudioData',
-  'promptAudioName',
-  'targetAudioData',
-  'targetAudioName',
-  // audiox 标量
-  'secondsTotal',
-  // soulx
-  'language',
-  'control',
   // 通用
   'seed',
   'guidanceScale',
@@ -305,13 +278,7 @@ export const useMusicGeneration = (mode = 't2m') => {
     engine,
     needsAudio,
     audioMetaKey,
-    needsVideo,
-    needsDualAudio,
     needsText,
-    needsTranslation,
-    videoMetaKey,
-    promptAudioMetaKey,
-    targetAudioMetaKey,
     resolveTaskType,
   } = modeDef;
   const storageKey = musicHistoryStorageKey(mode);
@@ -337,18 +304,6 @@ export const useMusicGeneration = (mode = 't2m') => {
     // 引用上一首生成结果当源音频:有值时走 task:<id>,免去"下载再上传"
     srcTaskId: '',
     srcTaskLabel: '',
-    // audiox / soulx 上传(base64 data-url)+ 文件名(展示用)
-    videoData: '', // v2a/v2m:源视频 → metadata.video
-    videoName: '',
-    promptAudioData: '', // svs:音色参考 → metadata.prompt_audio
-    promptAudioName: '',
-    targetAudioData: '', // svs:目标曲/伴奏 → metadata.target_audio
-    targetAudioName: '',
-    // audiox 标量
-    secondsTotal: '', // AudioX 时长(秒);默认 10
-    // soulx(svs)专属
-    language: MUSIC_SVS_DEFAULT_LANGUAGE,
-    control: MUSIC_SVS_DEFAULT_CONTROL,
     // 通用高级参数:留空即不下发,走引擎默认。
     seed: '', // 指定后可复现;空 = 随机
     guidanceScale: '', // 贴合描述程度;空 = 引擎默认
@@ -508,8 +463,7 @@ export const useMusicGeneration = (mode = 't2m') => {
   // (`<d>` 内)排除在英文化之外的理由(见 h3Prompt.constants.js 的 SHARED_OUTPUT_RULES:
   // "a translated line makes the character speak the wrong language")。
   const needsEnglishOnly =
-    (!!needsTranslation || resolvedEngine === MUSIC_ENGINE_MINIMAX_MUSIC3) &&
-    translationCfg.enabled;
+    resolvedEngine === MUSIC_ENGINE_MINIMAX_MUSIC3 && translationCfg.enabled;
 
   // 音乐体验区所有辅助语言模型调用(中译英、AI 帮我写词)共用的运营配置:与各体验区
   // 「AI 优化提示词」同一份(总开关 + 模型 + 分组)。原先让用户在左侧自己挑一个,但这
@@ -820,16 +774,19 @@ export const useMusicGeneration = (mode = 't2m') => {
     [currentConvId, resumePoll],
   );
 
-  // 单次非流式调用语言模型,把中文 rawText 转成一句英文音频描述。
-  // forVideo=true 时用带"贴合画面"约束的模板(tv2a)。失败抛错,交由 generate 走降级。
+  // 单次非流式调用语言模型,把中文描述转成英文。失败抛错,交由 generate 走降级。
+  //
+  // AudioX/SoulX 下线后,音乐页只剩 MiniMax-Music3 需要中译英(ACE-Step 的文本编码器
+  // 认中文),所以这里不再按玩法挑模板 —— 原来的 forVideo/forMusic3 两个开关与
+  // AudioX 那两份音景模板一并移除。**兜底分支消失本身就是收益**:那份 AudioX 模板会
+  // 把 BPM 与 [verse]/[chorus] 删掉、压到 40 词、改写成 AudioCaps 音景,正是 Music3
+  // 要的反面,以前只靠一个参数传对才躲开。
   //
   // 用哪个模型不再让用户在左侧挑,而是与「AI 优化提示词」「AI 帮我写词」共用运营在
   // 「体验区管理 → 通用设置」里配的那一个 —— 三者都是「单次非流式打 /pg/chat/completions
   // 的辅助调用」,没道理一个体验区里摆两套模型配置。
-  // forMusic3 优先于 forVideo:两者互斥(Music3 没有视频输入),但显式写出优先级,
-  // 免得日后加参数时靠调用顺序碰运气。
   const translatePrompt = useCallback(
-    async (rawText, forVideo, forMusic3) => {
+    async (rawText) => {
       const model = promptOptimizeGlobal.model;
       if (!model) throw new Error('no-translation-model');
       // 复用 axios API 实例:自动带 baseURL(分离部署时打到 API 而非前端 origin)与
@@ -846,11 +803,7 @@ export const useMusicGeneration = (mode = 't2m') => {
           messages: [
             {
               role: 'system',
-              content: forMusic3
-                ? TRANSLATE_SYSTEM_MUSIC3
-                : forVideo
-                  ? TRANSLATE_SYSTEM_VIDEO
-                  : TRANSLATE_SYSTEM_BASE,
+              content: TRANSLATE_SYSTEM_MUSIC3,
             },
             { role: 'user', content: rawText },
           ],
@@ -988,18 +941,6 @@ export const useMusicGeneration = (mode = 't2m') => {
           showError(t('请先上传驱动音频'));
           return;
         }
-        if (needsVideo && !(inputs.videoData || '').startsWith('data:')) {
-          showError(t('请先上传源视频'));
-          return;
-        }
-        if (
-          needsDualAudio &&
-          (!(inputs.promptAudioData || '').startsWith('data:') ||
-            !(inputs.targetAudioData || '').startsWith('data:'))
-        ) {
-          showError(t('请先上传音色参考与目标曲/伴奏'));
-          return;
-        }
         convId = genId();
         params = pickParams(inputs);
       } else {
@@ -1032,9 +973,6 @@ export const useMusicGeneration = (mode = 't2m') => {
 
       // 上传的驱动/参考媒体:刷新后 localStorage 已剥离 → 提示重开对话重传。
       let audioDataURL = '';
-      let videoDataURL = '';
-      let promptAudioURL = '';
-      let targetAudioURL = '';
       if (needsAudio) {
         // 引用上一首生成结果:发 task:<task_id>,由后端 nfsinput/taskref.go 在共享盘上
         // 直读产物(零网络、已做归属与终态校验),不必把音频拉成 base64 再传一遍。
@@ -1044,24 +982,6 @@ export const useMusicGeneration = (mode = 't2m') => {
           : params.audioData || '';
         if (!params.srcTaskId && !audioDataURL.startsWith('data:')) {
           showError(t('驱动音频已失效,请开启新对话并重新上传'));
-          return;
-        }
-      }
-      if (needsVideo) {
-        videoDataURL = params.videoData || '';
-        if (!videoDataURL.startsWith('data:')) {
-          showError(t('源视频已失效,请开启新对话并重新上传'));
-          return;
-        }
-      }
-      if (needsDualAudio) {
-        promptAudioURL = params.promptAudioData || '';
-        targetAudioURL = params.targetAudioData || '';
-        if (
-          !promptAudioURL.startsWith('data:') ||
-          !targetAudioURL.startsWith('data:')
-        ) {
-          showError(t('参考音频已失效,请开启新对话并重新上传'));
           return;
         }
       }
@@ -1144,23 +1064,16 @@ export const useMusicGeneration = (mode = 't2m') => {
       let effectiveText = text;
       if (willTranslate) {
         try {
-          effectiveText = await translatePrompt(
-            text,
-            needsVideo,
-            resolvedEngine === MUSIC_ENGINE_MINIMAX_MUSIC3,
-          );
+          effectiveText = await translatePrompt(text);
           patchConvMessage(convId, userMsg.id, {
             translatedText: effectiveText,
           });
           patchConvMessage(convId, asstId, { translating: false });
         } catch (e) {
-          if (needsVideo) {
-            // 视频生音降级:丢弃文字,按纯视频 v2a 继续提交(气泡保留原文,不显译文)。
-            effectiveText = '';
-            patchConvMessage(convId, asstId, { translating: false });
-            showError(t('文字未生效,已按纯视频生成'));
-          } else {
-            // 文生音效降级:消息已建 → asstMsg 直接置 FAILED(带重试),不提交。
+          {
+            // 翻译失败即置 FAILED(带重试),不提交:描述是 Music3 的必填项,
+            // 拿未翻译的中文硬发出去只会得到一段不知所云的编曲。
+            // (原先这里还有一条"视频生音降级"分支,随 AudioX 下线一并移除。)
             patchConvMessage(convId, asstId, {
               status: MUSIC_STATUS.FAILED,
               translating: false,
@@ -1306,59 +1219,6 @@ export const useMusicGeneration = (mode = 't2m') => {
             metadata.seed = seedStr;
             metadata.use_random_seed = false;
           }
-        } else {
-          // ── AudioX / SoulX:视频/双音频 + 标量 ──
-          // AudioX 另需 audiox_task 与 task_type 同值。
-          if (resolvedEngine === 'audiox')
-            metadata.audiox_task = resolvedTaskType;
-
-          if (needsVideo && videoMetaKey) metadata[videoMetaKey] = videoDataURL;
-          if (needsDualAudio) {
-            if (promptAudioMetaKey)
-              metadata[promptAudioMetaKey] = promptAudioURL;
-            if (targetAudioMetaKey)
-              metadata[targetAudioMetaKey] = targetAudioURL;
-          }
-
-          // AudioX 专属:时长(秒);SoulX 无此参数,不下发。所见即所发:留空补 UI 默认 10。
-          if (resolvedEngine === 'audiox') {
-            const secs = parseFloat(params.secondsTotal);
-            metadata.seconds_total =
-              Number.isFinite(secs) && secs > 0
-                ? secs
-                : MUSIC_DEFAULT_SECONDS_TOTAL;
-          }
-          // 采样步数:AudioX(AudioXPipeline)硬要 num_inference_steps 且**无** deploy-config
-          // 兜底,留空必须补上 UI 默认(placeholder 承诺的 250),否则引擎报
-          // "AudioXPipeline requires sampling_params.num_inference_steps"。SoulX(svs)有
-          // deploy-config 默认(32),留空交给引擎,不在此下发。
-          const steps = parseInt(params.inferenceSteps, 10);
-          if (Number.isFinite(steps) && steps > 0) {
-            metadata.num_inference_steps = steps;
-          } else if (resolvedEngine === 'audiox') {
-            metadata.num_inference_steps = MUSIC_AUDIOX_DEFAULT_STEPS;
-          }
-          // guidance:AudioX 留空补 UI 默认 7(所见即所发);SoulX 交给引擎 deploy-config
-          // 默认 3(ConfigPanel 的 SoulX 占位也已改成 3,显示=生效),不在此下发。
-          const gs = parseFloat(params.guidanceScale);
-          if (Number.isFinite(gs) && gs > 0) {
-            metadata.guidance_scale = gs;
-          } else if (resolvedEngine === 'audiox') {
-            metadata.guidance_scale = MUSIC_AUDIOX_DEFAULT_GUIDANCE;
-          }
-          const seedStr = String(params.seed ?? '').trim();
-          if (seedStr !== '') {
-            const seedNum = parseInt(seedStr, 10);
-            if (Number.isFinite(seedNum)) metadata.seed = seedNum;
-          }
-
-          // SoulX(svs)专属:演唱语言 + 控制方式。
-          if (resolvedEngine === 'soulx') {
-            const lang = (params.language || '').trim();
-            if (lang) metadata.language = lang;
-            const control = (params.control || '').trim();
-            if (control) metadata.control = control;
-          }
         }
 
         const body = {
@@ -1423,15 +1283,10 @@ export const useMusicGeneration = (mode = 't2m') => {
       engine,
       needsAudio,
       audioMetaKey,
-      needsVideo,
-      needsDualAudio,
       needsText,
       needsEnglishOnly,
       assistModelReady,
       translatePrompt,
-      videoMetaKey,
-      promptAudioMetaKey,
-      targetAudioMetaKey,
       resolveTaskType,
       storageKey,
       patchConvMessage,
@@ -1506,14 +1361,9 @@ export const useMusicGeneration = (mode = 't2m') => {
   // 缺必填上传 → 发送置灰。引用上一首生成结果(srcTaskId)时不需要上传,故同样算已备齐。
   const missingRequiredAudio =
     !locked &&
-    ((needsAudio &&
-      !inputs.srcTaskId &&
-      !(inputs.audioData || '').startsWith('data:')) ||
-      (needsDualAudio &&
-        (!(inputs.promptAudioData || '').startsWith('data:') ||
-          !(inputs.targetAudioData || '').startsWith('data:'))));
-  const missingRequiredVideo =
-    !locked && needsVideo && !(inputs.videoData || '').startsWith('data:');
+    needsAudio &&
+    !inputs.srcTaskId &&
+    !(inputs.audioData || '').startsWith('data:');
 
   return {
     inputs,
@@ -1528,17 +1378,13 @@ export const useMusicGeneration = (mode = 't2m') => {
     locked,
     turnLimitReached,
     missingRequiredAudio,
-    missingRequiredVideo,
     // 给 UI 的是 **resolvedEngine**(模型声明优先、未声明才回退 tab 默认),不是
     // modeDef.engine。tab 默认是硬编码的(「文生音乐」恒 acestep),而同一个 tab 挂着
     // 多个引擎的模型 —— 用 tab 默认的话,选了 MiniMax-Music3 时面板照样按 ACE-Step
     // 渲染:时长/演唱语言/BPM 这些它根本不认的控件全在,而且拖了不报错、只是无效。
     engine: resolvedEngine,
     needsAudio,
-    needsVideo,
-    needsDualAudio,
     needsText,
-    needsTranslation,
     showTranslation,
     englishOnlyNoTranslate,
     draftAvailable,

@@ -15,10 +15,7 @@ import {
   musicExamplesForMode,
 } from '../musicPlayground.constants';
 import { defaultOptimizeSystemPrompt } from '../promptOptimize.constants';
-import {
-  TRANSLATE_SYSTEM_MUSIC3,
-  TRANSLATE_SYSTEM_BASE,
-} from '../../hooks/musicPlayground/useMusicGeneration';
+import { TRANSLATE_SYSTEM_MUSIC3 } from '../../hooks/musicPlayground/useMusicGeneration';
 
 // 语音模型配置里的 engine 声明。
 //
@@ -218,41 +215,32 @@ describe('文生音乐按引擎族分流', () => {
       );
     }
     // 其他 mode 不受引擎参数影响
-    expect(musicExamplesForMode('t2a', MUSIC_ENGINE_MINIMAX_MUSIC3)).toEqual(
-      musicExamplesForMode('t2a', 'audiox'),
+    expect(musicExamplesForMode('cover', MUSIC_ENGINE_MINIMAX_MUSIC3)).toEqual(
+      musicExamplesForMode('cover', 'acestep'),
     );
   });
 });
 
-// 中译英模板也必须按引擎族分:AudioX 那份是给音景写的(AudioCaps 风格、≤40 词、
-// 明令去掉 BPM 与 [verse]/[chorus]),而 Music3 的 instructions 要的正好是它禁掉的
-// 东西。拿错模板不报错,只是引擎收到一段被削平的 caption、编曲质量默默变差 ——
-// 这条路在"用户写中文描述、不点优化直接提交"时会走到,是默认路径不是边角。
-describe('中译英模板按引擎族分', () => {
-  it('Music3 用自己的模板,不复用 AudioX 那份', () => {
-    expect(TRANSLATE_SYSTEM_MUSIC3).not.toBe(TRANSLATE_SYSTEM_BASE);
-  });
-
-  it('AudioX 模板的禁令没有被带进 Music3 模板', () => {
-    // 这三条是 AudioX 专属约束,落到 Music3 上正好把它要的东西删掉。
-    // 比对禁令原句而非孤立词:Music3 模板里有「用户没说速度就别编」,
-    // 那句话本身也会含 BPM 这个词,按词判会误伤。
-    const BAN_NOTATION = 'no music notation, no BPM';
-    const BAN_LENGTH = '<= 40 words';
-    expect(TRANSLATE_SYSTEM_BASE).toContain(BAN_NOTATION);
-    expect(TRANSLATE_SYSTEM_BASE).toContain(BAN_LENGTH);
-    expect(TRANSLATE_SYSTEM_MUSIC3).not.toContain(BAN_NOTATION);
-    expect(TRANSLATE_SYSTEM_MUSIC3).not.toContain(BAN_LENGTH);
-    expect(TRANSLATE_SYSTEM_MUSIC3).not.toContain('AudioCaps');
-  });
-
-  it('Music3 模板保留结构化字段,且要求忠实、不许替用户编', () => {
+// 中译英模板。AudioX/SoulX 下线后音乐页只剩 ACE-Step(认中文,不翻译)与 Music3,
+// translatePrompt 因此只有一份模板、没有兜底分支 —— 原先那份 AudioX 音景模板
+// (AudioCaps 风格、≤40 词、明令去掉 BPM 与 [verse]/[chorus])已随玩法删除。
+// 这一组守的是内容契约:Music3 的模板不能被写成音效那一路,否则引擎收到的是一段
+// 被削平的 caption,不报错、只是编曲质量默默变差。
+describe('Music3 中译英模板', () => {
+  it('保留结构化字段,且要求忠实、不许替用户编', () => {
     for (const key of ['BPM', 'Key', 'Vocals', 'Arrangement']) {
       expect(TRANSLATE_SYSTEM_MUSIC3, `缺 ${key}`).toContain(key);
     }
-    // 自动跑的一步必须忠实:不能像"优化提示词"那样扩写
+    // 自动跑的一步必须忠实:不能像「AI 优化提示词」那样扩写
     expect(TRANSLATE_SYSTEM_MUSIC3).toContain('Do NOT invent');
     // 歌词兜底:误贴进描述框时也不能被译进去
     expect(TRANSLATE_SYSTEM_MUSIC3).toContain('never translate lyrics');
+  });
+
+  it('没有被写成音效模板那一路', () => {
+    // 这三条是已下线的 AudioX 模板的特征,落到 Music3 上正好把它要的东西删掉
+    expect(TRANSLATE_SYSTEM_MUSIC3).not.toContain('no music notation, no BPM');
+    expect(TRANSLATE_SYSTEM_MUSIC3).not.toContain('<= 40 words');
+    expect(TRANSLATE_SYSTEM_MUSIC3).not.toContain('AudioCaps');
   });
 });

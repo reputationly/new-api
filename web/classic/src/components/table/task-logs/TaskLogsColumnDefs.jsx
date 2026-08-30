@@ -151,6 +151,10 @@ const FACADE_TASK_TYPE_META = {
   t2m: { label: '文生音乐', color: 'orange' },
   cover: { label: '音乐改编', color: 'orange' },
   repaint: { label: '音乐重绘', color: 'orange' },
+  // ── 已下线玩法的只读标签 ─────────────────────────────────────────
+  // AudioX(t2a/v2m/tv2m)与 SoulX-Singer(svs)已于 2026-08 下线,写入侧全部摘除,
+  // 新任务不会再产生这几个 task_type。**这几行刻意保留**:删了的话历史记录就只显示
+  // 原始的 t2a/svs,谁也看不懂那是什么玩法 —— 读侧兼容的成本只有几行映射。
   t2a: { label: '文生音效', color: 'orange' },
   svs: { label: '歌声合成', color: 'orange' },
   // AudioX 视频生音:已无前端入口,但 task_type 仍有效,直连仍可能产生记录。
@@ -163,7 +167,11 @@ const renderType = (type, t, taskType) => {
   const meta = FACADE_TASK_TYPE_META[taskType];
   if (meta) {
     return (
-      <Tag color={meta.color} shape='circle' prefixIcon={<Sparkles size={14} />}>
+      <Tag
+        color={meta.color}
+        shape='circle'
+        prefixIcon={<Sparkles size={14} />}
+      >
         {t(meta.label)}
       </Tag>
     );

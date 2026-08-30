@@ -84,8 +84,6 @@ var playgroundTabsByStoreKey = map[string][]playgroundTabSpec{
 		{key: "t2m", capability: "文生音乐", fields: []string{"maxChars", "translation"}},
 		{key: "cover", capability: "音乐改编", fields: []string{"maxChars", "refAudioMaxMB"}},
 		{key: "repaint", capability: "音乐重绘", fields: []string{"maxChars", "refAudioMaxMB"}},
-		{key: "t2a", capability: "文生音效", fields: []string{"maxChars", "translation"}},
-		{key: "svs", capability: "歌声合成", fields: []string{"maxChars", "refAudioMaxMB"}},
 	},
 }
 

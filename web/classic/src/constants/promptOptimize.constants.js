@@ -4,7 +4,7 @@
 //   1. 用户不选模型 —— 优化用哪个语言模型由运营在「体验区管理 → 通用设置」里配,
 //      体验区只出一个按钮(见 hooks/common/usePromptOptimize.js);
 //   2. 每个 tab 有自己的默认系统提示词 —— 视频提示词讲镜头运动,图像讲构图光影,
-//      音效讲声源与声学环境,一份通用模板对谁都不合适。运营可在 tab 配置里改写,
+//      音乐讲编曲结构,一份通用模板对谁都不合适。运营可在 tab 配置里改写,
 //      留空即用这里的默认值(后续调优默认值时,没改过的 tab 自动跟着升级)。
 //
 // 输出契约对所有 tab 统一:只回优化后的提示词正文,不要解释、不要引号、不要围栏 ——
@@ -95,16 +95,6 @@ Rules:
 - No speech or dialogue lines — these models do not synthesize intelligible speech.
 - Do not emit duration or loudness parameters.`;
 
-const SFX_PROMPT = `You are a prompt engineer for text-to-audio (sound effect) models. Rewrite the user's rough idea into one precise sound description.
-
-Cover: the sound source and its material → the action producing the sound → its envelope over time (sudden/sustained, rising/decaying, single hit or repeating) → the acoustic space (close and dry, room, hall, outdoors, underwater) → background ambience, if any.
-
-Rules:
-- Concrete and physical: "heavy oak door creaking open on rusted hinges, closing with a dull thud in a stone corridor", not "door sound".
-- One coherent sound event or scene, not a list of unrelated effects.
-- No music, melody, or lyrics — those belong to the music playground.
-- No speech.`;
-
 // MiniMax-Music3 的 instructions。**与 ACE-Step 的 caption 不是一回事**:
 // ACE-Step 的描述位是 prompt(与歌词并列的整体描述),而 Music3 的 prompt 位是歌词,
 // 描述走独立的 instructions。
@@ -149,7 +139,6 @@ export const DEFAULT_OPTIMIZE_SYSTEM_PROMPTS = {
   s2v: S2V_PROMPT + OUTPUT_CONTRACT,
   vace: VIDEO_EDIT_PROMPT + OUTPUT_CONTRACT,
   dub: DUB_PROMPT + OUTPUT_CONTRACT,
-  t2a: SFX_PROMPT + OUTPUT_CONTRACT,
 };
 
 // 取某个 tab 的默认系统提示词(运营未改写时用它)。

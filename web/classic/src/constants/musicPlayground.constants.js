@@ -1,8 +1,10 @@
 // 音乐模型体验区常量。链路复用视频体验区的异步任务门面(POST /pg/videos),按 mode 映射
 // task_type。涵盖两类引擎:
 //   - ACE-Step 文生音乐/音乐改编/音乐重绘(t2m/cover/repaint),结果为音频(.mp3);
-//   - AudioX + SoulX-Singer 扩散音频(文生音效/视频配音效/视频配乐/歌声合成
-//     = t2a/v2a/tv2a/v2m/tv2m/svs),结果为音频(.wav)。
+//   - MiniMax-Music3 文生音乐(与 ACE-Step 同挂 t2m,按引擎族分流),结果为音频(.wav)。
+// 2026-08 下线:AudioX(文生音效 t2a、视频生音乐 v2m/tv2m)与 SoulX-Singer(歌声合成 svs)
+// —— 实例已收到 0,体验区入口、参数与模板一并摘除。任务日志仍保留这几个 task_type
+// 的中文标签,以免历史记录只显示原始值。
 // 通用状态机/轮询/内容地址等工具直接复用 videoPlayground.constants;结果播放/下载按返回的
 // content-url + media-type 处理,格式无关(见 MusicChatArea)。
 
@@ -21,43 +23,33 @@ export {
   buildVideoContentUrl as buildMusicContentUrl,
 } from './videoPlayground.constants';
 
-// 音乐/扩散音频生成较慢(30~120s 的曲子 / AudioX 默认 250 步,单实例 FIFO),沿用 4s
+// 音乐生成较慢(30~120s 的曲子,单实例 FIFO),沿用 4s
 // 间隔,上限同视频。
 export const MUSIC_POLL_MAX_TIMES = 90; // 约 6 分钟后超时
 
-// 七个能力标签(= 体验区子标签页名;中文即值)。前三个为 ACE-Step,后四个为 AudioX/SoulX。
+// 三个能力标签(= 体验区子标签页名;中文即值),都由 ACE-Step 承载;文生音乐另可挂
+// MiniMax-Music3(按引擎族分流,不占新能力词)。
 // 与后端 constant/model_capability.go 的 MusicCapabilities 保持一致(新增能力两处同步)。
 export const MUSIC_T2M_CAPABILITY = '文生音乐';
 export const MUSIC_COVER_CAPABILITY = '音乐改编';
 export const MUSIC_REPAINT_CAPABILITY = '音乐重绘';
-export const MUSIC_T2A_CAPABILITY = '文生音效';
 // 2026-07 下线:视频生音(AudioX v2a/tv2a,出 .wav)及其旧标签 视频配音效/视频配乐。
 // 视频配乐产品线移交 LTX-2.3(task_type=v2a 契约改判,产物=配好音的视频),入口在
 // 体验区「语音模型 → 视频配乐」(见 audioPlayground 侧),不再归音乐页。
-export const MUSIC_SVS_CAPABILITY = '歌声合成';
 export const MUSIC_CAPABILITIES = [
   MUSIC_T2M_CAPABILITY,
   MUSIC_COVER_CAPABILITY,
   MUSIC_REPAINT_CAPABILITY,
-  MUSIC_T2A_CAPABILITY,
-  MUSIC_SVS_CAPABILITY,
 ];
 
 // mode → 门面契约映射。engine 区分参数形态:
 //   - acestep:文本描述(prompt)+ 可选歌词/时长 +(cover/repaint)驱动音频。
-//   - audiox / soulx:与 new-api 任务适配器(relay/channel/task/gpustackplus/adaptor.go)
-//     的 task_type 与 metadata 键精确对齐:
-//       * 文生音效  t2a  :纯文本 prompt,无输入物化。
-//       * 视频配音效 v2a/tv2a:上传视频(metadata.video)+ 可选文本;有文本→tv2a,否则 v2a。
-//       * 视频配乐  v2m/tv2m:上传视频(metadata.video)+ 可选文本;有文本→tv2m,否则 v2m。
-//       * 歌声合成  svs  :两个音频——音色参考(metadata.prompt_audio)+ 目标曲/伴奏
-//                         (metadata.target_audio),均必填;无需文本(发送固定标签占位)。
 // 字段说明:
 //   needsAudio:acestep 的驱动音频(单音频,audioMetaKey 透传)。
-//   needsVideo:audiox 视频条件输入(单视频上传器 → metadata.video)。
-//   needsDualAudio:soulx 双音频上传器(音色参考 + 目标曲/伴奏)。
-//   needsText:文本是否必填(t2m/t2a 必填;v2*/tv2* 可选;svs 无需)。
-//   resolveTaskType(hasText):acestep/t2a/svs 与文本无关;v2*/tv2* 按是否带文本分支。
+//   needsText:文本是否必填。
+//   resolveTaskType(hasText):三个玩法都与文本无关,保留这个形状是因为下线前的
+//     v2*/tv2* 曾按「有没有文本」分叉;现在无分叉,但接口不变以免调用方跟着改。
+//   needsVideo / needsDualAudio 随 AudioX/SoulX 一并移除。
 export const MUSIC_MODES = {
   t2m: {
     taskType: 't2m',
@@ -92,41 +84,11 @@ export const MUSIC_MODES = {
     needsText: true,
     resolveTaskType: () => 'repaint',
   },
-  t2a: {
-    taskType: 't2a',
-    capability: MUSIC_T2A_CAPABILITY,
-    engine: 'audiox',
-    needsAudio: false,
-    audioMetaKey: '',
-    needsVideo: false,
-    needsDualAudio: false,
-    needsText: true, // 文生音效:文本必填
-    needsTranslation: true, // 中文提示词提交前中译英(AudioX 文本编码器仅认英文)
-    videoMetaKey: 'video',
-    promptAudioMetaKey: 'prompt_audio',
-    targetAudioMetaKey: 'target_audio',
-    resolveTaskType: () => 't2a',
-  },
-  // (原「视频生音」v2a 模式已于 2026-07 下线,见文件头能力常量处的迁移说明。)
-  svs: {
-    taskType: 'svs',
-    capability: MUSIC_SVS_CAPABILITY,
-    engine: 'soulx',
-    needsAudio: false,
-    audioMetaKey: '',
-    needsVideo: false,
-    needsDualAudio: true,
-    needsText: false, // 歌声合成:无需文本(发送固定标签占位)
-    videoMetaKey: 'video',
-    promptAudioMetaKey: 'prompt_audio',
-    targetAudioMetaKey: 'target_audio',
-    resolveTaskType: () => 'svs',
-  },
 };
 
-// 体验区子标签页顺序(3 个 ACE-Step + 2 个 AudioX/SoulX)。
+// 体验区子标签页顺序。
 // v2a(视频生音)已下线:视频配乐移交 LTX-2.3,入口在语音模型页。
-export const MUSIC_TAB_ORDER = ['t2m', 'cover', 'repaint', 't2a', 'svs'];
+export const MUSIC_TAB_ORDER = ['t2m', 'cover', 'repaint'];
 
 // ── ACE-Step 参数 ──────────────────────────────────────────────
 // 时长预设(秒),经 metadata.audio_duration 透传给引擎。'' = 引擎默认(不下发)。
@@ -143,18 +105,9 @@ export const MUSIC_PROMPT_PRESETS = [
   '空灵的禅意音乐,适合瑜伽冥想',
 ];
 
-// 音效/配乐提示词预设(t2a/v2*/tv2* 展示)。
-export const MUSIC_AUDIOX_PROMPT_PRESETS = [
-  '雨点打在窗户上的滴答声,伴随远处闷雷',
-  '繁忙街道上的汽车鸣笛与人群嘈杂声',
-  '悠扬舒缓的钢琴独奏,适合宁静的夜晚',
-  '激昂的管弦乐,气势磅礴的史诗配乐',
-];
-
 // ── 一键示例(带预置文件/参数,按 mode)──────────────────────────────────
 // 结构同音频:{ label, prompt, params?, files? }。cover/repaint 预置驱动音(ACE-Step 官方
-// test_track),svs 预置双音频(SoulX 官方示例);t2m/t2a 纯文本;v2a/v2m 的 AudioX 官方
-// 示例视频为 CC-BY-NC,暂不打包,先给纯文本(需自行上传视频)。ChatArea 兼容纯字符串。
+// test_track);t2m 纯文本。ChatArea 兼容纯字符串。
 export const MUSIC_EXAMPLES = {
   t2m: [
     {
@@ -183,27 +136,6 @@ export const MUSIC_EXAMPLES = {
       prompt: '保持主旋律,重绘为更抒情的钢琴伴奏版本',
       params: { audioName: 'acestep-reference.mp3' },
       files: { audioData: '/playground-samples/audio/acestep-reference.mp3' },
-    },
-  ],
-  t2a: [
-    { label: '雨声闷雷', prompt: '雨点打在窗户上的滴答声,伴随远处闷雷' },
-    { label: '街道嘈杂', prompt: '繁忙街道上的汽车鸣笛与人群嘈杂声' },
-    { label: '钢琴独奏', prompt: '悠扬舒缓的钢琴独奏,适合宁静的夜晚' },
-  ],
-  svs: [
-    {
-      label: '歌声合成(普通话)',
-      prompt: '',
-      params: {
-        language: 'Mandarin', // = MUSIC_SVS_DEFAULT_LANGUAGE
-        control: 'melody', // = MUSIC_SVS_DEFAULT_CONTROL
-        promptAudioName: 'soulx-prompt-zh.mp3',
-        targetAudioName: 'soulx-target-music.mp3',
-      },
-      files: {
-        promptAudioData: '/playground-samples/audio/soulx-prompt-zh.mp3',
-        targetAudioData: '/playground-samples/audio/soulx-target-music.mp3',
-      },
     },
   ],
 };
@@ -293,44 +225,13 @@ export const MUSIC_REPAINT_MODES = [
 export const MUSIC_DEFAULT_REPAINT_MODE = 'balanced';
 export const MUSIC_DEFAULT_REPAINT_STRENGTH = 0.5;
 
-// ── AudioX / SoulX 参数 ────────────────────────────────────────
-// 标量参数默认(仅作输入框占位提示;留空即不下发,走引擎默认)。
-// AudioX:seconds_total(仅 AudioX)默认 10、num_inference_steps 默认 250;
-// SoulX(svs):num_inference_steps 默认 32。guidance_scale/seed 两引擎共用。
-export const MUSIC_DEFAULT_SECONDS_TOTAL = 10;
-export const MUSIC_AUDIOX_DEFAULT_STEPS = 250;
-export const MUSIC_SOULX_DEFAULT_STEPS = 32;
-export const MUSIC_AUDIOX_DEFAULT_GUIDANCE = 7.0;
-// SoulX(svs)guidance 默认 = deploy-config soulxsinger_svs.yaml 的 guidance_scale: 3.0。
-// ConfigPanel 占位与实际引擎默认必须一致(所见即所发)。
-export const MUSIC_SOULX_DEFAULT_GUIDANCE = 3.0;
+// 采样步数占位默认。AudioX/SoulX 下线后只剩 ACE-Step 一档(Music3 不暴露步数),
+// 函数保留是因为面板与调用方都按「按引擎取默认」的形状写,退化成常量返回即可,
+// 日后再进引擎时不用改调用点。
+export const musicDefaultStepsForEngine = () => MUSIC_DEFAULT_STEPS;
 
-// SoulX 歌声合成的语言与控制方式(metadata.language / metadata.control)。
-export const MUSIC_SVS_LANGUAGES = [
-  { value: 'Mandarin', label: '普通话' },
-  { value: 'Cantonese', label: '粤语' },
-  { value: 'English', label: '英文' },
-];
-export const MUSIC_SVS_DEFAULT_LANGUAGE = 'Mandarin';
-export const MUSIC_SVS_CONTROLS = [
-  { value: 'melody', label: '旋律(melody)' },
-  { value: 'score', label: '曲谱(score)' },
-];
-export const MUSIC_SVS_DEFAULT_CONTROL = 'melody';
-
-// 采样步数占位默认按引擎选择。
-export const musicDefaultStepsForEngine = (engine) => {
-  if (engine === 'audiox') return MUSIC_AUDIOX_DEFAULT_STEPS;
-  if (engine === 'soulx') return MUSIC_SOULX_DEFAULT_STEPS;
-  return MUSIC_DEFAULT_STEPS;
-};
-
-// guidance 占位默认按引擎选择(SoulX=3 与 deploy-config 一致;AudioX/ACE-Step=7)。
-export const musicDefaultGuidanceForEngine = (engine) => {
-  if (engine === 'soulx') return MUSIC_SOULX_DEFAULT_GUIDANCE;
-  if (engine === 'audiox') return MUSIC_AUDIOX_DEFAULT_GUIDANCE;
-  return MUSIC_DEFAULT_GUIDANCE;
-};
+// guidance 占位默认。同上,只剩 ACE-Step。
+export const musicDefaultGuidanceForEngine = () => MUSIC_DEFAULT_GUIDANCE;
 
 // ── 上传大小上限 ───────────────────────────────────────────────
 // 上传参考/源音大小上限(MB;base64 随请求体走,过大拖慢提交)。

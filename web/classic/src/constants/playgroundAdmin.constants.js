@@ -142,12 +142,12 @@ export const AUDIO_ENGINE_OPTIONS_INLINE = [
 // 取值必须与后端 common.MusicEngineMinimaxMusic3 一致（后端比较前 lower+trim）。
 export const MUSIC_ENGINE_MINIMAX_MUSIC3 = 'minimax-music3';
 
-// 只列 MiniMax-Music3:玩法默认引擎（文生音乐恒 acestep、文生音效 audiox、歌声合成
-// soulx）已经覆盖其余模型，需要模型级覆盖的只有「与 ACE-Step 同挂文生音乐」的
-// MiniMax-Music3。多列几个只会让运营选到与玩法不匹配的引擎，而后果是静默的
+// 只列 MiniMax-Music3:AudioX/SoulX 下线后音乐页只剩 ACE-Step 与 Music3 两族，
+// 而三个玩法的默认引擎都是 ACE-Step，需要模型级覆盖的只有「与 ACE-Step 同挂文生音乐」
+// 的 MiniMax-Music3。多列几个只会让运营选到与玩法不匹配的引擎，而后果是静默的
 // （拿到该引擎不认的键、必需的键一个不发）。与视频侧同一取舍。
 export const MUSIC_ENGINE_OPTIONS_INLINE = [
-  { value: '', label: '默认（按玩法：ACE-Step / AudioX / SoulX）' },
+  { value: '', label: '默认（ACE-Step）' },
   { value: MUSIC_ENGINE_MINIMAX_MUSIC3, label: 'MiniMax-Music3（vLLM-Omni）' },
 ];
 
@@ -198,7 +198,7 @@ export const PLAYGROUND_MODEL_LEVEL_FIELDS = {
       label: '引擎族',
       type: 'select',
       options: MUSIC_ENGINE_OPTIONS_INLINE,
-      help: '玩法自带默认引擎（文生音乐=ACE-Step），同一玩法挂了别的引擎的模型时必须在这里声明。MiniMax-Music3 也是文生音乐，不声明就会走 ACE-Step 分支：拿到 lyrics/thinking 这些它不认的键，而它必需的 instructions 一个都不下发，引擎直接 400。属模型能力，与 tab 无关。',
+      help: '玩法默认引擎是 ACE-Step，同一玩法挂了别的引擎的模型时必须在这里声明。MiniMax-Music3 也是文生音乐，不声明就会走 ACE-Step 分支：拿到 lyrics/thinking 这些它不认的键，而它必需的 instructions 一个都不下发，引擎直接 400。属模型能力，与 tab 无关。',
     },
   ],
 };
@@ -423,19 +423,6 @@ export const PLAYGROUND_CATEGORIES = [
         key: 'repaint',
         label: '音乐重绘',
         capability: '音乐重绘',
-        fields: ['maxChars', 'refAudioMaxMB'],
-      },
-      {
-        key: 't2a',
-        label: '文生音效',
-        capability: '文生音效',
-        fields: ['maxChars', 'translation'],
-        promptOptimize: true,
-      },
-      {
-        key: 'svs',
-        label: '歌声合成',
-        capability: '歌声合成',
         fields: ['maxChars', 'refAudioMaxMB'],
       },
     ],

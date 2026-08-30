@@ -28,11 +28,8 @@ const MusicPlaygroundBody = ({ mode, initialSrcTaskId = '', onSendToSrc }) => {
     locked,
     turnLimitReached,
     missingRequiredAudio,
-    missingRequiredVideo,
     engine,
     needsAudio,
-    needsVideo,
-    needsDualAudio,
     needsText,
     showTranslation,
     englishOnlyNoTranslate,
@@ -64,13 +61,9 @@ const MusicPlaygroundBody = ({ mode, initialSrcTaskId = '', onSendToSrc }) => {
   const audioLabel =
     mode === 'cover' ? t('参考音频') : mode === 'repaint' ? t('源音频') : '';
 
-  // 各玩法欢迎语。
-  const welcomeText =
-    mode === 't2a'
-      ? t('欢迎使用 AI 文生音效,请在左侧选择模型,并在下方输入音效描述')
-      : mode === 'svs'
-        ? t('欢迎使用 AI 歌声合成,请在左侧上传音色参考与目标曲/伴奏')
-        : '';
+  // 各玩法欢迎语。AudioX/SoulX 下线后三个玩法都用 ChatArea 的默认欢迎语
+  // (它已按引擎族分 ACE-Step / Music3 两套),这里不再覆盖。
+  const welcomeText = '';
 
   return (
     <div
@@ -87,8 +80,6 @@ const MusicPlaygroundBody = ({ mode, initialSrcTaskId = '', onSendToSrc }) => {
           mode={mode}
           engine={engine}
           needsAudio={needsAudio}
-          needsVideo={needsVideo}
-          needsDualAudio={needsDualAudio}
           audioLabel={audioLabel}
           refAudioMaxMB={refAudioMaxMB}
           videoMaxMB={videoMaxMB}
@@ -102,12 +93,9 @@ const MusicPlaygroundBody = ({ mode, initialSrcTaskId = '', onSendToSrc }) => {
           generating={generating}
           turnLimitReached={turnLimitReached}
           missingRequiredAudio={missingRequiredAudio}
-          missingRequiredVideo={missingRequiredVideo}
           engine={engine}
           mode={mode}
           needsText={needsText}
-          needsVideo={needsVideo}
-          needsDualAudio={needsDualAudio}
           showTranslation={showTranslation}
           englishOnlyNoTranslate={englishOnlyNoTranslate}
           welcomeText={welcomeText}

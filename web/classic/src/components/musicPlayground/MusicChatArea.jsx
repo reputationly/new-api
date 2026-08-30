@@ -21,9 +21,9 @@ import {
   MUSIC_ENGINE_MINIMAX_MUSIC3,
 } from '../../constants/musicPlayground.constants';
 
-// 音乐模型对话区:成品渲染 <audio> 播放器 + 下载。格式无关(ACE-Step .mp3 / AudioX/SoulX
-// .wav)——下载文件名从返回的 content-url + 响应 media type 推断,不硬编码扩展名。
-// svs(歌声合成)无需文本,输入框为固定占位;预设/占位/欢迎语随 engine / needsText 变化。
+// 音乐模型对话区:成品渲染 <audio> 播放器 + 下载。格式无关(ACE-Step .mp3 /
+// MiniMax-Music3 .wav)——下载文件名从返回的 content-url + 响应 media type 推断,
+// 不硬编码扩展名。预设/占位/欢迎语随引擎族(ACE-Step / Music3)变化。
 
 const WELCOME_ID = '__welcome__';
 const MAX_PROMPT_LEN = 5000;
@@ -168,12 +168,9 @@ const MusicChatArea = ({
   generating,
   turnLimitReached = false,
   missingRequiredAudio = false,
-  missingRequiredVideo = false,
   engine = 'acestep',
   mode = 't2m',
   needsText = true,
-  needsVideo = false,
-  needsDualAudio = false,
   showTranslation = false,
   englishOnlyNoTranslate = false,
   welcomeText = '',
@@ -197,7 +194,7 @@ const MusicChatArea = ({
   // 歌词在左侧面板(→ 引擎 input)。文案必须说清,否则用户会把歌词写进这里,
   // 而那样只会得到一段"按歌词描述编出来的伴奏",不报错。
   const isMusic3 = engine === MUSIC_ENGINE_MINIMAX_MUSIC3;
-  // 一键示例(按 mode):cover/repaint 带驱动音、svs 带双音频,故 svs 也展示(有素材)。
+  // 一键示例(按 mode + 引擎族):cover/repaint 带驱动音;t2m 两套引擎各一份。
   const presets = musicExamplesForMode(mode, engine);
   const showPresets = presets.length > 0;
 
@@ -207,15 +204,12 @@ const MusicChatArea = ({
       ? t('欢迎使用 AI 文生音乐,请在左侧选择模型,并在下方输入音乐风格描述')
       : t('欢迎使用 AI 音频生成,请在左侧选择模型并配置输入');
 
+  // 只剩 ACE-Step 与 Music3 两族;最后一档是兜底,防运营声明了未知引擎时输入框没占位。
   const placeholder = isMusic3
     ? t('描述曲风、乐器编配、速度与情绪(歌词写在左侧)')
     : isAceStep
       ? t('请输入音乐风格描述')
-      : needsText
-        ? t('请输入音效/配乐描述')
-        : needsVideo
-          ? t('可选:补充描述(留空按纯视频生成)')
-          : t('点击右侧按钮开始生成');
+      : t('请输入描述');
 
   const roleConfig = useMemo(
     () => ({
@@ -417,12 +411,8 @@ const MusicChatArea = ({
   );
 
   const renderInputArea = useCallback(() => {
-    // 缺必填上传/生成中/达上限时置灰;svs 无需文本,空输入也可发送。
-    const blockSend =
-      generating ||
-      turnLimitReached ||
-      missingRequiredAudio ||
-      missingRequiredVideo;
+    // 缺必填上传/生成中/达上限时置灰。
+    const blockSend = generating || turnLimitReached || missingRequiredAudio;
     const hasText = inputValue.trim().length > 0;
     // 优化 / 拟稿在途时同样不能发:此刻发出去的还是没经 AI 处理的原文,而拟稿更狠 ——
     // 歌词还没落到左侧,提交就会命中 sample_mode,选好的时长/BPM 又被引擎覆盖掉。
@@ -470,22 +460,12 @@ const MusicChatArea = ({
             {t('本轮对话已达生成上限，请点击右侧「新对话」继续')}
           </Typography.Text>
         )}
-        {missingRequiredVideo && (
-          <Typography.Text
-            type='warning'
-            className='text-xs block mb-2 text-center'
-          >
-            {t('请先在左侧上传源视频')}
-          </Typography.Text>
-        )}
         {missingRequiredAudio && (
           <Typography.Text
             type='warning'
             className='text-xs block mb-2 text-center'
           >
-            {needsDualAudio
-              ? t('请先在左侧上传音色参考与目标曲/伴奏')
-              : t('请先在左侧上传驱动音频')}
+            {t('请先在左侧上传驱动音频')}
           </Typography.Text>
         )}
         {/* 一键示例:纯文本(仅填输入框)或结构化对象({label,prompt,params,files}——
@@ -535,9 +515,8 @@ const MusicChatArea = ({
             }}
           />
         )}
-        {/* 「AI 优化提示词」出现在文生音效(t2a)与 MiniMax-Music3 的文生音乐上:
-            两者的输入都是一句"要什么声音/什么编曲"的描述,补全成结构化描述能直接
-            提升产出质量。
+        {/* 「AI 优化提示词」出现在 MiniMax-Music3 的文生音乐上:它的输入是一句
+            "要什么编曲"的描述,补全成官方 Structured Caption 能直接提升产出质量。
 
             **`!onDraftPlan` 这个条件不能省**。promptOptimize 是 **tab 级**声明,
             usePromptOptimize 的 available 只看 tab 不看引擎 —— 光靠 draftAvailable
@@ -603,7 +582,6 @@ const MusicChatArea = ({
     generating,
     turnLimitReached,
     missingRequiredAudio,
-    missingRequiredVideo,
     showTranslation,
     englishOnlyNoTranslate,
     // engine / isMusic3:翻译提示文案与「AI 优化提示词」的模板都按引擎族分叉,
@@ -611,7 +589,6 @@ const MusicChatArea = ({
     engine,
     isMusic3,
     needsText,
-    needsDualAudio,
     showPresets,
     presets,
     placeholder,

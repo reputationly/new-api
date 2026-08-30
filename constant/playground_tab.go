@@ -52,12 +52,10 @@ var taskTypeToPlaygroundTab = map[string]string{
 	"t2m":     "t2m",
 	"cover":   "cover",
 	"repaint": "repaint",
-	"t2a":     "t2a",
-	"svs":     "svs",
 
 	// 无对应 tab,一律走模型级:
 	//   sr      —— 超分不单独开玩法,只作 1080P 两段流水线的内部一段;
-	//   v2m/tv2m —— AudioX 视频生音已下线,音乐页无入口;
+	//   t2a/svs/v2m/tv2m —— AudioX 与 SoulX-Singer 已于 2026-08 下线,音乐页无入口;
 	//   tts     —— 情感合成/语音合成/双人对话/声音设计四个 tab 共用同一个 task_type,
 	//              从请求上无从区分是哪个玩法。这四格的配置在保存时会同时回写一份
 	//              "最宽松"的模型级值(见体验区管理页的保存逻辑),故此处退回模型级

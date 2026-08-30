@@ -80,8 +80,6 @@ var validTaskTypes = map[string]bool{
 	"v2a": true,
 	// 音乐生成(ACE-Step):t2m 纯文本、cover 参考音频、repaint 源音频。
 	"t2m": true, "cover": true, "repaint": true,
-	// 扩散音频(vLLM-Omni audiogen):AudioX t2a/v2m/tv2m + SoulX-Singer svs。
-	"t2a": true, "v2m": true, "tv2m": true, "svs": true,
 }
 
 // legacyInputKeys 旧的原始输入 / 引擎原生路径字段:输入统一走 input_refs,这些键
@@ -290,7 +288,7 @@ func (a *TaskAdaptor) BuildRequestBody(c *gin.Context, info *relaycommon.RelayIn
 	// task_type 白名单校验(§N2):它可能来自 metadata,非法值既会让 NFS 写盘路径异常,
 	// 也会被门面拒;就地本地 400,不进后续物化 / 提交。
 	if !validTaskTypes[taskType] {
-		return nil, localBadRequest(fmt.Errorf("不支持的 task_type: %q(允许:t2i/i2i/t2v/i2v/l2va/flf2v/tts/s2v/r2va/sr/v2a/v2v/rv2v/r2v/mv2v/ads2v/t2m/cover/repaint/t2a/v2m/tv2m/svs)", taskType))
+		return nil, localBadRequest(fmt.Errorf("不支持的 task_type: %q(允许:t2i/i2i/t2v/i2v/l2va/flf2v/tts/s2v/r2va/sr/v2a/v2v/rv2v/r2v/mv2v/ads2v/t2m/cover/repaint)", taskType))
 	}
 	// SoulX svs 的文本仅占位(引擎按 prompt_audio/target_audio 生成歌声),但引擎 input 需非空、
 	// 且真机验证过的请求带 "soulx-singer" 标签。ValidateBasicTaskRequest 已豁免 svs 的空 prompt,
@@ -376,8 +374,7 @@ func (a *TaskAdaptor) BuildRequestBody(c *gin.Context, info *relaycommon.RelayIn
 			return nil, localBadRequest(err)
 		}
 	}
-	if taskType == "t2m" || taskType == "cover" || taskType == "repaint" ||
-		taskType == "t2a" || taskType == "tv2m" {
+	if taskType == "t2m" || taskType == "cover" || taskType == "repaint" {
 		// 字数上限(MusicModelConfig,按模型/全局默认;0=不限制):就地本地 400,防前端(含
 		// 直连 /pg/videos)绕过。ACE-Step 校验 prompt/lyrics/sample_query;AudioX 文本类
 		// (t2a/tv2m)也归「音乐」大类,同样受 MusicModelConfig 字数限制,只有 prompt。
@@ -432,19 +429,11 @@ func (a *TaskAdaptor) BuildRequestBody(c *gin.Context, info *relaycommon.RelayIn
 		// 音乐生成:t2m 无输入;cover 需参考音频(metadata.reference_audio);
 		// repaint 需源音频(metadata.src_audio)。
 		refs, err = materializeMusicInputs(c, info, taskType, modelName, req)
-	case "t2a":
-		// AudioX 文本→音效/音乐:纯文本 prompt,无输入物化。
 	case "v2a":
 		// 视频配乐(LTX-2.3 首发):源视频(metadata.video)+ 可选 prompt(透传)。
 		// 归视频大类 → 走 VideoModelConfig 上限(newVideoMaterializer),与下线的
 		// AudioX v2a(音乐大类上限)不同,故独立物化函数。
 		refs, err = materializeDubInputs(c, info, taskType, modelName, req)
-	case "v2m", "tv2m":
-		// AudioX 视频→音乐:物化视频(metadata.video);tv2m 另有文本 prompt(透传)。
-		refs, err = materializeAudioXVideoInputs(c, info, taskType, modelName, req)
-	case "svs":
-		// SoulX-Singer 集成 preprocess:物化 prompt_audio(音色参考)+ target_audio(目标曲/伴奏)。
-		refs, err = materializeSingingInputs(c, info, taskType, modelName, req)
 	default:
 		// t2v/i2v/l2va/flf2v/i2i/t2i:有图才物化(纯文本 t2v/t2i 无输入)。
 		// 首尾帧(flf2v):images[0]=首帧→image,images[1]=尾帧→last_frame;其余只取首帧。
@@ -780,20 +769,12 @@ func taskTypeOfRequest(req *relaycommon.TaskSubmitReq, inferName string, configN
 func inferTaskType(modelName string) string {
 	m := strings.ToLower(modelName)
 	switch {
-	// 扩散音频(vLLM-Omni audiogen)放最前,免被下面的 tts/兜底吞掉:
-	//   AudioX 默认 t2a(文生音效);v2m/tv2m 由 metadata.task_type 显式指定
-	//  (v2a/tv2a 已随 AudioX 视频配乐下线,v2a 契约改判给视频配乐,见 validTaskTypes)。
-	//   SoulX-Singer 默认 svs(歌声合成)。
-	case strings.Contains(m, "audiox"):
-		return "t2a"
 	// 视频配乐(v2a,LTX-2.3 首发):只匹配任务 token(v2a/dub,如部署名 ltx2-v2a),
 	// 不匹配模型家族名——裸 "ltx" 会把 LTX-Video t2v/i2v、ltx2 t2av 等生成类部署
 	// 误判成配音。生成类 LTX 落 t2v 兜底;不带任务后缀的配音部署用显式
 	// metadata.task_type(优先于本推断)。与 gpustack-ui task-inputs.ts 保持镜像。
 	case strings.Contains(m, "v2a") || strings.Contains(m, "dub"):
 		return "v2a"
-	case strings.Contains(m, "soulx") || strings.Contains(m, "singer"):
-		return "svs"
 	// 语音合成:含 "tts" 的名字(qwen3-tts/glm-tts/moss-ttsd/indextts)+ vLLM-Omni
 	// 里名字不含 "tts" 的 TTS 家族(voxcpm/cosyvoice 克隆、moss-voicegenerator
 	// 声音设计、moss-soundeffect 音效)。都走 /v1/audio/speech 异步契约。
@@ -1284,55 +1265,6 @@ func materializeTTSInputs(c *gin.Context, info *relaycommon.RelayInfo, taskType,
 			m.Cleanup()
 			return nil, err
 		}
-	}
-	return m.Refs(), nil
-}
-
-// materializeAudioXVideoInputs 物化 AudioX 视频→音乐(v2m/tv2m)的源视频
-// (metadata.video)。门面把 video→video_path 映射给引擎(AudioX 用 av.open 读裸路径,无需
-// file://)。audiox_task/seconds_total/num_inference_steps 等标量随 metadata 透传,不物化。
-// 注:v2a/tv2a 已随 AudioX 视频配乐下线;v2a 契约改判给视频配乐,走 materializeDubInputs。
-func materializeAudioXVideoInputs(c *gin.Context, info *relaycommon.RelayInfo, taskType, modelName string, req relaycommon.TaskSubmitReq) (map[string][]string, error) {
-	video := metadataString(req.Metadata, "video")
-	if video == "" {
-		return nil, fmt.Errorf("模型 %s 的任务类型 %s(视频→音频/音乐)需要源视频:请在 metadata.video 提供视频 URL 或 base64", modelName, taskType)
-	}
-	// AudioX 归「音乐」大类,视频上限配在 MusicModelConfig.videoMaxMB(不是 VideoModelConfig)
-	// —— 故不用 newVideoMaterializer(读视频模型配置),改直接建物化器 + 音乐视频上限兜底。
-	m := nfsinput.NewMaterializer(taskType, modelName, fmt.Sprintf("%d", info.UserId), inputGroupID(info))
-	if maxBytes, ok := common.MusicVideoMaxBytesForModel(req.Model, info.OriginModelName, modelName); ok {
-		m.SetMaxBytes(maxBytes)
-	}
-	if err := m.AddString(c.Request.Context(), nfsinput.FieldVideo, 0, false, video); err != nil {
-		m.Cleanup()
-		return nil, err
-	}
-	return m.Refs(), nil
-}
-
-// materializeSingingInputs 物化 SoulX-Singer SVS 集成 preprocess 的输入:prompt_audio(音色
-// 参考人声,必填)+ target_audio(目标曲/伴奏,必填)。服务器内联抽歌词/音符/音高,免预计算
-// 元数据。门面把 prompt_audio/target_audio 原样(引擎 extra_args 同名键)映射给引擎;
-// language/control/num_inference_steps 等标量随 metadata 透传。
-func materializeSingingInputs(c *gin.Context, info *relaycommon.RelayInfo, taskType, modelName string, req relaycommon.TaskSubmitReq) (map[string][]string, error) {
-	promptAudio := metadataString(req.Metadata, "prompt_audio")
-	targetAudio := metadataString(req.Metadata, "target_audio")
-	if promptAudio == "" || targetAudio == "" {
-		return nil, fmt.Errorf("模型 %s 的任务类型 svs(歌声合成)需要 metadata.prompt_audio(音色参考)与 metadata.target_audio(目标曲/伴奏)", modelName)
-	}
-	m := nfsinput.NewMaterializer(taskType, modelName, fmt.Sprintf("%d", info.UserId), inputGroupID(info))
-	// SoulX 归「音乐」大类,参考音上限配在 MusicModelConfig.refAudioMaxMB(不是 AudioModelConfig)。
-	if maxBytes, ok := common.MusicRefAudioMaxBytesForModel(taskType, req.Model, info.OriginModelName, modelName); ok {
-		m.SetMaxBytes(maxBytes)
-	}
-	ctx := c.Request.Context()
-	if err := m.AddString(ctx, nfsinput.FieldPromptAudio, 0, false, promptAudio); err != nil {
-		m.Cleanup()
-		return nil, err
-	}
-	if err := m.AddString(ctx, nfsinput.FieldTargetAudio, 0, false, targetAudio); err != nil {
-		m.Cleanup()
-		return nil, err
 	}
 	return m.Refs(), nil
 }
