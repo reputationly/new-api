@@ -549,7 +549,12 @@ export const isPipelineModel = (config, model) =>
 // to=目标档位、model=超分模型名、from=起步档位（必填）。留空整体 = 不提供超分档位
 // （纯 opt-in，与 sizes 同惯例：不给未配置的模型凭空长出一个档位）。
 export const getUpscaleRulesForModel = (config, model) =>
-  normalizeUpscaleList(config?.models?.[model]?.upscale);
+  normalizeUpscaleList(
+    config?.models?.[model]?.upscale,
+    // 一段式的规则行不需要 model（放大由引擎做），必须跟着放行，否则运营配好的
+    // 档位在运行时被丢掉、体验区下拉里就是不出现。
+    isNativeDeliveryModel(config, model),
+  );
 
 // 起步档位：只认运营显式指定的那一档，且必须仍在该模型原生档里（防止改了 sizes 之后
 // 留下悬空值）。没填、或填的档位已不在原生档里时返回 ''，调用方据此整档不渲染。
@@ -711,19 +716,40 @@ export const normalizeSizeList = (list) =>
 // 超分规则列表规范化（解析与管理端保存共用，避免两条路径分叉）。
 // 丢弃缺 to / model 的行；同一个 to 只留第一条 —— 多条同 to 会在尺寸下拉里出现两个
 // 同名档位，只能靠 label 区分，等于把心智负担还给用户，不如在配置侧就收敛。
-export const normalizeUpscaleList = (list) => {
+// allowEmptyModel：该模型走「高分辨率档用纯放大」时，规则行的 model 是**可选**的。
+//
+// 两段式下 model 必填天经地义 —— 没有超分模型就没有第二段可跑，留着一条跑不动的规则
+// 只会在体验区长出一个点了不生效的档位。但一段式整条路上根本没有第二个模型：放大由
+// 引擎在出片前做，这一格填什么都不会被读到。
+//
+// 曾经在这里踩过:管理页把这一格置灰(因为它确实不生效),结果「添加超分档位」变成
+// 不可能完成的操作 —— 新行填不了 model，保存后被本函数整行丢弃，而且不报错，运营
+// 只会看到「新加的档位怎么没了」。**可选**才是对的，置灰不是。
+export const normalizeUpscaleList = (list, allowEmptyModel = false) => {
   if (!Array.isArray(list)) return [];
   const seen = new Set();
   const out = [];
   list.forEach((r) => {
     const to = normalizeVideoSize(r?.to);
     const model = String(r?.model || '').trim();
-    if (!to || !model || seen.has(to)) return;
+    if (!to || seen.has(to)) return;
+    if (!model && !allowEmptyModel) return;
     seen.add(to);
     out.push({ to, model, from: normalizeVideoSize(r?.from) || '' });
   });
   return out;
 };
+
+// 一段式交付可选的目标档位。**短边档**：1080P / 2K / 4K 说的都是短边，长边由源画幅
+// 决定（与 upscaleTargetShortEdge 同一套语义）。
+//
+// 两段式的目标档位取自「超分模型登记的 sizes」——那是它部署 config 里的目标尺寸，
+// 是部署事实。一段式没有那个模型，缩放由引擎的编码漏斗做，能缩到任意短边，所以这里
+// 给一份通行档位表让运营点，而不是逼他手打像素串。
+// ⚠️ 取值必须是 normalizeVideoSize 归一**之后**的形态:它只对 `\d+p` 形态转大写,
+// 其余一律小写("4K" → "4k")。写成 '4K' 的话,存下来是 '4k'、而下拉选项是 '4K',
+// Select 的 value 匹配不到任何 option —— 界面上那一格看起来是空的。
+export const VIDEO_DELIVERY_TIERS = ['1080P', '2k', '4k'];
 
 // 现场拍摄档位。存在的理由见 hooks/videoPlayground/useVideoRecorder.js 顶部注释:
 // 系统相机的分辨率/帧率网页管不着(华为 4K30 约 5-7 MB/s,录十几秒就顶穿 maxInputMB),
@@ -858,7 +884,8 @@ export const parseVideoModelConfig = (raw) => {
           nativeDelivery: !!cfg?.nativeDelivery,
           // 同上,白名单式重建:漏了它每次保存都会把整条超分链配置抹掉,而症状是
           // 「体验区的 1080P 档位莫名消失」,查起来要绕一大圈。
-          upscale: normalizeUpscaleList(cfg?.upscale),
+          // 一段式允许 model 为空，判据取同一份配置里的 nativeDelivery。
+          upscale: normalizeUpscaleList(cfg?.upscale, !!cfg?.nativeDelivery),
           // 引擎族声明。**这是白名单式重建，漏一个字段就等于每次管理页保存都把它删掉**——
           // engine 决定后端走不走 MiniMax H3 那套请求整形(帧数约定/时长字段/画布推导),
           // 丢了不会报错,只会让 H3 悄悄退回 wan 的形态。

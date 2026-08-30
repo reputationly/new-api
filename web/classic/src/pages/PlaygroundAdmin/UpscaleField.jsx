@@ -5,6 +5,7 @@ import { Plus, Trash2 } from 'lucide-react';
 import {
   getSizesForVideoModel,
   videoSizeShortEdge,
+  VIDEO_DELIVERY_TIERS,
 } from '../../constants/videoPlayground.constants';
 
 const { Text } = Typography;
@@ -26,13 +27,14 @@ const { Text } = Typography;
 // min(源面积×倍率, config target 面积)，前端固定发一个足够大的值让它恒取右项即可，
 // 起步档差异自动抹平。让运营填倍率只会填错——同一个「到 1080」，480P 起步要 2.28、
 // 720P 起步要 1.5、768P 起步要 1.4，而且算错了不报错、只是悄悄掉档。
-// srModelUnused：该模型走「高分辨率档用纯放大」，超分模型这一格不会被调用。
+// srModelUnused：该模型走「高分辨率档用纯放大」。一段式整条路上没有第二个模型，
+// 「超分模型」这一格没有任何用途，整格不渲染，目标档位改用通行短边档表
+// （VIDEO_DELIVERY_TIERS），起步档位照旧。
 //
-// 置灰而不是隐藏，更不是允许清空：规则行缺 model 会在保存时被 normalizeUpscaleList
-// 整行丢弃，而档位（1080P / 2K）正是由这些规则**定义**的 —— 清掉等于把用户的高分辨率
-// 档位一起删了，且症状是「体验区下拉里那两档莫名消失」，不会有任何报错。
-// 所以它必须留着一个合法值，只是不再生效；界面要把这件事说出来，否则下一个人一定会
-// 问「勾了纯放大为什么还要选超分模型」。
+// ⚠️ 别再改回「置灰」：那样新增行填不了 model，而 normalizeUpscaleList 会把缺 model
+// 的行整行丢弃 —— 「添加超分档位」变成不可能完成的操作，保存后那一行直接消失，不报错。
+// 正确做法是让 model 对一段式**可选**（见 normalizeUpscaleList 的 allowEmptyModel），
+// 界面上顺势把这一格藏掉。
 const UpscaleField = ({
   value,
   onChange,
@@ -73,6 +75,9 @@ const UpscaleField = ({
             ),
           ]),
         );
+        // 一段式（纯放大）没有超分模型可查档位，改用通行的短边档表。
+        // 两段式仍取超分模型登记的 sizes —— 那是它部署 config 里的目标尺寸，是部署事实。
+        const toChoices = srModelUnused ? VIDEO_DELIVERY_TIERS : srSizes;
         const targetEdge = videoSizeShortEdge(r.to);
         // 只有比目标小的档位才是合法起步档：目标档本身已在已配档位里时，体验区会让
         // 原生档优先、这条规则整条让位（buildVideoSizeChoices 的 taken 判据）。
@@ -82,23 +87,25 @@ const UpscaleField = ({
         });
         return (
           <div key={i} className='flex flex-wrap items-center gap-2 mb-2'>
-            <Text type='tertiary' size='small'>
-              {t('超分模型')}
-            </Text>
-            <Select
-              size='small'
-              filter
-              disabled={srModelUnused}
-              style={{ minWidth: 200 }}
-              placeholder={t('选择超分模型')}
-              value={r.model || ''}
-              optionList={modelNames.map((m) => ({ label: m, value: m }))}
-              onChange={(v) => patch(i, 'model', v || '')}
-            />
-            {srModelUnused && (
-              <Text type='tertiary' size='small'>
-                {t('（本模型不调用它：已启用纯放大）')}
-              </Text>
+            {/* 一段式（纯放大）整条路上没有第二个模型，这一格没有任何用途，直接不渲染。
+                曾经改成「置灰」——那是错的：新增行填不了 model，保存后被
+                normalizeUpscaleList 整行丢弃，「添加超分档位」变成不可能完成的操作，
+                而且不报错，运营只会看到「新加的档位怎么没了」。 */}
+            {!srModelUnused && (
+              <>
+                <Text type='tertiary' size='small'>
+                  {t('超分模型')}
+                </Text>
+                <Select
+                  size='small'
+                  filter
+                  style={{ minWidth: 200 }}
+                  placeholder={t('选择超分模型')}
+                  value={r.model || ''}
+                  optionList={modelNames.map((m) => ({ label: m, value: m }))}
+                  onChange={(v) => patch(i, 'model', v || '')}
+                />
+              </>
             )}
             <Text type='tertiary' size='small'>
               {t('超分至')}
@@ -106,9 +113,15 @@ const UpscaleField = ({
             <Select
               size='small'
               style={{ minWidth: 130 }}
-              placeholder={r.model ? t('该模型未登记档位') : t('先选超分模型')}
+              placeholder={
+                srModelUnused
+                  ? t('选择交付档位')
+                  : r.model
+                    ? t('该模型未登记档位')
+                    : t('先选超分模型')
+              }
               value={r.to || ''}
-              optionList={srSizes.map((s) => ({ label: s, value: s }))}
+              optionList={toChoices.map((s) => ({ label: s, value: s }))}
               onChange={(v) => patch(i, 'to', v || '')}
             />
             <Text type='tertiary' size='small'>

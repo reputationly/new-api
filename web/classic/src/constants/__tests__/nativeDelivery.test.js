@@ -5,6 +5,11 @@ import {
   isPipelineModel,
   buildVideoSizeChoices,
   upscaleTargetShortEdge,
+  normalizeUpscaleList,
+  getUpscaleRulesForModel,
+  normalizeVideoSize,
+  videoSizeShortEdge,
+  VIDEO_DELIVERY_TIERS,
   VIDEO_DELIVERY_SHORT_EDGE_KEY,
 } from '../videoPlayground.constants';
 import { PLAYGROUND_MODEL_LEVEL_FIELDS } from '../playgroundAdmin.constants';
@@ -116,5 +121,68 @@ describe('档位可用性过滤只对两段式成立', () => {
   it('一段式：不传可用列表时 1080P 照常出', () => {
     const choices = buildVideoSizeChoices(cfg(true), 'm', native, null);
     expect(choices.map((c) => c.value)).toEqual(['1248x704', '1080P']);
+  });
+});
+
+// 一段式的超分规则行**不需要 model**。
+//
+// 这条是踩出来的:管理页曾把「超分模型」置灰(因为它确实不生效),结果新增行填不了
+// model,保存后被 normalizeUpscaleList 整行丢弃 ——「添加超分档位」变成不可能完成的
+// 操作,而且不报错,运营只会看到「新加的档位怎么没了」。
+describe('一段式的规则行允许 model 为空', () => {
+  const rules = [{ to: '4K', from: '768P' }]; // 没有 model('4K' 会被归一成 '4k')
+
+  it('两段式:缺 model 的行被丢弃（没有超分模型就没有第二段可跑）', () => {
+    expect(normalizeUpscaleList(rules)).toEqual([]);
+  });
+
+  it('一段式:缺 model 的行保留，档位照常成立', () => {
+    const out = normalizeUpscaleList(rules, true);
+    expect(out).toHaveLength(1);
+    expect(out[0].to).toBe('4k'); // normalizeVideoSize 只对 \d+p 转大写
+    expect(out[0].from).toBe('768P');
+  });
+
+  // 运行时取值必须跟着放行，否则运营配好了、体验区照样不出这一档
+  it('getUpscaleRulesForModel 对一段式模型放行无 model 的规则', () => {
+    const cfg = {
+      models: {
+        h3: { pipeline: true, nativeDelivery: true, upscale: rules },
+        wan: { pipeline: true, upscale: rules },
+      },
+    };
+    expect(getUpscaleRulesForModel(cfg, 'h3')).toHaveLength(1);
+    expect(getUpscaleRulesForModel(cfg, 'wan')).toHaveLength(0);
+  });
+
+  // 配置往返也要保住:parse 是白名单式重建，一段式必须传同一个开关进去
+  it('parseVideoModelConfig 对一段式模型保住无 model 的规则', () => {
+    const parsed = parseVideoModelConfig({
+      models: { h3: { nativeDelivery: true, upscale: rules } },
+    });
+    expect(parsed.models.h3.upscale).toHaveLength(1);
+  });
+
+  // to 仍然必填:没有目标档位这条规则什么都定义不了
+  it('缺 to 的行两种模式都丢弃', () => {
+    expect(normalizeUpscaleList([{ from: '768P' }], true)).toEqual([]);
+  });
+});
+
+// 交付档位表必须是归一**之后**的形态，否则管理页那一格看起来是空的：
+// 存下来的 to 是 normalizeVideoSize 的结果，而下拉选项若用未归一的写法就匹配不上。
+describe('VIDEO_DELIVERY_TIERS 与归一口径一致', () => {
+  it('每一项都等于自己归一后的值', () => {
+    for (const tier of VIDEO_DELIVERY_TIERS) {
+      expect(normalizeVideoSize(tier), `${tier} 未归一`).toBe(tier);
+    }
+  });
+
+  it('每一项都能解析出短边（否则超分档排序与起步档筛选会失效）', () => {
+    for (const tier of VIDEO_DELIVERY_TIERS) {
+      expect(videoSizeShortEdge(tier), `${tier} 解析不出短边`).toBeGreaterThan(
+        0,
+      );
+    }
   });
 });
