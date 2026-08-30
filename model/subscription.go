@@ -149,7 +149,12 @@ type SubscriptionPlan struct {
 	Subtitle string `json:"subtitle" gorm:"type:varchar(255);default:''"`
 
 	// Display money amount (follow existing code style: float64 for money)
-	PriceAmount float64 `json:"price_amount" gorm:"type:decimal(10,6);not null;default:0"`
+	// 用 precision/scale 而不是 type:decimal(10,6)：SQLite 驱动（glebarez/sqlite）的 DDL
+	// 解析器抓列类型的正则字符集不含逗号，会把 decimal(10,6) 读成 decimal(10，进而每次
+	// AutoMigrate 都误判该列需要变更、走 recreateTable，并在参数替换时把类型写坏成 ?,6)，
+	// 导致「第一次启动正常、第二次启动 FATAL」。改用 precision/scale 后由各方言自己生成：
+	// MySQL decimal(10, 6)、PostgreSQL numeric(10, 6)、SQLite real —— 语义不变且无逗号。
+	PriceAmount float64 `json:"price_amount" gorm:"precision:10;scale:6;not null;default:0"`
 	Currency    string  `json:"currency" gorm:"type:varchar(8);not null;default:'USD'"`
 
 	DurationUnit  string `json:"duration_unit" gorm:"type:varchar(16);not null;default:'month'"`

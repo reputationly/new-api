@@ -248,6 +248,12 @@ func InitLogDB() (err error) {
 }
 
 func migrateDB() error {
+	// 先修历史遗留的「带逗号列类型」SQLite schema：它会让驱动的 DDL 解析器出错，
+	// 使下面的 AutoMigrate 直接 FATAL（详见 repairSQLiteCommaColumnTypes 的注释）。
+	// 必须排在所有迁移之前——坏 schema 下连迁移都跑不起来。
+	if err := repairSQLiteCommaColumnTypes(); err != nil {
+		return err
+	}
 	// Migrate price_amount column from float/double to decimal for existing tables
 	migrateSubscriptionPlanPriceAmount()
 	// Migrate model_limits column from varchar to text for existing tables
@@ -727,6 +733,13 @@ type sqliteColumnDef struct {
 	DDL  string
 }
 
+// ensureSubscriptionPlanTableSQLite 手工建表/补列（SQLite 专用）。
+//
+// price_amount 用 real 而不是 decimal(10,6)：SQLite 驱动（glebarez/sqlite）的 DDL
+// 解析器抓列类型的正则字符集不含逗号，会把 decimal(10,6) 读成 decimal(10，进而每次
+// AutoMigrate 都误判该列需要变更、走 recreateTable，并在参数替换时把类型写坏成 ?,6)，
+// 最终「第一次启动正常、第二次启动 FATAL」。SQLite 是类型亲和性，real 与 decimal
+// 在这里存取行为一致。MySQL / PostgreSQL 不走本函数，精度由模型的 precision/scale 决定。
 func ensureSubscriptionPlanTableSQLite() error {
 	if !common.UsingSQLite {
 		return nil
@@ -737,7 +750,7 @@ func ensureSubscriptionPlanTableSQLite() error {
 ` + "`id`" + ` integer,
 ` + "`title`" + ` varchar(128) NOT NULL,
 ` + "`subtitle`" + ` varchar(255) DEFAULT '',
-` + "`price_amount`" + ` decimal(10,6) NOT NULL,
+` + "`price_amount`" + ` real NOT NULL,
 ` + "`currency`" + ` varchar(8) NOT NULL DEFAULT 'USD',
 ` + "`duration_unit`" + ` varchar(16) NOT NULL DEFAULT 'month',
 ` + "`duration_value`" + ` integer NOT NULL DEFAULT 1,
@@ -770,7 +783,7 @@ PRIMARY KEY (` + "`id`" + `)
 	required := []sqliteColumnDef{
 		{Name: "title", DDL: "`title` varchar(128) NOT NULL"},
 		{Name: "subtitle", DDL: "`subtitle` varchar(255) DEFAULT ''"},
-		{Name: "price_amount", DDL: "`price_amount` decimal(10,6) NOT NULL"},
+		{Name: "price_amount", DDL: "`price_amount` real NOT NULL"},
 		{Name: "currency", DDL: "`currency` varchar(8) NOT NULL DEFAULT 'USD'"},
 		{Name: "duration_unit", DDL: "`duration_unit` varchar(16) NOT NULL DEFAULT 'month'"},
 		{Name: "duration_value", DDL: "`duration_value` integer NOT NULL DEFAULT 1"},

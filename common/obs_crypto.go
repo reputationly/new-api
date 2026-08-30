@@ -7,6 +7,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"strings"
@@ -34,7 +35,21 @@ func InitOBSKeys() {
 			}
 		}
 		if obsEncryptKey == nil {
-			SysLog("WARNING: OBS_ENCRYPT_KEY not set or invalid; using random key. Stored OBS AK/SK will be unreadable after restart.")
+			// 区分「没设」与「设错了」：两者的修法不同，共用一条文案会让人对着一个
+			// 已经填了的环境变量反复怀疑人生。格式要求（hex-64）也必须写进日志——
+			// 只说 "invalid" 不告诉人对的样子是什么，等于没说。
+			switch {
+			case encHex == "":
+				SysLog("WARNING: OBS_ENCRYPT_KEY 未设置，本次启动使用随机密钥。" +
+					"后果：系统设置里保存的 OBS AK/SK 在下次重启后将无法解密，表现为「明明填过 AK/SK，重启后却报 access key/secret required」。" +
+					"生成方式：openssl rand -hex 32")
+			case len(encHex) != 64:
+				SysLog(fmt.Sprintf("WARNING: OBS_ENCRYPT_KEY 长度为 %d，要求 64 个十六进制字符（32 字节），本次启动使用随机密钥。"+
+					"生成方式：openssl rand -hex 32", len(encHex)))
+			default:
+				SysLog("WARNING: OBS_ENCRYPT_KEY 不是合法的十六进制字符串，本次启动使用随机密钥。" +
+					"生成方式：openssl rand -hex 32")
+			}
 			obsEncryptKey = make([]byte, 32)
 			if _, err := rand.Read(obsEncryptKey); err != nil {
 				panic("obs: failed to generate random encrypt key: " + err.Error())

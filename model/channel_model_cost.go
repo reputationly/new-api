@@ -24,10 +24,15 @@ import (
 // 策略；通配会让「未列出的模型成本是多少」变成一个需要推断的问题，而成本必填
 // （§5.5）的前提恰恰是每个 (渠道, 模型) 组合都有明确答案。
 type ChannelModelCost struct {
-	Id        int     `json:"id"`
-	ChannelId int     `json:"channel_id" gorm:"not null;index:idx_cmc_channel_model,priority:1"`
-	ModelName string  `json:"model_name" gorm:"type:varchar(128);not null;index:idx_cmc_channel_model,priority:2"`
-	CostRatio float64 `json:"cost_ratio" gorm:"type:decimal(10,6);not null;default:1"`
+	Id        int    `json:"id"`
+	ChannelId int    `json:"channel_id" gorm:"not null;index:idx_cmc_channel_model,priority:1"`
+	ModelName string `json:"model_name" gorm:"type:varchar(128);not null;index:idx_cmc_channel_model,priority:2"`
+	// 用 precision/scale 而不是 type:decimal(10,6)：SQLite 驱动（glebarez/sqlite）的 DDL
+	// 解析器抓列类型的正则字符集不含逗号，会把 decimal(10,6) 读成 decimal(10，进而每次
+	// AutoMigrate 都误判该列需要变更、走 recreateTable，并在参数替换时把类型写坏成 ?,6)，
+	// 导致「第一次启动正常、第二次启动 FATAL」。改用 precision/scale 后由各方言自己生成：
+	// MySQL decimal(10, 6)、PostgreSQL numeric(10, 6)、SQLite real —— 语义不变且无逗号。
+	CostRatio float64 `json:"cost_ratio" gorm:"precision:10;scale:6;not null;default:1"`
 	Remark    string  `json:"remark" gorm:"type:varchar(255);default:''"`
 
 	CreatedAt int64 `json:"created_at" gorm:"bigint"`
