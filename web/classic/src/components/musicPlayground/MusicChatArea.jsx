@@ -493,18 +493,27 @@ const MusicChatArea = ({
             })}
           </div>
         )}
-        {/* 「AI 帮我写词」= 官方 Simple Mode 的【Create Sample】那一步:据这句描述拟出
-            caption/歌词/BPM/调式/时长,caption 回填到输入框、其余回填到左侧面板,由用户
-            过目再改。这一步不只是省事 —— 填了歌词之后提交就不再走 sample_mode,引擎那边
-            「用 LM 自己推的时长覆盖用户值」的逻辑不触发,时长/BPM 才真正生效。
+        {/* ACE-Step 的「AI 优化提示词」。**与其他体验区同名同款,但底下做的事更多**:
+            它是官方 Simple Mode 的【Create Sample】那一步,据这句描述拟出
+            caption/歌词/BPM/调式/时长,caption 回填输入框、其余回填左侧面板,由用户过目再改。
+
+            为什么 ACE-Step 不能换成通用的那份"只重写输入框":填了歌词之后提交才不再走
+            sample_mode —— 否则引擎会用它自己 LM 推的时长/BPM **无条件覆盖**用户在左侧
+            选的值(llm_generation_inputs.py),症状是"选了 60 秒出来 2 分 30",且不报错。
+            所以行为必须留着,统一的只是名字与文案。
+
+            名字统一的代价是要在 hint 里说清副作用:它会动左侧的控件,而通用那份不会。
+            两句 hint 刻意写成同一句式,让用户看出是同一个东西的两种深度。
             外观与交互走 AiAssistButton,与各体验区的「AI 优化提示词」同一份:空输入不置灰
             (点了给提示),在途转圈换文案。 */}
         {onDraftPlan && (
           <AiAssistButton
-            label={t('AI 帮我写词')}
-            busyLabel={t('拟稿中…')}
-            hint={t('先拟好歌词与曲式再生成,左侧的时长/速度才会生效')}
-            busyHint={t('正在拟稿，请勿刷新或切换页面，否则要重新来一次')}
+            label={t('AI 优化提示词')}
+            busyLabel={t('优化中…')}
+            hint={t(
+              '把大白话补全成模型认的描述，并把歌词与时长/速度一并填到左侧，可再改',
+            )}
+            busyHint={t('正在优化，请勿刷新或切换页面，否则要重新来一次')}
             busy={drafting}
             disabled={generating}
             onClick={async () => {
@@ -520,10 +529,10 @@ const MusicChatArea = ({
 
             **`!onDraftPlan` 这个条件不能省**。promptOptimize 是 **tab 级**声明,
             usePromptOptimize 的 available 只看 tab 不看引擎 —— 光靠 draftAvailable
-            排除 Music3 只做了一半:ACE-Step 那边「AI 帮我写词」照旧渲染,而优化按钮
-            也跟着渲染出来,两个并排。而且 ACE-Step 的 t2m 没有专用优化模板,点了走的是
-            通用兜底,对它的 caption 帮不上忙。
-            两个按钮是同一件事的两种做法,用同一个判据取反即可:写词按钮在
+            排除 Music3 只做了一半:ACE-Step 那边的 draftPlan 按钮照旧渲染,这个也
+            跟着渲染出来,两个同名按钮并排。而且 ACE-Step 的 t2m 没有专用优化模板,
+            点了走的是通用兜底,对它的 caption 帮不上忙。
+            两者是同一个按钮的两条实现,用同一个判据取反即可:draftPlan 那条在
             (onDraftPlan 由页面按 draftAvailable 传)就不出优化按钮,反之才出。
 
             engine 必须传:文生音乐这个 tab 同时挂 ACE-Step 与 Music3,而两者的描述位

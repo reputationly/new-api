@@ -13,7 +13,7 @@ import { defaultOptimizeSystemPrompt } from '../../constants/promptOptimize.cons
 
 // 「AI 优化提示词」共用 hook(图像/视频/音效体验区共用一份)。
 //
-// 与文生音乐的「AI 帮我写词」同一条链路(单次非流式打 /pg/chat/completions,后端按
+// 与文生音乐 ACE-Step 的 draftPlan 同一条链路(单次非流式打 /pg/chat/completions,后端按
 // 会话身份注入上游 key),但刻意不给用户模型选择器:优化用哪个语言模型、走哪个分组
 // 都是运营的事,配在「体验区管理 → 通用设置」,用户只看到一个按钮。
 //
@@ -52,7 +52,7 @@ export const usePromptOptimize = (
     const global = getPromptOptimizeGlobal(cfg);
     const tab = getTabPromptOptimize(cfg, category, tabKey);
     // 中央元数据里没声明 promptOptimize 的 tab 一律不出按钮:语音四个玩法输入的是
-    // 待合成文本(改写=改内容,不是优化),文生音乐已有更专的「AI 帮我写词」。
+    // 待合成文本(改写=改内容,不是优化);文生音乐的 ACE-Step 走更专的 draftPlan 分支。
     const declared =
       getPlaygroundTab(category, tabKey)?.promptOptimize === true;
     return {
@@ -114,7 +114,7 @@ export const usePromptOptimize = (
       } catch (e) {
         const msg = e?.response?.data?.error?.message || e?.message || '';
         // 只认「分组权限 / 无可用渠道」这两类配置问题(判据见 helpers/playground.js,
-        // 与音乐页的「AI 帮我写词」共用一份)。
+        // 与音乐页 ACE-Step 的 draftPlan 共用一份)。
         showError(
           isPlaygroundConfigIssue(msg)
             ? // 前缀 + 原文,而不是替换:普通用户看开头知道找谁,管理员看后半段

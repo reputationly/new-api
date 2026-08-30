@@ -1,6 +1,6 @@
 // 「AI 优化提示词」的默认系统提示词。
 //
-// 参考文生音乐的「AI 帮我写词」:同样是单次非流式打 /pg/chat/completions,区别是
+// 参考文生音乐 ACE-Step 的 draftPlan:同样是单次非流式打 /pg/chat/completions,区别是
 //   1. 用户不选模型 —— 优化用哪个语言模型由运营在「体验区管理 → 通用设置」里配,
 //      体验区只出一个按钮(见 hooks/common/usePromptOptimize.js);
 //   2. 每个 tab 有自己的默认系统提示词 —— 视频提示词讲镜头运动,图像讲构图光影,

@@ -326,7 +326,7 @@ export const useMusicGeneration = (mode = 't2m') => {
   });
   const [currentConvId, setCurrentConvId] = useState(null);
   const [generating, setGenerating] = useState(false);
-  // 「AI 帮我写词」调用中(单次非流式,1~3 秒);按钮据此转圈并禁用。
+  // ACE-Step 的「AI 优化提示词」(draftPlan)调用中(单次非流式,1~3 秒);按钮据此转圈并禁用。
   const [drafting, setDrafting] = useState(false);
 
   const messages = useMemo(() => {
@@ -449,7 +449,7 @@ export const useMusicGeneration = (mode = 't2m') => {
   // (同视频页按引擎族给 MiniMax H3 换提示词模板的处理)。
   //
   // 早先这里还控制左侧一个「语言模型」下拉,让用户自己挑翻译模型;现已撤掉 ——
-  // 翻译、AI 优化提示词、AI 帮我写词都是同一类辅助调用,统一用运营在「体验区管理 →
+  // 翻译与「AI 优化提示词」的两条实现都是同一类辅助调用,统一用运营在「体验区管理 →
   // 通用设置」里配的那个模型(见下面的 promptOptimizeGlobal)。
   //
   // MiniMax-Music3 也归进「玩法可能需要」这一层。它与 AudioX 的理由不同:不是中文会塌成
@@ -465,7 +465,7 @@ export const useMusicGeneration = (mode = 't2m') => {
   const needsEnglishOnly =
     resolvedEngine === MUSIC_ENGINE_MINIMAX_MUSIC3 && translationCfg.enabled;
 
-  // 音乐体验区所有辅助语言模型调用(中译英、AI 帮我写词)共用的运营配置:与各体验区
+  // 音乐体验区所有辅助语言模型调用(中译英、draftPlan)共用的运营配置:与各体验区
   // 「AI 优化提示词」同一份(总开关 + 模型 + 分组)。原先让用户在左侧自己挑一个,但这
   // 三者都是「单次非流式打 /pg/chat/completions」的同一类调用,却要两套配置面、两个
   // 模型、两种可用性判断 —— 运营那边配好了优化模型,用户这边还得再选一遍,选错就报
@@ -473,9 +473,10 @@ export const useMusicGeneration = (mode = 't2m') => {
   //
   // 刻意只读 __global,不读 tab 级 promptOptimize:这里判的是「有没有可用的辅助语言
   // 模型」,而 tab 级那个开关管的是「要不要出优化按钮」,两件事。按 tab 判会让运营关掉
-  // 优化按钮时连中译英和「AI 帮我写词」一起判没了。
-  //(t2m 现已声明 promptOptimize —— 它与「AI 帮我写词」按引擎族互斥,不会并排出现
-  // 两个按钮,见 playgroundAdmin.constants.js 该 tab 处的说明。)
+  // 优化按钮时连中译英和 draftPlan 一起判没了。
+  //(t2m 现已声明 promptOptimize —— 「AI 优化提示词」在 ACE-Step 上走 draftPlan、
+  // 在 Music3 上走通用优化,两条实现互斥,界面上只会出现一个按钮,
+  // 见 playgroundAdmin.constants.js 该 tab 处的说明。)
   // 系统提示词同理不走运营改写的那份 —— 写词的输出是 JSON、翻译的输出
   // 是一行英文 caption,拿优化提示词那套模板去改都会把解析打挂,故各自固定用内置模板。
   const promptOptimizeGlobal = useMemo(
@@ -492,7 +493,7 @@ export const useMusicGeneration = (mode = 't2m') => {
   // 未开总开关 / 没配模型时按钮整体不渲染,与 PromptOptimizeButton 同一条规矩:
   // 与其给一个点了报「未配置」的按钮,不如让它不存在。
   //
-  // **Music3 上不给这个按钮**:「AI 帮我写词」产出的是 ACE-Step 那一套(caption +
+  // **Music3 不走这条实现**:draftPlan 产出的是 ACE-Step 那一套(caption +
   // 歌词 + BPM + 调式 + 时长)并回填各控件,而 Music3 只有描述与歌词两个位、没有
   // BPM/调式/时长。给它这个按钮等于回填一堆无处可去的字段。Music3 换成通用的
   // 「AI 优化提示词」(模板已按引擎族换成编曲说明,见 promptOptimize.constants.js),
@@ -782,7 +783,7 @@ export const useMusicGeneration = (mode = 't2m') => {
   // 把 BPM 与 [verse]/[chorus] 删掉、压到 40 词、改写成 AudioCaps 音景,正是 Music3
   // 要的反面,以前只靠一个参数传对才躲开。
   //
-  // 用哪个模型不再让用户在左侧挑,而是与「AI 优化提示词」「AI 帮我写词」共用运营在
+  // 用哪个模型不再让用户在左侧挑,而是与「AI 优化提示词」的两条实现共用运营在
   // 「体验区管理 → 通用设置」里配的那一个 —— 三者都是「单次非流式打 /pg/chat/completions
   // 的辅助调用」,没道理一个体验区里摆两套模型配置。
   const translatePrompt = useCallback(
@@ -817,7 +818,8 @@ export const useMusicGeneration = (mode = 't2m') => {
     [promptOptimizeGlobal.model, promptOptimizeGlobal.group],
   );
 
-  // 「AI 帮我写词」= 官方 Simple Mode 里【Create Sample】那一步:据一句话描述拟出
+  // draftPlan = ACE-Step 上「AI 优化提示词」的实现,对应官方 Simple Mode 里
+  // 【Create Sample】那一步:据一句话描述拟出
   // caption/歌词/BPM/调式/时长,直接回填到配置面板的各个控件,由用户过目再改。
   //
   // 这一步的意义不只是省事:填了歌词之后提交就不再命中 sample_mode 分支,引擎那边
@@ -833,7 +835,7 @@ export const useMusicGeneration = (mode = 't2m') => {
       if (!text) {
         showInfo(
           t(
-            '先写一句大概方向，比如「一首深情的中文抒情歌曲」，AI 再帮你拟歌词与曲式',
+            '先写一句大概方向，比如「一首深情的中文抒情歌曲」，AI 再帮你补全描述、歌词与曲式',
           ),
         );
         return false;
@@ -864,7 +866,7 @@ export const useMusicGeneration = (mode = 't2m') => {
           const msg = e?.response?.data?.error?.message || e?.message || '';
           showError(
             isPlaygroundConfigIssue(msg)
-              ? t('AI 写词暂不可用，请联系管理员') + ' — ' + msg
+              ? t('AI 优化提示词暂不可用，请联系管理员') + ' — ' + msg
               : t('生成方案失败:') + msg,
           );
           return false;

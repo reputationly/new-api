@@ -332,7 +332,7 @@ const MusicConfigPanel = ({
               >
                 <HelpCircle size={14} className='text-gray-400 cursor-help' />
               </Tooltip>
-              {/* 「AI 帮我写词」按钮在对话区输入框旁边 —— 它要拿输入框里的描述当输入,
+              {/* 「AI 优化提示词」按钮在对话区输入框旁边 —— 它要拿输入框里的描述当输入,
                   而那个值在 MusicChatArea 的本地 state 里。Music3 上没有那个按钮
                   (它回填的 BPM/调式/时长 Music3 都没有),换成「AI 优化提示词」。 */}
             </div>

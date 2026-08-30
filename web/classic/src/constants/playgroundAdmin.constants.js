@@ -394,19 +394,19 @@ export const PLAYGROUND_CATEGORIES = [
     configKey: 'MusicModelConfig',
     tabs: [
       {
-        // 文生音乐挂「AI 优化提示词」，但它与「AI 帮我写词」**按引擎族互斥**，不会并排
-        // 出现两个（原先不挂它，理由正是这个并排问题）：
-        //   ACE-Step → 只出「AI 帮我写词」（一次产出 caption/歌词/BPM/调式/时长并回填
-        //              各控件），它的描述位是 caption，通用优化帮不上；
-        //   MiniMax-Music3 → 只出「AI 优化提示词」。它没有 BPM/调式/时长这些位，
-        //              「帮我写词」回填的字段无处可去；而它的描述位是 instructions
+        // 文生音乐挂「AI 优化提示词」。界面上永远只有这一个按钮，但**底下按引擎族走
+        // 两条实现**，因为两族的描述位语义不同：
+        //   ACE-Step → draftPlan 分支：一次产出 caption/歌词/BPM/调式/时长，caption 回填
+        //              输入框、其余回填左侧控件。不能换成通用的"只重写输入框"——填了歌词
+        //              提交才不走 sample_mode，否则引擎用自己推的时长覆盖用户选的值。
+        //   MiniMax-Music3 → 通用优化 + 专用模板：它没有 BPM/调式/时长这些位，
+        //              draftPlan 回填的字段无处可去；描述位是 instructions
         //              （官方 Structured Caption），正是优化模板能发力的地方。
-        //   互斥在两处实现：draftAvailable 排除 Music3，优化模板按 engine 换。
-        // 但「AI 帮我写词」用的语言模型就是下面 __global.promptOptimize 里配的那个 ——
-        // 不声明 promptOptimize 只是不出那个按钮，不代表这个 tab 与那份配置无关。
+        //   分流在两处实现：draftAvailable 排除 Music3，优化模板按 engine 换；
+        //   渲染侧用 !onDraftPlan 取反，保证两条实现不会同时出按钮。
         //
         // 没有 translation 字段：ACE-Step 的文本编码器认中文，本就不需要中译英；此前
-        // 挂它是因为「AI 帮我写词」曾借用中译英那个下拉挑模型，现在不借了。
+        // 挂它是因为 draftPlan 曾借用中译英那个下拉挑模型，现在不借了。
         key: 't2m',
         label: '文生音乐',
         capability: '文生音乐',

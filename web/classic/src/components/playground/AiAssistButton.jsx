@@ -4,7 +4,7 @@ import { Sparkles } from 'lucide-react';
 
 // 体验区「让 AI 先帮我写一版」类按钮的统一外观与交互。目前两个调用方:
 //   - PromptOptimizeButton(图像/视频/音效的「AI 优化提示词」)
-//   - MusicChatArea(文生音乐的「AI 帮我写词」)
+//   - MusicChatArea(文生音乐 ACE-Step 的「AI 优化提示词」= draftPlan 分支)
 // 两者产出的东西不同(一个回一段正文、一个回一份 JSON 方案),但对用户而言是同一件事:
 // 点一下、等几秒、结果回填、可再改;用的也是同一个运营配的语言模型(「体验区管理 →
 // 通用设置」里的优化模型)。此前各写各的,于是图标、加载态文案、空输入的处理、在途提示

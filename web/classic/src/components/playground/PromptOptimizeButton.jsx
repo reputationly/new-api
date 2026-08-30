@@ -3,7 +3,8 @@ import { useTranslation } from 'react-i18next';
 import { usePromptOptimize } from '../../hooks/common/usePromptOptimize';
 import AiAssistButton from './AiAssistButton';
 
-// 「AI 优化提示词」按钮。外观与交互来自 AiAssistButton，与音乐页的「AI 帮我写词」共用一份。
+// 「AI 优化提示词」按钮。外观与交互来自 AiAssistButton，与音乐页 ACE-Step 的同名按钮
+// （draftPlan 分支，见 MusicChatArea）共用一份。
 //
 // 运营没开总开关 / 没配优化模型 / 单独关掉了这个 tab 时整体不渲染 —— 与其给一个点了
 // 报「未配置」的按钮，不如让它不存在。配置读取与调用都在 usePromptOptimize 里，这里
