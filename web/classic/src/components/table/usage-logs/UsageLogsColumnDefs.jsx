@@ -82,7 +82,7 @@ function buildChannelAffinityTooltip(affinity, t) {
   const lines = [
     t('渠道亲和性'),
     `${t('规则')}：${affinity.rule_name || '-'}`,
-    `${t('分组')}：${affinity.selected_group || '-'}`,
+    `${t('使用分组')}：${affinity.selected_group || '-'}`,
     `${t('Key')}：${keyText}`,
     ...(keyHint ? [`${t('Key 摘要')}：${keyHint}`] : []),
   ];
@@ -379,7 +379,8 @@ function getUsageLogGroupSummary(groupRatio, userGroupRatio, t) {
   if (ratio === undefined || ratio === null || ratio === '') {
     return '';
   }
-  return `${useUserGroupRatio ? t('专属倍率') : t('分组')} ${formatRatio(ratio)}x`;
+  // 这里的「分组」修饰的是倍率不是分组名，所以叫「分组倍率」，与「专属倍率」对仗
+  return `${useUserGroupRatio ? t('专属倍率') : t('分组倍率')} ${formatRatio(ratio)}x`;
 }
 
 function renderCompactDetailSummary(summarySegments) {
@@ -646,7 +647,9 @@ export const getLogsColumns = ({
     },
     {
       key: COLUMN_KEYS.GROUP,
-      title: t('分组'),
+      // 叫「使用分组」而不是「令牌分组」：auto 分组时这里记的是**实际命中**的分组
+      // （service/quota.go 会把 UsingGroup 替换成真实分组），与令牌上写的不是一个值
+      title: t('使用分组'),
       dataIndex: 'group',
       render: (text, record, index) => {
         if (

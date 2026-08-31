@@ -106,7 +106,7 @@ const ModelPricingTable = ({
     // 定义表格列
     const columns = [
       {
-        title: t('分组'),
+        title: t('令牌分组'),
         dataIndex: 'group',
         render: (text) => (
           <Tag color='white' size='small' shape='circle'>

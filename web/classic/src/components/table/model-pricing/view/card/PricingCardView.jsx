@@ -395,7 +395,8 @@ const PricingCardView = ({
                             : t('无')}
                         </div>
                         <div>
-                          {t('分组')}: {priceData?.usedGroupRatio ?? '-'}
+                          {/* 这里显示的是倍率值不是分组名，故称「分组倍率」 */}
+                          {t('分组倍率')}: {priceData?.usedGroupRatio ?? '-'}
                         </div>
                       </div>
                     </div>

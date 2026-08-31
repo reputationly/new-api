@@ -149,7 +149,7 @@ const ChannelAffinityUsageCacheModal = ({
       data.push({ key: t('规则'), value: ruleName });
     }
     if (hasTextValue(usingGroup)) {
-      data.push({ key: t('分组'), value: usingGroup });
+      data.push({ key: t('使用分组'), value: usingGroup });
     }
     if (hasTextValue(keyHint)) {
       data.push({ key: t('Key 摘要'), value: keyHint });

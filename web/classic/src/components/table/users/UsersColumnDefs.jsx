@@ -436,7 +436,7 @@ export const getUsersColumns = ({
         ]
       : []),
     {
-      title: t('分组'),
+      title: t('用户分组'),
       dataIndex: 'group',
       render: (text, record, index) => {
         // 子账户的分组字段纯惰性：计费走绑定 key 所属的企业主账户分组，子账户自身

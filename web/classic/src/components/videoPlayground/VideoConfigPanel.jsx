@@ -267,7 +267,7 @@ const VideoConfigPanel = ({
           <div className='flex items-center gap-2 mb-2'>
             <Users size={16} className='text-gray-500' />
             <Typography.Text strong className='text-sm'>
-              {t('分组')}
+              {t('令牌分组')}
             </Typography.Text>
             <Tooltip
               content={t('仅展示包含视频生成模型的分组。')}

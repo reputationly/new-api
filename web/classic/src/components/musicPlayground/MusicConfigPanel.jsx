@@ -164,7 +164,7 @@ const MusicConfigPanel = ({
           <div className='flex items-center gap-2 mb-2'>
             <Users size={16} className='text-gray-500' />
             <Typography.Text strong className='text-sm'>
-              {t('分组')}
+              {t('令牌分组')}
             </Typography.Text>
             <Tooltip content={t('仅展示包含音乐模型的分组。')} position='top'>
               <HelpCircle size={14} className='text-gray-400 cursor-help' />

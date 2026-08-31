@@ -611,7 +611,7 @@ export default function SettingsChannelAffinity(props) {
       title: t('作用域'),
       render: (_, record) => {
         const tags = [];
-        if (record?.include_using_group) tags.push(t('分组'));
+        if (record?.include_using_group) tags.push(t('使用分组'));
         if (record?.include_model_name) tags.push(t('模型'));
         if (record?.include_rule_name) tags.push(t('规则'));
         if (tags.length === 0) return '-';

@@ -428,12 +428,14 @@ const EditUserModal = (props) => {
                       <Col span={24}>
                         <Form.Select
                           field='group'
-                          label={t('分组')}
-                          placeholder={t('请选择分组')}
+                          label={t('用户分组')}
+                          placeholder={t('请选择用户分组')}
                           optionList={groupOptions}
                           allowAdditions
                           search
-                          rules={[{ required: true, message: t('请选择分组') }]}
+                          rules={[
+                            { required: true, message: t('请选择用户分组') },
+                          ]}
                         />
                       </Col>
 

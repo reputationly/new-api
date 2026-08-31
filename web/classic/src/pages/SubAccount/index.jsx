@@ -627,7 +627,7 @@ const SubAccountPage = () => {
                     },
                   },
                   {
-                    title: t('分组'),
+                    title: t('令牌分组'),
                     dataIndex: 'group',
                     render: (v) =>
                       v === 'auto' ? (

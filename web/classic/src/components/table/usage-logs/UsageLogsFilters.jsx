@@ -95,7 +95,7 @@ const LogsFilters = ({
           <Form.Input
             field='group'
             prefix={<IconSearch />}
-            placeholder={t('分组')}
+            placeholder={t('使用分组')}
             showClear
             pure
             size='small'
