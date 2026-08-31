@@ -1903,7 +1903,7 @@ export function renderModelPrice(opts) {
       }),
       cacheTokens > 0
         ? buildBillingPriceText(
-            '缓存读取价格：{{symbol}}{{total}} / 1M tokens',
+            '缓存输入价格：{{symbol}}{{total}} / 1M tokens',
             {
               symbol,
               usdAmount: inputRatioPrice * cacheRatio,
@@ -2207,7 +2207,7 @@ export function renderLogContent(opts) {
     appendPricePart(
       parts,
       cacheRatio !== 1.0,
-      '缓存读取价格 {{symbol}}{{price}} / 1M tokens',
+      '缓存输入价格 {{symbol}}{{price}} / 1M tokens',
       {
         symbol,
         price: (modelRatio * 2.0 * cacheRatio * rate).toFixed(6),
@@ -2790,7 +2790,7 @@ export function renderAudioModelPrice(opts) {
       }),
       cacheTokens > 0
         ? buildBillingPriceText(
-            '缓存读取价格：{{symbol}}{{price}} / 1M tokens',
+            '缓存输入价格：{{symbol}}{{price}} / 1M tokens',
             {
               symbol,
               usdAmount: inputRatioPrice * cacheRatio,
@@ -2803,13 +2803,13 @@ export function renderAudioModelPrice(opts) {
         usdAmount: inputRatioPrice * audioRatio,
         rate,
       }),
-      buildBillingPriceText('音频补全价格：{{symbol}}{{price}} / 1M tokens', {
+      buildBillingPriceText('音频输出价格：{{symbol}}{{price}} / 1M tokens', {
         symbol,
         usdAmount: inputRatioPrice * audioRatio * audioCompletionRatio,
         rate,
       }),
       buildBillingText(
-        '文字提示 {{input}} tokens / 1M tokens * {{symbol}}{{textInputPrice}} + 文字补全 {{completion}} tokens / 1M tokens * {{symbol}}{{textCompPrice}} + 音频提示 {{audioInput}} tokens / 1M tokens * {{symbol}}{{audioInputPrice}} + 音频补全 {{audioCompletion}} tokens / 1M tokens * {{symbol}}{{audioCompPrice}} * {{ratioType}} {{ratio}} = {{symbol}}{{total}}',
+        '文字输入 {{input}} tokens / 1M tokens * {{symbol}}{{textInputPrice}} + 文字输出 {{completion}} tokens / 1M tokens * {{symbol}}{{textCompPrice}} + 音频输入 {{audioInput}} tokens / 1M tokens * {{symbol}}{{audioInputPrice}} + 音频输出 {{audioCompletion}} tokens / 1M tokens * {{symbol}}{{audioCompPrice}} * {{ratioType}} {{ratio}} = {{symbol}}{{total}}',
         {
           input: inputTokens,
           completion: completionTokens,
@@ -3080,7 +3080,7 @@ export function renderClaudeModelPrice(opts) {
       hasSplitCacheCreation && cacheCreationTokens1h > 0;
 
     const breakdownSegments = [
-      i18next.t('提示 {{input}} tokens / 1M tokens * {{symbol}}{{price}}', {
+      i18next.t('输入 {{input}} tokens / 1M tokens * {{symbol}}{{price}}', {
         input: inputTokens,
         symbol,
         price: inputUnitPrice.toFixed(6),
@@ -3138,7 +3138,7 @@ export function renderClaudeModelPrice(opts) {
 
     breakdownSegments.push(
       i18next.t(
-        '补全 {{completion}} tokens / 1M tokens * {{symbol}}{{price}}',
+        '输出 {{completion}} tokens / 1M tokens * {{symbol}}{{price}}',
         {
           completion: completionTokens,
           symbol,
@@ -3162,7 +3162,7 @@ export function renderClaudeModelPrice(opts) {
       }),
       cacheTokens > 0
         ? buildBillingPriceText(
-            '缓存读取价格：{{symbol}}{{price}} / 1M tokens',
+            '缓存输入价格：{{symbol}}{{price}} / 1M tokens',
             {
               symbol,
               usdAmount: cacheRatioPrice,
@@ -3296,7 +3296,7 @@ export function renderClaudeModelPrice(opts) {
     ),
     shouldShowCache
       ? buildBillingText(
-          '缓存读取：{{tokens}} / 1M * 模型倍率 {{modelRatio}} * 缓存倍率 {{cacheRatio}} * {{ratioType}} {{ratio}} = {{amount}}',
+          '缓存输入：{{tokens}} / 1M * 模型倍率 {{modelRatio}} * 缓存倍率 {{cacheRatio}} * {{ratioType}} {{ratio}} = {{amount}}',
           {
             tokens: cacheTokens,
             modelRatio: modelRatioValue,
@@ -3367,7 +3367,7 @@ export function renderClaudeModelPrice(opts) {
         )
       : null,
     buildBillingText(
-      '补全 {{completion}} tokens * 输出倍率 {{completionRatio}}',
+      '输出 {{completion}} tokens * 输出倍率 {{completionRatio}}',
       {
         completion: completionTokens,
         completionRatio: completionRatioValue,
@@ -3439,7 +3439,7 @@ export function renderClaudeLogContent(opts) {
         symbol,
         price: (modelRatio * 2.0 * completionRatio * rate).toFixed(6),
       }),
-      i18next.t('缓存读取价格 {{symbol}}{{price}} / 1M tokens', {
+      i18next.t('缓存输入价格 {{symbol}}{{price}} / 1M tokens', {
         symbol,
         price: (modelRatio * 2.0 * cacheRatio * rate).toFixed(6),
       }),

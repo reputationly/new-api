@@ -385,13 +385,13 @@ function PriceInput({ unitCost, field, index, onUpdate, placeholder }) {
 // ---------------------------------------------------------------------------
 
 const CACHE_FIELDS_TIMED = [
-  { field: 'cache_read_unit_cost', labelKey: '缓存读取价格' },
+  { field: 'cache_read_unit_cost', labelKey: '缓存输入价格' },
   { field: 'cache_create_unit_cost', labelKey: '缓存创建价格（5分钟）' },
   { field: 'cache_create_1h_unit_cost', labelKey: '缓存创建价格（1小时）' },
 ];
 
 const CACHE_FIELDS_GENERIC = [
-  { field: 'cache_read_unit_cost', labelKey: '缓存读取价格' },
+  { field: 'cache_read_unit_cost', labelKey: '缓存输入价格' },
   { field: 'cache_create_unit_cost', labelKey: '缓存创建价格' },
 ];
 
@@ -1068,7 +1068,7 @@ function RawExprEditor({ exprString, onChange, t }) {
             <div>
               {t('变量')}: <code>p</code> ({t('输入 Token')}), <code>c</code> (
               {t('输出 Token')}), <code>len</code> ({t('输入长度')}),{' '}
-              <code>cr</code> ({t('缓存读取')}), <code>cc</code> (
+              <code>cr</code> ({t('缓存输入')}), <code>cc</code> (
               {t('缓存创建')}), <code>cc1h</code> ({t('缓存创建-1小时')})
             </div>
             <div>

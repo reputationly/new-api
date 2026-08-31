@@ -8,7 +8,7 @@ const { Text } = Typography;
 const KIND_LABELS = {
   input: '输入',
   output: '输出',
-  cache_read: '缓存读取',
+  cache_read: '缓存输入',
   cache_write: '缓存写入',
   count: '计件',
 };

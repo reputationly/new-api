@@ -794,7 +794,7 @@ export const calculateModelPrice = ({
 
   // 2.5 视频计费矩阵：实收由「分辨率 × 输入是否含视频」查表决定，与 model_ratio 无关。
   // 不短路的话定价页会展示那个预扣锚点（480p 实际 ¥46 却显示 ¥51），还会多出一个
-  // 对视频模型毫无意义的「补全价格」。见 docs/video-billing-matrix-design.md §2.6。
+  // 对视频模型毫无意义的「输出价格」。见 docs/video-billing-matrix-design.md §2.6。
   if (record.video_pricing?.mode) {
     return {
       isVideoMatrix: true,
@@ -1030,7 +1030,7 @@ export const getModelPriceItems = (priceData, t, quotaDisplayType = 'USD') => {
         },
         {
           key: 'cache-ratio',
-          label: t('缓存读取倍率'),
+          label: t('缓存输入倍率'),
           value: priceData.cacheRatio,
           suffix: 'x',
         },
@@ -1074,13 +1074,13 @@ export const getModelPriceItems = (priceData, t, quotaDisplayType = 'USD') => {
       },
       {
         key: 'completion',
-        label: t('补全价格'),
+        label: t('输出价格'),
         value: priceData.completionPrice,
         suffix: unitSuffix,
       },
       {
         key: 'cache',
-        label: t('缓存读取价格'),
+        label: t('缓存输入价格'),
         value: priceData.cachePrice,
         suffix: unitSuffix,
       },
@@ -1104,7 +1104,7 @@ export const getModelPriceItems = (priceData, t, quotaDisplayType = 'USD') => {
       },
       {
         key: 'audio-output',
-        label: t('音频补全价格'),
+        label: t('音频输出价格'),
         value: priceData.audioOutputPrice,
         suffix: unitSuffix,
       },

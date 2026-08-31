@@ -170,7 +170,7 @@ const Models = () => {
 
   // 视频计费矩阵：实收按「分辨率 × 输入是否含视频」查表，与 model_ratio 无关——
   // 后者只是提交时的预扣锚点。不单独判的话列表会显示锚点价（480p 实际 ¥46 却显示
-  // ¥51），详情还会算出一个「输出价格」——视频模型根本没有补全价这回事。
+  // ¥51），详情还会算出一个「输出价格」——视频模型根本没有输出价这回事。
   // 判定与 PC 端 calculateModelPrice 同源，见 docs/video-billing-matrix-design.md §2.6。
   const isVideoMatrix = (m) => !!m.video_pricing?.mode;
 

@@ -91,7 +91,7 @@ const Logs = () => {
             >
               {log.type === 2 && (
                 <span style={{ fontSize: 12, color: 'var(--adm-color-weak)' }}>
-                  提示 {log.prompt_tokens} / 补全 {log.completion_tokens}
+                  输入 {log.prompt_tokens} / 输出 {log.completion_tokens}
                 </span>
               )}
               {log.content && (
