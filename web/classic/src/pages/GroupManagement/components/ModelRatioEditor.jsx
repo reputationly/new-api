@@ -30,6 +30,10 @@ const uid = () => `gmr_${++_idCounter}`;
 const MODE_MULTIPLY = 'multiply';
 const MODE_OVERRIDE = 'override';
 
+// 与 Semi Table 的默认每页条数一致：分页改受控后这个值要自己给，写错会让页码
+// 与实际切片对不上（翻到第 2 页显示的还是第 1 页的行）。
+const PAGE_SIZE = 10;
+
 function parseJSON(str) {
   if (!str || !str.trim()) return {};
   try {
@@ -143,6 +147,10 @@ export default function ModelRatioEditor({
   const [groupModels, setGroupModels] = useState([]);
   const [batchMode, setBatchMode] = useState(MODE_MULTIPLY);
   const [batchValue, setBatchValue] = useState(0.8);
+  // 精确规则表的分页必须受控。Semi Table 的内置分页是非受控的，dataSource 换引用
+  // 就回到第一页——而 rows 每敲一个键都会重建（emitAndSet），结果是在第二页改折扣
+  // 值，刚输入就被弹回第一页，改到一半的那行看不见了。
+  const [page, setPage] = useState(1);
 
   // 切分组时整体重建：规则集是按分组隔离的，沿用上一个分组的行会写串
   const prevGroupRef = useRef(group);
@@ -152,6 +160,7 @@ export default function ModelRatioEditor({
       setRows(flattenRules(parseJSON(value), group));
       setSelected([]);
       setKeyword('');
+      setPage(1);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [group]);
@@ -221,9 +230,12 @@ export default function ModelRatioEditor({
 
   // 新行插到最前面，不是追加到末尾。
   //
-  // 精确规则表是分页的，追加到末尾时：规则一超过一页，新行就落在最后一页，而表格
-  // 数据一变又回到第一页——点了「添加」却什么都没发生，人会以为没加上，再点几次，
-  // 于是多出好几条空规则。逐条录入十几个模型时这个问题每次都撞上。
+  // 精确规则表是分页的，追加到末尾时新行会落在最后一页——点了「添加」却什么都没
+  // 发生，人会以为没加上，再点几次，于是多出好几条空规则。逐条录入十几个模型时
+  // 这个问题每次都撞上。
+  //
+  // 分页受控之后表格不再自动跳回第一页，所以这里必须显式跳：否则在第三页点添加，
+  // 新行安静地待在第一页，症状和当初一模一样。
   //
   // 顺序只影响显示：匹配走 pickRuleFrom 的具体度优先（精确名 > 前缀 > "*"），
   // 与数组顺序无关。
@@ -233,6 +245,7 @@ export default function ModelRatioEditor({
         { _id: uid(), pattern, mode: MODE_MULTIPLY, value: 1, remark: '' },
         ...prev,
       ]);
+      setPage(1);
     },
     [emitAndSet],
   );
@@ -295,6 +308,29 @@ export default function ModelRatioEditor({
   const exactRows = useMemo(
     () => filtered.filter((r) => !isWildcard(r.pattern)),
     [filtered],
+  );
+
+  // 分页受控之后越界要自己收：删行或搜索把结果缩短时，当前页可能已经不存在，
+  // 表格会渲染成一片空白——看起来和「规则全没了」无法区分。
+  //
+  // 夹取要在**渲染期**做，不能只靠下面那个 effect：effect 是 passive 的，跑在
+  // commit 之后，结果集缩短的那一次渲染仍然拿着越界的 page，切片出空数组，
+  // 于是空表会先画出来一帧再被纠正——正是这段注释要避免的那个症状本身。
+  const totalPages = Math.max(1, Math.ceil(exactRows.length / PAGE_SIZE));
+  const safePage = Math.min(page, totalPages);
+
+  // effect 仍然要留：safePage 只夹住当下这一帧，page 本身还是越界值。等结果集
+  // 恢复（清空搜索）时 safePage 会解夹，把人弹到一个他没主动翻过去的页面上。
+  // 这里把 state 收敛到用户实际看到的那一页。
+  useEffect(() => {
+    if (page > totalPages) setPage(totalPages);
+  }, [page, totalPages]);
+
+  // 受控分页下 Semi Table 不再自己切片——它把 dataSource 当成「已经是当前页的数据」。
+  // 不切的话每页都渲染全量行，翻页按钮点了没反应。
+  const pagedExactRows = useMemo(
+    () => exactRows.slice((safePage - 1) * PAGE_SIZE, safePage * PAGE_SIZE),
+    [exactRows, safePage],
   );
 
   const modeOptions = useMemo(
@@ -560,9 +596,15 @@ export default function ModelRatioEditor({
         )}
         <CardTable
           columns={columns}
-          dataSource={exactRows}
+          dataSource={pagedExactRows}
           rowKey='_id'
           size='small'
+          pagination={{
+            currentPage: safePage,
+            pageSize: PAGE_SIZE,
+            total: exactRows.length,
+            onPageChange: setPage,
+          }}
           empty={
             <Text type='tertiary'>
               {t('该分组暂无模型折扣，所有模型按分组基础倍率计费')}
