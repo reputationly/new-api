@@ -146,10 +146,7 @@ function renderType(type, t) {
 
 function buildStreamStatusTooltip(ss, t) {
   if (!ss) return null;
-  const lines = [
-    t('流状态') + '：' + t('异常'),
-    (ss.end_reason || 'unknown'),
-  ];
+  const lines = [t('流状态') + '：' + t('异常'), ss.end_reason || 'unknown'];
   if (ss.error_count > 0) {
     lines.push(`${t('软错误')}: ${ss.error_count}`);
   }
@@ -187,11 +184,7 @@ function renderIsStream(bool, t, streamStatus) {
                 userSelect: 'none',
               }}
             >
-              <CircleAlert
-                size={14}
-                strokeWidth={2.5}
-                color='currentColor'
-              />
+              <CircleAlert size={14} strokeWidth={2.5} color='currentColor' />
             </span>
           </Tooltip>
         )}
@@ -463,7 +456,11 @@ function getUsageLogDetailSummary(record, text, billingDisplayMode, t) {
     };
   }
 
-  const summaryOpts = { ...other, displayMode: billingDisplayMode, outputMode: 'segments' };
+  const summaryOpts = {
+    ...other,
+    displayMode: billingDisplayMode,
+    outputMode: 'segments',
+  };
 
   if (other?.billing_mode === 'tiered_expr') {
     return { segments: renderTieredModelPriceSimple(summaryOpts) };
@@ -834,7 +831,9 @@ export const getLogsColumns = ({
         const pointsConsumed = record.points_consumed || 0;
         const pointsTag =
           pointsConsumed > 0 ? (
-            <Tooltip content={`${t('积分抵扣')}：${renderQuota(pointsConsumed, 6)}`}>
+            <Tooltip
+              content={`${t('积分抵扣')}：${renderQuota(pointsConsumed, 6)}`}
+            >
               <Tag color='orange' shape='circle' size='small'>
                 {t('积分')} {quotaToPoints(pointsConsumed)}
               </Tag>

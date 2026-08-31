@@ -198,10 +198,9 @@ const SubAccountPage = () => {
           : t('确定启用该子账户吗？'),
       onOk: async () => {
         try {
-          const res = await API.put(
-            `/api/user/sub_account/${row.id}/status`,
-            { status: next },
-          );
+          const res = await API.put(`/api/user/sub_account/${row.id}/status`, {
+            status: next,
+          });
           if (res.data?.success) {
             showSuccess(t('操作成功'));
             await fetchList();
@@ -217,9 +216,7 @@ const SubAccountPage = () => {
   const removeSub = (row) => {
     Modal.confirm({
       title: t('删除子账户'),
-      content: t(
-        '删除前需先解除该子账户的全部令牌绑定。确定删除该子账户吗？',
-      ),
+      content: t('删除前需先解除该子账户的全部令牌绑定。确定删除该子账户吗？'),
       okType: 'danger',
       onOk: async () => {
         try {
@@ -704,8 +701,7 @@ const SubAccountPage = () => {
                   {
                     title: t('过期时间'),
                     dataIndex: 'expired_time',
-                    render: (v) =>
-                      v === -1 ? t('永不过期') : tsToText(v),
+                    render: (v) => (v === -1 ? t('永不过期') : tsToText(v)),
                   },
                   {
                     title: t('操作'),
