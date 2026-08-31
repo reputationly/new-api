@@ -3,7 +3,7 @@ package gpustackplus
 import (
 	"fmt"
 	"math"
-	"strconv"
+	"sort"
 	"strings"
 
 	"github.com/QuantumNous/new-api/common"
@@ -46,9 +46,11 @@ import (
 //  4. 向上而不是就近吸附:就近会让 10 秒落到 233 帧(9.71 s),**短于**对外承诺的时长。
 //     向上吸附保证实际时长永不短于承诺。
 //
-//  5. **尺寸与显存包络是硬拒**:宽高都要被 32 整除、短边 ≤ 704、
-//     `W×H×num_frames ≤ 4.3×10⁸`。三条都是"进了队列也只会 500 或 OOM"的输入,
+//  5. **尺寸与显存包络是硬拒**:宽高都要被 32 整除、短边 ≤ 1408(2K)、
+//     `W×H×num_frames ≤ 9.0×10⁸`。三条都是"进了队列也只会 500 或 OOM"的输入,
 //     挡在网关比让用户排队几分钟后失败好,所以在这里就地 400。
+//     ⚠️ 2026-08-31 之前这两个上限是 704 / 4.3×10⁸,那是"1080p 交超分"那版的口径;
+//     引擎侧加了解码前卸载 DiT 之后 1080p 与 2K 都能原生出片,上限随之抬高。
 //
 //  6. **画布要在这里合成**:引擎只认 OpenAI 风格的 size("WIDTHxHEIGHT")或 width/height。
 //     它请求体里那个 aspect_ratio 字段是 **H3 专用**的,LTX 的 pipeline 从不读 ——
@@ -62,13 +64,24 @@ const (
 	// 宽高两轴都必须被 32 整除,同时也是 latent patch 的边长(P 由 W/32 × H/32 得出)。
 	ltx25AlignMultiple = 32
 
-	// 短边上限。超过它引擎侧 VAE 解码后的 all-gather 会把 fp32 整段视频张量压在单卡上,
-	// 加卡无用 —— 1080p 在 4×A100-40G 上时长上限只有约 11 秒,已定案交给超分链路。
-	ltx25MaxShortEdge = 704
+	// 短边上限 = 2K 档的短边。2026-08-31 之前这里是 704(「1080p 交超分」的那版口径),
+	// 引擎侧加了「VAE 解码前把 DiT 搬回主机内存」之后天花板整个抬掉了:1080p 与 2K
+	// 都能原生出片,4K 只能出 5 秒、成本又高(283 s/条),对外不给,所以上限停在 1408。
+	ltx25MaxShortEdge = 1408
 
-	// 显存包络:W×H×num_frames 的上限。最大实测点 1248×704×489(20.375 s)峰值
-	// 37.0 GB / 40 GB,面积×帧数 = 4.296×10⁸,即这个数就是实测天花板本身。
-	ltx25MaxPixelFrames = 430_000_000
+	// 显存包络:W×H×num_frames 的上限。2026-08-31 五机并发实测的分界(4×A100-40G、
+	// 开卸载开关):
+	//
+	//	2560×1408×249 = 8.98e8 ✅   3840×2176×121 = 1.011e9 ✅
+	//	1920×1088×489 = 1.022e9 ✅  2560×1408×361 = 1.302e9 ❌  3840×2176×249 = 2.081e9 ❌
+	//
+	// 真实分界在 1.05e9,这里取 9.0e8 是**刻意留一档余量**:1.022e9 那个通过点只剩
+	// 5.2 GB,而八题材压测显示峰值随内容浮动 4.3 GB(28.9~33.2 GB) —— 按分界值配,
+	// 某些题材会翻车而另一些不会,是最难排查的一类。
+	//
+	// 9.0e8 同时表达了三条时长上限,不用再维护一张「分辨率 → 时长」的表:
+	//	2560×1408 → 249 帧(10.4 s)   1920×1088 → 425 帧(17.7 s)   ≤1248×704 → 全时长
+	ltx25MaxPixelFrames = 900_000_000
 
 	// 现网 LTX-2.5 部署的 sequence_parallel_size(dev-gpustack-a100-0017,4×A100-40G
 	// 整机单实例)。它只参与**默认帧数的选取**,不参与对调用方自传帧数的校验 ——
@@ -185,7 +198,7 @@ func ltx25ApplyCanvas(body map[string]any) error {
 	_, hasH := body["height"]
 	if hasW || hasH {
 		// 调用方自定画布,不覆盖。但档位词对引擎的 SizeStr 是非法值,仍要清掉。
-		if ltx25ShortEdgeFromSizeToken(size) > 0 {
+		if _, _, ok := ltx25SizeTier(size); ok {
 			delete(body, "size")
 		}
 		return nil
@@ -197,19 +210,14 @@ func ltx25ApplyCanvas(body map[string]any) error {
 		return nil // 已经是像素串
 	}
 
-	shortEdge := ltx25ShortEdgeFromSizeToken(size)
-	if shortEdge <= 0 {
+	shortEdge, align, isTier := ltx25SizeTier(size)
+	if !isTier {
+		// 挡的是 540P / 720P / 4K 这类"看起来是行业档位、实际不是本模型档位"的写法。
+		// 静默映射到最近的合法档更糟:用户以为拿到 720p,实际是 704,这个差异只在
+		// 出片后量像素才看得出来。
 		return fmt.Errorf(
-			"LTX-2.5 的 size 只接受精确像素(如 %dx%d)或分辨率档位词(如 %dP),收到 %q",
-			ltx25OfficialSizes[0][0], ltx25OfficialSizes[0][1], ltx25MaxShortEdge, size)
-	}
-	if shortEdge > ltx25MaxShortEdge || shortEdge%ltx25AlignMultiple != 0 {
-		// 挡的是 540P / 720P 这类"看起来是行业档位、实际不是本模型短边"的写法。
-		// 静默映射到最近的合法短边更糟:用户以为拿到 720,实际是 704,而这个差异
-		// 只在出片后量像素才看得出来。
-		return fmt.Errorf(
-			"LTX-2.5 的分辨率档位词短边必须是 %d 的倍数且不超过 %d,%q 不合规(如 544P、704P)",
-			ltx25AlignMultiple, ltx25MaxShortEdge, size)
+			"LTX-2.5 的 size 只接受精确像素(如 %dx%d)或档位词 %s,收到 %q",
+			ltx25OfficialSizes[0][0], ltx25OfficialSizes[0][1], ltx25SizeTierNames(), size)
 	}
 
 	ar, _ := body["aspect_ratio"].(string)
@@ -223,12 +231,27 @@ func ltx25ApplyCanvas(body map[string]any) error {
 			size, ar)
 	}
 
-	w, h := ltx25Canvas(shortEdge, ratio)
+	w, h := ltx25Canvas(shortEdge, ratio, align)
 	if w <= 0 || h <= 0 {
 		return fmt.Errorf("LTX-2.5 无法由档位词 %q 与宽高比 %q 推出合法画布", size, ar)
 	}
 	body["size"] = fmt.Sprintf("%dx%d", w, h)
 	return nil
+}
+
+// ltx25SizeTierNames 把档位词表渲染成错误文案里的可选值,按短边从小到大。
+// 不硬编码成字符串:菜单改了文案要跟着改,而"文案与实际取值分叉"这个仓里已经栽过。
+func ltx25SizeTierNames() string {
+	names := make([]string, 0, len(ltx25SizeTiers))
+	for name := range ltx25SizeTiers {
+		names = append(names, strings.ToUpper(name))
+	}
+	sort.Slice(names, func(i, j int) bool {
+		a, _, _ := ltx25SizeTier(names[i])
+		b, _, _ := ltx25SizeTier(names[j])
+		return a < b
+	})
+	return strings.Join(names, " / ")
 }
 
 // ltx25NormalizeAspectRatio 把体验区实际发出的宽高比字段归一到本文件要的 aspect_ratio。
@@ -271,21 +294,41 @@ func ltx25NormalizeAspectRatio(body map[string]any) {
 	}
 }
 
-// ltx25ShortEdgeFromSizeToken 从档位词取短边像素:"704P"/"544p" → 704/544;不是档位词返回 0。
+// ltx25SizeTiers 是对外档位词 → (短边像素, 对齐粒度)。
 //
-// 不像 h3ShortEdgeFromSizeToken 那样收 2K/4K:LTX 的短边上限是 704,那两个词无论怎么
-// 解释都超界,与其解析出来再报"超界",不如让它落进"既不是像素串也不是档位词"那条
-// 更贴切的错误 —— 用户真正需要知道的是"这个模型没有 2K"。
-func ltx25ShortEdgeFromSizeToken(size string) int {
-	s := strings.ToLower(strings.TrimSpace(size))
-	if !strings.HasSuffix(s, "p") {
-		return 0
+// **必须查表,不能按字面算**,两处都反直觉:
+//
+//  1. 短边不是档位词的字面值。`1080P` 的短边是 **1088** 不是 1080、`2K` 是 **1408**
+//     不是 1440 —— 两阶段的引擎硬校验(ltx2_request.py 的
+//     `alignment = vae_spatial_compression_ratio × max_spatial_downscale` = 32×2 = 64)
+//     要求宽高都被 64 整除,而 1080/64=16.875、1440/64=22.5 都不整除,发过去直接被拒。
+//     所以别复用 h3ShortEdgeFromSizeToken 的 `2k→1440`,照抄必炸。
+//  2. 对齐粒度随档位变。544P/704P 由一阶段实例服务(对齐 32),1080P/2K 由**两阶段
+//     实例**服务(对齐 64)。粒度写死 32 的话,`2K + 4:3` 会算出 1888×1408,
+//     1888/64=29.5,引擎拒。
+//
+// 档位与实例是绑定的(--model-class-name 是启动参数、不是请求参数),所以一个部署只
+// 服务这张表里的一部分档位;网关这里只管把词翻成像素,发给哪个实例由模型名决定。
+var ltx25SizeTiers = map[string]struct {
+	shortEdge int
+	align     int
+}{
+	"544p":  {544, 32},  // 一阶段原生桶
+	"704p":  {704, 32},  // 一阶段
+	"1080p": {1088, 64}, // 两阶段,实测 1920×1088 最长 17.7 s(见 ltx25MaxPixelFrames)
+	"2k":    {1408, 64}, // 两阶段,实测 2496/2560×1408 最长 10.4 s
+}
+
+// ltx25SizeTier 解析档位词;不是档位词返回 ok=false。
+//
+// 不收 4K:实测 3840×2176 只能出 5 秒(283 s/条、整机 0.21 条/分),对外不给。
+// 与其解析出来再报"超界",不如让它落进"既不是像素串也不是档位词"那条更贴切的错误。
+func ltx25SizeTier(size string) (shortEdge int, align int, ok bool) {
+	t, hit := ltx25SizeTiers[strings.ToLower(strings.TrimSpace(size))]
+	if !hit {
+		return 0, 0, false
 	}
-	n, err := strconv.Atoi(strings.TrimSuffix(s, "p"))
-	if err != nil || n <= 0 {
-		return 0
-	}
-	return n
+	return t.shortEdge, t.align, true
 }
 
 // ltx25Canvas 按 (短边, 宽高比) 推画布,两轴对齐到 32(四舍五入,与 h3Canvas 同法)。
@@ -298,16 +341,21 @@ func ltx25ShortEdgeFromSizeToken(size string) int {
 //	544 × 4/3  = 725.3 → 736(向下取整会得 704,画幅偏 3%)   704 × 4/3  = 938.7 → 928
 //	544 × 16/9 = 967.1 → 960                                704 × 16/9 = 1251.6 → 1248
 //
-// 这六个值与 docs/ltx25-playground-and-api-design.md §三 里 4 卡实测过的尺寸一一对应。
-func ltx25Canvas(shortEdge int, ratio float64) (int, int) {
-	if shortEdge <= 0 || !(ratio > 0) || math.IsInf(ratio, 0) {
+// align 由档位决定(见 ltx25SizeTiers):一阶段 32、两阶段 64。两阶段那两档的结果:
+//
+//	1088 × 16/9 = 1934.2 → 1920   1408 × 16/9 = 2503.1 → 2496
+//
+// 2496×1408 比实测用的 2560×1408 更接近 16:9(偏 0.3% vs 2.3%)且面积小 2.5%,
+// 与「704 短边取 1248 而不是 1280」是同一条理由;既然更小,实测过的包络照样成立。
+func ltx25Canvas(shortEdge int, ratio float64, align int) (int, int) {
+	if shortEdge <= 0 || align <= 0 || !(ratio > 0) || math.IsInf(ratio, 0) {
 		return 0, 0
 	}
 	short := float64(shortEdge)
 	if ratio >= 1.0 {
-		return h3AlignMultiple(short*ratio, ltx25AlignMultiple), h3AlignMultiple(short, ltx25AlignMultiple)
+		return h3AlignMultiple(short*ratio, align), h3AlignMultiple(short, align)
 	}
-	return h3AlignMultiple(short, ltx25AlignMultiple), h3AlignMultiple(short/ratio, ltx25AlignMultiple)
+	return h3AlignMultiple(short, align), h3AlignMultiple(short/ratio, align)
 }
 
 // ltx25Dims 从 body["size"]("WIDTHxHEIGHT",adaptor 已透传顶层 size)解析宽高。
@@ -402,9 +450,13 @@ func ltx25FramesForDuration(durationSec, w, h int, hasSize bool) int {
 // 它不在菜单上,把人往那儿引等于制造一批没定过价的请求。将来菜单加档时再往这里补,
 // 加漏了的后果只是建议值不够近,不会让合法请求被拒。
 var ltx25OfficialSizes = [][2]int{
-	{1248, 704}, // 16:9, P=858, m=2
-	{928, 704},  // 4:3,  P=638, m=2
-	{704, 704},  // 1:1,  P=484, m=1
+	{2496, 1408}, // 2K   16:9, 两阶段(对齐 64)
+	{1408, 1408}, // 2K   1:1
+	{1920, 1088}, // 1080p 16:9, 两阶段
+	{1088, 1088}, // 1080p 1:1
+	{1248, 704},  // 720p 16:9, P=858, m=2
+	{928, 704},   // 720p 4:3,  P=638, m=2
+	{704, 704},   // 720p 1:1,  P=484, m=1
 }
 
 // ltx25ValidateSize 校验尺寸的两条硬约束:短边 ≤ 704、32 对齐。
@@ -443,16 +495,30 @@ func ltx25SuggestSize(w, h int) (int, int) {
 	want := float64(max(w, h)) / float64(min(w, h)) // 恒 ≥1,与朝向无关
 	area := float64(w) * float64(h)
 
-	bestW, bestH := 0, 0
-	bestRatioErr, bestAreaErr := math.Inf(1), math.Inf(1)
+	// 两轮:先按画幅选出**同一族**的候选,再在族内按面积就近。
+	//
+	// 不能一轮比完。菜单跨了 540p~2K 五个分辨率之后,同一个画幅族里有三个桶
+	// (16:9 有 1248×704 / 1920×1088 / 2496×1408),它们的比例误差差在小数点后三位;
+	// 单轮「比例优先、并列才比面积」会把 700×400 这种小请求判给 1920×1088 ——
+	// 画幅对了,分辨率却跳了两档。族内按面积就近才是"最接近"。
+	minRatioErr := math.Inf(1)
 	for _, s := range ltx25OfficialSizes {
 		long, short := max(s[0], s[1]), min(s[0], s[1])
-		ratioErr := math.Abs(float64(long)/float64(short) - want)
-		areaErr := math.Abs(float64(s[0])*float64(s[1]) - area)
-		// 比例优先;比例基本相同(浮点噪声级)时才比面积
-		if ratioErr < bestRatioErr-1e-9 ||
-			(math.Abs(ratioErr-bestRatioErr) <= 1e-9 && areaErr < bestAreaErr) {
-			bestRatioErr, bestAreaErr = ratioErr, areaErr
+		if e := math.Abs(float64(long)/float64(short) - want); e < minRatioErr {
+			minRatioErr = e
+		}
+	}
+	// 0.01 的窗口:16:9 族内部三个桶的比例互差最多 0.008(1.7647 ~ 1.7727),
+	// 而相邻画幅族(16:9 与 4:3)相差 0.44,不会被误并进来。
+	bestW, bestH := 0, 0
+	bestAreaErr := math.Inf(1)
+	for _, s := range ltx25OfficialSizes {
+		long, short := max(s[0], s[1]), min(s[0], s[1])
+		if math.Abs(float64(long)/float64(short)-want) > minRatioErr+0.01 {
+			continue
+		}
+		if areaErr := math.Abs(float64(s[0])*float64(s[1]) - area); areaErr < bestAreaErr {
+			bestAreaErr = areaErr
 			bestW, bestH = long, short
 		}
 	}

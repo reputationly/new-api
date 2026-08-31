@@ -1,6 +1,7 @@
 package gpustackplus
 
 import (
+	"math"
 	"strings"
 	"testing"
 )
@@ -141,9 +142,11 @@ func TestLTX25RejectsUnalignedSize(t *testing.T) {
 
 // R2 准入:短边超 704 就地 400。1080p 交超分链路,不在这个模型上开。
 func TestLTX25RejectsShortEdgeOverCap(t *testing.T) {
-	err := applyLTX25Request(map[string]any{"size": "1920x1080"}, 5)
+	// 2026-08-31 起短边上限抬到 1408(2K)。1920x1080 现在只违「对齐」不违「上限」,
+	// 所以这条改用 4K —— 它是实测只能出 5 秒、对外不给的那一档。
+	err := applyLTX25Request(map[string]any{"size": "3840x2176"}, 5)
 	if err == nil {
-		t.Fatal("1920x1080 应被拒(短边 1080 > 704)")
+		t.Fatal("3840x2176 应被拒(短边 2176 > 1408)")
 	}
 	if !strings.Contains(err.Error(), "短边上限") {
 		t.Fatalf("两条全违时要报更根本的短边上限那条,实际: %v", err)
@@ -161,21 +164,27 @@ func TestLTX25RejectsShortEdgeOverCap(t *testing.T) {
 // 挑桶按**画幅**而不是面积:用户选的是构图。1280x720 要的是 16:9,给 1248x704(1.773)
 // 才是同一个画幅;按面积挑会给出一个画幅不对的桶,构图整个变了。
 func TestLTX25SuggestedSizeIsOfficialBucket(t *testing.T) {
-	// 上线菜单的五个桶(含转置),建议值只能是它们之一
+	// 上线菜单的桶(含转置),建议值只能是它们之一。
+	// 2026-08-31 扩到 2K:1080p 与 2K 两档由**两阶段实例**服务,对齐 64。
 	menu := map[[2]int]bool{
-		{1248, 704}: true, {704, 1248}: true, // 16:9 / 9:16
-		{928, 704}: true, {704, 928}: true, // 4:3 / 3:4
-		{704, 704}: true, // 1:1
+		{2496, 1408}: true, {1408, 2496}: true, // 2K    16:9 / 9:16
+		{1408, 1408}: true,                     // 2K    1:1
+		{1920, 1088}: true, {1088, 1920}: true, // 1080p 16:9 / 9:16
+		{1088, 1088}: true,                    // 1080p 1:1
+		{1248, 704}:  true, {704, 1248}: true, // 720p  16:9 / 9:16
+		{928, 704}: true, {704, 928}: true, // 720p  4:3 / 3:4
+		{704, 704}: true, // 720p  1:1
 	}
 	for _, tc := range []struct{ w, h, wantW, wantH int }{
-		{1280, 720, 1248, 704},  // 16:9 → 归到 16:9 的桶,不是把宽留在 1280
-		{1920, 1080, 1248, 704}, // 同一个画幅归到同一个桶
-		{720, 1280, 704, 1248},  // 竖版:跟随朝向自动转置
-		{1080, 1920, 704, 1248},
+		{1280, 720, 1248, 704},   // 16:9 → 同族里面积最近的是 720p 那个桶
+		{1920, 1080, 1920, 1088}, // 同族但面积大一档 → 归 1080p,不再跳回 720p
+		{3840, 2176, 2496, 1408}, // 4K 不提供,指向同族里最大的 2K
+		{720, 1280, 704, 1248},   // 竖版:跟随朝向自动转置
+		{1080, 1920, 1088, 1920},
 		{1024, 768, 928, 704}, // 4:3
 		{768, 1024, 704, 928}, // 3:4
-		{1000, 1000, 704, 704},
-		{700, 400, 1248, 704}, // 短边合规但不对齐;1.75 最接近 16:9 那个桶
+		{1000, 1000, 1088, 1088},
+		{700, 400, 1248, 704}, // 短边合规但不对齐;1.75 落 16:9 族,族内面积最近
 	} {
 		sw, sh := ltx25SuggestSize(tc.w, tc.h)
 		if sw != tc.wantW || sh != tc.wantH {
@@ -218,13 +227,14 @@ func TestLTX25OfficialMenuPassesItsOwnGates(t *testing.T) {
 // R2 准入:面积×帧数超包络就地 400,而不是让它排队几分钟后 OOM。
 // 1248x704 的 30 秒是验收用例 #7。
 func TestLTX25RejectsPixelEnvelope(t *testing.T) {
-	err := applyLTX25Request(map[string]any{"size": "1248x704"}, 30)
+	// 2K 的 15 秒:2560×1408×361 = 1.302e9,2026-08-31 实测就是在这一档 OOM 的
+	err := applyLTX25Request(map[string]any{"size": "2560x1408"}, 15)
 	if err == nil {
-		t.Fatal("1248x704 / 30s 应被拒(超显存包络)")
+		t.Fatal("2560x1408 / 15s 应被拒(超显存包络,实测 OOM)")
 	}
 	// 文案给出的「最长秒数」必须自己在包络内 —— 否则用户照着改还是失败
-	maxFrames := ltx25MaxFramesForArea(1248, 704)
-	if maxFrames <= 0 || 1248*704*maxFrames > ltx25MaxPixelFrames {
+	maxFrames := ltx25MaxFramesForArea(2560, 1408)
+	if maxFrames <= 0 || 2560*1408*maxFrames > ltx25MaxPixelFrames {
 		t.Fatalf("建议的最大帧数 %d 自己就超包络", maxFrames)
 	}
 	// 实测最大点 1248×704×489(20.375 s)必须仍在包络内 —— 这是包络常量的标定点
@@ -236,9 +246,9 @@ func TestLTX25RejectsPixelEnvelope(t *testing.T) {
 // 包络校验对**调用方自传帧数**这条路同样生效 —— 否则 API 用户能绕过体验区的档位
 // 限制发出必然 OOM 的组合(设计文档 §五)。
 func TestLTX25EnvelopeAppliesToCallerFrames(t *testing.T) {
-	err := applyLTX25Request(map[string]any{"size": "1248x704", "num_frames": 729}, 0)
+	err := applyLTX25Request(map[string]any{"size": "2560x1408", "num_frames": 361}, 0)
 	if err == nil {
-		t.Fatal("自传 729 帧 @1248x704 应被包络拒掉")
+		t.Fatal("自传 361 帧 @2560x1408 应被包络拒掉(2026-08-31 实测 OOM 的那一发)")
 	}
 }
 
@@ -404,7 +414,7 @@ func TestLTX25CanvasFeedsFrameGrid(t *testing.T) {
 // 540P / 720P 这两个尤其要挡:它们是行业通行档位,但 720 不是 32 的倍数、也超短边上限,
 // 静默映射到 704 会让人以为拿到了 720p。
 func TestLTX25RejectsIllegalSizeToken(t *testing.T) {
-	for _, size := range []string{"720P", "540P", "1080P", "2K", "4k", "abc", "704"} {
+	for _, size := range []string{"720P", "540P", "1440P", "4K", "abc", "704"} {
 		body := map[string]any{"size": size, "aspect_ratio": "16:9"}
 		err := applyLTX25Request(body, 5)
 		if err == nil {
@@ -527,5 +537,104 @@ func TestLTX25DropsTargetShapeOnPixelPath(t *testing.T) {
 	}
 	if got := body["size"]; got != "1248x704" {
 		t.Errorf("像素串被改写成 %v", got)
+	}
+}
+
+// ── 1080p / 2K 两档(两阶段实例) ──────────────────────────────────────────
+
+// 档位词 → 画布。两处反直觉,写错了不会在网关报错、要到引擎才炸:
+//   - 短边不是字面值:1080P 的短边是 1088、2K 是 1408;
+//   - 对齐粒度是 64 不是 32(两阶段的 alignment = 32 × max_spatial_downscale)。
+func TestLTX25HDCanvasFromToken(t *testing.T) {
+	cases := []struct{ token, ratio, want string }{
+		{"1080P", "16:9", "1920x1088"}, // 实测跑过的桶
+		{"1080P", "9:16", "1088x1920"},
+		{"1080P", "1:1", "1088x1088"},
+		{"1080P", "4:3", "1472x1088"}, // 按 32 对齐会得 1450→1440,1440/64=22.5 引擎拒
+		{"2K", "16:9", "2496x1408"},   // 比实测用的 2560×1408 更接近 16:9 且更省
+		{"2K", "9:16", "1408x2496"},
+		{"2K", "1:1", "1408x1408"},
+		{"2K", "4:3", "1856x1408"}, // 按 32 对齐会得 1888,1888/64=29.5 引擎拒
+		{"2k", "16 : 9", "2496x1408"},
+	}
+	for _, c := range cases {
+		body := map[string]any{"size": c.token, "aspect_ratio": c.ratio}
+		mustApply(t, body, 5)
+		if got := body["size"]; got != c.want {
+			t.Errorf("%s + %s → size = %v, want %s", c.token, c.ratio, got, c.want)
+		}
+	}
+}
+
+// 表驱动的不变量:每个档位 × 每个具名比例推出的画布,都必须满足该档自己的对齐粒度。
+// 这条比上面那张明细表更重要 —— 将来加档位或加比例时,漏掉 64 对齐会被这条挡住。
+func TestLTX25TierCanvasAlwaysAligned(t *testing.T) {
+	for token, tier := range ltx25SizeTiers {
+		for ratio := range ltx25NamedAspectRatios {
+			body := map[string]any{"size": token, "aspect_ratio": ratio}
+			if err := applyLTX25Request(body, 5); err != nil {
+				t.Fatalf("%s + %s 被拒: %v", token, ratio, err)
+			}
+			w, h, ok := ltx25Dims(body)
+			if !ok {
+				t.Fatalf("%s + %s 没合成出像素串: %v", token, ratio, body["size"])
+			}
+			if w%tier.align != 0 || h%tier.align != 0 {
+				t.Errorf("%s + %s → %dx%d 不是 %d 的倍数(两阶段会被引擎拒)", token, ratio, w, h, tier.align)
+			}
+			if min(w, h) != tier.shortEdge {
+				t.Errorf("%s + %s → %dx%d 的短边不是 %d", token, ratio, w, h, tier.shortEdge)
+			}
+			if err := ltx25ValidateSize(w, h); err != nil {
+				t.Errorf("%s + %s → %dx%d 过不了自己的尺寸校验: %v", token, ratio, w, h, err)
+			}
+		}
+	}
+}
+
+// 包络给出的时长上限必须与 2026-08-31 的实测对齐:2K 10.4 秒、1080p 17.7 秒。
+// 这两个数不是拍的,是 ltx25MaxPixelFrames 除出来的;改那个常量这里会红,提醒同步文档。
+func TestLTX25HDDurationCeiling(t *testing.T) {
+	for _, c := range []struct {
+		w, h, wantFrames int
+		wantSec          float64
+	}{
+		{2496, 1408, 249, 10.375}, // 2K
+		{1920, 1088, 425, 17.708}, // 1080p
+		{1248, 704, 1017, 42.375}, // 720p:远超菜单,等于不限
+	} {
+		got := ltx25MaxFramesForArea(c.w, c.h)
+		if got != c.wantFrames {
+			t.Errorf("%dx%d 的最大帧数 = %d, want %d", c.w, c.h, got, c.wantFrames)
+		}
+		if sec := ltx25MaxDurationSec(c.w, c.h); math.Abs(sec-c.wantSec) > 0.01 {
+			t.Errorf("%dx%d 的最长秒数 = %.3f, want %.3f", c.w, c.h, sec, c.wantSec)
+		}
+	}
+}
+
+// 实测通过/失败的那几个点,直接钉成断言。改包络常量时这条是最后一道闸。
+func TestLTX25EnvelopeMatchesMeasured(t *testing.T) {
+	for _, c := range []struct {
+		size   string
+		frames int
+		pass   bool
+		note   string
+	}{
+		{"1248x704", 489, true, "720p 20.4s 实测 28.0GB"},
+		{"2560x1408", 249, true, "2K 10.4s 实测 30.3GB"},
+		{"1920x1088", 425, true, "1080p 17.7s(包络上限)"},
+		{"1920x1088", 489, false, "1080p 20.4s 实测能过但只剩 5.2GB,刻意收紧"},
+		{"2560x1408", 361, false, "2K 15.0s 实测 OOM"},
+		{"3840x2176", 249, false, "4K 10.4s 实测 OOM"},
+	} {
+		body := map[string]any{"size": c.size, "num_frames": c.frames}
+		err := applyLTX25Request(body, 0)
+		if c.pass && err != nil {
+			t.Errorf("%s/%d 帧应放行(%s),却被拒: %v", c.size, c.frames, c.note, err)
+		}
+		if !c.pass && err == nil {
+			t.Errorf("%s/%d 帧应被拒(%s),却放行了", c.size, c.frames, c.note)
+		}
 	}
 }
