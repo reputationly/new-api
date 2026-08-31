@@ -137,7 +137,8 @@ const Models = () => {
     return perModel !== undefined ? perModel : groupRatioMap[g];
   };
   const resolveGroupRatio = (m) => {
-    if (group) return { group, ratio: effectiveRatio(group, m.model_name) ?? 1 };
+    if (group)
+      return { group, ratio: effectiveRatio(group, m.model_name) ?? 1 };
     const candidates = (m.enable_groups || [])
       .map((g) => ({ group: g, ratio: effectiveRatio(g, m.model_name) }))
       .filter((c) => typeof c.ratio === 'number');

@@ -636,7 +636,9 @@ const serializeModel = (model, t, rate) => {
   ) {
     if (hasValue(model.fixedPrice)) {
       // 人民币按次价 ÷ 汇率 = 后端存储的美元 ModelPrice。
-      result.ModelPrice = toNormalizedNumber(Number(model.fixedPrice) / usd2rmb);
+      result.ModelPrice = toNormalizedNumber(
+        Number(model.fixedPrice) / usd2rmb,
+      );
     }
     // per-request 到此为止：这类模型按次定价，倍率无意义，不回写。
     // tiered_expr 不能停在这——它的 ModelRatio 也要原样保住，继续往下走。
@@ -943,8 +945,12 @@ export function useModelPricingEditorState({
       ImageRatio: parseOptionJSON(options.ImageRatio),
       AudioRatio: parseOptionJSON(options.AudioRatio),
       AudioCompletionRatio: parseOptionJSON(options.AudioCompletionRatio),
-      ModelBillingMode: parseOptionJSON(options['billing_setting.billing_mode']),
-      ModelBillingExpr: parseOptionJSON(options['billing_setting.billing_expr']),
+      ModelBillingMode: parseOptionJSON(
+        options['billing_setting.billing_mode'],
+      ),
+      ModelBillingExpr: parseOptionJSON(
+        options['billing_setting.billing_expr'],
+      ),
       VideoPricing: parseOptionJSON(options.VideoPricingConfig),
     };
 
@@ -1471,8 +1477,10 @@ export function useModelPricingEditorState({
             model.requestRuleExpr,
           );
           if (finalBillingExpr) {
-            tieredOutput['billing_setting.billing_mode'][model.name] = 'tiered_expr';
-            tieredOutput['billing_setting.billing_expr'][model.name] = finalBillingExpr;
+            tieredOutput['billing_setting.billing_mode'][model.name] =
+              'tiered_expr';
+            tieredOutput['billing_setting.billing_expr'][model.name] =
+              finalBillingExpr;
           }
         }
 
