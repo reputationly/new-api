@@ -9,17 +9,19 @@ import {
   Banner,
   Button,
   Checkbox,
+  Dropdown,
   Empty,
   Input,
   InputNumber,
   Popconfirm,
   Select,
   Tag,
+  TextArea,
   Typography,
 } from '@douyinfe/semi-ui';
 import { IconDelete, IconPlus, IconSearch } from '@douyinfe/semi-icons';
 import { useTranslation } from 'react-i18next';
-import { API } from '../../../helpers';
+import { API, showError, showSuccess } from '../../../helpers';
 import CardTable from '../../../components/common/ui/CardTable';
 
 const { Text } = Typography;
@@ -70,7 +72,16 @@ export function buildModeOptions(allowOverride, t) {
  * 兼容裸数字写法（{"GLM-5": 0.5}）——后端也认它，编辑器不能把手工写的配置吃掉。
  */
 function flattenRules(nested, group) {
-  const rules = nested[group];
+  return rulesToRows(nested[group]);
+}
+
+/**
+ * 单个分组的规则对象 → 表格行。与 rowsToRules 互为逆运算。
+ *
+ * 抽出来是为了让 JSON 视图和表格视图共用同一对转换：两边各写一份的话，
+ * 「切到 JSON 改一个字再切回来，某一列悄悄变了」这种问题永远查不清。
+ */
+function rulesToRows(rules) {
   if (!rules || typeof rules !== 'object') return [];
   return Object.entries(rules).map(([pattern, rule]) => {
     if (typeof rule === 'number') {
@@ -92,25 +103,87 @@ function flattenRules(nested, group) {
   });
 }
 
-/** 把某分组的规则行写回整份 GroupModelRatio JSON，其他分组原样保留。 */
-function serializeRules(nested, group, rows) {
-  const next = { ...nested };
-  const groupRules = {};
+/**
+ * 表格行 → 单个分组的规则对象。
+ *
+ * 两处有损，是 JSON 对象本身的约束，不是实现取巧：模型名为空的行无法成为 key
+ * （那是还没填完的输入），重复模型名只保留最后一条。切到 JSON 视图前会就这两点
+ * 给出提示，不让它们静默消失。
+ */
+function rowsToRules(rows) {
+  const out = {};
   rows.forEach((row) => {
     const pattern = (row.pattern || '').trim();
     if (!pattern) return;
-    groupRules[pattern] = {
+    out[pattern] = {
       mode: row.mode,
       value: row.value,
       ...(row.remark ? { remark: row.remark } : {}),
     };
   });
+  return out;
+}
+
+/** 把某分组的规则行写回整份 GroupModelRatio JSON，其他分组原样保留。 */
+function serializeRules(nested, group, rows) {
+  const next = { ...nested };
+  const groupRules = rowsToRules(rows);
   if (Object.keys(groupRules).length === 0) {
     delete next[group];
   } else {
     next[group] = groupRules;
   }
   return JSON.stringify(next, null, 2);
+}
+
+/**
+ * 校验 JSON 视图里贴进来的规则，口径与后端 CheckGroupModelRatio 对齐。
+ *
+ * 前端拦一道不是为了替代后端，是为了让错误在**当前这一屏**暴露：等到点保存
+ * 才报错的话，人已经切走分组、上下文全丢了，而 option 是全量覆盖保存的，
+ * 一次失败要重贴整份。
+ *
+ * 返回错误信息字符串，没问题返回 ''。
+ */
+function validateRules(parsed, allowOverride, t) {
+  if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    return t('顶层必须是一个对象：{ "模型名": { "mode": ..., "value": ... } }');
+  }
+  for (const [pattern, rule] of Object.entries(parsed)) {
+    if (!pattern.trim()) {
+      return t('存在空的模型名');
+    }
+    const star = pattern.indexOf('*');
+    if (star !== -1 && star !== pattern.length - 1) {
+      return `${pattern}：${t('「*」只能放在结尾作前缀通配')}`;
+    }
+    if (typeof rule === 'number') {
+      if (!(rule >= 0)) return `${pattern}：${t('倍率不能小于 0')}`;
+      continue;
+    }
+    if (!rule || typeof rule !== 'object' || Array.isArray(rule)) {
+      return `${pattern}：${t('规则必须是对象或数字')}`;
+    }
+    // mode 非字符串时后端 unmarshal 直接失败（Mode 是 string 字段），这里同样拒绝，
+    // 免得前端放行、保存时才被后端打回。
+    if (rule.mode != null && typeof rule.mode !== 'string') {
+      return `${pattern}：${t('mode 必须是字符串')}`;
+    }
+    // 用 || 而不是 ??：后端把空串也归一成 multiply（UnmarshalJSON 与
+    // CheckGroupModelRatio 的 case "" 分支都是这么写的），?? 只兜 null/undefined，
+    // 会把 {"mode": ""} 这种后端认可的写法拦在前端，与本函数声称的对齐相矛盾。
+    const mode = rule.mode || MODE_MULTIPLY;
+    if (mode !== MODE_MULTIPLY && mode !== MODE_OVERRIDE) {
+      return `${pattern}：${t('未知的 mode')} "${mode}"`;
+    }
+    if (mode === MODE_OVERRIDE && !allowOverride) {
+      return `${pattern}：${t('此处不允许 override，请改用 multiply')}`;
+    }
+    if (typeof rule.value !== 'number' || !(rule.value >= 0)) {
+      return `${pattern}：${t('value 必须是不小于 0 的数字')}`;
+    }
+  }
+  return '';
 }
 
 /**
@@ -137,6 +210,9 @@ export default function ModelRatioEditor({
   modelsEndpoint,
   allowOverride = true,
   texts = {},
+  // 「同步到其他分组」的候选。不传就不显示那个按钮——调用方没给候选时，
+  // 与其渲染一个空下拉，不如整个藏掉。
+  syncTargets = [],
 }) {
   const { t } = useTranslation();
 
@@ -152,6 +228,14 @@ export default function ModelRatioEditor({
   // 值，刚输入就被弹回第一页，改到一半的那行看不见了。
   const [page, setPage] = useState(1);
 
+  // JSON 视图。逐个下拉添加模型在配置几十个模型时是纯体力活，JSON 可以整段粘贴。
+  //
+  // jsonText 是本地缓冲而不是从 rows 实时算出来的：JSON 打到一半必然是非法的，
+  // 每敲一个字就回写父组件会把配置打成碎片。只有解析并校验通过才提交。
+  const [viewMode, setViewMode] = useState('table');
+  const [jsonText, setJsonText] = useState('');
+  const [jsonError, setJsonError] = useState('');
+
   // 切分组时整体重建：规则集是按分组隔离的，沿用上一个分组的行会写串
   const prevGroupRef = useRef(group);
   useEffect(() => {
@@ -161,6 +245,9 @@ export default function ModelRatioEditor({
       setSelected([]);
       setKeyword('');
       setPage(1);
+      // JSON 缓冲是上一个分组的内容，留着会让人对着 A 分组的文本改 B 分组
+      setJsonText('');
+      setJsonError('');
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [group]);
@@ -260,6 +347,113 @@ export default function ModelRatioEditor({
       ),
     );
   }, [emitAndSet, selected, batchMode, batchValue]);
+
+  // 切到 JSON 视图：用 rows 现算一份文本。不能沿用上次的缓冲——表格那边可能已经
+  // 改过了，拿旧文本会让人以为改动丢了，一保存又把表格的改动覆盖回去。
+  const enterJsonView = useCallback(() => {
+    setJsonText(JSON.stringify(rowsToRules(rows), null, 2));
+    setJsonError('');
+    setViewMode('json');
+  }, [rows]);
+
+  // 切回表格：把当前 JSON 落到 rows。解析失败就拦住，否则切过去看到的是旧数据，
+  // 而人以为自己刚写的已经生效了。
+  const leaveJsonView = useCallback(() => {
+    const text = jsonText.trim();
+    if (!text) {
+      emitAndSet([]);
+      setJsonError('');
+      setViewMode('table');
+      setPage(1);
+      return;
+    }
+    let parsed;
+    try {
+      parsed = JSON.parse(text);
+    } catch (e) {
+      setJsonError(e.message);
+      return;
+    }
+    const invalid = validateRules(parsed, allowOverride, t);
+    if (invalid) {
+      setJsonError(invalid);
+      return;
+    }
+    emitAndSet(rulesToRows(parsed));
+    setJsonError('');
+    setSelected([]);
+    setViewMode('table');
+    setPage(1);
+  }, [jsonText, allowOverride, emitAndSet, t]);
+
+  // JSON 文本变更：能解析就即时提交，不能解析只记错误。
+  //
+  // 即时提交是必要的——否则在 JSON 视图里改完直接点右上角保存，改动根本没进过
+  // 父组件，页面提示「你似乎并没有修改什么」，人会以为编辑器坏了。
+  const handleJsonChange = useCallback(
+    (text) => {
+      setJsonText(text);
+      if (!text.trim()) {
+        setJsonError('');
+        emitAndSet([]);
+        return;
+      }
+      let parsed;
+      try {
+        parsed = JSON.parse(text);
+      } catch (e) {
+        setJsonError(e.message);
+        return;
+      }
+      const invalid = validateRules(parsed, allowOverride, t);
+      if (invalid) {
+        setJsonError(invalid);
+        return;
+      }
+      setJsonError('');
+      emitAndSet(rulesToRows(parsed));
+    },
+    [allowOverride, emitAndSet, t],
+  );
+
+  const copyJson = useCallback(async () => {
+    const text = JSON.stringify(rowsToRules(rows), null, 2);
+    try {
+      await navigator.clipboard.writeText(text);
+      showSuccess(t('已复制当前分组的规则 JSON'));
+    } catch {
+      // 非 https 或浏览器不给权限时剪贴板不可用，退回到让人自己选中复制
+      setJsonText(text);
+      setViewMode('json');
+      showError(t('复制失败，已切到 JSON 视图，请手动选中复制'));
+    }
+  }, [rows, t]);
+
+  // 把当前分组的规则整份复制到另一个分组。
+  //
+  // 存在的理由：default 与 premium 合并成同一个池子之后，同一份折扣必须在两个
+  // 分组各配一遍（GroupModelRatio 按分组索引），手工配两遍必然有一天配漏一条，
+  // 而漏配的表现只是某个模型贵了一点，没人会立刻发现。
+  const syncToGroup = useCallback(
+    (target) => {
+      if (!target || target === group) return;
+      const nextNested = { ...nestedRef.current };
+      const groupRules = rowsToRules(rows);
+      if (Object.keys(groupRules).length === 0) {
+        delete nextNested[target];
+      } else {
+        nextNested[target] = groupRules;
+      }
+      onChangeRef.current?.(JSON.stringify(nextNested, null, 2));
+      showSuccess(
+        t('已把 {{n}} 条规则同步到 {{g}}', {
+          n: Object.keys(groupRules).length,
+          g: target,
+        }),
+      );
+    },
+    [group, rows, t],
+  );
 
   /** 已配过规则的模型不再出现在下拉里，避免同一个模型配出两行互相打架 */
   const configuredPatterns = useMemo(
@@ -514,33 +708,111 @@ export default function ModelRatioEditor({
       )}
 
       <div className='mt-3 flex flex-wrap items-center gap-2'>
-        <Input
-          prefix={<IconSearch />}
-          placeholder={t('搜索模型或备注')}
-          value={keyword}
-          onChange={setKeyword}
-          style={{ width: 220 }}
-          showClear
-        />
-        <Select
-          filter
-          placeholder={t('从本分组可用模型中添加')}
-          style={{ width: 260 }}
-          optionList={modelOptions}
-          value={null}
-          onChange={(v) => v && addRow(v)}
-          emptyContent={
-            groupModels.length === 0
-              ? t('该分组暂无渠道覆盖的模型')
-              : t('全部模型已配置')
-          }
-        />
-        <Button icon={<IconPlus />} theme='outline' onClick={() => addRow('')}>
-          {t('自定义/通配规则')}
-        </Button>
+        {viewMode === 'table' && (
+          <>
+            <Input
+              prefix={<IconSearch />}
+              placeholder={t('搜索模型或备注')}
+              value={keyword}
+              onChange={setKeyword}
+              style={{ width: 220 }}
+              showClear
+            />
+            <Select
+              filter
+              placeholder={t('从本分组可用模型中添加')}
+              style={{ width: 260 }}
+              optionList={modelOptions}
+              value={null}
+              onChange={(v) => v && addRow(v)}
+              emptyContent={
+                groupModels.length === 0
+                  ? t('该分组暂无渠道覆盖的模型')
+                  : t('全部模型已配置')
+              }
+            />
+            <Button
+              icon={<IconPlus />}
+              theme='outline'
+              onClick={() => addRow('')}
+            >
+              {t('自定义/通配规则')}
+            </Button>
+          </>
+        )}
+
+        <div className='ml-auto flex items-center gap-2'>
+          {/*
+            用 Dropdown 而不是 Select：这里要的是「执行一次同步」这个动作，不是
+            选一个值。受控 Select（value={null}）点选项根本不触发 onChange，而且
+            它选完还会显示成「已选中 premium」，与实际语义不符。
+          */}
+          {syncTargets.filter((g) => g !== group).length > 0 && (
+            <Dropdown
+              trigger='click'
+              position='bottomRight'
+              render={
+                <Dropdown.Menu>
+                  {syncTargets
+                    .filter((g) => g !== group)
+                    .map((g) => (
+                      <Dropdown.Item key={g} onClick={() => syncToGroup(g)}>
+                        {g}
+                      </Dropdown.Item>
+                    ))}
+                </Dropdown.Menu>
+              }
+            >
+              <Button size='small' theme='borderless'>
+                {t('同步到其他分组')}
+              </Button>
+            </Dropdown>
+          )}
+          <Button size='small' theme='borderless' onClick={copyJson}>
+            {t('复制 JSON')}
+          </Button>
+          <Button
+            size='small'
+            theme='outline'
+            onClick={viewMode === 'table' ? enterJsonView : leaveJsonView}
+          >
+            {viewMode === 'table' ? t('切换到 JSON') : t('切换到表格')}
+          </Button>
+        </div>
       </div>
 
-      {selected.length > 0 && (
+      {viewMode === 'json' && (
+        <div className='mt-3'>
+          <Text type='tertiary' size='small' className='mb-1 block'>
+            {t(
+              '这里是「{{g}}」这一个分组的规则，与上方表格逐条对应。整段粘贴即可批量配置；改完可用「同步到其他分组」把同一份规则复制过去。',
+              { g: group },
+            )}
+          </Text>
+          <TextArea
+            value={jsonText}
+            onChange={handleJsonChange}
+            autosize={{ minRows: 12, maxRows: 30 }}
+            style={{ fontFamily: 'monospace' }}
+            placeholder={
+              '{\n  "GLM-5.2": { "mode": "multiply", "value": 0.9 }\n}'
+            }
+            validateStatus={jsonError ? 'error' : 'default'}
+          />
+          {jsonError ? (
+            <Text type='danger' size='small' className='mt-1 block'>
+              {t('JSON 无效，改动尚未生效：')}
+              {jsonError}
+            </Text>
+          ) : (
+            <Text type='tertiary' size='small' className='mt-1 block'>
+              {t('格式正确，改动已同步到表格；仍需点右上角保存才会落库。')}
+            </Text>
+          )}
+        </div>
+      )}
+
+      {viewMode === 'table' && selected.length > 0 && (
         <div className='mt-3 flex flex-wrap items-center gap-2 rounded-lg bg-[var(--semi-color-fill-0)] p-2'>
           <Text size='small'>
             {t('已选 {{count}} 条', { count: selected.length })}
@@ -573,7 +845,7 @@ export default function ModelRatioEditor({
         </div>
       )}
 
-      {wildcardRows.length > 0 && (
+      {viewMode === 'table' && wildcardRows.length > 0 && (
         <div className='mt-4'>
           <Text type='tertiary' size='small' className='mb-1 block'>
             {t('通配规则（影响面大，单独列出）')}
@@ -588,30 +860,32 @@ export default function ModelRatioEditor({
         </div>
       )}
 
-      <div className='mt-4'>
-        {wildcardRows.length > 0 && (
-          <Text type='tertiary' size='small' className='mb-1 block'>
-            {t('精确规则')}
-          </Text>
-        )}
-        <CardTable
-          columns={columns}
-          dataSource={pagedExactRows}
-          rowKey='_id'
-          size='small'
-          pagination={{
-            currentPage: safePage,
-            pageSize: PAGE_SIZE,
-            total: exactRows.length,
-            onPageChange: setPage,
-          }}
-          empty={
-            <Text type='tertiary'>
-              {t('该分组暂无模型折扣，所有模型按分组基础倍率计费')}
+      {viewMode === 'table' && (
+        <div className='mt-4'>
+          {wildcardRows.length > 0 && (
+            <Text type='tertiary' size='small' className='mb-1 block'>
+              {t('精确规则')}
             </Text>
-          }
-        />
-      </div>
+          )}
+          <CardTable
+            columns={columns}
+            dataSource={pagedExactRows}
+            rowKey='_id'
+            size='small'
+            pagination={{
+              currentPage: safePage,
+              pageSize: PAGE_SIZE,
+              total: exactRows.length,
+              onPageChange: setPage,
+            }}
+            empty={
+              <Text type='tertiary'>
+                {t('该分组暂无模型折扣，所有模型按分组基础倍率计费')}
+              </Text>
+            }
+          />
+        </div>
+      )}
 
       {duplicates.size > 0 && (
         <Text type='warning' size='small' className='mt-2 block'>

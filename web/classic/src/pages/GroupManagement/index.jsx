@@ -364,6 +364,7 @@ export default function GroupManagementPage() {
                   value={inputs.GroupModelRatio}
                   staleRules={healthMap[activeGroup]?.stale_rules || []}
                   onChange={(v) => setField('GroupModelRatio', v)}
+                  syncTargets={groupNames}
                 />
               </div>
             </Tabs.TabPane>
@@ -407,6 +408,7 @@ export default function GroupManagementPage() {
                   onChange={(v) => setField('UserGroupModelRatio', v)}
                   modelsEndpoint='/api/group/models'
                   allowOverride={false}
+                  syncTargets={configuredTiers}
                   texts={{
                     emptyHint: t('请先选择或输入一个用户档'),
                     banner: (
