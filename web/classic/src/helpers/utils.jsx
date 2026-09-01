@@ -947,17 +947,21 @@ export const calculateModelPrice = ({
 
   if (record.quota_type === 1) {
     // 按次计费
-    const priceUSD = parseFloat(record.model_price) * usedGroupRatio;
-    const rawDisplayPrice = displayPrice(priceUSD, 12);
-    const symbol = rawDisplayPrice.replace(/[-\d.,\s]/g, '');
-    const numericPrice = Number(rawDisplayPrice.replace(/[^0-9.-]/g, ''));
-    const displayVal = `${symbol}${formatPriceWithCeiling(
-      numericPrice,
-      precision,
-    )}`;
+    const formatPerCall = (usd) => {
+      const raw = displayPrice(usd, 12);
+      const symbol = raw.replace(/[-\d.,\s]/g, '');
+      const numeric = Number(raw.replace(/[^0-9.-]/g, ''));
+      return `${symbol}${formatPriceWithCeiling(numeric, precision)}`;
+    };
+    const basePriceUSD = parseFloat(record.model_price);
+    const priceUSD = basePriceUSD * usedGroupRatio;
 
     return {
-      price: displayVal,
+      price: formatPerCall(priceUSD),
+      // 折前价：少乘一个分组倍率，口径同按量计费的 originalInputPrice。
+      // 自建的媒体类模型几乎全是按次计费，也正是折扣力度最大的一批（5 折），
+      // 漏了这一项的结果是打折最狠的模型反而看不到划线原价。
+      originalPrice: usedGroupRatio < 1 ? formatPerCall(basePriceUSD) : null,
       points: {
         // 按次价 ceil：一次调用一次结算，实际就烧 ceil(积分价) 个整积分，
         // ceil 显示的即真实扣费（floor 会把不足 1 积分的按次价显示成免费）
@@ -1149,6 +1153,7 @@ export const getModelPriceItems = (priceData, t, quotaDisplayType = 'USD') => {
         label: t('模型价格'),
         value: priceData.price,
         suffix: ` / ${t('次')}`,
+        originalValue: priceData.originalPrice,
       },
     ].filter(
       (item) =>

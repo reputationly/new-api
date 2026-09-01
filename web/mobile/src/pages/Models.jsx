@@ -549,7 +549,25 @@ const Models = () => {
                 {isDynamic(detail) ? (
                   '动态计费：按用量阶梯表达式实时计算，详细规则请在电脑端模型广场查看'
                 ) : detail.quota_type === 1 ? (
-                  `单次价格：${displayPrice(detail.model_price * detailPricingGroup.ratio)}`
+                  // 划线原价的口径同下面按量计费那支：少乘一个分组倍率。
+                  // 自建媒体模型几乎全是按次，折扣力度也最大，不给对比价看不出来。
+                  <div>
+                    单次价格：
+                    {detailPricingGroup.ratio < 1 && (
+                      <span
+                        style={{
+                          color: '#9aa1ad',
+                          textDecoration: 'line-through',
+                          marginRight: 4,
+                        }}
+                      >
+                        {displayPrice(detail.model_price)}
+                      </span>
+                    )}
+                    {displayPrice(
+                      detail.model_price * detailPricingGroup.ratio,
+                    )}
+                  </div>
                 ) : (
                   // 有折扣时给划线原价，让「便宜了多少」看得见；无折扣时
                   // originalInputPrice 为 null，渲染成和以前一样的单价行。
