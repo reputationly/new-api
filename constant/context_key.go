@@ -79,4 +79,14 @@ const (
 	// Sub-account parent id — written alongside the KYC keys by
 	// userCache.WriteContext (relay chain). >0 表示当前用户是某企业主账户的只读子账户。
 	ContextKeyUserParentId ContextKey = "user_parent_id"
+
+	// ContextKeySyncImageOBSKeys 同步生图链路把成品落进 OBS 后留下的对象 key 列表。
+	// 由各渠道的图片响应处理写入（自建走 gpustackplus 适配器，第三方走
+	// OpenaiHandlerWithUsage），ImageHelper 在结算后读它给任务记录填结果引用。
+	// 签名 URL 不能存库（有有效期），存的是 key，查询时实时签发。
+	ContextKeySyncImageOBSKeys ContextKey = "sync_image_obs_keys"
+
+	// ContextKeySyncConsumedQuota PostTextConsumeQuota 实际结算掉的额度。
+	// 同步生图的任务记录要在结算之后才知道扣了多少，而结算函数本身不返回值。
+	ContextKeySyncConsumedQuota ContextKey = "sync_consumed_quota"
 )

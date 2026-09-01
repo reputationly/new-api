@@ -131,6 +131,10 @@ type Properties struct {
 	// 任务写入（其存在本身就是「这是一个 v2 任务」的判据，列表接口据此筛选）。
 	// Properties 是 gorm:"type:json" 列，加字段无需迁移，老行反序列化成零值。
 	MiniMaxV2 *MiniMaxV2Properties `json:"minimax_v2,omitempty"`
+	// SyncMode 标记这条记录来自同步端点（出生即终态，不经轮询）。
+	// 只为排查留档，不参与任何筛选、也不在任务日志里展示——对用户来说
+	// 「我调 API 出了图，日志里有一条已完成的图片任务」，走同步还是异步是网关内部的事。
+	SyncMode bool `json:"sync_mode,omitempty"`
 }
 
 // MiniMaxV2Properties 冻结 v2 查询接口要回显的请求维度与用量。

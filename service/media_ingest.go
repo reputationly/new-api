@@ -103,29 +103,36 @@ func ResolveResultURL(ctx context.Context, raw string) string {
 	return mediastore.ResolveResultURL(ctx, raw)
 }
 
-// PersistImageNFSToOBS 把一张成品图（nfs_path）落 OBS 并返回实时签名 URL。
-// 用于同步生图链路（/v1/images/generations，无 Task 记录，当场返回 URL）。
+// PersistImageNFSToOBS 把一张成品图（nfs_path）落 OBS 并返回实时签名 URL 与对象 key。
+// 用于同步生图链路（/v1/images/generations，当场返回 URL）。
 // 总开关关闭 / 路径非法 / 落盘失败均返回错误——同步链路必须拿到可访问 URL，不做静默降级。
-func PersistImageNFSToOBS(ctx context.Context, userID int, nfsPath string) (string, error) {
+//
+// key 一并回吐是给同步任务留档用的：签名 URL 有效期有限、不能存库，任务表存的是
+// obs://<key> 占位符，查询时实时签发（与异步链路同一套，见 relay/image_task_response.go）。
+func PersistImageNFSToOBS(ctx context.Context, userID int, nfsPath string) (signedURL string, objectKey string, err error) {
 	if !mediastore.Enabled() {
-		return "", fmt.Errorf("media storage 未启用，无法对外提供生图结果 URL")
+		return "", "", fmt.Errorf("media storage 未启用，无法对外提供生图结果 URL")
 	}
 	s := system_setting.GetMediaStorageSettings()
 	if !s.IngestNFSPath {
-		return "", fmt.Errorf("nfs_path 落盘已关闭")
+		return "", "", fmt.Errorf("nfs_path 落盘已关闭")
 	}
 	root := s.NFSRoot()
 	if !isUnderRoot(root, nfsPath) {
-		return "", fmt.Errorf("nfs_path %q 不在挂载根 %q 之下", nfsPath, root)
+		return "", "", fmt.Errorf("nfs_path %q 不在挂载根 %q 之下", nfsPath, root)
 	}
 	key := mediastore.KeyFromNFSPath(root, nfsPath)
 	meta := map[string]string{
 		"user-id": strconv.Itoa(userID),
 	}
 	if err := mediastore.Persist(ctx, key, mediastore.PersistSource{NFSPath: nfsPath}, meta); err != nil {
-		return "", fmt.Errorf("落盘 OBS 失败: %w", err)
+		return "", "", fmt.Errorf("落盘 OBS 失败: %w", err)
 	}
-	return mediastore.Sign(ctx, key)
+	signed, err := mediastore.Sign(ctx, key)
+	if err != nil {
+		return "", "", err
+	}
+	return signed, key, nil
 }
 
 // RewriteImageResponseToOBS 把一份 OpenAI 图片响应里的第三方结果统一搬到 OBS（§一、目标）。
@@ -139,9 +146,13 @@ func PersistImageNFSToOBS(ctx context.Context, userID int, nfsPath string) (stri
 // 改写走 map[string]json.RawMessage 外科手术式替换，只动 data[i].url / data[i].b64_json
 // 两个字段——顶层 usage、逐项 revised_prompt 等未建模字段原样保留，不因重编码丢失。
 // 返回改写后的响应体；若总开关关闭 / 无可搬项 / 解析失败，原样返回入参。
-func RewriteImageResponseToOBS(ctx context.Context, userID, channelID int, modelName, responseFormat string, body []byte) []byte {
+//
+// 第二个返回值是本次落盘的对象 key（按 data[] 顺序），供同步链路把结果留档进任务表；
+// 未落盘的项（透传 / 已是我方 OBS / b64 直通 / 落盘失败）不在其中，所以它可能比 data[] 短，
+// 甚至为空 —— 调用方必须容忍「有响应但没有 key」。
+func RewriteImageResponseToOBS(ctx context.Context, userID, channelID int, modelName, responseFormat string, body []byte) ([]byte, []string) {
 	if !mediastore.Enabled() || len(body) == 0 {
-		return body
+		return body, nil
 	}
 	wantB64 := strings.EqualFold(responseFormat, "b64_json")
 	// 渠道配了透传：上游给的是公网可直达的 URL，原样交给客户端，不中转。
@@ -150,14 +161,15 @@ func RewriteImageResponseToOBS(ctx context.Context, userID, channelID int, model
 
 	var envelope map[string]json.RawMessage
 	if err := common.Unmarshal(body, &envelope); err != nil || len(envelope["data"]) == 0 {
-		return body
+		return body, nil
 	}
 	var items []map[string]json.RawMessage
 	if err := common.Unmarshal(envelope["data"], &items); err != nil || len(items) == 0 {
-		return body
+		return body, nil
 	}
 
 	changed := false
+	var keys []string
 	for _, item := range items {
 		urlStr := jsonRawString(item["url"])
 		b64Str := jsonRawString(item["b64_json"])
@@ -169,13 +181,14 @@ func RewriteImageResponseToOBS(ctx context.Context, userID, channelID int, model
 			if mediastore.IsOwnOBSURL(urlStr) {
 				continue // 已是我方 OBS，跳过
 			}
-			signed, err := persistThirdPartyImage(ctx, userID, modelName, mediastore.PersistSource{UpstreamURL: urlStr}, extFromURL(urlStr))
+			signed, key, err := persistImageToOBS(ctx, userID, modelName, mediastore.PersistSource{UpstreamURL: urlStr}, extFromURL(urlStr))
 			if err != nil {
 				common.SysError("mediastore: rewrite image url failed, keep upstream url: " + err.Error())
 				continue // OBS 不可用 → 降级保留上游 url
 			}
 			setJSONRawString(item, "url", signed)
 			delete(item, "b64_json")
+			keys = append(keys, key)
 			changed = true
 		case b64Str != "":
 			if wantB64 {
@@ -185,29 +198,30 @@ func RewriteImageResponseToOBS(ctx context.Context, userID, channelID int, model
 			if decErr != nil {
 				continue
 			}
-			signed, err := persistThirdPartyImage(ctx, userID, modelName, mediastore.PersistSource{Data: raw}, "png")
+			signed, key, err := persistImageToOBS(ctx, userID, modelName, mediastore.PersistSource{Data: raw}, "png")
 			if err != nil {
 				common.SysError("mediastore: rewrite image b64 failed, keep b64: " + err.Error())
 				continue
 			}
 			setJSONRawString(item, "url", signed)
 			delete(item, "b64_json")
+			keys = append(keys, key)
 			changed = true
 		}
 	}
 	if !changed {
-		return body
+		return body, nil
 	}
 	newData, err := common.Marshal(items)
 	if err != nil {
-		return body
+		return body, nil
 	}
 	envelope["data"] = newData
 	out, err := common.Marshal(envelope)
 	if err != nil {
-		return body
+		return body, nil
 	}
-	return out
+	return out, keys
 }
 
 // jsonRawString 从 RawMessage 中取 JSON 字符串值；非字符串/缺失返回空。
@@ -230,10 +244,15 @@ func setJSONRawString(m map[string]json.RawMessage, key, val string) {
 }
 
 // persistThirdPartyImage 为第三方图片构造 Key 并落盘，返回签名 URL。
-func persistThirdPartyImage(ctx context.Context, userID int, modelName string, src mediastore.PersistSource, ext string) (string, error) {
+// persistImageToOBS 落盘接缝。mediastore 的包级函数在没有真 OBS 时无法打桩，
+// 单测通过替换它注入假实现（手法与 relay/task_media_offload.go 的 defaultUploader 一致）。
+var persistImageToOBS = persistThirdPartyImage
+
+// 返回签名 URL 与对象 key；key 供同步任务留档（理由见 PersistImageNFSToOBS）。
+func persistThirdPartyImage(ctx context.Context, userID int, modelName string, src mediastore.PersistSource, ext string) (string, string, error) {
 	s := system_setting.GetMediaStorageSettings()
 	if src.UpstreamURL != "" && !s.IngestUpstreamURL {
-		return "", fmt.Errorf("上游 URL 落盘已关闭")
+		return "", "", fmt.Errorf("上游 URL 落盘已关闭")
 	}
 	if ext == "" {
 		ext = "png"
@@ -242,9 +261,13 @@ func persistThirdPartyImage(ctx context.Context, userID int, modelName string, s
 	key := mediastore.BuildKey("t2i", modelName, userID, taskID, ext, time.Now())
 	meta := map[string]string{"user-id": strconv.Itoa(userID)}
 	if err := mediastore.Persist(ctx, key, src, meta); err != nil {
-		return "", err
+		return "", "", err
 	}
-	return mediastore.Sign(ctx, key)
+	signed, err := mediastore.Sign(ctx, key)
+	if err != nil {
+		return "", "", err
+	}
+	return signed, key, nil
 }
 
 func extFromURL(rawURL string) string {

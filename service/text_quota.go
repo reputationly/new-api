@@ -376,6 +376,8 @@ func PostTextConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, us
 	if err := SettleBilling(ctx, relayInfo, summary.Quota); err != nil {
 		logger.LogError(ctx, "error settling billing: "+err.Error())
 	}
+	// 同步生图的任务记录要在结算之后才知道扣了多少，而本函数不返回值。
+	common.SetContextKey(ctx, constant.ContextKeySyncConsumedQuota, summary.Quota)
 
 	logModel := summary.ModelName
 	if strings.HasPrefix(logModel, "gpt-4-gizmo") {

@@ -611,11 +611,12 @@ func (a *Adaptor) DoResponse(c *gin.Context, resp *http.Response, info *relaycom
 		return nil, types.NewError(errors.New("生图完成但门面未返回 nfs_path"), types.ErrorCodeBadResponse)
 	}
 
-	// 4) 落 OBS,拿签名 URL。
-	signed, sErr := service.PersistImageNFSToOBS(c.Request.Context(), info.UserId, st.NFSPath)
+	// 4) 落 OBS,拿签名 URL。obsKey 留给同步任务记录当结果引用(签名 URL 有有效期、不能存库)。
+	signed, obsKey, sErr := service.PersistImageNFSToOBS(c.Request.Context(), info.UserId, st.NFSPath)
 	if sErr != nil {
 		return nil, types.NewError(sErr, types.ErrorCodeBadResponse)
 	}
+	relaycommon.AppendSyncImageOBSKeys(c, obsKey)
 
 	// 5) 组 OpenAI 图片响应写回客户端。
 	imgResp := dto.ImageResponse{

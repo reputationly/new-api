@@ -22,6 +22,9 @@ import (
 
 func ImageHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *types.NewAPIError) {
 	info.InitChannelMeta(c)
+	// 本函数每次 relay 尝试被调用一次，这里即「尝试开始」。清掉上一次尝试落盘留下的
+	// OBS key，否则同步任务记录会指向上一次尝试（可能是另一个渠道）的图。
+	relaycommon.ResetSyncImageOBSKeys(c)
 
 	imageReq, ok := info.Request.(*dto.ImageRequest)
 	if !ok {
@@ -153,5 +156,8 @@ func ImageHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *type
 	}
 
 	service.PostTextConsumeQuota(c, info, usage.(*dto.Usage), logContent)
+	// 同步生图也进任务日志（见 image_sync_task.go）。必须在结算之后：任务记录的 quota
+	// 由 PostTextConsumeQuota 算出并留在 context 里。
+	recordSyncImageTask(c, info)
 	return nil
 }
