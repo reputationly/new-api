@@ -42,6 +42,11 @@ import {
   videoSecondsRank,
   flattenVideoMatrix,
 } from './videoMatrix';
+// 折扣展示口径同样是纯计算，拆出去给手机端共用（helpers/utils.jsx 被 mobile 的
+// vite 配置整模块 shim 掉，放这里手机端拿不到）
+import { getGroupDiscountInfo } from './discount';
+
+export { getGroupDiscountInfo };
 
 const HTMLToastContent = ({ htmlContent }) => {
   return <div dangerouslySetInnerHTML={{ __html: htmlContent }} />;
@@ -898,6 +903,16 @@ export const calculateModelPrice = ({
 
     return {
       inputPrice,
+      // 折前价：少乘一个 usedGroupRatio。只给输入/输出出对比价——缓存、图片、音频
+      // 那几项同样是折后价，但每行都划一道会把价格区挤成一团，顶部的折扣标签统管全部。
+      originalInputPrice:
+        usedGroupRatio < 1 ? formatTokenPrice(record.model_ratio * 2) : null,
+      originalCompletionPrice:
+        usedGroupRatio < 1
+          ? formatTokenPrice(
+              record.model_ratio * 2 * Number(record.completion_ratio),
+            )
+          : null,
       points: pointsMap,
       completionPrice: formatTokenPrice(
         inputRatioPriceUSD * Number(record.completion_ratio),
@@ -1080,12 +1095,16 @@ export const getModelPriceItems = (priceData, t, quotaDisplayType = 'USD') => {
         label: t('输入价格'),
         value: priceData.inputPrice,
         suffix: unitSuffix,
+        // 折前价，仅输入/输出两项给。缓存、图片、音频同样是折后价，但逐行划线
+        // 会把价格区挤成一团——折扣力度由模型名旁的标签统一表达。
+        originalValue: priceData.originalInputPrice,
       },
       {
         key: 'completion',
         label: t('输出价格'),
         value: priceData.completionPrice,
         suffix: unitSuffix,
+        originalValue: priceData.originalCompletionPrice,
       },
       {
         key: 'cache',
@@ -1281,7 +1300,19 @@ export const formatPriceInfo = (priceData, t, quotaDisplayType = 'USD') => {
     <>
       {items.map((item) => (
         <span key={item.key} style={{ color: 'var(--semi-color-text-1)' }}>
-          {item.label} {item.value}
+          {item.label}{' '}
+          {item.originalValue && (
+            <span
+              style={{
+                color: 'var(--semi-color-text-2)',
+                textDecoration: 'line-through',
+                marginRight: 4,
+              }}
+            >
+              {item.originalValue}
+            </span>
+          )}
+          {item.value}
           {item.suffix}
         </span>
       ))}

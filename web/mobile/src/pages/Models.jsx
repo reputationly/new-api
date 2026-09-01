@@ -16,6 +16,7 @@ import { API } from '@classic/helpers/api';
 // videoMatrix.js 不引 UI 依赖，两端共用同一份，不必再手抄同步。
 import { flattenVideoMatrix } from '@classic/helpers/videoMatrix';
 import { formatPriceWithCeiling } from '@classic/helpers/priceFormat';
+import { getGroupDiscountInfo, DISCOUNT_HEX } from '@classic/helpers/discount';
 import {
   MODEL_CATEGORIES,
   buildModelCategoryIndex,
@@ -184,7 +185,32 @@ const Models = () => {
   // 原先这里是手抄的一份拷贝，两端各改一次就会漂移。
   const formatPrice = formatPriceWithCeiling;
 
+  // 折扣标签。口径与 PC 端共用 getGroupDiscountInfo，两端各写一份必然漂移，
+  // 而漂移的表现是同一个模型在手机和电脑上显示不同的折扣。
+  const discountTag = (ratio) => {
+    const d = getGroupDiscountInfo(ratio);
+    if (!d) return null;
+    const c = DISCOUNT_HEX[d.color] || DISCOUNT_HEX.amber;
+    return (
+      <span
+        style={{
+          flexShrink: 0,
+          fontSize: 11,
+          lineHeight: '16px',
+          padding: '0 6px',
+          borderRadius: 8,
+          background: c.bg,
+          color: c.fg,
+        }}
+      >
+        {d.text}
+      </span>
+    );
+  };
+
   const inputPricePerM = (m) => m.model_ratio * 2 * resolveGroupRatio(m).ratio;
+  // 折前价：少乘一个分组倍率。仅在有折扣时给，用于详情里的划线对比。
+  const originalInputPricePerM = (m) => m.model_ratio * 2;
   const displayPrice = (usdValue) =>
     `${currencyConfig.symbol}${formatPrice(usdValue * currencyConfig.rate)}`;
 
@@ -308,14 +334,24 @@ const Models = () => {
               <div style={{ flex: 1, minWidth: 0 }}>
                 <div
                   style={{
-                    fontWeight: 500,
-                    fontSize: 14.5,
-                    overflow: 'hidden',
-                    textOverflow: 'ellipsis',
-                    whiteSpace: 'nowrap',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 6,
+                    minWidth: 0,
                   }}
                 >
-                  {m.model_name}
+                  <div
+                    style={{
+                      fontWeight: 500,
+                      fontSize: 14.5,
+                      overflow: 'hidden',
+                      textOverflow: 'ellipsis',
+                      whiteSpace: 'nowrap',
+                    }}
+                  >
+                    {m.model_name}
+                  </div>
+                  {discountTag(resolveGroupRatio(m).ratio)}
                 </div>
                 {vendorName(m.vendor_id) && (
                   <div
@@ -510,11 +546,54 @@ const Models = () => {
               </div>
             ) : (
               <div style={{ fontSize: 14, color: '#374151', marginTop: 12 }}>
-                {isDynamic(detail)
-                  ? '动态计费：按用量阶梯表达式实时计算，详细规则请在电脑端模型广场查看'
-                  : detail.quota_type === 1
-                    ? `单次价格：${displayPrice(detail.model_price * detailPricingGroup.ratio)}`
-                    : `输入 ${displayPrice(inputPricePerM(detail))} / 1M Tokens · 输出 ${displayPrice(inputPricePerM(detail) * (detail.completion_ratio || 1))} / 1M Tokens`}
+                {isDynamic(detail) ? (
+                  '动态计费：按用量阶梯表达式实时计算，详细规则请在电脑端模型广场查看'
+                ) : detail.quota_type === 1 ? (
+                  `单次价格：${displayPrice(detail.model_price * detailPricingGroup.ratio)}`
+                ) : (
+                  // 有折扣时给划线原价，让「便宜了多少」看得见；无折扣时
+                  // originalInputPrice 为 null，渲染成和以前一样的单价行。
+                  <div
+                    style={{ display: 'flex', flexDirection: 'column', gap: 4 }}
+                  >
+                    <div>
+                      输入{' '}
+                      {detailPricingGroup.ratio < 1 && (
+                        <span
+                          style={{
+                            color: '#9aa1ad',
+                            textDecoration: 'line-through',
+                            marginRight: 4,
+                          }}
+                        >
+                          {displayPrice(originalInputPricePerM(detail))}
+                        </span>
+                      )}
+                      {displayPrice(inputPricePerM(detail))} / 1M Tokens
+                    </div>
+                    <div>
+                      输出{' '}
+                      {detailPricingGroup.ratio < 1 && (
+                        <span
+                          style={{
+                            color: '#9aa1ad',
+                            textDecoration: 'line-through',
+                            marginRight: 4,
+                          }}
+                        >
+                          {displayPrice(
+                            originalInputPricePerM(detail) *
+                              (detail.completion_ratio || 1),
+                          )}
+                        </span>
+                      )}
+                      {displayPrice(
+                        inputPricePerM(detail) * (detail.completion_ratio || 1),
+                      )}{' '}
+                      / 1M Tokens
+                    </div>
+                  </div>
+                )}
               </div>
             )}
             <div style={{ fontSize: 12, color: '#9aa1ad', marginTop: 6 }}>

@@ -41,6 +41,7 @@ import {
   formatDynamicPriceSummary,
   formatVideoMatrixSummary,
   getLobeHubIcon,
+  getGroupDiscountInfo,
 } from '../../../../../helpers';
 import PricingCardSkeleton from './PricingCardSkeleton';
 import { useMinimumLoadingTime } from '../../../../../hooks/common/useMinimumLoadingTime';
@@ -323,6 +324,27 @@ const PricingCardView = ({
                   </div>
 
                   <div className='flex items-center space-x-2 ml-3'>
+                    {/*
+                      折扣标签放操作区而不是跟在模型名后面：模型名那行是 truncate 的，
+                      长名字会把标签挤没，而这里的位置固定、每张卡片对齐。
+                    */}
+                    {(() => {
+                      const d = getGroupDiscountInfo(priceData?.usedGroupRatio);
+                      if (!d) return null;
+                      return (
+                        <Tooltip
+                          content={t('{{group}} 分组，已按 {{text}} 计价', {
+                            group: priceData.usedGroup,
+                            text: d.text,
+                          })}
+                        >
+                          <Tag color={d.color} shape='circle' size='small'>
+                            {d.text}
+                          </Tag>
+                        </Tooltip>
+                      );
+                    })()}
+
                     {/* 复制按钮 */}
                     <Button
                       size='small'

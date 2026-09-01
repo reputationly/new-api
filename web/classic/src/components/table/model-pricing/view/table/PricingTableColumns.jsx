@@ -27,6 +27,7 @@ import {
   getModelPriceItems,
   formatVideoMatrixSummary,
   getLobeHubIcon,
+  getGroupDiscountInfo,
 } from '../../../../../helpers';
 import {
   renderLimitedItems,
@@ -183,11 +184,30 @@ export const getPricingTableColumns = ({
     title: t('模型名称'),
     dataIndex: 'model_name',
     render: (text, record, index) => {
-      return renderModelTag(text, {
-        onClick: () => {
-          copyText(text);
-        },
-      });
+      // 折扣标签跟在模型名后面。这里没有 truncate，长名字会自然换行，
+      // 不会像卡片视图那样把标签挤掉。
+      const d = getGroupDiscountInfo(getPriceData(record)?.usedGroupRatio);
+      return (
+        <div className='flex items-center gap-1 flex-wrap'>
+          {renderModelTag(text, {
+            onClick: () => {
+              copyText(text);
+            },
+          })}
+          {d && (
+            <Tooltip
+              content={t('{{group}} 分组，已按 {{text}} 计价', {
+                group: getPriceData(record).usedGroup,
+                text: d.text,
+              })}
+            >
+              <Tag color={d.color} shape='circle' size='small'>
+                {d.text}
+              </Tag>
+            </Tooltip>
+          )}
+        </div>
+      );
     },
     onFilter: (value, record) =>
       record.model_name.toLowerCase().includes(value.toLowerCase()),
@@ -285,7 +305,13 @@ export const getPricingTableColumns = ({
         <div className='space-y-1'>
           {priceItems.map((item) => (
             <div key={item.key} className='text-gray-700'>
-              {item.label} {item.value}
+              {item.label}{' '}
+              {item.originalValue && (
+                <span className='mr-1 text-gray-400 line-through'>
+                  {item.originalValue}
+                </span>
+              )}
+              {item.value}
               {item.suffix}
             </div>
           ))}
