@@ -57,9 +57,12 @@ var (
 	lastGetPricingTime   time.Time
 	updatePricingLock    sync.Mutex
 
-	// 缓存映射：模型名 -> 启用分组 / 计费类型
-	modelEnableGroups     = make(map[string][]string)
-	modelQuotaTypeMap     = make(map[string]int)
+	// 缓存映射：模型名 -> 启用分组 / 计费类型 / 提供它的渠道
+	modelEnableGroups = make(map[string][]string)
+	modelQuotaTypeMap = make(map[string]int)
+	// modelEnableChannels 供积分渠道白名单的**展示侧**判断：模型广场要标出哪些模型
+	// 能用积分抵扣。计费侧不读它——那边直接拿本次请求选中的 ChannelId 判，是精确的。
+	modelEnableChannels   = make(map[string][]int)
 	modelEnableGroupsLock = sync.RWMutex{}
 )
 
@@ -459,9 +462,25 @@ func updatePricing(imgRaw, vidRaw, audRaw, musRaw string) {
 	}
 
 	// 刷新缓存映射，供高并发快速查询
+	// 模型 -> 渠道（去重）。数据源就是上面那份 enableAbilities，顺手聚合，
+	// 不额外查库。
+	channelsByModel := make(map[string][]int)
+	seenChannel := make(map[string]map[int]bool)
+	for _, a := range enableAbilities {
+		if seenChannel[a.Model] == nil {
+			seenChannel[a.Model] = make(map[int]bool)
+		}
+		if seenChannel[a.Model][a.ChannelId] {
+			continue
+		}
+		seenChannel[a.Model][a.ChannelId] = true
+		channelsByModel[a.Model] = append(channelsByModel[a.Model], a.ChannelId)
+	}
+
 	modelEnableGroupsLock.Lock()
 	modelEnableGroups = make(map[string][]string)
 	modelQuotaTypeMap = make(map[string]int)
+	modelEnableChannels = channelsByModel
 	for _, p := range pricingMap {
 		modelEnableGroups[p.ModelName] = p.EnableGroup
 		modelQuotaTypeMap[p.ModelName] = p.QuotaType

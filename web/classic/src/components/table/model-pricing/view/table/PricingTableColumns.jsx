@@ -164,6 +164,7 @@ export const getPricingTableColumns = ({
         pointsEnabled: pointsConfig?.enabled,
         quotaPerPoint: pointsConfig?.quotaPerPoint,
         pointsEnabledGroups: pointsConfig?.enabledGroups,
+        pointsEnabledModels: pointsConfig?.enabledModels,
       });
       priceDataCache.set(record, cache);
     }

@@ -151,6 +151,27 @@ func GetPricing(c *gin.Context) {
 		}
 	}
 
+	// 渠道白名单开启后，光靠分组已经判不出某个模型能不能用积分——同一个分组下自建与
+	// 外采渠道并存。这里逐模型算一遍下发，页面才不会标着「可用积分」却实际扣余额。
+	//
+	// 未配置渠道白名单时下发 nil，前端据此退回「只看分组」的旧口径，行为不变。
+	//
+	// 判据是「该模型由任一白名单渠道提供」。当前 default / premium 挂的是同一批渠道，
+	// 所以这个近似是精确的；若将来两个分组的渠道分化，展示可能略宽于实扣——那时
+	// 应改为按 (分组, 模型) 下发。
+	var pointsEnabledModels []string
+	if pointsSetting.Enabled && len(pointsSetting.EnabledChannels) > 0 {
+		pointsEnabledModels = make([]string, 0, len(pricing))
+		for _, item := range pricing {
+			for _, ch := range model.GetModelEnableChannels(item.ModelName) {
+				if operation_setting.IsPointsEnabledForChannel(ch) {
+					pointsEnabledModels = append(pointsEnabledModels, item.ModelName)
+					break
+				}
+			}
+		}
+	}
+
 	c.JSON(200, gin.H{
 		"success":               true,
 		"data":                  pricing,
@@ -163,6 +184,8 @@ func GetPricing(c *gin.Context) {
 		"points_enabled":        pointsSetting.Enabled,
 		"quota_per_point":       pointsSetting.QuotaPerPoint,
 		"points_enabled_groups": pointsEnabledGroups,
+		// nil = 未启用渠道白名单，前端退回只看分组的旧口径
+		"points_enabled_models": pointsEnabledModels,
 		"pricing_version":       "a42d372ccf0b5dd13ecf71203521f9d2",
 	})
 }

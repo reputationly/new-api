@@ -30,9 +30,39 @@ export default function SettingsPoints(props) {
     'points_setting.kyc_verified_points': 0,
     'points_setting.kyc_inviter_points': 0,
     'points_setting.new_user_points': 0,
+    'points_setting.enabled_channels': [],
   });
   const refForm = useRef();
   const [inputsRow, setInputsRow] = useState(inputs);
+  const [channelOptions, setChannelOptions] = useState([]);
+
+  // 渠道下拉：让人选渠道名而不是背 ID。取法与使用日志的渠道筛选一致
+  // （useUsageLogsData.jsx:120）。
+  useEffect(() => {
+    let cancelled = false;
+    API.get('/api/channel/?p=0&page_size=1000')
+      .then((res) => {
+        if (cancelled) return;
+        const { success, data } = res.data || {};
+        const items = success
+          ? Array.isArray(data?.items)
+            ? data.items
+            : Array.isArray(data)
+              ? data
+              : []
+          : [];
+        setChannelOptions(
+          items.map((c) => ({
+            label: `${c.id} - ${c.name || '未命名'}`,
+            value: c.id,
+          })),
+        );
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   function handleFieldChange(fieldName) {
     return (value) => {
@@ -41,10 +71,26 @@ export default function SettingsPoints(props) {
   }
 
   function onSubmit() {
-    const updateArray = compareObjects(inputs, inputsRow);
+    // compareObjects 用 !== 逐个比属性，数组永远判为「已变」（引用不同）。
+    // 这个表单此前全是标量字段所以没暴露；enabled_channels 是第一个数组字段，
+    // 不额外按值比的话，每次保存都会多发一次同值的 PUT，而且「你似乎并没有修改
+    // 什么」的提示从此再不会出现——用户改错了什么也得不到反馈。
+    //
+    // 排序后比较：渠道的先后顺序不影响语义，不排的话调换选择顺序会被误判为修改。
+    const sameArray = (a, b) =>
+      Array.isArray(a) &&
+      Array.isArray(b) &&
+      JSON.stringify([...a].sort()) === JSON.stringify([...b].sort());
+    const updateArray = compareObjects(inputs, inputsRow).filter(
+      (item) => !sameArray(inputs[item.key], inputsRow[item.key]),
+    );
     if (!updateArray.length) return showWarning(t('你似乎并没有修改什么'));
     const requestQueue = updateArray.map((item) => {
-      const value = String(inputs[item.key]);
+      // 数组字段必须发 JSON：后端 config.updateConfigFromMap 对 Slice 走
+      // json.Unmarshal，String([1,18]) 得到的 "1,18" 解析失败后是**静默 continue**，
+      // 表现为点了保存、提示成功、配置却没变。
+      const raw = inputs[item.key];
+      const value = Array.isArray(raw) ? JSON.stringify(raw) : String(raw);
       return API.put('/api/option/', {
         key: item.key,
         value,
@@ -70,6 +116,16 @@ export default function SettingsPoints(props) {
     const currentInputs = {};
     for (let key in props.options) {
       if (Object.keys(inputs).includes(key)) {
+        // 数组字段存的是 JSON 串，直接塞给 Select 会渲染成一个字符串选项
+        if (Array.isArray(inputs[key])) {
+          try {
+            const parsed = JSON.parse(props.options[key] || '[]');
+            currentInputs[key] = Array.isArray(parsed) ? parsed : [];
+          } catch {
+            currentInputs[key] = [];
+          }
+          continue;
+        }
         currentInputs[key] = props.options[key];
       }
     }
@@ -168,6 +224,26 @@ export default function SettingsPoints(props) {
                   )}
                   min={0}
                   disabled={!inputs['points_setting.enabled']}
+                />
+              </Col>
+            </Row>
+            <Row gutter={16}>
+              <Col xs={24} sm={24} md={16} lg={16} xl={16}>
+                <Form.Select
+                  field={'points_setting.enabled_channels'}
+                  label={t('允许积分抵扣的渠道')}
+                  placeholder={t('留空 = 不限制渠道')}
+                  multiple
+                  filter
+                  style={{ width: '100%' }}
+                  optionList={channelOptions}
+                  onChange={handleFieldChange(
+                    'points_setting.enabled_channels',
+                  )}
+                  disabled={!inputs['points_setting.enabled']}
+                  extraText={t(
+                    '积分该不该抵，取决于这次调用走了哪条供应链：自建渠道花的是自己的算力，外采渠道花的是供应商账单。分组合并后同一分组下两种渠道并存，只靠分组白名单已经分不开。留空表示不做渠道限制（与本功能上线前行为一致）。',
+                  )}
                 />
               </Col>
             </Row>

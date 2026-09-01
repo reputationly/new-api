@@ -8,6 +8,7 @@ import (
 	"sync"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/logger"
 	"github.com/QuantumNous/new-api/model"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
@@ -410,8 +411,27 @@ func NewBillingSession(c *gin.Context, relayInfo *relaycommon.RelayInfo, preCons
 		// 刻意不判实名：RequireKyc 只是「发放侧」的门（签到、邀请人赠分），进了账的积分
 		// 一律可花。手里有余额却因为没实名花不掉，对用户是没收；防薅羊毛的位置在发放侧
 		// 与白名单分组，不在这里。
+		// 渠道白名单是第二道：分组合并后（docs §10.2）default 组下自建与外采渠道
+		// 并存，只判分组等于拿免费积分去买外采算力。空白名单时这层恒为 true，
+		// 行为与加这层之前一致。
+		//
+		// 渠道号从 context 取而**不是** relayInfo.ChannelId：后者属于内嵌指针
+		// ChannelMeta，而本函数所在的 PreConsumeBilling（controller/relay.go:193）
+		// 跑在 InitChannelMeta 之前，那时 ChannelMeta 仍是 nil，直接读会 panic
+		// （同一个坑见 service/upstream_moderation.go:81）。context 里的值由
+		// middleware.Distribute 在进 handler 前就写好了，这里一定拿得到。
+		//
+		// 取不到时得 0，白名单非空则判定为不允许——降级方向是「不用积分、扣余额」，
+		// 保守且不漏钱。
+		//
+		// ⚠️ 已知边界：这里判的是**预扣费时**选中的渠道。跨渠道重试若从自建切到
+		// 外采，本次仍按预扣时的 funding 类型结算，会出现用积分付外采的钱。
+		// 同分组内重试才可能触发、且单笔封顶在预扣额度，暂不处理；真要堵需要把
+		// funding 类型的决策推迟到结算，那会改动 BillingSession 的核心时序。
+		channelId := common.GetContextKeyInt(c, constant.ContextKeyChannelId)
 		useHybrid := operation_setting.GetPointsSetting().Enabled &&
-			operation_setting.IsPointsEnabledForGroup(relayInfo.UsingGroup)
+			operation_setting.IsPointsEnabledForGroup(relayInfo.UsingGroup) &&
+			operation_setting.IsPointsEnabledForChannel(channelId)
 		userPoints := 0
 		if useHybrid {
 			if p, perr := model.GetUserPoints(relayInfo.UserId, false); perr == nil {

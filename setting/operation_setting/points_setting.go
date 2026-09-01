@@ -12,13 +12,25 @@ import (
 // PointsSetting 积分系统配置。积分是独立于 Quota 余额的营销赠送钱包，
 // 内部以 quota unit 记账（与 Quota 同单位），1 积分 = 1 分钱（初始值）。
 type PointsSetting struct {
-	Enabled           bool     `json:"enabled"`             // 积分系统总开关
-	RequireKyc        bool     `json:"require_kyc"`         // 未实名用户不得参加积分活动（只卡发放：签到、邀请人赠分；不卡消费）
-	QuotaPerPoint     float64  `json:"quota_per_point"`     // 1 积分对应 quota unit，默认 ≈684.93
-	EnabledGroups     []string `json:"enabled_groups"`      // 允许积分抵扣的分组白名单（空=所有分组只扣余额）
-	KycVerifiedPoints int      `json:"kyc_verified_points"` // 实名通过赠送积分数（本人），0=关闭
-	KycInviterPoints  int      `json:"kyc_inviter_points"`  // 被邀请用户实名通过时邀请人赠送积分数，0=关闭
-	NewUserPoints     int      `json:"new_user_points"`     // 新用户注册赠送积分数，0=关闭；不受 RequireKyc 约束
+	Enabled       bool     `json:"enabled"`         // 积分系统总开关
+	RequireKyc    bool     `json:"require_kyc"`     // 未实名用户不得参加积分活动（只卡发放：签到、邀请人赠分；不卡消费）
+	QuotaPerPoint float64  `json:"quota_per_point"` // 1 积分对应 quota unit，默认 ≈684.93
+	EnabledGroups []string `json:"enabled_groups"`  // 允许积分抵扣的分组白名单（空=所有分组只扣余额）
+	// EnabledChannels 允许积分抵扣的渠道白名单，空 = 不按渠道限制。
+	//
+	// 为什么需要它：分组合并成同一个池子（docs §10.2）之后，EnabledGroups 就不再
+	// 能区分「这次调用花的是谁的钱」——default 组下既有自建渠道也有外采渠道，一条
+	// 分组白名单把两者一起放行，等于拿免费送出的积分去买并行科技的算力。
+	//
+	// 为什么是渠道而不是模型：积分该不该抵，取决于这次调用走了哪条供应链，那是渠道
+	// 的属性。按模型配是用派生属性去近似它，且新上一个自建模型就要记得补一条，
+	// 漏了没人知道（swiftvr / seedvr2 的折扣就是这么从上线漏到下线的）。
+	//
+	// 空 = 不限制：升级当天行为与升级前逐位一致，配置收紧是运营的独立动作。
+	EnabledChannels   []int `json:"enabled_channels"`
+	KycVerifiedPoints int   `json:"kyc_verified_points"` // 实名通过赠送积分数（本人），0=关闭
+	KycInviterPoints  int   `json:"kyc_inviter_points"`  // 被邀请用户实名通过时邀请人赠送积分数，0=关闭
+	NewUserPoints     int   `json:"new_user_points"`     // 新用户注册赠送积分数，0=关闭；不受 RequireKyc 约束
 
 	// ChannelRewards 渠道积分奖励：按**邀请人**覆盖 NewUserPoints。
 	// 用渠道商自己的邀请链接注册的新人拿这里的数，其他人拿 NewUserPoints。
@@ -101,6 +113,7 @@ var pointsSetting = PointsSetting{
 	RequireKyc:        true,
 	QuotaPerPoint:     common.QuotaPerUnit / 730.0, // ≈684.93，1 积分 = 1 分钱
 	EnabledGroups:     []string{},
+	EnabledChannels:   []int{},
 	KycVerifiedPoints: 0,
 	KycInviterPoints:  0,
 	NewUserPoints:     0,
@@ -127,6 +140,25 @@ func IsPointsEnabledForGroup(group string) bool {
 	}
 	for _, g := range pointsSetting.EnabledGroups {
 		if g == group {
+			return true
+		}
+	}
+	return false
+}
+
+// IsPointsEnabledForChannel 判断某渠道的消费是否允许积分抵扣。
+//
+// 空白名单 = 不限制：这个字段是后加的，空值必须等价于「没有这层过滤」，
+// 否则升级那一刻所有人的积分会集体失效。
+//
+// 与 IsPointsEnabledForGroup 是 AND 关系：分组管「谁能用积分」，渠道管
+// 「积分能买什么」。两层都过才允许混扣。
+func IsPointsEnabledForChannel(channelId int) bool {
+	if len(pointsSetting.EnabledChannels) == 0 {
+		return true
+	}
+	for _, id := range pointsSetting.EnabledChannels {
+		if id == channelId {
 			return true
 		}
 	}

@@ -741,6 +741,9 @@ export const calculateModelPrice = ({
   pointsEnabled = false,
   quotaPerPoint = 0,
   pointsEnabledGroups = [],
+  // 允许积分抵扣的模型名单。null = 后端未启用渠道白名单，只按分组判（旧口径）。
+  // 分组合并之后单看分组会把外采模型也标成「可用积分」，实际扣的是余额。
+  pointsEnabledModels = null,
 }) => {
   // 1. 选择实际使用的分组
   let usedGroup = selectedGroup;
@@ -852,11 +855,17 @@ export const calculateModelPrice = ({
     // 积分价：仅当积分启用且该模型实际使用的分组在白名单时，按 quota unit 换算积分数。
     // 返回原始数值不取整——渲染点统一格式化：(0,1) 显示「<1 积分」（结算每笔至少烧
     // 1 积分，floor 成 0 会造成免费假象），≥1 floor 取整（积分不显示小数）
+    // 模型这层只在后端启用了渠道白名单时才生效（pointsEnabledModels 非 null），
+    // 否则维持只看分组的旧口径。
+    const modelAllowsPoints =
+      !Array.isArray(pointsEnabledModels) ||
+      pointsEnabledModels.includes(record.model_name);
     const usdToPoints = (usd) =>
       pointsEnabled &&
       quotaPerPoint > 0 &&
       Array.isArray(pointsEnabledGroups) &&
-      pointsEnabledGroups.includes(usedGroup)
+      pointsEnabledGroups.includes(usedGroup) &&
+      modelAllowsPoints
         ? (usd * getQuotaPerUnit()) / quotaPerPoint / unitDivisor
         : null;
     const pointsMap = {

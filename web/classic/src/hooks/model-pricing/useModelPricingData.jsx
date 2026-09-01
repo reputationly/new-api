@@ -276,6 +276,7 @@ export const useModelPricingData = () => {
       points_enabled,
       quota_per_point,
       points_enabled_groups,
+      points_enabled_models,
     } = res.data;
     if (success) {
       setGroupRatio(group_ratio);
@@ -296,6 +297,8 @@ export const useModelPricingData = () => {
         enabled: !!points_enabled,
         quotaPerPoint: Number(quota_per_point) || 0,
         enabledGroups: points_enabled_groups || [],
+        // null = 未启用渠道白名单，判定退回只看分组的旧口径
+        enabledModels: points_enabled_models ?? null,
       });
       setModelsFormat(data, group_ratio, vendorMap);
     } else {

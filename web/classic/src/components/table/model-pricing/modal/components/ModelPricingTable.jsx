@@ -70,6 +70,7 @@ const ModelPricingTable = ({
             pointsEnabled: pointsConfig?.enabled,
             quotaPerPoint: pointsConfig?.quotaPerPoint,
             pointsEnabledGroups: pointsConfig?.enabledGroups,
+            pointsEnabledModels: pointsConfig?.enabledModels,
           })
         : { inputPrice: '-', outputPrice: '-', price: '-' };
 

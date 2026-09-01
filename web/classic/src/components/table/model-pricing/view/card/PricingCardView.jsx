@@ -289,6 +289,7 @@ const PricingCardView = ({
             pointsEnabled: pointsConfig?.enabled,
             quotaPerPoint: pointsConfig?.quotaPerPoint,
             pointsEnabledGroups: pointsConfig?.enabledGroups,
+            pointsEnabledModels: pointsConfig?.enabledModels,
           });
 
           return (
