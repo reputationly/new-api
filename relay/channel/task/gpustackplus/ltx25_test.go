@@ -197,7 +197,7 @@ func TestLTX25SuggestedSizeIsOfficialBucket(t *testing.T) {
 	}
 }
 
-// 菜单上的五个桶必须条条自洽:合法、且 15 秒(统一上限)不超包络。
+// 菜单上的桶必须条条自洽:合法、且各自档位的最长时长不超包络。
 // 这是「上线菜单不会被自己的准入校验拒掉」的总闸 —— 破了就是配置一上线全站 400。
 func TestLTX25OfficialMenuPassesItsOwnGates(t *testing.T) {
 	for _, s := range [][2]int{
@@ -207,7 +207,7 @@ func TestLTX25OfficialMenuPassesItsOwnGates(t *testing.T) {
 		if err := ltx25ValidateSize(w, h); err != nil {
 			t.Fatalf("菜单尺寸 %dx%d 过不了尺寸校验: %v", w, h, err)
 		}
-		for _, d := range []int{5, 6, 10, 14, 15} {
+		for _, d := range []int{5, 6, 10, 14, ltx25MaxOutputSecFor(w, h)} {
 			frames := ltx25FramesForDuration(d, w, h, true)
 			if err := ltx25ValidateEnvelope(w, h, frames); err != nil {
 				t.Fatalf("菜单组合 %dx%d / %ds(%d 帧)过不了包络: %v", w, h, d, frames, err)
@@ -590,52 +590,68 @@ func TestLTX25TierCanvasAlwaysAligned(t *testing.T) {
 	}
 }
 
-// 对外时长上限是**统一的 15 秒**,不再按分辨率分档 —— 产品口径由 ltx25MaxOutputSec
-// 一个数说清楚,不再从包络反推。
+// 对外时长上限按档分两档:一阶段(≤704 短边)20 秒、两阶段(1080p/2K)15 秒。
+// 两档不同不是口径没定,是显存差着一个数量级 —— 同样 20 秒,720p 是 4.3e8,
+// 2K 要 1.72e9,而实测 2K 到 425 帧就 OOM。
 //
-// 按帧数比而不是比秒数:15 秒在 m=2 的尺寸上落 361 帧(15.04 s)、在奇数 P 的尺寸上落
-// 377 帧(15.71 s)。拿"15.0 秒"去卡后者会误伤它自己的 15 秒档。
-func TestLTX25UniformDurationCap(t *testing.T) {
+// 按帧数比而不是比秒数:上限秒数在 m=2 的尺寸上落 361/489 帧、在奇数 P 的尺寸上落
+// 377 帧(15.71 s)。拿"15.0 秒"这个数去卡后者会误伤它自己的 15 秒档。
+func TestLTX25PerTierDurationCap(t *testing.T) {
 	for _, c := range []struct {
 		size       string
+		maxSec     int
 		wantFrames int
 	}{
-		{"960x544", 361},   // m=2
-		{"1248x704", 361},  // m=2
-		{"1920x1088", 361}, // 两阶段,半画布 m=2
-		{"2496x1408", 361}, // 两阶段,半画布 m=2 —— 八题材压过的那一档
-		{"704x704", 361},   // m=1
-		{"544x544", 377},   // 奇数 P,m=4 → 15.71 s
+		{"1248x704", 20, 489},  // 720p:实测 28.0 GB / 余 12.0 GB
+		{"704x1248", 20, 489},  // 竖版同档
+		{"928x704", 20, 489},   // 4:3 同档
+		{"704x704", 20, 481},   // m=1,栅格最细
+		{"1920x1088", 15, 361}, // 1080p:两阶段
+		{"2496x1408", 15, 361}, // 2K:八题材压过的那一档
+		{"1408x1408", 15, 361}, // 2K 1:1
 	} {
 		w, h, ok := ltx25DimsOf(c.size)
 		if !ok {
 			t.Fatalf("%s 解析不出宽高", c.size)
 		}
-		if got := ltx25FramesForDuration(ltx25MaxOutputSec, w, h, true); got != c.wantFrames {
-			t.Errorf("%s 的 15 秒档 = %d 帧, want %d", c.size, got, c.wantFrames)
+		if got := ltx25MaxOutputSecFor(w, h); got != c.maxSec {
+			t.Errorf("%s 的档位上限 = %d 秒, want %d", c.size, got, c.maxSec)
 		}
-		// 15 秒必须放行
-		if err := applyLTX25Request(map[string]any{"size": c.size}, ltx25MaxOutputSec); err != nil {
-			t.Errorf("%s / 15 秒应放行,却被拒: %v", c.size, err)
+		if got := ltx25FramesForDuration(c.maxSec, w, h, true); got != c.wantFrames {
+			t.Errorf("%s 的 %d 秒档 = %d 帧, want %d", c.size, c.maxSec, got, c.wantFrames)
 		}
-		// 16 秒必须被拒,且文案要说"最长 15 秒"而不是甩显存包络
-		err := applyLTX25Request(map[string]any{"size": c.size}, ltx25MaxOutputSec+1)
+		if err := applyLTX25Request(map[string]any{"size": c.size}, c.maxSec); err != nil {
+			t.Errorf("%s / %d 秒应放行,却被拒: %v", c.size, c.maxSec, err)
+		}
+		err := applyLTX25Request(map[string]any{"size": c.size}, c.maxSec+1)
 		if err == nil {
-			t.Errorf("%s / 16 秒应被拒", c.size)
+			t.Errorf("%s / %d 秒应被拒", c.size, c.maxSec+1)
 		} else if !strings.Contains(err.Error(), "对外最长") {
-			t.Errorf("%s / 16 秒的错误文案应指向时长上限,实际: %v", c.size, err)
+			t.Errorf("%s 超限的文案应指向时长上限,实际: %v", c.size, err)
 		}
+	}
+}
+
+// 两阶段档比一阶段档**更短**,这条锁住"别把 2K 也放到 20 秒"。
+func TestLTX25TwoStageCapIsShorter(t *testing.T) {
+	if ltx25MaxOutputSecTwoStage >= ltx25MaxOutputSecOneStage {
+		t.Fatalf("两阶段上限(%d)不该 ≥ 一阶段(%d):2K 20 秒需要 1.72e9,实测 425 帧就 OOM",
+			ltx25MaxOutputSecTwoStage, ltx25MaxOutputSecOneStage)
+	}
+	w, h, _ := ltx25DimsOf("2496x1408")
+	if err := applyLTX25Request(map[string]any{"size": "2496x1408"}, ltx25MaxOutputSecOneStage); err == nil {
+		t.Fatalf("2K / %d 秒应被拒(%dx%d)", ltx25MaxOutputSecOneStage, w, h)
 	}
 }
 
 // 调用方自传帧数同样受时长上限约束 —— 否则 API 用户能绕过体验区的档位。
 func TestLTX25DurationCapAppliesToCallerFrames(t *testing.T) {
-	body := map[string]any{"size": "1248x704", "num_frames": 489} // 20.4 s
-	if err := applyLTX25Request(body, 0); err == nil {
-		t.Fatal("自传 489 帧(20.4 s)应被时长上限拒掉")
+	// 2K 的上限是 15 秒(361 帧),自传 489 帧(20.4 s)要被拒
+	if err := applyLTX25Request(map[string]any{"size": "2496x1408", "num_frames": 489}, 0); err == nil {
+		t.Fatal("2K 自传 489 帧(20.4 s)应被时长上限拒掉")
 	}
-	// 上限之内的自传帧数不受影响
-	mustApply(t, map[string]any{"size": "1248x704", "num_frames": 361}, 0)
+	// 同样 489 帧在 720p 上是合法的(该档 20 秒)—— 上限按档走,不是一刀切
+	mustApply(t, map[string]any{"size": "1248x704", "num_frames": 489}, 0)
 }
 
 // 实测通过/失败的那几个点,直接钉成断言。改包络常量时这条是最后一道闸。

@@ -47,7 +47,7 @@ import (
 //     向上吸附保证实际时长永不短于承诺。
 //
 //  5. **尺寸、时长与显存包络是硬拒**:宽高都要被 32 整除、短边 ≤ 1408(2K)、
-//     对外时长 ≤ 15 秒、`W×H×num_frames ≤ 1.3×10⁹`。都是"进了队列也只会 500 或 OOM"
+//     对外时长 ≤ 20 秒(一阶段)/ 15 秒(两阶段)、`W×H×num_frames ≤ 1.3×10⁹`。都是"进了队列也只会 500 或 OOM"
 //     (或超出对外承诺)的输入,
 //     挡在网关比让用户排队几分钟后失败好,所以在这里就地 400。
 //     ⚠️ 2026-08-31 之前这两个上限是 704 / 4.3×10⁸,那是"1080p 交超分"那版的口径;
@@ -74,13 +74,17 @@ const (
 	// 都能原生出片,4K 只能出 5 秒、成本又高(283 s/条),对外不给,所以上限停在 1408。
 	ltx25MaxShortEdge = 1408
 
-	// 对外统一的时长上限(秒)。四个分辨率档共用一个数 —— 产品口径,好解释、好对外说,
-	// 也免得用户去记"哪一档能出多久"。
+	// 对外时长上限(秒),按档分两档。分界正好落在已有的一阶段/两阶段边界上
+	// (ltx25MaxOneStageShortEdge),不引入新判据。
 	//
-	// 15 秒是实测能站住的最大统一值。最吃紧的是 2K:2496×1408×361 = 1.269e9,
-	// 2026-09-01 用八条不同题材压过一轮,**8/8 通过**(峰值 39.2~39.4 GB)。其余三档在
-	// 15 秒下都远低于它:1080p 7.54e8、720p 3.17e8、540p 1.89e8。
-	ltx25MaxOutputSec = 15
+	//	≤704 短边(一阶段) → 20 秒:1248×704×489 = 4.30e8,实测峰值 28.0 GB、余量 12.0 GB
+	//	1080p / 2K(两阶段) → 15 秒:最吃紧的是 2K 的 2496×1408×361 = 1.269e9,
+	//	                            2026-09-01 八条不同题材压过一轮 8/8 通过(39.2~39.4 GB)
+	//
+	// 两档不同不是没定好口径,是显存差着一个数量级:同样 20 秒,720p 是 4.3e8,
+	// 2K 要 1.72e9 —— 后者实测 425 帧就 OOM 了,给不了。
+	ltx25MaxOutputSecOneStage = 20
+	ltx25MaxOutputSecTwoStage = 15
 
 	// 显存包络:W×H×num_frames 的上限。2026-09-01(引擎侧分块 postprocess + gather
 	// 收敛到 rank0 之后)的实测分界:
@@ -182,13 +186,23 @@ func applyLTX25Request(body map[string]any, durationSec int) error {
 // m=2 的尺寸上落 361 帧(15.04 s)、在奇数 P 的尺寸上落 377 帧(15.71 s)。拿"15.0 秒"
 // 这个数去卡后者,会把它自己的 15 秒档误伤掉 —— 上限必须用同一套栅格算出来。
 func ltx25ValidateOutputLength(w, h int, hasSize bool, frames int) error {
-	maxFrames := ltx25FramesForDuration(ltx25MaxOutputSec, w, h, hasSize)
+	maxSec := ltx25MaxOutputSecFor(w, h)
+	maxFrames := ltx25FramesForDuration(maxSec, w, h, hasSize)
 	if frames <= maxFrames {
 		return nil
 	}
 	return fmt.Errorf(
-		"LTX-2.5 对外最长 %d 秒(该尺寸下 %d 帧),本次请求 %d 帧(约 %.1f 秒)",
-		ltx25MaxOutputSec, maxFrames, frames, float64(frames)/ltx25FPS)
+		"LTX-2.5 在 %dx%d 下对外最长 %d 秒(%d 帧),本次请求 %d 帧(约 %.1f 秒)",
+		w, h, maxSec, maxFrames, frames, float64(frames)/ltx25FPS)
+}
+
+// ltx25MaxOutputSecFor 返回该画布的对外时长上限。判据与 ltx25GridCanvas 同一条:
+// 短边 >704 就是两阶段档(1080p/2K),其余是一阶段档。
+func ltx25MaxOutputSecFor(w, h int) int {
+	if min(w, h) > ltx25MaxOneStageShortEdge {
+		return ltx25MaxOutputSecTwoStage
+	}
+	return ltx25MaxOutputSecOneStage
 }
 
 // ltx25NamedAspectRatios 是体验区「宽高比」下拉的具名值 → 数值。
