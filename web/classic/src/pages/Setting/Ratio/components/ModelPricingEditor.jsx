@@ -45,6 +45,7 @@ import {
   PAGE_SIZE,
   PRICE_SUFFIX,
   VIDEO_MODE_TOKEN,
+  VIDEO_MODE_PER_SECOND,
   buildSummaryText,
   canUseTokenVideoMatrix,
   videoResolutionOptionsForModel,
@@ -845,9 +846,14 @@ export default function ModelPricingEditor({
                             ? t(
                                 '「按 Token」：实际收费 = 上游返回的 token 数 × 下表单价。上面的按量/按次价格仅用于提交时的预扣（必填），不参与最终金额。秒数已隐含在 token 里，无需也不应再按秒数缩放。',
                               )
-                            : t(
-                                '「按次」：下表格子里就是终价，提交时即定价、不再差额结算。上面的按量/按次价格不参与计算，可以留空。',
-                              )
+                            : selectedModel.videoMatrix.mode ===
+                                VIDEO_MODE_PER_SECOND
+                              ? t(
+                                  '「按秒」：下表格子里是**每秒单价**，实际收费 = 单价 × 本次时长。别把整段的总价填进去——那会按时长再乘一遍。上面的按量/按次价格不参与计算，可以留空。',
+                                )
+                              : t(
+                                  '「按次」：下表格子里就是终价，提交时即定价、不再差额结算。上面的按量/按次价格不参与计算，可以留空。',
+                                )
                         }
                       />
                       <VideoMatrixEditor
