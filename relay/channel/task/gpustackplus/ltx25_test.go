@@ -638,3 +638,58 @@ func TestLTX25EnvelopeMatchesMeasured(t *testing.T) {
 		}
 	}
 }
+
+// ── 两阶段的栅格由 stage 1(半分辨率)决定 ──────────────────────────────────
+
+// 1080p / 2K 走两阶段,SP 切分发生在 stage 1 的半分辨率上,栅格要按那个尺寸算。
+//
+// 2026-09-01 实测:1920×1088 / 721 帧(T=91)报
+// `seq_len=46410 not divisible by sequence_parallel_size=4`,46410 = 510 × 91,
+// 510 正是 stage 1 的 (960/32)×(544/32) —— 不是最终画布的 P=2040。
+// 按最终尺寸算会得 m=1,于是"1080p 10 秒"换算成 241 帧(T=31 奇数)直接 500。
+func TestLTX25TwoStageGridUsesHalfCanvas(t *testing.T) {
+	for _, c := range []struct {
+		size        string
+		durationSec int
+		wantFrames  int
+		note        string
+	}{
+		{"1920x1088", 10, 249, "按最终尺寸算会给 241(T=31 奇数)→ 引擎 500"},
+		{"1920x1088", 5, 121, "与一阶段同值,但走的是半画布栅格"},
+		{"1920x1088", 17, 409, "17×24=408 → 半画布栅格(step 16, first 9)吸到 409"},
+		{"2496x1408", 10, 249, "2K 同理"},
+		{"2496x1408", 10, 249, "当前包络(9.0e8)封在 249 帧;引擎其实能到 361 帧/15 s"},
+		// 一阶段的桶不受影响 —— 判据是短边而不是「宽高是否 64 对齐」,
+		// 704×704 也满足 64 对齐,但它归一阶段实例,P=484 → m=1。
+		{"704x704", 10, 241, "一阶段:m=1,栅格最细,不该被误判成两阶段"},
+		{"1248x704", 10, 249, "一阶段 m=2,与改动前一致"},
+	} {
+		body := map[string]any{"size": c.size}
+		mustApply(t, body, c.durationSec)
+		if got := body["num_frames"]; got != c.wantFrames {
+			t.Errorf("%s/%ds: num_frames = %v, want %d(%s)", c.size, c.durationSec, got, c.wantFrames, c.note)
+		}
+	}
+}
+
+// 不变量:两阶段尺寸换算出的帧数,拿**半画布**算的 seq_len 必须被 SP 整除。
+// 上面那张表是具体值,这条是规则本身 —— 加新档位时它会替你把关。
+func TestLTX25TwoStageFramesShardableOnHalfCanvas(t *testing.T) {
+	for _, size := range []string{"1920x1088", "1088x1920", "2496x1408", "1408x2496", "1408x1408"} {
+		w, h, ok := ltx25DimsOf(size)
+		if !ok {
+			t.Fatalf("%s 解析不出宽高", size)
+		}
+		for d := 2; d <= 10; d++ { // 停在 10 s:再长会撞当前的包络常量,那是产品口径不是栅格问题
+			frames := ltx25FramesForDuration(d, w, h, true)
+			p := (w / 2 / 32) * (h / 2 / 32) // stage 1 的画布
+			if seq := p * ((frames-1)/8 + 1); seq%ltx25SequenceParallelSize != 0 {
+				t.Fatalf("%s/%ds → %d 帧:半画布 seq_len=%d 除不尽 SP=%d,引擎会 500",
+					size, d, frames, seq, ltx25SequenceParallelSize)
+			}
+			if (frames-1)%8 != 0 {
+				t.Fatalf("%s/%ds → %d 帧不在 8k+1 上", size, d, frames)
+			}
+		}
+	}
+}

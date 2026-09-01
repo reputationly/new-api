@@ -64,6 +64,10 @@ const (
 	// 宽高两轴都必须被 32 整除,同时也是 latent patch 的边长(P 由 W/32 × H/32 得出)。
 	ltx25AlignMultiple = 32
 
+	// 一阶段档的最大短边。它同时是「这个画布归哪一档实例服务」的判据:
+	// ltx25SizeTiers 里一阶段最大 704、两阶段最小 1088,中间没有重叠。
+	ltx25MaxOneStageShortEdge = 704
+
 	// 短边上限 = 2K 档的短边。2026-08-31 之前这里是 704(「1080p 交超分」的那版口径),
 	// 引擎侧加了「VAE 解码前把 DiT 搬回主机内存」之后天花板整个抬掉了:1080p 与 2K
 	// 都能原生出片,4K 只能出 5 秒、成本又高(283 s/条),对外不给,所以上限停在 1408。
@@ -386,9 +390,31 @@ func ltx25IntField(body map[string]any, key string) (int, bool) {
 // P = (W/32)×(H/32)、m = SP/gcd(P,SP),则 step = 8m、first = 8(m-1)+1。
 // m=1 时退化为引擎的裸约束 8k+1(单卡或 P 已被 SP 整除)。
 func ltx25FrameGrid(w, h int) (step, first int) {
-	p := (w / ltx25AlignMultiple) * (h / ltx25AlignMultiple)
+	gw, gh := ltx25GridCanvas(w, h)
+	p := (gw / ltx25AlignMultiple) * (gh / ltx25AlignMultiple)
 	m := ltx25SequenceParallelSize / ltx25Gcd(p, ltx25SequenceParallelSize)
 	return 8 * m, 8*(m-1) + 1
+}
+
+// ltx25GridCanvas 返回**算栅格时该用的那个画布**。
+//
+// 一阶段:就是请求的画布。
+// 两阶段:是它的**一半** —— stage 1 在半分辨率上去噪(recipe 的 spatial_downscale=2),
+// SP 切分发生在那里,栅格由半分辨率的 P 决定,不是最终尺寸。
+//
+// 2026-09-01 实测坐实:1920×1088 / 721 帧(T=91)报
+// `seq_len=46410 not divisible by sequence_parallel_size=4`,而 46410 = 510 × 91,
+// 510 = (960/32)×(544/32) —— 正是 stage 1 的 960×544,不是最终画布的 P=2040。
+// 按最终尺寸算会得出 m=1(任意 8k+1 都合法),于是"1080p 10 秒"被换算成 241 帧
+// (T=31 奇数)直接 500。这条洞之前没暴露,是因为验收时都直接发 num_frames 绕开了换算。
+//
+// 判据用**短边**而不是"宽高是否 64 对齐":704×704 也满足 64 对齐,但它是一阶段的桶
+// (ltx25SizeTiers 里一阶段最大短边 704、两阶段最小短边 1088,中间没有重叠)。
+func ltx25GridCanvas(w, h int) (int, int) {
+	if min(w, h) > ltx25MaxOneStageShortEdge {
+		return w / 2, h / 2
+	}
+	return w, h
 }
 
 func ltx25Gcd(a, b int) int {
