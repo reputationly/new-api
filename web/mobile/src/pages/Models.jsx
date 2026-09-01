@@ -14,7 +14,10 @@ import { StatusContext } from '@classic/context/Status';
 import { API } from '@classic/helpers/api';
 // 直接引纯计算模块——helpers/utils.jsx 会传染桌面依赖、在 mobile 侧被整模块 shim，
 // videoMatrix.js 不引 UI 依赖，两端共用同一份，不必再手抄同步。
-import { flattenVideoMatrix } from '@classic/helpers/videoMatrix';
+import {
+  flattenVideoMatrix,
+  VIDEO_PER_SECOND_COLUMN,
+} from '@classic/helpers/videoMatrix';
 import { formatPriceWithCeiling } from '@classic/helpers/priceFormat';
 import { getGroupDiscountInfo, DISCOUNT_HEX } from '@classic/helpers/discount';
 import {
@@ -223,7 +226,14 @@ const Models = () => {
       const prices = cells.map((c) => c.priceUSD);
       const lo = Math.min(...prices);
       const hi = Math.max(...prices);
-      const unit = m.video_pricing.mode === 'token' ? '/1M' : '/次';
+      // 三种模式，不能用 token 一个布尔切：per_second 落进 else 会显示「/次」，
+      // 而它是每秒单价，10 秒的片子会被读成和 1 秒一个价。
+      const unit =
+        m.video_pricing.mode === 'token'
+          ? '/1M'
+          : m.video_pricing.mode === 'per_second'
+            ? '/秒'
+            : '/次';
       return lo === hi
         ? `${displayPrice(lo)}${unit}`
         : `${displayPrice(lo)}~${displayPrice(hi)}${unit}`;
@@ -515,7 +525,11 @@ const Models = () => {
                   style={{ fontSize: 12, color: '#9aa1ad', marginBottom: 6 }}
                 >
                   单位：{currencyConfig.symbol} /{' '}
-                  {detail.video_pricing.mode === 'token' ? '1M tokens' : '次'}
+                  {detail.video_pricing.mode === 'token'
+                    ? '1M tokens'
+                    : detail.video_pricing.mode === 'per_second'
+                      ? '秒'
+                      : '次'}
                 </div>
                 {videoMatrixCells(detail).map((cell) => (
                   <div
@@ -537,10 +551,26 @@ const Models = () => {
                           ? cell.column === 'without_video'
                             ? '输入不含视频'
                             : '输入包含视频'
-                          : `${cell.column} 秒`}
+                          : cell.column === VIDEO_PER_SECOND_COLUMN
+                            ? '每秒单价'
+                            : `${cell.column} 秒`}
                       </span>
                     </span>
-                    <strong>{displayPrice(cell.priceUSD)}</strong>
+                    <strong>
+                      {cell.originalPriceUSD != null && (
+                        <span
+                          style={{
+                            color: '#9aa1ad',
+                            textDecoration: 'line-through',
+                            marginRight: 4,
+                            fontWeight: 400,
+                          }}
+                        >
+                          {displayPrice(cell.originalPriceUSD)}
+                        </span>
+                      )}
+                      {displayPrice(cell.priceUSD)}
+                    </strong>
                   </div>
                 ))}
               </div>

@@ -5,6 +5,7 @@ import {
   flattenVideoMatrix,
   videoSecondsRank,
   getModelPricingCurrencyConfig,
+  VIDEO_PER_SECOND_COLUMN,
 } from '../../../../../helpers';
 
 const { Text } = Typography;
@@ -24,20 +25,27 @@ export default function VideoMatrixBreakdown({ videoPricing, t }) {
   if (!cells.length) return null;
 
   const isToken = videoPricing.mode === 'token';
+  // 三种模式不能用 isToken 一个布尔切：per_second 落进 else 分支会被当成 per_call，
+  // 列头拼成「__per_second__ 秒」、单位写成「/次」，而它实际是每秒单价。
+  const isPerSecond = videoPricing.mode === 'per_second';
   const { symbol, rate } = getModelPricingCurrencyConfig();
 
   // 列：token 模式固定两列（与配置页、供应商价目表同序）；按次模式取出现过的秒数。
   // 秒数用 videoSecondsRank 解析——后端接受 '5s' / '5秒' 这类列名，
   // 直接 Number() 会得到 NaN、比较器恒返回 NaN，排序退化成原序。
-  const columnKeys = isToken
-    ? ['without_video', 'with_video']
-    : [...new Set(cells.map((c) => c.column))].sort(
-        (a, b) => videoSecondsRank(a) - videoSecondsRank(b),
-      );
+  let columnKeys;
+  if (isToken) columnKeys = ['without_video', 'with_video'];
+  else if (isPerSecond) columnKeys = [VIDEO_PER_SECOND_COLUMN];
+  else
+    columnKeys = [...new Set(cells.map((c) => c.column))].sort(
+      (a, b) => videoSecondsRank(a) - videoSecondsRank(b),
+    );
 
   const columnLabel = (key) => {
-    if (!isToken) return `${key} ${t('秒')}`;
-    return key === 'without_video' ? t('输入不含视频') : t('输入包含视频');
+    if (isToken)
+      return key === 'without_video' ? t('输入不含视频') : t('输入包含视频');
+    if (isPerSecond) return t('每秒单价');
+    return `${key} ${t('秒')}`;
   };
 
   // 行：按分辨率聚合，交汇格取价格。未配置的格子留空，显示为「—」——
@@ -90,7 +98,9 @@ export default function VideoMatrixBreakdown({ videoPricing, t }) {
               ? t(
                   '按上游返回的 token 数计费，单价随分辨率与是否含视频输入变化。时长已隐含在 token 数里。',
                 )
-              : t('按次计费，单价随分辨率与时长变化。')}
+              : isPerSecond
+                ? t('按秒计费，单价随分辨率变化，实收 = 单价 × 本次时长。')
+                : t('按次计费，单价随分辨率与时长变化。')}
           </div>
         </div>
       </div>
@@ -98,7 +108,9 @@ export default function VideoMatrixBreakdown({ videoPricing, t }) {
       <div className='text-xs text-gray-500 mb-2'>
         {isToken
           ? `${t('单位')}：${symbol} / 1M tokens`
-          : `${t('单位')}：${symbol} / ${t('次')}`}
+          : isPerSecond
+            ? `${t('单位')}：${symbol} / ${t('秒')}`
+            : `${t('单位')}：${symbol} / ${t('次')}`}
       </div>
 
       <Table

@@ -14,7 +14,13 @@
  */
 export const videoResolutionRank = (r) => {
   const s = String(r ?? '').trim();
-  if (/^4k$/i.test(s)) return 2160;
+  // 兜底行永远排最后：它是「其余所有分辨率」，放在具体档位之间会割裂表格
+  if (s === '*') return Number.MAX_SAFE_INTEGER;
+  // k 档按 n × 1080 折算成序数。写死 /^4k$/ 会让 LTX-2.5 的 2K 落进下面的
+  // \d+p 分支——它匹配不上，返回 0，于是 2K 排到 480p 前面。取值只用于排序，
+  // 单调即可，不必是真实短边（2K 的真实短边随部署而变：LTX 是 1408）。
+  const k = s.match(/^(\d+)k$/i);
+  if (k) return Number(k[1]) * 1080;
   const m = s.match(/^(\d+)\s*p?$/i);
   return m ? Number(m[1]) : 0;
 };
@@ -34,19 +40,43 @@ export const videoSecondsRank = (c) => {
 };
 
 /**
- * 把视频计费矩阵的所有格子摊平成 [{resolution, column, priceUSD}]，并乘上分组倍率。
+ * per_second 一维表升二维时用的虚拟列名。
  *
- * 列的语义随 mode 变：token 模式是「输入是否含视频」，per_call 模式是秒数。
+ * 必须是哨兵值而不是「秒」这类可读文本：渲染端普遍写着 `${column} 秒`
+ * （per_call 的列名就是纯数字），拿可读文本去拼会得到「秒 秒」。哨兵值逼着
+ * 渲染端为 per_second 显式分支，而不是让它悄悄落进 per_call 的模板。
+ */
+export const VIDEO_PER_SECOND_COLUMN = '__per_second__';
+
+/**
+ * 把视频计费矩阵的所有格子摊平成 [{resolution, column, priceUSD, originalPriceUSD}]。
+ *
+ * 列的语义随 mode 变：token 是「输入是否含视频」，per_call 是秒数，
+ * per_second 只有一列（每秒单价），由本函数把一维表升成二维。
+ *
+ * originalPriceUSD 是**折前价**（少乘一个分组倍率），口径与按量/按次两条路的
+ * originalInputPrice / originalPrice 一致：仅在 0 <= 倍率 < 1 时给，其余为 null。
+ * 倍率 > 1 是涨价，划线会显示成「原价更便宜」，比不显示更糟。
  */
 export const flattenVideoMatrix = (videoPricing, groupRatio) => {
   if (!videoPricing?.mode) return [];
   const isToken = videoPricing.mode === 'token';
-  const table = (isToken ? videoPricing.token : videoPricing.per_call) || {};
+  const isPerSecond = videoPricing.mode === 'per_second';
+  // per_second 的后端表是一维的 { 分辨率: $/秒 }，先升成二维走同一套摊平逻辑
+  let table;
+  if (isToken) table = videoPricing.token || {};
+  else if (isPerSecond) {
+    table = {};
+    Object.entries(videoPricing.per_second || {}).forEach(([res, usd]) => {
+      table[res] = { [VIDEO_PER_SECOND_COLUMN]: usd };
+    });
+  } else table = videoPricing.per_call || {};
 
   // 0 是合法倍率（免费分组），不能用 `|| 1` 兜底——那会把免费分组显示成原价。
   // 只有 undefined / 非数才回退 1（详情页展示基础单价时就不传）。
   const raw = Number(groupRatio);
   const gr = Number.isFinite(raw) && raw >= 0 ? raw : 1;
+  const discounted = gr < 1;
 
   const rows = [];
   Object.entries(table).forEach(([resolution, cols]) => {
@@ -55,7 +85,12 @@ export const flattenVideoMatrix = (videoPricing, groupRatio) => {
       // 过滤的是「未配置的格子」，判据必须用**折算前**的原始价：
       // 折算后判的话，免费分组会让所有格子变 0 而被整表滤空。
       if (!Number.isFinite(base) || base <= 0) return;
-      rows.push({ resolution, column, priceUSD: base * gr });
+      rows.push({
+        resolution,
+        column,
+        priceUSD: base * gr,
+        originalPriceUSD: discounted ? base : null,
+      });
     });
   });
 
@@ -63,6 +98,7 @@ export const flattenVideoMatrix = (videoPricing, groupRatio) => {
   // 便于逐格对照。
   const colOrder = (c) =>
     isToken ? (c === 'without_video' ? 0 : 1) : videoSecondsRank(c);
+  // per_second 每行只有一列，列序无意义；分辨率序仍然要对
   rows.sort(
     (a, b) =>
       videoResolutionRank(a.resolution) - videoResolutionRank(b.resolution) ||

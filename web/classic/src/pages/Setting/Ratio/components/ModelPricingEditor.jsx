@@ -47,6 +47,7 @@ import {
   VIDEO_MODE_TOKEN,
   buildSummaryText,
   canUseTokenVideoMatrix,
+  videoResolutionOptionsForModel,
   formatDisplayPrice,
   hasValue,
   normalizeRate,
@@ -853,6 +854,10 @@ export default function ModelPricingEditor({
                         value={selectedModel.videoMatrix}
                         onChange={handleVideoMatrixChange}
                         allowTokenMode={canUseTokenVideoMatrix(selectedModel)}
+                        resolutionOptions={videoResolutionOptionsForModel(
+                          options?.VideoModelConfig,
+                          selectedModel?.name,
+                        )}
                         t={t}
                       />
                       <div className='mt-3 text-xs text-gray-500'>

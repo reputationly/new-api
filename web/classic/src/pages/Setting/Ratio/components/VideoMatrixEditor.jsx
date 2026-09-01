@@ -4,9 +4,10 @@ import {
   NUMERIC_INPUT_REGEX,
   VIDEO_MODE_TOKEN,
   VIDEO_MODE_PER_CALL,
+  VIDEO_MODE_PER_SECOND,
+  VIDEO_COL_PER_SECOND,
   VIDEO_COL_WITH_VIDEO,
   VIDEO_COL_WITHOUT_VIDEO,
-  VIDEO_DEFAULT_RESOLUTIONS,
   VIDEO_DEFAULT_SECONDS,
   videoCellKey,
 } from '../hooks/useModelPricingEditorState';
@@ -27,6 +28,7 @@ export default function VideoMatrixEditor({
   value,
   onChange,
   allowTokenMode = true,
+  resolutionOptions = [],
   t,
 }) {
   const patch = (next) => onChange({ ...value, ...next });
@@ -45,16 +47,21 @@ export default function VideoMatrixEditor({
     });
   };
 
-  const cols =
-    value.mode === VIDEO_MODE_TOKEN
-      ? [
-          { key: VIDEO_COL_WITHOUT_VIDEO, label: t('输入不含视频') },
-          { key: VIDEO_COL_WITH_VIDEO, label: t('输入包含视频') },
-        ]
-      : (value.seconds || []).map((s) => ({
-          key: String(s),
-          label: `${s} ${t('秒')}`,
-        }));
+  let cols;
+  if (value.mode === VIDEO_MODE_TOKEN) {
+    cols = [
+      { key: VIDEO_COL_WITHOUT_VIDEO, label: t('输入不含视频') },
+      { key: VIDEO_COL_WITH_VIDEO, label: t('输入包含视频') },
+    ];
+  } else if (value.mode === VIDEO_MODE_PER_SECOND) {
+    // 一维表：每个分辨率只有一个每秒单价。列名是虚拟的，序列化时会被拍平。
+    cols = [{ key: VIDEO_COL_PER_SECOND, label: t('每秒单价') }];
+  } else {
+    cols = (value.seconds || []).map((s) => ({
+      key: String(s),
+      label: `${s} ${t('秒')}`,
+    }));
+  }
 
   const columns = [
     {
@@ -99,6 +106,7 @@ export default function VideoMatrixEditor({
               disabled: !allowTokenMode,
             },
             { label: t('按次'), value: VIDEO_MODE_PER_CALL },
+            { label: t('按秒'), value: VIDEO_MODE_PER_SECOND },
           ]}
           style={{ width: 130, flexShrink: 0 }}
         />
@@ -107,12 +115,9 @@ export default function VideoMatrixEditor({
           filter
           allowCreate
           value={value.resolutions}
-          optionList={VIDEO_DEFAULT_RESOLUTIONS.map((r) => ({
-            label: r,
-            value: r,
-          }))}
+          optionList={resolutionOptions.map((r) => ({ label: r, value: r }))}
           onChange={(v) => patch({ resolutions: v })}
-          placeholder={t('分辨率，如 720p')}
+          placeholder={t('分辨率，如 720p；填 * 作为兜底行')}
           style={{ flex: 1, minWidth: 200 }}
         />
         {value.mode === VIDEO_MODE_PER_CALL && (
@@ -135,7 +140,9 @@ export default function VideoMatrixEditor({
       <Text type='tertiary' size='small'>
         {value.mode === VIDEO_MODE_TOKEN
           ? t('单位：¥ / 百万 tokens')
-          : t('单位：¥ / 次')}
+          : value.mode === VIDEO_MODE_PER_SECOND
+            ? t('单位：¥ / 秒，实收 = 单价 × 本次时长')
+            : t('单位：¥ / 次')}
       </Text>
 
       <div style={{ marginTop: 8 }}>

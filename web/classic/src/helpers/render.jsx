@@ -2523,13 +2523,17 @@ export function renderVideoMatrixPriceSimple(opts) {
     completion_tokens: tokens = 0,
   } = opts;
 
+  // 三种模式：token 看「是否含视频输入」，per_call / per_second 都看时长。
+  // 用 mode === 'per_call' 一个布尔切的话，per_second 会落进 token 分支，
+  // 显示「输入不含视频」而不是时长——而时长正是它的计价乘数。
+  const isTokenMode = mode === 'token';
   const dimension = [
     resolution,
-    mode === 'per_call'
-      ? seconds && i18next.t('{{seconds}} 秒', { seconds })
-      : hasVideoInput
+    isTokenMode
+      ? hasVideoInput
         ? i18next.t('输入包含视频')
-        : i18next.t('输入不含视频'),
+        : i18next.t('输入不含视频')
+      : seconds && i18next.t('{{seconds}} 秒', { seconds }),
   ]
     .filter(Boolean)
     .join(' · ');
@@ -2543,7 +2547,21 @@ export function renderVideoMatrixPriceSimple(opts) {
   // 运营没法判断是 token 数不同还是单价取错了档。
   // tokens 由结算日志的 completion_tokens 带来（见 RecordTaskBillingLogParams）。
   let formula = null;
-  if (mode !== 'per_call' && tokens > 0) {
+  if (mode === 'per_second' && seconds > 0) {
+    const { symbol, rate } = getCurrencyConfig();
+    const rawRatio = Number(effectiveGroupRatio);
+    const ratio = Number.isFinite(rawRatio) && rawRatio >= 0 ? rawRatio : 1;
+    const amount = unitPrice * seconds * ratio;
+    formula = i18next.t(
+      '{{price}} / 秒 × {{seconds}} 秒 × {{ratio}} = {{amount}}',
+      {
+        price: formatCompactDisplayPrice(unitPrice),
+        seconds,
+        ratio: formatRatioValue(ratio, 4),
+        amount: `${symbol}${Number((amount * rate).toFixed(6))}`,
+      },
+    );
+  } else if (isTokenMode && tokens > 0) {
     const { symbol, rate } = getCurrencyConfig();
     // 0 是合法倍率（免费分组），不能用 `|| 1` 兜底——那会让免费任务的算式算出全价。
     const rawRatio = Number(effectiveGroupRatio);
@@ -2565,12 +2583,15 @@ export function renderVideoMatrixPriceSimple(opts) {
     dimension ? { tone: 'primary', text: dimension } : null,
     {
       tone: 'secondary',
-      text:
-        mode === 'per_call'
-          ? i18next.t('视频按次 {{price}}', {
+      text: isTokenMode
+        ? i18next.t('视频按量 {{price}} / 1M tokens', {
+            price: formatCompactDisplayPrice(unitPrice),
+          })
+        : mode === 'per_second'
+          ? i18next.t('视频按秒 {{price}} / 秒', {
               price: formatCompactDisplayPrice(unitPrice),
             })
-          : i18next.t('视频按量 {{price}} / 1M tokens', {
+          : i18next.t('视频按次 {{price}}', {
               price: formatCompactDisplayPrice(unitPrice),
             }),
     },
@@ -2601,7 +2622,10 @@ export function buildVideoMatrixDetailRows(opts) {
   } = opts;
   if (!mode) return [];
 
-  const isPerCall = mode === 'per_call';
+  // 同 renderVideoMatrixPriceSimple：三种模式，不能用一个布尔切。
+  // per_second 与 per_call 同属「提交时定死终价」，差别只在单价的单位与算式。
+  const isTokenMode = mode === 'token';
+  const isPerSecond = mode === 'per_second';
   const { symbol, rate } = getCurrencyConfig();
   const { ratio: effectiveRatio, label: ratioLabel } = getEffectiveRatio(
     groupRatio,
@@ -2610,18 +2634,24 @@ export function buildVideoMatrixDetailRows(opts) {
   // 0 是合法倍率（免费分组），不能用 `|| 1` 兜底——那会让免费任务算出全价。
   const rawRatio = Number(effectiveRatio);
   const ratio = Number.isFinite(rawRatio) && rawRatio >= 0 ? rawRatio : 1;
-  const unitText = isPerCall ? i18next.t('次') : '1M Tokens';
+  const unitText = isTokenMode
+    ? '1M Tokens'
+    : isPerSecond
+      ? i18next.t('秒')
+      : i18next.t('次');
   // 单价固定 4 位：供应商账单就是 ¥46.0000 这个精度，对账时逐位比。
   const unitDisplay = `${symbol}${(Number(unitPrice) * rate).toFixed(4)} / ${unitText}`;
 
   const rows = [];
   rows.push({
     key: i18next.t('计价方式'),
-    value: isPerCall
-      ? i18next.t('按次固定价')
-      : i18next.t('按上游返回的 token 用量'),
+    value: isTokenMode
+      ? i18next.t('按上游返回的 token 用量')
+      : isPerSecond
+        ? i18next.t('按秒计价（单价 × 时长）')
+        : i18next.t('按次固定价'),
   });
-  if (!isPerCall && tokens > 0) {
+  if (isTokenMode && tokens > 0) {
     rows.push({
       key: i18next.t('计费 Tokens'),
       value: Number(tokens).toLocaleString(),
@@ -2631,17 +2661,16 @@ export function buildVideoMatrixDetailRows(opts) {
   if (resolution) {
     rows.push({ key: i18next.t('分辨率'), value: resolution });
   }
-  if (isPerCall) {
-    if (seconds > 0) {
-      rows.push({
-        key: i18next.t('时长'),
-        value: i18next.t('{{seconds}} 秒', { seconds }),
-      });
-    }
-  } else {
+  if (isTokenMode) {
     rows.push({
       key: i18next.t('参考视频'),
       value: hasVideoInput ? i18next.t('是') : i18next.t('否'),
+    });
+  } else if (seconds > 0) {
+    // per_call 与 per_second 都按时长展示；后者时长还是计价乘数，缺了算式对不上
+    rows.push({
+      key: i18next.t('时长'),
+      value: i18next.t('{{seconds}} 秒', { seconds }),
     });
   }
   rows.push({
@@ -2651,13 +2680,19 @@ export function buildVideoMatrixDetailRows(opts) {
       : `${formatRatioValue(ratio, 4)}x`,
   });
 
-  if (!isPerCall && tokens > 0) {
+  if (isPerSecond && seconds > 0) {
+    const amount = Number(unitPrice) * seconds * ratio;
+    rows.push({
+      key: i18next.t('计费过程'),
+      value: `${symbol}${(Number(unitPrice) * rate).toFixed(4)} / ${i18next.t('秒')} × ${seconds} × ${formatRatioValue(ratio, 4)} = ${symbol}${(amount * rate).toFixed(6)}`,
+    });
+  } else if (isTokenMode && tokens > 0) {
     const amount = (tokens / 1e6) * Number(unitPrice) * ratio;
     rows.push({
       key: i18next.t('计费过程'),
       value: `${Number(tokens).toLocaleString()} × ${symbol}${(Number(unitPrice) * rate).toFixed(4)} / 1M Tokens × ${formatRatioValue(ratio, 4)} = ${symbol}${(amount * rate).toFixed(6)}`,
     });
-  } else if (isPerCall) {
+  } else if (!isTokenMode && !isPerSecond) {
     const amount = Number(unitPrice) * ratio;
     rows.push({
       key: i18next.t('计费过程'),

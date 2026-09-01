@@ -141,13 +141,66 @@ const parseOptionJSON = (rawValue) => {
 // 与后端 setting/ratio_setting/video_pricing.go 的常量一一对应。
 export const VIDEO_MODE_TOKEN = 'token';
 export const VIDEO_MODE_PER_CALL = 'per_call';
+export const VIDEO_MODE_PER_SECOND = 'per_second';
 export const VIDEO_COL_WITH_VIDEO = 'with_video';
 export const VIDEO_COL_WITHOUT_VIDEO = 'without_video';
+
+// per_second 的后端表是一维的 { 分辨率: $/秒 }，而编辑器 state 统一是二维的
+// cells[分辨率||列]。用这个虚拟列名把一维塞进二维，列渲染、数字过滤、留空判定
+// 就全部复用，只有序列化两端需要成对拍平/还原。
+//
+// 前缀 `__` 是为了不可能与真实列名（with_video / 秒数）撞车。
+export const VIDEO_COL_PER_SECOND = '__per_second__';
 
 export const VIDEO_DEFAULT_RESOLUTIONS = ['480p', '720p', '1080p', '4k'];
 export const VIDEO_DEFAULT_SECONDS = ['5', '10'];
 
 export const videoCellKey = (resolution, col) => `${resolution}||${col}`;
+
+/**
+ * 矩阵行名的候选分辨率：优先取该模型在体验区配的 sizes（VideoModelConfig），
+ * 取不到才回落到通用档位。
+ *
+ * 为什么不硬编码 480p/720p/1080p/4k：各模型的档位集合并不相同——LTX-2.5 是
+ * 544P/704P/1080P/2K、H3 是 480P/768p——照通用档位配出来的行名永远命中不了，
+ * 而未命中是**静默**回退固定价的（docs/video-billing-matrix-design.md §6.0）。
+ * 从同一份配置取，配置端就不会和请求端分叉。
+ *
+ * 只取档位词与像素串，比例词（"16:9"）不进候选：它不含分辨率信息，
+ * VideoResolutionTier 对它返回空串，配成行名是死配置。
+ */
+export const videoResolutionOptionsForModel = (
+  videoModelConfigRaw,
+  modelName,
+) => {
+  const fallback = [...VIDEO_DEFAULT_RESOLUTIONS];
+  if (!videoModelConfigRaw || !modelName) return fallback;
+  let cfg;
+  try {
+    cfg = JSON.parse(videoModelConfigRaw);
+  } catch {
+    return fallback;
+  }
+  const entry = cfg?.models?.[modelName];
+  if (!entry) return fallback;
+
+  // sizes 可能挂在模型级，也可能按 tab 分格存放（2026-08 的 tabs 改造）。
+  // 两处都要收，否则只配了 tab 的模型会拿到空列表。
+  const buckets = [
+    entry.sizes,
+    ...Object.values(entry.tabs || {}).map((v) => v?.sizes),
+  ];
+  const seen = new Set();
+  buckets.forEach((list) => {
+    if (!Array.isArray(list)) return;
+    list.forEach((raw) => {
+      const s = String(raw ?? '').trim();
+      if (!s || s.includes(':')) return; // 比例词不含分辨率信息
+      seen.add(s.toLowerCase());
+    });
+  });
+  return seen.size ? [...seen] : fallback;
+};
 
 export const emptyVideoMatrix = () => ({
   mode: VIDEO_MODE_TOKEN,
@@ -166,10 +219,22 @@ export const emptyVideoMatrix = () => ({
 export const parseVideoMatrixEntry = (entry, rate) => {
   if (!entry || typeof entry !== 'object') return null;
   const usd2rmb = normalizeRate(rate);
-  const mode =
-    entry.mode === VIDEO_MODE_PER_CALL ? VIDEO_MODE_PER_CALL : VIDEO_MODE_TOKEN;
-  const table =
-    (mode === VIDEO_MODE_TOKEN ? entry.token : entry.per_call) || {};
+  // 未知 mode 一律回落 token（既有行为）。回落到 per_second 会让整表落进另一个
+  // 字段名下，后端 validate 照样通过、查表却永远未命中——静默错账。
+  let mode = VIDEO_MODE_TOKEN;
+  if (entry.mode === VIDEO_MODE_PER_CALL) mode = VIDEO_MODE_PER_CALL;
+  else if (entry.mode === VIDEO_MODE_PER_SECOND) mode = VIDEO_MODE_PER_SECOND;
+
+  // per_second 的后端表是一维的，先升成二维再走同一套解析
+  let table;
+  if (mode === VIDEO_MODE_TOKEN) table = entry.token || {};
+  else if (mode === VIDEO_MODE_PER_CALL) table = entry.per_call || {};
+  else {
+    table = {};
+    Object.entries(entry.per_second || {}).forEach(([resolution, usd]) => {
+      table[resolution] = { [VIDEO_COL_PER_SECOND]: usd };
+    });
+  }
 
   const cells = {};
   const cols = new Set();
@@ -200,10 +265,14 @@ export const parseVideoMatrixEntry = (entry, rate) => {
 export const serializeVideoMatrix = (matrix, rate) => {
   if (!matrix) return null;
   const usd2rmb = normalizeRate(rate);
-  const cols =
-    matrix.mode === VIDEO_MODE_TOKEN
-      ? [VIDEO_COL_WITHOUT_VIDEO, VIDEO_COL_WITH_VIDEO]
-      : (matrix.seconds || []).map((s) => String(s).trim()).filter(Boolean);
+  let cols;
+  if (matrix.mode === VIDEO_MODE_TOKEN) {
+    cols = [VIDEO_COL_WITHOUT_VIDEO, VIDEO_COL_WITH_VIDEO];
+  } else if (matrix.mode === VIDEO_MODE_PER_SECOND) {
+    cols = [VIDEO_COL_PER_SECOND];
+  } else {
+    cols = (matrix.seconds || []).map((s) => String(s).trim()).filter(Boolean);
+  }
 
   const table = {};
   (matrix.resolutions || []).forEach((resolution) => {
@@ -223,9 +292,18 @@ export const serializeVideoMatrix = (matrix, rate) => {
   });
   if (!Object.keys(table).length) return null;
 
-  return matrix.mode === VIDEO_MODE_TOKEN
-    ? { mode: VIDEO_MODE_TOKEN, token: table }
-    : { mode: VIDEO_MODE_PER_CALL, per_call: table };
+  if (matrix.mode === VIDEO_MODE_TOKEN) {
+    return { mode: VIDEO_MODE_TOKEN, token: table };
+  }
+  if (matrix.mode === VIDEO_MODE_PER_SECOND) {
+    // 拍回一维：后端的 PerSecond 是 map[string]float64，多一层会 unmarshal 失败
+    const flat = {};
+    Object.entries(table).forEach(([resolution, bucket]) => {
+      flat[resolution] = bucket[VIDEO_COL_PER_SECOND];
+    });
+    return { mode: VIDEO_MODE_PER_SECOND, per_second: flat };
+  }
+  return { mode: VIDEO_MODE_PER_CALL, per_call: table };
 };
 
 // 货币边界：倍率 → 人民币输入价（倍率 × 基准价 2 × 汇率）。
@@ -394,8 +472,13 @@ export const isBasePricingUnset = (model) =>
   !hasValue(model.fixedPrice) &&
   !hasValue(model.inputPrice) &&
   !(
-    model.videoMatrix?.mode === VIDEO_MODE_PER_CALL &&
-    hasAnyVideoMatrixCell(model.videoMatrix)
+    // per_second 与 per_call 同理：矩阵里就是终价（前者乘上秒数），
+    // 后端 videoPerCallPriceable 会为两者放行，不需要任何 legacy 价格。
+    // 漏掉 per_second 会让运营去补一个用不上的 ModelPrice，正好制造出
+    // 这段注释本来要消除的「两边都配」。
+    [VIDEO_MODE_PER_CALL, VIDEO_MODE_PER_SECOND].includes(
+      model.videoMatrix?.mode,
+    ) && hasAnyVideoMatrixCell(model.videoMatrix)
   );
 
 /**

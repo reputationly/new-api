@@ -41,6 +41,7 @@ import {
   videoResolutionRank,
   videoSecondsRank,
   flattenVideoMatrix,
+  VIDEO_PER_SECOND_COLUMN,
 } from './videoMatrix';
 // 折扣展示口径同样是纯计算，拆出去给手机端共用（helpers/utils.jsx 被 mobile 的
 // vite 配置整模块 shim 掉，放这里手机端拿不到）
@@ -1251,7 +1252,12 @@ export const formatDynamicPriceSummary = (billingExpr, t, groupRatio = 1) => {
 // （utils.jsx 会传染桌面依赖、在 mobile 侧被整模块 shim 掉）。
 //
 // 见文件头 import：formatVideoMatrixSummary 要调 flattenVideoMatrix，理由同上。
-export { videoResolutionRank, videoSecondsRank, flattenVideoMatrix };
+export {
+  videoResolutionRank,
+  videoSecondsRank,
+  flattenVideoMatrix,
+  VIDEO_PER_SECOND_COLUMN,
+};
 
 /**
  * 卡片/表格视图的紧凑摘要：矩阵有多格，列表里放不下，显示价格区间。
@@ -1273,13 +1279,40 @@ export const formatVideoMatrixSummary = (priceData, t) => {
   const lo = Math.min(...prices);
   const hi = Math.max(...prices);
   const fmt = (v) => `${symbol}${Number(v.toFixed(2))}`;
-  const isToken = priceData.videoPricing.mode === 'token';
+  const range = (vals) => {
+    const a = Math.min(...vals);
+    const b = Math.max(...vals);
+    return a === b ? fmt(a) : `${fmt(a)} ~ ${fmt(b)}`;
+  };
+  // 折前区间：与按量/按次两条路同口径，仅在有折扣时给。矩阵模型此前只显示一个
+  // 折后区间，同一个模型打没打折、打了多少，用户在这一行完全看不出来。
+  const originals = rows
+    .map((r) => r.originalPriceUSD)
+    .filter((v) => v !== null && v !== undefined);
+  const originalText =
+    originals.length === rows.length && rows.length > 0
+      ? range(originals.map((v) => v * rate))
+      : null;
+  const mode = priceData.videoPricing.mode;
+  // 单位必须跟着 mode 走：per_second 的数是「每秒」单价，标成「/次」会让用户
+  // 以为 10 秒的片子和 1 秒一个价
+  const unit =
+    mode === 'token'
+      ? ' / 1M tokens'
+      : mode === 'per_second'
+        ? ` / ${t('秒')}`
+        : ` / ${t('次')}`;
 
   return (
     <>
       <span style={{ color: 'var(--semi-color-text-1)' }}>
+        {originalText && (
+          <span className='mr-1 font-normal text-gray-400 line-through'>
+            {originalText}
+          </span>
+        )}
         {lo === hi ? fmt(lo) : `${fmt(lo)} ~ ${fmt(hi)}`}
-        {isToken ? ` / 1M tokens` : ` / ${t('次')}`}
+        {unit}
       </span>
       <span
         style={{
