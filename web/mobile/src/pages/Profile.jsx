@@ -1,6 +1,13 @@
-import React, { useCallback, useContext, useEffect, useState } from 'react';
+import React, {
+  useCallback,
+  useContext,
+  useEffect,
+  useRef,
+  useState,
+} from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Button, Dialog, List, NavBar } from 'antd-mobile';
+import { Button, Dialog, List, NavBar, Popup } from 'antd-mobile';
+import { QRCodeCanvas } from 'qrcode.react';
 
 import { UserContext } from '@classic/context/User';
 import { API, updateAPI } from '@classic/helpers/api';
@@ -144,6 +151,40 @@ const Profile = () => {
     }
   };
 
+  // 二维码要以 <img> 呈现，长按才会弹出系统的「保存图片」——canvas 和 svg 长按都没有
+  // 这个菜单。所以先用离屏 canvas 画出来，再 toDataURL 成一张真正的图片。
+  const qrCanvasRef = useRef(null);
+  const [qrVisible, setQrVisible] = useState(false);
+  const [qrImage, setQrImage] = useState('');
+
+  const handleShowAffQr = async () => {
+    let link = affLink;
+    if (!link) {
+      link = await fetchAffLink({ silent: false });
+      if (!link) return;
+    }
+    setQrVisible(true);
+  };
+
+  // 拿到链接就转图，不等弹层打开。
+  //
+  // 离屏 canvas 常驻在页面根部而不是放进 Popup：放进去的话这段 effect 就得依赖
+  // Popup 何时挂载子树才能 querySelector 到 canvas——那是 antd-mobile 的内部实现
+  // 细节（当前靠 useLayoutEffect 同步挂载才成立），它哪天改成动画结束后再挂，
+  // 这里就拿到 null，表现是「二维码生成中…」永久卡住，且只有真机才看得见。
+  // 常驻之后没有任何时序依赖，代价只是一张 480px 的隐藏画布。
+  useEffect(() => {
+    if (!affLink) return;
+    const canvas = qrCanvasRef.current?.querySelector('canvas');
+    if (!canvas) return;
+    try {
+      setQrImage(canvas.toDataURL('image/png'));
+    } catch (e) {
+      // toDataURL 在极少数隐私模式下会抛，退化成不展示图片而不是白屏
+      setQrImage('');
+    }
+  }, [affLink]);
+
   const handleLogout = async () => {
     const confirmed = await Dialog.confirm({ content: '确定退出登录吗？' });
     if (!confirmed) return;
@@ -213,7 +254,6 @@ const Profile = () => {
             每日签到
           </List.Item>
         )}
-        <List.Item onClick={() => navigate('/tokens')}>令牌管理</List.Item>
         <List.Item onClick={() => navigate('/logs')}>使用日志</List.Item>
         <List.Item
           description='点击复制，好友通过该链接注册即计入你的邀请'
@@ -222,23 +262,18 @@ const Profile = () => {
           我的邀请链接
         </List.Item>
         <List.Item
+          description='点击查看，可保存或截图分享给好友'
+          onClick={handleShowAffQr}
+        >
+          我的邀请二维码
+        </List.Item>
+        <List.Item
           extra={badge(ticketUnread)}
           onClick={() => navigate('/tickets')}
         >
           我的工单
         </List.Item>
         <List.Item onClick={() => navigate('/setting')}>账户设置</List.Item>
-        <List.Item
-          description='移动端暂不支持充值'
-          onClick={() =>
-            Dialog.alert({
-              content:
-                '请在电脑浏览器打开本站，进入「控制台 → 充值」完成充值。',
-            })
-          }
-        >
-          充值说明
-        </List.Item>
       </List>
 
       {admin && (
@@ -287,6 +322,79 @@ const Profile = () => {
           退出登录
         </Button>
       </div>
+
+      {/*
+        离屏画布：常驻页面、只为拿 dataURL，不出现在视觉上。affLink 由挂载时预取，
+        所以点开弹层时图片通常已经就绪，不会看到「生成中」。
+      */}
+      <div ref={qrCanvasRef} style={{ display: 'none' }} aria-hidden>
+        {affLink ? <QRCodeCanvas value={affLink} size={480} /> : null}
+      </div>
+
+      <Popup
+        visible={qrVisible}
+        onMaskClick={() => setQrVisible(false)}
+        onClose={() => setQrVisible(false)}
+        bodyStyle={{ borderTopLeftRadius: 12, borderTopRightRadius: 12 }}
+      >
+        <div
+          style={{
+            padding: 24,
+            display: 'flex',
+            flexDirection: 'column',
+            alignItems: 'center',
+            gap: 12,
+          }}
+        >
+          <div style={{ fontSize: 16, fontWeight: 600 }}>我的邀请二维码</div>
+
+          {qrImage ? (
+            // 白底留边有两个作用：深色模式下不至于和背景糊在一起导致扫不出，
+            // 保存到相册后也仍是一张能直接扫的图。
+            <div style={{ background: '#fff', padding: 12, borderRadius: 8 }}>
+              <img
+                src={qrImage}
+                alt='邀请二维码'
+                style={{ width: 220, height: 220, display: 'block' }}
+              />
+            </div>
+          ) : (
+            <div style={{ color: 'var(--adm-color-weak)', fontSize: 13 }}>
+              二维码生成中…
+            </div>
+          )}
+
+          {/*
+            不写死「长按一定能保存」：微信内置浏览器对 base64 图片的长按菜单在部分
+            版本（尤其 iOS）不弹出，写成承诺会让人以为是页面坏了。截图是所有浏览器
+            都有的兜底，且截出来的二维码照样能扫、能被微信长按识别。
+          */}
+          <div
+            style={{
+              color: 'var(--adm-color-weak)',
+              fontSize: 13,
+              textAlign: 'center',
+            }}
+          >
+            长按二维码可保存到相册（部分浏览器需截图保存）
+            <br />
+            好友扫码注册即计入你的邀请
+          </div>
+          <div
+            style={{
+              color: 'var(--adm-color-weak)',
+              fontSize: 12,
+              wordBreak: 'break-all',
+              textAlign: 'center',
+            }}
+          >
+            {affLink}
+          </div>
+          <Button block onClick={() => setQrVisible(false)}>
+            关闭
+          </Button>
+        </div>
+      </Popup>
     </div>
   );
 };

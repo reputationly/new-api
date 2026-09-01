@@ -25,9 +25,11 @@ import {
   Input,
   Badge,
   Button,
+  Modal,
   Space,
 } from '@douyinfe/semi-ui';
-import { Copy, Users, UserCheck, Coins, Gift } from 'lucide-react';
+import { QRCodeSVG } from 'qrcode.react';
+import { Copy, Users, UserCheck, Coins, Gift, QrCode } from 'lucide-react';
 import { quotaToPoints } from '../../helpers/quota';
 import InvitedUsersTable from './InvitedUsersTable';
 
@@ -36,6 +38,7 @@ const { Text } = Typography;
 const InvitationCard = ({ t, userState, affLink, handleAffLinkClick }) => {
   // 被邀请人列表的汇总统计（总数 / 已实名数），由内嵌表格加载后回传。
   const [stats, setStats] = useState({ total: 0, verifiedTotal: 0 });
+  const [qrVisible, setQrVisible] = useState(false);
 
   const inviteCount = stats.total || userState?.user?.aff_count || 0;
   const verifiedCount = stats.verifiedTotal || 0;
@@ -123,15 +126,28 @@ const InvitationCard = ({ t, userState, affLink, handleAffLinkClick }) => {
             className='!rounded-lg'
             prefix={t('邀请链接')}
             suffix={
-              <Button
-                type='primary'
-                theme='solid'
-                onClick={handleAffLinkClick}
-                icon={<Copy size={14} />}
-                className='!rounded-lg'
-              >
-                {t('复制')}
-              </Button>
+              // 两个按钮包一层带右间距的容器：Semi 的 suffix 是紧贴输入框右边框的，
+              // 复制按钮原本几乎顶着边，再塞一个二维码按钮会更挤。
+              <Space spacing={4} className='mr-1'>
+                <Button
+                  theme='borderless'
+                  onClick={() => setQrVisible(true)}
+                  icon={<QrCode size={14} />}
+                  className='!rounded-lg'
+                  disabled={!affLink}
+                >
+                  {t('二维码')}
+                </Button>
+                <Button
+                  type='primary'
+                  theme='solid'
+                  onClick={handleAffLinkClick}
+                  icon={<Copy size={14} />}
+                  className='!rounded-lg'
+                >
+                  {t('复制')}
+                </Button>
+              </Space>
             }
           />
         </Card>
@@ -173,6 +189,35 @@ const InvitationCard = ({ t, userState, affLink, handleAffLinkClick }) => {
           <InvitedUsersTable t={t} onStats={setStats} />
         </Card>
       </Space>
+
+      <Modal
+        title={t('邀请二维码')}
+        visible={qrVisible}
+        onCancel={() => setQrVisible(false)}
+        footer={null}
+        centered
+        width={320}
+      >
+        <div className='flex flex-col items-center gap-3 py-2'>
+          {/*
+            白底留边是二维码能被扫出来的前提：深色模式下容器背景是深的，
+            SVG 的浅色模块会和背景糊在一起，多数扫码器直接识别不了。
+          */}
+          <div className='rounded-lg bg-white p-3'>
+            <QRCodeSVG value={affLink || ''} size={200} />
+          </div>
+          <Text type='tertiary' size='small' className='text-center'>
+            {t('好友扫码注册即计入你的邀请')}
+          </Text>
+          <Text
+            type='tertiary'
+            size='small'
+            className='break-all text-center opacity-70'
+          >
+            {affLink}
+          </Text>
+        </div>
+      </Modal>
     </Card>
   );
 };

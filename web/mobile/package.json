@@ -10,6 +10,7 @@
     "dayjs": "^1.11.11",
     "i18next": "^23.16.8",
     "localforage": "^1.10.0",
+    "qrcode.react": "^4.2.0",
     "react": "^18.2.0",
     "react-dom": "^18.2.0",
     "react-i18next": "^13.0.0",
