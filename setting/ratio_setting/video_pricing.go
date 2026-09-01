@@ -21,21 +21,42 @@ import (
 )
 
 const (
-	VideoPriceModeToken   = "token"
-	VideoPriceModePerCall = "per_call"
+	VideoPriceModeToken     = "token"
+	VideoPriceModePerCall   = "per_call"
+	VideoPriceModePerSecond = "per_second"
 
 	VideoPriceKeyWithVideo    = "with_video"
 	VideoPriceKeyWithoutVideo = "without_video"
+
+	// VideoPriceRowFallback 是分辨率维度的兜底行,语义同 GroupModelRatio 的 "*":
+	// 精确行优先,未列出的分辨率落到它。
+	//
+	// 为什么必须有:分辨率这一维**没有后端校验**(理由见 common/media_model_config.go
+	// 文件头——运营填档位词、客户端发精确像素,字符串比较永远对不上,当白名单会把
+	// 合法请求拒成 400),所以 API 直连可以传任意 size。而两种形态是两套坐标系:
+	// LTX 的 1080p 档真实像素 1920×1088,VideoResolutionTier 按短边归档得到 "4k",
+	// 矩阵里没这一行就静默回退固定价——最贵的档反而收得最少。
+	VideoPriceRowFallback = "*"
 )
 
 // VideoPriceEntry 单个模型的计费矩阵。
 //
-//	Token:   [分辨率][with_video|without_video] → $/百万 tokens
-//	PerCall: [分辨率][秒数]                      → $/次
+//	Token:     [分辨率][with_video|without_video] → $/百万 tokens
+//	PerCall:   [分辨率][秒数]                      → $/次
+//	PerSecond: [分辨率]                            → $/秒
+//
+// PerSecond 为什么不并进 PerCall 的通配列:PerCall 的列名校验要求正整数秒
+// (拼错的列名会静默失配,见 validate),开一个 "*" 口子就得放宽这道校验;而且同一
+// 张表里混着「总价」与「单价」两种语义,运营看不出哪格是哪种。三种模式各自语义
+// 单一,编辑器也好画。
+//
+// 适用:时长连续的模型。minimax-h3 是 4~15 秒、LTX-2.5 的 1080p 到 17.7 秒,
+// 穷举成 PerCall 要 92 格,按秒只要 6 格。
 type VideoPriceEntry struct {
-	Mode    string                        `json:"mode"`
-	Token   map[string]map[string]float64 `json:"token,omitempty"`
-	PerCall map[string]map[string]float64 `json:"per_call,omitempty"`
+	Mode      string                        `json:"mode"`
+	Token     map[string]map[string]float64 `json:"token,omitempty"`
+	PerCall   map[string]map[string]float64 `json:"per_call,omitempty"`
+	PerSecond map[string]float64            `json:"per_second,omitempty"`
 }
 
 var videoPricingMap = types.NewRWMap[string, VideoPriceEntry]()
@@ -90,6 +111,43 @@ func (e VideoPriceEntry) LookupPerCall(resolution string, seconds int) (float64,
 	return lookupCell(e.PerCall, resolution, strconv.Itoa(seconds))
 }
 
+// LookupPerSecond 查 $/秒。仅 per_second 模式有效。
+//
+// 价格 <= 0 一律视为**未配置**而非"免费",与 lookupCell 同口径:调用方无从区分
+// 「这一档没填」与「这一档就是 0」,而未配置时的正确行为是回退旧计费路径。
+func (e VideoPriceEntry) LookupPerSecond(resolution string) (float64, bool) {
+	if e.Mode != VideoPriceModePerSecond || len(e.PerSecond) == 0 {
+		return 0, false
+	}
+	want := normalizeResolutionKey(resolution)
+	if want == "" {
+		return 0, false
+	}
+	// 形状必须与 lookupCell 逐行对应:外层按「精确行 → 兜底行」依次试,单行查不到
+	// (含价格 <= 0 这种"未配置"形态)只结束本行,不结束整次查找。写成在行内直接
+	// return false 的话,配了 {"1080p": 0, "*": 0.02} 时兜底行一次都试不到——而
+	// 0 既然等于未配置,它就该和「这一行不存在」表现一致。
+	for _, key := range []string{want, VideoPriceRowFallback} {
+		if p, ok := lookupPerSecondRow(e.PerSecond, key); ok {
+			return p, true
+		}
+	}
+	return 0, false
+}
+
+func lookupPerSecondRow(table map[string]float64, wantRow string) (float64, bool) {
+	for r, price := range table {
+		if normalizeResolutionKey(r) != wantRow {
+			continue
+		}
+		if price <= 0 {
+			return 0, false
+		}
+		return price, true
+	}
+	return 0, false
+}
+
 // lookupCell 行列都按归一化后的键匹配(小写、去空格;秒数取前导整数),
 // 容忍运营把 "720P" / "5s" 这类形态填进来。
 //
@@ -103,6 +161,17 @@ func lookupCell(table map[string]map[string]float64, row, col string) (float64, 
 	if wantRow == "" {
 		return 0, false
 	}
+	// 精确行优先,未列出的分辨率落兜底行。兜底只作用在**分辨率**这一维:
+	// 秒数维度是离散且可穷举的,给它兜底等于抹掉时长差异,那正是 per_second 该做的事。
+	for _, key := range []string{wantRow, VideoPriceRowFallback} {
+		if p, ok := lookupRow(table, key, col); ok {
+			return p, true
+		}
+	}
+	return 0, false
+}
+
+func lookupRow(table map[string]map[string]float64, wantRow, col string) (float64, bool) {
 	for r, cols := range table {
 		if normalizeResolutionKey(r) != wantRow {
 			continue
@@ -166,9 +235,21 @@ func (e VideoPriceEntry) validate(model string) error {
 			}
 			return nil
 		})
+	case VideoPriceModePerSecond:
+		// 一维表,复用 validateTable 要先包一层——包出来的假列名不参与校验,
+		// 单价的合法性判据(非负、非 NaN/Inf)与二维表逐字一致。
+		for row, price := range e.PerSecond {
+			if normalizeResolutionKey(row) == "" {
+				return fmt.Errorf("模型 %s: 分辨率不能为空", model)
+			}
+			if math.IsNaN(price) || math.IsInf(price, 0) || price < 0 {
+				return fmt.Errorf("模型 %s: %s 的每秒单价非法(%v)", model, row, price)
+			}
+		}
+		return nil
 	default:
-		return fmt.Errorf("模型 %s: 计费模式只能是 %s / %s,收到 %q",
-			model, VideoPriceModeToken, VideoPriceModePerCall, e.Mode)
+		return fmt.Errorf("模型 %s: 计费模式只能是 %s / %s / %s,收到 %q",
+			model, VideoPriceModeToken, VideoPriceModePerCall, VideoPriceModePerSecond, e.Mode)
 	}
 }
 
