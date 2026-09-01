@@ -22,7 +22,12 @@ export const formatPriceWithCeiling = (value, precision = 2) => {
 
   const factor = 10 ** precision;
   const scaled = numericValue * factor;
-  const tolerance = Number.EPSILON * Math.max(1, Math.abs(scaled));
+  // 容差要盖住**存储精度**而不只是浮点运算精度：model_ratio 在库里存 12 位小数，
+  // 舍入方向朝上时误差经 ×2×汇率 放大到 scaled 尺度的 1e-10——比 Number.EPSILON
+  // 大四个数量级。用 EPSILON 的话，定价本意为整数元的模型有一半会凭空多进 1 分
+  // （Kimi-K3 输出价显示 ¥100.01 而非 ¥100.00）。
+  // 1e-9 相对容差离 1 分（scaled 尺度的 1）还差 9 个数量级，不会吞掉真实超出。
+  const tolerance = 1e-9 * Math.max(1, Math.abs(scaled));
   const ceilThreshold = 1 / (factor * 10);
 
   const settled =
