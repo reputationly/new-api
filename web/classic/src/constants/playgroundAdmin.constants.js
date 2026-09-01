@@ -747,6 +747,36 @@ export const tabScopedValue = (modelEntry, tabKey, field) => {
 export const normalizeModelNote = (v) =>
   typeof v === 'string' ? v.trim() : '';
 
+// ---------------------------------------------------------------------------
+// 模型级「AI 优化提示词」系统提示词（tab 级存放）
+// ---------------------------------------------------------------------------
+// 运营为**某个 tab 下的某个模型**单独改写的优化系统提示词，存在
+// models[name].tabs[tabKey].optimizePrompt。取值链：
+//   模型级（这里）→ tab 级通用（PlaygroundTabConfig 的 promptOptimize.systemPrompt）
+//   → 内置默认（promptOptimize.constants.js，按 tab + 引擎族）
+//
+// 为什么需要这一层：系统提示词此前只有 tab 级一份，而同一个 tab 完全可以挂多个引擎族
+// 的模型（文生视频同时挂 wan / MiniMax H3 / LTX-2.5，文生音乐同时挂 ACE-Step /
+// MiniMax-Music3），各家要的模板形状彼此相反 —— 运营一旦改写 tab 那份，其余引擎族的
+// 模型就被迫用它，不报错、只是默默出差档。有了模型级覆盖，「给这一个模型单独写一份」
+// 不再需要把它拆到另一个 tab。
+//
+// 与 note 同层同理：纯文案、不是参数，故不进 tab.fields，也就不会被 recomputeModelLevel
+// 反推到模型级。
+export const normalizeModelOptimizePrompt = (v) =>
+  typeof v === 'string' ? v.trim() : '';
+
+// 由 /api/status 里的原始 option（字符串或对象）取某模型在某 tab 下的优化系统提示词。
+// 未配置返回 ''，调用方据此回落 tab 级。与 buildModelNoteIndex 同一取舍：用户端只要
+// 这一个字段，走通用 JSON 解析，不把四份配置各自的规范化函数都拖进来。
+export const getModelOptimizePrompt = (raw, tabKey, model) => {
+  if (!tabKey || !model) return '';
+  const parsed = parseModelConfig(raw);
+  return normalizeModelOptimizePrompt(
+    parsed?.models?.[model]?.tabs?.[tabKey]?.optimizePrompt,
+  );
+};
+
 // 由 /api/status 里的原始 option（字符串或对象）建「模型名 -> 该 tab 备注」索引。
 // 体验区侧只要备注这一个字段，走通用 JSON 解析即可，不必把四份配置各自的规范化函数
 // 都拖进用户端。

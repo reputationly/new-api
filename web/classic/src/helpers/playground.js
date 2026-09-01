@@ -59,6 +59,28 @@ export function isPlaygroundConfigIssue(message) {
   return PLAYGROUND_CONFIG_ISSUE_RE.test(String(message || ''));
 }
 
+// 剥掉推理模型混在正文里的思考段。
+//
+// 上面那三处辅助调用(AI 优化提示词 / 中译英 / ACE-Step 生成方案)拿到 content 之后
+// 都直接用:优化的结果回填输入框、翻译的结果发给引擎、方案的结果 JSON.parse。
+// 一旦运营把辅助模型配成推理模型(Qwen3.8、DeepSeek V4 Flash 这类现在是常态),
+// 而上游又把思考拼进 content 而不是单独的 reasoning_content 字段,后果分别是:
+// 输入框里灌进一整段思考过程(不报错)、把思考发给生成引擎、JSON.parse 直接失败。
+//
+// **取最后一个 </think> 之后的部分**,而不是用 constants/playground.constants.js 的
+// THINK_TAG_REGEX 去匹配成对标签 —— 那个正则要求 <think> 与 </think> 都在正文里,
+// 而最常见的形态恰恰是只有闭标签:很多模型的 chat template 会在助手轮的开头就替模型
+// 写好 <think>,于是 completion 里只剩「思考…</think>\n\n正文」。用成对匹配的正则
+// 一个字都剥不掉。取最后一个闭标签之后的做法对两种形态都成立。
+//
+// 没有闭标签时原样返回(包括「只有 <think> 开头、被截断」这种):这时正文本就不存在,
+// 与其猜着截,不如让调用方按「模型未返回内容」报错——那是实话。
+export function stripModelThinking(text) {
+  const s = String(text || '');
+  const end = s.lastIndexOf('</think>');
+  return end === -1 ? s : s.slice(end + '</think>'.length);
+}
+
 // 一个模型挂多个非 chat 端点时，按 priority 选第一个用于弹框展示。
 export function pickPrimaryUnsupportedEndpoint(modelEndpointTypes, model) {
   const types = modelEndpointTypes?.get?.(model) || [];

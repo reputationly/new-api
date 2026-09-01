@@ -4,17 +4,21 @@ import {
   Banner,
   Button,
   Card,
+  Collapse,
   Empty,
   Input,
   InputNumber,
   Select,
   Switch,
+  Tag,
   TextArea,
   Typography,
 } from '@douyinfe/semi-ui';
 import { Trash2 } from 'lucide-react';
 import {
+  MUSIC_ENGINE_MINIMAX_MUSIC3,
   PLAYGROUND_MODEL_LEVEL_FIELDS,
+  normalizeModelOptimizePrompt,
   getTabDisplay,
   getTabFieldLock,
   getTabPromptGuide,
@@ -95,6 +99,36 @@ const TabPanel = ({ category, tab, draft }) => {
   const mixedShownTemplate = tabEngine
     ? t('{{engine}} 的专用模板', { engine: engineLabel(tabEngine) })
     : t('通用模板');
+
+  // 某个模型「不定制的话实际会用哪一份」:tab 级改写 → 该模型自己引擎族的内置默认。
+  // 与体验区运行时的取值链同源(usePromptOptimize:模型级 → tab 级 → 内置默认),模型卡
+  // 片里的占位符与「填入当前生效的内容」都用它 —— 各写一份判断,迟早出现「管理端展示
+  // 的是 A、用户点按钮用的是 B」,而这种分叉不报错。
+  //
+  // 这里按**模型自己的 engine** 取,而不是上面那个 tabEngine 猜出来的:模型卡片这一层
+  // 本来就没有歧义,拿全 tab 的猜测覆盖掉确定的事实只会把错的递给运营。
+  const effectivePrompt = (m) =>
+    (optimize.systemPrompt || '').trim() ||
+    defaultOptimizeSystemPrompt(tab.key, m?.engine || '');
+
+  // 「这个模型到底定制过没有」:判据必须与运行时同一口径(getModelOptimizePrompt 先
+  // trim 再判空),否则敲两个空格就会出现「标签写着已定制、实际跟随 tab」——管理端
+  // 说谎比配错更难查。两边共用 normalizeModelOptimizePrompt。
+  const customizedPrompt = (e) =>
+    normalizeModelOptimizePrompt(e?.optimizePrompt);
+
+  // 文生音乐下的 ACE-Step:体验区那个按钮走的是 draftPlan 分支(一次产出描述/歌词/
+  // BPM/调式/时长并回填左侧控件),**根本不是**「AI 优化提示词」,故这里配的模板一个字
+  // 都不会被用到。不隐藏输入框而是给一条告警:隐藏看起来像 bug,而且判断本身是复制来的。
+  //
+  // ⚠️ 这条判据抄自 useMusicGeneration 的 draftAvailable(t2m + 引擎非 Music3),是**第二
+  // 份实现**。之所以接受:把整支音乐 hook 拖进管理页只为拿一个布尔值代价更大,且这里
+  // 只影响一句提示文案、没有任何行为依赖它。draftAvailable 的引擎规则若改,这句话会过时
+  // (不会出错),改那边时请顺手搜一下本文件。
+  const draftPlanOnly = (m) =>
+    category === 'music' &&
+    tab.key === 't2m' &&
+    (m?.engine || '') !== MUSIC_ENGINE_MINIMAX_MUSIC3;
 
   const candidates = useMemo(() => {
     const taken = new Set(rows.map((r) => r.name));
@@ -260,7 +294,7 @@ const TabPanel = ({ category, tab, draft }) => {
             />
             <Text>{t('在本 tab 的提示词框上显示「AI 优化提示词」按钮')}</Text>
           </div>
-          <Text size='small'>{t('优化系统提示词')}</Text>
+          <Text size='small'>{t('优化系统提示词（本 tab 通用方案）')}</Text>
           <TextArea
             rows={10}
             value={optimize.systemPrompt}
@@ -302,7 +336,7 @@ const TabPanel = ({ category, tab, draft }) => {
           </div>
           <Text type='tertiary' size='small' className='block mt-2'>
             {t(
-              '留空即使用内置默认（占位符里就是它），后续版本调优默认值时会自动跟随；改写后则以此为准。用哪个语言模型在「通用设置」里配，用户端不出模型选择器。',
+              '这是本 tab 的通用方案：留空即使用内置默认（占位符里就是它），后续版本调优默认值时会自动跟随；改写后则以此为准。下方每个模型还可以各自定制一份（模型级优先于这里），不定制就用这份通用的。用哪个语言模型在「通用设置」里配，用户端不出模型选择器。',
             )}
           </Text>
           {tabEngine && !mixedEngines && (
@@ -316,7 +350,7 @@ const TabPanel = ({ category, tab, draft }) => {
           {mixedEngines && (
             <Text type='warning' size='small' className='block mt-1'>
               {t(
-                '⚠️ 本 tab 同时挂着多个引擎族的模型，而系统提示词只有一份（tab 级）。占位符与「填入默认内容」给的是{{shown}}，一旦写进去，其余引擎族的模型也会被迫用它——各家模板形状彼此相反（MiniMax H3 要带字段名的分段结构、LTX-2.5 要长段单段落视听描述、通用版要一句话镜头描述），混用不报错、只是效果变差。要么留空（此时各模型按自己的引擎族取内置默认），要么把它们拆到不同 tab。',
+                '⚠️ 本 tab 同时挂着多个引擎族的模型，而这份系统提示词是 tab 级的、对它们一视同仁。占位符与「填入默认内容」给的是{{shown}}，一旦写进去，其余引擎族的模型也会被迫用它——各家模板形状彼此相反（MiniMax H3 要带字段名的分段结构、LTX-2.5 要长段单段落视听描述、通用版要一句话镜头描述），混用不报错、只是效果变差。两条路：这里留空（各模型按自己的引擎族取内置默认），或者到下方模型卡片里给需要特殊对待的模型单独定制一份（模型级优先于这里）。',
                 { shown: mixedShownTemplate },
               )}
             </Text>
@@ -409,6 +443,93 @@ const TabPanel = ({ category, tab, draft }) => {
                   )}
                 </Text>
               </div>
+              {/* 模型级的优化系统提示词:不定制就跟随上面那份 tab 通用方案。
+                  折叠起来是因为它是长文本、且多数模型不需要定制 —— 展开与否用
+                  「已定制 / 跟随本 tab」的标签一眼可辨,不必逐个点开确认。
+                  占位符按**这个模型自己的引擎族**取默认,与 tab 那份按全 tab 猜一个
+                  引擎不同:模型卡片这一层本来就没有歧义。 */}
+              {tab.promptOptimize && (
+                <div className='mb-3'>
+                  {draftPlanOnly(model) && (
+                    <Text type='warning' size='small' className='block mb-1'>
+                      {t(
+                        '⚠️ 本模型走「一键生成方案」分支（ACE-Step：一次产出描述、歌词、BPM、调式与时长并回填左侧控件），体验区不会给它「AI 优化提示词」按钮——这里配的模板不会被用到。要用模型级模板，请把模型的引擎族声明为 MiniMax-Music3。',
+                      )}
+                    </Text>
+                  )}
+                  <Collapse>
+                    <Collapse.Panel
+                      itemKey='optimizePrompt'
+                      header={
+                        <span className='flex items-center gap-2'>
+                          <Text size='small'>{t('AI 优化提示词')}</Text>
+                          <Tag
+                            size='small'
+                            color={customizedPrompt(entry) ? 'blue' : 'grey'}
+                          >
+                            {customizedPrompt(entry)
+                              ? t('已定制')
+                              : t('跟随本 tab')}
+                          </Tag>
+                        </span>
+                      }
+                    >
+                      <TextArea
+                        rows={10}
+                        value={entry.optimizePrompt || ''}
+                        onChange={(v) =>
+                          draft.setTabField(
+                            storeKey,
+                            tab.key,
+                            name,
+                            'optimizePrompt',
+                            v,
+                          )
+                        }
+                        placeholder={effectivePrompt(model)}
+                      />
+                      <div className='flex items-center gap-3 mt-2'>
+                        <Button
+                          size='small'
+                          theme='borderless'
+                          disabled={!customizedPrompt(entry)}
+                          onClick={() =>
+                            draft.setTabField(
+                              storeKey,
+                              tab.key,
+                              name,
+                              'optimizePrompt',
+                              '',
+                            )
+                          }
+                        >
+                          {t('跟随本 tab')}
+                        </Button>
+                        <Button
+                          size='small'
+                          theme='borderless'
+                          onClick={() =>
+                            draft.setTabField(
+                              storeKey,
+                              tab.key,
+                              name,
+                              'optimizePrompt',
+                              effectivePrompt(model),
+                            )
+                          }
+                        >
+                          {t('填入当前生效的内容以便修改')}
+                        </Button>
+                      </div>
+                      <Text type='tertiary' size='small' className='block mt-2'>
+                        {t(
+                          '留空=用上面那份 tab 通用方案（占位符里就是当前对本模型实际生效的内容）。只在这个模型需要跟别人不一样时才填——典型是同一玩法下挂了不同引擎族的模型，各家要的模板形状本就相反。',
+                        )}
+                      </Text>
+                    </Collapse.Panel>
+                  </Collapse>
+                </div>
+              )}
               {/* 玩法声明:本 tab 覆盖多个门面 task_type 时,由运营指明这个模型是哪一个。
                   不走 fields —— 它不是参数,不该被 recomputeModelLevel 反推到模型级。 */}
               {tab.taskTypeChoices && (

@@ -2,12 +2,17 @@ import { useCallback, useContext, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { StatusContext } from '../../context/Status';
 import { API, showError, showInfo } from '../../helpers';
-import { isPlaygroundConfigIssue } from '../../helpers/playground';
+import {
+  isPlaygroundConfigIssue,
+  stripModelThinking,
+} from '../../helpers/playground';
 import {
   parsePlaygroundTabConfig,
+  getModelOptimizePrompt,
   getPlaygroundTab,
   getPromptOptimizeGlobal,
   getTabPromptOptimize,
+  getTabStoreKey,
 } from '../../constants/playgroundAdmin.constants';
 import { defaultOptimizeSystemPrompt } from '../../constants/promptOptimize.constants';
 
@@ -26,26 +31,36 @@ import { defaultOptimizeSystemPrompt } from '../../constants/promptOptimize.cons
 // 「不可用」——照它藏按钮会把功能从本来能用的人眼前拿走,那比报个错糟得多。
 // 分组配错时改为在 catch 里给一句能行动的提示。
 //
-// 系统提示词优先用运营为该 tab 改写的版本,留空则用内置默认
-// (constants/promptOptimize.constants.js,按 tab 分开写)。
+// 系统提示词三级取值:**模型级改写 → tab 级通用改写 → 内置默认**
+// (constants/promptOptimize.constants.js,按 tab + 引擎族分开写)。
 //
-// 第三个参数是可选的模型上下文,只有视频体验区传:
+// 模型级那层是后加的,解决的是「一个 tab 挂多个引擎族」:tab 级只有一份,运营一旦改写
+// 它,同 tab 下别家引擎的模型也被迫用这份形状不对的模板(H3 要带字段名的分段结构、
+// LTX-2.5 要长段视听描述、通用版要一句话镜头描述),不报错、只是默默出差档。
+// 运营在体验区管理的模型卡片里给单个模型另写一份即可,留空则跟随 tab。
+//
+// 第三个参数是可选的模型上下文:
+//   model   —— 当前选中的模型名,用来取它的模型级改写;不传即只走 tab 级(原行为);
 //   engine  —— 所选模型的引擎族(minimax-h3 要的是分段结构,与通用契约形状相反);
 //   context —— 本次请求的既成事实(传了首帧还是尾帧、选了几秒、有几张参考图)。
 //              优化模型看不到左侧面板,不喂它就只能猜,猜错同样不报错、只是默默变差。
-// 两者都留空即维持原行为(手机端 PromptBar、图像/音乐体验区都不传)。
 //
 // 返回 { available, optimizing, optimize }。optimize(text) 成功返回优化后的字符串,
 // 失败返回 null 并已弹过错误提示 —— 调用方只需判空后回填输入框。
 export const usePromptOptimize = (
   category,
   tabKey,
-  { engine, context } = {},
+  { engine, context, model: selectedModel } = {},
 ) => {
   const { t } = useTranslation();
   const [statusState] = useContext(StatusContext);
   const [optimizing, setOptimizing] = useState(false);
   const raw = statusState?.status?.PlaygroundTabConfig;
+  // 模型级改写存在四份 ModelConfig 的 models[x].tabs[y].optimizePrompt 里,哪一份由
+  // getTabStoreKey 决定 —— 「视频配音」入口在语音页、模型却配在 VideoModelConfig,
+  // 与 useModelNotes 同一套,这里不需要特判。
+  const storeKey = getTabStoreKey(category, tabKey);
+  const modelConfigRaw = storeKey ? statusState?.status?.[storeKey] : null;
 
   const { available, model, group, systemPrompt } = useMemo(() => {
     const cfg = parsePlaygroundTabConfig(raw);
@@ -62,10 +77,11 @@ export const usePromptOptimize = (
       // context 无条件追加在末尾:它不是模板而是本次请求的事实,运营改写过模板时
       // 同样需要(改写的多半也是 H3 模板,少了这段照样分不清 I2VA / L2VA)。
       systemPrompt:
-        ((tab.systemPrompt || '').trim() ||
+        (getModelOptimizePrompt(modelConfigRaw, tabKey, selectedModel) ||
+          (tab.systemPrompt || '').trim() ||
           defaultOptimizeSystemPrompt(tabKey, engine)) + (context || ''),
     };
-  }, [raw, category, tabKey, engine, context]);
+  }, [raw, modelConfigRaw, category, tabKey, selectedModel, engine, context]);
 
   const optimize = useCallback(
     async (rawText) => {
@@ -99,8 +115,11 @@ export const usePromptOptimize = (
           },
           { skipErrorHandler: true },
         );
-        // 模型偶尔会包一层 ``` 围栏或首尾引号,剥掉再回填。
-        const out = (res?.data?.choices?.[0]?.message?.content || '')
+        // 先剥思考段再剥围栏:围栏那条正则是 ^ 锚定的,思考段还在前面时它匹配不到。
+        // 推理模型把思考拼进 content 时,不剥就等于把整段思考回填进用户的输入框。
+        const out = stripModelThinking(
+          res?.data?.choices?.[0]?.message?.content,
+        )
           .trim()
           .replace(/^```(?:\w+)?\s*/i, '')
           .replace(/\s*```$/, '')

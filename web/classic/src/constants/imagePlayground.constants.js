@@ -2,6 +2,7 @@
 
 import {
   normalizeModelNote,
+  normalizeModelOptimizePrompt,
   tabScopedValue,
 } from './playgroundAdmin.constants';
 
@@ -134,6 +135,10 @@ const normalizeImageTabs = (raw) => {
     if (sizes.length) entry.sizes = sizes;
     const note = normalizeModelNote(cfg?.note);
     if (note) entry.note = note;
+    // 「AI 优化提示词」的模型级系统提示词覆盖(留空=用 tab 那份通用的)。白名单式重建，
+    // 漏了它 = 管理页保存一次就把运营刚写的模板删掉。
+    const optimizePrompt = normalizeModelOptimizePrompt(cfg?.optimizePrompt);
+    if (optimizePrompt) entry.optimizePrompt = optimizePrompt;
     out[tabKey] = entry;
   });
   return out;

@@ -169,6 +169,8 @@ const MusicChatArea = ({
   turnLimitReached = false,
   missingRequiredAudio = false,
   engine = 'acestep',
+  // 选中的模型名：「AI 优化提示词」按它取模型级的系统提示词改写（没写则跟随 tab）。
+  selectedModel = '',
   mode = 't2m',
   needsText = true,
   showTranslation = false,
@@ -543,6 +545,7 @@ const MusicChatArea = ({
             category='music'
             tabKey={mode}
             engine={engine}
+            model={selectedModel}
             value={inputValue}
             onChange={setInputValue}
             disabled={generating}

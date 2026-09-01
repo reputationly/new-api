@@ -73,6 +73,7 @@ const ImagePlaygroundBody = ({ mode }) => {
           turnLimitReached={turnLimitReached}
           missingRequiredImage={missingRequiredImage}
           mode={mode}
+          selectedModel={inputs.model}
           showPresets={!isI2I}
           styleState={styleState}
           onSend={generate}

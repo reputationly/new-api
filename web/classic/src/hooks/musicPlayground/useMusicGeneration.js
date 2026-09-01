@@ -14,7 +14,10 @@ import {
   hydrateConversationsFromStorage,
   stripUnresolvedMediaRefs,
 } from '../../helpers/playgroundMediaStorage';
-import { isPlaygroundConfigIssue } from '../../helpers/playground';
+import {
+  isPlaygroundConfigIssue,
+  stripModelThinking,
+} from '../../helpers/playground';
 import {
   parsePlaygroundTabConfig,
   getPromptOptimizeGlobal,
@@ -818,7 +821,10 @@ export const useMusicGeneration = (mode = 't2m') => {
         },
         { skipErrorHandler: true },
       );
-      const out = (res?.data?.choices?.[0]?.message?.content || '').trim();
+      // 剥思考段:辅助模型是推理模型时,不剥就会把整段思考当成译文发给生成引擎。
+      const out = stripModelThinking(
+        res?.data?.choices?.[0]?.message?.content,
+      ).trim();
       if (!out) throw new Error('translate-empty');
       return out;
     },
@@ -868,7 +874,11 @@ export const useMusicGeneration = (mode = 't2m') => {
             },
             { skipErrorHandler: true },
           );
-          out = (res?.data?.choices?.[0]?.message?.content || '').trim();
+          // 剥思考段:推理模型的思考若混在 content 里,下面的 JSON.parse 必然失败,
+          // 而报出来的是「模型没有返回可用的方案」——把人引向「换个模型」,查不到真因。
+          out = stripModelThinking(
+            res?.data?.choices?.[0]?.message?.content,
+          ).trim();
         } catch (e) {
           const msg = e?.response?.data?.error?.message || e?.message || '';
           showError(

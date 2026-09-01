@@ -10,6 +10,7 @@
 
 import {
   normalizeModelNote,
+  normalizeModelOptimizePrompt,
   tabScopedValue,
   MUSIC_ENGINE_MINIMAX_MUSIC3,
 } from './playgroundAdmin.constants';
@@ -326,6 +327,11 @@ const normalizeMusicTabs = (raw) => {
     }
     const note = normalizeModelNote(cfg?.note);
     if (note) entry.note = note;
+    // 「AI 优化提示词」的模型级系统提示词覆盖(留空=用 tab 那份通用的)。白名单式重建，
+    // 漏了它 = 管理页保存一次就把运营刚写的模板删掉。文生音乐正是最需要它的场景：
+    // ACE-Step 与 MiniMax-Music3 同挂 t2m，两者的描述位语义相反。
+    const optimizePrompt = normalizeModelOptimizePrompt(cfg?.optimizePrompt);
+    if (optimizePrompt) entry.optimizePrompt = optimizePrompt;
     out[tabKey] = entry;
   });
   return out;

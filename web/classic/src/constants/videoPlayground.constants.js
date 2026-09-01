@@ -3,6 +3,7 @@
 import {
   VIDEO_ENGINE_MINIMAX_H3,
   normalizeModelNote,
+  normalizeModelOptimizePrompt,
   tabScopedValue,
 } from './playgroundAdmin.constants';
 
@@ -838,6 +839,11 @@ const normalizeVideoTabEntry = (cfg) => {
   // 模型备注：纯展示项(体验区模型下拉里给用户看)，与 taskType 同理不进 tab.fields。
   const note = normalizeModelNote(cfg?.note);
   if (note) out.note = note;
+  // 「AI 优化提示词」的模型级系统提示词覆盖(留空=用 tab 那份通用的)。同上不进
+  // tab.fields。⚠️ 这里同样是白名单式重建：漏了它 = 运营在管理页保存一次就把刚写的
+  // 模板删掉，而症状是「优化效果某天起悄悄退回通用版」。
+  const optimizePrompt = normalizeModelOptimizePrompt(cfg?.optimizePrompt);
+  if (optimizePrompt) out.optimizePrompt = optimizePrompt;
   return out;
 };
 

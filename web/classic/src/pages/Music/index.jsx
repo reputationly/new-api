@@ -94,6 +94,7 @@ const MusicPlaygroundBody = ({ mode, initialSrcTaskId = '', onSendToSrc }) => {
           turnLimitReached={turnLimitReached}
           missingRequiredAudio={missingRequiredAudio}
           engine={engine}
+          selectedModel={inputs.model}
           mode={mode}
           needsText={needsText}
           showTranslation={showTranslation}

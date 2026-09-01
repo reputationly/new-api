@@ -87,6 +87,8 @@ const ImageChatArea = ({
   turnLimitReached = false,
   missingRequiredImage = false,
   mode = 'text2image',
+  // 选中的模型名：「AI 优化提示词」按它取模型级的系统提示词改写（没写则跟随 tab）。
+  selectedModel = '',
   showPresets = false,
   onSend,
   onRegenerate,
@@ -329,6 +331,7 @@ const ImageChatArea = ({
         <PromptOptimizeButton
           category='image'
           tabKey={mode}
+          model={selectedModel}
           value={inputValue}
           onChange={setInputValue}
           disabled={generating}

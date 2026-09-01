@@ -593,6 +593,7 @@ const VideoChatArea = ({
           }}
           disabled={taskSlotsFull}
           onOptimizingChange={setOptimizing}
+          model={selectedModel}
           engine={optimizeEngine}
           optimizeContext={optimizeContext}
         />

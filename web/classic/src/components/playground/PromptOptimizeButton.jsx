@@ -14,6 +14,9 @@ import AiAssistButton from './AiAssistButton';
 // 动的灰按钮好懂。优化过程中按钮转圈并禁用，同时通过 onOptimizingChange 把状态抬给
 // 调用方去灰掉发送按钮——这一步是真的不能发：请求在途，此刻发出去的还是没优化的原文。
 //
+// model 是当前选中的模型名：运营可以在体验区管理里给单个模型另写一份优化系统提示词
+// （models[x].tabs[y].optimizePrompt），不写则跟随 tab 那份通用的。不传即只走 tab 级。
+//
 // engine / optimizeContext 只有视频体验区传（选中模型的引擎族、本次请求的输入形态与
 // 时长），用来给 MiniMax H3 换一套分段结构的系统提示词；不传即维持原行为。
 const PromptOptimizeButton = ({
@@ -23,6 +26,7 @@ const PromptOptimizeButton = ({
   onChange,
   disabled = false,
   onOptimizingChange,
+  model,
   engine,
   optimizeContext,
 }) => {
@@ -30,7 +34,7 @@ const PromptOptimizeButton = ({
   const { available, optimizing, optimize } = usePromptOptimize(
     category,
     tabKey,
-    { engine, context: optimizeContext },
+    { engine, context: optimizeContext, model },
   );
   useEffect(() => {
     onOptimizingChange?.(optimizing);

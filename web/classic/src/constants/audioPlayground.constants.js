@@ -4,6 +4,7 @@
 
 import {
   normalizeModelNote,
+  normalizeModelOptimizePrompt,
   tabScopedValue,
 } from './playgroundAdmin.constants';
 
@@ -619,6 +620,15 @@ const normalizeAudioTabs = (raw) => {
     if (mb != null) entry.refAudioMaxMB = mb;
     const note = normalizeModelNote(cfg?.note);
     if (note) entry.note = note;
+    // 「AI 优化提示词」的模型级系统提示词覆盖(留空=用 tab 那份通用的)。
+    //
+    // **今天没有任何语音玩法用得上它**:四个玩法都没声明 promptOptimize(输入的是待合成
+    // 文本,改写=改内容),而「视频配音」的模型配在 VideoModelConfig(storeIn),走视频那份
+    // normalizer。仍然补上,是因为这里是白名单式重建:哪天给某个语音玩法加上
+    // promptOptimize,管理页会正常渲染、正常保存,然后在下次加载时被这里静默删掉 ——
+    // 那种「配了却留不住、还不报错」的故障排查代价远大于这三行。
+    const optimizePrompt = normalizeModelOptimizePrompt(cfg?.optimizePrompt);
+    if (optimizePrompt) entry.optimizePrompt = optimizePrompt;
     out[tabKey] = entry;
   });
   return out;
