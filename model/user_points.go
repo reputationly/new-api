@@ -2,6 +2,7 @@ package model
 
 import (
 	"errors"
+	"fmt"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
@@ -27,17 +28,45 @@ func IsUserPointsEligible(userId int) bool {
 	return cache.KycStatus == KYCStatusApproved || cache.EnterpriseStatus == EnterpriseStatusApproved
 }
 
-// NewUserPointsGrant 返回新用户注册应发放的积分数与对应 quota unit（未配置则两个 0）。
+// NewUserPointsGrant 返回新用户注册应发放的积分数、对应 quota unit，以及命中的渠道备注
+// （未命中渠道规则时为空串）。未配置则前两个为 0。
 //
 // 只受积分系统总开关约束，**不受 RequireKyc 约束**：注册礼是拉新钩子，注册那一刻就要
 // 落进账户、在使用日志里看得见、并且能直接花，跟着实名门走就没有钩子可言。规模由积分
-// 数额与注册门槛（邮箱验证/Turnstile）控制，损失面由白名单分组兜底。
-func NewUserPointsGrant() (points int, quota int) {
+// 数额与注册门槛（邮箱验证/Turnstile）控制，损失面由白名单分组兜底。渠道奖励沿用同一
+// 口径——它的宣传话术就是「注册立得」，加实名门会让对外承诺与实际到账时机对不上。
+//
+// inviterId 命中渠道奖励时**彻底覆盖** NewUserPoints，包括覆盖成 0（该渠道不送）。
+// 想让某渠道回落到默认值，把那条规则删掉或停用，而不是填 0。
+func NewUserPointsGrant(inviterId int) (points int, quota int, channel string) {
 	ps := operation_setting.GetPointsSetting()
-	if !ps.Enabled || ps.NewUserPoints <= 0 {
-		return 0, 0
+	if !ps.Enabled {
+		return 0, 0, ""
 	}
-	return ps.NewUserPoints, common.PointsToQuota(ps.NewUserPoints)
+	p := ps.NewUserPoints
+	if r, ok := operation_setting.GetChannelPointsReward(inviterId); ok {
+		p = r.Points
+		channel = r.Remark
+		if channel == "" {
+			channel = r.Username
+		}
+	}
+	if p <= 0 {
+		return 0, 0, ""
+	}
+	return p, common.PointsToQuota(p), channel
+}
+
+// newUserPointsLog 拼注册赠分的日志文案。命中渠道奖励时带上渠道名——渠道奖励额度
+// 通常远高于默认值，不标注的话对账时只看见一个偏大的数字，查不出该记到谁的推广账上。
+//
+// 两个注册路径（Insert / FinalizeOAuthUserCreation）共用，避免文案分叉后
+// 按关键字统计推广效果时漏掉其中一条。
+func newUserPointsLog(points int, channel string) string {
+	if channel == "" {
+		return fmt.Sprintf("新用户注册赠送 %d 积分", points)
+	}
+	return fmt.Sprintf("新用户注册赠送 %d 积分（渠道：%s）", points, channel)
 }
 
 // 积分账户原子增减，镜像 user.go 的 quota 操作（Redis Hash 异步缓存 + 可选批量更新）。

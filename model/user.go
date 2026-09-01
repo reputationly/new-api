@@ -66,6 +66,8 @@ type User struct {
 	// 只在这两步之间传值。不从 PointsBalance 反算：反算走的是实时 quota_per_point，
 	// 两步之间配置若被改，日志数字就和实际发放数对不上。
 	newUserPointsGranted int
+	// 命中的渠道备注，同样只在这两步之间传值；空串表示走的是默认注册赠分
+	newUserPointsChannel string
 }
 
 func (user *User) ToBaseUser() *UserBase {
@@ -592,7 +594,7 @@ func (user *User) Insert(inviterId int) error {
 	// 注册礼额度与积分两路独立：额度是真金白银的钱包，积分是营销赠送钱包（白名单分组下
 	// 优先抵扣）。运营可只发其一、都发或都不发，互不影响。随 Create 一起落库而不是建完
 	// 再 Increase——新号还没有缓存，一次写入即最终态，省掉一次写和一次缓存失效。
-	newUserPoints, newUserPointsQuota := NewUserPointsGrant()
+	newUserPoints, newUserPointsQuota, pointsChannel := NewUserPointsGrant(inviterId)
 	user.PointsBalance = newUserPointsQuota
 	//user.SetAccessToken(common.GetUUID())
 	user.AffCode = common.GetRandomString(4)
@@ -631,8 +633,10 @@ func (user *User) Insert(inviterId int) error {
 		RecordLog(user.Id, LogTypeSystem, fmt.Sprintf("新用户注册赠送 %s", logger.LogQuota(common.QuotaForNewUser)))
 	}
 	// 额度与积分各记一条：两者是两个钱包，合成一条反而看不出哪份进了哪边。
+	// 渠道奖励额度通常远高于默认值，日志里必须带上是哪个渠道给的，否则对账时
+	// 只看见一个偏大的数字，查不出该记到谁的推广账上。
 	if newUserPoints > 0 {
-		RecordLog(user.Id, LogTypeSystem, fmt.Sprintf("新用户注册赠送 %d 积分", newUserPoints))
+		RecordLog(user.Id, LogTypeSystem, newUserPointsLog(newUserPoints, pointsChannel))
 	}
 	// 只要存在邀请人就记录邀请关系（aff_count++），与奖励解耦。
 	// 邀请奖励改为被邀请人实名后发放积分（service.GrantKycPoints），此处不再发放任何额度。
@@ -656,9 +660,10 @@ func (user *User) InsertWithTx(tx *gorm.DB, inviterId int) error {
 	user.Quota = common.QuotaForNewUser
 	// 注册礼见 Insert 处注释；OAuth 路径同样随 tx.Create 一起落库，
 	// 积分数带给提交后的 FinalizeOAuthUserCreation 记日志
-	newUserPoints, newUserPointsQuota := NewUserPointsGrant()
+	newUserPoints, newUserPointsQuota, pointsChannel := NewUserPointsGrant(inviterId)
 	user.PointsBalance = newUserPointsQuota
 	user.newUserPointsGranted = newUserPoints
+	user.newUserPointsChannel = pointsChannel
 	user.AffCode = common.GetRandomString(4)
 	// 持久化邀请关系：OAuth 注册路径构造 user 时未设 InviterId，须在此落库，
 	// 否则被邀请人 inviter_id=0，既不出现在「我邀请的用户」，邀请人也拿不到实名后的邀请积分。
@@ -699,7 +704,8 @@ func (user *User) FinalizeOAuthUserCreation(inviterId int) {
 	}
 	// 用 InsertWithTx 带过来的发放数（user 就是写库时那个实例），与 Insert 路径同源
 	if user.newUserPointsGranted > 0 {
-		RecordLog(user.Id, LogTypeSystem, fmt.Sprintf("新用户注册赠送 %d 积分", user.newUserPointsGranted))
+		RecordLog(user.Id, LogTypeSystem,
+			newUserPointsLog(user.newUserPointsGranted, user.newUserPointsChannel))
 	}
 	// 只要存在邀请人就记录邀请关系（aff_count++），与奖励解耦。
 	// 邀请奖励改为被邀请人实名后发放积分（service.GrantKycPoints），此处不再发放任何额度。

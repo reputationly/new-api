@@ -17,6 +17,7 @@ import {
 } from '../../../helpers';
 import { useTranslation } from 'react-i18next';
 import { useNavigate } from 'react-router-dom';
+import ChannelPointsRewards from './components/ChannelPointsRewards';
 
 export default function SettingsPoints(props) {
   const { t } = useTranslation();
@@ -201,6 +202,16 @@ export default function SettingsPoints(props) {
           </Form.Section>
         </Form>
       </Spin>
+
+      {/*
+        放在积分设置之后、且不在那个 Form 里：它自己管加载与保存（单独一个 JSON
+        option key），塞进上面的 compareObjects 批量提交会把数组当标量比对。
+      */}
+      <ChannelPointsRewards
+        options={props.options}
+        refresh={props.refresh}
+        disabled={!inputs['points_setting.enabled']}
+      />
     </>
   );
 }
