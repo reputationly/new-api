@@ -40,6 +40,8 @@ import {
   TASK_ACTION_REFERENCE_GENERATE,
   TASK_ACTION_TEXT_GENERATE,
   TASK_ACTION_REMIX_GENERATE,
+  TASK_ACTION_IMAGE_GENERATE,
+  TASK_ACTION_IMAGE_EDIT,
 } from '../../../constants/common.constant';
 import { CHANNEL_OPTIONS } from '../../../constants/channel.constants';
 import { stringToColor } from '../../../helpers/render';
@@ -219,6 +221,21 @@ const renderType = (type, t, taskType) => {
           {t('视频Remix')}
         </Tag>
       );
+    // 图片任务。走到这里说明 data 里没有 task_type 可取——同步补记的记录没有 data，
+    // 异步的 data 是上游提交响应、也未必带。标签词与颜色对齐上面的 t2i/i2i,
+    // 否则同一件事会因为数据来源不同显示成两种。
+    case TASK_ACTION_IMAGE_GENERATE:
+      return (
+        <Tag color='cyan' shape='circle' prefixIcon={<Sparkles size={14} />}>
+          {t('文生图')}
+        </Tag>
+      );
+    case TASK_ACTION_IMAGE_EDIT:
+      return (
+        <Tag color='cyan' shape='circle' prefixIcon={<Sparkles size={14} />}>
+          {t('图生图')}
+        </Tag>
+      );
     default:
       return (
         <Tag color='white' shape='circle' prefixIcon={<HelpCircle size={14} />}>
@@ -325,6 +342,7 @@ export const getTaskLogsColumns = ({
   openContentModal,
   isAdminUser,
   openVideoModal,
+  openImageModal,
   openAudioModal,
 }) => {
   return [
@@ -519,6 +537,24 @@ export const getTaskLogsColumns = ({
               }}
             >
               {t('点击预览视频')}
+            </a>
+          );
+        }
+        // 图片任务（异步提交与同步补记共用同一组 action）。图片与视频共用 result_url，
+        // 但必须走 <img> 而不是 <video>——后者对 png 只会黑屏。
+        const isImageTask =
+          record.action === TASK_ACTION_IMAGE_GENERATE ||
+          record.action === TASK_ACTION_IMAGE_EDIT;
+        if (isSuccess && isImageTask && hasResultUrl) {
+          return (
+            <a
+              href='#'
+              onClick={(e) => {
+                e.preventDefault();
+                openImageModal(resultUrl, record.task_id);
+              }}
+            >
+              {t('点击预览图片')}
             </a>
           );
         }

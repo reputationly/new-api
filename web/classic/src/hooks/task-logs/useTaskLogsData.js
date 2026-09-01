@@ -73,6 +73,12 @@ export const useTaskLogsData = () => {
   const [videoUrl, setVideoUrl] = useState('');
   const [videoTaskId, setVideoTaskId] = useState('');
 
+  // 图片预览弹窗状态。与视频分开而不是共用一套：两者的弹窗同时挂在页面上，
+  // 共用 url 会让关掉图片弹窗的瞬间视频弹窗闪一下上一张图。
+  const [isImageModalOpen, setIsImageModalOpen] = useState(false);
+  const [imageUrl, setImageUrl] = useState('');
+  const [imageTaskId, setImageTaskId] = useState('');
+
   // Audio preview modal state
   const [isAudioModalOpen, setIsAudioModalOpen] = useState(false);
   const [audioClips, setAudioClips] = useState([]);
@@ -283,6 +289,13 @@ export const useTaskLogsData = () => {
     setIsVideoModalOpen(true);
   };
 
+  // 打开图片预览弹窗（同样带 taskId，下载走 /download 端点拿友好文件名）
+  const openImageModal = (url, taskId = '') => {
+    setImageUrl(url);
+    setImageTaskId(taskId);
+    setIsImageModalOpen(true);
+  };
+
   const openAudioModal = (clips) => {
     setAudioClips(clips);
     setIsAudioModalOpen(true);
@@ -331,6 +344,12 @@ export const useTaskLogsData = () => {
     videoUrl,
     videoTaskId,
 
+    // 图片弹窗状态
+    isImageModalOpen,
+    setIsImageModalOpen,
+    imageUrl,
+    imageTaskId,
+
     // Audio preview modal
     isAudioModalOpen,
     setIsAudioModalOpen,
@@ -369,6 +388,7 @@ export const useTaskLogsData = () => {
     copyText,
     openContentModal,
     openVideoModal,
+    openImageModal,
     openAudioModal,
     enrichLogs,
     syncPageData,

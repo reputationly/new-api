@@ -44,3 +44,9 @@ export const TASK_ACTION_TEXT_GENERATE = 'textGenerate';
 export const TASK_ACTION_FIRST_TAIL_GENERATE = 'firstTailGenerate';
 export const TASK_ACTION_REFERENCE_GENERATE = 'referenceGenerate';
 export const TASK_ACTION_REMIX_GENERATE = 'remixGenerate';
+
+// 图片任务。取值必须与后端 constant.TaskActionImageGenerate / TaskActionImageEdit
+// 一致——异步提交（middleware.ImageAsyncConvert）与同步补记（relay/image_sync_task.go）
+// 写的都是这两个值。
+export const TASK_ACTION_IMAGE_GENERATE = 'imageGenerate';
+export const TASK_ACTION_IMAGE_EDIT = 'imageEdit';

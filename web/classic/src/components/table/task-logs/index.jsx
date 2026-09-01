@@ -48,6 +48,15 @@ const TaskLogsPage = () => {
         taskId={taskLogsData.videoTaskId}
         isAdmin={taskLogsData.isAdminUser}
       />
+      {/* 图片预览弹窗（异步与同步的图片任务共用） */}
+      <ContentModal
+        isModalOpen={taskLogsData.isImageModalOpen}
+        setIsModalOpen={taskLogsData.setIsImageModalOpen}
+        modalContent={taskLogsData.imageUrl}
+        isImage={true}
+        taskId={taskLogsData.imageTaskId}
+        isAdmin={taskLogsData.isAdminUser}
+      />
       <AudioPreviewModal
         isModalOpen={taskLogsData.isAudioModalOpen}
         setIsModalOpen={taskLogsData.setIsAudioModalOpen}

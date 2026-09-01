@@ -30,6 +30,7 @@ const ContentModal = ({
   setIsModalOpen,
   modalContent,
   isVideo,
+  isImage,
   taskId,
   isAdmin,
 }) => {
@@ -37,6 +38,8 @@ const ContentModal = ({
   const [videoError, setVideoError] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [downloading, setDownloading] = useState(false);
+  // 媒体预览（视频 / 图片）与纯文本预览共用这个弹窗，但尺寸与内容渲染都不同。
+  const isMedia = isVideo || isImage;
 
   // 下载：走后端 /download 端点拿「带友好文件名」的签名 URL（带 attachment）。
   // 无 taskId 时如实报错，不再回退成 window.open(原始 URL)——那等于在新标签页里
@@ -66,11 +69,11 @@ const ContentModal = ({
   };
 
   useEffect(() => {
-    if (isModalOpen && isVideo) {
+    if (isModalOpen && isMedia) {
       setVideoError(false);
       setIsLoading(true);
     }
-  }, [isModalOpen, isVideo]);
+  }, [isModalOpen, isMedia]);
 
   const handleVideoError = () => {
     setVideoError(true);
@@ -168,6 +171,68 @@ const ContentModal = ({
     );
   };
 
+  // 图片预览。与视频共用「右上角下载 + 居中 Spin」的骨架，但失败时不套用视频那段
+  // 「跨域/防盗链」文案——图片加载失败的成因不同（多半是签名 URL 过期），照搬会误导。
+  const renderImageContent = () => {
+    if (videoError) {
+      return (
+        <div style={{ textAlign: 'center', padding: '40px' }}>
+          <Text
+            type='tertiary'
+            style={{ display: 'block', marginBottom: '16px' }}
+          >
+            {t('图片加载失败，签名链接可能已过期，请重新打开本页面重试')}
+          </Text>
+          <Button
+            icon={<IconDownload />}
+            loading={downloading}
+            onClick={handleDownload}
+          >
+            {t('下载')}
+          </Button>
+        </div>
+      );
+    }
+
+    return (
+      <div style={{ position: 'relative', height: '100%' }}>
+        <Button
+          icon={<IconDownload />}
+          loading={downloading}
+          onClick={handleDownload}
+          size='small'
+          style={{ position: 'absolute', top: 8, right: 8, zIndex: 11 }}
+        >
+          {t('下载')}
+        </Button>
+        {isLoading && (
+          <div
+            style={{
+              position: 'absolute',
+              top: '50%',
+              left: '50%',
+              transform: 'translate(-50%, -50%)',
+              zIndex: 10,
+            }}
+          >
+            <Spin size='large' />
+          </div>
+        )}
+        <img
+          src={modalContent}
+          alt={t('生成结果')}
+          style={{
+            width: '100%',
+            height: '100%',
+            objectFit: 'contain',
+          }}
+          onError={handleVideoError}
+          onLoad={handleVideoLoaded}
+        />
+      </div>
+    );
+  };
+
   return (
     <Modal
       visible={isModalOpen}
@@ -175,19 +240,17 @@ const ContentModal = ({
       onCancel={() => setIsModalOpen(false)}
       closable={null}
       bodyStyle={{
-        height: isVideo ? '70vh' : '400px',
+        height: isMedia ? '70vh' : '400px',
         maxHeight: '80vh',
         overflow: 'auto',
-        padding: isVideo && videoError ? '0' : '24px',
+        padding: isMedia && videoError ? '0' : '24px',
       }}
-      width={isVideo ? '90vw' : 800}
-      style={isVideo ? { maxWidth: 960 } : undefined}
+      width={isMedia ? '90vw' : 800}
+      style={isMedia ? { maxWidth: 960 } : undefined}
     >
-      {isVideo ? (
-        renderVideoContent()
-      ) : (
-        <p style={{ whiteSpace: 'pre-line' }}>{modalContent}</p>
-      )}
+      {isVideo && renderVideoContent()}
+      {isImage && renderImageContent()}
+      {!isMedia && <p style={{ whiteSpace: 'pre-line' }}>{modalContent}</p>}
     </Modal>
   );
 };
