@@ -68,12 +68,18 @@ const EditRedemptionModal = (props) => {
   const [showQuotaInput, setShowQuotaInput] = useState(false);
   const pointsEnabled = isPointsEnabled();
 
+  // 默认发积分而不是额度：日常发的兑换码绝大多数是积分，默认额度意味着每次新建
+  // 都要先切一次类型，切漏了就会发出一张面额完全不同的码。
+  //
+  // 未启用积分时必须退回 quota——那种情况下「奖励类型」选择器根本不渲染
+  // （下方 pointsEnabled 判断），默认成 points 会把人卡在积分输入框上，
+  // 没有任何入口切回额度。
   const getInitValues = () => ({
     name: '',
-    reward_type: 'quota',
+    reward_type: pointsEnabled ? 'points' : 'quota',
     quota: 100000,
     amount: Number(quotaToDisplayAmount(100000).toFixed(6)),
-    points: 1000,
+    points: 500,
     count: 1,
     expired_time: null,
   });
@@ -333,11 +339,19 @@ const EditRedemptionModal = (props) => {
                           label={t('积分数')}
                           placeholder={t('输入积分数')}
                           min={0}
+                          // 积分只能是整数：quotaToPoints 是 floor、用户侧从不显示
+                          // 小数，而填 100.5 会按 pointsToQuota 的 ceil 换成 quota，
+                          // 兑换码名字却走 parseInt 截断成 100，名实不符。
+                          precision={0}
+                          step={1}
                           rules={[
                             { required: true, message: t('请输入积分数') },
                             {
                               validator: (rule, v) => {
-                                const num = parseInt(v, 10);
+                                const num = Number(v);
+                                if (!Number.isInteger(num)) {
+                                  return Promise.reject(t('积分数必须是整数'));
+                                }
                                 return num > 0
                                   ? Promise.resolve()
                                   : Promise.reject(t('积分数必须大于0'));
@@ -345,7 +359,12 @@ const EditRedemptionModal = (props) => {
                             },
                           ]}
                           onChange={(val) => {
-                            const points = val === '' || val == null ? 0 : val;
+                            // precision 只约束键入，粘贴仍可能带小数，这里兜一道
+                            const raw =
+                              val === '' || val == null ? 0 : Number(val);
+                            const points = Number.isFinite(raw)
+                              ? Math.floor(raw)
+                              : 0;
                             formApiRef.current?.setValue('points', points);
                             formApiRef.current?.setValue(
                               'quota',
