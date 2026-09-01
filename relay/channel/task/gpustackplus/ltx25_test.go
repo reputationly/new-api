@@ -1,7 +1,6 @@
 package gpustackplus
 
 import (
-	"math"
 	"strings"
 	"testing"
 )
@@ -41,7 +40,7 @@ func TestLTX25DurationToFrames(t *testing.T) {
 		{"960x544", 5, 121},
 		{"960x544", 10, 249},
 		{"960x544", 15, 361},
-		{"960x544", 18, 441},
+		{"960x544", 15, 361}, // 统一上限那一档
 		{"1248x704", 5, 121},
 		{"1248x704", 10, 249},
 		{"1248x704", 14, 345},
@@ -51,7 +50,6 @@ func TestLTX25DurationToFrames(t *testing.T) {
 		{"544x544", 10, 249},
 		{"544x544", 14, 345},
 		{"544x544", 15, 377},
-		{"544x544", 16, 409},
 		{"736x544", 15, 377},
 		// m=1(P≡0 mod 4):栅格最细,24d 向上取到最近的 8k+1
 		{"704x704", 5, 121},
@@ -199,7 +197,7 @@ func TestLTX25SuggestedSizeIsOfficialBucket(t *testing.T) {
 	}
 }
 
-// 菜单上的五个桶必须条条自洽:合法、且 18 秒(菜单最长档)不超包络。
+// 菜单上的五个桶必须条条自洽:合法、且 15 秒(统一上限)不超包络。
 // 这是「上线菜单不会被自己的准入校验拒掉」的总闸 —— 破了就是配置一上线全站 400。
 func TestLTX25OfficialMenuPassesItsOwnGates(t *testing.T) {
 	for _, s := range [][2]int{
@@ -209,7 +207,7 @@ func TestLTX25OfficialMenuPassesItsOwnGates(t *testing.T) {
 		if err := ltx25ValidateSize(w, h); err != nil {
 			t.Fatalf("菜单尺寸 %dx%d 过不了尺寸校验: %v", w, h, err)
 		}
-		for _, d := range []int{5, 6, 10, 14, 18} {
+		for _, d := range []int{5, 6, 10, 14, 15} {
 			frames := ltx25FramesForDuration(d, w, h, true)
 			if err := ltx25ValidateEnvelope(w, h, frames); err != nil {
 				t.Fatalf("菜单组合 %dx%d / %ds(%d 帧)过不了包络: %v", w, h, d, frames, err)
@@ -592,25 +590,52 @@ func TestLTX25TierCanvasAlwaysAligned(t *testing.T) {
 	}
 }
 
-// 包络给出的时长上限必须与 2026-08-31 的实测对齐:2K 10.4 秒、1080p 17.7 秒。
-// 这两个数不是拍的,是 ltx25MaxPixelFrames 除出来的;改那个常量这里会红,提醒同步文档。
-func TestLTX25HDDurationCeiling(t *testing.T) {
+// 对外时长上限是**统一的 15 秒**,不再按分辨率分档 —— 产品口径由 ltx25MaxOutputSec
+// 一个数说清楚,不再从包络反推。
+//
+// 按帧数比而不是比秒数:15 秒在 m=2 的尺寸上落 361 帧(15.04 s)、在奇数 P 的尺寸上落
+// 377 帧(15.71 s)。拿"15.0 秒"去卡后者会误伤它自己的 15 秒档。
+func TestLTX25UniformDurationCap(t *testing.T) {
 	for _, c := range []struct {
-		w, h, wantFrames int
-		wantSec          float64
+		size       string
+		wantFrames int
 	}{
-		{2496, 1408, 249, 10.375}, // 2K
-		{1920, 1088, 425, 17.708}, // 1080p
-		{1248, 704, 1017, 42.375}, // 720p:远超菜单,等于不限
+		{"960x544", 361},   // m=2
+		{"1248x704", 361},  // m=2
+		{"1920x1088", 361}, // 两阶段,半画布 m=2
+		{"2496x1408", 361}, // 两阶段,半画布 m=2 —— 八题材压过的那一档
+		{"704x704", 361},   // m=1
+		{"544x544", 377},   // 奇数 P,m=4 → 15.71 s
 	} {
-		got := ltx25MaxFramesForArea(c.w, c.h)
-		if got != c.wantFrames {
-			t.Errorf("%dx%d 的最大帧数 = %d, want %d", c.w, c.h, got, c.wantFrames)
+		w, h, ok := ltx25DimsOf(c.size)
+		if !ok {
+			t.Fatalf("%s 解析不出宽高", c.size)
 		}
-		if sec := ltx25MaxDurationSec(c.w, c.h); math.Abs(sec-c.wantSec) > 0.01 {
-			t.Errorf("%dx%d 的最长秒数 = %.3f, want %.3f", c.w, c.h, sec, c.wantSec)
+		if got := ltx25FramesForDuration(ltx25MaxOutputSec, w, h, true); got != c.wantFrames {
+			t.Errorf("%s 的 15 秒档 = %d 帧, want %d", c.size, got, c.wantFrames)
+		}
+		// 15 秒必须放行
+		if err := applyLTX25Request(map[string]any{"size": c.size}, ltx25MaxOutputSec); err != nil {
+			t.Errorf("%s / 15 秒应放行,却被拒: %v", c.size, err)
+		}
+		// 16 秒必须被拒,且文案要说"最长 15 秒"而不是甩显存包络
+		err := applyLTX25Request(map[string]any{"size": c.size}, ltx25MaxOutputSec+1)
+		if err == nil {
+			t.Errorf("%s / 16 秒应被拒", c.size)
+		} else if !strings.Contains(err.Error(), "对外最长") {
+			t.Errorf("%s / 16 秒的错误文案应指向时长上限,实际: %v", c.size, err)
 		}
 	}
+}
+
+// 调用方自传帧数同样受时长上限约束 —— 否则 API 用户能绕过体验区的档位。
+func TestLTX25DurationCapAppliesToCallerFrames(t *testing.T) {
+	body := map[string]any{"size": "1248x704", "num_frames": 489} // 20.4 s
+	if err := applyLTX25Request(body, 0); err == nil {
+		t.Fatal("自传 489 帧(20.4 s)应被时长上限拒掉")
+	}
+	// 上限之内的自传帧数不受影响
+	mustApply(t, map[string]any{"size": "1248x704", "num_frames": 361}, 0)
 }
 
 // 实测通过/失败的那几个点,直接钉成断言。改包络常量时这条是最后一道闸。
@@ -621,20 +646,24 @@ func TestLTX25EnvelopeMatchesMeasured(t *testing.T) {
 		pass   bool
 		note   string
 	}{
-		{"1248x704", 489, true, "720p 20.4s 实测 28.0GB"},
-		{"2560x1408", 249, true, "2K 10.4s 实测 30.3GB"},
-		{"1920x1088", 425, true, "1080p 17.7s(包络上限)"},
-		{"1920x1088", 489, false, "1080p 20.4s 实测能过但只剩 5.2GB,刻意收紧"},
-		{"2560x1408", 361, false, "2K 15.0s 实测 OOM"},
-		{"3840x2176", 249, false, "4K 10.4s 实测 OOM"},
+		// 2026-09-01(分块 postprocess + gather 收敛之后)的实测分界
+		{"2496x1408", 361, true, "2K 15.0s,八题材 8/8 通过"},
+		{"1920x1088", 601, true, "1080p 25.0s 实测通过"},
+		{"1920x1088", 697, false, "1080p 29.0s 实测 OOM"},
+		{"2496x1408", 425, false, "2K 17.7s 实测 OOM"},
+		// 4K 不在对外范围内(短边 2176 > 1408,进不到包络这一步就被拒了)。
+		// 留个记录:引擎侧实测 3840×2176 能到 169 帧(1.412e9)、201 帧(1.680e9)挂 ——
+		// 也就是说包络的真实分界在 1.41e9 附近,这里取 1.30e9 是留的余量。
 	} {
-		body := map[string]any{"size": c.size, "num_frames": c.frames}
-		err := applyLTX25Request(body, 0)
+		// 直接测包络函数:它现在只管显存安全网,与对外时长上限(15 秒)是两件事,
+		// 走 applyLTX25Request 会先被时长卡住,测不到包络本身。
+		w, h, _ := ltx25DimsOf(c.size)
+		err := ltx25ValidateEnvelope(w, h, c.frames)
 		if c.pass && err != nil {
-			t.Errorf("%s/%d 帧应放行(%s),却被拒: %v", c.size, c.frames, c.note, err)
+			t.Errorf("%s/%d 帧应过包络(%s),却被拒: %v", c.size, c.frames, c.note, err)
 		}
 		if !c.pass && err == nil {
-			t.Errorf("%s/%d 帧应被拒(%s),却放行了", c.size, c.frames, c.note)
+			t.Errorf("%s/%d 帧应被包络拒(%s),却放行了", c.size, c.frames, c.note)
 		}
 	}
 }
@@ -656,7 +685,7 @@ func TestLTX25TwoStageGridUsesHalfCanvas(t *testing.T) {
 	}{
 		{"1920x1088", 10, 249, "按最终尺寸算会给 241(T=31 奇数)→ 引擎 500"},
 		{"1920x1088", 5, 121, "与一阶段同值,但走的是半画布栅格"},
-		{"1920x1088", 17, 409, "17×24=408 → 半画布栅格(step 16, first 9)吸到 409"},
+		{"1920x1088", 15, 361, "半画布栅格(step 16, first 9);也是统一上限那一档"},
 		{"2496x1408", 10, 249, "2K 同理"},
 		{"2496x1408", 10, 249, "当前包络(9.0e8)封在 249 帧;引擎其实能到 361 帧/15 s"},
 		// 一阶段的桶不受影响 —— 判据是短边而不是「宽高是否 64 对齐」,
