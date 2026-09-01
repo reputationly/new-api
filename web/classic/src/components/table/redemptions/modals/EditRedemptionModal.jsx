@@ -357,64 +357,67 @@ const EditRedemptionModal = (props) => {
                         />
                       </Col>
                     ) : (
-                    <Col span={24}>
-                      <Form.InputNumber
-                        field='amount'
-                        label={t('金额')}
-                        prefix={getCurrencyConfig().symbol}
-                        placeholder={t('输入金额')}
-                        precision={6}
-                        min={0}
-                        step={0.000001}
-                        style={{ width: '100%' }}
-                        onChange={(val) => {
-                          const amount = val === '' || val == null ? 0 : val;
-                          formApiRef.current?.setValue('amount', amount);
-                          formApiRef.current?.setValue(
-                            'quota',
-                            displayAmountToQuota(amount),
-                          );
-                        }}
-                        showClear
-                      />
-                      <div
-                        className='text-xs cursor-pointer mt-1'
-                        style={{ color: 'var(--semi-color-text-2)' }}
-                        onClick={() => setShowQuotaInput((v) => !v)}
-                      >
-                        {showQuotaInput
-                          ? `▾ ${t('收起原生额度输入')}`
-                          : `▸ ${t('使用原生额度输入')}`}
-                      </div>
-                      <div style={{ display: showQuotaInput ? 'block' : 'none' }} className='mt-2'>
+                      <Col span={24}>
                         <Form.InputNumber
-                          field='quota'
-                          label={t('额度')}
-                          placeholder={t('输入额度')}
-                          rules={[
-                            { required: true, message: t('请输入额度') },
-                            {
-                              validator: (rule, v) => {
-                                const num = parseInt(v, 10);
-                                return num > 0
-                                  ? Promise.resolve()
-                                  : Promise.reject(t('额度必须大于0'));
-                              },
-                            },
-                          ]}
+                          field='amount'
+                          label={t('金额')}
+                          prefix={getCurrencyConfig().symbol}
+                          placeholder={t('输入金额')}
+                          precision={6}
+                          min={0}
+                          step={0.000001}
+                          style={{ width: '100%' }}
                           onChange={(val) => {
-                            const quota = val === '' || val == null ? 0 : val;
-                            formApiRef.current?.setValue('quota', quota);
+                            const amount = val === '' || val == null ? 0 : val;
+                            formApiRef.current?.setValue('amount', amount);
                             formApiRef.current?.setValue(
-                              'amount',
-                              Number(quotaToDisplayAmount(quota).toFixed(6)),
+                              'quota',
+                              displayAmountToQuota(amount),
                             );
                           }}
-                          style={{ width: '100%' }}
                           showClear
                         />
-                      </div>
-                    </Col>
+                        <div
+                          className='text-xs cursor-pointer mt-1'
+                          style={{ color: 'var(--semi-color-text-2)' }}
+                          onClick={() => setShowQuotaInput((v) => !v)}
+                        >
+                          {showQuotaInput
+                            ? `▾ ${t('收起原生额度输入')}`
+                            : `▸ ${t('使用原生额度输入')}`}
+                        </div>
+                        <div
+                          style={{ display: showQuotaInput ? 'block' : 'none' }}
+                          className='mt-2'
+                        >
+                          <Form.InputNumber
+                            field='quota'
+                            label={t('额度')}
+                            placeholder={t('输入额度')}
+                            rules={[
+                              { required: true, message: t('请输入额度') },
+                              {
+                                validator: (rule, v) => {
+                                  const num = parseInt(v, 10);
+                                  return num > 0
+                                    ? Promise.resolve()
+                                    : Promise.reject(t('额度必须大于0'));
+                                },
+                              },
+                            ]}
+                            onChange={(val) => {
+                              const quota = val === '' || val == null ? 0 : val;
+                              formApiRef.current?.setValue('quota', quota);
+                              formApiRef.current?.setValue(
+                                'amount',
+                                Number(quotaToDisplayAmount(quota).toFixed(6)),
+                              );
+                            }}
+                            style={{ width: '100%' }}
+                            showClear
+                          />
+                        </div>
+                      </Col>
                     )}
                     {!isEdit && (
                       <Col span={12}>
