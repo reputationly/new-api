@@ -29,14 +29,11 @@ import { resetPricingFilters } from '../../../../helpers/utils';
 import { usePricingFilterCounts } from '../../../../hooks/model-pricing/usePricingFilterCounts';
 
 const PricingSidebar = ({
-  showWithRecharge,
-  setShowWithRecharge,
   currency,
   setCurrency,
+  setFilterPointsOnly,
   handleChange,
   setActiveKey,
-  showRatio,
-  setShowRatio,
   viewMode,
   setViewMode,
   filterGroup,
@@ -54,8 +51,6 @@ const PricingSidebar = ({
   setFilterCapability,
   currentPage,
   setCurrentPage,
-  tokenUnit,
-  setTokenUnit,
   loading,
   t,
   ...categoryProps
@@ -81,10 +76,11 @@ const PricingSidebar = ({
   const handleResetFilters = () =>
     resetPricingFilters({
       handleChange,
-      setShowWithRecharge,
       setCurrency,
-      setShowRatio,
       setViewMode,
+      // 桌面端「重置」也要清掉「仅看可积分抵扣」——移动端弹窗的重置清了，
+      // 两边不一致的话，用户在桌面端点完重置会发现列表还是被筛过的。
+      setFilterPointsOnly,
       setFilterGroup,
       setFilterQuotaType,
       setFilterEndpointType,
@@ -92,7 +88,6 @@ const PricingSidebar = ({
       setFilterTag,
       setFilterCapability,
       setCurrentPage,
-      setTokenUnit,
     });
 
   return (

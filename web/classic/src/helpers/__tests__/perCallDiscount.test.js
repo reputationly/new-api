@@ -24,7 +24,6 @@ const perCall = (ratio) =>
     groupRatio: { default: 1 },
     // 后端算好的终值（分组倍率 × 模型折扣），见 controller/pricing.go
     groupModelRatio: { default: { 'z-image': ratio } },
-    tokenUnit: 'M',
     displayPrice,
   });
 

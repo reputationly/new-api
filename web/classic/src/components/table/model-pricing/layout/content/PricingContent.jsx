@@ -32,16 +32,17 @@ const PricingContent = ({ isMobile, sidebarProps, ...props }) => {
           {...props}
           isMobile={isMobile}
           sidebarProps={sidebarProps}
-          showWithRecharge={sidebarProps.showWithRecharge}
-          setShowWithRecharge={sidebarProps.setShowWithRecharge}
           currency={sidebarProps.currency}
           setCurrency={sidebarProps.setCurrency}
-          showRatio={sidebarProps.showRatio}
-          setShowRatio={sidebarProps.setShowRatio}
           viewMode={sidebarProps.viewMode}
           setViewMode={sidebarProps.setViewMode}
-          tokenUnit={sidebarProps.tokenUnit}
-          setTokenUnit={sidebarProps.setTokenUnit}
+          filterPointsOnly={sidebarProps.filterPointsOnly}
+          setFilterPointsOnly={sidebarProps.setFilterPointsOnly}
+          // 积分没开（或没配单位积分额度）的站点不出这个开关：开了也筛不出模型。
+          pointsEnabled={
+            !!sidebarProps.pointsConfig?.enabled &&
+            sidebarProps.pointsConfig?.quotaPerPoint > 0
+          }
         />
       </div>
 

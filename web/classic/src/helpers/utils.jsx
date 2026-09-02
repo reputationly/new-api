@@ -735,12 +735,41 @@ export const getEffectiveGroupRatio = (
   return perModel !== undefined ? perModel : groupRatio?.[group];
 };
 
+// 某个模型在某个分组下能不能用积分抵扣。
+//
+// **与下面 calculateModelPrice 里算积分价那段是同一套规则**（全局开关 + 单位积分额度
+// > 0 + 模型在渠道白名单里 + 该模型用的分组在积分分组里）。抽成导出的纯函数，是为了让
+// 模型广场的「仅看可积分抵扣」筛选与积分价展示读同一份判据 —— 各写一份的话，迟早出现
+// 「筛出来的模型点进去却没有积分价」，而且不报错。
+//
+// selectedGroup 传具体分组时，那个分组必须**同时**在模型可用分组与积分分组里；传
+// 'all'/空则只要有一个可用分组命中即可。白名单为 null = 后端没启用渠道白名单那一层，
+// 退回只看分组的旧口径。
+export const isPointsEligible = (
+  model,
+  { pointsConfig, selectedGroup } = {},
+) => {
+  if (!pointsConfig?.enabled || !(pointsConfig?.quotaPerPoint > 0))
+    return false;
+  const whitelist = pointsConfig.enabledModels;
+  if (Array.isArray(whitelist) && !whitelist.includes(model?.model_name)) {
+    return false;
+  }
+  const groups = Array.isArray(model?.enable_groups) ? model.enable_groups : [];
+  const pointGroups = pointsConfig.enabledGroups || [];
+  if (selectedGroup && selectedGroup !== 'all') {
+    return (
+      pointGroups.includes(selectedGroup) && groups.includes(selectedGroup)
+    );
+  }
+  return groups.some((g) => pointGroups.includes(g));
+};
+
 export const calculateModelPrice = ({
   record,
   selectedGroup,
   groupRatio,
   groupModelRatio,
-  tokenUnit,
   displayPrice,
   quotaDisplayType = 'USD',
   precision = 2,
@@ -818,8 +847,10 @@ export const calculateModelPrice = ({
     // 按量计费
     const isTokensDisplay = quotaDisplayType === 'TOKENS';
     const inputRatioPriceUSD = record.model_ratio * 2 * usedGroupRatio;
-    const unitDivisor = tokenUnit === 'K' ? 1000 : 1;
-    const unitLabel = tokenUnit === 'K' ? 'K' : 'M';
+    // 价格一律按每 1M token 计。曾经有个 K/M 切换开关，切完只是把同一个数字挪个
+    // 小数点，对判断"贵不贵"没有帮助，已下线。
+    const unitDivisor = 1;
+    const unitLabel = 'M';
     const hasRatioValue = (value) =>
       value !== undefined &&
       value !== null &&
@@ -1410,12 +1441,10 @@ export const createCardProPagination = ({
 // 模型定价筛选条件默认值
 const DEFAULT_PRICING_FILTERS = {
   search: '',
-  showWithRecharge: false,
   currency: 'USD',
-  showRatio: false,
   viewMode: 'card',
-  tokenUnit: 'M',
   filterGroup: 'all',
+  filterPointsOnly: false,
   filterQuotaType: 'all',
   filterEndpointType: 'all',
   filterVendor: 'all',
@@ -1427,10 +1456,9 @@ const DEFAULT_PRICING_FILTERS = {
 // 重置模型定价筛选条件
 export const resetPricingFilters = ({
   handleChange,
-  setShowWithRecharge,
   setCurrency,
-  setShowRatio,
   setViewMode,
+  setFilterPointsOnly,
   setFilterGroup,
   setFilterQuotaType,
   setFilterEndpointType,
@@ -1438,14 +1466,11 @@ export const resetPricingFilters = ({
   setFilterTag,
   setFilterCapability,
   setCurrentPage,
-  setTokenUnit,
 }) => {
   handleChange?.(DEFAULT_PRICING_FILTERS.search);
-  setShowWithRecharge?.(DEFAULT_PRICING_FILTERS.showWithRecharge);
   setCurrency?.(DEFAULT_PRICING_FILTERS.currency);
-  setShowRatio?.(DEFAULT_PRICING_FILTERS.showRatio);
   setViewMode?.(DEFAULT_PRICING_FILTERS.viewMode);
-  setTokenUnit?.(DEFAULT_PRICING_FILTERS.tokenUnit);
+  setFilterPointsOnly?.(DEFAULT_PRICING_FILTERS.filterPointsOnly);
   setFilterGroup?.(DEFAULT_PRICING_FILTERS.filterGroup);
   setFilterQuotaType?.(DEFAULT_PRICING_FILTERS.filterQuotaType);
   setFilterEndpointType?.(DEFAULT_PRICING_FILTERS.filterEndpointType);

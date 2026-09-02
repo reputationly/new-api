@@ -20,6 +20,7 @@ For commercial licensing, please contact support@quantumnous.com
 import { useState, useEffect, useContext, useRef, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 import { API, copy, showError, showInfo, showSuccess } from '../../helpers';
+import { isPointsEligible } from '../../helpers/utils';
 import { Modal } from '@douyinfe/semi-ui';
 import { UserContext } from '../../context/User';
 import { StatusContext } from '../../context/Status';
@@ -29,8 +30,6 @@ export const useModelPricingData = () => {
   const [searchValue, setSearchValue] = useState('');
   const compositionRef = useRef({ isComposition: false });
   const [selectedRowKeys, setSelectedRowKeys] = useState([]);
-  const [modalImageUrl, setModalImageUrl] = useState('');
-  const [isModalOpenurl, setIsModalOpenurl] = useState(false);
   const [selectedGroup, setSelectedGroup] = useState('all');
   const [showModelDetail, setShowModelDetail] = useState(false);
   const [selectedModel, setSelectedModel] = useState(null);
@@ -43,8 +42,9 @@ export const useModelPricingData = () => {
   const [pageSize, setPageSize] = useState(20);
   const [currentPage, setCurrentPage] = useState(1);
   const [currency, setCurrency] = useState('USD');
-  const [showWithRecharge, setShowWithRecharge] = useState(false);
-  const [tokenUnit, setTokenUnit] = useState('M');
+  // 「仅显示可积分抵扣的模型」。默认关：积分是少数用户才关心的口子，默认开会让
+  // 大部分人看到一个被裁剪过的模型列表却不知道为什么。
+  const [filterPointsOnly, setFilterPointsOnly] = useState(false);
   const [models, setModels] = useState([]);
   const [vendorsMap, setVendorsMap] = useState({});
   const [loading, setLoading] = useState(true);
@@ -63,14 +63,14 @@ export const useModelPricingData = () => {
   const [statusState] = useContext(StatusContext);
   const [userState] = useContext(UserContext);
 
-  // 充值汇率（price）与美元兑人民币汇率（usd_exchange_rate）
-  const priceRate = useMemo(
-    () => statusState?.status?.price ?? 1,
-    [statusState],
-  );
+  // 美元兑人民币汇率，只用于按 CNY 展示。
+  //
+  // 曾经还有个「充值价格显示」开关，按 price / usd_exchange_rate 再换算一次 ——
+  // 那是上游给"充值价高于汇率、体现溢价"的站点用的。本站两个值相等（都是 7.3），
+  // 换算恒等于 1，开关点了数字纹丝不动，等于给用户一个坏掉的按钮，已下线。
   const usdExchangeRate = useMemo(
-    () => statusState?.status?.usd_exchange_rate ?? priceRate,
-    [statusState, priceRate],
+    () => statusState?.status?.usd_exchange_rate ?? 1,
+    [statusState],
   );
   const customExchangeRate = useMemo(
     () => statusState?.status?.custom_currency_exchange_rate ?? 1,
@@ -98,7 +98,6 @@ export const useModelPricingData = () => {
 
   useEffect(() => {
     if (siteDisplayType === 'TOKENS') {
-      setShowWithRecharge(false);
       setCurrency('USD');
     }
   }, [siteDisplayType]);
@@ -172,6 +171,14 @@ export const useModelPricingData = () => {
       );
     }
 
+    // 仅显示可积分抵扣的模型。判据来自 helpers 里那支导出的纯函数，与积分价展示
+    // 共用一份 —— 在这里再写一遍的话，迟早出现「筛出来的模型点进去却没有积分价」。
+    if (filterPointsOnly) {
+      result = result.filter((model) =>
+        isPointsEligible(model, { pointsConfig, selectedGroup: filterGroup }),
+      );
+    }
+
     // 搜索筛选
     if (searchValue.length > 0) {
       const searchTerm = searchValue.toLowerCase();
@@ -194,6 +201,8 @@ export const useModelPricingData = () => {
   }, [
     models,
     searchValue,
+    filterPointsOnly,
+    pointsConfig,
     filterGroup,
     filterQuotaType,
     filterEndpointType,
@@ -213,11 +222,7 @@ export const useModelPricingData = () => {
   );
 
   const displayPrice = (usdPrice, digits = 3) => {
-    let priceInUSD = usdPrice;
-    if (showWithRecharge) {
-      priceInUSD = (usdPrice * priceRate) / usdExchangeRate;
-    }
-
+    const priceInUSD = usdPrice;
     if (currency === 'CNY') {
       return `¥${(priceInUSD * usdExchangeRate).toFixed(digits)}`;
     } else if (currency === 'CUSTOM') {
@@ -381,6 +386,10 @@ export const useModelPricingData = () => {
     filterVendor,
     filterTag,
     filterCapability,
+    // 收窄型筛选都要在这里 —— 卡片视图按 (currentPage-1)*pageSize 切片且不夹紧，
+    // 漏一个就会出现「在第 2 页打开这个筛选 → 列表变短 → 页码越界 → 空白网格」，
+    // 而分页器还停在旧页码上，用户只能靠点别的筛选把自己救回来。
+    filterPointsOnly,
     searchValue,
   ]);
 
@@ -390,10 +399,6 @@ export const useModelPricingData = () => {
     setSearchValue,
     selectedRowKeys,
     setSelectedRowKeys,
-    modalImageUrl,
-    setModalImageUrl,
-    isModalOpenurl,
-    setIsModalOpenurl,
     selectedGroup,
     setSelectedGroup,
     showModelDetail,
@@ -417,12 +422,10 @@ export const useModelPricingData = () => {
     currentPage,
     setCurrentPage,
     currency,
+    filterPointsOnly,
+    setFilterPointsOnly,
     setCurrency,
     siteDisplayType,
-    showWithRecharge,
-    setShowWithRecharge,
-    tokenUnit,
-    setTokenUnit,
     models,
     loading,
     groupRatio,
@@ -433,7 +436,6 @@ export const useModelPricingData = () => {
     pointsConfig,
 
     // 计算属性
-    priceRate,
     usdExchangeRate,
     filteredModels,
     rowSelection,

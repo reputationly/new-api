@@ -35,9 +35,7 @@ const ModelPricingTable = ({
   groupModelRatio,
   currency,
   siteDisplayType,
-  tokenUnit,
   displayPrice,
-  showRatio,
   usableGroup,
   autoGroups = [],
   pointsConfig,
@@ -63,7 +61,6 @@ const ModelPricingTable = ({
             selectedGroup: group,
             groupRatio,
             groupModelRatio,
-            tokenUnit,
             displayPrice,
             currency,
             quotaDisplayType: siteDisplayType,
@@ -121,7 +118,9 @@ const ModelPricingTable = ({
     const isDynamic = modelData?.billing_mode === 'tiered_expr';
 
     // 动态计费时始终显示倍率列，否则根据设置
-    if (showRatio || isDynamic) {
+    // 动态计费（计费表达式）的模型仍要列分组倍率——那是它定价的组成部分，
+    // 与已下线的「显示倍率」开关无关。
+    if (isDynamic) {
       columns.push({
         title: t('分组倍率'),
         dataIndex: 'ratio',

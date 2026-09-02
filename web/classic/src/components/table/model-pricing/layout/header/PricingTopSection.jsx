@@ -36,17 +36,14 @@ const PricingTopSection = memo(
     filteredModels,
     loading,
     searchValue,
-    showWithRecharge,
-    setShowWithRecharge,
     currency,
     setCurrency,
     siteDisplayType,
-    showRatio,
-    setShowRatio,
     viewMode,
     setViewMode,
-    tokenUnit,
-    setTokenUnit,
+    filterPointsOnly,
+    setFilterPointsOnly,
+    pointsEnabled,
     t,
   }) => {
     const [showFilterModal, setShowFilterModal] = useState(false);
@@ -65,17 +62,14 @@ const PricingTopSection = memo(
                 isMobile={isMobile}
                 searchValue={searchValue}
                 setShowFilterModal={setShowFilterModal}
-                showWithRecharge={showWithRecharge}
-                setShowWithRecharge={setShowWithRecharge}
                 currency={currency}
                 setCurrency={setCurrency}
                 siteDisplayType={siteDisplayType}
-                showRatio={showRatio}
-                setShowRatio={setShowRatio}
                 viewMode={viewMode}
                 setViewMode={setViewMode}
-                tokenUnit={tokenUnit}
-                setTokenUnit={setTokenUnit}
+                filterPointsOnly={filterPointsOnly}
+                setFilterPointsOnly={setFilterPointsOnly}
+                pointsEnabled={pointsEnabled}
                 t={t}
               />
             </div>
@@ -101,17 +95,14 @@ const PricingTopSection = memo(
             isMobile={isMobile}
             searchValue={searchValue}
             setShowFilterModal={setShowFilterModal}
-            showWithRecharge={showWithRecharge}
-            setShowWithRecharge={setShowWithRecharge}
             currency={currency}
             setCurrency={setCurrency}
             siteDisplayType={siteDisplayType}
-            showRatio={showRatio}
-            setShowRatio={setShowRatio}
             viewMode={viewMode}
             setViewMode={setViewMode}
-            tokenUnit={tokenUnit}
-            setTokenUnit={setTokenUnit}
+            filterPointsOnly={filterPointsOnly}
+            setFilterPointsOnly={setFilterPointsOnly}
+            pointsEnabled={pointsEnabled}
           />
         )}
       </>

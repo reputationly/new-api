@@ -21,43 +21,33 @@ import React from 'react';
 import SelectableButtonGroup from '../../../common/ui/SelectableButtonGroup';
 
 const PricingDisplaySettings = ({
-  showWithRecharge,
-  setShowWithRecharge,
   currency,
   setCurrency,
   siteDisplayType,
-  showRatio,
-  setShowRatio,
   viewMode,
   setViewMode,
-  tokenUnit,
-  setTokenUnit,
+  filterPointsOnly,
+  setFilterPointsOnly,
+  pointsEnabled = false,
   loading = false,
   t,
 }) => {
   const supportsCurrencyDisplay = siteDisplayType !== 'TOKENS';
 
   const items = [
-    ...(supportsCurrencyDisplay
-      ? [
-          {
-            value: 'recharge',
-            label: t('充值价格显示'),
-          },
-        ]
-      : []),
-    {
-      value: 'ratio',
-      label: t('显示倍率'),
-    },
     {
       value: 'tableView',
       label: t('表格视图'),
     },
-    {
-      value: 'tokenUnit',
-      label: t('按K显示单位'),
-    },
+    // 积分没开的站点不出这一项：开了也筛不出任何模型，等于给一个必然空结果的开关。
+    ...(pointsEnabled
+      ? [
+          {
+            value: 'pointsOnly',
+            label: t('仅看可积分抵扣'),
+          },
+        ]
+      : []),
   ];
 
   const currencyItems = [
@@ -68,27 +58,19 @@ const PricingDisplaySettings = ({
 
   const handleChange = (value) => {
     switch (value) {
-      case 'recharge':
-        setShowWithRecharge(!showWithRecharge);
-        break;
-      case 'ratio':
-        setShowRatio(!showRatio);
-        break;
       case 'tableView':
         setViewMode(viewMode === 'table' ? 'card' : 'table');
         break;
-      case 'tokenUnit':
-        setTokenUnit(tokenUnit === 'K' ? 'M' : 'K');
+      case 'pointsOnly':
+        setFilterPointsOnly(!filterPointsOnly);
         break;
     }
   };
 
   const getActiveValues = () => {
     const activeValues = [];
-    if (supportsCurrencyDisplay && showWithRecharge) activeValues.push('recharge');
-    if (showRatio) activeValues.push('ratio');
     if (viewMode === 'table') activeValues.push('tableView');
-    if (tokenUnit === 'K') activeValues.push('tokenUnit');
+    if (filterPointsOnly) activeValues.push('pointsOnly');
     return activeValues;
   };
 
@@ -105,7 +87,7 @@ const PricingDisplaySettings = ({
         t={t}
       />
 
-      {supportsCurrencyDisplay && showWithRecharge && (
+      {supportsCurrencyDisplay && (
         <SelectableButtonGroup
           title={t('货币单位')}
           items={currencyItems}

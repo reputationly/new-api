@@ -28,7 +28,6 @@ import {
   Button,
   Avatar,
 } from '@douyinfe/semi-ui';
-import { IconHelpCircle } from '@douyinfe/semi-icons';
 import { Copy } from 'lucide-react';
 import {
   IllustrationNoResult,
@@ -68,13 +67,9 @@ const PricingCardView = ({
   groupRatio,
   groupModelRatio,
   copyText,
-  setModalImageUrl,
-  setIsModalOpenurl,
   currency,
   siteDisplayType,
-  tokenUnit,
   displayPrice,
-  showRatio,
   t,
   selectedRowKeys = [],
   setSelectedRowKeys,
@@ -249,12 +244,7 @@ const PricingCardView = ({
 
   // 显示骨架屏
   if (showSkeleton) {
-    return (
-      <PricingCardSkeleton
-        rowSelection={!!rowSelection}
-        showRatio={showRatio}
-      />
-    );
+    return <PricingCardSkeleton rowSelection={!!rowSelection} />;
   }
 
   if (!filteredModels || filteredModels.length === 0) {
@@ -283,7 +273,6 @@ const PricingCardView = ({
             selectedGroup,
             groupRatio,
             groupModelRatio,
-            tokenUnit,
             displayPrice,
             currency,
             quotaDisplayType: siteDisplayType,
@@ -384,46 +373,6 @@ const PricingCardView = ({
                 <div className='mt-auto'>
                   {/* 标签区域 */}
                   {renderTags(model)}
-
-                  {/* 倍率信息（可选） */}
-                  {showRatio && (
-                    <div className='pt-3'>
-                      <div className='flex items-center space-x-1 mb-2'>
-                        <span className='text-xs font-medium text-gray-700'>
-                          {t('倍率信息')}
-                        </span>
-                        <Tooltip
-                          content={t('倍率是为了方便换算不同价格的模型')}
-                        >
-                          <IconHelpCircle
-                            className='text-blue-500 cursor-pointer'
-                            size='small'
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              setModalImageUrl('/ratio.png');
-                              setIsModalOpenurl(true);
-                            }}
-                          />
-                        </Tooltip>
-                      </div>
-                      <div className='grid grid-cols-3 gap-2 text-xs text-gray-600'>
-                        <div>
-                          {t('模型')}:{' '}
-                          {model.quota_type === 0 ? model.model_ratio : t('无')}
-                        </div>
-                        <div>
-                          {t('输出')}:{' '}
-                          {model.quota_type === 0
-                            ? parseFloat(model.completion_ratio.toFixed(3))
-                            : t('无')}
-                        </div>
-                        <div>
-                          {/* 这里显示的是倍率值不是分组名，故称「分组倍率」 */}
-                          {t('分组倍率')}: {priceData?.usedGroupRatio ?? '-'}
-                        </div>
-                      </div>
-                    </div>
-                  )}
                 </div>
               </div>
             </Card>

@@ -39,9 +39,7 @@ const ModelDetailSideSheet = ({
   groupModelRatio,
   currency,
   siteDisplayType,
-  tokenUnit,
   displayPrice,
-  showRatio,
   usableGroup,
   vendorsMap,
   endpointMap,
@@ -132,9 +130,7 @@ const ModelDetailSideSheet = ({
                 groupModelRatio={groupModelRatio}
                 currency={currency}
                 siteDisplayType={siteDisplayType}
-                tokenUnit={tokenUnit}
                 displayPrice={displayPrice}
-                showRatio={showRatio}
                 usableGroup={usableGroup}
                 autoGroups={autoGroups}
                 pointsConfig={pointsConfig}

@@ -18,7 +18,7 @@ For commercial licensing, please contact support@quantumnous.com
 */
 
 import React from 'react';
-import { Layout, ImagePreview } from '@douyinfe/semi-ui';
+import { Layout } from '@douyinfe/semi-ui';
 import PricingSidebar from './PricingSidebar';
 import PricingContent from './content/PricingContent';
 import ModelDetailSideSheet from '../modal/ModelDetailSideSheet';
@@ -29,12 +29,9 @@ const PricingPage = () => {
   const pricingData = useModelPricingData();
   const { Sider, Content } = Layout;
   const isMobile = useIsMobile();
-  const [showRatio, setShowRatio] = React.useState(false);
   const [viewMode, setViewMode] = React.useState('card');
   const allProps = {
     ...pricingData,
-    showRatio,
-    setShowRatio,
     viewMode,
     setViewMode,
   };
@@ -57,12 +54,6 @@ const PricingPage = () => {
         </Content>
       </Layout>
 
-      <ImagePreview
-        src={pricingData.modalImageUrl}
-        visible={pricingData.isModalOpenurl}
-        onVisibleChange={(visible) => pricingData.setIsModalOpenurl(visible)}
-      />
-
       <ModelDetailSideSheet
         visible={pricingData.showModelDetail}
         onClose={pricingData.closeModelDetail}
@@ -72,9 +63,7 @@ const PricingPage = () => {
         usableGroup={pricingData.usableGroup}
         currency={pricingData.currency}
         siteDisplayType={pricingData.siteDisplayType}
-        tokenUnit={pricingData.tokenUnit}
         displayPrice={pricingData.displayPrice}
-        showRatio={allProps.showRatio}
         vendorsMap={pricingData.vendorsMap}
         endpointMap={pricingData.endpointMap}
         autoGroups={pricingData.autoGroups}

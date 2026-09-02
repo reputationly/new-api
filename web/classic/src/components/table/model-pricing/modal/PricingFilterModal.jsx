@@ -27,17 +27,15 @@ const PricingFilterModal = ({ visible, onClose, sidebarProps, t }) => {
   const handleResetFilters = () =>
     resetPricingFilters({
       handleChange: sidebarProps.handleChange,
-      setShowWithRecharge: sidebarProps.setShowWithRecharge,
       setCurrency: sidebarProps.setCurrency,
-      setShowRatio: sidebarProps.setShowRatio,
       setViewMode: sidebarProps.setViewMode,
+      setFilterPointsOnly: sidebarProps.setFilterPointsOnly,
       setFilterGroup: sidebarProps.setFilterGroup,
       setFilterQuotaType: sidebarProps.setFilterQuotaType,
       setFilterEndpointType: sidebarProps.setFilterEndpointType,
       setFilterVendor: sidebarProps.setFilterVendor,
       setFilterTag: sidebarProps.setFilterTag,
       setCurrentPage: sidebarProps.setCurrentPage,
-      setTokenUnit: sidebarProps.setTokenUnit,
     });
 
   const footer = (

@@ -31,17 +31,14 @@ const SearchActions = memo(
     isMobile = false,
     searchValue = '',
     setShowFilterModal,
-    showWithRecharge,
-    setShowWithRecharge,
     currency,
     setCurrency,
+    filterPointsOnly,
+    setFilterPointsOnly,
+    pointsEnabled = false,
     siteDisplayType,
-    showRatio,
-    setShowRatio,
     viewMode,
     setViewMode,
-    tokenUnit,
-    setTokenUnit,
     t,
   }) => {
     const supportsCurrencyDisplay = siteDisplayType !== 'TOKENS';
@@ -59,10 +56,6 @@ const SearchActions = memo(
     const handleViewModeToggle = useCallback(() => {
       setViewMode?.(viewMode === 'table' ? 'card' : 'table');
     }, [viewMode, setViewMode]);
-
-    const handleTokenUnitToggle = useCallback(() => {
-      setTokenUnit?.(tokenUnit === 'K' ? 'M' : 'K');
-    }, [tokenUnit, setTokenUnit]);
 
     return (
       <div className='flex items-center gap-2 w-full'>
@@ -93,19 +86,10 @@ const SearchActions = memo(
           <>
             <Divider layout='vertical' margin='8px' />
 
-            {/* 充值价格显示开关 */}
+            {/* 货币单位选择。曾经挂在「充值价格显示」开关下面，那个开关删了
+                （本站 price 与 usd_exchange_rate 相等，换算恒等于 1），
+                货币选择本身仍有用，改为独立展示。 */}
             {supportsCurrencyDisplay && (
-              <div className='flex items-center gap-2'>
-                <span className='text-sm text-gray-600'>{t('充值价格显示')}</span>
-                <Switch
-                  checked={showWithRecharge}
-                  onChange={setShowWithRecharge}
-                />
-              </div>
-            )}
-
-            {/* 货币单位选择 */}
-            {supportsCurrencyDisplay && showWithRecharge && (
               <Select
                 value={currency}
                 onChange={setCurrency}
@@ -117,11 +101,18 @@ const SearchActions = memo(
               />
             )}
 
-            {/* 显示倍率开关 */}
-            <div className='flex items-center gap-2'>
-              <span className='text-sm text-gray-600'>{t('倍率')}</span>
-              <Switch checked={showRatio} onChange={setShowRatio} />
-            </div>
+            {/* 仅看可积分抵扣。积分没开的站点不出这一项——开了也筛不出任何模型。 */}
+            {pointsEnabled && (
+              <div className='flex items-center gap-2'>
+                <span className='text-sm text-gray-600'>
+                  {t('仅看可积分抵扣')}
+                </span>
+                <Switch
+                  checked={filterPointsOnly}
+                  onChange={setFilterPointsOnly}
+                />
+              </div>
+            )}
 
             {/* 视图模式切换按钮 */}
             <Button
@@ -130,15 +121,6 @@ const SearchActions = memo(
               onClick={handleViewModeToggle}
             >
               {t('表格视图')}
-            </Button>
-
-            {/* Token单位切换按钮 */}
-            <Button
-              theme={tokenUnit === 'K' ? 'solid' : 'outline'}
-              type={tokenUnit === 'K' ? 'primary' : 'tertiary'}
-              onClick={handleTokenUnitToggle}
-            >
-              {tokenUnit}
             </Button>
           </>
         )}

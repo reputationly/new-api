@@ -146,16 +146,13 @@ const PricingVendorIntro = memo(
     isMobile = false,
     searchValue = '',
     setShowFilterModal,
-    showWithRecharge,
-    setShowWithRecharge,
     currency,
     setCurrency,
-    showRatio,
-    setShowRatio,
     viewMode,
     setViewMode,
-    tokenUnit,
-    setTokenUnit,
+    filterPointsOnly,
+    setFilterPointsOnly,
+    pointsEnabled,
   }) => {
     const [currentOffset, setCurrentOffset] = useState(0);
     const [descModalVisible, setDescModalVisible] = useState(false);
@@ -281,16 +278,13 @@ const PricingVendorIntro = memo(
           isMobile={isMobile}
           searchValue={searchValue}
           setShowFilterModal={setShowFilterModal}
-          showWithRecharge={showWithRecharge}
-          setShowWithRecharge={setShowWithRecharge}
           currency={currency}
           setCurrency={setCurrency}
-          showRatio={showRatio}
-          setShowRatio={setShowRatio}
           viewMode={viewMode}
           setViewMode={setViewMode}
-          tokenUnit={tokenUnit}
-          setTokenUnit={setTokenUnit}
+          filterPointsOnly={filterPointsOnly}
+          setFilterPointsOnly={setFilterPointsOnly}
+          pointsEnabled={pointsEnabled}
           t={t}
         />
       ),
@@ -303,16 +297,13 @@ const PricingVendorIntro = memo(
         isMobile,
         searchValue,
         setShowFilterModal,
-        showWithRecharge,
-        setShowWithRecharge,
         currency,
         setCurrency,
-        showRatio,
-        setShowRatio,
         viewMode,
         setViewMode,
-        tokenUnit,
-        setTokenUnit,
+        filterPointsOnly,
+        setFilterPointsOnly,
+        pointsEnabled,
         t,
       ],
     );

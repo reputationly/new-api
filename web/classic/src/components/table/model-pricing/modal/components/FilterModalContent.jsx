@@ -28,15 +28,14 @@ import { usePricingFilterCounts } from '../../../../../hooks/model-pricing/usePr
 
 const FilterModalContent = ({ sidebarProps, t }) => {
   const {
-    showWithRecharge,
-    setShowWithRecharge,
     currency,
     setCurrency,
     siteDisplayType,
+    filterPointsOnly,
+    setFilterPointsOnly,
+    pointsConfig,
     handleChange,
     setActiveKey,
-    showRatio,
-    setShowRatio,
     viewMode,
     setViewMode,
     filterGroup,
@@ -51,8 +50,6 @@ const FilterModalContent = ({ sidebarProps, t }) => {
     setFilterTag,
     filterCapability,
     setFilterCapability,
-    tokenUnit,
-    setTokenUnit,
     loading,
     ...categoryProps
   } = sidebarProps;
@@ -78,17 +75,16 @@ const FilterModalContent = ({ sidebarProps, t }) => {
   return (
     <>
       <PricingDisplaySettings
-        showWithRecharge={showWithRecharge}
-        setShowWithRecharge={setShowWithRecharge}
         currency={currency}
         setCurrency={setCurrency}
         siteDisplayType={siteDisplayType}
-        showRatio={showRatio}
-        setShowRatio={setShowRatio}
         viewMode={viewMode}
         setViewMode={setViewMode}
-        tokenUnit={tokenUnit}
-        setTokenUnit={setTokenUnit}
+        filterPointsOnly={filterPointsOnly}
+        setFilterPointsOnly={setFilterPointsOnly}
+        pointsEnabled={
+          !!pointsConfig?.enabled && pointsConfig?.quotaPerPoint > 0
+        }
         loading={loading}
         t={t}
       />
