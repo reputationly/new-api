@@ -137,6 +137,12 @@ const normalizeImageTabs = (raw) => {
     const entry = {};
     const sizes = normalizeSizeList(cfg?.sizes);
     if (sizes.length) entry.sizes = sizes;
+    // 宽高比与分辨率档。**白名单式重建,漏了就是"运营每保存一次删一次"**
+    // (与 engine / optimizePrompt 同一类坑)。
+    const ratios = normalizeSizeList(cfg?.aspectRatios);
+    if (ratios.length) entry.aspectRatios = ratios;
+    const tiers = normalizeTierList(cfg?.sizeTiers);
+    if (tiers.length) entry.sizeTiers = tiers;
     const note = normalizeModelNote(cfg?.note);
     if (note) entry.note = note;
     // 「AI 优化提示词」的模型级系统提示词覆盖(留空=用 tab 那份通用的)。白名单式重建，
@@ -146,24 +152,6 @@ const normalizeImageTabs = (raw) => {
     out[tabKey] = entry;
   });
   return out;
-};
-
-// 解析管理员配置的「按模型尺寸」，返回指定模型的可选尺寸列表
-// config 形如 { default: [...], models: { modelName: { sizes:[], capabilities:[], tabs:{} } } }
-// 优先级：tab 级 → 模型级 → 全局默认 → 内置兜底。tabKey 传空时退化为只按模型名。
-export const getSizesForModel = (config, model, tabKey) => {
-  const fallback = FALLBACK_IMAGE_SIZES;
-  if (!config || typeof config !== 'object') return fallback;
-  const entry = config.models && config.models[model];
-  const scoped = tabScopedValue(entry, tabKey, 'sizes');
-  if (scoped) return scoped;
-  // 兼容旧形态（entry 为尺寸数组）与新形态（{ sizes, capabilities }）
-  const modelSizes = Array.isArray(entry) ? entry : entry?.sizes;
-  if (Array.isArray(modelSizes) && modelSizes.length > 0) return modelSizes;
-  if (Array.isArray(config.default) && config.default.length > 0) {
-    return config.default;
-  }
-  return fallback;
 };
 
 // 只取运营在该 tab 下**显式**配置的 sizes，不走模型级/全局/内置兜底；没配返回 undefined。
@@ -177,6 +165,154 @@ export const getExplicitTabSizes = (config, model, tabKey) => {
   if (!config || typeof config !== 'object') return undefined;
   return tabScopedValue(config.models && config.models[model], tabKey, 'sizes');
 };
+
+// 比例词判据。运营两种写法混着用（历史上文生图填的就是比例词），拆语义要靠它。
+export const isRatioWord = (s) => /^\d+:\d+$/.test(normalizeImageSize(s));
+
+// 非空数组才算"配了"。**这个判断不能省**：parseImageSizeConfig 对每个模型都会落一个
+// sizes 键（没配就是 []），而空数组是 truthy —— 直接用 `||` 串起来会停在 `[]` 上，
+// 运营配的分类默认值一次都不会被读到，所有模型静默退回内置兜底像素。
+const nonEmptyList = (v) => (Array.isArray(v) && v.length ? v : null);
+
+// 该模型在该 tab 下的**画幅配置总账**。只有两种模式，由"运营配了什么"推导：
+//
+//   area   本 tab 配齐了「宽高比 + 分辨率档」→ 算出精确像素下发（实测这是拿到高分辨率
+//          的唯一路：同一模型收到 "16:9" 出 1344x768=1.03MP，收到 "2720x1536" 原样出
+//          4.18MP，差 4 倍）
+//   table  其余一切 → 把配好的值列表原样给用户选、原样下发
+//
+// **sizes 的语义是"发什么"，不是"什么比例"**：像素与比例词都可以填，后端两种都认
+// （gpustackplus 的 setImageShape：比例词 → aspect_ratio、精确像素 → target_shape）。
+// 老配置里两种混填过，照样工作，行为与改造前一字不差。
+//
+// ⚠️ 曾经还有第三种 ratio 模式（把 sizes 里的比例词"提升"成宽高比、单独配 aspectRatios
+// 也能生效）。砍掉了：它让 sizes 与 aspectRatios 各自都有两种归宿，四轮评审里有一半的
+// 缺陷出在这些组合上（判定链短路、告警判据分叉、i2i 闸被绕过）。收敛成两种模式之后，
+// 每个字段只有一个语义 —— 要按比例算像素就把 aspectRatios 与 sizeTiers 配齐，
+// 只想直接发比例词就填进 sizes。
+//
+// 宽高比与分辨率档**只在 tab 级读，没有模型级回落**。三个理由：后端根本不读图像的画幅
+// 配置（media_model_config.go 文件头写明 sizes 只驱动前端），模型级对图像没有"直连请求
+// 兜底"的意义；体验区取值永远带 tabKey；而 recomputeModelLevel 会把 tab 值的并集写到
+// 模型级、parse 又把它丢掉 —— 写/读/parse 三处口径不一致。收成 tab-only 后三处自动一致
+// （recomputeModelLevel 那边也已跳过这两个字段）。
+export const getImageShapeConfig = (config, model, tabKey) => {
+  const entry = config?.models?.[model];
+  const ratios = tabScopedValue(entry, tabKey, 'aspectRatios') || [];
+  const tiers = tabScopedValue(entry, tabKey, 'sizeTiers') || [];
+
+  // sizes 保留模型级回落（parse 保住了它）；
+  // 分类默认值与内置兜底只在"本模型什么都没配"时出场。
+  const explicitList =
+    tabScopedValue(entry, tabKey, 'sizes') ||
+    nonEmptyList(Array.isArray(entry) ? entry : entry?.sizes);
+
+  const mode = ratios.length && tiers.length ? 'area' : 'table';
+  const sizes =
+    mode === 'area'
+      ? []
+      : explicitList || nonEmptyList(config?.default) || FALLBACK_IMAGE_SIZES;
+
+  return {
+    mode,
+    sizes,
+    ratios,
+    tiers,
+    align:
+      parseInt(entry?.sizeAlign, 10) > 0
+        ? parseInt(entry.sizeAlign, 10)
+        : DEFAULT_IMAGE_SIZE_ALIGN,
+    // 本 tab 有没有**显式**声明画幅。图生图据此决定要不要下发 size：那是 tab 级 opt-in
+    // 的能力（见 getExplicitTabSizes 的注释——size 会流向该 tab 下所有渠道，而
+    // gpt-image / dall-e 的 edits 只认固定档位，后端对 dall-e 系不合规尺寸直接 400），
+    // 从模型级 / 分类默认值继承来的值不能替运营开这个能力。
+    tabScoped: Boolean(
+      tabScopedValue(entry, tabKey, 'sizes') || ratios.length || tiers.length,
+    ),
+  };
+};
+
+// 下发 size 的**唯一判据**。返回要发的值，空串表示"一个 size 字段都不发"。
+//
+// 抽成纯函数不是为了复用（只有一个调用点），是为了**能被穷举测试**：这条判断散在
+// generate 里的时候，接连两轮评审各挑出它的一个漏洞 ——
+//   - 算不出像素时 computeImageSize 返回 ''，而调用方照发，给每次请求塞 "size": ""；
+//   - 'auto' 哨兵只在旧的那一支里排除了，新加的那一支忘了抄。
+// 两次都是"改了一支忘了另一支"，抽出来之后就只有一支。
+//
+// 三个来源任一成立即可下发：文生图（一直如此）/ 画幅由「比例 × 档位」算出来 /
+// 图生图显式配了尺寸白名单。前两条前提是共用的：值得存在，且不是 auto
+// （auto 的语义就是"交给引擎决定"，见 IMAGE_SIZE_AUTO 的注释）。
+export const resolveSubmitImageSize = (
+  size,
+  { isI2I, usesComputedShape, canPickI2ISize } = {},
+) => {
+  const s = normalizeImageSize(size || '');
+  // 空值不用单独判：归一化后本来就是空串，顺着往下走返回的还是空串（调用方按
+  // "空=不发"处理）。写成 `if (!s) return ''` 是个等价分支——留着只会让人以为它承重。
+  if (s === IMAGE_SIZE_AUTO) return '';
+  if (!isI2I || usesComputedShape || canPickI2ISize) return s;
+  return '';
+};
+
+// 内置推荐档位（管理页「填入推荐档位」一键写入）。
+//
+// **每一行都是在现网实测出来的，不是照抄文档**——文档与实机对不上的地方不止一处：
+//   - sensenova-u1.5：收到比例词 "16:9" 出 1344x768（1.03MP），收到 "2720x1536"
+//     原样出 4.18MP。官方五档是等面积阶梯，用面积基准 2048 + 32 对齐能逐个精确复现；
+//     表外的 4:3（算出 2336x1760）实测也原样生效，3072x3072 同样能出（9.44MP）。
+//   - qwen-image：引擎侧有自己的分辨率表并会**静默吸附**——发 1760x992 出的是
+//     1664x928。所以它只能枚举官方表，配面积档不会报错但会让界面说谎。
+//     用的是 2512 版的七行（4:3 是 1472x1104，初版的 1140 不是精确 4:3）。
+//   - z-image：**长边上限 1664**，发 2208x1248 出 1664x928（按比例缩回上限带）。
+//     所以它也只能枚举。另外"必须被 64 整除"是网上的讹传：1472x1104 实测正常出图。
+//   - hunyuan-image-3：只验过 auto（不发 size → 1024x1024，1.05MP），显式尺寸没测，
+//     故**不给推荐档**——没验证过的东西不该摆在"一键填入"里。
+//
+// 按模型名精确匹配（lower+trim）。这里用模型名而不是引擎族声明是可以的：它只是个
+// 一键填充的便利，填完运营看得见、能改；与"按模型名 substring 猜引擎"完全不是一回事。
+export const IMAGE_SHAPE_PRESETS = {
+  'sensenova-u1.5': {
+    label: 'SenseNova-U1.5 官方 2K 档（实测）',
+    aspectRatios: ['1:1', '3:2', '2:3', '16:9', '9:16'],
+    sizeTiers: ['2048'],
+    sizeAlign: 32,
+  },
+  'qwen-image': {
+    label: 'Qwen-Image-2512 官方七档（实测，引擎会吸附到表内）',
+    sizes: [
+      '1328x1328',
+      '1664x928',
+      '928x1664',
+      '1472x1104',
+      '1104x1472',
+      '1584x1056',
+      '1056x1584',
+    ],
+    sizeAlign: 16,
+  },
+  'z-image': {
+    label: 'Z-Image 档位（实测，长边上限 1664）',
+    sizes: [
+      '1664x1664',
+      '1664x928',
+      '928x1664',
+      '1472x1104',
+      '1104x1472',
+      '1024x1024',
+    ],
+    sizeAlign: 16,
+  },
+};
+// qwen-image-edit 与 qwen-image 同一套权重与分辨率表。
+IMAGE_SHAPE_PRESETS['qwen-image-edit'] = IMAGE_SHAPE_PRESETS['qwen-image'];
+
+export const getImageShapePreset = (model) =>
+  IMAGE_SHAPE_PRESETS[
+    String(model || '')
+      .trim()
+      .toLowerCase()
+  ] || null;
 
 // 图生图「输出尺寸」里的自动档：选中它就一个 size 字段都不下发，把画幅交回引擎。
 //
@@ -262,6 +398,44 @@ export const readImageDimensions = (dataUrl) =>
 const normalizeEngine = (v) =>
   typeof v === 'string' ? v.trim().toLowerCase() : '';
 
+// 分辨率档列表：正整数（边长基准 px），去重后从小到大。
+const normalizeTierList = (list) =>
+  Array.isArray(list)
+    ? Array.from(
+        new Set(
+          list
+            .map((x) => parseInt(String(x).trim(), 10))
+            .filter((n) => Number.isFinite(n) && n > 0),
+        ),
+      ).sort((a, b) => a - b)
+    : [];
+
+// 默认像素对齐粒度。实测 SenseNova-U1.5 的引擎按 32 上取整（发 2368x1776 出 2368x1792），
+// 用 32 算出来的就是最终值、所见即所得；且 32 对齐能逐个精确复现它官方那五档。
+export const DEFAULT_IMAGE_SIZE_ALIGN = 32;
+
+// 「面积档 × 比例」→ 精确像素。
+//
+//   面积 A = base²，h = √(A/r)，w = r·h，两边各自**向下**取整到 align 的倍数。
+//
+// 向下而不是四舍五入：宁可比档位略小，也不要越过模型的显存/训练上限。实测这条对
+// SenseNova-U1.5 官方五档是精确命中的（base=2048、align=32）：
+//   1:1 → 2048x2048   3:2 → 2496x1664   16:9 → 2720x1536（原始算出 2730.67）
+//
+// ratio 支持 "16:9" 与 "1664x928" 两种写法（sizeToRatio 已经统一）。取不到比例或档位
+// 非法时返回 ''，调用方据此退回"不下发 size"。
+export const computeImageSize = (ratio, tierBase, align) => {
+  const r = sizeToRatio(ratio);
+  const base = parseInt(tierBase, 10);
+  const step =
+    parseInt(align, 10) > 0 ? parseInt(align, 10) : DEFAULT_IMAGE_SIZE_ALIGN;
+  if (!r || !Number.isFinite(base) || base <= 0) return '';
+  const area = base * base;
+  const h = Math.sqrt(area / r);
+  const floorTo = (v) => Math.max(step, Math.floor(v / step) * step);
+  return `${floorTo(r * h)}x${floorTo(h)}`;
+};
+
 // 引擎族：模型级声明，不随 tab 变。未声明返回空串 = 用通用模板。
 // 判据是配置声明而不是模型名 substring —— 前端拿对外模型名、后端拿渠道重定向后的
 // 上游名，靠名字判两边必然分叉（与 getEngineForVideoModel / getEngineForMusicModel 同）。
@@ -289,6 +463,12 @@ export const parseImageSizeConfig = (raw) => {
             // (与视频那份 parse 同一类坑)。图像这边它只决定优化模板走哪份,
             // 丢了不报错、只是 SenseNova-U1.5 悄悄退回通用模板。
             engine: normalizeEngine(cfg?.engine),
+            // 像素对齐粒度(模型级)。同上,漏了就是保存一次删一次;丢了会退回默认 32,
+            // 对 Qwen-Image 这类 16 对齐的模型算出来的档位会整体错开。
+            sizeAlign:
+              parseInt(cfg?.sizeAlign, 10) > 0
+                ? parseInt(cfg.sizeAlign, 10)
+                : null,
             tabs: normalizeImageTabs(cfg?.tabs),
           };
         }

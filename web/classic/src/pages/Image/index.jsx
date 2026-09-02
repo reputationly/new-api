@@ -23,6 +23,10 @@ const ImagePlaygroundBody = ({ mode }) => {
     canPickI2ISize,
     i2iSizeOptions,
     i2iAspectMismatch,
+    shapeMode,
+    availableRatios,
+    availableTiers,
+    sizeAlign,
     optimizeEngine,
     messages,
     conversations,
@@ -55,6 +59,10 @@ const ImagePlaygroundBody = ({ mode }) => {
           groups={groups}
           models={models}
           availableSizes={availableSizes}
+          shapeMode={shapeMode}
+          availableRatios={availableRatios}
+          availableTiers={availableTiers}
+          sizeAlign={sizeAlign}
           canPickI2ISize={canPickI2ISize}
           i2iSizeOptions={i2iSizeOptions}
           i2iAspectMismatch={i2iAspectMismatch}

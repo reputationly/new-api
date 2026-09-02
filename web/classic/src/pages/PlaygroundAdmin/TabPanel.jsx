@@ -27,6 +27,10 @@ import {
   getPromptOptimizeGlobal,
 } from '../../constants/playgroundAdmin.constants';
 import { getSizesForVideoModel } from '../../constants/videoPlayground.constants';
+import {
+  getImageShapePreset,
+  getImageShapeConfig,
+} from '../../constants/imagePlayground.constants';
 import { defaultOptimizeSystemPrompt } from '../../constants/promptOptimize.constants';
 import { defaultPromptGuide } from '../../constants/promptGuide.constants';
 import FieldInput from './FieldInput';
@@ -38,6 +42,62 @@ const { Text, Title } = Typography;
 //
 // 「专用」是重点：只渲染该 tab 在中央元数据里声明的 fields。同一个模型挂多个玩法时，
 // 文生视频那格填的时长不会连带限制图生视频，数字人也不会再出现一个点了不生效的尺寸框。
+
+// 图像画幅的两条提示，抽出来只是为了让上面那段 JSX 不再长一截：
+//   ① 有实测过的推荐档就给一键填入（内容见 IMAGE_SHAPE_PRESETS 的注释，逐条实测）；
+//   ② 同时配了「尺寸列表」与「宽高比+分辨率档」时告警 —— 体验区按 area 走，
+//      那份尺寸列表一个字都不会被用到（判据见 getImageShapeConfig）。
+const ImageShapeHints = ({ modelName, model, tabKey, entry, onApply }) => {
+  const { t } = useTranslation();
+  const preset = getImageShapePreset(modelName);
+
+  // 「配了但不生效」的告警**直接问运行时那支函数**，不在这里重写一遍判据。
+  //
+  // ⚠️ 之前这里手写成「三样都配了才告警」，与 getImageShapeConfig 的实际口径对不上，
+  // 漏掉两种同样静默的组合：
+  //   - 老配置 sizes 里混填了比例词，再加上分辨率档 → 比例词被当宽高比用、整份精确
+  //     像素失效，而 aspectRatios 是空的，那条判据永远不触发；
+  //   - 配了像素又配了宽高比但没配档位 → 像素优先，宽高比一个字都不生效。
+  // 两处判据分开写就一定会分叉，而这个告警存在的全部意义正是"别让人以为它管用"。
+  const shape = getImageShapeConfig(
+    { models: { [modelName]: model } },
+    modelName,
+    tabKey,
+  );
+  // 配了但不生效的两种情况，判据都来自上面那支运行时函数，不在这里重写：
+  //   - 画幅走「比例 × 档位」时，本 tab 的尺寸列表一个值都不会被用到；
+  //   - 宽高比与分辨率档**必须成对**，只配一半等于没配。
+  const pixelsIgnored = (entry.sizes || []).length > 0 && shape.mode === 'area';
+  const shapeIncomplete =
+    (entry.aspectRatios || []).length > 0 !==
+    (entry.sizeTiers || []).length > 0;
+
+  if (!preset && !pixelsIgnored && !shapeIncomplete) return null;
+  return (
+    <div className='mt-2'>
+      {preset && (
+        <Button size='small' theme='borderless' onClick={() => onApply(preset)}>
+          {t('填入推荐档位')}：{t(preset.label)}
+        </Button>
+      )}
+      {pixelsIgnored && (
+        <Text type='warning' size='small' className='block mt-1'>
+          {t(
+            '⚠️ 本 tab 配了「尺寸 / 分辨率」，但画幅当前由「宽高比 × 分辨率档」算出，那份列表一个值都不会生效（比例词也不例外——它只在没配「宽高比 + 分辨率档」时才作为尺寸下发）。要改用那份列表，请清空「分辨率档」。',
+          )}
+        </Text>
+      )}
+      {shapeIncomplete && (
+        <Text type='warning' size='small' className='block mt-1'>
+          {t(
+            '⚠️ 「宽高比」与「分辨率档」必须成对配置，只配一半不生效（画幅仍由上面的「尺寸 / 分辨率」列表决定）。两个都填上才会按「面积档 × 比例」算出精确像素。',
+          )}
+        </Text>
+      )}
+    </div>
+  );
+};
+
 const TabPanel = ({ category, tab, draft }) => {
   const { t } = useTranslation();
   const [pending, setPending] = useState('');
@@ -575,6 +635,47 @@ const TabPanel = ({ category, tab, draft }) => {
                     />
                   ))}
                 </div>
+              )}
+              {/* 画幅：一键填入实测过的推荐档 + 同时配了两套时的告警。
+                  只对图像分类有意义（视频那边画幅走另一套字段）。 */}
+              {category === 'image' && (
+                <ImageShapeHints
+                  modelName={name}
+                  model={model}
+                  tabKey={tab.key}
+                  entry={entry}
+                  onApply={(preset) => {
+                    // 两套互斥：填 area 就清掉 sizes，反之亦然 —— 否则一键填完
+                    // 立刻触发下面那条"配了两套"的告警，等于自己造矛盾。
+                    draft.setTabField(
+                      storeKey,
+                      tab.key,
+                      name,
+                      'aspectRatios',
+                      preset.aspectRatios,
+                    );
+                    draft.setTabField(
+                      storeKey,
+                      tab.key,
+                      name,
+                      'sizeTiers',
+                      preset.sizeTiers,
+                    );
+                    draft.setTabField(
+                      storeKey,
+                      tab.key,
+                      name,
+                      'sizes',
+                      preset.sizes,
+                    );
+                    draft.setModelField(
+                      storeKey,
+                      name,
+                      'sizeAlign',
+                      preset.sizeAlign ?? null,
+                    );
+                  }}
+                />
               )}
               {modelLevelFields.length > 0 && (
                 <div className='mt-3 pt-3 border-t border-gray-100 flex flex-wrap items-center gap-6'>

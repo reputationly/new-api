@@ -41,8 +41,9 @@ import {
   IMAGE_POLL_MAX_TRIES,
   IMAGE_HISTORY_LIMIT,
   IMAGE_CONV_TURN_LIMIT,
-  getSizesForModel,
   getExplicitTabSizes,
+  getImageShapeConfig,
+  computeImageSize,
   readImageDimensions,
   pickClosestSize,
   sizeToRatio,
@@ -51,6 +52,7 @@ import {
   normalizeImageSize,
   IMAGE_QUALITY_BOT_TASK,
   getEngineForImageModel,
+  resolveSubmitImageSize,
 } from '../../constants/imagePlayground.constants';
 
 // 文生图 / 图生图共用本 hook,按 mode 区分能力过滤、请求端点、是否带底图。
@@ -156,7 +158,11 @@ export const useImageGeneration = ({
   const [inputs, setInputs] = useState({
     group: '',
     model: '',
+    // size 始终是**真正下发的那个值**。area 模式下它由下面两个选择器算出来
+    // (见 getImageShapeConfig / computeImageSize),提交那段因此一个字都不用改。
     size: '',
+    aspectRatio: '', // 宽高比(仅 area 模式)
+    sizeTier: null, // 分辨率档的面积基准 px(仅 area 模式)
     seed: '', // 随机种子;'' 表示随机(不下发,引擎自动随机)
     // 一次生成几张:多张的意义是**给不同 seed 让用户挑**,见 playgroundBatch.constants。
     // 默认 1 —— 多花钱的事不该是默认值。
@@ -298,10 +304,67 @@ export const useImageGeneration = ({
     [statusState?.status?.ImageModelSizeConfig],
   );
 
-  const availableSizes = useMemo(
-    () => getSizesForModel(sizeConfig, inputs.model, mode),
+  // 该模型在本 tab 下的画幅配置总账:两种模式(area/table)由运营配了什么
+  // 推导,见 getImageShapeConfig。
+  const shape = useMemo(
+    () => getImageShapeConfig(sizeConfig, inputs.model, mode),
     [sizeConfig, inputs.model, mode],
   );
+
+  // **图生图的画幅是 tab 级 opt-in**。理由见 getExplicitTabSizes 的注释:下发的 size 会
+  // 流向该 tab 下的所有渠道,而 gpt-image / dall-e 的 edits 只认固定档位 ——
+  // relay/helper/valid_request.go 对 dall-e 系不合规尺寸直接 400。
+  //
+  // 所以从**模型级 / 分类默认值**继承来的比例不能替运营开这个能力:那些值多半是给文生图
+  // 配的(分类默认值历来填比例词),i2i 从没打算下发它们。只有运营在本 tab 下显式配了
+  // 画幅(sizes / aspectRatios / sizeTiers 任一)才算数。
+  // 文生图不受影响:它本来就一直有尺寸下拉。
+  const shapeMode = !isI2I || shape.tabScoped ? shape.mode : 'none';
+
+  // 尺寸下拉只在 table 模式有内容;area 模式下它是空的,由比例/档位两个选择器
+  // 接管(下面那个 effect 会把算出来的值写回 inputs.size)。
+  const availableSizes = shapeMode === 'table' ? shape.sizes : [];
+
+  // area 模式:真正下发的 size 由「比例 × 档位」算出来。
+  //
+  // **刻意仍然写回 inputs.size**,而不是在提交处再分支一次 —— 提交那段(reqBody.size)
+  // 因此一个字都不用改,两个新选择器只是"生产 size 的 UI"。少一处分支就少一处分叉。
+  useEffect(() => {
+    if (locked) return;
+    if (shapeMode !== 'area') return;
+    if (!shape.ratios.length) return;
+    const ratio = shape.ratios.includes(inputs.aspectRatio)
+      ? inputs.aspectRatio
+      : shape.ratios[0];
+    // 档位默认取**最大**的那一档:这个功能存在的理由就是"出图分辨率太低",
+    // 默认给最小档等于没做。tiers 已按从小到大排序。
+    // 档位默认取**最大**的那一档:这个功能存在的理由就是"出图分辨率太低",
+    // 默认给最小档等于没做。tiers 已按从小到大排序。
+    const tier = shape.tiers.includes(inputs.sizeTier)
+      ? inputs.sizeTier
+      : (shape.tiers[shape.tiers.length - 1] ?? null);
+    const size = computeImageSize(ratio, tier, shape.align);
+    if (
+      ratio === inputs.aspectRatio &&
+      tier === inputs.sizeTier &&
+      size === inputs.size
+    ) {
+      return;
+    }
+    setInputs((prev) => ({
+      ...prev,
+      aspectRatio: ratio,
+      sizeTier: tier,
+      size,
+    }));
+  }, [
+    shape,
+    shapeMode,
+    inputs.aspectRatio,
+    inputs.sizeTier,
+    inputs.size,
+    locked,
+  ]);
 
   // 所选模型的引擎族，只喂给「AI 优化提示词」挑模板（图像这边后端不按它分支，
   // 见 playgroundAdmin.constants 的 IMAGE_ENGINE_SENSENOVA_U15 注释）。
@@ -314,8 +377,20 @@ export const useImageGeneration = ({
       isI2I ? getExplicitTabSizes(sizeConfig, inputs.model, mode) : undefined,
     [isI2I, sizeConfig, inputs.model, mode],
   );
+  // 画幅由「比例(+档位)」算出来时，i2i 的整套白名单机制必须让开。
+  //
+  // ⚠️ **不让开就是页面卡死**，不是"多一个没用的控件"：下面那个白名单校验 effect 会把
+  // 算出来的像素(2720x1536，不在白名单里)改回白名单首档，而上面那个 area effect 又会
+  // 把它改回算出来的值 —— 两个 effect 各自依赖 inputs.size，来回写成死循环
+  // (renderHook 实测 249 秒不收敛，浏览器里就是 Maximum update depth exceeded)。
+  // 触发条件正是管理页那条告警描述的组合(i2i 同时配了 sizes 与 比例+档位)，而那条
+  // 文案原本还说"留着不报错" —— 现已一并改口径。
+  const usesComputedShape = shapeMode === 'area';
   const canPickI2ISize =
-    isI2I && Array.isArray(explicitI2ISizes) && explicitI2ISizes.length > 0;
+    isI2I &&
+    !usesComputedShape &&
+    Array.isArray(explicitI2ISizes) &&
+    explicitI2ISizes.length > 0;
 
   // 选项 = 自动档 + 运营配的白名单。白名单之外不给别的：能选的一定是模型支持的
   // 档位。底图不进选项，它只决定上传那一刻把哪一档填进框里。
@@ -888,11 +963,16 @@ export const useImageGeneration = ({
         // 常比人工指定更合适),而 qwen-image-edit 不传只会落到写死的 16:9,
         // 所以它的默认值始终是具体档位、不是自动。第三方渠道(gpt-image 等)
         // 因为运营不会给它配 sizes,同样一个字段都收不到。
-        if (
-          !isI2I ||
-          (canPickI2ISize && params.size && params.size !== IMAGE_SIZE_AUTO)
-        ) {
-          reqBody.size = normalizeImageSize(params.size);
+        // usesComputedShape 这一支不能省:上面把 canPickI2ISize 在 area 模式下
+        // 关掉了,只留原条件的话 i2i 会一个 size 都不发,算出来的高分辨率白算。
+        // 下发 size 的判据只有一处（resolveSubmitImageSize），这里只负责调用。
+        const outSize = resolveSubmitImageSize(params.size, {
+          isI2I,
+          usesComputedShape,
+          canPickI2ISize,
+        });
+        if (outSize) {
+          reqBody.size = outSize;
         }
         // 随机种子见下方并发段:多张时由前端逐张下发,单张时维持原行为。
         // 提示词智能优化:开了才发,关闭时一个字段都不带。
@@ -1106,6 +1186,7 @@ export const useImageGeneration = ({
       storageKey,
       isI2I,
       canPickI2ISize,
+      usesComputedShape,
       t,
     ],
   );
@@ -1206,6 +1287,11 @@ export const useImageGeneration = ({
     canPickI2ISize,
     i2iSizeOptions,
     i2iAspectMismatch,
+    // 画幅：模式 + 两个新选择器的候选。table 模式下这三个都为空/无意义。
+    shapeMode,
+    availableRatios: shape.ratios,
+    availableTiers: shape.tiers,
+    sizeAlign: shape.align,
     optimizeEngine,
     messages,
     conversations,

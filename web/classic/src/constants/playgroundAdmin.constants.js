@@ -53,7 +53,19 @@ export const PLAYGROUND_FIELD_META = {
     label: '宽高比',
     type: 'list',
     placeholder: '如 16:9、9:16、1:1',
-    help: '留空=该 tab 不展示宽高比选择器。',
+    help: '留空=该 tab 不展示宽高比选择器。图像玩法里它与下面的「分辨率档」配合：两者都配=按「面积档 × 比例」算出精确像素下发（推荐）；只配比例=下发比例词，由引擎按自己的离散表定画幅（分辨率通常偏低）。',
+  },
+  // 图像专用。**它不是短边档,是面积档**(总像素预算,值为边长基准 px,面积 = 基准²)。
+  //
+  // 为什么是面积而不是短边:实测 SenseNova-U1.5 官方五档是等面积阶梯(4.15–4.19M,
+  // 离散度 1.0%)而短边在 1536/1664/2048 之间跳。用面积基准 2048 + 32 对齐能逐个
+  // 精确复现那五行;用短边档一行都对不上。视频那边用短边是因为视频引擎按短边校验
+  // (H3 的 short_edge),两者不能照搬。
+  sizeTiers: {
+    label: '分辨率档（面积基准 px）',
+    type: 'list',
+    placeholder: '如 2048（=2048² 的像素预算）',
+    help: '留空=不展示分辨率档选择器，画幅只由上面的宽高比决定。填了以后与宽高比组合算出精确像素：面积 = 基准²，再按该比例分配长短边并对齐。配一个值就只有一档（不展示选择器、直接生效），配多个则用户可选。⚠️ **配之前务必实测一次**：引擎超限时不会报错，而是按比例缩回自己的上限带，界面写的像素和实际出图就对不上了。实测 sensenova-u1.5 表外档位（2336×1760）原样生效，而 z-image 的长边上限是 1664（请求 2208×1248 实际出 1664×928），所以 z-image 应该用上面的「尺寸/分辨率」枚举、而不是本项。',
   },
   maxInputMB: {
     label: '上传文件上限（MB）',
@@ -185,6 +197,13 @@ export const IMAGE_ENGINE_OPTIONS_INLINE = [
 export const PLAYGROUND_MODEL_LEVEL_FIELDS = {
   ImageModelSizeConfig: [
     {
+      key: 'sizeAlign',
+      label: '像素对齐粒度',
+      type: 'int',
+      placeholder: '留空=32',
+      help: '「面积档 × 比例」算出来的长宽会各自向下取整到它的倍数。留空=32。⚠️ 这个值要跟引擎一致，否则会出现「界面显示 2368×1776、实际出图 2368×1792」这种对不上：实测 SenseNova-U1.5 的引擎按 32 上取整，而 Qwen-Image 官方表是 16 的倍数且没有一个是 64 的倍数（1328/64=20.75），所以不能全局写死。属模型能力，与 tab 无关。',
+    },
+    {
       key: 'engine',
       label: '引擎族',
       type: 'select',
@@ -260,18 +279,20 @@ export const PLAYGROUND_CATEGORIES = [
     label: '图像模型', // 由「图片模型」改名
     configKey: 'ImageModelSizeConfig',
     tabs: [
+      // sizes / aspectRatios / sizeTiers 三者的关系见 PLAYGROUND_FIELD_META.sizeTiers
+      // 与 getImageShapeConfig:配了什么就出什么控件,不需要另外声明"规则"。
       {
         key: 'text2image',
         label: '文生图',
         capability: '文生图',
-        fields: ['sizes'],
+        fields: ['sizes', 'aspectRatios', 'sizeTiers'],
         promptOptimize: true,
       },
       {
         key: 'image2image',
         label: '图生图',
         capability: '图生图',
-        fields: ['sizes'],
+        fields: ['sizes', 'aspectRatios', 'sizeTiers'],
         promptOptimize: true,
       },
     ],
@@ -874,6 +895,16 @@ export const orphanFields = (storeKey, model) => {
 //
 // 只重算「该模型至少参与了一个声明该字段的 tab」的字段，其余平铺字段原样保留：
 // 没进任何 tab 的模型（如只挂了「图像编辑」这种暂无玩法的能力）配置不会被抹掉。
+// **tab-only 字段**：反推到模型级只会产生一份没人读、还会被 parse 丢掉的噪声键。
+//
+// 图像的宽高比与分辨率档就是这类：后端根本不读图像的画幅配置（见
+// common/media_model_config.go 文件头「sizes 只驱动前端体验区的可选值」），体验区取值
+// 又永远带 tabKey。早先没跳过它们，结果是「保存时写进模型级 → parse 白名单重建时丢掉
+// → 读取侧的模型级回落永远取不到」，写/读/parse 三处口径全不一样。
+const MODEL_LEVEL_SKIP = {
+  ImageModelSizeConfig: ['aspectRatios', 'sizeTiers'],
+};
+
 export const recomputeModelLevel = (storeKey, model) => {
   const out = { ...(model || {}) };
   delete out.tabs;
@@ -884,7 +915,9 @@ export const recomputeModelLevel = (storeKey, model) => {
   );
   const fields = new Set();
   owned.forEach((x) => (x.tab.fields || []).forEach((f) => fields.add(f)));
+  const skip = MODEL_LEVEL_SKIP[storeKey] || [];
   fields.forEach((field) => {
+    if (skip.includes(field)) return;
     const entries = owned
       .filter((x) => (x.tab.fields || []).includes(field))
       .map((x) => tabsObj[x.tab.key]?.[field]);

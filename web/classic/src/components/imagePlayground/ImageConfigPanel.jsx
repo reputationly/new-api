@@ -26,11 +26,33 @@ import {
 import ImageUrlInput from '../playground/ImageUrlInput';
 import { useModelNotes } from '../../hooks/common/useModelNotes';
 import PromptGuideTip from '../playground/PromptGuideTip';
-import { IMAGE_MAX_EDIT_IMAGES } from '../../constants/imagePlayground.constants';
+import {
+  IMAGE_MAX_EDIT_IMAGES,
+  DEFAULT_IMAGE_SIZE_ALIGN,
+  computeImageSize,
+  sizeToRatio,
+} from '../../constants/imagePlayground.constants';
+
 import {
   PLAYGROUND_BATCH_COUNTS,
   SEED_MAX,
 } from '../../constants/playgroundBatch.constants';
+
+// 比例按钮里那个小方块的长边像素。按比例缩短边，横/竖/方一眼可辨——比一串
+// "16:9 / 9:16" 文字快得多，尤其横竖两版名字只差一个冒号位置。
+const RATIO_BOX_MAX = 24;
+const ratioBox = (r) => {
+  const v = sizeToRatio(r) || 1;
+  return v >= 1
+    ? {
+        width: RATIO_BOX_MAX,
+        height: Math.max(6, Math.round(RATIO_BOX_MAX / v)),
+      }
+    : {
+        width: Math.max(6, Math.round(RATIO_BOX_MAX * v)),
+        height: RATIO_BOX_MAX,
+      };
+};
 
 const ImageConfigPanel = ({
   isI2I = false,
@@ -39,6 +61,15 @@ const ImageConfigPanel = ({
   groups,
   models,
   availableSizes,
+  // 画幅：模式决定出哪个控件（见 constants 的 getImageShapeConfig）。
+  //   area  → 宽高比 + 分辨率档两个下拉，提交的像素由它俩算出来
+  //   table → 尺寸下拉（值原样下发；像素与比例词都可以，后端两种都认）
+  shapeMode = 'table',
+  availableRatios = [],
+  availableTiers = [],
+  // 对齐粒度按模型走（实测 U1.5 是 32、Qwen-Image 官方表是 16）。用错会让下拉里
+  // 写的像素和实际出图对不上，所以这里必须拿模型的值，不能用默认值凑。
+  sizeAlign = DEFAULT_IMAGE_SIZE_ALIGN,
   canPickI2ISize = false,
   i2iSizeOptions = [],
   i2iAspectMismatch = null,
@@ -66,6 +97,20 @@ const ImageConfigPanel = ({
     (availableSizes || []).map((s) => ({ label: s, value: s })),
     inputs.size,
   );
+
+  const usesRatio = shapeMode === 'area';
+  // 刚切完模型、同步 effect 还没跑的那一帧，当前值可能不在候选里；补进去避免
+  // "一个都没高亮"的闪烁。**锁定态不走这里**——那时显示的是真实产出值，见下方 disabled 分支。
+  const ratioChoices =
+    inputs.aspectRatio && !(availableRatios || []).includes(inputs.aspectRatio)
+      ? [...(availableRatios || []), inputs.aspectRatio]
+      : availableRatios || [];
+  // 档位标签直接写出算出来的像素:运营配的是"面积基准",用户关心的是"出多大的图"。
+  // 只有一档时不渲染下拉(它已经生效了),避免一个只能选一项的控件。
+  const tierOptions = (availableTiers || []).map((base) => {
+    const px = computeImageSize(inputs.aspectRatio, base, sizeAlign);
+    return { label: px ? `${base}（${px}）` : String(base), value: base };
+  });
 
   const renderImagePreview = (label, urls) => (
     <div>
@@ -217,7 +262,97 @@ const ImageConfigPanel = ({
         {/* 图片尺寸。文生图一直有；图生图只在运营给该模型显式配了本 tab 的 sizes
             时才出现（canPickI2ISize），每次上传底图后自动选中画幅最接近的那一档
             ——不给这个框时输出画幅由引擎默认档决定，与底图无关。 */}
-        {(!isI2I || canPickI2ISize) && (
+        {/* 宽高比 + 分辨率档（area 模式）。运营把比例与档位都配上才出现；
+            档就多一个档位下拉，两者组合算出精确像素下发——这是拿到高分辨率的唯一路，
+            只发比例词的话画幅由引擎的离散表定（实测 1344x768，仅 1.03MP）。 */}
+        {usesRatio && (
+          <div>
+            <div className='flex items-center gap-2 mb-2'>
+              <Ruler size={16} className='text-gray-500' />
+              <Typography.Text strong className='text-sm'>
+                {disabled ? t('画幅') : t('宽高比')}
+              </Typography.Text>
+            </div>
+            {/* 锁定态（打开历史会话）只显示真正产出这张图的值。
+                会话里只存了 size，比例与档位从来没存过（改造前的老会话更不可能有），
+                拿 inputs 里的残留值去高亮按钮，显示的是**上一次草稿**的选择——
+                那是假信息，比不显示更糟。直接写出 size 即可——它是从会话恢复的，
+                是唯一的事实，不需要反推比例或档位。 */}
+            {disabled ? (
+              <Typography.Text type='tertiary' className='text-sm'>
+                {inputs.size || t('由模型决定')}
+              </Typography.Text>
+            ) : (
+              <div className='flex flex-wrap gap-2'>
+                {ratioChoices.map((r) => {
+                  const active = r === inputs.aspectRatio;
+                  return (
+                    <button
+                      key={r}
+                      type='button'
+                      disabled={disabled}
+                      aria-pressed={active}
+                      onClick={() => onInputChange('aspectRatio', r)}
+                      className={`flex w-14 flex-col items-center justify-center gap-1 rounded-lg border py-2 transition-colors ${
+                        active
+                          ? 'border-blue-500 bg-blue-50'
+                          : 'border-gray-200 hover:border-gray-300'
+                      } ${disabled ? 'cursor-not-allowed opacity-50' : 'cursor-pointer'}`}
+                    >
+                      <span
+                        className={`block rounded-sm border ${
+                          active ? 'border-blue-500' : 'border-gray-400'
+                        }`}
+                        style={ratioBox(r)}
+                      />
+                      <span
+                        className={`text-[11px] leading-none ${
+                          active ? 'text-blue-600' : 'text-gray-500'
+                        }`}
+                      >
+                        {r}
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+            {!disabled && tierOptions.length > 1 && (
+              <div className='mt-3'>
+                <div className='flex items-center gap-2 mb-2'>
+                  <Typography.Text strong className='text-sm'>
+                    {t('分辨率')}
+                  </Typography.Text>
+                </div>
+                <Select
+                  placeholder={t('请选择分辨率')}
+                  name='sizeTier'
+                  selection
+                  onChange={(value) => onInputChange('sizeTier', value)}
+                  value={inputs.sizeTier}
+                  optionList={tierOptions}
+                  disabled={disabled}
+                  style={{ width: '100%' }}
+                  dropdownStyle={{ width: '100%', maxWidth: '100%' }}
+                  className='!rounded-lg'
+                />
+              </div>
+            )}
+            {/* 把最终像素写出来:用户选的是比例和档位,真正下发的是算出来的 size,
+                不显示的话"我选了 2K 到底出多大"没有任何地方能看到。 */}
+            {!disabled && inputs.size && (
+              <Typography.Text
+                type='tertiary'
+                size='small'
+                className='block mt-1'
+              >
+                {t('出图 {{size}}', { size: inputs.size })}
+              </Typography.Text>
+            )}
+          </div>
+        )}
+
+        {shapeMode !== 'none' && !usesRatio && (!isI2I || canPickI2ISize) && (
           <div>
             <div className='flex items-center gap-2 mb-2'>
               <Ruler size={16} className='text-gray-500' />
