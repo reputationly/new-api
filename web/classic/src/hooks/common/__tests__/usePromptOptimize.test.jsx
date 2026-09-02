@@ -14,6 +14,7 @@ import { API } from '../../../helpers';
 import { StatusContext } from '../../../context/Status';
 import { usePromptOptimize } from '../usePromptOptimize';
 import {
+  IMAGE_ENGINE_SENSENOVA_U15,
   VIDEO_ENGINE_LTX25,
   getModelOptimizePrompt,
 } from '../../../constants/playgroundAdmin.constants';
@@ -146,6 +147,61 @@ describe('usePromptOptimize 的系统提示词取值链', () => {
     );
     expect(getModelOptimizePrompt(raw, 'image2video', 'ltx-2.5')).toBe('');
     expect(getModelOptimizePrompt(raw, 'text2video', 'wan2.2')).toBe('');
+  });
+});
+
+// 图像体验区此前根本不传 engine（图像没有引擎族这一层），SenseNova-U1.5 的模板是随
+// 这层一起加的。这里守的是「engine 真的走到了模板选择」——断了不报错，只是退回通用版。
+describe('图像 tab 也按引擎族取内置模板', () => {
+  beforeEach(() => {
+    API.post.mockReset();
+    API.post.mockResolvedValue({
+      data: { choices: [{ message: { content: '优化后的提示词' } }] },
+    });
+  });
+
+  const renderImage = (opts) =>
+    renderHook(() => usePromptOptimize('image', 'text2image', opts), {
+      wrapper: ({ children }) => (
+        <StatusContext.Provider
+          value={[
+            {
+              status: {
+                PlaygroundTabConfig: JSON.stringify({
+                  __global: {
+                    promptOptimize: { enabled: true, model: 'gpt-optimizer' },
+                  },
+                }),
+              },
+            },
+            () => {},
+          ]}
+        >
+          {children}
+        </StatusContext.Provider>
+      ),
+    });
+
+  it('声明了 SenseNova-U1.5 就用它的模板', async () => {
+    const { result } = renderImage({ engine: IMAGE_ENGINE_SENSENOVA_U15 });
+    await act(async () => {
+      await result.current.optimize('一张发布会海报');
+    });
+    const [, body] = API.post.mock.calls.at(-1);
+    expect(body.messages[0].content).toBe(
+      defaultOptimizeSystemPrompt('text2image', IMAGE_ENGINE_SENSENOVA_U15),
+    );
+  });
+
+  it('没声明引擎族的图像模型维持原行为（通用图像模板）', async () => {
+    const { result } = renderImage({});
+    await act(async () => {
+      await result.current.optimize('一张发布会海报');
+    });
+    const [, body] = API.post.mock.calls.at(-1);
+    expect(body.messages[0].content).toBe(
+      defaultOptimizeSystemPrompt('text2image', ''),
+    );
   });
 });
 

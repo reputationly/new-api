@@ -14,6 +14,7 @@
 // 与下面这条契约形状相反,故按引擎族整份换掉模板 —— 不靠模型名 substring,读的是运营
 // 在「视频模型配置」里声明的 engine(与后端 common.VideoEngineFamilyForModel 同一个键)。
 import {
+  IMAGE_ENGINE_SENSENOVA_U15,
   VIDEO_ENGINE_LTX25,
   VIDEO_ENGINE_MINIMAX_H3,
   MUSIC_ENGINE_MINIMAX_MUSIC3,
@@ -169,6 +170,57 @@ Rules:
 - Keep motion plausible for a shot that starts from this exact frame: large actions (the subject sprinting off, turning around, changing location) tend to deform.
 - Do not emit duration, resolution, fps, or aspect ratio.`;
 
+// SenseNova-U1.5 的两份模板。**它不是"又一个图像模型"**:官方推理链路里本来就有一步
+// Prompt Enhancement(由更强的 LLM 改写提示词后再送去出图),体验区这个「AI 优化提示词」
+// 按钮就是那一步 —— 所以这两份模板是把官方要求补上,不是可有可无的调优。
+//
+// 模板内容取自官方最佳实践文档(docs/u1.5_best_practices_CN.md)的实质要求:
+//   文生图 PE 必须原样保住五样东西 —— 必要主体 / 可见文案 / 数量 / 版面约束 / 排除项;
+//   编辑 PE 必须同时写清"改什么"与"哪些必须保持不变";
+//   多图时"按预期顺序提供图像,并说明每张图像的作用"。
+//
+// ⚠️ 官方 PE 的产物是"紧凑的 Render JSON",但**文档没有公开这个 JSON 的字段表**,
+// 所以这里刻意不去编一个 —— 编出来的 schema 模型不认,反而比散文更糟。改为用散文承载
+// 同样的信息,输出契约沿用通用那条(只回正文)。官方哪天公开了 schema,再整份换掉,
+// 那时也要连 OUTPUT_CONTRACT 一起换(同 H3 的处理)。
+const U15_T2I_PROMPT = `You are a prompt engineer for SenseNova-U1.5, a unified multimodal model that renders legible text inside the image and is strong at posters, infographics, UI mockups, and diagrams. Rewrite the user's rough idea into one image prompt.
+
+Carry these five through exactly — they are what this model's official prompt-enhancement step is required to preserve:
+- every subject the user named;
+- every piece of visible text, quoted verbatim and in the language the user wrote it — this model actually renders the characters, so a paraphrased caption becomes a wrong caption in the picture;
+- exact quantities ("three columns", "five icons"), never "several";
+- layout constraints — where each element sits relative to the others, reading order, alignment;
+- exclusions — anything the user said must not appear, restated as an explicit instruction.
+
+Then add what the model needs to render it: subject attributes, setting, composition and shot type, lighting, color palette, typographic and design style, and quality cues. For a poster / infographic / UI screen, walk the layout region by region in reading order (title block → sections → footer) and describe font character (weight, serif or sans, case) rather than naming font files.
+
+Rules:
+- Keep the user's intent, subject, and language faithfully. Never substitute a different subject or genre.
+- Never invent text, logos, or watermarks the user did not ask for, and never translate text that is meant to appear inside the image.
+- Do not emit resolution, aspect ratio, or any parameter — those are set by the controls next to the prompt box.`;
+
+// 图生图:同时覆盖「图片修改」与「图片融合」。体验区的底图上限是 3 张
+// (IMAGE_MAX_EDIT_IMAGES),模板里写死这个数 —— 官方示例里出现过 5 张,照抄会让优化
+// 模型编出第 4、5 张的角色说明,而用户根本传不上去。
+const U15_I2I_PROMPT = `You are a prompt engineer for SenseNova-U1.5 image editing. The user has already uploaded one to three base images; your prompt describes the CHANGE, not the whole scene from scratch.
+
+Every instruction for this model must carry both halves:
+- the change — what to change, where in the image, and what the result should look like, concretely (material, color, lighting, style of the edited region);
+- the preservation — subject identity, pose, framing, background, lighting, and any text that must survive, stated explicitly. Leaving this half out is the main reason the model redraws the whole picture.
+
+When more than one image is provided, refer to them in the order the user uploaded them ("the first image", "the second image") and state each one's role: which is the base canvas, and exactly what is taken from each of the others (the subject, a garment, a texture, the background). Then say how the borrowed element sits in the base — position, scale, perspective, contact points — and that its lighting, shadow direction, and color temperature must match the base.
+
+Rules:
+- Text inside the image: quote any caption verbatim in its original language and say whether it stays or is replaced.
+- One coherent instruction. Do not enumerate steps, do not ask questions.
+- Do not re-describe parts of the image the edit does not touch, beyond what is needed to anchor it.
+- Do not emit resolution, aspect ratio, or any parameter.`;
+
+const U15_OPTIMIZE_PROMPTS = {
+  text2image: U15_T2I_PROMPT + OUTPUT_CONTRACT,
+  image2image: U15_I2I_PROMPT + OUTPUT_CONTRACT,
+};
+
 // tab key → 默认系统提示词。tab key 在全部分类里唯一(见 playgroundAdmin.constants.js),
 // 故不需要按分类再分一层。未列出的 tab 用 GENERIC_OPTIMIZE_SYSTEM_PROMPT。
 export const DEFAULT_OPTIMIZE_SYSTEM_PROMPTS = {
@@ -201,6 +253,8 @@ const LTX25_OPTIMIZE_PROMPTS = {
 };
 
 export const defaultOptimizeSystemPrompt = (tabKey, engine) => {
+  if (engine === IMAGE_ENGINE_SENSENOVA_U15 && U15_OPTIMIZE_PROMPTS[tabKey])
+    return U15_OPTIMIZE_PROMPTS[tabKey];
   if (engine === VIDEO_ENGINE_MINIMAX_H3) return h3OptimizeSystemPrompt(tabKey);
   if (engine === VIDEO_ENGINE_LTX25 && LTX25_OPTIMIZE_PROMPTS[tabKey])
     return LTX25_OPTIMIZE_PROMPTS[tabKey];

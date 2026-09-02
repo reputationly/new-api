@@ -6,6 +6,10 @@ import {
   tabScopedValue,
 } from './playgroundAdmin.constants';
 
+// 常量本体定义在 playgroundAdmin.constants.js（管理页下拉也要用它），这里再导出，
+// 依赖方向保持单向 —— 与 VIDEO_ENGINE_MINIMAX_H3 / MUSIC_ENGINE_MINIMAX_MUSIC3 同一处理。
+export { IMAGE_ENGINE_SENSENOVA_U15 } from './playgroundAdmin.constants';
+
 // 提示词预设:点击对应按钮清空输入框并填入该提示词(体验区快速试玩,仅文生图展示)。
 export const IMAGE_PROMPT_PRESETS = [
   '远景镜头，在壮丽的雪山背景下，两个小小的人影站在远处山顶，背对着镜头，静静地观赏着日落的美景。夕阳的余晖洒在雪山上，呈现出一片金黄色的光辉，与蔚蓝的天空形成鲜明对比。两人仿佛被这壮观的自然景象所吸引，整个画面充满了宁静与和谐。',
@@ -253,6 +257,17 @@ export const readImageDimensions = (dataUrl) =>
     img.src = dataUrl;
   });
 
+// 引擎族取值口径与视频/语音/音乐一致：lower + trim（那三处是为了与后端比较；图像这边
+// 后端没有对应物，仍保持同一口径，免得运营在四个分类之间形成两套记忆）。
+const normalizeEngine = (v) =>
+  typeof v === 'string' ? v.trim().toLowerCase() : '';
+
+// 引擎族：模型级声明，不随 tab 变。未声明返回空串 = 用通用模板。
+// 判据是配置声明而不是模型名 substring —— 前端拿对外模型名、后端拿渠道重定向后的
+// 上游名，靠名字判两边必然分叉（与 getEngineForVideoModel / getEngineForMusicModel 同）。
+export const getEngineForImageModel = (config, model) =>
+  config?.models?.[model]?.engine || '';
+
 // 解析 status 中的 ImageModelSizeConfig（字符串或对象）
 // models[name] 统一产出 { sizes:[], capabilities:[] }；兼容旧形态（值为尺寸数组）
 export const parseImageSizeConfig = (raw) => {
@@ -270,6 +285,10 @@ export const parseImageSizeConfig = (raw) => {
           models[model] = {
             sizes: normalizeSizeList(cfg?.sizes),
             capabilities: normalizeCapabilityList(cfg?.capabilities),
+            // 引擎族声明。**白名单式重建,漏了它 = 管理页每保存一次就把它删一次**
+            // (与视频那份 parse 同一类坑)。图像这边它只决定优化模板走哪份,
+            // 丢了不报错、只是 SenseNova-U1.5 悄悄退回通用模板。
+            engine: normalizeEngine(cfg?.engine),
             tabs: normalizeImageTabs(cfg?.tabs),
           };
         }

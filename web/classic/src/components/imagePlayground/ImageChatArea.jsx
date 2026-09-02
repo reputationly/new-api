@@ -89,6 +89,9 @@ const ImageChatArea = ({
   mode = 'text2image',
   // 选中的模型名：「AI 优化提示词」按它取模型级的系统提示词改写（没写则跟随 tab）。
   selectedModel = '',
+  // 所选模型的引擎族：决定内置模板走哪一份（SenseNova-U1.5 的口径与通用模板差别很大，
+  // 见 promptOptimize.constants.js）。留空即通用模板。
+  optimizeEngine = '',
   showPresets = false,
   onSend,
   onRegenerate,
@@ -332,6 +335,7 @@ const ImageChatArea = ({
           category='image'
           tabKey={mode}
           model={selectedModel}
+          engine={optimizeEngine}
           value={inputValue}
           onChange={setInputValue}
           disabled={generating}

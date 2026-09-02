@@ -50,6 +50,7 @@ import {
   parseImageSizeConfig,
   normalizeImageSize,
   IMAGE_QUALITY_BOT_TASK,
+  getEngineForImageModel,
 } from '../../constants/imagePlayground.constants';
 
 // 文生图 / 图生图共用本 hook,按 mode 区分能力过滤、请求端点、是否带底图。
@@ -301,6 +302,10 @@ export const useImageGeneration = ({
     () => getSizesForModel(sizeConfig, inputs.model, mode),
     [sizeConfig, inputs.model, mode],
   );
+
+  // 所选模型的引擎族，只喂给「AI 优化提示词」挑模板（图像这边后端不按它分支，
+  // 见 playgroundAdmin.constants 的 IMAGE_ENGINE_SENSENOVA_U15 注释）。
+  const optimizeEngine = getEngineForImageModel(sizeConfig, inputs.model);
 
   // 图生图的输出尺寸：仅当运营给该模型在本 tab 下显式配了 sizes 才开放（见
   // getExplicitTabSizes 的注释——gpt-image 这类只认固定档位，不能无差别下发）。
@@ -1201,6 +1206,7 @@ export const useImageGeneration = ({
     canPickI2ISize,
     i2iSizeOptions,
     i2iAspectMismatch,
+    optimizeEngine,
     messages,
     conversations,
     currentConvId,

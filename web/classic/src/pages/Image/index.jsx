@@ -23,6 +23,7 @@ const ImagePlaygroundBody = ({ mode }) => {
     canPickI2ISize,
     i2iSizeOptions,
     i2iAspectMismatch,
+    optimizeEngine,
     messages,
     conversations,
     generating,
@@ -74,6 +75,7 @@ const ImagePlaygroundBody = ({ mode }) => {
           missingRequiredImage={missingRequiredImage}
           mode={mode}
           selectedModel={inputs.model}
+          optimizeEngine={optimizeEngine}
           showPresets={!isI2I}
           styleState={styleState}
           onSend={generate}

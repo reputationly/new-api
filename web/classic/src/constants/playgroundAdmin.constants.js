@@ -162,8 +162,36 @@ export const MUSIC_ENGINE_OPTIONS_INLINE = [
   { value: MUSIC_ENGINE_MINIMAX_MUSIC3, label: 'MiniMax-Music3（vLLM-Omni）' },
 ];
 
+// 图像引擎族。**与上面三个不是一回事,必须说清**:视频/语音/音乐的 engine 同时驱动后端
+// 的请求整形(帧数约定、extra_params 折叠、引擎分支),选错会静默出错档;图像这一层
+// **后端没有对应物**(common 里没有 ImageEngineFamilyForModel),它今天唯一的作用是
+// 决定「AI 优化提示词」用哪份内置模板。选错的后果仅仅是模板回落到通用版,不影响出图。
+//
+// SenseNova-U1.5:统一多模态模型,能在画面里渲染可读文字,擅长海报/信息图/UI 稿。
+// 它的官方推理链路里本来就有一步 Prompt Enhancement(由更强的 LLM 改写提示词),
+// 与体验区这个「AI 优化提示词」按钮是同一件事 —— 所以给它配专用模板不是锦上添花,
+// 是把官方要求的那一步补上。模板见 promptOptimize.constants.js。
+export const IMAGE_ENGINE_SENSENOVA_U15 = 'sensenova-u1.5';
+
+export const IMAGE_ENGINE_OPTIONS_INLINE = [
+  { value: '', label: '默认（通用扩散模型）' },
+  {
+    value: IMAGE_ENGINE_SENSENOVA_U15,
+    label: 'SenseNova-U1.5（统一多模态，强文字渲染）',
+  },
+];
+
 // 模型级（不随 tab 变化）的字段：单独渲染在模型行上，不进 tabs 子层。
 export const PLAYGROUND_MODEL_LEVEL_FIELDS = {
+  ImageModelSizeConfig: [
+    {
+      key: 'engine',
+      label: '引擎族',
+      type: 'select',
+      options: IMAGE_ENGINE_OPTIONS_INLINE,
+      help: '只影响「AI 优化提示词」用哪份内置模板，不改变发给上游的请求（图像这边后端没有按引擎族分支）。SenseNova-U1.5 的模板会要求把可见文案逐字保留、数量与版面写死、并显式列出排除项——这是它官方 Prompt Enhancement 那一步的口径，与通用模板差别很大。选错不会出错，只是优化效果退回通用版。属模型能力，与 tab 无关。',
+    },
+  ],
   VideoModelConfig: [
     {
       key: 'pipeline',
