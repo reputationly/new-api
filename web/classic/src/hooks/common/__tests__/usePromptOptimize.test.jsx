@@ -193,6 +193,29 @@ describe('图像 tab 也按引擎族取内置模板', () => {
     );
   });
 
+  // 官方 Image PE 的产物是 Render JSON，且**那坨 JSON 原样就是提示词**。所以回填链路
+  // 必须走 JSON 提取而不是通用清洗——模型在 JSON 前后多说一句是常态。
+  it('U1.5 文生图：回填的是提取出来的 Render JSON', async () => {
+    const brief = '{"subjects":[{"description":"a cathedral"}]}';
+    API.post.mockResolvedValue({
+      data: {
+        choices: [
+          {
+            message: {
+              content: 'Here is the brief:\n```json\n' + brief + '\n```',
+            },
+          },
+        ],
+      },
+    });
+    const { result } = renderImage({ engine: IMAGE_ENGINE_SENSENOVA_U15 });
+    let out;
+    await act(async () => {
+      out = await result.current.optimize('巴黎圣母院封面');
+    });
+    expect(out).toBe(brief);
+  });
+
   it('没声明引擎族的图像模型维持原行为（通用图像模板）', async () => {
     const { result } = renderImage({});
     await act(async () => {
@@ -202,6 +225,68 @@ describe('图像 tab 也按引擎族取内置模板', () => {
     expect(body.messages[0].content).toBe(
       defaultOptimizeSystemPrompt('text2image', ''),
     );
+  });
+});
+
+// 官方 edit_pe.py 在用户消息末尾拼 "\n\nRewritten Prompt:"。用户原文本身常常就是一句
+// 指令（「把左边那人的外套改成亮黄色」），不加这个尾巴，模型容易把它当成要执行的任务。
+describe('U1.5 图生图要拼官方的用户消息后缀', () => {
+  beforeEach(() => {
+    API.post.mockReset();
+    API.post.mockResolvedValue({
+      data: { choices: [{ message: { content: '改写后的编辑指令' } }] },
+    });
+  });
+
+  const renderEdit = (opts) =>
+    renderHook(() => usePromptOptimize('image', 'image2image', opts), {
+      wrapper: ({ children }) => (
+        <StatusContext.Provider
+          value={[
+            {
+              status: {
+                PlaygroundTabConfig: JSON.stringify({
+                  __global: {
+                    promptOptimize: { enabled: true, model: 'gpt-optimizer' },
+                  },
+                }),
+              },
+            },
+            () => {},
+          ]}
+        >
+          {children}
+        </StatusContext.Provider>
+      ),
+    });
+
+  it('声明了 U1.5 就拼后缀', async () => {
+    const { result } = renderEdit({ engine: IMAGE_ENGINE_SENSENOVA_U15 });
+    await act(async () => {
+      await result.current.optimize('把外套改成亮黄色');
+    });
+    const [, body] = API.post.mock.calls.at(-1);
+    expect(body.messages[1].content).toBe(
+      '把外套改成亮黄色\n\nRewritten Prompt:',
+    );
+  });
+
+  it('没声明引擎族就不拼，维持原行为', async () => {
+    const { result } = renderEdit({});
+    await act(async () => {
+      await result.current.optimize('把外套改成亮黄色');
+    });
+    const [, body] = API.post.mock.calls.at(-1);
+    expect(body.messages[1].content).toBe('把外套改成亮黄色');
+  });
+
+  it('产物是自然语言，不走 JSON 提取', async () => {
+    const { result } = renderEdit({ engine: IMAGE_ENGINE_SENSENOVA_U15 });
+    let out;
+    await act(async () => {
+      out = await result.current.optimize('把外套改成亮黄色');
+    });
+    expect(out).toBe('改写后的编辑指令');
   });
 });
 

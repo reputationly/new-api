@@ -3,6 +3,7 @@ import { useTranslation } from 'react-i18next';
 import { StatusContext } from '../../context/Status';
 import { API, showError, showInfo } from '../../helpers';
 import {
+  extractRenderJson,
   isPlaygroundConfigIssue,
   stripModelThinking,
 } from '../../helpers/playground';
@@ -14,7 +15,11 @@ import {
   getTabPromptOptimize,
   getTabStoreKey,
 } from '../../constants/playgroundAdmin.constants';
-import { defaultOptimizeSystemPrompt } from '../../constants/promptOptimize.constants';
+import {
+  defaultOptimizeSystemPrompt,
+  optimizeOutputsJson,
+  optimizeUserSuffix,
+} from '../../constants/promptOptimize.constants';
 
 // 「AI 优化提示词」共用 hook(图像/视频/音效体验区共用一份)。
 //
@@ -110,21 +115,32 @@ export const usePromptOptimize = (
             stream: false,
             messages: [
               { role: 'system', content: systemPrompt },
-              { role: 'user', content: text },
+              // 后缀只有 U1.5 的图生图有(官方 edit_pe.py 的 USER_SUFFIX),其余为空串,
+              // 拼上去等于没拼 —— 不必在这里再分支一次。
+              {
+                role: 'user',
+                content: text + optimizeUserSuffix(tabKey, engine),
+              },
             ],
           },
           { skipErrorHandler: true },
         );
         // 先剥思考段再剥围栏:围栏那条正则是 ^ 锚定的,思考段还在前面时它匹配不到。
         // 推理模型把思考拼进 content 时,不剥就等于把整段思考回填进用户的输入框。
-        const out = stripModelThinking(
+        const body = stripModelThinking(
           res?.data?.choices?.[0]?.message?.content,
-        )
-          .trim()
-          .replace(/^```(?:\w+)?\s*/i, '')
-          .replace(/\s*```$/, '')
-          .replace(/^["'“”]+|["'“”]+$/g, '')
-          .trim();
+        );
+        // 产物是 JSON 的模板(SenseNova-U1.5 文生图)走官方那套提取,**不能走下面的通用
+        // 清洗**:那条剥首尾引号的正则对 JSON 无害但也无用,而"取首个 { 到末个 }"才是
+        // 官方兜模型多说两句的办法。两条路互斥,别叠加。
+        const out = optimizeOutputsJson(tabKey, engine)
+          ? extractRenderJson(body)
+          : body
+              .trim()
+              .replace(/^```(?:\w+)?\s*/i, '')
+              .replace(/\s*```$/, '')
+              .replace(/^["'“”]+|["'“”]+$/g, '')
+              .trim();
         if (!out) {
           showError(t('提示词优化失败:模型未返回内容'));
           return null;
@@ -146,7 +162,9 @@ export const usePromptOptimize = (
         setOptimizing(false);
       }
     },
-    [available, model, group, systemPrompt, t],
+    // tabKey / engine 是新加的:用户消息后缀与"产物是不是 JSON"都按它俩分支,
+    // 漏进依赖数组的话,切了 tab 或换了模型仍会沿用上一份闭包里的判断。
+    [available, model, group, systemPrompt, tabKey, engine, t],
   );
 
   return { available, optimizing, optimize };

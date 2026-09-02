@@ -189,7 +189,7 @@ export const PLAYGROUND_MODEL_LEVEL_FIELDS = {
       label: '引擎族',
       type: 'select',
       options: IMAGE_ENGINE_OPTIONS_INLINE,
-      help: '只影响「AI 优化提示词」用哪份内置模板，不改变发给上游的请求（图像这边后端没有按引擎族分支）。SenseNova-U1.5 的模板会要求把可见文案逐字保留、数量与版面写死、并显式列出排除项——这是它官方 Prompt Enhancement 那一步的口径，与通用模板差别很大。选错不会出错，只是优化效果退回通用版。属模型能力，与 tab 无关。',
+      help: '只影响「AI 优化提示词」用哪份内置模板，不改变发给上游的请求（图像这边后端没有按引擎族分支）。选 SenseNova-U1.5 后用的是**官方原文模板**：文生图走官方 Image PE，**产物是一段 Render JSON**（那段 JSON 原样就是提示词，直接提交即可，不必再翻译成句子）——点完优化看到输入框里是 JSON 属正常；图生图走官方 Edit Instruction Rewriter，产物仍是自然语言指令。两者都会把可见文案逐字保留、数量与版面写死、并显式列出排除项，与通用模板差别很大。⚠️ 官方 Image PE 只认五档 2K 画布（2048x2048 / 2496x1664 / 1664x2496 / 2720x1536 / 1536x2720），请在上方「尺寸 / 分辨率」里配齐，否则会按默认档出图、分辨率远低于官方示例。选错引擎族不会报错，只是优化效果退回通用版。属模型能力，与 tab 无关。',
     },
   ],
   VideoModelConfig: [

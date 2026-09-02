@@ -59,6 +59,36 @@ export function isPlaygroundConfigIssue(message) {
   return PLAYGROUND_CONFIG_ISSUE_RE.test(String(message || ''));
 }
 
+// 从模型回复里取出 Render JSON（SenseNova-U1.5 的 Image PE 产物）。
+//
+// 逻辑照搬官方 src/sensenova_u1_5/image_pe.py 的 extract_json：剥掉 ``` 围栏，再取**首个
+// `{` 到末个 `}`** 之间的部分。后半条不是多余的保险 —— 模型在 JSON 前后多说一句
+// （"Here is the render brief:"）是常态，官方脚本正是这么兜的。
+//
+// 与官方的一处差别：官方 parse 失败就抛错终止，我们**降级返回原文**。理由是这里的产物
+// 直接回填用户输入框：拿到一段不合规的文本，用户还能自己改改再发；抛错等于把这次优化
+// 的结果整个丢掉，对用户更糟。
+//
+// 解析成功也只返回原始切片、不重新序列化：官方打印的是紧凑 JSON，但那只是 CLI 的事，
+// 保留模型自己的换行缩进在输入框里可读得多，而作为提示词两者等价。
+export function extractRenderJson(text) {
+  const original = String(text || '').trim();
+  const s = original.replace(/^```(?:\w+)?\s*/i, '').replace(/\s*```$/, '');
+  const start = s.indexOf('{');
+  const end = s.lastIndexOf('}');
+  if (start < 0 || end < start) return original;
+  const sliced = s.slice(start, end + 1);
+  // 只 parse 一次用来判合规，不接结果:切片必然以 { 开头、} 结尾,parse 成功时一定是
+  // 非空对象,所以「是不是 object / 是不是数组」那类判断在这里全都不可达 —— 写了也是
+  // 死代码,而死代码会让"我测过了"变成错觉(那条断言实际走的是上面的 start < 0)。
+  try {
+    JSON.parse(sliced);
+  } catch (e) {
+    return original;
+  }
+  return sliced;
+}
+
 // 剥掉推理模型混在正文里的思考段。
 //
 // 上面那三处辅助调用(AI 优化提示词 / 中译英 / ACE-Step 生成方案)拿到 content 之后
