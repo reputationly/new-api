@@ -315,6 +315,31 @@ func (a *TaskAdaptor) BuildRequestBody(c *gin.Context, info *relaycommon.RelayIn
 	if !validTaskTypes[taskType] {
 		return nil, localBadRequest(fmt.Errorf("不支持的 task_type: %q(允许:t2i/i2i/t2v/i2v/l2va/flf2v/tts/s2v/r2va/sr/v2a/v2v/rv2v/r2v/mv2v/ads2v/t2m/cover/repaint)", taskType))
 	}
+	// MiniMax-Music3 借用 task_type=tts 抵达引擎的 /v1/tasks/audio/(它本就是
+	// /v1/audio/speech 的异步孪生),但**它不是语音模型** —— 下面几处 tts 专属逻辑
+	// 要按引擎族让开。判据是配置声明(MusicModelConfig.models[].engine)而不是模型名
+	// substring,与本仓其余引擎族判定同源。
+	isMusic3 := common.MusicEngineFamilyForModel(req.Model, info.OriginModelName, modelName) ==
+		common.MusicEngineMinimaxMusic3
+	// 对外的 t2m 在这里改写成 tts。Music3 的能力标签是「文生音乐」、门面词表里对应 t2m,
+	// 但 t2m → kind "music" → POST /v1/tasks/music/ 是 ACE-Step 的路由,vLLM-Omni 没有
+	// (它只有 audio/audiogen/image/video 四条),原样发过去是 405。引擎侧对得上的是
+	// tts → kind "audio",instructions 原生就在那个 schema 里;顺带出参扩展名也对了
+	// (kind "audio" 出 .wav,Music3 出的就是 wav;kind "music" 出 .mp3,本来就是错的)。
+	//
+	// 改写收在网关这一层而不是让调用方自己发 tts:体验区一直是前端按引擎族改发
+	// (useMusicGeneration.js 的 resolvedTaskType),而直连 API 的调用方按能力标签推出来
+	// 的只会是 t2m,吃 405 且看不懂。收进来之后对外契约恢复直觉,前端那段也可以撤掉。
+	//
+	// 只改写 t2m:cover/repaint 同样落 kind "music",但 Music3 本就不提供这两种玩法
+	// (能力标签只有「文生音乐」),把它们也改写成 tts 只会让引擎拿一个没有源音频的
+	// 请求去合成,不如让它照旧失败。
+	//
+	// 等 gpustack 侧让 t2m 也能指向 vLLM-Omni 之后,这段连同前端那段一起删。
+	if isMusic3 && taskType == "t2m" {
+		taskType = "tts"
+		body["task_type"] = taskType
+	}
 	// 生图的画幅:比例词("1:1")与精确像素("1664x928")两种写法都要认,且必须与同步链路
 	// (relay/channel/gpustackplus/adaptor.go 的 setImageShape)同语义 —— 上面那段通用的
 	// size 转发只认 WxH,比例词到这里 aspect_ratio 一个字段都没有,而引擎的默认值写死
@@ -398,12 +423,8 @@ func (a *TaskAdaptor) BuildRequestBody(c *gin.Context, info *relaycommon.RelayIn
 	if taskType == "s2v" && len(req.Images) > 1 {
 		return nil, localBadRequest(fmt.Errorf("模型 %s 的任务类型 s2v(数字人)只接受一张人物图,多传的图不会生效", modelName))
 	}
-	// MiniMax-Music3 借用 task_type=tts 抵达引擎的 /v1/tasks/audio/(它本就是
-	// /v1/audio/speech 的异步孪生),但**它不是语音模型** —— 下面几处 tts 专属逻辑
-	// 要按引擎族让开。判据是配置声明(MusicModelConfig.models[].engine)而不是模型名
-	// substring,与本仓其余引擎族判定同源。
-	isMusic3 := common.MusicEngineFamilyForModel(req.Model, info.OriginModelName, modelName) ==
-		common.MusicEngineMinimaxMusic3
+	// isMusic3 在上面 task_type 改写处已求值:下面几处 tts 专属逻辑要按引擎族让开
+	// —— Music3 走到这里 taskType 一定是 tts,但**它不是语音模型**。
 	if taskType == "tts" {
 		// 语音合成不接受图片输入(参考音走 metadata.voice,下面单独物化)。
 		if req.HasImage() {
