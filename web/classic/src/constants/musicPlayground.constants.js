@@ -26,7 +26,11 @@ export {
 
 // 音乐生成较慢(30~120s 的曲子,单实例 FIFO),沿用 4s
 // 间隔,上限同视频。
-export const MUSIC_POLL_MAX_TIMES = 90; // 约 6 分钟后超时
+// 生成阶段的轮询预算（不含排队）：约 6 分钟。
+export const MUSIC_POLL_MAX_TIMES = 90;
+// 排队阶段单独计预算：约 40 分钟。合并计算的话，排队一长就会在还没轮到时耗光
+// 预算停轮，逼用户去点「继续获取」——而那时任务其实好好地待在队列里。
+export const MUSIC_QUEUE_POLL_MAX_TIMES = 600;
 
 // 三个能力标签(= 体验区子标签页名;中文即值),都由 ACE-Step 承载;文生音乐另可挂
 // MiniMax-Music3(按引擎族分流,不占新能力词)。

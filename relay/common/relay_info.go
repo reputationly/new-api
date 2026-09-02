@@ -815,6 +815,11 @@ type TaskInfo struct {
 	// 时用它补查单价，见 service.RecalculateTaskQuotaByVideoMatrix。
 	// 上游不回该字段时为空，结算侧自行回退。
 	Resolution string `json:"resolution,omitempty"`
+	// QueueAhead / EstimatedStartSeconds 排队回显：还要等几次生成、大约多少秒。
+	// 目前只有自建 GPUStack 门面能给（它知道任务落在哪个实例的队列上），其余渠道恒为 nil。
+	// 指针类型区分 0（下一个就是我）与 nil（说不准），见 gpustackplus.statusResponse。
+	QueueAhead            *int `json:"queue_ahead,omitempty"`
+	EstimatedStartSeconds *int `json:"estimated_start_seconds,omitempty"`
 }
 
 func FailTaskInfo(reason string) *TaskInfo {

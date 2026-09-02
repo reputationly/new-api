@@ -31,6 +31,12 @@ type ImageJob struct {
 	Data        []ImageData    `json:"data,omitempty"`
 	Usage       *Usage         `json:"usage,omitempty"`
 	Error       *ImageJobError `json:"error,omitempty"`
+	// QueueAhead / EstimatedStartSeconds 排队回显：还要等几次生成、大约多少秒。
+	// 只有自建 GPUStack 门面能给（它知道任务落在哪个实例的队列上），其余渠道恒省略。
+	// 指针 + omitempty：0 是「下一个就是我」，缺省是「说不准」，两者在前端是不同的话；
+	// 用值类型会把「说不准」折成 0，等于承诺马上开始。
+	QueueAhead            *int `json:"queue_ahead,omitempty"`
+	EstimatedStartSeconds *int `json:"estimated_start_seconds,omitempty"`
 }
 
 type ImageJobError struct {

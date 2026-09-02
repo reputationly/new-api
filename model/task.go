@@ -135,6 +135,14 @@ type Properties struct {
 	// 只为排查留档，不参与任何筛选、也不在任务日志里展示——对用户来说
 	// 「我调 API 出了图，日志里有一条已完成的图片任务」，走同步还是异步是网关内部的事。
 	SyncMode bool `json:"sync_mode,omitempty"`
+	// QueueAhead / EstimatedStartSeconds 排队回显，与上面几个「提交时冻结」的字段不同，
+	// 它们每轮轮询都会被覆盖：还要等几次生成、大约多少秒。任务进终态时由轮询侧清空。
+	//
+	// 放 Properties 而不是新开列：这是易失展示数据，重启后无需保留，而 Properties 是
+	// json 列，加字段不需要迁移、老行反序列化成 nil。
+	// 指针类型区分 0（下一个就是我）与 nil（说不准），见 gpustackplus.statusResponse。
+	QueueAhead            *int `json:"queue_ahead,omitempty"`
+	EstimatedStartSeconds *int `json:"estimated_start_seconds,omitempty"`
 }
 
 // MiniMaxV2Properties 冻结 v2 查询接口要回显的请求维度与用量。
@@ -725,6 +733,16 @@ func (t *Task) ToOpenAIVideo() *dto.OpenAIVideo {
 		// GetResultURL 对老数据会回退到 FailReason（历史上这列兼作结果地址），
 		// 失败任务本就没有产物，别把错误文案当成 url 发出去。
 		return openAIVideo
+	}
+	// 排队回显：体验区只读这份 OpenAI 格式响应，不带就只能显示笼统的「任务排队中…」。
+	// 仅在未完成时下发——完成的任务没有队列位置，回 0 会被读成「马上开始」。
+	if t.Status != TaskStatusSuccess {
+		if n := t.Properties.QueueAhead; n != nil {
+			openAIVideo.SetMetadata("queue_ahead", *n)
+		}
+		if s := t.Properties.EstimatedStartSeconds; s != nil {
+			openAIVideo.SetMetadata("estimated_start_seconds", *s)
+		}
 	}
 	// obs:// 占位符 → 实时签名 URL（§5.4）；非 obs 引用原样返回。
 	openAIVideo.SetMetadata("url", mediastore.ResolveResultURL(context.Background(), t.GetResultURL()))

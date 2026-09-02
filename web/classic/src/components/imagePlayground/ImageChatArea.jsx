@@ -15,6 +15,7 @@ import {
   IMAGE_PROMPT_PRESETS,
 } from '../../constants/imagePlayground.constants';
 import { UserContext } from '../../context/User';
+import { formatQueueHint } from '../../helpers/queueHint';
 import { blockChatDrag } from '../playground/blockChatDrag';
 import PromptOptimizeButton from '../playground/PromptOptimizeButton';
 import ImagePreviewModal from './ImagePreviewModal';
@@ -196,9 +197,24 @@ const ImageChatArea = ({
           </div>
         ) : null;
 
+      // 排队回显：一张都没出来时才有意义 —— 已经在出图了就不是在排队。
+      // 门面说不准（非自建渠道、派发中）时为 null，退回 defaultContent 的通用态。
+      const queueHint =
+        m.status === IMAGE_GEN_STATUS.PENDING && !m.pollTimedOut
+          ? formatQueueHint(m.queueAhead, m.queueEtaSeconds, t)
+          : null;
+
       if (m.status !== IMAGE_GEN_STATUS.SUCCESS && !partial) {
         if (timedOutHint)
           return <div className='inline-block'>{timedOutHint}</div>;
+        if (queueHint)
+          return (
+            <div className='inline-block'>
+              <Typography.Text type='tertiary' className='text-sm'>
+                {queueHint}
+              </Typography.Text>
+            </div>
+          );
         return defaultContent;
       }
       // base64 图片不落盘，刷新后历史里这类图已不在

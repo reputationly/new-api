@@ -13,6 +13,7 @@ import { useTranslation } from 'react-i18next';
 import { showError, getLogo, stringToColor } from '../../helpers';
 import { UserContext } from '../../context/User';
 import { blockChatDrag } from '../playground/blockChatDrag';
+import { formatQueueHint } from '../../helpers/queueHint';
 import PromptOptimizeButton from '../playground/PromptOptimizeButton';
 import OptimizedPromptSections from './OptimizedPromptSections';
 import H3PromptFields, { H3MainFieldLabel } from './H3PromptFields';
@@ -65,7 +66,15 @@ const downloadVideo = async (url, t) => {
 
 // 生成中：精简阶段（文字不缩略）+ 进度。流水线按 pipeline 动态插入
 // 「画质增强」（超分）/「配音」阶段：生成 →[画质增强]→[配音]→ 完成。
-const VideoProgress = ({ status, progress, stage, pipeline, t }) => {
+const VideoProgress = ({
+  status,
+  progress,
+  stage,
+  pipeline,
+  queueAhead,
+  queueEtaSeconds,
+  t,
+}) => {
   const hasUpscale = !!pipeline?.upscale;
   const hasDub = !!pipeline?.dub;
   const stages = [t('排队中'), t('生成中')];
@@ -153,7 +162,8 @@ const VideoProgress = ({ status, progress, stage, pipeline, t }) => {
               : stage === 'dubbing'
                 ? t('配音中…')
                 : status === VIDEO_STATUS.QUEUED
-                  ? t('任务排队中…')
+                  ? formatQueueHint(queueAhead, queueEtaSeconds, t) ||
+                    t('任务排队中…')
                   : t('生成中…')}
           </div>
         )}
@@ -387,6 +397,8 @@ const VideoChatArea = ({
           progress={m.progress}
           stage={m.stage}
           pipeline={m.pipeline}
+          queueAhead={m.queueAhead}
+          queueEtaSeconds={m.queueEtaSeconds}
           t={t}
         />
       );

@@ -9,6 +9,7 @@ import {
   TextArea,
 } from '@douyinfe/semi-ui';
 import { Download, RefreshCw, Send } from 'lucide-react';
+import { formatQueueHint } from '../../helpers/queueHint';
 import { useTranslation } from 'react-i18next';
 import { showError, getLogo, stringToColor } from '../../helpers';
 import { UserContext } from '../../context/User';
@@ -52,7 +53,13 @@ const downloadAudio = async (url, t) => {
 };
 
 // 生成中:三阶段 + 进度(语音任务通常无百分比,走 Spin 文案)。
-const AudioProgress = ({ status, progress, t }) => {
+const AudioProgress = ({
+  status,
+  progress,
+  queueAhead,
+  queueEtaSeconds,
+  t,
+}) => {
   const current = status === AUDIO_STATUS.QUEUED ? 0 : 1;
   const stages = [t('排队中'), t('合成中'), t('完成')];
   const hasPercent = typeof progress === 'number' && progress > 0;
@@ -113,7 +120,10 @@ const AudioProgress = ({ status, progress, t }) => {
         ) : (
           <div className='flex items-center gap-2 text-gray-500 text-sm'>
             <Spin size='small' />
-            {status === AUDIO_STATUS.QUEUED ? t('任务排队中…') : t('合成中…')}
+            {status === AUDIO_STATUS.QUEUED
+              ? formatQueueHint(queueAhead, queueEtaSeconds, t) ||
+                t('任务排队中…')
+              : t('合成中…')}
           </div>
         )}
       </div>
@@ -295,7 +305,15 @@ const AudioChatArea = ({
           </div>
         );
       }
-      return <AudioProgress status={m.status} progress={m.progress} t={t} />;
+      return (
+        <AudioProgress
+          status={m.status}
+          progress={m.progress}
+          queueAhead={m.queueAhead}
+          queueEtaSeconds={m.queueEtaSeconds}
+          t={t}
+        />
+      );
     },
     [byId, generating, onRegenerate, onRefetch, t],
   );

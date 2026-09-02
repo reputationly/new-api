@@ -41,6 +41,7 @@ import {
   MUSIC_CONV_TURN_LIMIT,
   MUSIC_POLL_INTERVAL_MS,
   MUSIC_POLL_MAX_TIMES,
+  MUSIC_QUEUE_POLL_MAX_TIMES,
   MUSIC_DURATIONS,
   MUSIC_DEFAULT_DURATION,
   MUSIC_DEFAULT_REPAINT_MODE,
@@ -661,6 +662,12 @@ export const useMusicGeneration = (mode = 't2m') => {
     async (convId, msgId, taskId, count) => {
       const active = activePollRef.current;
       if (!active || active.canceled || active.taskId !== taskId) return;
+      // 本轮是否处在排队。**不能在调度处读 active.queuedPolls**：那是排队段自己的
+      // 预算计数，只在成功轮询里更新;请求持续失败时(令牌禁用/额度耗尽 403、任务行
+      // 没了 400、断网)它会粘在上一次的值上,于是下面的 count 不再增长、queuedPolls
+      // 也涨不动 —— 两个停止条件同时失效,变成 4 秒一次的无限轮询 + 永远转圈的进度卡。
+      // 用每轮的局部量,错误路径保持 false,让 count 照常增长、正常触发超时。
+      let queuedThisRound = false;
       try {
         const res = await API.get(
           `${MUSIC_API_ENDPOINTS.VIDEO_FETCH}/${encodeURIComponent(taskId)}`,
@@ -697,10 +704,26 @@ export const useMusicGeneration = (mode = 't2m') => {
           finishPoll();
           return;
         }
+        // 排队回显只有自建 GPUStack 门面会给，其余渠道为 undefined，组件退回
+        // 原来那句笼统的「任务排队中…」。
+        const meta = data.metadata || inner.metadata || {};
         patchConvMessage(convId, msgId, {
           status: status || MUSIC_STATUS.IN_PROGRESS,
           ...(progress !== undefined ? { progress } : {}),
+          queueAhead: meta.queue_ahead,
+          queueEtaSeconds: meta.estimated_start_seconds,
         });
+        // 排队与生成各计各的预算，理由见常量定义。
+        queuedThisRound = status === MUSIC_STATUS.QUEUED;
+        const queuedPolls =
+          status === MUSIC_STATUS.QUEUED
+            ? (active.queuedPolls = (active.queuedPolls || 0) + 1)
+            : (active.queuedPolls = 0);
+        if (queuedPolls >= MUSIC_QUEUE_POLL_MAX_TIMES) {
+          patchConvMessage(convId, msgId, { pollTimedOut: true });
+          finishPoll();
+          return;
+        }
         if (count >= MUSIC_POLL_MAX_TIMES) {
           patchConvMessage(convId, msgId, { pollTimedOut: true });
           finishPoll();
@@ -716,7 +739,8 @@ export const useMusicGeneration = (mode = 't2m') => {
       const cur = activePollRef.current;
       if (!cur || cur.canceled || cur.taskId !== taskId) return;
       cur.timer = setTimeout(
-        () => pollOnce(convId, msgId, taskId, count + 1),
+        () =>
+          pollOnce(convId, msgId, taskId, queuedThisRound ? count : count + 1),
         MUSIC_POLL_INTERVAL_MS,
       );
     },

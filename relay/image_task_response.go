@@ -58,6 +58,12 @@ func BuildImageJob(ctx context.Context, task *model.Task) *dto.ImageJob {
 		job.CompletedAt = task.FinishTime
 	}
 
+	// 排队回显只在未终态时下发：已完成的任务没有队列位置，回 0 会被读成「马上开始」。
+	if job.Status == dto.ImageJobStatusQueued || job.Status == dto.ImageJobStatusInProgress {
+		job.QueueAhead = task.Properties.QueueAhead
+		job.EstimatedStartSeconds = task.Properties.EstimatedStartSeconds
+	}
+
 	switch job.Status {
 	case dto.ImageJobStatusCompleted:
 		// DB 里存的是 obs://<key> 占位符，签名 URL 有有效期、不能存库，

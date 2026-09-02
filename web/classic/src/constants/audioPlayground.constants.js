@@ -19,7 +19,10 @@ export {
 
 // 语音任务比视频快(短句 RTF~3,数秒~数十秒),但排队深时(单实例 FIFO 8)
 // 也可能等几分钟;沿用 4s 间隔,上限略低于视频。
-export const AUDIO_POLL_MAX_TIMES = 75; // 约 5 分钟
+// 合成阶段的轮询预算（不含排队）：约 5 分钟。
+export const AUDIO_POLL_MAX_TIMES = 75;
+// 排队阶段单独计预算：约 40 分钟。理由同 MUSIC_QUEUE_POLL_MAX_TIMES。
+export const AUDIO_QUEUE_POLL_MAX_TIMES = 600;
 
 // 四个能力标签(= 体验区子标签页名;中文即值)。区分 IndexTTS-2 的情感合成与 vLLM-Omni
 // 家族的语音合成(音色来源/语言合并为一个玩法的面板内选项)/对话/设计。与后端

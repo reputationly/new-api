@@ -141,6 +141,12 @@ type statusResponse struct {
 	// 老版本门面不返回这两个字段,零值走 taskcommon 的固定档位兜底。
 	Progress float64 `json:"progress"`
 	Phase    string  `json:"phase"`
+	// QueueAhead 还要跑完几次生成才轮到这条任务;EstimatedStartSeconds 是它乘上
+	// 该模型的单次耗时。指针类型是必须的:0 表示「下一个就是我/已在跑」,null 表示
+	// 「门面说不准」(老版本门面、派发中、无运行实例),两者在前端是完全不同的文案。
+	// 用值类型会把 null 折成 0,等于对用户承诺「马上开始」。
+	QueueAhead            *int `json:"queue_ahead"`
+	EstimatedStartSeconds *int `json:"estimated_start_seconds"`
 }
 
 // progressInProgressFloor/Ceil 把门面的 0-100 映射到 new-api 的进度语义。
@@ -1638,6 +1644,11 @@ func (a *TaskAdaptor) ParseTaskResult(respBody []byte) (*relaycommon.TaskInfo, e
 
 	// 门面状态机:queued(排队/等重派)→ assigned(已派发实例)→ running → done;
 	// failed/canceled 终态。旧引擎态(pending/processing/completed)保留兼容。
+	// 排队回显：门面对终态恒回 null，下面终态分支再显式清一次——「已完成」旁边挂
+	// 「前面还有 2 个」是自相矛盾的回显，不能指望上游永远不出错。
+	ti.QueueAhead = sr.QueueAhead
+	ti.EstimatedStartSeconds = sr.EstimatedStartSeconds
+
 	switch strings.ToLower(strings.TrimSpace(sr.Status)) {
 	case "queued", "assigned", "pending", "submitted":
 		ti.Status = model.TaskStatusQueued
@@ -1650,10 +1661,12 @@ func (a *TaskAdaptor) ParseTaskResult(respBody []byte) (*relaycommon.TaskInfo, e
 		}
 	case "done", "completed", "succeed", "success":
 		ti.Status = model.TaskStatusSuccess
+		ti.QueueAhead, ti.EstimatedStartSeconds = nil, nil
 		// 关键:把成品在 SFS 上的绝对路径交给落盘钩子(显式 nfs_path,非启发式)。
 		ti.NFSPath = sr.NFSPath
 	case "failed", "cancelled", "canceled", "error":
 		ti.Status = model.TaskStatusFailure
+		ti.QueueAhead, ti.EstimatedStartSeconds = nil, nil
 		ti.Reason = firstNonEmpty(sr.Error, sr.ErrorType, "task failed")
 	default:
 		// 未知/空状态:保持排队,交后续轮询与超时兜底,避免误杀刚提交的任务。

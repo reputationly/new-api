@@ -640,7 +640,15 @@ export const DUB_PIPELINE_MODES = ['text2video', 'image2video', 'vace'];
 export const DUB_PIPELINE_ENABLED = false;
 
 export const VIDEO_POLL_INTERVAL_MS = 4000;
-export const VIDEO_POLL_MAX_TIMES = 90; // 约 6 分钟后超时
+// 生成阶段的轮询预算（不含排队）：约 6 分钟。
+export const VIDEO_POLL_MAX_TIMES = 90;
+// 排队阶段单独计预算：约 40 分钟。
+//
+// 为什么要分开：这两段的时长由完全不同的东西决定。生成时长由模型和载荷决定，
+// 是个可预期的常数量级；排队时长由集群忙闲和准入阈值决定，慢模型（h3-ref2va 单条
+// ~660s、8 实例）排到第二轮就是二十来分钟。合并计算的话，排队一长就会在还没轮到
+// 时耗光预算停轮，逼用户去点「继续获取」——而那时任务其实好好地待在队列里。
+export const VIDEO_QUEUE_POLL_MAX_TIMES = 600;
 
 // 任务状态（与后端 dto/openai_video.go 对齐 + 前端补充）
 export const VIDEO_STATUS = {

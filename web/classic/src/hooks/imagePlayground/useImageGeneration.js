@@ -143,6 +143,36 @@ const markInterruptedAsFailed = (list, errText) =>
 // (与 model/size/seed 同一模式),在 classic 生成过多张的对话在 web/mobile 打开续问,
 // 会照着 conv.batchCount 并发多次 —— 那边没有这个控件,用户看不见也拦不住。
 // 所以闸门必须在 hook 里,不能只靠"那个应用不给控件"。
+// aggregateQueue 把 N 个候选任务的排队回显收敛成整条消息的口径。
+// 全部有值才报，取最大值（整条消息以最慢的那个为准）。
+// 说不准时必须**显式**回 undefined 而不是空对象:patchConvMessage 是 { ...m, ...patch }
+// 浅合并,键不存在就保留上一轮的值 —— 于是正好在"该回落到通用「任务排队中…」文案"的
+// 场景(门面回 queue_ahead: null,即调度中/无运行实例),卡片反而冻结在上一次那个数字,
+// 显示"前面还有 2 个任务"而队伍看起来卡住不动。服务端在终态会主动清这两个字段
+// (service/task_polling.go),前端这一侧也得跟上。
+// 视频/语音/音乐三个 hook 没这问题:它们每轮都显式传两个键。
+const EMPTY_QUEUE = { queueAhead: undefined, queueEtaSeconds: undefined };
+
+export const aggregateQueue = (tasks) => {
+  // 只把仍在排队的那几个算进来。图片这条链路 queued 与 in_progress 在本地是同一个
+  // pending 态（区别只在 task.queued 上），而门面对运行中的任务按设计回
+  // queue_ahead: 0 —— 不筛掉的话 formatQueueHint 会把这个 0 读成「即将开始…」，
+  // 在整个生成期间盖掉 loading 态，写着「还没开始」而图其实正在出。
+  // 筛而不是"让它回 undefined"：后者会撞上下面「任一说不准就整条不报」的口径，
+  // 4 张候选里先跑起来一张，另外 3 张真实的排队位置会跟着一起消失。
+  const queued = tasks.filter((x) => x.queued);
+  if (!queued.length) return EMPTY_QUEUE;
+  const aheads = queued.map((x) => x.queueAhead);
+  if (aheads.some((v) => typeof v !== 'number')) return EMPTY_QUEUE;
+  const etas = queued.map((x) => x.queueEtaSeconds);
+  return {
+    queueAhead: Math.max(...aheads),
+    queueEtaSeconds: etas.every((v) => typeof v === 'number')
+      ? Math.max(...etas)
+      : undefined,
+  };
+};
+
 export const useImageGeneration = ({
   mode = 'text2image',
   allowBatch = false,
@@ -676,7 +706,13 @@ export const useImageGeneration = ({
               task.status = 'failed';
               task.error = d.error?.message || t('图片生成失败');
             }
-            // queued / in_progress：保持 pending，下一轮再看
+            // queued / in_progress：保持 pending，下一轮再看。
+            // 排队回显顺手记下，供下面取整条消息的口径。两者在本地都是 pending，
+            // 但只有 queued 才算"在排队"——门面对 in_progress 回 queue_ahead: 0，
+            // 不记下这个区分，aggregateQueue 就分不出「下一个轮到我」和「已经在跑了」。
+            task.queued = d.status === 'queued';
+            task.queueAhead = d.queue_ahead;
+            task.queueEtaSeconds = d.estimated_start_seconds;
           } catch (e) {
             // 轮询瞬时错误不判失败，继续重试直到撞上限：网络抖一下就把任务判死，
             // 用户会看到「失败」而服务端其实出图了。
@@ -695,6 +731,10 @@ export const useImageGeneration = ({
         imageTasks: snapshot.map((x) => ({ ...x })),
         images: done.map((x) => x.url),
         imageSeeds: done.map((x) => x.seed ?? null),
+        // 一条消息可能是 N 个独立任务，各自排在不同实例的队列上。整条消息要等最慢
+        // 的那个，所以取 max —— 报最小值会让「还有 1 个」之后又干等好几分钟。
+        // 任一任务说不准（undefined）就整条不报，不拿半份数据凑一个数出来。
+        ...aggregateQueue(stillPending),
       };
 
       if (stillPending.length === 0) {

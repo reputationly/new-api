@@ -430,6 +430,10 @@ func updateVideoSingleTask(ctx context.Context, adaptor TaskPollingAdaptor, ch *
 	quota := task.Quota
 
 	task.Status = model.TaskStatus(taskResult.Status)
+	// 排队回显每轮覆盖（含覆盖回 nil）：上一轮「前面还有 3 个」不能在这一轮说不准时
+	// 留在页面上，那会让队伍看起来卡住不动。adaptor 已保证终态回 nil。
+	task.Properties.QueueAhead = taskResult.QueueAhead
+	task.Properties.EstimatedStartSeconds = taskResult.EstimatedStartSeconds
 	switch taskResult.Status {
 	case model.TaskStatusSubmitted:
 		task.Progress = taskcommon.ProgressSubmitted

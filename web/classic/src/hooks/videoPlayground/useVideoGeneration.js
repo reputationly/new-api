@@ -59,6 +59,7 @@ import {
   DUB_PIPELINE_ENABLED,
   VIDEO_POLL_INTERVAL_MS,
   VIDEO_POLL_MAX_TIMES,
+  VIDEO_QUEUE_POLL_MAX_TIMES,
   parseVideoModelConfig,
   getSizesForVideoModel,
   getDurationsForVideoModel,
@@ -1160,6 +1161,12 @@ export const useVideoGeneration = ({
     async (convId, msgId, taskId, count) => {
       const active = activePollsRef.current.get(msgId);
       if (!active || active.canceled || active.taskId !== taskId) return;
+      // 本轮是否处在排队。**不能在调度处读 active.queuedPolls**：那是排队段自己的
+      // 预算计数，只在成功轮询里更新;请求持续失败时(令牌禁用/额度耗尽 403、任务行
+      // 没了 400、断网)它会粘在上一次的值上,于是下面的 count 不再增长、queuedPolls
+      // 也涨不动 —— 两个停止条件同时失效,变成 4 秒一次的无限轮询 + 永远转圈的进度卡。
+      // 用每轮的局部量,错误路径保持 false,让 count 照常增长、正常触发超时。
+      let queuedThisRound = false;
       try {
         const res = await API.get(
           `${VIDEO_API_ENDPOINTS.VIDEO_FETCH}/${encodeURIComponent(taskId)}`,
@@ -1213,10 +1220,27 @@ export const useVideoGeneration = ({
           return;
         }
         // queued / in_progress
+        // 排队回显来自门面（它知道任务落在哪个实例的队列上）：只有自建 GPUStack
+        // 会给，其余渠道恒为 undefined，此时组件退回原来那句「任务排队中…」。
+        const meta = data.metadata || inner.metadata || {};
         patchConvMessage(convId, msgId, {
           status: status || VIDEO_STATUS.IN_PROGRESS,
           ...(progress !== undefined ? { progress } : {}),
+          queueAhead: meta.queue_ahead,
+          queueEtaSeconds: meta.estimated_start_seconds,
         });
+        // 排队不消耗生成侧的轮询预算：放宽准入后慢模型可能排上二十分钟，按原来的
+        // 计法会在还没轮到时就停轮、逼用户点「继续获取」。两段各有各的上限。
+        queuedThisRound = status === VIDEO_STATUS.QUEUED;
+        const queuedPolls =
+          status === VIDEO_STATUS.QUEUED
+            ? (active.queuedPolls = (active.queuedPolls || 0) + 1)
+            : (active.queuedPolls = 0);
+        if (queuedPolls >= VIDEO_QUEUE_POLL_MAX_TIMES) {
+          patchConvMessage(convId, msgId, { pollTimedOut: true });
+          finishPoll(msgId);
+          return;
+        }
         if (count >= VIDEO_POLL_MAX_TIMES) {
           // 客户端轮询超时：不判失败，保留可恢复状态，仅标记以便展示「继续获取」；
           // 任务可能仍在后端进行/已完成，用原 taskId 续查即可，无需重新提交。
@@ -1234,8 +1258,11 @@ export const useVideoGeneration = ({
       }
       const cur = activePollsRef.current.get(msgId);
       if (!cur || cur.canceled || cur.taskId !== taskId) return;
+      // 排队那几轮不计进 count：VIDEO_POLL_MAX_TIMES 的语义是「生成本身等多久」，
+      // 把排队算进去会让它随集群忙闲漂移。
       cur.timer = setTimeout(
-        () => pollOnce(convId, msgId, taskId, count + 1),
+        () =>
+          pollOnce(convId, msgId, taskId, queuedThisRound ? count : count + 1),
         VIDEO_POLL_INTERVAL_MS,
       );
     },
