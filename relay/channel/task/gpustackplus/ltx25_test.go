@@ -1,6 +1,7 @@
 package gpustackplus
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -433,6 +434,131 @@ func TestLTX25TokenRequiresNamedRatio(t *testing.T) {
 		if err := applyLTX25Request(body, 5); err == nil {
 			t.Errorf("aspect_ratio=%q 时应拒绝(无法推出画布),却放行了", ar)
 		}
+	}
+}
+
+// 关键帧的「跟随上传素材」档:没有具名比例,只有首帧的真实宽高比。
+//
+// 这条是 P1 的回归锁。2026-08-31 给关键帧 tab 的 sizes 锁加了 LTX 豁免
+// (playgroundAdmin.constants.js 的 exemptEngines),档位词从此能发出来了,但比例的
+// 下发条件仍是 `!needsImage` —— 关键帧一个比例字段都不发,于是 LTX 的关键帧**每发必
+// 400**。修法是补这条数值兜底,而不是像 H3 那样清掉档位词降级(那会让引擎回落到
+// pipeline 默认的 960×544,用户选的 2K 静默失效)。
+func TestLTX25CanvasFromSourceRatio(t *testing.T) {
+	cases := []struct {
+		token string
+		ratio float64
+		want  string
+	}{
+		// 任意真实比例都能落到合法画布上 —— 这正是选它而不是"吸附到最近具名比例"的理由
+		{"2K", 1.6, "2240x1408"},    // 1600×1000 的图,2240/64=35 ✓
+		{"704P", 1.5, "1056x704"},   // 3:2 的图,1056/32=33 ✓
+		{"544P", 1.25, "672x544"},   // 5:4 的图
+		{"1080P", 1.6, "1728x1088"}, // 1728/64=27 ✓
+		// 恰好等于具名比例时,与具名那条路结果一致
+		{"2K", 16.0 / 9.0, "2496x1408"},
+		{"704P", 1.0, "704x704"},
+		// 竖图:短边落在 w 上
+		{"704P", 0.75, "704x928"},
+		// 超出具名表区间的极端素材钳到边界(9:16 / 21:9),而不是算出一个必撞包络的画布
+		{"704P", 0.2, "704x1248"}, // 1:5 → 钳到 9:16
+		{"704P", 5.0, "1632x704"}, // 5:1 → 钳到 21:9
+		{"2K", 3.0, "3264x1408"},  // 3:1 → 钳到 21:9
+	}
+	for _, c := range cases {
+		body := map[string]any{"size": c.token, ltx25SourceRatioKey: c.ratio}
+		if err := applyLTX25Request(body, 5); err != nil {
+			t.Fatalf("%s + 源比例 %.4f 被拒: %v", c.token, c.ratio, err)
+		}
+		if got := body["size"]; got != c.want {
+			t.Errorf("%s + 源比例 %.4f → size = %v, want %s", c.token, c.ratio, got, c.want)
+		}
+		// 引擎不读这个键,与 target_shape 同一个标准:取完即删,否则是排查时的噪声
+		if _, ok := body[ltx25SourceRatioKey]; ok {
+			t.Errorf("%s: %s 取完没删掉", c.token, ltx25SourceRatioKey)
+		}
+	}
+}
+
+// 具名比例是用户**显式选的**,必须压过素材的真实比例 —— 反了的话用户在关键帧上选
+// 16:9(前端已把图裁成 16:9)却按原图比例出画布,引擎再裁一刀,构图两次都不对。
+func TestLTX25NamedRatioBeatsSourceRatio(t *testing.T) {
+	body := map[string]any{"size": "704P", "aspect_ratio": "1:1", ltx25SourceRatioKey: 1.6}
+	mustApply(t, body, 5)
+	if got := body["size"]; got != "704x704" {
+		t.Fatalf("源比例压过了具名比例: size = %v, want 704x704", got)
+	}
+
+	// ratio 别名同理(体验区关键帧选了具名比例时发的就是它)
+	body = map[string]any{"size": "704P", "ratio": "4:3", ltx25SourceRatioKey: 1.6}
+	mustApply(t, body, 5)
+	if got := body["size"]; got != "928x704" {
+		t.Fatalf("源比例压过了 ratio 别名: size = %v, want 928x704", got)
+	}
+}
+
+// 非档位词的路径上,这个键同样要清掉 —— 早退分支容易漏,与 target_shape 同一个标准。
+func TestLTX25DropsSourceRatioOnEveryPath(t *testing.T) {
+	for _, body := range []map[string]any{
+		{"size": "1248x704", ltx25SourceRatioKey: 1.6},                           // 像素串
+		{"width": 1248, "height": 704, ltx25SourceRatioKey: 1.6},                 // 调用方自带画布
+		{"width": 1248, "height": 704, "size": "704P", ltx25SourceRatioKey: 1.6}, // 自带画布 + 档位词
+	} {
+		mustApply(t, body, 10)
+		if _, ok := body[ltx25SourceRatioKey]; ok {
+			t.Errorf("%v: %s 没被清掉", body, ltx25SourceRatioKey)
+		}
+	}
+}
+
+// 无效的源比例不能被当成"有比例"放行:那会让 ltx25Canvas 算出 0×0 或负数画布。
+// 报错必须停在"推不出画布"这一层,而不是漏到下游变成一句看不懂的尺寸校验失败。
+func TestLTX25RejectsInvalidSourceRatio(t *testing.T) {
+	for _, v := range []any{0, 0.0, -1.5, "1.6", nil, []any{16, 9}} {
+		body := map[string]any{"size": "704P", ltx25SourceRatioKey: v}
+		err := applyLTX25Request(body, 5)
+		if err == nil {
+			t.Errorf("源比例 %#v(无效)时应拒绝,却放行了 size = %v", v, body["size"])
+			continue
+		}
+		if !strings.Contains(err.Error(), "宽高比") {
+			t.Errorf("源比例 %#v 的错误没指向比例缺失: %v", v, err)
+		}
+	}
+}
+
+// 发了 source_aspect_ratio 但形态不对时,文案必须**回显原值**。
+//
+// 文案既然告诉调用方有这条出路,就得对他们用错时负责。最自然的误用是发 JSON 字符串
+// ("1.78" 而不是 1.78) —— h3ToFloat 只收数值。不回显的话报出来的是 `收到 ""`
+// (那是 aspect_ratio 的值),读起来像"这个键我压根没认",把人指向反方向:
+// 他会去翻文档确认键名对不对,而真正的问题是值的类型。
+//
+// 体验区不会走到这里(它只在 srcRatio > 0 时下发数值),这条护的是直连 /v1/videos。
+func TestLTX25InvalidSourceRatioEchoesValue(t *testing.T) {
+	for _, v := range []any{"1.78", 0, -1.5} {
+		body := map[string]any{"size": "704P", ltx25SourceRatioKey: v}
+		err := applyLTX25Request(body, 5)
+		if err == nil {
+			t.Fatalf("源比例 %#v 应被拒", v)
+		}
+		// 断言「键名=原值」整体,不能只找原值:0 这种值在 "704P" 里就能撞上,
+		// 那样断言恒真、测试是假的(这条正是变异验证时发现的)。
+		want := fmt.Sprintf("%s=%#v", ltx25SourceRatioKey, v)
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("源比例 %#v 的错误没回显成 %q,读起来像「这个键没被识别」: %v", v, want, err)
+		}
+	}
+
+	// 压根没发这个键时不该多这一句:文生视频漏配比例是最常见的一种,
+	// 给它塞一个它没发过的键名只会增加噪音。
+	body := map[string]any{"size": "704P"}
+	err := applyLTX25Request(body, 5)
+	if err == nil {
+		t.Fatal("没有任何比例时应被拒")
+	}
+	if strings.Contains(err.Error(), "=") {
+		t.Errorf("没发 %s 时不该回显它: %v", ltx25SourceRatioKey, err)
 	}
 }
 

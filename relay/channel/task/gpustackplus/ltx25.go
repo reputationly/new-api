@@ -233,13 +233,13 @@ var ltx25NamedAspectRatios = map[string]float64{
 // 三种入参形态:
 //   - 已有 width/height:调用方自定画布,只把档位词从 size 上清掉(留着必被引擎拒);
 //   - size 是像素串:原样放行(API 直连的常规形态,也是运营改填精确像素后的形态);
-//   - size 是档位词:与具名比例合成像素串写回 size。
+//   - size 是档位词:与具名比例(缺失时退到首帧真实比例)合成像素串写回 size。
 //
 // 返回非 nil 时调用方就地 400。
 func ltx25ApplyCanvas(body map[string]any) error {
 	// 必须先归一:体验区**不发 aspect_ratio**(见 ltx25NormalizeAspectRatio)。
 	// 放在所有早退分支之前,像素串那条路也要把 wan 专属的 target_shape 清掉。
-	ltx25NormalizeAspectRatio(body)
+	srcRatio, rawSrcRatio := ltx25NormalizeAspectRatio(body)
 
 	size, _ := body["size"].(string)
 	size = strings.TrimSpace(size)
@@ -273,12 +273,27 @@ func ltx25ApplyCanvas(body map[string]any) error {
 	ar, _ := body["aspect_ratio"].(string)
 	ratio, ok := ltx25NamedAspectRatios[common.NormalizeAspectRatio(strings.ToLower(strings.TrimSpace(ar)))]
 	if !ok {
+		// 没有具名比例,退到首帧的真实比例(关键帧的「跟随上传素材」档,见
+		// ltx25SourceRatioKey)。这条兜底只在关键帧那条路上有值 —— 文生视频没有素材可跟随。
+		ratio = ltx25ClampSourceRatio(srcRatio)
+	}
+	if !(ratio > 0) {
 		// 推不出画布。**不能像 H3 那样清掉档位词降级**:H3 清掉后引擎按 short_edge=768
 		// 自算,出的还是同一档;LTX 清掉后引擎回落到 pipeline 默认的 960×544 —— 用户选的
 		// 704P 被静默换成另一档,那种错比 400 难查得多。
+		//
+		// 发过 source_aspect_ratio 但没被采用时,必须把原值回显出来:文案既然告诉调用方
+		// 有这条出路,就得对他们用错时负责。最自然的误用是发 JSON 字符串
+		// ("1.78" 而不是 1.78),而 h3ToFloat 只收数值 —— 不回显的话报出来的是
+		// `收到 ""`(那是 aspect_ratio 的值),读起来像"这个键我压根没认",把人指向反方向。
+		detail := fmt.Sprintf("收到 %q", ar)
+		if rawSrcRatio != nil {
+			detail += fmt.Sprintf("、%s=%#v(要大于 0 的数值)", ltx25SourceRatioKey, rawSrcRatio)
+		}
 		return fmt.Errorf(
-			"LTX-2.5 使用分辨率档位词(%q)时必须同时指定具名宽高比(16:9 / 9:16 / 4:3 / 3:4 / 1:1 / 21:9),收到 %q",
-			size, ar)
+			"LTX-2.5 使用分辨率档位词(%q)时必须同时指定具名宽高比(16:9 / 9:16 / 4:3 / 3:4 / 1:1 / 21:9)"+
+				"或 %s(首帧真实宽高比数值),%s",
+			size, ltx25SourceRatioKey, detail)
 	}
 
 	w, h := ltx25Canvas(shortEdge, ratio, align)
@@ -320,17 +335,30 @@ func ltx25SizeTierNames() string {
 // target_shape 只用来反推**比例**,绝不当画布用:那是 wan 的 720p 级固定值表
 // ([720,1280] 等),既不是 32 的倍数也不是用户选的档位。取值后即删 —— 与
 // target_video_length / video_duration 同理,LTX 引擎不读,留着只会在排查时误导。
-func ltx25NormalizeAspectRatio(body map[string]any) {
+//
+// 返回首帧的真实宽高比(见 ltx25SourceRatioKey),没有则 0。它不写进 aspect_ratio:
+// 那个键的语义是**具名**比例(下游按字符串查表),塞个 1.6 进去只会在别处静默查不到。
+//
+// 第二个返回值是那个键的**原值**(没发则 nil),只用于推不出画布时的报错回显 ——
+// 键被删掉之后就再也拿不到了,而"发了但形态不对"与"根本没发"必须能在文案里区分开。
+func ltx25NormalizeAspectRatio(body map[string]any) (float64, any) {
+	// 与 target_shape 同一个标准:LTX 引擎不读这个键,取完即删,免得在排查时误导。
+	// 用 h3ToFloat 而不是断言 float64:metadata 走 JSON 落地成 float64,但直连调用方
+	// 经其他路径进来也可能是整型(1 而不是 1.0)。
+	rawSrcRatio := body[ltx25SourceRatioKey]
+	srcRatio, _ := h3ToFloat(rawSrcRatio)
+	delete(body, ltx25SourceRatioKey)
+
 	shape := body["target_shape"]
 	delete(body, "target_shape")
 	if _, ok := body["aspect_ratio"]; ok {
 		delete(body, "ratio") // 已有权威值:别名清掉,免得两个键打架
-		return
+		return srcRatio, rawSrcRatio
 	}
 	if r, ok := body["ratio"].(string); ok && strings.TrimSpace(r) != "" {
 		body["aspect_ratio"] = common.NormalizeAspectRatio(r)
 		delete(body, "ratio")
-		return
+		return srcRatio, rawSrcRatio
 	}
 	delete(body, "ratio")
 	// 两个别名都没有,才轮到 target_shape 兜底 —— ratio 是调用方直接表达的,更权威。
@@ -342,6 +370,45 @@ func ltx25NormalizeAspectRatio(body map[string]any) {
 	if ar := h3AspectRatioFromTargetShape(shape); ar != "" {
 		body["aspect_ratio"] = ar
 	}
+	return srcRatio, rawSrcRatio
+}
+
+// ltx25SourceRatioKey 是体验区在关键帧的「跟随上传素材」档下发的**首帧真实宽高比**
+// (w/h 的数值,如 1.6)。
+//
+// 为什么需要它,而 H3/ wan 的关键帧不需要:那两家的引擎按 images[0] 自己推画布,
+// 传什么比例都被忽略,体验区靠 composeImageToRatio 改图来表达画幅。**LTX 的 i2v 不是
+// 这样**:引擎按请求里的 width/height 把首帧等比放大到覆盖后居中裁剪
+// (_preprocess_i2v_pil_images),画布必须由请求给出。于是「跟随上传素材」这个档在 LTX
+// 上无处落脚 —— 它既没有具名比例(用户选的就是"不干预"),又必须有一个画布。
+//
+// 用数值而不是复用 ratio / aspect_ratio:那两个键的语义是**具名**比例,第三方渠道
+// (Ark/Seedance)直接把字符串发给上游,塞 "1600:1000" 进去是它们的 400。也不让前端
+// 自己算像素:档位词→短边的映射(1080P→1088、2K→1408)与对齐粒度(32/64)都在本文件,
+// 前端重算一份必然分叉,而分叉的症状是出片尺寸不对、只有量像素才看得出来。
+//
+// 真实比例可以是任意值,ltx25ClampSourceRatio 负责把它收进已实测过的包络内。
+const ltx25SourceRatioKey = "source_aspect_ratio"
+
+// ltx25ClampSourceRatio 把首帧真实比例钳进具名比例表的 [最窄, 最宽] 区间;
+// 取不出有效比例返回 0(调用方据此 400)。
+//
+// 钳位而不是直接放行任意比例:短边由档位定死,长边 = 短边 × 比例,一张 3:1 的图在 2K
+// 档会算出 4224×1408,乘上帧数必然撞 ltx25MaxPixelFrames —— 那时报的是"帧数超包络",
+// 而用户根本没选过帧数,排查方向完全错。钳到 21:9 后画布仍在实测过的范围内,引擎的
+// 居中裁剪会把多出来的部分吃掉,这正是「跟随素材」在能力边界上该有的行为。
+//
+// 也不因此就静默改档:钳位动的是**素材的比例**(用户选的是"不干预",没有被违背的显式
+// 意图),与"用户选了 2K 却出 544P"那种静默换档不是一回事。
+func ltx25ClampSourceRatio(r float64) float64 {
+	if !(r > 0) || math.IsInf(r, 0) {
+		return 0
+	}
+	lo, hi := math.Inf(1), math.Inf(-1)
+	for _, v := range ltx25NamedAspectRatios {
+		lo, hi = math.Min(lo, v), math.Max(hi, v)
+	}
+	return math.Min(math.Max(r, lo), hi)
 }
 
 // ltx25SizeTiers 是对外档位词 → (短边像素, 对齐粒度)。

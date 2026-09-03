@@ -54,6 +54,26 @@ const loadImage = (dataUrl) =>
     img.src = dataUrl;
   });
 
+/**
+ * 读出一张图的真实宽高比（w/h）。解不出返回 0，调用方据此跳过下发。
+ *
+ * 只有「画布必须由请求给出」的那类引擎需要它：LTX-2.5 的 i2v 是引擎按请求里的
+ * width/height 把首帧等比放大到覆盖后居中裁剪，不像 H3/wan 那样按 images[0] 推画布。
+ * 于是用户选「跟随上传素材」时，既没有具名比例、又必须有一个画布——把图的真实比例
+ * 交给网关去合成，是唯一能让这个档在 LTX 上落地的做法。见 useVideoGeneration 提交处
+ * 与后端 ltx25.go 的 ltx25SourceRatioKey。
+ *
+ * 只回比例、不回像素：档位词→短边的映射（1080P 的短边是 1088 不是 1080）与对齐粒度
+ * （一阶段 32、两阶段 64）都在网关侧，前端再算一份必然分叉，而分叉的症状是出片尺寸
+ * 不对、只有量像素才看得出来。
+ */
+export const imageAspectRatio = async (dataUrl) => {
+  if (!dataUrl) return 0;
+  const img = await loadImage(dataUrl);
+  if (!img) return 0;
+  return img.naturalWidth / img.naturalHeight;
+};
+
 // 目标画布尺寸：保持与原图相近的面积（不无端放大或缩小画质），按目标比例摆开，
 // 再钳进 [MIN_EDGE, MAX_EDGE]。
 const canvasSize = (srcW, srcH, ratio) => {

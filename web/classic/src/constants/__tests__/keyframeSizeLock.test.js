@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import {
   VIDEO_ENGINE_LTX25,
   VIDEO_ENGINE_MINIMAX_H3,
+  VIDEO_ENGINES_GATEWAY_CANVAS,
   getTabFieldLock,
   tabHasField,
 } from '../playgroundAdmin.constants';
@@ -64,6 +65,37 @@ describe('关键帧 sizes 锁定', () => {
   // 别的玩法不该被这个机制波及：文生视频的档位是运营自己配的。
   it('文生视频不锁定，档位仍由运营配置决定', () => {
     expect(getTabFieldLock('video', 'text2video', 'sizes')).toBeNull();
+  });
+});
+
+// 解锁与「下发比例」是同一件事的两面，必须成对出现。
+//
+// 这一组是 2026-09-03 那个 P1 的回归锁：给 LTX 开了 sizes 锁豁免（档位词从此能发出去），
+// 却没有把它加进 VIDEO_ENGINES_GATEWAY_CANVAS（比例仍被 `!needsImage` 挡着一个字不发），
+// 于是网关拿着 '2K' 推不出画布 —— LTX 的关键帧**每发必 400**。
+//
+// 两张名单的判据其实是同一句话：「引擎认请求里的 width/height、画布必须由请求给出」。
+// 是它 ⇒ 该解锁（让运营配的档位发得出去），也 ⇒ 该发比例（否则档位词推不出画布）。
+// 只做一半就是一条恒失败的路径，所以由测试把两者钉在一起。
+describe('解锁 sizes 的引擎必须同时下发比例', () => {
+  it('每个豁免 sizes 锁的引擎都在 VIDEO_ENGINES_GATEWAY_CANVAS 里', () => {
+    const lock = getTabFieldLock('video', 'flf2v', 'sizes');
+    for (const engine of lock?.exemptEngines || []) {
+      expect(VIDEO_ENGINES_GATEWAY_CANVAS).toContain(engine);
+    }
+  });
+
+  it('反过来也成立：要网关合画布的引擎不该被锁住档位', () => {
+    for (const engine of VIDEO_ENGINES_GATEWAY_CANVAS) {
+      expect(getTabFieldLock('video', 'flf2v', 'sizes', engine)).toBeNull();
+    }
+  });
+
+  // 名单外的引擎维持原行为：H3/wan 的画布由引擎按 images[0] 推，发比例反而会与
+  // composeImageToRatio 改过的图打架（图已是 16:9 又收到 9:16）。
+  it('H3 与 wan 不在名单里', () => {
+    expect(VIDEO_ENGINES_GATEWAY_CANVAS).not.toContain(VIDEO_ENGINE_MINIMAX_H3);
+    expect(VIDEO_ENGINES_GATEWAY_CANVAS).not.toContain('');
   });
 });
 

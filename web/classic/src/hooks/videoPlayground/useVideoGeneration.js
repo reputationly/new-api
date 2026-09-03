@@ -84,10 +84,15 @@ import {
   normalizeBatchCount,
   deriveSeeds,
 } from '../../constants/playgroundBatch.constants';
-import { composeImageToRatio, FIT_BLUR } from '../../helpers/imageCompose';
+import {
+  composeImageToRatio,
+  imageAspectRatio,
+  FIT_BLUR,
+} from '../../helpers/imageCompose';
 import {
   getTabFieldLock,
   tabHasField,
+  VIDEO_ENGINES_GATEWAY_CANVAS,
 } from '../../constants/playgroundAdmin.constants';
 import { buildH3OptimizeContext } from '../../constants/h3Prompt.constants';
 
@@ -2010,6 +2015,43 @@ export const useVideoGeneration = ({
                 ),
               )
             : params.images;
+
+          // 画布必须由请求给出的引擎族(见 VIDEO_ENGINES_GATEWAY_CANVAS),关键帧上
+          // **仍然要下发比例** —— 上面那条 `!needsImage` 的判据对它们不成立。
+          //
+          // 这是 2026-08-31 那次改动漏掉的另一半:关键帧 tab 的 sizes 锁给 LTX 开了
+          // 豁免(playgroundAdmin.constants.js 的 exemptEngines),档位词从此能发出来,
+          // 但比例一个字都没发 —— 网关拿 '2K' 推不出画布,LTX 的关键帧每发必 400。
+          //
+          // 不存在「与改过的图打架」的问题:那条顾虑针对的是**引擎按图推画布**的渠道
+          // (图已裁成 16:9 又收到 9:16,出片按谁的来取决于渠道)。这一族恰恰相反,
+          // 画布只可能来自请求,发的比例与图的比例是同一个值。
+          if (VIDEO_ENGINES_GATEWAY_CANVAS.includes(paramEngine)) {
+            if (wantsCompose) {
+              // 图已经被裁/补成 params.aspectRatio 了,发同一个具名值,三者一致:
+              // 图是这个比例、网关按这个比例合画布、引擎再 cover 裁剪等于不裁。
+              body.metadata = {
+                ...(body.metadata || {}),
+                ratio: params.aspectRatio,
+              };
+            } else {
+              // 「跟随上传素材」(默认档)或运营没配 aspectRatios:没有具名比例可发,
+              // 改发首帧的真实比例,由网关按它 + 档位词合成精确画布(后端
+              // ltx25.go 的 ltx25SourceRatioKey)。发比例而不是发算好的像素:档位词→
+              // 短边的映射与对齐粒度都在网关侧,前端重算一份必然分叉。
+              //
+              // 解不出图时不发(imageAspectRatio 返回 0)。那时网关会 400 说缺比例 ——
+              // 比静默换一个画布档好查:LTX 上「回落到跟随原图」根本不存在,引擎收不到
+              // 画布只会回落到 pipeline 默认的 960×544。
+              const srcRatio = await imageAspectRatio(params.images[0]);
+              if (srcRatio > 0) {
+                body.metadata = {
+                  ...(body.metadata || {}),
+                  source_aspect_ratio: srcRatio,
+                };
+              }
+            }
+          }
         }
         // 图生视频(Bernini r2v):参考图(1~3)→ metadata.src_ref_images,
         // 门面物化后引擎按参考图组合主体/服装/道具/场景生成视频。

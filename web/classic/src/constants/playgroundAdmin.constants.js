@@ -143,6 +143,18 @@ export const VIDEO_ENGINE_MINIMAX_H3 = 'minimax-h3';
 // 每个带时长的请求 500（整数秒 × 24 恒 ≡ 0 mod 8，取不到 8k+1 需要的余数 1）。
 export const VIDEO_ENGINE_LTX25 = 'ltx-2.5';
 
+// 「画布由网关按比例合成」的引擎族。这些引擎**只认请求里的 width/height**，画布必须
+// 由请求给出，网关据比例 + 档位词合成精确像素（后端 ltx25ApplyCanvas）。
+//
+// 它决定的是关键帧类玩法要不要下发比例。默认那条路（H3 / wan）恰恰相反：引擎按
+// images[0] 自己推画布，传来的比例被静默忽略，体验区靠 composeImageToRatio 改图来表达
+// 画幅，比例字段**不能**发——发了会与改过的图打架（第三方渠道认 ratio，图已是 16:9 又
+// 收到一个 9:16，出片按谁的来取决于渠道）。
+//
+// ⚠️ 判据必须是这张显式名单，不能写成「非 H3」：那样每接入一个新的自建引擎都会被默认
+// 归进这一类，而这一类的错是「画幅静默不对」。名单外的引擎维持原行为。
+export const VIDEO_ENGINES_GATEWAY_CANVAS = [VIDEO_ENGINE_LTX25];
+
 export const VIDEO_ENGINE_OPTIONS_INLINE = [
   {
     value: '',
