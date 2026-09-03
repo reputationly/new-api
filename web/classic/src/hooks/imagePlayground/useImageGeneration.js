@@ -979,18 +979,55 @@ export const useImageGeneration = ({
         // 图生图:用户消息展示底图
         images: isI2I ? params.images || [] : undefined,
       };
-      const asstMsg = {
-        id: `${reqId}-a`,
+
+      // 不允许多张时一律按 1 走,连带 seed 也回到"用户填了才发"的原口径。
+      const count = allowBatch ? normalizeBatchCount(params.batchCount) : 1;
+
+      // seed 的两种口径,**刻意不统一**:
+      //   count === 1 → 维持改造前:用户填了才发,留空不发。
+      //   count > 1  → 由前端逐张下发不同 seed(deriveSeeds),否则 N 张一模一样。
+      // 为什么单张不顺手也发一个:seed 不是 dto.ImageRequest 的声明字段,它落进
+      // Extra,而 replicate / siliconflow 这两个适配器会把 Extra **全量转发**给上游
+      // (见下面 use_prompt_enhancer 处的同一条警告)。今天 seed 只在用户手填时下发,
+      // 风险由用户自己担;改成每次都发,等于替所有第三方渠道担了这个风险。
+      // 代价是单张时结果上显示不出 seed —— 那与改造前一致,不是回退。
+      const seeds =
+        count > 1
+          ? deriveSeeds(params.seed, count)
+          : params.seed !== '' && params.seed != null
+            ? [Number(params.seed)]
+            : [null];
+
+      // **每个候选一条独立的 assistant 消息**,与视频侧同构(useVideoGeneration 的
+      // asstIds/asstMsgs)。改造前是「一条消息挂 N 个任务」,只能把 N 个状态聚合成一个
+      // 数字,而聚合必然丢信息 —— 三个任务里两个在跑、一个排队时,整条消息被标成
+      // 「排队中」(掩盖了 2/3 已在出图);等第一张图出来后,排队信息又整个消失,剩下那个
+      // 还没开始的任务没有任何提示。拆开之后每条消息只对应一个任务,各显各的状态。
+      //
+      // **单张必须保持 `${reqId}-a` 这个 id 形态**:历史恢复、IDB 媒体引用、续查
+      // (refetchImage)都按 msgId 索引,改 id 形态等于给存量会话换了一套键。与视频侧
+      // 同一处理(那边的注释写明了同一个理由)。
+      const asstIds =
+        count === 1 ? [`${reqId}-a`] : seeds.map((_, i) => `${reqId}-a${i}`);
+      const asstMsgs = asstIds.map((id, i) => ({
+        id,
         role: 'assistant',
         status: IMAGE_GEN_STATUS.PENDING,
         model: params.model,
         size: params.size,
         prompt: text,
         images: [],
-        // 异步任务槽（每个候选一个）。同步路径留空，markInterruptedAsFailed 据此
-        // 区分「同步被打断」与「异步可续查」。
+        // 异步任务槽。拆开后恒为 0 或 1 个,但**保持数组形态** —— 存量会话里是 N 个,
+        // 轮询与 markInterruptedAsFailed 两条路都按数组写的,换成标量等于把老消息
+        // 全部读废。同步路径留空,markInterruptedAsFailed 据此区分「同步被打断」
+        // 与「异步可续查」。
         imageTasks: [],
-      };
+        // 多张时记下各自的 seed 与序号,结果区据此显示「第 n/N 张 · 种子 x」。
+        // 单张不写这几个字段 —— 存量消息也没有,渲染侧一视同仁按"没有就不显示"处理。
+        ...(count > 1
+          ? { seed: seeds[i], batchIndex: i, batchTotal: count }
+          : {}),
+      }));
 
       setConversations((prev) => {
         const idx = prev.findIndex((c) => c.id === convId);
@@ -1009,7 +1046,7 @@ export const useImageGeneration = ({
               title: text,
               createdAt: now,
               updatedAt: now,
-              messages: [userMsg, asstMsg],
+              messages: [userMsg, ...asstMsgs],
             },
             ...prev,
           ];
@@ -1017,7 +1054,7 @@ export const useImageGeneration = ({
           const conv = {
             ...prev[idx],
             updatedAt: now,
-            messages: [...prev[idx].messages, userMsg, asstMsg],
+            messages: [...prev[idx].messages, userMsg, ...asstMsgs],
           };
           next = [conv, ...prev.filter((_, i) => i !== idx)];
         }
@@ -1073,23 +1110,8 @@ export const useImageGeneration = ({
         const endpoint = isI2I
           ? IMAGE_API_ENDPOINTS.IMAGE_EDITS
           : IMAGE_API_ENDPOINTS.IMAGE_GENERATIONS;
-        // 不允许多张时一律按 1 走,连带 seed 也回到"用户填了才发"的原口径。
-        const count = allowBatch ? normalizeBatchCount(params.batchCount) : 1;
-
-        // seed 的两种口径,**刻意不统一**:
-        //   count === 1 → 维持改造前:用户填了才发,留空不发。
-        //   count > 1  → 由前端逐张下发不同 seed(deriveSeeds),否则 N 张一模一样。
-        // 为什么单张不顺手也发一个:seed 不是 dto.ImageRequest 的声明字段,它落进
-        // Extra,而 replicate / siliconflow 这两个适配器会把 Extra **全量转发**给上游
-        // (见上面 use_prompt_enhancer 处的同一条警告)。今天 seed 只在用户手填时下发,
-        // 风险由用户自己担;改成每次都发,等于替所有第三方渠道担了这个风险。
-        // 代价是单张时结果上显示不出 seed —— 那与改造前一致,不是回退。
-        const seeds =
-          count > 1
-            ? deriveSeeds(params.seed, count)
-            : params.seed !== '' && params.seed != null
-              ? [Number(params.seed)]
-              : [null];
+        // count / seeds 已在上面消息构造处算好 —— 每个候选要有自己的消息,
+        // 就必须先知道有几个、各自什么 seed。
 
         const extractImages = (res) => {
           const items = Array.isArray(res?.data?.data) ? res.data.data : [];
@@ -1150,7 +1172,9 @@ export const useImageGeneration = ({
             // 拿不到才退回默认值。慢模型用 3s 轮询等于空打三十多次。
             const ra = Number(r.value?.headers?.['retry-after']);
             if (Number.isFinite(ra) && ra > 0) intervalSec = ra;
+            // 记下这个任务属于哪条消息 —— 下面按消息各自开轮询,不再汇总成一条。
             tasks.push({
+              msgId: asstIds[i],
               taskId,
               seed: seeds[i],
               status: 'pending',
@@ -1161,8 +1185,24 @@ export const useImageGeneration = ({
 
           if (tasks.length > 0) {
             asyncCapableRef.current.set(params.model, true);
-            patchConvMessage(convId, `${reqId}-a`, { imageTasks: tasks });
-            startPolling(convId, `${reqId}-a`, tasks, intervalSec);
+            // 每条消息一个任务、一条轮询槽。槽本来就按 msgId 建(pollSlotsRef),
+            // 所以这里只是从「一条槽轮 N 个任务」变成「N 条槽各轮一个」——
+            // pollOnce / aggregateQueue 一个字都不用改,对单元素数组它们本来就成立。
+            tasks.forEach(({ msgId, ...task }) => {
+              patchConvMessage(convId, msgId, { imageTasks: [task] });
+              startPolling(convId, msgId, [task], intervalSec);
+            });
+            // 提交失败的那几条没有任务、也就没人推进它们,必须就地判失败 ——
+            // 否则它们会永远停在 PENDING(界面上是一个不会动的「生成中」),
+            // 而改造前这几条是被合并进同一条消息、由成功的那些带着走完的。
+            asstIds.forEach((msgId, i) => {
+              if (tasks.some((x) => x.msgId === msgId)) return;
+              patchConvMessage(convId, msgId, {
+                status: IMAGE_GEN_STATUS.FAILED,
+                error: submitFailures[0] || t('图片生成失败'),
+              });
+              void i;
+            });
             if (submitFailures.length > 0) {
               showError(
                 t('{{fail}} 张提交失败：', {
@@ -1199,44 +1239,55 @@ export const useImageGeneration = ({
           ),
         );
 
-        const images = [];
-        const imageSeeds = [];
+        // 逐条写回各自的消息。改造前是把 N 张汇总进一条消息,现在每条消息只放
+        // 自己那一次请求的结果 —— 于是"第 2 张失败"只让第 2 条显示失败,不再连累
+        // 其余几条的展示。
+        let okCount = 0;
         const failures = [];
         settled.forEach((r, i) => {
+          const msgId = asstIds[i];
           if (r.status !== 'fulfilled') {
-            failures.push(
+            const msg =
               r.reason?.response?.data?.error?.message ||
-                r.reason?.message ||
-                t('图片生成失败'),
-            );
+              r.reason?.message ||
+              t('图片生成失败');
+            failures.push(msg);
+            patchConvMessage(convId, msgId, {
+              status: IMAGE_GEN_STATUS.FAILED,
+              error: msg,
+            });
             return;
           }
           const urls = extractImages(r.value);
           if (urls.length === 0) {
-            failures.push(t('未返回图片数据'));
+            const msg = t('未返回图片数据');
+            failures.push(msg);
+            patchConvMessage(convId, msgId, {
+              status: IMAGE_GEN_STATUS.FAILED,
+              error: msg,
+            });
             return;
           }
-          // 一次请求理论上只回一张(n=1),但真回多张也照单收下,seed 按请求对齐。
-          urls.forEach((u) => {
-            images.push(u);
-            imageSeeds.push(seeds[i]);
+          okCount += 1;
+          patchConvMessage(convId, msgId, {
+            status: IMAGE_GEN_STATUS.SUCCESS,
+            // 一次请求理论上只回一张(n=1),但真回多张也照单收下,seed 按请求对齐。
+            images: urls,
+            // 与 images 等长、按下标对齐。单张且用户没填 seed 时是 [null],渲染侧不显示。
+            imageSeeds: urls.map(() => seeds[i]),
           });
         });
 
-        // 全军覆没才算失败;部分成功仍展示已出的图,另给一句提示。
-        if (images.length === 0) {
+        // 全军覆没才 throw —— 上面已经逐条标了 FAILED,这里只是为了走 catch 里那句
+        // 统一的 showError。**catch 不能再去 patch `${reqId}-a`**:多张时那个 id
+        // 根本不存在,而单张时它已经在上面被标过了。
+        if (okCount === 0) {
           throw new Error(failures[0] || t('未返回图片数据'));
         }
-        patchConvMessage(convId, `${reqId}-a`, {
-          status: IMAGE_GEN_STATUS.SUCCESS,
-          images,
-          // 与 images 等长、按下标对齐。单张且用户没填 seed 时是 [null],渲染侧不显示。
-          imageSeeds,
-        });
         if (failures.length > 0) {
           showError(
             t('已生成 {{ok}} 张，{{fail}} 张失败：', {
-              ok: images.length,
+              ok: okCount,
               fail: failures.length,
             }) + failures[0],
           );
@@ -1246,10 +1297,16 @@ export const useImageGeneration = ({
           error?.response?.data?.error?.message ||
           error?.message ||
           t('图片生成失败');
-        patchConvMessage(convId, `${reqId}-a`, {
-          status: IMAGE_GEN_STATUS.FAILED,
-          error: msg,
-        });
+        // 逐条兜底,**不能只写 `${reqId}-a`** —— 多张时那个 id 根本不存在,漏掉的话
+        // 请求整体抛错(如提交前就 400)会让 N 条消息全部停在 PENDING,界面上是 N 个
+        // 永远不会动的「生成中」。patchConvMessage 对已是终态的消息覆盖同一份错误
+        // 是幂等的,同步路径里已标过失败的那些再标一次不改变结果。
+        asstIds.forEach((msgId) =>
+          patchConvMessage(convId, msgId, {
+            status: IMAGE_GEN_STATUS.FAILED,
+            error: msg,
+          }),
+        );
         showError(msg);
       } finally {
         setSubmitting(false);

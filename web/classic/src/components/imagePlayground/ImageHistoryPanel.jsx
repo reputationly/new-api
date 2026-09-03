@@ -26,19 +26,35 @@ const statusMeta = (status, t) => {
   }
 };
 
-// 从一段对话里提取展示信息：标题、最新状态、成功图片数
+// 从一段对话里提取展示信息：标题、整批状态、成功图片数
+//
+// 状态必须按**整批合并**取，不能只读末条。多张候选拆成 N 条独立消息之后
+// （useImageGeneration 的 asstMsgs），末条只是其中一个候选：「2 张成功 + 最后一张
+// 被拒」会让这一行显示红色「失败」，而右边同一行还写着 2 张图 —— 自相矛盾，且
+// 用户会以为整批白跑了。这不是罕见组合：gpustack 的准入控制按非终态任务数估排队
+// 时间，越靠后的请求越容易吃 429（见 playgroundBatch.constants 的说明，那里把
+// 「选了 3 张，回来 2 张 + 1 个 429」列为漏配时的常态表现）。
+//
+// 口径与拆分前那条聚合消息一致：还有没跑完的就是「生成中」，全部终态后只要出了
+// 一张就算「已完成」（拆分前是 `done.length > 0 ? SUCCESS : FAILED`）。
 const convSummary = (conv) => {
   const assistants = (conv.messages || []).filter(
     (m) => m.role === 'assistant',
   );
-  const last = assistants[assistants.length - 1];
   const imageCount = assistants.reduce(
     (acc, m) => acc + (m.images ? m.images.length : 0),
     0,
   );
+  const anyStatus = (s) => assistants.some((m) => m.status === s);
+  const status =
+    assistants.length === 0 || anyStatus(IMAGE_GEN_STATUS.PENDING)
+      ? IMAGE_GEN_STATUS.PENDING
+      : anyStatus(IMAGE_GEN_STATUS.SUCCESS)
+        ? IMAGE_GEN_STATUS.SUCCESS
+        : IMAGE_GEN_STATUS.FAILED;
   return {
     title: conv.title || assistants[0]?.prompt || '',
-    status: last ? last.status : IMAGE_GEN_STATUS.PENDING,
+    status,
     imageCount,
     time: conv.updatedAt || conv.createdAt,
   };

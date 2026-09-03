@@ -232,13 +232,22 @@ const ImageChatArea = ({
       }
       return (
         <div className='inline-block'>
+          {/* partial 只可能出现在**存量会话**里:改造后每条消息只挂一个任务,
+              图出来的同时状态就转 SUCCESS,不存在「出了一半」的中间态。老消息一条挂
+              N 个任务,这句仍然是它们的正确描述,所以留着。
+              batchTotal 是新消息的口径:多张时每条各自报「第 n/N 张」,与视频侧一致。 */}
           <Typography.Text className='text-sm text-gray-600 block mb-2'>
             {partial
               ? t('已出 {{done}}/{{total}} 张，其余生成中…', {
                   done: (m.images || []).length,
                   total: (m.imageTasks || []).length || (m.images || []).length,
                 })
-              : t('图像已生成')}
+              : m.batchTotal > 1
+                ? t('图像已生成（第 {{i}}/{{n}} 张）', {
+                    i: (m.batchIndex ?? 0) + 1,
+                    n: m.batchTotal,
+                  })
+                : t('图像已生成')}
           </Typography.Text>
           {timedOutHint}
           {/* 多张时每张各自带 seed 与复制/下载。
