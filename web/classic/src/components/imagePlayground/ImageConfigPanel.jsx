@@ -325,15 +325,21 @@ const ImageConfigPanel = ({
                       disabled={disabled}
                       aria-pressed={active}
                       onClick={() => onInputChange('aspectRatio', r)}
+                      // 颜色只能用 semi-color-* 这套:classic 的 tailwind.config.js 把
+                      // theme.colors 整份替换成了 semi 变量,blue/gray/white 这些默认色板
+                      // 在构建产物里根本不存在 —— 之前的 bg-blue-50 / border-blue-500 从来
+                      // 没生效过,所以「点了没有选中效果」。
                       className={`flex min-w-0 flex-col items-center justify-center gap-1 rounded-md border px-0 py-1.5 transition-colors ${
                         active
-                          ? 'border-blue-500 bg-blue-500 text-white shadow-sm'
-                          : 'border-gray-200 text-gray-500 hover:border-blue-300 hover:bg-blue-50'
+                          ? 'border-semi-color-primary bg-semi-color-primary text-semi-color-white shadow-sm'
+                          : 'border-semi-color-border text-semi-color-text-2 hover:border-semi-color-primary hover:bg-semi-color-primary-light-default'
                       } ${disabled ? 'cursor-not-allowed opacity-50' : 'cursor-pointer'}`}
                     >
                       <span
                         className={`block rounded-[2px] border ${
-                          active ? 'border-white' : 'border-gray-400'
+                          active
+                            ? 'border-semi-color-white'
+                            : 'border-semi-color-text-3'
                         }`}
                         style={ratioBox(r)}
                       />

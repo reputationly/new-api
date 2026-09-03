@@ -58,6 +58,18 @@ describe('area 模式：比例按钮组 + 分辨率下拉', () => {
     expect(
       screen.getByText('1:1').closest('button').getAttribute('aria-pressed'),
     ).toBe('false');
+    // 选中态必须用 semi-color-* 色板:classic 的 tailwind.config.js 把 theme.colors
+    // 整份换成了 semi 变量,bg-blue-500 / border-gray-200 这类默认色板在构建产物里
+    // 根本不存在。aria-pressed 是对的、类名也写了,页面上却没有任何选中效果 ——
+    // 这条曾在线上真实发生,靠人眼在 jsdom 里看不出来,只能守类名。
+    const inactive = screen.getByText('1:1').closest('button');
+    expect(active.className).toMatch(/(^|\s)bg-semi-color-primary(\s|$)/);
+    expect(inactive.className).not.toMatch(/(^|\s)bg-semi-color-primary(\s|$)/);
+    for (const btn of [active, inactive]) {
+      expect(btn.className).not.toMatch(
+        /(^|\s)(bg|border|text)-(blue|gray|white)/,
+      );
+    }
   });
 
   it('点比例按钮把值抬给调用方', () => {
