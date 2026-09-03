@@ -39,16 +39,18 @@ import {
 
 // 比例按钮里那个小方块的长边像素。按比例缩短边，横/竖/方一眼可辨——比一串
 // "16:9 / 9:16" 文字快得多，尤其横竖两版名字只差一个冒号位置。
-const RATIO_BOX_MAX = 24;
+// 20px 是「五个比例挤进一排」倒推出来的:面板 300 宽、卡片内边距 24×2,剩 252,
+// 五格 + 四道 6px 缝每格只有 45px 出头,24px 的方块加上边框就顶到格子边了。
+const RATIO_BOX_MAX = 20;
 const ratioBox = (r) => {
   const v = sizeToRatio(r) || 1;
   return v >= 1
     ? {
         width: RATIO_BOX_MAX,
-        height: Math.max(6, Math.round(RATIO_BOX_MAX / v)),
+        height: Math.max(5, Math.round(RATIO_BOX_MAX / v)),
       }
     : {
-        width: Math.max(6, Math.round(RATIO_BOX_MAX * v)),
+        width: Math.max(5, Math.round(RATIO_BOX_MAX * v)),
         height: RATIO_BOX_MAX,
       };
 };
@@ -305,7 +307,15 @@ const ImageConfigPanel = ({
                 {inputs.size || t('由模型决定')}
               </Typography.Text>
             ) : (
-              <div className='flex flex-wrap gap-2'>
+              <div
+                // 一排等分:运营通常配五个比例,固定宽度 + flex-wrap 在 252px 的面板里
+                // 必然折成两行(5×56 + 4×8 = 312)。按个数等分列宽后无论几个都是一行,
+                // 每格宽度随个数收缩;选中态用实心蓝底,浅蓝描边在白卡片上几乎看不出来。
+                className='grid gap-1.5'
+                style={{
+                  gridTemplateColumns: `repeat(${Math.max(ratioChoices.length, 1)}, minmax(0, 1fr))`,
+                }}
+              >
                 {ratioChoices.map((r) => {
                   const active = r === inputs.aspectRatio;
                   return (
@@ -315,23 +325,19 @@ const ImageConfigPanel = ({
                       disabled={disabled}
                       aria-pressed={active}
                       onClick={() => onInputChange('aspectRatio', r)}
-                      className={`flex w-14 flex-col items-center justify-center gap-1 rounded-lg border py-2 transition-colors ${
+                      className={`flex min-w-0 flex-col items-center justify-center gap-1 rounded-md border px-0 py-1.5 transition-colors ${
                         active
-                          ? 'border-blue-500 bg-blue-50'
-                          : 'border-gray-200 hover:border-gray-300'
+                          ? 'border-blue-500 bg-blue-500 text-white shadow-sm'
+                          : 'border-gray-200 text-gray-500 hover:border-blue-300 hover:bg-blue-50'
                       } ${disabled ? 'cursor-not-allowed opacity-50' : 'cursor-pointer'}`}
                     >
                       <span
-                        className={`block rounded-sm border ${
-                          active ? 'border-blue-500' : 'border-gray-400'
+                        className={`block rounded-[2px] border ${
+                          active ? 'border-white' : 'border-gray-400'
                         }`}
                         style={ratioBox(r)}
                       />
-                      <span
-                        className={`text-[11px] leading-none ${
-                          active ? 'text-blue-600' : 'text-gray-500'
-                        }`}
-                      >
+                      <span className='text-[10px] font-medium leading-none tracking-tight'>
                         {r}
                       </span>
                     </button>

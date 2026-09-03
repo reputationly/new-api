@@ -1,5 +1,11 @@
 import { describe, it, expect } from 'vitest';
-import { buildImageOptimizeContext } from '../promptOptimize.constants';
+import {
+  appendOptimizeContext,
+  buildImageOptimizeContext,
+  defaultOptimizeSystemPrompt,
+  U15_EDIT_CLOSING_MARKER,
+} from '../promptOptimize.constants';
+import { IMAGE_ENGINE_SENSENOVA_U15 } from '../playgroundAdmin.constants';
 import { IMAGE_SIZE_AUTO } from '../imagePlayground.constants';
 
 // 优化模型看不到左侧面板。这段「本次请求事实」补的就是它猜不到、且猜错不报错的两件事：
@@ -69,5 +75,49 @@ describe('buildImageOptimizeContext', () => {
     });
     expect(out).toContain('1664x2496');
     expect(out).toContain('<Image 1>..<Image 2>');
+  });
+});
+
+// 官方 U1.5 编辑模板的收尾句「Below is the Prompt to be rewritten」本意是紧接原文。
+// 请求事实若拼在它后面,模型会把那段英文当成「原文」,「用原文语言改写」就变成了英文
+// 改写(线上一次中文海报请求就是这样出了整段英文)。所以事实必须插在收尾句之前。
+describe('appendOptimizeContext', () => {
+  const ctx = buildImageOptimizeContext({ size: '1536x2720', imageCount: 1 });
+
+  it('U1.5 编辑模板:事实插在收尾句之前,收尾句仍是模板最后一段', () => {
+    const base = defaultOptimizeSystemPrompt(
+      'image2image',
+      IMAGE_ENGINE_SENSENOVA_U15,
+    );
+    const out = appendOptimizeContext(base, ctx);
+    const at = out.indexOf(ctx);
+    expect(at).toBeGreaterThan(0);
+    expect(at).toBeLessThan(out.indexOf(U15_EDIT_CLOSING_MARKER));
+    expect(
+      out.endsWith(base.slice(base.lastIndexOf(U15_EDIT_CLOSING_MARKER))),
+    ).toBe(true);
+    // 模板正文一个字不少:去掉插入段后与原模板相同。
+    expect(out.replace(ctx + '\n', '')).toBe(base);
+  });
+
+  it('没有收尾句的模板仍追加在末尾', () => {
+    expect(appendOptimizeContext('通用模板', ctx)).toBe('通用模板' + ctx);
+    expect(
+      appendOptimizeContext(
+        defaultOptimizeSystemPrompt('image2image', ''),
+        ctx,
+      ).endsWith(ctx),
+    ).toBe(true);
+  });
+
+  it('运营把官方模板贴进改写里也命中(判据是字面,不是引擎族)', () => {
+    const pasted = '我的前言\n' + U15_EDIT_CLOSING_MARKER + ' 请只回改写。';
+    const out = appendOptimizeContext(pasted, ctx);
+    expect(out.indexOf(ctx)).toBeLessThan(out.indexOf(U15_EDIT_CLOSING_MARKER));
+  });
+
+  it('没有事实时原样返回', () => {
+    expect(appendOptimizeContext('X', '')).toBe('X');
+    expect(appendOptimizeContext('X', undefined)).toBe('X');
   });
 });

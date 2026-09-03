@@ -17,6 +17,7 @@ import {
   getTabStoreKey,
 } from '../../constants/playgroundAdmin.constants';
 import {
+  appendOptimizeContext,
   defaultOptimizeSystemPrompt,
   optimizeOutputsJson,
   optimizeUserSuffix,
@@ -93,12 +94,16 @@ export const usePromptOptimize = (
       available: declared && global.enabled && !!global.model && tab.enabled,
       model: global.model,
       group: global.group,
-      // context 无条件追加在末尾:它不是模板而是本次请求的事实,运营改写过模板时
+      // context 无条件拼进去:它不是模板而是本次请求的事实,运营改写过模板时
       // 同样需要(改写的多半也是 H3 模板,少了这段照样分不清 I2VA / L2VA)。
-      systemPrompt:
-        (getModelOptimizePrompt(modelConfigRaw, tabKey, selectedModel) ||
+      // 拼在哪由 appendOptimizeContext 定:一般在末尾,U1.5 官方编辑模板则插在
+      // 「Below is the Prompt to be rewritten」之前(理由见该函数注释)。
+      systemPrompt: appendOptimizeContext(
+        getModelOptimizePrompt(modelConfigRaw, tabKey, selectedModel) ||
           (tab.systemPrompt || '').trim() ||
-          defaultOptimizeSystemPrompt(tabKey, engine)) + (context || ''),
+          defaultOptimizeSystemPrompt(tabKey, engine),
+        context,
+      ),
     };
   }, [raw, modelConfigRaw, category, tabKey, selectedModel, engine, context]);
 

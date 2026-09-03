@@ -16,7 +16,11 @@ import ImageChatArea from '../ImageChatArea';
 import { StatusContext } from '../../../context/Status';
 import { UserContext } from '../../../context/User';
 import { IMAGE_ENGINE_SENSENOVA_U15 } from '../../../constants/playgroundAdmin.constants';
-import { defaultOptimizeSystemPrompt } from '../../../constants/promptOptimize.constants';
+import {
+  appendOptimizeContext,
+  defaultOptimizeSystemPrompt,
+  U15_EDIT_CLOSING_MARKER,
+} from '../../../constants/promptOptimize.constants';
 
 // 守的是**prop 透传**，不是模板内容（模板由 constants 的用例守）。
 //
@@ -104,18 +108,26 @@ describe('图像体验区把引擎族透传给「AI 优化提示词」', () => {
     ]);
   });
 
-  it('optimizeContext 拼在系统提示词末尾', async () => {
+  // 守的仍是透传;「插在哪」由 constants 的 appendOptimizeContext 用例守。这里只
+  // 确认 context 进了系统提示词、且 U1.5 编辑模板的收尾句仍在它后面(而不是末尾)。
+  it('optimizeContext 拼进系统提示词,U1.5 编辑模板下位于收尾句之前', async () => {
+    const ctx = '\n\n---\n\nCurrent request:\n\n- Target canvas: 9x16.';
     const { container } = renderArea({
       mode: 'image2image',
       optimizeEngine: IMAGE_ENGINE_SENSENOVA_U15,
-      optimizeContext: '\n\n---\n\nCurrent request:\n\n- Target canvas: 9x16.',
+      optimizeContext: ctx,
     });
     await typePrompt(container, '把天空改成晚霞');
     await clickOptimize(container);
     const [, body] = API.post.mock.calls.at(-1);
-    expect(body.messages[0].content).toBe(
-      defaultOptimizeSystemPrompt('image2image', IMAGE_ENGINE_SENSENOVA_U15) +
-        '\n\n---\n\nCurrent request:\n\n- Target canvas: 9x16.',
+    const sys = body.messages[0].content;
+    expect(sys).toBe(
+      appendOptimizeContext(
+        defaultOptimizeSystemPrompt('image2image', IMAGE_ENGINE_SENSENOVA_U15),
+        ctx,
+      ),
     );
+    expect(sys.indexOf(ctx)).toBeGreaterThan(0);
+    expect(sys.indexOf(ctx)).toBeLessThan(sys.indexOf(U15_EDIT_CLOSING_MARKER));
   });
 });

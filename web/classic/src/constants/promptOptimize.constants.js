@@ -428,3 +428,20 @@ export const buildImageOptimizeContext = ({ size, imageCount = 0 } = {}) => {
     ? `\n\n---\n\nCurrent request:\n\n${lines.join('\n')}`
     : '';
 };
+
+// 官方 U1.5 编辑模板的收尾句:它的本意是「下面紧接着就是要改写的原文」。
+// 拼接请求事实时必须插在这句**之前**,而不是模板末尾 —— 否则「Below is the Prompt」
+// 后面紧跟的是一段英文的 Target canvas / Input images,模型很容易把这段当成「原文」,
+// 于是「用原文语言改写」这条规则就被读成了「用英文改写」;同时原文与说明之间隔了一
+// 段与它无关的事实,模板刻意安排的「说明→原文」贴合也被拆开了。
+// 判据是字面匹配而非引擎族:运营把官方模板贴进 tab 级/模型级改写时同样命中,不必再
+// 分支;没有这句的模板(通用版、H3、LTX、Music3)照旧追加在末尾。
+export const U15_EDIT_CLOSING_MARKER = '\nBelow is the Prompt to be rewritten.';
+
+export const appendOptimizeContext = (systemPrompt, context) => {
+  const base = systemPrompt || '';
+  if (!context) return base;
+  const at = base.lastIndexOf(U15_EDIT_CLOSING_MARKER);
+  if (at === -1) return base + context;
+  return base.slice(0, at) + context + '\n' + base.slice(at);
+};
