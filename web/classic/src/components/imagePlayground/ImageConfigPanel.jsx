@@ -28,8 +28,7 @@ import { useModelNotes } from '../../hooks/common/useModelNotes';
 import PromptGuideTip from '../playground/PromptGuideTip';
 import {
   IMAGE_MAX_EDIT_IMAGES,
-  DEFAULT_IMAGE_SIZE_ALIGN,
-  computeImageSize,
+  imageTierLabel,
   sizeToRatio,
 } from '../../constants/imagePlayground.constants';
 
@@ -67,9 +66,6 @@ const ImageConfigPanel = ({
   shapeMode = 'table',
   availableRatios = [],
   availableTiers = [],
-  // 对齐粒度按模型走（实测 U1.5 是 32、Qwen-Image 官方表是 16）。用错会让下拉里
-  // 写的像素和实际出图对不上，所以这里必须拿模型的值，不能用默认值凑。
-  sizeAlign = DEFAULT_IMAGE_SIZE_ALIGN,
   canPickI2ISize = false,
   i2iSizeOptions = [],
   i2iAspectMismatch = null,
@@ -105,12 +101,28 @@ const ImageConfigPanel = ({
     inputs.aspectRatio && !(availableRatios || []).includes(inputs.aspectRatio)
       ? [...(availableRatios || []), inputs.aspectRatio]
       : availableRatios || [];
-  // 档位标签直接写出算出来的像素:运营配的是"面积基准",用户关心的是"出多大的图"。
-  // 只有一档时不渲染下拉(它已经生效了),避免一个只能选一项的控件。
-  const tierOptions = (availableTiers || []).map((base) => {
-    const px = computeImageSize(inputs.aspectRatio, base, sizeAlign);
-    return { label: px ? `${base}（${px}）` : String(base), value: base };
-  });
+  // 档位下拉**只出档名**(标准/高清/超清),不出像素也不出面积基准。
+  //
+  // 原来写的是 `2048（2048x2048）` —— 前半段是面积基准,一个既不是宽也不是高的中间量;
+  // 后半段会随比例变,四个选项的文字跟着一起跳。真实像素改由下面单独一行给出:
+  // 一行代替 N 个括号,信息量一样但不跳,而且比例和档位任一变化它都跟着变。
+  //
+  // 只有一档时不渲染下拉(它已经生效了),避免一个只能选一项的控件 —— 那一档出多大,
+  // 下面那行照样写着。
+  const tierOptions = (availableTiers || []).map((base) => ({
+    label: t(imageTierLabel(base)),
+    value: base,
+  }));
+
+  // 「出图 2048×1152 · 2.4MP」。百万像素是给用户一个跨比例可比的量:同一档在 1:1 与
+  // 16:9 下长宽差很多,面积却基本一致,只看长宽会以为"换了比例就变小了"。
+  const outputHint = (() => {
+    const [w, h] = String(inputs.size || '')
+      .split('x')
+      .map((n) => parseInt(n, 10));
+    if (!w || !h) return inputs.size || '';
+    return `${w}×${h} · ${(w * h) / 1e6 >= 10 ? Math.round((w * h) / 1e6) : ((w * h) / 1e6).toFixed(1)}MP`;
+  })();
 
   const renderImagePreview = (label, urls) => (
     <div>
@@ -331,11 +343,11 @@ const ImageConfigPanel = ({
               <div className='mt-3'>
                 <div className='flex items-center gap-2 mb-2'>
                   <Typography.Text strong className='text-sm'>
-                    {t('分辨率')}
+                    {t('画质')}
                   </Typography.Text>
                 </div>
                 <Select
-                  placeholder={t('请选择分辨率')}
+                  placeholder={t('请选择画质')}
                   name='sizeTier'
                   selection
                   onChange={(value) => onInputChange('sizeTier', value)}
@@ -356,7 +368,7 @@ const ImageConfigPanel = ({
                 size='small'
                 className='block mt-1'
               >
-                {t('出图 {{size}}', { size: inputs.size })}
+                {t('出图 {{size}}', { size: outputHint })}
               </Typography.Text>
             )}
           </div>

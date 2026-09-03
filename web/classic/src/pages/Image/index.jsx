@@ -26,7 +26,6 @@ const ImagePlaygroundBody = ({ mode }) => {
     shapeMode,
     availableRatios,
     availableTiers,
-    sizeAlign,
     optimizeEngine,
     optimizeImages,
     optimizeContext,
@@ -64,7 +63,6 @@ const ImagePlaygroundBody = ({ mode }) => {
           shapeMode={shapeMode}
           availableRatios={availableRatios}
           availableTiers={availableTiers}
-          sizeAlign={sizeAlign}
           canPickI2ISize={canPickI2ISize}
           i2iSizeOptions={i2iSizeOptions}
           i2iAspectMismatch={i2iAspectMismatch}

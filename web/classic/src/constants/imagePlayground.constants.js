@@ -222,6 +222,11 @@ export const getImageShapeConfig = (config, model, tabKey) => {
       parseInt(entry?.sizeAlign, 10) > 0
         ? parseInt(entry.sizeAlign, 10)
         : DEFAULT_IMAGE_SIZE_ALIGN,
+    // 引擎侧长边护栏的镜像，见 computeImageSize。未配=不钳制。
+    maxLongEdge:
+      parseInt(entry?.maxLongEdge, 10) > 0
+        ? parseInt(entry.maxLongEdge, 10)
+        : 0,
     // 本 tab 有没有**显式**声明画幅。图生图据此决定要不要下发 size：那是 tab 级 opt-in
     // 的能力（见 getExplicitTabSizes 的注释——size 会流向该 tab 下所有渠道，而
     // gpt-image / dall-e 的 edits 只认固定档位，后端对 dall-e 系不合规尺寸直接 400），
@@ -255,56 +260,124 @@ export const resolveSubmitImageSize = (
   return '';
 };
 
+// 质量档的档名。档位配的是**面积基准**（算像素用的中间量，见 computeImageSize），
+// 直接摆给用户看没有意义 —— "2048" 既不是宽也不是高，在 16:9 下算出的是 2720x1536。
+//
+// **刻意不叫 1K/2K/4K**：K 在显示行业指横向像素（DCI 2K = 2048 横向），而面积基准在
+// 不同比例下长边差很多 —— 2048 基准在 1:1 是 2048x2048（叫 2K 说得通），在 16:9 是
+// 2720x1536（横向 2720，叫 2K 就错了）。「K」用在面积上是二次的，怎么叫都有一半场景
+// 对不上。用不承诺具体数字的档名 + 界面上单独一行显示真实像素，两边都不说谎。
+//
+// 档名绑定**绝对面积**而不是"该模型的第几档"：换模型时「高清」还是同一个量级，
+// 否则用户会发现同样叫高清、换个模型小了一半。模型支持哪几档就只显示哪几档。
+export const IMAGE_TIER_LABELS = {
+  1024: '标准', // 1.05 MP
+  1536: '高清', // 2.36 MP
+  2048: '超清', // 4.19 MP
+  4096: '极清', // 16.8 MP（不进下面的可选阶梯，见 IMAGE_QUALITY_TIERS）
+};
+
+// 未收录的基准回落到数字本身：老配置里可能有手填的值，界面不能因此空掉。
+export const imageTierLabel = (base) =>
+  IMAGE_TIER_LABELS[parseInt(base, 10)] || String(base ?? '');
+
+// 运营在管理页能勾的画质档（有序，从低到高）。
+//
+// **管理页只出档名、不出数字**：面积基准是算像素用的中间量，"2048" 既不是宽也不是高
+// （16:9 下算出来是 2720x1536），让运营去理解它没有意义，填错了还会静默出错档。
+// 运营要回答的只有一个问题——「这个模型对外提供到哪一档」。
+//
+// **三档都可自由勾选，标准也不例外**：有的模型只想对外给高清以上（比如低档出图质量
+// 拿不出手），有的只给标准（慢模型不想让用户点到更慢的档）。这是运营的产品决策，
+// 代码不替它设限 —— 只在一键填入推荐档时默认带上标准。
+//
+// **极清（4096）刻意不在这里**：实测 U1.5 能出（4096² / 223s），但逼近同步链路
+// ~300s 上限，不该做成运营随手一勾就能开的选项。将来要开先解决同步链路的超时。
+export const IMAGE_QUALITY_TIERS = [
+  { base: '1024', label: '标准' },
+  { base: '1536', label: '高清' },
+  { base: '2048', label: '超清' },
+];
+
 // 内置推荐档位（管理页「填入推荐档位」一键写入）。
 //
-// **每一行都是在现网实测出来的，不是照抄文档**——文档与实机对不上的地方不止一处：
-//   - sensenova-u1.5：收到比例词 "16:9" 出 1344x768（1.03MP），收到 "2720x1536"
-//     原样出 4.18MP。官方五档是等面积阶梯，用面积基准 2048 + 32 对齐能逐个精确复现；
-//     表外的 4:3（算出 2336x1760）实测也原样生效，3072x3072 同样能出（9.44MP）。
-//   - qwen-image：引擎侧有自己的分辨率表并会**静默吸附**——发 1760x992 出的是
-//     1664x928。所以它只能枚举官方表，配面积档不会报错但会让界面说谎。
-//     用的是 2512 版的七行（4:3 是 1472x1104，初版的 1140 不是精确 4:3）。
-//   - z-image：**长边上限 1664**，发 2208x1248 出 1664x928（按比例缩回上限带）。
-//     所以它也只能枚举。另外"必须被 64 整除"是网上的讹传：1472x1104 实测正常出图。
-//   - hunyuan-image-3：只验过 auto（不发 size → 1024x1024，1.05MP），显式尺寸没测，
-//     故**不给推荐档**——没验证过的东西不该摆在"一键填入"里。
+// **每一行都是在现网实测出来的，不是照抄文档**。2026-09-03 用真实请求把七个模型逐档
+// 打了一遍、把图下载回来读 PNG 头核对真实宽高，下面记的是那次的结果。
+//
+// 三种完全不同的上限性质，决定了每个模型该用 area 还是 table 模式：
+//
+//   1. **按面积受限（显存）→ area 模式**
+//      - sensenova-u1.5：一个像素都不吸附。1024²/2048²/2720x1536/4096² 全部原样返回
+//        （15.5s / 50.9s / 51.0s / 223s），耗时与面积成正比。**4096 基准（16.8MP）实测
+//        可用但暂不开放**：223s 逼近同步链路 ~300s 上限。
+//      - id4：1024²/1536²/2048²/2048x1152 全部原样（45.9s / 107.7s / 208.6s / 108.4s）。
+//        vllm-omni 报告里的「生产上限 1024」是 varlen 未改造的**性能顾虑**，不是能力
+//        上限 —— 代价就体现在 2048² 的 208s 上。
+//      - kr2：1024²/1536²/2048x1152/1152x2048/1856x1248 全部原样。**上限是单卡显存且
+//        加卡无效**（ReplicatedLinear 架构，TP 对它不起作用）：int8 下 2.4MP 占 35.3GB
+//        (89%)、4.2MP 占 39.1GB(99% 零余量)，所以只给到 1536 基准。
+//
+//   2. **按长边受限（引擎护栏）→ area 模式 + maxLongEdge**
+//      - z-image / qwen-image：LightX2V 的 runner 里 `max_custom_size` 默认 1664
+//        （z_image_runner.py:293 / qwen_image_runner.py:451），超了按长边等比缩。
+//        实测 1664² 与 1536² 原样返回，2048x1152 被缩成 1664x928。这是**可配置项而非
+//        模型能力上限**，将来调高引擎配置（需另验显存与画质）后把这里的 maxLongEdge
+//        一起放宽即可。
+//
+//   3. **按面积锁死（模型权重）→ table 模式，不给质量档**
+//      - hunyuan-image-3：面积恒定 ~1MP，比例可变。基准来自 checkpoint 的
+//        `image_base_size`，而它同时是喂给模型的条件 token `<img_size_1024>`——
+//        那是训练出来的信号，不是参数开关，改引擎代码无效（实测请求里带
+//        image_base_size:2048 依然出 1024x1024）。比例范围反而是七个模型里最宽的：
+//        ResolutionGroup 从 base/2 到 base*2，实测 512x2048 与 2048x512 都原样返回。
 //
 // 按模型名精确匹配（lower+trim）。这里用模型名而不是引擎族声明是可以的：它只是个
 // 一键填充的便利，填完运营看得见、能改；与"按模型名 substring 猜引擎"完全不是一回事。
+const AREA_RATIOS = ['1:1', '3:2', '2:3', '16:9', '9:16'];
+
 export const IMAGE_SHAPE_PRESETS = {
   'sensenova-u1.5': {
-    label: 'SenseNova-U1.5 官方 2K 档（实测）',
-    aspectRatios: ['1:1', '3:2', '2:3', '16:9', '9:16'],
-    sizeTiers: ['2048'],
+    label: 'SenseNova-U1.5 标准/高清/超清（实测，原样照发不吸附）',
+    aspectRatios: AREA_RATIOS,
+    sizeTiers: ['1024', '1536', '2048'],
+    sizeAlign: 32,
+  },
+  id4: {
+    label: 'Ideogram-4 标准/高清/超清（实测，超清 209s）',
+    aspectRatios: AREA_RATIOS,
+    sizeTiers: ['1024', '1536', '2048'],
+    sizeAlign: 32,
+  },
+  kr2: {
+    label: 'Krea2 标准/高清（实测，单卡显存封顶 2.4MP）',
+    aspectRatios: AREA_RATIOS,
+    sizeTiers: ['1024', '1536'],
     sizeAlign: 32,
   },
   'qwen-image': {
-    label: 'Qwen-Image-2512 官方七档（实测，引擎会吸附到表内）',
-    sizes: [
-      '1328x1328',
-      '1664x928',
-      '928x1664',
-      '1472x1104',
-      '1104x1472',
-      '1584x1056',
-      '1056x1584',
-    ],
-    sizeAlign: 16,
+    label: 'Qwen-Image 标准/高清（实测，引擎长边护栏 1664）',
+    aspectRatios: AREA_RATIOS,
+    sizeTiers: ['1024', '1536'],
+    sizeAlign: 32,
+    maxLongEdge: 1664,
   },
   'z-image': {
-    label: 'Z-Image 档位（实测，长边上限 1664）',
-    sizes: [
-      '1664x1664',
-      '1664x928',
-      '928x1664',
-      '1472x1104',
-      '1104x1472',
-      '1024x1024',
-    ],
+    label: 'Z-Image 标准/高清（实测，引擎长边护栏 1664）',
+    aspectRatios: AREA_RATIOS,
+    sizeTiers: ['1024', '1536'],
+    sizeAlign: 32,
+    maxLongEdge: 1664,
+  },
+  // 面积锁死在 ~1MP，没有"更高质量"这个维度可选，所以给离散列表而不是面积档。
+  // 下面五行都是实测原样返回的（1024x768 / 1280x720 及其竖版在引擎的
+  // HUNYUAN_IMAGE3_EXTRA_RESOLUTIONS 里，1024x1024 是 base_size 本身）。
+  'hunyuan-image-3': {
+    label: 'HunyuanImage-3.0 官方档（实测，面积固定 1MP）',
+    sizes: ['1024x1024', '1280x720', '720x1280', '1024x768', '768x1024'],
     sizeAlign: 16,
   },
 };
-// qwen-image-edit 与 qwen-image 同一套权重与分辨率表。
+// qwen-image-edit 与 qwen-image 同一套权重、同一个 runner，长边护栏也一样。
 IMAGE_SHAPE_PRESETS['qwen-image-edit'] = IMAGE_SHAPE_PRESETS['qwen-image'];
 
 export const getImageShapePreset = (model) =>
@@ -424,16 +497,40 @@ export const DEFAULT_IMAGE_SIZE_ALIGN = 32;
 //
 // ratio 支持 "16:9" 与 "1664x928" 两种写法（sizeToRatio 已经统一）。取不到比例或档位
 // 非法时返回 ''，调用方据此退回"不下发 size"。
-export const computeImageSize = (ratio, tierBase, align) => {
+//
+// maxLongEdge（可选，模型级）：**引擎侧长边护栏的镜像**。LightX2V 的四个图像 runner
+// （z_image / qwen_image / flux2 / longcat_image）都有同一段：
+//
+//     max_size = self.config.get("max_custom_size", 1664)
+//     if width > max_size or height > max_size:
+//         scale = max_size / max(width, height)
+//         width, height = int(width * scale), int(height * scale)
+//
+// 不在这里跟着钳一次，界面就会说谎：面积档在 16:9 下算出 2048x1152，引擎实际出的是
+// 1664x928（实测 z-image 与 qwen-image 都如此），用户看到的尺寸和拿到的图对不上。
+// 缩放公式与引擎逐字一致（按长边等比缩），这样两边算出来的是同一个结果。
+//
+// 只对声明了该字段的模型生效；U1.5 / Krea2 / Ideogram-4 这类按面积（显存）受限、
+// 不做长边裁剪的模型不配它，行为与改造前一字不差。
+export const computeImageSize = (ratio, tierBase, align, maxLongEdge) => {
   const r = sizeToRatio(ratio);
   const base = parseInt(tierBase, 10);
   const step =
     parseInt(align, 10) > 0 ? parseInt(align, 10) : DEFAULT_IMAGE_SIZE_ALIGN;
   if (!r || !Number.isFinite(base) || base <= 0) return '';
   const area = base * base;
-  const h = Math.sqrt(area / r);
+  let h = Math.sqrt(area / r);
+  let w = r * h;
+  // 钳制必须在取整**之前**：先按长边等比缩回上限，再向下对齐。反过来做会先对齐出一个
+  // 超限值、缩完又落在对齐格之外。
+  const cap = parseInt(maxLongEdge, 10);
+  if (cap > 0 && Math.max(w, h) > cap) {
+    const scale = cap / Math.max(w, h);
+    w *= scale;
+    h *= scale;
+  }
   const floorTo = (v) => Math.max(step, Math.floor(v / step) * step);
-  return `${floorTo(r * h)}x${floorTo(h)}`;
+  return `${floorTo(w)}x${floorTo(h)}`;
 };
 
 // 引擎族：模型级声明，不随 tab 变。未声明返回空串 = 用通用模板。
@@ -468,6 +565,13 @@ export const parseImageSizeConfig = (raw) => {
             sizeAlign:
               parseInt(cfg?.sizeAlign, 10) > 0
                 ? parseInt(cfg.sizeAlign, 10)
+                : null,
+            // 长边护栏(模型级)。**白名单式重建,漏了它 = 管理页每保存一次就把它删一次**
+            // (与 engine / sizeAlign 同一类坑)。丢了不报错,只是界面重新开始说谎:
+            // 面积档算出的尺寸超过引擎护栏时不再钳制,显示 2048x1152 而实际出 1664x928。
+            maxLongEdge:
+              parseInt(cfg?.maxLongEdge, 10) > 0
+                ? parseInt(cfg.maxLongEdge, 10)
                 : null,
             tabs: normalizeImageTabs(cfg?.tabs),
           };

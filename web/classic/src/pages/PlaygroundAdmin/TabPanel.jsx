@@ -83,14 +83,14 @@ const ImageShapeHints = ({ modelName, model, tabKey, entry, onApply }) => {
       {pixelsIgnored && (
         <Text type='warning' size='small' className='block mt-1'>
           {t(
-            '⚠️ 本 tab 配了「尺寸 / 分辨率」，但画幅当前由「宽高比 × 分辨率档」算出，那份列表一个值都不会生效（比例词也不例外——它只在没配「宽高比 + 分辨率档」时才作为尺寸下发）。要改用那份列表，请清空「分辨率档」。',
+            '⚠️ 本 tab 配了「尺寸 / 分辨率」，但画幅当前由「宽高比 × 画质档」算出，那份列表一个值都不会生效（比例词也不例外——它只在没配「宽高比 + 画质档」时才作为尺寸下发）。要改用那份列表，请把「画质档」三个勾全部取消。',
           )}
         </Text>
       )}
       {shapeIncomplete && (
         <Text type='warning' size='small' className='block mt-1'>
           {t(
-            '⚠️ 「宽高比」与「分辨率档」必须成对配置，只配一半不生效（画幅仍由上面的「尺寸 / 分辨率」列表决定）。两个都填上才会按「面积档 × 比例」算出精确像素。',
+            '⚠️ 「宽高比」与「画质档」必须成对配置，只配一半不生效（画幅仍由上面的「尺寸 / 分辨率」列表决定）。两个都配上才会按「画质档 × 比例」算出精确像素。',
           )}
         </Text>
       )}
@@ -673,6 +673,16 @@ const TabPanel = ({ category, tab, draft }) => {
                       name,
                       'sizeAlign',
                       preset.sizeAlign ?? null,
+                    );
+                    // 长边护栏也要一起写:它和档位是配套的。只填档位不填护栏,
+                    // 高清档在 16:9 下就会显示 2048x1152 而实际出 1664x928。
+                    // 没有护栏的模型显式写 null —— 一键填入要能把上一个模型
+                    // 留下的值清掉,否则换模型后会带着别人的护栏。
+                    draft.setModelField(
+                      storeKey,
+                      name,
+                      'maxLongEdge',
+                      preset.maxLongEdge ?? null,
                     );
                   }}
                 />

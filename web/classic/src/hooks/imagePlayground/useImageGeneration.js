@@ -367,14 +367,20 @@ export const useImageGeneration = ({
     const ratio = shape.ratios.includes(inputs.aspectRatio)
       ? inputs.aspectRatio
       : shape.ratios[0];
-    // 档位默认取**最大**的那一档:这个功能存在的理由就是"出图分辨率太低",
-    // 默认给最小档等于没做。tiers 已按从小到大排序。
-    // 档位默认取**最大**的那一档:这个功能存在的理由就是"出图分辨率太低",
-    // 默认给最小档等于没做。tiers 已按从小到大排序。
+    // 档位默认取**中间那一档**(只有一档时就是它,两档时取高的那档)。
+    //
+    // 曾经取最大档,理由是"这个功能存在就是因为出图分辨率太低,默认给最小档等于没做"。
+    // 那个理由在只有一档(2048)时成立,现在档位铺开就不成立了:实测耗时与面积成正比,
+    // U1.5 标准 15.5s / 高清 28.1s / 超清 50.9s,Ideogram-4 更是 46s / 108s / 209s ——
+    // 默认最大档等于让每个第一次点生成的人先等两三分钟。
+    // 取中间档是"够用且不劝退"的折中,用户想要更高随时能往上选。
     const tier = shape.tiers.includes(inputs.sizeTier)
       ? inputs.sizeTier
-      : (shape.tiers[shape.tiers.length - 1] ?? null);
-    const size = computeImageSize(ratio, tier, shape.align);
+      : // **ceil 不是 floor**:tiers 由 normalizeTierList 升序排好,两档时 floor 会取到
+        // 下标 0(标准)——恰好是上面那句注释说要避开的"默认给最小档等于没做",而
+        // kr2 / z-image / qwen-image / qwen-image-edit 四个推荐档正好都是两档。
+        (shape.tiers[Math.ceil((shape.tiers.length - 1) / 2)] ?? null);
+    const size = computeImageSize(ratio, tier, shape.align, shape.maxLongEdge);
     if (
       ratio === inputs.aspectRatio &&
       tier === inputs.sizeTier &&
@@ -1427,7 +1433,6 @@ export const useImageGeneration = ({
     shapeMode,
     availableRatios: shape.ratios,
     availableTiers: shape.tiers,
-    sizeAlign: shape.align,
     optimizeEngine,
     optimizeImages,
     optimizeContext,

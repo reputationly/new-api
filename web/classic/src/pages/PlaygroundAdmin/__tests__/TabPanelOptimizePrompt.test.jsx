@@ -106,8 +106,12 @@ describe('图像画幅：推荐档一键填入', () => {
     expect(screen.queryByText(/填入推荐档位/)).not.toBeNull();
   });
 
-  it('没有推荐档的模型不出按钮——没验证过的东西不该摆在一键填入里', () => {
-    renderImageTab({ 'hunyuan-image-3': { tabs: { text2image: {} } } });
+  // 第三方模型（gpt-image / dall-e / nano-banana 等）**永远不该有推荐档**：它们只认
+  // 各自枚举的固定尺寸，面积档算出的 1344x768 这类值会被直接拒（dall-e 系在
+  // relay/helper/valid_request.go 本地就 400，gpt-image 系由上游拒）。运营给它们配
+  // 尺寸列表即可，一键填入不替没实测过的模型做决定。
+  it('没有实测过的模型不出按钮——没验证过的东西不该摆在一键填入里', () => {
+    renderImageTab({ 'gpt-image-2': { tabs: { text2image: {} } } });
     expect(screen.queryByText(/填入推荐档位/)).toBeNull();
   });
 
@@ -129,7 +133,9 @@ describe('图像画幅：推荐档一键填入', () => {
       setTabField.mock.calls.map((c) => [c[3], c[4]]),
     );
     expect(calls.aspectRatios).toEqual(['1:1', '3:2', '2:3', '16:9', '9:16']);
-    expect(calls.sizeTiers).toEqual(['2048']);
+    // 2026-09-03 实测三档全部原样返回（1024² 15.5s / 1536² 28.1s / 2048² 50.9s）。
+    // 4096 基准同样可用但 223s，逼近同步链路上限，故不进推荐档。
+    expect(calls.sizeTiers).toEqual(['1024', '1536', '2048']);
     expect(calls.sizes).toBeUndefined();
     expect(setModelField).toHaveBeenCalledWith(
       'ImageModelSizeConfig',
@@ -139,10 +145,15 @@ describe('图像画幅：推荐档一键填入', () => {
     );
   });
 
-  // Qwen 反过来：引擎有自己的吸附表，只能枚举，所以推荐档给的是 sizes、清掉比例与档位。
+  // HunyuanImage-3.0 反过来：面积被权重锁死在 ~1MP（checkpoint 的 image_base_size
+  // 同时是喂给模型的条件 token <img_size_1024>，实测请求里带 image_base_size:2048
+  // 依然出 1024x1024），没有"更高质量"这个维度，所以推荐档给的是 sizes、清掉比例与档位。
   it('填入 table 档时把比例与档位清空', () => {
     const setTabField = vi.fn();
-    renderImageTab({ 'qwen-image': { tabs: { text2image: {} } } }, setTabField);
+    renderImageTab(
+      { 'hunyuan-image-3': { tabs: { text2image: {} } } },
+      setTabField,
+    );
     screen
       .getByText(/填入推荐档位/)
       .closest('button')
@@ -150,7 +161,7 @@ describe('图像画幅：推荐档一键填入', () => {
     const calls = Object.fromEntries(
       setTabField.mock.calls.map((c) => [c[3], c[4]]),
     );
-    expect(calls.sizes).toContain('1664x928');
+    expect(calls.sizes).toContain('1280x720');
     expect(calls.aspectRatios).toBeUndefined();
     expect(calls.sizeTiers).toBeUndefined();
   });
@@ -160,7 +171,13 @@ describe('图像画幅：「配了但不生效」都要告警', () => {
   // 砍掉 ratio 模式后，sizes 里的比例词不再被"提升"成宽高比 —— 这种配置现在是
   // 「只配了档位、没配比例」，属于不成对，尺寸列表照常生效。告警要说清这一点，
   // 否则运营会以为档位已经在起作用。
-  it('只配了分辨率档、没配比例 → 提示必须成对', () => {
+  // 断言必须指向**告警本身**（⚠️ 开头那条），不能只匹配「必须成对配置」：
+  // 同一页的「宽高比」「画质档」两处字段说明也写了这句话（提前提示与事后告警口径
+  // 一致是有意为之），只匹配这五个字会撞上多个元素、报「Found multiple elements」，
+  // 而那个报错看着像"告警没出现"，实际是断言太松。
+  const WARN_PAIR = /⚠️ 「宽高比」与「画质档」必须成对配置/;
+
+  it('只配了画质档、没配比例 → 提示必须成对', () => {
     renderImageTab({
       m: {
         tabs: {
@@ -171,16 +188,16 @@ describe('图像画幅：「配了但不生效」都要告警', () => {
         },
       },
     });
-    expect(screen.queryByText(/必须成对配置/)).not.toBeNull();
+    expect(screen.queryByText(WARN_PAIR)).not.toBeNull();
   });
 
-  it('只配了宽高比、没配档位 → 同样提示必须成对', () => {
+  it('只配了宽高比、没配画质档 → 同样提示必须成对', () => {
     renderImageTab({
       m: {
         tabs: { text2image: { sizes: ['1024x1024'], aspectRatios: ['16:9'] } },
       },
     });
-    expect(screen.queryByText(/必须成对配置/)).not.toBeNull();
+    expect(screen.queryByText(WARN_PAIR)).not.toBeNull();
   });
 
   // 配齐了比例与档位、同时还配了尺寸 → 画幅按算出来的像素走，那份尺寸列表一个值

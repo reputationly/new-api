@@ -1,6 +1,8 @@
 import React from 'react';
 import { useTranslation } from 'react-i18next';
 import {
+  Checkbox,
+  CheckboxGroup,
   Input,
   InputNumber,
   Select,
@@ -10,6 +12,10 @@ import {
 } from '@douyinfe/semi-ui';
 import { PLAYGROUND_FIELD_META } from '../../constants/playgroundAdmin.constants';
 import { VIDEO_ASPECT_RATIOS } from '../../constants/videoPlayground.constants';
+import {
+  IMAGE_QUALITY_TIERS,
+  imageTierLabel,
+} from '../../constants/imagePlayground.constants';
 
 const { Text } = Typography;
 
@@ -70,6 +76,50 @@ const FieldInput = ({ field, value, onChange, compact = false, lock }) => {
             placeholder={t(meta.placeholder || '输入后回车')}
             style={{ width: '100%' }}
           />
+        );
+      }
+      // 画质档：**只出档名，不出数字**。存进配置的仍是面积基准（computeImageSize 要
+      // 它算像素），但那是实现细节 —— 运营要回答的只有「这个模型对外提供到哪一档」。
+      // 让运营去填 "2048" 既没有意义（它既不是宽也不是高），填错了还会静默出错档。
+      //
+      // 三档都可自由勾选（标准也能取消）：只给高清以上、或只给标准，都是合法的产品
+      // 决策。全不勾 = 不展示画质选择器，回到"只由宽高比定画幅"。
+      //
+      // 顺序按面积基准升序，不跟着勾选顺序走 —— 让"超清"排在"标准"前面纯属噪声。
+      case 'tiers': {
+        const picked = Array.isArray(value) ? value.map(String) : [];
+        // 老配置里可能有**不在标准阶梯上的值**：这个字段原来是自由文本列表，运营手填
+        // 过什么都有可能，4096（极清）更是被文档明确提过。这些值必须一起渲染成勾选项，
+        // 否则它们会显示成"一个都没勾"——运营随手点一下就把配置覆盖掉了，而体验区那边
+        // 还在按旧值出图，两处说法不一致、且全程没有任何报错。
+        //
+        // 渲染出来之后它们是普通勾选项：留着就保住，主动取消才移除，两种意图都能表达。
+        const known = IMAGE_QUALITY_TIERS.map((x) => x.base);
+        const options = [
+          ...IMAGE_QUALITY_TIERS,
+          ...picked
+            .filter((b) => !known.includes(b))
+            .map((b) => ({ base: b, label: imageTierLabel(b) })),
+        ].sort((a, b) => Number(a.base) - Number(b.base));
+        return (
+          <CheckboxGroup
+            direction='horizontal'
+            value={options
+              .filter((x) => picked.includes(x.base))
+              .map((x) => x.base)}
+            onChange={(v) => {
+              const next = options
+                .filter((x) => (v || []).includes(x.base))
+                .map((x) => x.base);
+              onChange(next.length ? next : undefined);
+            }}
+          >
+            {options.map((x) => (
+              <Checkbox key={x.base} value={x.base}>
+                {t(x.label)}
+              </Checkbox>
+            ))}
+          </CheckboxGroup>
         );
       }
       case 'int':

@@ -85,28 +85,32 @@ describe('area 模式：比例按钮组 + 分辨率下拉', () => {
     expect(screen.queryByText('分辨率')).toBeNull();
   });
 
-  it('多档时渲染分辨率下拉，标签写出各档算出来的像素', () => {
+  // 下拉里**只出档名**，不出像素也不出面积基准。基准（2048）是算像素用的中间量，
+  // 既不是宽也不是高；而像素会随比例变，写进四个选项会让文字跟着一起跳。
+  // 真实像素由下面那一行单独给出，一行代替 N 个括号。
+  it('多档时渲染画质下拉，标签只有档名', () => {
     renderPanel({
       shapeMode: 'area',
       availableRatios: ['16:9'],
       availableTiers: [1024, 2048],
-      sizeAlign: 32,
     });
-    expect(screen.queryByText('分辨率')).not.toBeNull();
-    // 选中项的标签：面积基准 + 算出来的像素
-    expect(screen.getByText(/2048（2720x1536）/)).not.toBeNull();
+    expect(screen.queryByText('画质')).not.toBeNull();
+    expect(screen.getByText('超清')).not.toBeNull();
+    // 面积基准绝不能露给用户。
+    expect(screen.queryByText(/2048（/)).toBeNull();
   });
 
   // 用户选的是比例和档位，真正下发的是算出来的 size——不写出来的话
-  // 「我选了 2K 到底出多大」没有任何地方能看到。
-  it('把最终像素写在下面', () => {
+  // 「我选了超清到底出多大」没有任何地方能看到。
+  // 带上百万像素是给一个**跨比例可比**的量：同一档在 1:1 与 16:9 下长宽差很多、
+  // 面积却基本一致，只看长宽会以为"换了比例就变小了"。
+  it('把最终像素与百万像素写在下面', () => {
     renderPanel({
       shapeMode: 'area',
       availableRatios: ['16:9'],
       availableTiers: [2048],
-      sizeAlign: 32,
     });
-    expect(screen.getByText(/出图 2720x1536/)).not.toBeNull();
+    expect(screen.getByText(/出图 2720×1536 · 4\.2MP/)).not.toBeNull();
   });
 
   // 锁定态（打开历史会话）**不能**拿 inputs 里的比例/档位去高亮按钮：会话只存了
