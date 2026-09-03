@@ -76,6 +76,16 @@ const ImageUrlInput = ({
   maxAspect = 0,
   // 最多可上传张数(0/未传=不限)。达到上限后隐藏拖拽框(单帧槽=1,参考图=1~3)。
   maxCount = 0,
+  // 是否在缩略图左上角标出序号。**默认关**,只有能传多张、且用户需要在提示词里指名
+  // 道姓的调用点才开(图生图底图)。
+  //
+  // 为什么需要:多图编辑时用户会写「参考第 2 张的风格」,而这个说法要成立,界面上得
+  // 先有「第 2 张」。在这之前缩略图只有 alt 里的编号(屏幕阅读器可见、眼睛看不见),
+  // 用户只能赌自己记得上传顺序 —— 赌错了模型就照着另一张图改。这个序号与发给优化
+  // 模型的 image part 顺序、与最终发给出图模型的底图顺序是同一个数组下标。
+  //
+  // 单张时不显示:一张图标个「1」是纯噪声,关键帧那种单帧槽尤其不该有。
+  numbered = false,
 }) => {
   const { t } = useTranslation();
   const fileInputRef = useRef(null);
@@ -147,11 +157,14 @@ const ImageUrlInput = ({
               (maxAspect > 0 && ratio > maxAspect)
             ) {
               Toast.error({
-                content: t('图片宽高比需在 {{lo}}~{{hi}} 之间（当前 {{cur}}）', {
-                  lo: minAspect,
-                  hi: maxAspect,
-                  cur: ratio.toFixed(2),
-                }),
+                content: t(
+                  '图片宽高比需在 {{lo}}~{{hi}} 之间（当前 {{cur}}）',
+                  {
+                    lo: minAspect,
+                    hi: maxAspect,
+                    cur: ratio.toFixed(2),
+                  },
+                ),
                 duration: 3,
               });
               continue;
@@ -307,6 +320,11 @@ const ImageUrlInput = ({
                 className='object-cover rounded-lg border border-gray-200'
                 style={{ objectFit: 'cover', borderRadius: 8 }}
               />
+              {numbered && imageUrls.length > 1 && (
+                <span className='absolute top-0 left-0 bg-black/60 text-white text-[10px] leading-none rounded-br-lg rounded-tl-lg px-1.5 py-1 pointer-events-none'>
+                  {index + 1}
+                </span>
+              )}
               <Button
                 icon={<X size={12} />}
                 size='small'

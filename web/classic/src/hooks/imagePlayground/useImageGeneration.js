@@ -54,6 +54,7 @@ import {
   getEngineForImageModel,
   resolveSubmitImageSize,
 } from '../../constants/imagePlayground.constants';
+import { buildImageOptimizeContext } from '../../constants/promptOptimize.constants';
 
 // 文生图 / 图生图共用本 hook,按 mode 区分能力过滤、请求端点、是否带底图。
 // 两种模式各自独立的历史存储 key,互不串扰。
@@ -400,6 +401,16 @@ export const useImageGeneration = ({
   // 见 playgroundAdmin.constants 的 IMAGE_ENGINE_SENSENOVA_U15 注释）。
   const optimizeEngine = getEngineForImageModel(sizeConfig, inputs.model);
 
+  // 一并发给「AI 优化提示词」的底图。图生图不喂图，改写模型只能从文字猜底图内容，
+  // 猜错不报错、却会产出一份和底图对着干的提示词（为什么非发不可见 usePromptOptimize
+  // 头部注释）。文生图恒为空数组，等于不发。
+  //
+  // 顺序就是模型认的图片编号，与左侧缩略图角标同源 —— 不排序、不去重、不补位。
+  const optimizeImages = useMemo(
+    () => (isI2I ? (inputs.imageUrls || []).filter(Boolean) : []),
+    [isI2I, inputs.imageUrls],
+  );
+
   // 图生图的输出尺寸：仅当运营给该模型在本 tab 下显式配了 sizes 才开放（见
   // getExplicitTabSizes 的注释——gpt-image 这类只认固定档位，不能无差别下发）。
   const explicitI2ISizes = useMemo(
@@ -421,6 +432,34 @@ export const useImageGeneration = ({
     !usesComputedShape &&
     Array.isArray(explicitI2ISizes) &&
     explicitI2ISizes.length > 0;
+
+  // 优化模型看不到左侧面板：画幅决定它要不要压缩文案（U1.5 编辑模板 §6），张数决定
+  // 「第 N 张」这个说法成不成立。两者都是本次请求的既成事实，与视频区的
+  // optimizeContext 同一机制。
+  //
+  // **画幅必须走 resolveSubmitImageSize，不能直接用 inputs.size** —— 这两个值会分叉，
+  // 而告诉模型一个本次根本不会下发的画幅，比不说更糟（它会照着做 §6 的文案压缩判断）。
+  //
+  // 分叉路径：图生图下先选一个配了 i2i sizes 的模型（inputs.size 被填成具体像素），
+  // 再切到一个没配的模型 —— shapeMode 变 'none'（见上面 :352 的 tabScoped 闸），
+  // availableSizes 随之为空，合法性 effect 在 valid.length === 0 处直接 return，
+  // inputs.size **保持前一个模型的旧值**；而提交时 resolveSubmitImageSize 判定
+  // !usesComputedShape && !canPickI2ISize，size 被整段丢掉。此时界面上连尺寸控件都
+  // 不显示，人眼也发现不了 inputs.size 还留着个陈旧像素值。判据只有一处，这里跟着它走。
+  //
+  // 位置：必须排在 usesComputedShape / canPickI2ISize 之后，它俩是这个判据的入参。
+  const optimizeContext = useMemo(
+    () =>
+      buildImageOptimizeContext({
+        size: resolveSubmitImageSize(inputs.size, {
+          isI2I,
+          usesComputedShape,
+          canPickI2ISize,
+        }),
+        imageCount: optimizeImages.length,
+      }),
+    [inputs.size, isI2I, usesComputedShape, canPickI2ISize, optimizeImages],
+  );
 
   // 选项 = 自动档 + 运营配的白名单。白名单之外不给别的：能选的一定是模型支持的
   // 档位。底图不进选项，它只决定上传那一刻把哪一档填进框里。
@@ -1333,6 +1372,8 @@ export const useImageGeneration = ({
     availableTiers: shape.tiers,
     sizeAlign: shape.align,
     optimizeEngine,
+    optimizeImages,
+    optimizeContext,
     messages,
     conversations,
     currentConvId,

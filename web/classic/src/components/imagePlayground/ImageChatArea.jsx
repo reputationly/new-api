@@ -93,6 +93,11 @@ const ImageChatArea = ({
   // 所选模型的引擎族：决定内置模板走哪一份（SenseNova-U1.5 的口径与通用模板差别很大，
   // 见 promptOptimize.constants.js）。留空即通用模板。
   optimizeEngine = '',
+  // 图生图底图：一并发给「AI 优化提示词」的模型，让它看着图改写而不是靠文字猜。
+  // 文生图恒为空。顺序即模型认的图片编号，与左侧缩略图上的序号角标一一对应。
+  optimizeImages,
+  // 本次请求的既成事实（目标画幅、底图张数与编号），拼在系统提示词末尾。
+  optimizeContext = '',
   showPresets = false,
   onSend,
   onRegenerate,
@@ -352,6 +357,8 @@ const ImageChatArea = ({
           tabKey={mode}
           model={selectedModel}
           engine={optimizeEngine}
+          optimizeContext={optimizeContext}
+          images={optimizeImages}
           value={inputValue}
           onChange={setInputValue}
           disabled={generating}
@@ -395,6 +402,10 @@ const ImageChatArea = ({
         </div>
       </div>
     );
+    // renderInputArea 是 Semi Chat 的渲染回调:deps 不变就返回上一个闭包,
+    // 里面的 props 全是旧值。所以凡是**透传给 PromptOptimizeButton 的 prop 都必须
+    // 进 deps**——漏一个就是"换了模型/换了底图,优化按钮还按上一份在发"，不报错。
+    // selectedModel / optimizeEngine 是补的既有遗漏(与本次改动同一类,一并修)。
   }, [
     generating,
     turnLimitReached,
@@ -403,6 +414,11 @@ const ImageChatArea = ({
     optimizing,
     onSend,
     mode,
+    selectedModel,
+    optimizeEngine,
+    optimizeImages,
+    optimizeContext,
+    showPresets,
     t,
   ]);
 

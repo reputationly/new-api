@@ -28,6 +28,8 @@ const ImagePlaygroundBody = ({ mode }) => {
     availableTiers,
     sizeAlign,
     optimizeEngine,
+    optimizeImages,
+    optimizeContext,
     messages,
     conversations,
     generating,
@@ -84,6 +86,8 @@ const ImagePlaygroundBody = ({ mode }) => {
           mode={mode}
           selectedModel={inputs.model}
           optimizeEngine={optimizeEngine}
+          optimizeImages={optimizeImages}
+          optimizeContext={optimizeContext}
           showPresets={!isI2I}
           styleState={styleState}
           onSend={generate}

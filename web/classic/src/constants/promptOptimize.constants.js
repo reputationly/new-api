@@ -20,6 +20,7 @@ import {
   MUSIC_ENGINE_MINIMAX_MUSIC3,
 } from './playgroundAdmin.constants';
 import { h3OptimizeSystemPrompt } from './h3Prompt.constants';
+import { IMAGE_SIZE_AUTO, isRatioWord } from './imagePlayground.constants';
 
 const OUTPUT_CONTRACT = `\n\nOutput ONLY the rewritten prompt itself. No explanation, no preface, no quotes, no markdown fence. Keep the user's original language unless the target model requires English.`;
 
@@ -235,8 +236,11 @@ Before returning, silently verify semantic coverage, exact visible-copy preserva
 //   1. 产物是**自然语言指令**而不是 JSON;
 //   2. 用户消息末尾要拼 USER_SUFFIX(见下面 optimizeUserSuffix);
 //   3. 官方把**输入图片一并发给改写模型**(edit_pe.py 的 _to_image_url),即编辑 PE 是
-//      看着图改写的。我们这条链路目前只发文本 —— 这是与官方仅存的能力差距,要补齐得让
-//      优化模型换成 VLM 并改 usePromptOptimize 发多模态 content。
+//      看着图改写的。这条**已经补齐**:usePromptOptimize 在有底图时把 user content 换成
+//      多模态数组(图在前、文本在后,顺序即图片编号),与官方 messages 构造逐项对齐。
+//      前提是运营配的优化模型得是 VLM —— 刻意不做能力探测,理由见 usePromptOptimize
+//      头部注释。这份模板里过半规则(与底图风格一致 / 保持人物核心视觉一致 /
+//      「沿用当前风格」时提取配色构图 / 多图角色分配)都必须看到图才能执行。
 const U15_I2I_PROMPT = `# Edit Instruction Rewriter
 You are a professional image-editing and reference-guided generation instruction rewriter. Your task is to produce a precise, detailed, and visually achievable instruction from the user's request and the provided input images, whether the task edits a base image or generates a new image guided by one or more references.
 
@@ -375,3 +379,52 @@ export const optimizeUserSuffix = (tabKey, engine) =>
   engine === IMAGE_ENGINE_SENSENOVA_U15 && tabKey === 'image2image'
     ? U15_EDIT_USER_SUFFIX
     : '';
+
+// 图像体验区拼在**系统提示词末尾**的「本次请求事实」。与视频区的
+// buildH3OptimizeContext 同一个机制、同一个理由:优化模型看不到左侧面板,而下面两件事
+// 它猜不对,猜错了不报错、只是默默变差 ——
+//
+//   1. 目标画幅。U1.5 编辑模板 §6 有条硬要求「放不下就压缩低优先级文案,而不是缩小
+//      字号」,这个判断**必须知道画幅**才做得了。实测一次 7 条中文时间线塞进 9:16
+//      手机屏,优化模型一条没压 —— 它当时根本不知道画幅是多少。
+//   2. 底图张数与编号。多图时用户会说「第 2 张的风格」,而这个说法要成立,模型得知道
+//      自己收到的 image part 顺序 = 界面上缩略图的角标序号(ImageUrlInput 的 numbered)。
+//      官方 edit_pe.py 只靠数组顺序隐式传达,文档另外叮嘱调用方「按预期顺序提供图像,
+//      并在原始指令中说明每张图像的角色」—— 这里把顺序这件事显式说出来。
+//
+// **只陈述事实,不下指令**:该拿这些事实做什么是模板的事(§6 已经写了),两处都写会
+// 打架。与 buildH3OptimizeContext 一致:没有事实可说就返回空串,拼上去等于没拼,
+// 因此文生图(无图)、自动档(无确定画幅)都不需要在调用侧分支。
+export const buildImageOptimizeContext = ({ size, imageCount = 0 } = {}) => {
+  const lines = [];
+  // 调用方传进来的必须是**本次真正会下发的那个值**(resolveSubmitImageSize 的结果),
+  // 空串即"这次不发 size"。auto 同理:语义是"交给引擎决定",说不出具体值就不说 ——
+  // 编一个具体画幅比不说更糟,模型会照着它做排版可行性判断(§6 的文案压缩)。
+  if (size && size !== IMAGE_SIZE_AUTO) {
+    // sizes 的语义是「发什么」而不是「什么比例」,像素与比例词都合法、运营两种混着用
+    // (见 imagePlayground.constants 的 isRatioWord 注释,文生图历来填比例词)。
+    // 不分开写就会发出 "Target canvas: 16:9 pixels" —— 一句自相矛盾的假事实。
+    //
+    // 就到画幅为止,**不要再跟一句「文字元素要清晰可读」**:那是指令不是事实,违反上面
+    // 那条约定。U1.5 编辑模板 §6 本来就写了「放不下就压缩低优先级文案」,重复一遍是
+    // 两处打架;而这段 context 是无条件拼在**任何**模板末尾的(usePromptOptimize),
+    // 对通用模板它更是凭空多出来的指令 —— IMAGE_PROMPT 明令「未经用户要求不得在画面里
+    // 编造文字」,一句"每个必需文字元素都要清晰可读"却预设了文字元素存在,会推着模型给
+    // 「一只猫在窗台上打盹」这种请求也去规划画面文案。模型需要的只是画幅这个事实。
+    lines.push(
+      isRatioWord(size)
+        ? `- Target canvas: aspect ratio ${size}.`
+        : `- Target canvas: ${size} pixels.`,
+    );
+  }
+  if (imageCount > 0) {
+    lines.push(
+      `- Input images: ${imageCount}, provided in this order as <Image 1>${
+        imageCount > 1 ? `..<Image ${imageCount}>` : ''
+      }. When the user refers to "the Nth image", it means this order.`,
+    );
+  }
+  return lines.length
+    ? `\n\n---\n\nCurrent request:\n\n${lines.join('\n')}`
+    : '';
+};

@@ -120,13 +120,20 @@ const ImageConfigPanel = ({
         </Typography.Text>
       </div>
       <div className='flex flex-wrap gap-2'>
-        {(urls || []).filter(Boolean).map((url, index) => (
-          <img
-            key={index}
-            src={url}
-            alt={`${label}-${index + 1}`}
-            className='w-20 h-20 object-cover rounded-lg border border-gray-200'
-          />
+        {(urls || []).filter(Boolean).map((url, index, arr) => (
+          <div key={index} className='relative'>
+            <img
+              src={url}
+              alt={`${label}-${index + 1}`}
+              className='w-20 h-20 object-cover rounded-lg border border-gray-200'
+            />
+            {/* 锁定态仍可续问，底图沿用这一批，所以「第 N 张」的说法照样要成立。 */}
+            {arr.length > 1 && (
+              <span className='absolute top-0 left-0 bg-black/60 text-white text-[10px] leading-none rounded-br-lg rounded-tl-lg px-1.5 py-1 pointer-events-none'>
+                {index + 1}
+              </span>
+            )}
+          </div>
         ))}
       </div>
     </div>
@@ -243,6 +250,9 @@ const ImageConfigPanel = ({
                 })}
                 required
                 maxCount={IMAGE_MAX_EDIT_IMAGES}
+                // 传多张时给缩略图标序号：用户要能在提示词里说「第 2 张」，
+                // 界面上就得先有「第 2 张」（见 ImageUrlInput 的 numbered 注释）。
+                numbered
                 imageUrls={inputs.imageUrls || []}
                 onImageUrlsChange={(v) =>
                   onInputChange(

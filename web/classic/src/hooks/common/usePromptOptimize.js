@@ -7,6 +7,7 @@ import {
   isPlaygroundConfigIssue,
   stripModelThinking,
 } from '../../helpers/playground';
+import { isMediaRef } from '../../helpers/playgroundMediaStorage';
 import {
   parsePlaygroundTabConfig,
   getModelOptimizePrompt,
@@ -49,13 +50,26 @@ import {
 //   engine  —— 所选模型的引擎族(minimax-h3 要的是分段结构,与通用契约形状相反);
 //   context —— 本次请求的既成事实(传了首帧还是尾帧、选了几秒、有几张参考图)。
 //              优化模型看不到左侧面板,不喂它就只能猜,猜错同样不报错、只是默默变差。
+//   images  —— 本次请求的输入图**本身**,会作为多模态 content 一并发给优化模型。
+//
+// images 那条与 context 的区别是"看没看到图":context 只说"有一张底图",images 让模型
+// 真的看见它。图生图缺了它会**主动编错**——不是效果打折,是产出与底图打架:
+// 用户传了一张彩色油画(南京受降),优化模型只从文字"日本投降递交投降文件"猜,写出
+// "密苏里号战舰 / 黑白纪实摄影风格",而底图模型是能看到底图的,两边直接对着干。
+// 官方 edit_pe.py 正是把输入图与原文一起发给改写模型的(见 promptOptimize.constants.js
+// 里 U15_I2I_PROMPT 的注释),这条模板里过半规则(与底图风格一致 / 保持人物核心视觉
+// 一致 / "沿用当前风格"时提取配色构图 / 多图角色分配)都必须看到图才能执行。
+//
+// 前提是运营配的优化模型得是 VLM。**刻意不做能力探测**:唯一能拿到的判据是模型名,
+// 而按名字猜是不是 VL 模型必然误判,把功能从本来能用的人眼前拿走比报个错糟得多——
+// 与本文件顶上「不判分组权限」同一个取舍。配错了会在 catch 里报出上游原话。
 //
 // 返回 { available, optimizing, optimize }。optimize(text) 成功返回优化后的字符串,
 // 失败返回 null 并已弹过错误提示 —— 调用方只需判空后回填输入框。
 export const usePromptOptimize = (
   category,
   tabKey,
-  { engine, context, model: selectedModel } = {},
+  { engine, context, model: selectedModel, images } = {},
 ) => {
   const { t } = useTranslation();
   const [statusState] = useContext(StatusContext);
@@ -88,6 +102,15 @@ export const usePromptOptimize = (
     };
   }, [raw, modelConfigRaw, category, tabKey, selectedModel, engine, context]);
 
+  // idb-media: 是本地 IDB 的裸引用(见 helpers/playgroundMediaStorage),对模型毫无意义
+  // ——发过去等于在图片位喂一串垃圾文本。hydrate 已保证不残留,这里与提交底图前那道
+  // 过滤(useImageGeneration 的 params.images)同源再兜一次:那边发空底图是被后端拒,
+  // 这边是**静默产出一份基于幻觉的提示词**,后者更难发现。
+  const optimizeImages = useMemo(
+    () => (images || []).filter((s) => s && !isMediaRef(s)),
+    [images],
+  );
+
   const optimize = useCallback(
     async (rawText) => {
       const text = (rawText || '').trim();
@@ -99,6 +122,7 @@ export const usePromptOptimize = (
         return null;
       }
       if (!available) return null;
+      const userText = text + optimizeUserSuffix(tabKey, engine);
       setOptimizing(true);
       try {
         // group 由运营在「体验区管理 → 通用设置」里配。留空则不下发,后端按用户
@@ -117,9 +141,24 @@ export const usePromptOptimize = (
               { role: 'system', content: systemPrompt },
               // 后缀只有 U1.5 的图生图有(官方 edit_pe.py 的 USER_SUFFIX),其余为空串,
               // 拼上去等于没拼 —— 不必在这里再分支一次。
+              //
+              // 有图时换成多模态数组,**图在前、文本在后**,与官方 edit_pe.py 的
+              // messages 构造逐项对齐。顺序不是风格问题:它就是模型认的图片编号,
+              // 用户说"参考第二张图的风格"时靠的正是这个顺序,乱序等于指错图。
+              //
+              // 没图则保持字符串原样 —— 不退化成单元素数组:纯文本模型收字符串是
+              // 一定认的,收 content 数组则未必,而文生图这一路本来就没图。
               {
                 role: 'user',
-                content: text + optimizeUserSuffix(tabKey, engine),
+                content: optimizeImages.length
+                  ? [
+                      ...optimizeImages.map((url) => ({
+                        type: 'image_url',
+                        image_url: { url },
+                      })),
+                      { type: 'text', text: userText },
+                    ]
+                  : userText,
               },
             ],
           },
@@ -164,7 +203,9 @@ export const usePromptOptimize = (
     },
     // tabKey / engine 是新加的:用户消息后缀与"产物是不是 JSON"都按它俩分支,
     // 漏进依赖数组的话,切了 tab 或换了模型仍会沿用上一份闭包里的判断。
-    [available, model, group, systemPrompt, tabKey, engine, t],
+    // optimizeImages 同理,且漏掉它的后果最隐蔽:用户换了底图却仍拿旧图去改写,
+    // 既不报错也看不出来,只是改写结果对不上眼前这张图。
+    [available, model, group, systemPrompt, tabKey, engine, optimizeImages, t],
   );
 
   return { available, optimizing, optimize };

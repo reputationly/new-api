@@ -19,6 +19,10 @@ import AiAssistButton from './AiAssistButton';
 //
 // engine / optimizeContext 只有视频体验区传（选中模型的引擎族、本次请求的输入形态与
 // 时长），用来给 MiniMax H3 换一套分段结构的系统提示词；不传即维持原行为。
+//
+// images 是本次请求的输入图本身（图生图底图），会作为多模态 content 一并发给优化模型
+// ——图生图不喂图，改写模型只能靠文字猜底图内容，猜错了不报错，只是产出一份和底图
+// 对着干的提示词。为什么非发不可见 usePromptOptimize 头部注释。不传即只发文本。
 const PromptOptimizeButton = ({
   category,
   tabKey,
@@ -29,12 +33,13 @@ const PromptOptimizeButton = ({
   model,
   engine,
   optimizeContext,
+  images,
 }) => {
   const { t } = useTranslation();
   const { available, optimizing, optimize } = usePromptOptimize(
     category,
     tabKey,
-    { engine, context: optimizeContext, model },
+    { engine, context: optimizeContext, model, images },
   );
   useEffect(() => {
     onOptimizingChange?.(optimizing);
