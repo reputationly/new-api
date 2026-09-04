@@ -3,6 +3,7 @@ package model
 import (
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"sync"
 
@@ -42,6 +43,63 @@ func GetGroupEnabledModels(group string) []string {
 	var models []string
 	// Find distinct models
 	DB.Table("abilities").Where(commonGroupCol+" = ? and enabled = ?", group, true).Distinct("model").Pluck("model", &models)
+	return models
+}
+
+// LessByDisplayOrder 模型展示顺序的**唯一判据**:优先级降序 → 名字小写后升序。
+//
+// 模型广场(model/pricing.go 的 updatePricing)与体验区模型下拉
+// (GetGroupsEnabledModelsOrdered)共用这一个函数。这两处给用户看的是同一批模型,
+// 顺序不一致就是在制造困惑,而"两边各写一份、约定保持一致"已经证明是靠不住的:
+// 这条规则前后错了两次(先是让数据库 ORDER BY 排、collation 依环境而变;后是前端另写
+// 一份 localeCompare),两次都不报错、只是两页顺序悄悄对不上。
+//
+// 名字**先转小写再逐字节比**,不用数据库的 ORDER BY:字符串排序依 collation 而定,是
+// 环境相关的。拿线上 53 个真实模型名实测,SQLite(BINARY,大写全排小写前)与
+// PostgreSQL 的结果差 53 行,加了 LOWER() 仍差 18 行 —— 开发机验过的顺序在线上不成立。
+func LessByDisplayOrder(priorityA int64, nameA string, priorityB int64, nameB string) bool {
+	if priorityA != priorityB {
+		return priorityA > priorityB
+	}
+	la, lb := strings.ToLower(nameA), strings.ToLower(nameB)
+	if la != lb {
+		return la < lb
+	}
+	// 仅大小写不同的同名模型:再按原名定序,否则顺序取决于数据库返回的先后。
+	return nameA < nameB
+}
+
+// GetGroupsEnabledModelsOrdered 取若干分组下所有启用的模型,按展示顺序排好
+// (判据见 LessByDisplayOrder)。给体验区的模型下拉用。
+//
+// 一次查询跨全部目标分组,不按分组逐个查再拼:后者的结果是「按分组分块」的,组间顺序
+// 由循环决定,全局优先级会被打散(自动分组下就是多个目标分组)。这条 WHERE 走
+// abilities 主键 (group, model, channel_id) 的前导列,是索引范围扫。
+//
+// **优先级不在这里现算,读 GetModelMaxPriorities 那份共享缓存**。两个理由:
+//  1. 一致性由构造保证 —— 模型广场排序读的是同一份映射,不再是"两边各算一遍、约定
+//     保持一致"(这条规则上已经错过两次)。
+//  2. 便宜 —— 自己算要 GROUP BY + 子查询求 MAX,而 abilities 表上 enabled 无索引、
+//     model 又是主键第二列当不了前导键,三种数据库都只能全表扫;这个端点是体验区与
+//     令牌页每次加载都打的。那份映射本来就随定价缓存每分钟刷一次。
+//
+// 优先级取的是**全局**最大值(不限于目标分组),理由见 modelMaxPriority 的注释:
+// 广场那份数据是包级全局缓存、没有"当前用户"可言,只能全局聚合;这边若按目标分组算,
+// 同一个模型把高优先级渠道挂在用户不可用的分组时,两页就会给出不同名次。代价是排序会
+// 受用户看不到的分组影响 —— 这是有意的,优先级表达的是运营意图,不该因切分组而变。
+func GetGroupsEnabledModelsOrdered(groups []string) []string {
+	models := make([]string, 0)
+	if len(groups) == 0 {
+		return models
+	}
+	DB.Table("abilities").
+		Where(commonGroupCol+" in (?) and enabled = ?", groups, true).
+		Distinct("model").
+		Pluck("model", &models)
+	priorities := GetModelMaxPriorities()
+	sort.SliceStable(models, func(i, j int) bool {
+		return LessByDisplayOrder(priorities[models[i]], models[i], priorities[models[j]], models[j])
+	})
 	return models
 }
 

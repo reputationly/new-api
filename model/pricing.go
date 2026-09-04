@@ -3,6 +3,7 @@ package model
 import (
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strings"
 
 	"sync"
@@ -16,23 +17,31 @@ import (
 )
 
 type Pricing struct {
-	ModelName              string                  `json:"model_name"`
-	Description            string                  `json:"description,omitempty"`
-	Icon                   string                  `json:"icon,omitempty"`
-	Tags                   string                  `json:"tags,omitempty"`
-	CapabilityTags         []string                `json:"capability_tags,omitempty"`
-	VendorID               int                     `json:"vendor_id,omitempty"`
-	QuotaType              int                     `json:"quota_type"`
-	ModelRatio             float64                 `json:"model_ratio"`
-	ModelPrice             float64                 `json:"model_price"`
-	OwnerBy                string                  `json:"owner_by"`
-	CompletionRatio        float64                 `json:"completion_ratio"`
-	CacheRatio             *float64                `json:"cache_ratio,omitempty"`
-	CreateCacheRatio       *float64                `json:"create_cache_ratio,omitempty"`
-	ImageRatio             *float64                `json:"image_ratio,omitempty"`
-	AudioRatio             *float64                `json:"audio_ratio,omitempty"`
-	AudioCompletionRatio   *float64                `json:"audio_completion_ratio,omitempty"`
-	EnableGroup            []string                `json:"enable_groups"`
+	ModelName            string   `json:"model_name"`
+	Description          string   `json:"description,omitempty"`
+	Icon                 string   `json:"icon,omitempty"`
+	Tags                 string   `json:"tags,omitempty"`
+	CapabilityTags       []string `json:"capability_tags,omitempty"`
+	VendorID             int      `json:"vendor_id,omitempty"`
+	QuotaType            int      `json:"quota_type"`
+	ModelRatio           float64  `json:"model_ratio"`
+	ModelPrice           float64  `json:"model_price"`
+	OwnerBy              string   `json:"owner_by"`
+	CompletionRatio      float64  `json:"completion_ratio"`
+	CacheRatio           *float64 `json:"cache_ratio,omitempty"`
+	CreateCacheRatio     *float64 `json:"create_cache_ratio,omitempty"`
+	ImageRatio           *float64 `json:"image_ratio,omitempty"`
+	AudioRatio           *float64 `json:"audio_ratio,omitempty"`
+	AudioCompletionRatio *float64 `json:"audio_completion_ratio,omitempty"`
+	EnableGroup          []string `json:"enable_groups"`
+	// DisplayPriority 展示优先级:该模型在**任一**启用分组下能落到的最高渠道优先级
+	// (abilities.priority 的 MAX,而它是渠道 priority 的副本)。模型广场据此把自建
+	// 算力承载的模型排到前面。语义与取 MAX 的理由见 GetGroupsEnabledModelsOrdered。
+	//
+	// **`json:"-"` 不下发**:排序在后端做完(见下面 pricingMap 排序处),前端只按数组
+	// 顺序渲染、并不显示这个数字。而 /api/pricing 挂的是 TryUserAuth
+	// (router/api-router.go),匿名可访问 —— 没必要把内部路由优先级顺带公开出去。
+	DisplayPriority        int64                   `json:"-"`
 	SupportedEndpointTypes []constant.EndpointType `json:"supported_endpoint_types"`
 	BillingMode            string                  `json:"billing_mode,omitempty"`
 	BillingExpr            string                  `json:"billing_expr,omitempty"`
@@ -62,7 +71,17 @@ var (
 	modelQuotaTypeMap = make(map[string]int)
 	// modelEnableChannels 供积分渠道白名单的**展示侧**判断：模型广场要标出哪些模型
 	// 能用积分抵扣。计费侧不读它——那边直接拿本次请求选中的 ChannelId 判，是精确的。
-	modelEnableChannels   = make(map[string][]int)
+	modelEnableChannels = make(map[string][]int)
+	// modelMaxPriority 模型名 -> 该模型在**任一**启用分组下能落到的最高渠道优先级。
+	// 展示顺序的唯一数据源:模型广场(pricingMap 的排序)与体验区模型下拉
+	// (GetGroupsEnabledModelsOrdered)都读它,两处的顺序因此由**构造**保证一致,
+	// 而不是靠"两边各算一遍、约定保持一致"—— 后者这条规则上已经错过两次。
+	//
+	// 顺带省掉了体验区那边的一次聚合查询:原先它自己 GROUP BY + 子查询算 MAX,
+	// 而 abilities 表上 enabled 无索引、model 又是主键第二列当不了前导键,三种数据库
+	// 都只能全表扫,且挂在 /api/user/models 上每次加载都打。这份映射本来就在
+	// updatePricing 里算好、随定价缓存每分钟刷一次,直接复用即可。
+	modelMaxPriority      = make(map[string]int64)
 	modelEnableGroupsLock = sync.RWMutex{}
 )
 
@@ -272,6 +291,9 @@ func updatePricing(imgRaw, vidRaw, audRaw, musRaw string) {
 
 	modelGroupsMap := make(map[string]*types.Set[string])
 
+	// 展示优先级:跨全部启用分组取 MAX。搭在既有循环里,不额外查库 ——
+	// enableAbilities 本来就为了填端点类型而全量加载过了。
+	maxPriorityByModel := make(map[string]int64)
 	for _, ability := range enableAbilities {
 		groups, ok := modelGroupsMap[ability.Model]
 		if !ok {
@@ -279,6 +301,15 @@ func updatePricing(imgRaw, vidRaw, audRaw, musRaw string) {
 			modelGroupsMap[ability.Model] = groups
 		}
 		groups.Add(ability.Group)
+		// priority 可空,空按 0 计 —— 与 SQL 侧的 COALESCE(MAX(priority), 0) 同一口径,
+		// 两处必须一致,否则模型广场与体验区会给出不同的顺序。
+		var p int64
+		if ability.Priority != nil {
+			p = *ability.Priority
+		}
+		if cur, seen := maxPriorityByModel[ability.Model]; !seen || p > cur {
+			maxPriorityByModel[ability.Model] = p
+		}
 	}
 
 	//这里使用切片而不是Set，因为一个模型可能支持多个端点类型，并且第一个端点是优先使用端点
@@ -376,6 +407,7 @@ func updatePricing(imgRaw, vidRaw, audRaw, musRaw string) {
 			ModelName:              model,
 			EnableGroup:            groups.Items(),
 			SupportedEndpointTypes: modelSupportEndpointTypes[model],
+			DisplayPriority:        maxPriorityByModel[model],
 		}
 
 		// 补充模型元数据（描述、标签、供应商、状态）
@@ -456,6 +488,18 @@ func updatePricing(imgRaw, vidRaw, audRaw, musRaw string) {
 		pricingMap = append(pricingMap, pricing)
 	}
 
+	// 排序判据与体验区模型下拉共用同一个函数,两页顺序才不会分叉(见 LessByDisplayOrder
+	// 的注释:这条规则前后错过两次,都是"两边各写一份、约定保持一致"导致的)。
+	//
+	// ⚠️ 必须排在下面那句 PricingVersion 赋值**之前** —— 那句打在 pricingMap[0] 上,
+	// 排序会换掉首元素,顺序反了标记就跑到别的模型身上。
+	sort.SliceStable(pricingMap, func(i, j int) bool {
+		return LessByDisplayOrder(
+			pricingMap[i].DisplayPriority, pricingMap[i].ModelName,
+			pricingMap[j].DisplayPriority, pricingMap[j].ModelName,
+		)
+	})
+
 	// 防止大更新后数据不通用
 	if len(pricingMap) > 0 {
 		pricingMap[0].PricingVersion = "5a90f2b86c08bd983a9a2e6d66c255f4eaef9c4bc934386d2b6ae84ef0ff1f1f"
@@ -481,6 +525,7 @@ func updatePricing(imgRaw, vidRaw, audRaw, musRaw string) {
 	modelEnableGroups = make(map[string][]string)
 	modelQuotaTypeMap = make(map[string]int)
 	modelEnableChannels = channelsByModel
+	modelMaxPriority = maxPriorityByModel
 	for _, p := range pricingMap {
 		modelEnableGroups[p.ModelName] = p.EnableGroup
 		modelQuotaTypeMap[p.ModelName] = p.QuotaType

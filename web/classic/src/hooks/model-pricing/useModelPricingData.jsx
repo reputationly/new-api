@@ -244,22 +244,23 @@ export const useModelPricingData = () => {
         m.vendor_description = vendor.description;
       }
     }
-    models.sort((a, b) => {
-      return a.quota_type - b.quota_type;
-    });
-
-    models.sort((a, b) => {
-      if (a.model_name.startsWith('gpt') && !b.model_name.startsWith('gpt')) {
-        return -1;
-      } else if (
-        !a.model_name.startsWith('gpt') &&
-        b.model_name.startsWith('gpt')
-      ) {
-        return 1;
-      } else {
-        return a.model_name.localeCompare(b.model_name);
-      }
-    });
+    // **不在前端排序** —— 顺序由后端给定(model/pricing.go 的 updatePricing 在构建
+    // pricingMap 时排好,判据是 model.LessByDisplayOrder,数据源是 modelMaxPriority
+    // 那份共享缓存)。体验区的模型下拉读同一份缓存、用同一个判据函数,两页顺序因此由
+    // 构造保证一致。
+    //
+    // ⚠️ 这个不变量**只覆盖 web/classic**。web/default 的模型广场有自己一套排序
+    // (features/pricing 的 use-filters + lib/filters),缺省仍按 model_name 的
+    // localeCompare 全量重排,拿不到后端顺序,那边的广场与体验区下拉仍会分叉。
+    // 线上跑的是 classic(系统设置的主题),所以当前无实际影响;哪天要发 default,
+    // 按 .agents/skills/classic-to-default-sync 的约定给它加一个「跟随后端顺序」的
+    // 排序项并设为缺省即可。
+    //
+    // 这里曾经自己排过两次:一次按 quota_type(死代码,被紧跟的全量重排覆盖,而后者
+    // 只在模型同名时返回 0、模型名又唯一),一次「gpt 开头优先 + localeCompare」。后者
+    // 与后端对不齐——localeCompare 与任何一个数据库的 collation 都不一致,拿线上 53 个
+    // 真实模型名实测差十几行。规则只留一份、放在后端,才不会再分叉。
+    // 用户点表头排序不受影响,那是 Semi 的列级 sorter,主动点才触发。
 
     setModels(models);
   };

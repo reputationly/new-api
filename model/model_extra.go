@@ -48,3 +48,22 @@ func GetModelQuotaTypes(modelName string) []int {
 	}
 	return []int{quota}
 }
+
+// GetModelMaxPriorities 返回「模型名 -> 最高渠道优先级」的快照。
+//
+// 展示顺序的唯一数据源,模型广场与体验区模型下拉共用(见 modelMaxPriority 的注释)。
+// 返回副本而不是内部 map:调用方要拿着它排序、遍历,直接交出去等于把一个会被
+// updatePricing 整体替换的 map 暴露在锁外。
+func GetModelMaxPriorities() map[string]int64 {
+	// 确保缓存最新。与本文件其它访问器同一写法:先在**不持任何锁**时触发刷新,
+	// 再取读锁 —— updatePricing 内部会拿 modelEnableGroupsLock 写锁,顺序反了就死锁。
+	GetPricing()
+
+	modelEnableGroupsLock.RLock()
+	defer modelEnableGroupsLock.RUnlock()
+	out := make(map[string]int64, len(modelMaxPriority))
+	for k, v := range modelMaxPriority {
+		out[k] = v
+	}
+	return out
+}

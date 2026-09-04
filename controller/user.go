@@ -601,14 +601,10 @@ func GetUserModels(c *gin.Context) {
 		targetGroups = []string{requested}
 	}
 
-	var models []string
-	for _, group := range targetGroups {
-		for _, m := range model.GetGroupEnabledModels(group) {
-			if !common.StringsContains(models, m) {
-				models = append(models, m)
-			}
-		}
-	}
+	// 一次查询跨全部目标分组,按展示优先级降序 —— 而不是按分组逐个查再去重追加。
+	// 后者的结果是「按分组分块」的:组间顺序由循环决定,全局优先级会被打散。自动分组
+	// (targetGroups 有多个)与不传 group(取用户全部可用分组)两条路径都会踩到。
+	models := model.GetGroupsEnabledModelsOrdered(targetGroups)
 	// 可见性裁剪（§6bis）：令牌页与操练场的模型下拉都读这个接口，用户档看不到的
 	// 模型不该出现在这里——否则会配出一个「选得了却调不通」的令牌白名单。
 	models = model.FilterModelsByVisibility(models, billingGroup)
