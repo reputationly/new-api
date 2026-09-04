@@ -1,6 +1,7 @@
 import React, { useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Card, Select, Switch, Typography } from '@douyinfe/semi-ui';
+import { Card, Switch, Typography } from '@douyinfe/semi-ui';
+import CreatableSelect from '../../components/common/CreatableSelect';
 import {
   PLAYGROUND_CATEGORIES,
   PLAYGROUND_GLOBAL_KEY,
@@ -136,9 +137,7 @@ const GlobalPanel = ({ draft }) => {
         </div>
         <div style={{ maxWidth: 360 }}>
           <Text size='small'>{t('优化用的分组')}</Text>
-          <Select
-            filter
-            allowCreate
+          <CreatableSelect
             showClear
             value={global.group || undefined}
             optionList={groupOptions}
@@ -170,9 +169,7 @@ const GlobalPanel = ({ draft }) => {
         </div>
         <div style={{ maxWidth: 360 }} className='mt-4'>
           <Text size='small'>{t('优化用的语言模型')}</Text>
-          <Select
-            filter
-            allowCreate
+          <CreatableSelect
             value={global.model || undefined}
             optionList={modelOptions}
             onChange={(v) => patchGlobal({ model: v || '' })}

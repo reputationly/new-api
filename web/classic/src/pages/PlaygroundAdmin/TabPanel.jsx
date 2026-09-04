@@ -14,6 +14,7 @@ import {
   TextArea,
   Typography,
 } from '@douyinfe/semi-ui';
+import CreatableSelect from '../../components/common/CreatableSelect';
 import { Trash2 } from 'lucide-react';
 import {
   MUSIC_ENGINE_MINIMAX_MUSIC3,
@@ -437,9 +438,7 @@ const TabPanel = ({ category, tab, draft }) => {
           />
         )}
         <div className='flex items-center gap-2 mb-4'>
-          <Select
-            filter
-            allowCreate
+          <CreatableSelect
             value={pending || undefined}
             optionList={candidates.map((n) => ({ label: n, value: n }))}
             onChange={(v) => setPending(v)}
