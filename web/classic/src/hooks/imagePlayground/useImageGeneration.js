@@ -50,7 +50,6 @@ import {
   IMAGE_SIZE_AUTO,
   parseImageSizeConfig,
   normalizeImageSize,
-  IMAGE_QUALITY_BOT_TASK,
   getEngineForImageModel,
   resolveSubmitImageSize,
 } from '../../constants/imagePlayground.constants';
@@ -198,7 +197,6 @@ export const useImageGeneration = ({
     // 一次生成几张:多张的意义是**给不同 seed 让用户挑**,见 playgroundBatch.constants。
     // 默认 1 —— 多花钱的事不该是默认值。
     batchCount: PLAYGROUND_BATCH_DEFAULT,
-    qualityMode: false, // 提示词智能优化；默认关
     imageUrls: [], // 图生图底图（base64 data-url 数组,≤IMAGE_MAX_EDIT_IMAGES）
   });
   const [groups, setGroups] = useState([]);
@@ -864,6 +862,38 @@ export const useImageGeneration = ({
   // 事算的（见它的注释），只是一直没有消费方。两处各写一份迟早分叉。
   const interruptible = generating && !hasResumableTask;
 
+  // 把一条会话「当时锁定的参数」写回左侧配置面板。**两条恢复路径共用同一份**:
+  //   1. 点历史列表(openHistoryItem);
+  //   2. mount 时自动回到还在跑的那条会话(紧接着的 resume effect)。
+  //
+  // 第 2 条以前只切会话、不回填,于是中间对话区是这条会话的、左侧面板却是另一套值。
+  // 成因是两边的到达时机:会话列表由 localStorage **同步**读出,首轮渲染就把会话锁上,
+  // 而分组/模型是 HTTP 异步拿的,响应回来时 loadGroups / loadModels 里那两处回填已被
+  // lockedRef 挡掉,双双停在空串;画幅那条效果则在锁上之前抢跑了一轮,那时 inputs.model
+  // 还是空的,于是落到兜底档 —— 显示出一个既不属于这条会话、也不属于任何选中模型的
+  // 尺寸,比空着更误导。抽成一份就是为了让这两条路径不可能再分叉。
+  const applyConvToInputs = useCallback(
+    (conv) => {
+      if (!conv) return;
+      setInputs((prev) => ({
+        ...prev,
+        group: conv.group != null ? conv.group : prev.group,
+        model: conv.model != null ? conv.model : prev.model,
+        size: conv.size != null ? conv.size : prev.size,
+        // 这两个**不回落到 prev**:回落等于把上一次草稿的选择当成这条会话的,而锁定态
+        // 会照着它高亮按钮 —— 那是假信息,比不显示更糟。老会话没存过,清成空串,
+        // 面板据此回落到「只写出 size」。
+        aspectRatio: conv.aspectRatio || '',
+        sizeTier: conv.sizeTier || '',
+        seed: conv.seed != null ? conv.seed : prev.seed,
+        batchCount: normalizeBatchCount(conv.batchCount),
+        // 图生图历史会话恢复底图，供左侧锁定态只读预览；媒体已由 IDB hydrate。
+        imageUrls: isI2I ? conv.images || [] : prev.imageUrls,
+      }));
+    },
+    [isI2I],
+  );
+
   const resumedRef = useRef(false);
   useEffect(() => {
     if (resumedRef.current || conversations.length === 0) return;
@@ -883,9 +913,19 @@ export const useImageGeneration = ({
     // **只在 mount 这一次做**(resumedRef 已经保证):否则用户在生成过程中主动点
     // 「新对话」会被立刻拽回去,变成点不动的按钮。
     // 只在用户还没自己选过会话时才接管(currentConvId 恒初始化为 null)。
+    //
+    // lockedRef 是 currentConvId != null 的镜像,用它替掉原来的
+    // `setCurrentConvId((cur) => cur ?? resumeConvId)`:语义相同(仅在用户还没自己选过
+    // 会话时接管),但这里必须**同时**决定要不要回填左侧面板,而 state updater 必须是
+    // 纯函数,不能在里面调 setInputs。会走到「已经有 cur」的只有一种情形:进页面时没有
+    // 历史,用户发起第一次生成后 conversations 才由空变非空,而那时 generate 已经设过
+    // currentConvId 了。
     const resumeConvId = pickResumeConvId(conversations);
-    if (resumeConvId != null) setCurrentConvId((cur) => cur ?? resumeConvId);
-  }, [conversations, startPolling]);
+    if (resumeConvId != null && !lockedRef.current) {
+      setCurrentConvId(resumeConvId);
+      applyConvToInputs(conversations.find((c) => c.id === resumeConvId));
+    }
+  }, [conversations, startPolling, applyConvToInputs]);
 
   // 核心：生成图片（追加到当前对话；无当前对话则新建一个并锁定参数）
   const generate = useCallback(
@@ -905,12 +945,12 @@ export const useImageGeneration = ({
         if (isI2I) {
           const imgs = (inputs.imageUrls || []).filter(Boolean);
           if (imgs.length === 0) {
-            showError(t('请先上传至少一张底图'));
+            showError(t('请先上传至少一张图片'));
             return;
           }
           if (imgs.length > IMAGE_MAX_EDIT_IMAGES) {
             showError(
-              t('最多上传 {{count}} 张底图', { count: IMAGE_MAX_EDIT_IMAGES }),
+              t('最多上传 {{count}} 张图片', { count: IMAGE_MAX_EDIT_IMAGES }),
             );
             return;
           }
@@ -921,9 +961,13 @@ export const useImageGeneration = ({
           group: inputs.group,
           model: inputs.model,
           size: normalizeImageSize(inputs.size),
+          // 比例与画质档一并存进会话。size 本身反推不出画质档(面积公式还叠了长边
+          // 钳制),而锁定态要把左侧那两个控件按原样显示出来,就只能靠会话自己记着。
+          // 老会话没有这两个字段,锁定态回落到「只写出 size」,与改造前一致。
+          aspectRatio: inputs.aspectRatio,
+          sizeTier: inputs.sizeTier,
           seed: inputs.seed,
           batchCount: inputs.batchCount,
-          qualityMode: inputs.qualityMode,
           images: convImages,
         };
       } else {
@@ -945,19 +989,21 @@ export const useImageGeneration = ({
               group: conv.group,
               model: conv.model,
               size: conv.size,
+              aspectRatio: conv.aspectRatio,
+              sizeTier: conv.sizeTier,
               seed: conv.seed,
               // 老对话没有这个字段 → 归一成 1,与改造前行为一致。
               batchCount: normalizeBatchCount(conv.batchCount),
-              qualityMode: conv.qualityMode,
               images: conv.images || [],
             }
           : {
               group: inputs.group,
               model: inputs.model,
               size: normalizeImageSize(inputs.size),
+              aspectRatio: inputs.aspectRatio,
+              sizeTier: inputs.sizeTier,
               seed: inputs.seed,
               batchCount: inputs.batchCount,
-              qualityMode: inputs.qualityMode,
               images: convImages,
             };
       }
@@ -971,7 +1017,7 @@ export const useImageGeneration = ({
           (s) => s && !isMediaRef(s),
         );
         if (params.images.length === 0) {
-          showError(t('底图已失效,请开启新对话并重新上传底图'));
+          showError(t('图片已失效,请开启新对话并重新上传'));
           return;
         }
       }
@@ -993,9 +1039,11 @@ export const useImageGeneration = ({
       //   count === 1 → 维持改造前:用户填了才发,留空不发。
       //   count > 1  → 由前端逐张下发不同 seed(deriveSeeds),否则 N 张一模一样。
       // 为什么单张不顺手也发一个:seed 不是 dto.ImageRequest 的声明字段,它落进
-      // Extra,而 replicate / siliconflow 这两个适配器会把 Extra **全量转发**给上游
-      // (见下面 use_prompt_enhancer 处的同一条警告)。今天 seed 只在用户手填时下发,
-      // 风险由用户自己担;改成每次都发,等于替所有第三方渠道担了这个风险。
+      // Extra。虽然 Extra 的 MarshalJSON 不合并它,但部分适配器绕开那层直接读 ——
+      // replicate(adaptor.go:148)与 siliconflow(adaptor.go:42)会把 Extra **全量转发**
+      // 给上游 input,不认的字段可能报错或改变行为(minimax / ali 是白名单,不受影响)。
+      // 今天 seed 只在用户手填时下发,风险由用户自己担;改成每次都发,等于替所有
+      // 第三方渠道担了这个风险。
       // 代价是单张时结果上显示不出 seed —— 那与改造前一致,不是回退。
       const seeds =
         count > 1
@@ -1045,9 +1093,10 @@ export const useImageGeneration = ({
               group: params.group,
               model: params.model,
               size: params.size,
+              aspectRatio: params.aspectRatio,
+              sizeTier: params.sizeTier,
               seed: params.seed,
               batchCount: params.batchCount,
-              qualityMode: params.qualityMode,
               images: params.images || [],
               title: text,
               createdAt: now,
@@ -1097,18 +1146,6 @@ export const useImageGeneration = ({
           reqBody.size = outSize;
         }
         // 随机种子见下方并发段:多张时由前端逐张下发,单张时维持原行为。
-        // 提示词智能优化:开了才发,关闭时一个字段都不带。
-        //
-        // ⚠️ 关闭时不能发 use_prompt_enhancer: false ——这些未知字段落在
-        // dto.ImageRequest.Extra,虽然 MarshalJSON 不合并 Extra,但部分适配器绕开它
-        // 直接读:replicate(adaptor.go:148)与 siliconflow(adaptor.go:42)会把 Extra
-        // 全量转发给上游 input,不认的字段可能报错或改变行为。minimax / ali 是白名单,
-        // 不受影响。关闭时省掉该字段不影响 ERNIE:gpustackplus 的 imageBoolExtraFrom
-        // 读不到即 false,仍会显式下发 extra_args.apply_pe=false 给引擎。
-        if (params.qualityMode) {
-          reqBody.use_prompt_enhancer = true;
-          reqBody.bot_task = IMAGE_QUALITY_BOT_TASK;
-        }
         // 图生图:走 edits 端点,带底图数组(gpustackplus 后端接受 image 数组)
         if (isI2I) {
           reqBody.image = params.images || [];
@@ -1395,20 +1432,9 @@ export const useImageGeneration = ({
   const openHistoryItem = useCallback(
     (conv) => {
       setCurrentConvId(conv.id);
-      setInputs((prev) => ({
-        ...prev,
-        group: conv.group != null ? conv.group : prev.group,
-        model: conv.model != null ? conv.model : prev.model,
-        size: conv.size != null ? conv.size : prev.size,
-        seed: conv.seed != null ? conv.seed : prev.seed,
-        batchCount: normalizeBatchCount(conv.batchCount),
-        qualityMode:
-          conv.qualityMode != null ? conv.qualityMode : prev.qualityMode,
-        // 图生图历史会话恢复底图，供左侧锁定态只读预览；媒体已由 IDB hydrate。
-        imageUrls: isI2I ? conv.images || [] : prev.imageUrls,
-      }));
+      applyConvToInputs(conv);
     },
-    [isI2I],
+    [applyConvToInputs],
   );
 
   // 图生图必须先上传底图:新对话(未锁定)且无底图时发送置灰,

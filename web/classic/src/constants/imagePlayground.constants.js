@@ -55,17 +55,6 @@ export const FALLBACK_IMAGE_SIZES = [
   '512x512',
 ];
 
-// 「提示词智能优化」开关打开时,附带下发的 HunyuanImage-3.0 自回归(AR)档:
-// 引擎先思考并改写提示词再去噪,短提示词下出图更贴合描述,代价是耗时约 2.8 倍
-// (后端实测)。关闭时不下发该字段,引擎缺省 bot_task=None 即快速档。
-//
-// ⚠️ 这是 Hunyuan 专有参数,与同一开关下发的通用字段 use_prompt_enhancer
-// (ERNIE 侧映射为 extra_args.apply_pe)是两套机制,故两个都发:不认的引擎
-// 会直接忽略(其 ImageTaskRequest 是 extra="allow")。
-// 也刻意不按模型名过滤——渠道映射可以把任意模型名指向 HunyuanImage-3.0,
-// 前端看不到映射结果,按名字硬拦会误伤。
-export const IMAGE_QUALITY_BOT_TASK = 'think_recaption';
-
 // localStorage key：图片生成历史
 export const IMAGE_HISTORY_STORAGE_KEY = 'image_playground_history';
 

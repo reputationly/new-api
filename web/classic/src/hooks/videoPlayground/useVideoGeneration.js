@@ -977,6 +977,48 @@ export const useVideoGeneration = ({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [userState?.user, inputs.group, videoModelSet]);
 
+  // 把一条会话「当时锁定的参数」写回左侧配置面板。**两条恢复路径共用同一份**:
+  //   1. 点历史列表(openHistoryItem);
+  //   2. mount 时自动回到还在跑的那条会话(紧接着的 resume effect)。
+  //
+  // 第 2 条以前只切会话、不回填,于是中间对话区是这条会话的、左侧面板却是另一套值:
+  // 会话列表由 localStorage 同步读出,首轮渲染就把会话锁上,而分组/模型是 HTTP 异步
+  // 拿的,响应回来时 loadGroups / loadModels 里那两处回填已被 lockedRef 挡掉,停在空串。
+  // 图像侧同一处缺陷、同一种修法(useImageGeneration 的同名函数)。
+  const applyConvToInputs = useCallback((conv) => {
+    if (!conv) return;
+    setInputs((prev) => ({
+      ...prev,
+      group: conv.group != null ? conv.group : prev.group,
+      model: conv.model != null ? conv.model : prev.model,
+      size: conv.size != null ? conv.size : prev.size,
+      seconds: conv.seconds != null ? conv.seconds : prev.seconds,
+      seed: conv.seed != null ? conv.seed : prev.seed,
+      batchCount: normalizeBatchCount(conv.batchCount),
+      aspectRatio:
+        conv.aspectRatio != null ? conv.aspectRatio : prev.aspectRatio,
+      fitMode: conv.fitMode != null ? conv.fitMode : prev.fitMode,
+      steps: conv.steps != null ? conv.steps : prev.steps,
+      srRatio: conv.srRatio != null ? conv.srRatio : prev.srRatio,
+      // 打开历史:恢复该会话上传过的输入媒体(已从 IDB hydrate),供只读查看/播放。
+      // 帧图存为 images 数组(i2v/s2v 首帧=images[0];flf2v 首帧/尾帧=images[0/1])。
+      // 锁定态下 ConfigPanel 的上传控件 disabled → 只展示预览/播放器,不能删改/重传。
+      firstFrame: (conv.images || [])[0] || '',
+      lastFrame: (conv.images || [])[1] || '',
+      audioData: conv.audioData || '',
+      sourceVideo: conv.sourceVideo || '',
+      srcVideo: conv.srcVideo || '',
+      // 老双视频会话:恢复第二源视频供锁定态只读展示(新会话恒为 '',顺带把上一条
+      // 老会话残留的值清掉 —— 它没有上传口,留着会显示在不相干的会话里)。
+      srcVideo2: conv.srcVideo2 || '',
+      refImages: conv.refImages || [],
+      refVideos: conv.refVideos || [],
+      // 恢复插帧/配音开关显示（锁定态下只读展示，续会话仍读 params 里的会话值）
+      interpolation: !!conv.interpolation,
+      dubbing: !!conv.dubbing,
+    }));
+  }, []);
+
   // 挂载后为仍在进行中的任务恢复轮询（刷新/重进页面不丢进度）。
   //
   // 从「只恢复最近一个」改成「按时间倒序恢复最多 VIDEO_MAX_CONCURRENT_TASKS 个」：
@@ -1007,10 +1049,16 @@ export const useVideoGeneration = ({
     // 看结果的。
     //
     // 只在这里做,不做成随 conversations 变化的常驻效果:否则用户在生成过程中主动点
-    // 「新对话」会被立刻拽回去,那个按钮就等于点不动。setCurrentConvId 用函数式更新
-    // 并只在仍为 null 时接管,避免与用户自己的选择打架。
-    if (resumed.length > 0) {
-      setCurrentConvId((cur) => cur ?? resumed[0].convId);
+    // 「新对话」会被立刻拽回去,那个按钮就等于点不动。
+    //
+    // lockedRef 是 currentConvId != null 的镜像,用它替掉原来的
+    // `setCurrentConvId((cur) => cur ?? resumed[0].convId)`:语义相同,但这里必须**同时**
+    // 决定要不要回填左侧面板,而 state updater 必须是纯函数,不能在里面调 setInputs。
+    if (resumed.length > 0 && !lockedRef.current) {
+      setCurrentConvId(resumed[0].convId);
+      applyConvToInputs(
+        conversationsRef.current.find((c) => c.id === resumed[0].convId),
+      );
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [userState?.user]);
@@ -2299,36 +2347,7 @@ export const useVideoGeneration = ({
   const openHistoryItem = useCallback(
     (conv) => {
       setCurrentConvId(conv.id);
-      setInputs((prev) => ({
-        ...prev,
-        group: conv.group != null ? conv.group : prev.group,
-        model: conv.model != null ? conv.model : prev.model,
-        size: conv.size != null ? conv.size : prev.size,
-        seconds: conv.seconds != null ? conv.seconds : prev.seconds,
-        seed: conv.seed != null ? conv.seed : prev.seed,
-        batchCount: normalizeBatchCount(conv.batchCount),
-        aspectRatio:
-          conv.aspectRatio != null ? conv.aspectRatio : prev.aspectRatio,
-        fitMode: conv.fitMode != null ? conv.fitMode : prev.fitMode,
-        steps: conv.steps != null ? conv.steps : prev.steps,
-        srRatio: conv.srRatio != null ? conv.srRatio : prev.srRatio,
-        // 打开历史:恢复该会话上传过的输入媒体(已从 IDB hydrate),供只读查看/播放。
-        // 帧图存为 images 数组(i2v/s2v 首帧=images[0];flf2v 首帧/尾帧=images[0/1])。
-        // 锁定态下 ConfigPanel 的上传控件 disabled → 只展示预览/播放器,不能删改/重传。
-        firstFrame: (conv.images || [])[0] || '',
-        lastFrame: (conv.images || [])[1] || '',
-        audioData: conv.audioData || '',
-        sourceVideo: conv.sourceVideo || '',
-        srcVideo: conv.srcVideo || '',
-        // 老双视频会话:恢复第二源视频供锁定态只读展示(新会话恒为 '',顺带把上一条
-        // 老会话残留的值清掉 —— 它没有上传口,留着会显示在不相干的会话里)。
-        srcVideo2: conv.srcVideo2 || '',
-        refImages: conv.refImages || [],
-        refVideos: conv.refVideos || [],
-        // 恢复插帧/配音开关显示（锁定态下只读展示，续会话仍读 params 里的会话值）
-        interpolation: !!conv.interpolation,
-        dubbing: !!conv.dubbing,
-      }));
+      applyConvToInputs(conv);
       // 若该会话最后一个任务仍在进行中，恢复轮询
       const assts = (conv.messages || []).filter((m) => m.role === 'assistant');
       const last = assts[assts.length - 1];
@@ -2340,7 +2359,7 @@ export const useVideoGeneration = ({
         resumePoll(conv.id, last.id, last.taskId);
       }
     },
-    [resumePoll],
+    [resumePoll, applyConvToInputs],
   );
 
   // 卸载时清理所有轮询

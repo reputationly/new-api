@@ -5,7 +5,6 @@ import {
   Typography,
   Tooltip,
   InputNumber,
-  Switch,
 } from '@douyinfe/semi-ui';
 import {
   Settings,
@@ -14,7 +13,6 @@ import {
   Ruler,
   HelpCircle,
   Shuffle,
-  Gauge,
   Images,
 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
@@ -98,7 +96,8 @@ const ImageConfigPanel = ({
 
   const usesRatio = shapeMode === 'area';
   // 刚切完模型、同步 effect 还没跑的那一帧，当前值可能不在候选里；补进去避免
-  // "一个都没高亮"的闪烁。**锁定态不走这里**——那时显示的是真实产出值，见下方 disabled 分支。
+  // "一个都没高亮"的闪烁。**锁定态同样要走这里**：会话记下的比例未必还在该模型当前
+  // 配置的候选里（运营随时会改），补进去才显示得出来。
   const ratioChoices =
     inputs.aspectRatio && !(availableRatios || []).includes(inputs.aspectRatio)
       ? [...(availableRatios || []), inputs.aspectRatio]
@@ -111,10 +110,28 @@ const ImageConfigPanel = ({
   //
   // 只有一档时不渲染下拉(它已经生效了),避免一个只能选一项的控件 —— 那一档出多大,
   // 下面那行照样写着。
-  const tierOptions = (availableTiers || []).map((base) => ({
+  const tierChoices =
+    inputs.sizeTier && !(availableTiers || []).includes(inputs.sizeTier)
+      ? [...(availableTiers || []), inputs.sizeTier]
+      : availableTiers || [];
+  const tierOptions = tierChoices.map((base) => ({
     label: t(imageTierLabel(base)),
     value: base,
   }));
+
+  // 锁定态能不能照原样显示这两个控件，取决于**这条会话有没有存过比例与档位**。
+  // 存了就整套按原样渲染（只是 disabled），让「生成前」和「生成后」长得一样——
+  // 原先锁定态退化成一行纯文字 `1152x2048`，用户会以为设置丢了。
+  //
+  // 老会话只有 size、没有这两个字段（本次改造之前一直如此）。那时拿 inputs 里的残留值
+  // 去高亮按钮，显示的是**上一次草稿**的选择，是假信息，比不显示更糟——所以回落到
+  // 只写出 size。判据是会话自己有没有值，不是"锁没锁"。
+  const showShapeControls =
+    !disabled || (!!inputs.aspectRatio && !!inputs.sizeTier);
+  // 未锁定时单档下拉没有意义（只能选它自己），隐藏；锁定态要显示——那时它不是选择器，
+  // 而是「这张图用的哪一档」的说明。
+  const showTierSelect =
+    showShapeControls && tierOptions.length > (disabled ? 0 : 1);
 
   // 「出图 2048×1152 · 2.4MP」。百万像素是给用户一个跨比例可比的量:同一档在 1:1 与
   // 16:9 下长宽差很多,面积却基本一致,只看长宽会以为"换了比例就变小了"。
@@ -258,8 +275,8 @@ const ImageConfigPanel = ({
           <>
             {!disabled && (
               <ImageUrlInput
-                label={t('上传底图')}
-                tooltip={t('最多上传 {{count}} 张底图', {
+                label={t('上传图片')}
+                tooltip={t('最多上传 {{count}} 张图片', {
                   count: IMAGE_MAX_EDIT_IMAGES,
                 })}
                 required
@@ -279,7 +296,7 @@ const ImageConfigPanel = ({
             )}
             {disabled &&
               (inputs.imageUrls || []).length > 0 &&
-              renderImagePreview(t('底图'), inputs.imageUrls)}
+              renderImagePreview(t('图片'), inputs.imageUrls)}
           </>
         )}
 
@@ -294,15 +311,12 @@ const ImageConfigPanel = ({
             <div className='flex items-center gap-2 mb-2'>
               <Ruler size={16} className='text-gray-500' />
               <Typography.Text strong className='text-sm'>
-                {disabled ? t('画幅') : t('宽高比')}
+                {showShapeControls ? t('宽高比') : t('画幅')}
               </Typography.Text>
             </div>
-            {/* 锁定态（打开历史会话）只显示真正产出这张图的值。
-                会话里只存了 size，比例与档位从来没存过（改造前的老会话更不可能有），
-                拿 inputs 里的残留值去高亮按钮，显示的是**上一次草稿**的选择——
-                那是假信息，比不显示更糟。直接写出 size 即可——它是从会话恢复的，
-                是唯一的事实，不需要反推比例或档位。 */}
-            {disabled ? (
+            {/* 判据见上方 showShapeControls：新会话存了比例与档位，锁定态照原样渲染；
+                老会话只有 size，回落到写出 size。 */}
+            {!showShapeControls ? (
               <Typography.Text type='tertiary' className='text-sm'>
                 {inputs.size || t('由模型决定')}
               </Typography.Text>
@@ -351,7 +365,7 @@ const ImageConfigPanel = ({
                 })}
               </div>
             )}
-            {!disabled && tierOptions.length > 1 && (
+            {showTierSelect && (
               <div className='mt-3'>
                 <div className='flex items-center gap-2 mb-2'>
                   <Typography.Text strong className='text-sm'>
@@ -374,7 +388,7 @@ const ImageConfigPanel = ({
             )}
             {/* 把最终像素写出来:用户选的是比例和档位,真正下发的是算出来的 size,
                 不显示的话"我选了 2K 到底出多大"没有任何地方能看到。 */}
-            {!disabled && inputs.size && (
+            {showShapeControls && inputs.size && (
               <Typography.Text
                 type='tertiary'
                 size='small'
@@ -435,38 +449,6 @@ const ImageConfigPanel = ({
             )}
           </div>
         )}
-
-        {/* 提示词智能优化：默认关闭。 */}
-        <div>
-          <div className='flex items-center justify-between'>
-            <div className='flex items-center gap-2'>
-              <Gauge size={16} className='text-gray-500' />
-              <Typography.Text strong className='text-sm'>
-                {t('提示词智能优化')}
-              </Typography.Text>
-              <Tooltip
-                content={t(
-                  '开启后会自动丰富和优化提示词，适合只写了主题或简短创意的情况。如果提示词已经很详细，或对文字、数量、位置和版式有严格要求，建议关闭。部分模型（如 hunyuan-image-3）开启后会先思考再改写提示词，生成时长明显增加（约 2.8 倍）。',
-                )}
-                position='top'
-                style={{ maxWidth: 320 }}
-              >
-                <HelpCircle size={14} className='text-gray-400 cursor-help' />
-              </Tooltip>
-            </div>
-            <Switch
-              checked={!!inputs.qualityMode}
-              onChange={(checked) => onInputChange('qualityMode', checked)}
-              checkedText={t('开')}
-              uncheckedText={t('关')}
-              size='small'
-              disabled={disabled}
-            />
-          </div>
-          <Typography.Text className='text-xs text-gray-400'>
-            {t('简短描述建议开启；详细文案或严格版式建议关闭')}
-          </Typography.Text>
-        </div>
 
         {/* 生成张数。多张 = 同一提示词、不同 seed 的候选,供用户挑。
             **只在 web/classic 出现**:web/mobile 是独立应用,它不传 allowBatch,

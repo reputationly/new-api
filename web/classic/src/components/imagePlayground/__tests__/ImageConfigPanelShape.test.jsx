@@ -125,24 +125,40 @@ describe('area 模式：比例按钮组 + 分辨率下拉', () => {
     expect(screen.getByText(/出图 2720×1536 · 4\.2MP/)).not.toBeNull();
   });
 
-  // 锁定态（打开历史会话）**不能**拿 inputs 里的比例/档位去高亮按钮：会话只存了
-  // size，这两个字段从来没存过（改造前的老会话更不可能有），残留的是上一次草稿的
-  // 选择——显示出来就是假信息。改为直接写出真正产出这张图的值。
-  it('锁定态显示真实产出值，不渲染比例按钮与档位下拉', () => {
+  // 锁定态分两种，判据是**这条会话自己有没有存过比例与档位**，不是"锁没锁"。
+  //
+  // 新会话存了 → 整套控件按原样渲染（只是 disabled），「生成前」「生成后」长得一样。
+  // 原先无论哪种都退化成一行纯文字 `1152x2048`，用户会以为自己的设置丢了。
+  it('锁定态：会话存了比例与档位时，照原样渲染两个控件', () => {
     renderPanel({
       shapeMode: 'area',
       availableRatios: ['1:1', '16:9'],
       availableTiers: [1024, 2048],
       sizeAlign: 32,
       disabled: true,
-      inputs: { ...base.inputs, aspectRatio: '9:16', sizeTier: 1024 },
+      inputs: { ...base.inputs, aspectRatio: '16:9', sizeTier: 2048 },
     });
-    // size 是从会话里恢复的，它才是事实
+    const active = screen.getByText('16:9').closest('button');
+    expect(active.getAttribute('aria-pressed')).toBe('true');
+    expect(active.getAttribute('disabled')).not.toBeNull();
+    expect(screen.getByText('画质')).not.toBeNull();
+    expect(screen.getByText(/出图 2720×1536/)).not.toBeNull();
+  });
+
+  // 老会话只有 size。那时 inputs 里残留的是**上一次草稿**的选择，拿它高亮按钮就是
+  // 显示假信息，比不显示更糟——所以仍旧只写出 size。这条守的就是"不许拿残留值顶替"。
+  it('锁定态：老会话没存过比例与档位时，只写出 size', () => {
+    renderPanel({
+      shapeMode: 'area',
+      availableRatios: ['1:1', '16:9'],
+      availableTiers: [1024, 2048],
+      sizeAlign: 32,
+      disabled: true,
+      inputs: { ...base.inputs, aspectRatio: '', sizeTier: null },
+    });
     expect(screen.getByText('2720x1536')).not.toBeNull();
-    // 残留的 9:16 / 1024 一个都不能露出来
-    expect(screen.queryByText('9:16')).toBeNull();
-    expect(screen.queryByText('分辨率')).toBeNull();
-    expect(screen.queryByText(/1024（/)).toBeNull();
+    expect(screen.queryByText('16:9')).toBeNull();
+    expect(screen.queryByText('画质')).toBeNull();
   });
 });
 
