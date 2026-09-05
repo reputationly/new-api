@@ -28,18 +28,18 @@ import (
 type BillingSession struct {
 	relayInfo        *relaycommon.RelayInfo
 	funding          FundingSource
-	preConsumedQuota int  // 实际预扣额度（信任用户可能为 0）
-	tokenConsumed    int  // 令牌额度实际扣减量
-	extraReserved    int  // 发送前补充预扣的额度（订阅退款时需要单独回滚）
+	preConsumedQuota int // 实际预扣额度（信任用户可能为 0）
+	tokenConsumed    int // 令牌额度实际扣减量
+	extraReserved    int // 发送前补充预扣的额度（订阅退款时需要单独回滚）
 	// Hybrid 追加预扣的积分/钱包拆分（reserveFunding 记录、rollbackFundingReserve
 	// 精确原路回滚用；仅在 Reserve 持锁期间读写）
 	lastReservePoints int
 	lastReserveWallet int
 	trusted           bool // 是否命中信任额度旁路
-	fundingSettled   bool // funding.Settle 已成功，资金来源已提交
-	settled          bool // Settle 全部完成（资金 + 令牌）
-	refunded         bool // Refund 已调用
-	mu               sync.Mutex
+	fundingSettled    bool // funding.Settle 已成功，资金来源已提交
+	settled           bool // Settle 全部完成（资金 + 令牌）
+	refunded          bool // Refund 已调用
+	mu                sync.Mutex
 }
 
 // Settle 根据实际消耗额度进行结算。

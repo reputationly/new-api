@@ -790,8 +790,8 @@ func TestVideoMatrix_UpstreamResolutionMisses(t *testing.T) {
 	seedUser(t, uid, 10_000_000)
 
 	cases := map[string]string{
-		"回执没给分辨率":  "",
-		"回执档位未配价":  "1080p",
+		"回执没给分辨率":   "",
+		"回执档位未配价":   "1080p",
 		"回执分辨率无法识别": "adaptive",
 	}
 	for name, resolution := range cases {
