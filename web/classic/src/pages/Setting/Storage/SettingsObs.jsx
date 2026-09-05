@@ -36,6 +36,7 @@ export default function SettingsObs(props) {
     'media_storage.ingest_nfs_path': true,
     'media_storage.ingest_upstream_url': true,
     'media_storage.ingest_client_upload': true,
+    'media_storage.nfs_zero_copy_input': false,
     'media_storage.upstream_url_allowed_hosts': '',
     'media_storage.async_worker_count': 4,
     'media_storage.stats_snapshot_interval_minutes': 60,
@@ -315,6 +316,21 @@ export default function SettingsObs(props) {
                 uncheckedText='〇'
                 onChange={handleFieldChange(
                   'media_storage.ingest_client_upload',
+                )}
+              />
+            </Col>
+            <Col xs={24} sm={12} md={8}>
+              <Form.Switch
+                field={'media_storage.nfs_zero_copy_input'}
+                label={t('产物零拷贝复用')}
+                extraText={t(
+                  '自建模型的产物被再次当作输入时（图生图/首尾帧/参考生视频），直接复用它在 NFS 上的路径，不再复制一份。需 GPUStack 门面已支持，未升级前请勿开启',
+                )}
+                size='default'
+                checkedText='｜'
+                uncheckedText='〇'
+                onChange={handleFieldChange(
+                  'media_storage.nfs_zero_copy_input',
                 )}
               />
             </Col>

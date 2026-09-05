@@ -18,6 +18,39 @@ func KeyFromNFSPath(root, nfsPath string) string {
 	return strings.TrimPrefix(filepath.ToSlash(rel), "/")
 }
 
+// NFSPathFromKey 是 KeyFromNFSPath 的逆：由 OBS Key 还原共享 NFS 上的绝对路径。
+// 两者构成 1:1 映射（TestKeyNFSPathRoundTrip 钉住），这条不变量是「自家产物 URL 直接
+// 解析成 NFS 路径、免去一次 HTTP 全量下载」的承重点——key 与 NFS 相对路径同构，所以不
+// 需要任何 URL→路径的映射表，一次字符串拼接即可。
+//
+// key 来自客户端可控的 URL path，故先做形态收敛：空、绝对路径、含 ".." 段的一律返回 ""
+// （调用方视为「不是自家产物」并回退下载）。这只是廉价前置过滤，最终越权判定仍由
+// ValidateNFSPath 的 Clean+前缀+symlink 三道负责。
+func NFSPathFromKey(root, key string) string {
+	key = strings.TrimSpace(key)
+	if key == "" || strings.HasPrefix(key, "/") || filepath.IsAbs(key) {
+		return ""
+	}
+	for _, seg := range strings.Split(filepath.ToSlash(key), "/") {
+		if seg == ".." {
+			return ""
+		}
+	}
+	return filepath.Join(root, filepath.FromSlash(key))
+}
+
+// KeyUserIDSegment 取 Key 约定里的 <user_id> 段（倒数第二段）；取不到返回 ""。
+// 归属校验用：Key 形如 <功能>-<模型>/yyyy/mm/dd/<user_id>/<file>，攻击者无法构造出
+// 「倒数第二段是自己的 user_id、却指向他人目录」的路径，故按段校验即已充分，
+// 不必回查 task 表。
+func KeyUserIDSegment(key string) string {
+	segs := strings.Split(strings.Trim(filepath.ToSlash(key), "/"), "/")
+	if len(segs) < 2 {
+		return ""
+	}
+	return segs[len(segs)-2]
+}
+
 // BuildKey 为无 nfs_path 的来源（第三方渠道）按同一约定构造 Key。
 // feature 形如 t2i/i2i/t2v/i2v；model 为模型标识；ext 不含点。
 func BuildKey(feature, model string, userID int, taskID, ext string, at time.Time) string {

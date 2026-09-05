@@ -41,6 +41,16 @@ type MediaStorageSettings struct {
 	// 第三方供应商——那是不同的隐私姿态。也是 OBS/上游抽风时的 kill switch。
 	// 详见 docs/inbound-media-offload-design.md。
 	IngestClientUpload bool `json:"ingest_client_upload"`
+	// NFSZeroCopyInput 自家产物被当作输入（图生图/首尾帧/参考生视频）时，直接把产物在共享
+	// NFS 上的相对路径下发为 input_ref，不再读出字节复制一份到 inputs/（零拷贝，见
+	// relay/channel/gpustackplus/nfsinput/ownurl.go）。
+	//
+	// 默认 false：它依赖 GPUStack 门面放开 _validate_input_ref 的 inputs/ 前缀限制，
+	// 「新 new-api + 旧门面」这个完全可能的组合下会被门面 400，属于硬故障而非降级——
+	// 这与 IngestClientUpload 那种「失败即回退原行为」的开关不同，故不能默认打开。
+	// 门面侧发布确认后再手动开启。关闭时仍享受同盘直读（省掉一次 HTTP 下载），
+	// 那一层对门面完全透明、无兼容风险。
+	NFSZeroCopyInput bool `json:"nfs_zero_copy_input"`
 	// 上游 URL 下载的 host 白名单（防 SSRF 纵深），逗号/空白分隔，支持子域匹配
 	// （填 example.com 同时放行 cdn.example.com）。留空 = 不限 host，仅做私网 IP/DNS 过滤。
 	UpstreamURLAllowedHosts string `json:"upstream_url_allowed_hosts"`

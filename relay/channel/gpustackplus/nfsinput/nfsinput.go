@@ -538,6 +538,37 @@ func (m *Materializer) AddString(ctx context.Context, field Field, index int, mu
 		return m.addBytesExt(field, index, multi, data, ext)
 	}
 	if strings.HasPrefix(raw, "http://") || strings.HasPrefix(raw, "https://") {
+		// —— 自家产物 URL 快路径(见 ownurl.go)——
+		// 客户端把我们上一步返回的产物 URL 原样传回来时,那份字节已经在同一块 NFS 上,
+		// 没必要出网再拉一遍。任何一步不成立都会落到下面的下载路径,行为与改造前一致。
+		//
+		// 代理 URL 转成 task: 后重入本函数:只会落到上面的 TaskRefScheme 分支,不会再回到
+		// 这里,故至多递归一层。
+		if id := ownProxyTaskID(raw); id != "" {
+			return m.AddString(ctx, field, index, multi, TaskRefScheme+id)
+		}
+		if src, ok := m.resolveOwnOBSURL(raw); ok {
+			// 尺寸闸提到两级快路径之前:超限是硬错误,不该回退去下载同一份字节再被拒一次。
+			if limit := effectiveSizeLimit(m.maxBytes); limit > 0 && src.size > limit {
+				return fmt.Errorf("输入 %s 超过大小上限 %d MB", field, limit/1024/1024)
+			}
+			// 两级快路径都遵循同一条规矩:**读得到才用,读不到就落回下载**。
+			// resolveOwnOBSURL 的 os.Stat 与这里的实际打开之间有窗口(janitor 正好清掉 day
+			// dir),NFS 也可能瞬时 ESTALE/抖动;这类失败下 OBS 上的对象通常还在——NFS 的
+			// janitor TTL 与 OBS 桶生命周期是两套独立策略,"NFS 没了 OBS 还在"正是 taskref
+			// 整条退化链的前提。所以读失败必须回退,不能变成 400。
+			//
+			// src.abs 已在 resolveOwnOBSURL 里过完 ValidateNFSPath,这里不再重复校验——它
+			// 返回的是 symlink 解析后的路径,拿去和未解析的 root 比前缀反而会在 root 自身是
+			// symlink 时误判。
+			if m.canZeroCopy(field) {
+				if head, pErr := peekHead(src.abs, magicPeekBytes); pErr == nil {
+					return m.addOwnSourceRef(field, src, head)
+				}
+			} else if data, rErr := os.ReadFile(src.abs); rErr == nil {
+				return m.addBytesExt(field, index, multi, data, refMediaExt(src.key))
+			}
+		}
 		// 自家 OBS host 授信。不放行的话,本网关自己产出、自己落盘的对象反而进不来:
 		// 从 VPC 内访问 OBS 时 <bucket>.<endpoint> 解析到的是云厂商内网服务端点,例如华为云
 		// 给的是 100.125.x.x —— 落在 100.64.0.0/10 (CGNAT),被 isPrivateIP 判为私网直接拒
