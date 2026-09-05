@@ -317,6 +317,18 @@ func validateTokenModelLimits(userId int, token *model.Token) error {
 			available[m] = true
 		}
 	}
+	// 聚合模型没有渠道 ability,不会出现在 GetGroupEnabledModels 里,但它**必须**能进
+	// 令牌白名单 —— 隐藏能力的定向发放正是靠白名单圈定集成方的,存不进去等于功能不可用。
+	//
+	// 与 distributor 的展开是同一件事的两面,当初就是一起改的:那边负责让聚合模型名能被
+	// 路由,这边负责让它能被存进白名单。只改一边都会坏:只放开这里而 distributor 不认,
+	// 会存下「配得上却调不通」的令牌;只改那边,开了模型限制的令牌根本存不进这个名字。
+	// 分组约束不在这里判 —— 与真实模型一致,交给调用时的展开与渠道选择。
+	for name, agg := range common.GetAggregateModels() {
+		if groupAllowedForAggregateToken(agg, targetGroups) {
+			available[name] = true
+		}
+	}
 
 	var invalid []string
 	for _, m := range strings.Split(token.ModelLimits, ",") {
@@ -604,4 +616,24 @@ func GetTokenKeysBatch(c *gin.Context) {
 		keysMap[t.Id] = t.GetFullKey()
 	}
 	common.ApiSuccess(c, gin.H{"keys": keysMap})
+}
+
+// groupAllowedForAggregateToken 判断令牌的目标分组里,是否有任何一个被允许使用该聚合模型。
+//
+// 未配置 Groups = 不额外限制(约束来自展开后的生成段模型,调用时选渠道那步会拒),
+// 与 middleware/aggregate_expand.go 的 groupAllowedForAggregate 同语义 —— 两处都放宽或
+// 都收紧,否则会出现"存得进白名单但调不通"或反过来的错位。
+func groupAllowedForAggregateToken(agg *common.AggregateModel, targetGroups []string) bool {
+	if agg == nil {
+		return false
+	}
+	if len(agg.Groups) == 0 {
+		return true
+	}
+	for _, g := range targetGroups {
+		if common.StringsContains(agg.Groups, g) {
+			return true
+		}
+	}
+	return false
 }

@@ -9,6 +9,9 @@ const (
 
 	ContextKeyOriginalModel    ContextKey = "original_model"
 	ContextKeyRequestStartTime ContextKey = "request_start_time"
+	// ContextKeyAggregateExpansion 聚合模型展开结果。model 字段在 distributor 里已被
+	// 改写成生成段的真实模型,这里留着客户原本调用的那个聚合模型名与其流水线配置。
+	ContextKeyAggregateExpansion ContextKey = "aggregate_expansion"
 
 	/* token related keys */
 	ContextKeyTokenUnlimited         ContextKey = "token_unlimited_quota"

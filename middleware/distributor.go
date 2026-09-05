@@ -74,6 +74,28 @@ func Distribute() func(c *gin.Context) {
 				}
 			}
 
+			// 聚合(编排)模型展开。位置是刻意的:必须在上面的令牌白名单校验**之后**
+			// (白名单里存的是聚合模型名,展开早了会拿生成段模型去比对,配对的令牌反被拒),
+			// 又必须在下面选渠道**之前**(选渠道要用真实模型名,聚合模型没有 ability)。
+			// 详见 middleware/aggregate_expand.go。
+			if realModel, aggErr := expandAggregateModel(modelRequest.Model,
+				common.GetContextKeyString(c, constant.ContextKeyUserGroup)); aggErr != nil {
+				// 分组不允许时与可见性拦截同口径:报"模型不存在",不泄露隐藏能力的存在。
+				abortWithOpenAiMessage(c, http.StatusNotFound,
+					i18n.T(c, i18n.MsgDistributorNoAvailableChannel, map[string]any{
+						"Group": common.GetContextKeyString(c, constant.ContextKeyUsingGroup),
+						"Model": modelRequest.Model,
+					}), types.ErrorCodeModelNotFound)
+				return
+			} else if realModel != "" {
+				agg := common.GetAggregateModel(modelRequest.Model)
+				if err := applyAggregateExpansion(c, modelRequest.Model, realModel, agg); err != nil {
+					abortWithOpenAiMessage(c, http.StatusBadRequest, err.Error())
+					return
+				}
+				modelRequest.Model = realModel
+			}
+
 			if shouldSelectChannel {
 				if modelRequest.Model == "" {
 					abortWithOpenAiMessage(c, http.StatusBadRequest, i18n.T(c, i18n.MsgDistributorModelNameRequired))
