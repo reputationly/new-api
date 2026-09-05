@@ -316,6 +316,8 @@ func SetApiRouter(router *gin.Engine) {
 			optionRoute.POST("/rest_model_ratio", controller.ResetModelRatio)
 			optionRoute.POST("/migrate_console_setting", controller.MigrateConsoleSetting) // 用于迁移检测的旧键，下个版本会删除
 			optionRoute.POST("/notification_test", controller.TestNotification)
+			// 聚合模型配置的干跑校验:接受未保存的配置体,让运营在点保存前就看到问题。
+			optionRoute.POST("/aggregate_model_dry_run", controller.AggregateModelDryRun)
 		}
 
 		// Custom OAuth provider management (root only)

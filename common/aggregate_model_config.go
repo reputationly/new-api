@@ -193,6 +193,32 @@ func parseAggregateModels(raw string) map[string]*AggregateModel {
 	return out
 }
 
+// RawAggregateModelConfig 返回**未经解析与过滤**的原始配置串。
+//
+// 给干跑校验用。GetAggregateModels 是过滤视图:配置坏掉时返回空表、enabled:false 的
+// 条目被丢弃 —— 拿它做校验就分不出「没有配置」和「配置坏了」,后者会被报成"没什么可校验的,
+// 一切正常",正是干跑校验要消除的那种假绿灯。
+func RawAggregateModelConfig() string {
+	OptionMapRWMutex.RLock()
+	defer OptionMapRWMutex.RUnlock()
+	return OptionMap["AggregateModelConfig"]
+}
+
+// ParseAggregateModelList 解析配置串为**完整列表**(保留 enabled:false 的条目),
+// 解析失败返回错误而不是静默降级。与 GetAggregateModels 的分工:那个服务于运行时
+// (只要能用的),这个服务于校验(要看全部,并且要知道解析有没有失败)。
+func ParseAggregateModelList(raw string) ([]*AggregateModel, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil, nil
+	}
+	var items []*AggregateModel
+	if err := UnmarshalJsonStr(raw, &items); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 // GetAggregateModel 取一个 enabled 的聚合模型配置;不存在返回 nil。
 func GetAggregateModel(name string) *AggregateModel {
 	return GetAggregateModels()[strings.TrimSpace(name)]
