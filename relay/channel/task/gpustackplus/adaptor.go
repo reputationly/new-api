@@ -477,7 +477,10 @@ func (a *TaskAdaptor) BuildRequestBody(c *gin.Context, info *relaycommon.RelayIn
 	var refs map[string][]string
 	switch taskType {
 	case "tts":
-		if isMusic3 {
+		if IsBreezeTTSModel(modelName) {
+			// Breeze 音色设计:声线由 instructions 的自然语言描述生成,没有参考音频。
+			// 什么都不物化,refs 保持 nil(同 Music3)。
+		} else if isMusic3 {
 			// Music3 没有任何音频输入:人声是它按歌词自己唱出来的,不需要参考音色。
 			// 走下面 IndexTTS 那支会撞上"必填 voice"的硬校验 —— 那道校验是给语音克隆
 			// 定的,而 IsOmniTTSModel 是模型名 substring 白名单(qwen3-tts/voxcpm/…),
@@ -1402,6 +1405,19 @@ func materializeTTSInputs(c *gin.Context, info *relaycommon.RelayInfo, taskType,
 		}
 	}
 	return m.Refs(), nil
+}
+
+// IsBreezeTTSModel 判断 tts 任务是否由独立的 Breeze TTS 2 引擎服务。
+//
+// 首发只开「音色设计」:纯文字描述造声线,没有任何音频输入。它与 Music3 同形——
+// 走 IndexTTS 那支会撞上「voice 必填」的硬校验(那道校验是给语音克隆定的),
+// 而 IsOmniTTSModel 是 vLLM-Omni 的模型名白名单,Breeze 跑在自己的引擎上,
+// 两支都不该进,故单开一支什么都不物化。
+//
+// 二期开语音克隆时这里要改:Breeze 克隆要参考音频 **加准确文稿**(ref_text),
+// 与 IndexTTS 的零样本克隆不同,音色库需要为每个音色补一份 transcript。
+func IsBreezeTTSModel(modelName string) bool {
+	return strings.Contains(strings.ToLower(modelName), "breeze")
 }
 
 // IsOmniTTSModel 判断 tts 任务的模型是否由 vLLM-Omni 引擎服务(区别于旧 IndexTTS)。

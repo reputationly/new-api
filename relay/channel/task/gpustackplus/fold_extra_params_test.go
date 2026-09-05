@@ -130,3 +130,32 @@ func TestIsOmniTTSModelDoesNotCoverMusic3(t *testing.T) {
 		t.Fatal("indextts 系应走旧的必填参考音路径")
 	}
 }
+
+// Breeze TTS 2 的音色设计没有任何音频输入:声线由 instructions 的自然语言描述
+// 生成。它必须既不进 IndexTTS 那支(那支的 materializeTTSInputs 硬要求 voice,
+// 会把纯文本请求直接 400),也不进 vLLM-Omni 那支(Breeze 跑在自己的独立引擎上,
+// 参考音契约与 Omni 的 ref_audio/speaker 不同)。
+//
+// 这与 Music3 是同一类坑的两个实例 —— 都是"没有参考音的 tts",都得单开一支。
+func TestBreezeTTSTakesItsOwnBranch(t *testing.T) {
+	for _, m := range []string{"breeze-tts-2", "BREEZE-TTS-2", "reputationly/breeze-tts-2"} {
+		if !IsBreezeTTSModel(m) {
+			t.Fatalf("%s 应判为 Breeze TTS(大小写与带前缀的模型名都要认出来)", m)
+		}
+	}
+	// 名字含 tts 但不是 Breeze 的,不能被误捕
+	for _, m := range []string{"qwen3-tts", "indextts-2.5", "moss-voicegenerator", "glm-tts"} {
+		if IsBreezeTTSModel(m) {
+			t.Fatalf("%s 不该被 IsBreezeTTSModel 判为真", m)
+		}
+	}
+	// Breeze 不该被当成 Omni TTS —— 它不在 vLLM-Omni 引擎上,
+	// 误判会让它去物化 ref_audio 并按 Omni 的 speaker 语义处理预设音色。
+	if IsOmniTTSModel("breeze-tts-2") {
+		t.Fatal("breeze 跑在独立引擎上,不该走 vLLM-Omni 的参考音契约")
+	}
+	// 任务类型仍要能从名字推断出 tts(名字含 "tts",走既有规则,无需新增分支)
+	if got := inferTaskType("breeze-tts-2"); got != "tts" {
+		t.Fatalf("breeze-tts-2 应推断为 tts,实际 %s", got)
+	}
+}

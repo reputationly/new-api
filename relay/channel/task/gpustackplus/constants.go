@@ -32,6 +32,10 @@ var ModelList = []string{
 	"moss-ttsd",
 	"moss-voicegenerator",
 	"moss-soundeffect",
+	// 音色设计(Breeze TTS 2,独立引擎,接替 moss-voicegenerator)。纯文字描述造声线,
+	// 无参考音频,故不物化任何输入(见 adaptor.go 的 IsBreezeTTSModel 分支)。
+	// 首发只开音色设计;二期开克隆时要额外带准确文稿 ref_text。
+	"breeze-tts-2",
 	// 视频配乐(task_type=v2a 新契约:视频→配好音的视频,LTX-2.3 首发)。
 	"ltx2-v2a",
 }
