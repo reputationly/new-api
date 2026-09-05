@@ -2,11 +2,13 @@ package middleware
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
+	"github.com/QuantumNous/new-api/service"
 )
 
 // 聚合(编排)模型的入口展开。
@@ -31,6 +33,10 @@ type AggregateExpansion struct {
 	// 只有这里还留着"客户以为自己在调什么",排障时是第一手信息。
 	PublicName string
 	Config     *common.AggregateModel
+	// Enhance 提示词增强的过程记录(含增强前后的文本、是否降级)。
+	// 增强后的 prompt **不回传给客户**,所以客户报"生成的跟我写的不一样"时,
+	// 这份记录是唯一能解释清楚的证据。未启用增强时为 nil。
+	Enhance *service.EnhanceResult
 }
 
 // expandAggregateModel 若 modelName 是一个启用中的聚合模型,校验访问权限并返回展开后的
@@ -106,6 +112,34 @@ func applyAggregateExpansion(c *gin.Context, publicName, realModel string, agg *
 	// model 由展开结果决定,不允许被 Overrides 顶掉:运营在 overrides 里手滑写一个 model
 	// 会让请求发去一个既非聚合模型、也非配置的生成段模型的地方,且不报错。
 	body["model"] = realModel
+
+	exp := &AggregateExpansion{PublicName: publicName, Config: agg}
+
+	// 提示词增强跑在这里 —— 生成段请求发出**之前**,否则改写就没有意义了。
+	//
+	// 它是一次同步的 LLM 调用,会给请求加上几秒延迟;这是这个功能的固有成本,不是缺陷
+	// (体验区那条路是用户点按钮等,这里换成我们替他等)。EnhancePrompt 永远不返回错误,
+	// 任何失败都体现为"用原始提示词继续",所以这里没有失败分支可漏。
+	if agg.PromptEnhance.IsEnabled() {
+		prompt, _ := body["prompt"].(string)
+		if strings.TrimSpace(prompt) != "" {
+			// 带客户的 Authorization 原样发起 —— 增强以客户身份走一遍 relay,
+			// 于是计费/限流/日志与他自己调一次 chat 完全一致(分段计费)。
+			res := service.EnhancePrompt(c.Request.Context(), agg,
+				c.Request.Header.Get("Authorization"),
+				prompt, collectInputImages(body))
+			exp.Enhance = res
+			// 这个判断当前是**冗余**的:EnhanceResult 的契约保证降级时
+			// EnhancedPrompt 就等于原 prompt,所以写不写回结果一样(去掉它做变异
+			// 测试也不会见红)。留着是为了让"降级不改客户的提示词"这条意图在调用点
+			// 就能读到,而不必翻到 service 层去确认契约;万一哪天那个契约变了,
+			// 这里也不会跟着出错。
+			if !res.Degraded {
+				body["prompt"] = res.EnhancedPrompt
+			}
+		}
+	}
+
 	data, err := common.Marshal(body)
 	if err != nil {
 		return fmt.Errorf("序列化请求体失败: %w", err)
@@ -113,11 +147,36 @@ func applyAggregateExpansion(c *gin.Context, publicName, realModel string, agg *
 	if err := common.ReplaceRequestBody(c, data); err != nil {
 		return fmt.Errorf("改写请求体失败: %w", err)
 	}
-	common.SetContextKey(c, constant.ContextKeyAggregateExpansion, &AggregateExpansion{
-		PublicName: publicName,
-		Config:     agg,
-	})
+	common.SetContextKey(c, constant.ContextKeyAggregateExpansion, exp)
 	return nil
+}
+
+// collectInputImages 从请求体里收集输入图,喂给增强模型看。
+//
+// 只认这几个顶层字段:它们覆盖了图生图 / 首尾帧 / 参考生视频的入参形态。收不到也无妨
+// —— 纯文生场景本来就没有图,增强照常按文字工作。
+func collectInputImages(body map[string]any) []string {
+	var out []string
+	appendVal := func(v any) {
+		switch t := v.(type) {
+		case string:
+			if strings.TrimSpace(t) != "" {
+				out = append(out, t)
+			}
+		case []any:
+			for _, item := range t {
+				if s, ok := item.(string); ok && strings.TrimSpace(s) != "" {
+					out = append(out, s)
+				}
+			}
+		}
+	}
+	for _, key := range []string{"image", "images", "input_reference"} {
+		if v, ok := body[key]; ok {
+			appendVal(v)
+		}
+	}
+	return out
 }
 
 // GetAggregateExpansion 取本次请求的聚合展开结果;非聚合请求返回 nil。

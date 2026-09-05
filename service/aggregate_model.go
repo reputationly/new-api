@@ -192,8 +192,17 @@ func DryRunAggregateModel(m *common.AggregateModel, peers map[string]int) *Aggre
 	// —— 4. 提示词增强段 ——
 	if m.PromptEnhance.IsEnabled() {
 		enhModel := strings.TrimSpace(m.PromptEnhance.Model)
+		// 模板必填。后端**读不到**体验区那份内置默认模板 —— 它是前端 JS 常量
+		// (promptOptimize.constants.js),运营在 options 里的改写后端能读,内置默认读不到。
+		// 与其把那几份模板抄一份到 Go(抄两份必然漂移,且漂移不报错、只是默默出差档),
+		// 不如要求聚合模型显式写一份:配漏了在这里就报出来,而不是上线后静默降级。
+		if strings.TrimSpace(m.PromptEnhance.SystemPrompt) == "" {
+			add("enhance_template", AggregateCheckError,
+				"启用了提示词增强但未配置模板(system_prompt):运行时会降级为使用原始提示词,"+
+					"等于增强没生效")
+		}
 		if enhModel == "" {
-			add("prompt_enhance", AggregateCheckOK, "未指定增强模型,继承体验区通用设置")
+			add("prompt_enhance", AggregateCheckError, "启用了提示词增强但未指定增强模型")
 		} else if exists, _, _ := currentModelFacts(enhModel); !exists {
 			add("prompt_enhance", unknownLevel(),
 				"增强模型 %q 当前没有可用渠道,增强会失败(将降级为使用原始提示词)%s",
@@ -201,12 +210,32 @@ func DryRunAggregateModel(m *common.AggregateModel, peers map[string]int) *Aggre
 		} else {
 			add("prompt_enhance", AggregateCheckOK, "增强模型 %q 可路由", enhModel)
 			res.Billable = append(res.Billable, enhModel)
+			// 增强以客户身份自调用一次 /v1/chat/completions,会过令牌的模型白名单。
+			// 客户令牌若开了白名单却没放行这个模型,增强每次都吃 403 并降级 ——
+			// 不报错、只是增强静默失效,是最难察觉的那类失败。
+			add("enhance_token_whitelist", AggregateCheckWarn,
+				"增强以客户身份调用 %q:若集成方的令牌开启了模型白名单,需把该模型一并加入,否则增强会被拒并降级",
+				enhModel)
 		}
 		if !m.PromptEnhance.IsSendInputImages() {
 			// 不是错误,但后果隐蔽到必须警告一次。
 			add("send_input_images", AggregateCheckWarn,
 				"已关闭「把输入图发给增强模型」:图生图场景下增强模型看不到底图,"+
 					"会凭文字臆造描述并与底图打架(产出对着干,不是效果打折)")
+		} else if enhModel != "" {
+			// 开着传图就必须配一个**支持视觉**的模型。
+			//
+			// 这里只能提示、不能校验:全站没有任何一处声明过"某个 LLM 支不支持视觉"
+			// —— CapabilityTags 是媒体玩法能力(图生视频那类),Tags 是运营手写的自由
+			// 文本,都不表达多模态。硬猜模型名(带 vision/4o 就算)只会在改名换代时误判。
+			//
+			// 配错的表现极不显眼:多数纯文本模型收到 image_url 要么报错、要么直接忽略
+			// 图片照常回一段文字 —— 后者会让增强"看起来在工作",实际退化成没有底图的
+			// 纯文字臆造,正是上面那条警告描述的坏结果。
+			add("enhance_vision", AggregateCheckWarn,
+				"增强模型 %q 会收到输入图,请确认它**支持视觉输入**;"+
+					"纯文本模型可能直接忽略图片并照常返回文字,增强会静默退化成凭空臆造",
+				enhModel)
 		}
 	}
 

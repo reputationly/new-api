@@ -225,6 +225,94 @@ func TestDryRunGroupCheckDegradesWhenPricingUnavailable(t *testing.T) {
 	}
 }
 
+// 开着「传输入图」就必须提示增强模型要支持视觉。
+// 配了纯文本模型不会报错 —— 它可能直接忽略图片、照常返回文字,让增强"看起来在工作",
+// 实际退化成没有底图的凭空臆造。全站没有任何地方声明 LLM 的视觉能力,只能提示。
+func TestDryRunHintsVisionModelWhenSendingImages(t *testing.T) {
+	withFakeModels(t, map[string]fakeModel{
+		"gen-model": {groups: []string{"default"}},
+		"some-llm":  {groups: []string{"default"}},
+	})
+
+	res := DryRunAggregateModel(&common.AggregateModel{
+		Name: "v-agg", Type: "video",
+		Generate: common.AggregateGenerate{Model: "gen-model"},
+		PromptEnhance: &common.AggregatePromptEnhance{
+			Model:        "some-llm",
+			SystemPrompt: "改写以下提示词",
+		},
+	}, map[string]int{"v-agg": 1})
+
+	requireLevel(t, res, "enhance_vision", AggregateCheckWarn)
+	if !strings.Contains(checkByKey(res, "enhance_vision").Message, "支持视觉") {
+		t.Errorf("应提示需要支持视觉的模型,实得 %q", checkByKey(res, "enhance_vision").Message)
+	}
+	// 提示归提示,不该拦着保存。
+	if !res.Passed {
+		t.Error("视觉提示是 warn,不该导致校验不通过")
+	}
+}
+
+// 关掉传图时不该再提示视觉 —— 那时增强模型收不到图片,支不支持视觉都无所谓;
+// 此时该出现的是另一条(关掉传图本身的)警告。
+func TestDryRunNoVisionHintWhenImagesDisabled(t *testing.T) {
+	withFakeModels(t, map[string]fakeModel{
+		"gen-model": {groups: []string{"default"}},
+		"some-llm":  {groups: []string{"default"}},
+	})
+
+	res := DryRunAggregateModel(&common.AggregateModel{
+		Name: "v-agg", Type: "video",
+		Generate: common.AggregateGenerate{Model: "gen-model"},
+		PromptEnhance: &common.AggregatePromptEnhance{
+			Model:           "some-llm",
+			SystemPrompt:    "改写以下提示词",
+			SendInputImages: boolPtr(false),
+		},
+	}, map[string]int{"v-agg": 1})
+
+	if ch := checkByKey(res, "enhance_vision"); ch != nil {
+		t.Errorf("不传图时不该提示视觉能力,实得 %q", ch.Message)
+	}
+	requireLevel(t, res, "send_input_images", AggregateCheckWarn)
+}
+
+// 启用增强却没配模板必须报错。
+//
+// 后端**读不到**体验区那份内置默认模板(它是前端 JS 常量),运营在 options 里的改写能读、
+// 内置默认读不到。与其把那几份模板抄进 Go(抄两份必然漂移,而漂移不报错、只是默默出差档),
+// 不如要求显式写一份 —— 漏配在这里就暴露,而不是上线后每次都静默降级成"没增强"。
+func TestDryRunRequiresEnhanceTemplate(t *testing.T) {
+	withFakeModels(t, map[string]fakeModel{
+		"gen-model": {groups: []string{"default"}},
+		"some-llm":  {groups: []string{"default"}},
+	})
+
+	res := DryRunAggregateModel(&common.AggregateModel{
+		Name: "v-agg", Type: "video",
+		Generate:      common.AggregateGenerate{Model: "gen-model"},
+		PromptEnhance: &common.AggregatePromptEnhance{Model: "some-llm"},
+	}, map[string]int{"v-agg": 1})
+
+	requireLevel(t, res, "enhance_template", AggregateCheckError)
+	if res.Passed {
+		t.Error("缺模板的增强配置不该通过 —— 它上线后等于增强没生效")
+	}
+}
+
+// 启用增强却没配模型同样是 error:运行时只会降级,等于这段白配。
+func TestDryRunRequiresEnhanceModel(t *testing.T) {
+	withFakeModels(t, map[string]fakeModel{"gen-model": {groups: []string{"default"}}})
+
+	res := DryRunAggregateModel(&common.AggregateModel{
+		Name: "v-agg", Type: "video",
+		Generate:      common.AggregateGenerate{Model: "gen-model"},
+		PromptEnhance: &common.AggregatePromptEnhance{SystemPrompt: "改写"},
+	}, map[string]int{"v-agg": 1})
+
+	requireLevel(t, res, "prompt_enhance", AggregateCheckError)
+}
+
 // 分组名两侧的多余空格不该变成一条"该分组无可用渠道"的错误。
 // 配置仍是手工编辑的 JSON,而空格在渲染后的消息里看不见 —— 运营会照着错误的方向
 // 去查渠道配置,查不出任何问题。

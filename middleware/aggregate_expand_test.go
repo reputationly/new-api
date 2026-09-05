@@ -249,3 +249,60 @@ func TestGroupAllowedMatchesTokenSideSemantics(t *testing.T) {
 	require.False(t, groupAllowedForAggregate(vipOnly, "default"))
 	require.False(t, groupAllowedForAggregate(nil, "default"))
 }
+
+// 增强降级时**必须保留客户的原始 prompt**,不能把降级后的空值或半成品写回 body。
+// 这里用一个必然降级的配置(没配增强模型)验证整条接线。
+func TestApplyExpansionKeepsPromptWhenEnhanceDegrades(t *testing.T) {
+	withAggregateConfig(t, `[{
+		"name":"h3-2k","type":"video","enabled":true,
+		"generate":{"model":"minimax-h3"},
+		"prompt_enhance":{"system_prompt":"改写以下提示词"}
+	}]`)
+
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/videos",
+		strings.NewReader(`{"model":"h3-2k","prompt":"a cat"}`))
+
+	require.NoError(t, applyAggregateExpansion(c, "h3-2k", "minimax-h3", common.GetAggregateModel("h3-2k")))
+
+	require.Equal(t, "a cat", readBodyMap(t, c)["prompt"],
+		"增强降级后必须原样使用客户的提示词")
+
+	exp := GetAggregateExpansion(c)
+	require.NotNil(t, exp.Enhance, "降级也要留下记录,否则排障时看不出增强跑没跑")
+	require.True(t, exp.Enhance.Degraded)
+	require.NotEmpty(t, exp.Enhance.DegradeReason)
+}
+
+// 未启用增强段时不该产生任何增强记录,也不该动 prompt。
+func TestApplyExpansionSkipsEnhanceWhenDisabled(t *testing.T) {
+	withAggregateConfig(t, aggConfig)
+
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/videos",
+		strings.NewReader(`{"model":"h3-2k","prompt":"a cat"}`))
+
+	require.NoError(t, applyAggregateExpansion(c, "h3-2k", "minimax-h3", common.GetAggregateModel("h3-2k")))
+
+	require.Equal(t, "a cat", readBodyMap(t, c)["prompt"])
+	require.Nil(t, GetAggregateExpansion(c).Enhance, "未启用增强不该留下记录")
+}
+
+// 输入图要从请求体里收集出来喂给增强模型 —— 覆盖图生图/首尾帧/参考生视频的入参形态。
+func TestCollectInputImages(t *testing.T) {
+	got := collectInputImages(map[string]any{
+		"image":           "https://a/1.png",
+		"images":          []any{"https://a/2.png", "", "https://a/3.png"},
+		"input_reference": "https://a/4.png",
+		"prompt":          "not an image",
+	})
+	require.ElementsMatch(t,
+		[]string{"https://a/1.png", "https://a/2.png", "https://a/3.png", "https://a/4.png"}, got)
+}
+
+// 纯文生请求没有图,收集结果为空,增强照常按文字工作(不该 panic 或塞入空串)。
+func TestCollectInputImagesEmptyForTextOnly(t *testing.T) {
+	require.Empty(t, collectInputImages(map[string]any{"prompt": "a cat"}))
+}
