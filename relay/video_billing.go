@@ -44,7 +44,16 @@ func videoBillingSeconds(c *gin.Context, req *relaycommon.TaskSubmitReq, seconds
 	if GetTaskPlatform(c) != constant.TaskPlatform(strconv.Itoa(constant.ChannelTypeGPUStackPlus)) {
 		return 0
 	}
-	return relaycommon.VideoSecondsFallback(req)
+	if s := relaycommon.VideoSecondsFallback(req); s > 0 {
+		return s
+	}
+	// 最后一招:从**输入视频**里探测。
+	//
+	// 超分(sr)这类"输入多长、输出就多长"的玩法,时长是输入文件的固有属性 —— 客户不会
+	// 传 seconds,也不该要求他传。走到这里 seconds 仍是 0,再不补就只能整单回退固定价,
+	// 那正是超分一直没法按秒计费的原因。探测不到照样返回 0、照常回退,不阻断请求。
+	// 见 video_input_duration.go。
+	return probeInputVideoSeconds(c, req)
 }
 
 // warnVideoMatrixMiss 在「矩阵配了、但这次请求查不到价」时打 WARN。
