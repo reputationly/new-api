@@ -40,37 +40,60 @@ type AggregateExpansion struct {
 }
 
 // expandAggregateModel 若 modelName 是一个启用中的聚合模型,校验访问权限并返回展开后的
-// 生成段模型名。返回 ("", nil) 表示不是聚合模型,调用方按原样继续。
+// 生成段模型名**与其配置**。返回 ("", nil, nil) 表示不是聚合模型,调用方按原样继续。
 //
 // 权限判定只做「分组是否被允许」这一件事,其余(令牌白名单、可见性)都由既有链路负责:
 // 展开发生在它们之后,而展开后的真实模型还会再过一遍渠道选择,该拒的自然会拒。
-func expandAggregateModel(modelName, userGroup string) (string, error) {
+func expandAggregateModel(modelName, usingGroup, userGroup string) (string, *common.AggregateModel, error) {
 	agg := common.GetAggregateModel(modelName)
 	if agg == nil {
-		return "", nil
+		return "", nil, nil
 	}
-	if !groupAllowedForAggregate(agg, userGroup) {
+	if !groupAllowedForAggregate(agg, usingGroup, userGroup) {
 		// 与可见性拦截同口径:对这个用户它就是不存在,不透露隐藏能力的存在。
-		return "", fmt.Errorf("model not found")
+		return "", nil, fmt.Errorf("model not found")
 	}
 	if agg.Generate.Model == "" {
-		return "", fmt.Errorf("聚合模型 %s 未配置生成段模型", modelName)
+		return "", nil, fmt.Errorf("聚合模型 %s 未配置生成段模型", modelName)
 	}
-	return agg.Generate.Model, nil
+	// **把解析出的配置一并返回**,让调用方不必再查一次:配置随时可能被重新保存
+	// (管理员保存 / 多节点 option 同步),两次查找之间被改掉的话,第二次会拿到 nil,
+	// 而下游立刻解引用它 —— 一个本该干净失败的请求变成 panic。
+	return agg.Generate.Model, agg, nil
 }
+
+// expandAutoGroups 把 "auto" 展开成用户实际的自动分组集合。做成变量供测试构造 ——
+// 真实实现要读运营配置与用户可用分组,在单测里搭不起来,而这条展开正是本判定最容易
+// 写错、且写错时表现为"存得进白名单却调不通"的地方,不能没有覆盖。
+var expandAutoGroups = service.GetUserAutoGroup
 
 // groupAllowedForAggregate 判断某分组能否使用该聚合模型。
 //
 // 未配置 Groups = 不额外限制:此时约束完全来自展开后的生成段模型 —— 该分组下它没有渠道
 // 的话,选渠道那一步自然会拒。配置了 Groups 才是显式白名单,用于把定向能力圈给指定集成方。
-func groupAllowedForAggregate(agg *common.AggregateModel, userGroup string) bool {
+//
+// **"auto" 必须先展开再比对**。它是一个合法的 token.Group,但不是任何真实分组的名字,
+// 拿字面量去比白名单永远不中。而令牌保存侧(validateTokenModelLimits)对 auto 的处理
+// 是展开成 GetUserAutoGroup(user.Group) 再比 —— 两边不一致就会出现:auto 令牌能把
+// 聚合模型名存进白名单,每次调用却 404。那正是这套判定要消除的分裂,只是换了个形式。
+// 同一函数下方几十行处的渠道选择也是这么展开 auto 的(见 usingGroup == "auto" 分支)。
+func groupAllowedForAggregate(agg *common.AggregateModel, usingGroup, userGroup string) bool {
 	if agg == nil {
 		return false
 	}
 	if len(agg.Groups) == 0 {
 		return true
 	}
-	return common.StringsContains(agg.Groups, userGroup)
+	candidates := []string{usingGroup}
+	if usingGroup == "auto" {
+		candidates = expandAutoGroups(userGroup)
+	}
+	for _, g := range candidates {
+		if common.StringsContains(agg.Groups, g) {
+			return true
+		}
+	}
+	return false
 }
 
 // applyAggregateExpansion 就地改写请求:model 字段换成生成段模型,并把展开结果挂到 context。
@@ -91,8 +114,14 @@ func applyAggregateExpansion(c *gin.Context, publicName, realModel string, agg *
 	if err != nil {
 		return fmt.Errorf("读取请求体失败: %w", err)
 	}
+	// **UnmarshalWithNumber,不是 Unmarshal**:这里是对客户**整个请求体**做
+	// 读-改-写,普通 Unmarshal 会把所有 JSON 数字变成 float64,超过 2^53 的整数
+	// (seed、纳秒时间戳、id 形态的 metadata)在 Marshal 回去时被静默改值或写成
+	// 指数形式,上游按整数解析直接拒。common/json.go 里这个函数的注释写的就是
+	// 本场景("需要原样保留未改写字段再 Marshal 回去"),relay/task_media_rewrite.go
+	// 的同类改写也用它。
 	var body map[string]any
-	if err := common.Unmarshal(raw, &body); err != nil {
+	if err := common.UnmarshalWithNumber(raw, &body); err != nil {
 		return fmt.Errorf("解析请求体失败: %w", err)
 	}
 	// 解析出 nil(body 为空、或内容是 JSON null)时必须报错,不能就地补一个空 map ——

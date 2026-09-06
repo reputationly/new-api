@@ -56,6 +56,12 @@ func sweepTimedOutTasks(ctx context.Context) {
 	timedOutCount := 0
 
 	for _, task := range tasks {
+		// 聚合流水线的父任务:只要它等的子任务还在,就不算超时。理由见
+		// AggregateParentStillWaiting —— 按单段的窗口去判一条跑两段的任务必然误杀,
+		// 而误杀会在超分还在跑的时候就把父任务判失败并退款。
+		if AggregateParentStillWaiting(task) {
+			continue
+		}
 		isLegacy := task.SubmitTime > 0 && task.SubmitTime < legacyTaskCutoff
 
 		oldStatus := task.Status
@@ -88,6 +94,30 @@ func sweepTimedOutTasks(ctx context.Context) {
 	}
 }
 
+// partitionTasksForPolling 把未完成任务分成两拨:按平台分组去问上游的,
+// 和等待超分段的聚合父任务。
+//
+// 父任务**不能**进上游轮询。两个理由:它自己的上游任务(生成段)早已完成,再去问渠道
+// 只会一轮轮拿到同一个 completed;而它又不能改挂子任务的上游 id —— 轮询按上游 id
+// 建索引(下面的 taskM[upstreamID]),父子两条记录会撞在同一个 key 上,而未完成任务
+// 按 id 升序遍历、后来者覆盖先前者,id 更大的子任务必然胜出,父任务于是永远拿不到
+// 更新,一直卡到超时被判失败并退款。详见 TryAdvanceAggregatePipeline 里的说明。
+//
+// 抽成独立函数是为了让这条分流可被测试钉住:它是整条流水线能不能收尾的关键,
+// 而 TaskPollingLoop 本身是个无限循环,测不了。
+func partitionTasksForPolling(tasks []*model.Task) (map[constant.TaskPlatform][]*model.Task, []*model.Task) {
+	byPlatform := make(map[constant.TaskPlatform][]*model.Task)
+	var aggregateParents []*model.Task
+	for _, t := range tasks {
+		if IsAggregatePipelineParent(t) {
+			aggregateParents = append(aggregateParents, t)
+			continue
+		}
+		byPlatform[t.Platform] = append(byPlatform[t.Platform], t)
+	}
+	return byPlatform, aggregateParents
+}
+
 // TaskPollingLoop 主轮询循环，每 15 秒检查一次未完成的任务
 func TaskPollingLoop() {
 	for {
@@ -96,9 +126,9 @@ func TaskPollingLoop() {
 		ctx := context.TODO()
 		sweepTimedOutTasks(ctx)
 		allTasks := model.GetAllUnFinishSyncTasks(constant.TaskQueryLimit)
-		platformTask := make(map[constant.TaskPlatform][]*model.Task)
-		for _, t := range allTasks {
-			platformTask[t.Platform] = append(platformTask[t.Platform], t)
+		platformTask, aggregateParents := partitionTasksForPolling(allTasks)
+		if len(aggregateParents) > 0 {
+			SyncAggregatePipelineParents(ctx, aggregateParents)
 		}
 		for platform, tasks := range platformTask {
 			if len(tasks) == 0 {
@@ -460,7 +490,7 @@ func updateVideoSingleTask(ctx context.Context, adaptor TaskPollingAdaptor, ch *
 		// **不能在这里 return**:switch 之后才是把改动写回库的地方。提前返回会让
 		// Stage=2 与新的上游 id 都不落库,下一轮轮询仍按旧 id 查到生成段 completed,
 		// 于是**再提交一次超分**,循环重复提交并重复计费。
-		if pipelineAdvanced = TryAdvanceAggregatePipeline(ctx, task, taskResult.NFSPath); pipelineAdvanced {
+		if pipelineAdvanced = TryAdvanceAggregatePipeline(ctx, adaptor, task, taskResult, taskResult.NFSPath); pipelineAdvanced {
 			task.Status = model.TaskStatusInProgress
 			task.Progress = taskcommon.ProgressInProgress
 			task.FinishTime = 0
@@ -605,6 +635,41 @@ func settleTaskBillingOnComplete(ctx context.Context, adaptor TaskPollingAdaptor
 		logger.LogInfo(ctx, fmt.Sprintf("任务 %s 按次计费，跳过差额结算", task.TaskID))
 		warnVideoMatrixSkipped(ctx, task, "任务被判定为按次计费")
 		DeferredBillingFallback(ctx, task, "任务被判定为按次计费")
+		return
+	}
+
+	// 0.5 聚合流水线的父任务:进入超分段后,最终这份 taskResult 来自**超分段**的上游回执,
+	// 而 BillingContext 冻结的是**生成段**的定价上下文。照常按用量重算,就会拿生成段的
+	// 模型去查超分后的分辨率(如 2K)的价 —— 生成段被按 2K 档收一次,超分子任务自己又按
+	// SR 模型收一次,同一档分辨率付了两遍。图生视频那类"提交时单价为 0、分辨率由回执给出"
+	// 的玩法尤其明显。
+	//
+	// 父任务代表的是生成段,它的价钱在生成段完成时就该定死,不能被第二段的回执改写。
+	// 超分那笔由它自己的子任务独立结算(分段计费本来就是这个语义)。
+	// **必须排在按次计费之后**:per_call / per_second 的模型价在提交时就定死了,
+	// 那条分支会直接返回并保住冻结价。排在它前面的话,下面的 token 重算会把一个
+	// 按次计费的父任务改成按 token 收费 —— 只要该模型恰好也配了 ratio,价钱就被悄悄换掉。
+	if agg := task.PrivateData.Aggregate; agg != nil && agg.Stage == 2 {
+		// 用**推进时留下的生成段回执**结算,而不是手上这份超分段的 taskResult。
+		//
+		// 两种偷懒都不行:拿超分回执算 → 生成段被按超分后的分辨率计费(2K 档付两遍);
+		// 什么都不算直接回退预扣 → 预扣只是粗略锚点,视频计费矩阵的单价只在结算侧
+		// 才查得出来,等于按不含分辨率/时长维度的 ModelRatio 收费。
+		logger.LogInfo(ctx, fmt.Sprintf("任务 %s 为聚合流水线父任务，按生成段回执结算", task.TaskID))
+		if agg.Stage1AdaptorQuota > 0 {
+			RecalculateTaskQuota(ctx, task, agg.Stage1AdaptorQuota, "聚合流水线：生成段adaptor计费")
+			warnVideoMatrixSkipped(ctx, task, "生成段 adaptor 抢先给出了额度")
+			return
+		}
+		if RecalculateTaskQuotaByVideoMatrix(ctx, task, agg.Stage1BillableTokens, agg.Stage1Resolution) {
+			return
+		}
+		if RecalculateTaskQuotaByTokens(ctx, task, agg.Stage1TotalTokens) {
+			warnVideoMatrixSkipped(ctx, task, "聚合流水线：落到生成段的 token 重算")
+			return
+		}
+		warnVideoMatrixSkipped(ctx, task, "聚合流水线：生成段回执未带可计费用量")
+		DeferredBillingFallback(ctx, task, "聚合流水线：生成段回执未带可计费用量")
 		return
 	}
 	// 1. 优先让 adaptor 决定最终额度

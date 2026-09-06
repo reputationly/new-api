@@ -150,15 +150,14 @@ func ListModels(c *gin.Context, modelType int) {
 		// 本函数的非白名单路径 / 令牌页模型下拉)全部源自 abilities 表,而聚合模型没有
 		// 渠道 ability,天然不在里面;令牌白名单是唯一**按模型名逐条存**的地方。
 		//
-		// ⚠️ **这行目前还够不到**,不是疏漏:validateTokenModelLimits(token.go:288)
-		// 按 abilities 构造 available 并拒绝保存范围外的名字,所以聚合模型名此刻根本
-		// 进不了 token.ModelLimits。它是给下一步准备的——定向发放要靠令牌白名单圈定
-		// 集成方,届时必须把聚合模型并入那个 available 集合,白名单里才会出现聚合模型
-		// 名,这行随即生效。
+		// 这行**已在真实流量上生效**:validateTokenModelLimits(token.go)现在把聚合
+		// 模型名并入了 available 集合,所以 token.ModelLimits 里确实会出现它们 ——
+		// 定向发放正是靠令牌白名单圈定集成方的。
 		//
-		// 两处口径必须**同时**改,别只动一边:只放开保存校验而 distributor
-		// (distributor.go:66-73 的白名单命中检查 + 渠道路由)还不认聚合模型,就会存下
-		// 一份「配得上却调不通」的令牌;只留这行过滤则它永远不执行。
+		// 改动这里时必须与两处保持同一口径,否则会出现「存得进白名单却调不通」:
+		//   - controller/token.go 的 groupAllowedForAggregateToken(保存侧准入)
+		//   - middleware/aggregate_expand.go 的 groupAllowedForAggregate(调用侧准入)
+		// 两者都按**令牌的目标分组**判定。
 		// 见 TestListModelsHidesAggregateModel。
 		allowModels = common.FilterHiddenAggregateModels(allowModels)
 

@@ -71,8 +71,17 @@ func AggregateModelDryRun(c *gin.Context) {
 			})
 			return
 		}
-		models = parsed
-		// 解析结果按名字排序:原始 JSON 的顺序由运营编辑决定,但回落路径要稳定输出,
+		// 先剔除 nil 条目再排序。`[null, {...}]` 是合法 JSON,ParseAggregateModelList
+		// 原样返回(它只负责解析,不做语义过滤),排序里解引用 Name 就会 panic ——
+		// 一个本该报"配置有问题"的校验请求变成 500。运行时那条路
+		// (parseAggregateModels)和 DryRunAggregateConfig 都跳过 nil,这里也必须跳。
+		models = models[:0]
+		for _, m := range parsed {
+			if m != nil {
+				models = append(models, m)
+			}
+		}
+		// 按名字排序:原始 JSON 的顺序由运营编辑决定,但回落路径要稳定输出,
 		// 否则配置页列表每次点校验都在跳,两次结果也无法比对。
 		sort.Slice(models, func(i, j int) bool {
 			return strings.TrimSpace(models[i].Name) < strings.TrimSpace(models[j].Name)

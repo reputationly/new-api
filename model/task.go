@@ -232,9 +232,33 @@ type TaskAggregateInfo struct {
 	UpscaleModel  string `json:"upscale_model,omitempty"`
 	UpscaleTarget string `json:"upscale_target,omitempty"`
 
-	// Stage1TaskID 生成段的上游任务 id。进入超分段后 UpstreamTaskID 会被换成
-	// stage2 的,这里留住第一段的,否则排障时再也找不回它。
-	Stage1TaskID string `json:"stage1_task_id,omitempty"`
+	// Stage2TaskID 超分子任务的**本站**任务 id。父任务靠它去查第二段的进度。
+	//
+	// 父任务**不接管**第二段的上游轮询身份 —— 那条路走不通:轮询按上游 task id 建索引
+	// (taskM[upstreamID]),父任务一旦换上子任务的上游 id,两条记录就在同一个 key 上撞车,
+	// 而未完成任务按 id 升序遍历、后来者覆盖先前者,id 更大的子任务必然胜出,父任务
+	// 于是永远不被轮询,一直卡到超时被判失败并退款。所以父任务保留自己的上游身份,
+	// 改为**等待**子任务:见 service 侧的 syncAggregatePipelineParents。
+	Stage2TaskID string `json:"stage2_task_id,omitempty"`
+
+	// Stage1NFSPath 生成段产物在共享 NFS 上的路径。超分段失败时用它降级交付 ——
+	// 生成段已经真实烧掉 GPU 并计费,不能因为第二段失败就把成品也丢了。
+	Stage1NFSPath string `json:"stage1_nfs_path,omitempty"`
+
+	// —— 生成段回执里的计费依据 ——
+	//
+	// 父任务代表的是**生成段**,它的价钱必须按生成段的实际用量算。但流水线推进后,
+	// 任务最终到达成功态时手上只剩**超分段**的回执 —— 拿它算价会把生成段按超分后的
+	// 分辨率计费(2K 档被付两遍)。而完全不算又更糟:预扣只是个粗略锚点
+	// (relay/video_billing.go 明说"结算是差额的,预扣准不准不影响最终金额"),
+	// 视频计费矩阵的单价**只在结算侧**才会被查出来(RecalculateTaskQuotaByVideoMatrix),
+	// 跳过等于按不含分辨率/时长维度的 ModelRatio 收费。
+	//
+	// 所以在推进的那一刻把生成段回执的计费依据留下来,结算时用它们。
+	Stage1AdaptorQuota   int    `json:"stage1_adaptor_quota,omitempty"`
+	Stage1BillableTokens int    `json:"stage1_billable_tokens,omitempty"`
+	Stage1TotalTokens    int    `json:"stage1_total_tokens,omitempty"`
+	Stage1Resolution     string `json:"stage1_resolution,omitempty"`
 
 	// CallerKey 客户本次请求的令牌,供后台提交超分段时以同一身份自调用 ——
 	// 计费/限流/日志因此与客户自己调一次超分完全一致(分段计费)。

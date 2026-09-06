@@ -78,7 +78,20 @@ func Distribute() func(c *gin.Context) {
 			// (白名单里存的是聚合模型名,展开早了会拿生成段模型去比对,配对的令牌反被拒),
 			// 又必须在下面选渠道**之前**(选渠道要用真实模型名,聚合模型没有 ability)。
 			// 详见 middleware/aggregate_expand.go。
-			if realModel, aggErr := expandAggregateModel(modelRequest.Model,
+			// 判据用 **UsingGroup**(令牌指向的路由分组),不是 UserGroup:
+			// 令牌保存侧的校验(controller/token.go 的 groupAllowedForAggregateToken)
+			// 比对的就是令牌的目标分组。两边取不同的值时,一个绑了 vip 分组的令牌、
+			// 持有者却在 default 档,会出现"名字存得进白名单、调用却 404"—— 正是这两处
+			// 注释都反复强调不能出现的那种分裂。
+			//
+			// 与紧邻的可见性拦截刻意不同:那条判的是**用户身份**能不能看见一个模型,
+			// 而聚合模型的 groups 是**能力/路由**约束(哪个分组可以用这条流水线),
+			// 与令牌指向哪儿走同一套。
+			// 传两个分组:UsingGroup 是判据(与令牌保存侧同口径),UserGroup 只在
+			// UsingGroup 为 "auto" 时用来展开出真实分组集合 —— 与保存侧
+			// validateTokenModelLimits 对 auto 的处理保持一致。
+			if realModel, aggCfg, aggErr := expandAggregateModel(modelRequest.Model,
+				common.GetContextKeyString(c, constant.ContextKeyUsingGroup),
 				common.GetContextKeyString(c, constant.ContextKeyUserGroup)); aggErr != nil {
 				// 分组不允许时与可见性拦截同口径:报"模型不存在",不泄露隐藏能力的存在。
 				abortWithOpenAiMessage(c, http.StatusNotFound,
@@ -88,8 +101,9 @@ func Distribute() func(c *gin.Context) {
 					}), types.ErrorCodeModelNotFound)
 				return
 			} else if realModel != "" {
-				agg := common.GetAggregateModel(modelRequest.Model)
-				if err := applyAggregateExpansion(c, modelRequest.Model, realModel, agg); err != nil {
+				// 用上面已经解析好的那份配置,不再查第二次 —— 两次查找之间配置若被
+				// 重新保存,第二次可能返回 nil,下游解引用即 panic。
+				if err := applyAggregateExpansion(c, modelRequest.Model, realModel, aggCfg); err != nil {
 					abortWithOpenAiMessage(c, http.StatusBadRequest, err.Error())
 					return
 				}

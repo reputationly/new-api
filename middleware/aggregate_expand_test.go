@@ -43,7 +43,7 @@ const aggConfig = `[{
 func TestExpandAggregateModel(t *testing.T) {
 	withAggregateConfig(t, aggConfig)
 
-	got, err := expandAggregateModel("h3-2k", "default")
+	got, _, err := expandAggregateModel("h3-2k", "default", "default")
 	require.NoError(t, err)
 	require.Equal(t, "minimax-h3", got)
 }
@@ -52,7 +52,7 @@ func TestExpandAggregateModel(t *testing.T) {
 func TestExpandLeavesNormalModelUntouched(t *testing.T) {
 	withAggregateConfig(t, aggConfig)
 
-	got, err := expandAggregateModel("gpt-4o", "default")
+	got, _, err := expandAggregateModel("gpt-4o", "default", "default")
 	require.NoError(t, err)
 	require.Empty(t, got)
 }
@@ -61,7 +61,7 @@ func TestExpandLeavesNormalModelUntouched(t *testing.T) {
 func TestExpandIgnoresDisabledAggregate(t *testing.T) {
 	withAggregateConfig(t, `[{"name":"off","type":"video","enabled":false,"generate":{"model":"x"}}]`)
 
-	got, err := expandAggregateModel("off", "default")
+	got, _, err := expandAggregateModel("off", "default", "default")
 	require.NoError(t, err)
 	require.Empty(t, got, "停用的聚合模型不该被展开")
 }
@@ -75,11 +75,11 @@ func TestExpandEnforcesGroupWhitelist(t *testing.T) {
 		"generate":{"model":"minimax-h3"}
 	}]`)
 
-	got, err := expandAggregateModel("vip-only", "vip")
+	got, _, err := expandAggregateModel("vip-only", "vip", "vip")
 	require.NoError(t, err)
 	require.Equal(t, "minimax-h3", got)
 
-	_, err = expandAggregateModel("vip-only", "default")
+	_, _, err = expandAggregateModel("vip-only", "default", "default")
 	require.Error(t, err, "不在白名单的分组应被拒绝")
 }
 
@@ -89,7 +89,7 @@ func TestExpandWithoutGroupsAllowsAny(t *testing.T) {
 	withAggregateConfig(t, aggConfig)
 
 	for _, g := range []string{"default", "vip", "whatever"} {
-		got, err := expandAggregateModel("h3-2k", g)
+		got, _, err := expandAggregateModel("h3-2k", g, g)
 		require.NoError(t, err)
 		require.Equal(t, "minimax-h3", got, "未配 groups 时不该按分组拒绝")
 	}
@@ -99,7 +99,7 @@ func TestExpandWithoutGroupsAllowsAny(t *testing.T) {
 func TestExpandRejectsMissingGenerateModel(t *testing.T) {
 	withAggregateConfig(t, `[{"name":"broken","type":"video","enabled":true}]`)
 
-	_, err := expandAggregateModel("broken", "default")
+	_, _, err := expandAggregateModel("broken", "default", "default")
 	require.Error(t, err)
 }
 
@@ -243,11 +243,11 @@ func TestGroupAllowedMatchesTokenSideSemantics(t *testing.T) {
 	noGroups := &common.AggregateModel{Name: "a"}
 	vipOnly := &common.AggregateModel{Name: "b", Groups: []string{"vip"}}
 
-	require.True(t, groupAllowedForAggregate(noGroups, "anything"),
+	require.True(t, groupAllowedForAggregate(noGroups, "anything", "anything"),
 		"未配 groups 应放行任意分组")
-	require.True(t, groupAllowedForAggregate(vipOnly, "vip"))
-	require.False(t, groupAllowedForAggregate(vipOnly, "default"))
-	require.False(t, groupAllowedForAggregate(nil, "default"))
+	require.True(t, groupAllowedForAggregate(vipOnly, "vip", "vip"))
+	require.False(t, groupAllowedForAggregate(vipOnly, "default", "default"))
+	require.False(t, groupAllowedForAggregate(nil, "default", "default"))
 }
 
 // 增强降级时**必须保留客户的原始 prompt**,不能把降级后的空值或半成品写回 body。
@@ -305,4 +305,61 @@ func TestCollectInputImages(t *testing.T) {
 // 纯文生请求没有图,收集结果为空,增强照常按文字工作(不该 panic 或塞入空串)。
 func TestCollectInputImagesEmptyForTextOnly(t *testing.T) {
 	require.Empty(t, collectInputImages(map[string]any{"prompt": "a cat"}))
+}
+
+// 大整数必须原样保留。
+//
+// 这里是对客户**整个请求体**做读-改-写:用普通 Unmarshal 的话所有 JSON 数字会变成
+// float64,超过 2^53 的整数(seed、纳秒时间戳、id 形态的 metadata)在 Marshal 回去时
+// 被静默改值或写成指数形式,上游按整数解析直接拒 —— 而我们这边一切正常。
+func TestApplyExpansionPreservesLargeIntegers(t *testing.T) {
+	withAggregateConfig(t, aggConfig)
+
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/videos",
+		strings.NewReader(`{"model":"h3-2k","prompt":"a cat","seed":9007199254740993,"metadata":{"trace_id":1739000000000000123}}`))
+
+	require.NoError(t, applyAggregateExpansion(c, "h3-2k", "minimax-h3", common.GetAggregateModel("h3-2k")))
+
+	storage, err := common.GetBodyStorage(c)
+	require.NoError(t, err)
+	raw, err := storage.Bytes()
+	require.NoError(t, err)
+	// 直接看序列化后的文本:既不能被改值,也不能变成指数形式。
+	require.Contains(t, string(raw), "9007199254740993",
+		"超过 2^53 的 seed 必须原样保留,不能被 float64 round-trip 改掉")
+	require.Contains(t, string(raw), "1739000000000000123",
+		"嵌套在 metadata 里的大整数同样要保住")
+	require.NotContains(t, string(raw), "e+", "不得被写成指数形式")
+}
+
+// "auto" 是合法的 token.Group,但不是任何真实分组的名字。
+//
+// 令牌保存侧对它的处理是展开成用户的自动分组集合再比白名单;调用侧若拿字面量 "auto"
+// 去比,永远不中 —— auto 令牌能把聚合模型名存进白名单,每次调用却 404。
+// 那正是这套判定要消除的「存得进却调不通」,只是换了个形式。
+func TestGroupAllowedExpandsAutoGroup(t *testing.T) {
+	orig := expandAutoGroups
+	t.Cleanup(func() { expandAutoGroups = orig })
+	// 该用户的 auto 池里含 vip。
+	expandAutoGroups = func(userGroup string) []string { return []string{"default", "vip"} }
+
+	vipOnly := &common.AggregateModel{Name: "a", Groups: []string{"vip"}}
+
+	require.True(t, groupAllowedForAggregate(vipOnly, "auto", "default"),
+		"auto 必须展开后比对:展开集合里有 vip,就该放行 —— 拿字面量 auto 比永远不中,"+
+			"结果是 auto 令牌存得进白名单却每次调用 404")
+
+	// 展开集合里没有白名单分组时,照常拒绝。
+	expandAutoGroups = func(string) []string { return []string{"default"} }
+	require.False(t, groupAllowedForAggregate(vipOnly, "auto", "default"))
+
+	// 显式分组的语义不受影响。
+	require.True(t, groupAllowedForAggregate(vipOnly, "vip", "vip"))
+	require.False(t, groupAllowedForAggregate(vipOnly, "default", "default"))
+
+	// 未配 groups 时一律放行,且不该去展开(没必要)。
+	noGroups := &common.AggregateModel{Name: "b"}
+	require.True(t, groupAllowedForAggregate(noGroups, "auto", "default"))
 }

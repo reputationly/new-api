@@ -158,3 +158,18 @@ func TestDryRunRejectsMalformedBody(t *testing.T) {
 
 	require.Equal(t, http.StatusBadRequest, rec.Code)
 }
+
+// 已保存的配置里有 null 条目时,干跑校验不能 panic 成 500。
+//
+// `[null, {...}]` 是合法 JSON,ParseAggregateModelList 只负责解析、不做语义过滤,
+// 于是列表里真的会出现 nil。回落路径要对它排序,解引用 Name 就崩 —— 而这条路径的
+// 职责恰恰是「把配置的问题报出来」,自己崩掉是最糟的失败方式。
+func TestDryRunHandlesNullEntriesInSavedConfig(t *testing.T) {
+	withAggregateModelConfig(t, `[null,{"name":"ok-one","type":"video","enabled":true,"generate":{"model":"g"}},null]`)
+
+	rec := dryRunRequest(t, ``, false)
+
+	require.Equal(t, http.StatusOK, rec.Code)
+	require.Equal(t, []string{"ok-one"}, decodeDryRun(t, rec),
+		"null 条目应被跳过,其余照常校验")
+}
