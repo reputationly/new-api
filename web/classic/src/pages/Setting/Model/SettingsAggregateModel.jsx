@@ -6,6 +6,7 @@ import {
   Form,
   Space,
   Tag,
+  TextArea,
   Typography,
 } from '@douyinfe/semi-ui';
 import { useTranslation } from 'react-i18next';
@@ -85,36 +86,49 @@ const SettingsAggregateModel = ({ options, refresh }) => {
 
   return (
     <Card>
-      <Form.Section text={t('聚合模型（流水线编排）')}>
-        <Banner
-          type='info'
-          closeIcon={null}
-          description={
-            <div>
-              {t(
-                '一个对外模型名对应一条固定流水线：图片为「提示词增强 → 生成」，视频为「提示词增强 → 生成 → 超分」。',
-              )}
-              <br />
-              {t(
-                '聚合模型不会出现在模型广场与 /v1/models，只有知道模型名才能调用；分组与令牌白名单照常生效。',
-              )}
-              <br />
-              {t(
-                '各段独立计费：客户账单上会出现生成段、超分段与增强模型各自的消费记录。',
-              )}
-            </div>
-          }
-          style={{ marginBottom: 12 }}
-        />
+      {/* <Form> 在这里只为 Form.Section 提供上下文(拿它的分区标题样式,与
+          SettingsChannelAffinity 等同目录组件一致)。**不放任何 Form 字段** ——
+          本组件的真相是下面的 draft/raw,不需要也不应再有一份 Semi 字段状态。 */}
+      <Form>
+        <Form.Section text={t('聚合模型（流水线编排）')}>
+          <Banner
+            type='info'
+            closeIcon={null}
+            description={
+              <div>
+                {t(
+                  '一个对外模型名对应一条固定流水线：图片为「提示词增强 → 生成」，视频为「提示词增强 → 生成 → 超分」。',
+                )}
+                <br />
+                {t(
+                  '聚合模型不会出现在模型广场与 /v1/models，只有知道模型名才能调用；分组与令牌白名单照常生效。',
+                )}
+                <br />
+                {t(
+                  '各段独立计费：客户账单上会出现生成段、超分段与增强模型各自的消费记录。',
+                )}
+              </div>
+            }
+            style={{ marginBottom: 12 }}
+          />
 
-        <Form.TextArea
-          field='AggregateModelConfig'
-          label={t('配置（JSON）')}
-          initValue={raw}
-          value={raw}
-          onChange={(v) => setDraft(v)}
-          autosize={{ minRows: 12, maxRows: 30 }}
-          placeholder={`[
+          <div style={{ marginBottom: 6 }}>
+            <Text strong>{t('配置（JSON）')}</Text>
+          </div>
+          {/* 用**受控的普通 TextArea**,不用 Form.TextArea。
+              Form.TextArea 自带内部字段状态:initValue 只在挂载时取一次,而
+              ModelSetting 先以 AggregateModelConfig:'' 渲染、再异步 getOptions()
+              取真值(ModelSetting.jsx:53)。于是已保存的配置永远显示不出来 ——
+              编辑器一片空白,但 raw 里其实有内容。运营会以为"还没配过",写一个模型
+              存进去,就静默覆盖掉之前整份配置。
+              兄弟组件靠 useEffect(props.options) + formApi.setValues 同步(见
+              SettingGeminiModel.jsx),但本组件自己已经有 draft/raw 这一份真相,
+              再引一份字段状态就是两个真相来源 —— 正是这个 bug 的成因。 */}
+          <TextArea
+            value={raw}
+            onChange={(v) => setDraft(v)}
+            autosize={{ minRows: 12, maxRows: 30 }}
+            placeholder={`[
   {
     "name": "h3-2k",
     "type": "video",
@@ -127,96 +141,97 @@ const SettingsAggregateModel = ({ options, refresh }) => {
     }
   }
 ]`}
-          extraText={
-            <div>
-              <Text type='secondary'>
-                {t(
-                  'generate.overrides 是客户参数的覆盖值：客户传的尺寸是他要的「最终」尺寸，生成段收到的应是「中间」尺寸，最终分辨率由超分段产出。',
-                )}
-              </Text>
-              <br />
-              <Text type='secondary'>
-                {t(
-                  'prompt_enhance 会把本次请求的输入图一并发给增强模型，因此请配置一个支持视觉的模型；纯文本模型可能直接忽略图片并照常返回文字，增强会静默退化成凭空臆造。',
-                )}
-              </Text>
-            </div>
-          }
-        />
+          />
+          {/* extraText 是 Form 字段专有属性,普通 TextArea 不认(传了会被当成未知 DOM
+              属性丢弃,说明文字直接消失)。改成紧随其后的独立说明块。 */}
+          <div style={{ marginTop: 6 }}>
+            <Text type='secondary' size='small'>
+              {t(
+                'generate.overrides 是客户参数的覆盖值：客户传的尺寸是他要的「最终」尺寸，生成段收到的应是「中间」尺寸，最终分辨率由超分段产出。',
+              )}
+            </Text>
+            <br />
+            <Text type='secondary' size='small'>
+              {t(
+                'prompt_enhance 会把本次请求的输入图一并发给增强模型，因此请配置一个支持视觉的模型；纯文本模型可能直接忽略图片并照常返回文字，增强会静默退化成凭空臆造。',
+              )}
+            </Text>
+          </div>
 
-        <Space style={{ marginTop: 12 }}>
-          <Button onClick={dryRun} loading={checking}>
-            {t('干跑校验')}
-          </Button>
-          <Button theme='solid' onClick={submit} loading={loading}>
-            {t('保存')}
-          </Button>
-        </Space>
-        <div style={{ marginTop: 6 }}>
-          <Text type='secondary' size='small'>
-            {t(
-              '干跑校验不发起任何真实调用，不消耗算力也不计费。它检查的是配置本身：模型能否路由、分组继承结果、超分模型是否具备超分能力等——这些体验区验证不了，且配错时不会报错，只会默默出差档。效果好不好请到体验区验证。',
-            )}
-          </Text>
-        </div>
+          <Space style={{ marginTop: 12 }}>
+            <Button onClick={dryRun} loading={checking}>
+              {t('干跑校验')}
+            </Button>
+            <Button theme='solid' onClick={submit} loading={loading}>
+              {t('保存')}
+            </Button>
+          </Space>
+          <div style={{ marginTop: 6 }}>
+            <Text type='secondary' size='small'>
+              {t(
+                '干跑校验不发起任何真实调用，不消耗算力也不计费。它检查的是配置本身：模型能否路由、分组继承结果、超分模型是否具备超分能力等——这些体验区验证不了，且配错时不会报错，只会默默出差档。效果好不好请到体验区验证。',
+              )}
+            </Text>
+          </div>
 
-        {results && (
-          <Card
-            style={{ marginTop: 12 }}
-            title={
-              <Space>
-                {t('校验结果')}
-                {results.passed ? (
-                  <Tag color='green'>{t('通过')}</Tag>
-                ) : (
-                  <Tag color='red'>{t('存在错误')}</Tag>
-                )}
-              </Space>
-            }
-          >
-            {results.message && (
-              <Banner
-                type={results.passed ? 'info' : 'danger'}
-                closeIcon={null}
-                description={results.message}
-                style={{ marginBottom: 12 }}
-              />
-            )}
-            {(results.results || []).map((r) => (
-              <div key={r.name} style={{ marginBottom: 16 }}>
+          {results && (
+            <Card
+              style={{ marginTop: 12 }}
+              title={
                 <Space>
-                  <Text strong>{r.name}</Text>
-                  {r.groups_inherited && (
-                    <Tag color='blue'>
-                      {t('分组继承自生成段')}
-                      {r.groups?.length ? `：${r.groups.join(', ')}` : ''}
-                    </Tag>
-                  )}
-                  {r.billable_models?.length > 0 && (
-                    <Tag color='grey'>
-                      {t('计费段')}：{r.billable_models.join(' + ')}
-                    </Tag>
+                  {t('校验结果')}
+                  {results.passed ? (
+                    <Tag color='green'>{t('通过')}</Tag>
+                  ) : (
+                    <Tag color='red'>{t('存在错误')}</Tag>
                   )}
                 </Space>
-                <div style={{ marginTop: 6 }}>
-                  {(r.checks || []).map((ch, idx) => (
-                    <div key={idx} style={{ marginBottom: 4 }}>
-                      <Space align='start'>
-                        {levelTag(ch.level)}
-                        <Text
-                          type={ch.level === 'error' ? 'danger' : undefined}
-                        >
-                          {ch.message}
-                        </Text>
-                      </Space>
-                    </div>
-                  ))}
+              }
+            >
+              {results.message && (
+                <Banner
+                  type={results.passed ? 'info' : 'danger'}
+                  closeIcon={null}
+                  description={results.message}
+                  style={{ marginBottom: 12 }}
+                />
+              )}
+              {(results.results || []).map((r) => (
+                <div key={r.name} style={{ marginBottom: 16 }}>
+                  <Space>
+                    <Text strong>{r.name}</Text>
+                    {r.groups_inherited && (
+                      <Tag color='blue'>
+                        {t('分组继承自生成段')}
+                        {r.groups?.length ? `：${r.groups.join(', ')}` : ''}
+                      </Tag>
+                    )}
+                    {r.billable_models?.length > 0 && (
+                      <Tag color='grey'>
+                        {t('计费段')}：{r.billable_models.join(' + ')}
+                      </Tag>
+                    )}
+                  </Space>
+                  <div style={{ marginTop: 6 }}>
+                    {(r.checks || []).map((ch, idx) => (
+                      <div key={idx} style={{ marginBottom: 4 }}>
+                        <Space align='start'>
+                          {levelTag(ch.level)}
+                          <Text
+                            type={ch.level === 'error' ? 'danger' : undefined}
+                          >
+                            {ch.message}
+                          </Text>
+                        </Space>
+                      </div>
+                    ))}
+                  </div>
                 </div>
-              </div>
-            ))}
-          </Card>
-        )}
-      </Form.Section>
+              ))}
+            </Card>
+          )}
+        </Form.Section>
+      </Form>
     </Card>
   );
 };
