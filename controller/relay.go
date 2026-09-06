@@ -646,6 +646,11 @@ func RelayTask(c *gin.Context) {
 			PerCallBilling: service.IsTaskPerCallBilling(relayInfo),
 			VideoBilling:   freezeVideoBilling(relayInfo),
 		}
+		// 聚合模型:把流水线状态与增强记录随任务持久化。任务本身记的是展开后的生成段
+		// 模型(计费/日志按它走),对外那个聚合模型名只存在这里 —— 响应回显与排障都靠它。
+		if exp := middleware.GetAggregateExpansion(c); exp != nil {
+			task.PrivateData.Aggregate = buildTaskAggregateInfo(c, exp)
+		}
 		task.Quota = result.Quota
 		task.Data = result.TaskData
 		task.Action = relayInfo.Action
@@ -727,4 +732,27 @@ func shouldRetryTaskRelay(c *gin.Context, channelId int, taskErr *dto.TaskError,
 		return false
 	}
 	return true
+}
+
+// buildTaskAggregateInfo 把一次聚合展开的结果转成随任务持久化的形态。
+//
+// 只在这里做一次转换,不让 model 包认识 middleware 的类型(那会造成包依赖倒置)。
+func buildTaskAggregateInfo(c *gin.Context, exp *middleware.AggregateExpansion) *model.TaskAggregateInfo {
+	info := &model.TaskAggregateInfo{PublicModel: exp.PublicName}
+	if exp.Config != nil && exp.Config.Upscale.IsEnabled() {
+		info.Stage = 1
+		info.UpscaleModel = exp.Config.Upscale.Model
+		info.UpscaleTarget = exp.Config.Upscale.Target
+		// 只有真要跑第二段时才留客户令牌 —— 没有超分段就没人会用它,
+		// 存了只是白白多一处明文凭证。
+		info.CallerKey = strings.TrimPrefix(c.Request.Header.Get("Authorization"), "Bearer ")
+	}
+	if e := exp.Enhance; e != nil {
+		info.EnhanceModel = e.Model
+		info.OriginalPrompt = e.OriginalPrompt
+		info.EnhancedPrompt = e.EnhancedPrompt
+		info.EnhanceDegraded = e.Degraded
+		info.EnhanceReason = e.DegradeReason
+	}
+	return info
 }

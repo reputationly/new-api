@@ -427,6 +427,10 @@ func updateVideoSingleTask(ctx context.Context, adaptor TaskPollingAdaptor, ch *
 	shouldRefund := false
 	shouldSettle := false
 	deferredPersist := false
+	// pipelineAdvanced 本轮把聚合任务推进到了超分段。与 deferredPersist 同样的作用:
+	// 阻止下面用上游进度(生成段的 100%)覆盖我们刚设的 InProgress —— 否则客户会看到
+	// 一个"进度 100% 却仍在进行中"的任务。
+	pipelineAdvanced := false
 	quota := task.Quota
 
 	task.Status = model.TaskStatus(taskResult.Status)
@@ -445,6 +449,23 @@ func updateVideoSingleTask(ctx context.Context, adaptor TaskPollingAdaptor, ch *
 			task.StartTime = now
 		}
 	case model.TaskStatusSuccess:
+		// 聚合流水线:生成段完成时先看还有没有后续段。必须**早于**下面的落盘与结算 ——
+		// 一旦落了 OBS 就等于把中间产物(未超分的那一版)交付出去了,而客户要的是最终
+		// 分辨率;那一版只该作为超分段的输入。
+		//
+		// 提交成功则任务留在 InProgress、上游 id 换成第二段的,轮询下一轮自然跟进,
+		// 客户侧全程只有一个 task id。提交失败返回 false,继续走下面的正常收尾 ——
+		// 交付生成段成品,好过把一个已经烧掉 GPU 的成功任务判失败。
+		//
+		// **不能在这里 return**:switch 之后才是把改动写回库的地方。提前返回会让
+		// Stage=2 与新的上游 id 都不落库,下一轮轮询仍按旧 id 查到生成段 completed,
+		// 于是**再提交一次超分**,循环重复提交并重复计费。
+		if pipelineAdvanced = TryAdvanceAggregatePipeline(ctx, task, taskResult.NFSPath); pipelineAdvanced {
+			task.Status = model.TaskStatusInProgress
+			task.Progress = taskcommon.ProgressInProgress
+			task.FinishTime = 0
+			break
+		}
 		task.Progress = taskcommon.ProgressComplete
 		if task.FinishTime == 0 {
 			task.FinishTime = now
@@ -504,7 +525,7 @@ func updateVideoSingleTask(ctx context.Context, adaptor TaskPollingAdaptor, ch *
 	default:
 		return fmt.Errorf("unknown task status %s for task %s", taskResult.Status, task.TaskID)
 	}
-	if taskResult.Progress != "" && !deferredPersist {
+	if taskResult.Progress != "" && !deferredPersist && !pipelineAdvanced {
 		task.Progress = taskResult.Progress
 	}
 

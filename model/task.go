@@ -210,6 +210,50 @@ type TaskPrivateData struct {
 	// 用布尔而不是比对 FailReason 文案：文案会因 i18n / 措辞调整而变，
 	// 比对字符串的判据会在某次无关改动后静默失效。
 	Cancelled bool `json:"cancelled,omitempty"`
+
+	// Aggregate 聚合(编排)模型的流水线状态与过程记录。非聚合任务为 nil。
+	Aggregate *TaskAggregateInfo `json:"aggregate,omitempty"`
+}
+
+// TaskAggregateInfo 一次聚合模型调用的流水线状态,随任务持久化。
+//
+// 它落在 TaskPrivateData(`json:"-"`)里,**不会出现在任何对外响应中** —— 这正是要的:
+// 增强后的提示词、内部各段的模型名都属于内部编排,不该暴露给集成方。但客户报
+// "生成的东西跟我写的不一样"时,这份记录是唯一能解释清楚的证据,所以必须留。
+type TaskAggregateInfo struct {
+	// PublicModel 客户实际调用的聚合模型名。任务本身记的是展开后的生成段模型
+	// (计费与日志都按它走),只有这里留着对外那个名字,用于响应回显与排障。
+	PublicModel string `json:"public_model,omitempty"`
+
+	// Stage 流水线进度:1=生成段进行中,2=超分段进行中。0 表示没有后续段。
+	Stage int `json:"stage,omitempty"`
+
+	// UpscaleModel/UpscaleTarget 超分段配置。为空表示这条流水线不含超分。
+	UpscaleModel  string `json:"upscale_model,omitempty"`
+	UpscaleTarget string `json:"upscale_target,omitempty"`
+
+	// Stage1TaskID 生成段的上游任务 id。进入超分段后 UpstreamTaskID 会被换成
+	// stage2 的,这里留住第一段的,否则排障时再也找不回它。
+	Stage1TaskID string `json:"stage1_task_id,omitempty"`
+
+	// CallerKey 客户本次请求的令牌,供后台提交超分段时以同一身份自调用 ——
+	// 计费/限流/日志因此与客户自己调一次超分完全一致(分段计费)。
+	//
+	// 明文存储的权衡:与同结构里已有的 Key(渠道上游 key)同性质,且 TaskPrivateData
+	// 整体不外泄。换来的是超分段不必手写一份算价与路由逻辑(那份必然与主链路漂移)。
+	CallerKey string `json:"caller_key,omitempty"`
+
+	// 增强段的过程记录。EnhancedPrompt 不回传客户,只用于排障对照。
+	EnhanceModel    string `json:"enhance_model,omitempty"`
+	OriginalPrompt  string `json:"original_prompt,omitempty"`
+	EnhancedPrompt  string `json:"enhanced_prompt,omitempty"`
+	EnhanceDegraded bool   `json:"enhance_degraded,omitempty"`
+	EnhanceReason   string `json:"enhance_reason,omitempty"`
+}
+
+// HasUpscale 该流水线是否还有一段超分要跑。
+func (a *TaskAggregateInfo) HasUpscale() bool {
+	return a != nil && a.UpscaleModel != ""
 }
 
 // TaskBillingContext 记录任务提交时的计费参数，以便轮询阶段可以重新计算额度。
