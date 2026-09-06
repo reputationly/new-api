@@ -102,6 +102,7 @@ func videoPerCallPriceable(c *gin.Context, info *relaycommon.RelayInfo) bool {
 		return false
 	}
 	resolution, seconds, _ := relaycommon.ResolveVideoDims(&req)
+	resolution = videoBillingResolution(&req, resolution)
 	seconds = videoBillingSeconds(c, &req, seconds)
 	switch entry.Mode {
 	case ratio_setting.VideoPriceModePerCall:
@@ -139,6 +140,7 @@ func applyVideoPricing(c *gin.Context, info *relaycommon.RelayInfo) bool {
 		return false
 	}
 	resolution, seconds, hasVideoInput := relaycommon.ResolveVideoDims(&req)
+	resolution = videoBillingResolution(&req, resolution)
 	seconds = videoBillingSeconds(c, &req, seconds)
 
 	frozen := &relaycommon.VideoBillingContext{

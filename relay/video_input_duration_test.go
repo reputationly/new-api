@@ -445,3 +445,32 @@ func TestProbeBase64AcceptsUnpadded(t *testing.T) {
 	require.Equal(t, 20, videoBillingSeconds(probeCtx(t, 7),
 		srReq("data:video/mp4;base64,"+unpadded), 0), "data-uri 无 padding")
 }
+
+// 超分/配乐读不出画幅时,计费行名落到 "*"。
+//
+// 这两种玩法的输出画幅跟随源视频,客户没有画幅入参,resolution 恒为空;不给兜底行名
+// 就会撞上矩阵的空行名守卫,按秒计费配了也永不生效 —— 超分一直只能按次收正因于此。
+func TestVideoBillingResolutionWildcardForFollowInputTasks(t *testing.T) {
+	cases := []struct {
+		name   string
+		md     map[string]any
+		rawRes string
+		want   string
+	}{
+		{"sr 无画幅 → 兜底行", map[string]any{"task_type": "sr"}, "", "*"},
+		{"v2a 无画幅 → 兜底行", map[string]any{"task_type": "v2a"}, "", "*"},
+		// 已解析出画幅时不得改写:精确行必须优先于兜底行。
+		{"sr 有画幅 → 原样", map[string]any{"task_type": "sr"}, "1080p", "1080p"},
+		// 编辑类玩法不在此列:它们的输出长度/画幅由引擎默认值决定,拿兜底价收是猜。
+		{"v2v 不兜底", map[string]any{"task_type": "v2v"}, "", ""},
+		{"无 task_type 不兜底", map[string]any{}, "", ""},
+		{"nil metadata 不兜底", nil, "", ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := videoBillingResolution(&relaycommon.TaskSubmitReq{Metadata: tc.md}, tc.rawRes)
+			require.Equal(t, tc.want, got)
+		})
+	}
+	require.Equal(t, "", videoBillingResolution(nil, ""))
+}

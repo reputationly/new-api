@@ -7,6 +7,7 @@ package common
 // 就会出现按 720p 收费却生成 1080p 这类静默错账,是最难发现的一类计费 bug。
 
 import (
+	"encoding/json"
 	"regexp"
 	"strconv"
 	"strings"
@@ -53,12 +54,123 @@ func VideoSecondsFallback(req *TaskSubmitReq) int {
 }
 
 // videoResolution 优先取 metadata 里显式给的 resolution(与适配器的优先级一致:
-// metadata 原生键压过统一契约的顶层 size),其次由 size 归档。
+// metadata 原生键压过统一契约的顶层 size),其次由 size 归档,最后看 target_short_edge。
+//
+// 为什么需要第三级:**超分请求根本不带 size**。它的入参是倍率(sr_ratio)与目标短边
+// (target_short_edge),画幅跟随源视频——这跟"生成类"请求由客户指定画幅是两种模型。
+// 少了这一级,超分的 resolution 恒为空,计费矩阵的空行名守卫直接判未命中,按秒计费
+// 配了也永远不生效(见 TestSRResolutionFromTargetShortEdge)。
+//
+// target_short_edge 是**声明的输出短边**,正是该拿来定价的那个量:客户最终拿到的画质
+// 由它决定。它只在 task_type=sr 的超分段出现(见 videoPlayground.constants.js 对三个
+// short_edge 字段的辨析),所以不必再按 task_type 设闸——带了它就是这个语义。
+//
+// 它仍可能返回空:体验区只在"精确像素"那条路才发 target_short_edge,档位词那条不发。
+// 空值怎么计费**不在这里决定** —— 本函数只负责"从请求里读出画幅",读不出就是读不出。
+// 兜底行名是计费口径,由 relay/video_billing.go 的 videoBillingResolution 决定。
 func videoResolution(req *TaskSubmitReq) string {
 	if s, _ := req.Metadata["resolution"].(string); strings.TrimSpace(s) != "" {
 		return strings.ToLower(strings.TrimSpace(s))
 	}
-	return VideoResolutionTier(req.Size)
+	if tier := VideoResolutionTier(req.Size); tier != "" {
+		return tier
+	}
+	// target_short_edge 只在**有源视频**的请求上采信。
+	//
+	// 它是 SwiftVR 超分段的字段,生成类请求(t2v/i2v)的引擎根本不认,而且是**静默忽略**
+	// —— 引擎侧没有 extra="forbid",多传的键不报错(见 videoPlayground.constants.js
+	// 对 delivery_short_edge 的那段辨析)。metadata 又是直连调用方完全可控、且被
+	// adaptor.go:290 整体透传的:一个不带 size 的生成请求塞 target_short_edge:1,
+	// 就能把计费行名压到 480p,上游照样按默认档出片 —— 不报错的少收。
+	//
+	// 判据用「有没有源视频」而**不是显式 task_type**:sr 可以由模型名推断
+	// (adaptor.go:911 的 swiftvr/seedvr/-sr),直连调用方不写 task_type 也能正常跑超分;
+	// 按显式 task_type 设闸会把这些合法请求的分辨率维度砍掉、整单退回固定价。
+	// 而 metadata.video 是 sr/v2a 的必填项(materializeSRInputs / materializeDubInputs
+	// 缺了它直接报错),生成类请求则从不携带它(VideoHasVideoInput 特意把它排除在
+	// "视频输入"之外)—— 正好切开这两类,且不依赖计费阶段拿不到的推断结果。
+	if metadataNonEmptyString(req.Metadata, "video") == "" {
+		return ""
+	}
+	return tierFromTargetShortEdge(metadataInt(req.Metadata, "target_short_edge"))
+}
+
+// metadataNonEmptyString 取一个去空白后的字符串值(非字符串或缺失返回空)。
+func metadataNonEmptyString(md map[string]any, key string) string {
+	if md == nil {
+		return ""
+	}
+	s, _ := md[key].(string)
+	return strings.TrimSpace(s)
+}
+
+// tierFromTargetShortEdge 把**声明的目标短边**归一成计费行名。
+//
+// 与 tierFromShortEdge(按像素粗分桶)的差别只在 2K,但那一档非改不可:
+// gpustackplus/minimax_h3.go 的 h3ShortEdgeFromSizeToken 与前端 videoSizeShortEdge
+// 是刻意同口径的一对,把档位词映成短边 —— 2k→1440、4k→2160。本函数是它们的**逆向**,
+// 必须原样对上。按 tierFromShortEdge 的分桶走,1440 会落进 ">1080 即 4k",于是用户在
+// 体验区选 2K 超分、后端按 4k 行计费(配了 4k 就多收,没配就整个未命中回退固定价)。
+//
+// **不把 1440 并进 tierFromShortEdge**:那条路服务的是 VideoResolutionTier 对**任意
+// 像素串**的归档,改它会让既有 token/per_call 模型的 2560x1440 请求从 4k 行挪到 2k 行
+// —— 那是现网计费口径的改变,不属于本次改动。两个函数服务两种输入,不该合并。
+//
+// 只精确匹配这两个值、其余仍走分桶:target_short_edge 也可能由像素串算出(见前端
+// videoSizeShortEdge 的 min(w,h) 分支),那些值没有权威档位表可对,交给 "*" 兜底行
+// 比在这里自造一套档位边界诚实。
+func tierFromTargetShortEdge(shortEdge int) string {
+	switch shortEdge {
+	case 1440:
+		return "2k"
+	case 2160:
+		return "4k"
+	}
+	return tierFromShortEdge(shortEdge)
+}
+
+// metadataInt 从 metadata 取一个正整数。JSON 数字按解析方式可能落成 float64 /
+// json.Number / 字符串,逐一容忍——只认其中一种会让"配了却不生效"随解析路径变化。
+func metadataInt(md map[string]any, key string) int {
+	if md == nil {
+		return 0
+	}
+	switch v := md[key].(type) {
+	case float64:
+		return int(v)
+	case int:
+		return v
+	case int64:
+		return int(v)
+	case json.Number:
+		if n, err := v.Int64(); err == nil {
+			return int(n)
+		}
+	case string:
+		if n, err := strconv.Atoi(strings.TrimSpace(v)); err == nil {
+			return n
+		}
+	}
+	return 0
+}
+
+// tierFromShortEdge 按短边归档,与 VideoResolutionTier 的像素分支同一套档位边界。
+// 两处必须同源:分叉了就会出现"同一段视频,走 size 归到 1080p、走 target_short_edge
+// 归到 4k",而这种错账不报错、只体现在账单上。
+func tierFromShortEdge(shortEdge int) string {
+	if shortEdge <= 0 {
+		return ""
+	}
+	switch {
+	case shortEdge <= 480:
+		return "480p"
+	case shortEdge <= 720:
+		return "720p"
+	case shortEdge <= 1080:
+		return "1080p"
+	default:
+		return "4k"
+	}
 }
 
 // VideoResolutionTier 把 size 归一成计费矩阵的行名。
@@ -86,16 +198,7 @@ func VideoResolutionTier(size string) string {
 	if w < h {
 		shortEdge = w
 	}
-	switch {
-	case shortEdge <= 480:
-		return "480p"
-	case shortEdge <= 720:
-		return "720p"
-	case shortEdge <= 1080:
-		return "1080p"
-	default:
-		return "4k"
-	}
+	return tierFromShortEdge(shortEdge)
 }
 
 // videoPerCallSeconds 按次计费的秒数**只认 req.Duration**。

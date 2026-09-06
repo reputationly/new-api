@@ -21,6 +21,7 @@ import (
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/service/mediastore"
+	"github.com/QuantumNous/new-api/setting/ratio_setting"
 	"github.com/QuantumNous/new-api/setting/system_setting"
 )
 
@@ -72,6 +73,29 @@ const (
 // 判据只认**显式** metadata.task_type:推断逻辑在适配器里(taskTypeOfRequest),
 // 计费阶段拿不到。没显式传就不探测,回退固定价 —— 少赚好过错账。
 var probeTaskTypes = map[string]bool{"sr": true, "v2a": true}
+
+// videoBillingResolution 决定计费矩阵的**行名**,在 ResolveVideoDims 读不出画幅时兜底。
+//
+// 为什么需要它:sr(超分)/ v2a(配乐)的输出画幅**跟随源视频**,客户根本没有画幅入参
+// (超分只有 sr_ratio,配乐连这个都没有)。ResolveVideoDims 于是返回空,而计费矩阵的
+// 空行名守卫会直接判未命中 —— 按秒计费配了也永不生效,超分只能一直按次收。
+//
+// **不去放宽 LookupPerSecond 的空行名守卫**:那道守卫保护的是生成类模型 —— size 解析
+// 不出时,谁也不知道这是 544P 还是 2K,而兜底行通常配在最便宜那档,按它收就是少收
+// (video_pricing_test.go 的 fallbackRowCfg 里 1080p=0.0685、*=0.02,差 3 倍多)。
+// 那条契约对生成类仍然成立,只是对"画幅非入参"的玩法不成立,所以按玩法定向解决。
+//
+// 复用 probeTaskTypes 而不是另写一份 {sr, v2a}:这两处判的是同一件事 ——「输出跟随
+// 输入,因而可以拿输入的属性来计费」。分成两份迟早漂移,而漂移的症状是错账。
+func videoBillingResolution(req *relaycommon.TaskSubmitReq, resolution string) string {
+	if resolution != "" || req == nil {
+		return resolution
+	}
+	if !probeTaskTypes[strings.TrimSpace(metadataStringValue(req.Metadata, "task_type"))] {
+		return ""
+	}
+	return ratio_setting.VideoPriceRowFallback
+}
 
 // videoDurationInputField 源视频所在的 metadata 键。
 //

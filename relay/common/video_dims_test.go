@@ -1,6 +1,7 @@
 package common
 
 import (
+	"encoding/json"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -138,18 +139,95 @@ func TestVideoSecondsFallback(t *testing.T) {
 		" 8": 8,
 		"1":  1,
 		// 脏值一律 0：算成秒数就是凭空定价
-		"":     0,
-		"  ":   0,
-		"abc":  0,
-		"0":    0,
-		"-3":   0,
-		"5.5":  0,
-		"10s":  0, // 带单位不认，与 Duration 的整数语义一致
-		"1e3":  0,
-		"０":    0, // 全角数字
+		"":    0,
+		"  ":  0,
+		"abc": 0,
+		"0":   0,
+		"-3":  0,
+		"5.5": 0,
+		"10s": 0, // 带单位不认，与 Duration 的整数语义一致
+		"1e3": 0,
+		"０":   0, // 全角数字
 	}
 	for in, want := range cases {
 		require.Equalf(t, want, VideoSecondsFallback(&TaskSubmitReq{Seconds: in}), "seconds=%q", in)
 	}
 	require.Zero(t, VideoSecondsFallback(nil))
+}
+
+// 超分请求不带 size,分辨率必须由 target_short_edge 定档。
+//
+// 少了这一级,超分的 resolution 恒为空,按秒计费配了也永不生效——这是本功能上线前
+// 漏掉的那一维(秒数补齐了,分辨率没有)。
+func TestSRResolutionFromTargetShortEdge(t *testing.T) {
+	srReq := func(md map[string]any) *TaskSubmitReq {
+		base := map[string]any{"task_type": "sr", "video": "task:abc", "sr_ratio": 4}
+		for k, v := range md {
+			base[k] = v
+		}
+		return &TaskSubmitReq{Metadata: base}
+	}
+	cases := []struct {
+		name string
+		md   map[string]any
+		want string
+	}{
+		{"1080 短边", map[string]any{"target_short_edge": float64(1080)}, "1080p"},
+		// 2K 必须落 2k 行,不能落 4k:前端 videoSizeShortEdge('2k')=1440 与后端
+		// h3ShortEdgeFromSizeToken 是同口径的一对,本处是它们的逆向。按 >1080 即 4k
+		// 的分桶走,用户选 2K 超分会按 4k 收(或整个未命中回退固定价)。
+		{"1440 短边 → 2k(不是 4k)", map[string]any{"target_short_edge": float64(1440)}, "2k"},
+		{"2160 短边", map[string]any{"target_short_edge": float64(2160)}, "4k"},
+		{"720 短边", map[string]any{"target_short_edge": float64(720)}, "720p"},
+		{"字符串形态", map[string]any{"target_short_edge": "1080"}, "1080p"},
+		{"json.Number", map[string]any{"target_short_edge": json.Number("2160")}, "4k"},
+		{"缺字段 → 空(兜底行名由计费层给)", nil, ""},
+		{"0 值 → 空", map[string]any{"target_short_edge": float64(0)}, ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			res, _, _ := ResolveVideoDims(srReq(tc.md))
+			require.Equal(t, tc.want, res)
+		})
+	}
+}
+
+// 显式 resolution / size 的优先级不能被 target_short_edge 顶掉。
+func TestTargetShortEdgeIsLowestPriority(t *testing.T) {
+	res, _, _ := ResolveVideoDims(&TaskSubmitReq{
+		Size:     "720p",
+		Metadata: map[string]any{"target_short_edge": float64(2160)},
+	})
+	require.Equal(t, "720p", res, "顶层 size 应压过 target_short_edge")
+
+	res, _, _ = ResolveVideoDims(&TaskSubmitReq{
+		Metadata: map[string]any{"resolution": "2k", "target_short_edge": float64(1080)},
+	})
+	require.Equal(t, "2k", res, "metadata.resolution 应压过 target_short_edge")
+}
+
+// 没有源视频的请求不得采信 target_short_edge。
+//
+// 它是超分段的字段,生成类引擎静默忽略它(没有 extra="forbid")。metadata 由调用方
+// 完全可控且整体透传,不设闸的话:一个不带 size 的生成请求塞 target_short_edge:1
+// 就能把行名压到 480p、上游照默认档出片 —— 不报错的少收。
+func TestTargetShortEdgeIgnoredWithoutSourceVideo(t *testing.T) {
+	// 生成类请求(无 metadata.video):必须读不出画幅,回退固定价而不是 480p。
+	res, _, _ := ResolveVideoDims(&TaskSubmitReq{
+		Metadata: map[string]any{"prompt": "a cat", "target_short_edge": float64(1)},
+	})
+	require.Equal(t, "", res, "无源视频时不得采信 target_short_edge")
+
+	// 有源视频但**没有显式 task_type**:sr 可由模型名推断(swiftvr/seedvr/-sr),
+	// 这类合法直连超分必须照常拿到分辨率,否则按显式 task_type 设闸就会误伤它们。
+	res, _, _ = ResolveVideoDims(&TaskSubmitReq{
+		Metadata: map[string]any{"video": "https://a/v.mp4", "target_short_edge": float64(1440)},
+	})
+	require.Equal(t, "2k", res, "有源视频即采信,不要求显式 task_type")
+
+	// 空白源视频等同于没有。
+	res, _, _ = ResolveVideoDims(&TaskSubmitReq{
+		Metadata: map[string]any{"video": "   ", "target_short_edge": float64(2160)},
+	})
+	require.Equal(t, "", res)
 }
