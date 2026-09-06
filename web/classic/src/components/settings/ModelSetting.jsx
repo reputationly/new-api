@@ -25,6 +25,7 @@ import { useTranslation } from 'react-i18next';
 import SettingGeminiModel from '../../pages/Setting/Model/SettingGeminiModel';
 import SettingClaudeModel from '../../pages/Setting/Model/SettingClaudeModel';
 import SettingGlobalModel from '../../pages/Setting/Model/SettingGlobalModel';
+import SettingsAggregateModel from '../../pages/Setting/Model/SettingsAggregateModel';
 import SettingGrokModel from '../../pages/Setting/Model/SettingGrokModel';
 import SettingsChannelAffinity from '../../pages/Setting/Operation/SettingsChannelAffinity';
 
@@ -48,6 +49,8 @@ const ModelSetting = () => {
     'gemini.thinking_adapter_budget_tokens_percentage': 0.6,
     'grok.violation_deduction_enabled': true,
     'grok.violation_deduction_amount': 0.05,
+    // 聚合(编排)模型:一个对外模型名 = 一条固定流水线。整份配置是一段 JSON。
+    AggregateModelConfig: '',
   });
 
   let [loading, setLoading] = useState(false);
@@ -65,7 +68,8 @@ const ModelSetting = () => {
           item.key === 'claude.default_max_tokens' ||
           item.key === 'gemini.supported_imagine_models' ||
           item.key === 'global.thinking_model_blacklist' ||
-          item.key === 'global.chat_completions_to_responses_policy'
+          item.key === 'global.chat_completions_to_responses_policy' ||
+          item.key === 'AggregateModelConfig'
         ) {
           if (item.value !== '') {
             try {
@@ -128,6 +132,10 @@ const ModelSetting = () => {
         {/* Grok */}
         <Card style={{ marginTop: '10px' }}>
           <SettingGrokModel options={inputs} refresh={onRefresh} />
+        </Card>
+        {/* 聚合(编排)模型 */}
+        <Card style={{ marginTop: '10px' }}>
+          <SettingsAggregateModel options={inputs} refresh={onRefresh} />
         </Card>
       </Spin>
     </>
