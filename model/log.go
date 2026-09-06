@@ -61,6 +61,18 @@ func formatUserLogs(logs []*Log, startIdx int) {
 			delete(otherMap, "admin_info")
 			// delete(otherMap, "reject_reason")
 			delete(otherMap, "stream_status")
+			// 模型映射的结果属于内部路由信息，与上面剥掉 ChannelName 是同一个理由：
+			// 不让终端用户看出这次请求实际落到了谁家、上游那边这个模型叫什么。
+			// 渠道一旦配了 model mapping（把对外的 X 映射成上游的 Y），
+			// upstream_model_name 就直接把供应商侧的真实模型名摆出来了。
+			//
+			// 两个字段都要删：只删名字的话 is_model_mapped:true 仍留在 JSON 里，
+			// 等于照样告诉用户「这里发生了映射」。
+			//
+			// 只影响返回给用户的那份副本，DB 里的 Other 原样保留 —— 管理员日志
+			// （GetAllLogs 不走本函数）与对账（reconcile_helpers 直接读库）都照常。
+			delete(otherMap, "upstream_model_name")
+			delete(otherMap, "is_model_mapped")
 		}
 		logs[i].Other = common.MapToJsonStr(otherMap)
 		logs[i].Id = startIdx + i + 1
