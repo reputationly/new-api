@@ -1,6 +1,7 @@
 package middleware
 
 import (
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -11,6 +12,17 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 )
+
+// 这两个包装只是把"从 body 归一化"这一步补上,让既有用例保持按单个请求体书写。
+// 生产路径复用同一份归一化结果(见 applyAggregateExpansion),不重复序列化 ——
+// 参考素材常是 base64 data URL,多序列化一次是几 MB 的代价。
+func collectInputImagesFromBody(body map[string]any) []string {
+	return collectInputImages(body, normalizeTaskRequest(body))
+}
+
+func buildTaskContextFromBody(body map[string]any) string {
+	return buildTaskContext(body, normalizeTaskRequest(body))
+}
 
 func withAggregateConfig(t *testing.T, raw string) {
 	t.Helper()
@@ -292,7 +304,7 @@ func TestApplyExpansionSkipsEnhanceWhenDisabled(t *testing.T) {
 
 // 输入图要从请求体里收集出来喂给增强模型 —— 覆盖图生图/首尾帧/参考生视频的入参形态。
 func TestCollectInputImages(t *testing.T) {
-	got := collectInputImages(map[string]any{
+	got := collectInputImagesFromBody(map[string]any{
 		"image":           "https://a/1.png",
 		"images":          []any{"https://a/2.png", "", "https://a/3.png"},
 		"input_reference": "https://a/4.png",
@@ -304,7 +316,110 @@ func TestCollectInputImages(t *testing.T) {
 
 // 纯文生请求没有图,收集结果为空,增强照常按文字工作(不该 panic 或塞入空串)。
 func TestCollectInputImagesEmptyForTextOnly(t *testing.T) {
-	require.Empty(t, collectInputImages(map[string]any{"prompt": "a cat"}))
+	require.Empty(t, collectInputImagesFromBody(map[string]any{"prompt": "a cat"}))
+}
+
+// 参考生视频(r2va)的参考图在 metadata.src_ref_images 里,不在顶层。
+//
+// 只看顶层的话,这类请求收集到的图是**空的**,增强模型只能从文字猜 —— 而参考生视频的
+// 全部创作意图就在这些素材里,猜出来的描述会与素材直接打架。
+func TestCollectInputImagesReadsMetadataRefs(t *testing.T) {
+	got := collectInputImagesFromBody(map[string]any{
+		"prompt": "a cat",
+		"metadata": map[string]any{
+			"task_type":      "r2va",
+			"src_ref_images": []any{"https://a/ref1.png", "", "https://a/ref2.png"},
+		},
+	})
+	require.ElementsMatch(t, []string{"https://a/ref1.png", "https://a/ref2.png"}, got)
+}
+
+// 首帧(顶层 image)与参考素材(metadata)是不同的键,两边都要收。
+func TestCollectInputImagesMergesTopLevelAndMetadata(t *testing.T) {
+	got := collectInputImagesFromBody(map[string]any{
+		"image":    "https://a/first.png",
+		"metadata": map[string]any{"src_ref_images": []any{"https://a/ref.png"}},
+	})
+	require.ElementsMatch(t, []string{"https://a/first.png", "https://a/ref.png"}, got)
+}
+
+// 参考视频/音频**不能**当成图片发给增强模型。
+//
+// 每一项都会被编成 image_url part,塞一段视频进去轻则被忽略、重则整个请求被拒;
+// 而调用方常传 base64 data-uri,一段视频还会把请求撑爆 —— 结果是增强整体降级,
+// 比看不见参考视频更糟。
+func TestCollectInputImagesSkipsNonImageRefs(t *testing.T) {
+	got := collectInputImagesFromBody(map[string]any{
+		"metadata": map[string]any{
+			"src_ref_images":               []any{"https://a/ref.png"},
+			"reference_videos":             []any{"https://a/clip.mp4"},
+			"reference_audios":             []any{"https://a/voice.wav"},
+			"reference_video_durations_ms": []any{3000},
+		},
+	})
+	require.Equal(t, []string{"https://a/ref.png"}, got)
+}
+
+// metadata 不是对象时按"没有参考素材"处理,不能 panic ——
+// 请求体的合法性由上游适配器判定,在中间件里为它报错只会挡住本能跑通的生成。
+func TestCollectInputImagesToleratesNonObjectMetadata(t *testing.T) {
+	require.Empty(t, collectInputImagesFromBody(map[string]any{"metadata": "not-an-object"}))
+	require.Empty(t, collectInputImagesFromBody(map[string]any{"metadata": nil}))
+}
+
+// 参考生视频要把素材清单和标号说清楚:增强模型看不到面板,不说它就不知道有几张图、
+// 该用哪个编号指代 —— 而 guide 正是靠 <Picture N> / <Video N> 指代素材的。
+func TestBuildTaskContextListsReferenceAssets(t *testing.T) {
+	got := buildTaskContextFromBody(map[string]any{
+		"metadata": map[string]any{
+			"task_type":        "r2va",
+			"src_ref_images":   []any{"a", "b"},
+			"reference_videos": []any{"c"},
+			"reference_audios": []any{"d"},
+		},
+	})
+	require.Contains(t, got, "2 reference image(s), labelled <Picture 1>..<Picture 2>")
+	require.Contains(t, got, "1 reference video(s), labelled <Video 1>")
+	require.Contains(t, got, "<Audio 1>")
+}
+
+// 首尾帧齐全时说明两张图各自的时间角色 —— 说反了模型会朝错误的方向收敛。
+func TestBuildTaskContextNamesFrameRoles(t *testing.T) {
+	got := buildTaskContextFromBody(map[string]any{
+		"images":   []any{"first.png", "last.png"},
+		"metadata": map[string]any{"task_type": "flf2v"},
+	})
+	require.Contains(t, got, "FL2VA")
+	require.Contains(t, got, "<Picture 1> is the first frame and <Picture 2> is the last frame")
+}
+
+// 只给一张关键帧时**不猜**是首是尾:猜反了不会报错,只会让模型朝反方向收敛。
+// 陈述"这是一张关键帧"信息量更少,但不会误导。
+func TestBuildTaskContextDoesNotGuessSingleKeyframeRole(t *testing.T) {
+	got := buildTaskContextFromBody(map[string]any{
+		"images":   []any{"only.png"},
+		"metadata": map[string]any{"task_type": "flf2v"},
+	})
+	require.NotContains(t, got, "first frame and")
+	require.Contains(t, got, "<Picture 1> is a keyframe")
+}
+
+// 时长要带两位小数:guide 要求每个切点时间戳落在成片时长内,而模型看不到面板上的秒数。
+// duration 是 UnmarshalWithNumber 解出来的 json.Number,只判 float64 会静默取不到值。
+func TestBuildTaskContextReadsJSONNumberDuration(t *testing.T) {
+	got := buildTaskContextFromBody(map[string]any{
+		"duration": json.Number("5"),
+		"metadata": map[string]any{"task_type": "i2v"},
+	})
+	require.Contains(t, got, "Effective video duration: 5.00 seconds")
+	require.Contains(t, got, "I2VA")
+}
+
+// 说不出任何事实就返回空串 —— 拼一个只有标题没有内容的"Current request:"上去,
+// 等于告诉模型"这里本该有信息但没有",不如不拼。
+func TestBuildTaskContextEmptyWhenNothingKnown(t *testing.T) {
+	require.Empty(t, buildTaskContextFromBody(map[string]any{"prompt": "a cat"}))
+	require.Empty(t, buildTaskContextFromBody(map[string]any{"metadata": "not-an-object"}))
 }
 
 // 大整数必须原样保留。
@@ -362,4 +477,185 @@ func TestGroupAllowedExpandsAutoGroup(t *testing.T) {
 	// 未配 groups 时一律放行,且不该去展开(没必要)。
 	noGroups := &common.AggregateModel{Name: "b"}
 	require.True(t, groupAllowedForAggregate(noGroups, "auto", "default"))
+}
+
+// ── 检视意见的回归 ───────────────────────────────────────────────────
+// 这五条的共同点是「生成段读得到、增强段读不到」:请求照常出片,但改写出的提示词
+// 描述的是另一个输入。全部不报错,只有产出对不上。
+
+// l2va 与 i2v 的输入形态完全一样(一张图),只有语义相反。不说破,增强模型会按
+// 最常见的 i2v 写"从这张图往下发展",方向正好反了。
+func TestBuildTaskContextCoversL2VA(t *testing.T) {
+	got := buildTaskContextFromBody(map[string]any{
+		"images":   []any{"a.png"},
+		"metadata": map[string]any{"task_type": "l2va"},
+	})
+	require.Contains(t, got, "L2VA")
+	require.Contains(t, got, "LAST frame")
+}
+
+// R2VA 最多三段参考音频,写死成 1 会让后两段在增强模型眼里不存在。
+func TestBuildTaskContextReportsAllReferenceAudios(t *testing.T) {
+	got := buildTaskContextFromBody(map[string]any{
+		"metadata": map[string]any{
+			"task_type":        "r2va",
+			"reference_audios": []any{"a.wav", "b.wav", "c.wav"},
+		},
+	})
+	require.Contains(t, got, "3 reference audio(s)")
+	require.Contains(t, got, "<Audio 1>..<Audio 3>")
+}
+
+// 逗号分隔的单串在生成段是多张参考图(common.MetadataStringList),
+// 增强段若当成一项,既数错了、又把一个非法 URL 递给增强模型。
+func TestCommaSeparatedRefsAgreeAcrossStages(t *testing.T) {
+	body := map[string]any{
+		"metadata": map[string]any{
+			"task_type":      "r2va",
+			"src_ref_images": "a.png,b.png",
+		},
+	}
+	require.Contains(t, buildTaskContextFromBody(body), "2 reference image(s)")
+	require.Equal(t, []string{"a.png", "b.png"}, collectInputImagesFromBody(body))
+}
+
+// data URL 自带逗号,拆了就成了两个残缺片段。这条是上面那条的反面,必须同时成立。
+func TestDataURLRefIsNotCommaSplit(t *testing.T) {
+	const dataURL = "data:image/png;base64,iVBORw0KGgo="
+	body := map[string]any{
+		"metadata": map[string]any{"task_type": "r2va", "src_ref_images": dataURL},
+	}
+	require.Contains(t, buildTaskContextFromBody(body), "1 reference image(s)")
+	require.Equal(t, []string{dataURL}, collectInputImagesFromBody(body))
+}
+
+// metadata 允许是 JSON 编码的字符串(TaskSubmitReq.UnmarshalJSON 会解开)。
+// 直接读 map 的话这种合法写法会让增强段一条事实都取不到。
+func TestBuildTaskContextAcceptsJSONStringMetadata(t *testing.T) {
+	got := buildTaskContextFromBody(map[string]any{
+		"metadata": `{"task_type":"i2v"}`,
+		"images":   []any{"a.png"},
+	})
+	require.Contains(t, got, "I2VA")
+}
+
+// duration 允许是字符串整数。取不到时表现为"增强照常跑、只是没有时长约束",
+// 于是可能写出超出成片长度的分镜时间点。
+func TestBuildTaskContextAcceptsStringDuration(t *testing.T) {
+	got := buildTaskContextFromBody(map[string]any{
+		"duration": "5",
+		"metadata": map[string]any{"task_type": "t2v"},
+	})
+	require.Contains(t, got, "5.00 seconds")
+}
+
+// 单数键是平台契约里明确支持的拼法(与 doubao/Ark 对齐),生成段用
+// TaskSubmitReq.RefVideos/RefAudios 两种都收。增强段只认复数就会说"没有参考素材",
+// 而请求本身跑得好好的 —— 又一次"生成段看得到、增强段看不到"。
+func TestBuildTaskContextAcceptsSingularReferenceKeys(t *testing.T) {
+	got := buildTaskContextFromBody(map[string]any{
+		"metadata": map[string]any{
+			"task_type":       "r2va",
+			"reference_video": "clip.mp4",
+			"reference_audio": "voice.wav",
+		},
+	})
+	require.Contains(t, got, "1 reference video(s)")
+	require.Contains(t, got, "1 reference audio(s)")
+	require.NotContains(t, got, "none yet")
+}
+
+// 只给 seconds 时**不陈述时长**。
+//
+// gpustackplus 确实会按 seconds 回落出片,但聚合展开跑在选渠道之前,这里不知道
+// 生成段会落到哪个渠道;而 kling/vidu/jimeng 完全忽略 seconds,跟着回落就会告诉
+// 增强模型一个上游根本不会采纳的时长,分镜时间点全落在片子之外。
+// 计费侧对同一件事设了渠道闸(videoBillingSeconds 先判 TaskPlatform),我们拿不到
+// 那个判据,就只能不说 —— 少说一句事实,比说一句错的安全。
+func TestBuildTaskContextOmitsDurationWhenOnlySecondsGiven(t *testing.T) {
+	got := buildTaskContextFromBody(map[string]any{
+		"seconds":  "8",
+		"metadata": map[string]any{"task_type": "t2v"},
+	})
+	require.NotContains(t, got, "seconds. Every cut timestamp")
+}
+
+// 显式 duration(含字符串整数)照常陈述 —— 那是调用方明确声明的事实,与渠道无关。
+func TestBuildTaskContextStatesExplicitDuration(t *testing.T) {
+	for _, raw := range []any{5, "5"} {
+		got := buildTaskContextFromBody(map[string]any{
+			"duration": raw,
+			"metadata": map[string]any{"task_type": "t2v"},
+		})
+		require.Containsf(t, got, "5.00 seconds", "duration=%v(%T)", raw, raw)
+	}
+}
+
+// 四句任务类型措辞逐字抄自前端 buildH3OptimizeContext。H3 的 guide 就是靠
+// "Emit the <X> alignment instruction" 这句触发对齐指令的;只留 T2VA 的否定句
+// 而丢掉三句肯定句是最糟的组合 —— 帧类任务从没被要求发,纯文生却明确说别发。
+func TestTaskTypeWordingMatchesFrontendVerbatim(t *testing.T) {
+	cases := []struct {
+		name string
+		body map[string]any
+		want string
+	}{
+		{"FL2VA", map[string]any{"images": []any{"a.png", "b.png"}, "metadata": map[string]any{"task_type": "flf2v"}},
+			"Emit the FL2VA alignment instruction, and prefer a single shot."},
+		{"I2VA", map[string]any{"images": []any{"a.png"}, "metadata": map[string]any{"task_type": "i2v"}},
+			"Emit the I2VA alignment instruction and develop forward from it."},
+		{"L2VA", map[string]any{"images": []any{"a.png"}, "metadata": map[string]any{"task_type": "l2va"}},
+			"is the LAST frame, not the first. Emit the L2VA alignment instruction and converge onto it at the end."},
+		{"T2VA", map[string]any{"metadata": map[string]any{"task_type": "t2v"}},
+			"Do NOT emit any alignment instruction; begin directly with integrated_multimodal_description."},
+	}
+	for _, c := range cases {
+		require.Containsf(t, buildTaskContextFromBody(c.body), c.want, "%s 措辞与前端不一致", c.name)
+	}
+}
+
+// 送给增强模型的图片顺序必须与 <Picture N> 标号一致。
+//
+// 参考族只吃 metadata.src_ref_images —— 顶层图不在它的输入契约里。混着发会同时坏两件事:
+// 参考图被顶层图往后挤(<Picture 1> 指向了别的素材),以及把生成段根本不看的图摆到
+// 增强模型面前。两者都不报错,只是改写出的提示词描述的是另一个输入。
+func TestCollectInputImagesForR2VASendsOnlyReferenceImages(t *testing.T) {
+	body := map[string]any{
+		"image": "https://a/not-used-by-r2va.png",
+		"metadata": map[string]any{
+			"task_type":      "r2va",
+			"src_ref_images": []any{"https://a/ref1.png", "https://a/ref2.png"},
+		},
+	}
+	require.Equal(t, []string{"https://a/ref1.png", "https://a/ref2.png"}, collectInputImagesFromBody(body))
+	// 标号说有两张,发出去的就必须正好是这两张、且顺序一致。
+	require.Contains(t, buildTaskContextFromBody(body), "2 reference image(s), labelled <Picture 1>..<Picture 2>")
+}
+
+// 帧族相反:只吃顶层 images,metadata 里的参考图不属于它的契约。
+// <Picture 1> 是首帧、<Picture 2> 是尾帧,顺序错了方向就反了。
+func TestCollectInputImagesForFrameTasksSendsOnlyTopLevel(t *testing.T) {
+	body := map[string]any{
+		"images": []any{"https://a/first.png", "https://a/last.png"},
+		"metadata": map[string]any{
+			"task_type":      "flf2v",
+			"src_ref_images": []any{"https://a/stray-ref.png"},
+		},
+	}
+	require.Equal(t, []string{"https://a/first.png", "https://a/last.png"}, collectInputImagesFromBody(body))
+}
+
+// 帧族的条件图要按回落取,不能并集。同时给 images 和 image 时,生成段只用 images;
+// 增强段若把 image 也算一份,<Picture 2> 就从"尾帧"变成了重复的首帧,对齐指令写反。
+func TestCollectInputImagesForFrameTasksHonoursAliasPrecedence(t *testing.T) {
+	body := map[string]any{
+		"images":   []any{"https://a/first.png", "https://a/last.png"},
+		"image":    "https://a/first.png",
+		"metadata": map[string]any{"task_type": "flf2v"},
+	}
+	got := collectInputImagesFromBody(body)
+	require.Equal(t, []string{"https://a/first.png", "https://a/last.png"}, got,
+		"images 已给出时不应再并入 image")
+	// 标号声明的张数必须与实际发送数一致。
+	require.Contains(t, buildTaskContextFromBody(body), "<Picture 2> is the last frame")
 }

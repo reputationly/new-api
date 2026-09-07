@@ -8,6 +8,7 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
+	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/service"
 )
 
@@ -122,6 +123,13 @@ func applyAggregateExpansion(c *gin.Context, publicName, realModel string, agg *
 	// 的同类改写也用它。
 	var body map[string]any
 	if err := common.UnmarshalWithNumber(raw, &body); err != nil {
+		// 最可能的成因是 multipart:/v1/images/edits 支持 multipart 提交
+		// (relay/helper/valid_request.go 的 RelayModeImagesEdits 分支),而这里的
+		// 展开只会读-改-写 JSON。报错要把这层说破,否则运营看到的是一句
+		// "解析请求体失败",完全指不到"换 JSON 提交或别用聚合模型"这个动作上。
+		if ct := c.Request.Header.Get("Content-Type"); strings.Contains(ct, "multipart/form-data") {
+			return fmt.Errorf("聚合模型 %s 暂不支持 multipart 提交(Content-Type: %s),请改用 JSON 请求体,或直接调用生成段模型 %s", publicName, ct, realModel)
+		}
 		return fmt.Errorf("解析请求体失败: %w", err)
 	}
 	// 解析出 nil(body 为空、或内容是 JSON null)时必须报错,不能就地补一个空 map ——
@@ -154,9 +162,19 @@ func applyAggregateExpansion(c *gin.Context, publicName, realModel string, agg *
 		if strings.TrimSpace(prompt) != "" {
 			// 带客户的 Authorization 原样发起 —— 增强以客户身份走一遍 relay,
 			// 于是计费/限流/日志与他自己调一次 chat 完全一致(分段计费)。
+			// 事实一律从**归一化后**的请求读,不从原始 map 读。
+			//
+			// TaskSubmitReq.UnmarshalJSON 已经把几种合法编码收敛成一种:metadata 可以是
+			// JSON 编码的字符串、duration 可以是字符串整数。直接读 map 会在这些形态下
+			// 一条事实都取不到 —— 生成段照常按 metadata 里的 task_type 和素材跑,
+			// 增强段却什么都不知道,于是改写出一段与素材无关的提示词,且不报错。
+			//
+			// 从**改写后**的 body 走一遍序列化,而不是用入口的原始字节:Overrides 可能
+			// 改掉 duration 一类字段,事实要描述真正发出去的那个请求。
+			norm := normalizeTaskRequest(body)
 			res := service.EnhancePrompt(c.Request.Context(), agg,
 				c.Request.Header.Get("Authorization"),
-				prompt, collectInputImages(body))
+				prompt, collectInputImages(body, norm), buildTaskContext(body, norm))
 			exp.Enhance = res
 			// 这个判断当前是**冗余**的:EnhanceResult 的契约保证降级时
 			// EnhancedPrompt 就等于原 prompt,所以写不写回结果一样(去掉它做变异
@@ -182,9 +200,50 @@ func applyAggregateExpansion(c *gin.Context, publicName, realModel string, agg *
 
 // collectInputImages 从请求体里收集输入图,喂给增强模型看。
 //
-// 只认这几个顶层字段:它们覆盖了图生图 / 首尾帧 / 参考生视频的入参形态。收不到也无妨
-// —— 纯文生场景本来就没有图,增强照常按文字工作。
-func collectInputImages(body map[string]any) []string {
+// 顶层的 image / images / input_reference 覆盖图生图与首尾帧;**参考生视频(r2va)的
+// 参考图不在顶层**,它在 metadata.src_ref_images 里 —— 顶层的 image 是"首帧",与参考素材
+// 是不同的键,调用方混用会让上游的输入形态判定失准,所以两边必须分开收集。
+//
+// 漏掉 metadata 那一份的后果不是"少看几张图":参考生视频的全部创作意图就在参考素材里,
+// 增强模型只能从文字猜,会凭空臆造出与素材打架的描述(见 SendInputImages 的字段注释),
+// 而生成模型是看得见素材的。这正是该开关默认为开要防的事故,只是换了个入参位置。
+//
+// **只收图片,不收 metadata.reference_videos / reference_audios**:增强请求把每一项都
+// 编成 `image_url` part(见 buildEnhanceRequest),塞一段视频进去,轻则被模型忽略、重则
+// 整个请求被拒;而调用方传的常常是 base64 data-uri,一段几十 MB 的视频还会把请求撑爆。
+// 结果是增强直接降级——比看不见参考视频更糟。要让增强理解视频参考,得先有"抽帧"或
+// "在文本里声明素材角色"的机制,那是另一件事,不该借这个口子偷偷做半套。
+func collectInputImages(body map[string]any, norm *relaycommon.TaskSubmitReq) []string {
+	// **按 task_type 只收生成段真正会用到的那一组**,顺序与 buildTaskContext 的
+	// <Picture N> 标号一致。
+	//
+	// 混着收会同时坏两件事:标号错位(参考图被顶层图往后挤,<Picture 1> 指向了别的素材),
+	// 以及把生成段根本不看的素材摆到增强模型面前 —— 它会照着一张不参与生成的图去写。
+	// 两者都不报错,只是改写出的提示词描述的是另一个输入。
+	if norm != nil {
+		switch norm.TaskType() {
+		case "r2va", "r2v", "rv2v":
+			// 参考族只吃 metadata.src_ref_images;顶层图不在它的输入契约里。
+			return norm.RefImages()
+		case "i2v", "l2va", "flf2v", "s2v":
+			// 帧族只吃顶层条件图,且 images / image / input_reference 是**回落关系**
+			// 而不是并集 —— 取并集会让同一张图数两遍,<Picture N> 整体后移。
+			return norm.FrameImages()
+		}
+	}
+	// 说不出 task_type(图片聚合、或调用方没显式指定)时尽力收集:顶层在前、参考在后。
+	// 这条路径不发标号,所以这里取并集是安全的 —— 宁可多给增强模型看一张,
+	// 也别漏掉调用方用非常规别名传的那张。
+	out := topLevelImages(body)
+	if norm != nil {
+		out = append(out, norm.RefImages()...)
+	}
+	return out
+}
+
+// topLevelImages 取顶层的条件图。三个键都收:公共校验把 image 归一进 images,
+// 适配器在 images 为空时补 input_reference,这里覆盖调用方可能用的每一种写法。
+func topLevelImages(body map[string]any) []string {
 	var out []string
 	appendVal := func(v any) {
 		switch t := v.(type) {
@@ -206,6 +265,164 @@ func collectInputImages(body map[string]any) []string {
 		}
 	}
 	return out
+}
+
+// normalizeTaskRequest 把改写后的 body 过一遍 TaskSubmitReq 的解码,拿到归一化的
+// metadata / duration。解不出来(图片聚合的请求体就不是这个形状)返回 nil,
+// 调用方按"说不出事实"处理 —— 中间件不因为解析失败挡住本能跑通的生成。
+func normalizeTaskRequest(body map[string]any) *relaycommon.TaskSubmitReq {
+	raw, err := common.Marshal(body)
+	if err != nil {
+		return nil
+	}
+	var req relaycommon.TaskSubmitReq
+	if err := common.Unmarshal(raw, &req); err != nil {
+		return nil
+	}
+	return &req
+}
+
+// buildTaskContext 把本次请求的**既成事实**编成一段给增强模型看的说明。
+//
+// 增强模型看不到调用方的面板:它只拿到一句"一只猫在窗台打盹",分不出这是首帧生视频
+// 还是首尾帧,更不知道有几张参考素材、成片多长。猜错同样不报错,只是默默出差档 ——
+// 体验区早就踩过,那边的对策是 buildH3OptimizeContext(`web/classic/src/constants/
+// h3Prompt.constants.js`),这里是同一件事的后端版。
+//
+// **措辞与标号逐字抄自前端那份**(`<Picture 1>` / `<Video 1>` / 两位小数的时长,
+// 以及每句里的 "Emit the <X> alignment instruction")。不是风格问题:H3 的 guide 就是
+// 用这套标号和这几句指代素材与对齐动作的,自造一套等于让模型去对齐一个它没见过的
+// 体系;尤其**丢掉肯定句而留下 T2VA 的否定句**最糟 —— 帧类任务从没被要求发出对齐指令,
+// 纯文生却明确说别发。两处将来要一起改。
+//
+// **唯一的有意分歧是参考音频的条数**:前端那份的入参是布尔量(`hasRefAudio`),写死
+// "1 reference audio";而平台后端 R2VA 收最多三段(adaptor.go 的 maxR2VARefAudios),
+// 这里按实际条数输出。抄成 1 会让后两段在增强模型眼里不存在。
+//
+// 与模板的分工:模板(system_prompt)说"产出长什么样",这段说"这一次的输入是什么",
+// 所以它**无条件拼上**,运营改写过模板也不例外 —— 事实不该被模板覆盖掉。
+//
+// 判据只用 metadata.task_type 与素材字段这些**平台统一任务契约**里的东西,不去猜模型;
+// 说不出任何事实时返回空串,拼上去等于没拼。
+func buildTaskContext(body map[string]any, norm *relaycommon.TaskSubmitReq) string {
+	if norm == nil {
+		return ""
+	}
+	taskType := norm.TaskType()
+
+	var facts []string
+	switch strings.TrimSpace(taskType) {
+	case "r2va":
+		var parts []string
+		if n := len(norm.RefImages()); n > 0 {
+			parts = append(parts, fmt.Sprintf("%d reference image(s), labelled %s", n, pictureLabels(n)))
+		}
+		if n := len(norm.RefVideos()); n > 0 {
+			parts = append(parts, fmt.Sprintf("%d reference video(s), labelled %s", n, videoLabels(n)))
+		}
+		// R2VA 最多收三段参考音频(adaptor.go 的 maxR2VARefAudios),H3 的 guide 按
+		// <Audio N> 逐条指代。写死成 1 会让增强模型以为只有一段,后两段在它眼里不存在。
+		if n := len(norm.RefAudios()); n > 0 {
+			parts = append(parts, fmt.Sprintf(
+				"%d reference audio(s), labelled %s (voice-timbre reference)", n, audioLabels(n)))
+		}
+		assets := "none yet"
+		if len(parts) > 0 {
+			assets = strings.Join(parts, "; ")
+		}
+		facts = append(facts,
+			fmt.Sprintf("Task: full-reference rewrite. Available reference assets: %s.", assets))
+	case "flf2v":
+		// 关键帧的两张图在顶层 images 里,顺序即首帧、尾帧。只给一张时**不猜**是首是尾
+		// ——猜反了模型会朝着错误的方向收敛,而只陈述"有一张关键帧"至少不会误导。
+		if countRefs(body["images"]) >= 2 {
+			facts = append(facts,
+				"Task type: FL2VA. <Picture 1> is the first frame and <Picture 2> is the last frame. Emit the FL2VA alignment instruction, and prefer a single shot.")
+		} else {
+			facts = append(facts, "Task type: keyframe-driven. <Picture 1> is a keyframe of the shot.")
+		}
+	case "i2v":
+		facts = append(facts,
+			"Task type: I2VA. <Picture 1> is the first frame. Emit the I2VA alignment instruction and develop forward from it.")
+	case "l2va":
+		// l2va 是"只给尾帧、反推开头"。它与 i2v 的输入形态完全一样(都是一张图),
+		// 差别只在语义 —— 不说破,增强模型只会按最常见的 i2v 去写"从这张图往下发展",
+		// 方向正好反了。这正是 flf2v 分支"只给一张时不猜是首是尾"要回避的歧义,
+		// 而 l2va 这里是**知道**的,不该跟着不猜。
+		facts = append(facts,
+			"Task type: L2VA. <Picture 1> is the LAST frame, not the first. Emit the L2VA alignment instruction and converge onto it at the end.")
+	case "t2v":
+		facts = append(facts,
+			"Task type: T2VA. There is no reference image. Do NOT emit any alignment instruction; begin directly with integrated_multimodal_description.")
+	}
+
+	// 时长只认显式的 duration(字符串整数由 TaskSubmitReq 归一化)。
+	//
+	// **不跟 seconds 回落**,尽管 gpustackplus 会跟:那条回落只对确实读 Seconds 的渠道
+	// 成立(见 VideoSecondsFallback 的说明),而聚合展开跑在**选渠道之前**,这里根本
+	// 不知道生成段会落到哪个渠道。对 kling/vidu/jimeng 这类忽略 Seconds 的渠道,
+	// 跟了就是告诉增强模型"成片 10 秒",而上游按自己的默认出 5 秒 —— 分镜时间点
+	// 全部落在片子之外。计费侧对同一件事是设了渠道闸的(videoBillingSeconds 先判
+	// TaskPlatform),我们拿不到那个判据,就只能不说。
+	//
+	// 代价是 gpustackplus + 只给 seconds 的请求会少一条时长约束。少说一句事实,
+	// 比说一句错的安全 —— 这一段的全部意义就是"陈述既成事实"。
+	if seconds := float64(norm.Duration); seconds > 0 {
+		facts = append(facts, fmt.Sprintf(
+			"Effective video duration: %.2f seconds. Every cut timestamp must fall strictly inside it.", seconds))
+	}
+
+	if len(facts) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	b.WriteString("\n\n---\n\nCurrent request:\n\n")
+	for _, f := range facts {
+		b.WriteString("- ")
+		b.WriteString(f)
+		b.WriteString("\n")
+	}
+	return b.String()
+}
+
+// countRefs 数一个素材字段里有几项。单个字符串算一项,数组按非空项数,其余算 0。
+func countRefs(v any) int {
+	switch t := v.(type) {
+	case string:
+		if strings.TrimSpace(t) != "" {
+			return 1
+		}
+	case []any:
+		n := 0
+		for _, item := range t {
+			if s, ok := item.(string); ok && strings.TrimSpace(s) != "" {
+				n++
+			}
+		}
+		return n
+	}
+	return 0
+}
+
+func pictureLabels(n int) string {
+	if n > 1 {
+		return fmt.Sprintf("<Picture 1>..<Picture %d>", n)
+	}
+	return "<Picture 1>"
+}
+
+func audioLabels(n int) string {
+	if n > 1 {
+		return fmt.Sprintf("<Audio 1>..<Audio %d>", n)
+	}
+	return "<Audio 1>"
+}
+
+func videoLabels(n int) string {
+	if n > 1 {
+		return fmt.Sprintf("<Video 1>..<Video %d>", n)
+	}
+	return "<Video 1>"
 }
 
 // GetAggregateExpansion 取本次请求的聚合展开结果;非聚合请求返回 nil。

@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -28,7 +29,7 @@ func enhanceCfg(sysPrompt, mdl string) *common.AggregateModel {
 func TestEnhanceDisabledReturnsOriginal(t *testing.T) {
 	agg := &common.AggregateModel{Name: "agg", Type: "video"}
 
-	res := EnhancePrompt(context.Background(), agg, "Bearer sk-test", "a cat", nil)
+	res := EnhancePrompt(context.Background(), agg, "Bearer sk-test", "a cat", nil, "")
 
 	require.Equal(t, "a cat", res.EnhancedPrompt)
 	require.False(t, res.Degraded, "未配置增强段不该被记成降级")
@@ -53,7 +54,7 @@ func TestEnhanceDegradesInsteadOfFailing(t *testing.T) {
 			if name == "缺少调用者身份" {
 				auth = ""
 			}
-			res := EnhancePrompt(context.Background(), tc.agg, auth, tc.prompt, nil)
+			res := EnhancePrompt(context.Background(), tc.agg, auth, tc.prompt, nil, "")
 
 			require.True(t, res.Degraded, "应降级而不是失败")
 			require.NotEmpty(t, res.DegradeReason, "降级必须留下原因,否则排障时无从下手")
@@ -105,7 +106,7 @@ func TestBuildEnhanceRequestPlainWhenNoImages(t *testing.T) {
 
 // 降级原因要能指认问题,而不是一句笼统的"增强失败"。
 func TestEnhanceDegradeReasonIsActionable(t *testing.T) {
-	res := EnhancePrompt(context.Background(), enhanceCfg("", "gpt-4o-mini"), "Bearer sk-test", "a cat", nil)
+	res := EnhancePrompt(context.Background(), enhanceCfg("", "gpt-4o-mini"), "Bearer sk-test", "a cat", nil, "")
 
 	require.True(t, strings.Contains(res.DegradeReason, "模板"),
 		"未配模板时降级原因应点名模板,实得 %q", res.DegradeReason)
@@ -138,7 +139,7 @@ func TestEnhanceSuccessUsesRewrittenPrompt(t *testing.T) {
 		  "usage":{"prompt_tokens":12,"completion_tokens":8}}`)
 
 	res := EnhancePrompt(context.Background(), enhanceCfg("改写以下提示词", "gpt-4o-mini"),
-		"Bearer sk-test", "a cat", nil)
+		"Bearer sk-test", "a cat", nil, "")
 
 	require.False(t, res.Degraded, "成功时不该标记降级: %s", res.DegradeReason)
 	require.Equal(t, "a majestic cat, cinematic lighting", res.EnhancedPrompt, "应去掉首尾空白")
@@ -158,7 +159,7 @@ func TestEnhanceForwardsCallerIdentity(t *testing.T) {
 	t.Cleanup(func() { enhanceEndpoint = orig })
 	enhanceEndpoint = func() string { return srv.URL }
 
-	EnhancePrompt(context.Background(), enhanceCfg("改写", "gpt-4o-mini"), "Bearer sk-customer", "a cat", nil)
+	EnhancePrompt(context.Background(), enhanceCfg("改写", "gpt-4o-mini"), "Bearer sk-customer", "a cat", nil, "")
 
 	require.Equal(t, "Bearer sk-customer", gotAuth,
 		"必须带客户身份,否则计费落不到他账上")
@@ -169,11 +170,54 @@ func TestEnhanceActuallySendsImages(t *testing.T) {
 	got := withFakeEnhanceEndpoint(t, http.StatusOK, `{"choices":[{"message":{"content":"x"}}]}`)
 
 	EnhancePrompt(context.Background(), enhanceCfg("改写", "gpt-4o-mini"),
-		"Bearer sk-test", "a cat", []string{"https://example.com/base.png"})
+		"Bearer sk-test", "a cat", []string{"https://example.com/base.png"}, "")
 
 	require.Contains(t, string(*got), "https://example.com/base.png",
 		"输入图必须真的发给增强模型,否则它会凭空臆造并与底图打架")
 	require.Contains(t, string(*got), "image_url")
+}
+
+// 本次请求的事实要拼在**系统提示词**里,不能进 user 消息。
+//
+// 位置不是风格问题:放进 user,模型会把"Task type: I2VA…"当成用户想生成的内容的一部分,
+// 改写结果里就会冒出这几句元信息。体验区同一机制也是拼进 system(appendOptimizeContext)。
+func TestEnhanceAppendsTaskContextToSystemPrompt(t *testing.T) {
+	got := withFakeEnhanceEndpoint(t, http.StatusOK, `{"choices":[{"message":{"content":"x"}}]}`)
+
+	EnhancePrompt(context.Background(), enhanceCfg("改写", "gpt-4o-mini"),
+		"Bearer sk-test", "a cat", nil, "\n\n---\n\nCurrent request:\n\n- Task type: I2VA.\n")
+
+	var sent struct {
+		Messages []struct {
+			Role    string `json:"role"`
+			Content any    `json:"content"`
+		} `json:"messages"`
+	}
+	require.NoError(t, json.Unmarshal(*got, &sent))
+	require.Len(t, sent.Messages, 2)
+	require.Equal(t, "system", sent.Messages[0].Role)
+	require.Contains(t, sent.Messages[0].Content, "Task type: I2VA",
+		"事实必须进系统提示词")
+	require.Contains(t, sent.Messages[0].Content, "改写",
+		"模板本身不能被事实顶掉")
+	require.Equal(t, "a cat", sent.Messages[1].Content,
+		"user 消息只放用户原文,拼了事实进来会被当成待改写的内容")
+}
+
+// 没有可说的事实时不该改动系统提示词(空串拼上去等于没拼,但要确保没有多余分隔符)。
+func TestEnhanceWithoutTaskContextLeavesTemplateIntact(t *testing.T) {
+	got := withFakeEnhanceEndpoint(t, http.StatusOK, `{"choices":[{"message":{"content":"x"}}]}`)
+
+	EnhancePrompt(context.Background(), enhanceCfg("改写", "gpt-4o-mini"),
+		"Bearer sk-test", "a cat", nil, "")
+
+	var sent struct {
+		Messages []struct {
+			Content any `json:"content"`
+		} `json:"messages"`
+	}
+	require.NoError(t, json.Unmarshal(*got, &sent))
+	require.Equal(t, "改写", sent.Messages[0].Content)
 }
 
 // 403 几乎总是"客户令牌白名单没放行增强模型"。降级原因必须指认它 ——
@@ -182,7 +226,7 @@ func TestEnhanceDegradesWithActionableReasonOn403(t *testing.T) {
 	withFakeEnhanceEndpoint(t, http.StatusForbidden, `{"error":"forbidden"}`)
 
 	res := EnhancePrompt(context.Background(), enhanceCfg("改写", "gpt-4o-mini"),
-		"Bearer sk-test", "a cat", nil)
+		"Bearer sk-test", "a cat", nil, "")
 
 	require.True(t, res.Degraded)
 	require.Equal(t, "a cat", res.EnhancedPrompt)
@@ -194,7 +238,7 @@ func TestEnhanceDegradesOnEmptyChoices(t *testing.T) {
 	withFakeEnhanceEndpoint(t, http.StatusOK, `{"choices":[]}`)
 
 	res := EnhancePrompt(context.Background(), enhanceCfg("改写", "gpt-4o-mini"),
-		"Bearer sk-test", "a cat", nil)
+		"Bearer sk-test", "a cat", nil, "")
 
 	require.True(t, res.Degraded)
 	require.Equal(t, "a cat", res.EnhancedPrompt)
@@ -205,8 +249,43 @@ func TestEnhanceDegradesOnBlankContent(t *testing.T) {
 	withFakeEnhanceEndpoint(t, http.StatusOK, `{"choices":[{"message":{"content":"   "}}]}`)
 
 	res := EnhancePrompt(context.Background(), enhanceCfg("改写", "gpt-4o-mini"),
-		"Bearer sk-test", "a cat", nil)
+		"Bearer sk-test", "a cat", nil, "")
 
 	require.True(t, res.Degraded)
 	require.Equal(t, "a cat", res.EnhancedPrompt)
+}
+
+// 官方 U1.5 编辑模板以「下面紧接着就是要改写的原文」收尾。事实拼在那句之后,
+// 模型会把这段英文当成"原文",于是「用原文语言改写」被读成「用英文改写」。
+// 与前端 appendOptimizeContext 同一套判据,两处的 marker 必须逐字一致。
+func TestAppendTaskContextInsertsBeforeU15ClosingMarker(t *testing.T) {
+	const tmpl = "You are an editor.\nBelow is the Prompt to be rewritten."
+	const ctx = "\n\n---\n\nCurrent request:\n\n- Task type: I2VA.\n"
+
+	got := appendTaskContext(tmpl, ctx)
+
+	markerAt := strings.LastIndex(got, u15EditClosingMarker)
+	ctxAt := strings.Index(got, "Current request:")
+	if markerAt < 0 || ctxAt < 0 {
+		t.Fatalf("模板或事实丢失: %q", got)
+	}
+	if ctxAt > markerAt {
+		t.Errorf("事实应插在收尾句之前,实际在其后:\n%s", got)
+	}
+}
+
+// 没有那句收尾的模板(通用版 / H3 / LTX / Music3)照旧追加末尾。
+func TestAppendTaskContextFallsBackToPlainAppend(t *testing.T) {
+	const tmpl = "You are a video prompt writer."
+	const ctx = "\n\n---\n\nCurrent request:\n\n- Task type: T2VA.\n"
+	if got := appendTaskContext(tmpl, ctx); got != tmpl+ctx {
+		t.Errorf("无 marker 时应直接追加, got:\n%s", got)
+	}
+}
+
+func TestAppendTaskContextNoOpWithoutContext(t *testing.T) {
+	const tmpl = "You are an editor.\nBelow is the Prompt to be rewritten."
+	if got := appendTaskContext(tmpl, ""); got != tmpl {
+		t.Errorf("无事实时不应改动模板, got: %q", got)
+	}
 }

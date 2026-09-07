@@ -58,12 +58,44 @@ type EnhanceResult struct {
 	Usage         *dto.Usage
 }
 
+// u15EditClosingMarker 官方 U1.5 编辑模板的收尾句,与前端
+// `web/classic/src/constants/promptOptimize.constants.js` 的 U15_EDIT_CLOSING_MARKER
+// **必须逐字一致** —— 判据是字面匹配,两处漂移了这里就静默失效。
+//
+// 跨语言没法共享一个常量,所以改动时两处一起改;前端那份有更详细的来由说明。
+const u15EditClosingMarker = "\nBelow is the Prompt to be rewritten."
+
+// appendTaskContext 把请求事实拼进系统提示词。
+//
+// **不是简单地接在末尾**:官方 U1.5 编辑模板以「下面紧接着就是要改写的原文」收尾,
+// 事实若拼在那句之后,模型很容易把这段英文的 Task type / Effective video duration
+// 当成"原文",于是模板里「用原文语言改写」这条规则被读成「用英文改写」;
+// 同时原文与说明之间隔了一段无关内容,模板刻意安排的「说明→原文」贴合也被拆开。
+//
+// 命中这句就插在它**之前**,没有这句的模板(通用版 / H3 / LTX / Music3)照旧追加末尾。
+// 与前端 appendOptimizeContext 同一套判据。
+func appendTaskContext(systemPrompt, taskContext string) string {
+	if taskContext == "" {
+		return systemPrompt
+	}
+	at := strings.LastIndex(systemPrompt, u15EditClosingMarker)
+	if at == -1 {
+		return systemPrompt + taskContext
+	}
+	return systemPrompt[:at] + taskContext + "\n" + systemPrompt[at:]
+}
+
 // EnhancePrompt 按聚合模型的增强段配置改写 prompt。authHeader 为客户本次请求的
 // Authorization,增强调用以同一身份发起,因而计费落在客户账上(分段计费)。
 //
+// taskContext 是本次请求的既成事实(输入形态、素材标号、时长),由调用方从请求体里编出来。
+// 它**拼在系统提示词末尾**,与体验区同一位置(`usePromptOptimize` 的 appendOptimizeContext)
+// —— 位置不是随意的:模板讲"产出长什么样",事实讲"这一次的输入是什么",放进 user 消息
+// 会让模型把它当成待改写的内容的一部分。空串表示没有可说的事实,不拼。
+//
 // **永远不返回错误** —— 任何失败都体现为 Degraded=true + 原样返回的 prompt。
 // 这是刻意的签名设计:让调用方无法"忘记处理增强失败",因为根本没有失败分支可漏。
-func EnhancePrompt(ctx context.Context, agg *common.AggregateModel, authHeader, prompt string, imageURLs []string) *EnhanceResult {
+func EnhancePrompt(ctx context.Context, agg *common.AggregateModel, authHeader, prompt string, imageURLs []string, taskContext string) *EnhanceResult {
 	started := time.Now()
 	res := &EnhanceResult{OriginalPrompt: prompt, EnhancedPrompt: prompt}
 	degrade := func(format string, args ...any) *EnhanceResult {
@@ -94,7 +126,9 @@ func EnhancePrompt(ctx context.Context, agg *common.AggregateModel, authHeader, 
 		return degrade("缺少调用者身份,无法发起增强调用")
 	}
 
-	body := buildEnhanceRequest(res.Model, cfg.SystemPrompt, prompt, imageURLs, cfg.IsSendInputImages())
+	// 事实无条件拼在模板之后:运营改写过模板也不例外 —— 模板可以换,
+	// "这一次传了几张图、多少秒"不能被换掉。
+	body := buildEnhanceRequest(res.Model, appendTaskContext(cfg.SystemPrompt, taskContext), prompt, imageURLs, cfg.IsSendInputImages())
 	payload, err := common.Marshal(body)
 	if err != nil {
 		return degrade("构造增强请求失败: %v", err)
