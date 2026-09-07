@@ -205,6 +205,86 @@ func ValidateVideoDurationForModel(taskType string, seconds int, secondsStr stri
 	return nil
 }
 
+const (
+	// ImageEditImagesCeiling 图生图底图张数的内置天花板 = 自建 GPUStack 门面的
+	// _TASK_INPUT_CAPS["i2i"]["image"](= nfsinput.MaxEditImageRefs)。运营配置只能
+	// 收窄,不能突破它:配得更大不会让请求通过,只会把「必被门面拒」的错推迟到用户
+	// 传满了才暴露。与前端 IMAGE_EDIT_IMAGES_CEILING 是同一个数,改一处要改两处。
+	//
+	// 9 取的是各 i2i 引擎里声明得最高的那个(SenseNova-U1),**不是**说每个模型都能吃 9 张
+	// ——Qwen-Image-Edit-Plus 4、HunyuanImage-3 3、Boogu-Image 1。天花板只保证
+	// 「能力最强的模型不被网关卡住」,具体每个模型开几张由运营按模型配置,见
+	// ImageMaxEditImagesForModel。
+	ImageEditImagesCeiling = 9
+)
+
+// ImageMaxEditImagesForModel 返回该图片模型允许的底图张数上限,以及运营是否配了它。
+//
+// **只读 tab 级 models[name].tabs[image2image].maxEditImages**,没有模型级/default 回落:
+// 底图张数只在「图生图」一个玩法下有意义,而调用方永远知道自己在处理 i2i(端点就是
+// /v1/images/edits),不存在「解析不出 tab 只能回落模型级」的场景。前端同样是 tab-only
+// (getMaxEditImagesForModel),recomputeModelLevel 也跳过它 —— 写/读/parse 三处口径一致。
+//
+// **未配置时返回 configured=false,调用方不得自行套用前端那个内置默认 3**:
+// 3 是体验区 UI 开几个槽位的产品选择,不是接口契约。直连 /v1/images/edits 在改造前
+// 一直允许到门面上限 5 张,拿 UI 默认值去收紧它会打断存量调用方 —— 与本文件开头
+// 「未配置的模型不加限制」是同一条原则。要让某个模型的接口收到 3 张,去体验区管理里
+// 把它填成 3。
+func ImageMaxEditImagesForModel(candidates ...string) (maxImages int, configured bool) {
+	OptionMapRWMutex.RLock()
+	raw := OptionMap["ImageModelSizeConfig"]
+	OptionMapRWMutex.RUnlock()
+	if strings.TrimSpace(raw) == "" {
+		return 0, false
+	}
+	var cfg struct {
+		Models map[string]struct {
+			Tabs map[string]struct {
+				MaxEditImages *int `json:"maxEditImages"`
+			} `json:"tabs"`
+		} `json:"models"`
+	}
+	if err := UnmarshalJsonStr(raw, &cfg); err != nil {
+		return 0, false
+	}
+	tab := constant.PlaygroundTabForTaskType("i2i")
+	for _, name := range candidates {
+		m, ok := cfg.Models[name]
+		if !ok {
+			continue
+		}
+		t, ok := m.Tabs[tab]
+		if !ok || t.MaxEditImages == nil {
+			continue
+		}
+		v := *t.MaxEditImages
+		if v > ImageEditImagesCeiling {
+			v = ImageEditImagesCeiling
+		}
+		// 0 在别的 int 字段里是「不限」,这里不成立:底图是图生图的唯一视觉输入。
+		// 前端同样把 0 抬回 1(getMaxEditImagesForModel),两边保持一致。
+		if v < 1 {
+			v = 1
+		}
+		return v, true
+	}
+	return 0, false
+}
+
+// ValidateImageEditCountForModel 校验底图张数:运营没配该模型则放行(既有行为,
+// 上限仍由渠道自身兜底,如 gpustackplus 的 nfsinput.MaxImageRefs)。
+func ValidateImageEditCountForModel(count int, candidates ...string) error {
+	maxImages, configured := ImageMaxEditImagesForModel(candidates...)
+	if !configured {
+		return nil
+	}
+	if count > maxImages {
+		return fmt.Errorf("模型 %s 图生图最多支持 %d 张底图,当前 %d 张",
+			firstNonEmptyStr(candidates...), maxImages, count)
+	}
+	return nil
+}
+
 // playgroundConfigKeys 是四份体验区模型配置的 option 键。查候选集要全扫:模型属于哪个
 // 大类由它配在哪份里决定,调用方(relay 适配器)并不知道。
 var playgroundConfigKeys = []string{

@@ -285,8 +285,8 @@ func materializeEditInputs(c *gin.Context, info *relaycommon.RelayInfo, taskType
 	if total == 0 {
 		return nil, errors.New("图片编辑(i2i)必须提供底图:JSON 的 image/images 字段或 multipart 的 image 文件")
 	}
-	if total > nfsinput.MaxImageRefs {
-		return nil, fmt.Errorf("图片编辑最多支持 %d 张底图,当前 %d 张", nfsinput.MaxImageRefs, total)
+	if total > nfsinput.MaxEditImageRefs {
+		return nil, fmt.Errorf("图片编辑最多支持 %d 张底图,当前 %d 张", nfsinput.MaxEditImageRefs, total)
 	}
 
 	// 蒙版(可选,单值):有蒙版时底图必须恰好 1 张(引擎约束,new-api 侧防呆)。

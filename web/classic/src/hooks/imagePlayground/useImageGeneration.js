@@ -43,6 +43,7 @@ import {
   IMAGE_CONV_TURN_LIMIT,
   getExplicitTabSizes,
   getImageShapeConfig,
+  getMaxEditImagesForModel,
   computeImageSize,
   readImageDimensions,
   pickClosestSize,
@@ -337,6 +338,13 @@ export const useImageGeneration = ({
   // 推导,见 getImageShapeConfig。
   const shape = useMemo(
     () => getImageShapeConfig(sizeConfig, inputs.model, mode),
+    [sizeConfig, inputs.model, mode],
+  );
+
+  // 底图张数上限(按模型,运营在体验区管理的「图生图」格里配)。服务端读的是同一份
+  // 配置(common.ImageMaxEditImagesForModel),所以界面开几个槽 = 接口放几张。
+  const maxEditImages = useMemo(
+    () => getMaxEditImagesForModel(sizeConfig, inputs.model, mode),
     [sizeConfig, inputs.model, mode],
   );
 
@@ -948,10 +956,8 @@ export const useImageGeneration = ({
             showError(t('请先上传至少一张图片'));
             return;
           }
-          if (imgs.length > IMAGE_MAX_EDIT_IMAGES) {
-            showError(
-              t('最多上传 {{count}} 张图片', { count: IMAGE_MAX_EDIT_IMAGES }),
-            );
+          if (imgs.length > maxEditImages) {
+            showError(t('最多上传 {{count}} 张图片', { count: maxEditImages }));
             return;
           }
           convImages = imgs;
@@ -1455,6 +1461,7 @@ export const useImageGeneration = ({
     canPickI2ISize,
     i2iSizeOptions,
     i2iAspectMismatch,
+    maxEditImages,
     // 画幅：模式 + 两个新选择器的候选。table 模式下这三个都为空/无意义。
     shapeMode,
     availableRatios: shape.ratios,

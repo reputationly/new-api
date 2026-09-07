@@ -23,6 +23,7 @@ const ImagePlaygroundBody = ({ mode }) => {
     canPickI2ISize,
     i2iSizeOptions,
     i2iAspectMismatch,
+    maxEditImages,
     shapeMode,
     availableRatios,
     availableTiers,
@@ -66,6 +67,7 @@ const ImagePlaygroundBody = ({ mode }) => {
           canPickI2ISize={canPickI2ISize}
           i2iSizeOptions={i2iSizeOptions}
           i2iAspectMismatch={i2iAspectMismatch}
+          maxEditImages={maxEditImages}
           onInputChange={handleInputChange}
           disabled={locked}
           allowBatch={allowBatch}

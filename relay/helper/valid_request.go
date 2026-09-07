@@ -226,7 +226,58 @@ func GetAndValidOpenAIImageRequest(c *gin.Context, relayMode int) (*dto.ImageReq
 	// 不按 ImageModelSizeConfig 校验 size：那份配置的 sizes 只供前端体验区做候选值，
 	// 运营填的是档位词/宽高比("720P"/"16:9")，API 客户端发的是精确像素("720x1280")，
 	// 字符串比较对不上，拦截只会把合法请求拒成 400。尺寸合法性交由上游模型自行判定。
+	//
+	// 底图**张数**则相反,是可以校验的:配置值与请求值都是整数,不存在上面那种语义错配
+	// (与 durations 同理)。运营没配该模型就放行,见 ValidateImageEditCountForModel。
+	//
+	// 放在这里而不是某个渠道适配器里,是因为第三方渠道(如 SenseNova)走的正是这条同步
+	// 链路,而 relay/channel/... 里那几道张数护栏都只在自建渠道内。异步链路不经过本函数,
+	// 它的护栏在 task/gpustackplus 的 materializeImageEditInputs —— 异步只有自建渠道
+	// 支持(第三方返回 async_not_supported,见 relay/image_async.go),那里够覆盖。
+	if relayMode == relayconstant.RelayModeImagesEdits {
+		if err := common.ValidateImageEditCountForModel(
+			countEditImages(c, imageRequest), imageRequest.Model,
+		); err != nil {
+			return nil, err
+		}
+	}
 	return imageRequest, nil
+}
+
+// countEditImages 数这次 i2i 请求带了几张底图。只数不取内容,与
+// gpustackplus.collectEditImages 的来源口径一致:JSON 的 image/images(字符串或数组)
+// 或 multipart 的 image / image[] 文件;JSON 里有值时不再看 multipart(同上)。
+func countEditImages(c *gin.Context, request *dto.ImageRequest) int {
+	n := 0
+	countRaw := func(raw []byte) {
+		if len(raw) == 0 {
+			return
+		}
+		var s string
+		if err := common.Unmarshal(raw, &s); err == nil {
+			if strings.TrimSpace(s) != "" {
+				n++
+			}
+			return
+		}
+		var arr []string
+		if err := common.Unmarshal(raw, &arr); err == nil {
+			for _, v := range arr {
+				if strings.TrimSpace(v) != "" {
+					n++
+				}
+			}
+		}
+	}
+	countRaw(request.Image)
+	countRaw(request.Images)
+	if n > 0 {
+		return n
+	}
+	if mf := c.Request.MultipartForm; mf != nil && mf.File != nil {
+		n += len(mf.File["image"]) + len(mf.File["image[]"])
+	}
+	return n
 }
 
 func GetAndValidateClaudeRequest(c *gin.Context) (textRequest *dto.ClaudeRequest, err error) {

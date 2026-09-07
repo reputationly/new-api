@@ -43,7 +43,7 @@ import (
 type Field string
 
 const (
-	FieldImage        Field = "image"         // 条件图 / 底图(i2i 支持多图,≤MaxImageRefs)
+	FieldImage        Field = "image"         // 条件图 / 底图(i2i 支持多图,≤MaxEditImageRefs)
 	FieldLastFrame    Field = "last_frame"    // 尾帧(flf2v),单值
 	FieldImageMask    Field = "image_mask"    // 蒙版(带 mask 的 edit),单值
 	FieldAudio        Field = "audio"         // 音频(s2v 数字人驱动音频),单值
@@ -68,8 +68,19 @@ const (
 )
 
 const (
-	// MaxImageRefs image 维度最多张数(与门面 _MAX_INPUT_IMAGES 对齐)。
+	// MaxImageRefs 非 i2i 的多图字段最多张数(与门面 _MAX_INPUT_IMAGES 对齐)。
+	// 现在只剩 src_ref_images(VACE R2V 参考图)用它:引擎侧 WanVACEPipeline 在
+	// vllm-omni 的 diffusion/model_metadata.py 里**没有**声明 max_multimodal_image_inputs,
+	// 这条线没有可依据的能力数字,所以 i2i 放宽时它刻意留在 5。
 	MaxImageRefs = 5
+	// MaxEditImageRefs 图生图(i2i)底图最多张数,与门面 _TASK_INPUT_CAPS["i2i"]["image"] 对齐。
+	//
+	// 9 = 各 i2i 引擎里声明得最高的那个(SenseNova-U1 9;Qwen-Image-Edit-Plus 4、
+	// HunyuanImage-3 3、Boogu-Image 1,见 model_metadata.py)。门面与这里都只做
+	// 防显存爆的兜底,**具体哪个模型开几张是产品决策**,由运营在体验区管理里按模型配置,
+	// 走 common.ImageMaxEditImagesForModel 那道护栏 —— 所以这里取的是最宽的那个值,
+	// 而不是某个模型的能力。
+	MaxEditImageRefs = 9
 	// downloadTimeout URL 下载超时(new-api 侧,独立于 relay 长超时)。
 	downloadTimeout = 30 * time.Second
 )

@@ -69,6 +69,9 @@ const ImageConfigPanel = ({
   canPickI2ISize = false,
   i2iSizeOptions = [],
   i2iAspectMismatch = null,
+  // 底图张数上限：由上层按模型从体验区配置解析（getMaxEditImagesForModel），
+  // 这里只负责渲染几个槽位。默认值取内置兜底，独立使用本组件时行为不变。
+  maxEditImages = IMAGE_MAX_EDIT_IMAGES,
   onInputChange,
   disabled = false,
   allowBatch = false,
@@ -277,19 +280,16 @@ const ImageConfigPanel = ({
               <ImageUrlInput
                 label={t('上传图片')}
                 tooltip={t('最多上传 {{count}} 张图片', {
-                  count: IMAGE_MAX_EDIT_IMAGES,
+                  count: maxEditImages,
                 })}
                 required
-                maxCount={IMAGE_MAX_EDIT_IMAGES}
+                maxCount={maxEditImages}
                 // 传多张时给缩略图标序号：用户要能在提示词里说「第 2 张」，
                 // 界面上就得先有「第 2 张」（见 ImageUrlInput 的 numbered 注释）。
                 numbered
                 imageUrls={inputs.imageUrls || []}
                 onImageUrlsChange={(v) =>
-                  onInputChange(
-                    'imageUrls',
-                    (v || []).slice(0, IMAGE_MAX_EDIT_IMAGES),
-                  )
+                  onInputChange('imageUrls', (v || []).slice(0, maxEditImages))
                 }
                 disabled={false}
               />

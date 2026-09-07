@@ -42,9 +42,19 @@ export const IMAGE_CAPABILITIES = [
 export const IMAGE_PAGE_CAPABILITY = '文生图';
 // 图生图（i2i）能力标签，与文生图共用体验区,通过 mode 区分
 export const IMAGE_I2I_CAPABILITY = '图生图';
-// 图生图最多上传底图数。前端限 3 张(≤ 后端 gpustackplus maxEditImages / 门面
-// _MAX_INPUT_IMAGES=5,前端更严不会被门面拒),控制单次请求体大小与体验。
+// 图生图底图张数的**内置默认**:运营没在体验区管理里给这个模型配 maxEditImages 时用它。
+// 3 是改造前全模型写死的值,保留它做兜底 = 未配模型的行为一字不变。
 export const IMAGE_MAX_EDIT_IMAGES = 3;
+
+// 底图张数的内置天花板:自建 GPUStack 门面的 _TASK_INPUT_CAPS["i2i"]["image"]
+// (= 后端 nfsinput.MaxEditImageRefs / common.ImageEditImagesCeiling,四处同一个数)。
+// **运营配置只能收窄,不能突破它**(读取侧一律 Math.min)——配得更大不会让请求通过,
+// 只会开出一批发出去必被门面拒的槽位,那种错要等用户传满了才暴露。
+//
+// 9 取的是各 i2i 引擎里声明得最高的那个(SenseNova-U1),**不是**每个模型都能吃 9 张:
+// Qwen-Image-Edit-Plus 4、HunyuanImage-3 3、Boogu-Image 1。天花板只保证能力最强的
+// 模型不被网关卡住,具体每个模型开几张要运营按模型配 —— 未配模型仍是内置默认 3。
+export const IMAGE_EDIT_IMAGES_CEILING = 9;
 
 // 当管理员未配置时的全局兜底：用最兼容的精确像素（dall-e/gpt-image 等只认像素的模型也能过）。
 // "默认用宽高比"应通过运营配置的 default 六种比例实现，而非这里的全局兜底。
@@ -116,9 +126,17 @@ export const normalizeCapabilityList = (list) =>
     ? Array.from(new Set(list.map((x) => String(x).trim()).filter(Boolean)))
     : [];
 
-// tab 子层规范化：models[name].tabs[tabKey] 只放该 tab 声明用得到的字段（图像目前
-// 只有 sizes）。空对象保留（= 该模型挂进了这个 tab、尺寸走兜底）；未配的字段不落键，
-// 好让 tabScopedValue 正确降级。
+// 底图张数（image2image）的规范化。0 与「未配」必须区分,所以用 != null 判而不是
+// truthy —— 未配不落键、读取时降级到内置默认;显式 0 落键 0(对图生图无意义,读取侧
+// 会抬回 1,见 getMaxEditImagesForModel)。与视频那份 toInputMB 同一套判据。
+const toEditImageCount = (v) => {
+  const n = parseInt(v, 10);
+  return Number.isFinite(n) && n >= 0 ? n : null;
+};
+
+// tab 子层规范化：models[name].tabs[tabKey] 只放该 tab 声明用得到的字段。空对象保留
+// （= 该模型挂进了这个 tab、尺寸走兜底）；未配的字段不落键，好让 tabScopedValue
+// 正确降级。
 const normalizeImageTabs = (raw) => {
   if (!raw || typeof raw !== 'object') return {};
   const out = {};
@@ -126,6 +144,10 @@ const normalizeImageTabs = (raw) => {
     const entry = {};
     const sizes = normalizeSizeList(cfg?.sizes);
     if (sizes.length) entry.sizes = sizes;
+    // 底图张数上限（图生图）。**白名单式重建,漏了它 = 管理页保存一次就把运营刚配的
+    // 张数删掉**（与 aspectRatios / engine 同一类坑）。
+    const editImages = toEditImageCount(cfg?.maxEditImages);
+    if (editImages != null) entry.maxEditImages = editImages;
     // 宽高比与分辨率档。**白名单式重建,漏了就是"运营每保存一次删一次"**
     // (与 engine / optimizePrompt 同一类坑)。
     const ratios = normalizeSizeList(cfg?.aspectRatios);
@@ -153,6 +175,25 @@ const normalizeImageTabs = (raw) => {
 export const getExplicitTabSizes = (config, model, tabKey) => {
   if (!config || typeof config !== 'object') return undefined;
   return tabScopedValue(config.models && config.models[model], tabKey, 'sizes');
+};
+
+// 该模型在该 tab 下能上传几张底图:tabs[image2image].maxEditImages → 内置默认 3。
+//
+// **tab-only,没有模型级回落**,与同在图像这份配置里的 aspectRatios / sizeTiers 同一决定:
+// parseImageSizeConfig 的模型级是白名单式重建,模型级的这个键读不回来;真要保留就得
+// 写/读/parse 三处一起改,而这里根本不需要 —— 底图张数只在「图生图」一个玩法下有意义,
+// 服务端那道护栏也永远知道自己在处理 i2i(端点就是 /v1/images/edits),不存在
+// 「解析不出 tab 只能回落模型级」的场景。故 recomputeModelLevel 也跳过它。
+//
+// 两处夹逼,理由各不相同:
+//   Math.min(天花板) —— 配置只能收窄。配大了门面照样拒,只是把错推迟到用户传满才暴露。
+//   Math.max(1, …)   —— 底图是图生图的**唯一**视觉输入,0 不是「关掉这个模态」而是把
+//                       玩法变成死胡同(上传框不渲染、又必须有图才能发)。int 字段通用的
+//                       「0=不限」语义在这里不成立,故抬回 1。要停用该玩法请去关 tab。
+export const getMaxEditImagesForModel = (config, model, tabKey) => {
+  const v = tabScopedValue(config?.models?.[model], tabKey, 'maxEditImages');
+  const raw = v != null ? v : IMAGE_MAX_EDIT_IMAGES;
+  return Math.max(1, Math.min(raw, IMAGE_EDIT_IMAGES_CEILING));
 };
 
 // 比例词判据。运营两种写法混着用（历史上文生图填的就是比例词），拆语义要靠它。

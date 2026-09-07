@@ -71,6 +71,14 @@ export const PLAYGROUND_FIELD_META = {
     type: 'int',
     help: '0 或留空=不限制。服务端物化输入时兜底，防直连绕过前端。',
   },
+  // 图生图的底图张数。与视频的「参考图张数上限」是两码事，故不复用 maxRefImages：
+  // 那边留空=9/3 张、0=不展示上传框，这边留空=3 张、0 会被抬回 1（底图是图生图的
+  // 唯一输入，配 0 只会让玩法变成死胡同）。共用一个 key 就得共用一段说反了的说明。
+  maxEditImages: {
+    label: '底图张数上限',
+    type: 'int',
+    help: '留空=用内置默认 3 张。**填得比 9 大无效**（只能收窄）：9 是自建 GPUStack 门面 routes/videos.py 里 i2i 的准入闸，取的是各引擎里声明得最高的那个，配大了只会开出一批发出去必被门面拒的槽位。**每个模型该填多少，看引擎给它声明的张数**（vllm-omni 的 diffusion/model_metadata.py）：SenseNova-U1.5 = 9（上游 harness 的 --image 是 nargs="+"、从不校验数量，9 是服务端准入值）、Qwen-Image-Edit-Plus = 4、HunyuanImage-3.0 = 3（上游多图融合上限）、Boogu-Image = 1。门面不按模型卡，**填超过引擎声明的张数不会被这一层拦下**，只会让请求打到引擎才出问题——所以这一格就是那道按模型的闸。填 0 无意义（底图是图生图的唯一输入，会被当作 1）；要停用这个玩法请在上方关掉 tab。**这一项服务端也认**：直连 /v1/images/edits 超过张数会被拒，不只是前端少给槽位。',
+  },
   maxAudioSec: {
     label: '驱动音频时长上限（秒）',
     type: 'int',
@@ -319,7 +327,7 @@ export const PLAYGROUND_CATEGORIES = [
         key: 'image2image',
         label: '图生图',
         capability: '图生图',
-        fields: ['sizes', 'aspectRatios', 'sizeTiers'],
+        fields: ['sizes', 'aspectRatios', 'sizeTiers', 'maxEditImages'],
         promptOptimize: true,
       },
     ],
@@ -928,8 +936,12 @@ export const orphanFields = (storeKey, model) => {
 // common/media_model_config.go 文件头「sizes 只驱动前端体验区的可选值」），体验区取值
 // 又永远带 tabKey。早先没跳过它们，结果是「保存时写进模型级 → parse 白名单重建时丢掉
 // → 读取侧的模型级回落永远取不到」，写/读/parse 三处口径全不一样。
+//
+// 底图张数（maxEditImages）同理，虽然后端**确实读它**：它只在「图生图」一个 tab 下有
+// 意义，而服务端那道护栏永远知道自己在处理 i2i（端点就是 /v1/images/edits），不需要
+// 「解析不出 tab 时回落模型级」这条退路。反推上去同样会被 parse 丢掉。
 const MODEL_LEVEL_SKIP = {
-  ImageModelSizeConfig: ['aspectRatios', 'sizeTiers'],
+  ImageModelSizeConfig: ['aspectRatios', 'sizeTiers', 'maxEditImages'],
 };
 
 export const recomputeModelLevel = (storeKey, model) => {

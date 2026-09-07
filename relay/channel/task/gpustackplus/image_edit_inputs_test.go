@@ -8,6 +8,7 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
+	"github.com/QuantumNous/new-api/relay/channel/gpustackplus/nfsinput"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/setting/system_setting"
 
@@ -50,13 +51,14 @@ func TestImageEditInputsRejectsMissingBaseImage(t *testing.T) {
 }
 
 func TestImageEditInputsRejectsTooManyImages(t *testing.T) {
-	images := make([]string, 6) // MaxImageRefs = 5
+	images := make([]string, nfsinput.MaxEditImageRefs+1)
 	for i := range images {
 		images[i] = "https://example.com/a.png"
 	}
 	err := callImageEditInputs(t, relaycommon.TaskSubmitReq{Images: images})
 	if err == nil {
-		t.Fatal("i2i with 6 base images should be rejected (MaxImageRefs = 5)")
+		t.Fatalf("i2i with %d base images should be rejected (MaxEditImageRefs = %d)",
+			len(images), nfsinput.MaxEditImageRefs)
 	}
 	if !strings.Contains(err.Error(), "最多支持") {
 		t.Errorf("error should mention the cap, got: %s", err)

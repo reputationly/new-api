@@ -11,7 +11,6 @@ import {
 } from 'antd-mobile';
 
 import { useImageGeneration } from '@classic/hooks/imagePlayground/useImageGeneration';
-import { IMAGE_MAX_EDIT_IMAGES } from '@classic/constants/imagePlayground.constants';
 
 import { useVisibleModes } from '../hooks/useVisibleModes';
 import { useAutoOpenLatest } from '../hooks/useAutoOpenLatest';
@@ -31,6 +30,7 @@ const ImageBody = ({ mode }) => {
     groups,
     models,
     availableSizes,
+    maxEditImages,
     messages,
     generating,
     hasResumableTask,
@@ -148,7 +148,7 @@ const ImageBody = ({ mode }) => {
       key: 'imageUrls',
       label: '底图',
       required: true,
-      max: IMAGE_MAX_EDIT_IMAGES,
+      max: maxEditImages,
       values: inputs.imageUrls || [],
       onChange: (v) => handleInputChange('imageUrls', v),
     },

@@ -958,7 +958,7 @@ func materializeVideoInputs(c *gin.Context, info *relaycommon.RelayInfo, taskTyp
 	return m.Refs(), nil
 }
 
-// materializeImageEditInputs 物化图片编辑(i2i)的输入:底图 1~MaxImageRefs 张 +
+// materializeImageEditInputs 物化图片编辑(i2i)的输入:底图 1~MaxEditImageRefs 张 +
 // 可选蒙版(单值)。
 //
 // 与同步链路的 gpustackplus.materializeEditInputs 是**成对实现**,语义必须一致 ——
@@ -972,8 +972,15 @@ func materializeImageEditInputs(c *gin.Context, info *relaycommon.RelayInfo, tas
 	if len(req.Images) == 0 {
 		return nil, fmt.Errorf("图片编辑(i2i)必须提供底图:image / images 字段或 multipart 的 image 文件")
 	}
-	if len(req.Images) > nfsinput.MaxImageRefs {
-		return nil, fmt.Errorf("图片编辑最多支持 %d 张底图,当前 %d 张", nfsinput.MaxImageRefs, len(req.Images))
+	if len(req.Images) > nfsinput.MaxEditImageRefs {
+		return nil, fmt.Errorf("图片编辑最多支持 %d 张底图,当前 %d 张", nfsinput.MaxEditImageRefs, len(req.Images))
+	}
+	// 运营在体验区管理里给这个模型配的张数上限(比门面那道 MaxImageRefs 更严时才会拦)。
+	// 同步链路的同一道闸在 relay/helper/valid_request.go —— 那边要覆盖第三方渠道,只能
+	// 挂在渠道无关层;异步只有自建渠道能进,放在这里就够。
+	if err := common.ValidateImageEditCountForModel(len(req.Images),
+		req.Model, info.OriginModelName, modelName); err != nil {
+		return nil, err
 	}
 
 	mask := strings.TrimSpace(metadataString(req.Metadata, "mask"))
