@@ -170,6 +170,10 @@ func InitOptionMap() {
 	common.OptionMap["AudioRatio"] = ratio_setting.AudioRatio2JSONString()
 	common.OptionMap["AudioCompletionRatio"] = ratio_setting.AudioCompletionRatio2JSONString()
 	common.OptionMap["VideoPricingConfig"] = ratio_setting.VideoPricing2JSONString()
+	// 聚合(编排)模型的出厂配置:两条视频流水线(帧族 / 参考族),都不带提示词增强段。
+	// 为什么是这两条、增强段为什么出厂关闭,见 common.DefaultAggregateModelConfig 的注释。
+	// 管理员保存过之后以库里的为准。
+	common.OptionMap["AggregateModelConfig"] = common.DefaultAggregateModelConfig
 	common.OptionMap["TopUpLink"] = common.TopUpLink
 	//common.OptionMap["ChatLink"] = common.ChatLink
 	//common.OptionMap["ChatLink2"] = common.ChatLink2
