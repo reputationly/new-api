@@ -263,10 +263,11 @@ func (a *TaskAdaptor) BuildRequestBody(c *gin.Context, info *relaycommon.RelayIn
 		return nil, fmt.Errorf("model is required (渠道模型映射与请求 model 均为空)")
 	}
 
-	// OpenAI /v1/videos 风格用 input_reference 传条件图;公共校验只归一化了
-	// image→Images,这里补上,否则合法的 i2v 请求会被下方防呆误拒。
-	if !req.HasImage() && strings.TrimSpace(req.InputReference) != "" {
-		req.Images = []string{req.InputReference}
+	// 条件图的回落(images → image → input_reference)统一由 FrameImages 表达。
+	// 公共校验只在走它的那条路上归一化,直连本适配器的请求要在这里补齐,
+	// 否则合法的 i2v 请求会被下方防呆误拒。增强段读的是同一个方法,两处不会分叉。
+	if !req.HasImage() {
+		req.Images = req.FrameImages()
 	}
 
 	// 引擎可识别的可选参数(negative_prompt / seed / target_video_length /
@@ -540,12 +541,7 @@ func (a *TaskAdaptor) BuildRequestBody(c *gin.Context, info *relaycommon.RelayIn
 		body["input_refs"] = refs
 	}
 	// OpenAI 风格 duration/seconds → wan 帧数约定(4n+1,16fps:5s → 81 帧)。
-	durationSec := req.Duration
-	if durationSec == 0 && strings.TrimSpace(req.Seconds) != "" {
-		if v, convErr := strconv.Atoi(strings.TrimSpace(req.Seconds)); convErr == nil {
-			durationSec = v
-		}
-	}
+	durationSec := req.EffectiveDuration()
 	// MiniMax H3 是另一套约定,整体绕开下面的 wan/InfiniteTalk 帧数与时长逻辑:
 	// 24fps + 17n+5 帧栅格 + extra_params.duration(float 秒),且画布要 width/height。
 	// 判据是**配置声明的引擎族**而不是模型名 —— 前端拿公开名、后端拿重定向后的上游名,
@@ -754,7 +750,7 @@ func taskTypesCompatibleWithInputs(req *relaycommon.TaskSubmitReq) []string {
 	hasAudio := metadataString(req.Metadata, "audio") != ""
 	hasVideo := metadataString(req.Metadata, "video") != ""
 	srcVideos := len(metadataStringList(req.Metadata, "src_video"))
-	refImages := len(metadataStringList(req.Metadata, "src_ref_images"))
+	refImages := len(req.RefImages())
 
 	noBernini := srcVideos == 0 && refImages == 0
 	noFrames := images == 0 && !hasAudio
@@ -1027,17 +1023,6 @@ const (
 	maxR2VARefTotal  = 12
 )
 
-// metadataStringListAny 按给定顺序取第一个非空的多值键。
-// metadataStringList 只认单个键,而参考视频/音频要同时兼容单复数两种写法。
-func metadataStringListAny(metadata map[string]any, keys ...string) []string {
-	for _, k := range keys {
-		if v := metadataStringList(metadata, k); len(v) > 0 {
-			return v
-		}
-	}
-	return nil
-}
-
 // materializeR2VAInputs 物化「参考生视频」(MiniMax H3 Ref2VA)的输入。
 //
 // **字段名与 doubao/Ark(Seedance 2.0)保持一致,这是刻意的**:体验区的「参考生视频」
@@ -1059,11 +1044,11 @@ func metadataStringListAny(metadata map[string]any, keys ...string) []string {
 // 目标台词要在 prompt 里用 <d>[语言] ...</d> 显式写出(vllm-omni 交接文档 §Ref2VA)。
 // 这与 s2v(InfiniteTalk 用现成音轨驱动口型)不是一回事,故两者不能合并成一个 task_type。
 func materializeR2VAInputs(c *gin.Context, info *relaycommon.RelayInfo, taskType, modelName string, req relaycommon.TaskSubmitReq) (map[string][]string, error) {
-	images := metadataStringList(req.Metadata, "src_ref_images")
-	// 兼容单复数两种键名:doubao 侧两者都收,这里保持一致,免得同一个 tab 下换个模型
-	// 就得改键名。复数优先(它是多值语义的规范形态)。
-	videos := metadataStringListAny(req.Metadata, "reference_videos", "reference_video")
-	audios := metadataStringListAny(req.Metadata, "reference_audios", "reference_audio")
+	// 键名口径(含单复数兼容、逗号分隔、data URL 不拆)统一由请求对象给出 ——
+	// 增强段编事实时读的是同一组方法,两处不会再分叉。
+	images := req.RefImages()
+	videos := req.RefVideos()
+	audios := req.RefAudios()
 
 	if len(images) == 0 && len(videos) == 0 {
 		return nil, fmt.Errorf("模型 %s 的任务类型 r2va(参考生视频)需要至少 1 张参考图(metadata.src_ref_images)或 1 个参考视频(metadata.reference_videos)", modelName)
@@ -1215,7 +1200,7 @@ func materializeDubInputs(c *gin.Context, info *relaycommon.RelayInfo, taskType,
 // 逗号拼接(门面 _MULTI_INPUT_FIELDS,src_video ≤2)。Bernini 无 mask,不处理 src_mask。
 func materializeBerniniInputs(c *gin.Context, info *relaycommon.RelayInfo, taskType, modelName string, req relaycommon.TaskSubmitReq) (map[string][]string, error) {
 	srcVideos := metadataStringList(req.Metadata, "src_video")
-	refImages := metadataStringList(req.Metadata, "src_ref_images")
+	refImages := req.RefImages()
 	if len(refImages) > nfsinput.MaxImageRefs {
 		return nil, fmt.Errorf("模型 %s 的 metadata.src_ref_images 最多 %d 张,收到 %d 张", modelName, nfsinput.MaxImageRefs, len(refImages))
 	}
@@ -1311,52 +1296,13 @@ func newVideoMaterializer(info *relaycommon.RelayInfo, taskType, modelName strin
 	return m
 }
 
-// metadataStringList 从 metadata 取一个字符串列表:支持数组([]any 里的字符串)、
-// 逗号分隔的单串、或单个字符串。用于 VACE 的 src_ref_images(可多张)。
+// metadataStringList 从 metadata 取一个字符串列表。
+//
+// 实现在 common.MetadataStringList —— 它是平台统一的 metadata 约定(数组 / 逗号分隔
+// 单串 / 单串,且 data URL 不按逗号拆),中间件的增强段也要按同一套数素材。
+// 两处若各写一份,同一个请求会在生成段与增强段被数成不同的素材数量,且不报错。
 func metadataStringList(md map[string]any, key string) []string {
-	if md == nil {
-		return nil
-	}
-	v, ok := md[key]
-	if !ok {
-		return nil
-	}
-	var out []string
-	switch t := v.(type) {
-	case string:
-		s := strings.TrimSpace(t)
-		if s == "" {
-			break
-		}
-		// A data URL carries a comma in its own payload (data:...;base64,XXXX),
-		// so never comma-split it — treat the whole string as one image. Only
-		// plain URL/path lists are comma-separated; multiple data URLs must be
-		// sent as a JSON array (handled by the []any/[]string cases below).
-		if strings.HasPrefix(s, "data:") {
-			out = append(out, s)
-		} else {
-			for _, part := range strings.Split(s, ",") {
-				if p := strings.TrimSpace(part); p != "" {
-					out = append(out, p)
-				}
-			}
-		}
-	case []any:
-		for _, e := range t {
-			if s, ok := e.(string); ok {
-				if s = strings.TrimSpace(s); s != "" {
-					out = append(out, s)
-				}
-			}
-		}
-	case []string:
-		for _, s := range t {
-			if s = strings.TrimSpace(s); s != "" {
-				out = append(out, s)
-			}
-		}
-	}
-	return out
+	return common.MetadataStringList(md, key)
 }
 
 // metadataString 从请求 metadata 里安全取一个字符串值(容忍 nil / 非字符串)。
