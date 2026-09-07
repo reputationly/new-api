@@ -2,6 +2,7 @@ package gpustackplus
 
 import (
 	"encoding/json" // 仅取 json.Number 类型;marshal/unmarshal 一律走 common(见 CLAUDE.md Rule 1)
+	"fmt"
 	"math"
 	"strconv"
 	"strings"
@@ -200,12 +201,56 @@ func h3Canvas(shortEdge int, ratio float64) (width, height int) {
 	} else {
 		w, h = float64(shortEdge), float64(shortEdge)/ratio
 	}
+	return h3AlignWithinCap(w, h)
+}
+
+// h3AlignWithinCap 等比缩到面积上限内、对齐到画布网格,并**保证结果不超过上限**。
+//
+// 最后那步退格不是多余的:h3AlignMultiple 是 round 不是 floor(引擎的 _align_multiple
+// 就是这么定的,别改),于是"缩到正好等于上限"之后两轴可能双双进位,重新越界 ——
+// 1920x540 缩完对齐得 1920x544 = 1044480,比上限还高 1.2%。越界的后果是 OOM 而不是
+// 报错,所以这里按长边逐级退一格,直到真的落回上限内。
+//
+// 退格只在越界时发生,不影响那些对齐后本就合规的档位(16:9@768 → 1344x768 恰好等于
+// 上限,不触发)。
+func h3AlignWithinCap(w, h float64) (int, int) {
 	if area := w * h; area > h3MaxOutputPixels {
 		scale := math.Sqrt(h3MaxOutputPixels / area)
 		w *= scale
 		h *= scale
 	}
-	return h3AlignMultiple(w, h3CanvasMultiple), h3AlignMultiple(h, h3CanvasMultiple)
+	aw := h3AlignMultiple(w, h3CanvasMultiple)
+	ah := h3AlignMultiple(h, h3CanvasMultiple)
+	for aw*ah > h3MaxOutputPixels {
+		if aw >= ah {
+			if aw <= h3CanvasMultiple {
+				break
+			}
+			aw -= h3CanvasMultiple
+		} else {
+			if ah <= h3CanvasMultiple {
+				break
+			}
+			ah -= h3CanvasMultiple
+		}
+	}
+	return aw, ah
+}
+
+// h3ClampPixels 把一对像素宽高按面积上限等比缩小并对齐到画布网格;未超限时原样返回。
+//
+// 与 h3Canvas 共用同一套算法(等比 scale + h3AlignMultiple),区别只是入参:那个从
+// (短边, 比例) 推画布,这个从已有的 (宽, 高) 出发。**不要在这里另写一套** ——
+// 两处若对不上,表现是引擎按自己那套再钳一次,而我们记账用的是自己算的那份,
+// 出片尺寸与账单尺寸悄悄分家。
+func h3ClampPixels(w, h int) (int, int) {
+	if w <= 0 || h <= 0 {
+		return w, h
+	}
+	if float64(w)*float64(h) <= h3MaxOutputPixels {
+		return w, h
+	}
+	return h3AlignWithinCap(float64(w), float64(h))
 }
 
 // h3EnsureExtraParams 取出 body["extra_params"] 这个嵌套对象,不存在则建。
@@ -429,7 +474,18 @@ func h3ApplyCanvas(body map[string]any) {
 	size, _ := body["size"].(string)
 	shortEdge := h3ShortEdgeFromSizeToken(size)
 	if shortEdge <= 0 {
-		return // 不是档位词(像素串或没配):原样交给引擎
+		// 不是档位词。像素串要按面积上限钳一道 —— 档位词那条路下面会经 h3Canvas
+		// 钳到 1032192 以内,像素串原样透传就绕过了同一道闸,而引擎对超限输入是 OOM
+		// 而不是报错(2560x1440 = 3686400,是上限的 3.6 倍)。
+		//
+		// 只在**超限时**改写:没超就不动。钳位是保护不是归一化,把合法尺寸也重算一遍
+		// 会让调用方拿到他没要求的画布,而引擎本来就接受任意 32 对齐的 SizeStr。
+		if w, h, ok := common.DimsFromSize(size); ok {
+			if cw, ch := h3ClampPixels(w, h); cw != w || ch != h {
+				body["size"] = fmt.Sprintf("%dx%d", cw, ch)
+			}
+		}
+		return
 	}
 	ar, _ := body["aspect_ratio"].(string)
 	ratio, ok := h3NamedAspectRatios[common.NormalizeAspectRatio(strings.ToLower(strings.TrimSpace(ar)))]

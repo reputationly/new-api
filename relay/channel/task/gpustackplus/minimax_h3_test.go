@@ -624,3 +624,59 @@ func TestH3DefaultsAspectRatioEvenWithExplicitCanvas(t *testing.T) {
 		t.Fatalf("调用方的画布被改了:%vx%v", body["width"], body["height"])
 	}
 }
+
+// 像素串走的是与档位词不同的分支,而引擎对超限输入是 OOM 不是报错 —— 这条守的就是
+// 「两条分支落在同一个面积上限内、且都对齐 32」。
+func TestH3ApplyCanvasClampsExplicitPixelSize(t *testing.T) {
+	cases := []struct{ name, size string }{
+		{"2K 16:9", "2560x1440"},
+		{"2K 竖屏", "1440x2560"},
+		{"4K", "3840x2160"},
+		{"16:9@768 —— 自然档位就已超限", "1366x768"},
+		// 下面两个是**刚好压在上限之上**的输入:缩放到正好等于上限后,
+		// h3AlignMultiple 的 round 会把两轴双双进位,重新越界。
+		// 只挑"远超上限"的输入测,会因为它们恰好向下取整而假绿。
+		{"仅超一点点 —— 对齐会进位", "1920x540"},
+		{"同上,另一种比例", "1400x740"},
+	}
+	for _, c := range cases {
+		body := map[string]any{"size": c.size}
+		h3ApplyCanvas(body)
+		got, _ := body["size"].(string)
+		w, h, ok := common.DimsFromSize(got)
+		if !ok {
+			t.Fatalf("%s: 钳位后无法解析: %q", c.name, got)
+		}
+		if w*h > h3MaxOutputPixels {
+			t.Errorf("%s: %s → %s 仍超面积上限 (%d > %d)", c.name, c.size, got, w*h, h3MaxOutputPixels)
+		}
+		// 引擎按 32 对齐;我们算的和它算的必须一致,否则出片尺寸与账单尺寸分家。
+		if w%h3CanvasMultiple != 0 || h%h3CanvasMultiple != 0 {
+			t.Errorf("%s: %s 未对齐到 %d", c.name, got, h3CanvasMultiple)
+		}
+		// 比例不能漂:钳位是等比缩,不是换画幅。
+		ow, oh, _ := common.DimsFromSize(c.size)
+		orig, now := float64(ow)/float64(oh), float64(w)/float64(h)
+		if r := orig / now; r > 1.06 || r < 0.94 {
+			t.Errorf("%s: 宽高比漂移 %s → %s (%.3f vs %.3f)", c.name, c.size, got, orig, now)
+		}
+	}
+}
+
+// 没超限就不能动。钳位是保护不是归一化:重算合法尺寸会让调用方拿到他没要求的画布。
+func TestH3ApplyCanvasLeavesLegalPixelSizeAlone(t *testing.T) {
+	body := map[string]any{"size": "1344x768"} // 恰好等于上限
+	h3ApplyCanvas(body)
+	if got, _ := body["size"].(string); got != "1344x768" {
+		t.Errorf("未超限却被改写: 1344x768 → %s", got)
+	}
+}
+
+// 调用方自己定了画布就完全不插手 —— 这是既有契约,钳位不能把它破坏掉。
+func TestH3ApplyCanvasRespectsExplicitWidthHeight(t *testing.T) {
+	body := map[string]any{"size": "2560x1440", "width": 2560, "height": 1440}
+	h3ApplyCanvas(body)
+	if got, _ := body["size"].(string); got != "2560x1440" {
+		t.Errorf("调用方已给 width/height,size 不该被钳: %s", got)
+	}
+}
