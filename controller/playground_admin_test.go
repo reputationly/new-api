@@ -51,7 +51,7 @@ func TestGetPlaygroundAdminOptionsIncludesSidebarModules(t *testing.T) {
 	}
 }
 
-// 保存走的是同一组 AdminAuth 接口，键不在白名单里会被 403 挡掉。
+// 保存走的是同一组 RootAuth 接口，键不在白名单里会被 403 挡掉。
 // 这里故意送一个非字符串的 value：它先过白名单、再撞上「配置值必须是字符串」的 400，
 // 于是不碰 DB 也能区分「白名单放行(400)」与「白名单拒绝(403)」。
 func TestUpdatePlaygroundAdminOptionAllowsSidebarModules(t *testing.T) {

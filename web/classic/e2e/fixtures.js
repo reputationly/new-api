@@ -12,7 +12,7 @@ export const hasCredentials = Boolean(ADMIN_USER && ADMIN_PASS);
  * 每个用例都因为验证码/OAuth 开关之类的无关变更而挂掉。
  *
  * 登录态同时需要 cookie（后端 session）与 localStorage 里的 user
- * （前端 AdminRoute 据此判断是否放行），两者缺一进不去后台。
+ * （前端 RootRoute 据此判断是否放行），两者缺一进不去后台。
  */
 export const test = base.extend({
   adminPage: async ({ page, context, baseURL }, use) => {
@@ -26,8 +26,8 @@ export const test = base.extend({
           `请确认 E2E_ADMIN_USER / E2E_ADMIN_PASS 与后端账号一致。`,
       );
     }
-    if (body.data?.role < 10) {
-      throw new Error('该账号不是管理员，分组管理页会被 AdminRoute 拦下');
+    if (body.data?.role < 100) {
+      throw new Error('该账号不是超级管理员，分组管理页会被 RootRoute 拦下');
     }
 
     await page.goto('/');

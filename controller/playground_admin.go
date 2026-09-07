@@ -9,18 +9,15 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-// 「体验区管理」页专属的配置读写。
+// 「体验区管理」页专属的配置读写。路由是 RootAuth（见 router/api-router.go），
+// 与用户管理 /api/user、渠道管理 /api/channel、分组管理 /api/group 的管理接口同级。
 //
-// 为什么不直接放开 /api/option/：那组路由是 RootAuth，PUT 能写**任意** option key
-// ——SMTP 凭据、OAuth secret、全站计费配置都在里面，且没有任何键白名单。把它降到
-// AdminAuth 等于把超管权限整个交出去。
-//
-// 所以照全站其余管理页的做法（用户管理 /api/user、渠道管理 /api/channel、
-// 兑换码 /api/redemption 都是各有专属接口 + AdminAuth）给这一页开一组，
-// 权限严格限定在下面这几个键上。体验区管理此前是全站唯一的 RootRoute 页面，
-// 正是因为它缺这组接口、只能借用 /api/option/。
+// 为什么仍不复用 /api/option/：那组 PUT 能写**任意** option key——SMTP 凭据、
+// OAuth secret、全站计费配置都在里面。这一页只该碰体验区那几个键，专属接口 +
+// 下面的白名单把误写面收窄到最小。白名单不是权限闸（超管本就能走 /api/option/），
+// 而是防这一页越界。
 
-// playgroundWritableOptions 管理员可改的键。**白名单，不是黑名单**：
+// playgroundWritableOptions 这一页可改的键。**白名单，不是黑名单**：
 // 将来新增体验区配置项要显式加进来，漏加只是页面存不上，而不是意外放开写权限。
 var playgroundWritableOptions = map[string]bool{
 	"PlaygroundTabConfig":  true,
@@ -31,7 +28,7 @@ var playgroundWritableOptions = map[string]bool{
 	// 「分类显示」区块（SettingsSidebarModulesAdmin）读写的侧边栏全局开关。漏加这条
 	// 时页面表现是：GET 拿不到它 → 组件回落到前端的 DEFAULT_ADMIN_CONFIG（图像/视频/
 	// 语音/音乐一律 false）→ 开关永远显示成默认态，而且下一次保存会把库里的真实配置
-	// 整个覆盖成默认值。它只控制侧边栏菜单的显隐，不改任何接口权限，交给 AdminAuth 合适。
+	// 整个覆盖成默认值。它只控制侧边栏菜单的显隐，不改任何接口权限。
 	"SidebarModulesAdmin": true,
 }
 

@@ -196,26 +196,31 @@ func SetApiRouter(router *gin.Engine) {
 				selfRoute.PUT("/feedback/topics/:id/close", controller.CloseFeedbackTopicByUser)
 			}
 
+			// 用户管理页仅超管可见可配（前端 RootRoute），该页用到的增删改查一律 RootAuth
+			rootUserRoute := userRoute.Group("/")
+			rootUserRoute.Use(middleware.RootAuth())
+			{
+				rootUserRoute.GET("/", controller.GetAllUsers)
+				rootUserRoute.GET("/search", controller.SearchUsers)
+				rootUserRoute.GET("/:id/oauth/bindings", controller.GetUserOAuthBindingsByAdmin)
+				rootUserRoute.DELETE("/:id/oauth/bindings/:provider_id", controller.UnbindCustomOAuthByAdmin)
+				rootUserRoute.DELETE("/:id/bindings/:binding_type", controller.AdminClearUserBinding)
+				rootUserRoute.POST("/", controller.CreateUser)
+				rootUserRoute.POST("/manage", controller.ManageUser)
+				rootUserRoute.PUT("/", controller.UpdateUser)
+				rootUserRoute.DELETE("/:id", controller.DeleteUser)
+				rootUserRoute.DELETE("/:id/reset_passkey", controller.AdminResetPasskey)
+				rootUserRoute.GET("/2fa/stats", controller.Admin2FAStats)
+				rootUserRoute.DELETE("/:id/2fa", controller.AdminDisable2FA)
+			}
+
 			adminRoute := userRoute.Group("/")
 			adminRoute.Use(middleware.AdminAuth())
 			{
-				adminRoute.GET("/", controller.GetAllUsers)
 				adminRoute.GET("/topup", controller.GetAllTopUps)
 				adminRoute.POST("/topup/complete", controller.AdminCompleteTopUp)
-				adminRoute.GET("/search", controller.SearchUsers)
-				adminRoute.GET("/:id/oauth/bindings", controller.GetUserOAuthBindingsByAdmin)
-				adminRoute.DELETE("/:id/oauth/bindings/:provider_id", controller.UnbindCustomOAuthByAdmin)
-				adminRoute.DELETE("/:id/bindings/:binding_type", controller.AdminClearUserBinding)
+				// 单个用户详情留在 AdminAuth：日志页（使用日志、任务日志）点用户要读
 				adminRoute.GET("/:id", controller.GetUser)
-				adminRoute.POST("/", controller.CreateUser)
-				adminRoute.POST("/manage", controller.ManageUser)
-				adminRoute.PUT("/", controller.UpdateUser)
-				adminRoute.DELETE("/:id", controller.DeleteUser)
-				adminRoute.DELETE("/:id/reset_passkey", controller.AdminResetPasskey)
-
-				// Admin 2FA routes
-				adminRoute.GET("/2fa/stats", controller.Admin2FAStats)
-				adminRoute.DELETE("/:id/2fa", controller.AdminDisable2FA)
 
 				// KYC admin routes — /kyc/admin/by-user/:user_id must be registered before /:id routes
 				adminRoute.GET("/kyc/admin", controller.AdminGetKYCList)
@@ -273,8 +278,9 @@ func SetApiRouter(router *gin.Engine) {
 			subscriptionRoute.POST("/wxpay/pay", middleware.SubAccountForbidden(), middleware.CriticalRateLimit(), middleware.KYCRequired(), controller.SubscriptionRequestWxpay)
 			subscriptionRoute.GET("/wxpay/query", controller.SubscriptionQueryWxpayOrder)
 		}
+		// 订阅管理页仅超管可见可配（前端 RootRoute）
 		subscriptionAdminRoute := apiRouter.Group("/subscription/admin")
-		subscriptionAdminRoute.Use(middleware.AdminAuth())
+		subscriptionAdminRoute.Use(middleware.RootAuth())
 		{
 			subscriptionAdminRoute.GET("/plans", controller.AdminListSubscriptionPlans)
 			subscriptionAdminRoute.POST("/plans", controller.AdminCreateSubscriptionPlan)
@@ -360,10 +366,19 @@ func SetApiRouter(router *gin.Engine) {
 			ratioSyncRoute.GET("/channels", controller.GetSyncableChannels)
 			ratioSyncRoute.POST("/fetch", controller.FetchUpstreamRatios)
 		}
-		channelRoute := apiRouter.Group("/channel")
-		channelRoute.Use(middleware.AdminAuth())
+		// 渠道列表与建渠道留在 AdminAuth：对账管理（上传对账）、日志页（渠道筛选）
+		// 要读列表，模型部署创建集群后要建对应渠道——这三个页面仍对普通管理员开放。
+		channelSharedRoute := apiRouter.Group("/channel")
+		channelSharedRoute.Use(middleware.AdminAuth())
 		{
-			channelRoute.GET("/", controller.GetAllChannels)
+			channelSharedRoute.GET("/", controller.GetAllChannels)
+			channelSharedRoute.POST("/", controller.AddChannel)
+		}
+
+		// 渠道管理页仅超管可见可配（前端 RootRoute），其余渠道接口一并收紧到 RootAuth
+		channelRoute := apiRouter.Group("/channel")
+		channelRoute.Use(middleware.RootAuth())
+		{
 			channelRoute.GET("/search", controller.SearchChannels)
 			channelRoute.GET("/models", controller.ChannelListModels)
 			channelRoute.GET("/missing_cost", controller.GetChannelsMissingCost)
@@ -371,12 +386,11 @@ func SetApiRouter(router *gin.Engine) {
 			channelRoute.GET("/:id", controller.GetChannel)
 			channelRoute.GET("/:id/cost", controller.GetChannelCosts)
 			channelRoute.PUT("/:id/cost", controller.SaveChannelCosts)
-			channelRoute.POST("/:id/key", middleware.RootAuth(), middleware.CriticalRateLimit(), middleware.DisableCache(), middleware.SecureVerificationRequired(), controller.GetChannelKey)
+			channelRoute.POST("/:id/key", middleware.CriticalRateLimit(), middleware.DisableCache(), middleware.SecureVerificationRequired(), controller.GetChannelKey)
 			channelRoute.GET("/test", controller.TestAllChannels)
 			channelRoute.GET("/test/:id", controller.TestChannel)
 			channelRoute.GET("/update_balance", controller.UpdateAllChannelsBalance)
 			channelRoute.GET("/update_balance/:id", controller.UpdateChannelBalance)
-			channelRoute.POST("/", controller.AddChannel)
 			channelRoute.PUT("/", controller.UpdateChannel)
 			channelRoute.DELETE("/disabled", controller.DeleteDisabledChannel)
 			channelRoute.POST("/tag/disabled", controller.DisableTagChannels)
@@ -386,7 +400,7 @@ func SetApiRouter(router *gin.Engine) {
 			channelRoute.POST("/batch", controller.DeleteChannelBatch)
 			channelRoute.POST("/fix", controller.FixChannelsAbilities)
 			channelRoute.GET("/fetch_models/:id", controller.FetchUpstreamModels)
-			channelRoute.POST("/fetch_models", middleware.RootAuth(), controller.FetchModels)
+			channelRoute.POST("/fetch_models", controller.FetchModels)
 			channelRoute.POST("/codex/oauth/start", controller.StartCodexOAuth)
 			channelRoute.POST("/codex/oauth/complete", controller.CompleteCodexOAuth)
 			channelRoute.POST("/:id/codex/oauth/start", controller.StartCodexOAuthForChannel)
@@ -472,12 +486,18 @@ func SetApiRouter(router *gin.Engine) {
 		{
 			logRoute.GET("/token", middleware.TokenAuthReadOnly(), controller.GetLogByKey)
 		}
-		groupRoute := apiRouter.Group("/group")
-		groupRoute.Use(middleware.AdminAuth())
+		// GET "/" 是既有接口（渠道编辑、订阅计划编辑、模型管理等多处在用，其中
+		// 模型管理仍对普通管理员开放），保持 AdminAuth 不动
+		groupSharedRoute := apiRouter.Group("/group")
+		groupSharedRoute.Use(middleware.AdminAuth())
 		{
-			// GET "/" 是既有接口（渠道编辑、订阅计划编辑等多处在用），保持不动，
-			// 分组管理页的新接口一律挂子路径避让
-			groupRoute.GET("/", controller.GetGroups)
+			groupSharedRoute.GET("/", controller.GetGroups)
+		}
+
+		// 分组管理页仅超管可见可配（前端 RootRoute），该页专用的子路径收紧到 RootAuth
+		groupRoute := apiRouter.Group("/group")
+		groupRoute.Use(middleware.RootAuth())
+		{
 			groupRoute.GET("/overview", controller.GetGroupOverview)
 			groupRoute.GET("/models", controller.GetGroupModels)
 			groupRoute.GET("/references", controller.GetGroupReferences)
@@ -542,10 +562,10 @@ func SetApiRouter(router *gin.Engine) {
 			modelsRoute.DELETE("/:id", controller.DeleteModelMeta)
 		}
 
-		// 体验区管理：只读写体验区那几个 option 键，故可开放到 AdminAuth
-		// （对比 /api/option/ 的 RootAuth——那组能写任意键，见 controller/playground_admin.go）
+		// 体验区管理页仅超管可见可配（前端 RootRoute）。控制器的键白名单保留
+		// （见 controller/playground_admin.go）：它限的不是权限，而是这一页的越界写入。
 		playgroundAdminRoute := apiRouter.Group("/playground_admin")
-		playgroundAdminRoute.Use(middleware.AdminAuth())
+		playgroundAdminRoute.Use(middleware.RootAuth())
 		{
 			playgroundAdminRoute.GET("/options", controller.GetPlaygroundAdminOptions)
 			playgroundAdminRoute.PUT("/option", controller.UpdatePlaygroundAdminOption)

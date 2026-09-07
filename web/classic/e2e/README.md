@@ -32,7 +32,8 @@ bun run test:coverage   # 覆盖率
 
 ## 端到端
 
-需要一个**已经在跑的后端**和一组管理员账号：
+需要一个**已经在跑的后端**和一组超级管理员账号（分组管理页是 RootRoute，
+普通管理员的账号会被 fixture 直接拒掉）：
 
 ```bash
 E2E_ADMIN_USER=your_admin E2E_ADMIN_PASS=your_pass bun run e2e

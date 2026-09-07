@@ -227,7 +227,7 @@ const SiderBar = ({ onNavigate = () => {} }) => {
         text: t('渠道管理'),
         itemKey: 'channel',
         to: '/channel',
-        className: isAdmin() ? '' : 'tableHiddle',
+        className: isRoot() ? '' : 'tableHiddle',
       },
       {
         text: t('对账管理'),
@@ -239,13 +239,13 @@ const SiderBar = ({ onNavigate = () => {} }) => {
         text: t('订阅管理'),
         itemKey: 'subscription',
         to: '/subscription',
-        className: isAdmin() ? '' : 'tableHiddle',
+        className: isRoot() ? '' : 'tableHiddle',
       },
       {
         text: t('分组管理'),
         itemKey: 'group',
         to: '/console/group',
-        className: isAdmin() ? '' : 'tableHiddle',
+        className: isRoot() ? '' : 'tableHiddle',
       },
       {
         text: t('充值套餐'),
@@ -269,9 +269,9 @@ const SiderBar = ({ onNavigate = () => {} }) => {
         text: t('体验区管理'),
         itemKey: 'playgroundAdmin',
         to: '/console/playground-admin',
-        // 页面走 /api/playground_admin/*（AdminAuth，仅体验区那几个键），
-        // 与用户/渠道/兑换码等管理页一致对管理员可见
-        className: isAdmin() ? '' : 'tableHiddle',
+        // 页面走 /api/playground_admin/*（RootAuth，仅体验区那几个键），
+        // 与用户/渠道/分组等管理页一致：仅超管可见
+        className: isRoot() ? '' : 'tableHiddle',
       },
       {
         text: t('兑换码管理'),
@@ -283,7 +283,7 @@ const SiderBar = ({ onNavigate = () => {} }) => {
         text: t('用户管理'),
         itemKey: 'user',
         to: '/user',
-        className: isAdmin() ? '' : 'tableHiddle',
+        className: isRoot() ? '' : 'tableHiddle',
       },
       {
         text: withUnreadBadge(t('工单管理'), adminUnread),
