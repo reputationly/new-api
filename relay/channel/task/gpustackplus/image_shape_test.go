@@ -121,8 +121,8 @@ func TestImageShapeMatchesSyncPathSemantics(t *testing.T) {
 // ── 接线测试 ──────────────────────────────────────────────────────────────
 //
 // 上面那些只测函数本身:把 adaptor.go 里的调用点删掉,它们照样全绿 —— 那是假绿。
-// 下面两条走真正的 BuildRequestBody,断言画幅与 ERNIE 生产档确实出现在**发往门面的
-// 提交体**里。现网那两个缺陷正是「函数写对了但没接上/根本没写」,只有这一层测得出来。
+// 下面这条走真正的 BuildRequestBody,断言画幅确实出现在**发往门面的提交体**里。
+// 现网那两个缺陷正是「函数写对了但没接上/根本没写」,只有这一层测得出来。
 
 func buildT2IBody(t *testing.T, model, size string, meta map[string]any) map[string]any {
 	t.Helper()
@@ -173,26 +173,6 @@ func TestBuildRequestBodyCarriesTargetShape(t *testing.T) {
 	}
 	if shape[0] != float64(928) || shape[1] != float64(1664) {
 		t.Fatalf("target_shape = %v, want [928 1664](高在前)", shape)
-	}
-}
-
-// ERNIE 生产档必须真的出现在提交体里,而不只是函数写对了。
-func TestBuildRequestBodyCarriesErnieDefaults(t *testing.T) {
-	body := buildT2IBody(t, "ernie-image-turbo", "1:1", nil)
-	if body["num_inference_steps"] != float64(8) {
-		t.Fatalf("num_inference_steps = %v, want 8(不发则 50 步,慢 6.25 倍)", body["num_inference_steps"])
-	}
-	if body["guidance_scale"] != float64(1) {
-		t.Fatalf("guidance_scale = %v, want 1.0", body["guidance_scale"])
-	}
-	extra, ok := body["extra_args"].(map[string]any)
-	if !ok || extra["apply_pe"] != false {
-		t.Fatalf("extra_args = %v, want {apply_pe:false}(不显式发则引擎缺省开启改写)", body["extra_args"])
-	}
-	// 用户开了智能优化时要跟着变 true
-	on := buildT2IBody(t, "ernie-image-turbo", "1:1", map[string]any{"use_prompt_enhancer": true})
-	if on["extra_args"].(map[string]any)["apply_pe"] != true {
-		t.Fatalf("开启智能优化后 apply_pe 应为 true,实际 %v", on["extra_args"])
 	}
 }
 

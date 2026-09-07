@@ -47,11 +47,11 @@ func (a *Adaptor) GetRequestURL(info *relaycommon.RelayInfo) (string, error) {
 
 // newAPIControlExtraKeys new-api 体验区注入的**渠道控制**字段,不是模型 input。
 //
-// 体验区的「提示词智能优化」开关走通用 OpenAI 图片请求下发,这些未知字段落在
-// dto.ImageRequest.Extra,由 gpustackplus 挑出来映射成引擎参数
-// (见 relay/channel/gpustackplus/adaptor.go 的 applyErnieImageTurboDefaults 与
-// hunyuanPromptKeys)。前端看不到渠道映射结果,无法按渠道决定发不发,所以同一个请求
-// 也可能落到 Replicate——原样转成 input 会让上游报未知输入而整单失败。
+// 这两个键曾由体验区的「提示词智能优化」开关下发,落在 dto.ImageRequest.Extra,
+// 由 gpustackplus 挑出来映射成引擎参数(见该渠道的 hunyuanPromptKeys)。
+// 该开关与 ERNIE 渠道均已下架,前端不再注入,但 API 直连调用方仍可能发,
+// 且同一个请求也可能落到 Replicate——原样转成 input 会让上游报未知输入而整单失败,
+// 所以这道剥离仍然保留。
 //
 // 只挡体验区确实会注入的这两个键,不做成通用黑名单:Replicate 的模型 input 是任意的,
 // 全量透传是本适配器有意的能力(直连调用方靠它传任意模型参数)。像 system_prompt 这类

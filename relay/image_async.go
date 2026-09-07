@@ -60,7 +60,7 @@ func IsImageTask(task *model.Task) bool {
 //
 // ⚠️ 已知局限：若同一个模型名同时挂在 GPUStackPlus 和别的渠道上，Distribute 选到后者
 // 就会在这里 400，而重试本可能选到前者。当前自建图片模型（z-image / qwen-image /
-// qwen-image-edit / hunyuan-image-3 / ernie-image-turbo）只挂 GPUStackPlus，不触发。
+// qwen-image-edit / hunyuan-image-3）只挂 GPUStackPlus，不触发。
 // **若将来出现混挂，要把这里改成可重试**（去掉 Local 标记），让 relay 继续找支持的渠道。
 func checkAsyncImageSupported(c *gin.Context, info *relaycommon.RelayInfo) *dto.TaskError {
 	if !IsAsyncImageSubmit(info) {

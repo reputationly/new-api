@@ -7,5 +7,4 @@ const ChannelName = "gpustackplus"
 var ModelList = []string{
 	"z-image",
 	"qwen-image-edit",
-	"ernie-image-turbo",
 }

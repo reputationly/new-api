@@ -221,14 +221,6 @@ func (a *Adaptor) ConvertImageRequest(c *gin.Context, info *relaycommon.RelayInf
 		body["negative_prompt"] = np
 	}
 
-	// ERNIE-Image-Turbo 生产档：Turbo 官方推荐 8 步、guidance=1.0，
-	// 此时不走 CFG。不依赖引擎默认值（当前 pipeline 默认为
-	// 50 步、guidance=4.0），避免 API 调用者漏传参数时误开 CFG。
-	// 体验区的“提示词智能优化”使用公共字段
-	// use_prompt_enhancer，这里只对 ERNIE 白名单映射到引擎原生
-	// extra_args.apply_pe。缺省为 false，保证严格文案/排版不被 PE 改写。
-	applyErnieImageTurboDefaults(c, request, modelName, body)
-
 	// HunyuanImage-3.0 提示词模式(bot_task / sys_type / system_prompt)。门面对这些键
 	// 是通用透传(既不在 _CONTROL_KEYS 也不在 _ENGINE_OWNED_FIELDS),引擎的
 	// ImageTaskRequest 已声明它们,所以这里放进 body 就能一路到底。不传即快档:
@@ -456,65 +448,20 @@ func imageNegativePromptFrom(c *gin.Context, request dto.ImageRequest) string {
 	return strings.TrimSpace(c.PostForm("negative_prompt"))
 }
 
-const ernieImageTurboModel = "ernie-image-turbo"
-
-func isErnieImageTurboModel(model string) bool {
-	return strings.Contains(strings.ToLower(strings.TrimSpace(model)), ernieImageTurboModel)
-}
-
-// applyErnieImageTurboDefaults 将对外的通用产品字段收敛为 ERNIE
-// 引擎参数。这里有意锁定 Turbo 的生产采样参数，不向外部
-// 暴露任意 extra_args / guidance；后续若接 ERNIE Base，应单独建立
-// 模型 profile，不要放宽这个 Turbo 分支。
-func applyErnieImageTurboDefaults(
-	c *gin.Context,
-	request dto.ImageRequest,
-	modelName string,
-	body map[string]any,
-) {
-	if !isErnieImageTurboModel(modelName) {
-		return
-	}
-
-	body["num_inference_steps"] = 8
-	body["guidance_scale"] = 1.0
-	// 键名必须是 extra_args,不是 extra_params。异步任务端点(/v1/tasks/image/)只把
-	// gen_params 上**已声明**的字段从 extra_body 搬过去(hasattr 过滤),而
-	// OmniDiffusionSamplingParams 有 extra_args、没有 extra_params——发 extra_params
-	// 会被静默丢弃(不报错)。同步端点 /v1/images/generations 认 extra_params,两条路的
-	// 契约在引擎侧是分叉的,别照搬同步端点的写法。
-	//
-	// 必须显式发 false:引擎 _should_apply_pe 读不到时缺省 True(PE 开),
-	// 与「严格文案/排版不被改写」的默认相反。
-	body["extra_args"] = map[string]any{
-		"apply_pe": imageBoolExtraFrom(c, request, "use_prompt_enhancer"),
-	}
-}
-
-// imageBoolExtraFrom 取一个仅本渠道消费的布尔参数:JSON 请求 → dto.Extra[key];
-// multipart(edits)→ 表单字段。缺省、null、非法值一律为 false——调用方(ERNIE 的
-// apply_pe)对「没传」和「显式 false」的处理相同,故不区分三态。
-func imageBoolExtraFrom(c *gin.Context, request dto.ImageRequest, key string) bool {
-	if raw, ok := request.Extra[key]; ok && len(raw) > 0 {
-		var value bool
-		if err := common.Unmarshal(raw, &value); err == nil {
-			return value
-		}
-	}
-	if raw := strings.TrimSpace(c.PostForm(key)); raw != "" {
-		if value, err := strconv.ParseBool(raw); err == nil {
-			return value
-		}
-	}
-	return false
-}
-
 // hunyuanPromptKeys HunyuanImage-3.0 的提示词模式开关(仅本渠道消费,不放共享 dto)。
 //
-// bot_task 决定引擎的自回归阶段跑不跑:image/vanilla 直接去噪(快档),
-// recaption/think/think_recaption 先让 AR 看图并改写提示词、预测输出比例(质量档)。
-// 实测两档差 2.8 倍耗时,收益随场景变化很大,所以必须是请求级参数而不是部署期固定。
+// bot_task 决定引擎的自回归阶段跑不跑:image/vanilla 直接去噪,
+// recaption/think/think_recaption 先让 AR 改写提示词、预测输出比例。
 // sys_type / system_prompt 是配套的系统提示词覆盖。
+//
+// 但 2026-09-07 起现网 hunyuan-image-3 已切 DiT 单引擎常驻(GPUStack 后端参数
+// --deploy-config /deploy-configs/hunyuan_image3_dit_a100_40g_resident.yaml),
+// 部署里根本没有 AR 引擎,这三个键传上去会被【静默忽略】——不报错、也不生效。
+// 提示词增强改由外部完成。要重新启用需先把后端参数切回
+// --residency-config /deploy-configs/hunyuan_image3_a100_40g_residency.yaml。
+//
+// 透传逻辑仍然保留而不是删掉:代码本身是对的(白名单+默认不传,不传即快档),
+// 留着的成本是零,删了反而让切回 residency 档时要重写。
 //
 // 白名单而非全量透传 Extra:Extra 装的是客户端发来的任意字段,而引擎侧的
 // ImageTaskRequest 是 extra="allow" 的,会照单全收——全量透传等于把引擎的参数面

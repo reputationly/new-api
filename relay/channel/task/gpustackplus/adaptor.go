@@ -353,11 +353,6 @@ func (a *TaskAdaptor) BuildRequestBody(c *gin.Context, info *relaycommon.RelayIn
 	// "16:9",不补就是强制横屏。详见 image_shape.go。
 	if imageShapeTaskTypes[taskType] {
 		applyImageShape(body, strings.TrimSpace(req.Size))
-		// ERNIE Turbo 的生产采样参数同样要在这条链路上补 —— 它是**转换**不是转发,
-		// metadata 透传救不了(对外只有 use_prompt_enhancer,引擎要 extra_args.apply_pe;
-		// 步数与 guidance 根本不来自请求)。不补的话:50 步(慢 6.25 倍)、CFG 开、
-		// 提示词改写默认打开。详见 ernie_image.go。
-		applyErnieImageTurboDefaults(body, modelName)
 	}
 	// SoulX svs 的文本仅占位(引擎按 prompt_audio/target_audio 生成歌声),但引擎 input 需非空、
 	// 且真机验证过的请求带 "soulx-singer" 标签。ValidateBasicTaskRequest 已豁免 svs 的空 prompt,
