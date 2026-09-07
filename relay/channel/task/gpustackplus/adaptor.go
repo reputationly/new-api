@@ -438,8 +438,20 @@ func (a *TaskAdaptor) BuildRequestBody(c *gin.Context, info *relaycommon.RelayIn
 		// 字数上限:按模型归属的那份配置查,不按 task_type 猜。Music3 配在
 		// MusicModelConfig 里(体验区把它挂在音乐页),拿 AudioModelConfig 去查会查不到、
 		// 落到全局音频默认值 —— 运营在音乐配置里给它设的上限就成了摆设,且不报错。
+		//
+		// 但 Music3 不适用那个逐字段字符闸:它的真实约束是 checkpoint 的联合
+		// token 预算(caption + 歌词拼成一条 prompt),形状完全不同。这里必须按
+		// 引擎的语义校验 —— 上面的 t2m 改写已经把 taskType 变成 tts,所以 Music3
+		// 的长度校验只会落在本分支,写去下面的 t2m 分支不会执行。
 		if isMusic3 {
-			if err := common.ValidateMusicTextForModel(taskType, req.Prompt, req.Model, info.OriginModelName, modelName); err != nil {
+			// 第二个参数是 req.Prompt 而不是 metadata.lyrics:Music3 的歌词
+			// 走顶层 prompt(门面映射到引擎的 input),metadata.lyrics 会被透传
+			// 但引擎不认,到了就丢。
+			if err := common.ValidateMusic3JointPrompt(
+				metadataString(req.Metadata, "instructions"),
+				req.Prompt,
+				modelName,
+			); err != nil {
 				return nil, localBadRequest(err)
 			}
 		} else if err := common.ValidateAudioTextForModel(taskType, req.Prompt, req.Model, info.OriginModelName, modelName); err != nil {
@@ -452,6 +464,9 @@ func (a *TaskAdaptor) BuildRequestBody(c *gin.Context, info *relaycommon.RelayIn
 		// (t2a/tv2m)也归「音乐」大类,同样受 MusicModelConfig 字数限制,只有 prompt。
 		// (tv2a 已随 AudioX 视频配乐下线;v2a 现属视频大类,不走音乐字数限制。)
 		// 任一字段超限即拒。
+		//
+		// Music3 到不了这里:上面的 t2m→tts 改写已经把它送进 tts 分支,它的
+		// 联合长度校验也在那里。
 		for _, txt := range []string{
 			req.Prompt,
 			metadataString(req.Metadata, "lyrics"),

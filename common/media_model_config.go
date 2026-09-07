@@ -812,6 +812,44 @@ func ValidateMusicTextForModel(taskType, text string, candidates ...string) erro
 	return nil
 }
 
+// MiniMax-Music3 的联合 prompt 预算,来自 checkpoint 自身而不是运营配置。
+//
+// 引擎把 caption 和歌词**拼成一条 prompt** 再编码,超了就整条拒:
+//
+//	prompt = build_prompt(request.instructions, request.input)
+//	if len(tokenizer.encode(prompt)) > MAX_PROMPT_TOKENS:  # 5000
+//	    raise ValueError("... Shorten the caption or the lyrics.")
+//
+// 所以它和 MusicModelConfig.maxChars 是**两种不同形状的约束**:后者按字段、
+// 按字符,前者是两个字段合起来按 token。用 maxChars 去卡 Music3 会同时错在
+// 单位、粒度和量级上 —— 实测运营配的 600 字符会把官方推荐的结构化 caption
+// (README:250-450 英文词)直接挡掉,而引擎本身能吃下 3268 字符的 caption。
+//
+// 换算依据(用该 checkpoint 自带 tokenizer 实测):中文歌词最密,1.27 字符/token;
+// 中文描述 1.48;英文描述 4.77。取最密的中文,5000 字符 ≈ 3937 token,连同
+// build_prompt 的框架 token 仍稳在 5000 以内;而任何非中文文本只会更省。
+// 因此用一个语言无关的 5000 字符联合上限近似它,不必在网关侧引入 tokenizer。
+const music3JointPromptMaxChars = 5000
+
+// ValidateMusic3JointPrompt 校验 Music3 的 caption + 歌词联合长度。
+//
+// 单独存在而不是并进 ValidateMusicTextForModel:后者是「逐字段、可运营配置」
+// 的闸,这条是「联合、由 checkpoint 决定」的闸,两者会同时生效且含义不同。
+// 混在一起会让运营以为调 maxChars 就能放开 Music3,而实际放不开。
+//
+// 参数对应引擎的 build_prompt(instructions, input):caption 是
+// metadata.instructions,**歌词是顶层 prompt**(门面把它映射到 input)。
+// 不是 metadata.lyrics —— 那个键会被透传,但引擎 schema 里没有它,到了就丢,
+// 计进预算只会凭空拒掉合法请求。
+func ValidateMusic3JointPrompt(caption, lyricsFromPrompt, modelName string) error {
+	n := len([]rune(caption)) + len([]rune(lyricsFromPrompt))
+	if n <= music3JointPromptMaxChars {
+		return nil
+	}
+	return fmt.Errorf("模型 %s 的描述与歌词合计 %d 字,超过上限 %d 字:请缩短描述或歌词",
+		modelName, n, music3JointPromptMaxChars)
+}
+
 // MusicRefAudioMaxBytesForModel 返回该音乐模型参考音/源音大小上限(字节;0=不限制)及是否已配置。
 // 优先 tab 级,其次模型级,再次全局 default。用于 cover/repaint/svs 服务端物化时兜底
 // (前端上传限制可被直连绕过)。
