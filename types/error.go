@@ -67,6 +67,10 @@ const (
 
 	// request error
 	ErrorCodeBadRequestBody ErrorCode = "bad_request_body"
+	// ErrorCodeEndpointNotSupported 客户端把模型打到了本渠道不提供的端点上。
+	// 消息由网关自己拼(该走哪个端点 + 文档链接),不含上游地址或密钥,故免打码 ——
+	// 见 skipsMasking。
+	ErrorCodeEndpointNotSupported ErrorCode = "endpoint_not_supported"
 
 	// response error
 	ErrorCodeReadResponseBodyFailed ErrorCode = "read_response_body_failed"
@@ -148,6 +152,39 @@ func (e *NewAPIError) ErrorWithStatusCode() string {
 	return fmt.Sprintf("status_code=%d, %s", e.StatusCode, msg)
 }
 
+// IsSelfAuthoredGuidance 标记「这条错误的消息完全由网关自己构造」——
+// 是给用户看的用法指引(该走哪个端点、公开文档链接),不含上游地址、内部模型路径或密钥。
+//
+// 这类消息必须原样送达客户端。网关在错误出口上串了两道防泄露改写,两道都会把指引毁掉:
+//   - common.MaskSensitiveInfo:URL 被压成 https://***.com/***/***;
+//   - service.ReplaceUpstreamModelPath:把「空格 + 以 / 开头 + 含 2 个以上 /」的串
+//     当成上游模型路径整段换成模型名。它的终止符只认 ASCII,中文标点不算,
+//     一吞就吞到下一个 ASCII 空格,能把半句话连同文档链接一起吃掉。
+//
+// ⚠️ 判据必须同时看 errorType,不能只看 errorCode:WithOpenAIError 会把**上游响应体里的
+// error.code 原样抄进 errorCode**(见该函数),上游回一个 {"code":"endpoint_not_supported",
+// "message":"...http://10.0.3.7:8000/v1/..."} 就能骗过豁免,让含内网地址的消息免打码
+// 直达客户端 —— 正是打码要防的那种泄露。ErrorTypeNewAPIError 只由网关侧的构造器
+// (NewError / NewErrorWithStatusCode)设置,上游构造的错误是 ErrorTypeOpenAIError 等。
+//
+// ⚠️ 往豁免里加错误码前先确认:该错误码的消息在**任何路径下**都不会带上上游 URL、key
+// 或客户端不该看到的内部信息。拿不准就别加,脱敏是安全默认值。
+func (e *NewAPIError) IsSelfAuthoredGuidance() bool {
+	if e == nil {
+		return false
+	}
+	return e.errorType == ErrorTypeNewAPIError && e.errorCode == ErrorCodeEndpointNotSupported
+}
+
+// skipsMasking 标记「这条错误的消息不该过 common.MaskSensitiveInfo」。
+// ErrorCodeCountTokenFailed 是早于本机制的特例:它只免打码,不免路径改写。
+func (e *NewAPIError) skipsMasking() bool {
+	if e == nil {
+		return false
+	}
+	return e.errorCode == ErrorCodeCountTokenFailed || e.IsSelfAuthoredGuidance()
+}
+
 func (e *NewAPIError) MaskSensitiveError() string {
 	if e == nil {
 		return ""
@@ -156,7 +193,7 @@ func (e *NewAPIError) MaskSensitiveError() string {
 		return string(e.errorCode)
 	}
 	errStr := e.Err.Error()
-	if e.errorCode == ErrorCodeCountTokenFailed {
+	if e.skipsMasking() {
 		return errStr
 	}
 	return common.MaskSensitiveInfo(errStr)
@@ -204,7 +241,7 @@ func (e *NewAPIError) ToOpenAIError() OpenAIError {
 			Code:    e.errorCode,
 		}
 	}
-	if e.errorCode != ErrorCodeCountTokenFailed {
+	if !e.skipsMasking() {
 		result.Message = common.MaskSensitiveInfo(result.Message)
 	}
 	if result.Message == "" {
@@ -233,7 +270,7 @@ func (e *NewAPIError) ToClaudeError() ClaudeError {
 			Type:    string(e.errorType),
 		}
 	}
-	if e.errorCode != ErrorCodeCountTokenFailed {
+	if !e.skipsMasking() {
 		result.Message = common.MaskSensitiveInfo(result.Message)
 	}
 	if result.Message == "" {

@@ -37,6 +37,7 @@ import (
 	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/relay/channel"
 	"github.com/QuantumNous/new-api/relay/channel/gpustackplus/nfsinput"
+	taskgpustackplus "github.com/QuantumNous/new-api/relay/channel/task/gpustackplus"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	relayconstant "github.com/QuantumNous/new-api/relay/constant"
 	"github.com/QuantumNous/new-api/service"
@@ -718,25 +719,139 @@ func (a *Adaptor) ConvertAudioRequest(c *gin.Context, info *relaycommon.RelayInf
 	return a.convertSpeechRequest(c, info, request)
 }
 
-// ————— 以下模式不适用于本渠道,返回 not available —————
+// ————— 以下模式不适用于本渠道 —————
+//
+// 本渠道只有图片/视频/音乐/语音生成能力,没有任何文本模型。客户端拿生成类模型去打
+// /v1/chat/completions 之类的文本端点时,早前一律返回裸的 "not available",既没说
+// 为什么不行,也没说该换哪个端点,且被包成 500 看着像网关故障。现在按模型在体验区
+// 配置里声明的 task_type 反查出正确端点写进报错,状态码改 400(用错端点是客户端问题)。
+
+// selfHostedDocsURL 自部署模型接口文档,报错里附给用户自查。
+const selfHostedDocsURL = "https://maasdocs.ovaijisuan.com/zh/docs/api/ai-model/self-hosted-overview"
+
+// taskTypeEndpoints 少数 task_type 有专属端点;其余(视频各式玩法与音乐)统一走任务提交口。
+var taskTypeEndpoints = map[string]string{
+	"t2i": "POST /v1/images/generations",
+	"i2i": "POST /v1/images/edits",
+	"tts": "POST /v1/audio/speech",
+}
+
+const videoTaskEndpoint = "POST /v1/video/generations"
+
+// inferFallbackTaskType 是 task Adaptor InferTaskType 的兜底返回值。名字没命中任何
+// 任务 token 时它也返回这个值,所以拿它当"推断成功"会把未知模型一律指向视频端点。
+// 须与 relay/channel/task/gpustackplus 的 inferTaskType default 分支保持一致。
+const inferFallbackTaskType = "t2v"
+
+// inferredIsConclusive 判断名字推断出的 task_type 是不是"真认出来了"。
+// 兜底值 t2v 有歧义:既可能是名字里真带 t2v(wan2.2-t2v 这类,推断可信),
+// 也可能是什么都没匹配上(推断无效)。InferTaskType 不区分这两者 —— 它的 t2v 来自
+// default 分支,没有显式 t2v case —— 所以这里补一道:名字里确实含 t2v 才采信。
+func inferredIsConclusive(inferName, inferred string) bool {
+	if inferred != inferFallbackTaskType {
+		return true
+	}
+	return strings.Contains(strings.ToLower(inferName), inferFallbackTaskType)
+}
+
+func endpointForTaskType(taskType string) string {
+	if ep, ok := taskTypeEndpoints[taskType]; ok {
+		return ep
+	}
+	return videoTaskEndpoint
+}
+
+// endpointsForTaskTypes 一个模型可能挂多个玩法,去重后保序列出对应端点。
+func endpointsForTaskTypes(taskTypes []string) []string {
+	endpoints := make([]string, 0, len(taskTypes))
+	seen := map[string]bool{}
+	for _, tt := range taskTypes {
+		if ep := endpointForTaskType(tt); !seen[ep] {
+			seen[ep] = true
+			endpoints = append(endpoints, ep)
+		}
+	}
+	return endpoints
+}
+
+// unsupportedEndpointError 组装"你走错端点了"的报错。
+//
+// 玩法是请求的属性而非模型的属性,一个模型可能挂多个 task_type(见
+// common.PlaygroundTaskTypeCandidates 的注释),所以这里给的是候选端点集合,不强行收敛。
+// 模型没配进体验区时查不到候选,退化成列出本渠道全部端点。
+func unsupportedEndpointError(info *relaycommon.RelayInfo, attempted string) error {
+	// 两个名字刻意分开,别合并成一个(task Adaptor 的 taskTypeOfRequest 注释警告过):
+	//   configName 查体验区配置 —— 配置按**公开名**键控,映射不改 OriginModelName;
+	//   inferName  喂名字推断   —— 该用当下最准的名字,即映射后的上游部署名,
+	//                              任务 token(ref2va / swiftvr / tts …)只在它里面。
+	// 渠道做了模型重定向时两者不同:公开名 my-video → 上游 minimax-h3-ref2va,
+	// 拿公开名去推断只会落 t2v 兜底。
+	var configName, inferName string
+	if info != nil {
+		configName = info.OriginModelName
+		inferName = firstNonEmpty(info.UpstreamModelName, info.OriginModelName)
+	}
+	modelName := firstNonEmpty(configName, inferName)
+
+	// 面向终端用户的措辞:只说「哪个模型、不能用哪个端点、该用哪个」。
+	//   - 不出现渠道名(gpustackplus 是内部实现名,用户既不知道也不需要知道,
+	//     而且它本身就属于打码机制要挡的内部信息);
+	//   - 不出现「体验区」这类后台概念;
+	//   - 用 task_type 的原词而非「玩法」—— 前者是 API 文档里的参数名,用户对得上。
+	var b strings.Builder
+	fmt.Fprintf(&b, "模型 %s 不是文本模型,不能用 %s。", firstNonEmpty(modelName, "(未指定)"), attempted)
+
+	// 与任务 Adaptor 的 task_type 解析同序:体验区声明优先,查不到就退回名字推断。
+	// 直连 API 的模型多半没配体验区(用户看到的正是这一类),名字推断是它们唯一的线索。
+	taskTypes := common.PlaygroundTaskTypeCandidates(configName)
+	inferred := taskgpustackplus.InferTaskType(inferName)
+	switch {
+	case len(taskTypes) > 0:
+		fmt.Fprintf(&b, "它支持的任务类型是 %s,请改用 %s。",
+			strings.Join(taskTypes, " / "), strings.Join(endpointsForTaskTypes(taskTypes), " 或 "))
+	case inferName != "" && inferred != "" && inferredIsConclusive(inferName, inferred):
+		// 名字里带任务 token(ref2va / swiftvr / tts / edit …)才算命中,措辞用"推断"
+		// 而非"声明",提醒这不是权威答案。
+		fmt.Fprintf(&b, "按模型名推断它是 %s 类任务,请改用 %s。", inferred, endpointForTaskType(inferred))
+	default:
+		// 判不出任务类型时不给端点建议:前半句已经点明了不能用哪个端点,
+		// 再列一串候选让用户自己挑,既没帮上忙,又等于承认网关也不知道。剩下的交给文档。
+		//
+		// 两种情况都落这里:
+		//   1. 模型没配进体验区,名字也推不出(t2v 既是真实任务又是 InferTaskType
+		//      的兜底值,名字里没有 t2v token 时分不清是哪种);
+		//   2. 模型**配了**体验区但查不到候选 —— 语音就是这样:AudioModelConfig 的
+		//      tab key 是 emotion/synthesis/dialogue/design,而 constant 的
+		//      taskTypeToPlaygroundTab 里没有它们(tts 四格共用一个 task_type,
+		//      故意不做映射),于是 PlaygroundTaskTypeCandidates 恒为空。
+	}
+	fmt.Fprintf(&b, "接口文档:%s", selfHostedDocsURL)
+
+	// 400 且 skip-retry:客户端用错端点,换个渠道重试同样不可能成功。
+	// 用 ErrorCodeEndpointNotSupported 而非通用的 BadRequestBody,除了语义更贴切,
+	// 还因为它在 skipsMasking 豁免集里 —— 否则 MaskSensitiveInfo 会把上面那条文档
+	// 链接压成 https://***.com/***/***,整段指引就白写了。
+	return types.NewErrorWithStatusCode(errors.New(b.String()), types.ErrorCodeEndpointNotSupported,
+		http.StatusBadRequest, types.ErrOptionWithSkipRetry())
+}
 
 func (a *Adaptor) ConvertOpenAIRequest(c *gin.Context, info *relaycommon.RelayInfo, request *dto.GeneralOpenAIRequest) (any, error) {
-	return nil, errors.New("not available")
+	return nil, unsupportedEndpointError(info, "/v1/chat/completions")
 }
 func (a *Adaptor) ConvertRerankRequest(c *gin.Context, relayMode int, request dto.RerankRequest) (any, error) {
-	return nil, errors.New("not available")
+	return nil, unsupportedEndpointError(nil, "/v1/rerank")
 }
 func (a *Adaptor) ConvertEmbeddingRequest(c *gin.Context, info *relaycommon.RelayInfo, request dto.EmbeddingRequest) (any, error) {
-	return nil, errors.New("not available")
+	return nil, unsupportedEndpointError(info, "/v1/embeddings")
 }
 func (a *Adaptor) ConvertClaudeRequest(c *gin.Context, info *relaycommon.RelayInfo, request *dto.ClaudeRequest) (any, error) {
-	return nil, errors.New("not available")
+	return nil, unsupportedEndpointError(info, "/v1/messages")
 }
-func (a *Adaptor) ConvertGeminiRequest(*gin.Context, *relaycommon.RelayInfo, *dto.GeminiChatRequest) (any, error) {
-	return nil, errors.New("not available")
+func (a *Adaptor) ConvertGeminiRequest(_ *gin.Context, info *relaycommon.RelayInfo, _ *dto.GeminiChatRequest) (any, error) {
+	return nil, unsupportedEndpointError(info, "/v1beta/models/*:generateContent")
 }
 func (a *Adaptor) ConvertOpenAIResponsesRequest(c *gin.Context, info *relaycommon.RelayInfo, request dto.OpenAIResponsesRequest) (any, error) {
-	return nil, errors.New("not available")
+	return nil, unsupportedEndpointError(info, "/v1/responses")
 }
 
 func firstNonEmpty(vals ...string) string {

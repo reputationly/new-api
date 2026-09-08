@@ -90,7 +90,10 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 
 	defer func() {
 		if newAPIError != nil {
-			if relayInfo != nil && relayInfo.OriginModelName != "" {
+			// 网关自造的用法指引不做路径改写:它里面的「/v1/...」是我们自己的公开端点,
+			// 不是上游内部模型路径,替换只会把整段指引吃成模型名(见 IsSelfAuthoredGuidance)。
+			if relayInfo != nil && relayInfo.OriginModelName != "" &&
+				!newAPIError.IsSelfAuthoredGuidance() {
 				newAPIError.SetMessage(service.ReplaceUpstreamModelPath(newAPIError.Error(), relayInfo.OriginModelName))
 			}
 			logger.LogError(c, fmt.Sprintf("relay error: %s", newAPIError.Error()))

@@ -866,6 +866,12 @@ func taskTypeOfRequest(req *relaycommon.TaskSubmitReq, inferName string, configN
 		firstNonEmpty(configNames...), strings.Join(ambiguous, "/"))
 }
 
+// InferTaskType 把名字推断导出给同步 Adaptor 的报错提示复用(见
+// relay/channel/gpustackplus 的 unsupportedEndpointError):客户端拿生成类模型去打
+// 文本端点时,要在报错里指出该走哪个端点,而直连 API 的模型多半没配进体验区,
+// 只剩名字这一条线索。走同一个函数而不是另抄一份判据表,免得两处漂移。
+func InferTaskType(modelName string) string { return inferTaskType(modelName) }
+
 // inferTaskType 按模型名推断门面 task_type;显式 metadata.task_type 优先于此推断。
 func inferTaskType(modelName string) string {
 	m := strings.ToLower(modelName)
