@@ -25,6 +25,9 @@ const (
 	InitialScannerBufferSize    = 64 << 10 // 64KB (64*1024)
 	DefaultMaxScannerBufferSize = 64 << 20 // 64MB (64*1024*1024) default SSE buffer size
 	DefaultPingInterval         = 10 * time.Second
+	// DefaultStreamingTimeout 与 common/init.go 里 STREAMING_TIMEOUT 的默认值一致,
+	// 用作 constant.StreamingTimeout 非正时的兜底(见下面 NewTicker 处的说明)。
+	DefaultStreamingTimeout = 300 * time.Second
 )
 
 func getScannerBufferSize() int {
@@ -50,7 +53,17 @@ func StreamScannerHandler(c *gin.Context, resp *http.Response, info *relaycommon
 		}
 	}()
 
+	// 非正值兜底,与下面 pingInterval 的处理一致。
+	// time.NewTicker 对 <=0 的间隔直接 panic,而 constant.StreamingTimeout 拿到 0 有两条路:
+	//   - 显式配了 STREAMING_TIMEOUT=0(GetEnvOrDefault 只在环境变量**为空**时才回落默认值,
+	//     配 0 就是 0);
+	//   - 没走 common 的初始化流程(它是包级 var,零值就是 0)。
+	// 真 panic 了会被 main.go 的 gin.CustomRecovery 兜成 500「系统异常」——不崩进程,
+	// 但所有流式请求全废,且报错完全指错方向,排查时看不出是配置问题。
 	streamingTimeout := time.Duration(constant.StreamingTimeout) * time.Second
+	if streamingTimeout <= 0 {
+		streamingTimeout = DefaultStreamingTimeout
+	}
 
 	var (
 		stopChan   = make(chan bool, 3) // 增加缓冲区避免阻塞
