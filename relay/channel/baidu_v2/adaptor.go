@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/relay/channel"
 	"github.com/QuantumNous/new-api/relay/channel/openai"
@@ -27,7 +28,48 @@ func (a *Adaptor) ConvertGeminiRequest(*gin.Context, *relaycommon.RelayInfo, *dt
 
 func (a *Adaptor) ConvertClaudeRequest(c *gin.Context, info *relaycommon.RelayInfo, req *dto.ClaudeRequest) (any, error) {
 	adaptor := openai.Adaptor{}
-	return adaptor.ConvertClaudeRequest(c, info, req)
+	converted, err := adaptor.ConvertClaudeRequest(c, info, req)
+	if err != nil {
+		return nil, err
+	}
+	openAIRequest, ok := converted.(*dto.GeneralOpenAIRequest)
+	if !ok {
+		return converted, nil
+	}
+	// openai.Adaptor 会为非 OpenAI/Azure 渠道清空 stream_options，
+	// 而千帆流式默认不返回 usage，不显式要 include_usage 就只能按估算计费
+	if info.SupportStreamOptions && info.IsStream {
+		openAIRequest.StreamOptions = &dto.StreamOptions{IncludeUsage: true}
+	}
+	// openai.Adaptor 内部调的是它自己的 ConvertOpenAIRequest，不会走到本 adaptor 的
+	// -search 处理，所以在这里补上，否则 /v1/messages 打 xxx-search 会把后缀原样发给千帆
+	return applySearchSuffix(info, openAIRequest)
+}
+
+// -search 是渠道模型列表里手工约定的后缀：剥掉后缀取回真实模型名，
+// 并按千帆 /v2/chat/completions 的 web_search 参数开启联网搜索
+func applySearchSuffix(info *relaycommon.RelayInfo, request *dto.GeneralOpenAIRequest) (any, error) {
+	if !strings.HasSuffix(info.UpstreamModelName, "-search") {
+		return request, nil
+	}
+	info.UpstreamModelName = strings.TrimSuffix(info.UpstreamModelName, "-search")
+	request.Model = info.UpstreamModelName
+	if len(request.WebSearch) > 0 {
+		return request, nil
+	}
+	// 不用 ToMap：返回 map 会让 GuessRelayFormatFromRequest 认不出格式，
+	// 转换链停在 Claude，usage 语义和日志里的最终请求格式都会判错
+	webSearch, err := common.Marshal(map[string]any{
+		"enable":          true,
+		"enable_citation": true,
+		"enable_trace":    true,
+		"enable_status":   false,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("error marshalling web_search: %w", err)
+	}
+	request.WebSearch = webSearch
+	return request, nil
 }
 
 func (a *Adaptor) ConvertAudioRequest(c *gin.Context, info *relaycommon.RelayInfo, request dto.AudioRequest) (io.Reader, error) {
@@ -44,18 +86,25 @@ func (a *Adaptor) Init(info *relaycommon.RelayInfo) {
 }
 
 func (a *Adaptor) GetRequestURL(info *relaycommon.RelayInfo) (string, error) {
-	switch info.RelayMode {
-	case constant.RelayModeChatCompletions:
+	switch info.RelayFormat {
+	case types.RelayFormatClaude:
+		// /v1/messages 不走 Path2RelayMode，RelayMode 恒为 0；
+		// ConvertClaudeRequest 已把请求体转成 OpenAI 格式，所以仍打千帆的 OpenAI 兼容端点
 		return fmt.Sprintf("%s/v2/chat/completions", info.ChannelBaseUrl), nil
-	case constant.RelayModeEmbeddings:
-		return fmt.Sprintf("%s/v2/embeddings", info.ChannelBaseUrl), nil
-	case constant.RelayModeImagesGenerations:
-		return fmt.Sprintf("%s/v2/images/generations", info.ChannelBaseUrl), nil
-	case constant.RelayModeImagesEdits:
-		return fmt.Sprintf("%s/v2/images/edits", info.ChannelBaseUrl), nil
-	case constant.RelayModeRerank:
-		return fmt.Sprintf("%s/v2/rerank", info.ChannelBaseUrl), nil
 	default:
+		switch info.RelayMode {
+		case constant.RelayModeChatCompletions:
+			return fmt.Sprintf("%s/v2/chat/completions", info.ChannelBaseUrl), nil
+		case constant.RelayModeEmbeddings:
+			return fmt.Sprintf("%s/v2/embeddings", info.ChannelBaseUrl), nil
+		case constant.RelayModeImagesGenerations:
+			return fmt.Sprintf("%s/v2/images/generations", info.ChannelBaseUrl), nil
+		case constant.RelayModeImagesEdits:
+			return fmt.Sprintf("%s/v2/images/edits", info.ChannelBaseUrl), nil
+		case constant.RelayModeRerank:
+			return fmt.Sprintf("%s/v2/rerank", info.ChannelBaseUrl), nil
+		default:
+		}
 	}
 	return "", fmt.Errorf("unsupported relay mode: %d", info.RelayMode)
 }
@@ -79,22 +128,7 @@ func (a *Adaptor) ConvertOpenAIRequest(c *gin.Context, info *relaycommon.RelayIn
 	if request == nil {
 		return nil, errors.New("request is nil")
 	}
-	if strings.HasSuffix(info.UpstreamModelName, "-search") {
-		info.UpstreamModelName = strings.TrimSuffix(info.UpstreamModelName, "-search")
-		request.Model = info.UpstreamModelName
-		if len(request.WebSearch) == 0 {
-			toMap := request.ToMap()
-			toMap["web_search"] = map[string]any{
-				"enable":          true,
-				"enable_citation": true,
-				"enable_trace":    true,
-				"enable_status":   false,
-			}
-			return toMap, nil
-		}
-		return request, nil
-	}
-	return request, nil
+	return applySearchSuffix(info, request)
 }
 
 func (a *Adaptor) ConvertRerankRequest(c *gin.Context, relayMode int, request dto.RerankRequest) (any, error) {
