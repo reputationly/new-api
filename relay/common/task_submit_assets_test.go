@@ -71,6 +71,13 @@ func TestTaskSubmitReqEffectiveDuration(t *testing.T) {
 		{"只给 seconds", `{"seconds":"8"}`, 8},
 		{"duration 优先于 seconds", `{"duration":5,"seconds":"8"}`, 5},
 		{"都没有", `{"prompt":"x"}`, 0},
+		// 整值浮点:Python 的 json.dumps(15.0)/JS 的 15.0 都发这个形状。旧实现解不出来,
+		// Duration 留 0,请求照常 200 而引擎按默认帧数出片 —— 时长被无声换掉。
+		{"duration 整值浮点", `{"duration":15.0}`, 15},
+		{"duration 整值浮点字符串", `{"duration":"15.0"}`, 15},
+		{"duration 浮点零", `{"duration":0.0}`, 0},
+		{"duration null 当作没传", `{"duration":null}`, 0},
+		{"duration 空串当作没传", `{"duration":""}`, 0},
 	}
 	for _, c := range cases {
 		var req TaskSubmitReq
@@ -79,6 +86,41 @@ func TestTaskSubmitReqEffectiveDuration(t *testing.T) {
 		}
 		if got := req.EffectiveDuration(); got != c.want {
 			t.Errorf("%s: EffectiveDuration = %d, want %d", c.name, got, c.want)
+		}
+	}
+}
+
+// 给不出准确秒数就报错,不截断也不静默丢弃。
+//
+// 15.5 截成 15 是把调用方要的时长换成另一个,与旧实现"解不出来就当没传"是同一类
+// 错误(都让请求照常成功却出了别的长度)。这几家上游的时长档位本来都是整秒,
+// 非整值只可能是调用方算错了,让它当场知道比事后对着片子长度猜强。
+func TestTaskSubmitReqRejectsNonIntegerDuration(t *testing.T) {
+	for _, raw := range []string{
+		`{"duration":15.5}`,
+		`{"duration":"15.5"}`,
+		`{"duration":"abc"}`,
+	} {
+		var req TaskSubmitReq
+		if err := common.Unmarshal([]byte(raw), &req); err == nil {
+			t.Errorf("%s: 期望报错,实际解出 Duration=%d", raw, req.Duration)
+		}
+	}
+}
+
+// 不认识的类型维持既有的宽松处理(当作没传),别在这次修复里顺手扩大成报错 ——
+// 那会让一批今天还能跑的调用方突然 400。
+func TestTaskSubmitReqIgnoresUnusableDurationTypes(t *testing.T) {
+	for _, raw := range []string{
+		`{"duration":true}`,
+		`{"duration":[5]}`,
+		`{"duration":{"seconds":5}}`,
+	} {
+		var req TaskSubmitReq
+		if err := common.Unmarshal([]byte(raw), &req); err != nil {
+			t.Errorf("%s: 不应报错,得到 %v", raw, err)
+		} else if req.Duration != 0 {
+			t.Errorf("%s: 期望 Duration=0, 得到 %d", raw, req.Duration)
 		}
 	}
 }

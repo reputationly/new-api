@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"strconv"
 	"strings"
 	"time"
@@ -736,6 +737,48 @@ func (t *TaskSubmitReq) HasImage() bool {
 	return len(t.Images) > 0
 }
 
+// parseDurationSeconds 解析 duration 字段,兼收 JSON 数字与数字字符串。
+//
+// **整值浮点(15.0)必须收下**。这是个真实踩过的坑:Python 的 json.dumps(15.0) 与 JS 的
+// JSON.stringify(15.0) 都会发出 15.0,而 15.0 解不进 int。旧实现先试 int 再试 string,
+// 两条都不匹配就让 Duration 留 0 —— 请求照常 200,引擎按任务默认帧数出片(H3 的
+// t2va/fl2va 是 209 帧 ≈ 8.7 s),调用方明确表达的时长被无声丢弃。
+// 体验区走 parseInt 发整数(见 useVideoGeneration.js 的时长字段分派),所以只有
+// API 直连方会中,现网实测 duration=15.0 与 duration=5.0 出的都是 8.7 秒片子。
+//
+// 非整值(15.5)显式报错,不截断:截断是把调用方要的时长换成另一个,和静默丢弃同类。
+// 给不出准确秒数就让调用方知道 —— 这几家上游的时长档位本来也都是整秒。
+//
+// null / 空串 / 其它类型维持既有的宽松处理(当作没传),不在本次修复范围内。
+func parseDurationSeconds(raw json.RawMessage) (int, error) {
+	var num float64
+	if err := common.Unmarshal(raw, &num); err == nil {
+		return durationSecondsFromFloat(num, raw)
+	}
+
+	var s string
+	if err := common.Unmarshal(raw, &s); err == nil {
+		s = strings.TrimSpace(s)
+		if s == "" {
+			return 0, nil
+		}
+		num, err := strconv.ParseFloat(s, 64)
+		if err != nil {
+			return 0, fmt.Errorf("duration %q 不是合法的秒数", s)
+		}
+		return durationSecondsFromFloat(num, raw)
+	}
+
+	return 0, nil
+}
+
+func durationSecondsFromFloat(v float64, raw json.RawMessage) (int, error) {
+	if v != math.Trunc(v) {
+		return 0, fmt.Errorf("duration %s 必须是整数秒", strings.TrimSpace(string(raw)))
+	}
+	return int(v), nil
+}
+
 func (t *TaskSubmitReq) UnmarshalJSON(data []byte) error {
 	type Alias TaskSubmitReq
 	aux := &struct {
@@ -751,17 +794,11 @@ func (t *TaskSubmitReq) UnmarshalJSON(data []byte) error {
 	}
 
 	if len(aux.Duration) > 0 {
-		var durationInt int
-		if err := common.Unmarshal(aux.Duration, &durationInt); err == nil {
-			t.Duration = durationInt
-		} else {
-			var durationStr string
-			if err := common.Unmarshal(aux.Duration, &durationStr); err == nil && durationStr != "" {
-				if v, err := strconv.Atoi(durationStr); err == nil {
-					t.Duration = v
-				}
-			}
+		v, err := parseDurationSeconds(aux.Duration)
+		if err != nil {
+			return err
 		}
+		t.Duration = v
 	}
 
 	if len(aux.Metadata) > 0 {
