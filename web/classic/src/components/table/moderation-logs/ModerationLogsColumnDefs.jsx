@@ -86,19 +86,37 @@ export const getModerationLogsColumns = ({ t, openContentModal }) => [
     },
   },
   {
+    // 「查看原文」并在这一列里，而不是单开一列操作列：
+    // 独立操作列要 fixed 才够得着，而 Semi 的固定列在这张表的宽度下会浮到「来源」
+    // 上面把 Tag 压成「上游拒…」；不 fixed 又会滚出可视区。放在预览旁边一并解决，
+    // 语义上也更直白——它展开的就是这一格截断掉的那段内容。
     title: t('内容预览'),
     dataIndex: 'preview',
-    render: (preview) =>
-      preview ? (
-        <Text
-          ellipsis={{ showTooltip: true }}
-          style={{ maxWidth: 260, display: 'inline-block' }}
-        >
-          {preview}
-        </Text>
-      ) : (
-        <Text type='tertiary'>-</Text>
-      ),
+    render: (preview, record) => (
+      <Space spacing={4}>
+        {preview ? (
+          <Text
+            ellipsis={{ showTooltip: true }}
+            style={{ maxWidth: 200, display: 'inline-block' }}
+          >
+            {preview}
+          </Text>
+        ) : (
+          <Text type='tertiary'>-</Text>
+        )}
+        {/* has_content 由后端算：只有真拦下来、且写入时配了加密密钥的记录才有原文。 */}
+        {record.has_content && (
+          <Button
+            size='small'
+            theme='borderless'
+            type='primary'
+            onClick={() => openContentModal(record)}
+          >
+            {t('查看原文')}
+          </Button>
+        )}
+      </Space>
+    ),
   },
   {
     title: t('用户'),
@@ -136,27 +154,9 @@ export const getModerationLogsColumns = ({ t, openContentModal }) => [
     dataIndex: 'request_id',
     render: (v) =>
       v ? (
-        <Text ellipsis={{ showTooltip: true }} style={{ maxWidth: 160 }}>
+        <Text ellipsis={{ showTooltip: true }} style={{ maxWidth: 120 }}>
           {v}
         </Text>
-      ) : (
-        <Text type='tertiary'>-</Text>
-      ),
-  },
-  {
-    title: t('操作'),
-    dataIndex: 'operate',
-    fixed: 'right',
-    render: (_, record) =>
-      // has_content 由后端算：只有真拦下来、且写入时配了加密密钥的记录才有原文。
-      record.has_content ? (
-        <Button
-          size='small'
-          type='tertiary'
-          onClick={() => openContentModal(record)}
-        >
-          {t('查看原文')}
-        </Button>
       ) : (
         <Text type='tertiary'>-</Text>
       ),
