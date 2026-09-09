@@ -22,6 +22,7 @@ import { Card, Spin } from '@douyinfe/semi-ui';
 import SettingsGeneral from '../../pages/Setting/Operation/SettingsGeneral';
 import SettingsHeaderNavModules from '../../pages/Setting/Operation/SettingsHeaderNavModules';
 import SettingsSensitiveWords from '../../pages/Setting/Operation/SettingsSensitiveWords';
+import SettingsModeration from '../../pages/Setting/Operation/SettingsModeration';
 import SettingsLog from '../../pages/Setting/Operation/SettingsLog';
 import SettingsMonitoring from '../../pages/Setting/Operation/SettingsMonitoring';
 import SettingsCreditLimit from '../../pages/Setting/Operation/SettingsCreditLimit';
@@ -72,6 +73,18 @@ const OperationSetting = () => {
     CheckSensitiveOnPromptEnabled: false,
     SensitiveWords: '',
     SensitiveRefusalText: '',
+
+    /* 内容审核设置：keyword_enabled 必须在此声明为布尔，理由同下面积分设置那段注释 */
+    'moderation.mode': 'off',
+    // 默认值必须与 setting/system_setting/moderation.go 的 moderationSettings 一致：
+    // /api/option/ 没回来时（getOptions 失败只弹 toast，不改 inputs）页面显示的就是
+    // 这里的占位值，写 false 会让开关显示为关而 L0 实际是开的。
+    'moderation.keyword_enabled': true,
+    'moderation.model_filter': '',
+    'moderation.log_pass_sample_rate': 0.01,
+    'moderation.log_queue_size': 2048,
+    'moderation.retention_block_days': 180,
+    'moderation.retention_pass_days': 3,
 
     /* 日志设置 */
     LogConsumeEnabled: false,
@@ -169,6 +182,10 @@ const OperationSetting = () => {
         {/* 屏蔽词过滤设置 */}
         <Card style={{ marginTop: '10px' }}>
           <SettingsSensitiveWords options={inputs} refresh={onRefresh} />
+        </Card>
+        {/* 内容审核设置 */}
+        <Card style={{ marginTop: '10px' }}>
+          <SettingsModeration options={inputs} refresh={onRefresh} />
         </Card>
         {/* 日志设置 */}
         <Card style={{ marginTop: '10px' }}>

@@ -59,6 +59,7 @@ const routerMap = {
   audio: '/console/audio',
   music: '/console/music',
   personal: '/console/personal',
+  moderationLogs: '/console/moderation-logs',
   kyc: '/console/kyc',
   enterprise: '/console/enterprise',
   bankTransfer: '/console/bank-transfer',
@@ -284,6 +285,12 @@ const SiderBar = ({ onNavigate = () => {} }) => {
         itemKey: 'user',
         to: '/user',
         className: isRoot() ? '' : 'tableHiddle',
+      },
+      {
+        text: t('审核记录'),
+        itemKey: 'moderationLogs',
+        to: '/console/moderation-logs',
+        className: isAdmin() ? '' : 'tableHiddle',
       },
       {
         text: withUnreadBadge(t('工单管理'), adminUnread),

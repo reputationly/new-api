@@ -246,6 +246,11 @@ export default function SettingsSidebarModulesAdmin(props) {
           description: t('查看与回复所有用户的工单'),
         },
         {
+          key: 'moderationLogs',
+          title: t('审核记录'),
+          description: t('内容审核判定记录与被拦原文'),
+        },
+        {
           key: 'kyc',
           title: t('实名认证'),
           description: t('实名认证审核管理'),

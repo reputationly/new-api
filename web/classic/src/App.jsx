@@ -55,6 +55,7 @@ import Subscription from './pages/Subscription';
 import Reconcile from './pages/Reconcile';
 import OAuth2Callback from './components/auth/OAuth2Callback';
 import PersonalSetting from './components/settings/PersonalSetting';
+import ModerationLogsPage from './pages/ModerationLogs';
 import KYCPage from './pages/KYC';
 import EnterprisePage from './pages/Enterprise';
 import BankTransferPage from './pages/BankTransfer';
@@ -247,6 +248,14 @@ function App() {
             <RootRoute>
               <User />
             </RootRoute>
+          }
+        />
+        <Route
+          path='/console/moderation-logs'
+          element={
+            <AdminRoute>
+              <ModerationLogsPage />
+            </AdminRoute>
           }
         />
         <Route

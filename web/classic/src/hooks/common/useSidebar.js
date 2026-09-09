@@ -58,6 +58,7 @@ export const DEFAULT_ADMIN_CONFIG = {
     playgroundAdmin: true,
     redemption: true,
     user: true,
+    moderationLogs: true,
     kyc: true,
     enterprise: true,
     bankTransfer: true,
