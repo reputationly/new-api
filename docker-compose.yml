@@ -41,6 +41,10 @@ services:
       - WATCHTOWER_API_URL=http://watchtower:8080
       - KYC_ENCRYPT_KEY=${KYC_ENCRYPT_KEY}  # 必须在 .env.test / .env.prod 中设置，否则重启后历史 KYC 数据将无法解密
       - KYC_HASH_KEY=${KYC_HASH_KEY}
+      # 内容审核原文留存的加密 key（AES-256-GCM，64 位 hex）。
+      # 不设置时审核照常运行，但被拦内容一律不留原文——且只对配置之后发生的拦截生效，
+      # 事后补配救不回已经丢掉的内容。配没配、配错没配错，看「运营设置 → 内容审核」顶部提示。
+      - MODERATION_ENCRYPT_KEY=${MODERATION_ENCRYPT_KEY}
 #      - SYNC_FREQUENCY=60  # Uncomment if regular database syncing is needed
 #      - GOOGLE_ANALYTICS_ID=G-XXXXXXXXXX  # Google Analytics 的测量 ID (Google Analytics Measurement ID G-FLN7WD8JC9)
 #      - UMAMI_WEBSITE_ID=xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx  # Umami 网站 ID (Umami Website ID a8f20661-db79-43d8-876c-f4743e8b4c5a)
