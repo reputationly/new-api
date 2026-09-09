@@ -1,5 +1,8 @@
 import React from 'react';
+import { Typography } from '@douyinfe/semi-ui';
+import { ShieldAlert } from 'lucide-react';
 import CardPro from '../../common/ui/CardPro';
+import CompactModeToggle from '../../common/ui/CompactModeToggle';
 import ModerationLogsTable from './ModerationLogsTable';
 import ModerationLogsFilters from './ModerationLogsFilters';
 import ModerationContentModal from './modals/ModerationContentModal';
@@ -23,6 +26,19 @@ const ModerationLogsPage = () => {
 
       <CardPro
         type='type2'
+        statsArea={
+          <div className='flex flex-col md:flex-row justify-between items-start md:items-center gap-2 w-full'>
+            <div className='flex items-center text-blue-500'>
+              <ShieldAlert size={16} className='mr-2' />
+              <Typography.Text>{data.t('审核记录')}</Typography.Text>
+            </div>
+            <CompactModeToggle
+              compactMode={data.compactMode}
+              setCompactMode={data.setCompactMode}
+              t={data.t}
+            />
+          </div>
+        }
         searchArea={<ModerationLogsFilters {...data} />}
         paginationArea={createCardProPagination({
           currentPage: data.activePage,

@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { API, showError, timestamp2string } from '../../helpers';
 import { ITEMS_PER_PAGE } from '../../constants';
+import { useTableCompactMode } from '../common/useTableCompactMode';
 
 // 审核记录页的数据层。见 docs/content-moderation-design.md §10.1。
 
@@ -14,6 +15,7 @@ export const useModerationLogsData = () => {
   const [logCount, setLogCount] = useState(0);
   const [pageSize, setPageSize] = useState(ITEMS_PER_PAGE);
   const [formApi, setFormApi] = useState(null);
+  const [compactMode, setCompactMode] = useTableCompactMode('moderationLogs');
 
   // 原文弹窗。内容不进 logs 行对象：每次取原文后端都会写一条管理操作审计，
   // 缓存下来重开不请求，就等于「看了但没留痕」，而留痕是这个入口唯一的约束。
@@ -155,6 +157,9 @@ export const useModerationLogsData = () => {
     formApi,
     setFormApi,
     formInitValues,
+
+    compactMode,
+    setCompactMode,
 
     contentModalOpen,
     contentLoading,

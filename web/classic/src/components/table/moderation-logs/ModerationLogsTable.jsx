@@ -16,6 +16,7 @@ const ModerationLogsTable = ({
   handlePageChange,
   handlePageSizeChange,
   openContentModal,
+  compactMode,
   t,
 }) => {
   const columns = useMemo(
@@ -29,7 +30,7 @@ const ModerationLogsTable = ({
       dataSource={logs}
       rowKey='key'
       loading={loading}
-      scroll={{ x: 'max-content' }}
+      scroll={compactMode ? undefined : { x: 'max-content' }}
       className='rounded-xl overflow-hidden'
       size='middle'
       empty={

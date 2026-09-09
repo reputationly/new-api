@@ -28,11 +28,13 @@ const splitList = (raw, sep) =>
 export const getModerationLogsColumns = ({ t, openContentModal }) => [
   {
     title: t('时间'),
+    width: 165,
     dataIndex: 'created_at',
     render: (v) => <Text>{renderTimestamp(v)}</Text>,
   },
   {
     title: t('处置'),
+    width: 130,
     dataIndex: 'action',
     render: (action, record) => (
       <Space spacing={4}>
@@ -53,6 +55,7 @@ export const getModerationLogsColumns = ({ t, openContentModal }) => [
   },
   {
     title: t('命中词'),
+    width: 140,
     dataIndex: 'words',
     render: (words) => {
       const list = splitList(words, MODERATION_WORDS_SEP);
@@ -70,6 +73,7 @@ export const getModerationLogsColumns = ({ t, openContentModal }) => [
   },
   {
     title: t('类别'),
+    width: 150,
     dataIndex: 'categories',
     render: (categories) => {
       const list = splitList(categories, ',');
@@ -91,6 +95,7 @@ export const getModerationLogsColumns = ({ t, openContentModal }) => [
     // 上面把 Tag 压成「上游拒…」；不 fixed 又会滚出可视区。放在预览旁边一并解决，
     // 语义上也更直白——它展开的就是这一格截断掉的那段内容。
     title: t('内容预览'),
+    width: 280,
     dataIndex: 'preview',
     render: (preview, record) => (
       <Space spacing={4}>
@@ -120,6 +125,7 @@ export const getModerationLogsColumns = ({ t, openContentModal }) => [
   },
   {
     title: t('用户'),
+    width: 90,
     dataIndex: 'username',
     render: (username, record) => (
       <Text>{username || record.user_id || '-'}</Text>
@@ -127,16 +133,19 @@ export const getModerationLogsColumns = ({ t, openContentModal }) => [
   },
   {
     title: t('模型'),
+    width: 120,
     dataIndex: 'model_name',
     render: (v) => (v ? <Tag shape='circle'>{v}</Tag> : <Text>-</Text>),
   },
   {
     title: t('分组'),
+    width: 90,
     dataIndex: 'group',
     render: (v) => <Text>{v || '-'}</Text>,
   },
   {
     title: t('来源'),
+    width: 100,
     dataIndex: 'source',
     render: (v) => (
       <Tag color={v === 'upstream' ? 'purple' : 'blue'} shape='circle'>
@@ -146,11 +155,13 @@ export const getModerationLogsColumns = ({ t, openContentModal }) => [
   },
   {
     title: t('判定层'),
+    width: 80,
     dataIndex: 'provider',
     render: (v) => <Text>{v || '-'}</Text>,
   },
   {
     title: t('请求 ID'),
+    width: 140,
     dataIndex: 'request_id',
     render: (v) =>
       v ? (
