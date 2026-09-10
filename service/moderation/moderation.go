@@ -25,6 +25,11 @@ const (
 const (
 	StagePrompt     = "prompt"
 	StageInputMedia = "input_media" // 第二期
+	// StageOutput 产物（我们生成的图片/视频）。第三期，§12.4。
+	//
+	// 与 input_media 分开记：产物违规是模型的问题，输入违规是用户的问题，
+	// 统计、申诉、退费口径都不同——混在一列里事后拆不开。
+	StageOutput = "output"
 )
 
 // Modality 模态。

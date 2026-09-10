@@ -85,6 +85,7 @@ const OperationSetting = () => {
     // Form.Switch 把它当真值渲染成「开」——而这个开关决定审核服务挂掉时
     // 拒不拒绝用户请求，显示反了会让人做出完全相反的判断。
     'moderation.fail_open': true,
+    'moderation.output_mode': 'off',
     // 策略三件套。都是字符串（JSON），不是布尔，所以不受上面那条 toBoolean 规则影响，
     // 但必须在这里声明——getOptions 只把「已声明的 key」放进 inputs。
     'moderation.policies': '',

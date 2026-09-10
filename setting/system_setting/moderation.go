@@ -447,6 +447,15 @@ type ModerationSettings struct {
 	// Mode 全局模式。不参与继承，零值按 off 处理（默认不审，与 §8.5 灰度流程一致）。
 	Mode ModerationMode `json:"mode"`
 
+	// OutputMode 产物侧的运行模式（第三期，§12.4）。零值 = off，升级后默认不开。
+	//
+	// 与 Mode 分开而不是共用一个：产物违规是**我们的模型生成的**，用户的 prompt
+	// 可能完全无辜，两侧的容忍度和处置口径本来就不同（§12.4.5）。而且「输入拦、
+	// 产物只观察」这类组合在灰度期几乎必然要用——共用一个开关就做不到。
+	//
+	// 注意**图片跟输入走**，不跟产物走：MediaActive 审的是用户**上传**的图，属于输入侧。
+	OutputMode ModerationMode `json:"output_mode"`
+
 	Endpoints     []ModerationEndpoint   `json:"endpoints"`
 	Policies      []ModerationPolicy     `json:"policies"`
 	GroupPolicies map[string]GroupPolicy `json:"group_policies"`
@@ -490,7 +499,11 @@ type ModerationSettings struct {
 }
 
 var moderationSettings = ModerationSettings{
-	Mode:               ModerationModeOff,
+	Mode: ModerationModeOff,
+	// 显式写 off，不能靠零值。零值是 ModerationModeInherit（""），
+	// 而 configToMap 会把它原样导出成 moderation.output_mode = ""，
+	// 前端拿到空串既选不中「关闭」，也过不了「!== 'off'」这类判断。
+	OutputMode:         ModerationModeOff,
 	KeywordEnabled:     true,
 	FailOpen:           true,
 	DefaultPolicy:      "标准",
@@ -536,6 +549,18 @@ func (s *ModerationSettings) ResolveMode(group string) ModerationMode {
 		return ModerationModeOff
 	}
 	return s.Mode
+}
+
+// ResolveOutputMode 解析分组的产物审核模式。
+//
+// 分组绑定里只有一个 Mode 字段，它管的是输入侧；产物侧目前只有全局开关。
+// 不给分组加第二个 Mode 是有意的：产物审核刚上线、准召未验，先让它全局一致，
+// 等真需要按分组区分再加——那时 GroupPolicy 加个字段即可，存量配置不受影响。
+func (s *ModerationSettings) ResolveOutputMode(group string) ModerationMode {
+	if s.OutputMode == ModerationModeInherit {
+		return ModerationModeOff
+	}
+	return s.OutputMode
 }
 
 // ResolvePolicy 解析分组生效的策略。找不到时回退 DefaultPolicy，再找不到回退第一条；

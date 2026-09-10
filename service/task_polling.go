@@ -124,6 +124,7 @@ func TaskPollingLoop() {
 		time.Sleep(time.Duration(15) * time.Second)
 		common.SysLog("任务进度轮询开始")
 		ctx := context.TODO()
+		resetOutputModerationBudget()
 		sweepTimedOutTasks(ctx)
 		allTasks := model.GetAllUnFinishSyncTasks(constant.TaskQueryLimit)
 		platformTask, aggregateParents := partitionTasksForPolling(allTasks)
@@ -372,6 +373,40 @@ func updateVideoTasks(ctx context.Context, platform constant.TaskPlatform, chann
 	return nil
 }
 
+// outputModerationCycleBudget 单轮轮询里产物审核可以占用的总时长。
+//
+// 整个轮询是**一个 goroutine 串到底**的：平台 → 渠道 → 任务三层 for 循环，
+// 任务之间还有 1s 固定 sleep。产物审核塞在这条路上，花掉的每一秒都直接推迟
+// 后面所有任务的状态更新——包括跟审核毫无关系的那些。
+//
+// 单次审核的上界是 mediaBatchBudget（30s）。判定服务挂掉又恰好是「连不上但不
+// 立即拒绝」那种挂法时，一轮里完成 20 个任务就是 10 分钟的停摆，全站任务状态
+// 集体卡住。这与「审核自己的故障不该影响用户调用」直接冲突。
+//
+// 所以按**轮**封顶而不是按任务：超预算后本轮剩下的任务跳过审核（漏审，会出声），
+// 下一轮预算重置后照常审。60s 相当于允许两次最坏情况的单次超时，正常情况下
+// （单张图约 160ms）够审几百个任务，根本碰不到这个上界。
+const outputModerationCycleBudget = 60 * time.Second
+
+// outputModerationSpent 本轮已花掉的审核时长。只在轮询这一个 goroutine 里读写，
+// 不需要加锁。
+//
+// 走下面两个函数而不是直接读写：**忘记重置这件事已经发生过一次**——加预算时
+// 注释和告警都写着「每轮重置」「下一轮恢复」，而重置那行压根没落进文件，于是它
+// 变成进程级累计量，两次最坏超时就把产物审核永久关掉，且因为告警与守卫在同一个
+// if 里，关得悄无声息。收成一对函数是为了让这个不变量能被测试钉住。
+var outputModerationSpent time.Duration
+
+// resetOutputModerationBudget 每轮轮询开头调用。
+func resetOutputModerationBudget() {
+	outputModerationSpent = 0
+}
+
+// outputModerationAllowed 本轮预算是否还够再审一个。
+func outputModerationAllowed() bool {
+	return outputModerationSpent < outputModerationCycleBudget
+}
+
 // maxPersistRetries 上游已完成但成品落 OBS 失败时的最大重试轮数。
 // 轮询间隔 15s，20 轮 ≈ 5 分钟：足够扛过 OBS 瞬时抖动/管理员开启存储，超限判失败退款。
 const maxPersistRetries = 20
@@ -538,6 +573,46 @@ func updateVideoSingleTask(ctx context.Context, adaptor TaskPollingAdaptor, ch *
 			// No URL from adaptor — construct proxy URL using public task ID
 			task.PrivateData.ResultURL = taskcommon.BuildProxyURL(task.TaskID)
 			shouldSettle = true
+		}
+		// 产物审核（挂载点 D-1，§12.4）。放在成功分支之后统一做：
+		// 三种可送审形态（obs:// / 上游直链 / data:）都要审，分头挂会漏。
+		//
+		// 第二个地址传的是**上游原始 URL**，不能只传 ResultURL：上面 data: 那一支
+		// 会把 ResultURL 改写成 BuildProxyURL（代理 URL 要本站鉴权，判定节点拉不到），
+		// 只看 ResultURL 的话 Vertex 这类 base64 产物会 100% 被当成「拿不到地址」跳过。
+		if task.Status == model.TaskStatusSuccess && ModerateTaskOutputFunc != nil && outputModerationAllowed() {
+			started := time.Now()
+			blocked, reason := ModerateTaskOutputFunc(ctx, task, task.PrivateData.ResultURL, taskResult.Url)
+			outputModerationSpent += time.Since(started)
+			if outputModerationSpent >= outputModerationCycleBudget {
+				// 本轮预算刚被这次调用耗尽 → 本轮后续任务会跳过审核。必须出声：
+				// 漏审和「审过了都没问题」在管理端长得一模一样。
+				logger.LogWarn(ctx, fmt.Sprintf(
+					"moderation: 本轮产物审核已用满 %s 预算，本轮后续完成的任务将跳过审核（下一轮恢复）",
+					outputModerationCycleBudget))
+			}
+			if blocked {
+				task.Status = model.TaskStatusFailure
+				task.FailReason = reason
+				// **结算照做**，不能因为拦截就跳过。
+				//
+				// 「上游返回用量计费」的任务（IsDeferredUsageBilling）在提交时刻意不写
+				// 使用日志（controller/relay.go），完成时这一次结算是它**唯一**会留下的
+				// 记账记录。跳过结算 + 不退费 = 余额扣了、使用日志里查无此单，用户在
+				// 控制台既看不到也申诉不了。不退费是「按实际消耗收费」，不是「悄悄扣钱」。
+				// **必须把产物地址一并清掉**，光改状态不够。
+				//
+				// 下游多个序列化口子不看 status：relay.TaskModel2Dto 无条件返回
+				// ResolveResultURL(task.GetResultURL())，controller/task_download.go 的
+				// 下载端点也只认 UserAuth 不认状态，几个渠道适配器的 ConvertToOpenAIVideo
+				// 还会从 task.Data 里翻出上游地址。不清的话结果是「任务显示失败，
+				// 违规产物照样能取走」——比不审更糟，因为记录里写着已拦截。
+				task.PrivateData.ResultURL = ""
+				task.Data = nil
+				// 不退费（业务侧决定）。产物已经生成、上游那笔算力已经花掉，
+				// 这里不做退款；用户看到的是任务失败 + fail_reason。
+				logger.LogWarn(ctx, fmt.Sprintf("Task %s: output blocked by content moderation", task.TaskID))
+			}
 		}
 	case model.TaskStatusFailure:
 		logger.LogJson(ctx, fmt.Sprintf("Task %s failed", taskId), task)
@@ -745,3 +820,12 @@ func warnVideoMatrixSkipped(ctx context.Context, task *model.Task, reason string
 		task.TaskID, bc.VideoBilling.Resolution, videoInputLabel(bc.VideoBilling.HasVideoInput),
 		bc.VideoBilling.UnitPrice, reason, task.Quota))
 }
+
+// ModerateTaskOutputFunc 产物审核钩子。由 main.go 注入 moderation.ModerateTaskOutput。
+//
+// 用函数变量而不是直接调用：service/moderation 已经依赖 service
+// （keyword.go 用 service.AcSearch、l1 用 service.GetHttpClient），
+// 反向 import 会成环。这与 GetTaskAdaptorFunc 打破 service → relay 环是同一个手法。
+//
+// 未注入时为 nil，调用点会跳过——产物审核是可选能力，没接上不该影响任务交付。
+var ModerateTaskOutputFunc func(ctx context.Context, task *model.Task, resultURL, upstreamURL string) (blocked bool, reason string)

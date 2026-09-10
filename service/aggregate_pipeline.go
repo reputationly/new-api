@@ -318,6 +318,25 @@ func finishAggregateParent(ctx context.Context, task *model.Task, resultURL, nfs
 	task.PrivateData.ResultURL = ref
 	task.Status = model.TaskStatusSuccess
 	task.Progress = "100%"
+
+	// 产物审核（§12.4）。父任务不走 updateVideoSingleTask —— partitionTasksForPolling
+	// 刻意把它挡在平台轮询之外 —— 所以那边的挂载点覆盖不到这里，漏了这段的后果是
+	// **超分/编排的最终成品从不送审**，而它恰恰是真正交付给用户的那一份。
+	// 子任务被审过不能替代：父任务交付的是自己的 ResultURL，时机也不同。
+	//
+	// 与主路径同口径：转失败 + 清空产物地址 + 不退费，预算也共用同一轮的额度。
+	if ModerateTaskOutputFunc != nil && outputModerationAllowed() {
+		started := time.Now()
+		blocked, reason := ModerateTaskOutputFunc(ctx, task, ref, "")
+		outputModerationSpent += time.Since(started)
+		if blocked {
+			task.Status = model.TaskStatusFailure
+			task.FailReason = reason
+			task.PrivateData.ResultURL = ""
+			task.Data = nil
+			common.SysLog(fmt.Sprintf("aggregate pipeline: task %s 产物被内容审核拦截", task.TaskID))
+		}
+	}
 	if task.FinishTime == 0 {
 		task.FinishTime = time.Now().Unix()
 	}

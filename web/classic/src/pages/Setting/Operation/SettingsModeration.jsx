@@ -115,6 +115,9 @@ export default function SettingsModeration(props) {
   const [loading, setLoading] = useState(false);
   const [inputs, setInputs] = useState({
     'moderation.mode': 'off',
+    // 产物侧（我们生成的图片/视频）。与 mode 分开：产物违规是模型的问题，
+    // 用户的 prompt 可能完全无辜，两侧的处置口径不同（§12.4.5）。
+    'moderation.output_mode': 'off',
     // 与 setting/system_setting/moderation.go 的 moderationSettings 保持一致，
     // 理由见 OperationSetting.jsx 同名键上的注释。
     'moderation.keyword_enabled': true,
@@ -462,6 +465,27 @@ export default function SettingsModeration(props) {
                 </Form.Select>
               </Col>
               <Col xs={24} sm={12} md={8} lg={8} xl={8}>
+                <Form.Select
+                  field={'moderation.output_mode'}
+                  label={t('产物运行模式')}
+                  extraText={t(
+                    '审我们生成的图片与视频（文本输出不审）。异步任务在完成后、用户取件前审，零额外延迟；判定违规则任务转失败，暂不退款（按实际消耗计费，用户可凭失败原因申诉）。',
+                  )}
+                  style={{ width: '100%' }}
+                  onChange={handleFieldChange('moderation.output_mode')}
+                >
+                  <Form.Select.Option value='off'>
+                    {t('关闭')}
+                  </Form.Select.Option>
+                  <Form.Select.Option value='observe'>
+                    {t('仅观察')}
+                  </Form.Select.Option>
+                  <Form.Select.Option value='blocking'>
+                    {t('拦截')}
+                  </Form.Select.Option>
+                </Form.Select>
+              </Col>
+              <Col xs={24} sm={12} md={8} lg={8} xl={8}>
                 <Form.Switch
                   field={'moderation.keyword_enabled'}
                   label={t('启用关键词层（L0）')}
@@ -489,6 +513,18 @@ export default function SettingsModeration(props) {
               </Col>
             </Row>
 
+            {['observe', 'blocking'].includes(
+              inputs['moderation.output_mode'],
+            ) &&
+              !endpoints.some((e) => e.modality === 'image' && e.enabled) && (
+                <Banner
+                  type='danger'
+                  description={t(
+                    '产物审核已开启，但没有启用中的「图片 / 视频」审核节点——产物一个都不会被审。请在下方添加一个模态为「图片 / 视频」的节点。',
+                  )}
+                  style={{ marginBottom: 16 }}
+                />
+              )}
             {inputs['moderation.fail_open'] && mode === 'blocking' && (
               <Banner
                 type='warning'

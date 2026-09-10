@@ -21,6 +21,7 @@ import (
 	"github.com/QuantumNous/new-api/relay/helper"
 	"github.com/QuantumNous/new-api/relay/minimaxv2"
 	"github.com/QuantumNous/new-api/service"
+	"github.com/QuantumNous/new-api/service/moderation"
 	"github.com/QuantumNous/new-api/types"
 	"github.com/gin-gonic/gin"
 )
@@ -558,6 +559,19 @@ func tryRealtimeFetch(task *model.Task, isOpenAIVideoAPI bool) []byte {
 	} else if task.Status == model.TaskStatusSuccess {
 		// No URL from adaptor — construct proxy URL using public task ID
 		task.PrivateData.ResultURL = taskcommon.BuildProxyURL(task.TaskID)
+	}
+
+	// 产物审核的已知缺口（§12.4）。这条路是**同步**的：用户查任务时直接向上游拉，
+	// 拿到就地落库并把 URL 一并返回，完全不经轮询循环上的挂载点。于是 Gemini/Vertex
+	// 走实时拉取完成的任务从不送审，而那正是 data: 视频的主要来源。
+	//
+	// 这里只出声不拦：把审核塞进来意味着在用户的查询请求上多等最多 30s，
+	// 那是要单独决策的取舍（§12.2），不该顺手做掉。但静默漏审比慢更糟——
+	// 「审过了都没问题」和「一张都没审」在管理端长得一模一样。
+	if task.Status == model.TaskStatusSuccess && snap.Status != model.TaskStatusSuccess &&
+		moderation.OutputMediaActive(task.Group, task.Properties.OriginModelName) {
+		common.SysLog("moderation: 任务 " + task.TaskID +
+			" 经 Gemini/Vertex 实时拉取完成，未经过产物审核（同步路径尚未挂载，见 §12.4）")
 	}
 
 	if !snap.Equal(task.Snapshot()) {

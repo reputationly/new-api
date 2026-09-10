@@ -200,3 +200,28 @@ func TestImageCoveredCategoriesMatchesModel(t *testing.T) {
 		t.Fatal("涉政类别不能标成图片覆盖——图片侧对它完全没有覆盖")
 	}
 }
+
+// 两个运行模式的默认值都必须是显式的 "off"，不能靠零值。
+//
+// 零值是 ModerationModeInherit（""），而 configToMap 会把它原样导出成
+// moderation.output_mode = ""。前端拿到空串：下拉框选不中「关闭」（显示空白），
+// 「产物审核已开启但没有图片节点」那条红色告警的判断也会命中——
+// 于是**每一个从没动过这项配置的部署**都会看到一条说自己配错了的红条，
+// 而实际上产物审核是关着的。
+func TestModerationModeDefaultsAreExplicitOff(t *testing.T) {
+	s := GetModerationSettings()
+
+	if s.Mode != ModerationModeOff {
+		t.Fatalf("输入侧默认模式应为显式 off，得到 %q", s.Mode)
+	}
+	if s.OutputMode != ModerationModeOff {
+		t.Fatalf("产物侧默认模式应为显式 off 而不是零值 %q——"+
+			"零值会以空串导出到前端，让下拉框空白、并误触发配置告警", s.OutputMode)
+	}
+
+	// 语义上两者等价（ResolveOutputMode 把 inherit 也解析成 off），
+	// 所以这条测试钉的是**导出值的形状**，不是判定行为。
+	if got := s.ResolveOutputMode("default"); got != ModerationModeOff {
+		t.Fatalf("默认配置下产物审核必须是关的，得到 %q", got)
+	}
+}

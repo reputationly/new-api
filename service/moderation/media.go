@@ -57,19 +57,43 @@ type MediaResult struct {
 	BlockedItem string
 }
 
-// MediaActive 报告当前配置下媒体审核是否会真正执行。
+// MediaActive 报告当前配置下**输入侧**媒体审核是否会真正执行。
 //
 // 与 Active 分开：文本链有 L0 兜底，「没有模型节点」时仍然要跑；媒体链没有任何
 // 进程内层，没有 image 节点就是完全不审，调用方据此跳过提取媒体的开销。
 func MediaActive(group, modelName string) bool {
+	return mediaActiveFor(group, modelName, StageInputMedia)
+}
+
+// OutputMediaActive 报告当前配置下**产物**审核是否会真正执行（§12.4）。
+//
+// 单独一个函数而不是给 MediaActive 加参数：三个既有调用点的语义是「用户上传的图
+// 要不要审」，改签名会让它们看起来像是也管产物。两条路的开关本来就是分开的。
+func OutputMediaActive(group, modelName string) bool {
+	return mediaActiveFor(group, modelName, StageOutput)
+}
+
+func mediaActiveFor(group, modelName, stage string) bool {
 	s := system_setting.GetModerationSettings()
 	if !s.ModelFilter.Match(modelName) {
 		return false
 	}
-	if s.ResolveMode(group) == system_setting.ModerationModeOff {
+	if mediaModeFor(s, group, stage) == system_setting.ModerationModeOff {
 		return false
 	}
 	return len(s.ImageEndpoints()) > 0
+}
+
+// mediaModeFor 按阶段取生效模式。
+//
+// 产物侧读 OutputMode，输入侧读 Mode——两者必须分开，因为产物违规是**我们的模型
+// 生成的**、用户的 prompt 可能完全无辜，容忍度和处置口径都不同（§12.4.5）。
+// 共用一个开关就做不到「输入拦、产物只观察」这类灰度期几乎必然要用的组合。
+func mediaModeFor(s *system_setting.ModerationSettings, group, stage string) system_setting.ModerationMode {
+	if stage == StageOutput {
+		return s.ResolveOutputMode(group)
+	}
+	return s.ResolveMode(group)
 }
 
 // ModerateMedia 审一组媒体。返回值永不为 nil。
@@ -82,7 +106,8 @@ func ModerateMedia(ctx context.Context, req *Request, items []MediaItem) *MediaR
 	}
 
 	s := system_setting.GetModerationSettings()
-	mode := s.ResolveMode(req.Group)
+	// 阶段决定读哪个开关：产物侧是 OutputMode，输入侧是 Mode。
+	mode := mediaModeFor(s, req.Group, req.Stage)
 	if !s.ModelFilter.Match(req.ModelName) {
 		mode = system_setting.ModerationModeOff
 	}
@@ -284,6 +309,15 @@ func dropVideosIfNoFFmpeg(items []MediaItem) []MediaItem {
 // 不需要靠数日志行数得到。
 func shouldLogSkip(prev, now int64) bool {
 	return prev == 0 || prev/100 != now/100
+}
+
+// mediaStage 落库用的阶段。零值按输入侧——媒体审核在第二期只有输入这一条路，
+// 那时调用方不传 Stage，存量记录也没有这一列的区分。
+func mediaStage(stage string) string {
+	if stage == StageOutput {
+		return StageOutput
+	}
+	return StageInputMedia
 }
 
 // moderateOne 按媒体类型分派。
@@ -634,7 +668,7 @@ func recordMediaLog(
 		RequestId:   req.RequestId,
 		ModelName:   req.ModelName,
 		Source:      model.ModerationSourceSelf,
-		Stage:       StageInputMedia,
+		Stage:       mediaStage(req.Stage),
 		Modality:    modality,
 		Action:      string(v.Action),
 		Enforced:    enforced,

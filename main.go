@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"embed"
 	"fmt"
 	"log"
@@ -195,6 +196,13 @@ func main() {
 				time.Sleep(6 * time.Hour)
 			}
 		})
+	}
+
+	// 产物审核钩子（§12.4 挂载点 D-1）。用注入而不是直接调用：
+	// service/moderation 已经依赖 service，反向 import 会成环。
+	service.ModerateTaskOutputFunc = func(ctx context.Context, task *model.Task, resultURL, upstreamURL string) (bool, string) {
+		res := moderation.ModerateTaskOutput(ctx, task, resultURL, upstreamURL)
+		return res.Blocked, res.Reason
 	}
 
 	// Wire task polling adaptor factory (breaks service -> relay import cycle)
