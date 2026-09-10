@@ -107,6 +107,20 @@ func Sign(ctx context.Context, key string, opts ...SignOption) (string, error) {
 	return store.Sign(ctx, key, SignedURLTTL(), opts...)
 }
 
+// SignWithTTL 用调用方指定的 TTL 签名。
+//
+// 存在的理由：主桶的统一 TTL 是给业务产物用的（默认 7 天，够用户慢慢下载），
+// 而审核取证回落到主桶时需要的是**短得多**的有效期——那条链接指向违规内容，
+// 只在管理员点开的那一刻有用。用 Sign() 会让「回落主桶」这条路悄悄签出一周有效的
+// 链接，与界面上承诺的「短期有效」不符。
+func SignWithTTL(ctx context.Context, key string, ttl time.Duration, opts ...SignOption) (string, error) {
+	store, err := Get()
+	if err != nil {
+		return "", err
+	}
+	return store.Sign(ctx, key, ttl, opts...)
+}
+
 // Exists 判断对象是否存在（HeadObject）。总开关关闭时返回 ErrNotEnabled。
 func Exists(ctx context.Context, key string) (bool, error) {
 	if !Enabled() {

@@ -2,6 +2,8 @@ package moderation
 
 import (
 	"context"
+	"errors"
+	"strings"
 	"testing"
 
 	"github.com/QuantumNous/new-api/setting/system_setting"
@@ -128,35 +130,84 @@ func TestMediaItemsFromFiles(t *testing.T) {
 // 如果审核服务一挂就开始拒请求，灰度本身就成了事故，没人敢开。
 func TestObserveNeverBlocksWhenServiceDown(t *testing.T) {
 	s := system_setting.GetModerationSettings()
-	origMode, origEndpoints := s.Mode, s.Endpoints
-	t.Cleanup(func() { s.Mode, s.Endpoints = origMode, origEndpoints })
+	origMode, origEndpoints, origFailOpen := s.Mode, s.Endpoints, s.FailOpen
+	t.Cleanup(func() { s.Mode, s.Endpoints, s.FailOpen = origMode, origEndpoints, origFailOpen })
 
 	// 指向一个必然连不上的地址，模拟审核服务整体挂掉。
 	s.Endpoints = []system_setting.ModerationEndpoint{{
 		Name: "dead", BaseURL: "http://127.0.0.1:1", Model: "x",
 		Modality: ModalityImage, TimeoutMS: 200, Enabled: true,
 	}}
-	ClearAllFreezes()
 
 	items := []MediaItem{{URL: testImagePNG, Type: types.FileTypeImage, Field: "img"}}
 	req := &Request{UserId: 1, Group: "default", ModelName: "gpt-4o"}
 
-	s.Mode = system_setting.ModerationModeObserve
-	got := ModerateMedia(context.Background(), req, items)
-	if got.Blocked {
-		t.Fatalf("observe 下审核服务挂掉绝不能拒绝请求，得到 Blocked=true reason=%q", got.Reason)
+	// observe 下无论 FailOpen 怎么配都不拒绝——这是 observe 的定义，
+	// 与故障处置策略无关。
+	for _, failOpen := range []bool{true, false} {
+		ClearAllFreezes()
+		s.Mode = system_setting.ModerationModeObserve
+		s.FailOpen = failOpen
+		got := ModerateMedia(context.Background(), req, items)
+		if got.Blocked {
+			t.Fatalf("observe 下审核服务挂掉绝不能拒绝请求（fail_open=%v），得到 reason=%q",
+				failOpen, got.Reason)
+		}
+		if got.Action != ActionError {
+			t.Fatalf("判定本身仍应记为 error（供运行态看出服务挂了），得到 %v", got.Action)
+		}
 	}
-	if got.Action != ActionError {
-		t.Fatalf("判定本身仍应记为 error（供运行态看出服务挂了），得到 %v", got.Action)
-	}
+}
 
-	// 反面：同样的故障在 blocking 下必须拒绝。两者的差别就是 observe 的定义。
-	ClearAllFreezes()
+// TestFailOpenPolicy 审核服务挂掉时，blocking 下的处置由 FailOpen 决定。
+//
+// 这是业务侧拍板的取舍（§15.8）：GPUStack 升级、模型挂掉这类我方运维事件不该
+// 变成用户可见的全站拒绝。两种配置都要能工作——关掉它就该回到原来的 fail-close。
+func TestFailOpenPolicy(t *testing.T) {
+	s := system_setting.GetModerationSettings()
+	origMode, origEndpoints, origFailOpen := s.Mode, s.Endpoints, s.FailOpen
+	t.Cleanup(func() { s.Mode, s.Endpoints, s.FailOpen = origMode, origEndpoints, origFailOpen })
+
+	s.Endpoints = []system_setting.ModerationEndpoint{{
+		Name: "dead", BaseURL: "http://127.0.0.1:1", Model: "x",
+		Modality: ModalityImage, TimeoutMS: 200, Enabled: true,
+	}}
 	s.Mode = system_setting.ModerationModeBlocking
-	got = ModerateMedia(context.Background(), req, items)
-	if !got.Blocked {
-		t.Fatal("blocking 下审核服务挂掉必须 fail-close 拒绝，否则垫长构造就能穿透")
-	}
+
+	items := []MediaItem{{URL: testImagePNG, Type: types.FileTypeImage, Field: "img"}}
+	req := &Request{UserId: 1, Group: "default", ModelName: "gpt-4o"}
+
+	t.Run("fail_open 开启时放行", func(t *testing.T) {
+		ClearAllFreezes()
+		s.FailOpen = true
+		before := FailOpenCount()
+		got := ModerateMedia(context.Background(), req, items)
+		if got.Blocked {
+			t.Fatalf("fail_open 开启时审核不可用必须放行，得到 reason=%q", got.Reason)
+		}
+		// 放行不等于「审核通过」：记录里必须仍是 error，否则事后分不清
+		// 「这条审过没问题」和「这条根本没审」。
+		if got.Action != ActionError {
+			t.Fatalf("放行时判定仍应是 error，得到 %v", got.Action)
+		}
+		// 必须计数：fail-open 是彻底静默的，审核挂一整天业务毫无异常，
+		// 只有这个数能说明有多少请求其实没审。
+		if FailOpenCount() <= before {
+			t.Fatal("放行必须被计数，否则这段降级完全不可见")
+		}
+	})
+
+	t.Run("fail_open 关闭时拒绝", func(t *testing.T) {
+		ClearAllFreezes()
+		s.FailOpen = false
+		got := ModerateMedia(context.Background(), req, items)
+		if !got.Blocked {
+			t.Fatal("fail_open 关闭时应回到 fail-close 拒绝")
+		}
+		if got.Reason == "" {
+			t.Fatal("拒绝必须给出面向用户的原因")
+		}
+	})
 }
 
 func TestItemEnforced(t *testing.T) {
@@ -209,19 +260,182 @@ func TestMediaHash(t *testing.T) {
 	}
 }
 
-func TestObjectKeyForLog(t *testing.T) {
-	// data-url 一律不入库：它本身是内容不是引用，存前 512 字节既回溯不了，
-	// 又把用户上传的内容明文摊进一张无需审计就能列出来的表。
-	if got := objectKeyForLog("data:image/png;base64,AAAA"); got != "" {
-		t.Fatalf("data-url 不该入库，得到 %q", got)
+func TestSignEvidenceURLDispatchesByScheme(t *testing.T) {
+	ctx := context.Background()
+
+	// 空 key：这条记录没留证据，必须是一个明确的错误而不是空字符串——
+	// 调用方拿到空串会当成「签出来了」，前端就显示一个点不开的链接。
+	if _, err := SignEvidenceURL(ctx, ""); !errors.Is(err, ErrNoEvidence) {
+		t.Fatalf("空 object_key 应返回 ErrNoEvidence，得到 %v", err)
 	}
-	url := "https://obs.example.com/ingest/2026/09/10/1/abc.png"
-	if got := objectKeyForLog(url); got != url {
-		t.Fatalf("http URL 应原样保留，得到 %q", got)
+
+	// 独立桶的 key，但桶没启用：要说清是配置问题。
+	// 直接拿去主桶签会得到一个 403 的链接，管理员完全无从判断原因。
+	s := system_setting.GetModerationStorageSettings()
+	orig := s.Enabled
+	t.Cleanup(func() { s.Enabled = orig })
+	s.Enabled = false
+	_, err := SignEvidenceURL(ctx, evidenceSchemeDedicated+"evidence/2026/09/10/1/abc.png")
+	if err == nil {
+		t.Fatal("对象在未启用的取证桶里时必须报错，不能退回主桶签名")
 	}
-	long := "https://a.com/" + string(make([]byte, 600))
-	if got := objectKeyForLog(long); len(got) != 512 {
-		t.Fatalf("超长 URL 应截断到列宽 512，得到 %d", len(got))
+	if !strings.Contains(err.Error(), "未启用") {
+		t.Fatalf("错误信息要指出是桶未启用: %v", err)
+	}
+
+	// 无 scheme 的历史值原样返回：早期版本这里存的是完整 URL。
+	legacy := "https://obs.example.com/ingest/2026/09/10/1/abc.png"
+	got, err := SignEvidenceURL(ctx, legacy)
+	if err != nil || got != legacy {
+		t.Fatalf("历史值应原样返回，得到 %q / %v", got, err)
+	}
+}
+
+func TestEvidenceKeyIsDeterministic(t *testing.T) {
+	// key 必须能在**上传之前**算出来——记录要立刻落库，不能等最长 30 秒的网络 IO。
+	// 一旦它依赖上传结果，记录就会被挂在慢操作后面：记录页要几十秒才出现、
+	// 时间戳偏移、进程重启时连记录一起丢。
+	// **必须把媒体存储也打开**。上一版只关了取证桶就以为会走回落分支，
+	// 但那条分支还有一道 mediastore.Enabled() 的闸——测试进程里它同样是 false，
+	// 于是 prepareEvidence 两次都返回空串，`k1 != k2` 比较的是两个 ""，
+	// 断言完全空跑。探针打出来的就是 key=""。
+	ms := system_setting.GetMediaStorageSettings()
+	origMS := *ms
+	t.Cleanup(func() { *ms = origMS })
+	ms.Enabled = true
+	ms.Endpoint = "https://obs.example.com"
+	ms.Bucket = "test-bucket"
+
+	es := system_setting.GetModerationStorageSettings()
+	origES := es.Enabled
+	t.Cleanup(func() { es.Enabled = origES })
+	es.Enabled = false // 走回落主桶那条路，BuildKey 不需要真实连接
+
+	it := MediaItem{URL: "data:image/png;base64,AAAA", Type: types.FileTypeImage}
+	k1, up1 := prepareEvidence(&it, "abc123", 7)
+	k2, _ := prepareEvidence(&it, "abc123", 7)
+
+	if k1 == "" {
+		t.Fatal("媒体存储已启用时必须算出 key，否则这条断言又是空跑")
+	}
+	if !strings.HasPrefix(k1, evidenceSchemeShared) {
+		t.Fatalf("回落主桶时应带 %q 前缀，得到 %q", evidenceSchemeShared, k1)
+	}
+	if !strings.Contains(k1, "abc123") {
+		t.Fatalf("key 应包含内容 hash（内容寻址），得到 %q", k1)
+	}
+	if k1 != k2 {
+		t.Fatalf("同样的输入必须算出同样的 key，得到 %q / %q", k1, k2)
+	}
+	if up1 == nil {
+		t.Fatal("data-url 需要真正上传一份，upload 闭包不该为 nil")
+	}
+
+	// 已经在我方 OBS 里的直接引用，不重复搬——这条路不需要上传。
+	own := MediaItem{
+		URL:  "https://test-bucket.obs.example.com/ingest/2026/09/10/1/x.png?AccessKeyId=AK",
+		Type: types.FileTypeImage,
+	}
+	k3, up3 := prepareEvidence(&own, "def456", 7)
+	if up3 != nil {
+		t.Fatal("已在我方 OBS 的对象不该再上传一份")
+	}
+	if !strings.Contains(k3, "ingest/2026/09/10/1/x.png") {
+		t.Fatalf("应直接反解出原 key，得到 %q", k3)
+	}
+}
+
+func TestEvidenceExt(t *testing.T) {
+	// 扩展名必须是纯字符串推导：它跑在请求路径上，不能为了拿个后缀去解码
+	// 一个 200 MB 的 data-url。
+	cases := []struct {
+		url  string
+		typ  types.FileType
+		want string
+	}{
+		{"data:image/png;base64,AAAA", types.FileTypeImage, "png"},
+		{"data:image/jpeg;base64,AAAA", types.FileTypeImage, "jpg"},
+		{"data:video/mp4;base64,AAAA", types.FileTypeVideo, "mp4"},
+		{"https://a.com/x/y.webp?sig=1", types.FileTypeImage, "webp"},
+		{"https://a.com/x/y.mov?sig=1", types.FileTypeVideo, "mov"},
+		// 认不出来时按类型兜底，不能返回空——空扩展名会让 key 以点结尾。
+		{"https://a.com/noext", types.FileTypeImage, "jpg"},
+		{"https://a.com/noext", types.FileTypeVideo, "mp4"},
+		{"data:application/octet-stream;base64,AAAA", types.FileTypeImage, "jpg"},
+	}
+	for _, c := range cases {
+		it := MediaItem{URL: c.url, Type: c.typ}
+		if got := evidenceExt(&it); got != c.want {
+			t.Errorf("evidenceExt(%q, %s) = %q, want %q", c.url, c.typ, got, c.want)
+		}
+	}
+}
+
+func TestEvidenceConcurrencyIsBounded(t *testing.T) {
+	// 每个留存任务把整个对象读进内存（上界 MaxObjectSizeMB，默认 200 MB）。
+	// 不限并发的话，一批并发被拦的大文件能直接把进程 OOM——而留存跑在 gopool
+	// 的默认池上，那个池本身没有容量限制。
+	held := 0
+	defer func() {
+		for i := 0; i < held; i++ {
+			releaseEvidenceSlot()
+		}
+	}()
+	for i := 0; i < evidenceConcurrency; i++ {
+		if !acquireEvidenceSlot() {
+			t.Fatalf("占满闸之前第 %d 个就拿不到名额", i)
+		}
+		held++
+	}
+	if acquireEvidenceSlot() {
+		held++
+		t.Fatal("超过上限时必须拿不到名额，否则并发无界")
+	}
+	releaseEvidenceSlot()
+	held--
+	if !acquireEvidenceSlot() {
+		t.Fatal("释放后应能再次获取")
+	}
+	held++
+}
+
+func TestShouldCleanupLogsAfterEvidence(t *testing.T) {
+	orig := evidenceCleanupSkips.Load()
+	t.Cleanup(func() { evidenceCleanupSkips.Store(orig) })
+	evidenceCleanupSkips.Store(0)
+
+	// 清干净了就照常删记录，并把跳过计数归零。
+	if !ShouldCleanupLogsAfterEvidence(true) {
+		t.Fatal("取证清完后应当继续删记录")
+	}
+	if evidenceCleanupSkips.Load() != 0 {
+		t.Fatal("成功一次应把连续跳过计数归零")
+	}
+
+	// 没清完就跳过——记录一删，object_key 就没了，剩下的对象永久变成
+	// 桶里无人认领的违规内容。这正是那条「必须一次清完」注释存在的理由。
+	for i := 1; i <= evidenceCleanupMaxSkips; i++ {
+		if ShouldCleanupLogsAfterEvidence(false) {
+			t.Fatalf("第 %d 轮未清完时不该删记录", i)
+		}
+	}
+
+	// 但不能无限跳：OBS 长期不可用会让过期记录一直堆着，表无限增长。
+	// 攒够轮数就强制收口（并告警），否则「防孤儿」会变成「表撑爆」。
+	if !ShouldCleanupLogsAfterEvidence(false) {
+		t.Fatalf("连续跳过超过 %d 轮后必须强制清理，否则表会无限增长", evidenceCleanupMaxSkips)
+	}
+	if evidenceCleanupSkips.Load() != 0 {
+		t.Fatal("强制清理后应重置计数，否则下一轮立刻又强制")
+	}
+}
+
+func TestEvidenceSchemesAreDistinct(t *testing.T) {
+	// 两个前缀不能互为前缀，否则 strings.HasPrefix 的分派会串——
+	// 独立桶的 key 会被当成主桶的，拿错凭证去签，结果是 403。
+	if strings.HasPrefix(evidenceSchemeDedicated, evidenceSchemeShared) ||
+		strings.HasPrefix(evidenceSchemeShared, evidenceSchemeDedicated) {
+		t.Fatalf("两个 scheme 不能互为前缀: %q / %q", evidenceSchemeDedicated, evidenceSchemeShared)
 	}
 }
 

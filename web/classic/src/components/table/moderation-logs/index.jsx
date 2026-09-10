@@ -6,6 +6,7 @@ import CompactModeToggle from '../../common/ui/CompactModeToggle';
 import ModerationLogsTable from './ModerationLogsTable';
 import ModerationLogsFilters from './ModerationLogsFilters';
 import ModerationContentModal from './modals/ModerationContentModal';
+import ModerationMediaModal from './modals/ModerationMediaModal';
 import { useModerationLogsData } from '../../../hooks/moderation-logs/useModerationLogsData';
 import { useIsMobile } from '../../../hooks/common/useIsMobile';
 import { createCardProPagination } from '../../../helpers/utils';
@@ -23,6 +24,14 @@ const ModerationLogsPage = () => {
         onClose={data.closeContentModal}
         t={data.t}
       />
+      <ModerationMediaModal
+        visible={data.mediaModalOpen}
+        loading={data.mediaLoading}
+        url={data.mediaUrl}
+        isVideo={data.mediaIsVideo}
+        onClose={data.closeMediaModal}
+        t={data.t}
+      />
 
       <CardPro
         type='type2'
@@ -30,7 +39,7 @@ const ModerationLogsPage = () => {
           <div className='flex flex-col md:flex-row justify-between items-start md:items-center gap-2 w-full'>
             <div className='flex items-center text-blue-500'>
               <ShieldAlert size={16} className='mr-2' />
-              <Typography.Text>{data.t('审核记录')}</Typography.Text>
+              <Typography.Text>{data.t('拦截记录')}</Typography.Text>
             </div>
             <CompactModeToggle
               compactMode={data.compactMode}

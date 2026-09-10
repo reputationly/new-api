@@ -167,21 +167,30 @@ func Moderate(ctx context.Context, req *Request) *Result {
 		result.Reason = ReasonText(verdict.Categories)
 	}
 
-	// fail-close：审核没能完成时拒绝，而不是放行（§6.4）。
+	// 审核没能完成时的处置（§6.4、§15.8）。
 	//
-	// L1 是自建服务，挂了是我们自己的运维问题——有告警、有人管、能修，所以拿短暂拒绝
-	// 换「不漏审」这条合规底线是成立的。真正致命的是 fail-open：超长输入被 vLLM 返回
-	// 400，若当成「审核异常」放行，攻击者垫几千个无害 token 就能稳定穿透，
-	// 这比模型准召不足严重得多。
+	// 原设计是 fail-close（拒绝），理由是拿短暂拒绝换「不漏审」这条合规底线。
+	// 业务侧后来给了明确结论：GPUStack 升级、模型挂掉这类**我方运维事件**不该变成
+	// 用户可见的全站拒绝——那条理由成立的前提是故障短暂，而计划内升级本身就要几分钟
+	// 到几十分钟。于是改成可配置，默认放行（FailOpen）。
 	//
-	// 只在 blocking 下生效：observe 期本来就不拒任何请求，把审核故障变成全站拒绝
-	// 会让灰度本身成为事故。
+	// 放行不等于静默：每一次都计数、都落库，运行态页面上看得见。**这不是「审核通过」，
+	// 是「审核没做」**，两者在记录里必须分得开——所以 Action 仍然是 error 而不是 pass。
+	//
+	// 文本这条路放开时还有 L0 关键词层兜底（进程内，不受模型服务故障影响）；
+	// 图片那条路没有任何兜底，见 media.go 里同一处的说明。
+	//
+	// 只在 blocking 下才谈得上拒绝：observe 期本来就不拒任何请求。
 	if verdict.Action == ActionError && mode == system_setting.ModerationModeBlocking {
-		result.Blocked = true
-		result.Reason = "内容审核服务暂时不可用，请稍后重试"
-		// 计数供运行态展示：管理端要能分清「审核挂了在拒绝」和「用户都在违规」，
-		// 这两件事在日志和记录页上长得一样（§6.5 四）。
-		RecordFailClose()
+		if s.FailOpen {
+			RecordFailOpen()
+		} else {
+			result.Blocked = true
+			result.Reason = "内容审核服务暂时不可用，请稍后重试"
+			// 计数供运行态展示：管理端要能分清「审核挂了在拒绝」和「用户都在违规」，
+			// 这两件事在日志和记录页上长得一样（§6.5 四）。
+			RecordFailClose()
+		}
 	}
 
 	// 落库要原文和归一化两份，不能只给归一化那份：

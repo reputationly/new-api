@@ -183,8 +183,14 @@ func main() {
 		// 只在主节点清理：多节点同时跑 DELETE 除了互相锁等待没有任何好处。
 		gopool.Go(func() {
 			for {
-				if err := model.CleanupModerationLogs(); err != nil {
-					common.SysError("moderation_log 清理失败: " + err.Error())
+				// 先删取证对象再删记录，且**取证没清完就不删记录**：object_key 只存在于
+				// 记录里，记录一删，剩下的对象就永久变成桶里一堆无人认领的违规内容。
+				// 连续跳过太多轮时会强制收口并告警，见 ShouldCleanupLogsAfterEvidence。
+				drained := moderation.CleanupEvidence()
+				if moderation.ShouldCleanupLogsAfterEvidence(drained) {
+					if err := model.CleanupModerationLogs(); err != nil {
+						common.SysError("moderation_log 清理失败: " + err.Error())
+					}
 				}
 				time.Sleep(6 * time.Hour)
 			}

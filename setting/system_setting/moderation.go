@@ -299,6 +299,23 @@ type ModerationSettings struct {
 	// 不能因为「内容审核默认 off」就被一起关掉（§14 P0 要求 L0 行为不变）。
 	KeywordEnabled bool `json:"keyword_enabled"`
 
+	// FailOpen 审核服务不可用时是否放行（§15.8 的业务侧结论）。
+	//
+	// 默认 true —— 这是业务侧拍的板：GPUStack 升级、模型挂掉这类**我方运维事件**
+	// 不该变成用户可见的全站拒绝。原设计是 fail-close（拒绝），理由是「拿短暂拒绝
+	// 换不漏审这条合规底线」，但那条理由成立的前提是故障短暂且有人立刻处理，
+	// 而计划内升级本身就会持续几分钟到几十分钟。
+	//
+	// **代价必须知情，两条**：
+	//
+	//  1. 文本侧还有 L0 关键词层兜底（它是进程内的，不受模型服务故障影响），
+	//     所以最确定的那批违规词仍然拦得住；
+	//  2. **图片/视频侧没有任何兜底** —— L0 是 AC 自动机，扫不了图。L2 一放开
+	//     就是完全不设防，这段时间上传什么都进得去。
+	//
+	// 关掉它就回到 fail-close：审核服务挂掉时拦截模式下全站 503。
+	FailOpen bool `json:"fail_open"`
+
 	// LogPassSampleRate Pass 记录的抽样比例（0~1）。Block/Review/error 恒全量落库。
 	// observe 模式下全量 Pass 会在一周内把表撑到不可维护（§10）。
 	LogPassSampleRate float64 `json:"log_pass_sample_rate"`
@@ -317,6 +334,7 @@ type ModerationSettings struct {
 var moderationSettings = ModerationSettings{
 	Mode:               ModerationModeOff,
 	KeywordEnabled:     true,
+	FailOpen:           true,
 	DefaultPolicy:      "标准",
 	ModelFilter:        ModelFilter{Mode: "all"},
 	LogPassSampleRate:  0.01,

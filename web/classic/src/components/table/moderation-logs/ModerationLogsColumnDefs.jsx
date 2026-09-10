@@ -5,7 +5,6 @@ import {
   moderationActionColor,
   moderationActionLabel,
   moderationCategoryLabel,
-  moderationSourceLabel,
 } from '../../../constants/moderation.constants';
 
 const { Text } = Typography;
@@ -25,16 +24,20 @@ const splitList = (raw, sep) =>
     .map((s) => s.trim())
     .filter(Boolean);
 
-export const getModerationLogsColumns = ({ t, openContentModal }) => [
+export const getModerationLogsColumns = ({
+  t,
+  openContentModal,
+  openMediaModal,
+}) => [
   {
     title: t('时间'),
-    width: 165,
+    width: 100,
     dataIndex: 'created_at',
     render: (v) => <Text>{renderTimestamp(v)}</Text>,
   },
   {
     title: t('处置'),
-    width: 130,
+    width: 110,
     dataIndex: 'action',
     render: (action, record) => (
       <Space spacing={4}>
@@ -55,7 +58,7 @@ export const getModerationLogsColumns = ({ t, openContentModal }) => [
   },
   {
     title: t('命中词'),
-    width: 140,
+    width: 100,
     dataIndex: 'words',
     render: (words) => {
       const list = splitList(words, MODERATION_WORDS_SEP);
@@ -73,7 +76,7 @@ export const getModerationLogsColumns = ({ t, openContentModal }) => [
   },
   {
     title: t('类别'),
-    width: 150,
+    width: 110,
     dataIndex: 'categories',
     render: (categories) => {
       const list = splitList(categories, ',');
@@ -95,14 +98,14 @@ export const getModerationLogsColumns = ({ t, openContentModal }) => [
     // 上面把 Tag 压成「上游拒…」；不 fixed 又会滚出可视区。放在预览旁边一并解决，
     // 语义上也更直白——它展开的就是这一格截断掉的那段内容。
     title: t('内容预览'),
-    width: 280,
+    width: 380,
     dataIndex: 'preview',
     render: (preview, record) => (
       <Space spacing={4}>
         {preview ? (
           <Text
             ellipsis={{ showTooltip: true }}
-            style={{ maxWidth: 200, display: 'inline-block' }}
+            style={{ maxWidth: 280, display: 'inline-block' }}
           >
             {preview}
           </Text>
@@ -120,12 +123,24 @@ export const getModerationLogsColumns = ({ t, openContentModal }) => [
             {t('查看原文')}
           </Button>
         )}
+        {/* 媒体记录没有文本预览，这一格恒为空——「查看媒体」就是它的等价物。
+            object_key 只有被判违规的图片/视频才有（通过与待复核的不留存）。 */}
+        {record.object_key && (
+          <Button
+            size='small'
+            theme='borderless'
+            type='primary'
+            onClick={() => openMediaModal(record)}
+          >
+            {t('查看媒体')}
+          </Button>
+        )}
       </Space>
     ),
   },
   {
     title: t('用户'),
-    width: 90,
+    width: 80,
     dataIndex: 'username',
     render: (username, record) => (
       <Text>{username || record.user_id || '-'}</Text>
@@ -137,35 +152,26 @@ export const getModerationLogsColumns = ({ t, openContentModal }) => [
     dataIndex: 'model_name',
     render: (v) => (v ? <Tag shape='circle'>{v}</Tag> : <Text>-</Text>),
   },
-  {
-    title: t('分组'),
-    width: 90,
-    dataIndex: 'group',
-    render: (v) => <Text>{v || '-'}</Text>,
-  },
-  {
-    title: t('来源'),
-    width: 100,
-    dataIndex: 'source',
-    render: (v) => (
-      <Tag color={v === 'upstream' ? 'purple' : 'blue'} shape='circle'>
-        {t(moderationSourceLabel(v))}
-      </Tag>
-    ),
-  },
+  // 「分组」与「来源」两列已移除，不是遗漏：
+  //   - source 目前恒为 self（§9.3 的上游拒绝信号回收还没做），整列只有一个值；
+  //   - group 在单分组部署下恒为 default，要到按分组灰度时才有信息量。
+  //
+  // 两者的**筛选条件仍然保留**——需要按它们查的时候筛就是了，
+  // 而列表宽度是稀缺资源，得留给内容预览。等 upstream 信号接进来、
+  // 或者真按分组放量了，再把对应那列加回来。
   {
     title: t('判定层'),
-    width: 80,
+    width: 60,
     dataIndex: 'provider',
     render: (v) => <Text>{v || '-'}</Text>,
   },
   {
     title: t('请求 ID'),
-    width: 140,
+    width: 100,
     dataIndex: 'request_id',
     render: (v) =>
       v ? (
-        <Text ellipsis={{ showTooltip: true }} style={{ maxWidth: 120 }}>
+        <Text ellipsis={{ showTooltip: true }} style={{ maxWidth: 85 }}>
           {v}
         </Text>
       ) : (

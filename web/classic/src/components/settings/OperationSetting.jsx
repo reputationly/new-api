@@ -80,6 +80,10 @@ const OperationSetting = () => {
     // /api/option/ 没回来时（getOptions 失败只弹 toast，不改 inputs）页面显示的就是
     // 这里的占位值，写 false 会让开关显示为关而 L0 实际是开的。
     'moderation.keyword_enabled': true,
+    // 同上：不在这里声明，存进去的 false 会以字符串 "false" 回来，
+    // Form.Switch 把它当真值渲染成「开」——而这个开关决定审核服务挂掉时
+    // 拒不拒绝用户请求，显示反了会让人做出完全相反的判断。
+    'moderation.fail_open': true,
     'moderation.model_filter': '',
     'moderation.log_pass_sample_rate': 0.01,
     'moderation.log_queue_size': 2048,

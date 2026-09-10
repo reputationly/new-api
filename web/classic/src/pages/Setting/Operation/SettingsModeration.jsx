@@ -118,6 +118,7 @@ export default function SettingsModeration(props) {
     // 与 setting/system_setting/moderation.go 的 moderationSettings 保持一致，
     // 理由见 OperationSetting.jsx 同名键上的注释。
     'moderation.keyword_enabled': true,
+    'moderation.fail_open': true,
     'moderation.model_filter': '',
     // 声明它只是为了让 props.options 里的值能落进 currentInputs；实际编辑走独立的
     // endpoints state，提交时在 onSubmit 里单独处理。
@@ -345,7 +346,7 @@ export default function SettingsModeration(props) {
             <Banner
               type='info'
               description={t(
-                '对用户输入的提示词做审核。命中即在预扣费之前拒绝，不产生扣费；每次判定都会落一条审核记录，可在「审核记录」页查询。',
+                '对用户输入的提示词做审核。命中即在预扣费之前拒绝，不产生扣费；每次判定都会落一条记录，可在「拦截记录」页查询。',
               )}
               style={{ marginBottom: 16 }}
             />
@@ -383,6 +384,17 @@ export default function SettingsModeration(props) {
                   style={{ marginBottom: 16 }}
                 />
               )}
+            {status?.fail_open_count > 0 && (
+              <Banner
+                type='warning'
+                description={
+                  t('因审核服务不可用而放行的请求数：') +
+                  status.fail_open_count +
+                  t('。这些请求没有经过审核，不是审核通过。')
+                }
+                style={{ marginBottom: 16 }}
+              />
+            )}
             {status?.fail_close_count > 0 && (
               <Banner
                 type='warning'
@@ -462,7 +474,39 @@ export default function SettingsModeration(props) {
                   onChange={handleFieldChange('moderation.keyword_enabled')}
                 />
               </Col>
+              <Col xs={24} sm={12} md={8} lg={8} xl={8}>
+                <Form.Switch
+                  field={'moderation.fail_open'}
+                  label={t('审核服务不可用时放行')}
+                  extraText={t(
+                    '开启：审核节点挂掉或升级时请求照常放行（记录里仍标记为未审核）。关闭：拦截模式下会全站拒绝。',
+                  )}
+                  size='default'
+                  checkedText='｜'
+                  uncheckedText='〇'
+                  onChange={handleFieldChange('moderation.fail_open')}
+                />
+              </Col>
             </Row>
+
+            {inputs['moderation.fail_open'] && mode === 'blocking' && (
+              <Banner
+                type='warning'
+                description={t(
+                  '已开启「服务不可用时放行」：审核节点挂掉或升级期间，请求不会被拒绝。文本侧仍有关键词层兜底，但图片/视频侧没有任何兜底（关键词扫不了图），这段时间上传的媒体完全不经审核。放行次数可在上方运行态查看。',
+                )}
+                style={{ marginBottom: 16 }}
+              />
+            )}
+            {!inputs['moderation.fail_open'] && mode === 'blocking' && (
+              <Banner
+                type='danger'
+                description={t(
+                  '已关闭「服务不可用时放行」：审核节点全部不可用时，拦截模式下所有请求都会被拒绝（503）。计划内维护（如 GPUStack 升级）前请先停用下方的审核节点，而不是依赖这个开关。',
+                )}
+                style={{ marginBottom: 16 }}
+              />
+            )}
 
             {mode === 'observe' && (
               <Banner

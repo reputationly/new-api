@@ -638,3 +638,16 @@ func RecordFailClose() { failCloseCount.Add(1) }
 
 // FailCloseCount 读累计值。
 func FailCloseCount() int64 { return failCloseCount.Load() }
+
+// failOpenCount 因审核未完成而**放行**的累计次数（FailOpen 开启时）。
+//
+// 这个数比 failCloseCount 更需要被看见：fail-close 会被用户投诉推到台前，
+// 而 fail-open 是彻底静默的——审核服务挂了一整天，业务毫无异常，
+// 只有这个计数能说明「这段时间有多少请求其实没审」。
+var failOpenCount atomic.Int64
+
+// RecordFailOpen 记一次因审核不可用而放行。
+func RecordFailOpen() { failOpenCount.Add(1) }
+
+// FailOpenCount 读累计值。
+func FailOpenCount() int64 { return failOpenCount.Load() }

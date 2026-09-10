@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { Card, Spin } from '@douyinfe/semi-ui';
 import SettingsObs from '../../pages/Setting/Storage/SettingsObs';
 import SettingsUserAssetObs from '../../pages/Setting/Storage/SettingsUserAssetObs';
+import SettingsModerationObs from '../../pages/Setting/Storage/SettingsModerationObs';
 import MediaStorageStats from '../../pages/Setting/Storage/MediaStorageStats';
 import { API, showError, toBoolean } from '../../helpers';
 
@@ -31,6 +32,13 @@ const MediaStorageSetting = () => {
     'user_asset_storage.bucket': '',
     'user_asset_storage.signed_url_ttl_hours': '168',
     'user_asset_storage.max_object_size_mb': '200',
+    // 审核取证(OBS)独立桶(被拦下的违规图片/视频),前缀 moderation_storage.
+    'moderation_storage.enabled': false,
+    'moderation_storage.endpoint': '',
+    'moderation_storage.region': '',
+    'moderation_storage.bucket': '',
+    'moderation_storage.signed_url_ttl_hours': '1',
+    'moderation_storage.max_object_size_mb': '200',
   });
   let [loading, setLoading] = useState(false);
 
@@ -42,7 +50,8 @@ const MediaStorageSetting = () => {
       data.forEach((item) => {
         if (
           !item.key.startsWith('media_storage.') &&
-          !item.key.startsWith('user_asset_storage.')
+          !item.key.startsWith('user_asset_storage.') &&
+          !item.key.startsWith('moderation_storage.')
         )
           return;
         if (typeof inputs[item.key] === 'boolean') {
@@ -79,6 +88,9 @@ const MediaStorageSetting = () => {
       </Card>
       <Card style={{ marginTop: '10px' }}>
         <SettingsUserAssetObs options={inputs} refresh={onRefresh} />
+      </Card>
+      <Card style={{ marginTop: '10px' }}>
+        <SettingsModerationObs options={inputs} refresh={onRefresh} />
       </Card>
       <MediaStorageStats />
     </Spin>

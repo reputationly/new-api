@@ -261,9 +261,12 @@ func (m *ModerationLog) SetModerationContent(raw, normalized string) {
 	m.ContentEnc = enc
 }
 
-// CleanupModerationLogs 按 §10 分档清理：Block/Review/error 留 180 天，Pass 留 3 天。
-// 不做这个区分的话，observe 模式下的全量 Pass 会在一周内把表撑到不可维护。
-func CleanupModerationLogs() error {
+// ModerationRetentionCutoffs 两档保留期对应的时间界。
+//
+// 单独导出是为了让取证对象的清理（service/moderation）与记录清理用**同一套**界值。
+// 两边各算各的必然会漂：一边改了兜底值另一边没跟上，表现就是「记录还在图没了」
+// 或者反过来，而两种都要等到有人来复核时才发现。
+func ModerationRetentionCutoffs() (passCutoff, blockCutoff int64) {
 	s := system_setting.GetModerationSettings()
 	blockDays := s.RetentionBlockDays
 	if blockDays <= 0 {
@@ -276,8 +279,13 @@ func CleanupModerationLogs() error {
 		passDays = 3
 	}
 	now := time.Now()
-	passCutoff := now.AddDate(0, 0, -passDays).Unix()
-	blockCutoff := now.AddDate(0, 0, -blockDays).Unix()
+	return now.AddDate(0, 0, -passDays).Unix(), now.AddDate(0, 0, -blockDays).Unix()
+}
+
+// CleanupModerationLogs 按 §10 分档清理：Block/Review/error 留 180 天，Pass 留 3 天。
+// 不做这个区分的话，observe 模式下的全量 Pass 会在一周内把表撑到不可维护。
+func CleanupModerationLogs() error {
+	passCutoff, blockCutoff := ModerationRetentionCutoffs()
 
 	if err := DB.Where("action = ? AND created_at < ?", ModerationActionPass, passCutoff).
 		Delete(&ModerationLog{}).Error; err != nil {
@@ -455,4 +463,94 @@ func GetModerationLogContent(id int) (string, error) {
 		return "", err
 	}
 	return common.DecryptModerationContent(entry.ContentEnc)
+}
+
+// GetModerationLogObjectKey 取该记录留存的取证对象 key（带桶 scheme）。
+//
+// 与取原文同样的约束：调用方必须已完成管理员鉴权并写审计——媒体取证材料就是原文，
+// 只是换了个模态，没有理由比文本宽松。
+func GetModerationLogObjectKey(id int) (string, error) {
+	var entry ModerationLog
+	if err := DB.Select("object_key").Where("id = ?", id).First(&entry).Error; err != nil {
+		return "", err
+	}
+	return entry.ObjectKey, nil
+}
+
+// ModerationEvidenceRef 一条到期记录及其取证对象。
+type ModerationEvidenceRef struct {
+	Id        int
+	ObjectKey string
+}
+
+// ClearModerationObjectKeysByIDs 把这些**记录**的 object_key 抹掉。
+//
+// **必须按 id 清，不能按 key 清。** 取证 key 是内容寻址的
+// （BuildKey 用 userID + 内容 hash + 日期），同一张被拦图在多轮对话里反复送审时，
+// 多条记录会共享同一个 key。按 key 清会连**未到期**的兄弟记录一起抹掉——
+// 而回落主桶那条路对象根本不删，结果是证据还在桶里、记录页的按钮却永久消失。
+//
+// 清空之后记录本身还在（等 CleanupModerationLogs 按保留期删），只是不再指向对象。
+// 不清的话下一轮 ExpiredModerationEvidence 会捞到同一批，清理循环永不结束。
+func ClearModerationObjectKeysByIDs(ids []int) error {
+	if len(ids) == 0 {
+		return nil
+	}
+	return DB.Model(&ModerationLog{}).
+		Where("id IN ?", ids).
+		Update("object_key", "").Error
+}
+
+// LiveModerationEvidenceRefs 这批 key 里，哪些还被**未到期**的记录引用着。
+//
+// 删对象之前必须问一次：key 是内容寻址的，同一个对象可能被多条记录共享，
+// 其中一些还没到保留期。直接删会让那些记录的「查看媒体」点出 404——
+// 而它们本该还能复核。
+//
+// **一批一次查询，不是一行一次。** object_key 没有索引（varchar(512) 全长索引会超过
+// MySQL 5.7 的 key 长度上限），逐行 COUNT 意味着每行都要把 action/created_at 索引
+// 扫出来的那一段全部过滤一遍——一批 500 行就是 500 次范围扫描，表一大就会直接
+// 撑爆清理任务的 5 分钟预算，而超时又会让记录被删、对象变孤儿。
+func LiveModerationEvidenceRefs(keys []string) (map[string]bool, error) {
+	live := make(map[string]bool, len(keys))
+	if len(keys) == 0 {
+		return live, nil
+	}
+	_, blockCutoff := ModerationRetentionCutoffs()
+	var found []string
+	err := DB.Model(&ModerationLog{}).
+		Where("action = ? AND created_at >= ? AND object_key IN ?",
+			ModerationActionBlock, blockCutoff, keys).
+		Distinct().
+		Pluck("object_key", &found).Error
+	if err != nil {
+		return nil, err
+	}
+	for _, k := range found {
+		live[k] = true
+	}
+	return live, nil
+}
+
+// ExpiredModerationEvidence 取一批已过保留期、且仍指向取证对象的记录。
+//
+// 清理任务用它把 OBS 对象和 DB 记录一起删掉：取证对象的生命周期必须跟着记录走。
+// 光删记录不删对象会在桶里攒下一堆再也没人能通过记录找到的违规内容；
+// 反过来光靠桶级规则删对象，两边的天数一旦对不上就是「记录还在图没了」。
+func ExpiredModerationEvidence(limit int) ([]ModerationEvidenceRef, error) {
+	_, blockCutoff := ModerationRetentionCutoffs()
+	var refs []ModerationEvidenceRef
+	// 只有 block 记录会留取证对象（prepareEvidence 只对它留存），
+	// 所以界值用 block 那一档——用 pass 那档会把还没到期的证据删掉。
+	// 带上 action = block：object_key 没有索引（varchar(512) 全长索引会超过
+	// MySQL 5.7 的 key 长度上限），而 action 有。只有 block 记录会留取证对象
+	// （prepareEvidence 只对它留存），所以这个条件是等价的，却能让优化器
+	// 先按索引把范围缩到极小的一撮，而不是扫遍整个 created_at 区间——
+	// observe 期这张表会被 pass 记录灌得很大，差别是数量级的。
+	err := DB.Model(&ModerationLog{}).
+		Select("id, object_key").
+		Where("action = ? AND created_at < ? AND object_key <> ''", ModerationActionBlock, blockCutoff).
+		Limit(limit).
+		Scan(&refs).Error
+	return refs, err
 }

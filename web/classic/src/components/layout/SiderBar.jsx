@@ -287,7 +287,7 @@ const SiderBar = ({ onNavigate = () => {} }) => {
         className: isRoot() ? '' : 'tableHiddle',
       },
       {
-        text: t('审核记录'),
+        text: t('拦截记录'),
         itemKey: 'moderationLogs',
         to: '/console/moderation-logs',
         className: isAdmin() ? '' : 'tableHiddle',

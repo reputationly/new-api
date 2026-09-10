@@ -16,12 +16,13 @@ const ModerationLogsTable = ({
   handlePageChange,
   handlePageSizeChange,
   openContentModal,
+  openMediaModal,
   compactMode,
   t,
 }) => {
   const columns = useMemo(
-    () => getModerationLogsColumns({ t, openContentModal }),
-    [t, openContentModal],
+    () => getModerationLogsColumns({ t, openContentModal, openMediaModal }),
+    [t, openContentModal, openMediaModal],
   );
 
   return (
@@ -39,7 +40,7 @@ const ModerationLogsTable = ({
           darkModeImage={
             <IllustrationNoResultDark style={{ width: 150, height: 150 }} />
           }
-          description={t('该时间范围内没有审核记录')}
+          description={t('该时间范围内没有拦截记录')}
           style={{ padding: 30 }}
         />
       }

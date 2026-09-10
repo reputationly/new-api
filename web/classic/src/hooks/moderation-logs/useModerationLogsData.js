@@ -23,6 +23,13 @@ export const useModerationLogsData = () => {
   const [contentLoading, setContentLoading] = useState(false);
   const [contentText, setContentText] = useState('');
 
+  // 媒体弹窗。同样不缓存 URL：每次都要写审计，缓存等于「看了但没留痕」。
+  // 而且签名链接是短期的（取证桶默认 1 小时），缓存下来重开多半已经过期。
+  const [mediaModalOpen, setMediaModalOpen] = useState(false);
+  const [mediaLoading, setMediaLoading] = useState(false);
+  const [mediaUrl, setMediaUrl] = useState('');
+  const [mediaIsVideo, setMediaIsVideo] = useState(false);
+
   const now = new Date();
   const zeroNow = new Date(now.getFullYear(), now.getMonth(), now.getDate());
 
@@ -134,6 +141,37 @@ export const useModerationLogsData = () => {
     }
   };
 
+  const openMediaModal = async (log) => {
+    setMediaUrl('');
+    // modality 决定用 <img> 还是 <video> 渲染。视频记录的取证对象是原始视频，
+    // 不是抽出来的帧——帧只在判定时用，没有留存。
+    setMediaIsVideo(log.modality === 'video');
+    setMediaModalOpen(true);
+    setMediaLoading(true);
+    try {
+      const res = await API.get(`/api/moderation/logs/${log.id}/media`);
+      const { success, message, data } = res.data;
+      if (success) {
+        setMediaUrl(data?.url || '');
+      } else {
+        showError(message);
+        setMediaModalOpen(false);
+      }
+    } catch (e) {
+      // 与取原文同理：请求没跑完时必须关掉弹窗，留在原地会把一次失败的查询
+      // 显示成「没有留存」这个确定结论。
+      setMediaModalOpen(false);
+    } finally {
+      setMediaLoading(false);
+    }
+  };
+
+  const closeMediaModal = () => {
+    setMediaModalOpen(false);
+    // 立刻丢掉 URL：它是一条能直接打开违规内容的链接，没必要在内存里多留一秒。
+    setMediaUrl('');
+  };
+
   const closeContentModal = () => {
     setContentModalOpen(false);
     setContentText('');
@@ -165,6 +203,12 @@ export const useModerationLogsData = () => {
     contentLoading,
     contentText,
     openContentModal,
+    mediaModalOpen,
+    mediaLoading,
+    mediaUrl,
+    mediaIsVideo,
+    openMediaModal,
+    closeMediaModal,
     closeContentModal,
 
     loadLogs,

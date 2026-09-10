@@ -88,6 +88,11 @@ import {
   Video,
   Music,
   AudioWaveform,
+  UsersRound,
+  FlaskConical,
+  Landmark,
+  ShieldAlert,
+  PackagePlus,
 } from 'lucide-react';
 import {
   SiAtlassian,
@@ -179,7 +184,21 @@ export function getLucideIcon(key, selected = false) {
       return <Users {...commonProps} color={iconColor} />;
     case 'setting':
       return <Settings {...commonProps} color={iconColor} />;
+    // 下面这几个此前都没登记，一起落到 default 的 CircleUser——
+    // 侧边栏上连着四五个一模一样的圆圈人形，等于没有图标。
+    case 'group':
+      return <UsersRound {...commonProps} color={iconColor} />;
+    case 'playgroundAdmin':
+      return <FlaskConical {...commonProps} color={iconColor} />;
+    case 'bankTransfer':
+      return <Landmark {...commonProps} color={iconColor} />;
+    case 'moderationLogs':
+      return <ShieldAlert {...commonProps} color={iconColor} />;
+    case 'topup-package':
+      return <PackagePlus {...commonProps} color={iconColor} />;
     default:
+      // 兜底仍是 CircleUser。新增菜单时记得在上面登记一个图标，
+      // 否则它会和其它未登记项长得一模一样。
       return <CircleUser {...commonProps} color={iconColor} />;
   }
 }

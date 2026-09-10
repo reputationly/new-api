@@ -247,7 +247,7 @@ export default function SettingsSidebarModulesAdmin(props) {
         },
         {
           key: 'moderationLogs',
-          title: t('审核记录'),
+          title: t('拦截记录'),
           description: t('内容审核判定记录与被拦原文'),
         },
         {
