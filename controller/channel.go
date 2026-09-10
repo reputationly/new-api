@@ -3,6 +3,7 @@ package controller
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"strconv"
@@ -431,14 +432,24 @@ func validateTwoFactorAuth(twoFA *model.TwoFA, code string) bool {
 
 // validateChannel 通用的渠道校验函数
 func validateChannel(channel *model.Channel, isAdd bool) error {
+	// nil 检查必须排在任何解引用之前。
+	//
+	// 下面 isAdd 分支里原本写着 `channel == nil || channel.Key == ""`，但那时
+	// ValidateSettings 已经先解引用过一次了，判断永远到不了：请求体少一层 channel
+	// 嵌套（ShouldBindJSON 对缺失的指针字段不报错，直接给 nil）就是一次 panic，
+	// 调用方只会收到「系统异常，请在我的工单中反馈」这种无从排查的提示。
+	if channel == nil {
+		return errors.New("请求体缺少 channel 字段")
+	}
+
 	// 校验 channel settings
 	if err := channel.ValidateSettings(); err != nil {
 		return fmt.Errorf("渠道额外设置[channel setting] 格式错误：%s", err.Error())
 	}
 
-	// 如果是添加操作，检查 channel 和 key 是否为空
+	// 如果是添加操作，检查 key 是否为空（channel 本身的 nil 已在函数开头拦掉）
 	if isAdd {
-		if channel == nil || channel.Key == "" {
+		if channel.Key == "" {
 			return fmt.Errorf("channel cannot be empty")
 		}
 
