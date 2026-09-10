@@ -25,6 +25,12 @@ type TokenCountMeta struct {
 	MessagesCount int         `json:"messages_count,omitempty"` // Number of messages in the request
 	Files         []*FileMeta `json:"files,omitempty"`          // List of files, each with type and content
 	MaxTokens     int         `json:"max_tokens,omitempty"`     // Maximum tokens allowed in the request
+	// LatestUserText 最新一轮用户输入的自然语言文本，供内容审核的模型层判定。
+	//
+	// 模型层只审这一段：把几十 KB 的历史与工具返回全喂进去，一个 coding 请求就要
+	// 切十几段、打十几次 GPU 调用，而那些内容不是用户此刻的意图表达。历史与
+	// tool_result 的绕过由关键词层的全文扫描兜底。空值时模型层退回扫全文。
+	LatestUserText string `json:"latest_user_text,omitempty"`
 
 	ImagePriceRatio float64 `json:"image_ratio,omitempty"` // Ratio for image size, if applicable
 	//IsStreaming   bool        `json:"is_streaming,omitempty"`   // Indicates if the request is streaming

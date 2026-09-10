@@ -148,18 +148,33 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 	// 内容审核。必须留在预扣费之前——这不是顺手，是「审核拒绝不扣款」的结构性保证（§9.1）。
 	if needModeration && meta != nil {
 		modResult := moderation.Moderate(c, &moderation.Request{
-			Texts:     []string{meta.CombineText},
-			UserId:    relayInfo.UserId,
-			TokenId:   relayInfo.TokenId,
-			Username:  common.GetContextKeyString(c, constant.ContextKeyUserName),
-			Group:     relayInfo.UsingGroup,
-			ModelName: relayInfo.OriginModelName,
-			RequestId: relayInfo.RequestId,
-			Stage:     moderation.StagePrompt,
+			Texts: []string{meta.CombineText},
+			// 最新一轮用户输入单独给一份，供 L1 优先判定——长请求里违规内容几乎
+			// 总在这一句，先判它能让绝大多数请求一段就出结论，不必扫完历史与工具返回。
+			PriorityText: meta.LatestUserText,
+			UserId:       relayInfo.UserId,
+			TokenId:      relayInfo.TokenId,
+			Username:     common.GetContextKeyString(c, constant.ContextKeyUserName),
+			Group:        relayInfo.UsingGroup,
+			ModelName:    relayInfo.OriginModelName,
+			RequestId:    relayInfo.RequestId,
+			Stage:        moderation.StagePrompt,
 		})
 		if modResult.Blocked {
 			logger.LogWarn(c, fmt.Sprintf("content moderation blocked: provider=%s categories=%s",
 				modResult.Provider, strings.Join(modResult.Categories, ",")))
+			// 审核没跑完导致的拒绝（fail-close）不能说成「你的内容违规」：
+			// 那是我们的服务故障，用户既无从修改也无从申诉，而 503 才让客户端
+			// 知道这是可重试的临时状态（§9.2.3 错误码分级）。
+			if modResult.Action == moderation.ActionError {
+				newAPIError = types.NewErrorWithStatusCode(
+					errors.New(modResult.Reason),
+					types.ErrorCodeModerationUnavailable,
+					http.StatusServiceUnavailable,
+					types.ErrOptionWithSkipRetry(),
+				)
+				return
+			}
 			if service.WriteSensitiveRefusal(c, relayFormat, relayInfo, request, modResult.Reason) {
 				return
 			}

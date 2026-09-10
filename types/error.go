@@ -40,7 +40,13 @@ type ErrorCode string
 const (
 	ErrorCodeInvalidRequest         ErrorCode = "invalid_request"
 	ErrorCodeSensitiveWordsDetected ErrorCode = "sensitive_words_detected"
-	ErrorCodeViolationFeeGrokCSAM   ErrorCode = "violation_fee.grok.csam"
+	// ErrorCodeModerationUnavailable 审核服务不可用导致的 fail-close 拒绝。
+	//
+	// 必须与 sensitive_words_detected 分开（§9.2.3）：一个是「你的内容违规」，
+	// 一个是「我们的审核挂了」。混用会让用户为一次服务故障去申诉自己没犯的错，
+	// 也让运营在记录里分不清违规量突增和审核宕机。
+	ErrorCodeModerationUnavailable ErrorCode = "moderation_unavailable"
+	ErrorCodeViolationFeeGrokCSAM  ErrorCode = "violation_fee.grok.csam"
 
 	// new api error
 	ErrorCodeCountTokenFailed   ErrorCode = "count_token_failed"

@@ -279,14 +279,28 @@ func (c *ClaudeRequest) GetTokenCountMeta() *types.TokenCountMeta {
 		}
 	}
 
+	// latestUserTexts 收集最新一轮 user 的自然语言文本，供审核优先判定
+	// （见 types.TokenCountMeta.LatestUserText）。
+	//
+	// Claude 格式必须按 content block 的 type 过滤，不能只看 role：tool_result 是塞在
+	// role=user 的 content blocks 里的，只按 role 取会把整个代码库当成用户输入。
+	// 这里只收 type=text 的块。
+	var latestUserTexts []string
 	// messages
 	for _, message := range c.Messages {
 		tokenCountMeta.MessagesCount++
 		texts = append(texts, message.Role)
+		isUser := message.Role == "user"
+		if isUser {
+			latestUserTexts = nil
+		}
 		if message.IsStringContent() {
 			content := message.GetStringContent()
 			if content != "" {
 				texts = append(texts, content)
+				if isUser {
+					latestUserTexts = append(latestUserTexts, content)
+				}
 			}
 			continue
 		}
@@ -296,6 +310,9 @@ func (c *ClaudeRequest) GetTokenCountMeta() *types.TokenCountMeta {
 			switch media.Type {
 			case "text":
 				texts = append(texts, media.GetText())
+				if isUser {
+					latestUserTexts = append(latestUserTexts, media.GetText())
+				}
 			case "image":
 				if source := media.ToFileSource(); source != nil {
 					fileMeta = append(fileMeta, &types.FileMeta{
@@ -354,6 +371,7 @@ func (c *ClaudeRequest) GetTokenCountMeta() *types.TokenCountMeta {
 	}
 
 	tokenCountMeta.CombineText = strings.Join(texts, "\n")
+	tokenCountMeta.LatestUserText = strings.Join(latestUserTexts, "\n")
 	tokenCountMeta.Files = fileMeta
 	return &tokenCountMeta
 }

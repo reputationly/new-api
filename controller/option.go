@@ -9,6 +9,7 @@ import (
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/service/mediastore"
+	"github.com/QuantumNous/new-api/service/moderation"
 	"github.com/QuantumNous/new-api/setting"
 	"github.com/QuantumNous/new-api/setting/console_setting"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
@@ -387,6 +388,10 @@ func UpdateOption(c *gin.Context) {
 			return
 		}
 		option.Value = enc
+		// 熔断结论是基于旧配置得出的，配置一换就作废。不清的话会出现最难解释的那种
+		// 状态：管理员改对了地址或密钥，测试连接是绿的，生产流量却还要熬满一个冻结
+		// 窗口（401 那档 10 分钟）才恢复。
+		moderation.ClearAllFreezes()
 	case "media_storage.enabled":
 		// 启用媒体存储前用当前已保存的配置跑一次连通性校验（PutObject+DeleteObject）。
 		if option.Value == "true" {

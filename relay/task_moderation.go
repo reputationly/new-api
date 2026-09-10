@@ -63,6 +63,15 @@ func moderateTaskRequest(c *gin.Context, info *relaycommon.RelayInfo) *dto.TaskE
 
 	logger.LogWarn(c, "content moderation blocked task: provider="+result.Provider+
 		" categories="+strings.Join(result.Categories, ","))
+	// 审核没跑完导致的拒绝不能说成「你的内容违规」——那是服务故障，用户改不了也
+	// 申诉不了，503 才表达出「稍后可再试」（§9.2.3）。
+	if result.Action == moderation.ActionError {
+		return service.TaskErrorWrapperLocal(
+			errors.New(result.Reason),
+			"moderation_unavailable",
+			http.StatusServiceUnavailable,
+		)
+	}
 	// skip-retry 语义：换个渠道再试一次不会让内容变得合规，重试纯属浪费。
 	return service.TaskErrorWrapperLocal(
 		errors.New(service.SensitiveRefusalTextWithReason(result.Reason)),

@@ -64,6 +64,13 @@ type Request struct {
 	TaskId    string
 	RequestId string
 
+	// PriorityText 最新一轮用户输入。**L1 只审这一段，不再扫全文**（§6.3 二）——
+	// 它是替换而不是追加，历史与 tool_result 模型完全看不到，那部分只由 L0 的全文
+	// 关键词扫描兜底。空值时（任务提交等非对话链路）L1 退回扫全文。
+	//
+	// 这个区别对判断「关键词表够不够用」是关键的，见 l1_qwen3guard.go 里的完整说明。
+	PriorityText string
+
 	Stage    string // 零值按 prompt
 	Modality string // 零值按 text
 }
@@ -133,7 +140,11 @@ func Moderate(ctx context.Context, req *Request) *Result {
 		return pass
 	}
 
-	verdict := runChain(ctx, normalized, mode, s, l0)
+	policy := s.ResolvePolicy(req.Group)
+
+	// 优先段单独归一化：它是全文的一部分，但要作为独立的一段先判，
+	// 所以不能靠从 normalized 里切子串（归一化会改变长度与内容，位置对不上）。
+	verdict := runChain(ctx, normalized, mode, s, l0, policy, Normalize(req.PriorityText))
 	if verdict == nil {
 		return pass
 	}
@@ -146,12 +157,28 @@ func Moderate(ctx context.Context, req *Request) *Result {
 	// observe 是决策产出后、返回错误前的唯一收口：决策照算、日志照写，就是不拒（§8.2）。
 	// 注意这对 L0 同样生效——切到 observe 会让关键词也只记不拦。这是 observe 的定义
 	// 决定的：不这样就量不出关键词表自身的误杀率，而那正是灰度期要回答的问题。
-	result.Blocked = verdict.Action == ActionBlock && mode != system_setting.ModerationModeObserve
+	enforcing := mode != system_setting.ModerationModeObserve
+	result.Blocked = verdict.Action == ActionBlock && enforcing
 	if result.Blocked {
 		result.Reason = ReasonText(verdict.Categories)
 	}
 
-	policy := s.ResolvePolicy(req.Group)
+	// fail-close：审核没能完成时拒绝，而不是放行（§6.4）。
+	//
+	// L1 是自建服务，挂了是我们自己的运维问题——有告警、有人管、能修，所以拿短暂拒绝
+	// 换「不漏审」这条合规底线是成立的。真正致命的是 fail-open：超长输入被 vLLM 返回
+	// 400，若当成「审核异常」放行，攻击者垫几千个无害 token 就能稳定穿透，
+	// 这比模型准召不足严重得多。
+	//
+	// 只在 blocking 下生效：observe 期本来就不拒任何请求，把审核故障变成全站拒绝
+	// 会让灰度本身成为事故。
+	if verdict.Action == ActionError && mode == system_setting.ModerationModeBlocking {
+		result.Blocked = true
+		result.Reason = "内容审核服务暂时不可用，请稍后重试"
+		// 计数供运行态展示：管理端要能分清「审核挂了在拒绝」和「用户都在违规」，
+		// 这两件事在日志和记录页上长得一样（§6.5 四）。
+		RecordFailClose()
+	}
 
 	// 落库要原文和归一化两份，不能只给归一化那份：
 	// Normalize 会转小写、折叠空白、把同形字映射成拉丁字母，喂给检测器正合适，
@@ -174,14 +201,16 @@ func runChain(
 	mode system_setting.ModerationMode,
 	s *system_setting.ModerationSettings,
 	l0 bool,
+	policy *system_setting.ModerationPolicy,
+	priority string,
 ) *Verdict {
 	var worst *Verdict
 
-	for _, m := range activeModerators(mode, s, l0) {
+	for _, m := range activeModerators(mode, s, l0, policy, priority) {
 		v, err := m.ModerateText(ctx, normalized)
 		if err != nil {
-			// 审核未能完成不是「通过」。处置交给 §6.4 的 fail 策略，
-			// 第一期只有进程内的 L0，走不到这里；L1 上线后这里要接 fail-close。
+			// 审核未能完成不是「通过」。判成 ActionError，由 Moderate 里的 fail-close
+			// 收口（§6.4）——这里不直接拒绝，是因为 observe 期不该因审核故障拒请求。
 			v = &Verdict{Action: ActionError, Provider: m.Name(), Detail: err.Error()}
 		}
 		if v == nil {
@@ -199,11 +228,29 @@ func runChain(
 
 // activeModerators 按配置装配生效的层。
 //
-// 第一期只有 L0。L1 及以上要在这里按 mode != off 装配——GPU 调用有成本，关了就是关了。
-func activeModerators(mode system_setting.ModerationMode, s *system_setting.ModerationSettings, l0 bool) []Moderator {
+// L1 按 mode != off 装配——GPU 调用有成本，关了就是关了；而 L0 是进程内的，
+// 它的开关独立于 mode（关键词拦截是现网既有行为，不该被「审核默认关闭」带走）。
+func activeModerators(
+	mode system_setting.ModerationMode,
+	s *system_setting.ModerationSettings,
+	l0 bool,
+	policy *system_setting.ModerationPolicy,
+	priority string,
+) []Moderator {
 	var chain []Moderator
 	if l0 {
 		chain = append(chain, keywordModerator{})
+	}
+	if mode != system_setting.ModerationModeOff && len(s.TextEndpoints()) > 0 {
+		strictness := system_setting.StrictnessStandard
+		if policy != nil && policy.Strictness != "" {
+			strictness = policy.Strictness
+		}
+		chain = append(chain, qwen3GuardModerator{
+			strictness: strictness,
+			policy:     policy,
+			priority:   priority,
+		})
 	}
 	return chain
 }

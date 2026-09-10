@@ -8,6 +8,7 @@ import (
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/model"
+	"github.com/QuantumNous/new-api/service/moderation"
 )
 
 // 审核记录的管理端接口。见 docs/content-moderation-design.md §10.1。
@@ -62,7 +63,22 @@ func GetModerationStatus(c *gin.Context) {
 		// 队列满时丢的审核记录数。不展示的话，审核记录里的空洞无法解释——
 		// 而「记录里没有」和「没发生过」在事后排查时是分不清的（§9.2）。
 		"dropped_logs": model.ModerationDroppedCount(),
+		// 降级态必须显式暴露，不能伪装健康（§6.5 四）：拦截模式下审核服务挂掉会
+		// fail-close 拒绝全部请求，而这在管理端看起来和「用户都在违规」一模一样。
+		// 冻结的节点名单回答「是不是节点挂了」，fail-close 计数回答「拒了多少」。
+		"frozen_endpoints": frozenEndpointNames(),
+		"fail_close_count": moderation.FailCloseCount(),
 	})
+}
+
+// frozenEndpointNames 当前处于冻结状态的节点名及其恢复时间（秒级时间戳）。
+func frozenEndpointNames() map[string]int64 {
+	frozen := moderation.FrozenEndpoints()
+	out := make(map[string]int64, len(frozen))
+	for name, until := range frozen {
+		out[name] = until.Unix()
+	}
+	return out
 }
 
 // GetModerationLogContent 解密查看被拦内容的原文（管理员）。

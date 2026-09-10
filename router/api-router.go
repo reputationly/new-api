@@ -475,6 +475,8 @@ func SetApiRouter(router *gin.Engine) {
 			moderationRoute.GET("/logs", controller.GetModerationLogs)
 			moderationRoute.GET("/logs/:id/content", controller.GetModerationLogContent)
 			moderationRoute.GET("/status", controller.GetModerationStatus)
+			// 保存前先验一次，免得配置错误要等审核真跑起来才暴露（§8.4）。
+			moderationRoute.POST("/test-endpoint", controller.TestModerationEndpoint)
 		}
 
 		dataRoute := apiRouter.Group("/data")

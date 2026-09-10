@@ -1,5 +1,19 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Banner, Button, Col, Form, Row, Spin } from '@douyinfe/semi-ui';
+import {
+  Banner,
+  Button,
+  Card,
+  Col,
+  Form,
+  Input,
+  InputNumber,
+  Row,
+  Space,
+  Spin,
+  Switch,
+  Tag,
+  Typography,
+} from '@douyinfe/semi-ui';
 import {
   API,
   compareObjects,
@@ -15,9 +29,62 @@ import { useTranslation } from 'react-i18next';
 // （service/moderation/moderation.go:90），分开放会让人以为它们互不相干，
 // 于是出现「审核已开但一条记录都没有」这种查不出原因的状态。
 //
-// 未纳入本卡片：policies / group_policies / endpoints。它们服务于 L1 及以上的
-// 远程分类器，第一期没有任何消费方（activeModerators 只装配 L0），
-// 做出来就是三块点不亮的配置。
+// 未纳入本卡片：policies / group_policies。它们目前只有一条内置的「标准」策略，
+// 且没有分组灰度的消费方；等要按分组放量时再补。
+
+/** 新增节点的默认值。取值依据见各字段的 extraText。 */
+const newEndpoint = () => ({
+  name: '',
+  base_url: '',
+  model: '',
+  api_key: '',
+  modality: 'text',
+  timeout_ms: 3000,
+  input_limit: 24000,
+  enabled: true,
+});
+
+/**
+ * 保存前校验。与后端 validateModerationEndpoints 一致：
+ * 名称是这套配置事实上的主键（凭证按名回捞、故障冻结按名记），
+ * 启用却填不全的节点会进调用轮换，在拦截模式下把每次审核都变成失败。
+ */
+function validateEndpoints(endpoints) {
+  const seen = new Set();
+  for (let i = 0; i < endpoints.length; i++) {
+    const e = endpoints[i];
+    const name = (e.name || '').trim();
+    if (!name) return `第 ${i + 1} 个审核节点没有填名称`;
+    if (seen.has(name)) return `审核节点名称重复：${name}`;
+    seen.add(name);
+    // 改名会让密钥回捞落空：后端按 name 去旧配置里取原密文（api_key 留空表示
+    // 「保持不变」），名字一改就找不到，凭证被静默清空，之后每次调用 401、
+    // 节点被冻结 10 分钟，拦截模式下就是全站拒绝——而界面只会显示「保存成功」。
+    if (
+      e.has_api_key &&
+      e._originalName &&
+      name !== e._originalName &&
+      !e.api_key
+    ) {
+      return `审核节点「${e._originalName}」改名为「${name}」后，需要重新填写 API Key（密钥是按名称保管的，改名后找不回原值）`;
+    }
+    if (!e.enabled) continue;
+    if (!(e.base_url || '').trim() || !(e.model || '').trim()) {
+      return `审核节点 ${name} 已启用，但地址或模型名为空`;
+    }
+  }
+  return '';
+}
+
+function parseEndpoints(raw) {
+  if (!raw) return [];
+  try {
+    const v = JSON.parse(raw);
+    return Array.isArray(v) ? v : [];
+  } catch (e) {
+    return [];
+  }
+}
 
 /** model_filter 是嵌套结构，配置管理器把它整体存成一个 JSON 字符串键。 */
 function parseModelFilter(raw) {
@@ -51,6 +118,9 @@ export default function SettingsModeration(props) {
     // 理由见 OperationSetting.jsx 同名键上的注释。
     'moderation.keyword_enabled': true,
     'moderation.model_filter': '',
+    // 声明它只是为了让 props.options 里的值能落进 currentInputs；实际编辑走独立的
+    // endpoints state，提交时在 onSubmit 里单独处理。
+    'moderation.endpoints': '',
     'moderation.log_pass_sample_rate': 0.01,
     'moderation.log_queue_size': 2048,
     'moderation.retention_block_days': 180,
@@ -64,6 +134,14 @@ export default function SettingsModeration(props) {
   const refForm = useRef();
   const [inputsRow, setInputsRow] = useState(inputs);
   const [status, setStatus] = useState(null);
+
+  // 审核节点是动态列表，不走 Form 的受控 values（那套按固定字段名绑定，
+  // 增删行会很别扭），单独用一份 state，提交时序列化成 moderation.endpoints。
+  const [endpoints, setEndpoints] = useState([]);
+  const [endpointsRow, setEndpointsRow] = useState('[]');
+  // 每个节点的测试结果，按下标存。key 用下标而不是 name：名字本身可编辑，
+  // 改到一半时用它当 key 会让结果错位到别的行上。
+  const [testResults, setTestResults] = useState({});
 
   // 运行态。原文能不能留存取决于一个只在环境变量里的密钥，不在这里显示的话，
   // 「为什么看不到原文」只能靠翻服务日志回答（§8.4）。
@@ -97,27 +175,100 @@ export default function SettingsModeration(props) {
     });
   }
 
+  function updateEndpoint(idx, field, value) {
+    setEndpoints((prev) =>
+      prev.map((e, i) => (i === idx ? { ...e, [field]: value } : e)),
+    );
+    // 改了任何字段，之前那条测试结论就不再代表当前配置，必须清掉——
+    // 留着会让人看着一个绿标去保存一份改坏了的配置。
+    setTestResults((prev) => ({ ...prev, [idx]: undefined }));
+  }
+
+  async function testEndpoint(idx) {
+    const ep = endpoints[idx];
+    if (!ep.base_url || !ep.model) {
+      showWarning(t('请先填写地址与模型名'));
+      return;
+    }
+    setTestResults((prev) => ({ ...prev, [idx]: { loading: true } }));
+    try {
+      const res = await API.post('/api/moderation/test-endpoint', {
+        name: ep.name,
+        base_url: ep.base_url,
+        model: ep.model,
+        api_key: ep.api_key,
+        timeout_ms: ep.timeout_ms,
+      });
+      const { success, message, data } = res.data;
+      setTestResults((prev) => ({
+        ...prev,
+        [idx]: success
+          ? {
+              ok: true,
+              latency: data?.latency_ms,
+              raw: data?.raw,
+              parsedOk: data?.parsed_ok,
+            }
+          : { ok: false, msg: message },
+      }));
+    } catch (e) {
+      setTestResults((prev) => ({
+        ...prev,
+        [idx]: { ok: false, msg: t('请求失败') },
+      }));
+    }
+  }
+
   function onSubmit() {
     // 只提交真正的配置键：filterMode / filterModels 是本地拆出来的显示字段，
-    // 提交上去会在 options 表里留下两个没人读的脏键。
-    const updateArray = compareObjects(inputs, inputsRow).filter((item) =>
-      item.key.startsWith('moderation.'),
+    // 提交上去会在 options 表里留下两个没人读的脏键。endpoints 走独立 state，
+    // 这里也要排除掉，否则会用未更新的旧值把刚编辑的内容覆盖回去。
+    const updateArray = compareObjects(inputs, inputsRow).filter(
+      (item) =>
+        item.key.startsWith('moderation.') &&
+        item.key !== 'moderation.endpoints',
     );
-    if (!updateArray.length) return showWarning(t('你似乎并没有修改什么'));
+    // 后端 validateModerationEndpoints 会硬拦这几条，这里先做一次即时反馈，
+    // 免得点了保存才在 toast 里看到错误、还要自己数是第几个节点。
+    const invalid = validateEndpoints(endpoints);
+    if (invalid) return showError(invalid);
+
+    // _originalName 是纯本地的比对基准，不能写进配置。
+    const nextEndpoints = JSON.stringify(
+      endpoints.map(({ _originalName, ...rest }) => rest),
+    );
+    const endpointsChanged = nextEndpoints !== endpointsRow;
+    if (!updateArray.length && !endpointsChanged) {
+      return showWarning(t('你似乎并没有修改什么'));
+    }
     const requestQueue = updateArray.map((item) =>
       API.put('/api/option/', {
         key: item.key,
         value: String(inputs[item.key]),
       }),
     );
+    if (endpointsChanged) {
+      requestQueue.push(
+        API.put('/api/option/', {
+          key: 'moderation.endpoints',
+          value: nextEndpoints,
+        }),
+      );
+    }
     setLoading(true);
     Promise.all(requestQueue)
       .then((res) => {
-        if (requestQueue.length === 1) {
-          if (res.includes(undefined)) return;
-        } else if (requestQueue.length > 1) {
-          if (res.includes(undefined))
-            return showError(t('部分保存失败，请重试'));
+        if (res.includes(undefined)) {
+          return showError(t('部分保存失败，请重试'));
+        }
+        // 后端拒绝走的是 HTTP 200 + {success:false}（common.ApiError），axios 拦截器
+        // 只管传输层错误和 401，所以这里必须自己看响应体。不看的话，节点保存被后端
+        // 拒掉（最常见的是没配 MODERATION_ENCRYPT_KEY，Encrypt 会整体拒绝）也会显示
+        // 「保存成功」，接着 refresh 把卡片悄悄刷回旧值——管理员以为配好了，实际
+        // 一个凭证都没存下，拦截模式下就是 401 → 冻结 → 全站 fail-close。
+        const failed = res.find((r) => r?.data?.success === false);
+        if (failed) {
+          return showError(failed.data.message || t('保存失败，请重试'));
         }
         showSuccess(t('保存成功'));
         props.refresh();
@@ -143,6 +294,22 @@ export default function SettingsModeration(props) {
     setInputs(currentInputs);
     setInputsRow(structuredClone(currentInputs));
     refForm.current.setValues(currentInputs);
+
+    // 后端回显时会把每条的 api_key 抹成空（RedactModerationEndpoints），
+    // 所以这里拿到的密钥一定是空的；提交时留空表示「保持不变」，由
+    // EncryptModerationEndpoints 按 name 取回原密文。
+    // 记住加载时的名字：保存时据此判断这一行是否被改名（见 validateEndpoints）。
+    const eps = parseEndpoints(props.options['moderation.endpoints']).map(
+      (e) => ({
+        ...e,
+        _originalName: e.name,
+      }),
+    );
+    setEndpoints(eps);
+    setEndpointsRow(
+      JSON.stringify(eps.map(({ _originalName, ...rest }) => rest)),
+    );
+    setTestResults({});
   }, [props.options]);
 
   const mode = inputs['moderation.mode'];
@@ -183,6 +350,31 @@ export default function SettingsModeration(props) {
                   style={{ marginBottom: 16 }}
                 />
               )}
+            {status?.frozen_endpoints &&
+              Object.keys(status.frozen_endpoints).length > 0 && (
+                <Banner
+                  type='danger'
+                  description={
+                    t('以下审核节点正处于冻结状态：') +
+                    Object.keys(status.frozen_endpoints).join('、') +
+                    t(
+                      '。拦截模式下审核失败会拒绝请求——先确认是节点故障还是密钥失效，别把它当成用户在违规。',
+                    )
+                  }
+                  style={{ marginBottom: 16 }}
+                />
+              )}
+            {status?.fail_close_count > 0 && (
+              <Banner
+                type='warning'
+                description={
+                  t('因审核未能完成而被拒绝的请求数：') +
+                  status.fail_close_count +
+                  t('。这是审核服务的问题，不是用户违规。')
+                }
+                style={{ marginBottom: 16 }}
+              />
+            )}
             {status?.dropped_logs > 0 && (
               <Banner
                 type='warning'
@@ -338,8 +530,163 @@ export default function SettingsModeration(props) {
               </Col>
             </Row>
 
+            {/* ── 审核节点（L1 模型层） ─────────────────────────────── */}
+            <Typography.Title heading={6} style={{ marginTop: 24 }}>
+              {t('审核节点（L1 模型层）')}
+            </Typography.Title>
+            <Typography.Text
+              type='tertiary'
+              style={{ display: 'block', marginBottom: 12 }}
+            >
+              {t(
+                '远程分类器节点，运行模式为「关闭」时不会调用。留空则只跑关键词层。多节点会逐个轮换，失败按 HTTP 状态分级冻结。',
+              )}
+            </Typography.Text>
+
+            {endpoints.length === 0 && (
+              <Typography.Text
+                type='tertiary'
+                style={{ display: 'block', marginBottom: 12 }}
+              >
+                {t('尚未配置审核节点')}
+              </Typography.Text>
+            )}
+
+            {endpoints.map((ep, idx) => {
+              const r = testResults[idx];
+              return (
+                <Card
+                  key={idx}
+                  style={{ marginBottom: 12 }}
+                  bodyStyle={{ padding: 16 }}
+                >
+                  <Row gutter={12}>
+                    <Col xs={24} sm={12} md={6}>
+                      <div style={{ marginBottom: 4 }}>{t('节点名称')}</div>
+                      <Input
+                        value={ep.name}
+                        placeholder='guard-1'
+                        onChange={(v) => updateEndpoint(idx, 'name', v)}
+                      />
+                    </Col>
+                    <Col xs={24} sm={12} md={10}>
+                      <div style={{ marginBottom: 4 }}>{t('地址')}</div>
+                      <Input
+                        value={ep.base_url}
+                        placeholder='http://10.0.0.238'
+                        onChange={(v) => updateEndpoint(idx, 'base_url', v)}
+                      />
+                    </Col>
+                    <Col xs={24} sm={12} md={8}>
+                      <div style={{ marginBottom: 4 }}>{t('模型名称')}</div>
+                      <Input
+                        value={ep.model}
+                        placeholder='qwen3guard'
+                        onChange={(v) => updateEndpoint(idx, 'model', v)}
+                      />
+                    </Col>
+                  </Row>
+
+                  <Row gutter={12} style={{ marginTop: 12 }}>
+                    <Col xs={24} sm={12} md={8}>
+                      <div style={{ marginBottom: 4 }}>{t('API Key')}</div>
+                      <Input
+                        mode='password'
+                        value={ep.api_key}
+                        placeholder={t('留空表示不修改已保存的密钥')}
+                        onChange={(v) => updateEndpoint(idx, 'api_key', v)}
+                      />
+                    </Col>
+                    <Col xs={12} sm={6} md={4}>
+                      <div style={{ marginBottom: 4 }}>{t('超时（毫秒）')}</div>
+                      <InputNumber
+                        value={ep.timeout_ms}
+                        min={100}
+                        style={{ width: '100%' }}
+                        onChange={(v) => updateEndpoint(idx, 'timeout_ms', v)}
+                      />
+                    </Col>
+                    <Col xs={12} sm={6} md={4}>
+                      <div style={{ marginBottom: 4 }}>{t('分段上限')}</div>
+                      <InputNumber
+                        value={ep.input_limit}
+                        min={128}
+                        style={{ width: '100%' }}
+                        onChange={(v) => updateEndpoint(idx, 'input_limit', v)}
+                      />
+                    </Col>
+                    <Col xs={12} sm={6} md={3}>
+                      <div style={{ marginBottom: 4 }}>{t('启用')}</div>
+                      <Switch
+                        checked={ep.enabled}
+                        onChange={(v) => updateEndpoint(idx, 'enabled', v)}
+                      />
+                    </Col>
+                    <Col xs={12} sm={6} md={5}>
+                      <div style={{ marginBottom: 4 }}>&nbsp;</div>
+                      <Space>
+                        <Button
+                          size='small'
+                          loading={r?.loading}
+                          onClick={() => testEndpoint(idx)}
+                        >
+                          {t('测试连接')}
+                        </Button>
+                        <Button
+                          size='small'
+                          type='danger'
+                          onClick={() => {
+                            setEndpoints((prev) =>
+                              prev.filter((_, i) => i !== idx),
+                            );
+                            setTestResults({});
+                          }}
+                        >
+                          {t('删除')}
+                        </Button>
+                      </Space>
+                    </Col>
+                  </Row>
+
+                  {r && !r.loading && (
+                    <div style={{ marginTop: 12 }}>
+                      {r.ok ? (
+                        <Space>
+                          {/* parsed_ok 才是真通：返回 200 但输出不是 Safety/Categories，
+                              说明部署的不是 guard 模型，审核链路会把每次判定都当异常，
+                              拦截模式下就是全站拒绝。 */}
+                          <Tag color={r.parsedOk ? 'green' : 'orange'}>
+                            {r.parsedOk ? t('连接正常') : t('能连通但输出异常')}
+                          </Tag>
+                          <Typography.Text type='tertiary'>
+                            {r.latency}ms · {r.raw}
+                          </Typography.Text>
+                        </Space>
+                      ) : (
+                        <Space>
+                          <Tag color='red'>{t('连接失败')}</Tag>
+                          <Typography.Text type='danger'>
+                            {r.msg}
+                          </Typography.Text>
+                        </Space>
+                      )}
+                    </div>
+                  )}
+                </Card>
+              );
+            })}
+
+            <Row style={{ marginBottom: 16 }}>
+              <Button
+                size='default'
+                onClick={() => setEndpoints((prev) => [...prev, newEndpoint()])}
+              >
+                {t('添加审核节点')}
+              </Button>
+            </Row>
+
             <Row>
-              <Button size='default' onClick={onSubmit}>
+              <Button size='default' type='primary' onClick={onSubmit}>
                 {t('保存内容审核设置')}
               </Button>
             </Row>

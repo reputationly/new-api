@@ -142,9 +142,20 @@ func (r *GeneralOpenAIRequest) GetTokenCountMeta() *types.TokenCountMeta {
 		tokenCountMeta.MaxTokens = int(maxTokens)
 	}
 
+	// latestUserTexts 收集最新一轮 user 的文本，供 L1 判定
+	// （见 types.TokenCountMeta.LatestUserText）。每遇到一条新的 user 消息就清空重收，
+	// 循环结束时留下的即最后一轮。assistant / tool 的内容不计入——它们是模型产物或
+	// 机器返回，且完全由客户端构造、可伪造，不代表用户此刻的意图。
+	//
+	// 注意 L1 只审这一段（替换全文，不是追加一遍），所以历史与 tool_result 的绕过
+	// **只有 L0 关键词层在看**。
+	var latestUserTexts []string
 	for _, message := range r.Messages {
 		tokenCountMeta.MessagesCount++
 		texts = append(texts, message.Role)
+		if message.Role == "user" {
+			latestUserTexts = nil
+		}
 		if message.Content != nil {
 			if message.Name != nil {
 				tokenCountMeta.NameCount++
@@ -171,6 +182,9 @@ func (r *GeneralOpenAIRequest) GetTokenCountMeta() *types.TokenCountMeta {
 					fileMeta = append(fileMeta, meta)
 				} else if m.Type == ContentTypeText {
 					texts = append(texts, m.Text)
+					if message.Role == "user" {
+						latestUserTexts = append(latestUserTexts, m.Text)
+					}
 				}
 			}
 		}
@@ -193,6 +207,7 @@ func (r *GeneralOpenAIRequest) GetTokenCountMeta() *types.TokenCountMeta {
 		//tkm += toolTokens
 	}
 	tokenCountMeta.CombineText = strings.Join(texts, "\n")
+	tokenCountMeta.LatestUserText = strings.Join(latestUserTexts, "\n")
 	tokenCountMeta.Files = fileMeta
 	return &tokenCountMeta
 }

@@ -2,6 +2,7 @@ package system_setting
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"strings"
 
@@ -53,6 +54,12 @@ const (
 	CategoryPII       = "pii"       // Personally Identifiable Information
 	CategoryCopyright = "copyright" // Copyright Violation —— 模型自承偏弱，建议不拦
 	CategoryKeyword   = "keyword"   // L0 关键词命中，非模型类别
+	// CategoryUnknownUpstream 模型给出了我们没登记的类别。
+	//
+	// 单独留一个常量而不是丢弃：丢了等于把未知风险当成安全放行。它不在 AllCategories 里
+	// （运营界面不需要为它配处置），CategoryAction 对未登记类别返回 block，
+	// 于是「模型报了个新类别」的默认行为是拦下来并留下记录，而不是静默通过。
+	CategoryUnknownUpstream = "unknown_upstream"
 )
 
 // AllCategories 供运营界面渲染类别处置表。
@@ -71,6 +78,14 @@ type ModerationEndpoint struct {
 	TimeoutMS  int    `json:"timeout_ms"`
 	InputLimit int    `json:"input_limit"` // 分段长度上限（rune），仅 text 有意义
 	Enabled    bool   `json:"enabled"`
+
+	// HasAPIKey 该节点是否存有凭证。仅用于回显：RedactModerationEndpoints 在 GET 时
+	// 按 APIKey 现算，EncryptModerationEndpoints 在保存时清零，因此它永不入库。
+	//
+	// 存在的理由：回显时 APIKey 一律被抹成空，前端因此分不清「这个节点没有密钥」和
+	// 「有密钥但没给你看」。而凭证是按 name 回捞的，改名会让回捞落空、把密钥静默清空，
+	// 前端要能拦住这一步，就必须知道这一行原本有没有密钥。
+	HasAPIKey bool `json:"has_api_key,omitempty"`
 }
 
 // GetAPIKey 解密入库凭证。
@@ -108,6 +123,40 @@ func (e *ModerationEndpoint) GetAPIKey() string {
 // 结果是凭证明文入库、明文出站。下面两个函数就是补这两个洞的。
 const ModerationEndpointsOptionKey = "moderation.endpoints"
 
+// validateModerationEndpoints 保存前的字段校验。
+//
+// 校验必须放在这里而不是只做前端提示：这是配置落库的唯一必经之路，
+// 而下面三条错配的后果都不是「这个节点不可用」，是**全站拒绝**——
+// 拦截模式下节点调用失败会判 ActionError，再被 §6.4 的 fail-close 兜成拒绝。
+//
+//  1. 启用了却没填地址或模型名：endpointsByModality 只看 enabled，会照样把它选进
+//     轮换列表，于是每次审核都必然失败。「点添加 → 直接保存」就能踩到。
+//  2. 名字为空或重名：name 是这套配置事实上的主键——EncryptModerationEndpoints
+//     按它回捞密钥、freezeUntil 按它记冻结。重名会让两个节点共用一条冻结记录，
+//     甚至互相拿到对方的凭证。
+func validateModerationEndpoints(endpoints []ModerationEndpoint) error {
+	seen := make(map[string]bool, len(endpoints))
+	for i := range endpoints {
+		e := &endpoints[i]
+		name := strings.TrimSpace(e.Name)
+		if name == "" {
+			return fmt.Errorf("第 %d 个审核节点没有填名称；名称是节点的标识，凭证保管与故障冻结都按它区分", i+1)
+		}
+		if seen[name] {
+			return fmt.Errorf("审核节点名称重复：%s；重名会导致两个节点共用冻结状态、并可能取到对方的凭证", name)
+		}
+		seen[name] = true
+		if !e.Enabled {
+			// 停用的节点不参与调用，字段不全无所谓——运营常把配了一半的节点先停用留着。
+			continue
+		}
+		if strings.TrimSpace(e.BaseURL) == "" || strings.TrimSpace(e.Model) == "" {
+			return fmt.Errorf("审核节点 %s 已启用但地址或模型名为空；启用的节点会进入调用轮换，配不全会让每次审核都失败", name)
+		}
+	}
+	return nil
+}
+
 // EncryptModerationEndpoints 把 endpoints JSON 里每一条的 api_key 加密后返回新 JSON。
 //
 // 空 api_key 按「保持不变」处理，从当前已存配置里按 name 取回原密文——
@@ -122,12 +171,20 @@ func EncryptModerationEndpoints(raw string) (string, error) {
 		return "", err
 	}
 
+	if err := validateModerationEndpoints(endpoints); err != nil {
+		return "", err
+	}
+
 	existing := make(map[string]string, len(moderationSettings.Endpoints))
 	for _, e := range moderationSettings.Endpoints {
 		existing[e.Name] = e.APIKey
 	}
 
 	for i := range endpoints {
+		// HasAPIKey 只是回显用的标记，每次 GET 由 RedactModerationEndpoints 按
+		// APIKey 现算。绝不能让它入库：存下来的值会和事实不符——密钥轮换后
+		// GetAPIKey() 返回空，而存着的标记仍宣称有密钥。
+		endpoints[i].HasAPIKey = false
 		if endpoints[i].APIKey == "" {
 			endpoints[i].APIKey = existing[endpoints[i].Name]
 			continue
@@ -167,6 +224,7 @@ func RedactModerationEndpoints(raw string) string {
 		return "[]"
 	}
 	for i := range endpoints {
+		endpoints[i].HasAPIKey = endpoints[i].APIKey != ""
 		endpoints[i].APIKey = ""
 	}
 	b, err := common.Marshal(endpoints)
