@@ -477,6 +477,54 @@ func GetModerationLogObjectKey(id int) (string, error) {
 	return entry.ObjectKey, nil
 }
 
+// categoryStatsScanLimit 统计类别命中时最多扫多少条记录。
+//
+// 有上界是因为这是个**管理页一打开就会调**的接口：observe 期表会被 pass 记录
+// 灌得很大，不封顶的话一次页面加载就能拖垮主库。超过上界时统计值偏小，
+// 但它的用途是「看哪一类命中多、该不该调」，量级对了就够用。
+const categoryStatsScanLimit = 20000
+
+// ModerationCategoryStats 统计近 days 天各风险类别的命中数。
+//
+// 供策略编辑器把数字放在开关旁边——observe 期攒记录的全部意义就是回答
+// 「这一类拦了多少、误杀几个」，看不到数字就只能凭感觉调。
+//
+// 在 Go 侧拆分而不是用 SQL：categories 是逗号分隔的多值列（一条记录可能命中
+// 多个类别），SQL 里按它分组会把 "sexual,violent" 当成一个独立的值。
+// 用 LIKE 逐类别 COUNT 则是九次全表扫，比拉一列回来拆更贵。
+func ModerationCategoryStats(days int) (map[string]int64, error) {
+	if days <= 0 {
+		days = 7
+	}
+	since := time.Now().AddDate(0, 0, -days).Unix()
+
+	var rows []string
+	// 谓词用 action 而不是 categories：**categories 上没有索引**，拿它做过滤
+	// 意味着每一行都要回表取出来才能判断，而 pass 记录（占绝大多数）恰恰是
+	// 要被排除的那批。LIMIT 在这里也救不了场——真实命中数通常远小于上限，
+	// 触发不了截断，查询照样要扫完整个时间窗。
+	//
+	// action 有索引，且「有类别」与「非 pass」在写入侧是等价的：pass 记录的
+	// categories 恒为空（parseVerdict 判 safe 时会把 Categories 清掉）。
+	err := DB.Model(&ModerationLog{}).
+		Where("action <> ? AND created_at >= ?", ModerationActionPass, since).
+		Limit(categoryStatsScanLimit).
+		Pluck("categories", &rows).Error
+	if err != nil {
+		return nil, err
+	}
+
+	stats := make(map[string]int64, len(system_setting.AllCategories))
+	for _, row := range rows {
+		for _, c := range strings.Split(row, ",") {
+			if c = strings.TrimSpace(c); c != "" {
+				stats[c]++
+			}
+		}
+	}
+	return stats, nil
+}
+
 // ModerationEvidenceRef 一条到期记录及其取证对象。
 type ModerationEvidenceRef struct {
 	Id        int

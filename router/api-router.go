@@ -475,6 +475,17 @@ func SetApiRouter(router *gin.Engine) {
 			moderationRoute.GET("/logs", controller.GetModerationLogs)
 			moderationRoute.GET("/logs/:id/content", controller.GetModerationLogContent)
 			moderationRoute.GET("/logs/:id/media", controller.GetModerationLogMedia)
+			moderationRoute.GET("/category-stats", controller.GetModerationCategoryStats)
+			// 策略三件套必须原子保存，理由见 controller/moderation_policy.go 顶部。
+			//
+			// **单独收紧到 RootAuth**：它写的是 moderation.policies /
+			// default_policy / group_policies 三个系统配置项，而这些键原本只能经
+			// optionRoute（RootAuth）写入。挂在组的 AdminAuth 上等于让任何普通管理员
+			// 都能把类别处置从 block 调成 ignore、把某个分组从 blocking 改成 off——
+			// 一次静默的全站放行。读记录的那几个 GET 保持 AdminAuth 不变。
+			//
+			// 与同一文件里体验区管理页的处置一致（playgroundAdminRoute 也是 RootAuth）。
+			moderationRoute.PUT("/policy-config", middleware.RootAuth(), controller.SaveModerationPolicyConfig)
 			moderationRoute.GET("/status", controller.GetModerationStatus)
 			// 保存前先验一次，免得配置错误要等审核真跑起来才暴露（§8.4）。
 			moderationRoute.POST("/test-endpoint", controller.TestModerationEndpoint)

@@ -380,6 +380,23 @@ func UpdateOption(c *gin.Context) {
 			return
 		}
 		option.Value = enc
+	case "moderation.policies":
+		// 类别名、动作、严格度写错都不会报错，只会让判定静默按别的规则走
+		// （未登记类别一律按 block 处置）。校验放在这条唯一的写入路径上。
+		if err := system_setting.ValidateModerationPoliciesJSON(option.Value.(string)); err != nil {
+			common.ApiError(c, err)
+			return
+		}
+	case "moderation.group_policies":
+		if err := system_setting.ValidateGroupPoliciesJSON(option.Value.(string)); err != nil {
+			common.ApiError(c, err)
+			return
+		}
+	case "moderation.default_policy":
+		if err := system_setting.ValidateDefaultPolicyName(option.Value.(string)); err != nil {
+			common.ApiError(c, err)
+			return
+		}
 	case system_setting.ModerationEndpointsOptionKey:
 		// 审核节点凭证加密入库（GET 已抹掉不回显）。空 api_key 表示「保持不变」，
 		// 由 EncryptModerationEndpoints 按 name 从已存配置里取回原密文。

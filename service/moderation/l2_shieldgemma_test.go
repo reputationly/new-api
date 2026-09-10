@@ -165,10 +165,19 @@ func TestVerdictFromScores(t *testing.T) {
 		if v := m.verdictFromScores(imageScores{"dangerous": 0.9}); v.Action != ActionReview {
 			t.Fatalf("dangerous 配了 log，应为 review，得到 %v", v.Action)
 		}
-		// ignore 必须连类别都不留：留着会在日志里出现「判了类别但动作是 pass」的自相矛盾记录
+		// ignore = 不处理，动作降到 pass，但**类别照留**。
+		//
+		// 这条早先断言的是「类别必须清零」，理由写的是「否则会出现判了类别却是
+		// pass 的自相矛盾记录」——那个判断是错的：类别是模型判定的内容属性，
+		// action 是我们的处置，两者不在一个维度上。清掉会把「这一类到底命中多少次」
+		// 抹掉，而那正是决定要不要把它从 ignore 调成 log 时唯一要看的数字。
+		// L1 的 actionForCategories 一直是留着的，这里对齐它。
 		v := m.verdictFromScores(imageScores{"violence": 0.9})
-		if v.Action != ActionPass || len(v.Categories) != 0 {
-			t.Fatalf("violence 配了 ignore，应为 pass 且无类别，得到 %v / %v", v.Action, v.Categories)
+		if v.Action != ActionPass {
+			t.Fatalf("violence 配了 ignore，动作应降到 pass，得到 %v", v.Action)
+		}
+		if len(v.Categories) != 1 || v.Categories[0] != system_setting.CategoryViolent {
+			t.Fatalf("ignore 不该抹掉类别（L1 也是留着的），得到 %v", v.Categories)
 		}
 	})
 
@@ -204,6 +213,34 @@ func TestVerdictFromScores(t *testing.T) {
 			t.Fatalf("未登记类别应 block，得到 %v", v.Action)
 		}
 	})
+}
+
+// TestIgnoreKeepsCategoriesLikeL1 两个模态对 ignore 的处置必须一致。
+//
+// 不一致的后果不是「风格不统一」：类别命中统计按记录里的 categories 算，
+// 一边留一边清会让同一个类别的数字取决于它是从文本还是图片来的——
+// 而运营看着这个数字决定要不要把 ignore 调成 log。
+func TestIgnoreKeepsCategoriesLikeL1(t *testing.T) {
+	policy := &system_setting.ModerationPolicy{
+		Categories: map[string]string{
+			system_setting.CategorySexual: system_setting.CategoryActionIgnore,
+		},
+	}
+
+	l2 := shieldGemmaModerator{strictness: system_setting.StrictnessStandard, policy: policy}
+	l2v := l2.verdictFromScores(imageScores{"sexual": 0.99})
+
+	l1 := qwen3GuardModerator{strictness: system_setting.StrictnessStandard, policy: policy}
+	l1Action := l1.actionForCategories([]string{system_setting.CategorySexual})
+
+	if l2v.Action != ActionPass || l1Action != ActionPass {
+		t.Fatalf("两边的 ignore 都应降到 pass，得到 L2=%v L1=%v", l2v.Action, l1Action)
+	}
+	// L1 的 actionForCategories 只改 action，Categories 由 parseVerdict 保留；
+	// L2 必须与之一致，否则统计口径按模态分裂。
+	if len(l2v.Categories) == 0 {
+		t.Fatal("L2 在 ignore 时抹掉了类别，而 L1 保留——统计口径会按模态分裂")
+	}
 }
 
 func TestFramePositions(t *testing.T) {

@@ -288,10 +288,15 @@ func (m shieldGemmaModerator) verdictFor(policy shieldGemmaPolicy, pYes float64,
 	case system_setting.CategoryActionLog:
 		v.Action = ActionReview
 	default:
-		// ignore：不处理，连记录都不升级。类别归零，否则日志里会出现
-		// 「判了类别但动作是 pass」这种自相矛盾的记录。
+		// ignore：不处理，连记录都不升级，但**类别照留**。
+		//
+		// 早先这里把类别清零了，理由写的是「否则日志里会出现『判了类别但动作是
+		// pass』这种自相矛盾的记录」——那个判断是错的。类别是**模型判定的内容
+		// 属性**，action 是**我们的处置**，「模型认为这是隐私信息、我们配置成不处理」
+		// 记下来是准确的，不是矛盾。清掉反而把「这一类到底命中多少次」这个
+		// 调策略时唯一要问的问题给抹了，而 L1 一直是留着的（actionForCategories
+		// 只改 action 不动 Categories），两个模态还因此行为不一致。
 		v.Action = ActionPass
-		v.Categories = nil
 	}
 	return v
 }

@@ -80,6 +80,20 @@ func GetModerationStatus(c *gin.Context) {
 	})
 }
 
+// GetModerationCategoryStats 近 7 天各风险类别的命中数（管理员）。
+//
+// 给策略编辑器用：把数字放在类别处置的开关旁边，运营才能看着真实数据调，
+// 而不是凭感觉。observe 期攒记录的全部意义就在这里。
+func GetModerationCategoryStats(c *gin.Context) {
+	days, _ := strconv.Atoi(c.DefaultQuery("days", "7"))
+	stats, err := model.ModerationCategoryStats(days)
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	common.ApiSuccess(c, stats)
+}
+
 // ffmpegReady 视频抽帧能力是否可用。
 func ffmpegReady() bool {
 	ok, _ := moderation.FFmpegAvailable()

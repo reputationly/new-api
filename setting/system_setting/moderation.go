@@ -68,6 +68,164 @@ var AllCategories = []string{
 	CategoryViolent, CategorySelfHarm, CategoryUnethical, CategoryPII, CategoryCopyright,
 }
 
+// ImageCoveredCategories 图片/视频判定实际能产出的类别。
+//
+// ShieldGemma 2 只有三条固定策略（色情 / 危险内容 / 暴力血腥），是训练时定死的，
+// 加不了也改不了——改写策略文本不会报错，只会让判定悄悄失效（§4.5 有实测证据）。
+//
+// 单独导出是给配置页用的：九个类别的处置表对图片只有这三行真正生效。
+// 不标出来的话，运营配了「政治 → 直接拒绝」会以为涉政图片能拦住，
+// 而实际上图片侧对涉政**一点覆盖都没有**，连 L0 关键词那样的兜底都没有
+// （AC 自动机扫不了图）。这种「以为配了其实没有」正是这套系统最不能出的错。
+var ImageCoveredCategories = map[string]bool{
+	CategorySexual:  true,
+	CategoryIllegal: true, // ShieldGemma 的「危险内容」，注意它还混着自杀教程
+	CategoryViolent: true,
+}
+
+// ValidateModerationPolicies 保存策略前的校验。
+//
+// 这是策略落库的唯一必经之路，而三种错配的后果都不是「这条策略不生效」：
+//
+//  1. 类别名写错 → CategoryAction 查不到，按「未登记即 block」处置，
+//     于是一个本想放宽的类别反而变成了最严的那档；
+//  2. 动作值写错 → 同样落到未登记分支，同上；
+//  3. 严格度写错 → parseVerdict 的 switch 落到 default，Controversial 那一档
+//     按 standard 处理，运营以为调了严格度其实没有。
+//
+// 三种都是**静默**的：保存成功、页面正常、判定悄悄按别的规则走。
+func ValidateModerationPolicies(policies []ModerationPolicy) error {
+	if len(policies) == 0 {
+		return errors.New("至少要保留一条策略；一条都没有时分组会退回「只跑关键词层」")
+	}
+	valid := make(map[string]bool, len(AllCategories))
+	for _, c := range AllCategories {
+		valid[c] = true
+	}
+	seen := make(map[string]bool, len(policies))
+	for i := range policies {
+		p := &policies[i]
+		name := strings.TrimSpace(p.Name)
+		if name == "" {
+			return fmt.Errorf("第 %d 条策略没有名称；分组是按名称绑定策略的", i+1)
+		}
+		if seen[name] {
+			return fmt.Errorf("策略名称重复：%s；分组按名称查找，重名会让绑定指向哪一条变得不确定", name)
+		}
+		seen[name] = true
+
+		switch p.Strictness {
+		case StrictnessLoose, StrictnessStandard, StrictnessStrict, "":
+		default:
+			return fmt.Errorf("策略 %s 的严格度取值非法：%s（只能是 loose / standard / strict）", name, p.Strictness)
+		}
+
+		for cat, action := range p.Categories {
+			if !valid[cat] {
+				return fmt.Errorf("策略 %s 含未知类别：%s；未登记的类别会按「直接拒绝」处置，多半不是你想要的", name, cat)
+			}
+			switch action {
+			case CategoryActionBlock, CategoryActionLog, CategoryActionIgnore:
+			default:
+				return fmt.Errorf("策略 %s 中类别 %s 的处置非法：%s（只能是 block / log / ignore）", name, cat, action)
+			}
+		}
+	}
+	return nil
+}
+
+// ValidateModerationPoliciesJSON 校验单独提交的策略列表。
+//
+// **只校验策略自身**，不做交叉引用检查。交叉引用（默认策略、分组绑定是否指向
+// 存在的策略）必须由 ValidateModerationPolicyConfig 在**三者一起提交**时做——
+// 分三次 PUT 逐个校验会死锁：改一条默认策略的名字时，先写 policies 会因为
+// 旧的 default_policy 还指着旧名而被拒，先写 default_policy 又会因为新名
+// 还不存在而被拒，两个方向都走不通。
+func ValidateModerationPoliciesJSON(raw string) error {
+	if strings.TrimSpace(raw) == "" {
+		return errors.New("策略配置不能为空")
+	}
+	var policies []ModerationPolicy
+	if err := common.UnmarshalJsonStr(raw, &policies); err != nil {
+		return fmt.Errorf("策略配置不是合法的 JSON：%w", err)
+	}
+	return ValidateModerationPolicies(policies)
+}
+
+// ValidateGroupPoliciesJSON 校验单独提交的分组绑定（只校验取值合法性）。
+func ValidateGroupPoliciesJSON(raw string) error {
+	if strings.TrimSpace(raw) == "" {
+		return nil // 空 = 所有分组跟随全局，是合法状态
+	}
+	var groups map[string]GroupPolicy
+	if err := common.UnmarshalJsonStr(raw, &groups); err != nil {
+		return fmt.Errorf("分组策略不是合法的 JSON：%w", err)
+	}
+	for group, gp := range groups {
+		switch gp.Mode {
+		case ModerationModeInherit, ModerationModeOff, ModerationModeObserve, ModerationModeBlocking:
+		default:
+			return fmt.Errorf("分组「%s」的运行模式取值非法：%s（只能是空 / off / observe / blocking）", group, gp.Mode)
+		}
+	}
+	return nil
+}
+
+// ValidateModerationPolicyConfig 校验一次性提交的策略三件套。
+//
+// 三者互相引用，必须**放在同一次提交里对照同一份快照**校验：
+//   - 默认策略与分组绑定都要指向 policies 里真实存在的一条；
+//   - 找不到时 ResolvePolicy 会**静默**回退默认策略、再回退第一条，
+//     某个分组的判定规则悄悄换了一套而界面上什么都看不出来。
+//
+// 之所以不能拆成三次校验：改名、「先解绑再删策略」这类最自然的组合操作，
+// 在任何一种拆分顺序下都会被中间态卡住。
+func ValidateModerationPolicyConfig(policies []ModerationPolicy, defaultPolicy string, groups map[string]GroupPolicy) error {
+	if err := ValidateModerationPolicies(policies); err != nil {
+		return err
+	}
+
+	names := make(map[string]bool, len(policies))
+	for i := range policies {
+		names[strings.TrimSpace(policies[i].Name)] = true
+	}
+
+	defaultPolicy = strings.TrimSpace(defaultPolicy)
+	if defaultPolicy == "" {
+		return errors.New("默认策略不能为空；没有默认策略时，未绑定的分组会静默落到列表里的第一条")
+	}
+	if !names[defaultPolicy] {
+		return fmt.Errorf("默认策略「%s」不在策略列表里", defaultPolicy)
+	}
+
+	for group, gp := range groups {
+		switch gp.Mode {
+		case ModerationModeInherit, ModerationModeOff, ModerationModeObserve, ModerationModeBlocking:
+		default:
+			return fmt.Errorf("分组「%s」的运行模式取值非法：%s（只能是空 / off / observe / blocking）", group, gp.Mode)
+		}
+		if gp.Policy != "" && !names[gp.Policy] {
+			return fmt.Errorf("分组「%s」绑定了不存在的策略「%s」；"+
+				"绑定不存在的策略会让它静默回退到默认策略", group, gp.Policy)
+		}
+	}
+	return nil
+}
+
+// ValidateDefaultPolicyName 校验默认策略名指向一条真实存在的策略。
+func ValidateDefaultPolicyName(name string) error {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return errors.New("默认策略不能为空；没有默认策略时，未绑定的分组会静默落到列表里的第一条")
+	}
+	for i := range GetModerationSettings().Policies {
+		if GetModerationSettings().Policies[i].Name == name {
+			return nil
+		}
+	}
+	return fmt.Errorf("默认策略「%s」不存在", name)
+}
+
 // ModerationEndpoint 审核服务节点。第一期只有 L0（进程内），节点列表为空也能跑。
 type ModerationEndpoint struct {
 	Name       string `json:"name"`
