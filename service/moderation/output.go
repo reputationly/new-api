@@ -197,3 +197,40 @@ var videoTaskActions = []string{
 	constant.TaskActionReferenceGenerate,
 	constant.TaskActionRemix,
 }
+
+// ModerateImageOutput 审一张同步生成的图片（挂载点 D-2，§12.4.3）。
+//
+// 与 D-1 的区别是**这条在用户的请求上**：审核耗时直接加在响应时延里（单张实测约
+// 160ms），拦截也不是把任务改成失败，而是整个请求返回错误、一个字节都不写出去。
+// 所以调用方必须在写响应**之前**调它。
+//
+// 同样永不 fail-close：判定服务抖一下不该让一次已经烧掉 GPU 的生图变成报错。
+func ModerateImageOutput(ctx context.Context, req *Request, imageURL string) OutputModerationResult {
+	pass := OutputModerationResult{}
+	if req == nil || strings.TrimSpace(imageURL) == "" {
+		return pass
+	}
+	if !OutputMediaActive(req.Group, req.ModelName) {
+		return pass
+	}
+	req.Stage = StageOutput
+
+	res := ModerateMedia(ctx, req, []MediaItem{{
+		URL:   imageURL,
+		Type:  types.FileTypeImage,
+		Field: "result",
+	}})
+	if !res.Blocked {
+		return pass
+	}
+	if res.Action == ActionError {
+		// 与 ModerateTaskOutput 同口径，理由见那边：拿基础设施的故障去毁用户的交付物
+		// 不值。这条路上「毁」的形式是把一次成功的生图变成 4xx。
+		common.SysLog("moderation: 同步生图产物审核异常（" + res.Reason + "），按不拦放行")
+		return pass
+	}
+	return OutputModerationResult{
+		Blocked: true,
+		Reason:  "生成结果未通过内容安全检查，请调整描述后重试",
+	}
+}

@@ -20,6 +20,29 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
+// applyImageNRatio 把 n（生成张数）作为价格倍率登记进 PriceData，返回 n。
+//
+// n is handled via OtherRatio so it is applied exactly once in quota
+// calculation (both price-based and ratio-based paths).
+// Adaptors may have already set a more accurate count from the
+// upstream response; only set the default when they haven't.
+//
+// 抽出来是因为**成功与产物拦截两条路都要算这一乘数**，而它们在函数里隔着
+// 一个 return。漏在拦截那条上的后果是：同一个请求，审核触发了就按 1 张收费、
+// 没触发就按 n 张收费——钱随审核是否触发而变，正是「照常计费」要否定的。
+func applyImageNRatio(info *relaycommon.RelayInfo, request *dto.ImageRequest) uint {
+	imageN := uint(1)
+	if request.N != nil {
+		imageN = *request.N
+	}
+	if info.PriceData.UsePrice { // only price model use N ratio
+		if _, hasN := info.PriceData.OtherRatios["n"]; !hasN {
+			info.PriceData.AddOtherRatio("n", float64(imageN))
+		}
+	}
+	return imageN
+}
+
 func ImageHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *types.NewAPIError) {
 	info.InitChannelMeta(c)
 	// 本函数每次 relay 尝试被调用一次，这里即「尝试开始」。清掉上一次尝试落盘留下的
@@ -111,25 +134,26 @@ func ImageHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *type
 
 	usage, newAPIError := adaptor.DoResponse(c, httpResp, info)
 	if newAPIError != nil {
+		// 产物审核拦截(挂载点 D-2):**照常计费,不退款**,与异步任务同口径——
+		// 图已经生成、算力已经花掉,拦的是交付不是生产(§12.4.5)。
+		//
+		// 必须在这里显式结算:适配器只能返回错误,而标准错误路径会把预扣费退还,
+		// 于是「不退款」这个决定会被框架默认行为悄悄推翻。
+		if relaycommon.IsOutputModerationBlocked(c) {
+			if u, ok := usage.(*dto.Usage); ok && u != nil {
+				// 与成功路径用同一个乘数。少了这一步，同一个请求审核触发就按 1 张
+				// 收费、没触发按 n 张收费——「照常计费」就成了「打 1/n 折」。
+				blockedN := applyImageNRatio(info, request)
+				service.PostTextConsumeQuota(c, info, u,
+					[]string{"产物未通过内容安全检查", fmt.Sprintf("生成数量 %d", blockedN)})
+			}
+		}
 		// reset status code 重置状态码
 		service.ResetStatusCode(newAPIError, statusCodeMappingStr)
 		return newAPIError
 	}
 
-	imageN := uint(1)
-	if request.N != nil {
-		imageN = *request.N
-	}
-
-	// n is handled via OtherRatio so it is applied exactly once in quota
-	// calculation (both price-based and ratio-based paths).
-	// Adaptors may have already set a more accurate count from the
-	// upstream response; only set the default when they haven't.
-	if info.PriceData.UsePrice { // only price model use N ratio
-		if _, hasN := info.PriceData.OtherRatios["n"]; !hasN {
-			info.PriceData.AddOtherRatio("n", float64(imageN))
-		}
-	}
+	imageN := applyImageNRatio(info, request)
 
 	if usage.(*dto.Usage).TotalTokens == 0 {
 		usage.(*dto.Usage).TotalTokens = 1

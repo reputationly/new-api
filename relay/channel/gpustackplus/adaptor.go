@@ -42,6 +42,7 @@ import (
 	relayconstant "github.com/QuantumNous/new-api/relay/constant"
 	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/service/mediastore"
+	"github.com/QuantumNous/new-api/service/moderation"
 	"github.com/QuantumNous/new-api/types"
 
 	"github.com/gin-gonic/gin"
@@ -565,6 +566,29 @@ func (a *Adaptor) DoResponse(c *gin.Context, resp *http.Response, info *relaycom
 		return nil, types.NewError(sErr, types.ErrorCodeBadResponse)
 	}
 	relaycommon.AppendSyncImageOBSKeys(c, obsKey)
+
+	// 4.5) 产物审核(挂载点 D-2,§12.4.3)。**必须在写响应之前**——第 5 步的
+	//      IOCopyBytesGracefully 一旦执行,字节就在线上了,再判违规也收不回来。
+	//
+	//      放在落 OBS 之后是有意的:这里手上的 signed 是我方短时效签名 URL,
+	//      判定节点拉得到;而落盘前只有一个 NFS 路径,判定节点访问不了。
+	if mr := moderation.ModerateImageOutput(c.Request.Context(), &moderation.Request{
+		UserId:    info.UserId,
+		ChannelId: info.ChannelId,
+		Group:     info.UsingGroup,
+		ModelName: info.OriginModelName,
+		RequestId: info.RequestId,
+	}, signed); mr.Blocked {
+		// 照常计费,不退款(与异步任务同口径)。标记留给 ImageHelper——计费发生在
+		// 那一层,而这里只能返回错误;不打标记的话标准错误路径会把预扣退掉。
+		relaycommon.MarkOutputModerationBlocked(c)
+		return &dto.Usage{PromptTokens: 1, TotalTokens: 1}, types.NewErrorWithStatusCode(
+			errors.New(mr.Reason),
+			"output_content_filtered",
+			http.StatusBadRequest,
+			types.ErrOptionWithSkipRetry(),
+		)
+	}
 
 	// 5) 组 OpenAI 图片响应写回客户端。
 	imgResp := dto.ImageResponse{

@@ -525,6 +525,47 @@ export default function SettingsModeration(props) {
                   style={{ marginBottom: 16 }}
                 />
               )}
+            {/* 覆盖范围。开关写着「拦截」会让人合理地以为所有产物都过了审——
+                实际上同步生图只覆盖自建渠道。这个认知错位比任何一条配置错误都危险，
+                所以只要产物审核开着就常驻显示。
+                改动挂载点时必须同步改这里，有 Go 测试盯着（见
+                TestOutputModerationMountsMatchDocumentedCoverage）。 */}
+            {['observe', 'blocking'].includes(
+              inputs['moderation.output_mode'],
+            ) && (
+              <Banner
+                type='info'
+                description={
+                  <div style={{ lineHeight: 1.8 }}>
+                    <div style={{ fontWeight: 600, marginBottom: 4 }}>
+                      {t('产物审核的覆盖范围')}
+                    </div>
+                    <div>
+                      {t('已覆盖')}：
+                      {t('异步任务（视频、异步生图）——全部渠道，含第三方')}
+                      {'；'}
+                      {t('同步生图——仅自建渠道')}
+                    </div>
+                    <div>
+                      {t('未覆盖')}：
+                      {t(
+                        '第三方渠道的同步生图（各家自带内容策略，本期不接管）',
+                      )}
+                      {'；'}
+                      {t('Gemini / Vertex 走实时拉取完成的任务')}
+                      {'；'}
+                      {t('文本输出（流式已发出的内容收不回）')}
+                    </div>
+                    <div style={{ marginTop: 6 }}>
+                      {t(
+                        '另外：图片判定只覆盖「色情 / 违法有害 / 暴力」三类。涉政类图片检测不了——这是视觉模型的能力边界，不是配置问题，调高严格度也不会覆盖到。',
+                      )}
+                    </div>
+                  </div>
+                }
+                style={{ marginBottom: 16 }}
+              />
+            )}
             {inputs['moderation.fail_open'] && mode === 'blocking' && (
               <Banner
                 type='warning'
