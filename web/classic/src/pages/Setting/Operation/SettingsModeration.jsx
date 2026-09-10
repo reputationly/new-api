@@ -8,6 +8,7 @@ import {
   Input,
   InputNumber,
   Row,
+  Select,
   Space,
   Spin,
   Switch,
@@ -177,7 +178,21 @@ export default function SettingsModeration(props) {
 
   function updateEndpoint(idx, field, value) {
     setEndpoints((prev) =>
-      prev.map((e, i) => (i === idx ? { ...e, [field]: value } : e)),
+      prev.map((e, i) => {
+        if (i !== idx) return e;
+        const next = { ...e, [field]: value };
+        // 切成图片节点时把超时抬上来：视觉推理比文本慢一个量级，
+        // 文本的 3000ms 默认值会让图片判定频繁超时，而超时在拦截模式下
+        // 是 fail-close，表现为「正常请求被拒」而不是「审核慢」。
+        if (
+          field === 'modality' &&
+          value === 'image' &&
+          next.timeout_ms < 10000
+        ) {
+          next.timeout_ms = 10000;
+        }
+        return next;
+      }),
     );
     // 改了任何字段，之前那条测试结论就不再代表当前配置，必须清掉——
     // 留着会让人看着一个绿标去保存一份改坏了的配置。
@@ -197,6 +212,10 @@ export default function SettingsModeration(props) {
         base_url: ep.base_url,
         model: ep.model,
         api_key: ep.api_key,
+        // 必须带上模态：图片节点要用一张真实的图去测，请求形状与文本完全不同。
+        // 不传的话后端按文本测，而视觉模型照样能回答纯文本对话——按钮报绿，
+        // 但生产真正会走的那条请求形状一次都没验证过。
+        modality: ep.modality || 'text',
         timeout_ms: ep.timeout_ms,
       });
       const { success, message, data } = res.data;
@@ -386,6 +405,27 @@ export default function SettingsModeration(props) {
                 style={{ marginBottom: 16 }}
               />
             )}
+            {/*
+              视频审核依赖服务端的 ffmpeg。缺了不会拒绝请求（那会把部署问题变成事故），
+              而是跳过视频——所以必须在这里说出来：否则「视频都审过了」和「视频一个都
+              没审」在这个页面上长得一模一样，而后者会一直持续到有人来问为什么没拦住。
+              只在配了图片节点时提示：没配图片节点时视频本来就不审，说 ffmpeg 是噪音。
+            */}
+            {status?.ffmpeg_ready === false &&
+              endpoints.some((e) => e.modality === 'image' && e.enabled) && (
+                <Banner
+                  type='warning'
+                  description={
+                    t(
+                      '服务端未安装 ffmpeg，上传的视频不会经过审核（图片审核不受影响）。',
+                    ) +
+                    (status.video_skipped_count > 0
+                      ? t('已跳过视频数：') + status.video_skipped_count
+                      : '')
+                  }
+                  style={{ marginBottom: 16 }}
+                />
+              )}
 
             <Row gutter={16}>
               <Col xs={24} sm={12} md={8} lg={8} xl={8}>
@@ -577,13 +617,35 @@ export default function SettingsModeration(props) {
                         onChange={(v) => updateEndpoint(idx, 'base_url', v)}
                       />
                     </Col>
-                    <Col xs={24} sm={12} md={8}>
+                    <Col xs={24} sm={12} md={5}>
                       <div style={{ marginBottom: 4 }}>{t('模型名称')}</div>
                       <Input
                         value={ep.model}
-                        placeholder='qwen3guard'
+                        placeholder={
+                          ep.modality === 'image'
+                            ? 'shieldgemma2'
+                            : 'qwen3guard'
+                        }
                         onChange={(v) => updateEndpoint(idx, 'model', v)}
                       />
+                    </Col>
+                    {/*
+                      模态决定这个节点审什么，也决定判定请求长什么样。
+                      没有这个选择器时 ImageEndpoints() 恒为空，整条图片/视频审核链
+                      从界面上就无法启用——只能手改 options 表里的 JSON。
+                    */}
+                    <Col xs={24} sm={12} md={3}>
+                      <div style={{ marginBottom: 4 }}>{t('模态')}</div>
+                      <Select
+                        value={ep.modality || 'text'}
+                        style={{ width: '100%' }}
+                        onChange={(v) => updateEndpoint(idx, 'modality', v)}
+                      >
+                        <Select.Option value='text'>{t('文本')}</Select.Option>
+                        <Select.Option value='image'>
+                          {t('图片 / 视频')}
+                        </Select.Option>
+                      </Select>
                     </Col>
                   </Row>
 
@@ -607,13 +669,29 @@ export default function SettingsModeration(props) {
                       />
                     </Col>
                     <Col xs={12} sm={6} md={4}>
-                      <div style={{ marginBottom: 4 }}>{t('分段上限')}</div>
-                      <InputNumber
-                        value={ep.input_limit}
-                        min={128}
-                        style={{ width: '100%' }}
-                        onChange={(v) => updateEndpoint(idx, 'input_limit', v)}
-                      />
+                      {/*
+                        分段上限只对文本节点有意义（超长输入按它切段）。图片节点
+                        没有「分段」这回事，留着一个改了也不起作用的输入框，
+                        只会让人以为调它能影响图片审核。
+                      */}
+                      {ep.modality === 'image' ? (
+                        <>
+                          <div style={{ marginBottom: 4 }}>{t('分段上限')}</div>
+                          <Input disabled value={t('图片节点不适用')} />
+                        </>
+                      ) : (
+                        <>
+                          <div style={{ marginBottom: 4 }}>{t('分段上限')}</div>
+                          <InputNumber
+                            value={ep.input_limit}
+                            min={128}
+                            style={{ width: '100%' }}
+                            onChange={(v) =>
+                              updateEndpoint(idx, 'input_limit', v)
+                            }
+                          />
+                        </>
+                      )}
                     </Col>
                     <Col xs={12} sm={6} md={3}>
                       <div style={{ marginBottom: 4 }}>{t('启用')}</div>

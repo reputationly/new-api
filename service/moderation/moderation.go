@@ -31,6 +31,10 @@ const (
 const (
 	ModalityText  = "text"
 	ModalityImage = "image" // 第二期
+	// ModalityVideo 视频。判定本身仍是逐帧走图片模型（§12.1），单独记一个模态是为了
+	// 让记录页能分清「用户传了张图」和「用户传了段视频、我们抽了三帧」——
+	// 两者的覆盖率完全不同，混在一起看会高估视频这条路的可信度。
+	ModalityVideo = "video"
 )
 
 // Verdict 单层审核的判定结果。

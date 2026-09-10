@@ -26,6 +26,7 @@ import (
 	"github.com/QuantumNous/new-api/router"
 	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/service/mediastore"
+	"github.com/QuantumNous/new-api/service/moderation"
 	_ "github.com/QuantumNous/new-api/setting/performance_setting"
 	"github.com/QuantumNous/new-api/setting/ratio_setting"
 	"github.com/QuantumNous/new-api/setting/system_setting"
@@ -89,6 +90,15 @@ func main() {
 			common.FatalLog("LightX2V NFS 输入盘探测失败(NFS 未挂载/不可写/与 gpustack output_root 不一致): " + err.Error())
 		}
 		common.SysLog("LightX2V NFS 输入盘 OK: " + mediastore.NFSRoot() + "/inputs")
+	}
+
+	// 内容审核的视频抽帧依赖外部 ffmpeg。这里主动探一次而不是等第一个视频请求：
+	// 缺了它视频会被静默跳过（不拒绝请求），启动时不说，就要等到有人问
+	// 「为什么违规视频没拦住」才发现——那时已经漏了一整段时间。
+	if ok, missing := moderation.FFmpegAvailable(); ok {
+		common.SysLog("内容审核: ffmpeg 可用，视频抽帧已就绪")
+	} else {
+		common.SysLog("内容审核: 缺少 " + missing + "，视频将不经审核（图片审核不受影响）")
 	}
 
 	if os.Getenv("GIN_MODE") != "debug" {

@@ -208,6 +208,14 @@ func RelayTaskSubmit(c *gin.Context, info *relaycommon.RelayInfo) (*TaskSubmitRe
 		return nil, taskErr
 	}
 
+	// 3.6 上传媒体审核（挂载点 C-1）。位置约束与 3.5 完全相同。
+	//
+	// 排在文本之后：文本审核是进程内的 L0 + 一次文本模型调用，图片是逐张的视觉推理。
+	// 一个 prompt 就违规的请求不该先花几百毫秒把图审完再拒。
+	if taskErr := moderateTaskMedia(c, info); taskErr != nil {
+		return nil, taskErr
+	}
+
 	// 4. 价格计算：基础模型价格
 	info.OriginModelName = modelName
 	priceData, err := helper.ModelPriceHelperPerCall(c, info)

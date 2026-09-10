@@ -68,7 +68,18 @@ func GetModerationStatus(c *gin.Context) {
 		// 冻结的节点名单回答「是不是节点挂了」，fail-close 计数回答「拒了多少」。
 		"frozen_endpoints": frozenEndpointNames(),
 		"fail_close_count": moderation.FailCloseCount(),
+		// 视频审核依赖外部 ffmpeg。缺了不会拒绝请求（那会把部署问题变成事故），
+		// 而是**跳过**视频——所以它必须在这里可见：不然「视频都审过了」和
+		// 「视频一个都没审」在管理端长得一模一样。
+		"ffmpeg_ready":        ffmpegReady(),
+		"video_skipped_count": moderation.VideoSkippedCount(),
 	})
+}
+
+// ffmpegReady 视频抽帧能力是否可用。
+func ffmpegReady() bool {
+	ok, _ := moderation.FFmpegAvailable()
+	return ok
 }
 
 // frozenEndpointNames 当前处于冻结状态的节点名及其恢复时间（秒级时间戳）。

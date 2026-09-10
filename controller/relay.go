@@ -136,10 +136,16 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 	// 审核模式调成 blocking 之后，同步链路依然一条记录都不产生（legacy 开关关着），
 	// 而任务链路照跑——两条路对同一份配置给出不同结果，且没有任何提示。
 	needModeration := moderation.Active(relayInfo.UsingGroup, relayInfo.OriginModelName)
+	// 媒体审核单独问一次，不靠「文本要审所以顺带有 Files」这个推论。
+	//
+	// 那个推论目前成立（MediaActive 的条件是 Active 的子集），但它是隐式的：
+	// fastTokenCountMetaForPricing 不填 Files，一旦哪天 Active 的定义变了，
+	// 这里会静默退回快路径、meta.Files 恒为空、图片一张都不审——而且不会报任何错。
+	needMediaModeration := moderation.MediaActive(relayInfo.UsingGroup, relayInfo.OriginModelName)
 	needCountToken := constant.CountToken
 	// Avoid building huge CombineText (strings.Join) when token counting and moderation are both disabled.
 	var meta *types.TokenCountMeta
-	if needModeration || needCountToken {
+	if needModeration || needMediaModeration || needCountToken {
 		meta = request.GetTokenCountMeta()
 	} else {
 		meta = fastTokenCountMetaForPricing(request)
@@ -186,6 +192,58 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 				types.ErrOptionWithSkipRetry(),
 			)
 			return
+		}
+	}
+
+	// 上传媒体审核（挂载点 C-3）。同样必须在预扣费之前。
+	//
+	// 排在文本审核之后：文本是进程内 L0 加一次文本模型调用，图片是逐张的视觉推理。
+	// 一个 prompt 就违规的请求不该先花几百毫秒把图审完再拒。
+	//
+	// 直接吃 meta.Files——那份数据 dto 层在遍历 messages 时已经填好（OpenAI 与 Claude
+	// 两条路都填），不必按格式各写一个提取器。
+	if needMediaModeration {
+		var files []*types.FileMeta
+		if meta != nil {
+			files = meta.Files
+		}
+		items := moderation.MediaItemsFromFiles(files)
+		// /v1/images/edits 的上传原图不在 meta.Files 里（ImageRequest.GetTokenCountMeta
+		// 只填 CombineText），单独提一次——那是最直接的高危面：拿违规图去 edit。
+		items = append(items, imageEditMediaItems(c, request)...)
+		if len(items) > 0 {
+			mediaResult := moderation.ModerateMedia(c, &moderation.Request{
+				UserId:    relayInfo.UserId,
+				TokenId:   relayInfo.TokenId,
+				Username:  common.GetContextKeyString(c, constant.ContextKeyUserName),
+				Group:     relayInfo.UsingGroup,
+				ModelName: relayInfo.OriginModelName,
+				RequestId: relayInfo.RequestId,
+				Stage:     moderation.StageInputMedia,
+			}, items)
+			if mediaResult.Blocked {
+				logger.LogWarn(c, fmt.Sprintf("content moderation blocked media: provider=%s categories=%s item=%s",
+					mediaResult.Provider, strings.Join(mediaResult.Categories, ","), mediaResult.BlockedItem))
+				if mediaResult.Action == moderation.ActionError {
+					newAPIError = types.NewErrorWithStatusCode(
+						errors.New(mediaResult.Reason),
+						types.ErrorCodeModerationUnavailable,
+						http.StatusServiceUnavailable,
+						types.ErrOptionWithSkipRetry(),
+					)
+					return
+				}
+				if service.WriteSensitiveRefusal(c, relayFormat, relayInfo, request, mediaResult.Reason) {
+					return
+				}
+				newAPIError = types.NewErrorWithStatusCode(
+					errors.New(service.SensitiveRefusalTextWithReason(mediaResult.Reason)),
+					types.ErrorCodeSensitiveWordsDetected,
+					http.StatusBadRequest,
+					types.ErrOptionWithSkipRetry(),
+				)
+				return
+			}
 		}
 	}
 

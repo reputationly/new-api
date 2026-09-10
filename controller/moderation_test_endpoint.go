@@ -18,10 +18,17 @@ import (
 // fail-close 下的全站拒绝，排查要翻服务日志。这里让运营在保存前就看到结果。
 
 type testModerationEndpointRequest struct {
-	Name      string `json:"name"`
-	BaseURL   string `json:"base_url"`
-	Model     string `json:"model"`
-	APIKey    string `json:"api_key"`
+	Name    string `json:"name"`
+	BaseURL string `json:"base_url"`
+	Model   string `json:"model"`
+	APIKey  string `json:"api_key"`
+	// Modality 决定用哪种判定去测。零值按 text。
+	//
+	// 必须由前端传：文本节点和图片节点的请求形状完全不同（图片要 content 数组、
+	// 图片排在文本之前、还要解析 logprobs）。拿文本请求去测一个视觉节点会「成功」——
+	// vLLM 上的视觉模型照样能回答纯文本对话——于是按钮报绿，而真正会用到的那条
+	// 请求形状一次都没被验证过。
+	Modality  string `json:"modality"`
 	TimeoutMS int    `json:"timeout_ms"`
 }
 
@@ -57,7 +64,17 @@ func TestModerationEndpoint(c *gin.Context) {
 	}
 
 	start := time.Now()
-	result := moderation.TestEndpoint(c, req.BaseURL, req.Model, apiKey, req.TimeoutMS)
+	var result moderation.TestResult
+	if req.Modality == moderation.ModalityImage {
+		// 图片节点用一张真实的图去测，走的正是生产会走的那条请求形状。
+		// 视觉推理比文本慢一个量级，默认超时也要跟着放宽。
+		if req.TimeoutMS < 10000 {
+			req.TimeoutMS = 10000
+		}
+		result = moderation.TestImageEndpoint(c, req.BaseURL, req.Model, apiKey, req.TimeoutMS)
+	} else {
+		result = moderation.TestEndpoint(c, req.BaseURL, req.Model, apiKey, req.TimeoutMS)
+	}
 	latency := time.Since(start).Milliseconds()
 
 	if result.Err != nil {
