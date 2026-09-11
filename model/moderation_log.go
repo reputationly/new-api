@@ -43,8 +43,9 @@ type ModerationLog struct {
 	// Enforced 这个判定是否真的执行了。observe 模式下 Action 仍是 block 但请求照常放行，
 	// 两者必须分开存：
 	//   - 「本周拦了多少」按 action 数会把观察期的误杀一并算进去，得按这一列数；
-	//   - 全文留存只对真拦下来的请求成立——正常返回了结果的请求留半年完整 prompt，
-	//     数据最小化上说不过去（见 SetModerationContent）。
+	//   - block 的全文留存要看这一列：observe 模式下判了 block 但请求照常返回了结果，
+	//     留半年完整 prompt 在数据最小化上说不过去（见 SetModerationContent）。
+	//     review 走的是另一套口径，它的全部用途就是等人复核，不看这一列。
 	Enforced bool `json:"enforced" gorm:"index"`
 
 	Score    float64 `json:"score"`
@@ -71,7 +72,8 @@ type ModerationLog struct {
 	//
 	// 敏感度与 Preview 同级（同样 160 字符硬截断、同样不加密），不引入新的留存等级。
 	JudgedPreview string `json:"judged_preview" gorm:"type:varchar(320)"`
-	// ContentEnc AES-256-GCM 密文，仅真正拦下来的请求写入。json tag 必须是 "-"：
+	// ContentEnc AES-256-GCM 密文，写入口径见 SetModerationContent（真拦下来的 block
+	// 全量留，review 留到上限为止）。json tag 必须是 "-"：
 	// 结构体绝不能把密文序列化出去，取原文只能走带鉴权和留痕的独立接口（§10.1）。
 	//
 	// 不能写 type:text——MySQL 的 TEXT 上限 64KiB，而 AES-GCM 加 base64 约 4/3 膨胀，
@@ -212,6 +214,35 @@ func TruncatePreview(s string) string {
 	return string(runes[:previewLimit]) + "…"
 }
 
+// evidenceLimit review 记录全文留存的单条上限（rune）。见 SetModerationContent 里
+// 「为什么只封 review 不封 block」。
+const evidenceLimit = 32 * 1024
+
+// evidenceHeadLimit 超限时头部保留的 rune 数，余下额度全部留给尾部。
+//
+// 必须头尾都留，不能只留头：这一列存在的全部理由就是「头部那段不是判定依据」——
+// L1 在 LatestUserText 为空时扫的是全文，而最新一轮输入与工具输出都在尾部，
+// 只留头等于把 160 字符预览的盲区原样放大到 32K，换个尺度重犯同一个错。
+// 反过来只留尾也不行：system prompt 在头部，注入型越狱恰恰藏在那里，
+// 且它能说明这是什么客户端。8K / 24K 的分法按「头部够看清身份、尾部够看完最近几轮」定。
+const evidenceHeadLimit = 8 * 1024
+
+// truncateEvidence 按 rune 截断复核材料：保留头尾，丢中间，并标注丢了多少。
+//
+// 标注不能省：一段本来就到此为止的 prompt 和一段被截断的 prompt，读起来毫无区别，
+// 复核的人会以为自己看到的就是全部，进而对着半截内容下「这次拦得对/不对」的结论。
+func truncateEvidence(s string) string {
+	runes := []rune(s)
+	if len(runes) <= evidenceLimit {
+		return s
+	}
+	tailLimit := evidenceLimit - evidenceHeadLimit
+	return string(runes[:evidenceHeadLimit]) +
+		fmt.Sprintf("\n\n…[中间已截断 %d 字符，原文共 %d 字符]\n\n",
+			len(runes)-evidenceLimit, len(runes)) +
+		string(runes[len(runes)-tailLimit:])
+}
+
 // ShouldSampleModerationPass 决定这条 pass 记录是否落库。
 //
 // 抽样不能是确定性的：用 hash 取模那类可从外部推算的规则，等于告诉攻击者
@@ -229,8 +260,8 @@ func ShouldSampleModerationPass() bool {
 
 // SetModerationContent 按 §10.1 的留存策略填充内容三件套。
 //
-// 三档：pass 什么都不留（只有 hash）；判了但没执行的留预览；真拦下来的才留全文密文。
-// 必须在 Action 与 Enforced 都赋值之后调用。
+// 三档：pass 什么都不留（只有 hash）；observe 下判了 block 但没执行的只留预览；
+// 真拦下来的 block 与全部 review 留全文密文。必须在 Action 与 Enforced 都赋值之后调用。
 //
 // 两个参数各司其职，不能合并：
 //   - normalized 只用来算 hash。归一化让「同一内容换个零宽字符」收敛成同一个 hash，
@@ -254,15 +285,33 @@ func (m *ModerationLog) SetModerationContent(raw, normalized string) {
 	}
 	m.Preview = TruncatePreview(raw)
 
-	// 全文只对「真拦下来」的请求留存，而不是「判定为 block」。
+	// 留全文的两类：真拦下来的 block（block 且 enforced），以及全部 review。
 	//
-	// observe 模式下判定照出但请求正常返回了结果，把这类完整 prompt 加密留存
-	// 180 天，对一个什么都没拦的请求来说是过度留存。代价是观察期只剩 160 字符
-	// 预览可看误杀——这是有意的取舍：要看全文就切回 blocking，那时留存才有对价。
-	if m.Action != ModerationActionBlock || !m.Enforced {
+	// block 看 Enforced：observe 模式下判定照出但请求正常返回了结果，把这类完整
+	// prompt 加密留存 180 天，对一个什么都没拦的请求来说是过度留存。
+	//
+	// review 不看 Enforced：「待复核」的全部意义就是等人判，而判误杀只能靠看模型
+	// 实际读到的内容。160 字符预览在 agent 流量上根本不够——那类请求的最后一条
+	// user 消息常常只有 tool_result、没有自然语言，LatestUserText 因此为空、L1
+	// 退化成扫全文（judgedPreview 会正确地不填），于是预览里全是 system prompt
+	// 开头，触发判定的那段根本不在里面。
+	//
+	// 保留期不必新增档位：CleanupModerationLogs 本来就把 review 与 block 同档 180 天。
+	if m.Action != ModerationActionReview && (m.Action != ModerationActionBlock || !m.Enforced) {
 		return
 	}
-	enc, err := common.EncryptModerationContent(raw)
+
+	// review 的全文封顶，block 不封——两者用途不同：block 是备案取证材料，截断等于
+	// 毁证；review 是给人读的复核材料，没人会为了判一次误杀读完三万字。
+	//
+	// 封顶针对的是速率的不确定性而不是当前的量：实测 review 约 11 条/天（180 天
+	// 不到 135 MB，完全不值得优化），但单个 agent 会话的突发速率是这个均值的两千倍
+	// （21 秒 6 条）。不封顶的话最坏情况算不出来，而且只有磁盘告警时才会发现。
+	content := raw
+	if m.Action == ModerationActionReview {
+		content = truncateEvidence(raw)
+	}
+	enc, err := common.EncryptModerationContent(content)
 	if err != nil {
 		// 密钥没配就是没配，ContentEnc 留空即可——写进去一堆解不开的东西
 		// 比不写更糟，因为它看起来是「存了」（§10.1）。
@@ -271,7 +320,7 @@ func (m *ModerationLog) SetModerationContent(raw, normalized string) {
 			// 事后回头查，看到的只是一堆 ContentEnc 为空的记录，分不清是没配密钥
 			// 还是本来就没内容，而那时想补也补不回来了。
 			moderationKeyWarnOnce.Do(func() {
-				common.SysError("MODERATION_ENCRYPT_KEY 未配置，拦截记录的原文无法留存，事后无法复核（此告警仅提示一次）")
+				common.SysError("MODERATION_ENCRYPT_KEY 未配置，拦截记录与待复核记录的原文无法留存，事后无法复核（此告警仅提示一次）")
 			})
 			return
 		}

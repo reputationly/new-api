@@ -134,6 +134,80 @@ func TestObserveOnlyBlockKeepsNoFullContent(t *testing.T) {
 	}
 }
 
+// TestReviewKeepsFullContent 待复核记录必须留全文，且不看 Enforced。
+//
+// review 的全部用途就是等人判误杀，而 160 字符预览在 agent 流量上判不了：
+// 那类请求的 LatestUserText 为空、L1 扫的是全文，预览里全是 system prompt 开头。
+// 断言两种 Enforced 取值：observe 期的 review 恰恰是 enforced=false 的那一种，
+// 只测 true 会让「review 复用了 block 那条看 Enforced 的分支」这个回归漏网。
+func TestReviewKeepsFullContent(t *testing.T) {
+	if !common.ModerationKeyReady() {
+		t.Fatal("测试密钥未生效，ContentEnc 恒为空，本用例会空过")
+	}
+
+	for _, enforced := range []bool{false, true} {
+		m := &ModerationLog{Action: ModerationActionReview, Enforced: enforced}
+		m.SetModerationContent("待复核内容", "待复核内容")
+
+		if m.ContentEnc == "" {
+			t.Errorf("enforced=%v 的 review 必须留全文密文", enforced)
+		}
+		if m.Preview == "" {
+			t.Errorf("enforced=%v 的 review 仍要留预览", enforced)
+		}
+	}
+}
+
+// TestReviewContentIsCapped review 的全文按 evidenceLimit 封顶并标注截断。
+//
+// 封顶是为了让最坏情况可计算（单个 agent 会话的突发速率是日均的两千倍）。
+// 同时钉住 block 不被封顶——它是备案取证材料，截断等于毁证，两者共用一段代码，
+// 很容易在后续重构里被"统一处理"成同一条路。
+func TestReviewContentIsCapped(t *testing.T) {
+	if !common.ModerationKeyReady() {
+		t.Fatal("测试密钥未生效，ContentEnc 恒为空，本用例会空过")
+	}
+
+	// 头尾各放一个标记，中间塞满填充物：只留头的实现会丢掉尾标记，
+	// 而尾部恰恰是 L1 扫全文时最可能触发判定的地方（最新一轮输入、工具输出）。
+	const headMark = "[HEAD-MARK]"
+	const tailMark = "[TAIL-MARK]"
+	plain := headMark + strings.Repeat("赌", evidenceLimit) + tailMark
+
+	review := &ModerationLog{Action: ModerationActionReview}
+	review.SetModerationContent(plain, plain)
+	got, err := common.DecryptModerationContent(review.ContentEnc)
+	if err != nil {
+		t.Fatalf("解密 review 全文失败: %v", err)
+	}
+	if !strings.HasPrefix(got, headMark) {
+		t.Error("头部必须保留：system prompt 在那里，注入型越狱藏在那里")
+	}
+	if !strings.HasSuffix(got, tailMark) {
+		t.Error("尾部必须保留：只留头就是把 160 字符预览的盲区放大到 32K")
+	}
+	if !strings.Contains(got, "已截断") {
+		t.Error("截断后必须标注，否则复核的人会以为看到的就是全部")
+	}
+	// 按 rune 切：按字节切会把「赌」劈成半个，存进去是乱码。
+	if strings.Contains(got, "�") {
+		t.Error("截断切在了多字节字符中间")
+	}
+	if n := len([]rune(got)); n <= evidenceLimit || n > evidenceLimit+64 {
+		t.Errorf("截断后长度 %d rune，应当是 evidenceLimit 加一小段标注", n)
+	}
+
+	block := &ModerationLog{Action: ModerationActionBlock, Enforced: true}
+	block.SetModerationContent(plain, plain)
+	blockGot, err := common.DecryptModerationContent(block.ContentEnc)
+	if err != nil {
+		t.Fatalf("解密 block 全文失败: %v", err)
+	}
+	if blockGot != plain {
+		t.Error("block 是取证材料，必须原样留全文，不能被封顶截断")
+	}
+}
+
 // TestRecordAuditLogWithAdminInfoPropagatesFailure 审计写入失败必须能被调用方看见。
 //
 // 旧的 RecordLogWithAdminInfo 只 SysLog 不返回错误，导致「查看原文」在日志库

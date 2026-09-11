@@ -357,7 +357,7 @@ export default function SettingsModeration(props) {
               <Banner
                 type='danger'
                 description={t(
-                  'MODERATION_ENCRYPT_KEY 格式非法（需 64 位十六进制），被拦内容不会加密留存，事后无法复核原文。',
+                  'MODERATION_ENCRYPT_KEY 格式非法（需 64 位十六进制），被拦内容与待复核内容不会加密留存，事后无法复核原文。',
                 )}
                 style={{ marginBottom: 16 }}
               />
@@ -368,7 +368,7 @@ export default function SettingsModeration(props) {
                 <Banner
                   type='warning'
                   description={t(
-                    '未配置 MODERATION_ENCRYPT_KEY，审核照常运行，但被拦内容不会留存，事后无法复核原文。',
+                    '未配置 MODERATION_ENCRYPT_KEY，审核照常运行，但被拦内容与待复核内容不会留存，事后无法复核原文。',
                   )}
                   style={{ marginBottom: 16 }}
                 />

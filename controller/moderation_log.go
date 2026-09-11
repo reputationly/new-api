@@ -127,9 +127,10 @@ func GetModerationLogContent(c *gin.Context) {
 		return
 	}
 	if content == "" {
-		// 记录在、原文不在。两种成因：这条不是 block 记录（按 §10.1 只有 block 留原文），
-		// 或者写入时没配 MODERATION_ENCRYPT_KEY。不写审计——什么都没泄露出去。
-		common.ApiErrorMsg(c, "该记录未留存原文：只有拦截记录才加密留存，且需在写入时已配置 MODERATION_ENCRYPT_KEY")
+		// 记录在、原文不在。两种成因：这条的处置不在留存口径内（按 §10.1 只有真拦下来的
+		// block 与待复核记录留原文），或者写入时没配 MODERATION_ENCRYPT_KEY。
+		// 不写审计——什么都没泄露出去。
+		common.ApiErrorMsg(c, "该记录未留存原文：只有拦截记录与待复核记录才加密留存，且需在写入时已配置 MODERATION_ENCRYPT_KEY")
 		return
 	}
 
