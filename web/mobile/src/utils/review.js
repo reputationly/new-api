@@ -22,6 +22,15 @@ export const REVIEW_STATUS = {
   3: { text: '已驳回', badge: 'danger' },
 };
 
+// 实名认证的「用户侧」状态：和 REVIEW_STATUS 的审批视角不同（多一档 0=未认证，
+// 2 的说法也是「已认证」而非「已通过」）。我的页与实名认证页共用。
+export const KYC_USER_STATUS = {
+  0: { text: '未认证', badge: 'info' },
+  1: { text: '审核中', badge: 'pending' },
+  2: { text: '已认证', badge: 'success' },
+  3: { text: '已驳回', badge: 'danger' },
+};
+
 export const fenToYuan = (fen) =>
   typeof fen === 'number' ? `¥${(fen / 100).toFixed(2)}` : '--';
 

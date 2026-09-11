@@ -14,6 +14,7 @@ import { API, updateAPI } from '@classic/helpers/api';
 
 import { copy, isAdmin, showError, showSuccess } from '../shims/classic-utils';
 import { pointsEnabled, renderPoints, renderQuota } from '../utils/quota';
+import { KYC_USER_STATUS } from '../utils/review';
 
 const Profile = () => {
   const navigate = useNavigate();
@@ -21,6 +22,7 @@ const Profile = () => {
   const [self, setSelf] = useState(null);
   const [checkinEnabled, setCheckinEnabled] = useState(false);
   const [checkedInToday, setCheckedInToday] = useState(false);
+  const [checkinLocked, setCheckinLocked] = useState(false);
   const [ticketUnread, setTicketUnread] = useState(0);
   // 管理员待办角标：{kyc, enterprise, bank_transfer, invoice} + 工单未读
   const [pendingCounts, setPendingCounts] = useState(null);
@@ -48,6 +50,27 @@ const Profile = () => {
       }
     } catch (e) {
       // 签到未启用时静默
+    }
+  }, []);
+
+  // 签到是否被实名门锁住，取 /points/overview 下发的 locked，不自己推：那个判定要同时
+  // 看「签到奖励类型=积分」「PointsSetting.RequireKyc」「本人实名或企业认证任一通过」
+  // （controller/points.go GetPointsOverview），前两项手机端手里根本没有。
+  // 任务缺席（额度模式签到、积分系统关闭、当天已签、子账户）一律当没锁，退回原行为：
+  // 点下去由后端拦，弹它那条「请先完成实名认证后参与积分签到」。
+  const loadCheckinLock = useCallback(async () => {
+    try {
+      const res = await API.get('/api/user/points/overview', {
+        skipErrorHandler: true,
+      });
+      if (res.data.success) {
+        const task = (res.data.data?.tasks || []).find(
+          (t) => t.type === 'checkin',
+        );
+        setCheckinLocked(task?.status === 'locked');
+      }
+    } catch (e) {
+      // 静默：拿不到就按没锁处理
     }
   }, []);
 
@@ -109,9 +132,10 @@ const Profile = () => {
   useEffect(() => {
     loadSelf();
     loadCheckin();
+    loadCheckinLock();
     loadBadges();
     fetchAffLink();
-  }, [loadSelf, loadCheckin, loadBadges, fetchAffLink]);
+  }, [loadSelf, loadCheckin, loadCheckinLock, loadBadges, fetchAffLink]);
 
   const badge = (n) =>
     n > 0 ? <span className='m-badge danger'>{n}</span> : null;
@@ -200,6 +224,19 @@ const Profile = () => {
   };
 
   const user = self || userState?.user || {};
+  const kycView = KYC_USER_STATUS[self?.kyc_status || 0] || KYC_USER_STATUS[0];
+
+  // 被实名门锁住时，这一行点下去是去实名，而不是让人先撞一次后端的错误提示。
+  const checkinExtra = checkedInToday
+    ? '今日已签到'
+    : checkinLocked
+      ? '需先实名'
+      : '';
+  const onCheckinClick = checkedInToday
+    ? undefined
+    : checkinLocked
+      ? () => navigate('/kyc')
+      : handleCheckin;
 
   return (
     <div>
@@ -247,11 +284,25 @@ const Profile = () => {
         style={{ '--border-top': 'none', '--border-bottom': 'none' }}
       >
         {checkinEnabled && (
-          <List.Item
-            extra={checkedInToday ? '今日已签到' : ''}
-            onClick={checkedInToday ? undefined : handleCheckin}
-          >
+          <List.Item extra={checkinExtra} onClick={onCheckinClick}>
             每日签到
+          </List.Item>
+        )}
+        {/* 实名认证 —— 子账户不是独立法律主体，不给入口（与桌面端 PersonalSetting 一致，
+            后端 selfRoute 的 SubAccountForbidden 也会拦）。状态徽标等 self 到手再渲染，
+            否则登录态里可能没有 kyc_status，已认证的人会先看到一瞬的「未认证」。 */}
+        {(user.parent_user_id || 0) === 0 && (
+          <List.Item
+            extra={
+              self ? (
+                <span className={`m-badge ${kycView.badge}`}>
+                  {kycView.text}
+                </span>
+              ) : null
+            }
+            onClick={() => navigate('/kyc')}
+          >
+            实名认证
           </List.Item>
         )}
         <List.Item onClick={() => navigate('/logs')}>使用日志</List.Item>

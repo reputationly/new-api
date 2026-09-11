@@ -28,6 +28,7 @@ const Models = lazy(lazyWithReload(() => import('./pages/Models')));
 const Tokens = lazy(lazyWithReload(() => import('./pages/Tokens')));
 const Logs = lazy(lazyWithReload(() => import('./pages/Logs')));
 const Setting = lazy(lazyWithReload(() => import('./pages/Setting')));
+const Kyc = lazy(lazyWithReload(() => import('./pages/Kyc')));
 const Tickets = lazy(lazyWithReload(() => import('./pages/Tickets')));
 const TicketDetail = lazy(lazyWithReload(() => import('./pages/TicketDetail')));
 const AdminTickets = lazy(
@@ -89,6 +90,7 @@ const router = createBrowserRouter(
         { path: '/tokens', element: guarded(lazyEl(Tokens)) },
         { path: '/logs', element: guarded(lazyEl(Logs)) },
         { path: '/setting', element: guarded(lazyEl(Setting)) },
+        { path: '/kyc', element: guarded(lazyEl(Kyc)) },
         { path: '/tickets', element: guarded(lazyEl(Tickets)) },
         { path: '/tickets/:id', element: guarded(lazyEl(TicketDetail)) },
         { path: '/admin/tickets', element: guarded(lazyEl(AdminTickets)) },
