@@ -61,14 +61,18 @@ func TestSetModerationContentRetentionByAction(t *testing.T) {
 func TestPassRecordCarriesNoContent(t *testing.T) {
 	const secret = "sk-live-0123456789abcdef 联系电话 13800138000"
 
-	m := &ModerationLog{Action: ModerationActionPass}
+	// JudgedPreview 在调用方的结构体字面量里就被赋了值——这正是它曾经绕过
+	// 这条早退的方式。测试必须复现那个顺序，否则改回旧代码也照样绿。
+	m := &ModerationLog{Action: ModerationActionPass, JudgedPreview: secret}
 	m.SetModerationContent(secret, secret)
 
-	// 这三个字段都会随列表接口原样返回，且列表接口不写审计。
+	// 这几个字段都会随列表接口原样返回，且列表接口不写审计。
+	// **新增任何「原文形态」的列都要加进这份清单。**
 	for name, v := range map[string]string{
-		"Preview":    m.Preview,
-		"Detail":     m.Detail,
-		"ContentEnc": m.ContentEnc,
+		"Preview":       m.Preview,
+		"Detail":        m.Detail,
+		"ContentEnc":    m.ContentEnc,
+		"JudgedPreview": m.JudgedPreview,
 	} {
 		if v != "" {
 			t.Errorf("pass 记录的 %s 不应有值，实际 %q", name, v)
@@ -532,4 +536,47 @@ func TestModerationLogFilterMatchesBothRequestAndTaskId(t *testing.T) {
 			t.Fatalf("不存在的 ID 应命中 0 条，得到 %d——筛选条件失效了", total)
 		}
 	})
+}
+
+// 复核看到的文字必须是模型实际读到的那段。
+//
+// L1 为省 token 只审最新一轮用户输入（PriorityText），而 preview 存的是全量拼接
+// 文本的开头。一个编程助手请求的 preview 全是 system prompt，模型判的却是末尾那句
+// 提问——两者可以一个字都不重叠。少了 judged_preview，运营只能拿一段模型没看过的
+// 文字去判断「这次拦截对不对」，而观察期的全部意义就是量误杀。
+func TestModerationLogCarriesJudgedPreview(t *testing.T) {
+	if err := DB.AutoMigrate(&ModerationLog{}); err != nil {
+		t.Fatalf("建表失败: %v", err)
+	}
+	if err := DB.Where("1 = 1").Delete(&ModerationLog{}).Error; err != nil {
+		t.Fatalf("清表失败: %v", err)
+	}
+
+	if err := DB.Create(&ModerationLog{
+		RequestId:     "judged-1",
+		Action:        ModerationActionBlock,
+		Provider:      "L1",
+		Preview:       "system 你是一个编程助手，请遵循以下规则……",
+		JudgedPreview: "六四事件是什么",
+		CreatedAt:     time.Now().Unix(),
+	}).Error; err != nil {
+		t.Fatalf("造数据: %v", err)
+	}
+
+	logs, _, err := GetModerationLogs(ModerationLogQuery{RequestId: "judged-1", PageSize: 10})
+	if err != nil {
+		t.Fatalf("查询失败: %v", err)
+	}
+	if len(logs) != 1 {
+		t.Fatalf("应命中 1 条，得到 %d", len(logs))
+	}
+	if logs[0].JudgedPreview != "六四事件是什么" {
+		t.Fatalf("列表投影漏了 judged_preview（得到 %q）——"+
+			"前端拿不到它就只能显示 system prompt，复核看到的文字模型根本没读过",
+			logs[0].JudgedPreview)
+	}
+	// 两段必须都在：判定段用来复核，完整请求用来看上下文
+	if logs[0].Preview == "" {
+		t.Fatal("preview 不能因为有了 judged_preview 就丢掉——上下文还要靠它")
+	}
 }

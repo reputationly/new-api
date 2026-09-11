@@ -102,13 +102,24 @@ export const getModerationLogsColumns = ({
     dataIndex: 'preview',
     render: (preview, record) => (
       <Space spacing={4}>
-        {preview ? (
-          <Text
-            ellipsis={{ showTooltip: true }}
-            style={{ maxWidth: 280, display: 'inline-block' }}
+        {/* 有 judged_preview 时**优先显示它**：那才是模型实际读到的文字。
+            L1 为省 token 只审最新一轮用户输入，而 preview 是全量拼接文本的开头——
+            一个编程助手请求的 preview 全是 system prompt，模型判的却是末尾那句提问，
+            两者可以一个字都不重叠。默认显示 preview 等于让人拿模型没看过的文字去复核。
+            完整请求仍可从 tooltip 看到，不丢上下文。 */}
+        {record.judged_preview || preview ? (
+          <Tooltip
+            content={
+              record.judged_preview
+                ? `${t('模型判定的文本')}：${record.judged_preview}\n\n${t('完整请求')}：${preview || '-'}`
+                : preview
+            }
+            style={{ whiteSpace: 'pre-wrap', maxWidth: 520 }}
           >
-            {preview}
-          </Text>
+            <Text ellipsis style={{ maxWidth: 280, display: 'inline-block' }}>
+              {record.judged_preview || preview}
+            </Text>
+          </Tooltip>
         ) : (
           <Text type='tertiary'>-</Text>
         )}

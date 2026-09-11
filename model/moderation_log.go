@@ -58,6 +58,19 @@ type ModerationLog struct {
 	ObjectKey   string `json:"object_key" gorm:"type:varchar(512)"`        // 被拦图片的 OBS key（第二期）
 	ContentHash string `json:"content_hash" gorm:"type:varchar(64);index"` // SHA-256(归一化原文)
 	Preview     string `json:"preview" gorm:"type:varchar(320)"`           // 原文前 160 字符，pass 记录不写（见 SetModerationContent）
+	// JudgedPreview 模型**实际读到**的那段文本的前 160 字符。
+	//
+	// 只在 L1 出判定、且它判的不是全文时才写。L1 为省 token 只审最新一轮用户输入
+	// （PriorityText，见 §6.3 二），而 Preview 存的是全量拼接文本的开头——
+	// 两者可以毫无交集：一个编程助手请求的 Preview 是长长的 system prompt，
+	// 而模型真正读到的是末尾那句用户提问。
+	//
+	// 不存这一份的后果是复核根本做不了：运营看到的文字里可能一个字都不是模型判的，
+	// 却要据此判断「这次拦截对不对」。观察期的全部意义就是量误杀，而误杀恰恰
+	// 只能靠这段文字去判。
+	//
+	// 敏感度与 Preview 同级（同样 160 字符硬截断、同样不加密），不引入新的留存等级。
+	JudgedPreview string `json:"judged_preview" gorm:"type:varchar(320)"`
 	// ContentEnc AES-256-GCM 密文，仅真正拦下来的请求写入。json tag 必须是 "-"：
 	// 结构体绝不能把密文序列化出去，取原文只能走带鉴权和留痕的独立接口（§10.1）。
 	//
@@ -229,7 +242,14 @@ func (m *ModerationLog) SetModerationContent(raw, normalized string) {
 
 	// pass 记录不留任何内容形态。它的用途是量抽样率和总量，ContentHash 已经够了；
 	// 留预览等于把正常用户的 prompt 头部明文存进一张无需审计就能列出来的表。
+	//
+	// **新增任何「原文形态」的列，都必须在这里一并清掉。** 这个闸门是收口，
+	// 而调用方是在结构体字面量里先赋值、再调它的——只在调用点判断的话，
+	// 下一个新列照样会绕过去。judged_preview 就是这么漏的：它绕过了这条早退，
+	// 让被抽样命中的 pass 记录重新带上了明文的用户输入，等于把顶部注释里
+	// 记着的那个 P1 换了个列名重新引入一遍。
 	if m.Action == ModerationActionPass {
+		m.JudgedPreview = ""
 		return
 	}
 	m.Preview = TruncatePreview(raw)
@@ -461,7 +481,7 @@ type moderationLogListRow struct {
 // CASE WHEN 写法三库通用，避开了 PostgreSQL 与 MySQL 的布尔字面量差异（Rule 2）。
 const moderationLogListColumns = "id, user_id, token_id, channel_id, username, user_group, " +
 	"policy, task_id, request_id, model_name, source, stage, modality, action, categories, " +
-	"enforced, score, provider, words, object_key, content_hash, preview, detail, created_at, " +
+	"enforced, score, provider, words, object_key, content_hash, preview, judged_preview, detail, created_at, " +
 	"(CASE WHEN content_enc IS NULL OR content_enc = '' THEN 0 ELSE 1 END) AS has_content"
 
 // GetModerationLogContent 解密取原文。调用方必须已完成管理员鉴权，

@@ -285,3 +285,108 @@ func TestSearchWordsCollectionDoesNotGrowWithInput(t *testing.T) {
 		t.Errorf("单次收集 %d 条，超过扫描窗口 %d", len(wSmall), wordScanLimit)
 	}
 }
+
+// judgedPreview 只在「模型判的不是全文」时才有值，且只认 L1。
+//
+// 写反了比不写更糟：运营会拿一段模型没看过的文字去复核，还以为那就是判定依据。
+func TestJudgedPreview(t *testing.T) {
+	const raw = "system 你是一个编程助手\nuser 六四事件是什么"
+	const latest = "六四事件是什么"
+
+	t.Run("L1 判最新一轮时记下来", func(t *testing.T) {
+		got := judgedPreview(&Request{PriorityText: latest}, &Verdict{Provider: "L1"}, raw)
+		if got != latest {
+			t.Fatalf("应记下模型实际读到的那段，得到 %q", got)
+		}
+	})
+
+	t.Run("L0 不记", func(t *testing.T) {
+		// L0 是全文扫描的 AC 自动机，它判的就是 preview 那段，再记一份是误导。
+		if got := judgedPreview(&Request{PriorityText: latest}, &Verdict{Provider: "L0"}, raw); got != "" {
+			t.Fatalf("L0 判的是全文，不该记判定段，得到 %q", got)
+		}
+	})
+
+	t.Run("L2 不记", func(t *testing.T) {
+		// L2 判的是图片，没有对应文本。
+		if got := judgedPreview(&Request{PriorityText: latest}, &Verdict{Provider: "L2"}, raw); got != "" {
+			t.Fatalf("L2 判的是图片，不该记判定段，得到 %q", got)
+		}
+	})
+
+	t.Run("只由零宽字符组成时不记", func(t *testing.T) {
+		// L1 的闸门是 Normalize 之后非空：零宽字符会被剥掉，L1 实际扫的是全文。
+		// 用 TrimSpace 判断的话它不认零宽字符是空白，这一列会声称
+		// 「模型判的是那段隐形字符」——拿去复核就是彻底的误导。
+		invisible := "\u200b\u200b\u200c"
+		if got := judgedPreview(&Request{PriorityText: invisible}, &Verdict{Provider: "L1"}, raw); got != "" {
+			t.Fatalf("归一化后为空时 L1 扫的是全文，不该记判定段，得到 %q", got)
+		}
+	})
+
+	t.Run("没有 PriorityText 时不记", func(t *testing.T) {
+		// 任务提交等非对话链路，L1 退回扫全文，与 preview 同源，重复存没意义。
+		if got := judgedPreview(&Request{}, &Verdict{Provider: "L1"}, raw); got != "" {
+			t.Fatalf("L1 扫全文时与 preview 同源，不该重复存，得到 %q", got)
+		}
+	})
+
+	t.Run("与全文相同时不记", func(t *testing.T) {
+		if got := judgedPreview(&Request{PriorityText: raw}, &Verdict{Provider: "L1"}, raw); got != "" {
+			t.Fatalf("与 preview 同源时不该重复存，得到 %q", got)
+		}
+	})
+
+	t.Run("超长按 160 字符截断", func(t *testing.T) {
+		long := strings.Repeat("政", 300)
+		got := judgedPreview(&Request{PriorityText: long}, &Verdict{Provider: "L1"}, raw)
+		if len([]rune(got)) > 161 {
+			t.Fatalf("判定段必须与 preview 同样截断，得到 %d 个字符", len([]rune(got)))
+		}
+	})
+}
+
+// judgedPreview 必须真的被接进落库路径。
+//
+// 只测 judgedPreview 函数本身是不够的：把 buildLogEntry 里那次赋值整行删掉，
+// 函数级测试照样全绿，而线上每条记录的 judged_preview 都是空的——复核看到的
+// 仍然是模型没读过的那段 system prompt。函数对不代表它被调用了。
+func TestBuildLogEntryFillsJudgedPreview(t *testing.T) {
+	const raw = "system 你是一个编程助手\nuser 六四事件是什么"
+	req := &Request{PriorityText: "六四事件是什么", ModelName: "qwen3.8-27b"}
+
+	t.Run("L1 真实判定时填上", func(t *testing.T) {
+		e := buildLogEntry(req, &Verdict{Action: ActionBlock, Provider: "L1"},
+			raw, raw, system_setting.ModerationModeObserve, nil, false)
+		if e.JudgedPreview != "六四事件是什么" {
+			t.Fatalf("落库记录没带上判定段（得到 %q）——复核时看到的还是 system prompt",
+				e.JudgedPreview)
+		}
+		// 完整请求也要在，两段各答一个问题
+		if e.Preview == "" {
+			t.Fatal("preview 不能丢，上下文还要靠它")
+		}
+	})
+
+	t.Run("审核失败时不填", func(t *testing.T) {
+		// L1 调用没发出去，模型什么都没读到。填了就是在撒谎，
+		// 而 fail-open 下判定服务一挂，每个请求都会落这么一条。
+		e := buildLogEntry(req, &Verdict{Action: ActionError, Provider: "L1"},
+			raw, raw, system_setting.ModerationModeObserve, nil, false)
+		if e.JudgedPreview != "" {
+			t.Fatalf("审核失败的记录不该声称模型读过什么，得到 %q", e.JudgedPreview)
+		}
+	})
+
+	t.Run("pass 记录不留任何原文形态", func(t *testing.T) {
+		// 留存收口在 SetModerationContent 里，这里验它确实被 buildLogEntry 调到了。
+		e := buildLogEntry(req, &Verdict{Action: ActionPass, Provider: "L1"},
+			raw, raw, system_setting.ModerationModeObserve, nil, false)
+		if e.JudgedPreview != "" || e.Preview != "" {
+			t.Fatalf("pass 记录不得带原文：preview=%q judged=%q", e.Preview, e.JudgedPreview)
+		}
+		if e.ContentHash == "" {
+			t.Fatal("pass 记录仍需 ContentHash")
+		}
+	})
+}

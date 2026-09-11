@@ -691,16 +691,16 @@ export default function SettingsModeration(props) {
               </Col>
             </Row>
 
-            {/* ── 审核节点（L1 模型层） ─────────────────────────────── */}
+            {/* ── 审核节点（L1 文本 / L2 图片·视频） ───────────────── */}
             <Typography.Title heading={6} style={{ marginTop: 24 }}>
-              {t('审核节点（L1 模型层）')}
+              {t('审核节点（L1 文本 / L2 图片·视频）')}
             </Typography.Title>
             <Typography.Text
               type='tertiary'
               style={{ display: 'block', marginBottom: 12 }}
             >
               {t(
-                '远程分类器节点，运行模式为「关闭」时不会调用。留空则只跑关键词层。多节点会逐个轮换，失败按 HTTP 状态分级冻结。',
+                '远程分类器节点，按「模态」分成两层：文本节点是 L1，图片 / 视频节点是 L2，各自独立轮换、互不兜底。运行模式为「关闭」时不会调用。文本节点留空则只跑关键词层；图片节点留空则图片与视频完全不审（关键词层扫不了图）。失败按 HTTP 状态分级冻结。',
               )}
             </Typography.Text>
 

@@ -288,6 +288,40 @@ func severity(a Action) int {
 	}
 }
 
+// judgedPreview 取「模型实际判定的那段文本」的预览，与 Preview 一致时返回空。
+//
+// 只认 L1：L0 是全文扫描的 AC 自动机，它判的就是 Preview 那段；L2 判的是图片，
+// 没有对应文本。写反了比不写更糟——运营会拿一段模型没看过的文字去复核。
+func judgedPreview(req *Request, v *Verdict, raw string) string {
+	if v == nil || v.Provider != "L1" {
+		return ""
+	}
+	// **审核失败的记录不填这一列。** runChain 在 L1 调用出错时会合成一条
+	// `{Action: ActionError, Provider: "L1"}`（连不上节点、全部节点被冻结、
+	// 隔板满、总预算超时都算），那次调用**根本没发出去**，模型什么都没读到。
+	// 填了就是在说「模型读了这段」，而这一列的全部价值就是让人据它复核。
+	//
+	// 这不是边角情况：fail-open 开着时，判定服务挂掉或升级期间**每一个请求**
+	// 都会落一条 error 记录。
+	if v.Action == ActionError {
+		return ""
+	}
+	// **判据必须与 L1 完全一致**：L1 的闸门是 Normalize(PriorityText) != ""
+	// （l1_qwen3guard.go 里 `if m.priority != ""` 才换 scanTarget）。
+	// 用 TrimSpace 判断会在一种输入上说谎：最新一轮只由零宽字符组成时，
+	// Normalize 会把它剥成空串、L1 实际扫的是全文，而 TrimSpace 不认零宽字符是空白，
+	// 于是这一列会声称「模型判的是那段隐形字符」。写反比不写更糟。
+	if Normalize(req.PriorityText) == "" {
+		return ""
+	}
+	pt := strings.TrimSpace(req.PriorityText)
+	if pt == raw {
+		// 与全文同源，不重复存。
+		return ""
+	}
+	return model.TruncatePreview(pt)
+}
+
 // recordLog 异步落一条审核记录。
 //
 // 这是 §1.0 那个盲区的补丁：在此之前关键词拦截不产生任何 DB 记录，
@@ -313,6 +347,24 @@ func recordLog(
 		}
 	}
 
+	model.RecordModerationLog(buildLogEntry(req, v, raw, normalized, mode, policy, enforced))
+}
+
+// buildLogEntry 组装一条待落库的审核记录。
+//
+// 从 recordLog 里抽出来是为了让「某个字段有没有被填」可以被**行为测试**钉住。
+// 上一版靠读源码 grep 那次调用，而 grep 与标识符拼写耦合：给 raw 改个名、
+// 把 verdict 提取成变量、调整字段顺序，都会让 CI 红着说「这一列没接线」，
+// 而实际上它接得好好的。
+func buildLogEntry(
+	req *Request,
+	v *Verdict,
+	raw string,
+	normalized string,
+	mode system_setting.ModerationMode,
+	policy *system_setting.ModerationPolicy,
+	enforced bool,
+) *model.ModerationLog {
 	stage := req.Stage
 	if stage == "" {
 		stage = StagePrompt
@@ -346,9 +398,13 @@ func recordLog(
 		Score:      v.Score,
 		Provider:   v.Provider,
 		Detail:     buildDetail(v, mode),
+		// 模型实际读到的那段。只在 L1 出判定、且它判的不是全文时才有值——
+		// L1 只审最新一轮用户输入，而 Preview 是全量拼接文本的开头，两者可以
+		// 完全不重叠。不存这一份，复核时看到的文字里可能一个字都不是模型判的。
+		JudgedPreview: judgedPreview(req, v, raw),
 	}
 	// 必须在 Action 与 Enforced 都已赋值之后调用：
 	// 全文留存看的是「真拦下来了吗」，不是「判成 block 了吗」（§10.1）。
 	entry.SetModerationContent(raw, normalized)
-	model.RecordModerationLog(entry)
+	return entry
 }
