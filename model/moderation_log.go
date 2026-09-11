@@ -308,9 +308,11 @@ type ModerationLogQuery struct {
 	Source         string
 	Category       string
 	Word           string
-	RequestId      string
-	StartIdx       int
-	PageSize       int
+	// RequestId 同时按 request_id 与 task_id 匹配，见 GetModerationLogs 里的说明。
+	// 参数名保留 request_id 不改，避免打破已有的书签与外部调用。
+	RequestId string
+	StartIdx  int
+	PageSize  int
 }
 
 // likeEscapeChar LIKE 模式的转义符。
@@ -387,7 +389,14 @@ func GetModerationLogs(q ModerationLogQuery) ([]*ModerationLog, int64, error) {
 		tx = tx.Where("source = ?", q.Source)
 	}
 	if q.RequestId != "" {
-		tx = tx.Where("request_id = ?", q.RequestId)
+		// 两列都匹配：异步产物审核的记录**没有**请求 ID（任务是几百秒前那次请求
+		// 提交的，RequestId 早已不在上下文里），task_id 才是它唯一的定位标识。
+		// 界面上这两者共用一列显示，筛选也必须共用一个入口——否则管理员看到一个 ID、
+		// 复制、粘进搜索框，得到零结果。
+		//
+		// 两列都有索引。OR 在 MySQL 走 index_merge、PG 走 BitmapOr；SQLite 可能退化成
+		// 扫表，但那是小部署，且这是管理员的低频精确查询，不值得为它拆成两个输入框。
+		tx = tx.Where("request_id = ? OR task_id = ?", q.RequestId, q.RequestId)
 	}
 	if q.Category != "" {
 		tx = whereDelimitedContains(tx, "categories", ",", q.Category)

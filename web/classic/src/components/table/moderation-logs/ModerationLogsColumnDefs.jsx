@@ -166,16 +166,24 @@ export const getModerationLogsColumns = ({
     render: (v) => <Text>{v || '-'}</Text>,
   },
   {
-    title: t('请求 ID'),
+    title: t('请求 / 任务 ID'),
     width: 100,
     dataIndex: 'request_id',
-    render: (v) =>
-      v ? (
+    // 异步产物审核没有请求 ID：任务是几百秒前那次请求提交的，那个 RequestId
+    // 早已不在上下文里。task_id 才是这类记录唯一能拿去定位的标识，所以回落显示它。
+    //
+    // **不加「任务」前缀**：这一格的值是拿来复制去搜的，前缀会一起被复制走，
+    // 粘进筛选框就搜不到。上面的筛选框两列都匹配，所以也不需要区分是哪一种。
+    render: (v, record) => {
+      const shown = v || record.task_id;
+      if (!shown) {
+        return <Text type='tertiary'>-</Text>;
+      }
+      return (
         <Text ellipsis={{ showTooltip: true }} style={{ maxWidth: 85 }}>
-          {v}
+          {shown}
         </Text>
-      ) : (
-        <Text type='tertiary'>-</Text>
-      ),
+      );
+    },
   },
 ];

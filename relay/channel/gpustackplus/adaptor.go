@@ -34,6 +34,7 @@ import (
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/relay/channel"
 	"github.com/QuantumNous/new-api/relay/channel/gpustackplus/nfsinput"
@@ -575,6 +576,10 @@ func (a *Adaptor) DoResponse(c *gin.Context, resp *http.Response, info *relaycom
 	if mr := moderation.ModerateImageOutput(c.Request.Context(), &moderation.Request{
 		UserId:    info.UserId,
 		ChannelId: info.ChannelId,
+		// 用户名与令牌跟文本侧同源(controller/relay.go)。少了它记录里「用户」列
+		// 只剩裸 ID,同一个人的文本侧记录却显示用户名,两边对不上号。
+		Username:  common.GetContextKeyString(c, constant.ContextKeyUserName),
+		TokenId:   info.TokenId,
 		Group:     info.UsingGroup,
 		ModelName: info.OriginModelName,
 		RequestId: info.RequestId,

@@ -68,9 +68,18 @@ func ModerateTaskOutput(ctx context.Context, task *model.Task, resultURL, upstre
 	res := ModerateMedia(ctx, &Request{
 		UserId:    task.UserId,
 		ChannelId: task.ChannelId,
+		// 用户名要显式查。task.Username 是 `gorm:"-"`，只在带 join 的查询里被填，
+		// 轮询拿到的这份恒为空——不查的话记录里「用户」列只剩一个裸的数字 ID，
+		// 而同一个人的文本侧记录显示的是用户名，两边对不上号。
+		// fromDB=false 走 Redis 缓存，轮询循环里不会每条都打库。
+		Username:  taskUsername(task.UserId),
+		TokenId:   task.PrivateData.TokenId,
 		Group:     group,
 		ModelName: modelName,
-		TaskId:    task.TaskID,
+		// 异步链路没有「请求 ID」——任务在几百秒前的那次请求里提交，
+		// 那个 RequestId 早已不在上下文里。TaskID 才是这条记录可用来定位的标识，
+		// 前端在请求 ID 为空时回落显示它。
+		TaskId: task.TaskID,
 		// Stage 决定读哪个开关、以及记录落在哪一档统计里。
 		Stage: StageOutput,
 	}, []MediaItem{item})
@@ -100,6 +109,18 @@ func ModerateTaskOutput(ctx context.Context, task *model.Task, resultURL, upstre
 		// 既不准确，也会让申诉无从谈起。
 		Reason: "生成结果未通过内容安全检查，请调整描述后重试",
 	}
+}
+
+// taskUsername 取用户名，查不到就返回空（记录里回落显示 ID，不因此影响判定）。
+func taskUsername(userID int) string {
+	if userID <= 0 {
+		return ""
+	}
+	name, err := model.GetUsernameById(userID, false)
+	if err != nil {
+		return ""
+	}
+	return name
 }
 
 // outputCandidateURL 在产物地址与上游原始地址之间选出一个能送审的。

@@ -36,9 +36,7 @@ const ModerationMediaModal = ({
       <Banner
         type='info'
         closeIcon={null}
-        description={translate(
-          '本次查看已记录到管理操作日志。链接为短期有效的签名地址，关闭后即失效。',
-        )}
+        description={translate('本次查看已记录到管理操作日志。')}
         style={{ marginBottom: 16 }}
       />
       {isVideo && (

@@ -140,7 +140,7 @@ const ModerationLogsFilters = ({
           <Form.Input
             field='request_id'
             prefix={<IconSearch />}
-            placeholder={t('请求 ID')}
+            placeholder={t('请求 / 任务 ID')}
             showClear
             pure
             size='small'

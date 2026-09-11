@@ -471,3 +471,65 @@ func TestWordsFilterEscapesLikeWildcards(t *testing.T) {
 		}
 	}
 }
+
+// 界面上显示出来的 ID 必须搜得到。
+//
+// 异步产物审核的记录没有 request_id（任务是几百秒前那次请求提交的，那个 ID 早已
+// 不在上下文里），列表里显示的是 task_id。两者共用一列显示，筛选就必须共用一个
+// 入口——否则管理员看到一个 ID、复制、粘进搜索框，得到零结果，而界面上看不出
+// 任何异常，只会以为「这条记录不见了」。
+func TestModerationLogFilterMatchesBothRequestAndTaskId(t *testing.T) {
+	if err := DB.AutoMigrate(&ModerationLog{}); err != nil {
+		t.Fatalf("建表失败: %v", err)
+	}
+	if err := DB.Where("1 = 1").Delete(&ModerationLog{}).Error; err != nil {
+		t.Fatalf("清表失败: %v", err)
+	}
+
+	now := time.Now().Unix()
+	// 同步链路：有 request_id，没有 task_id
+	if err := DB.Create(&ModerationLog{
+		RequestId: "req-sync-1", Action: ModerationActionBlock, CreatedAt: now,
+	}).Error; err != nil {
+		t.Fatalf("造同步记录: %v", err)
+	}
+	// 异步产物：只有 task_id
+	if err := DB.Create(&ModerationLog{
+		TaskId: "task-async-1", Stage: "output", Action: ModerationActionBlock, CreatedAt: now,
+	}).Error; err != nil {
+		t.Fatalf("造异步记录: %v", err)
+	}
+
+	t.Run("按请求 ID 搜得到", func(t *testing.T) {
+		logs, total, err := GetModerationLogs(ModerationLogQuery{RequestId: "req-sync-1", PageSize: 10})
+		if err != nil {
+			t.Fatalf("查询失败: %v", err)
+		}
+		if total != 1 || len(logs) != 1 || logs[0].RequestId != "req-sync-1" {
+			t.Fatalf("按 request_id 应命中 1 条，得到 total=%d len=%d", total, len(logs))
+		}
+	})
+
+	t.Run("按任务 ID 也搜得到", func(t *testing.T) {
+		// 这条是整个改动的立论：界面显示 task_id，搜索必须认它。
+		logs, total, err := GetModerationLogs(ModerationLogQuery{RequestId: "task-async-1", PageSize: 10})
+		if err != nil {
+			t.Fatalf("查询失败: %v", err)
+		}
+		if total != 1 || len(logs) != 1 || logs[0].TaskId != "task-async-1" {
+			t.Fatalf("按 task_id 应命中 1 条，得到 total=%d len=%d——"+
+				"界面显示的 ID 搜不到，管理员会以为记录丢了", total, len(logs))
+		}
+	})
+
+	t.Run("不匹配的 ID 不返回任何东西", func(t *testing.T) {
+		// 反面：两列都匹配不能退化成「条件失效、全表返回」。
+		_, total, err := GetModerationLogs(ModerationLogQuery{RequestId: "nope", PageSize: 10})
+		if err != nil {
+			t.Fatalf("查询失败: %v", err)
+		}
+		if total != 0 {
+			t.Fatalf("不存在的 ID 应命中 0 条，得到 %d——筛选条件失效了", total)
+		}
+	})
+}
