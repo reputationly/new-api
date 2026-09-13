@@ -101,6 +101,22 @@ func GlobalAPIRateLimit() func(c *gin.Context) {
 	return defNext
 }
 
+// HiloRateLimit 给 MiniMax Design 客户端那组**匿名**接口单独一个桶。
+//
+// 配额沿用 `GlobalApiRateLimit`，但 mark 用 "HL" 而不是 "GA" —— 桶的 key 是
+// `mark + ClientIP`，共用 "GA" 的话这组会和整个 dashboard/user API 抢同一份
+// 每 IP 配额。
+//
+// **这不是理论问题**:桌面客户端在轮询 `/api/v1/models/config`，而公网部署下
+// 它和同一个用户的浏览器往往走同一个出口 IP —— 轮询把配额吃掉，浏览器那边
+// 正常的 `/api/*` 就开始 429，而且看不出和客户端有什么关系。
+func HiloRateLimit() func(c *gin.Context) {
+	if common.GlobalApiRateLimitEnable {
+		return rateLimitFactory(common.GlobalApiRateLimitNum, common.GlobalApiRateLimitDuration, "HL")
+	}
+	return defNext
+}
+
 func CriticalRateLimit() func(c *gin.Context) {
 	if common.CriticalRateLimitEnable {
 		return rateLimitFactory(common.CriticalRateLimitNum, common.CriticalRateLimitDuration, "CT")
