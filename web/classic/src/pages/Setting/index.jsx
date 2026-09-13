@@ -31,6 +31,7 @@ import {
   LayoutDashboard,
   MessageSquare,
   Palette,
+  Sparkles,
   CreditCard,
   Server,
   Activity,
@@ -46,6 +47,7 @@ import ModelSetting from '../../components/settings/ModelSetting';
 import DashboardSetting from '../../components/settings/DashboardSetting';
 import RatioSetting from '../../components/settings/RatioSetting';
 import ChatsSetting from '../../components/settings/ChatsSetting';
+import HiloSetting from '../../components/settings/HiloSetting';
 import DrawingSetting from '../../components/settings/DrawingSetting';
 import PaymentSetting from '../../components/settings/PaymentSetting';
 import ModelDeploymentSetting from '../../components/settings/ModelDeploymentSetting';
@@ -89,6 +91,19 @@ const Setting = () => {
       ),
       content: <ChatsSetting />,
       itemKey: 'chats',
+    });
+    // 蒜狸小助手（MiniMax Design 客户端）的模型目录。
+    // 决定客户端能选哪些模型、每个模型有哪些参数，由
+    // `GET /api/v1/models/config` 下发。
+    panes.push({
+      tab: (
+        <span style={{ display: 'flex', alignItems: 'center', gap: '5px' }}>
+          <Sparkles size={18} />
+          {t('蒜狸小助手')}
+        </span>
+      ),
+      content: <HiloSetting />,
+      itemKey: 'hilo',
     });
     panes.push({
       tab: (
