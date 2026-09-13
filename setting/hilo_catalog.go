@@ -43,6 +43,43 @@ type HiloCatalogEntry struct {
 	PlatformModel string `json:"platform_model"`
 	// 客户端看到的定义。字段含义见 dto/hilo.go。
 	Model dto.HiloMediaModel `json:"model"`
+
+	// ModeModels 按玩法分派到不同的平台模型。
+	//
+	// # 为什么需要它
+	//
+	// 客户端对一个模型只发**一个接口**，玩法靠 `params.image_mode` 区分
+	// （实测：`first-last-frame` 时请求体里是 `first_frame_image`，
+	// `reference` 时是 `reference_images`）。但我们平台这两种是**两个
+	// checkpoint**，聚合配置的注释也写着「参考族是另一个 checkpoint，
+	// 不能和帧族共用一条流水线」。
+	//
+	// 只有一个 `PlatformModel` 的话，可用性判断只查得到其中一条 —— 另一条
+	// 停掉或配坏时，这个模型照样报给客户端，用户切到那个玩法才失败。
+	//
+	// 键是 `params.image_mode` 的取值；这里没配的玩法回落到 PlatformModel。
+	ModeModels map[string]string `json:"mode_models,omitempty"`
+}
+
+// PlatformModelsOf 这一条目录项依赖的全部平台模型（含按玩法分派的那些）。
+//
+// **可用性判断要看全部** —— 少查一个的后果是：目录照样报出这个模型，
+// 而用户切到那个玩法才失败，且失败信息来自渠道层，说不清原因。
+func (e HiloCatalogEntry) PlatformModelsOf() []string {
+	seen := map[string]bool{}
+	out := make([]string, 0, 1+len(e.ModeModels))
+	add := func(m string) {
+		if m == "" || seen[m] {
+			return
+		}
+		seen[m] = true
+		out = append(out, m)
+	}
+	add(e.PlatformModel)
+	for _, m := range e.ModeModels {
+		add(m)
+	}
+	return out
 }
 
 // HiloCatalog 四个分类。文本模型走 OpenCode，不在这里配。
@@ -162,6 +199,18 @@ func normalizeHiloCatalog(c *HiloCatalog) error {
 	return nil
 }
 
+// DefaultHiloCatalogJSON 出厂目录的存储格式，给设置页的「载入出厂目录」用。
+//
+// **不是当前生效的配置**，是代码里写死的那份出厂值。管理员想在出厂值基础上
+// 改时，需要的正是这个。
+func DefaultHiloCatalogJSON() string {
+	b, err := common.Marshal(defaultHiloCatalog())
+	if err != nil {
+		return "{}"
+	}
+	return string(b)
+}
+
 func HiloCatalog2JsonString() string {
 	hiloCatalogMu.RLock()
 	defer hiloCatalogMu.RUnlock()
@@ -228,7 +277,26 @@ func defaultHiloCatalog() HiloCatalog {
 		},
 		Video: []HiloCatalogEntry{
 			{
-				PlatformModel: "minimax-h3-fl2va",
+				// **填聚合模型，不是裸的 minimax-h3-fl2va。**
+				//
+				// 我们这套部署的 H3 上限是 768P（relay/minimaxv2 的
+				// resolveResolution 明说），2K 依赖闭源的 H3-Regenerate-2K,
+				// 我们没有。官方客户端能出 2K 是因为他们云端有那个模型。
+				//
+				// `minimax-h3-2k` 是 AggregateModelConfig 里的编排流水线:
+				// 生成(minimax-h3-fl2va) → SwiftVR 超分到 2K。对客户端来说
+				// 它**只是一个模型名、一个任务**，但产出追得平官方。
+				//
+				// 这条要求 AggregateModelConfig 里 minimax-h3-2k 是启用的
+				// （出厂默认启用）。停掉的话这一条会从目录里消失 ——
+				// 那是对的：编排没了，就不该再承诺 2K。
+				PlatformModel: "minimax-h3-2k",
+				// 参考族是另一个 checkpoint、另一条流水线。客户端对两种玩法
+				// 只发一个接口，靠 `image_mode` 区分，所以分派在这里表达。
+				ModeModels: map[string]string{
+					"reference":        "minimax-h3-ref-2k",
+					"first-last-frame": "minimax-h3-2k",
+				},
 				Model: dto.HiloMediaModel{
 					ID: "MiniMax-H3", Name: "MiniMax H3", Backend: "minimax_v3",
 					ModelName: "MiniMax-H3", PricingID: "MiniMax-H3", Type: "video",
@@ -241,14 +309,21 @@ func defaultHiloCatalog() HiloCatalog {
 						// **官方是 4–15，我们只到 10** —— 本机单段最长 10 秒。
 						"duration": hiloSelect("时长", []string{"4", "5", "6", "7", "8", "9", "10"}, "5"),
 						"ratio":    hiloSelect("宽高比", videoRatios, "adaptive"),
-						// **只有 768P 和 480P。** 官方给的是 768P/2K，我们两个都不能照抄:
-						// 本仓 `relay/minimaxv2/convert.go` 的 `resolveResolution` 明说
-						// 「self-hosted MiniMax-H3 deployment tops out at 768P」——
-						// 2K 依赖闭源的 H3-Regenerate-2K，1080P 直接落进 default 分支
-						// 返回 400。摆一个必然被拒的档位，用户选了才知道。
+						// **只给 2K，因为这条聚合流水线只产出 2K。**
 						//
-						// 480P 是本网关的扩展档（靠自己换算 width/height 下发）。
-						"resolution": hiloSelect("分辨率", []string{"768P", "480P"}, "768P"),
+						// 超分段是无条件跑的（buildTaskAggregateInfo 只看
+						// `Upscale.IsEnabled()`，不看客户要的档位），所以摆出
+						// 768P 也兑现不了：选了照样被超到 2K，而且付 2K 的钱。
+						//
+						// 而 2K 能成立，靠的是出厂聚合配置里的
+						// `generate.overrides: {resolution: 768P}` —— 没有它的话
+						// 客户传的 2K 会原样到达生成段，被 resolveResolution
+						// 直接 400（2K 依赖闭源的 H3-Regenerate-2K）。
+						// 两者是一对，改一个必须看另一个。
+						//
+						// 要同时给 768P 和 2K（官方就是这样），得让编排层按档位
+						// 决定"跑不跑超分"。那是生成转发那一层的事，还没做。
+						"resolution": hiloSelect("分辨率", []string{"2K"}, "2K"),
 						// **默认开。** 官方也是 true。我们之前完全没有这个参数,
 						// 于是 H3 的原生音轨一直没生成 —— 表现是「视频没有声音」。
 						"generate_audio": hiloSelect("有声视频", []string{"true", "false"}, "true"),
@@ -262,13 +337,6 @@ func defaultHiloCatalog() HiloCatalog {
 						{
 							If:      dto.HiloParamCond{Param: "image_mode", Eq: "first-last-frame"},
 							Disable: dto.HiloParamDisable{Param: "ratio", Options: videoRatios[1:]},
-						},
-						// 首尾帧模式下 480P 同样不可用:画幅跟随第一张图，而网关
-						// 不解码输入图、算不出那个画布（`resolveResolution` 里
-						// `isFrameTaskType` 那一支）。不禁的话用户选了直接 400。
-						{
-							If:      dto.HiloParamCond{Param: "image_mode", Eq: "first-last-frame"},
-							Disable: dto.HiloParamDisable{Param: "resolution", Options: []string{"480P"}},
 						},
 					},
 					InputMediaLimits: &dto.HiloInputMediaLimits{

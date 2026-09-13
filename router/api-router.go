@@ -316,6 +316,9 @@ func SetApiRouter(router *gin.Engine) {
 		optionRoute.Use(middleware.RootAuth())
 		{
 			optionRoute.GET("/", controller.GetOptions)
+			// 蒜狸小助手的出厂目录（只读）。设置页的「载入出厂目录」用它 ——
+			// 不能拿下发接口的结果反推，那份响应里没有 platform_model。
+			optionRoute.GET("/hilo_catalog_default", controller.GetHiloCatalogDefault)
 			optionRoute.PUT("/", controller.UpdateOption)
 			optionRoute.GET("/channel_affinity_cache", controller.GetChannelAffinityCacheStats)
 			optionRoute.DELETE("/channel_affinity_cache", controller.ClearChannelAffinityCache)

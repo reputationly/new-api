@@ -40,13 +40,35 @@ package common
 // H3 的面积上限(768×1344)由适配器统一钳(h3ApplyCanvas → h3ClampPixels),档位词与
 // 像素串两条入口过同一道闸。聚合配置不重复表达它 —— 引擎契约在适配器里只有一份,
 // 抄进配置必然漂移。
+//
+// ── generate.overrides 为什么必须有 ────────────────────────────────
+//
+// **档位词这条入口不是"钳",是"拒"**:relay/minimaxv2 的 resolveResolution 对 2K
+// 直接返回 400(「self-hosted MiniMax-H3 deployment tops out at 768P」),不做钳位。
+// 所以客户调 minimax-h3-2k 时传 resolution=2K —— 也就是这个聚合模型名承诺的东西 ——
+// 请求会原地失败,而不是"被钳到 768P 再超分"。
+//
+// overrides 把生成段固定成 768P,最终的 2K 交给超分段产出。这正是
+// middleware/aggregate_expand.go 里那段注释说的「客户传的是**最终**尺寸,
+// 生成段收到的必须是**中间**尺寸」。
+//
+// ⚠️ **键名是 `size`,不是 `resolution`。** applyAggregateExpansion 改写的是
+// `Distribute()` 里那份**统一任务契约**的 body(prompt/model/images/size/…),
+// H3 也是从 `body["size"]` 取档位词(h3ApplyCanvas → h3ShortEdgeFromSizeToken)。
+// 写成 `resolution` 的话这条路上没人读它,客户的 size=2K 原样打到引擎上 ——
+// 覆盖落空且不报错,正是这个机制要解决的问题本身。
+//
+// `resolution` 是**另一条路**(官方形状的 /v2/video_generation)上的字段名,
+// 但那条路的 MiniMaxV2CreateConvert 跑在 TokenAuth/Distribute **之前**
+// (router/video-router.go),它自己就会把 resolution 转成 size 并调
+// resolveResolution —— 2K 在那里直接 400,聚合展开根本轮不到。
 const DefaultAggregateModelConfig = `[
   {
     "name": "minimax-h3-2k",
     "type": "video",
     "enabled": true,
     "note": "H3 帧族(文生/图生/首尾帧/尾帧)2K:生成 → SwiftVR 超分。等价于体验区的两段编排,集成方只看到一个模型名和一个任务。提示词请自行扩写后再传。",
-    "generate": { "model": "minimax-h3-fl2va" },
+    "generate": { "model": "minimax-h3-fl2va", "overrides": { "size": "768P" } },
     "upscale": { "model": "swiftvr", "target_size": "2k" }
   },
   {
@@ -54,7 +76,7 @@ const DefaultAggregateModelConfig = `[
     "type": "video",
     "enabled": true,
     "note": "H3 参考族(参考图/参考视频生视频)2K。参考族是另一个 checkpoint,不能和帧族共用一条流水线。",
-    "generate": { "model": "minimax-h3-ref2va" },
+    "generate": { "model": "minimax-h3-ref2va", "overrides": { "size": "768P" } },
     "upscale": { "model": "swiftvr", "target_size": "2k" }
   }
 ]`

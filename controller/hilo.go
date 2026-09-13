@@ -1,8 +1,10 @@
 package controller
 
 import (
+	"fmt"
 	"net/http"
 
+	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/setting"
@@ -39,10 +41,7 @@ import (
 // 只报出**平台上真的有渠道的**模型。报一个没渠道的出来，用户能在界面上
 // 选中它，点生成才失败 —— 而失败信息是渠道层的，说不清"这个模型没部署"。
 func GetHiloModelsConfig(c *gin.Context) {
-	enabled := make(map[string]bool)
-	for _, name := range model.GetEnabledModels() {
-		enabled[name] = true
-	}
+	enabled := availableForHilo()
 
 	// **一律 make 而不是 var**：nil 切片序列化出来是 `null`，而 zod 要的是
 	// 数组，`null` 会让整份目录被判 invalid schema。
@@ -57,9 +56,25 @@ func GetHiloModelsConfig(c *gin.Context) {
 	catalog := setting.GetHiloCatalog()
 	collect := func(entries []setting.HiloCatalogEntry, dst *[]dto.HiloMediaModel) {
 		for _, e := range entries {
-			// 平台上没有这个模型就不报出去 —— 报了用户能选中，点生成
-			// 才失败，而失败信息是渠道层的，说不清"这个模型没部署"。
-			if !enabled[e.PlatformModel] {
+			// **要查它依赖的全部平台模型**，不只是 PlatformModel。
+			//
+			// 客户端对一个模型只发一个接口，玩法靠 `image_mode` 区分，而我们
+			// 平台上不同玩法是不同的 checkpoint（见 HiloCatalogEntry.ModeModels）。
+			// 只查一条的话，另一条停掉时目录照样报出这个模型，用户切到那个
+			// 玩法才失败，而失败信息来自渠道层、说不清原因。
+			skip := ""
+			for _, pm := range e.PlatformModelsOf() {
+				if !enabled[pm] {
+					skip = fmt.Sprintf("平台上没有 %s", pm)
+					break
+				}
+				if why := pipelineCannotDeliver(pm); why != "" {
+					skip = fmt.Sprintf("%s：%s", pm, why)
+					break
+				}
+			}
+			if skip != "" {
+				common.SysLog(fmt.Sprintf("[hilo] 跳过模型 %s：%s", e.Model.ID, skip))
 				continue
 			}
 			*dst = append(*dst, e.Model)
@@ -70,6 +85,70 @@ func GetHiloModelsConfig(c *gin.Context) {
 	collect(catalog.Audio, &out.AudioModels)
 
 	c.JSON(http.StatusOK, out)
+}
+
+// pipelineCannotDeliver 这个聚合流水线兑现不了它承诺的东西时，返回原因。
+//
+// # 为什么要在下发时再查一次
+//
+// 出厂目录（`defaultHiloCatalog`）是**代码**，跟着二进制升级；而出厂的聚合
+// 配置（`DefaultAggregateModelConfig`）只是**种子**，`loadOptionsFromDatabase`
+// 会用库里存过的值盖掉它。于是有一类部署：升级前保存过 AggregateModelConfig、
+// 又从没保存过 HiloCatalog —— 目录按新代码只报 2K，而库里那条流水线还是
+// 没有 `generate.overrides` 的旧版。
+//
+// 那种组合下客户端选 2K 会打到生成段，被 H3 直接拒（自建部署上限 768P）。
+// 与其让用户点了才知道，不如不报出来 —— 和"平台上没有这个模型"同一个口径。
+//
+// **用运行时守卫而不是数据迁移**：迁移要靠人执行一次，漏了就没有任何提示；
+// 守卫每次下发都自查，配置修好的那一刻自动恢复。
+func pipelineCannotDeliver(platformModel string) string {
+	agg := common.GetAggregateModel(platformModel)
+	if agg == nil || agg.Upscale == nil || !agg.Upscale.IsEnabled() {
+		return "" // 不是带超分的聚合流水线，没有这个问题
+	}
+	// 有超分段就意味着"客户传的是最终尺寸"，生成段必须收到被改写过的
+	// 中间尺寸。键名是 `size` —— 生成段读的是 body["size"]，见
+	// common/aggregate_model_default.go 里那段注释。
+	if _, ok := agg.Generate.Overrides["size"]; !ok {
+		return "这条流水线有超分段却没有 generate.overrides.size，" +
+			"客户要的最终尺寸会原样打到生成段并被拒。请在聚合模型配置里补上"
+	}
+	return ""
+}
+
+// availableForHilo 目录里的 `platform_model` 可以填哪些。
+//
+// # 两个来源，缺一不可
+//
+//   - **渠道模型**：`abilities` 表里启用的那些，也就是能直接调的裸模型。
+//   - **聚合模型**：`AggregateModelConfig` 配的编排流水线。
+//
+// 只看 `abilities` 的话，聚合模型会被静默过滤掉 —— 它**没有渠道 ability**
+// （见 controller/model.go 里那段注释），天然不在那张表里。表现是管理员在
+// 设置页填了 `minimax-h3-2k`，保存成功，客户端上却没有这个模型。
+//
+// # 为什么聚合模型对这一层特别重要
+//
+// 我们这套部署的 H3 上限是 768P（`relay/minimaxv2` 的 resolveResolution
+// 明说），2K 依赖闭源的 H3-Regenerate-2K。官方客户端能出 2K 是因为他们云端
+// 有那个模型，我们没有 —— 但 `minimax-h3-2k` 这条聚合流水线
+// （生成 → SwiftVR 超分）能达到同样的结果，而且对客户端来说**只是一个模型名**。
+//
+// 也就是说：**画质要追平官方，目录里该填的是聚合模型，不是裸的 H3。**
+func availableForHilo() map[string]bool {
+	out := make(map[string]bool)
+	for _, name := range model.GetEnabledModels() {
+		out[name] = true
+	}
+	// 隐藏的聚合模型照收。`Hidden` 管的是"不出现在对外的模型列表里"
+	// （模型广场 / /v1/models），而这里不是对外列表 —— 是我们自己的客户端
+	// 按管理员的配置取目录。过滤掉的话，定向发放的那些编排能力就永远用不上。
+	// GetAggregateModels 已经只返回启用的项（见它的注释），这里不用再判一次。
+	for name := range common.GetAggregateModels() {
+		out[name] = true
+	}
+	return out
 }
 
 // GetHiloUserEquity 处理 `GET /api/v1/user/equity`。
@@ -87,5 +166,20 @@ func GetHiloUserEquity(c *gin.Context) {
 		"remaining": -1,
 		"unlimited": true,
 		"vip":       true,
+	})
+}
+
+// GetHiloCatalogDefault 返回**出厂目录的存储格式**，管理员专用。
+//
+// 设置页的「载入出厂目录」要用它，而不能拿 `/api/v1/models/config` 的下发
+// 结果反推 —— 那份响应里**没有 `platform_model`**（见 GetHiloModelsConfig,
+// 只 append 了 e.Model）。反推只能靠 `model_name || id` 猜，而 H3 那条恰好
+// 猜不对：存的是 `minimax-h3-2k`（聚合编排），而 model_name/id 是
+// `MiniMax-H3`。猜错的后果是保存之后那条要么丢掉 2K 编排、要么被
+// availableForHilo 直接过滤掉 —— 正是这个页面要防的"静默消失"。
+func GetHiloCatalogDefault(c *gin.Context) {
+	c.JSON(http.StatusOK, gin.H{
+		"success": true,
+		"data":    setting.DefaultHiloCatalogJSON(),
 	})
 }

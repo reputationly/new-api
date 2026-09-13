@@ -3,6 +3,7 @@ package setting
 import (
 	"bytes"
 	"encoding/json"
+	"slices"
 	"testing"
 
 	"github.com/QuantumNous/new-api/dto"
@@ -182,6 +183,79 @@ func TestNilMapsAreNormalizedNotRejected(t *testing.T) {
 	}
 	// 恢复默认，别影响同包里其他测试。
 	_ = UpdateHiloCatalogByJsonString("")
+}
+
+// 出厂目录里的 H3 要指向**聚合模型**，不是裸模型。
+//
+// 我们这套部署的裸 H3 上限是 768P（relay/minimaxv2 的 resolveResolution
+// 明说），2K 依赖闭源的 H3-Regenerate-2K。画质要追平官方，只能靠
+// AggregateModelConfig 里那条「生成 → SwiftVR 超分」的流水线。
+//
+// 改回裸模型的话不会报错 —— 只是客户端选了 2K 拿到 400，或者悄悄降成
+// 768P。所以钉住它。
+func TestVideoCatalogPointsAtTheAggregatePipeline(t *testing.T) {
+	c := defaultHiloCatalog()
+	if len(c.Video) == 0 {
+		t.Fatal("视频目录是空的")
+	}
+	h3 := c.Video[0]
+	if h3.PlatformModel != "minimax-h3-2k" {
+		t.Errorf("H3 指向 %q，期望聚合模型 minimax-h3-2k —— 裸模型出不了 2K",
+			h3.PlatformModel)
+	}
+	res, ok := h3.Model.Params["resolution"]
+	if !ok {
+		t.Fatal("H3 没有 resolution 参数")
+	}
+	if !slices.Contains(res.Options, "2K") {
+		t.Errorf("分辨率档位 %v 里没有 2K —— 接了聚合流水线就该给得出", res.Options)
+	}
+	// 1080P 不在 relay 认的档位里，给了就是 400。
+	if slices.Contains(res.Options, "1080P") {
+		t.Error("1080P 会被 relay/minimaxv2 直接 400，不该出现在档位里")
+	}
+	// **只承诺做得到的档位。**
+	//
+	// 这条聚合流水线的超分段是无条件跑的（buildTaskAggregateInfo 只看
+	// Upscale.IsEnabled()，不看客户要的档位），所以给出 768P/480P 等于
+	// 承诺一个兑现不了的档位 —— 客户选了还是拿到 2K，而且付 2K 的钱。
+	//
+	// 等编排层能按档位决定「生成段发什么 + 跑不跑超分」之后，这条要放开。
+	for _, tier := range []string{"768P", "480P"} {
+		if slices.Contains(res.Options, tier) {
+			t.Errorf("%s 兑现不了：超分段无条件跑，选它也会被超到 2K", tier)
+		}
+	}
+}
+
+// 表格里那几个键要和存储格式对得上。
+//
+// 设置页按 image / video / audio 分组渲染，键名对不上的话表格是空的，
+// 而配置其实好好地存着 —— 看起来像"配置丢了"。
+func TestStorageKeysMatchWhatTheSettingsPageReads(t *testing.T) {
+	raw, err := json.Marshal(defaultHiloCatalog())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &got); err != nil {
+		t.Fatal(err)
+	}
+	for _, k := range []string{"image", "video", "audio"} {
+		if _, ok := got[k]; !ok {
+			t.Errorf("存储格式里没有 %q，设置页那一组会是空的", k)
+		}
+	}
+	// 单条的两个键同理 —— 表格一列读 platform_model，一列读 model.*。
+	var entries []map[string]json.RawMessage
+	if err := json.Unmarshal(got["image"], &entries); err != nil {
+		t.Fatal(err)
+	}
+	for _, k := range []string{"platform_model", "model"} {
+		if _, ok := entries[0][k]; !ok {
+			t.Errorf("条目里没有 %q", k)
+		}
+	}
 }
 
 // 配置解析失败时**保持原样**，不清空。
