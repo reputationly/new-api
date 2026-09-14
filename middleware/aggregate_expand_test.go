@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/relay/hilo"
 )
 
 // 这两个包装只是把"从 body 归一化"这一步补上,让既有用例保持按单个请求体书写。
@@ -658,4 +659,209 @@ func TestCollectInputImagesForFrameTasksHonoursAliasPrecedence(t *testing.T) {
 		"images 已给出时不应再并入 image")
 	// 标号声明的张数必须与实际发送数一致。
 	require.Contains(t, buildTaskContextFromBody(body), "<Picture 2> is the last frame")
+}
+
+// 参考族要把 metadata 里的参考视频收出来交给增强模型。
+func TestCollectInputVideosReferenceFamily(t *testing.T) {
+	body := map[string]any{
+		"model":    "minimax-h3-ref-2k",
+		"prompt":   "a cat",
+		"duration": 6,
+		"metadata": map[string]any{
+			"task_type":        "r2va",
+			"reference_videos": []any{"https://example.com/v.mp4"},
+		},
+	}
+	require.Equal(t, []string{"https://example.com/v.mp4"},
+		collectInputVideos(normalizeTaskRequest(body)))
+}
+
+// 帧族的输入是静态帧,没有参考视频可收 —— 别把别处的素材塞给它。
+func TestCollectInputVideosFrameFamilyEmpty(t *testing.T) {
+	body := map[string]any{
+		"model":    "minimax-h3-2k",
+		"prompt":   "a cat",
+		"images":   []any{"https://example.com/a.png"},
+		"metadata": map[string]any{"task_type": "i2v"},
+	}
+	require.Empty(t, collectInputVideos(normalizeTaskRequest(body)))
+}
+
+// buildCompilerInput 把请求事实翻成 IR 编译器的输入。
+
+// l2va:顶层只有一张图,它是**尾帧**。
+//
+// 这是整组里最关键的一条 —— l2va 和 i2v 的输入形态完全相同(都是一张图),
+// 只能靠 task_type 区分。标成 first_frame 的后果是渲染器把它当起点、
+// 视频从结尾往后长,而且不报错。同一类错在这个仓里已经犯过三次
+// (见 relay/hilo/frames.go 顶部)。
+func TestBuildCompilerInputLastFrameOnly(t *testing.T) {
+	body := map[string]any{
+		"prompt":   "a cat",
+		"duration": 6,
+		"images":   []any{"https://example.com/end.png"},
+		"metadata": map[string]any{"task_type": "l2va"},
+	}
+	in := buildCompilerInput(body, normalizeTaskRequest(body), "a cat")
+	require.NotNil(t, in)
+	require.Len(t, in.Assets, 1)
+	require.Equal(t, "last_frame", in.Assets[0].Role)
+}
+
+// flf2v:顺序即语义,[0]=首帧、[1]=尾帧。颠倒了视频会倒着长。
+func TestBuildCompilerInputFirstLastFrameOrder(t *testing.T) {
+	body := map[string]any{
+		"prompt":   "a cat",
+		"duration": 6,
+		"images":   []any{"https://example.com/a.png", "https://example.com/b.png"},
+		"metadata": map[string]any{"task_type": "flf2v"},
+	}
+	in := buildCompilerInput(body, normalizeTaskRequest(body), "a cat")
+	require.Len(t, in.Assets, 2)
+	require.Equal(t, "first_frame", in.Assets[0].Role)
+	require.Equal(t, "last_frame", in.Assets[1].Role)
+}
+
+// r2va:参考图和参考视频都进来,**图在前、视频在后**。
+//
+// 这个顺序必须和素材发给模型的顺序一致:IR 渲染时 BuildReferenceInventory
+// 按它发 <Picture N> / <Video N> 标号,排错序会让提示词指着的素材和它描述
+// 的不是同一个,且完全不报错。
+func TestBuildCompilerInputReferenceOrdering(t *testing.T) {
+	body := map[string]any{
+		"prompt":   "a cat",
+		"duration": 6,
+		"metadata": map[string]any{
+			"task_type":        "r2va",
+			"src_ref_images":   []any{"https://example.com/r1.png", "https://example.com/r2.png"},
+			"reference_videos": []any{"https://example.com/v.mp4"},
+		},
+	}
+	in := buildCompilerInput(body, normalizeTaskRequest(body), "a cat")
+	require.Len(t, in.Assets, 3)
+	require.Equal(t, []string{"image", "image", "video"},
+		[]string{in.Assets[0].MediaType, in.Assets[1].MediaType, in.Assets[2].MediaType})
+	require.Equal(t, "image_1", in.Assets[0].AssetID)
+	require.Equal(t, "video_1", in.Assets[2].AssetID)
+	for _, a := range in.Assets {
+		require.Equal(t, "reference", a.Role)
+	}
+}
+
+// 说不出 task_type 就编译不了 IR —— 靠猜出来的玩法会让渲染器把尾帧当首帧。
+// 返回 nil,让上层回落到 text。
+func TestBuildCompilerInputWithoutTaskTypeIsNil(t *testing.T) {
+	body := map[string]any{"prompt": "a cat"}
+	require.Nil(t, buildCompilerInput(body, normalizeTaskRequest(body), "a cat"))
+}
+
+// generate_audio 漏写 = 要出声,与 relay/hilo/convert.go 的默认一致。
+func TestBuildCompilerInputGenerateAudioDefaultsTrue(t *testing.T) {
+	body := map[string]any{"prompt": "a cat", "duration": 6,
+		"metadata": map[string]any{"task_type": "t2v"}}
+	require.True(t, buildCompilerInput(body, normalizeTaskRequest(body), "a cat").GenerateAudio)
+
+	body["generate_audio"] = false
+	require.False(t, buildCompilerInput(body, normalizeTaskRequest(body), "a cat").GenerateAudio)
+}
+
+// **时长只读 duration,不跟 seconds 回落。**
+//
+// 聚合展开跑在选渠道之前,而 kling/vidu/jimeng 完全忽略 seconds
+// (EffectiveDuration 的注释里点名禁止了我们这类调用方)。IR 会**断言**
+// 这个时长:校验硬要求镜头加起来等于它,于是渲染出一条对得上"我们以为的
+// 时长"的分镜表,而上游按自己的默认出片,每个切点都落在成片之外,不报错。
+//
+// 只给 seconds 时宁可不编 IR —— 时长是必填事实,靠猜不如不做。
+func TestBuildCompilerInputIgnoresSecondsFallback(t *testing.T) {
+	body := map[string]any{
+		"prompt":   "a cat",
+		"seconds":  "10",
+		"metadata": map[string]any{"task_type": "t2v"},
+	}
+	require.Nil(t, buildCompilerInput(body, normalizeTaskRequest(body), "a cat"),
+		"只给 seconds 时不该编 IR")
+}
+
+// 完全没有时长同样跳过。
+func TestBuildCompilerInputWithoutDurationIsNil(t *testing.T) {
+	body := map[string]any{"prompt": "a cat", "metadata": map[string]any{"task_type": "t2v"}}
+	require.Nil(t, buildCompilerInput(body, normalizeTaskRequest(body), "a cat"))
+}
+
+// 参考族的别名要归一到 r2va。
+//
+// 原样透传的后果不是"报个错就完了":那个值会被 applyAuthoritativeFacts
+// 盖回 IR,于是校验必然失败、而且**重修修不好**(错的字段是我们写的)。
+// 客户白等一次完整编译加一轮重修才静默回落 text。
+func TestBuildCompilerInputNormalizesReferenceAliases(t *testing.T) {
+	for _, alias := range []string{"r2va", "r2v", "rv2v"} {
+		body := map[string]any{
+			"prompt":   "a cat",
+			"duration": 6,
+			"metadata": map[string]any{
+				"task_type":      alias,
+				"src_ref_images": []any{"https://example.com/r.png"},
+			},
+		}
+		in := buildCompilerInput(body, normalizeTaskRequest(body), "a cat")
+		require.NotNil(t, in, "别名 %s 应被接受", alias)
+		require.Equal(t, hilo.TaskR2VA, in.TaskType, "别名 %s 应归一到 r2va", alias)
+	}
+}
+
+// 编译器不认识的玩法直接跳过,不要交给校验去必然失败。
+func TestBuildCompilerInputSkipsUnknownTaskType(t *testing.T) {
+	for _, tt := range []string{"ads2v", "mv2v", "v2v", "s2v"} {
+		body := map[string]any{
+			"prompt":   "a cat",
+			"duration": 6,
+			"metadata": map[string]any{"task_type": tt},
+		}
+		require.Nil(t, buildCompilerInput(body, normalizeTaskRequest(body), "a cat"),
+			"%s 不在编译器支持的五个玩法里,应跳过", tt)
+	}
+}
+
+// **官方客户端那条路上 generate_audio 只在 metadata 里。**
+//
+// 请求进到聚合展开之前已被 HiloVideoConvert 改写(ToTaskSubmit 把这个标志
+// 只写进 metadata,顶层没有),而出厂配置里带 prompt_enhance 的恰恰是走这条
+// 路的几个 H3 聚合模型。
+//
+// 只读顶层的后果:客户传了 false,IR 里却是 true —— 提示词写着
+// "Audio generation: true." 加整段声音描述,而生成段提交的是 false,
+// 出来一段无声视频。提示词描述的声音根本不存在,且不报错。
+func TestBuildCompilerInputReadsGenerateAudioFromMetadata(t *testing.T) {
+	body := map[string]any{
+		"prompt":   "a cat",
+		"duration": 6,
+		"metadata": map[string]any{
+			"task_type":      "r2va",
+			"generate_audio": false,
+			"src_ref_images": []any{"https://example.com/r.png"},
+		},
+	}
+	in := buildCompilerInput(body, normalizeTaskRequest(body), "a cat")
+	require.NotNil(t, in)
+	require.False(t, in.GenerateAudio, "metadata 里的 false 没被读到")
+}
+
+// 顶层优先于 metadata —— 顶层是调用方这一次显式写的。
+func TestBuildCompilerInputTopLevelGenerateAudioWins(t *testing.T) {
+	body := map[string]any{
+		"prompt": "a cat", "duration": 6, "generate_audio": true,
+		"metadata": map[string]any{"task_type": "t2v", "generate_audio": false},
+	}
+	require.True(t, buildCompilerInput(body, normalizeTaskRequest(body), "a cat").GenerateAudio)
+}
+
+// 被编码成字符串的布尔也要认:只认 bool 会把 "false" 当成"没写",
+// 于是回落到默认的"要出声"。
+func TestBuildCompilerInputReadsStringEncodedGenerateAudio(t *testing.T) {
+	body := map[string]any{
+		"prompt": "a cat", "duration": 6,
+		"metadata": map[string]any{"task_type": "t2v", "generate_audio": "false"},
+	}
+	require.False(t, buildCompilerInput(body, normalizeTaskRequest(body), "a cat").GenerateAudio)
 }

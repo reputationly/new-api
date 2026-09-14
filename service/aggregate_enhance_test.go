@@ -12,6 +12,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/dto"
 )
 
 func enhanceCfg(sysPrompt, mdl string) *common.AggregateModel {
@@ -29,7 +30,7 @@ func enhanceCfg(sysPrompt, mdl string) *common.AggregateModel {
 func TestEnhanceDisabledReturnsOriginal(t *testing.T) {
 	agg := &common.AggregateModel{Name: "agg", Type: "video"}
 
-	res := EnhancePrompt(context.Background(), agg, "Bearer sk-test", "a cat", nil, "")
+	res := EnhancePrompt(context.Background(), agg, "Bearer sk-test", EnhanceInput{Prompt: "a cat"})
 
 	require.Equal(t, "a cat", res.EnhancedPrompt)
 	require.False(t, res.Degraded, "未配置增强段不该被记成降级")
@@ -54,7 +55,7 @@ func TestEnhanceDegradesInsteadOfFailing(t *testing.T) {
 			if name == "缺少调用者身份" {
 				auth = ""
 			}
-			res := EnhancePrompt(context.Background(), tc.agg, auth, tc.prompt, nil, "")
+			res := EnhancePrompt(context.Background(), tc.agg, auth, EnhanceInput{Prompt: tc.prompt})
 
 			require.True(t, res.Degraded, "应降级而不是失败")
 			require.NotEmpty(t, res.DegradeReason, "降级必须留下原因,否则排障时无从下手")
@@ -71,8 +72,7 @@ func TestEnhanceDegradesInsteadOfFailing(t *testing.T) {
 // 只在文字里说"用户传了一张图"是不够的:增强模型看不到底图就会凭空臆造,
 // 而生成模型看得见底图,两边产出直接打架。
 func TestBuildEnhanceRequestSendsImages(t *testing.T) {
-	body := buildEnhanceRequest("m", "sys", "a cat",
-		[]string{"https://example.com/a.png", "", "https://example.com/b.png"}, true)
+	body := buildEnhanceRequest("m", "sys", "a cat", []string{"https://example.com/a.png", "", "https://example.com/b.png"}, nil, true, false)
 
 	msgs := body["messages"].([]map[string]any)
 	require.Len(t, msgs, 2)
@@ -89,7 +89,7 @@ func TestBuildEnhanceRequestSendsImages(t *testing.T) {
 
 // 关掉传图时退回纯文本 content —— 不能因为调用方传了 imageURLs 就擅自发出去。
 func TestBuildEnhanceRequestRespectsSendImagesOff(t *testing.T) {
-	body := buildEnhanceRequest("m", "sys", "a cat", []string{"https://example.com/a.png"}, false)
+	body := buildEnhanceRequest("m", "sys", "a cat", []string{"https://example.com/a.png"}, nil, false, false)
 
 	msgs := body["messages"].([]map[string]any)
 	require.Equal(t, "a cat", msgs[1]["content"], "关掉传图时应是纯文本 content")
@@ -98,7 +98,7 @@ func TestBuildEnhanceRequestRespectsSendImagesOff(t *testing.T) {
 // 没有图片时也应是纯文本,不要构造一个只有 text 一项的多模态数组 ——
 // 部分上游对单元素 content 数组的处理与纯字符串不一致。
 func TestBuildEnhanceRequestPlainWhenNoImages(t *testing.T) {
-	body := buildEnhanceRequest("m", "sys", "a cat", nil, true)
+	body := buildEnhanceRequest("m", "sys", "a cat", nil, nil, true, false)
 
 	msgs := body["messages"].([]map[string]any)
 	require.Equal(t, "a cat", msgs[1]["content"])
@@ -106,7 +106,7 @@ func TestBuildEnhanceRequestPlainWhenNoImages(t *testing.T) {
 
 // 降级原因要能指认问题,而不是一句笼统的"增强失败"。
 func TestEnhanceDegradeReasonIsActionable(t *testing.T) {
-	res := EnhancePrompt(context.Background(), enhanceCfg("", "gpt-4o-mini"), "Bearer sk-test", "a cat", nil, "")
+	res := EnhancePrompt(context.Background(), enhanceCfg("", "gpt-4o-mini"), "Bearer sk-test", EnhanceInput{Prompt: "a cat"})
 
 	require.True(t, strings.Contains(res.DegradeReason, "模板"),
 		"未配模板时降级原因应点名模板,实得 %q", res.DegradeReason)
@@ -138,8 +138,7 @@ func TestEnhanceSuccessUsesRewrittenPrompt(t *testing.T) {
 		`{"choices":[{"message":{"content":"  a majestic cat, cinematic lighting  "}}],
 		  "usage":{"prompt_tokens":12,"completion_tokens":8}}`)
 
-	res := EnhancePrompt(context.Background(), enhanceCfg("改写以下提示词", "gpt-4o-mini"),
-		"Bearer sk-test", "a cat", nil, "")
+	res := EnhancePrompt(context.Background(), enhanceCfg("改写以下提示词", "gpt-4o-mini"), "Bearer sk-test", EnhanceInput{Prompt: "a cat"})
 
 	require.False(t, res.Degraded, "成功时不该标记降级: %s", res.DegradeReason)
 	require.Equal(t, "a majestic cat, cinematic lighting", res.EnhancedPrompt, "应去掉首尾空白")
@@ -159,7 +158,7 @@ func TestEnhanceForwardsCallerIdentity(t *testing.T) {
 	t.Cleanup(func() { enhanceEndpoint = orig })
 	enhanceEndpoint = func() string { return srv.URL }
 
-	EnhancePrompt(context.Background(), enhanceCfg("改写", "gpt-4o-mini"), "Bearer sk-customer", "a cat", nil, "")
+	EnhancePrompt(context.Background(), enhanceCfg("改写", "gpt-4o-mini"), "Bearer sk-customer", EnhanceInput{Prompt: "a cat"})
 
 	require.Equal(t, "Bearer sk-customer", gotAuth,
 		"必须带客户身份,否则计费落不到他账上")
@@ -169,8 +168,7 @@ func TestEnhanceForwardsCallerIdentity(t *testing.T) {
 func TestEnhanceActuallySendsImages(t *testing.T) {
 	got := withFakeEnhanceEndpoint(t, http.StatusOK, `{"choices":[{"message":{"content":"x"}}]}`)
 
-	EnhancePrompt(context.Background(), enhanceCfg("改写", "gpt-4o-mini"),
-		"Bearer sk-test", "a cat", []string{"https://example.com/base.png"}, "")
+	EnhancePrompt(context.Background(), enhanceCfg("改写", "gpt-4o-mini"), "Bearer sk-test", EnhanceInput{Prompt: "a cat", ImageURLs: []string{"https://example.com/base.png"}})
 
 	require.Contains(t, string(*got), "https://example.com/base.png",
 		"输入图必须真的发给增强模型,否则它会凭空臆造并与底图打架")
@@ -184,8 +182,7 @@ func TestEnhanceActuallySendsImages(t *testing.T) {
 func TestEnhanceAppendsTaskContextToSystemPrompt(t *testing.T) {
 	got := withFakeEnhanceEndpoint(t, http.StatusOK, `{"choices":[{"message":{"content":"x"}}]}`)
 
-	EnhancePrompt(context.Background(), enhanceCfg("改写", "gpt-4o-mini"),
-		"Bearer sk-test", "a cat", nil, "\n\n---\n\nCurrent request:\n\n- Task type: I2VA.\n")
+	EnhancePrompt(context.Background(), enhanceCfg("改写", "gpt-4o-mini"), "Bearer sk-test", EnhanceInput{Prompt: "a cat", TaskContext: "\n\n---\n\nCurrent request:\n\n- Task type: I2VA.\n"})
 
 	var sent struct {
 		Messages []struct {
@@ -208,8 +205,7 @@ func TestEnhanceAppendsTaskContextToSystemPrompt(t *testing.T) {
 func TestEnhanceWithoutTaskContextLeavesTemplateIntact(t *testing.T) {
 	got := withFakeEnhanceEndpoint(t, http.StatusOK, `{"choices":[{"message":{"content":"x"}}]}`)
 
-	EnhancePrompt(context.Background(), enhanceCfg("改写", "gpt-4o-mini"),
-		"Bearer sk-test", "a cat", nil, "")
+	EnhancePrompt(context.Background(), enhanceCfg("改写", "gpt-4o-mini"), "Bearer sk-test", EnhanceInput{Prompt: "a cat"})
 
 	var sent struct {
 		Messages []struct {
@@ -225,8 +221,7 @@ func TestEnhanceWithoutTaskContextLeavesTemplateIntact(t *testing.T) {
 func TestEnhanceDegradesWithActionableReasonOn403(t *testing.T) {
 	withFakeEnhanceEndpoint(t, http.StatusForbidden, `{"error":"forbidden"}`)
 
-	res := EnhancePrompt(context.Background(), enhanceCfg("改写", "gpt-4o-mini"),
-		"Bearer sk-test", "a cat", nil, "")
+	res := EnhancePrompt(context.Background(), enhanceCfg("改写", "gpt-4o-mini"), "Bearer sk-test", EnhanceInput{Prompt: "a cat"})
 
 	require.True(t, res.Degraded)
 	require.Equal(t, "a cat", res.EnhancedPrompt)
@@ -237,8 +232,7 @@ func TestEnhanceDegradesWithActionableReasonOn403(t *testing.T) {
 func TestEnhanceDegradesOnEmptyChoices(t *testing.T) {
 	withFakeEnhanceEndpoint(t, http.StatusOK, `{"choices":[]}`)
 
-	res := EnhancePrompt(context.Background(), enhanceCfg("改写", "gpt-4o-mini"),
-		"Bearer sk-test", "a cat", nil, "")
+	res := EnhancePrompt(context.Background(), enhanceCfg("改写", "gpt-4o-mini"), "Bearer sk-test", EnhanceInput{Prompt: "a cat"})
 
 	require.True(t, res.Degraded)
 	require.Equal(t, "a cat", res.EnhancedPrompt)
@@ -248,8 +242,7 @@ func TestEnhanceDegradesOnEmptyChoices(t *testing.T) {
 func TestEnhanceDegradesOnBlankContent(t *testing.T) {
 	withFakeEnhanceEndpoint(t, http.StatusOK, `{"choices":[{"message":{"content":"   "}}]}`)
 
-	res := EnhancePrompt(context.Background(), enhanceCfg("改写", "gpt-4o-mini"),
-		"Bearer sk-test", "a cat", nil, "")
+	res := EnhancePrompt(context.Background(), enhanceCfg("改写", "gpt-4o-mini"), "Bearer sk-test", EnhanceInput{Prompt: "a cat"})
 
 	require.True(t, res.Degraded)
 	require.Equal(t, "a cat", res.EnhancedPrompt)
@@ -288,4 +281,163 @@ func TestAppendTaskContextNoOpWithoutContext(t *testing.T) {
 	if got := appendTaskContext(tmpl, ""); got != tmpl {
 		t.Errorf("无事实时不应改动模板, got: %q", got)
 	}
+}
+
+// 参考视频必须真的发给模型。
+//
+// 这条以前根本不成立:buildEnhanceRequest 的参数里没有视频,用户传一段
+// 参考视频,增强模型压根不知道它存在,却被模板要求"看着素材写" ——
+// 它只能编,而且编得通顺、不报错。
+func TestBuildEnhanceRequestSendsVideos(t *testing.T) {
+	body := buildEnhanceRequest("m", "sys", "a cat",
+		[]string{"https://example.com/a.png"},
+		[]string{"https://example.com/v.mp4", "", "https://example.com/w.mp4"}, true, false)
+
+	msgs := body["messages"].([]map[string]any)
+	parts := msgs[1]["content"].([]map[string]any)
+	require.Len(t, parts, 4, "文字 + 一张图 + 两段有效视频(空串跳过)")
+
+	// 视频排在图片之后:<Picture N> 的标号按图片顺序发,视频插在中间会错位。
+	require.Equal(t, "image_url", parts[1]["type"])
+	require.Equal(t, "video_url", parts[2]["type"])
+	require.Equal(t, "video_url", parts[3]["type"])
+	require.Equal(t, "https://example.com/v.mp4",
+		parts[2]["video_url"].(map[string]any)["url"])
+}
+
+// 只有视频、没有图片时也要走多模态数组 —— 早先的判断只看 len(imageURLs),
+// 纯视频输入会整段退回纯文本,视频再次丢失。
+func TestBuildEnhanceRequestSendsVideosWithoutImages(t *testing.T) {
+	body := buildEnhanceRequest("m", "sys", "a cat", nil,
+		[]string{"https://example.com/v.mp4"}, true, false)
+
+	msgs := body["messages"].([]map[string]any)
+	parts, ok := msgs[1]["content"].([]map[string]any)
+	require.True(t, ok, "纯视频输入也应是多模态数组,而不是纯文本")
+	require.Len(t, parts, 2)
+	require.Equal(t, "video_url", parts[1]["type"])
+}
+
+// 关掉传图时视频一并不发 —— 这个开关的语义是"别把用户素材外发"。
+func TestBuildEnhanceRequestRespectsSendImagesOffForVideos(t *testing.T) {
+	body := buildEnhanceRequest("m", "sys", "a cat", nil,
+		[]string{"https://example.com/v.mp4"}, false, false)
+
+	msgs := body["messages"].([]map[string]any)
+	require.Equal(t, "a cat", msgs[1]["content"])
+}
+
+// ── 思考模式 ───────────────────────────────────────────────────────
+
+// **默认关。**
+//
+// 思考型模型会从用户消息重新推导任务、绕开系统提示词里的 schema:实测
+// qwen3.8-flash-fp8 五次里有两次整份跑偏,交来一份自造的"视频生成请求"。
+// 关掉之后 16-21 秒且稳定(开着是 39-97 秒、3/5 通过)。
+func TestEnhanceRequestDisablesThinkingByDefault(t *testing.T) {
+	body := buildEnhanceRequest("m", "sys", "a cat", nil, nil, false, false)
+	kw, ok := body["chat_template_kwargs"].(map[string]any)
+	require.True(t, ok, "默认应显式关闭思考")
+	require.Equal(t, false, kw["enable_thinking"])
+}
+
+// 显式开启时**不发这个参数**,用上游自己的默认。
+//
+// 参数发得越多,遇上不认识它们的上游就越容易整条请求被拒 —— 那会让增强
+// 直接降级,比多思考几秒糟得多。
+func TestEnhanceRequestOmitsFlagWhenThinkingOn(t *testing.T) {
+	body := buildEnhanceRequest("m", "sys", "a cat", nil, nil, false, true)
+	require.NotContains(t, body, "chat_template_kwargs")
+}
+
+// 配置里漏写 thinking = 关闭。
+func TestIsThinkingDefaultsFalse(t *testing.T) {
+	require.False(t, (*common.AggregatePromptEnhance)(nil).IsThinking())
+	require.False(t, (&common.AggregatePromptEnhance{}).IsThinking())
+	on := true
+	require.True(t, (&common.AggregatePromptEnhance{Thinking: &on}).IsThinking())
+}
+
+// 配置要真的传到请求里,不是只存不用。
+func TestEnhancePassesThinkingConfigThrough(t *testing.T) {
+	got := withFakeEnhanceEndpoint(t, 200, `{"choices":[{"message":{"content":"x"}}]}`)
+	cfg := enhanceCfg("改写", "gpt-4o-mini")
+	on := true
+	cfg.PromptEnhance.Thinking = &on
+
+	EnhancePrompt(context.Background(), cfg, "Bearer sk-x", EnhanceInput{Prompt: "a cat"})
+	require.NotContains(t, string(*got), "enable_thinking",
+		"配置开启思考时不该再发关闭参数")
+}
+
+// **关思考的参数必须能穿过本站中继。**
+//
+// 增强是**以客户身份自调用一次本站 /v1/chat/completions**,所以这个参数要
+// 先被 dto.GeneralOpenAIRequest 接住、再被原样发给上游。dto 里少一个字段,
+// 它就在中继这一跳被静默丢掉 —— 上游照常返回、不报错,只是思考又开回来了,
+// 而症状(整份跑偏、耗时翻几倍)要到很后面才看得出来。
+//
+// 这条钉的是那个契约,不是某个适配器的实现。
+func TestThinkingFlagSurvivesRelayContract(t *testing.T) {
+	body := buildEnhanceRequest("qwen3.8-27b", "sys", "a cat", nil, nil, false, false)
+	payload, err := common.Marshal(body)
+	require.NoError(t, err)
+
+	var req dto.GeneralOpenAIRequest
+	require.NoError(t, common.Unmarshal(payload, &req), "中继入口要能解析它")
+	require.NotEmpty(t, req.ChatTemplateKwargs,
+		"dto.GeneralOpenAIRequest 没接住 chat_template_kwargs,中继这一跳会丢掉它")
+
+	out, err := common.Marshal(&req)
+	require.NoError(t, err)
+	require.Contains(t, string(out), `"enable_thinking":false`,
+		"重新序列化后参数丢了,发给上游的请求里没有它")
+}
+
+// ── 内联参考视频的大小守卫 ──────────────────────────────────────────
+
+// **超大的 data URI 视频不发。**
+//
+// 这条路在客户的关键路径上:增强跑在生成请求发出之前,失败了还要再跑一轮
+// 重修 —— 同一段字节要上传两次。一段几十 MB 的视频会把请求撑爆,而表现
+// 只是"增强降级 + 白等很久"。
+//
+// 我把 collectInputImages 上那段警告这件事的注释删掉了,却没把它说的问题
+// 解决掉 —— 这是补上。
+func TestEnhanceSkipsOversizedInlineVideo(t *testing.T) {
+	big := "data:video/mp4;base64," + strings.Repeat("A", maxEnhanceVideoDataURI)
+	body := buildEnhanceRequest("m", "sys", "a cat", nil, []string{big}, true, false)
+	require.Equal(t, "a cat", body["messages"].([]map[string]any)[1]["content"],
+		"整段超限视频被跳过后,没有别的素材,应退回纯文本")
+}
+
+// 超限的那一段跳过,**其余素材照常送** —— 少看一段比整次增强失败好。
+func TestEnhanceKeepsOtherMediaWhenOneVideoTooBig(t *testing.T) {
+	big := "data:video/mp4;base64," + strings.Repeat("A", maxEnhanceVideoDataURI)
+	body := buildEnhanceRequest("m", "sys", "a cat",
+		[]string{"https://e.com/a.png"},
+		[]string{big, "https://e.com/ok.mp4"}, true, false)
+
+	parts := body["messages"].([]map[string]any)[1]["content"].([]map[string]any)
+	require.Len(t, parts, 3, "文字 + 一张图 + 一段没超限的视频")
+	require.Equal(t, "video_url", parts[2]["type"])
+	require.Equal(t, "https://e.com/ok.mp4", parts[2]["video_url"].(map[string]any)["url"])
+}
+
+// **远程 URL 一律放行** —— 体积由上游自己取,不占我们的请求体。
+func TestEnhanceAllowsRemoteVideoRegardlessOfLength(t *testing.T) {
+	long := "https://e.com/" + strings.Repeat("x", maxEnhanceVideoDataURI) + ".mp4"
+	require.True(t, enhanceVideoAllowed(long))
+	require.True(t, enhanceVideoAllowed("https://e.com/v.mp4"))
+}
+
+// 没超限的内联视频照常发。
+func TestEnhanceAllowsSmallInlineVideo(t *testing.T) {
+	small := "data:video/mp4;base64," + strings.Repeat("A", 1024)
+	require.True(t, enhanceVideoAllowed(small))
+}
+
+func TestEnhanceVideoAllowedRejectsBlank(t *testing.T) {
+	require.False(t, enhanceVideoAllowed(""))
+	require.False(t, enhanceVideoAllowed("   "))
 }

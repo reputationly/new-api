@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"github.com/QuantumNous/new-api/relay/hilo"
 	"net/http"
 	"strings"
 	"time"
@@ -43,6 +44,47 @@ import (
 // 不能让一个抽风的 LLM 把整个请求拖死 —— 超时即降级,用原 prompt 照常生成。
 const enhanceTimeout = 20 * time.Second
 
+// textBudget text 改写的时间预算:配置优先,没配用内置默认。
+//
+// **IR 那边的配置值不适用于这里。** 运营为 IR 配的是几分钟级的数字
+// (一整份结构化 IR 要跑几十秒),而 text 改写只吐一段提示词,拿几分钟的
+// 预算兜一次本该几秒完成的调用,只会让失败的那次把客户吊更久。
+//
+// 所以配了 timeout_seconds 时这里取**两者的较小值**:既尊重运营显式调小
+// 的意图,又不让为 IR 放宽的预算顺带把 text 也放宽。
+func textBudget(cfg *common.AggregatePromptEnhance) time.Duration {
+	if cfg == nil || cfg.TimeoutSeconds <= 0 {
+		return enhanceTimeout
+	}
+	if d := time.Duration(cfg.TimeoutSeconds) * time.Second; d < enhanceTimeout {
+		return d
+	}
+	return enhanceTimeout
+}
+
+// EnhanceInput 一次增强要用到的全部输入。
+//
+// 做成结构体而不是继续加参数:这里已经有「提示词、图、视频、请求事实、
+// IR 编译事实」五类输入,位置参数排到第七个时,调用点看不出哪个是哪个,
+// 传串了也照样编译过。
+type EnhanceInput struct {
+	// Prompt 客户的原始提示词,逐字。
+	Prompt string
+	// ImageURLs / VideoURLs 本次要给模型看的素材。
+	ImageURLs []string
+	VideoURLs []string
+	// SendMedia 是否真的把素材发出去(对应 send_input_images 开关)。
+	SendMedia bool
+	// Thinking 让模型开启"思考"。默认关 —— 思考型模型会重新推导任务、
+	// 绕开 schema(见 common.AggregatePromptEnhance.Thinking)。
+	Thinking bool
+	// TaskContext 请求事实的文本描述,拼进 text 模式的系统提示词。
+	TaskContext string
+	// Compiler IR 模式所需的结构化请求事实。nil = 编译不了 IR,
+	// 配了 mode=ir 也只能走 text。
+	Compiler *hilo.CompilerInput
+}
+
 // EnhanceResult 一次增强的结果与过程记录。
 //
 // 记录是必须的:增强后的 prompt **不回传给客户**(避免暴露内部编排),那么客户报
@@ -56,6 +98,20 @@ type EnhanceResult struct {
 	Degraded      bool
 	DegradeReason string
 	Usage         *dto.Usage
+
+	// Mode 实际走的模式("text" / "ir")。配的是 ir 而这里是 text,
+	// 说明 IR 那条路失败了、回落了 —— 见 IRFallbackReason。
+	Mode string
+	// IR 编译成功时的那份 IR。留着供日志与排查:提示词不对时,能指出
+	// 是模型的创作判断有问题,还是渲染这一步错了。
+	IR *hilo.ContextIR
+	// IRRepaired 第一轮校验没过、靠重修才成功。
+	IRRepaired bool
+	// IRFallbackReason IR 失败并回落到 text 的原因。空 = 没回落过。
+	//
+	// **这是整件事里唯一的反馈来源。** IR 层此前零调用方,没有任何真实
+	// 失败样本,所以校验规则和编译器模板都只能靠想 —— 也就一直不收敛。
+	IRFallbackReason string
 }
 
 // u15EditClosingMarker 官方 U1.5 编辑模板的收尾句,与前端
@@ -95,9 +151,10 @@ func appendTaskContext(systemPrompt, taskContext string) string {
 //
 // **永远不返回错误** —— 任何失败都体现为 Degraded=true + 原样返回的 prompt。
 // 这是刻意的签名设计:让调用方无法"忘记处理增强失败",因为根本没有失败分支可漏。
-func EnhancePrompt(ctx context.Context, agg *common.AggregateModel, authHeader, prompt string, imageURLs []string, taskContext string) *EnhanceResult {
+func EnhancePrompt(ctx context.Context, agg *common.AggregateModel, authHeader string, in EnhanceInput) *EnhanceResult {
 	started := time.Now()
-	res := &EnhanceResult{OriginalPrompt: prompt, EnhancedPrompt: prompt}
+	prompt := in.Prompt
+	res := &EnhanceResult{OriginalPrompt: prompt, EnhancedPrompt: prompt, Mode: common.EnhanceModeText}
 	degrade := func(format string, args ...any) *EnhanceResult {
 		res.Degraded = true
 		res.DegradeReason = fmt.Sprintf(format, args...)
@@ -114,6 +171,43 @@ func EnhancePrompt(ctx context.Context, agg *common.AggregateModel, authHeader, 
 	if strings.TrimSpace(prompt) == "" {
 		return degrade("原始提示词为空,无可增强")
 	}
+	res.Model = strings.TrimSpace(cfg.Model)
+	if res.Model == "" {
+		return degrade("未配置增强模型")
+	}
+	if strings.TrimSpace(authHeader) == "" {
+		// 拿不到客户身份就无法以他的名义调用,也就无从计费 —— 宁可不增强。
+		return degrade("缺少调用者身份,无法发起增强调用")
+	}
+	// 素材发不发由配置定,调用点不必知道 —— 这个开关的后果太重
+	// (见 SendInputImages 字段注释),不该散在每个调用点各判一次。
+	in.SendMedia = cfg.IsSendInputImages()
+	in.Thinking = cfg.IsThinking()
+
+	// ── IR 模式 ──────────────────────────────────────────────
+	//
+	// 成功就直接返回;失败**不降级,而是回落到 text 改写**(见
+	// aggregate_enhance_ir.go 顶部的三级降级说明)。直接掉到原始提示词
+	// 会让开 IR 比不开还差,于是没人敢开,于是永远收不到真实失败样本。
+	if cfg.EnhanceMode() == common.EnhanceModeIR {
+		if in.Compiler == nil {
+			res.IRFallbackReason = "缺少请求事实(CompilerInput),无法编译 IR"
+		} else if out, err := compileIRWithTimeout(ctx, authHeader, res.Model, in, irBudget(cfg)); err != nil {
+			res.IRFallbackReason = err.Error()
+		} else {
+			res.EnhancedPrompt = out.Prompt
+			res.IR = out.IR
+			res.IRRepaired = out.Repaired
+			res.Usage = out.Usage
+			res.Mode = common.EnhanceModeIR
+			res.ElapsedMs = time.Since(started).Milliseconds()
+			return res
+		}
+		common.SysLog(fmt.Sprintf(
+			"aggregate enhance: IR 编译失败,回落 text 改写 (model=%s): %s",
+			res.Model, res.IRFallbackReason))
+	}
+
 	// 模板的继承链：配置里写了就用配置的，没写就回落到**按生成段模型挑的
 	// 内置默认**。这一级以前不存在 —— 于是「SystemPrompt 空 = 继承」这句
 	// 注释描述的是一条断掉的链，出厂配置也就不敢带增强段。
@@ -128,24 +222,18 @@ func EnhancePrompt(ctx context.Context, agg *common.AggregateModel, authHeader, 
 		return degrade("没有可用的增强模板(system_prompt 为空，且 %s 没有内置默认)",
 			agg.Generate.Model)
 	}
-	res.Model = strings.TrimSpace(cfg.Model)
-	if res.Model == "" {
-		return degrade("未配置增强模型")
-	}
-	if strings.TrimSpace(authHeader) == "" {
-		// 拿不到客户身份就无法以他的名义调用,也就无从计费 —— 宁可不增强。
-		return degrade("缺少调用者身份,无法发起增强调用")
-	}
-
 	// 事实无条件拼在模板之后:运营改写过模板也不例外 —— 模板可以换,
 	// "这一次传了几张图、多少秒"不能被换掉。
-	body := buildEnhanceRequest(res.Model, appendTaskContext(systemPrompt, taskContext), prompt, imageURLs, cfg.IsSendInputImages())
+	body := buildEnhanceRequest(res.Model, appendTaskContext(systemPrompt, in.TaskContext), prompt, in.ImageURLs, in.VideoURLs, in.SendMedia, cfg.IsThinking())
 	payload, err := common.Marshal(body)
 	if err != nil {
 		return degrade("构造增强请求失败: %v", err)
 	}
 
-	reqCtx, cancel := context.WithTimeout(ctx, enhanceTimeout)
+	// text 改写用自己的预算。**不能和 IR 共用一个 ctx** —— 共用的话
+	// IR 那 150 秒一旦用满,回落进来的 text 改写会立刻拿着一个已经取消的
+	// ctx 失败,三级降级里的中间那级就永远走不到,等于白设计。
+	reqCtx, cancel := context.WithTimeout(ctx, textBudget(cfg))
 	defer cancel()
 	enhanced, usage, err := callEnhance(reqCtx, authHeader, payload)
 	if err != nil {
@@ -166,29 +254,118 @@ func EnhancePrompt(ctx context.Context, agg *common.AggregateModel, authHeader, 
 // 带图时用多模态 content 数组。**图片必须真的发过去**,只在文字里说"用户传了一张图"是
 // 不够的:图生图场景下增强模型看不到底图就会凭空臆造(用户传彩色油画、它写出"黑白纪实"),
 // 而生成模型是看得见底图的,两边直接打架。这一条是体验区踩出来的经验。
-func buildEnhanceRequest(modelName, systemPrompt, prompt string, imageURLs []string, sendImages bool) map[string]any {
-	var userContent any = prompt
-	if sendImages && len(imageURLs) > 0 {
-		parts := []map[string]any{{"type": "text", "text": prompt}}
-		for _, u := range imageURLs {
-			if strings.TrimSpace(u) == "" {
-				continue
-			}
-			parts = append(parts, map[string]any{
-				"type":      "image_url",
-				"image_url": map[string]any{"url": u},
-			})
-		}
-		userContent = parts
-	}
-	return map[string]any{
+func buildEnhanceRequest(modelName, systemPrompt, prompt string, imageURLs, videoURLs []string, sendImages, thinking bool) map[string]any {
+	body := map[string]any{
 		"model": modelName,
 		"messages": []map[string]any{
 			{"role": "system", "content": systemPrompt},
-			{"role": "user", "content": userContent},
+			{"role": "user", "content": buildUserContent(prompt, imageURLs, videoURLs, sendImages)},
 		},
 		"stream": false,
 	}
+	applyThinking(body, thinking)
+	return body
+}
+
+// maxEnhanceVideoDataURI 内联视频(data URI)的大小上限。
+//
+// 参考视频常常是 base64 data URI,而**这条路在客户的关键路径上**:增强跑在
+// 生成请求发出之前,失败了还要再跑一轮重修 —— 同一段字节要上传两次。
+// 一段几十 MB 的视频会把请求撑爆,而表现只是"增强降级 + 白等很久"。
+//
+// 8 MB 是按"能让模型看清、又不至于拖垮一次同步调用"取的:实测探针用的
+// 2 秒 320x240 片段是 4 KB 级,真实的几秒参考片在这个量级之内。
+//
+// 超限就**跳过这一段视频**,不是整条降级 —— 少看一段素材比让整次增强失败好,
+// 而且图片那一半照常送到。
+const maxEnhanceVideoDataURI = 8 << 20
+
+// enhanceVideoAllowed 这段视频该不该发给增强模型。
+//
+// 远程 URL 一律放行(体积由上游自己取,不占我们的请求体);只有内联的
+// data URI 才卡大小 —— 那是唯一会把请求体撑大的形态。
+func enhanceVideoAllowed(u string) bool {
+	u = strings.TrimSpace(u)
+	if u == "" {
+		return false
+	}
+	if !strings.HasPrefix(u, "data:") {
+		return true
+	}
+	if len(u) > maxEnhanceVideoDataURI {
+		common.SysLog(fmt.Sprintf(
+			"aggregate enhance: 跳过一段内联参考视频(%d 字节,超过 %d 上限),"+
+				"增强模型看不到它;改用可访问的 URL 传参考视频可避免",
+			len(u), maxEnhanceVideoDataURI))
+		return false
+	}
+	return true
+}
+
+// applyThinking 显式声明要不要思考。
+//
+// **默认关**(见 AggregatePromptEnhance.Thinking 的字段注释):思考型模型会
+// 从用户消息重新推导任务、绕开系统提示词里的 schema,实测五次里跑偏两次;
+// 关掉之后又快又稳,视觉理解不受影响。
+//
+// 走 chat_template_kwargs 而不是顶层 enable_thinking:实测只有前者真的把
+// reasoning 关到 0,后者在这个平台上仍然会思考(reasoning=585)。
+//
+// 不思考时**只发这一个参数**,不额外声明其它:对非思考模型它是安全的空操作
+// (实测 qwen3.8-27b 照常返回、不报错),而参数发得越多,遇上不认识它们的
+// 上游就越容易整条请求被拒 —— 那会让增强直接降级,比多思考几秒糟得多。
+func applyThinking(body map[string]any, thinking bool) {
+	if thinking {
+		return // 开启就用上游自己的默认,不额外声明
+	}
+	body["chat_template_kwargs"] = map[string]any{"enable_thinking": false}
+}
+
+// buildUserContent 用户这一轮的 content:纯文本,或带素材的多模态数组。
+//
+// 单独抽出来是因为 IR 模式要自己拼多轮消息(见 aggregate_enhance_ir.go),
+// 素材该怎么编进 content 这件事只能有一份 —— 两处各写一遍,漂移的症状是
+// 「某条路径上视频又没发出去」,而那恰恰是不报错的那类错。
+func buildUserContent(prompt string, imageURLs, videoURLs []string, sendImages bool) any {
+	if !sendImages || (len(imageURLs) == 0 && len(videoURLs) == 0) {
+		return prompt
+	}
+	parts := []map[string]any{{"type": "text", "text": prompt}}
+	for _, u := range imageURLs {
+		if strings.TrimSpace(u) == "" {
+			continue
+		}
+		parts = append(parts, map[string]any{
+			"type":      "image_url",
+			"image_url": map[string]any{"url": u},
+		})
+	}
+	// **参考视频也要给模型看。**
+	//
+	// 以前这里只有图片,于是用户传一段参考视频,增强模型压根不知道它存在,
+	// 却被模板要求"看着素材写" —— 它只能编,而且编得通顺、不报错。
+	//
+	// 视频放在图片之后:<Picture N> 的标号按图片顺序发,视频插在中间会让
+	// 标号和 buildTaskContext 对不上。
+	for _, u := range videoURLs {
+		if !enhanceVideoAllowed(u) {
+			continue
+		}
+		parts = append(parts, map[string]any{
+			"type":      "video_url",
+			"video_url": map[string]any{"url": u},
+		})
+	}
+	// **过滤之后什么素材都没剩时,退回纯文本。**
+	//
+	// 空串和超限的内联视频会被上面两个循环跳掉,于是可能只剩下那条 text。
+	// 单元素 content 数组和纯字符串在部分上游的处理不一致(见
+	// TestBuildEnhanceRequestPlainWhenNoImages),不能因为调用方**传了**
+	// 素材就发一个只剩文字的数组 —— 判据要看真正编进去了几项。
+	if len(parts) <= 1 {
+		return prompt
+	}
+	return parts
 }
 
 // enhanceEndpoint 增强调用的目标地址。做成变量供测试指向本地假服务端。

@@ -71,6 +71,82 @@ type AggregatePromptEnhance struct {
 	//
 	// 必须是 *bool:plain bool 漏写就是 false,恰好落进上面这个有害分支,而且不报错。
 	SendInputImages *bool `json:"send_input_images"`
+
+	// Mode 增强怎么做。空 = "text"。
+	//
+	//	text  一次改写:模板 + 原提示词 → 模型直接吐出改写后的提示词。
+	//	ir    两步:模型先吐**结构化 JSON(Context-IR)**,我们确定性地校验它、
+	//	      再确定性地渲染成提示词。
+	//
+	// ir 贵一点(输出 token 多,失败时还要一轮修复),换来的是**错误可指认**:
+	// 文本改写吐出来的东西没有任何地方能校验,镜头时长加起来不等于请求时长、
+	// 参考图被描述成一张根本没传的图 —— 这些在 text 模式下全都不报错,只是
+	// 出来的视频不对。ir 模式下它们是 ValidateIR 的具名问题,能被驳回重修。
+	//
+	// 空 = text:老配置不能因为新增了一个字段就改变行为。
+	Mode string `json:"mode"`
+
+	// TimeoutSeconds 增强段的时间预算(秒)。0 = 按模式取内置默认。
+	//
+	// **这段时间直接加在客户提交请求之前**,所以它是个需要按实际模型调的
+	// 参数,而不是一个可以拍脑袋定死的常量:同一份提示词,实测单次 IR 编译
+	// 在 34-102 秒之间(见 service/aggregate_enhance_ir.go 的实测记录),
+	// 慢的那一半跟模型的"思考"长度强相关,换个模型就是另一条分布。
+	//
+	// 配小了的症状是**静默的**:IR 每次超时、每次回落 text 改写,看起来像
+	// "IR 没什么效果",实际是一次都没跑成。
+	TimeoutSeconds int `json:"timeout_seconds"`
+
+	// Thinking 让增强模型开启"思考"。**漏写 = 关闭。**
+	//
+	// # 为什么默认关
+	//
+	// 思考型模型会从用户消息出发**重新推导任务是什么**,而不是照系统提示词
+	// 里的 schema 写。实测 qwen3.8-flash-fp8 五次里有两次整份跑偏,交来一份
+	// 自造的"视频生成请求"(prompt / negative_prompt / audio_prompt),
+	// Context-IR 的字段一个都没有 —— 它自己的思考记录写着
+	// "This is a video generation API?",它是在猜。
+	//
+	// 关掉之后(各 5 次实测):
+	//
+	//	开 thinking   38.9-97.4 秒   3/5 通过
+	//	关 thinking   16.3-21.2 秒   4/5 通过(那 1 次是我们字段类型太死,已修)
+	//
+	// **又快又稳**,没有任何一项变差。视觉理解不受影响 —— 图片和视频的编码
+	// 和思考无关,关掉后两个模型对计数/方位/形状/运动方向/数量变化/颜色顺序
+	// 的判读都照旧正确。
+	//
+	// 对非思考模型(如 qwen3.8-27b)这个参数是安全的空操作:实测照常返回,
+	// 不报错。
+	//
+	// 留这个开关是因为将来可能换上一个确实需要思考才写得好 IR 的模型;
+	// 但那要靠实测数字说话,不是默认。
+	Thinking *bool `json:"thinking"`
+}
+
+// IsThinking 增强模型是否开启思考(漏写 = 关闭,见字段注释)。
+func (p *AggregatePromptEnhance) IsThinking() bool {
+	return p != nil && p.Thinking != nil && *p.Thinking
+}
+
+// 增强模式取值。
+const (
+	EnhanceModeText = "text"
+	EnhanceModeIR   = "ir"
+)
+
+// EnhanceMode 归一化后的增强模式(空/未知 = text)。
+//
+// 未知值回落到 text 而不是报错:配置是运营手写的,拼错一个模式名不该让
+// 整条生成链路挂掉 —— 退回到老行为是安全的那一侧。
+func (p *AggregatePromptEnhance) EnhanceMode() string {
+	if p == nil {
+		return EnhanceModeText
+	}
+	if strings.EqualFold(strings.TrimSpace(p.Mode), EnhanceModeIR) {
+		return EnhanceModeIR
+	}
+	return EnhanceModeText
 }
 
 // IsEnabled 提示词增强段是否启用(段不存在 = 不启用;存在但漏写 enabled = 启用)。

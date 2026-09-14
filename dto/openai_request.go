@@ -659,11 +659,31 @@ func (m *Message) ParseContent() []MediaContent {
 				}
 			}
 		case ContentTypeVideoUrl:
-			if videoUrl, ok := contentItem["video_url"].(string); ok {
+			// **两种写法都认**,和上面的 image_url 一致。
+			//
+			// 官方 OpenAI 兼容约定里 video_url 和 image_url 一样是个对象
+			// (`{"type":"video_url","video_url":{"url":…}}`),平台侧实测也
+			// 只吃这一种。这里原先只认裸字符串,后果不是"报错",而是**静默丢弃**:
+			// 解析不出来就没有 MediaContent,于是 GetTokenCountMeta 不产
+			// FileMeta(输入媒体审核看不到这段视频),Claude/Gemini/zhipu/dify/
+			// ollama 这些按 ParseContent 重建请求体的转换器也会把它整段丢掉。
+			//
+			// OpenAI 格式直通的渠道因为原样转发 Content,反而看不出问题 ——
+			// 也就是说这个缺陷**跟渠道形态走**,最难发现的那种。
+			var videoURL string
+			switch v := contentItem["video_url"].(type) {
+			case string:
+				videoURL = v
+			case map[string]interface{}:
+				if u, ok := v["url"].(string); ok {
+					videoURL = u
+				}
+			}
+			if videoURL != "" {
 				contentList = append(contentList, MediaContent{
 					Type: ContentTypeVideoUrl,
 					VideoUrl: &MessageVideoUrl{
-						Url: videoUrl,
+						Url: videoURL,
 					},
 				})
 			}

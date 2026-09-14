@@ -94,13 +94,7 @@ const (
 // 而参考图只是风格参考。真实请求里不会同时出现，这里只是不让它变成
 // 一个"看起来随机"的选择。
 func (r *VideoRequest) DetectMode() ImageMode {
-	if strings.TrimSpace(r.FirstFrame) != "" || strings.TrimSpace(r.LastFrame) != "" {
-		return ModeFirstLastFrame
-	}
-	if len(r.RefImages) > 0 {
-		return ModeReference
-	}
-	return ModeTextToVideo
+	return ResolveFrameRoles(r).Mode
 }
 
 // TaskTypeOf 这次请求的平台任务类型。
@@ -108,22 +102,7 @@ func (r *VideoRequest) DetectMode() ImageMode {
 // 帧族要再按**填了哪个槽**细分：首帧 / 尾帧 / 两者都有，是三种不同的
 // task_type，而它们的输入形态有两种是一样的。
 func (r *VideoRequest) TaskTypeOf() TaskType {
-	switch r.DetectMode() {
-	case ModeReference:
-		return TaskR2VA
-	case ModeFirstLastFrame:
-		hasFirst := strings.TrimSpace(r.FirstFrame) != ""
-		hasLast := strings.TrimSpace(r.LastFrame) != ""
-		switch {
-		case hasFirst && hasLast:
-			return TaskFLF2V
-		case hasLast:
-			return TaskL2VA
-		default:
-			return TaskI2V
-		}
-	}
-	return TaskT2V
+	return ResolveFrameRoles(r).TaskType
 }
 
 // Images 这次请求要带的素材，按玩法取对应的字段。
@@ -132,26 +111,11 @@ func (r *VideoRequest) TaskTypeOf() TaskType {
 // 而且不报错。只给尾帧时不能补一个空串占位（那会被当成一张读不出的图），
 // 而是要靠 metadata 说明这是"仅尾帧"。
 func (r *VideoRequest) Images() []string {
-	switch r.DetectMode() {
-	case ModeFirstLastFrame:
-		out := make([]string, 0, 2)
-		if f := strings.TrimSpace(r.FirstFrame); f != "" {
-			out = append(out, f)
-		}
-		if l := strings.TrimSpace(r.LastFrame); l != "" {
-			out = append(out, l)
-		}
-		return out
-	case ModeReference:
-		out := make([]string, 0, len(r.RefImages))
-		for _, u := range r.RefImages {
-			if s := strings.TrimSpace(u); s != "" {
-				out = append(out, s)
-			}
-		}
-		return out
+	roles := ResolveFrameRoles(r)
+	if roles.Mode == ModeReference {
+		return roles.Refs
 	}
-	return nil
+	return roles.FrameImages()
 }
 
 // ToTaskSubmit 转成统一任务契约的 body。

@@ -445,3 +445,124 @@ func TestDryRunConfigCrossEntryDuplicate(t *testing.T) {
 		requireLevel(t, r, "name", AggregateCheckError)
 	}
 }
+
+// ── 增强模式(mode) ──────────────────────────────────────────────────
+
+func irEnhanceModel(mode, sysPrompt string) *common.AggregateModel {
+	return &common.AggregateModel{
+		Name: "v-agg", Type: "video",
+		Generate: common.AggregateGenerate{Model: "gen-model"},
+		PromptEnhance: &common.AggregatePromptEnhance{
+			Model: "enh-model", Mode: mode, SystemPrompt: sysPrompt,
+		},
+	}
+}
+
+// mode 拼错时运行时**静默退回 text**。配置的人要的是 ir,却看不到任何异常,
+// 只会觉得"IR 好像没起作用" —— 干跑校验必须把它说出来。
+func TestDryRunWarnsOnUnknownEnhanceMode(t *testing.T) {
+	withFakeModels(t, map[string]fakeModel{
+		"gen-model": {groups: []string{"default"}},
+		"enh-model": {groups: []string{"default"}},
+	})
+	res := DryRunAggregateModel(irEnhanceModel("IRR", "模板"), map[string]int{"v-agg": 1})
+	requireLevel(t, res, "enhance_mode", AggregateCheckWarn)
+	if ch := checkByKey(res, "enhance_mode"); !strings.Contains(ch.Message, "不认识") {
+		t.Errorf("应指出模式名不认识,实得 %q", ch.Message)
+	}
+}
+
+// 合法的 mode 不该报"不认识"。
+func TestDryRunAcceptsKnownEnhanceModes(t *testing.T) {
+	withFakeModels(t, map[string]fakeModel{
+		"gen-model": {groups: []string{"default"}},
+		"enh-model": {groups: []string{"default"}},
+	})
+	for _, mode := range []string{"", "text", "TEXT", "ir", "IR"} {
+		res := DryRunAggregateModel(irEnhanceModel(mode, "模板"), map[string]int{"v-agg": 1})
+		if ch := checkByKey(res, "enhance_mode"); ch != nil && strings.Contains(ch.Message, "不认识") {
+			t.Errorf("mode=%q 是合法值,不该报不认识", mode)
+		}
+	}
+}
+
+// mode=ir 时 system_prompt **不生效**(IR 用内置编译器提示词)。
+// 不说的话运营会对着一份自己写的模板调半天,而那份模板一个字都没被用到。
+func TestDryRunWarnsIRIgnoresSystemPrompt(t *testing.T) {
+	withFakeModels(t, map[string]fakeModel{
+		"gen-model": {groups: []string{"default"}},
+		"enh-model": {groups: []string{"default"}},
+	})
+	res := DryRunAggregateModel(irEnhanceModel("ir", "我自己写的模板"), map[string]int{"v-agg": 1})
+	found := false
+	for _, ch := range res.Checks {
+		if ch.Key == "enhance_mode" && strings.Contains(ch.Message, "不使用 system_prompt") {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("mode=ir 时应提示 system_prompt 不生效,实得 %+v", res.Checks)
+	}
+}
+
+// 延迟必须用**实测数字**说。只说"会慢一些",运营按这个配上去,
+// 客户看到的是提交前多等一分半钟。
+func TestDryRunStatesIRLatencyInNumbers(t *testing.T) {
+	withFakeModels(t, map[string]fakeModel{
+		"gen-model": {groups: []string{"default"}},
+		"enh-model": {groups: []string{"default"}},
+	})
+	res := DryRunAggregateModel(irEnhanceModel("ir", ""), map[string]int{"v-agg": 1})
+	found := false
+	for _, ch := range res.Checks {
+		if ch.Key == "enhance_mode" && strings.Contains(ch.Message, "秒") {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("mode=ir 应给出实测延迟数字,实得 %+v", res.Checks)
+	}
+}
+
+// mode=ir 且没有可用模板时**不是错误** —— IR 自己有内置编译器提示词,
+// 缺的只是回落那一级。判成 error 会给一份能用的配置报假错。
+func TestDryRunIRWithoutTemplateIsWarnNotError(t *testing.T) {
+	withFakeModels(t, map[string]fakeModel{
+		"gen-model": {groups: []string{"default"}},
+		"enh-model": {groups: []string{"default"}},
+	})
+	res := DryRunAggregateModel(irEnhanceModel("ir", ""), map[string]int{"v-agg": 1})
+	requireLevel(t, res, "enhance_template", AggregateCheckWarn)
+
+	// 同一份配置换成 text 模式,就该是 error:那时确实等于增强没生效。
+	res2 := DryRunAggregateModel(irEnhanceModel("text", ""), map[string]int{"v-agg": 1})
+	requireLevel(t, res2, "enhance_template", AggregateCheckError)
+}
+
+// 预算配小了是**静默**失败:IR 每次超时、每次回落 text,看起来像
+// "IR 没什么效果",实际一次都没跑成 —— 干跑校验必须把它说出来。
+func TestDryRunWarnsOnTooSmallIRTimeout(t *testing.T) {
+	withFakeModels(t, map[string]fakeModel{
+		"gen-model": {groups: []string{"default"}},
+		"enh-model": {groups: []string{"default"}},
+	})
+	m := irEnhanceModel("ir", "模板")
+	m.PromptEnhance.TimeoutSeconds = 30
+	requireLevel(t, DryRunAggregateModel(m, map[string]int{"v-agg": 1}),
+		"enhance_timeout", AggregateCheckWarn)
+}
+
+// 够用的预算不该报警。
+func TestDryRunAcceptsAmpleIRTimeout(t *testing.T) {
+	withFakeModels(t, map[string]fakeModel{
+		"gen-model": {groups: []string{"default"}},
+		"enh-model": {groups: []string{"default"}},
+	})
+	for _, sec := range []int{0, 120, 240, 600} {
+		m := irEnhanceModel("ir", "模板")
+		m.PromptEnhance.TimeoutSeconds = sec
+		if ch := checkByKey(DryRunAggregateModel(m, map[string]int{"v-agg": 1}), "enhance_timeout"); ch != nil {
+			t.Errorf("timeout_seconds=%d 够用,不该报警：%s", sec, ch.Message)
+		}
+	}
+}

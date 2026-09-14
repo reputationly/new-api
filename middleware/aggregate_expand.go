@@ -2,6 +2,7 @@ package middleware
 
 import (
 	"fmt"
+	"github.com/QuantumNous/new-api/relay/hilo"
 	"strings"
 
 	"github.com/gin-gonic/gin"
@@ -173,8 +174,13 @@ func applyAggregateExpansion(c *gin.Context, publicName, realModel string, agg *
 			// 改掉 duration 一类字段,事实要描述真正发出去的那个请求。
 			norm := normalizeTaskRequest(body)
 			res := service.EnhancePrompt(c.Request.Context(), agg,
-				c.Request.Header.Get("Authorization"),
-				prompt, collectInputImages(body, norm), buildTaskContext(body, norm))
+				c.Request.Header.Get("Authorization"), service.EnhanceInput{
+					Prompt:      prompt,
+					ImageURLs:   collectInputImages(body, norm),
+					VideoURLs:   collectInputVideos(norm),
+					TaskContext: buildTaskContext(body, norm),
+					Compiler:    buildCompilerInput(body, norm, prompt),
+				})
 			exp.Enhance = res
 			// 这个判断当前是**冗余**的:EnhanceResult 的契约保证降级时
 			// EnhancedPrompt 就等于原 prompt,所以写不写回结果一样(去掉它做变异
@@ -198,6 +204,24 @@ func applyAggregateExpansion(c *gin.Context, publicName, realModel string, agg *
 	return nil
 }
 
+// collectInputVideos 本次要给增强模型看的参考视频。
+//
+// **视频以前完全没传** —— buildEnhanceRequest 的参数里只有 imageURLs，
+// 于是用户传一段参考视频，增强模型压根不知道它存在，却被模板要求
+// "看着素材写"。那时它只能编。
+//
+// 只有参考族（r2va/r2v/rv2v）会带参考视频；帧族的输入是静态帧。
+func collectInputVideos(norm *relaycommon.TaskSubmitReq) []string {
+	if norm == nil {
+		return nil
+	}
+	switch norm.TaskType() {
+	case "r2va", "r2v", "rv2v":
+		return norm.RefVideos()
+	}
+	return nil
+}
+
 // collectInputImages 从请求体里收集输入图,喂给增强模型看。
 //
 // 顶层的 image / images / input_reference 覆盖图生图与首尾帧;**参考生视频(r2va)的
@@ -208,11 +232,11 @@ func applyAggregateExpansion(c *gin.Context, publicName, realModel string, agg *
 // 增强模型只能从文字猜,会凭空臆造出与素材打架的描述(见 SendInputImages 的字段注释),
 // 而生成模型是看得见素材的。这正是该开关默认为开要防的事故,只是换了个入参位置。
 //
-// **只收图片,不收 metadata.reference_videos / reference_audios**:增强请求把每一项都
-// 编成 `image_url` part(见 buildEnhanceRequest),塞一段视频进去,轻则被模型忽略、重则
-// 整个请求被拒;而调用方传的常常是 base64 data-uri,一段几十 MB 的视频还会把请求撑爆。
-// 结果是增强直接降级——比看不见参考视频更糟。要让增强理解视频参考,得先有"抽帧"或
-// "在文本里声明素材角色"的机制,那是另一件事,不该借这个口子偷偷做半套。
+// **只收图片**;参考视频走 collectInputVideos,编成 `video_url` part。分开收是因为两者
+// 的标号空间是分开的(<Picture N> 与 <Video N>),混在一个列表里会让标号错位。
+//
+// 参考音频仍然不收:增强模型这一侧没有音频通道,塞进去只会被忽略或整条请求被拒。
+// 它的存在通过 buildTaskContext 的文字声明传达(「N 段参考音频,标号 <Audio N>」)。
 func collectInputImages(body map[string]any, norm *relaycommon.TaskSubmitReq) []string {
 	// **按 task_type 只收生成段真正会用到的那一组**,顺序与 buildTaskContext 的
 	// <Picture N> 标号一致。
@@ -433,4 +457,151 @@ func GetAggregateExpansion(c *gin.Context) *AggregateExpansion {
 	}
 	exp, _ := v.(*AggregateExpansion)
 	return exp
+}
+
+// buildCompilerInput 这一次请求的**结构化事实**,供 IR 编译用。
+//
+// 和 buildTaskContext 是同一批事实的两种形态:那份是给模型读的英文散文
+// (text 模式把它拼进系统提示词),这份是给编译器用的结构体。两份都从
+// 归一化后的请求取,不从原始 map 取 —— 原始 map 里 metadata 可能是一个
+// JSON 编码的字符串,直接读一条事实都取不到,而且不报错。
+//
+// 拿不到 task_type 时返回 nil:编译 IR 的前提是知道这是什么玩法,
+// 靠猜出来的 task_type 会让渲染器把尾帧当首帧。宁可回落到 text。
+func buildCompilerInput(body map[string]any, norm *relaycommon.TaskSubmitReq, prompt string) *hilo.CompilerInput {
+	if norm == nil {
+		return nil
+	}
+	taskType, ok := compilerTaskType(norm.TaskType())
+	if !ok {
+		return nil
+	}
+
+	// **时长只读 Duration,不跟 seconds 回落。**
+	//
+	// 判据和 buildTaskContext 那边完全一样(见那里的长注释):聚合展开跑在
+	// **选渠道之前**,不知道生成段会落到哪个渠道,而 kling/vidu/jimeng 完全
+	// 忽略 Seconds。EffectiveDuration 的注释里点名禁止了我们这类调用方。
+	//
+	// 在 IR 这条路上后果比 text 那边更重:text 模式只是少说一句事实,而 IR
+	// 会**断言**这个时长 —— validateTimeline 硬要求镜头时长加起来等于它,
+	// applyAuthoritativeFacts 又把它盖回去,于是渲染出一条对得上"我们以为的
+	// 时长"的分镜表,而上游按自己的默认出片,每一个切点都落在成片之外,
+	// 没有任何地方报错。
+	//
+	// 不知道时长就不编 IR:它是必填事实,靠猜不如不做。
+	duration := float64(norm.Duration)
+	if duration <= 0 {
+		return nil
+	}
+
+	roles := hilo.FrameRolesFromTask(string(taskType), norm.FrameImages(), norm.RefImages())
+
+	in := &hilo.CompilerInput{
+		UserRequest:     prompt,
+		TaskType:        taskType,
+		DurationSeconds: duration,
+		GenerateAudio:   readGenerateAudio(body, norm),
+	}
+
+	// **顺序必须和素材发给模型的顺序一致:先图后视频。**
+	//
+	// IR 渲染时 BuildReferenceInventory 按这个顺序发 <Picture N> / <Video N>
+	// 标号。这里排错序,模型看到的第二张图会被渲染成 <Picture 1> ——
+	// 提示词指着的素材和它描述的不是同一个,而且完全不报错。
+	for i, u := range collectInputImages(body, norm) {
+		in.Assets = append(in.Assets, hilo.CompilerAsset{
+			AssetID:   fmt.Sprintf("image_%d", i+1),
+			MediaType: "image",
+			Role:      roles.IRBindingRole(u),
+			URL:       u,
+		})
+	}
+	for i, u := range collectInputVideos(norm) {
+		in.Assets = append(in.Assets, hilo.CompilerAsset{
+			AssetID:   fmt.Sprintf("video_%d", i+1),
+			MediaType: "video",
+			Role:      "reference", // 只有参考族带视频
+			URL:       u,
+		})
+	}
+	return in
+}
+
+// compilerTaskType 把平台 task_type 归一成编译器认识的那五个之一。
+//
+// **不认识就返回 false,让调用方直接跳过 IR。**
+//
+// ValidateIR 只收 t2v/i2v/flf2v/l2va/r2va(TASK_TYPE_INVALID)。而平台上
+// 真实存在别的值 —— 参考族就有 r2v / rv2v(见 collectInputImages 和
+// gpustackplus 的适配器)。原样透传进去的后果不是"报个错就完了":
+// applyAuthoritativeFacts 会把这个值盖回 IR,于是**校验必然失败,而且
+// 重修修不好** —— 出问题的那个字段是我们写的,不是模型写的。客户要为此
+// 白等一次完整编译加一轮重修(最多 irCompileTimeout),然后才静默回落 text。
+//
+// r2v / rv2v 语义上就是参考族,归到 r2va;其余不认识的一律跳过。
+func compilerTaskType(raw string) (hilo.TaskType, bool) {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "t2v":
+		return hilo.TaskT2V, true
+	case "i2v":
+		return hilo.TaskI2V, true
+	case "flf2v":
+		return hilo.TaskFLF2V, true
+	case "l2va":
+		return hilo.TaskL2VA, true
+	case "r2va", "r2v", "rv2v":
+		return hilo.TaskR2VA, true
+	}
+	return "", false
+}
+
+// readGenerateAudio 这次要不要出声。**漏写 = 要** —— 与 relay/hilo/convert.go
+// 的默认一致。
+//
+// # 必须同时看 metadata
+//
+// 官方客户端那条路上(/v1/video/minimax-v3/generate),请求进到聚合展开之前
+// 已经被 HiloVideoConvert 改写过了:hilo.VideoRequest.ToTaskSubmit 把这个
+// 标志**只写进 metadata**(convert.go 的 meta["generate_audio"]),顶层没有。
+// 而出厂配置里带 prompt_enhance 的恰恰就是那几个 H3 聚合模型,走的就是这条路。
+//
+// 只读顶层的后果:客户明确传了 generate_audio:false,这里却读成 true,
+// applyAuthoritativeFacts 把它盖进 IR,编译器提示词写着 task.generate_audio:
+// true,validateAudio 于是**要求**一份非空的声音计划,渲染出
+// "Audio generation: true." 加整段 overall_soundscape —— 而生成段实际提交的
+// 是 metadata.generate_audio=false,出来一段无声视频。
+//
+// 提示词描述的声音根本不存在,而且没有任何地方报错。这正是本函数原注释警告
+// 的那种两边不一致,只是方向反了。
+func readGenerateAudio(body map[string]any, norm *relaycommon.TaskSubmitReq) bool {
+	if v, ok := readBoolAny(body["generate_audio"]); ok {
+		return v
+	}
+	if norm != nil {
+		if v, ok := readBoolAny(norm.Metadata["generate_audio"]); ok {
+			return v
+		}
+	}
+	return true
+}
+
+// readBoolAny 读一个可能被编码成字符串的布尔。
+//
+// TaskSubmitReq.UnmarshalJSON 会把 metadata 从 JSON 字符串解开,但解开之后
+// 里面的值仍可能是调用方写的 "false" 而不是 false —— 只认 bool 会把它当成
+// "没写",于是回落到默认的"要出声"。
+func readBoolAny(v any) (bool, bool) {
+	switch t := v.(type) {
+	case bool:
+		return t, true
+	case string:
+		switch strings.ToLower(strings.TrimSpace(t)) {
+		case "true", "1":
+			return true, true
+		case "false", "0":
+			return false, true
+		}
+	}
+	return false, false
 }

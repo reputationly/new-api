@@ -192,6 +192,43 @@ func DryRunAggregateModel(m *common.AggregateModel, peers map[string]int) *Aggre
 	// —— 4. 提示词增强段 ——
 	if m.PromptEnhance.IsEnabled() {
 		enhModel := strings.TrimSpace(m.PromptEnhance.Model)
+
+		// mode 拼错时运行时**静默退回 text**(EnhanceMode 的取值规则)。
+		// 那是安全的一侧,但配置的人要的是 ir —— 他看不到任何异常,只会
+		// 觉得"IR 好像没起作用"。这里必须把它说出来。
+		if rawMode := strings.TrimSpace(m.PromptEnhance.Mode); rawMode != "" &&
+			!strings.EqualFold(rawMode, common.EnhanceModeText) &&
+			!strings.EqualFold(rawMode, common.EnhanceModeIR) {
+			add("enhance_mode", AggregateCheckWarn,
+				"增强模式 %q 不认识(只支持 %q / %q),运行时会按 %q 处理",
+				rawMode, common.EnhanceModeText, common.EnhanceModeIR, common.EnhanceModeText)
+		}
+		if m.PromptEnhance.EnhanceMode() == common.EnhanceModeIR {
+			// IR 模式不读 system_prompt —— 它用内置的编译器提示词
+			// (relay/hilo/prompt.go)。配了却不生效,不说的话运营会对着
+			// 一份自己写的模板调半天,而那份模板一个字都没被用到。
+			if strings.TrimSpace(m.PromptEnhance.SystemPrompt) != "" {
+				add("enhance_mode", AggregateCheckWarn,
+					"mode=ir 时不使用 system_prompt(IR 用内置编译器提示词);"+
+						"它只在 IR 编译失败、回落 text 改写时才会被用到")
+			}
+			// 延迟必须用实测数字说,不能只说"会慢一些" —— 运营按"慢一些"
+			// 配上去,客户看到的是提交前多等一两分钟。
+			add("enhance_mode", AggregateCheckWarn,
+				"mode=ir 实测单次编译耗时 34-102 秒(qwen3.8-27b / qwen3.8-flash-fp8 各 5 次),"+
+					"这段等待直接加在客户提交请求之前;最坏情况还会再加一轮重修和一次 text 回落。"+
+					"换来的是结构错误(时长对不上、引用了没传的素材)能被确定性校验拦下")
+
+			// 预算配小了是**静默**失败:每次超时、每次回落 text,看起来像
+			// "IR 没什么效果",实际一次都没跑成。实测单次编译最慢 102 秒,
+			// 低于这个数就等于把 IR 关掉了 —— 而没有任何地方会说。
+			if sec := m.PromptEnhance.TimeoutSeconds; sec > 0 && sec < 120 {
+				add("enhance_timeout", AggregateCheckWarn,
+					"timeout_seconds=%d 低于实测单次编译耗时的上限(102 秒),"+
+						"IR 很可能每次都超时并静默回落 text 改写(看起来像「IR 没效果」);"+
+						"预算要按「编译 + 一轮重修」留,内置默认是 240 秒", sec)
+			}
+		}
 		// 模板：配置里写了就用配置的，没写则回落到**按生成段模型挑的内置默认**
 		// (service/aggregate_enhance_template.go)。运行时的继承链就是这样,
 		// 这里必须用同一个判据 —— 否则出厂配置(刻意不写 system_prompt、
@@ -201,10 +238,20 @@ func DryRunAggregateModel(m *common.AggregateModel, peers map[string]int) *Aggre
 		// 是事实,现在不是了。
 		if strings.TrimSpace(m.PromptEnhance.SystemPrompt) == "" &&
 			DefaultEnhanceTemplate(m.Generate.Model) == "" {
-			add("enhance_template", AggregateCheckError,
-				"启用了提示词增强但未配置模板(system_prompt),且生成段模型 %s "+
-					"没有内置默认模板:运行时会降级为使用原始提示词,等于增强没生效",
-				strings.TrimSpace(m.Generate.Model))
+			if m.PromptEnhance.EnhanceMode() == common.EnhanceModeIR {
+				// IR 模式下没有模板不是致命的:IR 自己有内置编译器提示词。
+				// 缺的是**回落那一级** —— IR 编译失败时无处可退,只能用
+				// 原始提示词。说成"等于增强没生效"在这里是错的。
+				add("enhance_template", AggregateCheckWarn,
+					"未配置模板(system_prompt)且生成段模型 %s 没有内置默认模板:"+
+						"IR 编译成功时不受影响,但一旦编译失败就无处回落,只能用原始提示词",
+					strings.TrimSpace(m.Generate.Model))
+			} else {
+				add("enhance_template", AggregateCheckError,
+					"启用了提示词增强但未配置模板(system_prompt),且生成段模型 %s "+
+						"没有内置默认模板:运行时会降级为使用原始提示词,等于增强没生效",
+					strings.TrimSpace(m.Generate.Model))
+			}
 		}
 		if enhModel == "" {
 			add("prompt_enhance", AggregateCheckError, "启用了提示词增强但未指定增强模型")

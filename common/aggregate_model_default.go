@@ -16,6 +16,22 @@ package common
 // 最后一级从来没实现,拿到空模板只能 degrade。出厂若配一个带增强的条目而不写模板,
 // 得到的是最坏状态:配置说 enabled、实际每次都用原始提示词,且不报错。
 //
+// ── 增强模型为什么是 qwen3.8-27b ──────────────────────────────────
+//
+// **它是平台上唯一真看得懂视频的。** 实测（白底黑方块横移、前绿后蓝的
+// 色块视频）:
+//
+//	qwen3.8-27b   画面颜色由绿色变为蓝色      ← 正确
+//	GLM-4.5V      颜色由深青渐变至亮绿        ← 编的
+//	MiniMax-M3    画面颜色由冷蓝渐变为暖橙红   ← 完全是编的
+//
+// **三个都不报错**，接口照收 video_url、照样返回一段通顺的描述 —— 差别
+// 只在内容对不对。这是最坏的一种失败:改写出的提示词描述的是一段不存在
+// 的视频，而没有任何地方会提示。
+//
+// 图片四个模型都看得对，但增强段要同时吃图和视频（r2va 是默认玩法，
+// 参考素材里就可能有视频），所以按视频这条短板选。
+//
 // 现在那一级补上了(service/aggregate_enhance_template.go),按生成段模型挑内置默认。
 // 模板取自三份逐字对齐过的材料:官方 H3 skill、官方客户端真正在用的 vendor 卡、
 // 以及 XINGSHEN2/minimax-H3-context-IR。所以这里可以只写 model,模板留空继承。
@@ -67,7 +83,7 @@ const DefaultAggregateModelConfig = `[
     "type": "video",
     "enabled": true,
     "note": "H3 帧族(文生/图生/首尾帧/尾帧)2K:生成 → SwiftVR 超分。等价于体验区的两段编排,集成方只看到一个模型名和一个任务。提示词请自行扩写后再传。",
-    "prompt_enhance": { "model": "MiniMax-M3" },
+    "prompt_enhance": { "model": "qwen3.8-27b" },
     "generate": { "model": "minimax-h3-fl2va", "overrides": { "size": "768P" } },
     "upscale": { "model": "swiftvr", "target_size": "2k" }
   },
@@ -76,7 +92,7 @@ const DefaultAggregateModelConfig = `[
     "type": "video",
     "enabled": true,
     "note": "H3 参考族(参考图/参考视频生视频)2K。参考族是另一个 checkpoint,不能和帧族共用一条流水线。",
-    "prompt_enhance": { "model": "MiniMax-M3" },
+    "prompt_enhance": { "model": "qwen3.8-27b" },
     "generate": { "model": "minimax-h3-ref2va", "overrides": { "size": "768P" } },
     "upscale": { "model": "swiftvr", "target_size": "2k" }
   }

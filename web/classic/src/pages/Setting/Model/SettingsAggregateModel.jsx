@@ -136,7 +136,8 @@ const SettingsAggregateModel = ({ options, refresh }) => {
     "generate": { "model": "minimax-h3", "overrides": { "size": "1280x720" } },
     "upscale":  { "model": "seedvr2-3b", "target_size": "2k" },
     "prompt_enhance": {
-      "model": "gpt-4o-mini",
+      "model": "qwen3.8-27b",
+      "mode": "text",
       "system_prompt": "把以下提示词改写得更适合视频生成模型……"
     }
   }
@@ -153,7 +154,19 @@ const SettingsAggregateModel = ({ options, refresh }) => {
             <br />
             <Text type='secondary' size='small'>
               {t(
-                'prompt_enhance 会把本次请求的输入图一并发给增强模型，因此请配置一个支持视觉的模型；纯文本模型可能直接忽略图片并照常返回文字，增强会静默退化成凭空臆造。',
+                'prompt_enhance 会把本次请求的输入图和参考视频一并发给增强模型，因此请配置一个支持视觉的模型；纯文本模型可能直接忽略素材并照常返回文字，增强会静默退化成凭空臆造。多数模型即使「收下」了视频也只是照样编一段通顺的描述而不报错，配之前请实测。',
+              )}
+            </Text>
+            <br />
+            <Text type='secondary' size='small'>
+              {t(
+                'prompt_enhance.thinking 默认关闭，一般不要打开：思考型模型会从用户消息重新推导任务、绕开系统提示词里的结构要求——实测某模型五次里有两次整份跑偏，交来一份自造的 JSON。关掉后同一模型 16-21 秒且稳定（开着是 39-97 秒、五次里三次可用），视觉理解不受影响。对非思考模型这个开关是安全的空操作。',
+              )}
+            </Text>
+            <br />
+            <Text type='secondary' size='small'>
+              {t(
+                'prompt_enhance.mode 留空或 "text" 是一次性改写；"ir" 让模型先产出结构化 JSON，由服务端确定性校验后再渲染成提示词——结构错误（镜头时长加起来不等于请求时长、描述里引用了没传的素材）会被拦下重修，而这些在 text 模式下不报错、只是出来的视频不对。代价是延迟：实测单次编译耗时 34-102 秒，直接加在客户提交请求之前。可用 prompt_enhance.timeout_seconds 调整预算（默认 240 秒，按「编译 + 一轮重修」留）；配小了不会报错，只会每次超时并静默回落 text。',
               )}
             </Text>
           </div>
