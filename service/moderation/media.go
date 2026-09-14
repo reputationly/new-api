@@ -140,7 +140,13 @@ func ModerateMedia(ctx context.Context, req *Request, items []MediaItem) *MediaR
 	if policy != nil && policy.Strictness != "" {
 		strictness = policy.Strictness
 	}
-	m := shieldGemmaModerator{strictness: strictness, policy: policy}
+	m := shieldGemmaModerator{
+		strictness: strictness,
+		policy:     policy,
+		// 图片侧暂时只有 ShieldGemma 一种协议（dialect 分派是第二步），
+		// 但记录里的归因不能因此留空——见 shieldGemmaModerator.dialect。
+		dialect: s.ImageDialect(),
+	}
 
 	// 整批媒体共享一个总预算。
 	//
@@ -167,7 +173,12 @@ func ModerateMedia(ctx context.Context, req *Request, items []MediaItem) *MediaR
 			if err != nil {
 				// 与文本链一致：审核未能完成不是「通过」，判 ActionError 交给下面的
 				// fail-close 收口，而不是在这里直接拒——observe 期不该因审核故障拒请求。
-				v = &Verdict{Action: ActionError, Provider: "L2", Detail: err.Error()}
+				v = &Verdict{
+					Action:   ActionError,
+					Provider: "L2",
+					Dialect:  m.dialect,
+					Detail:   err.Error(),
+				}
 			}
 			mu.Lock()
 			results = append(results, judged{item: it, v: v})

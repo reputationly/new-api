@@ -18,11 +18,14 @@ import {
 import { API, showError, showSuccess } from '../../../helpers';
 import {
   MODERATION_CATEGORY_ACTIONS,
+  MODERATION_CATEGORY_DEFAULTS,
   MODERATION_GROUP_MODES,
-  MODERATION_IMAGE_COVERED,
   MODERATION_POLICY_CATEGORIES,
   MODERATION_STRICTNESS,
   moderationCategoryLabel,
+  moderationDialectCovers,
+  moderationDialectDefault,
+  moderationStrictnessApplies,
 } from '../../../constants/moderation.constants';
 import { useTranslation } from 'react-i18next';
 
@@ -42,19 +45,77 @@ const { Text } = Typography;
 const DEFAULT_POLICY = () => ({
   name: '',
   strictness: 'standard',
+  // 新策略的默认值取 MODERATION_CATEGORY_DEFAULTS，与后端内置的「标准」策略和
+  // system_setting.defaultCategoryActions 同源。
+  //
+  // 不在这里重写一遍分类逻辑：上一版是一串写死类别名的三元表达式，
+  // 加一个类别就得同时改这里、后端内置策略、后端默认表三处，
+  // 而漏改的表现是新建的策略里那一类静默拿到 ignore。
   categories: MODERATION_POLICY_CATEGORIES.reduce((acc, c) => {
-    // 新策略的默认值与后端内置的「标准」一致：黄赌毒政治拒绝，
-    // 暴力/自伤/公序良俗仅记录（边界最模糊的三类，先观察量级），隐私版权不处理。
-    acc[c.value] = ['sexual', 'illegal', 'political', 'jailbreak'].includes(
-      c.value,
-    )
-      ? 'block'
-      : ['violent', 'self_harm', 'unethical'].includes(c.value)
-        ? 'log'
-        : 'ignore';
+    acc[c.value] = MODERATION_CATEGORY_DEFAULTS[c.value] || 'block';
     return acc;
   }, {}),
 });
+
+/**
+ * 当前启用节点用的判定协议。
+ *
+ * 从 moderation.endpoints 就地推导，不另开接口：这张表要标注的是「按现在的配置，
+ * 这一类真的会被判出来吗」，而唯一的依据就是启用了哪些节点。后端保证同模态下
+ * 启用节点的协议唯一，所以取第一个即可。
+ */
+function activeDialect(rawEndpoints, modality) {
+  const eps = parseJSON(rawEndpoints, []);
+  if (!Array.isArray(eps)) return '';
+  const hit = eps.find(
+    (e) => e?.enabled && (e.modality || 'text') === modality,
+  );
+  if (!hit) return '';
+  return hit.dialect || moderationDialectDefault(modality);
+}
+
+/**
+ * 覆盖标注。四种状态都要能区分，尤其「当前不覆盖」——
+ * 上一版只有「文本+图片 / 仅文本」两档，而换了协议之后会出现真正一个模态都
+ * 不覆盖的类别（如 Qwen3Guard 下的未成年人保护）。把它标成「仅文本」
+ * 就是在说谎：运营配了拒绝，而那一行永远不会命中。
+ */
+function coverage(category, textDialect, imageDialect) {
+  return {
+    text: !!textDialect && moderationDialectCovers(textDialect, category),
+    image: !!imageDialect && moderationDialectCovers(imageDialect, category),
+  };
+}
+
+function coverageLabel(category, textDialect, imageDialect) {
+  const c = coverage(category, textDialect, imageDialect);
+  if (c.text && c.image) return '文本+图片';
+  if (c.text) return '仅文本';
+  if (c.image) return '仅图片';
+  return '当前不覆盖';
+}
+
+function coverageColor(category, textDialect, imageDialect) {
+  const c = coverage(category, textDialect, imageDialect);
+  if (c.text && c.image) return 'blue';
+  if (c.text || c.image) return 'grey';
+  // 配了却完全不生效，是这张表上最需要被看见的状态。
+  return 'red';
+}
+
+function coverageHint(category, textDialect, imageDialect) {
+  const c = coverage(category, textDialect, imageDialect);
+  if (c.text && c.image) {
+    return '当前启用的文本与图片协议都能判出这一类，处置会真正生效。';
+  }
+  if (c.text) {
+    return '只有文本能判出这一类。上传的图片和视频对它没有覆盖——连关键词层都扫不了图，没有任何兜底。';
+  }
+  if (c.image) {
+    return '只有图片/视频能判出这一类，纯文本请求对它没有覆盖。';
+  }
+  return '当前启用的判定协议都产出不了这一类，这里配什么都不会生效。想覆盖它需要换用支持该类别的协议。';
+}
 
 function parseJSON(raw, fallback) {
   if (!raw) return fallback;
@@ -77,6 +138,16 @@ export default function SettingsModerationPolicy(props) {
   // 把数字放在开关旁边，调整才有依据——否则只能凭感觉调。
   const [catStats, setCatStats] = useState({});
   const mounted = useRef(false);
+
+  // 当前生效的判定协议。决定这张表上每一类到底覆盖不覆盖、严格度是否有意义。
+  const rawEndpoints = props.options?.['moderation.endpoints'];
+  const textDialect = activeDialect(rawEndpoints, 'text');
+  const imageDialect = activeDialect(rawEndpoints, 'image');
+  // 严格度只对提供「有争议」中间档的协议有意义。两边都不支持时那个下拉框
+  // 是个纯粹的摆设，必须在界面上说清楚——不然调了以为收紧了其实没有。
+  const strictnessMatters =
+    moderationStrictnessApplies(textDialect) ||
+    moderationStrictnessApplies(imageDialect);
 
   useEffect(() => {
     const p = parseJSON(props.options?.['moderation.policies'], []);
@@ -281,15 +352,15 @@ export default function SettingsModerationPolicy(props) {
       render: (v) => (
         <Space spacing={4}>
           <Text>{t(moderationCategoryLabel(v))}</Text>
-          {MODERATION_IMAGE_COVERED.has(v) ? (
-            <Tag color='blue' shape='circle' size='small'>
-              {t('文本+图片')}
+          <Tooltip content={t(coverageHint(v, textDialect, imageDialect))}>
+            <Tag
+              color={coverageColor(v, textDialect, imageDialect)}
+              shape='circle'
+              size='small'
+            >
+              {t(coverageLabel(v, textDialect, imageDialect))}
             </Tag>
-          ) : (
-            <Tag color='grey' shape='circle' size='small'>
-              {t('仅文本')}
-            </Tag>
-          )}
+          </Tooltip>
         </Space>
       ),
     },
@@ -299,7 +370,14 @@ export default function SettingsModerationPolicy(props) {
       width: 140,
       render: (_, record) => (
         <Select
-          value={policies[idx]?.categories?.[record.value] || 'block'}
+          // 未配置时显示的是**后端实际会用的默认值**，不是写死的 block。
+          // 存量策略里没有新增的那几类（cyber / advice / minor / terror / vulgar），
+          // 一律显示成 block 就是在说谎——后端对它们走的是 defaultCategoryActions。
+          value={
+            policies[idx]?.categories?.[record.value] ||
+            MODERATION_CATEGORY_DEFAULTS[record.value] ||
+            'block'
+          }
           style={{ width: '100%' }}
           onChange={(v) => updateCategory(idx, record.value, v)}
         >
@@ -330,7 +408,10 @@ export default function SettingsModerationPolicy(props) {
         // 配成「不处理」的类别，判定结果是 pass，而 pass 记录按抽样率落库
         // （默认 1%）——统计出来的数字会低估两个数量级。显示一个低估百倍的数
         // 比不显示更糟：运营会读成「这一类很少见」，正好做出反向决策。
-        const action = policies[idx]?.categories?.[record.value] || 'block';
+        const action =
+          policies[idx]?.categories?.[record.value] ||
+          MODERATION_CATEGORY_DEFAULTS[record.value] ||
+          'block';
         if (action === 'ignore') {
           return (
             <Tooltip
@@ -363,13 +444,35 @@ export default function SettingsModerationPolicy(props) {
         )}
         style={{ marginBottom: 16 }}
       />
+      {/*
+        覆盖范围是随判定协议变的，所以这条提示不能写死某个模型。
+        标红的「当前不覆盖」是最要紧的那一档：那一行配什么都不生效。
+      */}
       <Banner
         type='warning'
         description={t(
-          '图片/视频只有色情、违法违规、暴力三类判定（ShieldGemma 2 训练时固定，加不了）。其余六类标着「仅文本」的，对上传的图片和视频完全不生效——尤其涉政图片没有任何覆盖，连关键词层都扫不了图。',
+          '每一类的覆盖范围由节点上选的判定协议决定，在下表的类别名后面标着。标「仅文本」的对上传的图片和视频不生效——连关键词层都扫不了图，没有任何兜底；标红的「当前不覆盖」表示现在启用的协议产出不了这一类，配了也不会生效。',
         )}
         style={{ marginBottom: 16 }}
       />
+      {!textDialect && !imageDialect && (
+        <Banner
+          type='info'
+          description={t(
+            '还没有启用任何审核节点，因此下表暂时无法标注覆盖范围。请先在「内容审核」卡片里配置节点并选择判定协议。',
+          )}
+          style={{ marginBottom: 16 }}
+        />
+      )}
+      {!strictnessMatters && (textDialect || imageDialect) && (
+        <Banner
+          type='warning'
+          description={t(
+            '当前启用的判定协议都是二分判定（只有安全/违规两档），下面的「严格度」对它们毫无影响。松紧请用类别处置表调。',
+          )}
+          style={{ marginBottom: 16 }}
+        />
+      )}
 
       <Row gutter={16} style={{ marginBottom: 16 }}>
         <Col xs={24} sm={12} md={8}>

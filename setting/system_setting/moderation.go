@@ -36,29 +36,118 @@ const (
 )
 
 // 判定严格度（§8.2 第二个旋钮）：决定 Controversial 算不算违规。
+//
+// 注意它**只对提供中间档的 dialect 有意义**。qwen3guard 有 Controversial 这一档，
+// zhongsen-text 是二分的（sec vs 28 个风险码），严格度对后者完全无效——
+// 松紧只能靠类别处置表调。配置页必须把这件事写出来，否则它会被当成一个全局旋钮。
 const (
 	StrictnessLoose    = "loose"
 	StrictnessStandard = "standard"
 	StrictnessStrict   = "strict"
 )
 
-// Qwen3Guard 的九类（§4.1.1）。类别粒度由模型定，我们只能映射不能细分。
+// 判定协议（dialect）。**审核节点上部署的是哪个模型，决定了请求怎么发、输出怎么解析。**
+//
+// 做成节点的一个属性而不是全局开关：节点就是部署实体，协议是它的固有属性，
+// 不引入第二个真相来源。切换模型 = 改这个下拉框 / 切 enabled，不需要改代码。
+const (
+	DialectQwen3Guard   = "qwen3guard"      // 文本：Qwen3Guard-Gen，输出 "Safety: X\nCategories: Y"
+	DialectZhongsenText = "zhongsen-text"   // 文本：Zhongsen-Text-8b，输出首行缩写码 + <explanation>
+	DialectShieldGemma2 = "shieldgemma2"    // 图片：ShieldGemma 2，逐策略问 Yes/No 取 logprobs
+	DialectZSWS         = "zsws-multimodal" // 图片：ZSWS-Multimodal-4b，单次调用返回 <answer>大类</answer>
+)
+
+// TextDialects / ImageDialects **可选**的 dialect，按模态分。
+//
+// 分模态登记而不是一张总表：文本节点配成 shieldgemma2 是配置事故，
+// 而「保存成功但每次判定都失败」是这套系统最不该有的失效方式（见 validateModerationEndpoints）。
+//
+// **这两个列表的语义是「已经有解析实现、可以安全选中」，不是「我们认识这个名字」。**
+// DialectZSWS 故意不在 ImageDialects 里：常量和覆盖表都已就位，但图片侧还没有
+// dialect 分派（service/moderation/media.go 写死 shieldGemmaModerator），
+// 一旦放进来就会出现：
+//
+//	图片节点选 zsws-multimodal → 保存通过 → 给 ZSWS 发 ShieldGemma 的三条策略
+//	+ logprobs 请求 → 每次判定都 ActionError → FailOpen 默认 true
+//	→ 图片审核静默停摆，而「测试连接」走的还是 ShieldGemma 协议，照样报绿
+//
+// 界面上标一句「暂未实现」不是护栏——能被点到的选项就会被点。
+// 第二步补上 imageDialect 分派时，把它加回这里，并同步 l2 那侧的实现检查测试。
+var (
+	TextDialects  = []string{DialectQwen3Guard, DialectZhongsenText}
+	ImageDialects = []string{DialectShieldGemma2}
+)
+
+// DefaultDialectForModality 该模态的默认 dialect。
+//
+// 存量配置里没有 dialect 字段，零值必须回落到接这个字段之前实际在跑的那个模型，
+// 否则一次升级就会把所有存量节点的判定协议换掉。
+func DefaultDialectForModality(modality string) string {
+	if modality == ModalityImage {
+		return DialectShieldGemma2
+	}
+	return DialectQwen3Guard
+}
+
+// 模态取值。与 service/moderation 的 Modality* 一致；放在这里是因为
+// endpointsByModality 与 dialect 校验都要用，而 system_setting 不能反向依赖 service。
+const (
+	ModalityText  = "text"
+	ModalityImage = "image"
+)
+
+// 风险类别（§4.1.1）。**类别集合是所有 dialect 的并集**，不是某一个模型的类别表。
+//
+// 前九类来自 Qwen3Guard；后五类是接 Zhongsen-Text-8b 时补的——它的 28 个风险码压不进
+// 前九类，硬压会造成两类静默错判：恶意代码/黑客攻击落进 illegal 会连带拦掉正常的技术
+// 咨询，而暴恐、虐待未成年人这两条红线落进 violent/unethical 只会被记录不会被拦。
+//
+// 单个 dialect 通常只覆盖其中一部分（textDialect.CoveredCategories 报告覆盖范围），
+// 类别粒度仍由模型定，我们只能映射不能细分。
 const (
 	CategorySexual    = "sexual"    // Sexual Content or Sexual Acts —— 黄
 	CategoryIllegal   = "illegal"   // Non-violent Illegal Acts —— 赌、毒合并在此类，无法分开配置
 	CategoryPolitical = "political" // Politically Sensitive Topics —— 政治
-	CategoryJailbreak = "jailbreak" // Jailbreak —— 仅输入分类有效
+	CategoryJailbreak = "jailbreak" // Jailbreak —— 仅输入分类有效；Zhongsen 无此类别
 	CategoryViolent   = "violent"   // Violent
 	CategorySelfHarm  = "self_harm" // Suicide & Self-Harm
 	CategoryUnethical = "unethical" // Unethical Acts
 	CategoryPII       = "pii"       // Personally Identifiable Information
-	CategoryCopyright = "copyright" // Copyright Violation —— 模型自承偏弱，建议不拦
-	CategoryKeyword   = "keyword"   // L0 关键词命中，非模型类别
+	CategoryCopyright = "copyright" // Copyright Violation —— 模型自承偏弱，建议不拦；Zhongsen 无此类别
+	// CategoryCyber 网络安全。Zhongsen 的 acc / mc / ha / ps 四码。
+	//
+	// 必须独立于 illegal：默认处置是 log 而非 block，因为「帮我看下这段渗透测试脚本」
+	// 「这个 SQL 注入怎么修」是 coding 场景的常态提问，落进 illegal（默认 block）
+	// 会造成大面积误杀。
+	CategoryCyber = "cyber"
+	// CategoryAdvice 违规建议。Zhongsen 的 fin / med / law 三码。
+	//
+	// 默认 ignore：这一类的边界极模糊（「帮我分析这只股票」算不算违规提供投资建议），
+	// 而它命中的绝大多数是正常咨询。想拦的站点自己调成 log 或 block。
+	CategoryAdvice = "advice"
+	// CategoryMinor 未成年人保护。Zhongsen 的 cm / ma / md 三码。
+	//
+	// 默认 block：ma（教唆虐待、剥削未成年人）是高危红线，压进 unethical
+	// （默认 log）等于只记录不拦。
+	CategoryMinor = "minor"
+	// CategoryTerror 暴恐极端。Zhongsen 的 ter 码。
+	//
+	// 默认 block：备案口径下暴恐是一票否决，而普通暴力内容（violent）默认只 log，
+	// 两者合并会让红线跟着降级。
+	CategoryTerror = "terror"
+	// CategoryVulgar 低俗擦边。ZSWS 图片判定的 `4. sexual` 大类。
+	//
+	// 与 sexual 分开：ZSWS 把「直接的色情内容」（3. pornographic）和「大面积暴露、
+	// 二次元擦边」（4. sexual）判成两个大类，后者厂商建议的处置就是「弹性阻断」。
+	// 合并会让擦边内容跟着色情一起被硬拦，对图像生成平台是高频误杀源。
+	CategoryVulgar  = "vulgar"
+	CategoryKeyword = "keyword" // L0 关键词命中，非模型类别
 	// CategoryUnknownUpstream 模型给出了我们没登记的类别。
 	//
 	// 单独留一个常量而不是丢弃：丢了等于把未知风险当成安全放行。它不在 AllCategories 里
-	// （运营界面不需要为它配处置），CategoryAction 对未登记类别返回 block，
-	// 于是「模型报了个新类别」的默认行为是拦下来并留下记录，而不是静默通过。
+	// （运营界面不需要为它配处置），也**故意不进 defaultCategoryActions**，
+	// 于是 CategoryAction 对它返回 block——「模型报了个新类别」的默认行为是拦下来
+	// 并留下记录，而不是静默通过。
 	CategoryUnknownUpstream = "unknown_upstream"
 )
 
@@ -66,21 +155,91 @@ const (
 var AllCategories = []string{
 	CategorySexual, CategoryIllegal, CategoryPolitical, CategoryJailbreak,
 	CategoryViolent, CategorySelfHarm, CategoryUnethical, CategoryPII, CategoryCopyright,
+	CategoryCyber, CategoryAdvice, CategoryMinor, CategoryTerror, CategoryVulgar,
 }
 
-// ImageCoveredCategories 图片/视频判定实际能产出的类别。
+// defaultCategoryActions 每个类别在策略里没被显式配置时的处置。
 //
-// ShieldGemma 2 只有三条固定策略（色情 / 危险内容 / 暴力血腥），是训练时定死的，
-// 加不了也改不了——改写策略文本不会报错，只会让判定悄悄失效（§4.5 有实测证据）。
+// 存在的理由是**新增类别不能悄悄变成 block**。CategoryAction 原先对任何查不到的类别
+// 都返回 block，那条规则对「模型报了个没见过的类别」是对的，但对「我们自己新加了类别、
+// 而存量策略还是老的九项」就是灾难：升级当天 cyber 和 advice 会开始拦技术咨询和投资
+// 提问，而运营界面上那两行看起来根本没配过。
 //
-// 单独导出是给配置页用的：九个类别的处置表对图片只有这三行真正生效。
-// 不标出来的话，运营配了「政治 → 直接拒绝」会以为涉政图片能拦住，
-// 而实际上图片侧对涉政**一点覆盖都没有**，连 L0 关键词那样的兜底都没有
-// （AC 自动机扫不了图）。这种「以为配了其实没有」正是这套系统最不能出的错。
-var ImageCoveredCategories = map[string]bool{
-	CategorySexual:  true,
-	CategoryIllegal: true, // ShieldGemma 的「危险内容」，注意它还混着自杀教程
-	CategoryViolent: true,
+// 有了这张表就不需要写数据迁移——存量策略原样留着，缺的类别按这里的值走。
+// 注意 CategoryUnknownUpstream 故意不在表里，它必须保持「未登记即 block」。
+var defaultCategoryActions = map[string]string{
+	CategorySexual:    CategoryActionBlock,
+	CategoryIllegal:   CategoryActionBlock,
+	CategoryPolitical: CategoryActionBlock,
+	CategoryJailbreak: CategoryActionBlock,
+	CategoryViolent:   CategoryActionLog,
+	CategorySelfHarm:  CategoryActionLog,
+	CategoryUnethical: CategoryActionLog,
+	CategoryPII:       CategoryActionIgnore,
+	CategoryCopyright: CategoryActionIgnore,
+	CategoryCyber:     CategoryActionLog,
+	CategoryAdvice:    CategoryActionIgnore,
+	CategoryMinor:     CategoryActionBlock,
+	CategoryTerror:    CategoryActionBlock,
+	CategoryVulgar:    CategoryActionLog,
+}
+
+// DefaultCategoryAction 单个类别的默认处置，供配置页渲染「未配置」时的实际行为。
+// 查不到时返回 block，与 CategoryAction 的兜底保持一致。
+func DefaultCategoryAction(category string) string {
+	if a, ok := defaultCategoryActions[category]; ok {
+		return a
+	}
+	return CategoryActionBlock
+}
+
+// dialectCoveredCategories 每个 dialect 实际能产出的类别。
+//
+// 这张表是给配置页用的：类别处置表有 14 行，而**任何一个 dialect 都只覆盖其中一部分**。
+// 不标出来的话，运营配了「政治 → 直接拒绝」会以为涉政图片能拦住，而 ShieldGemma 对
+// 涉政一点覆盖都没有，连 L0 关键词那样的兜底都没有（AC 自动机扫不了图）。
+// 这种「以为配了其实没有」正是这套系统最不能出的错。
+//
+// 各 dialect 的覆盖边界都是模型定的，我们只能如实标注：
+//
+//   - qwen3guard：官方九类，与 Qwen3Guard-Gen 的类别表一一对应。
+//   - zhongsen-text：28 个风险码收敛到 11 类。**没有 jailbreak 和 copyright**
+//     （码表里没有对应项——换到这个 dialect 会失去越狱检测能力），
+//     也没有 vulgar（那是图片侧的类别）。
+//   - shieldgemma2：三条固定策略（色情 / 危险内容 / 暴力血腥），训练时定死，
+//     加不了也改不了——改写策略文本不会报错，只会让判定悄悄失效（§4.5 有实测证据）。
+//   - zsws-multimodal：六个大类，比 ShieldGemma 多覆盖了涉政与违禁品，
+//     并把色情与低俗擦边拆成 sexual / vulgar 两类。
+//
+// 前端 MODERATION_DIALECT_COVERED 是这张表的镜像，改这里必须同步改那里，
+// 否则界面上的覆盖标注会和实际判定能力对不上。
+var dialectCoveredCategories = map[string]map[string]bool{
+	DialectQwen3Guard: {
+		CategorySexual: true, CategoryIllegal: true, CategoryPolitical: true,
+		CategoryJailbreak: true, CategoryViolent: true, CategorySelfHarm: true,
+		CategoryUnethical: true, CategoryPII: true, CategoryCopyright: true,
+	},
+	DialectZhongsenText: {
+		CategorySexual: true, CategoryIllegal: true, CategoryPolitical: true,
+		CategoryViolent: true, CategorySelfHarm: true, CategoryUnethical: true,
+		CategoryPII: true, CategoryCyber: true, CategoryAdvice: true,
+		CategoryMinor: true, CategoryTerror: true,
+	},
+	DialectShieldGemma2: {
+		CategorySexual:  true,
+		CategoryIllegal: true, // ShieldGemma 的「危险内容」，注意它还混着自杀教程
+		CategoryViolent: true,
+	},
+	DialectZSWS: {
+		CategoryPolitical: true, CategoryViolent: true, CategorySexual: true,
+		CategoryVulgar: true, CategoryIllegal: true,
+	},
+}
+
+// DialectCoveredCategories 报告某个 dialect 能产出哪些类别。
+// 未知 dialect 返回 nil —— 调用方（配置页）据此不做覆盖标注，而不是谎称全覆盖。
+func DialectCoveredCategories(dialect string) map[string]bool {
+	return dialectCoveredCategories[dialect]
 }
 
 // ValidateModerationPolicies 保存策略前的校验。
@@ -228,12 +387,19 @@ func ValidateDefaultPolicyName(name string) error {
 
 // ModerationEndpoint 审核服务节点。第一期只有 L0（进程内），节点列表为空也能跑。
 type ModerationEndpoint struct {
-	Name       string `json:"name"`
-	BaseURL    string `json:"base_url"`
-	Model      string `json:"model"`
-	Modality   string `json:"modality"` // text | image，零值按 text（第二期用）
-	APIKey     string `json:"api_key"`  // 加密入库，读取走 GetAPIKey()
-	TimeoutMS  int    `json:"timeout_ms"`
+	Name      string `json:"name"`
+	BaseURL   string `json:"base_url"`
+	Model     string `json:"model"`
+	Modality  string `json:"modality"` // text | image，零值按 text（第二期用）
+	APIKey    string `json:"api_key"`  // 加密入库，读取走 GetAPIKey()
+	TimeoutMS int    `json:"timeout_ms"`
+	// Dialect 该节点部署的模型说哪种判定协议。零值按模态回落（见 ResolveDialect）。
+	//
+	// Model 字段是**给上游的模型名**（要和 GPUStack 里注册的名字逐字一致），
+	// 两者不能合并：同一个模型在不同部署里可以叫不同名字，而协议是由权重决定的。
+	// 拿模型名去猜协议就是在用一个运营可以随手改的字符串决定「输出怎么解析」，
+	// 而解析错的后果是每次判定都变成 ActionError，fail-open 下静默全量放行。
+	Dialect    string `json:"dialect"`
 	InputLimit int    `json:"input_limit"` // 分段长度上限（rune），仅 text 有意义
 	Enabled    bool   `json:"enabled"`
 
@@ -244,6 +410,25 @@ type ModerationEndpoint struct {
 	// 「有密钥但没给你看」。而凭证是按 name 回捞的，改名会让回捞落空、把密钥静默清空，
 	// 前端要能拦住这一步，就必须知道这一行原本有没有密钥。
 	HasAPIKey bool `json:"has_api_key,omitempty"`
+}
+
+// ResolveModality 该节点的模态，零值按 text。
+func (e *ModerationEndpoint) ResolveModality() string {
+	if e.Modality == "" {
+		return ModalityText
+	}
+	return e.Modality
+}
+
+// ResolveDialect 该节点的判定协议，零值按模态回落。
+//
+// 回落值必须是接 dialect 字段之前那个模态实际在跑的模型（text→qwen3guard、
+// image→shieldgemma2），否则升级会静默改掉所有存量节点的解析方式。
+func (e *ModerationEndpoint) ResolveDialect() string {
+	if e.Dialect != "" {
+		return e.Dialect
+	}
+	return DefaultDialectForModality(e.ResolveModality())
 }
 
 // GetAPIKey 解密入库凭证。
@@ -292,8 +477,14 @@ const ModerationEndpointsOptionKey = "moderation.endpoints"
 //  2. 名字为空或重名：name 是这套配置事实上的主键——EncryptModerationEndpoints
 //     按它回捞密钥、freezeUntil 按它记冻结。重名会让两个节点共用一条冻结记录，
 //     甚至互相拿到对方的凭证。
+//  3. dialect 与模态不匹配（文本节点配了 shieldgemma2）：请求形状和解析方式都会错，
+//     每次判定都失败。
+//  4. 同模态下启用的节点用了不同 dialect：见下面 activeDialect 的说明。
 func validateModerationEndpoints(endpoints []ModerationEndpoint) error {
 	seen := make(map[string]bool, len(endpoints))
+	// 同模态下已启用节点的 dialect，用于下面的唯一性检查。
+	activeDialect := make(map[string]string, 2)
+	dialectOwner := make(map[string]string, 2)
 	for i := range endpoints {
 		e := &endpoints[i]
 		name := strings.TrimSpace(e.Name)
@@ -304,15 +495,64 @@ func validateModerationEndpoints(endpoints []ModerationEndpoint) error {
 			return fmt.Errorf("审核节点名称重复：%s；重名会导致两个节点共用冻结状态、并可能取到对方的凭证", name)
 		}
 		seen[name] = true
+
+		modality := e.ResolveModality()
+		dialect := e.ResolveDialect()
+		allowed := TextDialects
+		if modality == ModalityImage {
+			allowed = ImageDialects
+		}
+		if !containsString(allowed, dialect) {
+			return fmt.Errorf("审核节点 %s 的判定协议「%s」不适用于%s节点；可选：%s",
+				name, dialect, modalityLabel(modality), strings.Join(allowed, " / "))
+		}
+
 		if !e.Enabled {
 			// 停用的节点不参与调用，字段不全无所谓——运营常把配了一半的节点先停用留着。
+			// dialect 唯一性也只看启用的：**切换模型的正常操作就是「新节点先配好停用着、
+			// 旧节点停用、新节点启用」**，如果停用的也参与检查，这条路就走不通了。
 			continue
 		}
 		if strings.TrimSpace(e.BaseURL) == "" || strings.TrimSpace(e.Model) == "" {
 			return fmt.Errorf("审核节点 %s 已启用但地址或模型名为空；启用的节点会进入调用轮换，配不全会让每次审核都失败", name)
 		}
+
+		// 同模态下启用的节点必须使用同一个 dialect。
+		//
+		// 混用不是「更灵活」，是**判定不可复现**：节点轮换（moderateSegment 逐个试）
+		// 决定了同一段文本这次可能由 qwen3guard 判、下次由 zhongsen 判，而两者的严格度
+		// 语义根本不同（zhongsen 没有 Controversial 这一档）。于是同一个输入会随机
+		// 得到不同结论，申诉和误杀率统计都无从下手。
+		//
+		// 想比两个模型的准召，要的是「双跑 + 记录两份」，那是另一个特性，
+		// 不是让生产流量随机落到其中一个上。
+		if prev, ok := activeDialect[modality]; ok && prev != dialect {
+			return fmt.Errorf(
+				"%s节点「%s」用的判定协议是「%s」，而「%s」用的是「%s」；"+
+					"同一模态下启用的节点必须使用同一协议，否则同一份输入会因为落到不同节点而得到不同判定。"+
+					"切换模型请先停用旧协议的节点，再启用新协议的节点",
+				modalityLabel(modality), name, dialect, dialectOwner[modality], prev)
+		}
+		activeDialect[modality] = dialect
+		dialectOwner[modality] = name
 	}
 	return nil
+}
+
+func containsString(list []string, v string) bool {
+	for _, s := range list {
+		if s == v {
+			return true
+		}
+	}
+	return false
+}
+
+func modalityLabel(modality string) string {
+	if modality == ModalityImage {
+		return "图片"
+	}
+	return "文本"
 }
 
 // EncryptModerationEndpoints 把 endpoints JSON 里每一条的 api_key 加密后返回新 JSON。
@@ -516,6 +756,8 @@ var moderationSettings = ModerationSettings{
 		{
 			Name:       "标准",
 			Strictness: StrictnessStandard,
+			// 与 defaultCategoryActions 逐条一致。写全而不是留空靠兜底：
+			// 新装站点的配置页要能看见每一类当前是什么处置，留空会显示成未配置。
 			Categories: map[string]string{
 				CategorySexual:    CategoryActionBlock,
 				CategoryIllegal:   CategoryActionBlock,
@@ -526,6 +768,11 @@ var moderationSettings = ModerationSettings{
 				CategoryUnethical: CategoryActionLog,
 				CategoryPII:       CategoryActionIgnore,
 				CategoryCopyright: CategoryActionIgnore,
+				CategoryCyber:     CategoryActionLog,
+				CategoryAdvice:    CategoryActionIgnore,
+				CategoryMinor:     CategoryActionBlock,
+				CategoryTerror:    CategoryActionBlock,
+				CategoryVulgar:    CategoryActionLog,
 			},
 		},
 	},
@@ -588,8 +835,16 @@ func (s *ModerationSettings) ResolvePolicy(group string) *ModerationPolicy {
 	return nil
 }
 
-// CategoryAction 查类别处置。未登记的类别按 block 处理 ——
-// 模型返回了我们没见过的类别时，宁可误拦一次也不能因为「配置里没写」就放行。
+// CategoryAction 查类别处置。
+//
+// 三级查找，顺序有讲究：
+//
+//  1. 策略里显式配了 —— 用它，运营的配置永远优先；
+//  2. 策略里没配但这是个**我们登记过**的类别 —— 用 defaultCategoryActions。
+//     新增类别时存量策略必然走到这里，而让它们默认 block 就是升级当天开始误杀
+//     （cyber 会拦技术咨询、advice 会拦投资提问），且界面上那几行看起来根本没配过；
+//  3. 连登记都没有（CategoryUnknownUpstream、或上游报了个新类别）—— block。
+//     模型返回了我们没见过的类别时，宁可误拦一次也不能因为「配置里没写」就放行。
 func (p *ModerationPolicy) CategoryAction(category string) string {
 	if p == nil {
 		return CategoryActionBlock
@@ -597,17 +852,17 @@ func (p *ModerationPolicy) CategoryAction(category string) string {
 	if a, ok := p.Categories[category]; ok && a != "" {
 		return a
 	}
-	return CategoryActionBlock
+	return DefaultCategoryAction(category)
 }
 
 // TextEndpoints 返回启用的文本审核节点（modality 零值按 text）。
 func (s *ModerationSettings) TextEndpoints() []ModerationEndpoint {
-	return s.endpointsByModality("text")
+	return s.endpointsByModality(ModalityText)
 }
 
 // ImageEndpoints 返回启用的图片审核节点（第二期用）。
 func (s *ModerationSettings) ImageEndpoints() []ModerationEndpoint {
-	return s.endpointsByModality("image")
+	return s.endpointsByModality(ModalityImage)
 }
 
 func (s *ModerationSettings) endpointsByModality(modality string) []ModerationEndpoint {
@@ -616,15 +871,34 @@ func (s *ModerationSettings) endpointsByModality(modality string) []ModerationEn
 		if !e.Enabled {
 			continue
 		}
-		m := e.Modality
-		if m == "" {
-			m = "text"
-		}
-		if m == modality {
+		if e.ResolveModality() == modality {
 			result = append(result, e)
 		}
 	}
 	return result
+}
+
+// TextDialect / ImageDialect 当前生效的判定协议，没有启用节点时返回空串。
+//
+// 取第一个启用节点的 dialect 就够：validateModerationEndpoints 保证了同模态下启用
+// 节点的 dialect 唯一。这里不重复做一致性检查——**校验只在保存这一条路上做**，
+// 判定路径每个请求都跑，在热路径上重算一遍一致性只是白花 CPU，
+// 而真要出现不一致，那说明 options 表被手改过，那种情况下报错也无处可报。
+func (s *ModerationSettings) TextDialect() string {
+	return s.dialectByModality(ModalityText)
+}
+
+func (s *ModerationSettings) ImageDialect() string {
+	return s.dialectByModality(ModalityImage)
+}
+
+func (s *ModerationSettings) dialectByModality(modality string) string {
+	for _, e := range s.Endpoints {
+		if e.Enabled && e.ResolveModality() == modality {
+			return e.ResolveDialect()
+		}
+	}
+	return ""
 }
 
 // ContentRetentionReady 报告原文加密留存是否可用。运营界面据此提示。

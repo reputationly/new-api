@@ -22,6 +22,9 @@ type keywordModerator struct{}
 
 func (keywordModerator) Name() string { return "L0" }
 
+// Dialect L0 是进程内的 AC 自动机，不涉及任何模型，所以没有判定协议。
+func (keywordModerator) Dialect() string { return "" }
+
 // wordScanLimit 收集命中词时实际扫描的最大 rune 数。
 //
 // 32K 字符足够回答「命中了哪几条规则」——这是 words 列存在的唯一目的，

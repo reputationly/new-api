@@ -89,6 +89,12 @@ func yesThreshold(strictness string) float64 {
 type shieldGemmaModerator struct {
 	strictness string
 	policy     *system_setting.ModerationPolicy
+	// dialect 出判定的协议名，落进每条记录的 detail.dialect。
+	//
+	// 目前恒为 shieldgemma2（图片侧还没有 dialect 分派），但**必须实打实地填**：
+	// 这一列存在的理由是按模型分组算准召，而空值会让所有图片记录在换模型前后
+	// 长得一模一样——事后无从追认是哪个模型判的。
+	dialect string
 }
 
 func (shieldGemmaModerator) Name() string { return "L2" }
@@ -119,7 +125,7 @@ func (m shieldGemmaModerator) ModerateVideo(ctx context.Context, videoURL string
 	if err != nil {
 		return nil, err
 	}
-	worst := &Verdict{Action: ActionPass, Provider: "L2"}
+	worst := &Verdict{Action: ActionPass, Provider: "L2", Dialect: m.dialect}
 	for _, scores := range frames {
 		v := m.verdictFromScores(scores)
 		if severity(v.Action) > severity(worst.Action) ||
@@ -217,7 +223,7 @@ func scoreImage(ctx context.Context, imageURL string) (imageScores, error) {
 // verdictFromScores 把三条策略的分数套上本分组的阈值与类别处置，得出判定。
 func (m shieldGemmaModerator) verdictFromScores(scores imageScores) *Verdict {
 	threshold := yesThreshold(m.strictness)
-	worst := &Verdict{Action: ActionPass, Provider: "L2"}
+	worst := &Verdict{Action: ActionPass, Provider: "L2", Dialect: m.dialect}
 	for _, p := range shieldGemmaPolicies {
 		pYes, ok := scores[p.Key]
 		if !ok {
@@ -276,7 +282,7 @@ func judgeOne(
 
 // verdictFor 把一条策略的 P(Yes) 映射成 Verdict。
 func (m shieldGemmaModerator) verdictFor(policy shieldGemmaPolicy, pYes float64, threshold float64) *Verdict {
-	v := &Verdict{Provider: "L2", Score: pYes}
+	v := &Verdict{Provider: "L2", Dialect: m.dialect, Score: pYes}
 	if pYes < threshold {
 		v.Action = ActionPass
 		return v

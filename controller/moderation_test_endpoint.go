@@ -28,7 +28,13 @@ type testModerationEndpointRequest struct {
 	// 图片排在文本之前、还要解析 logprobs）。拿文本请求去测一个视觉节点会「成功」——
 	// vLLM 上的视觉模型照样能回答纯文本对话——于是按钮报绿，而真正会用到的那条
 	// 请求形状一次都没被验证过。
-	Modality  string `json:"modality"`
+	Modality string `json:"modality"`
+	// Dialect 判定协议。零值由后端按模态回落（见 system_setting.ResolveDialect）。
+	//
+	// 必须由前端传，不能从已存配置里按 name 查：运营是在**保存前**点测试，
+	// 而「刚把这个节点从 qwen3guard 改成 zhongsen-text、想验一下」正是这个按钮
+	// 最该起作用的时刻。查已存配置会拿到改动前的协议，于是测的是旧解析器。
+	Dialect   string `json:"dialect"`
 	TimeoutMS int    `json:"timeout_ms"`
 }
 
@@ -63,6 +69,11 @@ func TestModerationEndpoint(c *gin.Context) {
 		}
 	}
 
+	dialect := req.Dialect
+	if dialect == "" {
+		dialect = system_setting.DefaultDialectForModality(req.Modality)
+	}
+
 	start := time.Now()
 	var result moderation.TestResult
 	if req.Modality == moderation.ModalityImage {
@@ -73,7 +84,7 @@ func TestModerationEndpoint(c *gin.Context) {
 		}
 		result = moderation.TestImageEndpoint(c, req.BaseURL, req.Model, apiKey, req.TimeoutMS)
 	} else {
-		result = moderation.TestEndpoint(c, req.BaseURL, req.Model, apiKey, req.TimeoutMS)
+		result = moderation.TestEndpoint(c, req.BaseURL, req.Model, apiKey, dialect, req.TimeoutMS)
 	}
 	latency := time.Since(start).Milliseconds()
 

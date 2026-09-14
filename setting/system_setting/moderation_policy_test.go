@@ -182,22 +182,123 @@ func TestValidateModerationPolicyConfig(t *testing.T) {
 	})
 }
 
-func TestImageCoveredCategoriesMatchesModel(t *testing.T) {
-	// ShieldGemma 2 只有三条固定策略，是训练时定死的。这个集合是配置页
-	// 标注「仅文本 / 文本+图片」的依据——标错了会让运营以为涉政图片被拦住了，
-	// 而图片侧对涉政一点覆盖都没有（AC 自动机扫不了图，没有任何兜底）。
+func TestDialectCoveredCategoriesMatchesModel(t *testing.T) {
+	// ShieldGemma 2 只有三条固定策略，是训练时定死的。覆盖集合是配置页
+	// 标注「这一类当前生效吗」的依据——标错了会让运营以为涉政图片被拦住了，
+	// 而 ShieldGemma 对涉政一点覆盖都没有（AC 自动机扫不了图，没有任何兜底）。
+	sg := DialectCoveredCategories(DialectShieldGemma2)
 	want := []string{CategorySexual, CategoryIllegal, CategoryViolent}
-	if len(ImageCoveredCategories) != len(want) {
-		t.Fatalf("图片覆盖的类别应恰好三个，得到 %d 个", len(ImageCoveredCategories))
+	if len(sg) != len(want) {
+		t.Fatalf("ShieldGemma 覆盖的类别应恰好三个，得到 %d 个", len(sg))
 	}
 	for _, c := range want {
-		if !ImageCoveredCategories[c] {
-			t.Fatalf("类别 %s 应标记为图片覆盖", c)
+		if !sg[c] {
+			t.Fatalf("类别 %s 应标记为 ShieldGemma 覆盖", c)
 		}
 	}
-	// 反面：涉政绝不能被标成图片覆盖
-	if ImageCoveredCategories[CategoryPolitical] {
-		t.Fatal("涉政类别不能标成图片覆盖——图片侧对它完全没有覆盖")
+	// 反面：涉政绝不能被标成 ShieldGemma 覆盖
+	if sg[CategoryPolitical] {
+		t.Fatal("涉政类别不能标成 ShieldGemma 覆盖——它对涉政完全没有覆盖")
+	}
+
+	// ZSWS 相对 ShieldGemma 的增量正是接它的理由：涉政有覆盖了。
+	// 这条钉住的是「换 dialect 真的换了能力边界」，而不只是换了解析器。
+	if !DialectCoveredCategories(DialectZSWS)[CategoryPolitical] {
+		t.Fatal("ZSWS 覆盖涉政——这是相对 ShieldGemma 的关键增量，标注不能丢")
+	}
+
+	// Zhongsen 没有越狱检测：码表里没有对应项。标成覆盖会让运营以为
+	// 配了「越狱 → 拒绝」就能拦住提示攻击，而换到这个 dialect 之后那一行是死配置。
+	if DialectCoveredCategories(DialectZhongsenText)[CategoryJailbreak] {
+		t.Fatal("Zhongsen 的 29 码表里没有越狱类别，不能标成覆盖")
+	}
+	if !DialectCoveredCategories(DialectQwen3Guard)[CategoryJailbreak] {
+		t.Fatal("Qwen3Guard 有 Jailbreak 类别，标注不能丢")
+	}
+
+	// 覆盖表里出现 AllCategories 之外的类别，说明两处已经对不上——
+	// 配置页按 AllCategories 渲染行，多出来的类别永远不会被显示，
+	// 于是一个真的会被判出来的类别在界面上根本不存在。
+	all := make(map[string]bool, len(AllCategories))
+	for _, c := range AllCategories {
+		all[c] = true
+	}
+	for dialect, covered := range dialectCoveredCategories {
+		for c := range covered {
+			if !all[c] {
+				t.Fatalf("dialect %s 标了一个不在 AllCategories 里的类别 %s", dialect, c)
+			}
+		}
+	}
+}
+
+// 新增类别时，存量策略里没有它——此时必须拿到 defaultCategoryActions 的值，
+// 而不是「未登记即 block」那条兜底。
+//
+// 这是升级安全性的关键：cyber 默认 block 会在升级当天开始拦「这段 SQL 注入怎么修」
+// 这类 coding 常态提问，advice 默认 block 会拦掉投资与医疗咨询，
+// 而配置页上那几行看起来根本没被配过，运营无从判断为什么突然开始误杀。
+func TestNewCategoriesFallBackToDefaultsNotBlock(t *testing.T) {
+	// 模拟存量策略：只配了接 Zhongsen 之前的九类。
+	legacy := &ModerationPolicy{
+		Name: "标准",
+		Categories: map[string]string{
+			CategorySexual:    CategoryActionBlock,
+			CategoryIllegal:   CategoryActionBlock,
+			CategoryPolitical: CategoryActionBlock,
+			CategoryJailbreak: CategoryActionBlock,
+			CategoryViolent:   CategoryActionLog,
+			CategorySelfHarm:  CategoryActionLog,
+			CategoryUnethical: CategoryActionLog,
+			CategoryPII:       CategoryActionIgnore,
+			CategoryCopyright: CategoryActionIgnore,
+		},
+	}
+
+	cases := map[string]string{
+		CategoryCyber:  CategoryActionLog,
+		CategoryAdvice: CategoryActionIgnore,
+		CategoryMinor:  CategoryActionBlock,
+		CategoryTerror: CategoryActionBlock,
+		CategoryVulgar: CategoryActionLog,
+	}
+	for cat, want := range cases {
+		if got := legacy.CategoryAction(cat); got != want {
+			t.Fatalf("存量策略下类别 %s 应回落到默认处置 %s，得到 %s", cat, want, got)
+		}
+	}
+
+	// 反面：真正未登记的类别（上游报了个我们没见过的）仍然必须 block。
+	// 这条兜底不能被 defaultCategoryActions 顺手削掉——丢了就等于把未知风险当安全。
+	if got := legacy.CategoryAction(CategoryUnknownUpstream); got != CategoryActionBlock {
+		t.Fatalf("未登记类别必须按 block 处置，得到 %s", got)
+	}
+	if got := legacy.CategoryAction("something-nobody-registered"); got != CategoryActionBlock {
+		t.Fatalf("完全陌生的类别必须按 block 处置，得到 %s", got)
+	}
+
+	// 显式配置永远优先于默认值。
+	legacy.Categories[CategoryCyber] = CategoryActionBlock
+	if got := legacy.CategoryAction(CategoryCyber); got != CategoryActionBlock {
+		t.Fatalf("显式配置应优先于默认值，得到 %s", got)
+	}
+}
+
+// 内置「标准」策略必须覆盖 AllCategories 的每一项。
+//
+// 漏一项的后果不是报错，是那一行在新装站点的配置页上显示为未配置——
+// 而它实际按 defaultCategoryActions 在生效，界面和行为对不上。
+func TestBuiltinPolicyCoversAllCategories(t *testing.T) {
+	builtin := GetModerationSettings().Policies[0]
+	for _, c := range AllCategories {
+		action, ok := builtin.Categories[c]
+		if !ok {
+			t.Fatalf("内置策略漏了类别 %s；新增类别时必须同步补进去", c)
+		}
+		if want := DefaultCategoryAction(c); action != want {
+			t.Fatalf("内置策略里 %s 配的是 %s，与默认处置 %s 不一致——"+
+				"两处都是「开箱行为」的定义，对不上时无法判断哪个准", c, action, want)
+		}
 	}
 }
 

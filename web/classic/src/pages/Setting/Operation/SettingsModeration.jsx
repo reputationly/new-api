@@ -22,6 +22,11 @@ import {
   showSuccess,
   showWarning,
 } from '../../../helpers';
+import {
+  moderationDialectDefault,
+  moderationDialectsFor,
+  moderationStrictnessApplies,
+} from '../../../constants/moderation.constants';
 import { useTranslation } from 'react-i18next';
 
 // 内容审核设置。见 docs/content-moderation-design.md §8。
@@ -40,6 +45,8 @@ const newEndpoint = () => ({
   model: '',
   api_key: '',
   modality: 'text',
+  // 默认给存量一直在跑的那个协议，不给新的——新增一个节点不该顺手改变判定行为。
+  dialect: 'qwen3guard',
   timeout_ms: 3000,
   input_limit: 24000,
   enabled: true,
@@ -52,6 +59,9 @@ const newEndpoint = () => ({
  */
 function validateEndpoints(endpoints) {
   const seen = new Set();
+  // 同模态下已启用节点的协议，用于下面的唯一性检查。
+  const activeDialect = {};
+  const dialectOwner = {};
   for (let i = 0; i < endpoints.length; i++) {
     const e = endpoints[i];
     const name = (e.name || '').trim();
@@ -73,8 +83,29 @@ function validateEndpoints(endpoints) {
     if (!(e.base_url || '').trim() || !(e.model || '').trim()) {
       return `审核节点 ${name} 已启用，但地址或模型名为空`;
     }
+    // 同模态下启用的节点必须用同一个协议。混用会让同一份输入因为落到不同节点
+    // 而得到不同判定（节点是轮换的），申诉和误杀率统计都无从下手。
+    // 在前端也拦一道是为了让报错就地出现在这张卡片上，而不是提交后才弹。
+    const modality = e.modality || 'text';
+    const dialect = e.dialect || moderationDialectDefault(modality);
+    const label = modality === 'image' ? '图片' : '文本';
+    if (activeDialect[modality] && activeDialect[modality] !== dialect) {
+      return (
+        `${label}节点「${name}」用的判定协议与「${dialectOwner[modality]}」不同；` +
+        `同一模态下启用的节点必须使用同一协议。切换模型请先停用旧协议的节点，再启用新协议的节点`
+      );
+    }
+    activeDialect[modality] = dialect;
+    dialectOwner[modality] = name;
   }
   return '';
+}
+
+/** 该节点当前选中的协议定义（含模型名占位、分段上限默认值、说明文案）。 */
+function currentDialect(ep) {
+  const modality = ep.modality || 'text';
+  const dialect = ep.dialect || moderationDialectDefault(modality);
+  return moderationDialectsFor(modality).find((d) => d.value === dialect);
 }
 
 function parseEndpoints(raw) {
@@ -195,6 +226,32 @@ export default function SettingsModeration(props) {
         ) {
           next.timeout_ms = 10000;
         }
+        // 换模态时协议也要跟着换：两边的协议集合不相交，留着旧值会在保存时
+        // 被后端以「协议不适用于该模态」拒掉，而运营只是改了个下拉框。
+        if (field === 'modality') {
+          next.dialect = moderationDialectDefault(value);
+        }
+        // 换协议时把模型名与分段上限带成该协议的默认值。
+        //
+        // 分段上限尤其要带：众森卫士的部署窗口是 4096，而 Qwen3Guard 那档默认
+        // 24000 rune 会直接打穿窗口让 vLLM 返回 400——400 是不冻结的，
+        // 于是每个长输入都会在所有节点上各失败一次，然后 fail-open 静默放行。
+        // 只在旧值等于上一个协议的默认值时才带，免得覆盖运营手填的数。
+        if (field === 'dialect') {
+          const prev = currentDialect(e);
+          const picked = currentDialect(next);
+          if (picked) {
+            if (!e.model || e.model === prev?.model) {
+              next.model = picked.model;
+            }
+            if (
+              picked.inputLimit &&
+              (!e.input_limit || e.input_limit === prev?.inputLimit)
+            ) {
+              next.input_limit = picked.inputLimit;
+            }
+          }
+        }
         return next;
       }),
     );
@@ -220,6 +277,9 @@ export default function SettingsModeration(props) {
         // 不传的话后端按文本测，而视觉模型照样能回答纯文本对话——按钮报绿，
         // 但生产真正会走的那条请求形状一次都没验证过。
         modality: ep.modality || 'text',
+        // 协议必须带上：测试是在**保存前**点的，后端读不到这次的改动。
+        // 不传就按存量协议测，于是「刚把它改成众森卫士、想验一下」测的是旧解析器。
+        dialect: ep.dialect || moderationDialectDefault(ep.modality || 'text'),
         timeout_ms: ep.timeout_ms,
       });
       const { success, message, data } = res.data;
@@ -742,11 +802,7 @@ export default function SettingsModeration(props) {
                       <div style={{ marginBottom: 4 }}>{t('模型名称')}</div>
                       <Input
                         value={ep.model}
-                        placeholder={
-                          ep.modality === 'image'
-                            ? 'shieldgemma2'
-                            : 'qwen3guard'
-                        }
+                        placeholder={currentDialect(ep)?.model || 'qwen3guard'}
                         onChange={(v) => updateEndpoint(idx, 'model', v)}
                       />
                     </Col>
@@ -767,6 +823,58 @@ export default function SettingsModeration(props) {
                           {t('图片 / 视频')}
                         </Select.Option>
                       </Select>
+                    </Col>
+                  </Row>
+
+                  {/*
+                    判定协议决定输出怎么解析。**它和「模型名称」不是一回事**：
+                    模型名是给上游的（要和 GPUStack 里注册的名字逐字一致），
+                    协议是由权重决定的解析方式。选错的表现不是报错，是每次判定
+                    都变成 ActionError，而「审核失败时放行」默认开着——
+                    于是审核看起来在跑，实际一条都没审。
+                  */}
+                  <Row gutter={12} style={{ marginTop: 12 }}>
+                    <Col xs={24} sm={12} md={8}>
+                      <div style={{ marginBottom: 4 }}>{t('判定协议')}</div>
+                      <Select
+                        value={
+                          ep.dialect ||
+                          moderationDialectDefault(ep.modality || 'text')
+                        }
+                        style={{ width: '100%' }}
+                        onChange={(v) => updateEndpoint(idx, 'dialect', v)}
+                      >
+                        {moderationDialectsFor(ep.modality || 'text').map(
+                          (d) => (
+                            <Select.Option key={d.value} value={d.value}>
+                              {t(d.label)}
+                            </Select.Option>
+                          ),
+                        )}
+                      </Select>
+                    </Col>
+                    <Col xs={24} sm={12} md={16}>
+                      <div style={{ marginBottom: 4 }}>&nbsp;</div>
+                      <Typography.Text type='tertiary' size='small'>
+                        {t(currentDialect(ep)?.desc || '')}
+                      </Typography.Text>
+                      {/*
+                        严格度对二分判定的协议无效。不标出来的话，运营把策略调成
+                        「严格」会以为收紧了，而那个旋钮对这个协议毫无影响——
+                        松紧只能靠类别处置表调。
+                      */}
+                      {!moderationStrictnessApplies(
+                        ep.dialect ||
+                          moderationDialectDefault(ep.modality || 'text'),
+                      ) && (
+                        <div style={{ marginTop: 4 }}>
+                          <Typography.Text type='warning' size='small'>
+                            {t(
+                              '该协议为二分判定，策略里的「严格度」对它无效；松紧请用类别处置表调',
+                            )}
+                          </Typography.Text>
+                        </div>
+                      )}
                     </Col>
                   </Row>
 

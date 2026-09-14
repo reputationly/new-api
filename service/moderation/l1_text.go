@@ -18,10 +18,14 @@ import (
 	"github.com/QuantumNous/new-api/setting/system_setting"
 )
 
-// L1：远程分类器层（Qwen3Guard-Gen）。见 docs/content-moderation-design.md §4.1、§6.3–§6.5。
+// L1：远程分类器层。见 docs/content-moderation-design.md §4.1、§6.3–§6.5。
 //
 // 与 L0 的分工：L0 全文扫关键词（进程内、微秒级），L1 做语义判定（GPU 调用、有长度上限）。
 // 两者不能互相替代——模型防语义，词库和归一化防编码层面的花招。
+//
+// **本文件对具体的护栏模型无知。** 请求参数与输出解析由 textDialect 提供
+// （dialect_text.go），这里只负责分段、节点轮换、冻结、并发闸、严格度与类别处置——
+// 这些对任何护栏模型都一样。加一个新模型是加一个 dialect，不是改这里。
 
 // segmentConcurrency 单个请求内分段的并发上限。
 //
@@ -33,56 +37,19 @@ const segmentConcurrency = 4
 // 它表示「结论已定」而不是「调用失败」，Wait 之后要和真错误分开处理。
 var errSegmentBlocked = errors.New("moderation: segment blocked")
 
-// qwen3GuardModerator L1 判定器。节点列表来自 moderation.endpoints。
-type qwen3GuardModerator struct {
+// textModerator L1 判定器。节点列表来自 moderation.endpoints。
+type textModerator struct {
 	strictness string
 	policy     *system_setting.ModerationPolicy
 	// priority 最新一轮用户输入（已归一化，可空）。它会被单独先判一次，见 ModerateText。
 	priority string
+	// dialect 判定协议。决定 max_tokens、分段兜底长度与输出解析方式。
+	dialect textDialect
 }
 
-func (qwen3GuardModerator) Name() string { return "L1" }
+func (textModerator) Name() string { return "L1" }
 
-// safetyLine / categoryLine 解析模型输出。
-//
-// Qwen3Guard-Gen 的官方 chat template 已经内置了判定 prompt（实测一次调用 prompt_tokens
-// 约 308，而输入只有几个字），所以这里**不需要自己拼模板**，把待审文本作为 user message
-// 直接发过去即可。输出形如：
-//
-//	Safety: Unsafe
-//	Categories: Violent
-//
-// 大小写与空白都按模型实际输出容错，别指望它永远规整。
-var (
-	safetyLine   = "safety:"
-	categoryLine = "categories:"
-)
-
-// categoryAliases 模型返回的类别名 → 本项目的类别常量（§4.1.1）。
-//
-// 官方类别是长名（"Non-violent Illegal Acts"），但实测返回的是短名（"Violent"），
-// 两种都要认。认不出来的类别**不能丢弃**——那等于把未知风险当成安全，
-// 所以统一落到 CategoryUnknownUpstream，由 CategoryAction 按「未登记即 block」处置。
-var categoryAliases = map[string]string{
-	"sexual content or sexual acts":       system_setting.CategorySexual,
-	"sexual":                              system_setting.CategorySexual,
-	"non-violent illegal acts":            system_setting.CategoryIllegal,
-	"illegal":                             system_setting.CategoryIllegal,
-	"politically sensitive topics":        system_setting.CategoryPolitical,
-	"political":                           system_setting.CategoryPolitical,
-	"jailbreak":                           system_setting.CategoryJailbreak,
-	"violent":                             system_setting.CategoryViolent,
-	"violence":                            system_setting.CategoryViolent,
-	"suicide & self-harm":                 system_setting.CategorySelfHarm,
-	"suicide and self-harm":               system_setting.CategorySelfHarm,
-	"self-harm":                           system_setting.CategorySelfHarm,
-	"unethical acts":                      system_setting.CategoryUnethical,
-	"unethical":                           system_setting.CategoryUnethical,
-	"personally identifiable information": system_setting.CategoryPII,
-	"pii":                                 system_setting.CategoryPII,
-	"copyright violation":                 system_setting.CategoryCopyright,
-	"copyright":                           system_setting.CategoryCopyright,
-}
+func (m textModerator) Dialect() string { return m.dialect.Name() }
 
 // chatRequest / chatResponse 只声明用得上的字段。审核调用不走 relay 的 DTO：
 // 那套结构为业务请求设计，字段多且会随上游演进，这里只需要最小子集。
@@ -106,7 +73,7 @@ type chatResponse struct {
 }
 
 // ModerateText 对归一化后的文本做一次 L1 判定。
-func (m qwen3GuardModerator) ModerateText(ctx context.Context, normalized string) (*Verdict, error) {
+func (m textModerator) ModerateText(ctx context.Context, normalized string) (*Verdict, error) {
 	endpoints := system_setting.GetModerationSettings().TextEndpoints()
 	if len(endpoints) == 0 {
 		// 开了 L1 却没有可用节点，是配置事故不是「无需审核」。交给 §6.4 的 fail 策略。
@@ -114,7 +81,7 @@ func (m qwen3GuardModerator) ModerateText(ctx context.Context, normalized string
 	}
 
 	// 分段长度取所有启用节点的最小 input_limit，保证任何一个节点都吃得下（§6.3 四）。
-	limit := minInputLimit(endpoints)
+	limit := minInputLimit(endpoints, m.dialect)
 
 	// L1 只审最新一轮用户输入，不扫历史与 tool_result（§6.3 二）。
 	//
@@ -148,7 +115,7 @@ func (m qwen3GuardModerator) ModerateText(ctx context.Context, normalized string
 	g.SetLimit(segmentConcurrency)
 
 	var mu sync.Mutex
-	worst := &Verdict{Action: ActionPass, Provider: "L1"}
+	worst := &Verdict{Action: ActionPass, Provider: "L1", Dialect: m.dialect.Name()}
 	for _, seg := range segments {
 		g.Go(func() error {
 			v, err := m.moderateSegment(gctx, seg, endpoints)
@@ -185,7 +152,7 @@ func (m qwen3GuardModerator) ModerateText(ctx context.Context, normalized string
 }
 
 // moderateSegment 对单段文本调用一次，按节点列表轮换。
-func (m qwen3GuardModerator) moderateSegment(
+func (m textModerator) moderateSegment(
 	ctx context.Context,
 	text string,
 	endpoints []system_setting.ModerationEndpoint,
@@ -203,7 +170,7 @@ func (m qwen3GuardModerator) moderateSegment(
 		if frozenUntil(ep.Name).After(time.Now()) {
 			continue
 		}
-		content, status, err := callGuard(ctx, &ep, text)
+		content, status, err := callGuard(ctx, &ep, text, m.dialect.MaxTokens())
 		if err != nil {
 			// 失败分三类，只有一类该归咎于节点：
 			//
@@ -238,19 +205,28 @@ func (m qwen3GuardModerator) moderateSegment(
 
 // parseVerdict 把模型输出映射成 Verdict。
 //
-// 判定分两层（§8.2 的两个正交旋钮）：Safety 答「有多严重」，Categories 答「什么类型」，
+// 判定分两层（§8.2 的两个正交旋钮）：Level 答「有多严重」，Categories 答「什么类型」，
 // 严重度先经 strictness 过滤，再由类别处置决定动作。
-func (m qwen3GuardModerator) parseVerdict(content string) *Verdict {
-	safety, cats := parseGuardOutput(content)
+//
+// 模型专属的解析在 dialect 里，这里只消费归一化后的 textJudgement——所以这段
+// strictness × 类别处置的逻辑对所有 dialect 共用一份，不会随模型分叉。
+func (m textModerator) parseVerdict(content string) *Verdict {
+	j := m.dialect.Parse(content)
 
-	v := &Verdict{Provider: "L1", Categories: cats}
-	switch safety {
-	case "safe":
+	v := &Verdict{
+		Provider:   "L1",
+		Dialect:    m.dialect.Name(),
+		Categories: j.Categories,
+		Reason:     j.Reason,
+	}
+	switch j.Level {
+	case LevelSafe:
 		v.Action = ActionPass
 		v.Categories = nil
 		return v
-	case "controversial":
+	case LevelControversial:
 		// Controversial 算不算违规由严格度决定（§8.2 第二个旋钮）。
+		// 注意只有提供中间档的 dialect 会走到这里（zhongsen-text 是二分的）。
 		switch m.strictness {
 		case system_setting.StrictnessLoose:
 			v.Action = ActionPass
@@ -263,21 +239,24 @@ func (m qwen3GuardModerator) parseVerdict(content string) *Verdict {
 			v.Action = ActionReview
 			return v
 		}
-	case "unsafe":
+	case LevelUnsafe:
 		// 落到下面的类别映射
 	default:
 		// 模型输出不符合预期格式。「模型没说安全」≠「安全」（§6.4），判 error 交给 fail 策略。
+		//
+		// 带上原始输出（截断）：这个分支最常见的成因是**节点上部署的模型与配置的
+		// dialect 对不上**，而那时唯一能说明问题的就是模型到底吐了什么。
 		v.Action = ActionError
-		v.Detail = "unrecognized safety level: " + safety
+		v.Detail = "unrecognized " + m.dialect.Name() + " output: " + truncateForError(content)
 		return v
 	}
 
-	v.Action = m.actionForCategories(cats)
+	v.Action = m.actionForCategories(j.Categories)
 	return v
 }
 
 // actionForCategories 按策略把类别映射成动作。多个类别时取最严的那个。
-func (m qwen3GuardModerator) actionForCategories(cats []string) Action {
+func (m textModerator) actionForCategories(cats []string) Action {
 	worst := ActionPass
 	for _, c := range cats {
 		switch m.policy.CategoryAction(c) {
@@ -304,8 +283,9 @@ func callGuard(
 	ctx context.Context,
 	ep *system_setting.ModerationEndpoint,
 	text string,
+	maxTokens int,
 ) (string, int, error) {
-	return callGuardWithKey(ctx, ep, ep.GetAPIKey(), text)
+	return callGuardWithKey(ctx, ep, ep.GetAPIKey(), text, maxTokens)
 }
 
 // callGuardWithKey 与 callGuard 相同，但由调用方给出明文 key。
@@ -315,6 +295,7 @@ func callGuardWithKey(
 	ep *system_setting.ModerationEndpoint,
 	apiKey string,
 	text string,
+	maxTokens int,
 ) (string, int, error) {
 	timeout := time.Duration(ep.TimeoutMS) * time.Millisecond
 	if timeout <= 0 {
@@ -323,11 +304,12 @@ func callGuardWithKey(
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
-	// max_tokens 给 64 足够：实测判定输出只有 8–9 个 token（"Safety: Unsafe\nCategories: Violent"）。
+	// max_tokens 由 dialect 给：各模型的输出长度差一个量级，而**调小有真实危险**
+	// （见 zhongsenTextDialect.MaxTokens 里关于 sec/se 截断的说明），所以它不是配置项。
 	body, err := common.Marshal(chatRequest{
 		Model:       ep.Model,
 		Messages:    []chatMessage{{Role: "user", Content: text}},
-		MaxTokens:   64,
+		MaxTokens:   maxTokens,
 		Temperature: 0,
 	})
 	if err != nil {
@@ -364,37 +346,12 @@ func callGuardWithKey(
 	return parsed.Choices[0].Message.Content, resp.StatusCode, nil
 }
 
-// parseGuardOutput 从模型输出里提取安全等级与类别。
-func parseGuardOutput(content string) (safety string, categories []string) {
-	for _, line := range strings.Split(content, "\n") {
-		lower := strings.ToLower(strings.TrimSpace(line))
-		switch {
-		case strings.HasPrefix(lower, safetyLine):
-			safety = strings.TrimSpace(strings.TrimPrefix(lower, safetyLine))
-		case strings.HasPrefix(lower, categoryLine):
-			raw := strings.TrimSpace(strings.TrimPrefix(lower, categoryLine))
-			if raw == "" || raw == "none" {
-				continue
-			}
-			for _, c := range strings.Split(raw, ",") {
-				c = strings.TrimSpace(c)
-				if c == "" {
-					continue
-				}
-				if mapped, ok := categoryAliases[c]; ok {
-					categories = append(categories, mapped)
-					continue
-				}
-				// 认不出来的类别不丢弃：丢了就等于把未知风险当安全放行。
-				categories = append(categories, system_setting.CategoryUnknownUpstream)
-			}
-		}
-	}
-	return safety, categories
-}
-
 // minInputLimit 取所有启用节点的最小分段长度（§6.3 四）。
-func minInputLimit(endpoints []system_setting.ModerationEndpoint) int {
+//
+// 节点都没填时按 dialect 的兜底值——**这个兜底必须跟着模型走**：qwen3guard 的
+// 4000 rune 是按它 8192 的窗口定的，照搬给 Zhongsen（厂商部署参数是 4096）会直接
+// 打穿窗口让 vLLM 返回 400。
+func minInputLimit(endpoints []system_setting.ModerationEndpoint, dialect textDialect) int {
 	limit := 0
 	for _, e := range endpoints {
 		if e.InputLimit <= 0 {
@@ -405,8 +362,7 @@ func minInputLimit(endpoints []system_setting.ModerationEndpoint) int {
 		}
 	}
 	if limit <= 0 {
-		// 节点没填时给一个对中文也打不穿 8192 窗口的保守值（§6.3 四）。
-		limit = 4000
+		limit = dialect.DefaultInputLimit()
 	}
 	return limit
 }
@@ -601,26 +557,34 @@ type TestResult struct {
 //
 // 刻意不复用 ModerateText：那条路会走节点轮换和冻结状态，而测试要的恰恰是
 // 「这一个节点此刻通不通」——被冻结的节点更需要能测，否则运营改完配置无法验证。
-func TestEndpoint(ctx context.Context, baseURL, model, apiKey string, timeoutMS int) TestResult {
+//
+// dialect 必须由调用方给出（前端传），不能从已存配置里查：运营是在**保存前**点测试，
+// 而「刚把这个节点的 dialect 改成 zhongsen-text」正是最需要验证的那一刻。
+func TestEndpoint(ctx context.Context, baseURL, model, apiKey, dialectName string, timeoutMS int) TestResult {
+	d := resolveTextDialect(dialectName)
 	ep := system_setting.ModerationEndpoint{
 		Name:      "__test__",
 		BaseURL:   baseURL,
 		Model:     model,
 		APIKey:    apiKey,
+		Dialect:   d.Name(),
 		TimeoutMS: timeoutMS,
 	}
-	// 走 testAPIKey 而不是 ep.GetAPIKey()：传进来的已经是明文，
+	// 走传入的明文 key 而不是 ep.GetAPIKey()：传进来的已经是明文，
 	// 再解密一次会把它当密文处理然后失败。
-	raw, _, err := callGuardWithKey(ctx, &ep, apiKey, "今天天气怎么样")
+	raw, _, err := callGuardWithKey(ctx, &ep, apiKey, d.ProbeText(), d.MaxTokens())
 	if err != nil {
 		return TestResult{Err: err}
 	}
-	safety, _ := parseGuardOutput(raw)
 	return TestResult{
 		Raw: strings.TrimSpace(raw),
-		// 解析得出安全等级才算真通。返回 200 但输出格式不对，说明部署的不是 guard 模型
-		// ——这种情况下审核链路会把每次判定都当成 ActionError，fail-close 下就是全站拒绝。
-		ParsedOK: safety == "safe" || safety == "unsafe" || safety == "controversial",
+		// 解析得出安全等级才算真通。返回 200 但输出格式不对，说明部署的模型与所选
+		// dialect 对不上——这种情况下审核链路会把每次判定都当成 ActionError，
+		// fail-close 下就是全站拒绝，而 fail-open 下是静默全量放行。
+		//
+		// 判据必须**由 dialect 自己给**：写死 safe/unsafe/controversial 这三个值
+		// 对 zhongsen-text 恒为 false，会让一个完全健康的节点一直报测试失败。
+		ParsedOK: d.Parse(raw).Level != "",
 	}
 }
 

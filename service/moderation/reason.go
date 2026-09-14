@@ -25,6 +25,11 @@ var categoryLabels = map[string]string{
 	system_setting.CategoryUnethical: "违背公序良俗的内容",
 	system_setting.CategoryPII:       "个人隐私信息",
 	system_setting.CategoryCopyright: "版权风险内容",
+	system_setting.CategoryCyber:     "网络攻击内容",
+	system_setting.CategoryAdvice:    "违规专业建议",
+	system_setting.CategoryMinor:     "危害未成年人的内容",
+	system_setting.CategoryTerror:    "暴恐极端内容",
+	system_setting.CategoryVulgar:    "低俗不良内容",
 }
 
 // ReasonText 把类别列表拼成拒绝原因。类别为空时给一个不暴露任何信息的兜底文案。
@@ -87,12 +92,23 @@ func truncateWords(words []string) string {
 // detailPayload moderation_log.detail 的结构。只放脱敏内容，原文走 ContentEnc（§10）。
 // 命中词不在这里——它已经是独立的 words 列，重复存一份只会让两处对不上时无从判断哪个准。
 type detailPayload struct {
-	Mode  string `json:"mode"`
-	Error string `json:"error,omitempty"`
+	Mode string `json:"mode"`
+	// Dialect 这条判定是哪个协议（也就是哪个模型）给出的。
+	//
+	// **切换审核模型时这一列是必需的。** 没有它，切换前后的记录在 provider 上
+	// 完全一样（都是 "L1"），于是没法按模型分组算准召——而那正是切换要回答的
+	// 唯一问题。事后再想补也来不及：历史记录无从追认是哪个模型判的。
+	Dialect string `json:"dialect,omitempty"`
+	// Reason 模型给出的归因理由（如 Zhongsen 的 <explanation>）。
+	//
+	// 给待复核队列用：复核时真正要回答的是「模型为什么判它违规」，光有类别标签
+	// 答不了。**只进 detail 列，不回显给用户**（§9.2.2）。
+	Reason string `json:"reason,omitempty"`
+	Error  string `json:"error,omitempty"`
 }
 
 func buildDetail(v *Verdict, mode system_setting.ModerationMode) string {
-	p := detailPayload{Mode: string(mode)}
+	p := detailPayload{Mode: string(mode), Dialect: v.Dialect, Reason: v.Reason}
 	if v.Action == ActionError {
 		p.Error = v.Detail
 	}

@@ -69,8 +69,13 @@ func endpoint(name, baseURL string, timeoutMS int) system_setting.ModerationEndp
 }
 
 // newModerator 用「标准」策略：黄赌毒政治 block，暴力等 log。
-func newModerator() qwen3GuardModerator {
-	return qwen3GuardModerator{
+//
+// dialect 固定给 qwen3guard：本文件的断言全是按 Qwen3Guard 的输出格式写的，
+// 它们同时充当「接 dialect 之后存量那条路行为不变」的回归网。
+// Zhongsen 的解析在 dialect_zhongsen_test.go 里单独钉。
+func newModerator() textModerator {
+	return textModerator{
+		dialect:    qwen3GuardDialect{},
 		strictness: system_setting.StrictnessStandard,
 		policy: &system_setting.ModerationPolicy{
 			Name:       "标准",

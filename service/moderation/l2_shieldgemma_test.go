@@ -230,7 +230,11 @@ func TestIgnoreKeepsCategoriesLikeL1(t *testing.T) {
 	l2 := shieldGemmaModerator{strictness: system_setting.StrictnessStandard, policy: policy}
 	l2v := l2.verdictFromScores(imageScores{"sexual": 0.99})
 
-	l1 := qwen3GuardModerator{strictness: system_setting.StrictnessStandard, policy: policy}
+	l1 := textModerator{
+		dialect:    qwen3GuardDialect{},
+		strictness: system_setting.StrictnessStandard,
+		policy:     policy,
+	}
 	l1Action := l1.actionForCategories([]string{system_setting.CategorySexual})
 
 	if l2v.Action != ActionPass || l1Action != ActionPass {

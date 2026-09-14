@@ -52,11 +52,26 @@ type Verdict struct {
 	// Words L0 命中的关键词。只进 moderation_log 和管理端，
 	// 绝不能回显给用户——那等于送一个免费的绕过探测器（§9.2.2）。
 	Words []string
+	// Reason 模型给出的归因理由，可空（只有部分 dialect 提供，见 textJudgement.Reason）。
+	//
+	// 与 Result.Reason 不是一回事，别弄混：这里是**模型的判定依据**，进 detail 列给
+	// 运营复核用；Result.Reason 是**给用户看的拒绝文案**，只到类别不带细节（§9.2.2）。
+	// 把这一份漏给用户就等于告诉对方「我们的模型是这样想的」，是个绕过教程。
+	Reason string
+	// Dialect 出这条判定的判定协议。L0（关键词）为空。
+	// 落 detail 列，用于按模型分组统计准召——切换审核模型时唯一的归因依据。
+	Dialect string
 }
 
 // Moderator 一层审核。第一期只有 L0（进程内关键词）。
 type Moderator interface {
 	Name() string
+	// Dialect 这一层用的判定协议，进程内的层（L0）返回空串。
+	//
+	// 在接口上而不是只在 Verdict 里：runChain 在调用失败时会**合成**一条
+	// ActionError 的 Verdict，那条记录同样需要能归因到具体模型——而 fail-open
+	// 开着时，判定服务挂掉期间每个请求都会落一条这样的记录。
+	Dialect() string
 	ModerateText(ctx context.Context, normalized string) (*Verdict, error)
 }
 
@@ -229,7 +244,12 @@ func runChain(
 		if err != nil {
 			// 审核未能完成不是「通过」。判成 ActionError，由 Moderate 里的 fail-close
 			// 收口（§6.4）——这里不直接拒绝，是因为 observe 期不该因审核故障拒请求。
-			v = &Verdict{Action: ActionError, Provider: m.Name(), Detail: err.Error()}
+			v = &Verdict{
+				Action:   ActionError,
+				Provider: m.Name(),
+				Dialect:  m.Dialect(),
+				Detail:   err.Error(),
+			}
 		}
 		if v == nil {
 			continue
@@ -264,10 +284,13 @@ func activeModerators(
 		if policy != nil && policy.Strictness != "" {
 			strictness = policy.Strictness
 		}
-		chain = append(chain, qwen3GuardModerator{
+		chain = append(chain, textModerator{
 			strictness: strictness,
 			policy:     policy,
 			priority:   priority,
+			// dialect 由启用的文本节点决定（同模态下保证唯一，见
+			// validateModerationEndpoints）。这是「换审核模型不用改代码」的落点。
+			dialect: resolveTextDialect(s.TextDialect()),
 		})
 	}
 	return chain

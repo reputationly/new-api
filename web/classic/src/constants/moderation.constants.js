@@ -30,7 +30,36 @@ export const MODERATION_CATEGORIES = [
   { value: 'unethical', label: '违背公序良俗的内容' },
   { value: 'pii', label: '个人隐私信息' },
   { value: 'copyright', label: '版权风险内容' },
+  { value: 'cyber', label: '网络攻击内容' },
+  { value: 'advice', label: '违规专业建议' },
+  { value: 'minor', label: '危害未成年人的内容' },
+  { value: 'terror', label: '暴恐极端内容' },
+  { value: 'vulgar', label: '低俗不良内容' },
 ];
+
+/**
+ * 每个类别在策略里没被显式配置时的实际处置。
+ * 与 system_setting.defaultCategoryActions 逐条一致。
+ *
+ * 界面上必须显示这个值而不是空白：存量策略里没有新增的那几类，
+ * 显示成「未配置」会让人以为它不生效，而它其实正按这里的值在拦或在放。
+ */
+export const MODERATION_CATEGORY_DEFAULTS = {
+  sexual: 'block',
+  illegal: 'block',
+  political: 'block',
+  jailbreak: 'block',
+  violent: 'log',
+  self_harm: 'log',
+  unethical: 'log',
+  pii: 'ignore',
+  copyright: 'ignore',
+  cyber: 'log',
+  advice: 'ignore',
+  minor: 'block',
+  terror: 'block',
+  vulgar: 'log',
+};
 
 /** words 列的分隔符，与 model.ModerationWordsSep 一致（词条本身可能含逗号）。 */
 export const MODERATION_WORDS_SEP = '\n';
@@ -44,17 +73,95 @@ export const MODERATION_POLICY_CATEGORIES = MODERATION_CATEGORIES.filter(
 );
 
 /**
- * 图片/视频判定实际能产出的类别，与 system_setting.ImageCoveredCategories 一致。
- *
- * ShieldGemma 2 只有三条固定策略，是训练时定死的。这个集合必须在界面上标出来：
- * 不标的话，配了「政治 → 直接拒绝」的人会以为涉政图片被拦住了，而图片侧对涉政
- * 一点覆盖都没有——连 L0 关键词那样的兜底都没有（AC 自动机扫不了图）。
+ * 判定协议（dialect）。节点上部署的是哪个模型，决定了请求怎么发、输出怎么解析。
+ * value 与 system_setting.Dialect* 一致。
  */
-export const MODERATION_IMAGE_COVERED = new Set([
-  'sexual',
-  'illegal',
-  'violent',
-]);
+export const MODERATION_TEXT_DIALECTS = [
+  {
+    value: 'qwen3guard',
+    label: 'Qwen3Guard',
+    model: 'qwen3guard',
+    inputLimit: 24000,
+    desc: '九类判定，有「有争议」中间档（严格度对它生效）',
+  },
+  {
+    value: 'zhongsen-text',
+    label: '众森卫士 Text',
+    model: 'Zhongsen-Text-8b',
+    inputLimit: 1500,
+    desc: '29 类细分标签 + 归因理由；二分判定，严格度对它无效',
+  },
+];
+
+/**
+ * 与 system_setting.ImageDialects 一致：这里列的是**已有解析实现、可以安全选中**的，
+ * 不是「我们认识的名字」。
+ *
+ * 众森多模态（zsws-multimodal）故意不在这里——图片侧还没有 dialect 分派，
+ * 选中它会给 ZSWS 发 ShieldGemma 的请求，每次判定都失败，而「审核失败时放行」
+ * 默认开着，于是图片审核静默停摆而「测试连接」照样报绿。
+ * 标一句「暂未实现」不是护栏：能被点到的选项就会被点。
+ */
+export const MODERATION_IMAGE_DIALECTS = [
+  {
+    value: 'shieldgemma2',
+    label: 'ShieldGemma 2',
+    model: 'shieldgemma2',
+    desc: '三条固定策略，P(Yes) 连续分数（严格度阈值对它生效）',
+  },
+];
+
+export const moderationDialectsFor = (modality) =>
+  modality === 'image' ? MODERATION_IMAGE_DIALECTS : MODERATION_TEXT_DIALECTS;
+
+export const moderationDialectDefault = (modality) =>
+  modality === 'image' ? 'shieldgemma2' : 'qwen3guard';
+
+/**
+ * 每个 dialect 实际能产出的类别，与 system_setting.dialectCoveredCategories 一致。
+ * 改这里必须同步改那边，否则界面上的覆盖标注会和实际判定能力对不上。
+ *
+ * 这个标注必须显示出来：不标的话，配了「政治 → 直接拒绝」的人会以为涉政图片被
+ * 拦住了，而 ShieldGemma 对涉政一点覆盖都没有——连 L0 关键词那样的兜底都没有
+ * （AC 自动机扫不了图）。「以为配了其实没有」正是这套系统最不能出的错。
+ */
+export const MODERATION_DIALECT_COVERED = {
+  qwen3guard: new Set([
+    'sexual',
+    'illegal',
+    'political',
+    'jailbreak',
+    'violent',
+    'self_harm',
+    'unethical',
+    'pii',
+    'copyright',
+  ]),
+  'zhongsen-text': new Set([
+    'sexual',
+    'illegal',
+    'political',
+    'violent',
+    'self_harm',
+    'unethical',
+    'pii',
+    'cyber',
+    'advice',
+    'minor',
+    'terror',
+  ]),
+  shieldgemma2: new Set(['sexual', 'illegal', 'violent']),
+  'zsws-multimodal': new Set([
+    'political',
+    'violent',
+    'sexual',
+    'vulgar',
+    'illegal',
+  ]),
+};
+
+export const moderationDialectCovers = (dialect, category) =>
+  MODERATION_DIALECT_COVERED[dialect]?.has(category) ?? false;
 
 /** 类别处置。value 与 system_setting.CategoryAction* 一致。 */
 export const MODERATION_CATEGORY_ACTIONS = [
@@ -67,6 +174,10 @@ export const MODERATION_CATEGORY_ACTIONS = [
  * 判定严格度。它**只影响两件事**，文案必须说清楚，否则会被当成一个全局松紧旋钮：
  * 文本侧决定模型判「有争议」那一档怎么算，图片侧决定 P(Yes) 的阈值。
  * 对「明确违规」和「明确安全」的判定毫无影响。
+ *
+ * 还有一件更容易踩的：**它只对提供中间档的 dialect 有意义**。
+ * 众森卫士 Text 是二分判定（安全 vs 28 个风险码），严格度对它完全无效，
+ * 松紧只能靠下面的类别处置表调。dialect 不支持时界面上必须标出来。
  */
 export const MODERATION_STRICTNESS = [
   {
@@ -85,6 +196,15 @@ export const MODERATION_STRICTNESS = [
     desc: '有争议的按违规处置；图片阈值降到 0.2，召回高但误杀也多',
   },
 ];
+
+/** 有「有争议」中间档、严格度真正生效的 dialect。 */
+export const MODERATION_STRICTNESS_DIALECTS = new Set([
+  'qwen3guard',
+  'shieldgemma2',
+]);
+
+export const moderationStrictnessApplies = (dialect) =>
+  MODERATION_STRICTNESS_DIALECTS.has(dialect);
 
 /** 分组可选的运行模式。空值 = 跟随全局。 */
 export const MODERATION_GROUP_MODES = [
