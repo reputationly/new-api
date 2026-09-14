@@ -98,6 +98,23 @@ func GetHiloModelsConfig(c *gin.Context) {
 	collect(catalog.Video, &out.VideoModels)
 	collect(catalog.Audio, &out.AudioModels)
 
+	// 对话模型。判据和媒体一样：**平台上真有渠道才报** —— 报一个没渠道的
+	// 出来，用户能在界面上选中它，发消息才失败，而失败信息是渠道层的，
+	// 说不清「这个模型没部署」。
+	for _, e := range catalog.Text {
+		if why := unavailable(enabled, e.PlatformModel); why != "" {
+			logSkipOnce(e.Model.ID, why)
+			continue
+		}
+		out.TextModels = append(out.TextModels, e.Model)
+	}
+	// 默认值指向第一个**真的报出去了**的，不是目录里的第一条 ——
+	// 第一条可能因为没渠道被跳过，那时默认值会指向一个选择器里根本不存在
+	// 的 id，客户端只能回落到它自己记着的上一次选择（多半是官方模型）。
+	if len(out.TextModels) > 0 {
+		out.DefaultTextModelID = out.TextModels[0].ID
+	}
+
 	c.JSON(http.StatusOK, out)
 }
 

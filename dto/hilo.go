@@ -152,9 +152,13 @@ type HiloVideoExtension struct {
 
 // HiloTextModel 是文本模型的目录项。字段比媒体模型少得多。
 type HiloTextModel struct {
-	ID              string                    `json:"id"`
-	Name            string                    `json:"name"`
-	Provider        string                    `json:"provider"`
+	ID   string `json:"id"`
+	Name string `json:"name"`
+	// Provider 前缀由**持有 provider 配置的那一方**填(见
+	// setting/hilo_catalog_text.go)。new-api 不下发 provider 配置,
+	// 所以这里留空 —— omitempty 让它整个字段不出现,而不是下发一个
+	// 空字符串:空串会让客户端把模型归到一个叫 "" 的 provider 下。
+	Provider        string                    `json:"provider,omitempty"`
 	Params          map[string]HiloModelParam `json:"params,omitempty"`
 	PromptMaxLength int                       `json:"promptMaxLength,omitempty"`
 	SupportsVideo   bool                      `json:"supportsVideo,omitempty"`

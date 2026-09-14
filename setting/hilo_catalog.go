@@ -111,11 +111,19 @@ func (e HiloCatalogEntry) PlatformModelsOf() []string {
 	return out
 }
 
-// HiloCatalog 四个分类。文本模型走 OpenCode，不在这里配。
+// HiloCatalog 四个分类。
+//
+// 这里原先写着「文本模型走 OpenCode，不在这里配」——**那是错的**，
+// 来龙去脉和后果见 hilo_catalog_text.go 顶部。
 type HiloCatalog struct {
 	Image []HiloCatalogEntry `json:"image"`
 	Video []HiloCatalogEntry `json:"video"`
 	Audio []HiloCatalogEntry `json:"audio"`
+	// Text 对话模型。
+	//
+	// 这个字段不存在时，配置里写了 `text` 段会被 Unmarshal **静默丢弃** ——
+	// 表现为「后台保存成功，但下发的 textModels 还是空的」。
+	Text []HiloTextEntry `json:"text"`
 }
 
 var (
@@ -178,6 +186,11 @@ func normalizeHiloCatalog(c *HiloCatalog) error {
 	}{
 		{"image", c.Image}, {"video", c.Video}, {"audio", c.Audio},
 	}
+	// 对话模型单独校验：字段面和媒体不同（见 hilo_catalog_text.go）。
+	if err := validateTextEntries(c.Text); err != nil {
+		return err
+	}
+
 	for _, g := range groups {
 		for i := range g.entries {
 			e := &g.entries[i]
@@ -405,5 +418,6 @@ func defaultHiloCatalog() HiloCatalog {
 				},
 			},
 		},
+		Text: defaultHiloTextCatalog(),
 	}
 }
