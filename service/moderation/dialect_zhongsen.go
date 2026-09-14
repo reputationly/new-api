@@ -20,8 +20,12 @@ import (
 //
 //  1. **没有 Controversial 这一档**。判定是二分的（sec vs 28 个风险码），
 //     所以 strictness 对这个 dialect 完全无效，松紧只能靠类别处置表调。
-//  2. **提供归因理由**。<explanation> 进 detail 列给待复核队列用——
-//     复核时真正要回答的是「模型为什么判它违规」。
+//  2. **能给归因理由，但默认不取**。<explanation> 对每个请求（包括判成 sec 的）
+//     都会写，约 108 个 completion token，而这条路在全站同步路径上——
+//     所以 MaxTokens 压在 16，理由拿不到。取舍的完整说明见 MaxTokens。
+//
+// 本文件的所有判断都对着模型自带的 chat template 核过
+// （tokenizer_config.json 里的 chat_template 字段），不是照文档写的。
 
 // zhongsenCodes 首词缩写码 → 本项目类别。取自厂商文档《安全标签对照表》（S-Eval 口径）。
 //
@@ -93,17 +97,46 @@ type zhongsenTextDialect struct{}
 
 func (zhongsenTextDialect) Name() string { return system_setting.DialectZhongsenText }
 
-// MaxTokens 256。
+// MaxTokens 16。两个方向都有约束，这个值是夹出来的。
 //
-// **绝不能按厂商文档的「极速模式」设成 1。** 29 个码里同时有 sec（安全）和
+// **下界：绝不能按厂商文档的「极速模式」设成 1。** 29 个码里同时有 sec（安全）和
 // se（伦理违规），而 max_tokens=1 只保证拿到一个 token——如果 "sec" 在这个模型的
 // 词表里不是单 token，截断的结果就是 "se"，于是一次**安全放行被读成伦理类违规**。
 // 安全与违规在这里只差一个字符，是这个 dialect 最隐蔽的失效方式。
 //
-// 取 256 而不是刚好够首行的 8：这样能一并拿到 <explanation> 给待复核队列用。
-// 代价可控——安全输入（占绝大多数流量）在输出 sec 之后就 finish_reason=stop，
-// 不会真的生成 256 个 token，所以这个值只影响违规样本的时延。
-func (zhongsenTextDialect) MaxTokens() int { return 256 }
+// **上界：不能大到让它把 <explanation> 写出来。** 读模型自带的 chat template
+// 可以确认（tokenizer_config.json 里的 chat_template，`# Instructions` 段）：
+//
+//   - Identify the single most relevant category ID for the input text.
+//   - On the next line, provide a concise justification ... <explanation> ...
+//
+// 这两条指令是**无条件**的，没有 safe/unsafe 分支——判成 sec 的请求同样会接着
+// 写那段理由（实测约 108 个 completion token）。而文本审核在每个请求的同步路径上、
+// 预扣费之前，99% 的流量都是安全的：给足预算等于**给每一个正常请求都加上一次
+// 百来 token 的解码**。对比 qwen3guard 实测输出只有 8–9 token、P99 415ms，
+// 那是五倍以上的时延回归。
+//
+// 代价是拿不到 <explanation>，Verdict.Reason 对这个 dialect 恒为空。想要归因理由
+// 就把这个值调到 256 左右——那是一个「用全站时延换复核信息」的取舍，不该是默认。
+// 调之前先确认 reason_first 仍是 false（见 ChatTemplateKwargs），否则首行会变成
+// 理由，而调小这个值就直接把判定截没了。
+func (zhongsenTextDialect) MaxTokens() int { return 16 }
+
+// ChatTemplateKwargs 显式钉住输出顺序。
+//
+// 模板里那段是 `{% if reason_first %}` 理由在前、`{% else %}` 类别码在前。
+// 我们不传时 Jinja 把未定义变量当假值，走的正是 else 分支——也就是说现在的解析
+// （firstNonEmptyLine 精确匹配码表）是**靠一个未定义变量的默认行为**成立的。
+//
+// 显式传 false 把它变成契约：万一模板把默认翻过去，首行就成了英文理由，精确匹配
+// 全部落空 → 每次判定都 ActionError → FailOpen 默认开着 → 静默全量放行。
+// 这种失效没有任何报错，而挡住它的代价只是多发一个字段。
+//
+// vLLM 是 apply_chat_template(messages, **chat_template_kwargs)，所以这里的键
+// 到模板里是顶层变量，正好对上 `{% if reason_first %}`。
+func (zhongsenTextDialect) ChatTemplateKwargs() map[string]any {
+	return map[string]any{"reason_first": false}
+}
 
 // DefaultInputLimit 1500 rune。
 //
@@ -157,8 +190,13 @@ func firstNonEmptyLine(s string) string {
 
 // extractExplanation 取出 <explanation> 里的审计理由。
 //
-// 闭合标签缺失时取到结尾：max_tokens 截断会让输出止于半句话，而半段理由对复核
-// 仍然有用——比丢掉它强。
+// **闭合标签缺失时返回空，而不是取到结尾。**
+//
+// 早先这里是「取到结尾」，理由写的是「半段理由对复核仍然有用」。那个判断在
+// max_tokens=16 的默认下是错的：那个预算刚够首行的类别码，输出必然止于
+// `<explanation>` 刚开头几个字，于是这一列存进去的是 "The" / "输入" 这种
+// 一两个词的碎片。复核看到它既读不懂也不能据它判断，而它长得**像**一条理由——
+// 比空着更有害。要完整理由就得把 MaxTokens 调上去，那时闭合标签自然在。
 func extractExplanation(content string) string {
 	const open = "<explanation>"
 	const close = "</explanation>"
@@ -167,10 +205,11 @@ func extractExplanation(content string) string {
 		return ""
 	}
 	body := content[start+len(open):]
-	if end := strings.Index(body, close); end >= 0 {
-		body = body[:end]
+	end := strings.Index(body, close)
+	if end < 0 {
+		return ""
 	}
-	body = strings.TrimSpace(body)
+	body = strings.TrimSpace(body[:end])
 	if len(body) > zhongsenReasonLimit {
 		// 按 rune 截，避免切出半个 UTF-8 字符（理由可能是中文）。
 		r := []rune(body)

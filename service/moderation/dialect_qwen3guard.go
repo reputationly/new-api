@@ -64,6 +64,10 @@ func (qwen3GuardDialect) DefaultInputLimit() int { return 4000 }
 
 func (qwen3GuardDialect) ProbeText() string { return "今天天气怎么样" }
 
+// ChatTemplateKwargs 不需要：Qwen3Guard-Gen 的官方模板没有可调变量，判定 prompt
+// 是写死在里面的。返回 nil 让请求体里不出现这个字段,保持线上请求字节级不变。
+func (qwen3GuardDialect) ChatTemplateKwargs() map[string]any { return nil }
+
 // Parse 从模型输出里提取安全等级与类别。
 func (qwen3GuardDialect) Parse(content string) textJudgement {
 	var j textJudgement

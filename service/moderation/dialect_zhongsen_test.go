@@ -4,6 +4,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/setting/system_setting"
 )
 
@@ -83,6 +84,88 @@ func TestZhongsenMaxTokensCannotTruncateFirstLine(t *testing.T) {
 	}
 }
 
+// TestZhongsenMaxTokensStaysOnFastPath max_tokens 不能大到让模型写出 <explanation>。
+//
+// 模型自带模板的 `# Instructions` 段是**无条件**的两条：先给类别 ID，下一行给
+// <explanation> 理由。没有 safe/unsafe 分支 —— 判成 sec 的请求同样会接着写那段
+// （实测约 108 个 completion token）。
+//
+// 而文本审核在每个请求的同步路径上、预扣费之前，99% 的流量是安全的：给足预算
+// 等于给每一个正常请求都加一次百来 token 的解码。对比 qwen3guard 实测输出
+// 只有 8–9 token、P99 415ms，那是五倍以上的时延回归。
+//
+// 这条拦的是「为了拿归因理由把它调上去」这类改动 —— 那是个要显式决策的取舍，
+// 不该悄悄变成默认。
+func TestZhongsenMaxTokensStaysOnFastPath(t *testing.T) {
+	got := (zhongsenTextDialect{}).MaxTokens()
+	if got > 32 {
+		t.Fatalf("max_tokens=%d 会让模型把 <explanation> 写出来（约 108 token），"+
+			"而它对每个安全请求也照写——这是加在全站同步路径上的时延", got)
+	}
+}
+
+// TestZhongsenPinsOutputOrder 输出顺序必须是显式契约，不能靠未定义变量。
+//
+// 模板里 `{% if reason_first %}` 理由在前、`{% else %}` 类别码在前。不传时 Jinja
+// 把未定义变量当假值，正好走 else —— 也就是说解析器的正确性挂在一个默认行为上。
+// 顺序一反，首行变成英文理由，精确匹配全部落空 → 每次 ActionError →
+// FailOpen 默认开着 → 静默全量放行，且没有任何报错。
+func TestZhongsenPinsOutputOrder(t *testing.T) {
+	kw := (zhongsenTextDialect{}).ChatTemplateKwargs()
+	v, ok := kw["reason_first"]
+	if !ok {
+		t.Fatal("必须显式传 reason_first，不能依赖模板里未定义变量的默认假值")
+	}
+	if b, isBool := v.(bool); !isBool || b {
+		t.Fatalf("reason_first 必须是 false（类别码在首行），得到 %#v", v)
+	}
+}
+
+// TestChatTemplateKwargsOnTheWire 断言**marshal 之后的请求体**，而不是 dialect 的返回值。
+//
+// 这两件事都是对线路字节的承诺，代理断言（比如只检查返回值是不是 nil）测不到：
+//
+//  1. qwen3guard 的请求体里不能出现 chat_template_kwargs —— 它是线上正在跑的那条路，
+//     多一个字段就是一次无谓的变更；
+//  2. zhongsen 的 reason_first **必须真的带着 false 发出去**。这一条是 Rule 6 那个
+//     陷阱的反面：`false` 之所以没被 omitempty 吞掉，靠的是它在 map 的**值**里
+//     （omitempty 只作用于 map 本身）。哪天有人把 ChatTemplateKwargs 换成一个带
+//     omitempty 的结构体字段，`false` 就会静默消失，输出顺序的保护随之失效，
+//     而返回值层面的断言完全看不出来。
+//
+// 顺带覆盖了 common.Marshal 这一层：将来真换掉 JSON 实现而 omitempty 语义有差异时，
+// 这里会红——那正是 Rule 1 要求统一走 common 包装的理由。
+func TestChatTemplateKwargsOnTheWire(t *testing.T) {
+	marshal := func(t *testing.T, d textDialect) string {
+		t.Helper()
+		b, err := common.Marshal(chatRequest{
+			Model:              "m",
+			Messages:           []chatMessage{{Role: "user", Content: "x"}},
+			MaxTokens:          d.MaxTokens(),
+			Temperature:        0,
+			ChatTemplateKwargs: d.ChatTemplateKwargs(),
+		})
+		if err != nil {
+			t.Fatalf("marshal 失败: %v", err)
+		}
+		return string(b)
+	}
+
+	// qwen3guard：字段必须整个不出现。
+	//
+	// 注意不能只断言「不含 reason_first」——那样返回一个空 map 也会通过，
+	// 而要守的是「这个键一个字都不许出现」。
+	if got := marshal(t, qwen3GuardDialect{}); strings.Contains(got, "chat_template_kwargs") {
+		t.Fatalf("qwen3guard 的请求体不该出现 chat_template_kwargs：%s", got)
+	}
+
+	// zhongsen：必须带着 false 出现。
+	got := marshal(t, zhongsenTextDialect{})
+	if !strings.Contains(got, `"chat_template_kwargs":{"reason_first":false}`) {
+		t.Fatalf("zhongsen 必须显式发 reason_first=false，否则首行顺序的保护是空的：%s", got)
+	}
+}
+
 func TestZhongsenParseEachCode(t *testing.T) {
 	d := zhongsenTextDialect{}
 	for code, wantCat := range zhongsenCodes {
@@ -146,11 +229,18 @@ func TestZhongsenExtractExplanation(t *testing.T) {
 		t.Fatalf("理由提取有误：%q", j.Reason)
 	}
 
-	// 闭合标签缺失（被 max_tokens 截断）：取到结尾。
-	// 半段理由对复核仍然有用，比丢掉强。
+	// 闭合标签缺失（被 max_tokens 截断）：**返回空，不要碎片**。
+	//
+	// 默认 MaxTokens=16 只够首行的类别码，所以截断点必然落在 <explanation> 刚开头，
+	// 「取到结尾」会把 "The" 这种一两个词的碎片存进 detail。它读不懂又长得**像**
+	// 一条理由，比空着更有害。
 	j = d.Parse("dw\n<explanation>\nThe input requests bomb-making")
-	if j.Reason != "The input requests bomb-making" {
-		t.Fatalf("截断的理由应取到结尾，得到 %q", j.Reason)
+	if j.Reason != "" {
+		t.Fatalf("理由不完整时应返回空而不是碎片，得到 %q", j.Reason)
+	}
+	// 判定本身不受影响——理由是附加信息，拿不到不能影响拦不拦。
+	if j.Level != LevelUnsafe {
+		t.Fatalf("理由被截断不应影响判定，得到 %q", j.Level)
 	}
 
 	// 没有 explanation（极速模式）：理由为空，判定照常。

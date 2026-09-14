@@ -59,6 +59,9 @@ type chatRequest struct {
 	MaxTokens int           `json:"max_tokens"`
 	// Temperature 固定 0：判定要可复现，同一段文本两次调用给出不同结论是没法排查的。
 	Temperature float64 `json:"temperature"`
+	// ChatTemplateKwargs 传给模型 chat template 的变量，由 dialect 提供。
+	// **必须带 omitempty**：不需要它的 dialect 返回 nil，字段就不出现在请求体里。
+	ChatTemplateKwargs map[string]any `json:"chat_template_kwargs,omitempty"`
 }
 
 type chatMessage struct {
@@ -170,7 +173,7 @@ func (m textModerator) moderateSegment(
 		if frozenUntil(ep.Name).After(time.Now()) {
 			continue
 		}
-		content, status, err := callGuard(ctx, &ep, text, m.dialect.MaxTokens())
+		content, status, err := callGuard(ctx, &ep, text, m.dialect)
 		if err != nil {
 			// 失败分三类，只有一类该归咎于节点：
 			//
@@ -283,9 +286,9 @@ func callGuard(
 	ctx context.Context,
 	ep *system_setting.ModerationEndpoint,
 	text string,
-	maxTokens int,
+	d textDialect,
 ) (string, int, error) {
-	return callGuardWithKey(ctx, ep, ep.GetAPIKey(), text, maxTokens)
+	return callGuardWithKey(ctx, ep, ep.GetAPIKey(), text, d)
 }
 
 // callGuardWithKey 与 callGuard 相同，但由调用方给出明文 key。
@@ -295,7 +298,7 @@ func callGuardWithKey(
 	ep *system_setting.ModerationEndpoint,
 	apiKey string,
 	text string,
-	maxTokens int,
+	d textDialect,
 ) (string, int, error) {
 	timeout := time.Duration(ep.TimeoutMS) * time.Millisecond
 	if timeout <= 0 {
@@ -304,13 +307,19 @@ func callGuardWithKey(
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
-	// max_tokens 由 dialect 给：各模型的输出长度差一个量级，而**调小有真实危险**
-	// （见 zhongsenTextDialect.MaxTokens 里关于 sec/se 截断的说明），所以它不是配置项。
+	// max_tokens 与 chat_template_kwargs 都由 dialect 给：前者各模型差一个量级、
+	// 而且**两个方向调错都有真实危险**（见 zhongsenTextDialect.MaxTokens），
+	// 后者是模板变量。所以它们不是配置项。
+	//
+	// 只发一条 user message：护栏模型的判定 prompt 内置在 chat template 里，
+	// **绝不能自己塞 system message** —— 有些模板（如 ZSWS）在检测到调用方给了
+	// system 时会把整份判定 prompt 丢掉，退化成一个普通对话模型。
 	body, err := common.Marshal(chatRequest{
-		Model:       ep.Model,
-		Messages:    []chatMessage{{Role: "user", Content: text}},
-		MaxTokens:   maxTokens,
-		Temperature: 0,
+		Model:              ep.Model,
+		Messages:           []chatMessage{{Role: "user", Content: text}},
+		MaxTokens:          d.MaxTokens(),
+		Temperature:        0,
+		ChatTemplateKwargs: d.ChatTemplateKwargs(),
 	})
 	if err != nil {
 		return "", 0, err
@@ -572,7 +581,7 @@ func TestEndpoint(ctx context.Context, baseURL, model, apiKey, dialectName strin
 	}
 	// 走传入的明文 key 而不是 ep.GetAPIKey()：传进来的已经是明文，
 	// 再解密一次会把它当密文处理然后失败。
-	raw, _, err := callGuardWithKey(ctx, &ep, apiKey, d.ProbeText(), d.MaxTokens())
+	raw, _, err := callGuardWithKey(ctx, &ep, apiKey, d.ProbeText(), d)
 	if err != nil {
 		return TestResult{Err: err}
 	}

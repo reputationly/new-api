@@ -60,6 +60,21 @@ type textDialect interface {
 	// 按模型的上下文窗口给，取值必须保证「一段 + 判定模板」塞得进窗口。
 	DefaultInputLimit() int
 
+	// ChatTemplateKwargs 要传给模型 chat template 的变量，可为 nil。
+	//
+	// 返回 nil 时请求体里**不出现这个字段**（omitempty），所以对不需要它的 dialect
+	// 是零影响——qwen3guard 的线上请求因此保持字节级不变。空 map 与 nil 等价，
+	// encoding/json 的 omitempty 对「长度为 0 的 map」同样省略（实测确认）。
+	//
+	// 反过来要注意：**键的值不受 omitempty 影响**。`{"reason_first": false}` 里的
+	// false 会照常发出去，正是靠这一点才能显式传一个「假」值；换成带 omitempty 的
+	// 结构体字段就会被静默吞掉（见 AGENTS.md Rule 6）。
+	//
+	// vLLM 会 apply_chat_template(messages, **chat_template_kwargs)，也就是把这里的
+	// 键**splat 成模板的顶层变量**。注意这跟「模板里有个叫 chat_template_kwargs 的
+	// dict 变量」是两种不同的取法，有些模板两种都认，读模板时要看清它取哪个。
+	ChatTemplateKwargs() map[string]any
+
 	// Parse 把模型输出解析成归一化判定。无法识别时返回 Level 为空的结果。
 	Parse(content string) textJudgement
 
