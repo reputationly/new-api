@@ -268,6 +268,30 @@ func TestNewCategoriesFallBackToDefaultsNotBlock(t *testing.T) {
 		}
 	}
 
+	// **反面，而且是更要紧的那一半**：原来那九类缺键时必须仍然 block。
+	//
+	// 「缺键 = block」是既有契约——前端 updateCategory 只写用户点过的那个键，
+	// 它自己的注释就写着「存量策略、手写 JSON 都不要求九类齐全」。拿新增类别的
+	// 默认表去兜全部类别，会把存量策略静默放松：violent / self_harm / unethical
+	// 从 block 变 log，pii / copyright 从 block 变 ignore。
+	partial := &ModerationPolicy{
+		Name:       "严格",
+		Categories: map[string]string{CategoryPII: CategoryActionLog},
+	}
+	for _, cat := range []string{
+		CategorySexual, CategoryIllegal, CategoryPolitical, CategoryJailbreak,
+		CategoryViolent, CategorySelfHarm, CategoryUnethical, CategoryCopyright,
+	} {
+		if got := partial.CategoryAction(cat); got != CategoryActionBlock {
+			t.Fatalf("原九类缺键时必须仍按 block 处置（既有契约），类别 %s 得到 %s——"+
+				"这会把「只列放宽项、其余留空靠默认拦」构造出来的严格策略整条掏空", cat, got)
+		}
+	}
+	// 显式配的那个不受影响。
+	if got := partial.CategoryAction(CategoryPII); got != CategoryActionLog {
+		t.Fatalf("显式配置必须优先，得到 %s", got)
+	}
+
 	// 反面：真正未登记的类别（上游报了个我们没见过的）仍然必须 block。
 	// 这条兜底不能被 defaultCategoryActions 顺手削掉——丢了就等于把未知风险当安全。
 	if got := legacy.CategoryAction(CategoryUnknownUpstream); got != CategoryActionBlock {

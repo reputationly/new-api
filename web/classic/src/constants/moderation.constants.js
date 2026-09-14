@@ -38,11 +38,12 @@ export const MODERATION_CATEGORIES = [
 ];
 
 /**
- * 每个类别在策略里没被显式配置时的实际处置。
+ * **开箱默认**：内置策略与新建策略每一类该填什么。
  * 与 system_setting.defaultCategoryActions 逐条一致。
  *
- * 界面上必须显示这个值而不是空白：存量策略里没有新增的那几类，
- * 显示成「未配置」会让人以为它不生效，而它其实正按这里的值在拦或在放。
+ * 注意它**不是**「策略里缺这个键时怎么判」——后者见
+ * moderationAbsentCategoryAction，覆盖面窄得多。把两者当成一回事会让界面
+ * 显示出后端并不会执行的动作。
  */
 export const MODERATION_CATEGORY_DEFAULTS = {
   sexual: 'block',
@@ -60,6 +61,30 @@ export const MODERATION_CATEGORY_DEFAULTS = {
   terror: 'block',
   vulgar: 'log',
 };
+
+/**
+ * 策略里**缺这个键**时才用的兜底，只含接众森卫士时新增的五类。
+ * 与 system_setting.newCategoryDefaults 逐条一致。
+ *
+ * 原来的九类刻意不在这里：它们的「缺键 = 直接拒绝」是既有契约（下面
+ * updateCategory 的注释也说了，存量策略与手写 JSON 都不要求九类齐全）。
+ * 拿开箱默认去兜全部类别会把存量策略静默放松，对「严格」这类策略尤其致命。
+ */
+const MODERATION_NEW_CATEGORY_DEFAULTS = {
+  cyber: 'log',
+  advice: 'ignore',
+  minor: 'block',
+  terror: 'block',
+  vulgar: 'log',
+};
+
+/**
+ * 策略里没配这一类时，后端**真会执行**的动作。
+ * 界面显示的必须是这个值——显示成别的就是在骗人，而这一列的全部价值
+ * 就是让运营据它决策。与 system_setting.AbsentCategoryAction 一致。
+ */
+export const moderationAbsentCategoryAction = (category) =>
+  MODERATION_NEW_CATEGORY_DEFAULTS[category] ?? 'block';
 
 /** words 列的分隔符，与 model.ModerationWordsSep 一致（词条本身可能含逗号）。 */
 export const MODERATION_WORDS_SEP = '\n';

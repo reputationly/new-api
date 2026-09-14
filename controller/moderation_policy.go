@@ -91,10 +91,41 @@ func SaveModerationPolicyConfig(c *gin.Context) {
 func normalizeModerationPolicyConfig(req *moderationPolicyConfigRequest) {
 	for i := range req.Policies {
 		req.Policies[i].Name = strings.TrimSpace(req.Policies[i].Name)
+		materializeCategoryActions(&req.Policies[i])
 	}
 	req.DefaultPolicy = strings.TrimSpace(req.DefaultPolicy)
 	for g, gp := range req.GroupPolicies {
 		gp.Policy = strings.TrimSpace(gp.Policy)
 		req.GroupPolicies[g] = gp
+	}
+}
+
+// materializeCategoryActions 把策略里缺的类别按**当前生效值**补齐，让 14 类都显式存在。
+//
+// 补的是 CategoryAction 此刻就会返回的那个动作，所以**按构造零行为变化**——
+// 它只是把隐式的东西写明。
+//
+// 为什么要补：
+//
+//  1. 「缺键」是个静默的歧义源。缺键的含义由代码里的兜底决定，而兜底一改，
+//     所有缺键策略的判定就跟着变——这次新增五个类别时就差点把存量策略放松掉
+//     （见 system_setting.newCategoryDefaults）。显式写下来之后，运营配的东西
+//     不再依赖任何兜底规则。
+//  2. 界面上补不了。配置页的下拉框对缺键显示的正是兜底值，而 Semi 的 Select
+//     选同一个值不触发 onChange —— 于是「把它设成界面上已经显示的那个值」
+//     这个最自然的操作根本写不进键去。只有在保存这一步补才补得上。
+//
+// 放在这里而不是前端：这是策略落库的唯一必经之路，API 直接调用的也一样被覆盖。
+func materializeCategoryActions(p *system_setting.ModerationPolicy) {
+	if p.Categories == nil {
+		p.Categories = make(map[string]string, len(system_setting.AllCategories))
+	}
+	for _, c := range system_setting.AllCategories {
+		if a, ok := p.Categories[c]; ok && a != "" {
+			continue
+		}
+		// 注意取的是 AbsentCategoryAction（缺键兜底）而不是 DefaultCategoryAction
+		// （开箱默认）。两者对原来那九类不同，用错就等于借着「补全」偷偷放宽。
+		p.Categories[c] = system_setting.AbsentCategoryAction(c)
 	}
 }

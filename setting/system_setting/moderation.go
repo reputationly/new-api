@@ -184,10 +184,45 @@ var defaultCategoryActions = map[string]string{
 	CategoryVulgar:    CategoryActionLog,
 }
 
-// DefaultCategoryAction 单个类别的默认处置，供配置页渲染「未配置」时的实际行为。
-// 查不到时返回 block，与 CategoryAction 的兜底保持一致。
+// DefaultCategoryAction 单个类别的**开箱默认**：内置策略与新建策略该填什么。
+//
+// 注意它不等于「策略里缺这个键时怎么判」，后者是 CategoryAction 的兜底，
+// 覆盖面窄得多，见 newCategoryDefaults。把两者当成一回事会静默放松存量策略。
 func DefaultCategoryAction(category string) string {
 	if a, ok := defaultCategoryActions[category]; ok {
+		return a
+	}
+	return CategoryActionBlock
+}
+
+// newCategoryDefaults **策略里缺键时**才用的兜底，只含接 Zhongsen 时新增的那五类。
+//
+// 为什么不能直接用 defaultCategoryActions：那张表含原来的九类，而九类的
+// 「缺键 = block」是**既有契约**——前端的 updateCategory 只写用户点过的那个键，
+// 它自己的注释也写着「存量策略、手写 JSON 都不要求九类齐全」，所以缺键是这套
+// 配置受支持的常态，不是异常。
+//
+// 拿全表做兜底会把存量策略静默放松：violent / self_harm / unethical 从 block 变 log，
+// pii / copyright 从 block 变 ignore。**对「严格」这类策略尤其致命**——旧语义下
+// 「只列出要放宽的类别、其余留空靠默认拦」是个可用的写法，那样构造的严格策略
+// 会被整条掏空，而界面上什么都看不出来。
+//
+// 新增的五类则必须有兜底：存量策略里不可能有它们，落到「未登记即 block」就是
+// 升级当天 cyber 开始拦技术咨询、advice 开始拦投资提问。
+var newCategoryDefaults = map[string]string{
+	CategoryCyber:  CategoryActionLog,
+	CategoryAdvice: CategoryActionIgnore,
+	CategoryMinor:  CategoryActionBlock,
+	CategoryTerror: CategoryActionBlock,
+	CategoryVulgar: CategoryActionLog,
+}
+
+// AbsentCategoryAction 策略里缺这个键时的实际处置。配置页据它渲染「未配置」的显示值。
+//
+// 导出是为了让前端有唯一真相来源：界面显示的必须是后端真会执行的那个动作，
+// 显示成别的就是在骗人——而这一列的全部价值就是让运营据它决策。
+func AbsentCategoryAction(category string) string {
+	if a, ok := newCategoryDefaults[category]; ok {
 		return a
 	}
 	return CategoryActionBlock
@@ -840,11 +875,13 @@ func (s *ModerationSettings) ResolvePolicy(group string) *ModerationPolicy {
 // 三级查找，顺序有讲究：
 //
 //  1. 策略里显式配了 —— 用它，运营的配置永远优先；
-//  2. 策略里没配但这是个**我们登记过**的类别 —— 用 defaultCategoryActions。
-//     新增类别时存量策略必然走到这里，而让它们默认 block 就是升级当天开始误杀
-//     （cyber 会拦技术咨询、advice 会拦投资提问），且界面上那几行看起来根本没配过；
-//  3. 连登记都没有（CategoryUnknownUpstream、或上游报了个新类别）—— block。
-//     模型返回了我们没见过的类别时，宁可误拦一次也不能因为「配置里没写」就放行。
+//  2. 策略里没配，且这是接 Zhongsen 时**新增**的那五类 —— 用 newCategoryDefaults。
+//     存量策略里不可能有它们，落到下面那条就是升级当天 cyber 开始拦技术咨询、
+//     advice 开始拦投资提问，而界面上那几行看起来根本没配过；
+//  3. 其余一律 block。**包括原来那九类**——它们的「缺键 = block」是既有契约，
+//     不能因为新增类别顺手改掉（理由见 newCategoryDefaults）。
+//     也包括 CategoryUnknownUpstream 和上游报来的新类别：模型返回了我们没见过的
+//     类别时，宁可误拦一次也不能因为「配置里没写」就放行。
 func (p *ModerationPolicy) CategoryAction(category string) string {
 	if p == nil {
 		return CategoryActionBlock
@@ -852,7 +889,7 @@ func (p *ModerationPolicy) CategoryAction(category string) string {
 	if a, ok := p.Categories[category]; ok && a != "" {
 		return a
 	}
-	return DefaultCategoryAction(category)
+	return AbsentCategoryAction(category)
 }
 
 // TextEndpoints 返回启用的文本审核节点（modality 零值按 text）。

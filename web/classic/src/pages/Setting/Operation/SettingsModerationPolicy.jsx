@@ -22,6 +22,7 @@ import {
   MODERATION_GROUP_MODES,
   MODERATION_POLICY_CATEGORIES,
   MODERATION_STRICTNESS,
+  moderationAbsentCategoryAction,
   moderationCategoryLabel,
   moderationDialectCovers,
   moderationDialectDefault,
@@ -223,12 +224,16 @@ export default function SettingsModerationPolicy(props) {
   }
 
   function updateCategory(idx, cat, action) {
-    // 兜底值必须与下面下拉框显示的那个一致（同样是 || 'block'）：
-    // categories 里缺键时界面显示「直接拒绝」（与后端「未登记即 block」一致），
-    // 但原始值是 undefined。不兜底的话，把一个显示为「直接拒绝」的类别改成
-    // 「仅记录」会**跳过**这条专门为放宽设计的确认——而存量策略、手写 JSON
-    // 都不要求九类齐全。
-    const current = policies[idx]?.categories?.[cat] || 'block';
+    // 兜底值必须与下面下拉框显示的那个**用同一个函数算**：
+    // categories 里缺键时界面显示的是后端真会执行的动作，但原始值是 undefined。
+    // 不兜底的话，把一个显示为「直接拒绝」的类别改成「仅记录」会**跳过**这条
+    // 专门为放宽设计的确认——而存量策略、手写 JSON 都不要求九类齐全。
+    //
+    // 两处不一致同样有害：新增的五类缺键时显示的是各自默认值（如 cyber 显示
+    // 「仅记录」），这里若写死 block，把它改成「不处理」会被当成 block→ignore
+    // 而弹出一条根本不成立的放宽确认。
+    const current =
+      policies[idx]?.categories?.[cat] || moderationAbsentCategoryAction(cat);
     const apply = () =>
       setPolicies((prev) =>
         prev.map((p, i) =>
@@ -370,13 +375,15 @@ export default function SettingsModerationPolicy(props) {
       width: 140,
       render: (_, record) => (
         <Select
-          // 未配置时显示的是**后端实际会用的默认值**，不是写死的 block。
-          // 存量策略里没有新增的那几类（cyber / advice / minor / terror / vulgar），
-          // 一律显示成 block 就是在说谎——后端对它们走的是 defaultCategoryActions。
+          // 未配置时显示的是**后端实际会用的那个动作**。
+          //
+          // 新增的五类（cyber / advice / minor / terror / vulgar）缺键时走各自的
+          // 默认值，一律显示成「直接拒绝」是在说谎；而原来的九类缺键时后端仍然
+          // 按「直接拒绝」处置（既有契约），显示成它们的开箱默认同样是说谎，
+          // 方向还相反——会让人以为一条没配过的「严格」策略比实际宽松。
           value={
             policies[idx]?.categories?.[record.value] ||
-            MODERATION_CATEGORY_DEFAULTS[record.value] ||
-            'block'
+            moderationAbsentCategoryAction(record.value)
           }
           style={{ width: '100%' }}
           onChange={(v) => updateCategory(idx, record.value, v)}
@@ -410,8 +417,7 @@ export default function SettingsModerationPolicy(props) {
         // 比不显示更糟：运营会读成「这一类很少见」，正好做出反向决策。
         const action =
           policies[idx]?.categories?.[record.value] ||
-          MODERATION_CATEGORY_DEFAULTS[record.value] ||
-          'block';
+          moderationAbsentCategoryAction(record.value);
         if (action === 'ignore') {
           return (
             <Tooltip
