@@ -457,6 +457,13 @@ func SetupContextForSelectedChannel(c *gin.Context, channel *model.Channel, mode
 
 	common.SetContextKey(c, constant.ContextKeySystemPromptOverride, false)
 
+	// 重试循环复用同一个 gin.Context，所以每次换渠道都要清掉上一次算出的
+	// GPUStack 实例路由头。不清的话，第一次尝试的头会被下发给重试选中的另一个
+	// 渠道——对别的 GPUStack 集群意味着显式路由到一个不提供该模型的实例（重试
+	// 直接失效），对第三方上游则是泄漏内部拓扑。在这里清而不是各 handler 各清，
+	// 是因为只有 OpenAI-chat 那条路会重算它，Claude / Responses 两条路不会。
+	common.SetContextKey(c, constant.ContextKeyGPUStackInstanceHeader, "")
+
 	// TODO: api_version统一
 	switch channel.Type {
 	case constant.ChannelTypeAzure:

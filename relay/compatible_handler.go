@@ -23,6 +23,23 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
+// invalidateGPUStackAffinityOnFailure 上游失败后标记该渠道的实例列表过期。
+//
+// 只在本次真的下发了亲和头时才动手：没下发就说明这次走的是网关自己的分流，失败与
+// 实例列表无关，拿它去失效缓存只会让正常的用户错误不断打掉亲和。
+// statusCode 传 0 表示连接层失败（还没拿到响应）。
+func invalidateGPUStackAffinityOnFailure(
+	c *gin.Context, info *relaycommon.RelayInfo, statusCode int,
+) {
+	if common.GetContextKeyString(c, constant.ContextKeyGPUStackInstanceHeader) == "" {
+		return
+	}
+	if statusCode != 0 && !service.GPUStackAffinityShouldInvalidate(statusCode) {
+		return
+	}
+	service.InvalidateGPUStackInstances(info.ChannelId)
+}
+
 func TextHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *types.NewAPIError) {
 	info.InitChannelMeta(c)
 
@@ -44,6 +61,19 @@ func TextHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *types
 	if err != nil {
 		return types.NewError(err, types.ErrorCodeChannelModelMappedError, types.ErrOptionWithSkipRetry())
 	}
+
+	// GPUStack 实例亲和：在这里算，因为这是唯一既拿得到 messages（亲和键的来源）
+	// 又还没把请求体序列化出去的地方。算出的路由头由 DoApiRequest 下发。
+	//
+	// **必须无条件写入**（不做亲和时写空串）：重试循环复用同一个 gin.Context，
+	// 若只在非空时写，第一次尝试算出的头会残留下来，被下发给重试选中的另一个渠道
+	// ——那对别的 GPUStack 集群意味着显式路由到一个不提供该模型的实例（重试直接
+	// 失效），对第三方上游则是泄漏内部拓扑。
+	common.SetContextKey(c, constant.ContextKeyGPUStackInstanceHeader,
+		service.GPUStackAffinityHeader(
+			info.ChannelSetting, info.ChannelId, info.ChannelBaseUrl,
+			info.UpstreamModelName, request.Messages,
+		))
 
 	includeUsage := true
 	// 判断用户是否需要返回使用情况
@@ -182,6 +212,9 @@ func TextHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *types
 	var httpResp *http.Response
 	resp, err := adaptor.DoRequest(c, info, requestBody)
 	if err != nil {
+		// 连不上：既然我们下发了实例路由头、放弃了网关的分流兜底，就得自己感知
+		// 实例已不可用，否则这个 TTL 窗口内的请求会持续打向一台死实例。
+		invalidateGPUStackAffinityOnFailure(c, info, 0)
 		return types.NewOpenAIError(err, types.ErrorCodeDoRequestFailed, http.StatusInternalServerError)
 	}
 
@@ -191,6 +224,7 @@ func TextHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *types
 		httpResp = resp.(*http.Response)
 		info.IsStream = info.IsStream || strings.HasPrefix(httpResp.Header.Get("Content-Type"), "text/event-stream")
 		if httpResp.StatusCode != http.StatusOK {
+			invalidateGPUStackAffinityOnFailure(c, info, httpResp.StatusCode)
 			newApiErr := service.RelayErrorHandler(c.Request.Context(), httpResp, false)
 			// reset status code 重置状态码
 			service.ResetStatusCode(newApiErr, statusCodeMappingStr)

@@ -12,6 +12,7 @@ import (
 	"time"
 
 	common2 "github.com/QuantumNous/new-api/common"
+	appconstant "github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/logger"
 	"github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relay/constant"
@@ -287,6 +288,24 @@ func applyHeaderOverrideToRequest(req *http.Request, headerOverride map[string]s
 	}
 }
 
+// gpustackInstanceHeaderKey 是 GPUStack 网关认的实例路由头。
+const gpustackInstanceHeaderKey = "X-GPUStack-Model-Instance"
+
+// applyGPUStackAffinityHeader 下发 TextHelper 算好的实例路由头。
+//
+// 放在 header override 之后：override 是用户显式配置的，优先级最高，如果运营自己
+// 指定了这个头就不该被亲和覆盖掉。
+func applyGPUStackAffinityHeader(req *http.Request, c *gin.Context) {
+	if req == nil || c == nil {
+		return
+	}
+	value := common2.GetContextKeyString(c, appconstant.ContextKeyGPUStackInstanceHeader)
+	if value == "" || req.Header.Get(gpustackInstanceHeaderKey) != "" {
+		return
+	}
+	req.Header.Set(gpustackInstanceHeaderKey, value)
+}
+
 func DoApiRequest(a Adaptor, c *gin.Context, info *common.RelayInfo, requestBody io.Reader) (*http.Response, error) {
 	fullRequestURL, err := a.GetRequestURL(info)
 	if err != nil {
@@ -311,6 +330,7 @@ func DoApiRequest(a Adaptor, c *gin.Context, info *common.RelayInfo, requestBody
 		return nil, err
 	}
 	applyHeaderOverrideToRequest(req, headerOverride)
+	applyGPUStackAffinityHeader(req, c)
 	resp, err := doRequest(c, req, info)
 	if err != nil {
 		return nil, fmt.Errorf("do request failed: %w", err)

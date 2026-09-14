@@ -199,6 +199,8 @@ const EditChannelModal = (props) => {
     pass_through_result_url: false,
     system_prompt: '',
     system_prompt_override: false,
+    gpustack_affinity: false,
+    gpustack_affinity_key: '',
     settings: '',
     // 仅 Vertex: 密钥格式（存入 settings.vertex_key_type）
     vertex_key_type: 'json',
@@ -517,6 +519,7 @@ const EditChannelModal = (props) => {
     pass_through_body_enabled: false,
     pass_through_result_url: false,
     system_prompt: '',
+    gpustack_affinity: false,
   });
   const showApiConfigCard = true; // 控制是否显示 API 配置卡片
   const getInitValues = () => ({ ...originInputs });
@@ -886,6 +889,9 @@ const EditChannelModal = (props) => {
           data.system_prompt = parsedSettings.system_prompt || '';
           data.system_prompt_override =
             parsedSettings.system_prompt_override || false;
+          data.gpustack_affinity = parsedSettings.gpustack_affinity || false;
+          data.gpustack_affinity_key =
+            parsedSettings.gpustack_affinity_key || '';
         } catch (error) {
           console.error('解析渠道设置失败:', error);
           data.force_format = false;
@@ -895,6 +901,8 @@ const EditChannelModal = (props) => {
           data.pass_through_result_url = false;
           data.system_prompt = '';
           data.system_prompt_override = false;
+          data.gpustack_affinity = false;
+          data.gpustack_affinity_key = '';
         }
       } else {
         data.force_format = false;
@@ -904,6 +912,8 @@ const EditChannelModal = (props) => {
         data.pass_through_result_url = false;
         data.system_prompt = '';
         data.system_prompt_override = false;
+        data.gpustack_affinity = false;
+        data.gpustack_affinity_key = '';
       }
 
       if (data.settings) {
@@ -1014,6 +1024,8 @@ const EditChannelModal = (props) => {
         pass_through_result_url: data.pass_through_result_url,
         system_prompt: data.system_prompt,
         system_prompt_override: data.system_prompt_override || false,
+        gpustack_affinity: data.gpustack_affinity || false,
+        gpustack_affinity_key: data.gpustack_affinity_key || '',
       });
       initialModelsRef.current = (data.models || [])
         .map((model) => (model || '').trim())
@@ -1057,7 +1069,8 @@ const EditChannelModal = (props) => {
         data.pass_through_result_url ||
         data.force_format ||
         data.claude_beta_query ||
-        data.system_prompt_override;
+        data.system_prompt_override ||
+        data.gpustack_affinity;
       if (hasAdvancedValues) {
         setAdvancedSettingsOpen(true);
       }
@@ -1409,6 +1422,8 @@ const EditChannelModal = (props) => {
       pass_through_result_url: false,
       system_prompt: '',
       system_prompt_override: false,
+      gpustack_affinity: false,
+      gpustack_affinity_key: '',
     });
     // 重置密钥模式状态
     setKeyMode('append');
@@ -1780,6 +1795,8 @@ const EditChannelModal = (props) => {
       pass_through_result_url: localInputs.pass_through_result_url || false,
       system_prompt: localInputs.system_prompt || '',
       system_prompt_override: localInputs.system_prompt_override || false,
+      gpustack_affinity: localInputs.gpustack_affinity || false,
+      gpustack_affinity_key: localInputs.gpustack_affinity_key || '',
     };
     localInputs.setting = JSON.stringify(channelExtraSettings);
 
@@ -1861,6 +1878,8 @@ const EditChannelModal = (props) => {
     delete localInputs.pass_through_body_enabled;
     delete localInputs.system_prompt;
     delete localInputs.system_prompt_override;
+    delete localInputs.gpustack_affinity;
+    delete localInputs.gpustack_affinity_key;
     delete localInputs.is_enterprise_account;
     // 顶层的 vertex_key_type 不应发送给后端
     delete localInputs.vertex_key_type;
@@ -2799,6 +2818,36 @@ const EditChannelModal = (props) => {
                       '如果用户请求中包含系统提示词，则使用此设置拼接到用户的系统提示词前面',
                     )}
                   />
+                  <Form.Switch
+                    field='gpustack_affinity'
+                    label={t('GPUStack 实例亲和')}
+                    checkedText={t('开')}
+                    uncheckedText={t('关')}
+                    onChange={(value) =>
+                      handleChannelSettingsChange('gpustack_affinity', value)
+                    }
+                    extraText={t(
+                      '把同一段对话的后续轮次路由回同一个 GPUStack 实例，避免前缀缓存被随机分流摊薄。仅对以 GPUStack 为上游的渠道有意义，且只作用于 OpenAI 格式的对话接口（/v1/messages 与 /v1/responses 不受影响）',
+                    )}
+                  />
+                  {channelSettings.gpustack_affinity && (
+                    <Form.Input
+                      field='gpustack_affinity_key'
+                      label={t('GPUStack 管理 Key')}
+                      placeholder={t('用于读取实例列表，需要管理权限')}
+                      type='password'
+                      onChange={(value) =>
+                        handleChannelSettingsChange(
+                          'gpustack_affinity_key',
+                          value,
+                        )
+                      }
+                      showClear
+                      extraText={t(
+                        '渠道自身的推理 Key 权限不够。地址复用上面的代理地址。留空则不启用亲和',
+                      )}
+                    />
+                  )}
                 </div>
               </div>
             );
