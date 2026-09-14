@@ -114,8 +114,19 @@ func EnhancePrompt(ctx context.Context, agg *common.AggregateModel, authHeader, 
 	if strings.TrimSpace(prompt) == "" {
 		return degrade("原始提示词为空,无可增强")
 	}
-	if strings.TrimSpace(cfg.SystemPrompt) == "" {
-		return degrade("未配置增强模板(system_prompt)")
+	// 模板的继承链：配置里写了就用配置的，没写就回落到**按生成段模型挑的
+	// 内置默认**。这一级以前不存在 —— 于是「SystemPrompt 空 = 继承」这句
+	// 注释描述的是一条断掉的链，出厂配置也就不敢带增强段。
+	//
+	// 仍然拿不到模板时才降级：那说明这个模型我们没有对应的改写知识，
+	// 硬套别的模型的模板会让改写结果带着一堆它不认的字段名。
+	systemPrompt := strings.TrimSpace(cfg.SystemPrompt)
+	if systemPrompt == "" {
+		systemPrompt = DefaultEnhanceTemplate(agg.Generate.Model)
+	}
+	if systemPrompt == "" {
+		return degrade("没有可用的增强模板(system_prompt 为空，且 %s 没有内置默认)",
+			agg.Generate.Model)
 	}
 	res.Model = strings.TrimSpace(cfg.Model)
 	if res.Model == "" {
@@ -128,7 +139,7 @@ func EnhancePrompt(ctx context.Context, agg *common.AggregateModel, authHeader, 
 
 	// 事实无条件拼在模板之后:运营改写过模板也不例外 —— 模板可以换,
 	// "这一次传了几张图、多少秒"不能被换掉。
-	body := buildEnhanceRequest(res.Model, appendTaskContext(cfg.SystemPrompt, taskContext), prompt, imageURLs, cfg.IsSendInputImages())
+	body := buildEnhanceRequest(res.Model, appendTaskContext(systemPrompt, taskContext), prompt, imageURLs, cfg.IsSendInputImages())
 	payload, err := common.Marshal(body)
 	if err != nil {
 		return degrade("构造增强请求失败: %v", err)

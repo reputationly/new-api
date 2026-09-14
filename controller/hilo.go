@@ -3,6 +3,7 @@ package controller
 import (
 	"fmt"
 	"net/http"
+	"sync"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/dto"
@@ -56,28 +57,41 @@ func GetHiloModelsConfig(c *gin.Context) {
 	catalog := setting.GetHiloCatalog()
 	collect := func(entries []setting.HiloCatalogEntry, dst *[]dto.HiloMediaModel) {
 		for _, e := range entries {
-			// **要查它依赖的全部平台模型**，不只是 PlatformModel。
-			//
-			// 客户端对一个模型只发一个接口，玩法靠 `image_mode` 区分，而我们
-			// 平台上不同玩法是不同的 checkpoint（见 HiloCatalogEntry.ModeModels）。
-			// 只查一条的话，另一条停掉时目录照样报出这个模型，用户切到那个
-			// 玩法才失败，而失败信息来自渠道层、说不清原因。
-			skip := ""
-			for _, pm := range e.PlatformModelsOf() {
-				if !enabled[pm] {
-					skip = fmt.Sprintf("平台上没有 %s", pm)
-					break
-				}
-				if why := pipelineCannotDeliver(pm); why != "" {
-					skip = fmt.Sprintf("%s：%s", pm, why)
-					break
-				}
-			}
-			if skip != "" {
-				common.SysLog(fmt.Sprintf("[hilo] 跳过模型 %s：%s", e.Model.ID, skip))
+			// 主模型不可用 → 整条不报。
+			if why := unavailable(enabled, e.PlatformModel); why != "" {
+				logSkipOnce(e.Model.ID, why)
 				continue
 			}
-			*dst = append(*dst, e.Model)
+			// **某个玩法不可用 → 只禁那个玩法，不是整条消失。**
+			//
+			// 客户端对一个模型只发一个接口，玩法靠 `image_mode` 区分，而我们
+			// 平台上不同玩法是不同的 checkpoint（见 ModeModels）。参考族那条
+			// 流水线停掉时，首尾帧玩法其实还好好的 —— 把整个 H3 撤下来是
+			// 过度杀伤，用户只会看到"模型没了"，而且日志里只有一行。
+			//
+			// 用 `paramConstraints` 禁掉单个选项，正是官方给比例用的那套机制。
+			// **必须拷一份再改。** `e.Model` 是浅拷贝，直接 append 会写进
+			// 全局缓存目录那个切片的底层数组（GetHiloCatalog 返回共享值，
+			// 它的注释写明「调用方只读」）。而这是个被轮询的匿名接口，
+			// 并发请求会互相踩：一个响应里可能出现另一个请求禁用的选项。
+			m := e.Model
+			m.ParamConstraints = append(
+				append([]dto.HiloParamConstraint(nil), e.Model.ParamConstraints...))
+			for mode, pm := range e.ModeModels {
+				if mode == "" || pm == "" || pm == e.PlatformModel {
+					continue
+				}
+				if why := unavailable(enabled, pm); why != "" {
+					logSkipOnce(e.Model.ID+"/"+mode, why)
+					m.ParamConstraints = append(m.ParamConstraints, dto.HiloParamConstraint{
+						// 「选了这个玩法就把它自己禁掉」—— 客户端读这张表时
+						// 会把该选项置灰，而不是让用户选中之后才失败。
+						If:      dto.HiloParamCond{Param: "image_mode", Eq: mode},
+						Disable: dto.HiloParamDisable{Param: "image_mode", Options: []string{mode}},
+					})
+				}
+			}
+			*dst = append(*dst, m)
 		}
 	}
 	collect(catalog.Image, &out.ImageModels)
@@ -85,6 +99,36 @@ func GetHiloModelsConfig(c *gin.Context) {
 	collect(catalog.Audio, &out.AudioModels)
 
 	c.JSON(http.StatusOK, out)
+}
+
+// unavailable 这个平台模型现在能不能用；不能用时返回原因。
+func unavailable(enabled map[string]bool, platformModel string) string {
+	if platformModel == "" {
+		return ""
+	}
+	if !enabled[platformModel] {
+		return fmt.Sprintf("平台上没有 %s", platformModel)
+	}
+	if why := pipelineCannotDeliver(platformModel); why != "" {
+		return fmt.Sprintf("%s：%s", platformModel, why)
+	}
+	return ""
+}
+
+// skipLogged 已经报过的「跳过原因」。
+//
+// `/api/v1/models/config` 是**客户端在轮询**的匿名接口，而这个守卫要防的
+// 恰恰是"配置一直没人改"的稳态 —— 每次请求都打一条，同一句话会刷出成千
+// 上万行，反而把它淹没。按 (模型, 原因) 去重：原因变了会重新报一次，
+// 配置修好之后也不会再有。
+var skipLogged sync.Map
+
+func logSkipOnce(modelID, reason string) {
+	key := modelID + "\x00" + reason
+	if _, loaded := skipLogged.LoadOrStore(key, struct{}{}); loaded {
+		return
+	}
+	common.SysLog(fmt.Sprintf("[hilo] 跳过模型 %s：%s", modelID, reason))
 }
 
 // pipelineCannotDeliver 这个聚合流水线兑现不了它承诺的东西时，返回原因。
@@ -104,13 +148,35 @@ func GetHiloModelsConfig(c *gin.Context) {
 // 守卫每次下发都自查，配置修好的那一刻自动恢复。
 func pipelineCannotDeliver(platformModel string) string {
 	agg := common.GetAggregateModel(platformModel)
-	if agg == nil || agg.Upscale == nil || !agg.Upscale.IsEnabled() {
-		return "" // 不是带超分的聚合流水线，没有这个问题
+	if agg == nil {
+		return "" // 裸模型，没有这个问题
 	}
-	// 有超分段就意味着"客户传的是最终尺寸"，生成段必须收到被改写过的
-	// 中间尺寸。键名是 `size` —— 生成段读的是 body["size"]，见
-	// common/aggregate_model_default.go 里那段注释。
-	if _, ok := agg.Generate.Overrides["size"]; !ok {
+	_, pinned := agg.Generate.Overrides["size"]
+	hasUpscaleSection := agg.Upscale != nil
+	upscaling := hasUpscaleSection && agg.Upscale.IsEnabled()
+
+	// **两件事必须同时成立或同时不成立。**
+	//
+	// `generate.overrides.size` 的含义是「生成段只出中间尺寸，最终尺寸交给
+	// 超分段」。所以它一旦存在，就等于声明了"后面还有一段"。
+	switch {
+	case pinned && hasUpscaleSection && !upscaling:
+		// **只拦「有超分段但被停用」这一种。**
+		//
+		// 那是运营临时关掉了后一段，而生成段还钉在中间尺寸 —— 客户要 2K
+		// 静默拿到 768P，不报错，比原本那个响亮的 400 更糟。
+		//
+		// 但**「压根没有超分段」是正当配置，不能一起拦**：
+		//   · 图片聚合根本不允许有超分段（干跑校验里「图片类型不支持超分段」），
+		//     而 overrides 正是图片钉尺寸的正常去处；
+		//   · 视频聚合也可以就按生成分辨率交付，干跑校验对「未配置超分段」
+		//     只当提示不当错误。
+		// 一起拦的话，这两类会被整条撤下目录，而它们什么毛病都没有。
+		return "生成段被 overrides 钉在中间尺寸，但超分段已停用，" +
+			"客户会静默拿到中间尺寸的产物。请启用超分段，或同时去掉 overrides.size"
+	case !pinned && upscaling:
+		// 有超分段就意味着"客户传的是最终尺寸"，生成段必须收到被改写过的
+		// 中间尺寸。键名是 `size` —— 生成段读的是 body["size"]。
 		return "这条流水线有超分段却没有 generate.overrides.size，" +
 			"客户要的最终尺寸会原样打到生成段并被拒。请在聚合模型配置里补上"
 	}

@@ -192,14 +192,19 @@ func DryRunAggregateModel(m *common.AggregateModel, peers map[string]int) *Aggre
 	// —— 4. 提示词增强段 ——
 	if m.PromptEnhance.IsEnabled() {
 		enhModel := strings.TrimSpace(m.PromptEnhance.Model)
-		// 模板必填。后端**读不到**体验区那份内置默认模板 —— 它是前端 JS 常量
-		// (promptOptimize.constants.js),运营在 options 里的改写后端能读,内置默认读不到。
-		// 与其把那几份模板抄一份到 Go(抄两份必然漂移,且漂移不报错、只是默默出差档),
-		// 不如要求聚合模型显式写一份:配漏了在这里就报出来,而不是上线后静默降级。
-		if strings.TrimSpace(m.PromptEnhance.SystemPrompt) == "" {
+		// 模板：配置里写了就用配置的，没写则回落到**按生成段模型挑的内置默认**
+		// (service/aggregate_enhance_template.go)。运行时的继承链就是这样,
+		// 这里必须用同一个判据 —— 否则出厂配置(刻意不写 system_prompt、
+		// 靠继承)会在校验页上报一个假错误。
+		//
+		// 这段注释以前写的是「后端读不到内置默认模板」,那在补上那一级之前
+		// 是事实,现在不是了。
+		if strings.TrimSpace(m.PromptEnhance.SystemPrompt) == "" &&
+			DefaultEnhanceTemplate(m.Generate.Model) == "" {
 			add("enhance_template", AggregateCheckError,
-				"启用了提示词增强但未配置模板(system_prompt):运行时会降级为使用原始提示词,"+
-					"等于增强没生效")
+				"启用了提示词增强但未配置模板(system_prompt),且生成段模型 %s "+
+					"没有内置默认模板:运行时会降级为使用原始提示词,等于增强没生效",
+				strings.TrimSpace(m.Generate.Model))
 		}
 		if enhModel == "" {
 			add("prompt_enhance", AggregateCheckError, "启用了提示词增强但未指定增强模型")

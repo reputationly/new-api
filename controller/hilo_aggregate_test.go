@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/setting"
 )
 
@@ -132,5 +133,89 @@ func TestHiloEntryWithoutModeModels(t *testing.T) {
 	got := e.PlatformModelsOf()
 	if len(got) != 1 || got[0] != "qwen-image" {
 		t.Errorf("应当只依赖 qwen-image，实际 %v", got)
+	}
+}
+
+// 超分段被关掉、而生成段还钉着中间尺寸 —— 这条要拦。
+//
+// `overrides.size` 的含义是「生成段只出中间尺寸，最终尺寸交给超分段」，
+// 它一旦存在就等于声明了后面还有一段。超分段没了的话，客户要 2K 会
+// **静默拿到 768P**，不报错 —— 比原本那个响亮的 400 更糟。
+//
+// 运营删掉或停用超分段都是正当操作（配置结构里这是两种不同的动作），
+// 所以这是真实可达的状态。
+func TestHiloRejectsPinnedGenerateWithoutUpscale(t *testing.T) {
+	setupModelListControllerTestDB(t)
+	withAggregateModelConfig(t, `[{"name":"x","type":"video","enabled":true,
+      "generate":{"model":"g","overrides":{"size":"768P"}},
+      "upscale":{"enabled":false,"model":"swiftvr","target_size":"2k"}}]`)
+	if why := pipelineCannotDeliver("x"); why == "" {
+		t.Error("超分段被停用、生成段还钉着中间尺寸 —— 应当被拦下")
+	}
+}
+
+// **「压根没有超分段」是正当配置，不能一起拦。**
+//
+// overrides 是钉尺寸的正常去处（配置结构的注释就这么写的）：
+//
+//	· 图片聚合根本不允许有超分段（干跑校验：「图片类型不支持超分段」），
+//	  它钉尺寸只能靠 overrides；
+//	· 视频聚合也可以就按生成分辨率交付，干跑校验对「未配置超分段」只当提示。
+//
+// 一起拦的话这两类会被整条撤下目录，而它们什么毛病都没有 —— 而且只留下
+// 一行去重过的日志，运营几乎不可能定位。
+func TestHiloAllowsPinnedSizeWithoutAnyUpscaleSection(t *testing.T) {
+	setupModelListControllerTestDB(t)
+	for _, cfg := range []struct{ name, json string }{
+		{"图片聚合钉尺寸", `[{"name":"x","type":"image","enabled":true,
+          "generate":{"model":"g","overrides":{"size":"2K"}}}]`},
+		{"视频聚合不超分", `[{"name":"x","type":"video","enabled":true,
+          "generate":{"model":"g","overrides":{"size":"768P"}}}]`},
+	} {
+		withAggregateModelConfig(t, cfg.json)
+		if why := pipelineCannotDeliver("x"); why != "" {
+			t.Errorf("%s：不该被拦：%s", cfg.name, why)
+		}
+	}
+}
+
+// 两者都没有 = 一条普通的单段流水线，正常。
+func TestHiloAllowsPipelineWithNeitherPinNorUpscale(t *testing.T) {
+	setupModelListControllerTestDB(t)
+	withAggregateModelConfig(t, `[{"name":"x","type":"image","enabled":true,
+      "generate":{"model":"g"}}]`)
+	if why := pipelineCannotDeliver("x"); why != "" {
+		t.Errorf("单段流水线不该被拦：%s", why)
+	}
+}
+
+// 某个玩法的流水线不可用时，**只禁那个玩法**，不是让整个模型消失。
+//
+// 客户端对一个模型只发一个接口，玩法靠 image_mode 区分。参考族停掉时
+// 首尾帧其实还好好的 —— 整条撤下来是过度杀伤，用户只看到"模型没了"。
+func TestHiloDisablesOnlyTheUnavailableMode(t *testing.T) {
+	setupModelListControllerTestDB(t)
+	// 只有帧族那条流水线，参考族缺席。
+	withAggregateModelConfig(t, `[{"name":"h3-2k","type":"video","enabled":true,
+      "generate":{"model":"g","overrides":{"size":"768P"}},
+      "upscale":{"model":"swiftvr","target_size":"2k"}}]`)
+
+	enabled := map[string]bool{"h3-2k": true} // h3-ref-2k 不可用
+	e := setting.HiloCatalogEntry{
+		PlatformModel: "h3-2k",
+		ModeModels: map[string]string{
+			"first-last-frame": "h3-2k",
+			"reference":        "h3-ref-2k",
+		},
+		Model: dto.HiloMediaModel{ID: "MiniMax-H3", Params: map[string]dto.HiloModelParam{
+			"image_mode": {Type: "select", Options: []string{"reference", "first-last-frame"}, Default: "reference"},
+		}},
+	}
+
+	if why := unavailable(enabled, e.PlatformModel); why != "" {
+		t.Fatalf("主模型应当可用：%s", why)
+	}
+	if why := unavailable(enabled, "h3-ref-2k"); why == "" {
+		t.Fatal("参考族应当被判为不可用，否则这个用例没在测想测的东西")
 	}
 }

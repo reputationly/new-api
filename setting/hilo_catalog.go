@@ -61,6 +61,35 @@ type HiloCatalogEntry struct {
 	ModeModels map[string]string `json:"mode_models,omitempty"`
 }
 
+// PlatformModelFor 这次请求该发给哪个平台模型。
+//
+// 客户端对一个模型只发一个接口，玩法靠素材字段区分，而我们平台上不同玩法
+// 是不同的 checkpoint。没为这个玩法配分派时回落到 PlatformModel ——
+// **回落而不是报错**：大多数模型只有一条流水线，为它们逐个写满 ModeModels
+// 是噪音。
+func (e HiloCatalogEntry) PlatformModelFor(mode string) string {
+	if m, ok := e.ModeModels[mode]; ok && m != "" {
+		return m
+	}
+	return e.PlatformModel
+}
+
+// FindHiloEntry 按客户端发来的模型名找目录项。
+//
+// 客户端发回来的是 `model`，对应目录里的 `model_name`（没配则是 `id`）——
+// **不是 platform_model**。那个是我们内部的平台模型名，客户端不知道它的存在。
+func FindHiloEntry(modelName string) (HiloCatalogEntry, bool) {
+	c := GetHiloCatalog()
+	for _, group := range [][]HiloCatalogEntry{c.Image, c.Video, c.Audio} {
+		for _, e := range group {
+			if e.Model.ModelName == modelName || e.Model.ID == modelName {
+				return e, true
+			}
+		}
+	}
+	return HiloCatalogEntry{}, false
+}
+
 // PlatformModelsOf 这一条目录项依赖的全部平台模型（含按玩法分派的那些）。
 //
 // **可用性判断要看全部** —— 少查一个的后果是：目录照样报出这个模型，
@@ -316,7 +345,7 @@ func defaultHiloCatalog() HiloCatalog {
 						// 768P 也兑现不了：选了照样被超到 2K，而且付 2K 的钱。
 						//
 						// 而 2K 能成立，靠的是出厂聚合配置里的
-						// `generate.overrides: {resolution: 768P}` —— 没有它的话
+						// `generate.overrides: {size: 768P}` —— 没有它的话
 						// 客户传的 2K 会原样到达生成段，被 resolveResolution
 						// 直接 400（2K 依赖闭源的 H3-Regenerate-2K）。
 						// 两者是一对，改一个必须看另一个。

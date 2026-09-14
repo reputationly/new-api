@@ -23,14 +23,24 @@ import (
 //
 // v1/v2 混用是官方的历史包袱，不是笔误。
 //
-// # 鉴权：故意不校验
+// # 鉴权：分两类，不能一刀切
 //
-// 官方 gateway 发过来的请求带 `token` 和 `Authorization: Bearer`，
-// 那是**它自己云端的 token**，对 new-api 没有意义。这一组路由因此
-// 不挂 TokenAuth —— 登录那一层整个绕过，也就不需要"把登录 hack 掉"。
+// **目录与配置类（models/config、client_config、user_equity…）不挂鉴权。**
+// 官方 gateway 请求这些时带的是它自己云端的 token，对 new-api 没有意义;
+// 要求鉴权等于要求用户先在我们这边登录，而"绕开登录"正是这条路的前提。
+// 代价是这几条匿名可达，所以它们只读、且单独限流（HiloRateLimit）。
 //
-// 真正的鉴权在**出口**：new-api 用自己的渠道配置去调上游模型。
-// 所以这组路由必须只监听本地、或者部署在可信网络里。
+// **生成类必须挂 TokenAuth。** 这不是安全洁癖，是分段计费的前提：
+//
+//	· 增强段以**客户的 Authorization** 自调用 /v1/chat/completions，
+//	  那笔账才落在客户头上（service/aggregate_enhance.go）；
+//	· 超分段把同一个令牌存进 CallerKey，轮询阶段用它提交第二段
+//	  （controller/relay.go 的 buildTaskAggregateInfo）。
+//
+// 不鉴权的话这两段都没有身份可用，整条分段计费断掉。
+//
+// 也就是说：客户端要为生成配一个**我们这边的**令牌。它和官方云的 token
+// 是两回事，填在 gateway 的环境变量里。
 func SetHiloRouter(router *gin.Engine) {
 	hilo := router.Group("/api")
 	hilo.Use(middleware.RouteTag("hilo"))
@@ -62,7 +72,18 @@ func SetHiloRouter(router *gin.Engine) {
 		hilo.GET("/v1/models/concurrency/limits", hiloEmptyObject)
 		hilo.GET("/v1/models/concurrency/usage", hiloEmptyObject)
 
-		// 生成入口**还没实现**，但必须显式占位。
+		// 视频生成。官方形状 → 统一任务契约 → 复用 RelayTask。
+		//
+		// **中间件顺序有讲究**，和 /v2/video_generation 那条一致：
+		//   HiloVideoConvert  改写 body 与路径（要早于鉴权，错误才走同一个信封）
+		//   TokenAuth         鉴权；白名单里存的是聚合模型名
+		//   Distribute        聚合展开 + 选渠道（展开必须晚于白名单、早于选渠道）
+		//   RelayTask         既有链路，分段计费/日志/限流全部白拿
+		hilo.POST("/v1/video/minimax-v3/generate",
+			middleware.HiloVideoConvert(), middleware.TokenAuth(), middleware.Distribute(),
+			controller.RelayTask)
+
+		// 其余生成入口**还没实现**，但必须显式占位。
 		//
 		// 不占位的话这些 POST 会落到 `web-router` 的 `NoRoute` 兜底，
 		// 返回一个笼统的 404 `Invalid URL` —— 而上面那份目录正在把客户端
@@ -78,7 +99,6 @@ func SetHiloRouter(router *gin.Engine) {
 			"/v2/image/enhance/generate",
 			"/v2/audio/tts",
 			"/v2/audio/music/minimax",
-			"/v1/video/minimax-v3/generate",
 		} {
 			hilo.POST(p, controller.RelayNotImplemented)
 		}

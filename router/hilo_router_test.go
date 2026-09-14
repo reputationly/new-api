@@ -3,6 +3,7 @@ package router
 import (
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/gin-gonic/gin"
@@ -32,8 +33,6 @@ func TestHiloGenerateRoutesAnswerNotImplemented(t *testing.T) {
 		"/api/v2/image/enhance/generate",
 		"/api/v2/audio/tts",
 		"/api/v2/audio/music/minimax",
-		// 视频在 v1，不是 v2 —— 官方的历史包袱，不是笔误。
-		"/api/v1/video/minimax-v3/generate",
 	}
 	for _, p := range paths {
 		w := httptest.NewRecorder()
@@ -41,5 +40,25 @@ func TestHiloGenerateRoutesAnswerNotImplemented(t *testing.T) {
 		if w.Code != http.StatusNotImplemented {
 			t.Errorf("POST %s = %d，期望 501（未实现要说清楚，别落到 404 兜底）", p, w.Code)
 		}
+	}
+}
+
+// 视频那条**已经接上真实转发**，不该再是 501。
+//
+// 它和上面那批的区别就是"做了没有"，所以这两个用例必须分开写：
+// 合成一个的话，哪天把 501 换成实现、忘了改测试，测试会替这个遗漏背书。
+func TestHiloVideoRouteIsWiredNotStubbed(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	r := gin.New()
+	SetHiloRouter(r)
+
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/video/minimax-v3/generate",
+		strings.NewReader(`{"model":"MiniMax-H3","prompt":"a cat"}`))
+	req.Header.Set("Content-Type", "application/json")
+	r.ServeHTTP(w, req)
+
+	if w.Code == http.StatusNotImplemented {
+		t.Error("视频转发已经实现了，不该还回 501")
 	}
 }
