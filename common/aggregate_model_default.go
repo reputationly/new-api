@@ -16,21 +16,47 @@ package common
 // 最后一级从来没实现,拿到空模板只能 degrade。出厂若配一个带增强的条目而不写模板,
 // 得到的是最坏状态:配置说 enabled、实际每次都用原始提示词,且不报错。
 //
-// ── 增强模型为什么是 qwen3.8-27b ──────────────────────────────────
+// ── 增强模型为什么是 qwen3.8-flash-fp8 ────────────────────────────
 //
-// **它是平台上唯一真看得懂视频的。** 实测（白底黑方块横移、前绿后蓝的
-// 色块视频）:
+// 选型的硬门槛是**真看得懂视频**。实测（前绿后蓝的色块视频）:
 //
 //	qwen3.8-27b   画面颜色由绿色变为蓝色      ← 正确
+//	qwen3.8-flash-fp8  同上                   ← 正确
 //	GLM-4.5V      颜色由深青渐变至亮绿        ← 编的
 //	MiniMax-M3    画面颜色由冷蓝渐变为暖橙红   ← 完全是编的
 //
-// **三个都不报错**，接口照收 video_url、照样返回一段通顺的描述 —— 差别
+// **四个都不报错**，接口照收 video_url、照样返回一段通顺的描述 —— 差别
 // 只在内容对不对。这是最坏的一种失败:改写出的提示词描述的是一段不存在
 // 的视频，而没有任何地方会提示。
 //
+// 颜色变化只需要看两帧就能答对，所以另加了一道**时序**判据:白底黑方块
+// 横移，问方向，正反两个方向各 3 次（thinking 关）——
+//
+//	qwen3.8-flash-fp8  6/6
+//	qwen3.8-27b        5/6
+//
+// flash-fp8 不输 27b，而且更快。默认的 text 模式下各跑 3 次取中位（thinking 关）:
+//
+//	                   纯文本   带参考视频
+//	qwen3.8-flash-fp8   2.1s     1.8s
+//	qwen3.8-27b         3.4s     4.9s
+//
+// 带视频那栏 27b 的输出也更长（169 vs 103 token），差距里有一部分是"写得多"
+// 而非纯粹慢;纯文本栏两者输出长度相当（124 vs 122），那一栏是干净的对比。
+//
+// 增强卡在客户的生成请求前面，省下的每一秒都是所有人少等一次。
+//
+// **这道判据的素材必须先验过再用。** 头一版用 ffmpeg drawbox 生成，
+// 那个写法没生效、整段全白，于是两个模型都在对着空白视频猜方向，
+// 猜出来的"恒定答案"差点被当成"都不懂时序"写进这里。改用逐帧生成并在
+// 编码前断言方块坐标（首帧 20 → 末帧 300）之后结论才成立。
+//
 // 图片四个模型都看得对，但增强段要同时吃图和视频（r2va 是默认玩法，
 // 参考素材里就可能有视频），所以按视频这条短板选。
+//
+// 注:IR 模式（mode=ir）下 flash-fp8 的编译通过率实测只有 3/5，而 27b 是
+// 5/5（见 service/aggregate_enhance_ir.go 的耗时表）。这里默认是 text 模式，
+// 不受影响;**若把 mode 改成 ir，增强模型要一并换回 27b。**
 //
 // 现在那一级补上了(service/aggregate_enhance_template.go),按生成段模型挑内置默认。
 // 模板取自三份逐字对齐过的材料:官方 H3 skill、官方客户端真正在用的 vendor 卡、
@@ -83,7 +109,7 @@ const DefaultAggregateModelConfig = `[
     "type": "video",
     "enabled": true,
     "note": "H3 帧族(文生/图生/首尾帧/尾帧)2K:生成 → SwiftVR 超分。等价于体验区的两段编排,集成方只看到一个模型名和一个任务。提示词请自行扩写后再传。",
-    "prompt_enhance": { "model": "qwen3.8-27b" },
+    "prompt_enhance": { "model": "qwen3.8-flash-fp8" },
     "generate": { "model": "minimax-h3-fl2va", "overrides": { "size": "768P" } },
     "upscale": { "model": "swiftvr", "target_size": "2k" }
   },
@@ -92,7 +118,7 @@ const DefaultAggregateModelConfig = `[
     "type": "video",
     "enabled": true,
     "note": "H3 参考族(参考图/参考视频生视频)2K。参考族是另一个 checkpoint,不能和帧族共用一条流水线。",
-    "prompt_enhance": { "model": "qwen3.8-27b" },
+    "prompt_enhance": { "model": "qwen3.8-flash-fp8" },
     "generate": { "model": "minimax-h3-ref2va", "overrides": { "size": "768P" } },
     "upscale": { "model": "swiftvr", "target_size": "2k" }
   }
