@@ -927,6 +927,11 @@ func (channel *Channel) ValidateSettings() error {
 			return err
 		}
 	}
+	// 代理地址在保存时就要拦。放过去的话，错值要等到有请求真打到这个渠道
+	// 才炸，而那句报错既不说渠道也不说填的是什么。见 dto.ValidateProxy。
+	if err := dto.ValidateProxy(channelParams.Proxy); err != nil {
+		return err
+	}
 	return nil
 }
 
