@@ -26,6 +26,7 @@ import {
   Modal,
   Select,
   Space,
+  Switch,
   Table,
   Tag,
   TextArea,
@@ -52,9 +53,28 @@ const GROUPS = [
   { key: 'image', label: '图片' },
   { key: 'video', label: '视频' },
   { key: 'audio', label: '音频' },
+  // **对话模型必须渲染出来。** 早先它只靠 passthrough 保住不丢，页面上
+  // 完全不可见 —— 管理员看到的是"共 5 个模型"而客户端上有 9 个，
+  // 想调一条对话模型只能去「编辑原文 JSON」里手写，而那正是这个表格要
+  // 替代的事。不可见还让「回到表格」那个静默回滚没有任何征兆。
+  { key: 'text', label: '对话' },
 ];
 
-/** 三组都空 = 一份"明确的空目录"，和"空配置（用出厂值）"是两回事。 */
+/**
+ * 从一份完整配置里取出各段，缺的补空数组。
+ *
+ * **只能有这一份。** 早先是四处各写一遍
+ * `{ image: parsed.image ?? [], video: …, audio: … }`（首次载入、载入出厂
+ * 目录、回到表格、清空），加一个新段就要记得四处都改 —— 而 `text` 加进来时
+ * 恰好没有任何一处改到，它在页面上整整缺席了一轮。
+ */
+const catalogFromParsed = (parsed) =>
+  Object.fromEntries(GROUPS.map((g) => [g.key, parsed?.[g.key] ?? []]));
+
+/** 是不是对话模型那一组（字段形态与媒体模型不同，见 columns）。 */
+const isText = (group) => group === 'text';
+
+/** 各组都空 = 一份"明确的空目录"，和"空配置（用出厂值）"是两回事。 */
 const isEmptyCatalog = (c) =>
   GROUPS.every((g) => !Array.isArray(c?.[g.key]) || c[g.key].length === 0);
 
@@ -86,7 +106,7 @@ const emptyCatalogHint = (t) =>
 const SettingsHiloCatalog = (props) => {
   const { t } = useTranslation();
   const [loading, setLoading] = useState(false);
-  const [catalog, setCatalog] = useState({ image: [], video: [], audio: [] });
+  const [catalog, setCatalog] = useState(catalogFromParsed({}));
   const [platformModels, setPlatformModels] = useState([]);
   const [editing, setEditing] = useState(null); // { group, index, json }
   const [rawMode, setRawMode] = useState(false);
@@ -103,7 +123,7 @@ const SettingsHiloCatalog = (props) => {
   // 也容易被后来的人误当成"表格数据"去改。
   const passthrough = useRef({});
 
-  // 把表格里的三段和"这个页面不渲染的段"合成一份完整配置。
+  // 把表格里的各段和"这个页面不渲染的段"合成一份完整配置。
   //
   // **三条写路径都必须走它**：表格保存、「编辑原文 JSON」的预填、
   // 「载入出厂目录」。漏掉任何一条，那条路上的 `text` 就会被静默抹掉 ——
@@ -134,7 +154,7 @@ const SettingsHiloCatalog = (props) => {
     if (!value.trim()) {
       setUsingFactory(true);
       passthrough.current = {};
-      setCatalog({ image: [], video: [], audio: [] });
+      setCatalog(catalogFromParsed({}));
       setRawText('');
       return;
     }
@@ -143,11 +163,7 @@ const SettingsHiloCatalog = (props) => {
       const parsed = JSON.parse(value);
       // 收起这个页面不渲染的段，保存时原样带回去。
       passthrough.current = pickPassthrough(parsed);
-      setCatalog({
-        image: parsed.image ?? [],
-        video: parsed.video ?? [],
-        audio: parsed.audio ?? [],
-      });
+      setCatalog(catalogFromParsed(parsed));
       setRawText(JSON.stringify(parsed, null, 2));
     } catch (e) {
       showError(t('现有配置不是合法 JSON，已切到原文模式：') + e.message);
@@ -240,6 +256,20 @@ const SettingsHiloCatalog = (props) => {
   };
 
   const addRow = (group) => {
+    // 对话模型的空模板：字段集与媒体模型不同（见 textColumns 的说明）。
+    // 套媒体那套会带出一堆客户端 schema 里不存在的键（backend / params /
+    // tool_names），而整份目录里只要有一条 backend 不在枚举里，
+    // **整份目录都会被拒**——表现是"一个模型都没有"，不是"少了一个"。
+    if (isText(group)) {
+      mutate({
+        ...catalog,
+        text: [
+          ...(catalog.text ?? []),
+          { platform_model: '', model: { id: '', name: '', supportsVideo: false } },
+        ],
+      });
+      return;
+    }
     const type = group;
     const next = {
       ...catalog,
@@ -313,6 +343,95 @@ const SettingsHiloCatalog = (props) => {
     // 覆盖同名键 —— passthrough 里本来就不该有它们，这只是双保险。
     return save(JSON.stringify(withPassthrough(catalog)));
   };
+
+  // 对话模型的列。
+  //
+  // **不能跟媒体模型共用一套。** 它的字段形态完全不同（见 dto.HiloTextModel）：
+  // 没有 backend、没有 params、显示名用 `name` 而不是 `display_name`。
+  // 硬套媒体那套的话，backend 列会渲染出一个必选却填不对的下拉，
+  // 管理员一改就把一条合法的对话模型写成非法的。
+  const textColumns = () => [
+    {
+      title: t('平台模型'),
+      dataIndex: 'platform_model',
+      width: 260,
+      render: (v, _r, index) => (
+        <CreatableSelect
+          value={v || undefined}
+          placeholder={t('选择本站模型')}
+          style={{ width: '100%' }}
+          optionList={modelOptions}
+          onChange={(val) => patchRow('text', index, { platform_model: val })}
+        />
+      ),
+    },
+    {
+      title: t('客户端显示名'),
+      width: 200,
+      render: (_v, r, index) => (
+        <input
+          className='semi-input'
+          style={{ width: '100%', padding: '4px 8px' }}
+          value={r.model?.name ?? ''}
+          onChange={(e) => patchModel('text', index, { name: e.target.value })}
+        />
+      ),
+    },
+    {
+      title: t('模型 ID'),
+      width: 220,
+      render: (_v, r) => <Text code>{r.model?.id || '—'}</Text>,
+    },
+    {
+      title: (
+        <Tooltip
+          content={t(
+            '报了 true 之后客户端会把视频喂给它。没实测验证过的一律留 false——' +
+              '读不了视频的模型不会报错，只会编一段听起来合理的描述。',
+          )}
+        >
+          <span>{t('能读视频')} ⓘ</span>
+        </Tooltip>
+      ),
+      width: 110,
+      render: (_v, r, index) => (
+        <Switch
+          size='small'
+          checked={!!r.model?.supportsVideo}
+          onChange={(val) => patchModel('text', index, { supportsVideo: val })}
+        />
+      ),
+    },
+    {
+      title: t('操作'),
+      width: 130,
+      render: (_v, r, index) => (
+        <Space>
+          <Button
+            size='small'
+            theme='borderless'
+            onClick={() =>
+              setEditing({
+                group: 'text',
+                index,
+                json: JSON.stringify(r.model, null, 2),
+              })
+            }
+          >
+            {t('详情')}
+          </Button>
+          <Button
+            size='small'
+            theme='borderless'
+            type='danger'
+            onClick={() => removeRow('text', index)}
+          >
+            {t('下架')}
+          </Button>
+        </Space>
+      ),
+    },
+  ];
 
   const columns = (group) => [
     {
@@ -458,11 +577,7 @@ const SettingsHiloCatalog = (props) => {
                 // Text: defaultHiloTextCatalog()）。不收起来的话，
                 // 「载入出厂目录 → 保存」存下去的是一份没有对话模型的目录。
                 passthrough.current = pickPassthrough(parsed);
-                setCatalog({
-                  image: parsed.image ?? [],
-                  video: parsed.video ?? [],
-                  audio: parsed.audio ?? [],
-                });
+                setCatalog(catalogFromParsed(parsed));
                 setUsingFactory(false);
               } catch {
                 showError(t('载入失败，可以改用「编辑原文 JSON」手写'));
@@ -500,11 +615,7 @@ const SettingsHiloCatalog = (props) => {
                     // `text`，回到表格一保存又被**还原回去**，而界面上提示
                     // 「保存成功」。丢数据至少还看得出来，这个是静默回滚。
                     passthrough.current = pickPassthrough(parsed);
-                    setCatalog({
-                      image: parsed.image ?? [],
-                      video: parsed.video ?? [],
-                      audio: parsed.audio ?? [],
-                    });
+                    setCatalog(catalogFromParsed(parsed));
                     setRawMode(false);
                   } catch (e) {
                     showError(t('JSON 还有语法错误，改好才能切回表格：') + e.message);
@@ -536,7 +647,7 @@ const SettingsHiloCatalog = (props) => {
               <Table
                 size='small'
                 pagination={false}
-                columns={columns(g.key)}
+                columns={isText(g.key) ? textColumns() : columns(g.key)}
                 // **Semi 的 rowKey 回调只传 record，不传 index**
                 // （semi-foundation 的 getRecordKey 是 `rowKey(record)`）。
                 // 写成 `(r, i) => ...` 的话 i 恒为 undefined，一组里所有行拿到

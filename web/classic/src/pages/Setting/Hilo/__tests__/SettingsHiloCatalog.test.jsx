@@ -219,7 +219,9 @@ describe('空配置 ≠ 空目录', () => {
     await clickText('保存');
 
     const sent = JSON.parse(API.put.mock.calls[0][1].value);
-    expect(sent.text, '管理员刚删掉的 text 又被还原回去了').toBeUndefined();
+    // 删掉之后存的是「没有对话模型」（缺键或空数组都算），关键是**不能**
+    // 把旧那条还原回来 —— 那才是静默回滚。
+    expect(sent.text ?? [], '管理员刚删掉的 text 又被还原回去了').toHaveLength(0);
   });
 
   it('有内容时正常保存', async () => {
@@ -321,5 +323,74 @@ describe('坏配置', () => {
     expect(showError).toHaveBeenCalled();
     // 这时候更要让人看见原文，而不是一个看起来正常的空表格。
     expect(document.body.innerHTML).toContain('这不是 json');
+  });
+});
+
+// ── 对话模型这一组 ────────────────────────────────────────────────
+//
+// 加这一组之前，text 只靠 passthrough 保住不丢、页面上完全不可见：
+// 管理员看到「共 5 个模型」而客户端上有 9 个，想调一条对话模型只能去
+// 「编辑原文 JSON」里手写 —— 而那正是这个表格要替代的事。
+describe('对话模型', () => {
+  const WITH_TEXT = {
+    ...FACTORY,
+    text: [
+      { platform_model: 'qwen3.8-27b', model: { id: 'qwen3.8-27b', name: 'Qwen3.8 27B', supportsVideo: true } },
+      { platform_model: 'GPT-5.4', model: { id: 'GPT-5.4', name: 'GPT-5.4' } },
+    ],
+  };
+
+  it('在表格里显示出来，并计入总数', async () => {
+    await renderPage({ HiloCatalog: JSON.stringify(WITH_TEXT) });
+
+    expect(screen.getByText('对话'), '没有对话分组').toBeTruthy();
+    // 显示名渲染在 <input value> 里，不是文本节点
+    const names = [...document.querySelectorAll('input.semi-input')].map((i) => i.value);
+    expect(names, '对话模型没渲染出来').toContain('Qwen3.8 27B');
+    expect(names).toContain('GPT-5.4');
+    // 模型 ID 是文本节点
+    expect(screen.getAllByText('qwen3.8-27b').length, '模型 ID 没显示').toBeGreaterThan(0);
+    // 2 图/视 + 2 对话 = 4；早先总数只数媒体，和客户端实际拿到的对不上
+    expect(screen.getByText(/共 4 个模型/)).toBeTruthy();
+  });
+
+  // **不能套媒体模型那套字段。** 整份目录里只要有一条 backend 不在枚举里，
+  // 后端会拒掉**整份**目录 —— 表现是"一个模型都没有"，不是"少了一个"。
+  it('新增一条对话模型不会带出 backend / params 这些键', async () => {
+    await renderPage({ HiloCatalog: JSON.stringify(WITH_TEXT) });
+
+    // 「+ 上架模型」每组一个，对话组是最后一个
+    const adds = screen.getAllByText('+ 上架模型');
+    await act(async () => adds[adds.length - 1].closest('button').click());
+    await clickText('保存');
+
+    const sent = JSON.parse(API.put.mock.calls[0][1].value);
+    const added = sent.text[sent.text.length - 1];
+    expect(sent.text).toHaveLength(3);
+    for (const k of ['backend', 'params', 'tool_names', 'type']) {
+      expect(added.model, `新增的对话模型带上了 ${k}，整份目录会被拒`).not.toHaveProperty(k);
+    }
+  });
+
+  // 渲染出来之后它就不再是 passthrough 的一部分了（pickPassthrough 按
+  // GROUPS 算），这条钉住两套机制没有互相打架、改动能真的存下去。
+  it('改显示名能存下去', async () => {
+    await renderPage({ HiloCatalog: JSON.stringify(WITH_TEXT) });
+
+    const box = [...document.querySelectorAll('input.semi-input')]
+      .find((i) => i.value === 'Qwen3.8 27B');
+    expect(box, '对话模型的显示名不可编辑').toBeTruthy();
+    await act(async () => {
+      const setter = Object.getOwnPropertyDescriptor(
+        window.HTMLInputElement.prototype, 'value',
+      ).set;
+      setter.call(box, '通义 27B');
+      box.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    await clickText('保存');
+
+    const sent = JSON.parse(API.put.mock.calls[0][1].value);
+    expect(sent.text[0].model.name).toBe('通义 27B');
+    expect(sent.text[1].model.id, '另一条被带坏了').toBe('GPT-5.4');
   });
 });
