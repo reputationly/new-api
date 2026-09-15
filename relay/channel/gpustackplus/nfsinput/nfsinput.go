@@ -548,6 +548,36 @@ func (m *Materializer) AddString(ctx context.Context, field Field, index int, mu
 		// 骗人;扩展名不影响下游解码,见 extForData 注释里的核对记录。
 		return m.addBytesExt(field, index, multi, data, ext)
 	}
+	// —— 自家 NFS 绝对路径(见 ownurl.go resolveOwnNFSPath)——
+	//
+	// 聚合流水线的超分段自调用走这条:生成段产物此刻只在 NFS 上,既没落 OBS、
+	// 任务也还没到 SUCCESS,task: 与 URL 两条路都用不了。
+	//
+	// 归属不过关时**不回退**,直接报错:与 http(s) 那条不同,那边回退去下载是条
+	// 今天就通的路(签名 URL 自带凭证),而这里没有任何别的解释 —— 一个绝对路径
+	// 只可能是想读 NFS,悄悄落到 base64 分支只会得到
+	// 「illegal base64 data at input byte N」这种与真实原因毫无关系的报错。
+	if IsOwnNFSPath(raw, m.root) {
+		src, ok := m.resolveOwnNFSPath(raw)
+		if !ok {
+			return fmt.Errorf("输入 %s 不是当前用户在共享存储上的产物路径", field)
+		}
+		if limit := effectiveSizeLimit(m.maxBytes); limit > 0 && src.size > limit {
+			return fmt.Errorf("输入 %s 超过大小上限 %d MB", field, limit/1024/1024)
+		}
+		// 与 OBS 快路径同一条规矩:读得到才零拷贝,读不到退回本地直读。
+		if m.canZeroCopy(field) {
+			if head, pErr := peekHead(src.abs, magicPeekBytes); pErr == nil {
+				return m.addOwnSourceRef(field, src, head)
+			}
+		}
+		data, rErr := os.ReadFile(src.abs)
+		if rErr != nil {
+			return fmt.Errorf("输入 %s 读取失败: %w", field, rErr)
+		}
+		return m.addBytesExt(field, index, multi, data, refMediaExt(src.key))
+	}
+
 	if strings.HasPrefix(raw, "http://") || strings.HasPrefix(raw, "https://") {
 		// —— 自家产物 URL 快路径(见 ownurl.go)——
 		// 客户端把我们上一步返回的产物 URL 原样传回来时,那份字节已经在同一块 NFS 上,

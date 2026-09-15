@@ -26,6 +26,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/QuantumNous/new-api/service/mediastore"
@@ -72,6 +73,91 @@ func (m *Materializer) resolveOwnOBSURL(raw string) (*ownSource, bool) {
 		return nil, false
 	}
 	return &ownSource{key: key, abs: resolved, size: fi.Size()}, true
+}
+
+// resolveOwnNFSPath 判断 raw 是否为「共享 NFS 上、且归当前用户所有」的绝对路径。
+//
+// # 为什么需要它
+//
+// 聚合流水线的超分段以客户身份**自调用** /v1/videos,输入是生成段产物在 NFS 上的
+// 绝对路径 —— 那一刻产物还没落 OBS(落盘发生在流水线收尾之后),既没有 task: 可引用
+// (任务尚未 SUCCESS 终态),也没有 URL 可下载。不认这种形态的后果实测过:超分段每次
+// 提交都被 AddString 当成裸 base64 解码,回 400
+// 「输入 video 既非 http(s) URL 也非合法 base64/data-uri」,而流水线按设计降级交付
+// 生成段成品 —— 于是**客户拿到的一直是未超分的 768P,任务却显示成功**。
+//
+// # 归属校验为什么够
+//
+// raw 是请求体里的任意字符串(与 resolveOwnOBSURL 的输入同性质),所以光有「落在 root
+// 之下」不够 —— 别人的产物也在 root 之下。这里用与 resolveOwnOBSURL 完全相同的那道闸:
+// Key 形如 <功能>-<模型>/yyyy/mm/dd/<user_id>/<file>,倒数第二段必须等于当前用户。
+// 构造不出「该段是自己、却指向他人目录」的路径。
+//
+// **Key 必须从 symlink 解析后的路径算。** 用解析前的算会留一个绕过:用户在自己的
+// 目录下放一个指向他人产物的软链,倒数第二段仍是自己的 uid,闸就形同虚设 ——
+// 而 ValidateNFSPath 只管「没逃出 root」,他人产物同样在 root 之下,它拦不住这个。
+func (m *Materializer) resolveOwnNFSPath(raw string) (*ownSource, bool) {
+	if !IsOwnNFSPath(raw, m.root) {
+		return nil, false
+	}
+	resolved, err := mediastore.ValidateNFSPath(m.root, raw)
+	if err != nil {
+		return nil, false
+	}
+	// **Key 要相对解析后的 root 算,不能相对配置里那个 root。**
+	//
+	// KeyFromNFSPath 是纯字符串裁前缀,而 ValidateNFSPath 返回的是
+	// EvalSymlinks 之后的路径。root 自身只要有一段是软链(软链过来的 SFS
+	// 挂载点;macOS 上 /var → /private/var,所有 t.TempDir() 都是),两者就对不上,
+	// 裁不掉前缀 —— key 退化成"整条绝对路径去掉开头的斜杠"。
+	//
+	// 阴险之处在于**这样也不报错**:KeyUserIDSegment 取的是倒数第二段,
+	// 那一段仍然是 uid 目录,归属校验照过;L2 直读也用的是 abs 不是 key。
+	// 只有开了 NFSZeroCopyInput 时,这串垃圾才会被 addOwnSourceRef 登记成
+	// input_ref 发给门面,而门面按它找不到文件。
+	//
+	// 兄弟函数 resolveOwnOBSURL 没有这个问题,因为它是**由 key 推 abs**,
+	// 方向相反。
+	resolvedRoot, err := filepath.EvalSymlinks(filepath.Clean(m.root))
+	if err != nil {
+		return nil, false
+	}
+	key := mediastore.KeyFromNFSPath(resolvedRoot, resolved)
+	if key == "" {
+		return nil, false
+	}
+	if seg := mediastore.KeyUserIDSegment(key); seg == "" || seg != m.userID {
+		return nil, false
+	}
+	fi, err := os.Stat(resolved)
+	if err != nil || !fi.Mode().IsRegular() {
+		return nil, false
+	}
+	return &ownSource{key: key, abs: resolved, size: fi.Size()}, true
+}
+
+// IsOwnNFSPath 判断 raw 是否**形如**共享 NFS root 下的绝对路径 —— 只看形态,
+// 不做归属与存在性校验(那些在 resolveOwnNFSPath 里)。
+//
+// # 为什么必须带 root 前缀这道门槛
+//
+// 光判 filepath.IsAbs 会把**裸 base64 的 JPEG 全部截走**:JPEG 的 magic 是
+// FF D8 FF,标准 base64 编码后恰好以 "/9j/" 开头,而 IsAbs 对任何以 "/" 开头的
+// 字符串都返回 true。裸 base64 是 AddString 明确支持的形态,这么一截,原本
+// 好好的请求会变成 400「不是当前用户在共享存储上的产物路径」—— 一个与真实
+// 原因毫无关系的报错。上线过一版才发现。
+//
+// 判据与 ValidateNFSPath 的第一道检查刻意保持一致(都用**未解析**的 root 比
+// 前缀),这样"进得了这条分支"与"过得了校验"用的是同一个坐标系,不会出现
+// 进来了却必然失败的中间状态。
+func IsOwnNFSPath(raw, root string) bool {
+	if root == "" || !filepath.IsAbs(raw) {
+		return false
+	}
+	cleanRoot := filepath.Clean(root)
+	cleanPath := filepath.Clean(raw)
+	return cleanPath == cleanRoot ||
+		strings.HasPrefix(cleanPath, cleanRoot+string(filepath.Separator))
 }
 
 // ownProxyTaskID 反解自家视频代理 URL {ServerAddress}/v1/videos/{id}/content 里的 task id;

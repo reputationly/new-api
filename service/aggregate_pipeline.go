@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"io"
 	"net/http"
 	"strings"
 	"time"
@@ -175,7 +176,15 @@ func submitUpscaleTask(ctx context.Context, agg *model.TaskAggregateInfo, nfsPat
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, fmt.Errorf("超分提交返回 %d", resp.StatusCode)
+		// **必须带上响应体。** 只记状态码的话，日志里就一句
+		// 「超分提交返回 400」——而 400 的原因全在体里（模型不可用、
+		// size 档位不对、task_type 不支持……），排查时唯一需要的信息恰好
+		// 没记下来。实际发生过：连着四个任务都是这一句，只能回来读代码猜。
+		//
+		// 同时带上请求参数：这是**自调用**，出问题往往是我们自己拼的
+		// model/size 与站点配置对不上，而那两个值日志里同样看不到。
+		return nil, fmt.Errorf("超分提交返回 %d（model=%s size=%s）: %s",
+			resp.StatusCode, agg.UpscaleModel, agg.UpscaleTarget, readErrorBody(resp.Body))
 	}
 
 	var parsed struct {
@@ -352,4 +361,24 @@ func finishAggregateParent(ctx context.Context, task *model.Task, resultURL, nfs
 	}
 	// 结算走与普通任务同一条函数:它内部会认出 Stage==2 并改用生成段的回执。
 	settleTaskBillingOnComplete(ctx, nil, task, &relaycommon.TaskInfo{})
+}
+
+// readErrorBody 取错误响应体，截断到能看清问题又不至于淹没日志的长度。
+//
+// 上游的错误体通常是一小段 JSON；但**不能不设上限**——这里读的是任意
+// 上游的响应，一个出错时回吐 HTML 页面的网关能把一行日志变成几十 KB。
+func readErrorBody(r io.Reader) string {
+	const limit = 2048
+	buf, err := io.ReadAll(io.LimitReader(r, limit+1))
+	if err != nil {
+		return fmt.Sprintf("(读取响应体失败: %v)", err)
+	}
+	body := strings.TrimSpace(string(buf))
+	if body == "" {
+		return "(响应体为空)"
+	}
+	if len(body) > limit {
+		return body[:limit] + "…(已截断)"
+	}
+	return body
 }
