@@ -17,7 +17,8 @@ func msg(role, content string) dto.Message {
 func instances(n int) []GPUStackInstance {
 	out := make([]GPUStackInstance, 0, n)
 	for i := 1; i <= n; i++ {
-		out = append(out, GPUStackInstance{ID: i, ModelID: 7, State: "running"})
+		out = append(out, GPUStackInstance{ID: i, ModelID: 7, State: "running",
+			WorkerIP: fmt.Sprintf("10.0.0.%d", i), Port: 40000 + i})
 	}
 	return out
 }
@@ -130,12 +131,19 @@ func TestPickInstanceSpreadsAcrossInstances(t *testing.T) {
 	}
 }
 
-func TestRouteHeaderValueMatchesGatewayFormat(t *testing.T) {
-	got := GPUStackInstance{ID: 23, ModelID: 7}.RouteHeaderValue()
-	// 格式由 gpustack 的 get_instance_id_from_header() 决定：
-	// ^model-\d+-(\d+)(?:-[^.]+)?\..+
-	if got != "model-7-23.static" {
-		t.Errorf("路由头值 = %q，期望 model-7-23.static", got)
+func TestDirectBaseURLAndHashKey(t *testing.T) {
+	inst := GPUStackInstance{ID: 23, ModelID: 7, WorkerIP: "10.0.0.7", Port: 40006}
+	if got := inst.DirectBaseURL(); got != "http://10.0.0.7:40006" {
+		t.Errorf("直连地址 = %q，期望 http://10.0.0.7:40006", got)
+	}
+	// HRW 的盐必须是身份而不是地址：换了端口仍要落到同一个哈希桶，否则实例重启
+	// 会把它承接的那批会话全部重映射，缓存白丢。
+	moved := GPUStackInstance{ID: 23, ModelID: 7, WorkerIP: "10.0.0.9", Port: 41111}
+	if inst.hashKey() != moved.hashKey() {
+		t.Errorf("换地址后 hashKey 变了：%q vs %q", inst.hashKey(), moved.hashKey())
+	}
+	if inst.hashKey() != "model-7-23" {
+		t.Errorf("hashKey = %q，期望 model-7-23", inst.hashKey())
 	}
 }
 
@@ -161,7 +169,7 @@ func TestAffinityHeaderDeclinesWithoutConfig(t *testing.T) {
 	}
 	for name, tc := range cases {
 		// BaseURL 指向一个必然连不通的地址：真去打了就会超时，测试会明显变慢。
-		got := GPUStackAffinityHeader(tc.setting, 1, "http://127.0.0.1:1", "m", tc.messages)
+		got := GPUStackAffinityBaseURL(tc.setting, 1, "http://127.0.0.1:1", "m", tc.messages)
 		if got != "" {
 			t.Errorf("%s 应返回空串，实际 %q", name, got)
 		}

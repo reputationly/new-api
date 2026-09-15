@@ -18,10 +18,30 @@ import (
 // 背景：GPUStack 的网关把每个 RUNNING 实例注册成独立 service，按百分比随机分流，
 // 而 vLLM 的前缀缓存是实例本地的——同一会话的第二轮落到别的实例就要重算整段前缀。
 // 计费产能约等于实算产能 ÷ (1 − 命中率)，所以命中率被摊薄的代价是成倍的。
+// 4 副本上受控回放（8 会话 × 5 轮）实测命中率 34.1%，逐轮命中占比
+// 0/0/38/62/75%——随机分流的特征曲线。
 //
 // 键取「对话前缀」而不是某个会话 id：多轮累积时首条消息恒定不变，正好等价于前缀
 // 缓存的命中条件，而且不需要客户端配合送任何 header。不同会话共享同一份文档时也会
 // 落到同一实例，比按会话 id 更贴合缓存的实际形状。
+//
+// 做法是**直连实例**（改写目标 URL 为 worker_ip:port），而不是给网关下发路由头。
+//
+// 为什么不能用 X-GPUStack-Model-Instance 那个头（2026-09-15 实测否掉）：
+// 那个头是「网关 → worker」的输出，不是「客户端 → 网关」的输入。
+//   - 所有 worker 都是 proxy_mode=worker，于是 gpustack 的
+//     model_instance_registry 把每个实例的 service 名解析到同一个
+//     worker_ip:10150；网关选完 cluster 后 worker 无法从地址分辨该转给哪个
+//     实例，只能靠网关把选择结果写进这个头告诉它。
+//   - 网关的 weighted_clusters 选择**不读**任何客户端头（实测：发
+//     model-57-1426 的请求落到了别的 worker，worker 查不到就 404）。
+//   - 做这个写入的 set-model-pre-route 是预编译 wasm（pip 包
+//     gpustack_higress_plugins），改不了。
+// 曾短暂放开网关对该头的剥离，结果是 3/6 的请求 404 —— 把一个静默的性能问题
+// 换成了显性的可用性故障。所以本实现**完全不发那个头**。
+//
+// 直连的代价与兜底：绕过网关的计量与 ingress 重试策略，所以任何一步失败都必须
+// 退回渠道原本的 Base URL（网关），可用性不低于不做亲和。
 
 const (
 	// gpustackAffinityPrefixChars 参与哈希的前缀字符数上限。取 2048 是因为只需要
@@ -61,13 +81,32 @@ type GPUStackInstance struct {
 	// 其它模型，若不筛就可能把文本请求钉到一个图像模型的实例上——那不是「优化
 	// 没生效」，是把请求打坏。
 	ModelName string `json:"model_name"`
+	// WorkerIP / Port 是实例推理端口的直连地址，用来改写目标 URL。
+	//
+	// 取 worker_ip 而不是 worker_advertise_address：后者是给集群外访问用的，
+	// 在我们的部署里为空，而 gpustack 自己的 model_instance_registry 也是
+	// “advertise_address or worker_ip” 的顺序。两个都空的实例在
+	// fetchGPUStackInstances 里就被丢掉了。
+	WorkerIP string `json:"worker_ip"`
+	Port     int    `json:"port"`
 }
 
-// RouteHeaderValue 返回 GPUStack 网关认的路由头值。格式来自 gpustack 的
-// gateway/utils.py：“model-<model_id>-<instance_id>.static“，消费在
-// get_instance_id_from_header()。
-func (i GPUStackInstance) RouteHeaderValue() string {
-	return fmt.Sprintf("model-%d-%d.static", i.ModelID, i.ID)
+// DirectBaseURL 返回该实例推理端口的直连 base URL。
+//
+// vLLM 侧无鉴权（实测 4/4 个实例在不带凭据时对 /v1/models 与一次真实
+// completion 都返回 200），所以直连不需要额外的头；渠道自己的 Authorization
+// 照常带上，vLLM 会忽略它。
+func (i GPUStackInstance) DirectBaseURL() string {
+	return fmt.Sprintf("http://%s:%d", i.WorkerIP, i.Port)
+}
+
+// hashKey 是 HRW 用的实例标识。
+//
+// 用身份（model_id + 实例 id）而不是地址：实例重启换端口、或 worker 换 IP 时，
+// 若用地址做盐，它原本承接的那批会话会被重映射到别的实例，缓存白丢。身份在实例
+// 生命周期内不变，只有实例真正被替换时才该重映射——那时缓存本来也没了。
+func (i GPUStackInstance) hashKey() string {
+	return fmt.Sprintf("model-%d-%d", i.ModelID, i.ID)
 }
 
 var (
@@ -78,13 +117,44 @@ var (
 	gpustackInstanceFailedAt = map[string]time.Time{}
 	gpustackInstanceLoading  = map[string]bool{}
 	gpustackInstanceMu       sync.Mutex
+
+	gpustackLogAt   = map[string]time.Time{}
+	gpustackLogAtMu sync.Mutex
 )
 
-// GPUStackAffinityHeader 为本次请求算出路由头值。
+// GPUStackAffinityLogThrottleWindow 同一条诊断日志的最小间隔。
+//
+// 取 30 秒与实例列表的 TTL 对齐：这几条日志描述的都是「缓存里这份列表有问题」，
+// 一份列表最多值一条日志。
+const GPUStackAffinityLogThrottleWindow = 30 * time.Second
+
+// GPUStackAffinityLogAllowed 判断这条诊断日志是否该打。
+//
+// 必须节流：gpustackRunningInstances 是 stale-while-revalidate，缓存里有什么就
+// 立刻返回什么，所以「拉到 0 条」「筛完 0 条」这两种状态在整个 TTL 窗口内每个
+// 请求都会命中。不节流就是按流量速率刷日志——正是
+// gpustackInstanceFailureBackoff 当初为拉取失败引入的那个问题。
+func GPUStackAffinityLogAllowed(key string) bool {
+	now := time.Now()
+	gpustackLogAtMu.Lock()
+	defer gpustackLogAtMu.Unlock()
+	if last, ok := gpustackLogAt[key]; ok && now.Sub(last) < GPUStackAffinityLogThrottleWindow {
+		return false
+	}
+	gpustackLogAt[key] = now
+	return true
+}
+
+// GPUStackAffinityBaseURL 为本次请求算出要直连的实例 base URL。
 //
 // 返回空串表示不做亲和——开关没开、没有 key、消息为空、或者实例列表拉不到。
-// 调用方据此跳过下发，行为退回 GPUStack 自己的分流，不影响可用性。
-func GPUStackAffinityHeader(
+// 调用方据此照常走渠道原本的 Base URL（网关），行为退回 GPUStack 自己的分流，
+// 不影响可用性。
+//
+// 除「开关没开」之外的每条失败路径都留日志：这个功能的失败形态全是静默的
+// （拉到 0 条实例是 HTTP 200 + total=0，不是报错），2026-09-15 那次定位花了
+// 两小时，全靠读 gpustack 源码倒推。日志的措辞要直接把原因写出来。
+func GPUStackAffinityBaseURL(
 	setting dto.ChannelSettings,
 	channelID int,
 	baseURL string,
@@ -98,6 +168,11 @@ func GPUStackAffinityHeader(
 	baseURL = strings.TrimSpace(baseURL)
 	modelName := strings.TrimSpace(upstreamModelName)
 	if key == "" || baseURL == "" || modelName == "" {
+		if GPUStackAffinityLogAllowed(fmt.Sprintf("incomplete|%d", channelID)) {
+			common.SysLog(fmt.Sprintf(
+				"gpustack affinity: 渠道 %d 亲和已开但配置不全（管理key=%v Base URL=%v 上游模型名=%v），本次不做亲和",
+				channelID, key != "", baseURL != "", modelName != ""))
+		}
 		return ""
 	}
 	prefix := gpustackAffinityPrefix(messages)
@@ -107,12 +182,61 @@ func GPUStackAffinityHeader(
 	// 缓存按「渠道」而不是「渠道+模型」：管理 API 只能按 model_id 过滤而我们只有
 	// 模型名，所以无论如何都要全量拉再客户端筛。若把模型名也放进缓存键，一个服务
 	// M 个模型的渠道每 30 秒就会做 M 次完全相同的全量翻页扫。
-	instances := gpustackInstancesForModel(
-		gpustackRunningInstances(channelID, baseURL, key), modelName)
-	if len(instances) == 0 {
+	all := gpustackRunningInstances(channelID, baseURL, key)
+	if len(all) == 0 {
+		// 最难查的一种失败：管理 API 返回 HTTP 200，pagination.total = 0。
+		// 不是 401 也不是 403，就是空。因为 /v2/model-instances 按
+		// owner_principal_id == current_principal_id 过滤，而 API key 认证时
+		// 这个值恒等于密钥自己的 owner（X-Organization-Id 被忽略），
+		// 模型/实例归组织所有，个人作用域的密钥一条都匹配不上。
+		if GPUStackAffinityLogAllowed(fmt.Sprintf("empty|%d", channelID)) {
+			common.SysError(fmt.Sprintf(
+				"gpustack affinity: 渠道 %d 的 RUNNING 实例列表为空。"+
+					"若管理 API 返回的是 HTTP 200 + total=0，说明管理密钥的作用域不对——"+
+					"它需要由平台管理员在「无组织上下文」下创建（owner_principal_id 为空），"+
+					"或至少属于模型所在的组织。密钥列表页的「作用域」列可以直接看出来。",
+				channelID))
+		}
 		return ""
 	}
-	return gpustackPickInstance(instances, prefix).RouteHeaderValue()
+	instances := gpustackInstancesForModel(all, modelName)
+	if len(instances) == 0 {
+		// seen 只在真要打日志时才构建：这条分支在整个 TTL 窗口内每个请求都会走到，
+		// 无条件遍历全量实例只为拼一行日志是纯浪费。
+		if GPUStackAffinityLogAllowed(fmt.Sprintf("nomatch|%d|%s", channelID, modelName)) {
+			seen := make([]string, 0, len(all))
+			for _, inst := range all {
+				seen = append(seen, inst.ModelName)
+			}
+			common.SysError(fmt.Sprintf(
+				"gpustack affinity: 渠道 %d 拉到 %d 个实例，但没有 model_name == %q 的。"+
+					"渠道配了模型重定向时上游名与 gpustack 侧的模型名会不一致。实际见到：%v",
+				channelID, len(all), modelName, dedupeStrings(seen)))
+		}
+		return ""
+	}
+	picked := gpustackPickInstance(instances, prefix)
+	target := picked.DirectBaseURL()
+	if common.DebugEnabled {
+		common.SysLog(fmt.Sprintf(
+			"gpustack affinity: 渠道 %d 模型 %s → 实例 %d（%s），候选 %d 个",
+			channelID, modelName, picked.ID, target, len(instances)))
+	}
+	return target
+}
+
+// dedupeStrings 去重并保序，仅用于日志里列出实际见到的模型名。
+func dedupeStrings(in []string) []string {
+	seen := make(map[string]struct{}, len(in))
+	out := make([]string, 0, len(in))
+	for _, s := range in {
+		if _, ok := seen[s]; ok {
+			continue
+		}
+		seen[s] = struct{}{}
+		out = append(out, s)
+	}
+	return out
 }
 
 // gpustackInstancesForModel 从渠道级列表里筛出该模型的实例。
@@ -183,13 +307,29 @@ func gpustackPickInstance(instances []GPUStackInstance, prefix string) GPUStackI
 		h := fnv.New64a()
 		_, _ = h.Write([]byte(prefix))
 		_, _ = h.Write([]byte{0})
-		_, _ = h.Write([]byte(inst.RouteHeaderValue()))
-		score := h.Sum64()
+		_, _ = h.Write([]byte(inst.hashKey()))
+		score := mix64(h.Sum64())
 		if idx == 0 || score > bestScore {
 			best, bestScore = inst, score
 		}
 	}
 	return best
+}
+
+// mix64 是 splitmix64 的终末混淆。
+//
+// 必须有：FNV-1a 是乘-异或链，雪崩很弱，而实例标识只在末尾几个字节上有差异
+// （model-7-23 / model-7-24），于是相邻实例的分数高度相关，HRW 退化——扩容一个
+// 实例时重映射比例实测到 24.7%，而理论值是 1/(N+1)≈11%（见
+// TestPickInstanceRemapsOnlyAFractionWhenScalingOut）。之前盐带 ".static" 后缀
+// 多了 7 个字节的混淆轮数才勉强达标，那是运气不是设计。
+func mix64(x uint64) uint64 {
+	x ^= x >> 30
+	x *= 0xbf58476d1ce4e5b9
+	x ^= x >> 27
+	x *= 0x94d049bb133111eb
+	x ^= x >> 31
+	return x
 }
 
 // gpustackRunningInstances 返回该渠道可见的全部 RUNNING 实例（不分模型），
@@ -359,11 +499,17 @@ func fetchGPUStackInstances(
 			return nil, err
 		}
 
-		// 两道筛选（模型名那道在 gpustackInstancesForModel 里做）：
+		// 三道筛选（模型名那道在 gpustackInstancesForModel 里做）：
 		//   - state：服务端已按 running 过滤，这里再挡一次，防过滤参数失效
-		//   - id/model_id 合法：拼出的路由头必须能被网关的正则解析
+		//   - id/model_id 合法：用于日志与 HRW 的稳定键
+		//   - worker_ip + port 齐全：直连的地址来源。刚调度上、还没拿到端口的
+		//     实例（state=starting 时常见）会缺这两项；若不丢掉，拼出的
+		//     "http://:0" 会让本该命中网关兜底的请求直接连接失败。
 		for _, inst := range items {
 			if !strings.EqualFold(inst.State, "running") || inst.ID <= 0 || inst.ModelID <= 0 {
+				continue
+			}
+			if strings.TrimSpace(inst.WorkerIP) == "" || inst.Port <= 0 {
 				continue
 			}
 			running = append(running, inst)

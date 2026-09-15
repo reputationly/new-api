@@ -55,11 +55,11 @@ func TestFetchInstancesParsesGatewayShapeAndFiltersByModel(t *testing.T) {
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{
 		  "items": [
-		    {"id": 23, "model_id": 7, "state": "running",  "model_name": "deepseek-v4-flash"},
-		    {"id": 24, "model_id": 7, "state": "starting", "model_name": "deepseek-v4-flash"},
-		    {"id": 25, "model_id": 7, "state": "running",  "model_name": "deepseek-v4-flash"},
-		    {"id": 0,  "model_id": 7, "state": "running",  "model_name": "deepseek-v4-flash"},
-		    {"id": 99, "model_id": 8, "state": "running",  "model_name": "qwen-image"}
+		    {"id": 23, "model_id": 7, "state": "running",  "model_name": "deepseek-v4-flash","worker_ip":"10.0.0.23","port":40023},
+		    {"id": 24, "model_id": 7, "state": "starting", "model_name": "deepseek-v4-flash","worker_ip":"10.0.0.24","port":40024},
+		    {"id": 25, "model_id": 7, "state": "running",  "model_name": "deepseek-v4-flash","worker_ip":"10.0.0.25","port":40025},
+		    {"id": 0,  "model_id": 7, "state": "running",  "model_name": "deepseek-v4-flash","worker_ip":"10.0.0.0","port":40000},
+		    {"id": 99, "model_id": 8, "state": "running",  "model_name": "qwen-image","worker_ip":"10.0.0.99","port":40099}
 		  ],
 		  "pagination": {"page": 1, "perPage": 100, "total": 5, "totalPage": 1}
 		}`))
@@ -99,8 +99,29 @@ func TestFetchInstancesParsesGatewayShapeAndFiltersByModel(t *testing.T) {
 			t.Errorf("混进了别的模型的实例: %+v", inst)
 		}
 	}
-	if mine[0].RouteHeaderValue() != "model-7-23.static" {
-		t.Errorf("路由头 = %q，期望 model-7-23.static", mine[0].RouteHeaderValue())
+	if mine[0].DirectBaseURL() != "http://10.0.0.23:40023" {
+		t.Errorf("直连地址 = %q，期望 http://10.0.0.23:40023", mine[0].DirectBaseURL())
+	}
+}
+
+// 没有 worker_ip 或 port 的实例必须被丢掉：刚调度上、还没拿到端口时会缺这两项，
+// 若留下它，拼出的 "http://:0" 会让本该命中网关兜底的请求直接连接失败。
+func TestFetchInstancesDropsAddresslessInstances(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"items":[
+		    {"id":1,"model_id":7,"state":"running","model_name":"m","worker_ip":"","port":40001},
+		    {"id":2,"model_id":7,"state":"running","model_name":"m","worker_ip":"10.0.0.2","port":0},
+		    {"id":3,"model_id":7,"state":"running","model_name":"m","worker_ip":"10.0.0.3","port":40003}
+		]}`))
+	}))
+	defer srv.Close()
+
+	got, err := fetchGPUStackInstances(srv.URL, "k")
+	if err != nil {
+		t.Fatalf("拉取失败: %v", err)
+	}
+	if len(got) != 1 || got[0].ID != 3 {
+		t.Fatalf("只应保留有完整地址的实例 3，实际 %+v", got)
 	}
 }
 
@@ -123,7 +144,7 @@ func TestRunningInstancesNeverBlocksOnColdCache(t *testing.T) {
 	release := make(chan struct{})
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		<-release // 模拟一个很慢的管理 API
-		_, _ = w.Write([]byte(`{"items":[{"id":1,"model_id":7,"state":"running","model_name":"m"}]}`))
+		_, _ = w.Write([]byte(`{"items":[{"id":1,"model_id":7,"state":"running","model_name":"m","worker_ip":"10.0.0.1","port":40001}]}`))
 	}))
 	defer srv.Close()
 	defer close(release)
@@ -148,7 +169,7 @@ func TestRunningInstancesSingleFlights(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		atomic.AddInt64(&hits, 1)
 		<-release
-		_, _ = w.Write([]byte(`{"items":[{"id":1,"model_id":7,"state":"running","model_name":"m"}]}`))
+		_, _ = w.Write([]byte(`{"items":[{"id":1,"model_id":7,"state":"running","model_name":"m","worker_ip":"10.0.0.1","port":40001}]}`))
 	}))
 	defer srv.Close()
 
@@ -168,7 +189,7 @@ func TestRunningInstancesCachesWithinTTL(t *testing.T) {
 	var hits int64
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		atomic.AddInt64(&hits, 1)
-		_, _ = w.Write([]byte(`{"items":[{"id":1,"model_id":7,"state":"running","model_name":"m"}]}`))
+		_, _ = w.Write([]byte(`{"items":[{"id":1,"model_id":7,"state":"running","model_name":"m","worker_ip":"10.0.0.1","port":40001}]}`))
 	}))
 	defer srv.Close()
 
@@ -193,7 +214,7 @@ func TestRunningInstancesKeepsStaleOnFailure(t *testing.T) {
 			w.WriteHeader(http.StatusInternalServerError)
 			return
 		}
-		_, _ = w.Write([]byte(`{"items":[{"id":42,"model_id":7,"state":"running","model_name":"m"}]}`))
+		_, _ = w.Write([]byte(`{"items":[{"id":42,"model_id":7,"state":"running","model_name":"m","worker_ip":"10.0.0.42","port":40042}]}`))
 	}))
 	defer srv.Close()
 
@@ -236,11 +257,11 @@ func TestAffinityHeaderEndToEndIsStableAcrossTurns(t *testing.T) {
 	resetGPUStackCache()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte(`{"items":[
-		  {"id":1,"model_id":7,"state":"running","model_name":"m"},
-		  {"id":2,"model_id":7,"state":"running","model_name":"m"},
-		  {"id":3,"model_id":7,"state":"running","model_name":"m"},
-		  {"id":4,"model_id":7,"state":"running","model_name":"m"},
-		  {"id":5,"model_id":7,"state":"running","model_name":"m"}
+		  {"id":1,"model_id":7,"state":"running","model_name":"m","worker_ip":"10.0.0.1","port":40001},
+		  {"id":2,"model_id":7,"state":"running","model_name":"m","worker_ip":"10.0.0.2","port":40002},
+		  {"id":3,"model_id":7,"state":"running","model_name":"m","worker_ip":"10.0.0.3","port":40003},
+		  {"id":4,"model_id":7,"state":"running","model_name":"m","worker_ip":"10.0.0.4","port":40004},
+		  {"id":5,"model_id":7,"state":"running","model_name":"m","worker_ip":"10.0.0.5","port":40005}
 		]}`))
 	}))
 	defer srv.Close()
@@ -252,8 +273,8 @@ func TestAffinityHeaderEndToEndIsStableAcrossTurns(t *testing.T) {
 	turn2 := []dto.Message{msg("user", doc), msg("assistant", "答一"), msg("user", "再问")}
 	turn3 := append(append([]dto.Message{}, turn2...), msg("assistant", "答二"), msg("user", "三问"))
 
-	h2 := GPUStackAffinityHeader(setting, 15, srv.URL, "m", turn2)
-	h3 := GPUStackAffinityHeader(setting, 15, srv.URL, "m", turn3)
+	h2 := GPUStackAffinityBaseURL(setting, 15, srv.URL, "m", turn2)
+	h3 := GPUStackAffinityBaseURL(setting, 15, srv.URL, "m", turn3)
 	if h2 == "" {
 		t.Fatal("应算出实例头")
 	}
@@ -265,7 +286,7 @@ func TestAffinityHeaderEndToEndIsStableAcrossTurns(t *testing.T) {
 	seen := map[string]bool{}
 	for i := 0; i < 60; i++ {
 		other := []dto.Message{msg("user", fmt.Sprintf("另一份文档 %d", i))}
-		seen[GPUStackAffinityHeader(setting, 15, srv.URL, "m", other)] = true
+		seen[GPUStackAffinityBaseURL(setting, 15, srv.URL, "m", other)] = true
 	}
 	if len(seen) < 3 {
 		t.Errorf("60 段不同对话只落到 %d 个实例，分布过于集中", len(seen))
@@ -276,10 +297,10 @@ func TestAffinityHeaderEndToEndIsStableAcrossTurns(t *testing.T) {
 func TestAffinityHeaderDeclinesOnMissingTarget(t *testing.T) {
 	setting := dto.ChannelSettings{GPUStackAffinity: true, GPUStackAffinityKey: "k"}
 	messages := []dto.Message{msg("user", "你好")}
-	if got := GPUStackAffinityHeader(setting, 16, "", "m", messages); got != "" {
+	if got := GPUStackAffinityBaseURL(setting, 16, "", "m", messages); got != "" {
 		t.Errorf("BaseURL 为空时应返回空串，实际 %q", got)
 	}
-	if got := GPUStackAffinityHeader(setting, 17, "http://127.0.0.1:1", "", messages); got != "" {
+	if got := GPUStackAffinityBaseURL(setting, 17, "http://127.0.0.1:1", "", messages); got != "" {
 		t.Errorf("模型名为空时应返回空串，实际 %q", got)
 	}
 }
@@ -291,7 +312,7 @@ func TestInvalidateMarksStaleButKeepsList(t *testing.T) {
 	var hits int64
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		atomic.AddInt64(&hits, 1)
-		_, _ = w.Write([]byte(`{"items":[{"id":7,"model_id":7,"state":"running","model_name":"m"}]}`))
+		_, _ = w.Write([]byte(`{"items":[{"id":7,"model_id":7,"state":"running","model_name":"m","worker_ip":"10.0.0.7","port":40007}]}`))
 	}))
 	defer srv.Close()
 
@@ -324,7 +345,7 @@ func TestInvalidateMarksStaleButKeepsList(t *testing.T) {
 func TestInvalidateIsScopedToChannel(t *testing.T) {
 	resetGPUStackCache()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_, _ = w.Write([]byte(`{"items":[{"id":1,"model_id":7,"state":"running","model_name":"m"}]}`))
+		_, _ = w.Write([]byte(`{"items":[{"id":1,"model_id":7,"state":"running","model_name":"m","worker_ip":"10.0.0.1","port":40001}]}`))
 	}))
 	defer srv.Close()
 
@@ -386,7 +407,7 @@ func TestFetchInstancesFollowsPagination(t *testing.T) {
 			return
 		}
 		_, _ = w.Write([]byte(
-			`{"items":[{"id":777,"model_id":7,"state":"running","model_name":"m"}],` +
+			`{"items":[{"id":777,"model_id":7,"state":"running","model_name":"m","worker_ip":"10.0.0.777","port":40777}],` +
 				`"pagination":{"totalPage":2}}`))
 	}))
 	defer srv.Close()
@@ -452,7 +473,7 @@ func TestInvalidateIsFlooredRightAfterSuccess(t *testing.T) {
 	var hits int64
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		atomic.AddInt64(&hits, 1)
-		_, _ = w.Write([]byte(`{"items":[{"id":1,"model_id":7,"state":"running","model_name":"m"}]}`))
+		_, _ = w.Write([]byte(`{"items":[{"id":1,"model_id":7,"state":"running","model_name":"m","worker_ip":"10.0.0.1","port":40001}]}`))
 	}))
 	defer srv.Close()
 

@@ -25,13 +25,13 @@ import (
 
 // invalidateGPUStackAffinityOnFailure 上游失败后标记该渠道的实例列表过期。
 //
-// 只在本次真的下发了亲和头时才动手：没下发就说明这次走的是网关自己的分流，失败与
-// 实例列表无关，拿它去失效缓存只会让正常的用户错误不断打掉亲和。
+// 只在本次真的走了直连时才动手：没走就说明这次是网关自己的分流，失败与实例列表
+// 无关，拿它去失效缓存只会让正常的用户错误不断打掉亲和。
 // statusCode 传 0 表示连接层失败（还没拿到响应）。
 func invalidateGPUStackAffinityOnFailure(
 	c *gin.Context, info *relaycommon.RelayInfo, statusCode int,
 ) {
-	if common.GetContextKeyString(c, constant.ContextKeyGPUStackInstanceHeader) == "" {
+	if common.GetContextKeyString(c, constant.ContextKeyGPUStackInstanceBaseURL) == "" {
 		return
 	}
 	if statusCode != 0 && !service.GPUStackAffinityShouldInvalidate(statusCode) {
@@ -63,14 +63,14 @@ func TextHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *types
 	}
 
 	// GPUStack 实例亲和：在这里算，因为这是唯一既拿得到 messages（亲和键的来源）
-	// 又还没把请求体序列化出去的地方。算出的路由头由 DoApiRequest 下发。
+	// 又还没把请求体序列化出去的地方。算出的直连 base URL 由 DoApiRequest 用来
+	// 改写目标地址。
 	//
 	// **必须无条件写入**（不做亲和时写空串）：重试循环复用同一个 gin.Context，
-	// 若只在非空时写，第一次尝试算出的头会残留下来，被下发给重试选中的另一个渠道
-	// ——那对别的 GPUStack 集群意味着显式路由到一个不提供该模型的实例（重试直接
-	// 失效），对第三方上游则是泄漏内部拓扑。
-	common.SetContextKey(c, constant.ContextKeyGPUStackInstanceHeader,
-		service.GPUStackAffinityHeader(
+	// 若只在非空时写，第一次尝试算出的地址会残留下来，被用去改写重试选中的另一个
+	// 渠道的 URL——那等于把请求打到一个根本不属于该渠道的地址上。
+	common.SetContextKey(c, constant.ContextKeyGPUStackInstanceBaseURL,
+		service.GPUStackAffinityBaseURL(
 			info.ChannelSetting, info.ChannelId, info.ChannelBaseUrl,
 			info.UpstreamModelName, request.Messages,
 		))

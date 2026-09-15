@@ -93,9 +93,9 @@ const (
 	// 同步生图的任务记录要在结算之后才知道扣了多少，而结算函数本身不返回值。
 	ContextKeySyncConsumedQuota ContextKey = "sync_consumed_quota"
 
-	// ContextKeyGPUStackInstanceHeader GPUStack 实例亲和算出的路由头值，形如
-	// ``model-<model_id>-<instance_id>.static``。在 TextHelper 里算（那里才拿得到
-	// messages），在 DoApiRequest 里发（那里才拿得到上游请求）——两处之间靠它传递。
-	// 空值表示本次不做亲和，退回 GPUStack 自己的分流。
-	ContextKeyGPUStackInstanceHeader ContextKey = "gpustack_instance_header"
+	// ContextKeyGPUStackInstanceBaseURL GPUStack 实例亲和算出的直连 base URL，
+	// 形如 ``http://10.0.0.7:40006``。在 TextHelper 里算（那里才拿得到 messages），
+	// 在 DoApiRequest 里用它改写目标 URL（那里才拿得到上游请求）——两处之间靠它传递。
+	// 空值表示本次不做亲和，照常走渠道的 Base URL（网关）。
+	ContextKeyGPUStackInstanceBaseURL ContextKey = "gpustack_instance_base_url"
 )

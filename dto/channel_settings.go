@@ -21,24 +21,40 @@ type ChannelSettings struct {
 	//
 	// 为什么需要：GPUStack 的网关按百分比在各 RUNNING 实例之间随机分流（每个实例
 	// 注册成独立 service），而 vLLM 的前缀缓存是**实例本地**的——同一会话的第二轮
-	// 落到别的实例就要重算整段前缀。线上前缀命中率 77.3%，而计费产能约等于
-	// 实算产能 ÷ (1 − 命中率)，随机分流到 N 个实例后命中率约摊薄成 1/N。
+	// 落到别的实例就要重算整段前缀。计费产能约等于实算产能 ÷ (1 − 命中率)。
+	// 4 副本上受控回放（8 会话 × 5 轮）实测命中率 34.1%，逐轮命中占比
+	// 0/0/38/62/75%——随机分流的特征曲线。
 	//
-	// 做法：取对话的稳定前缀做 HRW 哈希选出一个实例，下发
-	// X-GPUStack-Model-Instance 头，GPUStack 网关据此直接路由。实例列表来自
-	// GPUStack 的 /v2/model-instances，所以实例重启换 ID 会自动跟上。
+	// 做法：取对话的稳定前缀做 HRW 哈希选出一个实例，然后把本次请求的目标地址
+	// **改写成该实例推理端口的直连地址**（http://<worker_ip>:<port>）。实例列表与
+	// 地址都来自 GPUStack 的 /v2/model-instances，所以实例重启换地址会自动跟上。
 	//
-	// 默认关：只对以 GPUStack 为上游的渠道有意义。任何一步失败（拉不到实例、
-	// 消息为空）都不发这个头，行为退回 GPUStack 自己的随机分流。
+	// 为什么不是下发路由头：X-GPUStack-Model-Instance 是 GPUStack「网关 → worker」
+	// 的内部信号——网关把自己选中的实例写进这个头告诉 worker，而它的目标选择**不读**
+	// 这个头。客户端传进去只会让两端不一致：请求被负载均衡送到 worker X，头却说实例
+	// 在 worker Y，worker X 查不到就 404（2026-09-15 实测 3/6 请求失败）。
 	//
-	// 作用范围仅限 **OpenAI 格式的 chat completions**：路由头在 TextHelper 里计算，
+	// 前提：new-api 所在主机必须能直连 worker 的推理端口（同内网即可，vLLM 侧无
+	// 鉴权）。直连绕过了网关的计量与 ingress 重试策略，所以任何一步失败——拉不到
+	// 实例、消息为空、拨号不通、上游返回 404/502/503/504——都会自动退回渠道原本的
+	// Base URL（网关）重试一次，可用性不低于不开这个开关。
+	//
+	// 默认关：只对以 GPUStack 为上游的渠道有意义。
+	//
+	// 作用范围仅限 **OpenAI 格式的 chat completions**：直连地址在 TextHelper 里计算，
 	// 而 /v1/messages（ClaudeHelper）与 /v1/responses（ResponsesHelper）是另外两条
 	// 独立链路，不经过那里。这两种格式上开这个开关不会报错，只是没有效果——
 	// UI 的说明文字里写明了这一点。要扩到那两条链路，在对应 helper 的
 	// ModelMappedHelper 之后照抄 TextHelper 里那一段即可。
 	GPUStackAffinity bool `json:"gpustack_affinity,omitempty"`
-	// GPUStackAffinityKey 调 GPUStack 管理 API 用的 key（/v2/model-instances 需要
-	// org owner 角色，渠道自身的推理 key 权限不够）。地址复用渠道的 Base URL。
+	// GPUStackAffinityKey 调 GPUStack 管理 API 用的 key。地址复用渠道的 Base URL。
+	//
+	// 这个 key 的**作用域**必须能读到模型与实例：/v2/model-instances 按
+	// owner_principal_id == 当前 principal 过滤，而 API key 认证时这个值恒等于
+	// 密钥自己的 owner（X-Organization-Id 对 API key 无效）。个人作用域的密钥会
+	// 返回 HTTP 200 + total=0 —— 不报错，就是空，于是亲和静默失效。需要由平台
+	// 管理员在「无组织上下文」下创建的密钥（owner_principal_id 为空），或至少
+	// 属于模型所在的组织；GPUStack 密钥列表页的「作用域」列可以直接看出来。
 	GPUStackAffinityKey string `json:"gpustack_affinity_key,omitempty"`
 }
 

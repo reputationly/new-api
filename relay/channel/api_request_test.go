@@ -5,6 +5,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	appconstant "github.com/QuantumNous/new-api/constant"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
@@ -190,4 +191,83 @@ func TestProcessHeaderOverride_PassHeadersTemplateSetsRuntimeHeaders(t *testing.
 	require.Equal(t, "Codex CLI", upstreamReq.Header.Get("Originator"))
 	require.Equal(t, "sess-123", upstreamReq.Header.Get("Session_id"))
 	require.Empty(t, upstreamReq.Header.Get("X-Codex-Beta-Features"))
+}
+
+// 渠道 Base URL 带路径前缀时，直连地址必须去掉那个前缀：实例的推理端口上只有
+// 裸 /v1/...。不去掉的话每个亲和请求都会 404，而 404 又在外层自动重试范围里
+// （AutomaticRetryStatusCodeRanges 401-407），等于白烧一次换渠道重试。
+func TestGPUStackAffinityRewriteURLStripsBasePath(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name    string
+		fullURL string
+		baseURL string
+		target  string
+		want    string
+	}{
+		{
+			name:    "裸 host:port（当前部署）",
+			fullURL: "http://10.0.0.238:80/v1/chat/completions",
+			baseURL: "http://10.0.0.238:80",
+			target:  "http://10.0.0.7:40006",
+			want:    "http://10.0.0.7:40006/v1/chat/completions",
+		},
+		{
+			name:    "Base URL 带路径前缀",
+			fullURL: "http://gw/gpustack/v1/chat/completions",
+			baseURL: "http://gw/gpustack",
+			target:  "http://10.0.0.7:40006",
+			want:    "http://10.0.0.7:40006/v1/chat/completions",
+		},
+		{
+			name:    "前缀带尾斜杠",
+			fullURL: "http://gw/gpustack/v1/chat/completions",
+			baseURL: "http://gw/gpustack/",
+			target:  "http://10.0.0.7:40006",
+			want:    "http://10.0.0.7:40006/v1/chat/completions",
+		},
+		{
+			name:    "查询串保留",
+			fullURL: "http://gw/v1/chat/completions?a=1",
+			baseURL: "http://gw",
+			target:  "http://10.0.0.7:40006",
+			want:    "http://10.0.0.7:40006/v1/chat/completions?a=1",
+		},
+	}
+
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+			ctx.Set(string(appconstant.ContextKeyGPUStackInstanceBaseURL), tc.target)
+			require.Equal(t, tc.want, gpustackAffinityRewriteURL(tc.fullURL, tc.baseURL, ctx))
+		})
+	}
+}
+
+// 不做亲和时必须返回空串，调用方据此走原本的网关地址。
+func TestGPUStackAffinityRewriteURLDeclinesWithoutTarget(t *testing.T) {
+	t.Parallel()
+	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+	require.Empty(t, gpustackAffinityRewriteURL(
+		"http://gw/v1/chat/completions", "http://gw", ctx))
+	require.Empty(t, gpustackAffinityRewriteURL(
+		"http://gw/v1/chat/completions", "http://gw", nil))
+}
+
+// 404 必须触发回退：它是路径或实例不对的信号，且落在外层自动重试范围内。
+// 4xx 的其余部分与 500 不回退——那是请求本身或引擎内部的问题。
+func TestGPUStackAffinityShouldFallbackClassification(t *testing.T) {
+	t.Parallel()
+	for _, code := range []int{404, 502, 503, 504} {
+		require.True(t, gpustackAffinityShouldFallback(&http.Response{StatusCode: code}, nil),
+			"HTTP %d 应回退", code)
+	}
+	for _, code := range []int{200, 400, 401, 429, 500} {
+		require.False(t, gpustackAffinityShouldFallback(&http.Response{StatusCode: code}, nil),
+			"HTTP %d 不该回退", code)
+	}
+	require.True(t, gpustackAffinityShouldFallback(nil, http.ErrHandlerTimeout), "连接层失败应回退")
+	require.True(t, gpustackAffinityShouldFallback(nil, nil), "无响应应回退")
 }
