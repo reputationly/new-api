@@ -94,6 +94,29 @@ const SettingsHiloCatalog = (props) => {
   // 必须区分开，否则见下面 onSave 里那段注释描述的事故。
   const [usingFactory, setUsingFactory] = useState(false);
   const [rawText, setRawText] = useState('');
+  // **这个页面只渲染 GROUPS 里那三段，但配置里还有别的段（如 `text` 对话
+  // 模型）。** 保存时写的是 `JSON.stringify(catalog)` —— 不把它们留住，
+  // 管理员在这里改一个显示名就会把整段对话模型**静默抹掉**，
+  // 表现是画布上突然选不到 LLM，而这里什么都没提示。
+  //
+  // 用 ref 而不是 state：它不参与渲染，放进 state 只会多一次无谓的重渲染，
+  // 也容易被后来的人误当成"表格数据"去改。
+  const passthrough = useRef({});
+
+  // 把表格里的三段和"这个页面不渲染的段"合成一份完整配置。
+  //
+  // **三条写路径都必须走它**：表格保存、「编辑原文 JSON」的预填、
+  // 「载入出厂目录」。漏掉任何一条，那条路上的 `text` 就会被静默抹掉 ——
+  // 而这正是加 passthrough 要防的事（漏了两条，被检视抓到）。
+  const withPassthrough = (base) => ({ ...passthrough.current, ...base });
+
+  // 从一份完整配置里挑出这个页面不渲染的段。
+  const pickPassthrough = (parsed) => {
+    const known = new Set(GROUPS.map((g) => g.key));
+    return Object.fromEntries(
+      Object.entries(parsed ?? {}).filter(([k]) => !known.has(k)),
+    );
+  };
   // 有没有未保存的改动。**用来挡住父组件 refresh() 触发的回填** ——
   // 保存成功后 props.refresh() 会重新拉 options，那个 effect 会拿服务端
   // 的值把 catalog 重置掉。正常流程下没问题（刚存过，两边一样），但如果
@@ -110,6 +133,7 @@ const SettingsHiloCatalog = (props) => {
     if (dirty.current) return;
     if (!value.trim()) {
       setUsingFactory(true);
+      passthrough.current = {};
       setCatalog({ image: [], video: [], audio: [] });
       setRawText('');
       return;
@@ -117,6 +141,8 @@ const SettingsHiloCatalog = (props) => {
     setUsingFactory(false);
     try {
       const parsed = JSON.parse(value);
+      // 收起这个页面不渲染的段，保存时原样带回去。
+      passthrough.current = pickPassthrough(parsed);
       setCatalog({
         image: parsed.image ?? [],
         video: parsed.video ?? [],
@@ -283,7 +309,9 @@ const SettingsHiloCatalog = (props) => {
       return save(text);
     }
     if (isEmptyCatalog(catalog)) return showError(emptyCatalogHint(t));
-    return save(JSON.stringify(catalog));
+    // 合并回未渲染的段（见 passthrough 的说明）。展开顺序让表格里的三段
+    // 覆盖同名键 —— passthrough 里本来就不该有它们，这只是双保险。
+    return save(JSON.stringify(withPassthrough(catalog)));
   };
 
   const columns = (group) => [
@@ -426,6 +454,10 @@ const SettingsHiloCatalog = (props) => {
               try {
                 const res = await API.get('/api/option/hilo_catalog_default');
                 const parsed = JSON.parse(res?.data?.data ?? '{}');
+                // 出厂目录里也有 `text`（见 setting/hilo_catalog.go 的
+                // Text: defaultHiloTextCatalog()）。不收起来的话，
+                // 「载入出厂目录 → 保存」存下去的是一份没有对话模型的目录。
+                passthrough.current = pickPassthrough(parsed);
                 setCatalog({
                   image: parsed.image ?? [],
                   video: parsed.video ?? [],
@@ -463,6 +495,11 @@ const SettingsHiloCatalog = (props) => {
                 onClick={() => {
                   try {
                     const parsed = rawText.trim() ? JSON.parse(rawText) : {};
+                    // **必须跟着原文重算。** 不然 passthrough 里还留着切进
+                    // 原文模式之前的那份 —— 管理员在原文里刚删掉/改过的
+                    // `text`，回到表格一保存又被**还原回去**，而界面上提示
+                    // 「保存成功」。丢数据至少还看得出来，这个是静默回滚。
+                    passthrough.current = pickPassthrough(parsed);
                     setCatalog({
                       image: parsed.image ?? [],
                       video: parsed.video ?? [],
@@ -522,7 +559,11 @@ const SettingsHiloCatalog = (props) => {
             <Button
               theme='light'
               onClick={() => {
-                setRawText(JSON.stringify(catalog, null, 2));
+                // **必须带上未渲染的段。** 只预填 catalog 的话，
+                // 「进页面 → 编辑原文 JSON → 保存」会把一个字都没碰过的
+                // `text`（对话模型）整段抹掉 —— 原文保存是 `save(text)`，
+                // 预填成什么就存什么。
+                setRawText(JSON.stringify(withPassthrough(catalog), null, 2));
                 setRawMode(true);
               }}
             >

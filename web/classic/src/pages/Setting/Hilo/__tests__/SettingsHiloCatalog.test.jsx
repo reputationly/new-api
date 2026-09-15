@@ -124,6 +124,104 @@ describe('空配置 ≠ 空目录', () => {
     });
   });
 
+  // **这个页面只渲染图片/视频/音频三段，但配置里还有 `text`（对话模型）。**
+  //
+  // 保存写的是 `JSON.stringify(catalog)` —— 不把未渲染的段留住，管理员在
+  // 这里改一个显示名就会把整段对话模型**静默抹掉**：画布上突然选不到 LLM，
+  // 而这里什么都不提示。实测踩过一次（差点又踩第二次）。
+  it('保存时要保住页面不渲染的段（text 对话模型）', async () => {
+    const withText = {
+      ...FACTORY,
+      text: [
+        { platform_model: 'qwen3.8-27b', model: { id: 'qwen3.8-27b', name: 'Qwen3.8 27B' } },
+      ],
+    };
+    await renderPage({ HiloCatalog: JSON.stringify(withText) });
+    await clickText('保存');
+
+    const sent = JSON.parse(API.put.mock.calls[0][1].value);
+    expect(sent.text, '对话模型被静默抹掉了').toHaveLength(1);
+    expect(sent.text[0].model.id).toBe('qwen3.8-27b');
+    // 三段照常保存
+    expect(sent.video[0].platform_model).toBe('minimax-h3-2k');
+  });
+
+  // **「编辑原文 JSON」也会丢。** 它把 catalog 预填进文本框，而原文保存是
+  // `save(text)` —— 预填成什么就存什么。「进页面 → 点编辑原文 → 直接保存」
+  // 一个字没改，对话模型就没了。
+  it('「编辑原文 JSON」的预填要带上 text', async () => {
+    const withText = {
+      ...FACTORY,
+      text: [{ platform_model: 'qwen3.8-27b', model: { id: 'qwen3.8-27b', name: 'Q' } }],
+    };
+    await renderPage({ HiloCatalog: JSON.stringify(withText) });
+    await clickText('编辑原文 JSON');
+
+    const box = document.querySelector('textarea');
+    const prefilled = JSON.parse(box.value);
+    expect(prefilled.text, '预填里没有 text，保存就会把它抹掉').toHaveLength(1);
+    expect(prefilled.video[0].platform_model).toBe('minimax-h3-2k');
+  });
+
+  // **「载入出厂目录」也会丢。** 出厂目录本身带 text（见
+  // setting/hilo_catalog.go 的 Text: defaultHiloTextCatalog()），
+  // 只取三段的话，存下去就是一份没有对话模型的目录。
+  it('「载入出厂目录」之后保存，text 要还在', async () => {
+    const factoryWithText = {
+      ...FACTORY,
+      text: [{ platform_model: 'qwen3.8-27b', model: { id: 'qwen3.8-27b', name: 'Q' } }],
+    };
+    API.get.mockImplementation((url) => {
+      if (url.includes('hilo_catalog_default')) {
+        return Promise.resolve({
+          data: { success: true, data: JSON.stringify(factoryWithText) },
+        });
+      }
+      return Promise.resolve({ data: { success: true, data: [] } });
+    });
+
+    // 「载入出厂目录」只在出厂态（配置为空串）才渲染出来，所以从空配置进入。
+    // 这也顺带保证了 text 只可能来自出厂目录，不是上一份配置残留的 ——
+    // 空配置那条分支会把 passthrough 清空。
+    await renderPage({ HiloCatalog: '' });
+    await clickText('载入出厂目录');
+    await clickText('保存');
+
+    const sent = JSON.parse(API.put.mock.calls[0][1].value);
+    expect(sent.text, '出厂目录里的 text 被丢掉了').toHaveLength(1);
+  });
+
+  // **「回到表格」不能把原文里的改动还原回去。**
+  //
+  // 这条比"丢数据"更阴险：管理员在原文模式里删掉 text，切回表格一保存，
+  // 旧的 text 又被写回去，而界面提示「保存成功」—— 他以为删掉了，其实没有。
+  it('原文里删掉 text 后回到表格，保存不该把它还原', async () => {
+    const withText = {
+      ...FACTORY,
+      text: [{ platform_model: 'qwen3.8-27b', model: { id: 'qwen3.8-27b', name: 'Q' } }],
+    };
+    await renderPage({ HiloCatalog: JSON.stringify(withText) });
+    await clickText('编辑原文 JSON');
+
+    // 在原文里把 text 删掉
+    const box = document.querySelector('textarea');
+    const edited = JSON.parse(box.value);
+    delete edited.text;
+    await act(async () => {
+      const setter = Object.getOwnPropertyDescriptor(
+        window.HTMLTextAreaElement.prototype, 'value',
+      ).set;
+      setter.call(box, JSON.stringify(edited, null, 2));
+      box.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+
+    await clickText('回到表格');
+    await clickText('保存');
+
+    const sent = JSON.parse(API.put.mock.calls[0][1].value);
+    expect(sent.text, '管理员刚删掉的 text 又被还原回去了').toBeUndefined();
+  });
+
   it('有内容时正常保存', async () => {
     await renderPage({ HiloCatalog: JSON.stringify(FACTORY) });
     await clickText('保存');

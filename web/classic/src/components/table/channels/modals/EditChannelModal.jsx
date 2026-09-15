@@ -2844,7 +2844,7 @@ const EditChannelModal = (props) => {
                       }
                       showClear
                       extraText={t(
-                        '渠道自身的推理 Key 权限不够。地址复用上面的代理地址。留空则不启用亲和',
+                        '渠道自身的推理 Key 权限不够。管理接口打到本渠道的「API地址」上，与上面的「代理地址」无关。留空则不启用亲和',
                       )}
                     />
                   )}
