@@ -478,7 +478,7 @@ func TestDryRunAcceptsKnownEnhanceModes(t *testing.T) {
 		"gen-model": {groups: []string{"default"}},
 		"enh-model": {groups: []string{"default"}},
 	})
-	for _, mode := range []string{"", "text", "TEXT", "ir", "IR"} {
+	for _, mode := range []string{"", "text", "TEXT", "ir", "IR", "singlecall", "SingleCall"} {
 		res := DryRunAggregateModel(irEnhanceModel(mode, "模板"), map[string]int{"v-agg": 1})
 		if ch := checkByKey(res, "enhance_mode"); ch != nil && strings.Contains(ch.Message, "不认识") {
 			t.Errorf("mode=%q 是合法值,不该报不认识", mode)
@@ -539,6 +539,23 @@ func TestDryRunIRWithoutTemplateIsWarnNotError(t *testing.T) {
 	requireLevel(t, res2, "enhance_template", AggregateCheckError)
 }
 
+// **singlecall 和 IR 同性质：它有自己的内置编译器提示词。**
+//
+// 缺模板时缺的只是**回落那一级**，不是整个增强。报 error 会让一份能正常
+// 工作的配置在面板上变红、Passed=false —— 而运营据此去"修"一个不存在的
+// 问题，最可能的动作是把 mode 改回 text，正好把这次改动废掉。
+func TestDryRunSingleCallWithoutTemplateIsWarnNotError(t *testing.T) {
+	withFakeModels(t, map[string]fakeModel{
+		"gen-model": {groups: []string{"default"}},
+		"enh-model": {groups: []string{"default"}},
+	})
+	res := DryRunAggregateModel(irEnhanceModel("singlecall", ""), map[string]int{"v-agg": 1})
+	requireLevel(t, res, "enhance_template", AggregateCheckWarn)
+	if !res.Passed {
+		t.Error("mode=singlecall 缺模板被判为不通过；它能正常工作，只是失败时无处回落")
+	}
+}
+
 // 预算配小了是**静默**失败:IR 每次超时、每次回落 text,看起来像
 // "IR 没什么效果",实际一次都没跑成 —— 干跑校验必须把它说出来。
 func TestDryRunWarnsOnTooSmallIRTimeout(t *testing.T) {
@@ -565,4 +582,17 @@ func TestDryRunAcceptsAmpleIRTimeout(t *testing.T) {
 			t.Errorf("timeout_seconds=%d 够用,不该报警：%s", sec, ch.Message)
 		}
 	}
+}
+
+// 预算配小了是**静默**失败——这条判据原先只写在 ir 那一支里，而
+// singlecall 现在是出厂默认。漏掉它等于这套规矩只覆盖了已废弃的那条路。
+func TestDryRunWarnsOnTooSmallSingleCallTimeout(t *testing.T) {
+	withFakeModels(t, map[string]fakeModel{
+		"gen-model": {groups: []string{"default"}},
+		"enh-model": {groups: []string{"default"}},
+	})
+	m := irEnhanceModel("singlecall", "模板")
+	m.PromptEnhance.TimeoutSeconds = 30
+	requireLevel(t, DryRunAggregateModel(m, map[string]int{"v-agg": 1}),
+		"enhance_timeout", AggregateCheckWarn)
 }

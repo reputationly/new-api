@@ -148,3 +148,28 @@ func TestDefaultAggregatePinsGenerateStageWithSizeKey(t *testing.T) {
 		}
 	}
 }
+
+// **出厂配置必须真的跑 singlecall。**
+//
+// 这条是钉「默认值本身」的：EnhanceMode() 认不认这个模式、干跑校验放不放行，
+// 都有各自的测试；唯独「出厂那两条到底配没配 mode」没人管 —— 把那两个
+// "mode": "singlecall" 删掉，其余测试全绿，而线上静默跑回 text 模式。
+func TestDefaultConfigUsesSingleCallMode(t *testing.T) {
+	items, err := ParseAggregateModelList(DefaultAggregateModelConfig)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(items) == 0 {
+		t.Fatal("出厂配置是空的")
+	}
+	for _, m := range items {
+		if m.PromptEnhance == nil {
+			t.Errorf("%s 没配增强段", m.Name)
+			continue
+		}
+		if got := m.PromptEnhance.EnhanceMode(); got != EnhanceModeSingleCall {
+			t.Errorf("%s 的增强模式是 %q，期望 %q —— 少了它线上会静默跑回 text",
+				m.Name, got, EnhanceModeSingleCall)
+		}
+	}
+}

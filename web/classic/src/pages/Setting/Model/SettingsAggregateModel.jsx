@@ -136,9 +136,8 @@ const SettingsAggregateModel = ({ options, refresh }) => {
     "generate": { "model": "minimax-h3", "overrides": { "size": "1280x720" } },
     "upscale":  { "model": "seedvr2-3b", "target_size": "2k" },
     "prompt_enhance": {
-      "model": "qwen3.8-27b",
-      "mode": "text",
-      "system_prompt": "把以下提示词改写得更适合视频生成模型……"
+      "model": "qwen3.8-flash-fp8",
+      "mode": "singlecall"
     }
   }
 ]`}
@@ -166,7 +165,31 @@ const SettingsAggregateModel = ({ options, refresh }) => {
             <br />
             <Text type='secondary' size='small'>
               {t(
-                'prompt_enhance.mode 留空或 "text" 是一次性改写；"ir" 让模型先产出结构化 JSON，由服务端确定性校验后再渲染成提示词——结构错误（镜头时长加起来不等于请求时长、描述里引用了没传的素材）会被拦下重修，而这些在 text 模式下不报错、只是出来的视频不对。代价是延迟：实测单次编译耗时 34-102 秒，直接加在客户提交请求之前。可用 prompt_enhance.timeout_seconds 调整预算（默认 240 秒，按「编译 + 一轮重修」留）；配小了不会报错，只会每次超时并静默回落 text。',
+                'prompt_enhance.mode 三选一，出厂默认 singlecall。',
+              )}
+            </Text>
+            <br />
+            <Text type='secondary' size='small'>
+              {t(
+                '· singlecall：一次调用同时产出生产记录与最终提示词，输出 H3 官方格式（英文，integrated_multimodal_description / overall_soundscape / non_diegetic_music 三节）。程序只做轻量传输检查：镜头时长加起来必须等于请求时长、不能引用没传的素材、用户写明的台词必须原样保留——这些在 text 模式下不报错，只是出来的视频不对。编译失败会回落 text 改写，不会直接用原始提示词。',
+              )}
+            </Text>
+            <br />
+            <Text type='secondary' size='small'>
+              {t(
+                '· 留空或 text：一次性改写，输出官方客户端那套中文格式（全局基准 →【镜头N】）。只有这个模式会用 system_prompt。',
+              )}
+            </Text>
+            <br />
+            <Text type='secondary' size='small'>
+              {t(
+                '· ir：模型先产出结构化 JSON 再由服务端渲染。上游已废弃这套架构，且实测单次编译 34-102 秒；保留仅为兼容既有配置，不建议新用。',
+              )}
+            </Text>
+            <br />
+            <Text type='secondary' size='small'>
+              {t(
+                'prompt_enhance.timeout_seconds 调整预算（singlecall 默认 120 秒、ir 默认 240 秒）；配小了不会报错，只会每次超时并静默回落 text。',
               )}
             </Text>
           </div>

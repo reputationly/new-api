@@ -829,6 +829,10 @@ func buildTaskAggregateInfo(c *gin.Context, exp *middleware.AggregateExpansion) 
 		info.EnhancedPrompt = e.EnhancedPrompt
 		info.EnhanceDegraded = e.Degraded
 		info.EnhanceReason = e.DegradeReason
+		info.EnhanceMode = e.Mode
+		info.ContentPlan = e.ContentPlan
+		info.EnhanceUncertainties = e.Uncertainties
+		info.CompilerRevision = e.CompilerRevision
 	}
 	return info
 }

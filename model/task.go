@@ -273,6 +273,17 @@ type TaskAggregateInfo struct {
 	EnhancedPrompt  string `json:"enhanced_prompt,omitempty"`
 	EnhanceDegraded bool   `json:"enhance_degraded,omitempty"`
 	EnhanceReason   string `json:"enhance_reason,omitempty"`
+	// EnhanceMode 实际走的模式。配的是 singlecall 而这里是 text,说明
+	// 编译失败、回落了 —— 光看 EnhancedPrompt 看不出这一点。
+	EnhanceMode string `json:"enhance_mode,omitempty"`
+	// ContentPlan singlecall 产出的生产记录。客户说"生成的跟我写的不一样"
+	// 时,这份记录能指出模型当时把哪些内容当成了 must_keep。
+	ContentPlan string `json:"content_plan,omitempty"`
+	// EnhanceUncertainties 模型自己标出的未决点。**不是错误**。
+	EnhanceUncertainties []string `json:"enhance_uncertainties,omitempty"`
+	// CompilerRevision 编译器提示词的版本。同步上游新版后,对比两条任务
+	// 的产出要靠它区分 —— 否则只能按提交时间猜。
+	CompilerRevision string `json:"compiler_revision,omitempty"`
 }
 
 // HasUpscale 该流水线是否还有一段超分要跑。

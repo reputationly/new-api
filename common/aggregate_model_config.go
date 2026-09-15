@@ -72,29 +72,48 @@ type AggregatePromptEnhance struct {
 	// 必须是 *bool:plain bool 漏写就是 false,恰好落进上面这个有害分支,而且不报错。
 	SendInputImages *bool `json:"send_input_images"`
 
-	// Mode 增强怎么做。空 = "text"。
+	// Mode 增强怎么做。**出厂配置用 singlecall;字段留空则是 text。**
 	//
-	//	text  一次改写:模板 + 原提示词 → 模型直接吐出改写后的提示词。
-	//	ir    两步:模型先吐**结构化 JSON(Context-IR)**,我们确定性地校验它、
-	//	      再确定性地渲染成提示词。
+	//	singlecall  一次调用同时产出生产记录(content_plan)与最终提示词。
+	//	            输出 H3 官方格式(英文三节);程序只做轻量传输检查。
+	//	            见 service/aggregate_enhance_singlecall.go。
+	//	text        一次改写:模板 + 原提示词 → 模型直接吐出改写后的提示词。
+	//	            输出官方客户端那套中文格式(全局基准 →【镜头N】)。
+	//	            **只有这个模式会用 system_prompt。**
+	//	ir          两步:模型先吐**结构化 JSON(Context-IR)**,我们确定性地
+	//	            校验它、再确定性地渲染成提示词。**上游已废弃这套架构**
+	//	            (见 service/h3v20/README.md),保留仅为兼容既有配置。
 	//
-	// ir 贵一点(输出 token 多,失败时还要一轮修复),换来的是**错误可指认**:
-	// 文本改写吐出来的东西没有任何地方能校验,镜头时长加起来不等于请求时长、
-	// 参考图被描述成一张根本没传的图 —— 这些在 text 模式下全都不报错,只是
-	// 出来的视频不对。ir 模式下它们是 ValidateIR 的具名问题,能被驳回重修。
+	// singlecall 与 ir 换来的都是**错误可指认**:文本改写吐出来的东西没有
+	// 任何地方能校验,镜头时长加起来不等于请求时长、参考图被描述成一张根本
+	// 没传的图、用户写明的台词被翻译掉 —— 这些在 text 模式下全都不报错,
+	// 只是出来的视频不对。两者的区别是代价:singlecall 只多一份紧凑的
+	// content_plan,ir 要模型产出整棵 canonical IR(实测 34-102 秒)。
 	//
-	// 空 = text:老配置不能因为新增了一个字段就改变行为。
+	// 两者失败都**回落 text**,不是直接用原始提示词 —— 直接掉到原文会让
+	// 开着比不开还差,于是没人敢开,于是永远收不到真实失败样本。
+	//
+	// 空 = text:老配置不能因为新增了一个字段就改变行为。**出厂默认写在
+	// DefaultAggregateModelConfig 里,不靠这里的零值。**
 	Mode string `json:"mode"`
 
-	// TimeoutSeconds 增强段的时间预算(秒)。0 = 按模式取内置默认。
+	// TimeoutSeconds 增强段的时间预算(秒)。0 = **按模式**取内置默认:
+	//
+	//	singlecall  120 秒(service.singleCallTimeout)
+	//	ir          240 秒(service.irCompileTimeout)
+	//	text        走 enhanceTimeout,不看这个字段
+	//
+	// 两个默认值差一倍不是拍的:ir 要模型产出整棵 canonical IR,实测单次
+	// 编译 34-102 秒(见 service/aggregate_enhance_ir.go 的实测记录);
+	// singlecall 只吐一份紧凑的 content_plan 加一段提示词。拿 ir 的数字
+	// 去衡量 singlecall 的配置会得出错误结论。
 	//
 	// **这段时间直接加在客户提交请求之前**,所以它是个需要按实际模型调的
-	// 参数,而不是一个可以拍脑袋定死的常量:同一份提示词,实测单次 IR 编译
-	// 在 34-102 秒之间(见 service/aggregate_enhance_ir.go 的实测记录),
-	// 慢的那一半跟模型的"思考"长度强相关,换个模型就是另一条分布。
+	// 参数,而不是一个可以拍脑袋定死的常量 —— 慢的那一半跟模型的"思考"
+	// 长度强相关,换个模型就是另一条分布。
 	//
-	// 配小了的症状是**静默的**:IR 每次超时、每次回落 text 改写,看起来像
-	// "IR 没什么效果",实际是一次都没跑成。
+	// 配小了的症状是**静默的**:每次超时、每次回落 text 改写,看起来像
+	// "增强没什么效果",实际是一次都没跑成。干跑校验对两种模式都会提醒。
 	TimeoutSeconds int `json:"timeout_seconds"`
 
 	// Thinking 让增强模型开启"思考"。**漏写 = 关闭。**
@@ -133,6 +152,9 @@ func (p *AggregatePromptEnhance) IsThinking() bool {
 const (
 	EnhanceModeText = "text"
 	EnhanceModeIR   = "ir"
+	// EnhanceModeSingleCall 一次调用直接拿到 H3 提示词(移植自上游 v20)。
+	// 见 service/aggregate_enhance_singlecall.go。
+	EnhanceModeSingleCall = "singlecall"
 )
 
 // EnhanceMode 归一化后的增强模式(空/未知 = text)。
@@ -143,8 +165,11 @@ func (p *AggregatePromptEnhance) EnhanceMode() string {
 	if p == nil {
 		return EnhanceModeText
 	}
-	if strings.EqualFold(strings.TrimSpace(p.Mode), EnhanceModeIR) {
+	switch strings.ToLower(strings.TrimSpace(p.Mode)) {
+	case EnhanceModeIR:
 		return EnhanceModeIR
+	case EnhanceModeSingleCall:
+		return EnhanceModeSingleCall
 	}
 	return EnhanceModeText
 }

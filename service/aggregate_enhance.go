@@ -99,15 +99,25 @@ type EnhanceResult struct {
 	DegradeReason string
 	Usage         *dto.Usage
 
-	// Mode 实际走的模式("text" / "ir")。配的是 ir 而这里是 text,
-	// 说明 IR 那条路失败了、回落了 —— 见 IRFallbackReason。
+	// Mode 实际走的模式("text" / "ir" / "singlecall")。配的是后两者
+	// 而这里是 text,说明那条路失败了、回落了 —— 见 IRFallbackReason。
 	Mode string
+	// ContentPlan singlecall 产出的生产记录(content_plan)原文。
+	// **不回传客户**,只用于排障对照:客户说"生成的跟我写的不一样"时,
+	// 这份记录能指出模型当时把哪些内容当成了 must_keep。
+	ContentPlan string
+	// Uncertainties 模型自己标出的未决点。**不是错误** —— 上游刻意让它
+	// 把说不准的地方记下来,而不是编一个确定答案糊过去。
+	Uncertainties []string
+	// CompilerRevision 用的哪一版编译器提示词(singlecall 才有)。
+	CompilerRevision string
 	// IR 编译成功时的那份 IR。留着供日志与排查:提示词不对时,能指出
 	// 是模型的创作判断有问题,还是渲染这一步错了。
 	IR *hilo.ContextIR
 	// IRRepaired 第一轮校验没过、靠重修才成功。
 	IRRepaired bool
-	// IRFallbackReason IR 失败并回落到 text 的原因。空 = 没回落过。
+	// IRFallbackReason ir / singlecall 失败并回落到 text 的原因。
+	// 空 = 没回落过。
 	//
 	// **这是整件事里唯一的反馈来源。** IR 层此前零调用方,没有任何真实
 	// 失败样本,所以校验规则和编译器模板都只能靠想 —— 也就一直不收敛。
@@ -183,6 +193,36 @@ func EnhancePrompt(ctx context.Context, agg *common.AggregateModel, authHeader s
 	// (见 SendInputImages 字段注释),不该散在每个调用点各判一次。
 	in.SendMedia = cfg.IsSendInputImages()
 	in.Thinking = cfg.IsThinking()
+
+	// ── singlecall 模式 ──────────────────────────────────────
+	//
+	// 一次调用同时产出 content_plan 与 h3_prompt,程序只做轻量传输检查
+	// (见 aggregate_enhance_singlecall.go)。失败**回落 text 改写**,
+	// 与 IR 那条同一个理由 —— 直接掉到原始提示词会让开着比不开还差。
+	if cfg.EnhanceMode() == common.EnhanceModeSingleCall {
+		if in.Compiler == nil {
+			res.IRFallbackReason = "缺少请求事实(CompilerInput),无法编译"
+		} else if out, err := compileSingleCallWithTimeout(
+			ctx, authHeader, res.Model, in, singleCallBudget(cfg)); err != nil {
+			res.IRFallbackReason = err.Error()
+		} else {
+			res.EnhancedPrompt = out.Prompt
+			res.ContentPlan = out.Plan
+			res.Uncertainties = out.Uncertainties
+			res.CompilerRevision = out.Revision
+			res.IRRepaired = out.Repaired
+			res.Usage = out.Usage
+			res.Mode = common.EnhanceModeSingleCall
+			res.ElapsedMs = time.Since(started).Milliseconds()
+			for _, w := range out.Warnings {
+				common.SysLog(fmt.Sprintf("aggregate enhance: singlecall 传输警告 (model=%s): %s", res.Model, w))
+			}
+			return res
+		}
+		common.SysLog(fmt.Sprintf(
+			"aggregate enhance: singlecall 编译失败,回落 text 改写 (model=%s): %s",
+			res.Model, res.IRFallbackReason))
+	}
 
 	// ── IR 模式 ──────────────────────────────────────────────
 	//

@@ -16,6 +16,27 @@ package common
 // 最后一级从来没实现,拿到空模板只能 degrade。出厂若配一个带增强的条目而不写模板,
 // 得到的是最坏状态:配置说 enabled、实际每次都用原始提示词,且不报错。
 //
+// ── 增强模式为什么是 singlecall ───────────────────────────────────
+//
+// 两份官方材料对"H3 提示词长什么样"给的答案不一样:
+//
+//	H3 模型仓的 h3-prompt-writing skill  英文,三节
+//	                                    (integrated_multimodal_description /
+//	                                     overall_soundscape / non_diegetic_music)
+//	官方客户端的 vendor 卡                中文,「全局基准 → 【镜头N】」五字段
+//
+// singlecall 走前者(移植自 XINGSHEN2 v20,见 service/h3v20/);text 模板走
+// 后者。选前者的理由:客户端那套是给**交互式 agent** 用的初步优化(整节规则
+// 约 20 行),而我们这一段是服务端一次性编译,没有后续轮次可以补救。
+//
+// 声音是差别最明显的地方:三节格式里 overall_soundscape 是**独立顶层节**、
+// 总括全片;五字段格式把声音塞在每个镜头的第 5 小项里,而 non_diegetic_music
+// 整节不存在。
+//
+// 失败会**回落 text 改写**,不是掉回原始提示词 —— 见
+// service/aggregate_enhance_singlecall.go 顶部。所以切过来不会比原先更糟:
+// 最坏情况等于原先。
+
 // ── 增强模型为什么是 qwen3.8-flash-fp8 ────────────────────────────
 //
 // 选型的硬门槛是**真看得懂视频**。实测（前绿后蓝的色块视频）:
@@ -109,7 +130,7 @@ const DefaultAggregateModelConfig = `[
     "type": "video",
     "enabled": true,
     "note": "H3 帧族(文生/图生/首尾帧/尾帧)2K:生成 → SwiftVR 超分。等价于体验区的两段编排,集成方只看到一个模型名和一个任务。提示词请自行扩写后再传。",
-    "prompt_enhance": { "model": "qwen3.8-flash-fp8" },
+    "prompt_enhance": { "model": "qwen3.8-flash-fp8", "mode": "singlecall" },
     "generate": { "model": "minimax-h3-fl2va", "overrides": { "size": "768P" } },
     "upscale": { "model": "swiftvr", "target_size": "2k" }
   },
@@ -118,7 +139,7 @@ const DefaultAggregateModelConfig = `[
     "type": "video",
     "enabled": true,
     "note": "H3 参考族(参考图/参考视频生视频)2K。参考族是另一个 checkpoint,不能和帧族共用一条流水线。",
-    "prompt_enhance": { "model": "qwen3.8-flash-fp8" },
+    "prompt_enhance": { "model": "qwen3.8-flash-fp8", "mode": "singlecall" },
     "generate": { "model": "minimax-h3-ref2va", "overrides": { "size": "768P" } },
     "upscale": { "model": "swiftvr", "target_size": "2k" }
   }
