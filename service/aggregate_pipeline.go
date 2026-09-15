@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -60,6 +61,93 @@ var videosEndpoint = func() string {
 		return ""
 	}
 	return base + "/v1/videos"
+}
+
+// ── 超分段的对外呈现 ────────────────────────────────────────────────
+//
+// 客户侧全程只有**一个** task id,所以两段流水线要合成一条看起来连贯的进度。
+// 这里有两件事必须做对,而它们此前都是错的:
+//
+// **一、进度不能倒退。** 生成段跑到 30%(ProgressInProgress)、完成时本该是
+// 100%,但流水线一推进就被拨回 30% 并冻在那里,直到超分段结束才跳 100%。
+// 客户端普遍把进度当单调递增用,倒退会被渲染成"重新开始了"。
+//
+// **二、队列长度只属于生成段。** QueueAhead 是"前面还有几个任务在等卡",
+// 进超分段后生成段的队列已经不存在了,而父任务被 partitionTasksForPolling
+// 挡在平台轮询之外,那个值再也不会被刷新 —— 于是界面上一直显示着一个**已经
+// 消失的队列**。超分段自己的队列不显示:它快,显示一个转瞬即逝的排队数
+// 反而让人以为卡住了。
+const (
+	// aggregateUpscaleStart 刚进超分段时的进度。
+	//
+	// 取 60% 而不是接着 30% 往上爬:生成段是整条流水线里耗时最长的一段,
+	// 它做完时客户应该看到明显的推进。
+	aggregateUpscaleStart = 60
+	// aggregateUpscaleCeil 超分段能爬到的上限。留 5% 给收尾(落盘、审核、
+	// 结算)—— 到了 100% 却还没拿到 url,比停在 95% 更让人困惑。
+	aggregateUpscaleCeil = 95
+)
+
+// parsePercent 解 "30%" 这类进度串。解不出来返回 0 与 false。
+func parsePercent(p string) (int, bool) {
+	v := strings.TrimSuffix(strings.TrimSpace(p), "%")
+	if v == "" {
+		return 0, false
+	}
+	n, err := strconv.Atoi(v)
+	if err != nil || n < 0 || n > 100 {
+		return 0, false
+	}
+	return n, true
+}
+
+// upscaleProgress 把子任务的进度映射进 [60, 95]。
+//
+// 子任务的 Progress 是 "30%" 这种字符串;解不出来就返回起点,**不返回 0** ——
+// 那会让进度倒退回生成段之前。
+func upscaleProgress(subProgress string) string {
+	pct, _ := parsePercent(subProgress)
+	mapped := aggregateUpscaleStart + (aggregateUpscaleCeil-aggregateUpscaleStart)*pct/100
+	return strconv.Itoa(mapped) + "%"
+}
+
+// markUpscaleStage 把父任务置成"正在超分",并清掉生成段留下的队列回显。
+//
+// # 进度只增不减,由这里兜底
+//
+// 调用方给的值**不能直接写进去**。两个调用点都会给出偏低的值:
+//
+//   - 进超分段时给的是起点 60%。而生成段的上游(gpustackplus)报的是细粒度
+//     进度,scaleProgress 把门面的 0-100 压进 [30,95],task_polling 每轮抄进
+//     父任务 —— 生成段跑完那一刻父任务通常已经在 60-95% 之间。直接写 60%
+//     就是一次倒退,正是这套改动要消灭的东西。
+//   - 超分段进行中,子任务自己会回落:门面的 queued/assigned(含等重派)映射成
+//     ProgressQueued 20%,落盘重试把 95% 打回 ProgressInProgress 30%
+//     (task_polling.go 那两处)。跟着它走就会看到 93% → 70% 这种跌落。
+//
+// 所以在这里取高者。**唯一允许下调的是超过上限的值**:留 5% 给收尾,
+// 而"进度 100% 却仍在进行中"比停在 95% 更让人困惑(task_polling 里那条
+// pipelineAdvanced 守卫也是为了同一件事)。
+func markUpscaleStage(task *model.Task, progress string) {
+	task.Status = model.TaskStatusInProgress
+	task.Progress = clampUpscaleProgress(task.Progress, progress)
+	task.FinishTime = 0
+	// **必须清空。** 见本段开头的说明:不清的话界面上会一直显示一个
+	// 已经不存在的队列。
+	task.Properties.QueueAhead = nil
+	task.Properties.EstimatedStartSeconds = nil
+}
+
+// clampUpscaleProgress 取 current 与 want 的高者,并压到超分段上限之内。
+func clampUpscaleProgress(current, want string) string {
+	n, _ := parsePercent(want)
+	if cur, ok := parsePercent(current); ok && cur > n {
+		n = cur
+	}
+	if n > aggregateUpscaleCeil {
+		n = aggregateUpscaleCeil
+	}
+	return strconv.Itoa(n) + "%"
 }
 
 // TryAdvanceAggregatePipeline 在生成段完成时尝试推进到超分段。
@@ -123,6 +211,13 @@ func TryAdvanceAggregatePipeline(ctx context.Context, adaptor TaskPollingAdaptor
 	// 正确的做法是父任务保留自己的身份、改为**等待**子任务:
 	// 轮询循环把 Stage==2 的父任务分流出去(不进上游轮询),
 	// 由 syncAggregatePipelineParents 查子任务的终态再收尾。
+	// **对外呈现在这里一起设,不交给调用方。**
+	//
+	// 这个函数是唯一知道"确实推进到第二段了"的地方;把进度与队列回显留给
+	// 调用方去改,就等着哪天新增一个调用点、忘了改其中一项 —— 而漏掉的
+	// 表现是静默的(进度倒退,或者界面上挂着一个已经消失的队列)。
+	markUpscaleStage(task, upscaleProgress(""))
+
 	common.SysLog(fmt.Sprintf("aggregate pipeline: task %s 进入超分段(upstream=%s, platform=%s, channel=%d)",
 		task.TaskID, task.PrivateData.UpstreamTaskID, task.Platform, task.ChannelId))
 	return true
@@ -248,7 +343,10 @@ func AggregateParentStillWaiting(task *model.Task) bool {
 //   - 子任务成功 → 把它的产物挂到父任务上,按生成段的回执结算,置成功;
 //   - 子任务失败 → **降级交付生成段的成品**。生成段已经真实烧掉 GPU 且已计费,
 //     不能因为第二段失败就把成品也丢了;客户按分段计费只被扣了生成那笔,没吃亏。
-//   - 子任务还在跑 → 什么都不做,下一轮再看。
+//   - 子任务还在跑 → **把它的进度映射进 [60,95] 回显给父任务并写库**,
+//     下一轮再看。这一支以前是空实现,于是整个超分段对外没有进度:
+//     冻在进入第二段那一刻的值上,直到突然跳 100%。
+//     映射只增不减(见 markUpscaleStage)。
 func SyncAggregatePipelineParents(ctx context.Context, parents []*model.Task) {
 	for _, task := range parents {
 		agg := task.PrivateData.Aggregate
@@ -267,7 +365,22 @@ func SyncAggregatePipelineParents(ctx context.Context, parents []*model.Task) {
 				task.TaskID, sub.FailReason))
 			finishAggregateParent(ctx, task, "", agg.Stage1NFSPath)
 		default:
-			// 仍在排队/生成中
+			// 仍在排队/生成中:把子任务的进度映射进 [60,95] 回显给客户。
+			// 不做的话进度会冻在进入超分段那一刻的值上,直到突然跳 100%。
+			// 这里也 clamp 一次，**不是为了正确性**（markUpscaleStage 里
+			// 已经取高者），而是为了少写库：子任务回落时未 clamp 的 want
+			// 会一直不等于 task.Progress，于是每一轮都白写一次 —— 而这个
+			// 循环每 15 秒跑一遍，对每条在超分段的任务都跑。
+			want := clampUpscaleProgress(task.Progress, upscaleProgress(sub.Progress))
+			if task.Progress == want {
+				break
+			}
+			oldStatus := task.Status
+			markUpscaleStage(task, want)
+			if _, err := task.UpdateWithStatus(oldStatus); err != nil {
+				common.SysError(fmt.Sprintf(
+					"aggregate pipeline: 更新父任务 %s 进度失败: %v", task.TaskID, err))
+			}
 		}
 	}
 }

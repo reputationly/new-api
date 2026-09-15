@@ -4,6 +4,8 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -446,7 +448,12 @@ func TestSyncParentRefundsWhenGivingUp(t *testing.T) {
 		"彻底失败必须退还预扣 —— 客户什么都没拿到,不能收钱")
 }
 
-// 子任务还在跑 → 父任务原样不动,下一轮再看。
+// 子任务还在跑 → 父任务**不进终态**,下一轮再看。
+//
+// 注意它不再是"原样不动":进度会跟着子任务走(见
+// TestSyncParentAdvancesProgressWhileUpscaling)。这条钉的是**状态**和
+// 产物 —— 超分没完成之前不能落终态,那会让父任务离开未完成集合,
+// SyncAggregatePipelineParents 再也看不到它。
 func TestSyncParentWaitsWhileSubTaskRunning(t *testing.T) {
 	withSubTaskStatus(t, model.TaskStatusInProgress, "")
 	task := pipelineTask()
@@ -616,4 +623,220 @@ func TestSweepTimedOutStillFailsNormalTask(t *testing.T) {
 	require.NoError(t, model.DB.Where("id = ?", task.ID).First(&after).Error)
 	require.EqualValues(t, model.TaskStatusFailure, after.Status,
 		"普通任务的超时清理不该被这次改动影响")
+}
+
+// ── 超分段的对外呈现 ──────────────────────────────────────────────
+
+// **进度不能倒退。** 生成段跑到 30%，流水线一推进却被拨回 30% 并冻在那里
+// 直到跳 100%。客户端普遍把进度当单调递增用，倒退会被渲染成"重新开始了"。
+func TestAdvanceDoesNotRewindProgress(t *testing.T) {
+	calls, _ := withFakeVideosEndpoint(t, 200, `{"task_id":"pub-2"}`)
+	_ = calls
+	task := pipelineTask()
+	task.Progress = "30%"
+
+	require.True(t, TryAdvanceAggregatePipeline(
+		context.Background(), nil, task, stage1Result(), "/nfs-output/t2v/x.mp4"))
+
+	require.NotEqual(t, "30%", task.Progress, "进度被拨回生成段的值")
+	require.Equal(t, "60%", task.Progress, "进超分段应该明显推进一步")
+}
+
+// **队列长度只属于生成段。** 进超分段后生成段的队列已经不存在，而父任务从
+// 这一刻起被挡在平台轮询之外，那个值再也不会被刷新 —— 不清的话界面上会一直
+// 显示一个已经消失的队列。
+func TestAdvanceClearsQueueDisplay(t *testing.T) {
+	calls, _ := withFakeVideosEndpoint(t, 200, `{"task_id":"pub-2"}`)
+	_ = calls
+	task := pipelineTask()
+	n, sec := 3, 42
+	task.Properties.QueueAhead = &n
+	task.Properties.EstimatedStartSeconds = &sec
+
+	require.True(t, TryAdvanceAggregatePipeline(
+		context.Background(), nil, task, stage1Result(), "/nfs-output/t2v/x.mp4"))
+
+	require.Nil(t, task.Properties.QueueAhead, "生成段的队列长度留在了超分段")
+	require.Nil(t, task.Properties.EstimatedStartSeconds, "生成段的预计开始时间留在了超分段")
+}
+
+// 子任务进度映射进 [60,95]，且必须单调、解不出来时回起点而不是 0。
+func TestUpscaleProgressMapping(t *testing.T) {
+	require.Equal(t, "60%", upscaleProgress("0%"))
+	require.Equal(t, "70%", upscaleProgress("30%"))
+	require.Equal(t, "95%", upscaleProgress("100%"))
+
+	// 解不出来时回起点。回 0 会让进度倒退回生成段之前。
+	for _, bad := range []string{"", "garbage", "abc%", "-10%", "200%"} {
+		require.Equal(t, "60%", upscaleProgress(bad), "坏值 %q 应该回起点", bad)
+	}
+
+	// 单调
+	prev := 0
+	for pct := 0; pct <= 100; pct += 10 {
+		cur, err := strconv.Atoi(strings.TrimSuffix(
+			upscaleProgress(strconv.Itoa(pct)+"%"), "%"))
+		require.NoError(t, err)
+		require.GreaterOrEqual(t, cur, prev, "映射不单调")
+		prev = cur
+	}
+
+	// 上限留 5% 给收尾：到了 100% 却还没拿到 url 比停在 95% 更让人困惑
+	require.NotEqual(t, "100%", upscaleProgress("100%"))
+}
+
+// **超分段进行中，进度要跟着子任务走。**
+//
+// 原先这一支是 `default:` 什么都不做 —— 进度冻在进入超分段那一刻的值上，
+// 直到突然跳 100%。整个超分段对外完全没有进度。
+func TestSyncParentAdvancesProgressWhileUpscaling(t *testing.T) {
+	truncate(t)
+	orig := lookupTaskByPublicID
+	t.Cleanup(func() { lookupTaskByPublicID = orig })
+	subProgress := "0%"
+	lookupTaskByPublicID = func(string) (*model.Task, bool, error) {
+		return &model.Task{
+			TaskID: "sub-public-1", Status: model.TaskStatusInProgress, Progress: subProgress,
+		}, true, nil
+	}
+
+	task := pipelineTask()
+	task.Status = model.TaskStatusInProgress
+	task.Progress = "60%"
+	task.PrivateData.Aggregate.Stage = 2
+	task.PrivateData.Aggregate.Stage2TaskID = "sub-public-1"
+	// **必须真的入库。** 进度是靠 UpdateWithStatus 写出去的，库里没有这行
+	// 就影响 0 行 —— 而断言只读内存字段的话，把那次写库整个删掉测试照样
+	// 全绿（本文件 TestSyncParentRefundsWhenGivingUp 已经记过这个坑）。
+	require.NoError(t, task.Insert())
+
+	seen := []string{}
+	for _, p := range []string{"0%", "30%", "60%", "100%"} {
+		subProgress = p
+		SyncAggregatePipelineParents(context.Background(), []*model.Task{task})
+		seen = append(seen, task.Progress)
+		require.EqualValues(t, model.TaskStatusInProgress, task.Status,
+			"超分还在跑，父任务不该离开进行中")
+	}
+
+	require.Equal(t, []string{"60%", "70%", "81%", "95%"}, seen,
+		"超分段的进度没跟着子任务走（原先是冻住不动直到跳 100%%）")
+
+	// **回读库里那一行。** 只断言内存字段的话，写库删掉也不红。
+	var after model.Task
+	require.NoError(t, model.DB.Where("id = ?", task.ID).First(&after).Error)
+	require.Equal(t, "95%", after.Progress,
+		"进度只改了内存，没写进库 —— 客户端查到的还是旧值")
+}
+
+// 超分段不显示队列长度：它快，显示一个转瞬即逝的排队数反而让人以为卡住了。
+func TestSyncParentKeepsQueueDisplayCleared(t *testing.T) {
+	truncate(t)
+	orig := lookupTaskByPublicID
+	t.Cleanup(func() { lookupTaskByPublicID = orig })
+	lookupTaskByPublicID = func(string) (*model.Task, bool, error) {
+		return &model.Task{TaskID: "sub-public-1", Status: model.TaskStatusInProgress, Progress: "30%"}, true, nil
+	}
+
+	task := pipelineTask()
+	task.Status = model.TaskStatusInProgress
+	task.Progress = "60%"
+	n := 5
+	task.Properties.QueueAhead = &n // 生成段留下的残值
+	task.PrivateData.Aggregate.Stage = 2
+	task.PrivateData.Aggregate.Stage2TaskID = "sub-public-1"
+	require.NoError(t, task.Insert())
+
+	SyncAggregatePipelineParents(context.Background(), []*model.Task{task})
+
+	require.Nil(t, task.Properties.QueueAhead, "超分段不该显示队列长度")
+
+	var after model.Task
+	require.NoError(t, model.DB.Where("id = ?", task.ID).First(&after).Error)
+	require.Nil(t, after.Properties.QueueAhead, "库里那一行仍留着生成段的队列长度")
+}
+
+// **生成段的进度是细粒度的，进超分段不能把它按回起点。**
+//
+// gpustackplus 的 scaleProgress 把门面的 0-100 压进 [30,95]（adaptor.go），
+// task_polling 每轮抄进父任务。线上实测门面确实返回 progress（"progress":
+// 42.5），所以生成段跑完那一刻父任务通常已经在 60-95% 之间 —— 写死 60%
+// 就是一次倒退，正是这套改动要消灭的东西。
+func TestAdvanceKeepsHigherGenerateProgress(t *testing.T) {
+	for _, at := range []string{"93%", "80%", "61%"} {
+		calls, _ := withFakeVideosEndpoint(t, 200, `{"task_id":"pub-2"}`)
+		_ = calls
+		task := pipelineTask()
+		task.Progress = at
+
+		require.True(t, TryAdvanceAggregatePipeline(
+			context.Background(), nil, task, stage1Result(), "/nfs-output/t2v/x.mp4"))
+
+		require.Equal(t, at, task.Progress,
+			"生成段已经到 %s，进超分段却被按回去了", at)
+	}
+
+	// 低于起点时才抬到 60%
+	calls, _ := withFakeVideosEndpoint(t, 200, `{"task_id":"pub-2"}`)
+	_ = calls
+	low := pipelineTask()
+	low.Progress = "30%"
+	require.True(t, TryAdvanceAggregatePipeline(
+		context.Background(), nil, low, stage1Result(), "/nfs-output/t2v/x.mp4"))
+	require.Equal(t, "60%", low.Progress)
+}
+
+// **超分段里子任务自己会回落，父任务不能跟着跌。**
+//
+// 门面的 queued/assigned（含等重派）映射成 ProgressQueued 20%，落盘重试把
+// 95% 打回 ProgressInProgress 30%。跟着走就是 93% → 67%/70% 的可见跌落，
+// 而这是「等待分支从空实现改成推进进度」新引入的。
+func TestSyncParentNeverRewindsOnSubTaskDip(t *testing.T) {
+	truncate(t)
+	orig := lookupTaskByPublicID
+	t.Cleanup(func() { lookupTaskByPublicID = orig })
+	subProgress := "0%"
+	subStatus := model.TaskStatus(model.TaskStatusInProgress)
+	lookupTaskByPublicID = func(string) (*model.Task, bool, error) {
+		return &model.Task{TaskID: "sub-public-1", Status: subStatus, Progress: subProgress}, true, nil
+	}
+
+	task := pipelineTask()
+	task.Status = model.TaskStatusInProgress
+	task.Progress = "60%"
+	task.PrivateData.Aggregate.Stage = 2
+	task.PrivateData.Aggregate.Stage2TaskID = "sub-public-1"
+	require.NoError(t, task.Insert())
+
+	// 真实序列：跑到 95% → 门面把它挪回排队（等重派）→ 落盘重试打回 30% → 再跑上来
+	seq := []struct {
+		progress string
+		status   model.TaskStatus
+	}{
+		{"50%", model.TaskStatus(model.TaskStatusInProgress)},
+		{"95%", model.TaskStatus(model.TaskStatusInProgress)},
+		{"20%", model.TaskStatus(model.TaskStatusQueued)},     // 等重派
+		{"30%", model.TaskStatus(model.TaskStatusInProgress)}, // 落盘重试
+		{"95%", model.TaskStatus(model.TaskStatusInProgress)},
+	}
+	prev := 0
+	for _, step := range seq {
+		subProgress, subStatus = step.progress, step.status
+		SyncAggregatePipelineParents(context.Background(), []*model.Task{task})
+		cur, err := strconv.Atoi(strings.TrimSuffix(task.Progress, "%"))
+		require.NoError(t, err)
+		require.GreaterOrEqual(t, cur, prev,
+			"子任务回落到 %s 时父任务跟着跌了：%d%% → %d%%", step.progress, prev, cur)
+		prev = cur
+	}
+	// 子任务 95%% → 父任务 60 + 35×0.95 = 93%%；上限 95%% 只有子任务到 100%% 才达到
+	require.Equal(t, "93%", task.Progress)
+}
+
+// 超过上限的值是**唯一允许下调**的情形：进度 100% 却仍在进行中，
+// 比停在 95% 更让人困惑。
+func TestUpscaleProgressCapsAtCeiling(t *testing.T) {
+	require.Equal(t, "95%", clampUpscaleProgress("100%", "60%"))
+	require.Equal(t, "95%", clampUpscaleProgress("99%", "60%"))
+	require.Equal(t, "93%", clampUpscaleProgress("93%", "60%"))
 }

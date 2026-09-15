@@ -526,9 +526,10 @@ func updateVideoSingleTask(ctx context.Context, adaptor TaskPollingAdaptor, ch *
 		// Stage=2 与新的上游 id 都不落库,下一轮轮询仍按旧 id 查到生成段 completed,
 		// 于是**再提交一次超分**,循环重复提交并重复计费。
 		if pipelineAdvanced = TryAdvanceAggregatePipeline(ctx, adaptor, task, taskResult, taskResult.NFSPath); pipelineAdvanced {
-			task.Status = model.TaskStatusInProgress
-			task.Progress = taskcommon.ProgressInProgress
-			task.FinishTime = 0
+			// 状态、进度与队列回显由 TryAdvanceAggregatePipeline 一并设好
+			// (见它里面「对外呈现在这里一起设」那段)。这里**不要**再动 ——
+			// 尤其不要拨回 ProgressInProgress(30%):生成段刚做完,把进度退
+			// 回去会被客户端渲染成"重新开始了"。
 			break
 		}
 		task.Progress = taskcommon.ProgressComplete
