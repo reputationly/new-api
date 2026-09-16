@@ -783,11 +783,13 @@ func TestSentImagesMatchEvidenceAssets(t *testing.T) {
 		{"显式 flf2v", map[string]any{"prompt": "x", "duration": 5,
 			"images":   []any{"https://e/a.png", "https://e/b.png"},
 			"metadata": map[string]any{"task_type": "flf2v"}}},
-		{"推断 flf2v（无 task_type）", map[string]any{"prompt": "x", "duration": 5,
-			"images": []any{"https://e/a.png", "https://e/b.png"}}},
-		{"推断 flf2v 且混用 image 别名", map[string]any{"prompt": "x", "duration": 5,
-			"image":  "https://e/phantom.png",
-			"images": []any{"https://e/a.png", "https://e/b.png"}}},
+		{"显式 flf2v 且混用 image 别名", map[string]any{"prompt": "x", "duration": 5,
+			"image":    "https://e/phantom.png",
+			"images":   []any{"https://e/a.png", "https://e/b.png"},
+			"metadata": map[string]any{"task_type": "flf2v"}}},
+		{"显式 i2v", map[string]any{"prompt": "x", "duration": 5,
+			"images":   []any{"https://e/a.png"},
+			"metadata": map[string]any{"task_type": "i2v"}}},
 		{"推断 r2va", map[string]any{"prompt": "x", "duration": 5,
 			"metadata": map[string]any{"src_ref_images": []any{"https://e/r.png"}}}},
 	}
@@ -936,7 +938,11 @@ func TestInferTaskTypeWhenMetadataMissing(t *testing.T) {
 		ok   bool
 	}{
 		{"没有任何素材 → t2v", &relaycommon.TaskSubmitReq{}, hilo.TaskT2V, true},
-		{"两张帧图 → flf2v", &relaycommon.TaskSubmitReq{Images: []string{"a", "b"}}, hilo.TaskFLF2V, true},
+		// **有顶层帧图就不推断。** 生成段对 H3 帧族的名字推断只能给 t2v，
+		// 并明说「带图的直连请求必须显式声明 metadata.task_type」。线上实测：
+		// 两张图 + 无 task_type → 我推 flf2v、生成段解析 t2v → 400，而增强
+		// 跑在校验之前，那次编译白烧且已计费。
+		{"两张帧图 → 拒绝", &relaycommon.TaskSubmitReq{Images: []string{"a", "b"}}, "", false},
 		{"空串不算素材", &relaycommon.TaskSubmitReq{Images: []string{"", "  "}}, hilo.TaskT2V, true},
 		{"只有参考图 → r2va", &relaycommon.TaskSubmitReq{
 			Metadata: meta(map[string]any{"src_ref_images": []any{"r"}})}, hilo.TaskR2VA, true},
@@ -949,15 +955,15 @@ func TestInferTaskTypeWhenMetadataMissing(t *testing.T) {
 
 		// **参考音频出现即说明是别的玩法**（多半是 s2v 数字人），不猜。
 		{"带参考音频 → 拒绝", &relaycommon.TaskSubmitReq{
-			Images:   []string{"a", "b"},
-			Metadata: meta(map[string]any{"reference_audios": []any{"au"}})}, "", false},
+			Metadata: meta(map[string]any{
+				"src_ref_images":   []any{"r"},
+				"reference_audios": []any{"au"}})}, "", false},
 
-		// **帧优先于参考，与 ResolveFrameRoles 一致。**
-		// 反过来的话，FrameRolesFromTask(TaskR2VA, …) 压根不看 frameImages，
-		// 真正的首尾帧语义就凭空消失了。
-		{"帧图 + 参考图 → 帧优先", &relaycommon.TaskSubmitReq{
+		// 帧图 + 参考图：帧图在场就不推断（同上）。顺带也避开了
+		// FrameRolesFromTask(TaskR2VA, …) 压根不看 frameImages 那个坑。
+		{"帧图 + 参考图 → 拒绝", &relaycommon.TaskSubmitReq{
 			Images:   []string{"a", "b"},
-			Metadata: meta(map[string]any{"src_ref_images": []any{"r"}})}, hilo.TaskFLF2V, true},
+			Metadata: meta(map[string]any{"src_ref_images": []any{"r"}})}, "", false},
 	}
 	for _, c := range cases {
 		got, ok := inferCompilerTaskType(c.norm)
@@ -1017,8 +1023,9 @@ func TestEnhanceInputSendsWhatEvidenceDescribes(t *testing.T) {
 	// 混用 image 与 images：并集会把 phantom 排在最前，标号整体错开一位
 	body := map[string]any{
 		"model": "h3-2k", "prompt": "x", "duration": 5,
-		"image":  "https://e/phantom.png",
-		"images": []any{"https://e/a.png", "https://e/b.png"},
+		"image":    "https://e/phantom.png",
+		"images":   []any{"https://e/a.png", "https://e/b.png"},
+		"metadata": map[string]any{"task_type": "flf2v"},
 	}
 	withAggregateConfig(t, `[{
 		"name":"h3-2k","type":"video","enabled":true,
@@ -1127,4 +1134,38 @@ func TestNoInferenceWhenMetadataUnreadable(t *testing.T) {
 		require.NotNil(t, in, "%s：确实没有素材，应该能推出 t2v", name)
 		require.Equal(t, hilo.TaskT2V, in.TaskType, name)
 	}
+}
+
+// **推断的结论必须是生成段也会得出的结论。**
+//
+// 生成段对 H3 帧族的名字推断（gpustackplus inferTaskType）写得很死：
+// fl2va 分区同时服务 t2va + fl2va，名字给不出是哪一种，兜底 t2v，并明说
+// 「带图的直连请求必须显式声明 metadata.task_type」。
+//
+// 线上实测：两张图 + 无 task_type → 我这边推 flf2v，生成段解析 t2v，
+// 然后 400「任务类型 t2v 不接受图片输入」。而增强跑在生成段校验**之前**，
+// 那次编译白烧且已经计费。
+func TestInferenceAgreesWithGenerationStage(t *testing.T) {
+	// 生成段对 fl2va 分区：无图 → t2v（兜底默认），有图 → 必须显式声明
+	noMaterial := &relaycommon.TaskSubmitReq{}
+	got, ok := inferCompilerTaskType(noMaterial)
+	require.True(t, ok)
+	require.Equal(t, hilo.TaskT2V, got, "无素材时两边都该是 t2v")
+
+	for name, norm := range map[string]*relaycommon.TaskSubmitReq{
+		"一张顶层图": {Images: []string{"a"}},
+		"两张顶层图": {Images: []string{"a", "b"}},
+		"三张顶层图": {Images: []string{"a", "b", "c"}},
+	} {
+		if _, ok := inferCompilerTaskType(norm); ok {
+			t.Errorf("%s：生成段要求显式 task_type，我们却自己推了一个", name)
+		}
+	}
+
+	// 生成段对 ref2va 分区名字推断直接给 r2va，两边一致，可以推
+	refOnly := &relaycommon.TaskSubmitReq{
+		Metadata: map[string]any{"src_ref_images": []any{"r"}}}
+	got, ok = inferCompilerTaskType(refOnly)
+	require.True(t, ok, "参考族两边一致，应该能推")
+	require.Equal(t, hilo.TaskR2VA, got)
 }

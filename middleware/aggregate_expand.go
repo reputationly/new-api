@@ -788,14 +788,28 @@ func inferCompilerTaskType(norm *relaycommon.TaskSubmitReq) (hilo.TaskType, bool
 	}
 
 	switch {
-	case frames >= 2:
-		return hilo.TaskFLF2V, true
-	case frames == 1:
-		// i2v 还是 l2va 分不清。
+	case frames > 0:
+		// **有顶层帧图就不推断 —— 不管几张。**
+		//
+		// 这不是保守,是与生成段的契约对齐。它的名字推断对 H3 帧族写得很死
+		// (gpustackplus adaptor.go 的 inferTaskType):
+		//
+		//	fl2va 分区同时服务 t2va + fl2va 两种玩法,名字给不出是哪一种,
+		//	只能给兜底默认 t2v。**带图的直连请求必须显式声明
+		//	metadata.task_type**。
+		//
+		// 线上实测过:两张图 + 无 task_type,我这边推成 flf2v,生成段解析成
+		// t2v,然后 400「任务类型 t2v 不接受图片输入」。而增强跑在生成段校验
+		// **之前** —— 那次编译白烧并且已经计费。
+		//
+		// 一张图那条另有理由,同样成立:i2v 与 l2va 的输入形态完全相同,
+		// 猜成 i2v 而实际是尾帧,视频会从结尾往后长且不报错。
 		return "", false
 	case refImgs > 0 || refVids > 0:
+		// 参考族可以推:生成段的名字推断对 ref2va 分区直接给 r2va,两边一致。
 		return hilo.TaskR2VA, true
 	default:
+		// 什么素材都没有 → t2v。生成段对 fl2va 分区的兜底默认也是 t2v,一致。
 		return hilo.TaskT2V, true
 	}
 }
