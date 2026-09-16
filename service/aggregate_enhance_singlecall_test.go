@@ -98,20 +98,124 @@ func TestLabelIssues(t *testing.T) {
 	}
 }
 
-// **按玩法选节名单，不能一律用六节。**
+// **缺节是错误，不是警告 —— 线上用一条中英文串台的成片证明的。**
 //
-// 上游无论什么玩法都拿 ref2va 那六节去比，于是每个 t2v 请求都会得到一条
-// 必然为真的警告。警告恒真就等于没有 —— 真出问题时没人会多看一眼。
-func TestSectionWarningsByTaskType(t *testing.T) {
-	t2v := "integrated_multimodal_description: [Shot 1] ...\n\noverall_soundscape: ...\n\nnon_diegetic_music: N/A"
-	if w := sectionWarnings(t2v, "t2v"); len(w) != 0 {
-		t.Errorf("t2v 的三节齐全却报警告: %v", w)
+// detailed_description 是分镜正文所在的那一节，台词住在里面。缺了它，H3
+// 拿到的提示词没有任何台词、没有声音计划，只能自己编：用户要六句中文口播，
+// 成片说的是英文，而画面、时长、分辨率全都正常，没有任何地方报错。
+//
+// 当时这条检查**确实命中了**，日志里写着
+// 「Some official section labels are absent (detailed_description,
+// overall_soundscape)」—— 但它是警告，只进日志，没人看。
+func TestMissingSectionsIsAnError(t *testing.T) {
+	// r2va 必须六节齐全
+	full := "subject_definitions: x\nsummary: y\nretention_analysis: z\n" +
+		"detailed_description: w\noverall_soundscape: v\nnon_diegetic_music: N/A"
+	if m := missingSections(full, "r2va"); len(m) != 0 {
+		t.Errorf("六节齐全却报缺: %v", m)
 	}
-	if w := sectionWarnings(t2v, "r2va"); len(w) == 0 {
-		t.Error("r2va 缺 subject_definitions 等节，应该警告")
+
+	// 线上那条的真实形态：缺 detailed_description 与 overall_soundscape
+	real := "subject_definitions: x\nsummary: y\nretention_analysis: z\nnon_diegetic_music: N/A"
+	m := missingSections(real, "r2va")
+	if len(m) == 0 {
+		t.Fatal("缺了分镜正文和声音计划却没报")
 	}
-	if w := sectionWarnings("随便写的一段话", "t2v"); len(w) == 0 {
-		t.Error("三节一个都没有，应该警告")
+	for _, want := range []string{"detailed_description", "overall_soundscape"} {
+		if !strings.Contains(m[0], want) {
+			t.Errorf("报错里没点名缺的是 %s: %s", want, m[0])
+		}
+	}
+
+	// t2v 只要三节，不该拿六节去比（否则每个 t2v 都必然报错）
+	t2v := "integrated_multimodal_description: [Shot 1] x\n\noverall_soundscape: y\n\nnon_diegetic_music: N/A"
+	if m := missingSections(t2v, "t2v"); len(m) != 0 {
+		t.Errorf("t2v 三节齐全却报缺: %v", m)
+	}
+	if m := missingSections(t2v, "r2va"); len(m) == 0 {
+		t.Error("同一份文本按 r2va 判该报缺（少 subject_definitions 等）")
+	}
+}
+
+// **节名的排版形态很多，都要认。**
+//
+// 这条是硬错误、只有一轮重修，误判一次就是整次编译作废、静默回落 text。
+// 而规范自己就用了好几种形态，模型照着写随时会带上装饰字符 —— 早先一版
+// 要求节名后紧跟冒号，实测五种里误判四种。
+func TestMissingSectionsToleratesFormatting(t *testing.T) {
+	cases := map[string]string{
+		"裸节名（base-en.txt:39 正文形态）":     "integrated_multimodal_description: x\noverall_soundscape: y\nnon_diegetic_music: N/A",
+		"markdown 加粗（base-en.txt:47）":  "- **integrated_multimodal_description**: x\n- **overall_soundscape**: y\n- **non_diegetic_music**: N/A",
+		"反引号（ref-en.txt:7）":            "`integrated_multimodal_description`: x\n`overall_soundscape`: y\n`non_diegetic_music`: N/A",
+		"markdown 标题（base-en.txt:152）": "### Integrated Multimodal Description\nx\n### Overall Soundscape\ny\n### Non Diegetic Music\nN/A",
+		"破折号分隔":                        "integrated_multimodal_description - x\noverall_soundscape - y\nnon_diegetic_music - N/A",
+		"大小写混写":                        "Integrated_Multimodal_Description: x\nOVERALL_SOUNDSCAPE: y\nNon Diegetic Music: N/A",
+		// 分隔符不止 _ / 空格 / -。只挑几个来归一、其余删掉的话，节名里夹一个
+		// 别的分隔符就会把词粘回去（integratedmultimodaldescription），
+		// 实测六种误判五种。
+		"制表符":   "integrated\tmultimodal\tdescription: x\noverall_soundscape: y\nnon_diegetic_music: N/A",
+		"不换行空格": "integrated multimodal description: x\noverall_soundscape: y\nnon_diegetic_music: N/A",
+		"全角下划线": "integrated＿multimodal＿description: x\noverall_soundscape: y\nnon_diegetic_music: N/A",
+		"长破折号":  "integrated—multimodal—description: x\noverall_soundscape: y\nnon_diegetic_music: N/A",
+		"标题里换行": "### Overall\nSoundscape\ny\nintegrated_multimodal_description: x\nnon_diegetic_music: N/A",
+		// 长行折断：`_` 与换行相连，归一后若不把连续分隔符压成一个就会得到
+		// 两个空格，而 needle 里词间只有一个，于是匹配不上。
+		"软换行折断": "integrated_multimodal_\ndescription: x\noverall_soundscape: y\nnon_diegetic_music: N/A",
+	}
+	for name, p := range cases {
+		if m := missingSections(p, "t2v"); len(m) != 0 {
+			t.Errorf("%s 被误判为缺节: %v", name, m)
+		}
+	}
+
+	// 但真缺了还是要报 —— 放宽不等于失效。
+	// 返回的是**一条汇总错误**，里面列出缺的每一节。
+	m := missingSections("integrated_multimodal_description: x", "t2v")
+	if len(m) != 1 {
+		t.Fatalf("应返回一条汇总错误，实得 %d 条: %v", len(m), m)
+	}
+	for _, want := range []string{"overall_soundscape", "non_diegetic_music"} {
+		if !strings.Contains(m[0], want) {
+			t.Errorf("汇总错误里没点名缺的 %s: %s", want, m[0])
+		}
+	}
+}
+
+// **修复提示必须按玩法给。**
+//
+// 帧族没有 detailed_description 那一节（它的正文是
+// integrated_multimodal_description）。照着说会让模型凭空加一节不该有的，
+// 而 baseSections 不会拒绝多出来的东西 —— 一份格式错的提示词就发给 H3 了，
+// 全程不报错。
+func TestRepairHintMatchesTaskType(t *testing.T) {
+	base := missingSections("空白", "t2v")[0]
+	if !strings.Contains(base, "integrated_multimodal_description carries") {
+		t.Errorf("t2v 的修复提示没指向正确的正文节: %s", base)
+	}
+	if strings.Contains(base, "detailed_description carries") {
+		t.Errorf("t2v 的修复提示提到了只属于参考族的 detailed_description: %s", base)
+	}
+
+	ref := missingSections("空白", "r2va")[0]
+	if !strings.Contains(ref, "detailed_description carries") {
+		t.Errorf("r2va 的修复提示没指向正确的正文节: %s", ref)
+	}
+}
+
+// **必须经由 transportIssues 走一遍**：只测 missingSections 本身证明不了
+// 它被接进了 errs（接在 warns 上就不会触发重修，正是线上那次的情形）。
+func TestMissingSectionsReachesErrors(t *testing.T) {
+	f := func(v float64) flexSeconds { return flexSeconds{Value: v, Set: true} }
+	ev := evidenceOf(hilo.CompilerInput{TaskType: hilo.TaskT2V, DurationSeconds: 5})
+	out := &singleCallOutput{
+		H3Prompt: "就是一段大白话，一个官方节名都没有",
+		plan: &singleCallPlan{
+			Shots: []singleCallShot{{StartSeconds: f(0), EndSeconds: f(5)}},
+		},
+	}
+	errs, _ := transportIssues(out, ev)
+	if len(errs) == 0 || !strings.Contains(strings.Join(errs, ";"), "Required official sections") {
+		t.Errorf("缺节没进 errs（接在 warns 上就不会重修）: %v", errs)
 	}
 }
 
@@ -171,13 +275,7 @@ func TestTransportIssues(t *testing.T) {
 		t.Errorf("镜头只覆盖到 3 秒（请求 5 秒），transportIssues 没拦: %v", errs)
 	}
 
-	// 节名警告也要经由入口 —— 它是 warns 那一路，单独测函数证明不了接线。
-	noSections := *good
-	noSections.H3Prompt = "就是一段大白话，没有任何官方节名"
-	_, warns := transportIssues(&noSections, ev)
-	if len(warns) == 0 {
-		t.Error("提示词里一个官方节名都没有，transportIssues 没给出警告")
-	}
+	// 缺节现在是**错误**（见 TestMissingSectionsReachesErrors），不再是警告。
 
 	// 台词检查同样要经由 transportIssues 走一遍，理由同上。
 	evD := evidenceOf(hilo.CompilerInput{
@@ -525,7 +623,13 @@ func scCfg() *common.AggregateModel {
 }
 
 // scReply 一份能过传输检查的 singlecall 产物。
+//
+// **h3_prompt 必须带齐官方节名** —— 缺节现在是硬错误。夹具不带的话，
+// 每个用它的测试都会在缺节这一步就被拦下，测不到它本来想测的东西。
 func scReply(prompt string) string {
+	if !strings.Contains(prompt, "overall_soundscape:") {
+		prompt += "\n\noverall_soundscape: quiet room tone.\n\nnon_diegetic_music: N/A"
+	}
 	b, _ := json.Marshal(map[string]any{
 		"h3_prompt": prompt,
 		"content_plan": map[string]any{

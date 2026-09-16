@@ -471,10 +471,13 @@ const shotTimeTolerance = 0.002
 
 // transportIssues 传输检查：**只核对运得出去，不核对写得好不好**。
 //
-// 逐条对应上游 single_call_compiler.transport_issues。errors 会触发一轮
-// 重修，warnings 只记录 —— 上游对节名缺失的处置就是
-// "inspect wording, no automatic rewrite"，我们照办：自动重写一份自己
-// 都没把握的提示词，比留一条警告糟得多。
+// 逐条对应上游 single_call_compiler.transport_issues，有一处出入：
+// 上游对节名缺失只给警告（"inspect wording, no automatic rewrite"），
+// 我们判为**错误**并触发重修 —— 线上证明了照搬是错的，见 missingSections。
+//
+// warns 这一路目前**没有任何来源**。保留返回值而不是删掉：上游那份检查里
+// 警告是个正经分类（形态可疑但不影响交付），下一条这种检查随时会回来；
+// 而改签名会牵动调用点与测试，不值得为一次空置做。
 func transportIssues(out *singleCallOutput, ev singleCallEvidence) (errs []string, warns []string) {
 	if strings.TrimSpace(out.H3Prompt) == "" {
 		errs = append(errs, "h3_prompt must be nonempty")
@@ -499,7 +502,7 @@ func transportIssues(out *singleCallOutput, ev singleCallEvidence) (errs []strin
 	errs = append(errs, shotTimingIssues(out.plan.Shots, ev.Task.DurationSeconds)...)
 	errs = append(errs, labelIssues(out.H3Prompt, ev.Assets)...)
 	errs = append(errs, dialogueIssues(ev.UserRequest, out.H3Prompt)...)
-	warns = append(warns, sectionWarnings(out.H3Prompt, ev.Task.Type)...)
+	errs = append(errs, missingSections(out.H3Prompt, ev.Task.Type)...)
 	return errs, warns
 }
 
@@ -565,31 +568,125 @@ func labelIssues(prompt string, assets []singleCallEvidenceAsset) []string {
 // 官方节名。t2v 那几种玩法用三节（base-en.txt），全参考（r2va）用六节
 // （ref-en.txt）。
 //
-// **这里与上游有一处有意的出入**：上游无论什么玩法都拿六节去比，于是每个
-// t2v 请求都会得到一条必然为真的警告。警告一旦恒真就等于没有 —— 真出问题
-// 时没人会多看一眼。所以按玩法选名单。
+// **与上游有两处有意的出入。**
+//
+// 一、按玩法选名单。上游无论什么玩法都拿六节去比，于是每个 t2v 请求都会
+// 得到一条必然为真的警告 —— 警告一旦恒真就等于没有。
+//
+// 二、**缺节是错误，不是警告。** 上游的处置是 "inspect wording, no
+// automatic rewrite"，我照搬了，线上立刻证明它对我们不成立：
+//
+//	14:27:44  缺 subject_definitions, summary, retention_analysis, detailed_description
+//	14:44:32  缺 detailed_description, overall_soundscape
+//
+// 第二条那次，detailed_description 是**分镜正文所在的那一节，台词住在
+// 里面**。H3 拿到一份没有任何台词、没有声音计划的提示词，只能自己编 ——
+// 用户要的是六句中文口播，成片说的是英文。而画面、时长、分辨率全都正常，
+// 没有任何地方报错。
+//
+// 上游那句话针对的是"措辞可能不理想"；而且上游没有重修轮，我们有 ——
+// 让模型补一节正是重修该干的事。
 var (
 	baseSections = []string{"integrated_multimodal_description", "overall_soundscape", "non_diegetic_music"}
 	refSections  = []string{"subject_definitions", "summary", "retention_analysis",
 		"detailed_description", "overall_soundscape", "non_diegetic_music"}
 )
 
-func sectionWarnings(prompt, taskType string) []string {
-	want := baseSections
-	if strings.Contains(strings.ToLower(taskType), "r2v") {
-		want = refSections
-	}
+// missingSections 缺哪几个官方必需节。返回非空即**错误**（触发重修）。
+//
+// # 判据必须宽
+//
+// 这条是硬错误，且只有一轮重修 —— 误判一次的代价是整次编译作废、静默回落
+// text。而节名的排版形态很多，规范自己就用了好几种：
+//
+//	integrated_multimodal_description: ...        （base-en.txt:39 正文）
+//	- **overall_soundscape**: Summarizes ...      （base-en.txt:47 说明）
+//	`detailed_description`                        （ref-en.txt:7）
+//	### 4.6 overall_soundscape                    （base-en.txt:152）
+//
+// 模型照着这些示例写，装饰字符（**、反引号、#、-）随时可能带上。早先一版
+// 要求 name 后面紧跟冒号，实测五种形态里误判四种。
+//
+// 所以只问一件事：**这个节名在提示词里出现过吗**。出现了就当它在 —— 漏判
+// 的代价（少报一次缺节）远小于误判（整次编译作废）。
+func missingSections(prompt, taskType string) []string {
+	want := requiredSections(taskType)
+	// 归一掉装饰字符与下划线，"**Overall_Soundscape**" 与 "overall soundscape"
+	// 都落到同一个形态。
+	norm := normalizeSectionText(prompt)
 	var missing []string
 	for _, s := range want {
-		if !strings.Contains(prompt, s) {
+		if !strings.Contains(norm, normalizeSectionText(s)) {
 			missing = append(missing, s)
 		}
 	}
 	if len(missing) == 0 {
 		return nil
 	}
-	return []string{"Some official section labels are absent (" +
-		strings.Join(missing, ", ") + "); inspect wording, no automatic rewrite"}
+	return []string{"Required official sections are missing: " + strings.Join(missing, ", ") +
+		". " + sectionRepairHint(taskType) +
+		" Emit every section, in the order given by the H3 writing guide."}
+}
+
+// requiredSections 这次玩法要求哪几节。
+func requiredSections(taskType string) []string {
+	if strings.Contains(strings.ToLower(taskType), "r2v") {
+		return refSections
+	}
+	return baseSections
+}
+
+// sectionRepairHint 递给模型的修复提示。**必须按玩法给** —— 帧族没有
+// detailed_description 那一节（它的正文是 integrated_multimodal_description），
+// 照着说会让模型凭空加一节不该有的，而 baseSections 不会拒绝多出来的东西，
+// 于是一份格式错的提示词就发给 H3 了。
+func sectionRepairHint(taskType string) string {
+	if strings.Contains(strings.ToLower(taskType), "r2v") {
+		return "detailed_description carries the shot body and the <d>…</d> dialogue; " +
+			"overall_soundscape carries the sound plan."
+	}
+	return "integrated_multimodal_description carries the shot body and the <d>…</d> dialogue; " +
+		"overall_soundscape carries the sound plan."
+}
+
+// normalizeSectionText 归一化到"小写 + 字母数字，其余一律当分隔符"。
+//
+// **其余一律当分隔符，不能只挑几个。** 早先只把 `_` / 空格 / `-` 换成空格、
+// 其它非字母数字**删掉**，于是节名里夹一个别的分隔符就会把词粘回去、
+// 匹配不上，实测六种里误判五种：
+//
+//	integrated\tmultimodal\tdescription   → integratedmultimodaldescription
+//	### Overall\nSoundscape               → overallsoundscape
+//	integrated＿multimodal＿description     → 同上（全角下划线）
+//	integrated—multimodal—description      → 同上（长破折号）
+//	integrated\u00a0multimodal…            → 同上（不换行空格）
+//
+// 而 needle（节名）自身只含字母、数字和下划线，所以"把一切非字母数字变成
+// 空格"这个方向是**单向安全**的:它只会让更多形态匹配上,不会让本来能匹配的
+// 匹配不上。
+//
+// 代价是正文里一句 "the overall soundscape of the video" 也会被算作节存在 ——
+// 那属于漏判(少报一次缺节),而本函数的取舍就是宁可漏判不可误判:
+// 误判一次是整次编译作废、静默回落 text。
+func normalizeSectionText(s string) string {
+	var b strings.Builder
+	b.Grow(len(s))
+	space := true // 前导空白也压掉
+	for _, r := range strings.ToLower(s) {
+		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') {
+			b.WriteRune(r)
+			space = false
+			continue
+		}
+		// **连续分隔符必须压成一个。** 不压的话 `integrated_multimodal_\ndescription`
+		// 会归一成 "integrated multimodal  description"(两个空格),而 needle 里
+		// 词间只有一个空格 —— 换行折断的长节名就匹配不上了。
+		if !space {
+			b.WriteByte(' ')
+			space = true
+		}
+	}
+	return b.String()
 }
 
 // singleCallBudget 本次编译的时间预算：配置优先，没配用内置默认。
