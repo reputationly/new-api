@@ -284,6 +284,13 @@ type TaskAggregateInfo struct {
 	// CompilerRevision 编译器提示词的版本。同步上游新版后,对比两条任务
 	// 的产出要靠它区分 —— 否则只能按提交时间猜。
 	CompilerRevision string `json:"compiler_revision,omitempty"`
+	// EnhanceFallbackReason singlecall / ir 失败并**回落 text** 的原因。
+	//
+	// **和 EnhanceReason 不是一回事**:那个只在整个增强都失败、用回原始
+	// 提示词时才有值。这里记的是"高级模式没跑成、退到了文本改写",而它
+	// 此前只进日志不进库 —— 于是 enhance_mode 显示 text 时说不出为什么,
+	// 排查只能去翻 docker logs。线上第一次验证就栽在这上面。
+	EnhanceFallbackReason string `json:"enhance_fallback_reason,omitempty"`
 }
 
 // HasUpscale 该流水线是否还有一段超分要跑。

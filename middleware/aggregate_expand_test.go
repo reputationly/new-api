@@ -1,6 +1,7 @@
 package middleware
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -11,7 +12,9 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/QuantumNous/new-api/common"
+	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relay/hilo"
+	"github.com/QuantumNous/new-api/service"
 )
 
 // 这两个包装只是把"从 body 归一化"这一步补上,让既有用例保持按单个请求体书写。
@@ -22,7 +25,7 @@ func collectInputImagesFromBody(body map[string]any) []string {
 }
 
 func buildTaskContextFromBody(body map[string]any) string {
-	return buildTaskContext(body, normalizeTaskRequest(body))
+	return taskContextFor(body)
 }
 
 func withAggregateConfig(t *testing.T, raw string) {
@@ -702,7 +705,7 @@ func TestBuildCompilerInputLastFrameOnly(t *testing.T) {
 		"images":   []any{"https://example.com/end.png"},
 		"metadata": map[string]any{"task_type": "l2va"},
 	}
-	in := buildCompilerInput(body, normalizeTaskRequest(body), "a cat")
+	in := compilerInputFor(body, "a cat")
 	require.NotNil(t, in)
 	require.Len(t, in.Assets, 1)
 	require.Equal(t, "last_frame", in.Assets[0].Role)
@@ -716,7 +719,7 @@ func TestBuildCompilerInputFirstLastFrameOrder(t *testing.T) {
 		"images":   []any{"https://example.com/a.png", "https://example.com/b.png"},
 		"metadata": map[string]any{"task_type": "flf2v"},
 	}
-	in := buildCompilerInput(body, normalizeTaskRequest(body), "a cat")
+	in := compilerInputFor(body, "a cat")
 	require.Len(t, in.Assets, 2)
 	require.Equal(t, "first_frame", in.Assets[0].Role)
 	require.Equal(t, "last_frame", in.Assets[1].Role)
@@ -737,7 +740,7 @@ func TestBuildCompilerInputReferenceOrdering(t *testing.T) {
 			"reference_videos": []any{"https://example.com/v.mp4"},
 		},
 	}
-	in := buildCompilerInput(body, normalizeTaskRequest(body), "a cat")
+	in := compilerInputFor(body, "a cat")
 	require.Len(t, in.Assets, 3)
 	require.Equal(t, []string{"image", "image", "video"},
 		[]string{in.Assets[0].MediaType, in.Assets[1].MediaType, in.Assets[2].MediaType})
@@ -748,21 +751,72 @@ func TestBuildCompilerInputReferenceOrdering(t *testing.T) {
 	}
 }
 
-// 说不出 task_type 就编译不了 IR —— 靠猜出来的玩法会让渲染器把尾帧当首帧。
-// 返回 nil,让上层回落到 text。
-func TestBuildCompilerInputWithoutTaskTypeIsNil(t *testing.T) {
+// **缺时长就编译不了**,与 task_type 无关。
+//
+// 这条原先叫 WithoutTaskTypeIsNil，断言"没有 task_type 就返回 nil"——
+// 形态兜底上线后那条规则已经不成立（没有 task_type 但形态无歧义时会正常
+// 编译），它之所以还绿，只是因为 body 里没有 duration。名字和注释都在说
+// 一件它不再验证的事，改成钉它真正拦住的那条。
+func TestBuildCompilerInputNeedsDuration(t *testing.T) {
 	body := map[string]any{"prompt": "a cat"}
-	require.Nil(t, buildCompilerInput(body, normalizeTaskRequest(body), "a cat"))
+	require.Nil(t, compilerInputFor(body, "a cat"), "没有时长时不该编译")
+
+	// 补上时长，同样没有 task_type，现在应该按形态推成 t2v
+	body["duration"] = 5
+	in := compilerInputFor(body, "a cat")
+	require.NotNil(t, in, "有时长、形态无歧义时应该能编译")
+	require.Equal(t, hilo.TaskT2V, in.TaskType)
+}
+
+// **发给模型的素材，和证据里描述它们的清单，必须是同一批、同一顺序。**
+//
+// <Picture N> 的标号按证据发，而模型看到的是 ImageURLs。两边各算各的，
+// 模型就会看着第二张图去读「<Picture 1> 是首帧」——不报错，只是描述错位。
+//
+// 这条在形态兜底上线前不可能出问题（那时没有 task_type 就不编译、没有证据），
+// 是那个改动第一次把两份清单摆到一起的。
+func TestSentImagesMatchEvidenceAssets(t *testing.T) {
+	cases := []struct {
+		name string
+		body map[string]any
+	}{
+		{"显式 flf2v", map[string]any{"prompt": "x", "duration": 5,
+			"images":   []any{"https://e/a.png", "https://e/b.png"},
+			"metadata": map[string]any{"task_type": "flf2v"}}},
+		{"推断 flf2v（无 task_type）", map[string]any{"prompt": "x", "duration": 5,
+			"images": []any{"https://e/a.png", "https://e/b.png"}}},
+		{"推断 flf2v 且混用 image 别名", map[string]any{"prompt": "x", "duration": 5,
+			"image":  "https://e/phantom.png",
+			"images": []any{"https://e/a.png", "https://e/b.png"}}},
+		{"推断 r2va", map[string]any{"prompt": "x", "duration": 5,
+			"metadata": map[string]any{"src_ref_images": []any{"https://e/r.png"}}}},
+	}
+	for _, c := range cases {
+		norm := normalizeTaskRequest(c.body)
+		resolved := resolveCompilerTaskType(c.body, norm)
+		sent := compilerImages(norm, resolved, c.body)
+		in := buildCompilerInput(c.body, norm, "x", resolved)
+		require.NotNil(t, in, c.name)
+
+		var described []string
+		for _, a := range in.Assets {
+			if a.MediaType == "image" {
+				described = append(described, a.URL)
+			}
+		}
+		require.Equal(t, sent, described,
+			"%s：发给模型的图和证据里描述的不是同一批/同一顺序", c.name)
+	}
 }
 
 // generate_audio 漏写 = 要出声,与 relay/hilo/convert.go 的默认一致。
 func TestBuildCompilerInputGenerateAudioDefaultsTrue(t *testing.T) {
 	body := map[string]any{"prompt": "a cat", "duration": 6,
 		"metadata": map[string]any{"task_type": "t2v"}}
-	require.True(t, buildCompilerInput(body, normalizeTaskRequest(body), "a cat").GenerateAudio)
+	require.True(t, compilerInputFor(body, "a cat").GenerateAudio)
 
 	body["generate_audio"] = false
-	require.False(t, buildCompilerInput(body, normalizeTaskRequest(body), "a cat").GenerateAudio)
+	require.False(t, compilerInputFor(body, "a cat").GenerateAudio)
 }
 
 // **时长只读 duration,不跟 seconds 回落。**
@@ -779,14 +833,14 @@ func TestBuildCompilerInputIgnoresSecondsFallback(t *testing.T) {
 		"seconds":  "10",
 		"metadata": map[string]any{"task_type": "t2v"},
 	}
-	require.Nil(t, buildCompilerInput(body, normalizeTaskRequest(body), "a cat"),
+	require.Nil(t, compilerInputFor(body, "a cat"),
 		"只给 seconds 时不该编 IR")
 }
 
 // 完全没有时长同样跳过。
 func TestBuildCompilerInputWithoutDurationIsNil(t *testing.T) {
 	body := map[string]any{"prompt": "a cat", "metadata": map[string]any{"task_type": "t2v"}}
-	require.Nil(t, buildCompilerInput(body, normalizeTaskRequest(body), "a cat"))
+	require.Nil(t, compilerInputFor(body, "a cat"))
 }
 
 // 参考族的别名要归一到 r2va。
@@ -804,7 +858,7 @@ func TestBuildCompilerInputNormalizesReferenceAliases(t *testing.T) {
 				"src_ref_images": []any{"https://example.com/r.png"},
 			},
 		}
-		in := buildCompilerInput(body, normalizeTaskRequest(body), "a cat")
+		in := compilerInputFor(body, "a cat")
 		require.NotNil(t, in, "别名 %s 应被接受", alias)
 		require.Equal(t, hilo.TaskR2VA, in.TaskType, "别名 %s 应归一到 r2va", alias)
 	}
@@ -818,7 +872,7 @@ func TestBuildCompilerInputSkipsUnknownTaskType(t *testing.T) {
 			"duration": 6,
 			"metadata": map[string]any{"task_type": tt},
 		}
-		require.Nil(t, buildCompilerInput(body, normalizeTaskRequest(body), "a cat"),
+		require.Nil(t, compilerInputFor(body, "a cat"),
 			"%s 不在编译器支持的五个玩法里,应跳过", tt)
 	}
 }
@@ -842,7 +896,7 @@ func TestBuildCompilerInputReadsGenerateAudioFromMetadata(t *testing.T) {
 			"src_ref_images": []any{"https://example.com/r.png"},
 		},
 	}
-	in := buildCompilerInput(body, normalizeTaskRequest(body), "a cat")
+	in := compilerInputFor(body, "a cat")
 	require.NotNil(t, in)
 	require.False(t, in.GenerateAudio, "metadata 里的 false 没被读到")
 }
@@ -853,7 +907,7 @@ func TestBuildCompilerInputTopLevelGenerateAudioWins(t *testing.T) {
 		"prompt": "a cat", "duration": 6, "generate_audio": true,
 		"metadata": map[string]any{"task_type": "t2v", "generate_audio": false},
 	}
-	require.True(t, buildCompilerInput(body, normalizeTaskRequest(body), "a cat").GenerateAudio)
+	require.True(t, compilerInputFor(body, "a cat").GenerateAudio)
 }
 
 // 被编码成字符串的布尔也要认:只认 bool 会把 "false" 当成"没写",
@@ -863,5 +917,214 @@ func TestBuildCompilerInputReadsStringEncodedGenerateAudio(t *testing.T) {
 		"prompt": "a cat", "duration": 6,
 		"metadata": map[string]any{"task_type": "t2v", "generate_audio": "false"},
 	}
-	require.False(t, buildCompilerInput(body, normalizeTaskRequest(body), "a cat").GenerateAudio)
+	require.False(t, compilerInputFor(body, "a cat").GenerateAudio)
+}
+
+// ── 缺 metadata.task_type 时的形态兜底 ────────────────────────────
+
+// **直连 /v1/video/generations 的集成方拿不到增强。**
+//
+// TaskSubmitReq.TaskType() 只读 metadata.task_type，而那是官方客户端那条路
+// （HiloVideoConvert）才会填的。直连调用方不填 → buildCompilerInput 返回
+// nil → singlecall/ir 立刻回落 text，且不报错。线上第一次验证就撞上这个。
+func TestInferTaskTypeWhenMetadataMissing(t *testing.T) {
+	meta := func(kv map[string]any) map[string]any { return kv }
+	cases := []struct {
+		name string
+		norm *relaycommon.TaskSubmitReq
+		want hilo.TaskType
+		ok   bool
+	}{
+		{"没有任何素材 → t2v", &relaycommon.TaskSubmitReq{}, hilo.TaskT2V, true},
+		{"两张帧图 → flf2v", &relaycommon.TaskSubmitReq{Images: []string{"a", "b"}}, hilo.TaskFLF2V, true},
+		{"空串不算素材", &relaycommon.TaskSubmitReq{Images: []string{"", "  "}}, hilo.TaskT2V, true},
+		{"只有参考图 → r2va", &relaycommon.TaskSubmitReq{
+			Metadata: meta(map[string]any{"src_ref_images": []any{"r"}})}, hilo.TaskR2VA, true},
+		{"只有参考视频 → r2va", &relaycommon.TaskSubmitReq{
+			Metadata: meta(map[string]any{"reference_videos": []any{"v"}})}, hilo.TaskR2VA, true},
+
+		// **一张帧图推不出来，硬边界。** i2v 与 l2va 的输入形态完全相同；
+		// 猜成 i2v 而实际是尾帧，视频会从结尾往后长且不报错。
+		{"一张帧图 → 拒绝", &relaycommon.TaskSubmitReq{Images: []string{"a"}}, "", false},
+
+		// **参考音频出现即说明是别的玩法**（多半是 s2v 数字人），不猜。
+		{"带参考音频 → 拒绝", &relaycommon.TaskSubmitReq{
+			Images:   []string{"a", "b"},
+			Metadata: meta(map[string]any{"reference_audios": []any{"au"}})}, "", false},
+
+		// **帧优先于参考，与 ResolveFrameRoles 一致。**
+		// 反过来的话，FrameRolesFromTask(TaskR2VA, …) 压根不看 frameImages，
+		// 真正的首尾帧语义就凭空消失了。
+		{"帧图 + 参考图 → 帧优先", &relaycommon.TaskSubmitReq{
+			Images:   []string{"a", "b"},
+			Metadata: meta(map[string]any{"src_ref_images": []any{"r"}})}, hilo.TaskFLF2V, true},
+	}
+	for _, c := range cases {
+		got, ok := inferCompilerTaskType(c.norm)
+		if ok != c.ok || got != c.want {
+			t.Errorf("%s: 得到 (%q, %v)，期望 (%q, %v)", c.name, got, ok, c.want, c.ok)
+		}
+	}
+}
+
+// **从真实入口验兜底。** 只测 inferCompilerTaskType 证明不了它被接上了——
+// 把调用点删掉，那种测试照样全绿。
+func TestBuildCompilerInputFallsBackWhenTaskTypeAbsent(t *testing.T) {
+	// 没有 metadata：直连 /v1/video/generations 的形态
+	body := map[string]any{"prompt": "a cat", "duration": 5}
+	in := compilerInputFor(body, "a cat")
+	require.NotNil(t, in, "没给 task_type 的纯文生请求应该能编译（此前一律跳过）")
+	require.Equal(t, hilo.TaskT2V, in.TaskType)
+
+	// 一张帧图：推不出 i2v 还是 l2va，仍然跳过
+	one := map[string]any{"prompt": "a cat", "duration": 5,
+		"images": []any{"https://example.com/a.png"}}
+	require.Nil(t, compilerInputFor(one, "a cat"),
+		"一张帧图分不清首尾帧，宁可不编译")
+
+	// **明确声明了不支持的玩法：仍然跳过，不能按形态硬推成 t2v。**
+	// 那等于给错误的玩法编提示词。
+	other := map[string]any{"prompt": "a cat", "duration": 5,
+		"metadata": map[string]any{"task_type": "ads2v"}}
+	require.Nil(t, compilerInputFor(other, "a cat"),
+		"ads2v 是另一种玩法，不该被兜底推成 t2v")
+}
+
+// compilerInputFor 走和生产完全一样的解析链:先 resolveCompilerTaskType,
+// 再 buildCompilerInput。
+//
+// **测试不能自己传一个 taskType 进去** —— 那样"玩法怎么定"这一环就没人测,
+// 而这一轮的四条检视意见全出在那一环上。
+func compilerInputFor(body map[string]any, prompt string) *hilo.CompilerInput {
+	norm := normalizeTaskRequest(body)
+	return buildCompilerInput(body, norm, prompt, resolveCompilerTaskType(body, norm))
+}
+
+// **从真实调用点验：发出去的素材 == 证据里描述的素材。**
+//
+// 只测 compilerImages 本身证明不了它被接上了——把调用点换回
+// collectInputImages，那种测试照样全绿（变异校准里真漏过一次）。
+func TestEnhanceInputSendsWhatEvidenceDescribes(t *testing.T) {
+	orig := enhancePrompt
+	t.Cleanup(func() { enhancePrompt = orig })
+	var got service.EnhanceInput
+	enhancePrompt = func(_ context.Context, _ *common.AggregateModel, _ string,
+		in service.EnhanceInput) *service.EnhanceResult {
+		got = in
+		return &service.EnhanceResult{OriginalPrompt: in.Prompt, EnhancedPrompt: in.Prompt}
+	}
+
+	// 混用 image 与 images：并集会把 phantom 排在最前，标号整体错开一位
+	body := map[string]any{
+		"model": "h3-2k", "prompt": "x", "duration": 5,
+		"image":  "https://e/phantom.png",
+		"images": []any{"https://e/a.png", "https://e/b.png"},
+	}
+	withAggregateConfig(t, `[{
+		"name":"h3-2k","type":"video","enabled":true,
+		"generate":{"model":"minimax-h3"},
+		"prompt_enhance":{"model":"enh","system_prompt":"改写"}
+	}]`)
+	raw, _ := json.Marshal(body)
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/videos", strings.NewReader(string(raw)))
+	agg := common.GetAggregateModel("h3-2k")
+	require.NotNil(t, agg)
+	require.NoError(t, applyAggregateExpansion(c, "h3-2k", "minimax-h3", agg))
+
+	require.NotNil(t, got.Compiler, "没走到编译（形态应该能推出 flf2v）")
+	var described []string
+	for _, a := range got.Compiler.Assets {
+		if a.MediaType == "image" {
+			described = append(described, a.URL)
+		}
+	}
+	require.Equal(t, got.ImageURLs, described,
+		"发给模型的图和证据里描述的不是同一批/同一顺序")
+	require.NotContains(t, got.ImageURLs, "https://e/phantom.png",
+		"并集把 image 别名那张也收进来了，<Picture N> 会整体后移")
+}
+
+// **请求体装不进 TaskSubmitReq 时，素材不能丢。**
+//
+// normalizeTaskRequest 在那种形态下返回 nil——图片聚合正是这样
+// （"image": ["a.png","b.png"]，而 Image 是 string）。提前返回 nil 会让
+// 增强模型一张图都看不见，只能瞎写。collectInputImages 对 nil 是安全的，
+// 它从原始 body 收。
+func TestCompilerImagesFallsBackWhenNormIsNil(t *testing.T) {
+	body := map[string]any{"prompt": "x", "image": []any{"a.png", "b.png"}}
+	norm := normalizeTaskRequest(body)
+	require.Nil(t, norm, "测试前提：这种形态装不进 TaskSubmitReq")
+
+	got := compilerImages(norm, "", body)
+	require.Equal(t, []string{"a.png", "b.png"}, got,
+		"norm 为 nil 时素材被丢光了——增强模型会瞎写")
+}
+
+// **推断必须对齐生成段那张形态表。**
+//
+// 键名各不相同：s2v 判 metadata.audio、sr/v2a 判 metadata.video、
+// v2v 系判 metadata.src_video，而 RefAudios() 读的是 reference_audios。
+// 只查后者，前三种会被自信地推成 flf2v / t2v，而生成段解析成完全不同的
+// 玩法——编译器照着错误的玩法编一份提示词，不报错。
+func TestInferRejectsMaterialsOutsideCompilerScope(t *testing.T) {
+	cases := map[string]*relaycommon.TaskSubmitReq{
+		"metadata.audio（生成段判 s2v）": {
+			Images:   []string{"a", "b"},
+			Metadata: map[string]any{"audio": "https://e/a.wav"}},
+		"metadata.video（生成段判 sr/v2a）": {
+			Metadata: map[string]any{"video": "https://e/v.mp4"}},
+		"metadata.src_video（生成段判 v2v 系）": {
+			Metadata: map[string]any{"src_video": []any{"https://e/v.mp4"}}},
+		"reference_audios": {
+			Images:   []string{"a", "b"},
+			Metadata: map[string]any{"reference_audios": []any{"https://e/a.wav"}}},
+	}
+	for name, norm := range cases {
+		if _, ok := inferCompilerTaskType(norm); ok {
+			t.Errorf("%s：编译器管不了这种素材，却自信地推断了玩法", name)
+		}
+	}
+
+	// 空值不算素材，不该误伤正常请求
+	ok1 := &relaycommon.TaskSubmitReq{Metadata: map[string]any{"audio": "  ", "video": ""}}
+	if got, ok := inferCompilerTaskType(ok1); !ok || got != hilo.TaskT2V {
+		t.Errorf("空字符串被当成了素材：(%q, %v)", got, ok)
+	}
+}
+
+// taskContextFor 走和生产一样的解析链。
+func taskContextFor(body map[string]any) string {
+	norm := normalizeTaskRequest(body)
+	return buildTaskContext(body, norm)
+}
+
+// **metadata 读不出来时不猜。**
+//
+// 请求体里有 metadata 键但它不是对象（字符串/数组/数字）时，
+// TaskSubmitReq.Metadata 是 nil ——形态推断看到"什么素材都没有"，推出 t2v。
+// 可那份 metadata 里本来可能装着 task_type、src_ref_images、驱动音频。
+// 缺证据不等于证据表明没有，而这条路产出的提示词会明说
+// "There is no reference image"。
+func TestNoInferenceWhenMetadataUnreadable(t *testing.T) {
+	for name, md := range map[string]any{
+		"字符串": "not-an-object",
+		"数组":  []any{"a"},
+		"数字":  42,
+	} {
+		body := map[string]any{"prompt": "x", "duration": 5, "metadata": md}
+		require.Nil(t, compilerInputFor(body, "x"),
+			"metadata 是%s时读不出内容，不该推断出玩法", name)
+	}
+
+	// metadata 缺失或为 null 是"确实没有"，可以推断
+	for name, body := range map[string]map[string]any{
+		"没有 metadata 键":   {"prompt": "x", "duration": 5},
+		"metadata 为 null": {"prompt": "x", "duration": 5, "metadata": nil},
+	} {
+		in := compilerInputFor(body, "x")
+		require.NotNil(t, in, "%s：确实没有素材，应该能推出 t2v", name)
+		require.Equal(t, hilo.TaskT2V, in.TaskType, name)
+	}
 }

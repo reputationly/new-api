@@ -173,13 +173,23 @@ func applyAggregateExpansion(c *gin.Context, publicName, realModel string, agg *
 			// 从**改写后**的 body 走一遍序列化,而不是用入口的原始字节:Overrides 可能
 			// 改掉 duration 一类字段,事实要描述真正发出去的那个请求。
 			norm := normalizeTaskRequest(body)
-			res := service.EnhancePrompt(c.Request.Context(), agg,
+			resolved := resolveCompilerTaskType(body, norm)
+			res := enhancePrompt(c.Request.Context(), agg,
 				c.Request.Header.Get("Authorization"), service.EnhanceInput{
-					Prompt:      prompt,
-					ImageURLs:   collectInputImages(body, norm),
-					VideoURLs:   collectInputVideos(norm),
+					Prompt: prompt,
+					// **玩法解析一次,三处共用。**
+					//
+					// ImageURLs 是真正发给模型看的素材,Compiler.Assets 是证据
+					// 里描述它们的那份清单 —— 两者必须是同一批、同一顺序:
+					// <Picture N> 的标号按证据发,而模型看到的是 ImageURLs。
+					// 各算各的,模型就会看着第二张图去读"<Picture 1> 是首帧"。
+					//
+					// 解析不出玩法时(图片聚合、或一张帧图分不清首尾)传空,
+					// 两个收集器都退回原来的尽力并集 —— 那条路不发标号。
+					ImageURLs:   compilerImages(norm, resolved, body),
+					VideoURLs:   compilerVideos(norm, resolved),
 					TaskContext: buildTaskContext(body, norm),
-					Compiler:    buildCompilerInput(body, norm, prompt),
+					Compiler:    buildCompilerInput(body, norm, prompt, resolved),
 				})
 			exp.Enhance = res
 			// 这个判断当前是**冗余**的:EnhanceResult 的契约保证降级时
@@ -211,6 +221,14 @@ func applyAggregateExpansion(c *gin.Context, publicName, realModel string, agg *
 // "看着素材写"。那时它只能编。
 //
 // 只有参考族（r2va/r2v/rv2v）会带参考视频；帧族的输入是静态帧。
+// enhancePrompt 做成变量是为了能在测试里截获**真实调用点**传出去的
+// EnhanceInput。
+//
+// 这一轮的教训:只测 compilerImages 本身证明不了它被接上了 —— 把调用点换回
+// collectInputImages,那种测试照样全绿(变异校准里真漏过一次)。而这里恰恰是
+// 「发给模型的素材」与「证据里描述的素材」必须一致的地方。
+var enhancePrompt = service.EnhancePrompt
+
 func collectInputVideos(norm *relaycommon.TaskSubmitReq) []string {
 	if norm == nil {
 		return nil
@@ -332,6 +350,11 @@ func buildTaskContext(body map[string]any, norm *relaycommon.TaskSubmitReq) stri
 	if norm == nil {
 		return ""
 	}
+	// **只用显式的 task_type,不接形态兜底。**
+	//
+	// 兜底是给编译路径(ir / singlecall)用的,那条路有传输检查兜着;text 这条
+	// 是纯文本改写,没有任何地方能校验,少说一句事实比说一句猜的安全 ——
+	// 这一段的全部意义就是"陈述既成事实"。
 	taskType := norm.TaskType()
 
 	var facts []string
@@ -466,14 +489,13 @@ func GetAggregateExpansion(c *gin.Context) *AggregateExpansion {
 // 归一化后的请求取,不从原始 map 取 —— 原始 map 里 metadata 可能是一个
 // JSON 编码的字符串,直接读一条事实都取不到,而且不报错。
 //
-// 拿不到 task_type 时返回 nil:编译 IR 的前提是知道这是什么玩法,
+// 推不出形态时返回 nil:编译 IR 的前提是知道这是什么玩法,
 // 靠猜出来的 task_type 会让渲染器把尾帧当首帧。宁可回落到 text。
-func buildCompilerInput(body map[string]any, norm *relaycommon.TaskSubmitReq, prompt string) *hilo.CompilerInput {
+func buildCompilerInput(body map[string]any, norm *relaycommon.TaskSubmitReq, prompt string, taskType hilo.TaskType) *hilo.CompilerInput {
 	if norm == nil {
 		return nil
 	}
-	taskType, ok := compilerTaskType(norm.TaskType())
-	if !ok {
+	if taskType == "" {
 		return nil
 	}
 
@@ -509,7 +531,20 @@ func buildCompilerInput(body map[string]any, norm *relaycommon.TaskSubmitReq, pr
 	// IR 渲染时 BuildReferenceInventory 按这个顺序发 <Picture N> / <Video N>
 	// 标号。这里排错序,模型看到的第二张图会被渲染成 <Picture 1> ——
 	// 提示词指着的素材和它描述的不是同一个,而且完全不报错。
-	for i, u := range collectInputImages(body, norm) {
+	// **按已解析的 taskType 选素材,不能复用 collectInputImages。**
+	//
+	// 那个函数按**显式** norm.TaskType() 分派,说不出玩法时走"尽力并集"分支
+	// (topLevelImages 把 image / images / input_reference 三个键全收),而它
+	// 之所以敢取并集,注释写得很清楚:「这条路径不发标号,所以这里取并集是
+	// 安全的」。
+	//
+	// 形态兜底把那个前提打破了 —— 并集分支第一次进入**发 <Picture N> 标号**
+	// 的这条路。而推断用的 FrameImages() 是**回落**(images 优先,否则 image,
+	// 否则 input_reference),两边口径不一致:调用方同时给了 image 和 images
+	// 时,并集会把 image 那张排在最前,于是 image_1 是个谁也没绑定的幽灵
+	// (IRBindingRole 返回 ""),真正的首帧滑到 image_2,提示词里每个
+	// <Picture N> 都比生成段实际收到的错开一位 —— 全程不报错。
+	for i, u := range compilerImages(norm, taskType, body) {
 		in.Assets = append(in.Assets, hilo.CompilerAsset{
 			AssetID:   fmt.Sprintf("image_%d", i+1),
 			MediaType: "image",
@@ -517,7 +552,7 @@ func buildCompilerInput(body map[string]any, norm *relaycommon.TaskSubmitReq, pr
 			URL:       u,
 		})
 	}
-	for i, u := range collectInputVideos(norm) {
+	for i, u := range compilerVideos(norm, taskType) {
 		in.Assets = append(in.Assets, hilo.CompilerAsset{
 			AssetID:   fmt.Sprintf("video_%d", i+1),
 			MediaType: "video",
@@ -604,4 +639,184 @@ func readBoolAny(v any) (bool, bool) {
 		}
 	}
 	return false, false
+}
+
+// compilerImages / compilerVideos 按**已解析的**玩法取素材。
+//
+// 与 collectInputImages / collectInputVideos 的区别只有一点:那两个按显式
+// task_type 分派,这两个按 buildCompilerInput 手上那个(可能是推断出来的)。
+// 显式给了 task_type 时两者结果完全一致;缺失时才有分别 —— 见
+// buildCompilerInput 里那段说明。
+func compilerImages(norm *relaycommon.TaskSubmitReq, taskType hilo.TaskType, body map[string]any) []string {
+	// **nil 也要走并集,不能直接返回 nil。**
+	//
+	// normalizeTaskRequest 在请求体装不进 TaskSubmitReq 时返回 nil —— 图片
+	// 聚合正是这种形态(`"image": ["a.png","b.png"]`,而 Image 是 string)。
+	// 而 collectInputImages 对 nil 是安全的:它从**原始 body** 里收
+	// image / images / input_reference。在这里提前返回 nil,那类请求就从
+	// "增强模型看得见素材"变成"一张都看不见",它只能瞎写 —— 正是这个文件
+	// 反复警告的那种失败。
+	if norm == nil || taskType == "" {
+		// 解析不出玩法(图片聚合、或一张帧图分不清首尾):退回原来的尽力并集。
+		// 那条路不发 <Picture N> 标号,并集是安全的 —— 见 collectInputImages。
+		return collectInputImages(body, norm)
+	}
+	switch taskType {
+	case hilo.TaskR2VA:
+		// 参考族只吃 metadata.src_ref_images;顶层图不在它的输入契约里。
+		return norm.RefImages()
+	case hilo.TaskI2V, hilo.TaskL2VA, hilo.TaskFLF2V:
+		// 帧族只吃顶层条件图,且 images / image / input_reference 是**回落
+		// 关系**而不是并集 —— 取并集会让同一张图数两遍,<Picture N> 整体后移。
+		return norm.FrameImages()
+	}
+	return nil // t2v 没有输入图
+}
+
+func compilerVideos(norm *relaycommon.TaskSubmitReq, taskType hilo.TaskType) []string {
+	if norm == nil {
+		return nil
+	}
+	if taskType == "" {
+		return collectInputVideos(norm) // 同上:解析不出就退回原来的判据
+	}
+	if taskType != hilo.TaskR2VA {
+		return nil // 只有参考族带视频
+	}
+	return norm.RefVideos()
+}
+
+// resolveCompilerTaskType 这次请求的玩法:显式优先,缺失时按形态兜底。
+// 返回 "" 表示判不出来 —— 调用方据此退回不发标号的那条路。
+//
+// **「没给」和「给了但不支持」要分开。** 给了 ads2v / mv2v / v2v / s2v
+// 这类:调用方明确声明了另一种玩法,编译器不支持它,就该跳过 —— 按形态硬推
+// 成 t2v 等于给错误的玩法编提示词。
+//
+// 没给:官方客户端那条路不会走到这里(HiloVideoConvert 显式下发 task_type,
+// 见 relay/hilo/convert.go);走到这里的是直连 /v1/video/generations 的
+// 集成方 —— 他们此前一律拿不到增强,buildCompilerInput 返回 nil、
+// singlecall/ir 立刻回落 text,而且不报错。
+func resolveCompilerTaskType(body map[string]any, norm *relaycommon.TaskSubmitReq) hilo.TaskType {
+	if norm == nil {
+		return ""
+	}
+	if t, ok := compilerTaskType(norm.TaskType()); ok {
+		return t
+	}
+	if strings.TrimSpace(norm.TaskType()) != "" {
+		return "" // 明确声明了别的玩法
+	}
+	// **metadata 读不出来时不猜。**
+	//
+	// 请求体里有 metadata 键、但它不是对象(字符串/数组/数字)时,
+	// TaskSubmitReq.Metadata 会是 nil —— 于是形态推断看到的是"什么素材都
+	// 没有",推出 t2v。可那份 metadata 里本来可能装着 task_type、
+	// src_ref_images、driver audio……**缺证据不等于证据表明没有**,
+	// 而这条路产出的提示词会明说 "There is no reference image"。
+	if raw, present := body["metadata"]; present && raw != nil {
+		if _, isObject := raw.(map[string]any); !isObject {
+			return ""
+		}
+	}
+	if t, ok := inferCompilerTaskType(norm); ok {
+		return t
+	}
+	return ""
+}
+
+// inferCompilerTaskType 在缺 metadata.task_type 时按输入形态兜底。
+//
+// # 只推无歧义的
+//
+//	没有任何素材        → t2v
+//	两张帧图            → flf2v(顺序即语义:[0] 首帧、[1] 尾帧)
+//	只有参考素材        → r2va
+//	**一张帧图          → 推不出来,返回 false**
+//	**带参考音频        → 推不出来,返回 false**
+//
+// 一张帧图那条是硬边界,不是偷懒。relay/hilo/frames.go 顶部记着同一类错犯过
+// 三次的由来:i2v 与 l2va 的输入形态**完全相同**,一张图到底是首帧还是尾帧,
+// 只有 task_type 说得清。猜成 i2v 而实际是尾帧,后果是**视频从结尾往后长,
+// 而且不报错**。
+//
+// 参考音频那条同理:顶层图 + metadata 驱动音频在生成段那边会被解析成 s2v
+// (数字人,见 gpustackplus 的输入形态兼容表),而 s2v 根本不在编译器支持的
+// 五个玩法里。按图数硬推成 flf2v 就是"猜一个形态",正是本函数拒绝做的事。
+//
+// # 帧优先于参考,与 ResolveFrameRoles 一致
+//
+// 那边写着「**首尾帧优先**:帧约束的语义更强(它直接决定画幅),参考图只是
+// 风格参考」,并且会把 Refs 清空。这里的顺序必须一样 —— 反过来的话,同时
+// 给了帧图和参考图的请求会被判成 r2va,而 FrameRolesFromTask(TaskR2VA, …)
+// 压根不看 frameImages,真正的首尾帧语义就凭空消失了。
+func inferCompilerTaskType(norm *relaycommon.TaskSubmitReq) (hilo.TaskType, bool) {
+	if norm == nil {
+		return "", false
+	}
+	nonEmpty := func(in []string) int {
+		n := 0
+		for _, u := range in {
+			if strings.TrimSpace(u) != "" {
+				n++
+			}
+		}
+		return n
+	}
+	frames := nonEmpty(norm.FrameImages())
+	refImgs := nonEmpty(norm.RefImages())
+	refVids := nonEmpty(norm.RefVideos())
+
+	// **带了编译器这五个玩法用不到的素材,一律不猜。**
+	//
+	// 键名必须对齐生成段那张形态表(gpustackplus 的
+	// taskTypesCompatibleWithInputs),它判的是**这几个不同的键**:
+	//
+	//	metadata.audio      + 顶层图 → s2v(数字人)
+	//	metadata.video                → sr / v2a
+	//	metadata.src_video            → v2v / rv2v / mv2v / ads2v
+	//	metadata.reference_audios     → 参考音频
+	//
+	// 早先这里只查了 RefAudios()(读的是 reference_audios),于是
+	// `{images:[a,b], metadata:{audio:…}}` 被推成 flf2v,而生成段解析成
+	// s2v —— 编译器照着"首尾帧"编一份提示词,发给一个数字人任务,不报错。
+	// 同理 `{metadata:{video:…}}` 会被推成 t2v,而提示词里会断言
+	// "There is no reference image",可请求里明明有一段视频。
+	if nonEmpty(norm.RefAudios()) > 0 ||
+		hasMetadataMaterial(norm.Metadata, "audio", "video", "src_video") {
+		return "", false
+	}
+
+	switch {
+	case frames >= 2:
+		return hilo.TaskFLF2V, true
+	case frames == 1:
+		// i2v 还是 l2va 分不清。
+		return "", false
+	case refImgs > 0 || refVids > 0:
+		return hilo.TaskR2VA, true
+	default:
+		return hilo.TaskT2V, true
+	}
+}
+
+// hasMetadataMaterial 这些 metadata 键里有没有装素材。
+//
+// 只判**有没有**,不判它是什么玩法 —— 玩法由生成段的形态表决定,这里复制
+// 那份判断只会漂移。我们要的结论只有一个:出现了编译器管不了的素材,
+// 所以不猜。
+func hasMetadataMaterial(md map[string]any, keys ...string) bool {
+	for _, k := range keys {
+		switch v := md[k].(type) {
+		case string:
+			if strings.TrimSpace(v) != "" {
+				return true
+			}
+		default:
+			if len(common.MetadataStringList(md, k)) > 0 {
+				return true
+			}
+		}
+	}
+	return false
 }
