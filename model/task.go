@@ -5,6 +5,7 @@ import (
 	"context"
 	"database/sql/driver"
 	"encoding/json"
+	"strings"
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
@@ -99,12 +100,25 @@ func (t *Task) BeforeSave(tx *gorm.DB) error {
 			t.APIProtocol = TaskAPIProtocolMiniMaxV2
 		}
 	}
+	// 火山方舟 v3 兼容层同理（软删也必须在这里清列，否则下一次落盘会被照着 `!= nil`
+	// 重新写回去，任务从方舟列表里「复活」）。
+	if t.Properties.ArkV3 != nil {
+		if t.Properties.ArkV3.Deleted {
+			t.APIProtocol = ""
+		} else {
+			t.APIProtocol = TaskAPIProtocolArkV3
+		}
+	}
 	return nil
 }
 
 // TaskAPIProtocolMiniMaxV2 是 api_protocol 列在「经 MiniMax v2 官方协议提交」时的取值。
 // 定义在 model 包是为了让 BeforeSave 用得上——relay/minimaxv2 依赖 model，反向依赖不成立。
 const TaskAPIProtocolMiniMaxV2 = "minimax_v2"
+
+// TaskAPIProtocolArkV3 是 api_protocol 列在「经火山方舟 v3 官方协议提交」时的取值
+// （/api/v3/contents/generations/tasks）。与 MiniMaxV2 完全同构，理由见上。
+const TaskAPIProtocolArkV3 = "ark_v3"
 
 // TaskAPIProtocolImage 标记「经异步图片协议提交」的任务
 // （docs/image-async-task-design.md §7）。图片与视频共用同一个 platform（渠道类型
@@ -131,6 +145,9 @@ type Properties struct {
 	// 任务写入（其存在本身就是「这是一个 v2 任务」的判据，列表接口据此筛选）。
 	// Properties 是 gorm:"type:json" 列，加字段无需迁移，老行反序列化成零值。
 	MiniMaxV2 *MiniMaxV2Properties `json:"minimax_v2,omitempty"`
+	// ArkV3 是火山方舟 v3 协议兼容层的提交快照，仅经 /api/v3/contents/generations/tasks
+	// 提交的任务写入（其存在本身就是「这是一个方舟任务」的判据）。
+	ArkV3 *ArkV3Properties `json:"ark_v3,omitempty"`
 	// SyncMode 标记这条记录来自同步端点（出生即终态，不经轮询）。
 	// 只为排查留档，不参与任何筛选、也不在任务日志里展示——对用户来说
 	// 「我调 API 出了图，日志里有一条已完成的图片任务」，走同步还是异步是网关内部的事。
@@ -166,6 +183,34 @@ type MiniMaxV2Properties struct {
 	// （我们自己发出去的 content.url）、任务下载、分享链接的公开解析、remix 的原任务、
 	// 以及 `task:<task_id>` 产物引用展开。删行等于替用户把这些一并掐断，而官方那边
 	// 「删记录」只是从他们的任务列表里移除，两者的爆炸半径完全不是一回事。
+	Deleted bool `json:"deleted,omitempty"`
+}
+
+// ArkV3Properties 冻结火山方舟 v3 查询接口要回显的请求参数。
+//
+// 冻结是必需的：调用方提交完立刻查询是常规用法，而那一刻任务还没被轮询过，Task.Data
+// 里只有上游的提交响应（一个 id），分辨率、比例、时长一个都没有。轮询跑起来后，
+// **上游回执里的实际值优先于这里的请求值**（比如 ratio=adaptive 时实际出的比例、
+// duration=-1 时模型自选的秒数），见 arkv3.BuildTask。
+//
+// 指针字段区分「没传」与「显式传了 0 / false」：官方 generate_audio 默认 true、
+// watermark 默认 false，回显一个我们自己编的默认值会与实际产物不符。
+type ArkV3Properties struct {
+	Resolution            string   `json:"resolution,omitempty"`
+	Ratio                 string   `json:"ratio,omitempty"`
+	Duration              int      `json:"duration,omitempty"`
+	Frames                int      `json:"frames,omitempty"`
+	Seed                  *int     `json:"seed,omitempty"`
+	GenerateAudio         *bool    `json:"generate_audio,omitempty"`
+	Draft                 *bool    `json:"draft,omitempty"`
+	Tools                 []string `json:"tools,omitempty"` // 只存 tool 的 type
+	SafetyIdentifier      string   `json:"safety_identifier,omitempty"`
+	Priority              *int     `json:"priority,omitempty"`
+	ServiceTier           string   `json:"service_tier,omitempty"`
+	ExecutionExpiresAfter int      `json:"execution_expires_after,omitempty"`
+	// Deleted 是方舟协议侧的软删标记，语义与 MiniMaxV2Properties.Deleted 完全一致
+	// （任务从本协议的查询与列表里消失，但行保留 —— 同一行还背着产物代理、下载、
+	// 分享链接等与本协议无关的功能）。
 	Deleted bool `json:"deleted,omitempty"`
 }
 
@@ -334,6 +379,28 @@ func (t *Task) GetUpstreamTaskID() string {
 		return t.PrivateData.UpstreamTaskID
 	}
 	return t.TaskID
+}
+
+// PublicModelName 返回**调用方提交的那个模型名**，供各协议兼容层回显与筛选。
+//
+// 聚合（编排）模型会在 middleware.Distribute 里被展开成生成段模型，
+// Properties.OriginModelName 存的是展开后那个内部名字（计费与日志都按它走，见
+// applyAggregateExpansion）；对外那个名字只留在 PrivateData.Aggregate.PublicModel。
+//
+// 直接读 OriginModelName 的两个后果都不报错：回显给调用方一个它从没提交过的内部
+// 流水线模型名，以及按提交名做 filter.model 一条都筛不到、静默返回空列表。
+//
+// OpenAI 兼容那条链路（/v1/videos）由 relay.applyAggregateModelEcho 在响应体上做同一
+// 件事 —— 它改写的是各渠道适配器已经渲染好的 JSON，而各协议兼容层自己渲染响应、不经过
+// 那一刀，所以规则放在这里给它们共用。非聚合任务 Aggregate 为 nil，行为不变。
+func (t *Task) PublicModelName() string {
+	if agg := t.PrivateData.Aggregate; agg != nil && strings.TrimSpace(agg.PublicModel) != "" {
+		return agg.PublicModel
+	}
+	if t.Properties.OriginModelName != "" {
+		return t.Properties.OriginModelName
+	}
+	return t.Properties.UpstreamModelName
 }
 
 // GetResultURL 获取任务结果 URL（视频地址等）
@@ -518,15 +585,10 @@ func GetTimedOutUnfinishedTasks(cutoffUnix int64, limit int) []*Task {
 	return tasks
 }
 
-// videoTaskActions 视频类任务的 action 取值。tasks 表混装了视频、Suno 等多种任务
-// （Suno 是 MUSIC/LYRICS），platform 存的是渠道类型编号、区分不出玩法，所以按 action 筛。
-var videoTaskActions = []string{
-	constant.TaskActionGenerate,
-	constant.TaskActionTextGenerate,
-	constant.TaskActionFirstTailGenerate,
-	constant.TaskActionReferenceGenerate,
-	constant.TaskActionRemix,
-}
+// videoTaskActions 视频类任务的 action 取值。定义在 constant 包，与
+// constant.IsVideoTaskAction 同源 —— 两处各写一份必然漂移（加一个视频 action 时
+// 只改其中一处，另一处就静默漏掉那批任务）。
+var videoTaskActions = constant.VideoTaskActions
 
 // CountUserUnfinishedVideoTasks 统计该用户仍在途的视频任务数（已提交但未落终态）。
 //
@@ -809,6 +871,10 @@ func (t *Task) ToOpenAIVideo() *dto.OpenAIVideo {
 	openAIVideo.SetProgressStr(t.Progress)
 	openAIVideo.CreatedAt = t.CreatedAt
 	openAIVideo.CompletedAt = t.UpdatedAt
+	// 取消的任务终态就是 FAILURE，判定必须先于下面的失败分支。
+	if t.PrivateData.Cancelled {
+		openAIVideo.Status = dto.VideoStatusCancelled
+	}
 	if t.Status == TaskStatusFailure {
 		// 失败原因必须随查询回显：体验区（/pg/videos/:id）与 /v1/videos/:id 都只读这份
 		// OpenAI 格式响应，不带 error 的话前端只能退回「生成失败」这类通用文案，真正的

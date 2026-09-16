@@ -317,6 +317,12 @@ func getModelRequest(c *gin.Context) (*ModelRequest, bool, error) {
 		} else if c.Request.Method == http.MethodGet {
 			relayMode = relayconstant.RelayModeVideoFetchByID
 			shouldSelectChannel = false
+		} else if c.Request.Method == http.MethodDelete {
+			// 取消（DELETE /v1/videos/{task_id}）只操作本地任务表：没有模型可分发，
+			// 也不该占渠道。漏掉这一支的话 shouldSelectChannel 保持 true，而 DELETE
+			// 根本没有请求体、解析不出 model —— 请求会停在「模型名不能为空」的 400 上，
+			// 永远到不了 handler。
+			shouldSelectChannel = false
 		}
 		c.Set("relay_mode", relayMode)
 	} else if strings.Contains(c.Request.URL.Path, "/v1/video/generations") {

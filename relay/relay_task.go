@@ -485,7 +485,7 @@ func videoFetchByIDRespBodyBuilder(c *gin.Context) (respBody []byte, taskResp *d
 				taskResp = service.TaskErrorWrapper(err, "convert_to_openai_video_failed", http.StatusInternalServerError)
 				return
 			}
-			respBody = applyAggregateModelEcho(originTask, openAIVideoData)
+			respBody = applyCancelledEcho(originTask, applyAggregateModelEcho(originTask, openAIVideoData))
 			return
 		}
 		taskResp = service.TaskErrorWrapperLocal(fmt.Errorf("not_implemented:%s", originTask.Platform), "not_implemented", http.StatusNotImplemented)
@@ -507,6 +507,20 @@ func videoFetchByIDRespBodyBuilder(c *gin.Context) (respBody []byte, taskResp *d
 // 仅当渠道类型为 Gemini 或 Vertex 时触发；其他渠道或出错时返回 nil。
 // 当非 OpenAI Video API 时，还会构建自定义格式的响应体。
 func tryRealtimeFetch(task *model.Task, isOpenAIVideoAPI bool) []byte {
+	// 已取消的任务不再向上游拉状态 —— 否则这条路会把它**复活**。
+	//
+	// 取消是「抢本地终态 + 退款」（DELETE /v1/videos/{task_id}），而 Gemini/Vertex 没有
+	// 实现 channel.TaskCanceller，上游其实还在跑。下面那段拉到 running/succeeded 后会
+	// 无条件覆盖 task.Status 并落库（CAS 的 from 是进函数时的快照，FAILURE→IN_PROGRESS
+	// 会成功），于是：已退款的任务重新变回未完成态、重新被轮询捞走结算，而
+	// PrivateData.Cancelled 还留着 true —— 对外渲染出一个带着成品 URL 的 "cancelled"。
+	//
+	// 轮询那条路不受影响（GetAllUnFinishSyncTasks 排除 FAILURE/SUCCESS），只有这条同步
+	// 拉取会绕过终态。守卫只拦已取消的任务：其余终态任务的实时拉取是既有行为，
+	// 非 OpenAI 路径还依赖它构造响应格式，不在本次改动范围内动它。
+	if task.PrivateData.Cancelled {
+		return nil
+	}
 	channelModel, err := model.GetChannelById(task.ChannelId, true)
 	if err != nil {
 		return nil

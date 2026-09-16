@@ -195,7 +195,59 @@ func isKnownTaskField(field string) bool {
 	return knownFields[field]
 }
 
-func ValidateBasicTaskRequest(c *gin.Context, info *RelayInfo, action string) *dto.TaskError {
+// TaskValidateOption 让**知道上游契约的那一层**（各渠道适配器）微调基础校验。
+//
+// 存在的理由：「空 prompt 合不合法」各上游并不一致 —— 火山方舟对图生视频 / 参考生视频
+// 明确写着「文本（可选）+ 图片」，而我们自建 H3 的 MiniMax v2 兼容层反过来强制要求
+// 非空文本。在这个共用函数里全局放宽，会把本该被网关就地拦下的请求放到不接受它的
+// 引擎上去失败；全局收紧则砍掉了上游明确支持的用法。两难的根因是判据放错了层。
+type TaskValidateOption func(*taskValidateConfig)
+
+type taskValidateConfig struct {
+	promptOptionalWithMedia bool
+}
+
+// PromptOptionalWithMedia 声明「该上游在带了视觉输入时不要求提示词」。
+// 纯文生视频不受影响，仍然必填 —— 没有任何输入决定输出时，空 prompt 就是错的。
+func PromptOptionalWithMedia() TaskValidateOption {
+	return func(cfg *taskValidateConfig) { cfg.promptOptionalWithMedia = true }
+}
+
+// taskRequestHasMedia 判断请求是否带了视觉 / 听觉输入。
+//
+// ⚠️ 不能只看 req.Images：`image` 与 `input_reference` 到 Images 的归一化发生在
+// validatePrompt **之后**（见本函数调用点下方那两段兼容代码），只看 Images 会把
+// 单图上传和 OpenAI 风格的条件图判成「没有媒体」，于是豁免失效、报一个自相矛盾的
+// 「传了图却说缺提示词」。
+func taskRequestHasMedia(req *TaskSubmitReq) bool {
+	if len(req.Images) > 0 ||
+		strings.TrimSpace(req.Image) != "" ||
+		strings.TrimSpace(req.InputReference) != "" {
+		return true
+	}
+	// metadata 侧的参考媒体：src_ref_images 是多模态参考图，另两个键与 VideoHasVideoInput
+	// 同名同源。content 是调用方自排 Ark content[] 的逃生口，里面也可能只有媒体。
+	for _, key := range []string{"src_ref_images", "reference_videos", "reference_video",
+		"reference_images", "reference_audios", "reference_audio", "content"} {
+		switch v := req.Metadata[key].(type) {
+		case string:
+			if strings.TrimSpace(v) != "" {
+				return true
+			}
+		case []any:
+			if len(v) > 0 {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func ValidateBasicTaskRequest(c *gin.Context, info *RelayInfo, action string, opts ...TaskValidateOption) *dto.TaskError {
+	cfg := taskValidateConfig{}
+	for _, opt := range opts {
+		opt(&cfg)
+	}
 	var err error
 	contentType := c.GetHeader("Content-Type")
 	var req TaskSubmitReq
@@ -237,7 +289,12 @@ func ValidateBasicTaskRequest(c *gin.Context, info *RelayInfo, action string) *d
 			effectiveTaskType = "v2a"
 		}
 	}
-	if !promptOptionalTaskTypes[effectiveTaskType] {
+	// 第二条豁免来自适配器（PromptOptionalWithMedia）：判据是「这个上游带媒体时不要求
+	// 提示词」，与上面按 task_type 的豁免正交 —— 那张表管的是"这类任务的输出不看文本"，
+	// 这一条管的是"这个上游允许只给图"。
+	promptOptional := promptOptionalTaskTypes[effectiveTaskType] ||
+		(cfg.promptOptionalWithMedia && taskRequestHasMedia(&req))
+	if !promptOptional {
 		if taskErr := validatePrompt(req.Prompt); taskErr != nil {
 			return taskErr
 		}

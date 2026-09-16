@@ -38,6 +38,33 @@ func TestBuildTaskStatusMapping(t *testing.T) {
 	}
 }
 
+// 聚合（编排）模型：回显与 filter.model 都必须用调用方提交的那个名字。
+//
+// Distribute 会把聚合模型展开成生成段模型并写进 Properties.OriginModelName（计费与
+// 日志按它走），对外那个名字只留在 PrivateData.Aggregate.PublicModel 里。两个症状都
+// 不报错：回显泄露一个调用方从没提交过的内部流水线模型名，以及按提交名筛列表一条都
+// 筛不到、静默返回空集。
+func TestBuildTaskEchoesPublicAggregateModel(t *testing.T) {
+	task := v2Task("task_agg", model.TaskStatusSuccess, "minimax-h3-fl2va",
+		&model.MiniMaxV2Properties{Resolution: "768P", Duration: 6})
+	task.PrivateData.Aggregate = &model.TaskAggregateInfo{PublicModel: "minimax-h3-1080p"}
+
+	if got := BuildTask(task).Model; got != "minimax-h3-1080p" {
+		t.Fatalf("model = %q, want the submitted aggregate name (内部生成段模型不该露出去)", got)
+	}
+
+	page := FilterAndPage([]*model.Task{task}, ListFilter{PageNum: 1, PageSize: 20, Model: "minimax-h3-1080p"})
+	if page.Total != 1 {
+		t.Fatalf("按提交的聚合模型名筛到 %d 条，want 1（否则列表静默返回空集）", page.Total)
+	}
+
+	plain := v2Task("task_plain", model.TaskStatusSuccess, "minimax-h3-fl2va",
+		&model.MiniMaxV2Properties{Duration: 6})
+	if got := BuildTask(plain).Model; got != "minimax-h3-fl2va" {
+		t.Fatalf("非聚合任务 model = %q, want minimax-h3-fl2va", got)
+	}
+}
+
 func TestBuildTaskSucceeded(t *testing.T) {
 	task := v2Task("task_abc", model.TaskStatusSuccess, "MiniMax-H3", &model.MiniMaxV2Properties{
 		Resolution:      "768P",

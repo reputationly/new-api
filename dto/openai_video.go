@@ -11,6 +11,9 @@ const (
 	VideoStatusInProgress = "in_progress"
 	VideoStatusCompleted  = "completed"
 	VideoStatusFailed     = "failed"
+	// VideoStatusCancelled 不是任务表里的状态：取消复用 FAILURE 终态，靠
+	// PrivateData.Cancelled 在渲染层区分出来（与异步图片同一套做法，见 ImageJobStatusCancelled）。
+	VideoStatusCancelled = "cancelled"
 )
 
 type OpenAIVideo struct {

@@ -2,6 +2,7 @@ package doubao
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"io"
 	"net/http"
@@ -125,9 +126,15 @@ func (a *TaskAdaptor) Init(info *relaycommon.RelayInfo) {
 }
 
 // ValidateRequestAndSetAction parses body, validates fields and sets default action.
+//
+// PromptOptionalWithMedia：方舟对「文本（可选）+ 图片 / 视频 / 音频」是官方支持的输入
+// 组合（见「创建视频生成任务」的输入组合一节），只有纯文生视频才必须给提示词。不声明
+// 的话共用校验会无差别地要求非空 prompt，图生视频被网关回 400 prompt is required ——
+// 上游明明收，请求却到不了它。纯文生视频不受影响，判据里要求带媒体。
 func (a *TaskAdaptor) ValidateRequestAndSetAction(c *gin.Context, info *relaycommon.RelayInfo) (taskErr *dto.TaskError) {
 	// Accept only POST /v1/video/generations as "generate" action.
-	return relaycommon.ValidateBasicTaskRequest(c, info, constant.TaskActionGenerate)
+	return relaycommon.ValidateBasicTaskRequest(c, info, constant.TaskActionGenerate,
+		relaycommon.PromptOptionalWithMedia())
 }
 
 // BuildRequestURL constructs the upstream URL.
@@ -246,6 +253,39 @@ func (a *TaskAdaptor) FetchTask(baseUrl, key string, body map[string]any, proxy 
 	return client.Do(req)
 }
 
+// CancelTask 实现 channel.TaskCanceller：向方舟请求取消排队中的任务。
+//
+// 方舟对 queued 任务的 DELETE 是「取消」，对已结束任务是「删记录」。我们只在任务
+// 尚未开跑时调它（见 controller.cancelArkV3Task 与 arkv3.DeleteAction），所以这里
+// 一定走的是取消语义。
+//
+// 404 当成成功：任务在上游已经不存在，取消的目的（让它别再消耗算力）已经达成，
+// 报错只会让调用方以为取消失败。
+func (a *TaskAdaptor) CancelTask(ctx context.Context, baseURL, key, upstreamTaskID, proxy string) error {
+	uri := fmt.Sprintf("%s/api/v3/contents/generations/tasks/%s", baseURL, upstreamTaskID)
+	req, err := http.NewRequestWithContext(ctx, http.MethodDelete, uri, nil)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set("Authorization", "Bearer "+key)
+
+	client, err := service.GetHttpClientWithProxy(proxy)
+	if err != nil {
+		return fmt.Errorf("new proxy http client failed: %w", err)
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 300 || resp.StatusCode == http.StatusNotFound {
+		return nil
+	}
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
+	return fmt.Errorf("cancel task failed with status %d: %s", resp.StatusCode, string(body))
+}
+
 func (a *TaskAdaptor) GetModelList() []string {
 	return ModelList
 }
@@ -286,11 +326,19 @@ func (a *TaskAdaptor) convertToRequestPayload(req *relaycommon.TaskSubmitReq) (*
 		r.Duration = lo.ToPtr(dto.IntValue(req.Duration))
 	}
 
-	r.Content = lo.Reject(r.Content, func(c ContentItem, _ int) bool { return c.Type == "text" })
-	r.Content = append(r.Content, ContentItem{
-		Type: "text",
-		Text: req.Prompt,
-	})
+	// 顶层 prompt 是唯一的文本来源,它压过 metadata.content 里自带的 text 条目。
+	//
+	// **prompt 为空时整段跳过**:原先无条件替换,于是"图生视频不写提示词"这种官方
+	// 明确支持的组合(文本可选 + 图片)会发出一个 {"type":"text","text":""} 的空条目,
+	// 上游按空提示词拒绝。既然没有文本要覆盖,就别动 content —— 调用方若在
+	// metadata.content 里自己排了 text,那份也因此得以保留。
+	if strings.TrimSpace(req.Prompt) != "" {
+		r.Content = lo.Reject(r.Content, func(c ContentItem, _ int) bool { return c.Type == "text" })
+		r.Content = append(r.Content, ContentItem{
+			Type: "text",
+			Text: req.Prompt,
+		})
+	}
 
 	return &r, nil
 }

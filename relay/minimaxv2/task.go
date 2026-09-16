@@ -56,8 +56,10 @@ func IsV2Task(task *model.Task) bool {
 // BuildTask 把任务记录渲染成官方 task 对象。
 func BuildTask(task *model.Task) Task {
 	out := Task{
-		ID:        task.TaskID,
-		Model:     firstNonEmpty(task.Properties.OriginModelName, task.Properties.UpstreamModelName),
+		ID: task.TaskID,
+		// 回显与 filter.model 比对的都必须是**调用方提交的那个模型名**，聚合模型不能
+		// 露出展开后的生成段模型。规则见 model.Task.PublicModelName。
+		Model:     task.PublicModelName(),
 		Status:    taskStatusToV2(task.Status),
 		CreatedAt: task.CreatedAt,
 		UpdatedAt: task.UpdatedAt,

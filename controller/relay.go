@@ -17,6 +17,7 @@ import (
 	"github.com/QuantumNous/new-api/model"
 	perfmetrics "github.com/QuantumNous/new-api/pkg/perf_metrics"
 	"github.com/QuantumNous/new-api/relay"
+	"github.com/QuantumNous/new-api/relay/arkv3"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	relayconstant "github.com/QuantumNous/new-api/relay/constant"
 	"github.com/QuantumNous/new-api/relay/helper"
@@ -699,6 +700,9 @@ func RelayTask(c *gin.Context) {
 		// MiniMax v2 兼容层的回显 / 用量快照。这些值只存在于提交请求里，而查询发生在
 		// 几百秒后的轮询之后，那时请求体早已不在。非 v2 端点提交的任务是 no-op。
 		minimaxv2.ApplyTaskSnapshot(c, task)
+		// 火山方舟 v3 兼容层同理：resolution / ratio / duration 等回显字段只存在于提交
+		// 请求里，而调用方提交完立刻查询是常规用法，那时任务还没被轮询过。
+		arkv3.ApplyTaskSnapshot(c, task)
 		// 异步图片：图片与视频共用同一个 platform（渠道类型数字），任务列表要区分
 		// 二者只能靠这个带索引的真列。见 docs/image-async-task-design.md §7。
 		if relay.IsAsyncImageSubmit(relayInfo) {

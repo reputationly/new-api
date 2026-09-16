@@ -199,24 +199,13 @@ func outputMediaType(task *model.Task) (types.FileType, bool) {
 	if constant.IsImageTaskAction(task.Action) {
 		return types.FileTypeImage, true
 	}
-	for _, a := range videoTaskActions {
-		if task.Action == a {
-			return types.FileTypeVideo, true
-		}
+	// 判据与 model 层同源（constant.VideoTaskActions）。这里原先是一份手抄副本，
+	// 靠注释要求两边手工同步 —— 而漏同步的后果是静默的：新玩法的视频产物会被
+	// outputMediaType 判成"不是视频"，直接跳过产物审核，没有任何报错。
+	if constant.IsVideoTaskAction(task.Action) {
+		return types.FileTypeVideo, true
 	}
 	return "", false
-}
-
-// videoTaskActions 视频类任务的 action 取值。
-//
-// 与 model.videoTaskActions 同源（那个是包私有的），改动必须两边同步——
-// 漏了这边的后果是新玩法的视频产物被静默跳过审核。
-var videoTaskActions = []string{
-	constant.TaskActionGenerate,
-	constant.TaskActionTextGenerate,
-	constant.TaskActionFirstTailGenerate,
-	constant.TaskActionReferenceGenerate,
-	constant.TaskActionRemix,
 }
 
 // ModerateImageOutput 审一张同步生成的图片（挂载点 D-2，§12.4.3）。
