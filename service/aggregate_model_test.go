@@ -478,65 +478,40 @@ func TestDryRunAcceptsKnownEnhanceModes(t *testing.T) {
 		"gen-model": {groups: []string{"default"}},
 		"enh-model": {groups: []string{"default"}},
 	})
-	for _, mode := range []string{"", "text", "TEXT", "ir", "IR", "singlecall", "SingleCall"} {
+	for _, mode := range []string{"", "text", "TEXT", "singlecall", "SingleCall"} {
 		res := DryRunAggregateModel(irEnhanceModel(mode, "模板"), map[string]int{"v-agg": 1})
 		if ch := checkByKey(res, "enhance_mode"); ch != nil && strings.Contains(ch.Message, "不认识") {
 			t.Errorf("mode=%q 是合法值,不该报不认识", mode)
 		}
 	}
-}
 
-// mode=ir 时 system_prompt **不生效**(IR 用内置编译器提示词)。
-// 不说的话运营会对着一份自己写的模板调半天,而那份模板一个字都没被用到。
-func TestDryRunWarnsIRIgnoresSystemPrompt(t *testing.T) {
-	withFakeModels(t, map[string]fakeModel{
-		"gen-model": {groups: []string{"default"}},
-		"enh-model": {groups: []string{"default"}},
-	})
-	res := DryRunAggregateModel(irEnhanceModel("ir", "我自己写的模板"), map[string]int{"v-agg": 1})
-	found := false
-	for _, ch := range res.Checks {
-		if ch.Key == "enhance_mode" && strings.Contains(ch.Message, "不使用 system_prompt") {
-			found = true
+	// **"ir" 已删除，存量配置里写着它的必须被明确告知。**
+	//
+	// 静默跑 text 是最坏的:运营配了 ir、以为在用它，实际一直是文本改写，
+	// 而没有任何地方会说。
+	for _, mode := range []string{"ir", "IR"} {
+		res := DryRunAggregateModel(irEnhanceModel(mode, "模板"), map[string]int{"v-agg": 1})
+		ch := checkByKey(res, "enhance_mode")
+		if ch == nil || !strings.Contains(ch.Message, "不认识") {
+			t.Errorf("mode=%q 已删除,应报不认识,实得 %+v", mode, ch)
+		}
+		if ch != nil && !strings.Contains(ch.Message, "已删除") {
+			t.Errorf("mode=%q 的提示应说明它是被删掉的,而不只是拼错,实得 %q", mode, ch.Message)
 		}
 	}
-	if !found {
-		t.Errorf("mode=ir 时应提示 system_prompt 不生效,实得 %+v", res.Checks)
-	}
 }
 
-// 延迟必须用**实测数字**说。只说"会慢一些",运营按这个配上去,
-// 客户看到的是提交前多等一分半钟。
-func TestDryRunStatesIRLatencyInNumbers(t *testing.T) {
+// text 模式缺模板是**真错误**:那时确实等于增强没生效。
+//
+// 对照 TestDryRunSingleCallWithoutTemplateIsWarnNotError —— singlecall
+// 自带编译器提示词，缺的只是回落那一级，判成 error 会报假错。
+func TestDryRunTextWithoutTemplateIsError(t *testing.T) {
 	withFakeModels(t, map[string]fakeModel{
 		"gen-model": {groups: []string{"default"}},
 		"enh-model": {groups: []string{"default"}},
 	})
-	res := DryRunAggregateModel(irEnhanceModel("ir", ""), map[string]int{"v-agg": 1})
-	found := false
-	for _, ch := range res.Checks {
-		if ch.Key == "enhance_mode" && strings.Contains(ch.Message, "秒") {
-			found = true
-		}
-	}
-	if !found {
-		t.Errorf("mode=ir 应给出实测延迟数字,实得 %+v", res.Checks)
-	}
-}
-
-// mode=ir 且没有可用模板时**不是错误** —— IR 自己有内置编译器提示词,
-// 缺的只是回落那一级。判成 error 会给一份能用的配置报假错。
-func TestDryRunIRWithoutTemplateIsWarnNotError(t *testing.T) {
-	withFakeModels(t, map[string]fakeModel{
-		"gen-model": {groups: []string{"default"}},
-		"enh-model": {groups: []string{"default"}},
-	})
-	res := DryRunAggregateModel(irEnhanceModel("ir", ""), map[string]int{"v-agg": 1})
-	requireLevel(t, res, "enhance_template", AggregateCheckWarn)
-
-	// 同一份配置换成 text 模式,就该是 error:那时确实等于增强没生效。
-	res2 := DryRunAggregateModel(irEnhanceModel("text", ""), map[string]int{"v-agg": 1})
-	requireLevel(t, res2, "enhance_template", AggregateCheckError)
+	requireLevel(t, DryRunAggregateModel(irEnhanceModel("text", ""), map[string]int{"v-agg": 1}),
+		"enhance_template", AggregateCheckError)
 }
 
 // **singlecall 和 IR 同性质：它有自己的内置编译器提示词。**
@@ -556,27 +531,19 @@ func TestDryRunSingleCallWithoutTemplateIsWarnNotError(t *testing.T) {
 	}
 }
 
-// 预算配小了是**静默**失败:IR 每次超时、每次回落 text,看起来像
-// "IR 没什么效果",实际一次都没跑成 —— 干跑校验必须把它说出来。
-func TestDryRunWarnsOnTooSmallIRTimeout(t *testing.T) {
-	withFakeModels(t, map[string]fakeModel{
-		"gen-model": {groups: []string{"default"}},
-		"enh-model": {groups: []string{"default"}},
-	})
-	m := irEnhanceModel("ir", "模板")
-	m.PromptEnhance.TimeoutSeconds = 30
-	requireLevel(t, DryRunAggregateModel(m, map[string]int{"v-agg": 1}),
-		"enhance_timeout", AggregateCheckWarn)
-}
-
 // 够用的预算不该报警。
-func TestDryRunAcceptsAmpleIRTimeout(t *testing.T) {
+//
+// **mode 必须是 singlecall。** 这条原先用的是 ir，而 ir 删掉之后
+// EnhanceMode() 把它归一成 text，enhance_timeout 那道检查只在 singlecall
+// 分支里 —— 于是无论填多小的值 checkByKey 都是 nil，断言恒真、什么都没测。
+// 删一个枚举值会让引用它的测试静默空过，这是删除类改动特有的坑。
+func TestDryRunAcceptsAmpleSingleCallTimeout(t *testing.T) {
 	withFakeModels(t, map[string]fakeModel{
 		"gen-model": {groups: []string{"default"}},
 		"enh-model": {groups: []string{"default"}},
 	})
-	for _, sec := range []int{0, 120, 240, 600} {
-		m := irEnhanceModel("ir", "模板")
+	for _, sec := range []int{0, 60, 120, 600} {
+		m := irEnhanceModel("singlecall", "模板")
 		m.PromptEnhance.TimeoutSeconds = sec
 		if ch := checkByKey(DryRunAggregateModel(m, map[string]int{"v-agg": 1}), "enhance_timeout"); ch != nil {
 			t.Errorf("timeout_seconds=%d 够用,不该报警：%s", sec, ch.Message)

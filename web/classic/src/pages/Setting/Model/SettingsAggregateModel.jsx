@@ -165,7 +165,7 @@ const SettingsAggregateModel = ({ options, refresh }) => {
             <br />
             <Text type='secondary' size='small'>
               {t(
-                'prompt_enhance.mode 三选一，出厂默认 singlecall。',
+                'prompt_enhance.mode 二选一，出厂默认 singlecall。',
               )}
             </Text>
             <br />
@@ -183,13 +183,13 @@ const SettingsAggregateModel = ({ options, refresh }) => {
             <br />
             <Text type='secondary' size='small'>
               {t(
-                '· ir：模型先产出结构化 JSON 再由服务端渲染。上游已废弃这套架构，且实测单次编译 34-102 秒；保留仅为兼容既有配置，不建议新用。',
+                '曾经还有个 ir 模式（模型先产出结构化 JSON 再由服务端渲染）。上游已废弃那套架构，我们也从未在生产启用过，现已整体删除——存量配置里若还写着 ir，干跑校验会报「不认识」，请改成 singlecall。',
               )}
             </Text>
             <br />
             <Text type='secondary' size='small'>
               {t(
-                'prompt_enhance.timeout_seconds 调整预算（singlecall 默认 120 秒、ir 默认 240 秒）；配小了不会报错，只会每次超时并静默回落 text。',
+                'prompt_enhance.timeout_seconds 调整预算（singlecall 默认 120 秒）；配小了不会报错，只会每次超时并静默回落 text。',
               )}
             </Text>
           </div>

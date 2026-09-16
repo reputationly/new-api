@@ -1,16 +1,23 @@
 package service
 
 import (
+	"context"
 	"encoding/json"
+	"io"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 
+	"github.com/stretchr/testify/require"
+
+	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/relay/hilo"
 )
 
 func evidenceOf(in hilo.CompilerInput) singleCallEvidence { return buildSingleCallEvidence(in) }
 
-// **素材编号必须和 relay/hilo/render.go 一致。**
+// **素材编号必须和素材实际发出去的顺序一致。**
 //
 // 两边各编一套的后果是静默的：提示词里写 <Picture 2>，而 H3 收到的第二张
 // 图是另一张 —— 生成出来的东西不对，但没有任何地方报错。
@@ -405,4 +412,215 @@ func TestRefGuideOnlySentForReferenceTasks(t *testing.T) {
 			t.Errorf("%s 没发 base-en.txt", name)
 		}
 	}
+}
+
+// ── 从已删除的 IR 测试里移植过来 ──────────────────────────────────
+//
+// 这些工具函数随 IR 架构一起搬进了 singlecall（jsonCandidates /
+// extractJSONObject / stripCodeFence），但**它们的测试跟着 IR 的测试
+// 文件一起被删了** —— 代码搬了、护栏没搬。而它们守的恰恰是
+// extractSingleCall 这条出厂默认路径：围栏、JSON 后面拖着的散文、
+// 以及模型偶发多吐的那个游离花括号。破了的表现是**静默回落 text**。
+
+// chatResponse 把一段内容包成 chat completions 的回复。
+func chatResponse(content string) string {
+	b, _ := json.Marshal(map[string]any{
+		"choices": []map[string]any{{"message": map[string]any{"content": content}}},
+		"usage":   map[string]any{"prompt_tokens": 10, "completion_tokens": 20, "total_tokens": 30},
+	})
+	return string(b)
+}
+
+// fakeSequence 按顺序返回预置回复的假上游,并录下每次收到的请求体。
+//
+// 编译天然是多轮的(第一轮传输检查不过 → 重修 → 仍不过 → 回落 text),
+// 只能返回一种回复的假服务端连"重修成功"这条路都走不到。
+func fakeSequence(t *testing.T, responses ...string) *[][]byte {
+	t.Helper()
+	var got [][]byte
+	n := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		got = append(got, b)
+		w.Header().Set("Content-Type", "application/json")
+		idx := n
+		if idx >= len(responses) {
+			idx = len(responses) - 1
+		}
+		n++
+		_, _ = w.Write([]byte(responses[idx]))
+	}))
+	t.Cleanup(srv.Close)
+	orig := enhanceEndpoint
+	t.Cleanup(func() { enhanceEndpoint = orig })
+	enhanceEndpoint = func() string { return srv.URL }
+	return &got
+}
+
+// 模型很少只吐一个干净的 JSON。要了 response_format 也只是大概率 ——
+// 不认这个字段的上游会**静默忽略**它,所以这里必须自己扛住。
+func TestExtractJSONObjectTolerates(t *testing.T) {
+	cases := []struct{ name, in, want string }{
+		{"裸对象", `{"a":1}`, `{"a":1}`},
+		{"围栏", "```json\n{\"a\":1}\n```", `{"a":1}`},
+		{"前置寒暄", "Here is the IR:\n{\"a\":1}", `{"a":1}`},
+		{"后置补话", "{\"a\":1}\n以上就是 IR。如需调整请告知 {不是 JSON}", `{"a":1}`},
+		{"嵌套对象", `{"a":{"b":2}}`, `{"a":{"b":2}}`},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			require.Equal(t, c.want, extractJSONObject(c.in))
+		})
+	}
+}
+
+// **字符串里的花括号不算数。**
+//
+// 提示词正文里出现 `}` 完全正常。不跳过引号的话会在第一个带花括号的
+// 描述那里提前收尾,截出来的片段解析失败 —— 一次本来成功的编译白跑,
+// 而且报的是"IR 解析失败",指不到真正的原因。
+func TestExtractJSONObjectIgnoresBracesInStrings(t *testing.T) {
+	in := `{"event":"a sign reading } end", "next":1}`
+	require.Equal(t, in, extractJSONObject(in))
+}
+
+// 花括号没配平 = 输出被截断,解析也不会成功,直接判定取不到。
+func TestExtractJSONObjectRejectsTruncated(t *testing.T) {
+	require.Empty(t, extractJSONObject(`{"a":{"b":2}`))
+	require.Empty(t, extractJSONObject(`没有任何 JSON`))
+}
+
+// 转义引号不能被当成字符串结束。
+func TestExtractJSONObjectHandlesEscapedQuote(t *testing.T) {
+	in := `{"event":"she said \"} \" and left","n":1}`
+	require.Equal(t, in, extractJSONObject(in))
+	require.True(t, json.Valid([]byte(extractJSONObject(in))))
+}
+
+func TestStripCodeFence(t *testing.T) {
+	require.Equal(t, `{"a":1}`, stripCodeFence("```json\n{\"a\":1}\n```"))
+	require.Equal(t, `{"a":1}`, stripCodeFence("```\n{\"a\":1}\n```"))
+	require.Equal(t, `{"a":1}`, stripCodeFence(`{"a":1}`), "没有围栏时原样返回")
+}
+
+// scEvidence 一份最小但合法的编译请求事实。
+func scInput(prompt string) EnhanceInput {
+	return EnhanceInput{
+		Prompt: prompt,
+		Compiler: &hilo.CompilerInput{
+			UserRequest: prompt, TaskType: hilo.TaskT2V,
+			DurationSeconds: 5, GenerateAudio: true,
+		},
+	}
+}
+
+func scCfg() *common.AggregateModel {
+	return &common.AggregateModel{
+		Name: "agg", Type: "video",
+		PromptEnhance: &common.AggregatePromptEnhance{
+			Model: "enh", Mode: common.EnhanceModeSingleCall,
+			SystemPrompt: "文本模板:改写以下提示词",
+		},
+	}
+}
+
+// scReply 一份能过传输检查的 singlecall 产物。
+func scReply(prompt string) string {
+	b, _ := json.Marshal(map[string]any{
+		"h3_prompt": prompt,
+		"content_plan": map[string]any{
+			"bindings": []any{},
+			"shots":    []any{map[string]any{"start_seconds": 0, "end_seconds": 5}},
+		},
+		"uncertainties": []any{},
+	})
+	return string(b)
+}
+
+// **模型偶发在开头多吐一个游离的花括号。**
+//
+// 实测五次中两次（qwen3.8-27b）。它看起来像"多包了一层"，其实不是：整串
+// 净深度是 1，只有开头那个多余，结尾并没有多。所以按配平找结尾必然失败，
+// 掐头去尾还会把真正的收尾括号削掉。
+//
+// 这条原先钉在已删除的 IR 解析上，但那个候选提取（jsonCandidates）被搬进了
+// singlecall，守的是 extractSingleCall —— 出厂默认路径。
+func TestExtractSingleCallRecoversStrayLeadingBrace(t *testing.T) {
+	raw := scReply("integrated_multimodal_description: [Shot 1] x")
+	strayed := "{" + raw // 只在开头多一个，结尾不动
+
+	require.Empty(t, extractJSONObject(strayed),
+		"净深度不为 0，按配平找结尾必然失败 —— 这正是需要候选提取的原因")
+
+	out, err := extractSingleCall(strayed)
+	require.NoError(t, err)
+	require.Contains(t, out.H3Prompt, "[Shot 1]")
+}
+
+// 围栏与 JSON 后面拖着的散文都要能恢复。
+func TestExtractSingleCallToleratesFenceAndProse(t *testing.T) {
+	body := scReply("integrated_multimodal_description: [Shot 1] y")
+	for name, raw := range map[string]string{
+		"代码围栏":  "```json\n" + body + "\n```",
+		"前面有话":  "好的，这是结果：\n" + body,
+		"后面拖散文": body + "\n\n以上就是编译结果。",
+	} {
+		out, err := extractSingleCall(raw)
+		if err != nil {
+			t.Errorf("%s：解析失败 %v", name, err)
+			continue
+		}
+		if !strings.Contains(out.H3Prompt, "[Shot 1]") {
+			t.Errorf("%s：h3_prompt 没取出来", name)
+		}
+	}
+}
+
+// **编译失败要回落 text 改写，不是掉回原始提示词。**
+//
+// 直接掉到原文会让开着比不开还差，于是没人敢开，于是永远收不到真实失败
+// 样本 —— 这是整套降级设计的由来。
+func TestSingleCallFallsBackToTextNotToOriginal(t *testing.T) {
+	bad, _ := json.Marshal(map[string]any{
+		"h3_prompt": "x",
+		// 镜头只覆盖到 3 秒，而请求是 5 秒 —— 传输检查必拦
+		"content_plan": map[string]any{"bindings": []any{},
+			"shots": []any{map[string]any{"start_seconds": 0, "end_seconds": 3}}},
+	})
+	got := fakeSequence(t,
+		chatResponse(string(bad)), // 首轮不过
+		chatResponse(string(bad)), // 重修仍不过
+		chatResponse("文本改写的结果"),   // 第三次：text 模式
+	)
+
+	res := EnhancePrompt(context.Background(), scCfg(), "Bearer sk-x", scInput("一只猫"))
+
+	require.False(t, res.Degraded, "回落 text 成功了就不算降级：%s", res.DegradeReason)
+	require.Equal(t, common.EnhanceModeText, res.Mode)
+	require.Contains(t, res.FallbackReason, "duration",
+		"回落原因要能指认是哪条检查挡下的 —— 这是唯一的反馈来源")
+	require.Equal(t, "文本改写的结果", res.EnhancedPrompt)
+	require.Len(t, *got, 3, "两轮 singlecall + 一次 text")
+	require.Contains(t, string((*got)[2]), "文本模板", "第三次该走文本模板")
+}
+
+// **usage 必须累加，不能只报最后一轮。**
+//
+// 重修轮跑掉的 token 客户已经被计过费了（每一轮都是一次真实 relay 调用），
+// 只报最后一轮会让聚合日志里的用量小于实际扣费，对账时对不上。
+func TestSingleCallAccumulatesUsageAcrossRepair(t *testing.T) {
+	bad, _ := json.Marshal(map[string]any{
+		"h3_prompt": "x",
+		"content_plan": map[string]any{"bindings": []any{},
+			"shots": []any{map[string]any{"start_seconds": 0, "end_seconds": 3}}},
+	})
+	good := scReply("integrated_multimodal_description: [Shot 1] z")
+	fakeSequence(t, chatResponse(string(bad)), chatResponse(good))
+
+	res := EnhancePrompt(context.Background(), scCfg(), "Bearer sk-x", scInput("一只猫"))
+
+	require.Equal(t, common.EnhanceModeSingleCall, res.Mode)
+	require.True(t, res.Repaired, "第一轮没过、靠重修才成功")
+	require.NotNil(t, res.Usage)
+	require.Equal(t, 60, res.Usage.TotalTokens, "两轮各 30，必须累加")
 }

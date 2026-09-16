@@ -833,7 +833,7 @@ func buildTaskAggregateInfo(c *gin.Context, exp *middleware.AggregateExpansion) 
 		info.ContentPlan = e.ContentPlan
 		info.EnhanceUncertainties = e.Uncertainties
 		info.CompilerRevision = e.CompilerRevision
-		info.EnhanceFallbackReason = e.IRFallbackReason
+		info.EnhanceFallbackReason = e.FallbackReason
 	}
 	return info
 }

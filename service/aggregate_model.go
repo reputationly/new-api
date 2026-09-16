@@ -194,51 +194,28 @@ func DryRunAggregateModel(m *common.AggregateModel, peers map[string]int) *Aggre
 		enhModel := strings.TrimSpace(m.PromptEnhance.Model)
 
 		// mode 拼错时运行时**静默退回 text**(EnhanceMode 的取值规则)。
-		// 那是安全的一侧,但配置的人要的是 ir —— 他看不到任何异常,只会
-		// 觉得"IR 好像没起作用"。这里必须把它说出来。
+		// 那是安全的一侧,但配置的人要的是 singlecall —— 他看不到任何异常,
+		// 只会觉得"增强好像没起作用"。这里必须把它说出来。
+		//
+		// 已删除的 "ir" 也会落进这一支:那正是我们想要的 —— 存量配置里
+		// 写着 ir 的,应该被明确告知它已经不存在了,而不是静默跑 text。
 		if rawMode := strings.TrimSpace(m.PromptEnhance.Mode); rawMode != "" &&
 			!strings.EqualFold(rawMode, common.EnhanceModeText) &&
-			!strings.EqualFold(rawMode, common.EnhanceModeIR) &&
 			!strings.EqualFold(rawMode, common.EnhanceModeSingleCall) {
 			add("enhance_mode", AggregateCheckWarn,
-				"增强模式 %q 不认识(只支持 %q / %q / %q),运行时会按 %q 处理",
-				rawMode, common.EnhanceModeText, common.EnhanceModeIR,
+				"增强模式 %q 不认识(只支持 %q / %q),运行时会按 %q 处理"+
+					"(\"ir\" 模式已删除:上游废弃了那套架构,见 service/h3v20/README.md)",
+				rawMode, common.EnhanceModeText,
 				common.EnhanceModeSingleCall, common.EnhanceModeText)
 		}
 		if m.PromptEnhance.EnhanceMode() == common.EnhanceModeSingleCall &&
 			strings.TrimSpace(m.PromptEnhance.SystemPrompt) != "" {
-			// 与 ir 同理:singlecall 用的是移植自上游的内置编译器提示词
+			// singlecall 用的是移植自上游的内置编译器提示词
 			// (service/h3v20/),不读 system_prompt。配了却不生效而不说,
 			// 运营会对着一份一个字都没被用到的模板调半天。
 			add("enhance_mode", AggregateCheckWarn,
 				"mode=singlecall 时不使用 system_prompt(用内置的 v20 编译器提示词);"+
 					"它只在编译失败、回落 text 改写时才会被用到")
-		}
-		if m.PromptEnhance.EnhanceMode() == common.EnhanceModeIR {
-			// IR 模式不读 system_prompt —— 它用内置的编译器提示词
-			// (relay/hilo/prompt.go)。配了却不生效,不说的话运营会对着
-			// 一份自己写的模板调半天,而那份模板一个字都没被用到。
-			if strings.TrimSpace(m.PromptEnhance.SystemPrompt) != "" {
-				add("enhance_mode", AggregateCheckWarn,
-					"mode=ir 时不使用 system_prompt(IR 用内置编译器提示词);"+
-						"它只在 IR 编译失败、回落 text 改写时才会被用到")
-			}
-			// 延迟必须用实测数字说,不能只说"会慢一些" —— 运营按"慢一些"
-			// 配上去,客户看到的是提交前多等一两分钟。
-			add("enhance_mode", AggregateCheckWarn,
-				"mode=ir 实测单次编译耗时 34-102 秒(qwen3.8-27b / qwen3.8-flash-fp8 各 5 次),"+
-					"这段等待直接加在客户提交请求之前;最坏情况还会再加一轮重修和一次 text 回落。"+
-					"换来的是结构错误(时长对不上、引用了没传的素材)能被确定性校验拦下")
-
-			// 预算配小了是**静默**失败:每次超时、每次回落 text,看起来像
-			// "IR 没什么效果",实际一次都没跑成。实测单次编译最慢 102 秒,
-			// 低于这个数就等于把 IR 关掉了 —— 而没有任何地方会说。
-			if sec := m.PromptEnhance.TimeoutSeconds; sec > 0 && sec < 120 {
-				add("enhance_timeout", AggregateCheckWarn,
-					"timeout_seconds=%d 低于实测单次编译耗时的上限(102 秒),"+
-						"IR 很可能每次都超时并静默回落 text 改写(看起来像「IR 没效果」);"+
-						"预算要按「编译 + 一轮重修」留,内置默认是 240 秒", sec)
-			}
 		}
 		if m.PromptEnhance.EnhanceMode() == common.EnhanceModeSingleCall {
 			// 预算配小了是**静默**失败:每次超时、每次回落 text,看起来像
@@ -261,14 +238,12 @@ func DryRunAggregateModel(m *common.AggregateModel, peers map[string]int) *Aggre
 		// 是事实,现在不是了。
 		if strings.TrimSpace(m.PromptEnhance.SystemPrompt) == "" &&
 			DefaultEnhanceTemplate(m.Generate.Model) == "" {
-			// ir 与 singlecall 都**自带**编译器提示词(前者在
-			// relay/hilo/prompt.go,后者在 service/h3v20/),不读
+			// singlecall **自带**编译器提示词(service/h3v20/),不读
 			// system_prompt。缺模板时缺的只是**回落那一级** —— 编译失败时
 			// 无处可退,只能用原始提示词。说成"等于增强没生效"在这里是错的,
 			// 而且后果不只是措辞:报 error 会让 Passed=false,一份能正常
 			// 工作的配置在面板上变红,运营最可能的动作是把 mode 改回 text。
-			if mode := m.PromptEnhance.EnhanceMode(); mode == common.EnhanceModeIR ||
-				mode == common.EnhanceModeSingleCall {
+			if mode := m.PromptEnhance.EnhanceMode(); mode == common.EnhanceModeSingleCall {
 				add("enhance_template", AggregateCheckWarn,
 					"未配置模板(system_prompt)且生成段模型 %s 没有内置默认模板:"+
 						"mode=%s 编译成功时不受影响,但一旦编译失败就无处回落,只能用原始提示词",

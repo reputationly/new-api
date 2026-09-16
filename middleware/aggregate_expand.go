@@ -505,13 +505,13 @@ func buildCompilerInput(body map[string]any, norm *relaycommon.TaskSubmitReq, pr
 	// **选渠道之前**,不知道生成段会落到哪个渠道,而 kling/vidu/jimeng 完全
 	// 忽略 Seconds。EffectiveDuration 的注释里点名禁止了我们这类调用方。
 	//
-	// 在 IR 这条路上后果比 text 那边更重:text 模式只是少说一句事实,而 IR
-	// 会**断言**这个时长 —— validateTimeline 硬要求镜头时长加起来等于它,
-	// applyAuthoritativeFacts 又把它盖回去,于是渲染出一条对得上"我们以为的
-	// 时长"的分镜表,而上游按自己的默认出片,每一个切点都落在成片之外,
-	// 没有任何地方报错。
+	// 在编译这条路上后果比 text 那边更重:text 模式只是少说一句事实,而
+	// singlecall 会**断言**这个时长 —— 它进 evidence 的
+	// task.duration_seconds,传输检查硬要求镜头时间加起来等于它。于是编出
+	// 一条对得上"我们以为的时长"的分镜表,而上游按自己的默认出片,每一个
+	// 切点都落在成片之外,没有任何地方报错。
 	//
-	// 不知道时长就不编 IR:它是必填事实,靠猜不如不做。
+	// 不知道时长就不编:它是必填事实,靠猜不如不做。
 	duration := float64(norm.Duration)
 	if duration <= 0 {
 		return nil
@@ -565,14 +565,14 @@ func buildCompilerInput(body map[string]any, norm *relaycommon.TaskSubmitReq, pr
 
 // compilerTaskType 把平台 task_type 归一成编译器认识的那五个之一。
 //
-// **不认识就返回 false,让调用方直接跳过 IR。**
+// **不认识就返回 false,让调用方跳过编译、直接走 text。**
 //
-// ValidateIR 只收 t2v/i2v/flf2v/l2va/r2va(TASK_TYPE_INVALID)。而平台上
-// 真实存在别的值 —— 参考族就有 r2v / rv2v(见 collectInputImages 和
-// gpustackplus 的适配器)。原样透传进去的后果不是"报个错就完了":
-// applyAuthoritativeFacts 会把这个值盖回 IR,于是**校验必然失败,而且
-// 重修修不好** —— 出问题的那个字段是我们写的,不是模型写的。客户要为此
-// 白等一次完整编译加一轮重修(最多 irCompileTimeout),然后才静默回落 text。
+// 下面那个 switch 只认五个值。而平台上真实存在别的 —— 参考族就有
+// r2v / rv2v(见 collectInputImages 与 gpustackplus 的适配器),还有 s2v /
+// sr / v2v 等一整族别的能力。原样透传进去的后果不是"报个错就完了":
+// 这个值会写进 evidence 的 task.type,而传输检查拦下来的**是我们写的
+// 字段、不是模型写的**,重修让模型改它也改不掉。客户要为此白等一次完整
+// 编译加一轮重修(最多 service.singleCallTimeout),然后才静默回落 text。
 //
 // r2v / rv2v 语义上就是参考族,归到 r2va;其余不认识的一律跳过。
 func compilerTaskType(raw string) (hilo.TaskType, bool) {
@@ -602,10 +602,9 @@ func compilerTaskType(raw string) (hilo.TaskType, bool) {
 // 而出厂配置里带 prompt_enhance 的恰恰就是那几个 H3 聚合模型,走的就是这条路。
 //
 // 只读顶层的后果:客户明确传了 generate_audio:false,这里却读成 true,
-// applyAuthoritativeFacts 把它盖进 IR,编译器提示词写着 task.generate_audio:
-// true,validateAudio 于是**要求**一份非空的声音计划,渲染出
-// "Audio generation: true." 加整段 overall_soundscape —— 而生成段实际提交的
-// 是 metadata.generate_audio=false,出来一段无声视频。
+// 它进 evidence 的 task.generate_audio,编译器据此写出整段
+// overall_soundscape 与同步的音效描述 —— 而生成段实际提交的是
+// metadata.generate_audio=false,出来一段无声视频。
 //
 // 提示词描述的声音根本不存在,而且没有任何地方报错。这正是本函数原注释警告
 // 的那种两边不一致,只是方向反了。

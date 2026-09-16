@@ -80,8 +80,12 @@ type EnhanceInput struct {
 	Thinking bool
 	// TaskContext 请求事实的文本描述,拼进 text 模式的系统提示词。
 	TaskContext string
-	// Compiler IR 模式所需的结构化请求事实。nil = 编译不了 IR,
-	// 配了 mode=ir 也只能走 text。
+	// Compiler singlecall 编译器所需的结构化请求事实。
+	//
+	// **nil = 编译不了**，配了 mode=singlecall 也只能走 text —— 它是那条
+	// 静默降级的唯一触发条件（见 EnhancePrompt 里的分派）。为什么会 nil，
+	// 见 middleware 的 buildCompilerInput：缺时长、玩法判不出来、
+	// metadata 读不出来，三种。
 	Compiler *hilo.CompilerInput
 }
 
@@ -99,8 +103,8 @@ type EnhanceResult struct {
 	DegradeReason string
 	Usage         *dto.Usage
 
-	// Mode 实际走的模式("text" / "ir" / "singlecall")。配的是后两者
-	// 而这里是 text,说明那条路失败了、回落了 —— 见 IRFallbackReason。
+	// Mode 实际走的模式("text" / "singlecall")。配的是 singlecall 而这里
+	// 是 text,说明编译失败、回落了 —— 见 FallbackReason。
 	Mode string
 	// ContentPlan singlecall 产出的生产记录(content_plan)原文。
 	// **不回传客户**,只用于排障对照:客户说"生成的跟我写的不一样"时,
@@ -111,17 +115,13 @@ type EnhanceResult struct {
 	Uncertainties []string
 	// CompilerRevision 用的哪一版编译器提示词(singlecall 才有)。
 	CompilerRevision string
-	// IR 编译成功时的那份 IR。留着供日志与排查:提示词不对时,能指出
-	// 是模型的创作判断有问题,还是渲染这一步错了。
-	IR *hilo.ContextIR
-	// IRRepaired 第一轮校验没过、靠重修才成功。
-	IRRepaired bool
-	// IRFallbackReason ir / singlecall 失败并回落到 text 的原因。
-	// 空 = 没回落过。
+	// Repaired 第一轮传输检查没过、靠重修才成功。
+	Repaired bool
+	// FallbackReason singlecall 失败并回落到 text 的原因。空 = 没回落过。
 	//
 	// **这是整件事里唯一的反馈来源。** IR 层此前零调用方,没有任何真实
 	// 失败样本,所以校验规则和编译器模板都只能靠想 —— 也就一直不收敛。
-	IRFallbackReason string
+	FallbackReason string
 }
 
 // u15EditClosingMarker 官方 U1.5 编辑模板的收尾句,与前端
@@ -201,16 +201,16 @@ func EnhancePrompt(ctx context.Context, agg *common.AggregateModel, authHeader s
 	// 与 IR 那条同一个理由 —— 直接掉到原始提示词会让开着比不开还差。
 	if cfg.EnhanceMode() == common.EnhanceModeSingleCall {
 		if in.Compiler == nil {
-			res.IRFallbackReason = "缺少请求事实(CompilerInput),无法编译"
+			res.FallbackReason = "缺少请求事实(CompilerInput),无法编译"
 		} else if out, err := compileSingleCallWithTimeout(
 			ctx, authHeader, res.Model, in, singleCallBudget(cfg)); err != nil {
-			res.IRFallbackReason = err.Error()
+			res.FallbackReason = err.Error()
 		} else {
 			res.EnhancedPrompt = out.Prompt
 			res.ContentPlan = out.Plan
 			res.Uncertainties = out.Uncertainties
 			res.CompilerRevision = out.Revision
-			res.IRRepaired = out.Repaired
+			res.Repaired = out.Repaired
 			res.Usage = out.Usage
 			res.Mode = common.EnhanceModeSingleCall
 			res.ElapsedMs = time.Since(started).Milliseconds()
@@ -221,31 +221,7 @@ func EnhancePrompt(ctx context.Context, agg *common.AggregateModel, authHeader s
 		}
 		common.SysLog(fmt.Sprintf(
 			"aggregate enhance: singlecall 编译失败,回落 text 改写 (model=%s): %s",
-			res.Model, res.IRFallbackReason))
-	}
-
-	// ── IR 模式 ──────────────────────────────────────────────
-	//
-	// 成功就直接返回;失败**不降级,而是回落到 text 改写**(见
-	// aggregate_enhance_ir.go 顶部的三级降级说明)。直接掉到原始提示词
-	// 会让开 IR 比不开还差,于是没人敢开,于是永远收不到真实失败样本。
-	if cfg.EnhanceMode() == common.EnhanceModeIR {
-		if in.Compiler == nil {
-			res.IRFallbackReason = "缺少请求事实(CompilerInput),无法编译 IR"
-		} else if out, err := compileIRWithTimeout(ctx, authHeader, res.Model, in, irBudget(cfg)); err != nil {
-			res.IRFallbackReason = err.Error()
-		} else {
-			res.EnhancedPrompt = out.Prompt
-			res.IR = out.IR
-			res.IRRepaired = out.Repaired
-			res.Usage = out.Usage
-			res.Mode = common.EnhanceModeIR
-			res.ElapsedMs = time.Since(started).Milliseconds()
-			return res
-		}
-		common.SysLog(fmt.Sprintf(
-			"aggregate enhance: IR 编译失败,回落 text 改写 (model=%s): %s",
-			res.Model, res.IRFallbackReason))
+			res.Model, res.FallbackReason))
 	}
 
 	// 模板的继承链：配置里写了就用配置的，没写就回落到**按生成段模型挑的
@@ -363,7 +339,8 @@ func applyThinking(body map[string]any, thinking bool) {
 
 // buildUserContent 用户这一轮的 content:纯文本,或带素材的多模态数组。
 //
-// 单独抽出来是因为 IR 模式要自己拼多轮消息(见 aggregate_enhance_ir.go),
+// 单独抽出来是因为 singlecall 要自己拼多轮消息(重修轮,见
+// aggregate_enhance_singlecall.go),
 // 素材该怎么编进 content 这件事只能有一份 —— 两处各写一遍,漂移的症状是
 // 「某条路径上视频又没发出去」,而那恰恰是不报错的那类错。
 func buildUserContent(prompt string, imageURLs, videoURLs []string, sendImages bool) any {

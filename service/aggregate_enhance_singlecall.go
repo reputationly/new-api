@@ -5,15 +5,18 @@
 // 两段提示词原文在 service/h3v20/，用 go:embed 引入，**不在 Go 里改措辞** ——
 // 改了就没法和上游 diff。
 //
-// # 和另外两条路的关系
+// # 和 text 那条路的关系
 //
+//	singlecall  本文件，**出厂默认**。一次调用直接拿到 h3_prompt，
+//	            程序只做轻量传输检查。
 //	text        官方客户端 vendor 卡那套：中文「全局基准 → 【镜头N】」五字段。
-//	            这是 MiniMax Design 应用自己发给 H3 的格式。
-//	ir          模型吐 canonical IR → 确定性校验 → 确定性渲染 → 独立审计。
-//	            **上游已废弃**（见 service/h3v20/README.md）。
-//	singlecall  本文件。一次调用直接拿到 h3_prompt，程序只做轻量传输检查。
+//	            这是 MiniMax Design 应用自己发给 H3 的格式。编译失败时回落到它。
 //
-// 三者的输出格式不同，而且两份官方材料本身就不一致：H3 模型仓的
+// （曾经还有个 ir：模型吐 canonical IR → 确定性校验 → 确定性渲染 → 独立审计。
+// 上游废弃了那套架构，我们也从未在生产启用过，已整体删除 ——
+// 见 service/h3v20/README.md。）
+//
+// 两者的输出格式不同，而且两份官方材料本身就不一致：H3 模型仓的
 // `h3-prompt-writing` skill 要英文三节（`integrated_multimodal_description` /
 // `overall_soundscape` / `non_diegetic_music`），官方客户端的 vendor 卡要中文
 // 五字段。singlecall 走前者。
@@ -32,8 +35,8 @@
 //
 // # 降级
 //
-// 失败**不掉回原始提示词，而是回落 text 改写**。理由与 IR 那条完全相同
-// （见 aggregate_enhance_ir.go 顶部）：直接掉到原始提示词会让开着比不开还差，
+// 失败**不掉回原始提示词，而是回落 text 改写**。理由与已删除的 ir 那条
+// 完全相同：直接掉到原始提示词会让开着比不开还差，
 // 于是没人敢开，于是永远收不到真实失败样本。
 package service
 
@@ -292,9 +295,11 @@ func buildSingleCallEvidence(in hilo.CompilerInput) singleCallEvidence {
 		},
 		Assets: make([]singleCallEvidenceAsset, 0, len(in.Assets)),
 	}
-	// 编号规则与 relay/hilo/render.go 完全一致：按 media_type 分别计数、
-	// 按提交顺序递增。两处必须一样，否则 ir 与 singlecall 两条路产出的
-	// 提示词指向不同素材。
+	// 编号规则：按 media_type 分别计数、按提交顺序递增。
+	//
+	// **必须和素材实际发出去的顺序一致**（ImageURLs / VideoURLs，由
+	// middleware 的 compilerImages/compilerVideos 给出）——标号按证据发，
+	// 而模型看到的是那两个列表，错开一位就是「看着第二张图读 <Picture 1>」。
 	names := map[string]string{"image": "Picture", "video": "Video", "audio": "Audio"}
 	counters := map[string]int{}
 	for _, a := range in.Assets {
@@ -436,12 +441,12 @@ func parsePlan(raw json.RawMessage) *singleCallPlan {
 
 // extractSingleCall 从模型回复里取出 JSON 对象。
 //
-// 复用 IR 那条路的候选提取（irCandidates）：它处理围栏、前后缀，以及
+// 走 jsonCandidates：它处理围栏、前后缀，以及
 // 模型偶发在开头多吐一个游离花括号的情况 —— 那不是"多包一层"，整串净
 // 深度是 1，掐头去尾会把真正的收尾括号削掉。
 func extractSingleCall(raw string) (*singleCallOutput, error) {
 	var lastErr error
-	for _, cand := range irCandidates(raw) {
+	for _, cand := range jsonCandidates(raw) {
 		out := &singleCallOutput{}
 		if err := common.Unmarshal([]byte(cand), out); err != nil {
 			lastErr = err
@@ -589,9 +594,9 @@ func sectionWarnings(prompt, taskType string) []string {
 
 // singleCallBudget 本次编译的时间预算：配置优先，没配用内置默认。
 //
-// 与 irBudget 分开：两种模式的实际耗时不是一个量级（canonical IR 要吐
-// 整棵树，singlecall 只吐一份紧凑记录加一段提示词），共用一个数会让其中
-// 一个要么被吊死、要么白等。
+// 与 text 那条的 enhanceTimeout 分开：两者的耗时不是一个量级（singlecall
+// 要吐一份 content_plan 加一整段提示词，还带着约 70 KB 的系统提示词），
+// 共用一个数会让其中一个要么被吊死、要么白等。
 func singleCallBudget(cfg *common.AggregatePromptEnhance) time.Duration {
 	if cfg != nil && cfg.TimeoutSeconds > 0 {
 		return time.Duration(cfg.TimeoutSeconds) * time.Second
@@ -663,4 +668,120 @@ func dialogueIssues(userRequest, prompt string) []string {
 	}
 	return []string{"Verbatim dialogue must be preserved in its original language " +
 		"inside <d>[Language] ...</d>; missing: " + strings.Join(missing, " / ")}
+}
+
+// ── 从已删除的 IR 实现里搬过来的工具 ──────────────────────────────
+//
+// 这几个函数原先住在已删除的 service/aggregate_enhance_ir.go。IR 那套架构
+// (上游 v20 已废弃它,见 service/h3v20/README.md),但它们记录的是**模型
+// 行为的实测事实**,与哪套架构无关 —— 尤其 jsonCandidates 里那个游离花括号,
+// 是真实采样打回来的。
+
+// accumulateUsage 把多轮调用的 usage 累加起来。
+//
+// **必须累加,不能取最后一轮**:重修轮跑掉的 token 客户已经被计过费了
+// (每一轮都是一次真实的 relay 调用),只报最后一轮会让聚合日志里的用量
+// 小于实际扣费,对账时对不上。
+func accumulateUsage(dst *dto.Usage, src *dto.Usage) {
+	if dst == nil || src == nil {
+		return
+	}
+	dst.PromptTokens += src.PromptTokens
+	dst.CompletionTokens += src.CompletionTokens
+	dst.TotalTokens += src.TotalTokens
+}
+
+// jsonCandidates 按可能性从高到低给出待解析的候选片段。
+//
+// # 第二个候选是实测打回来的
+//
+// qwen3.8-27b 会**偶发**地在开头多吐一个游离的花括号:
+//
+//	{{"schema_version":"0.1.0", … "]}}
+//
+// 五次采样中了两次。看起来像"多包了一层",其实不是 —— 整串花括号的净深度
+// 是 **1**,只有开头那一个是多余的,结尾并没有对应地多出来一个。所以
+// 「掐头去尾各削一个字符」修不好它,反而会把真正的收尾括号削掉。
+//
+// 更麻烦的是 extractJSONObject 按配平找结尾,这种输入它永远配不平、直接
+// 返回空 —— 于是连解析都到不了,报出来的是"找不到 JSON 对象",指不到真正
+// 的原因。必须在这一层就把这个候选喂进去。
+//
+// 偶发比稳定出错更难查:同一份配置大多数时候好用,偶尔悄悄回落 text 改写,
+// 而回落是不报错的。
+func jsonCandidates(raw string) []string {
+	var out []string
+	add := func(s string) {
+		if s != "" {
+			out = append(out, s)
+		}
+	}
+	add(extractJSONObject(raw))
+
+	// 掐掉一个游离的前导花括号再试一次。
+	t := strings.TrimSpace(stripCodeFence(raw))
+	if strings.HasPrefix(t, "{{") {
+		add(extractJSONObject(t[1:]))
+	}
+	return out
+}
+
+// stripCodeFence 去掉代码围栏,取中间那段。
+func stripCodeFence(raw string) string {
+	t := strings.TrimSpace(raw)
+	if !strings.HasPrefix(t, "```") {
+		return t
+	}
+	if i := strings.IndexByte(t, '\n'); i >= 0 {
+		t = t[i+1:]
+	}
+	if i := strings.LastIndex(t, "```"); i >= 0 {
+		t = t[:i]
+	}
+	return strings.TrimSpace(t)
+}
+
+// extractJSONObject 取出第一个完整的顶层 JSON 对象。
+//
+// 按花括号配平找结尾,而不是取最后一个 `}`:模型在 JSON 之后还说了话时
+// (「…以上就是 IR。如需调整请告知。」)最后一个 `}` 可能落在正文里,截出来
+// 的片段解析失败,一次本来成功的编译就白跑了。
+//
+// 字符串内的花括号不算数 —— 提示词正文里出现 `}` 完全正常,不跳过引号会
+// 在第一个带花括号的描述那里提前收尾。
+func extractJSONObject(raw string) string {
+	s := strings.TrimSpace(raw)
+	start := strings.IndexByte(s, '{')
+	if start < 0 {
+		return ""
+	}
+	depth := 0
+	inStr := false
+	escaped := false
+	for i := start; i < len(s); i++ {
+		c := s[i]
+		if inStr {
+			switch {
+			case escaped:
+				escaped = false
+			case c == '\\':
+				escaped = true
+			case c == '"':
+				inStr = false
+			}
+			continue
+		}
+		switch c {
+		case '"':
+			inStr = true
+		case '{':
+			depth++
+		case '}':
+			depth--
+			if depth == 0 {
+				return s[start : i+1]
+			}
+		}
+	}
+	return "" // 花括号没配平:截断的输出,解析也不会成功
 }

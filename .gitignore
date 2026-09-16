@@ -55,3 +55,7 @@ web/canvas/tsconfig.tsbuildinfo
 # 移动端 H5 构建产物
 web/mobile/dist
 web/mobile/node_modules
+
+# Codex 检视的运行日志（工具产物，不是仓库内容）。
+# 它落在仓库根目录，一次 `git add -A` 就会被带进历史。
+.codex-review-*.txt

@@ -847,9 +847,9 @@ func TestBuildCompilerInputWithoutDurationIsNil(t *testing.T) {
 
 // 参考族的别名要归一到 r2va。
 //
-// 原样透传的后果不是"报个错就完了":那个值会被 applyAuthoritativeFacts
-// 盖回 IR,于是校验必然失败、而且**重修修不好**(错的字段是我们写的)。
-// 客户白等一次完整编译加一轮重修才静默回落 text。
+// 原样透传的后果不是"报个错就完了":那个值会进 evidence 的 task.type,
+// 传输检查拦下来的**是我们写的字段、不是模型写的**,重修让模型改它也
+// 改不掉。客户白等一次完整编译加一轮重修才静默回落 text。
 func TestBuildCompilerInputNormalizesReferenceAliases(t *testing.T) {
 	for _, alias := range []string{"r2va", "r2v", "rv2v"} {
 		body := map[string]any{

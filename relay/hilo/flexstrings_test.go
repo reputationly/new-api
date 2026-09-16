@@ -101,24 +101,26 @@ func TestFlexStringsMarshalsAsArray(t *testing.T) {
 	}
 }
 
-// **实测形状的回归守卫。**
+// **实测形状：模型把 sync_rules 写成了对象数组。**
 //
-// 这是 qwen3.8-flash-fp8 真实交来的 audio_plan,它让一次其余字段全对的
-// 编译整个失败,报的是 "cannot unmarshal object into Go struct field
-// IRAudioPlan.audio_plan.sync_rules of type string" —— 重修那侧完全看不懂。
-func TestContextIRAcceptsObservedSyncRulesShape(t *testing.T) {
+// 这是 qwen3.8-flash-fp8 真实交来的，当时让一次其余字段全对的编译整个失败，
+// 报的是 "cannot unmarshal object into Go struct field ... of type string"
+// —— 重修那侧完全看不懂。
+//
+// 这条规则现在服务 singlecall 的 uncertainties（同样是"模型可能写成对象"的
+// 自由字段）。容忍形态、不容忍语义：对象里取有意义的文本，不是整个吞掉。
+func TestFlexStringsAcceptsObjectArray(t *testing.T) {
 	raw := `{
-	  "audio_plan": {
-	    "ambient_sound": "soft ocean waves",
-	    "sync_rules": [
-	      {"type":"lip_sync","subject_id":"subject_1","shot_id":"02",
-	       "instruction":"Sync mouth movements with the Chinese dialogue."}
-	    ]
-	  }
+	  "sync_rules": [
+	    {"type":"lip_sync","subject_id":"subject_1","shot_id":"02",
+	     "instruction":"Sync mouth movements with the Chinese dialogue."}
+	  ]
 	}`
-	var ir ContextIR
-	if err := json.Unmarshal([]byte(raw), &ir); err != nil {
+	var v struct {
+		SyncRules FlexStrings `json:"sync_rules"`
+	}
+	if err := json.Unmarshal([]byte(raw), &v); err != nil {
 		t.Fatalf("实测形状解析失败：%v", err)
 	}
-	eq(t, ir.AudioPlan.SyncRules, "Sync mouth movements with the Chinese dialogue.")
+	eq(t, v.SyncRules, "Sync mouth movements with the Chinese dialogue.")
 }
