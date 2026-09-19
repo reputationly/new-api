@@ -725,6 +725,7 @@ func RelayTask(c *gin.Context) {
 			// 与消费日志的 count_billing 同源，见 service.IsTaskPerCallBilling
 			PerCallBilling: service.IsTaskPerCallBilling(relayInfo),
 			VideoBilling:   freezeVideoBilling(relayInfo),
+			TimeRule:       relayInfo.PriceData.GroupRatioInfo.TimeRuleLog(),
 		}
 		// 聚合模型:把流水线状态与增强记录随任务持久化。任务本身记的是展开后的生成段
 		// 模型(计费/日志按它走),对外那个聚合模型名只存在这里 —— 响应回显与排障都靠它。

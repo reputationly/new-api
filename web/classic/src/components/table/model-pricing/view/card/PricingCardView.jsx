@@ -41,7 +41,11 @@ import {
   formatVideoMatrixSummary,
   getLobeHubIcon,
   getGroupDiscountInfo,
+  getTimeDiscountInfo,
+  formatWindowLine,
+  formatTimeUntil,
 } from '../../../../../helpers';
+import { DISCOUNT_HEX } from '../../../../../helpers/discount';
 import PricingCardSkeleton from './PricingCardSkeleton';
 import { useMinimumLoadingTime } from '../../../../../hooks/common/useMinimumLoadingTime';
 import { renderLimitedItems } from '../../../../common/ui/RenderUtils';
@@ -66,6 +70,7 @@ const PricingCardView = ({
   selectedGroup,
   groupRatio,
   groupModelRatio,
+  groupTimeRatio,
   copyText,
   currency,
   siteDisplayType,
@@ -282,6 +287,21 @@ const PricingCardView = ({
             pointsEnabledModels: pointsConfig?.enabledModels,
           });
 
+          // 时段折扣按 calculateModelPrice 实际选中的那个分组查表。
+          // 不能用 selectedGroup：选「全部分组」时它是 'all'，而价格算的是最优分组
+          // 那一档——查错分组会让标签和价格来自两个不同的分组。
+          const timeInfo = getTimeDiscountInfo(
+            groupTimeRatio?.[priceData?.usedGroup]?.[model.model_name],
+          );
+          const timeTooltip = timeInfo
+            ? timeInfo.active
+              ? t('{{label}}，{{until}} 结束', {
+                  label: timeInfo.text,
+                  until: formatTimeUntil(timeInfo.until),
+                })
+              : timeInfo.windows.map((w) => formatWindowLine(w)).join('；')
+            : '';
+
           return (
             <Card
               key={modelKey || index}
@@ -333,6 +353,26 @@ const PricingCardView = ({
                         </Tooltip>
                       );
                     })()}
+
+                    {/*
+                      时段折扣角标。与上面的分组折扣标签并列而不是二选一：两者是
+                      正交的两层（分组打几折 × 此刻时段打几折），只显示其一会让
+                      用户按单层折扣去反算价格，怎么算都对不上。
+                    */}
+                    {timeInfo && (
+                      <Tooltip content={timeTooltip}>
+                        <Tag
+                          shape='circle'
+                          size='small'
+                          style={{
+                            backgroundColor: DISCOUNT_HEX.cyan.bg,
+                            color: DISCOUNT_HEX.cyan.fg,
+                          }}
+                        >
+                          {timeInfo.text}
+                        </Tag>
+                      </Tooltip>
+                    )}
 
                     {/* 复制按钮 */}
                     <Button

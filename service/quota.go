@@ -3,13 +3,11 @@ package service
 import (
 	"errors"
 	"fmt"
-	"log"
 	"math"
 	"strings"
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
-	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/logger"
 	"github.com/QuantumNous/new-api/model"
@@ -109,16 +107,18 @@ func PreWssConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, usag
 	audioOutTokens := usage.OutputTokenDetails.AudioTokens
 	modelRatio, _, _ := ratio_setting.GetModelRatio(modelName)
 
-	// 先落定 UsingGroup 再解析：auto 是伪分组名，用它查模型级折扣永远查不到。
-	autoGroup, exists := common.GetContextKey(ctx, constant.ContextKeyAutoGroup)
-	if exists {
-		relayInfo.UsingGroup = autoGroup.(string)
-	}
-
-	actualGroupRatio := ratio_setting.ResolveGroupRatio(relayInfo.UserGroup, relayInfo.UsingGroup, modelName).Final
-	if exists {
-		log.Printf("final group ratio: %f", actualGroupRatio)
-	}
+	// 用预扣费时冻结的倍率，不重新解析。
+	//
+	// 这个函数在 realtime 长连接里每收到一段 usage 就跑一次，而同一会话最终的
+	// PostWssConsumeQuota 用的是 PriceData.GroupRatioInfo（预扣费冻结值）。原先这里
+	// 重新解析，两个来源本就可能分叉——只是过去只有「管理员正好在会话中途改配置」
+	// 才触发，几乎不发生。加入时段折扣后它变成每天必然发生两次（跨空闲时段的起止钟点），
+	// 所以必须对齐到同一个来源。
+	//
+	// auto_group 的落定逻辑一并删除：冻结值是 HandleGroupRatio 算的，那里已经把伪分组
+	// 替换成真实分组了（relay/helper/price.go）。调用时序已核实——controller/relay.go
+	// 的 ModelPriceHelper 在进入 WssHelper 之前执行，此时 PriceData 已填好。
+	actualGroupRatio := relayInfo.PriceData.GroupRatioInfo.GroupRatio
 
 	quotaInfo := QuotaInfo{
 		InputDetails: TokenDetails{

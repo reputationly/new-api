@@ -19,13 +19,19 @@ For commercial licensing, please contact support@quantumnous.com
 
 import React from 'react';
 import { Avatar, Typography, Table, Tag } from '@douyinfe/semi-ui';
-import { IconCoinMoneyStroked } from '@douyinfe/semi-icons';
+import { IconCoinMoneyStroked, IconClock } from '@douyinfe/semi-icons';
 import {
   calculateModelPrice,
   getEffectiveGroupRatio,
   getModelPriceItems,
   formatVideoMatrixSummary,
+  getGroupDiscountInfo,
+  getTimeDiscountInfo,
+  formatWindowDays,
+  formatWindowRange,
+  formatTimeUntil,
 } from '../../../../../helpers';
+import { DISCOUNT_HEX } from '../../../../../helpers/discount';
 
 const { Text } = Typography;
 
@@ -33,6 +39,7 @@ const ModelPricingTable = ({
   modelData,
   groupRatio,
   groupModelRatio,
+  groupTimeRatio,
   currency,
   siteDisplayType,
   displayPrice,
@@ -207,6 +214,111 @@ const ModelPricingTable = ({
     );
   };
 
+  // 分时定价表。只在该模型确有时段折扣时渲染——没配的模型多一张空表只是噪音。
+  //
+  // 逐分组列出是必要的：时段规则按使用分组配，同一个模型在 default 有夜间折扣、
+  // 在 premium 没有，是完全正常的配置。只列当前最优分组会让另一个分组的用户
+  // 看到一个对自己不成立的优惠。
+  const renderTimeWindowTable = () => {
+    const availableGroups = Object.keys(usableGroup || {})
+      .filter((g) => g !== '' && g !== 'auto')
+      .filter((g) => modelEnableGroups.includes(g));
+
+    const rows = [];
+    availableGroups.forEach((group) => {
+      const info = getTimeDiscountInfo(
+        groupTimeRatio?.[group]?.[modelData?.model_name],
+      );
+      if (!info) return;
+      info.windows.forEach((w, idx) => {
+        rows.push({
+          key: `${group}-${idx}`,
+          group,
+          range: `${formatWindowDays(w.days)} ${formatWindowRange(w)}`,
+          // 展示该时段的**最终倍率**对应的折扣，而不是配置系数：用户要知道的是
+          // 「这个时段几折」，配置系数是管理端的事
+          discount: getGroupDiscountInfo(w.ratio),
+          ratio: w.ratio,
+          // 生效档由后端标（TimeWindowView.Active），不按 label 反推：
+          // label 互为子串时（「深夜」与「深夜加强」）字符串匹配会把两档都标成生效。
+          // 仍与 info.active 取交集，是为了对齐 getTimeDiscountInfo 那条防御分支
+          // （后端说 active 但系数 ≥1 时按未命中处理），两边口径不能分叉。
+          active: info.active && Boolean(w.active),
+          until: info.until,
+        });
+      });
+    });
+
+    if (rows.length === 0) return null;
+
+    return (
+      <div className='mt-6'>
+        <div className='flex items-center mb-4'>
+          <Avatar size='small' color='cyan' className='mr-2 shadow-md'>
+            <IconClock size={16} />
+          </Avatar>
+          <div>
+            <Text className='text-lg font-medium'>{t('分时定价')}</Text>
+            <div className='text-xs text-gray-600'>
+              {t('命中时段时按该时段的折扣计价，取代上表的分组折扣')}
+            </div>
+          </div>
+        </div>
+        <Table
+          dataSource={rows}
+          pagination={false}
+          size='small'
+          bordered={false}
+          className='!rounded-lg'
+          columns={[
+            {
+              title: t('令牌分组'),
+              dataIndex: 'group',
+              render: (text) => (
+                <Tag color='white' size='small' shape='circle'>
+                  {text}
+                  {t('分组')}
+                </Tag>
+              ),
+            },
+            {
+              title: t('生效时段'),
+              dataIndex: 'range',
+              render: (text, record) => (
+                <span className='flex items-center gap-1 flex-wrap'>
+                  {text}
+                  {record.active && (
+                    <Tag
+                      size='small'
+                      shape='circle'
+                      style={{
+                        backgroundColor: DISCOUNT_HEX.cyan.bg,
+                        color: DISCOUNT_HEX.cyan.fg,
+                      }}
+                    >
+                      {t('进行中 · 至 {{until}}', {
+                        until: formatTimeUntil(record.until),
+                      })}
+                    </Tag>
+                  )}
+                </span>
+              ),
+            },
+            {
+              title: t('该时段折扣'),
+              dataIndex: 'discount',
+              render: (d, record) => (
+                <Tag color='cyan' size='small' shape='circle'>
+                  {d ? d.text : `${Number(record.ratio.toFixed(4))}x`}
+                </Tag>
+              ),
+            },
+          ]}
+        />
+      </div>
+    );
+  };
+
   return (
     <div>
       <div className='flex items-center mb-4'>
@@ -236,6 +348,7 @@ const ModelPricingTable = ({
         </div>
       )}
       {renderGroupPriceTable()}
+      {renderTimeWindowTable()}
     </div>
   );
 };

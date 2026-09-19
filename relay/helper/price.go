@@ -62,6 +62,9 @@ func HandleGroupRatio(ctx *gin.Context, relayInfo *relaycommon.RelayInfo) types.
 		ModelRuleValue:    res.RuleValue,
 		UserRuleMatch:     res.UserRuleMatch,
 		UserRuleValue:     res.UserRuleValue,
+		TimeWindow:        res.TimeWindow,
+		TimeLabel:         res.TimeLabel,
+		TimeValue:         res.TimeValue,
 	}
 	if res.HasSpecialRatio {
 		groupRatioInfo.HasSpecialRatio = true

@@ -420,7 +420,33 @@ function renderCompactDetailSummary(summarySegments) {
   );
 }
 
+// 时段折扣段。在所有分支的汇合处统一追加，而不是往 renderModelPriceSimple /
+// renderTieredModelPriceSimple / renderVideoMatrixPriceSimple 各塞一遍——那三条
+// 算式各有各的参数形状，塞三遍就是三份会分叉的口径。
+//
+// 这一段刻意做成可见的：other 里的 group_model_rule / group_base_ratio 只落库供对账，
+// 而时段折扣必须让用户自己能验证「夜里下单确实便宜了」，看不见的优惠等于没有优惠。
+// group_ratio 本身已含时段系数，所以这段是解释，不是加数。
+function appendTimeRuleSegment(summary, other, t) {
+  if (!summary || !other?.time_rule) return summary;
+  return {
+    ...summary,
+    segments: [
+      ...summary.segments,
+      { text: `${t('时段折扣')} ${other.time_rule}`, tone: 'secondary' },
+    ],
+  };
+}
+
 function getUsageLogDetailSummary(record, text, billingDisplayMode, t) {
+  return appendTimeRuleSegment(
+    buildUsageLogDetailSummary(record, text, billingDisplayMode, t),
+    getLogOther(record.other),
+    t,
+  );
+}
+
+function buildUsageLogDetailSummary(record, text, billingDisplayMode, t) {
   const other = getLogOther(record.other);
 
   if (record.type === 6) {

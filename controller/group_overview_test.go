@@ -42,6 +42,7 @@ func TestPseudoGroupAutoValue(t *testing.T) {
 // TestStaleRulePatterns_NoRules 没配规则时不该报「未生效」——
 // 空数组和 nil 都要返回空，否则页面会给每个分组挂一个莫名其妙的橙色角标。
 func TestStaleRulePatterns_NoRules(t *testing.T) {
-	require.Empty(t, staleRulePatterns("premium", nil))
-	require.Empty(t, staleRulePatterns("premium", map[string]ratio_setting.ModelRatioRule{}))
+	require.Empty(t, staleRulePatterns("premium", nil, nil))
+	require.Empty(t, staleRulePatterns("premium", map[string]ratio_setting.ModelRatioRule{}, nil))
+	require.Empty(t, staleRulePatterns("premium", nil, []string{}))
 }

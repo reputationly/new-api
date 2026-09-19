@@ -128,6 +128,7 @@ func LogTaskConsumption(c *gin.Context, info *relaycommon.RelayInfo) {
 	if info.PriceData.GroupRatioInfo.HasSpecialRatio {
 		other["user_group_ratio"] = info.PriceData.GroupRatioInfo.GroupSpecialRatio
 	}
+	appendTimeRule(other, info.PriceData.GroupRatioInfo)
 	if info.IsModelMapped {
 		other["is_model_mapped"] = true
 		other["upstream_model_name"] = info.UpstreamModelName
@@ -254,6 +255,11 @@ func taskBillingOther(task *model.Task) map[string]interface{} {
 			other["model_ratio"] = bc.ModelRatio
 		}
 		other["group_ratio"] = bc.GroupRatio
+		// 时段折扣用提交时冻结的串，不重新解析：group_ratio 冻的是提交时刻的终值，
+		// 标签要与它同源，否则 07:59 提交、08:01 出片的任务会标成没打折而钱按打折扣。
+		if bc.TimeRule != "" {
+			other["time_rule"] = bc.TimeRule
+		}
 		if len(bc.OtherRatios) > 0 {
 			for k, v := range bc.OtherRatios {
 				other[k] = v

@@ -352,6 +352,13 @@ type TaskBillingContext struct {
 	OriginModelName string             `json:"origin_model_name,omitempty"` // 模型名称，必须为OriginModelName
 	PerCallBilling  bool               `json:"per_call_billing,omitempty"`  // 按次计费：跳过轮询阶段的差额结算
 
+	// TimeRule 是提交时命中的时段折扣，紧凑表示如「深夜档:×0.7」。
+	//
+	// 必须冻结：GroupRatio 本身已经冻结了含时段系数的终值，但结算发生在几百秒后的
+	// 异步轮询里，那时重新解析会得到**结算时刻**的时段——夜里 07:59 提交、08:01 出片
+	// 的任务，日志会标成没打折，而钱是按打折扣的。只存展示串，不参与任何计算。
+	TimeRule string `json:"time_rule,omitempty"`
+
 	// VideoBilling 命中「视频计费矩阵」时的冻结单价与维度。nil（旧任务、未配置的模型）
 	// 时轮询阶段走原有的 ModelRatio × OtherRatios 路径。
 	VideoBilling *TaskVideoBilling `json:"video_billing,omitempty"`

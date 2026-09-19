@@ -37,6 +37,7 @@ const ModelDetailSideSheet = ({
   modelData,
   groupRatio,
   groupModelRatio,
+  groupTimeRatio,
   currency,
   siteDisplayType,
   displayPrice,
@@ -128,6 +129,7 @@ const ModelDetailSideSheet = ({
                 modelData={modelData}
                 groupRatio={groupRatio}
                 groupModelRatio={groupModelRatio}
+                groupTimeRatio={groupTimeRatio}
                 currency={currency}
                 siteDisplayType={siteDisplayType}
                 displayPrice={displayPrice}

@@ -19,7 +19,14 @@ import {
   VIDEO_PER_SECOND_COLUMN,
 } from '@classic/helpers/videoMatrix';
 import { formatPriceWithCeiling } from '@classic/helpers/priceFormat';
-import { getGroupDiscountInfo, DISCOUNT_HEX } from '@classic/helpers/discount';
+import {
+  getGroupDiscountInfo,
+  getTimeDiscountInfo,
+  formatWindowDays,
+  formatWindowRange,
+  formatTimeUntil,
+  DISCOUNT_HEX,
+} from '@classic/helpers/discount';
 import {
   MODEL_CATEGORIES,
   buildModelCategoryIndex,
@@ -38,6 +45,9 @@ const Models = () => {
   const [models, setModels] = useState([]);
   const [vendors, setVendors] = useState([]);
   const [groupRatioMap, setGroupRatioMap] = useState({});
+  // 分组 -> 模型 -> 时段折扣展示数据。只用来渲染角标和详情里的分时表：
+  // 价格本身已含时段系数（后端折进了 group_model_ratio），这里再乘就是乘两遍。
+  const [groupTimeRatioMap, setGroupTimeRatioMap] = useState({});
   // 分组内按模型的倍率。后端已展开通配并算完三层，这里只查表（同 PC getEffectiveGroupRatio）
   const [groupModelRatioMap, setGroupModelRatioMap] = useState({});
   const [usableGroupMap, setUsableGroupMap] = useState({});
@@ -56,6 +66,7 @@ const Models = () => {
           setModels(res.data.data || []);
           setVendors(res.data.vendors || []);
           setGroupRatioMap(res.data.group_ratio || {});
+          setGroupTimeRatioMap(res.data.group_time_ratio || {});
           setGroupModelRatioMap(res.data.group_model_ratio || {});
           setUsableGroupMap(res.data.usable_group || {});
         } else {
@@ -211,6 +222,38 @@ const Models = () => {
     );
   };
 
+  // 某模型此刻的时段折扣。按 resolveGroupRatio 实际选中的那个分组查表——
+  // 「全部分组」时选的是最优分组，拿 group 去查会得到另一个分组的时段规则。
+  const timeInfoOf = (m) =>
+    getTimeDiscountInfo(
+      groupTimeRatioMap[resolveGroupRatio(m).group]?.[m.model_name],
+    );
+
+  // 时段角标。与上面的折扣标签并列而不是二选一：分组折扣和时段折扣是两层，
+  // 只显示其一会让用户按单层去反算价格，怎么算都对不上。
+  const timeTag = (m) => {
+    const info = timeInfoOf(m);
+    if (!info) return null;
+    const c = DISCOUNT_HEX.cyan;
+    return (
+      <span
+        style={{
+          flexShrink: 0,
+          fontSize: 11,
+          lineHeight: '16px',
+          padding: '0 6px',
+          borderRadius: 8,
+          background: c.bg,
+          color: c.fg,
+        }}
+      >
+        {info.active && info.until
+          ? `${info.text}·至${formatTimeUntil(info.until)}`
+          : info.text}
+      </span>
+    );
+  };
+
   const inputPricePerM = (m) => m.model_ratio * 2 * resolveGroupRatio(m).ratio;
   // 折前价：少乘一个分组倍率。仅在有折扣时给，用于详情里的划线对比。
   const originalInputPricePerM = (m) => m.model_ratio * 2;
@@ -362,6 +405,7 @@ const Models = () => {
                     {m.model_name}
                   </div>
                   {discountTag(resolveGroupRatio(m).ratio)}
+                  {timeTag(m)}
                 </div>
                 {vendorName(m.vendor_id) && (
                   <div
@@ -651,6 +695,49 @@ const Models = () => {
                 ? '（全部分组取最优倍率）'
                 : ''}
             </div>
+            {/*
+              分时定价。上面那行的分组倍率**已含**此刻的时段系数，所以这张表是
+              解释「为什么现在是这个价、别的时段是什么价」，不是又一个要乘上去的数。
+            */}
+            {(() => {
+              const info = timeInfoOf(detail);
+              if (!info) return null;
+              return (
+                <div style={{ marginTop: 12 }}>
+                  <div
+                    style={{ fontSize: 12, color: '#9aa1ad', marginBottom: 6 }}
+                  >
+                    分时定价（空闲时段取代分组折扣）
+                  </div>
+                  {info.windows.map((w, i) => (
+                    <div
+                      key={i}
+                      style={{
+                        display: 'flex',
+                        justifyContent: 'space-between',
+                        fontSize: 13,
+                        lineHeight: '22px',
+                      }}
+                    >
+                      <span style={{ color: '#6b7280' }}>
+                        {formatWindowDays(w.days)} {formatWindowRange(w)}
+                      </span>
+                      <span style={{ color: DISCOUNT_HEX.cyan.fg }}>
+                        {getGroupDiscountInfo(w.ratio)?.text ??
+                          `${Number(w.ratio.toFixed(4))}x`}
+                      </span>
+                    </div>
+                  ))}
+                  {info.active && info.until && (
+                    <div
+                      style={{ fontSize: 12, color: '#9aa1ad', marginTop: 4 }}
+                    >
+                      当前处于空闲时段，至 {formatTimeUntil(info.until)} 结束
+                    </div>
+                  )}
+                </div>
+              );
+            })()}
             {detail.description && (
               <div style={{ fontSize: 13, color: '#6b7280', marginTop: 8 }}>
                 {detail.description}

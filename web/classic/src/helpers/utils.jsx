@@ -45,9 +45,23 @@ import {
 } from './videoMatrix';
 // 折扣展示口径同样是纯计算，拆出去给手机端共用（helpers/utils.jsx 被 mobile 的
 // vite 配置整模块 shim 掉，放这里手机端拿不到）
-import { getGroupDiscountInfo } from './discount';
+import {
+  getGroupDiscountInfo,
+  getTimeDiscountInfo,
+  formatWindowDays,
+  formatWindowRange,
+  formatWindowLine,
+  formatTimeUntil,
+} from './discount';
 
-export { getGroupDiscountInfo };
+export {
+  getGroupDiscountInfo,
+  getTimeDiscountInfo,
+  formatWindowDays,
+  formatWindowRange,
+  formatWindowLine,
+  formatTimeUntil,
+};
 
 const HTMLToastContent = ({ htmlContent }) => {
   return <div dangerouslySetInnerHTML={{ __html: htmlContent }} />;

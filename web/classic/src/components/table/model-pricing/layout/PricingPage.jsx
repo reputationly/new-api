@@ -60,6 +60,7 @@ const PricingPage = () => {
         modelData={pricingData.selectedModel}
         groupRatio={pricingData.groupRatio}
         groupModelRatio={pricingData.groupModelRatio}
+        groupTimeRatio={pricingData.groupTimeRatio}
         usableGroup={pricingData.usableGroup}
         currency={pricingData.currency}
         siteDisplayType={pricingData.siteDisplayType}

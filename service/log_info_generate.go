@@ -54,6 +54,22 @@ func appendGroupModelRule(other map[string]interface{}, info types.GroupRatioInf
 	}
 }
 
+// appendTimeRule 把时段折扣（Layer 4）写进日志。
+//
+// 单独成函数而不是并进 appendGroupModelRule：任务路径（service/task_billing.go）
+// 从来不写 Layer 2/3 的痕迹，把它们顺带补上是另一回事；而时段折扣必须覆盖任务，
+// 视频正是空闲时段折扣的主场景。
+//
+// 与上面那些「只落库供对账」的字段不同，这一条会渲染到使用日志详情：用户要能
+// 自己验证夜里下单确实便宜了，看不见的优惠等于没有优惠。
+// other["group_ratio"] 仍是含时段系数的最终值，反算自洽不受影响。
+func appendTimeRule(other map[string]interface{}, info types.GroupRatioInfo) {
+	if other == nil || info.TimeWindow == "" {
+		return
+	}
+	other["time_rule"] = info.TimeRuleLog()
+}
+
 func GenerateTextOtherInfo(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, modelRatio, groupRatio, completionRatio float64,
 	cacheTokens int, cacheRatio float64, modelPrice float64, userGroupRatio float64) map[string]interface{} {
 	other := make(map[string]interface{})
@@ -65,6 +81,7 @@ func GenerateTextOtherInfo(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, m
 	other["model_price"] = modelPrice
 	other["user_group_ratio"] = userGroupRatio
 	appendGroupModelRule(other, relayInfo.PriceData.GroupRatioInfo)
+	appendTimeRule(other, relayInfo.PriceData.GroupRatioInfo)
 	other["frt"] = float64(relayInfo.FirstResponseTime.UnixMilli() - relayInfo.StartTime.UnixMilli())
 	if relayInfo.ReasoningEffort != "" {
 		other["reasoning_effort"] = relayInfo.ReasoningEffort
@@ -284,6 +301,7 @@ func GenerateMjOtherInfo(relayInfo *relaycommon.RelayInfo, priceData types.Price
 		other["user_group_ratio"] = priceData.GroupRatioInfo.GroupSpecialRatio
 	}
 	appendGroupModelRule(other, priceData.GroupRatioInfo)
+	appendTimeRule(other, priceData.GroupRatioInfo)
 	other["count_billing"] = true
 	appendRequestPath(nil, relayInfo, other)
 	return other

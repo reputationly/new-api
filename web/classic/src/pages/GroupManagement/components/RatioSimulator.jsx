@@ -3,6 +3,7 @@ import {
   Button,
   Card,
   Col,
+  DatePicker,
   Input,
   Row,
   Select,
@@ -31,6 +32,10 @@ export default function RatioSimulator({ groupNames = [] }) {
   const [modelName, setModelName] = useState('');
   const [result, setResult] = useState(null);
   const [loading, setLoading] = useState(false);
+  // 试算时刻。时段折扣（Layer 4）配没配对肉眼看不出来——配在错的分组、模板时区
+  // 写错、通配没匹配上，三种都只会静默不生效。把时刻拨到空闲时段看一眼终值是唯一验证手段。
+  // 空 = 用服务器当前时间。
+  const [at, setAt] = useState(null);
 
   const run = useCallback(async () => {
     if (!usingGroup) {
@@ -43,6 +48,9 @@ export default function RatioSimulator({ groupNames = [] }) {
         user_group: userGroup,
         using_group: usingGroup,
         model_name: modelName,
+        // 本地时刻转成带偏移的 RFC3339 交给后端；后端按各时段模板自己的时区判定，
+        // 前端不做任何时区换算（换算两遍必然错一次）
+        ...(at ? { at: new Date(at).toISOString() } : {}),
       });
       if (res.data?.success) {
         setResult(res.data.data);
@@ -54,7 +62,7 @@ export default function RatioSimulator({ groupNames = [] }) {
     } finally {
       setLoading(false);
     }
-  }, [userGroup, usingGroup, modelName, t]);
+  }, [userGroup, usingGroup, modelName, at, t]);
 
   const groupOptions = groupNames.map((g) => ({ label: g, value: g }));
 
@@ -121,7 +129,7 @@ export default function RatioSimulator({ groupNames = [] }) {
             filter
           />
         </Col>
-        <Col xs={24} sm={7}>
+        <Col xs={24} sm={4}>
           <Text type='tertiary' size='small' className='mb-1 block'>
             {t('模型')}
           </Text>
@@ -130,6 +138,20 @@ export default function RatioSimulator({ groupNames = [] }) {
             placeholder={t('如 GLM-5')}
             value={modelName}
             onChange={setModelName}
+          />
+        </Col>
+        <Col xs={24} sm={3}>
+          <Text type='tertiary' size='small' className='mb-1 block'>
+            {t('时刻')}
+          </Text>
+          <DatePicker
+            data-testid='sim-at'
+            type='dateTime'
+            style={{ width: '100%' }}
+            placeholder={t('现在')}
+            value={at}
+            onChange={setAt}
+            showClear
           />
         </Col>
         <Col xs={24} sm={3}>
@@ -195,12 +217,27 @@ export default function RatioSimulator({ groupNames = [] }) {
               : '',
             result.user_rule_match ? `×${result.user_rule_value}` : '—',
           )}
+          {renderLayer(
+            t('时段折扣'),
+            !!result.time_window,
+            result.time_window
+              ? `${result.time_label || result.time_window} · ${t('折扣 ×')} ${
+                  result.time_value
+                }`
+              : '',
+            result.time_window ? `×${result.time_value}` : '—',
+          )}
           <div className='mt-2 flex items-center justify-between border-t pt-2'>
             <Text strong>{t('最终倍率')}</Text>
             <Text strong style={{ fontSize: 18 }}>
               {Number(result.final.toFixed(6))}x
             </Text>
           </div>
+          {result.resolved_at && (
+            <Text type='tertiary' size='small' className='mt-1 block'>
+              {t('按 {{at}} 试算', { at: result.resolved_at })}
+            </Text>
+          )}
           {result.rule_mode === 'override' && result.has_special_ratio && (
             <Text type='warning' size='small' className='mt-2 block'>
               {t(

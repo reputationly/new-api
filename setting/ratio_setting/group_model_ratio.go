@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/types"
@@ -141,15 +142,20 @@ func pickModelRule(group, modelName string) (string, ModelRatioRule, bool) {
 }
 
 // pickRuleFrom 是 pickModelRule 的规则集无关版本，供 Layer 3（用户档折扣，
-// 见 user_group_model_ratio.go）复用。两层的模式串语义必须逐位一致——各写一份
-// 匹配逻辑，一旦分叉就会出现「Layer 2 命中而 Layer 3 不命中」这种没人能解释的价格。
-func pickRuleFrom(rules map[string]ModelRatioRule, modelName string) (string, ModelRatioRule, bool) {
+// 见 user_group_model_ratio.go）与 Layer 4（时段折扣，见 group_time_ratio.go）复用。
+// 三层的模式串语义必须逐位一致——各写一份匹配逻辑，一旦分叉就会出现
+// 「Layer 2 命中而 Layer 3 不命中」这种没人能解释的价格。
+//
+// 泛型化是为了让 Layer 4 的 []TimeRule 走同一份匹配：规则值的类型与模式串怎么匹配
+// 无关，为它再抄一份 for 循环正是上面那句话要防的事。
+func pickRuleFrom[T any](rules map[string]T, modelName string) (string, T, bool) {
+	var zero T
 	if len(rules) == 0 || modelName == "" {
-		return "", ModelRatioRule{}, false
+		return "", zero, false
 	}
 	bestWeight := -1
 	bestPattern := ""
-	var best ModelRatioRule
+	var best T
 	for pattern, rule := range rules {
 		weight, matched := matchModelPattern(pattern, modelName)
 		if !matched {
@@ -163,7 +169,7 @@ func pickRuleFrom(rules map[string]ModelRatioRule, modelName string) (string, Mo
 		}
 	}
 	if bestWeight < 0 {
-		return "", ModelRatioRule{}, false
+		return "", zero, false
 	}
 	return bestPattern, best, true
 }
@@ -187,6 +193,21 @@ type RatioResolution struct {
 
 	UserRuleMatch string  // Layer 3 命中的模式串，"" = 未命中
 	UserRuleValue float64 // Layer 3 配置值（恒为 multiply）
+
+	TimeWindow string  // Layer 4 命中的时段模板键，"" = 未命中
+	TimeLabel  string  // 时段模板显示名，如「深夜档」
+	TimeValue  float64 // Layer 4 配置值（恒为 multiply）
+}
+
+// UserMultiplier 返回 Layer 3 的乘数，未命中时为 1。
+//
+// 存在的理由：UserRuleValue 未命中时是零值 0，直接拿去乘会把价格算成免费。
+// 展示层要算「某个时段的最终倍率」时必须带上这一层，这里把那个陷阱收口。
+func (r RatioResolution) UserMultiplier() float64 {
+	if r.UserRuleMatch == "" {
+		return 1
+	}
+	return r.UserRuleValue
 }
 
 // ResolveGroupRatio 四层解析计费倍率。
@@ -194,7 +215,8 @@ type RatioResolution struct {
 //	Layer 0  base  = GroupRatio[usingGroup]                   场景倍率
 //	Layer 1  base ← GroupGroupRatio[userGroup][usingGroup]    命中即覆盖
 //	Layer 2  final ← GroupModelRatio[usingGroup][modelName]   override 覆盖 / multiply 叠乘
-//	Layer 3  final × UserGroupModelRatio[userGroup][modelName] 恒为叠乘
+//	Layer 4  final ← base × GroupTimeRatio[usingGroup][modelName] 命中时段则取代 Layer 2
+//	Layer 3  final × UserGroupModelRatio[userGroup][modelName]  恒为叠乘（永远最后）
 //
 // 为什么分层、而不是把各类规则拍平成一个规则集「取最具体的一条」：
 // 设 GroupGroupRatio{vip: {premium: 0.7}}（vip 全线 7 折）与
@@ -208,9 +230,26 @@ type RatioResolution struct {
 // 包括 Layer 2 命中 override 时——override 说的是「这条链这个模型的成本就是这个
 // 价」，用户的身份折扣是另一回事，不该被它吃掉。
 //
-// modelName 传空（无模型上下文的调用点）时 Layer 2/3 恒不命中，
+// Layer 4（时段折扣）按「使用分组」索引，与 Layer 0/1/2 同轴——它描述的是成本的
+// 时间维度（自建 GPU 夜里空闲，边际成本本就更低）。它**取代** Layer 2 而不是叠乘：
+// 「常规 8 折、空闲时段 5.6 折」是两个能直接比较的绝对价，叠乘则要求人先算
+// 0.8 × 0.7 才知道自己付多少。
+//
+// 但它排在 Layer 3 **之前**：Layer 3 是售价侧（这批用户打几折），与走常规价还是
+// 空闲时段价正交，不该被 Layer 4 的取代吃掉。
+//
+// modelName 传空（无模型上下文的调用点）时 Layer 2/3/4 恒不命中，
 // 结果与改造前逐位相同。
 func ResolveGroupRatio(userGroup, usingGroup, modelName string) RatioResolution {
+	return ResolveGroupRatioAt(userGroup, usingGroup, modelName, time.Now())
+}
+
+// ResolveGroupRatioAt 是 ResolveGroupRatio 的可注入时刻版本。
+//
+// 把时刻显式化而不是让 time.Now() 藏在内部，有两个消费方非它不可：Layer 4 的单测
+// （否则只能测「此刻」，跨午夜和工作日这些分支永远测不到），以及模型广场的
+// 「另一时段价」展示。
+func ResolveGroupRatioAt(userGroup, usingGroup, modelName string, at time.Time) RatioResolution {
 	res := RatioResolution{}
 
 	res.GroupRatio = GetGroupRatio(usingGroup)
@@ -235,8 +274,34 @@ func ResolveGroupRatio(userGroup, usingGroup, modelName string) RatioResolution 
 		}
 	}
 
+	// Layer 4：命中生效时段则**取代**上面那条模型折扣，而不是叠乘在它上面。
+	//
+	// 取代而非叠乘，是因为「常规 8 折、空闲时段 5.6 折」是两个可以直接比较的价；叠乘
+	// 要求人把 0.8 × 0.7 心算成 0.56 才知道自己付多少，而页面上那两个数看起来
+	// 像是能相加的。代价是改了模型折扣之后时段值不会自动跟着走——编辑器把两个数
+	// 并排显示、时段值高于常规值时告警，就是为这件事留的。
+	//
+	// 恒相对 Base（分组基础倍率 / 身份覆盖之后的基准），不区分 multiply/override：
+	// 时段规则整条取代 Layer 2，包括它的模式。
+	if key, win, rule, ok := pickTimeRule(usingGroup, modelName, at); ok {
+		res.TimeWindow = key
+		res.TimeLabel = win.Label
+		res.TimeValue = rule.Value
+		res.Final = res.Base * rule.Value
+		// 清掉 Layer 2 的命中痕迹：那条规则**没有生效**，被整条取代了。
+		// 留着的话日志里会写出一个 group_model_rule，运营拿
+		// group_base_ratio × 规则值 反算得到的数与 group_ratio 对不上——
+		// 而日志的分层必须永远自洽（service/log_info_generate.go 的不变式）。
+		res.RuleMatch = ""
+		res.RuleMode = ""
+		res.RuleValue = 0
+	}
+
 	res.AfterModelRule = res.Final
 
+	// Layer 3 放在 Layer 4 之后：它描述的是「这批用户打几折」，与走的是常规价还是
+	// 空闲时段价无关。放在前面会被 Layer 4 的取代吃掉——企业客户的档位优惠每天夜里
+	// 静默消失 8 小时，而日志上只有一个最终倍率，反算不出是哪一层拍的板。
 	if pattern, rule, ok := pickUserModelRule(userGroup, modelName); ok {
 		res.UserRuleMatch = pattern
 		res.UserRuleValue = rule.Value

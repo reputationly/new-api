@@ -4,6 +4,7 @@ import (
 	"net/http"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/model"
@@ -53,6 +54,7 @@ func GetGroupOverview(c *gin.Context) {
 	ratios := ratio_setting.GetGroupRatioCopy()
 	usable := setting.GetUserUsableGroupsCopy()
 	rules := ratio_setting.GetGroupModelRatioCopy()
+	timeRules := ratio_setting.GetGroupTimeRatioCopy().Rules
 	autoGroups := setting.GetAutoGroups()
 
 	// 有用户属于该分组时，即便没勾「用户可选」它也是可达的——管理员分配即生效。
@@ -85,6 +87,19 @@ func GetGroupOverview(c *gin.Context) {
 		cov := coverage[name]
 		_, selectable := usable[name]
 
+		// 时段规则的模式串可能与模型折扣的完全不重叠（只配了时段、没配折扣），
+		// 去重后一起算进规则数与失配判定，页面上那个数才是「本分组配了几条规则」。
+		timePatterns := make([]string, 0, len(timeRules[name]))
+		for pattern := range timeRules[name] {
+			timePatterns = append(timePatterns, pattern)
+		}
+		ruleCount := len(rules[name])
+		for _, pattern := range timePatterns {
+			if _, dup := rules[name][pattern]; !dup {
+				ruleCount++
+			}
+		}
+
 		item := GroupHealth{
 			Name:         name,
 			Ratio:        ratios[name],
@@ -92,8 +107,8 @@ func GetGroupOverview(c *gin.Context) {
 			Description:  setting.GetGroupDescription(name),
 			ChannelCount: cov.ChannelCount,
 			ModelCount:   cov.ModelCount,
-			RuleCount:    len(rules[name]),
-			StaleRules:   staleRulePatterns(name, rules[name]),
+			RuleCount:    ruleCount,
+			StaleRules:   staleRulePatterns(name, rules[name], timePatterns),
 		}
 
 		reachable := selectable ||
@@ -161,8 +176,18 @@ func groupStatus(name string, channelCount int, reachable bool) string {
 //
 // 这类规则不会算错钱（匹配不到就不生效），但它是一条无声失效的运营配置——
 // 管理员以为打了折，实际什么都没发生。
-func staleRulePatterns(group string, rules map[string]ratio_setting.ModelRatioRule) []string {
-	if len(rules) == 0 {
+// timePatterns 是本分组配了时段折扣的模式串，与 rules 合并判定失配。
+// 时段规则同样会无声失效，而且更隐蔽：模型折扣至少在列表里看得见一行，
+// 时段规则藏在弹窗里。
+func staleRulePatterns(group string, rules map[string]ratio_setting.ModelRatioRule, timePatterns []string) []string {
+	patterns := make(map[string]struct{}, len(rules)+len(timePatterns))
+	for pattern := range rules {
+		patterns[pattern] = struct{}{}
+	}
+	for _, pattern := range timePatterns {
+		patterns[pattern] = struct{}{}
+	}
+	if len(patterns) == 0 {
 		return []string{}
 	}
 	models, err := model.GetGroupModels(group)
@@ -170,7 +195,7 @@ func staleRulePatterns(group string, rules map[string]ratio_setting.ModelRatioRu
 		return []string{}
 	}
 	stale := make([]string, 0)
-	for pattern := range rules {
+	for pattern := range patterns {
 		matched := false
 		for _, m := range models {
 			if ratio_setting.MatchModelPattern(pattern, m) {
@@ -253,6 +278,11 @@ func ResolveGroupRatioPreview(c *gin.Context) {
 		UserGroup  string `json:"user_group"`
 		UsingGroup string `json:"using_group"`
 		ModelName  string `json:"model_name"`
+		// At 是试算时刻（RFC3339），省略则用当前时间。
+		//
+		// 时段折扣（Layer 4）配没配对，肉眼完全看不出来——配在错的分组、模板时区写错、
+		// 通配没匹配上，三种都只会静默不生效。能把时刻拨到空闲时段看一眼终值，是唯一的验证手段。
+		At string `json:"at"`
 	}
 	if err := common.DecodeJson(c.Request.Body, &req); err != nil {
 		common.ApiErrorMsg(c, "无效的参数")
@@ -263,7 +293,17 @@ func ResolveGroupRatioPreview(c *gin.Context) {
 		return
 	}
 
-	res := ratio_setting.ResolveGroupRatio(req.UserGroup, req.UsingGroup, req.ModelName)
+	at := time.Now()
+	if s := strings.TrimSpace(req.At); s != "" {
+		parsed, err := time.Parse(time.RFC3339, s)
+		if err != nil {
+			common.ApiErrorMsg(c, "无效的试算时刻，需为 RFC3339 格式")
+			return
+		}
+		at = parsed
+	}
+
+	res := ratio_setting.ResolveGroupRatioAt(req.UserGroup, req.UsingGroup, req.ModelName, at)
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
 		"data": gin.H{
@@ -281,6 +321,12 @@ func ResolveGroupRatioPreview(c *gin.Context) {
 			"after_model_rule": res.AfterModelRule,
 			"user_rule_match":  res.UserRuleMatch,
 			"user_rule_value":  res.UserRuleValue,
+			// Layer 4 时段折扣。同理必须返回，否则页面上「after_model_rule ×
+			// user_rule_value ≠ final」又会差出一个说不清的系数
+			"time_window": res.TimeWindow,
+			"time_label":  res.TimeLabel,
+			"time_value":  res.TimeValue,
+			"resolved_at": at.Format(time.RFC3339),
 			// 该组合下用户实际能否用到这个分组，试算结果才有意义
 			"usable": service.GroupInUserUsableGroups(req.UserGroup, req.UsingGroup),
 		},

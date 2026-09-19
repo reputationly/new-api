@@ -51,6 +51,10 @@ export const useModelPricingData = () => {
   const [groupRatio, setGroupRatio] = useState({});
   // 分组 → 模型 → 终值倍率。后端已展开通配并算完三层，前端只查表（见 getEffectiveGroupRatio）
   const [groupModelRatio, setGroupModelRatio] = useState({});
+  // 分组 -> 模型 -> 时段折扣展示数据。**只用于渲染角标/划线价/分时表**：
+  // 价格本身已经含时段系数（后端把终值折进了 group_model_ratio），这里再参与算价
+  // 就是乘两遍。active / until 也由后端算好，前端不碰客户端时钟。
+  const [groupTimeRatio, setGroupTimeRatio] = useState({});
   const [pointsConfig, setPointsConfig] = useState({
     enabled: false,
     quotaPerPoint: 0,
@@ -276,6 +280,7 @@ export const useModelPricingData = () => {
       vendors,
       group_ratio,
       group_model_ratio,
+      group_time_ratio,
       usable_group,
       supported_endpoint,
       auto_groups,
@@ -287,6 +292,7 @@ export const useModelPricingData = () => {
     if (success) {
       setGroupRatio(group_ratio);
       setGroupModelRatio(group_model_ratio || {});
+      setGroupTimeRatio(group_time_ratio || {});
       setUsableGroup(usable_group);
       setSelectedGroup('all');
       // 构建供应商 Map 方便查找
@@ -431,6 +437,7 @@ export const useModelPricingData = () => {
     loading,
     groupRatio,
     groupModelRatio,
+    groupTimeRatio,
     usableGroup,
     endpointMap,
     autoGroups,

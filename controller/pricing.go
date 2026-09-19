@@ -1,6 +1,8 @@
 package controller
 
 import (
+	"time"
+
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/service"
@@ -59,31 +61,59 @@ func filterPricingByUsableGroups(pricing []model.Pricing, usableGroup map[string
 // 前端只做 groupModelRatio[g]?.[m] ?? groupRatio[g] 这一步查表。
 //
 // 稀疏：只回命中了模型规则的组合。未配置时返回空 map，前端一路走原来的分支。
-func resolveGroupModelRatio(userGroup string, groupRatio map[string]float64, pricing []model.Pricing) map[string]map[string]float64 {
+func resolveGroupModelRatio(userGroup string, groupRatio map[string]float64, pricing []model.Pricing, at time.Time) (map[string]map[string]float64, map[string]map[string]ratio_setting.TimeRatioView) {
 	result := make(map[string]map[string]float64)
+	timeResult := make(map[string]map[string]ratio_setting.TimeRatioView)
 	allRules := ratio_setting.GetGroupModelRatioCopy()
 	// Layer 3（用户档折扣）按 userGroup 索引、与使用分组无关，所以是每次调用一个
 	// 定值。它必须参与「跳不跳过」的判断：只看 GroupModelRatio 会漏掉「仅配了
 	// 用户档折扣」的情况，结果是模型广场显示价偏高、实扣正确——最难发现的那类
 	// 不一致（docs/user-tier-pricing-and-topup-package-design.md §8.0）。
 	hasUserRules := ratio_setting.HasUserGroupModelRules(userGroup)
-	if len(allRules) == 0 && !hasUserRules {
-		return result
+	hasAnyTimeRules := false
+	for g := range groupRatio {
+		if ratio_setting.HasGroupTimeRules(g) {
+			hasAnyTimeRules = true
+			break
+		}
+	}
+	if len(allRules) == 0 && !hasUserRules && !hasAnyTimeRules {
+		return result, timeResult
 	}
 	for g := range groupRatio {
-		// 两层规则都没有的分组才跳过，避免在模型数三位数时白跑一遍全表
-		if len(allRules[g]) == 0 && !hasUserRules {
+		// 三层规则都没有的分组才跳过，避免在模型数三位数时白跑一遍全表。
+		// Layer 4 必须参与这个判断，理由与 Layer 3 相同：漏掉「只配了时段折扣」的
+		// 分组，模型广场会显示原价而实扣打折价。
+		hasTimeRules := ratio_setting.HasGroupTimeRules(g)
+		if len(allRules[g]) == 0 && !hasUserRules && !hasTimeRules {
 			continue
 		}
 		for _, item := range pricing {
-			res := ratio_setting.ResolveGroupRatio(userGroup, g, item.ModelName)
+			res := ratio_setting.ResolveGroupRatioAt(userGroup, g, item.ModelName, at)
+			// 时段视图用同一次解析的 Base 与用户档乘数：各时段的最终倍率必须与
+			// res.Final 同口径，否则广场上「空闲时段 5.6 折」这个数和实扣算的不是一回事。
+			hitTimeRule := false
+			if hasTimeRules {
+				if view, ok := ratio_setting.ResolveTimeRatioView(
+					g, item.ModelName, at, res.Base, res.UserMultiplier(),
+				); ok {
+					if timeResult[g] == nil {
+						timeResult[g] = make(map[string]ratio_setting.TimeRatioView)
+					}
+					timeResult[g][item.ModelName] = view
+					hitTimeRule = true
+				}
+			}
 			// 保持稀疏：只回「靠 group_ratio 算不出来」的组合。
 			// Layer 3 的 "*" 兜底已折进 group_ratio（见 GetPricing），若把它也算作
 			// 命中，配一条 "*" 就会把三位数的模型全表展开——响应体积暴涨，且每一项
 			// 都与 fallback 值相同。故只认非 "*" 的用户档规则。
 			hitModelRule := res.RuleMatch != ""
 			hitSpecificUserRule := res.UserRuleMatch != "" && res.UserRuleMatch != "*"
-			if !hitModelRule && !hitSpecificUserRule {
+			// 配了时段规则就必须下发终值，哪怕此刻不在优惠时段内（Final 等于 fallback）：
+			// 否则空闲时段一到，这个模型仍走 group_ratio 的 fallback 分支显示原价，而实扣
+			// 已经打折。下发一份与 fallback 相同的值是稀疏表的小代价，换的是价永远对。
+			if !hitModelRule && !hitSpecificUserRule && !hitTimeRule {
 				continue
 			}
 			if result[g] == nil {
@@ -92,7 +122,7 @@ func resolveGroupModelRatio(userGroup string, groupRatio map[string]float64, pri
 			result[g][item.ModelName] = res.Final
 		}
 	}
-	return result
+	return result, timeResult
 }
 
 func GetPricing(c *gin.Context) {
@@ -138,7 +168,10 @@ func GetPricing(c *gin.Context) {
 		}
 	}
 
-	groupModelRatio := resolveGroupModelRatio(group, groupRatio, pricing)
+	// 全程用同一个时刻：逐模型各取一次 time.Now() 会让请求正好跨过时段边界时，
+	// 表里一部分模型是空闲时段价、另一部分是高峰时段价。
+	now := time.Now()
+	groupModelRatio, groupTimeRatio := resolveGroupModelRatio(group, groupRatio, pricing, now)
 
 	// 积分展示：只回传「用户可见 ∩ 白名单」的分组，供模型广场追加积分单价（§8bis.2）
 	pointsSetting := operation_setting.GetPointsSetting()
@@ -173,11 +206,15 @@ func GetPricing(c *gin.Context) {
 	}
 
 	c.JSON(200, gin.H{
-		"success":               true,
-		"data":                  pricing,
-		"vendors":               model.GetVendors(),
-		"group_ratio":           groupRatio,
-		"group_model_ratio":     groupModelRatio,
+		"success":           true,
+		"data":              pricing,
+		"vendors":           model.GetVendors(),
+		"group_ratio":       groupRatio,
+		"group_model_ratio": groupModelRatio,
+		// 时段折扣的展示数据。group_model_ratio 里的终值**已含**当前时段系数，
+		// 所以列表价天生就是「此刻下单的真实价」；这份只用来渲染角标、划线原价与
+		// 详情里的分时价格表。active / until 由后端算好，前端不做任何时间判断。
+		"group_time_ratio":      groupTimeRatio,
 		"usable_group":          usableGroup,
 		"supported_endpoint":    model.GetSupportedEndpointMap(),
 		"auto_groups":           service.GetUserAutoGroup(group),

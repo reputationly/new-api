@@ -65,7 +65,7 @@ func TestPricingUserTier_DisplayMatchesCharge(t *testing.T) {
 	models := []string{"GLM-5", "Kimi-K3", "Qwen3.8-Max"}
 	baseRatio := map[string]float64{"default": 1, "premium": 1.5}
 
-	groupModelRatio := resolveGroupModelRatio("vip", baseRatio, pricingOf(models...))
+	groupModelRatio := resolveRatio("vip", baseRatio, pricingOf(models...))
 	groupRatio := applyUserFallback("vip", baseRatio)
 
 	for _, g := range []string{"default", "premium"} {
@@ -95,7 +95,7 @@ func TestPricingUserTier_OnlyUserRulesConfigured(t *testing.T) {
 	)
 
 	baseRatio := map[string]float64{"default": 1}
-	got := resolveGroupModelRatio("vip", baseRatio, pricingOf("Kimi-K3", "GLM-5"))
+	got := resolveRatio("vip", baseRatio, pricingOf("Kimi-K3", "GLM-5"))
 
 	require.InDelta(t, 0.6, got["default"]["Kimi-K3"], 1e-9,
 		"逐模型的用户档规则必须进终值表")
@@ -112,7 +112,7 @@ func TestPricingUserTier_OnlyUserRulesConfigured(t *testing.T) {
 func TestPricingUserTier_WildcardFallbackStaysSparse(t *testing.T) {
 	seedPricingUserTier(t, `{"default":1}`, `{}`, `{}`, `{"vip":{"*":0.9}}`)
 
-	got := resolveGroupModelRatio("vip",
+	got := resolveRatio("vip",
 		map[string]float64{"default": 1},
 		pricingOf("GLM-5", "Kimi-K3", "Qwen3.8-Max"))
 
@@ -126,7 +126,7 @@ func TestPricingUserTier_ScopedToUserGroup(t *testing.T) {
 
 	baseRatio := map[string]float64{"default": 1}
 
-	got := resolveGroupModelRatio("default", baseRatio, pricingOf("Kimi-K3"))
+	got := resolveRatio("default", baseRatio, pricingOf("Kimi-K3"))
 	require.Empty(t, got["default"], "default 档没有折扣，不该出现在终值表里")
 
 	groupRatio := applyUserFallback("default", baseRatio)
@@ -143,7 +143,7 @@ func TestPricingUserTier_EmptyConfigUnchanged(t *testing.T) {
 	)
 
 	baseRatio := map[string]float64{"default": 1, "premium": 1.5}
-	got := resolveGroupModelRatio("vip", baseRatio, pricingOf("GLM-5", "Kimi-K3"))
+	got := resolveRatio("vip", baseRatio, pricingOf("GLM-5", "Kimi-K3"))
 
 	require.InDelta(t, 0.75, got["premium"]["GLM-5"], 1e-9)
 	require.NotContains(t, got["premium"], "Kimi-K3")

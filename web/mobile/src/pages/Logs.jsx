@@ -4,6 +4,7 @@ import { InfiniteScroll, List, NavBar, PullToRefresh, Tag } from 'antd-mobile';
 import dayjs from 'dayjs';
 
 import { API } from '@classic/helpers/api';
+import { DISCOUNT_HEX } from '@classic/helpers/discount';
 
 import { showError } from '../shims/classic-utils';
 import { renderQuota } from '../utils/quota';
@@ -29,6 +30,20 @@ const typeTag = (type) => {
       return <Tag color='default'>其他</Tag>;
   }
 };
+
+// other 是后端存的 JSON 字符串。只取 time_rule 一项，解析失败就当没有——
+// 日志页为一个装饰性字段报错是本末倒置。
+const timeRuleOf = (log) => {
+  if (!log?.other) return '';
+  try {
+    return JSON.parse(log.other)?.time_rule || '';
+  } catch {
+    return '';
+  }
+};
+
+// 与 PC 端时段角标同色（@classic/helpers/discount 的 DISCOUNT_HEX.cyan.fg）。
+const TIME_RULE_COLOR = DISCOUNT_HEX.cyan.fg;
 
 const Logs = () => {
   const navigate = useNavigate();
@@ -103,6 +118,16 @@ const Logs = () => {
                   }}
                 >
                   {log.content}
+                </div>
+              )}
+              {/*
+                时段折扣。这是本页唯一读 other 的地方——用户要能自己验证「夜里下单
+                确实便宜了」，而 content 那串算式里没有这一项（group_ratio 已含时段
+                系数，但看不出其中有多少来自时段）。
+              */}
+              {timeRuleOf(log) && (
+                <div style={{ fontSize: 12, color: TIME_RULE_COLOR }}>
+                  时段折扣 {timeRuleOf(log)}
                 </div>
               )}
             </List.Item>

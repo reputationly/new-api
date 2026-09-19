@@ -29,6 +29,13 @@ type GroupRatioInfo struct {
 	// （docs/user-tier-pricing-and-topup-package-design.md §4）。
 	UserRuleMatch string  // 命中的模式串；"" = 未命中
 	UserRuleValue float64 // 恒为 multiply 的乘数
+
+	// Layer 4 时段折扣的解析痕迹。与上面几个「只落库不展示」的字段不同，
+	// 这一组会渲染到使用日志详情里：用户要能自己验证「夜里下单确实便宜了」，
+	// 看不见的优惠等于没有优惠。
+	TimeWindow string  // 命中的时段模板键；"" = 未命中
+	TimeLabel  string  // 时段模板显示名，如「深夜档」
+	TimeValue  float64 // 恒为 multiply 的乘数
 }
 
 // ModelRuleLog 返回模型级折扣规则的紧凑表示，供日志 other 字段使用。
@@ -50,6 +57,20 @@ func (g GroupRatioInfo) UserRuleLog() string {
 		return ""
 	}
 	return fmt.Sprintf("%s:×%g", g.UserRuleMatch, g.UserRuleValue)
+}
+
+// TimeRuleLog 返回时段折扣的紧凑表示，供日志 other 字段使用。
+// 取显示名而非模板键：这一条会直接呈现给用户，「深夜档:×0.7」比「night:×0.7」可读。
+// Layer 4 恒为 multiply，故不区分模式。未命中返回空串。
+func (g GroupRatioInfo) TimeRuleLog() string {
+	if g.TimeWindow == "" {
+		return ""
+	}
+	name := g.TimeLabel
+	if name == "" {
+		name = g.TimeWindow
+	}
+	return fmt.Sprintf("%s:×%g", name, g.TimeValue)
 }
 
 type PriceData struct {
