@@ -25,11 +25,8 @@ import {
   getEffectiveGroupRatio,
   getModelPriceItems,
   formatVideoMatrixSummary,
-  getGroupDiscountInfo,
-  getTimeDiscountInfo,
-  formatWindowDays,
-  formatWindowRange,
   formatTimeUntil,
+  buildTimeWindowRows,
 } from '../../../../../helpers';
 import { DISCOUNT_HEX } from '../../../../../helpers/discount';
 
@@ -220,33 +217,12 @@ const ModelPricingTable = ({
   // 在 premium 没有，是完全正常的配置。只列当前最优分组会让另一个分组的用户
   // 看到一个对自己不成立的优惠。
   const renderTimeWindowTable = () => {
-    const availableGroups = Object.keys(usableGroup || {})
-      .filter((g) => g !== '' && g !== 'auto')
-      .filter((g) => modelEnableGroups.includes(g));
-
-    const rows = [];
-    availableGroups.forEach((group) => {
-      const info = getTimeDiscountInfo(
-        groupTimeRatio?.[group]?.[modelData?.model_name],
-      );
-      if (!info) return;
-      info.windows.forEach((w, idx) => {
-        rows.push({
-          key: `${group}-${idx}`,
-          group,
-          range: `${formatWindowDays(w.days)} ${formatWindowRange(w)}`,
-          // 展示该时段的**最终倍率**对应的折扣，而不是配置系数：用户要知道的是
-          // 「这个时段几折」，配置系数是管理端的事
-          discount: getGroupDiscountInfo(w.ratio),
-          ratio: w.ratio,
-          // 生效档由后端标（TimeWindowView.Active），不按 label 反推：
-          // label 互为子串时（「深夜」与「深夜加强」）字符串匹配会把两档都标成生效。
-          // 仍与 info.active 取交集，是为了对齐 getTimeDiscountInfo 那条防御分支
-          // （后端说 active 但系数 ≥1 时按未命中处理），两边口径不能分叉。
-          active: info.active && Boolean(w.active),
-          until: info.until,
-        });
-      });
+    const rows = buildTimeWindowRows({
+      usableGroup,
+      modelEnableGroups,
+      groupTimeRatio,
+      modelName: modelData?.model_name,
+      normalLabel: t('其余时段'),
     });
 
     if (rows.length === 0) return null;

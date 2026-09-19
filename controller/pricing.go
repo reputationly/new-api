@@ -95,7 +95,9 @@ func resolveGroupModelRatio(userGroup string, groupRatio map[string]float64, pri
 			hitTimeRule := false
 			if hasTimeRules {
 				if view, ok := ratio_setting.ResolveTimeRatioView(
-					g, item.ModelName, at, res.Base, res.UserMultiplier(),
+					g, item.ModelName, at,
+					res.Base, res.UserMultiplier(),
+					res.NormalRatio*res.UserMultiplier(),
 				); ok {
 					if timeResult[g] == nil {
 						timeResult[g] = make(map[string]ratio_setting.TimeRatioView)

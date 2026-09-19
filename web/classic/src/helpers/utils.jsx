@@ -52,6 +52,7 @@ import {
   formatWindowRange,
   formatWindowLine,
   formatTimeUntil,
+  buildTimeWindowRows,
 } from './discount';
 
 export {
@@ -61,6 +62,7 @@ export {
   formatWindowRange,
   formatWindowLine,
   formatTimeUntil,
+  buildTimeWindowRows,
 };
 
 const HTMLToastContent = ({ htmlContent }) => {

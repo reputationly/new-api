@@ -46,13 +46,17 @@ export const DISCOUNT_HEX = {
   // 时段折扣单独一档冷色：它与上面三档（分组折扣力度）是两个维度，同一个模型
   // 可能两种标签并排，用同色系会让人以为是同一件事的两种说法。
   cyan: { bg: '#e6fffb', fg: '#08979c' },
+  // 中性：用于「该时段更贵」的提示。青色在本页面通篇表示优惠，
+  // 拿它去标一个涨价档等于在推销涨价。
+  neutral: { bg: '#f5f5f5', fg: '#595959' },
 };
 
 /**
  * 把后端下发的时段折扣数据翻译成展示信息。
  *
  * 入参是 /api/pricing 的 `group_time_ratio[group][model]`，形如：
- *   { active, best_ratio, label, until, windows: [{label,start,end,days,value,ratio,active}] }
+ *   { active, best_ratio, best_label, normal_ratio, label, until,
+ *     windows: [{label,start,end,days,tz,value,ratio,active}] }
  *
  * `best_ratio` 与每档的 `ratio` 都是后端算好的**最终倍率**，与列表价读的
  * group_model_ratio 同口径。所以这里只做「倍率 → 折扣文案」的翻译，不做任何乘法：
@@ -73,7 +77,7 @@ export const DISCOUNT_HEX = {
  * @returns {null | {
  *   active: boolean,  // 此刻是否在优惠时段内
  *   text: string,     // 角标文案
- *   color: string,    // DISCOUNT_HEX 的键
+ *   color: string,    // DISCOUNT_HEX 的键：比常规便宜用 cyan，更贵用 neutral
  *   until: string,    // 当前状态结束时刻（RFC3339），可能为空
  *   windows: Array,   // 详情页分时价格表用
  * }}
@@ -86,25 +90,55 @@ export const getTimeDiscountInfo = (entry) => {
   const bestInfo = getGroupDiscountInfo(entry.best_ratio);
   if (!bestInfo) return null;
 
+  // 参照物是**常规倍率**（未命中任何时段时的价），不是「此刻的最终倍率」。
+  //
+  // 角标要回答的是「这个时段比平时贵还是便宜」。拿此刻的最终倍率做参照，在命中
+  // 时段时它就等于那个时段自己的倍率——一个档跟它自己比，恒不成立，于是
+  // 「常规 0.35、高峰 0.5」这种配置在高峰时段内会渲染成青色促销角标，
+  // 而用户此刻付的比平时贵。
+  const normal = Number(entry.normal_ratio);
+  const isCheaper = (ratio) =>
+    !Number.isFinite(normal) || Number(ratio) < normal;
+
   if (entry.active) {
+    // 命中档的倍率：拿它跟常规比，才知道此刻是优惠还是溢价
+    const activeRatio = entry.windows.find((w) => w.active)?.ratio;
     return {
       active: true,
       text: entry.label ? `${entry.label}进行中` : '空闲时段进行中',
-      color: 'cyan',
+      color: isCheaper(activeRatio) ? 'cyan' : 'neutral',
       until: entry.until || '',
       windows: entry.windows,
     };
   }
 
+  // 档位名取自后端（best_label），不能硬编码「空闲时段」：管理员完全可能只配一个
+  // **更贵**的高峰档（常规倍率 0.35、高峰 0.5），硬编码会显示「空闲时段 5折」
+  // ——标签指向错的时段，数字也让人以为非高峰时反而只有 5 折。
+  //
+  // 同价的时段可能不止一个（「上午工作时间」与「下午工作时间」都配 0.5）。
+  // 只点其中一个名字会让用户以为另一段不享受——best_label 取的是第一个命中最优值的
+  // 档位，另一个同价档被静默略过。多于一个时改说「等 N 个时段」。
+  const tiedCount = entry.windows.filter(
+    (w) => Number(w?.ratio) === Number(entry.best_ratio),
+  ).length;
+  const label = entry.best_label || '空闲时段';
   return {
     active: false,
-    // 绝对折扣，不说「再」：时段折扣取代模型折扣，不是在它之上再打一次
-    text: `空闲时段 ${bestInfo.text}`,
-    color: 'cyan',
+    // 绝对折扣，不说「再」：时段倍率取代模型倍率，不是在它之上再打一次
+    text:
+      tiedCount > 1
+        ? `${label}等${tiedCount}个时段 ${bestInfo.text}`
+        : `${label} ${bestInfo.text}`,
+    color: isCheaper(entry.best_ratio) ? 'cyan' : 'neutral',
     until: entry.until || '',
     windows: entry.windows,
   };
 };
+
+// 与后端 setting/ratio_setting/group_time_ratio.go 的 defaultTimeRatioZone 一致。
+// 只用于「要不要在界面上标出时区」，不参与任何时间计算。
+export const DEFAULT_TIME_ZONE = 'Asia/Shanghai';
 
 const WEEKDAY_LABELS = ['日', '一', '二', '三', '四', '五', '六'];
 
@@ -165,9 +199,14 @@ export const crossesMidnight = (win) => {
  */
 export const formatWindowRange = (win) => {
   if (!win) return '';
-  return crossesMidnight(win)
+  const range = crossesMidnight(win)
     ? `${win.start}-次日${win.end}`
     : `${win.start}-${win.end}`;
+  // 非默认时区必须标出来：窗口可以配 per-window 时区，而「09:00-12:00」不说是
+  // 哪个时区的，用户没法判断它对自己意味着几点。默认时区不标，免得每行都挂一个
+  // 对所有人都一样的尾巴。
+  const tz = String(win.tz ?? '').trim();
+  return tz && tz !== DEFAULT_TIME_ZONE ? `${range}(${tz})` : range;
 };
 
 /**
@@ -181,4 +220,78 @@ export const formatWindowLine = (w) => {
   const d = getGroupDiscountInfo(w?.ratio);
   const discount = d ? d.text : `${Number(Number(w?.ratio ?? 1).toFixed(4))}x`;
   return `${formatWindowDays(w?.days)} ${formatWindowRange(w)} ${discount}`;
+};
+
+/**
+ * 构造「分时定价」表的行。classic 与 mobile 共用同一份——两端各写一份必然漂移，
+ * 而漂移的表现是同一个模型在手机和电脑上看到不同的分时价目。
+ *
+ * **刻意不走 getTimeDiscountInfo**：那个函数回答的是「值不值得出一个角标」，
+ * 在所有档位都不打折（best_ratio >= 1）时返回 null。拿它做入口判空，会让
+ * 「窗口全是 ×1 原价档、模型折扣 0.35」这种配置整张表消失，连「其余时段 3.5折」
+ * 那一行也没了——正是那一行要解决的问题。
+ *
+ * 逐分组列是必要的：时段规则按使用分组配，同一个模型在 default 有夜间折扣、
+ * 在 premium 没有，是完全正常的配置。
+ */
+export const buildTimeWindowRows = ({
+  usableGroup,
+  modelEnableGroups,
+  groupTimeRatio,
+  modelName,
+  normalLabel,
+}) => {
+  const groups = Object.keys(usableGroup || {})
+    .filter((g) => g !== '' && g !== 'auto')
+    .filter((g) => (modelEnableGroups || []).includes(g));
+
+  const rows = [];
+  groups.forEach((group) => {
+    const entry = groupTimeRatio?.[group]?.[modelName];
+    const windows = Array.isArray(entry?.windows) ? entry.windows : [];
+    if (windows.length === 0) return;
+
+    let anyActive = false;
+    windows.forEach((w, idx) => {
+      // 生效档由后端标（TimeWindowView.Active，与 pickTimeRule 同口径），
+      // 不按 label 反推：label 互为子串时（「深夜」与「深夜加强」）字符串匹配
+      // 会把两档都标成生效。也不与 entry.active 取交集——那个字段答的是
+      // 「有没有优惠」，命中 ×1 原价档时为假，会让当前行整个丢失。
+      const active = Boolean(w.active);
+      if (active) anyActive = true;
+      rows.push({
+        key: `${group}-${idx}`,
+        group,
+        // 带上档位名：角标说的是「上午工作时间等2个时段」，详情表只列时间区间的话
+        // 用户对不上号——他看到的那个名字在表里找不到。
+        label: w.label || '',
+        range: [w.label, formatWindowDays(w.days), formatWindowRange(w)]
+          .filter(Boolean)
+          .join(' '),
+        // 展示该时段的**最终倍率**对应的折扣，而不是配置倍率：用户要知道的是
+        // 「这个时段几折」，配置值是管理端的事
+        discount: getGroupDiscountInfo(w.ratio),
+        ratio: Number(w.ratio),
+        active,
+        until: entry.until || '',
+      });
+    });
+
+    // 「其余时段」这一行是必须的：只列配了规则的时段，表里两行 5 折，其余时间是
+    // 3.5 折还是 8 折用户完全看不出来，也就说不出自己此刻按哪一档付钱。
+    // 没有任何窗口生效时它就是当前档。
+    if (Number.isFinite(Number(entry.normal_ratio))) {
+      rows.push({
+        key: `${group}-normal`,
+        group,
+        label: normalLabel,
+        range: normalLabel,
+        discount: getGroupDiscountInfo(entry.normal_ratio),
+        ratio: Number(entry.normal_ratio),
+        active: !anyActive,
+        until: entry.until || '',
+      });
+    }
+  });
+  return rows;
 };

@@ -225,8 +225,11 @@ export const getPricingTableColumns = ({
                 shape='circle'
                 size='small'
                 style={{
-                  backgroundColor: DISCOUNT_HEX.cyan.bg,
-                  color: DISCOUNT_HEX.cyan.fg,
+                  // 同卡片视图：涨价档不能用表示优惠的青色
+                  backgroundColor: (
+                    DISCOUNT_HEX[timeInfo.color] || DISCOUNT_HEX.cyan
+                  ).bg,
+                  color: (DISCOUNT_HEX[timeInfo.color] || DISCOUNT_HEX.cyan).fg,
                 }}
               >
                 {timeInfo.text}

@@ -191,6 +191,11 @@ type RatioResolution struct {
 
 	AfterModelRule float64 // Layer 2 之后、套用用户档折扣之前的值
 
+	// NormalRatio 是 Layer 0/1/2 的结果，即**未命中任何时段**时的倍率。
+	// 展示层靠它在分时定价表里补出「其余时段」那一行——只列配了规则的时段，
+	// 用户看不到全天覆盖，也就说不出自己此刻到底按哪一档付钱。
+	NormalRatio float64
+
 	UserRuleMatch string  // Layer 3 命中的模式串，"" = 未命中
 	UserRuleValue float64 // Layer 3 配置值（恒为 multiply）
 
@@ -273,6 +278,9 @@ func ResolveGroupRatioAt(userGroup, usingGroup, modelName string, at time.Time) 
 			res.Final = res.Base * rule.Value
 		}
 	}
+
+	// 记在 Layer 4 之前：它是「没有时段规则时会走的那个倍率」。
+	res.NormalRatio = res.Final
 
 	// Layer 4：命中生效时段则**取代**上面那条模型折扣，而不是叠乘在它上面。
 	//

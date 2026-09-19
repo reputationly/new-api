@@ -47,17 +47,129 @@ describe('getTimeDiscountInfo', () => {
     expect(info.until).toBe('2026-09-19T08:00:00+08:00');
   });
 
-  it('高峰时段显示绝对折扣，不是需要再乘一次的相对值', () => {
+  it('未命中时段时显示绝对折扣，不是需要再乘一次的相对值', () => {
     const info = getTimeDiscountInfo({
       active: false,
       best_ratio: 0.56,
+      best_label: '深夜档',
       until: '2026-09-20T00:00:00+08:00',
       windows,
     });
     expect(info.active).toBe(false);
-    // 「空闲时段 5.6折」可以和常规的「8折」直接比较；相对说法「再7折」要求用户心算
-    expect(info.text).toBe('空闲时段 5.6折');
+    // 「深夜档 5.6折」可以和常规的「8折」直接比较；相对说法「再7折」要求用户心算
+    expect(info.text).toBe('深夜档 5.6折');
     expect(info.text).not.toContain('再');
+  });
+
+  // 档位名必须来自后端。硬编码「空闲时段」时，只配了一个**更贵**的高峰档
+  // （常规倍率 0.35、高峰 0.5）会显示「空闲时段 5折」——标签指向错的时段，
+  // 数字也让人以为非高峰时反而只有 5 折。
+  it('档位名取自后端，不硬编码「空闲时段」', () => {
+    const info = getTimeDiscountInfo({
+      active: false,
+      best_ratio: 0.5,
+      best_label: '高峰时段',
+      normal_ratio: 0.35,
+      windows,
+    });
+    expect(info.text).toBe('高峰时段 5折');
+    // 比常规价更贵 → 中性色，不能用表示优惠的青色
+    expect(info.color).toBe('neutral');
+  });
+
+  it('比常规价更便宜时用优惠色', () => {
+    const info = getTimeDiscountInfo({
+      active: false,
+      best_ratio: 0.5,
+      best_label: '深夜档',
+      normal_ratio: 0.8,
+      windows,
+    });
+    expect(info.color).toBe('cyan');
+  });
+
+  // 参照物必须是常规倍率。用「此刻的最终倍率」做参照时，命中时段的那一支是拿
+  // 一个档跟它自己比，恒不成立——「常规 0.35、高峰 0.5」在高峰时段内会渲染成
+  // 青色促销角标，而用户此刻付的比平时贵。
+  it('命中更贵的时段时角标是中性色，不是促销色', () => {
+    const info = getTimeDiscountInfo({
+      active: true,
+      label: '高峰时段',
+      best_ratio: 0.5,
+      normal_ratio: 0.35,
+      windows: [
+        {
+          label: '高峰时段',
+          start: '09:00',
+          end: '18:00',
+          ratio: 0.5,
+          active: true,
+        },
+      ],
+    });
+    expect(info.active).toBe(true);
+    expect(info.text).toBe('高峰时段进行中');
+    expect(info.color).toBe('neutral');
+  });
+
+  it('命中更便宜的时段时仍是促销色', () => {
+    const info = getTimeDiscountInfo({
+      active: true,
+      label: '深夜档',
+      best_ratio: 0.56,
+      normal_ratio: 0.8,
+      windows: [
+        {
+          label: '深夜档',
+          start: '00:00',
+          end: '08:00',
+          ratio: 0.56,
+          active: true,
+        },
+      ],
+    });
+    expect(info.color).toBe('cyan');
+  });
+
+  // 「上午工作时间」与「下午工作时间」都配 0.5 时，best_label 只会是其中一个。
+  // 只点一个名字会让用户以为另一段不享受这个价。
+  it('多个同价时段时不只点一个名字', () => {
+    const info = getTimeDiscountInfo(
+      {
+        active: false,
+        best_ratio: 0.5,
+        best_label: '上午工作时间',
+        windows: [
+          { label: '上午工作时间', start: '09:00', end: '12:00', ratio: 0.5 },
+          { label: '下午工作时间', start: '14:00', end: '18:00', ratio: 0.5 },
+        ],
+      },
+      0.35,
+    );
+    expect(info.text).toBe('上午工作时间等2个时段 5折');
+  });
+
+  it('只有一个时段命中最优价时不加计数', () => {
+    const info = getTimeDiscountInfo({
+      active: false,
+      best_ratio: 0.5,
+      best_label: '深夜档',
+      windows: [
+        { label: '深夜档', start: '00:00', end: '08:00', ratio: 0.5 },
+        { label: '傍晚档', start: '18:00', end: '22:00', ratio: 0.8 },
+      ],
+    });
+    expect(info.text).toBe('深夜档 5折');
+  });
+
+  it('没有 normal_ratio 时按优惠处理，不因缺字段而变灰', () => {
+    const info = getTimeDiscountInfo({
+      active: false,
+      best_ratio: 0.5,
+      windows,
+    });
+    expect(info.color).toBe('cyan');
+    expect(info.text).toBe('空闲时段 5折');
   });
 
   it('全天各档都不算折扣时不出角标', () => {

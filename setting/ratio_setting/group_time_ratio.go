@@ -419,13 +419,25 @@ type TimeWindowView struct {
 // 用户把手机时区改成 UTC，前端自己算就会显示错误的「空闲时段中」，而价格是后端算的，
 // 于是标签和价格互相矛盾。
 type TimeRatioView struct {
-	Active bool `json:"active"` // 此刻是否在优惠时段内
-	// BestRatio 是全天最优的**最终倍率**（不是系数），高峰时段用它渲染「空闲时段 5.6 折」。
-	// 用绝对值而非相对系数：用户不该为了知道自己付多少而去心算 0.8 × 0.7。
-	BestRatio float64          `json:"best_ratio"`
-	Label     string           `json:"label,omitempty"` // Active 时为当前档位名
-	Until     string           `json:"until,omitempty"` // 当前状态的结束时刻，RFC3339
-	Windows   []TimeWindowView `json:"windows"`         // 全部档位，供详情页渲染分时价格表
+	// Active 表示此刻是否处于**有优惠的**时段，只给角标用。要判断「哪一档是当前
+	// 计费档」请读 Windows[i].Active——命中 ×1 的原价档时后者为真而这里为假。
+	Active bool `json:"active"`
+	// BestRatio 是全天最优的**最终倍率**（不是配置倍率）。用绝对值而非相对系数：
+	// 用户不该为了知道自己付多少而去心算 0.8 × 0.7。
+	BestRatio float64 `json:"best_ratio"`
+	// BestLabel 是 BestRatio 所属档位的名字。角标必须用它，不能硬编码「空闲时段」：
+	// 管理员完全可能把**更贵**的高峰档配成唯一的时段规则（常规 0.35、高峰 0.5），
+	// 那时硬编码会显示「空闲时段 5折」——标签和数字双双指向错的东西。
+	BestLabel string `json:"best_label,omitempty"`
+	// NormalRatio 是未命中任何时段时的最终倍率，供详情页补出「其余时段」那一行。
+	// 只列配了规则的时段，用户看不到全天覆盖：表里两行 5 折，其余时间是 3.5 折
+	// 还是 8 折完全看不出来。
+	NormalRatio float64 `json:"normal_ratio"`
+	// Label 是此刻所处档位的名字（未命中任何时段时为空）。命中 ×1 的原价档时
+	// 它有值而 Active 为假——两者回答的是不同的问题。
+	Label   string           `json:"label,omitempty"`
+	Until   string           `json:"until,omitempty"` // 当前状态的结束时刻，RFC3339
+	Windows []TimeWindowView `json:"windows"`         // 全部档位，供详情页渲染分时价格表
 }
 
 // ResolveTimeRatioView 构建模型广场用的时段折扣展示数据。
@@ -435,7 +447,7 @@ type TimeRatioView struct {
 // base / userMul 由调用方从同一次 ResolveGroupRatioAt 的结果里取（res.Base 与
 // res.UserMultiplier()），不在这里重算——重算就是第二份解析实现，一旦与计费分叉，
 // 表现是广场标着「空闲时段 5.6 折」而实扣是另一个数，两边都不报错。
-func ResolveTimeRatioView(usingGroup, modelName string, at time.Time, base, userMul float64) (TimeRatioView, bool) {
+func ResolveTimeRatioView(usingGroup, modelName string, at time.Time, base, userMul, normalRatio float64) (TimeRatioView, bool) {
 	groupTimeRatioMu.RLock()
 	rules, hasGroup := groupTimeRatio.Rules[usingGroup]
 	var list []TimeRule
@@ -454,11 +466,14 @@ func ResolveTimeRatioView(usingGroup, modelName string, at time.Time, base, user
 		return TimeRatioView{}, false
 	}
 
-	view := TimeRatioView{Windows: make([]TimeWindowView, 0, len(list))}
+	view := TimeRatioView{
+		NormalRatio: normalRatio,
+		Windows:     make([]TimeWindowView, 0, len(list)),
+	}
 	var until time.Time
-	activeIdx := -1
+	chargedIdx := -1
 	bestValue := math.Inf(1)
-	activeValue := math.Inf(1)
+	chargedValue := math.Inf(1)
 	for _, rule := range list {
 		win, ok := windows[rule.Window]
 		if !ok {
@@ -477,17 +492,19 @@ func ResolveTimeRatioView(usingGroup, modelName string, at time.Time, base, user
 		})
 		if rule.Value < bestValue {
 			bestValue = rule.Value
+			view.BestLabel = win.displayName(rule.Window)
 		}
-		// 当前生效档位：与 pickTimeRule 同样取最小值，重叠时两处结论才一致。
+		// 此刻计费实际取用的档位：判据必须与 pickTimeRule **逐位一致**（命中且取最小
+		// 值，不看是否打折）。此前这里多了一个 rule.Value < 1 的门槛，于是一个 ×1 的
+		// 档（校验允许，语义是「这个时段不享受模型折扣，按原价」）生效时，详情表
+		// 没有任何窗口行标「进行中」，「其余时段」那行反而被标上——用户看到的
+		// 「当前档」是模型折扣价，实扣却是原价。
 		//
-		// rule.Value < 1 是必要条件：校验允许配 1（不打折的占位档），而 Active 会
-		// 被渲染成一个青色「进行中」角标。命中一个 ×1 的档位却标着优惠进行中，
-		// 角标就和它旁边那个没打折的价格自相矛盾。
-		if win.ActiveAt(at) && rule.Value < 1 && rule.Value < activeValue {
-			view.Active = true
+		// 「是否打折」是另一个问题，见下面的 view.Active。
+		if win.ActiveAt(at) && rule.Value < chargedValue {
 			view.Label = win.displayName(rule.Window)
-			activeValue = rule.Value
-			activeIdx = len(view.Windows) - 1
+			chargedValue = rule.Value
+			chargedIdx = len(view.Windows) - 1
 		}
 		// Until 取所有档位里最近的一次状态翻转：任一档位翻转都会改变这个模型的价，
 		// 只看当前命中的那个档，会在「一档刚结束、另一档紧接着开始」时给出错误的时刻。
@@ -499,8 +516,12 @@ func ResolveTimeRatioView(usingGroup, modelName string, at time.Time, base, user
 	if len(view.Windows) == 0 {
 		return TimeRatioView{}, false
 	}
-	if activeIdx >= 0 {
-		view.Windows[activeIdx].Active = true
+	if chargedIdx >= 0 {
+		view.Windows[chargedIdx].Active = true
+		// view.Active 回答的是「此刻有没有优惠」，只给角标用：命中一个 ×1 的档位
+		// 并不是优惠，标一个青色「进行中」会和旁边那个没打折的价格自相矛盾。
+		// 它与 Windows[i].Active 是两件事，共用一个字段正是上面那个 bug 的成因。
+		view.Active = chargedValue < 1
 	}
 	// bestValue 恒有限：走到这里说明至少有一个档位进了 Windows
 	view.BestRatio = base * bestValue * userMul

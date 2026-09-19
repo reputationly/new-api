@@ -164,6 +164,20 @@ function TimeRuleCell({ t, pattern, list, windowOptions, onChange }) {
         </div>
       ))}
 
+      {/*
+        模板全部绑完时，添加行会整个消失，而页面上没有任何解释——用户看到的是
+        「只能绑一条」。这里显式说明还差什么，并指向新建模板的入口。
+      */}
+      {available.length === 0 && (
+        <div className='border-t border-[var(--semi-color-border)] pt-2'>
+          <Text type='tertiary' size='small'>
+            {t(
+              '已绑定全部时段模板。还要再加一条（如上午、下午工作时段分开配），请先到上方「时段模板」新建。',
+            )}
+          </Text>
+        </div>
+      )}
+
       {available.length > 0 && (
         <div className='flex items-center gap-1 border-t border-[var(--semi-color-border)] pt-2'>
           <Select
@@ -196,10 +210,10 @@ function TimeRuleCell({ t, pattern, list, windowOptions, onChange }) {
           </Button>
         </div>
       )}
-      {/* 系数只允许 0~1：只打折不加价，与后端 CheckGroupTimeRatio 同一约定 */}
+      {/* 倍率只允许 0~1：与后端 CheckGroupTimeRatio 同一约定 */}
       <Text type='tertiary' size='small'>
         {t(
-          '系数 0~1，命中时段时**取代**左侧的模型折扣，而不是在它之上再乘一次',
+          '可添加多条（如上午、下午工作时段各一条）。命中时段时取代左侧的模型倍率，不是在它之上再乘一次；未命中任何时段时按左侧倍率计价。',
         )}
       </Text>
     </div>
@@ -837,10 +851,6 @@ export default function ModelRatioEditor({
           // 而后端无从硬拒绝（常规终值还受用户档影响，逐用户不同）。
           const pattern = (record.pattern || '').trim();
           const timeList = onTimeChange ? groupTimeRules[pattern] || [] : [];
-          const worst = timeList.reduce(
-            (acc, r) => Math.max(acc, base * r.value),
-            0,
-          );
           return (
             <div className='flex flex-col'>
               <Text
@@ -849,18 +859,13 @@ export default function ModelRatioEditor({
                 {Number(effective.toFixed(4))}x
               </Text>
               {timeList.length > 0 && (
-                <Text
-                  size='small'
-                  type={worst > effective ? 'danger' : 'tertiary'}
-                >
+                <Text size='small' type='tertiary'>
                   {t('时段 {{v}}x', {
-                    v: Number(
-                      Math.min(...timeList.map((r) => base * r.value)).toFixed(
-                        4,
-                      ),
-                    ),
+                    v: timeList
+                      .map((r) => Number((base * r.value).toFixed(4)))
+                      .sort((a, b) => a - b)
+                      .join(' / '),
                   })}
-                  {worst > effective ? ` ${t('高于常规')}` : ''}
                 </Text>
               )}
             </div>

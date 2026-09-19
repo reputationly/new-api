@@ -22,9 +22,8 @@ import { formatPriceWithCeiling } from '@classic/helpers/priceFormat';
 import {
   getGroupDiscountInfo,
   getTimeDiscountInfo,
-  formatWindowDays,
-  formatWindowRange,
   formatTimeUntil,
+  buildTimeWindowRows,
   DISCOUNT_HEX,
 } from '@classic/helpers/discount';
 import {
@@ -234,7 +233,9 @@ const Models = () => {
   const timeTag = (m) => {
     const info = timeInfoOf(m);
     if (!info) return null;
-    const c = DISCOUNT_HEX.cyan;
+    // 用 info.color 而不是写死青色：青色在两端都表示优惠，而时段档完全可能
+    // 比此刻更贵（常规倍率 0.35、高峰 0.5），那时它是涨价提示。
+    const c = DISCOUNT_HEX[info.color] || DISCOUNT_HEX.cyan;
     return (
       <span
         style={{
@@ -700,18 +701,31 @@ const Models = () => {
               解释「为什么现在是这个价、别的时段是什么价」，不是又一个要乘上去的数。
             */}
             {(() => {
-              const info = timeInfoOf(detail);
-              if (!info) return null;
+              // 与 PC 端共用同一份行构造（@classic/helpers/discount 的
+              // buildTimeWindowRows）：两端各写一份必然漂移，而漂移的表现是
+              // 同一个模型在手机和电脑上看到不同的分时价目。「其余时段」那行
+              // 此前手机端完全没有，用户看不出未命中时段时按几折付。
+              const rows = buildTimeWindowRows({
+                usableGroup: Object.fromEntries(
+                  (detail.enable_groups || []).map((g) => [g, g]),
+                ),
+                modelEnableGroups: detail.enable_groups || [],
+                groupTimeRatio: groupTimeRatioMap,
+                modelName: detail.model_name,
+                normalLabel: '其余时段',
+              });
+              if (rows.length === 0) return null;
+              const current = rows.find((r) => r.active);
               return (
                 <div style={{ marginTop: 12 }}>
                   <div
                     style={{ fontSize: 12, color: '#9aa1ad', marginBottom: 6 }}
                   >
-                    分时定价（空闲时段取代分组折扣）
+                    分时定价（命中时段时取代分组折扣）
                   </div>
-                  {info.windows.map((w, i) => (
+                  {rows.map((r) => (
                     <div
-                      key={i}
+                      key={r.key}
                       style={{
                         display: 'flex',
                         justifyContent: 'space-between',
@@ -720,19 +734,19 @@ const Models = () => {
                       }}
                     >
                       <span style={{ color: '#6b7280' }}>
-                        {formatWindowDays(w.days)} {formatWindowRange(w)}
+                        {r.range}
+                        {r.active ? ' · 进行中' : ''}
                       </span>
                       <span style={{ color: DISCOUNT_HEX.cyan.fg }}>
-                        {getGroupDiscountInfo(w.ratio)?.text ??
-                          `${Number(w.ratio.toFixed(4))}x`}
+                        {r.discount?.text ?? `${Number(r.ratio.toFixed(4))}x`}
                       </span>
                     </div>
                   ))}
-                  {info.active && info.until && (
+                  {current?.until && (
                     <div
                       style={{ fontSize: 12, color: '#9aa1ad', marginTop: 4 }}
                     >
-                      当前处于空闲时段，至 {formatTimeUntil(info.until)} 结束
+                      当前档位至 {formatTimeUntil(current.until)} 结束
                     </div>
                   )}
                 </div>

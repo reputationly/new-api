@@ -349,7 +349,7 @@ func TestTimeRatio_EndToEndConsistency(t *testing.T) {
 	viewAt := func(t *testing.T, at time.Time) (TimeRatioView, bool, RatioResolution) {
 		t.Helper()
 		res := ResolveGroupRatioAt("default", "premium", "wan2.2-t2v-plus", at)
-		view, ok := ResolveTimeRatioView("premium", "wan2.2-t2v-plus", at, res.Base, res.UserMultiplier())
+		view, ok := ResolveTimeRatioView("premium", "wan2.2-t2v-plus", at, res.Base, res.UserMultiplier(), res.NormalRatio*res.UserMultiplier())
 		return view, ok, res
 	}
 
@@ -375,15 +375,22 @@ func TestTimeRatio_EndToEndConsistency(t *testing.T) {
 		require.True(t, ok, "高峰时段也要下发，否则前端走 fallback 显示原价")
 		require.False(t, view.Active)
 		require.False(t, view.Windows[0].Active)
-		// 高峰时段靠 BestRatio 渲染「空闲时段 7.5 折」——绝对值，用户不用心算
+		// 高峰时段靠 BestRatio 渲染「深夜档 7.5 折」——绝对值，用户不用心算
 		require.InDelta(t, 0.75, view.BestRatio, 1e-9)
+		// 档位名必须一并下发：角标硬编码「空闲时段」时，只配了一个更贵的高峰档
+		// 会显示成「空闲时段 N 折」，标签指向错的时段
+		require.Equal(t, "深夜档", view.BestLabel)
+		// 未命中时段时的倍率必须一并下发：详情页靠它补出「其余时段」那一行，
+		// 否则表里只有打折的那几档，用户看不出其余时间是多少
+		require.InDelta(t, res.NormalRatio, view.NormalRatio, 1e-9)
+		require.InDelta(t, 1.2, view.NormalRatio, 1e-9, "1.5 × 0.8，模型折扣那一档")
 		require.Equal(t, "2026-09-15T00:00:00+08:00", view.Until)
 	})
 
 	t.Run("没配时段的分组不受影响", func(t *testing.T) {
 		res := ResolveGroupRatioAt("default", "default", "wan2.2-t2v-plus", night)
 		require.InDelta(t, 1.0, res.Final, 1e-9)
-		_, ok := ResolveTimeRatioView("default", "wan2.2-t2v-plus", night, res.Base, res.UserMultiplier())
+		_, ok := ResolveTimeRatioView("default", "wan2.2-t2v-plus", night, res.Base, res.UserMultiplier(), res.NormalRatio*res.UserMultiplier())
 		require.False(t, ok)
 	})
 }
@@ -436,15 +443,171 @@ func TestResolveTimeRatioView_NoBadgeWhenActiveWindowIsFullPrice(t *testing.T) {
 
 	// 20:00 命中 ×1 的傍晚档：有折扣的档位存在（深夜 0.5），但此刻并不打折
 	res := ResolveGroupRatioAt("default", "default", "m", at(t, 0, 20, 0))
-	view, ok := ResolveTimeRatioView("default", "m", at(t, 0, 20, 0), res.Base, res.UserMultiplier())
+	view, ok := ResolveTimeRatioView("default", "m", at(t, 0, 20, 0), res.Base, res.UserMultiplier(), res.NormalRatio*res.UserMultiplier())
 	require.True(t, ok)
 	require.InDelta(t, 1.0, res.Final, 1e-9, "×1 不改变价格")
-	require.False(t, view.Active, "此刻没打折，不该标「进行中」")
+	require.False(t, view.Active, "此刻没打折，不该出优惠角标")
 	require.InDelta(t, 0.5, view.BestRatio, 1e-9, "但仍要告诉用户深夜档有 5 折")
+
+	// 角标不出，不等于「不在任何时段里」：×1 那一档正是此刻的计费档，详情表必须
+	// 把它标成当前行。两者共用一个字段时，表里会没有任何窗口行生效、而「其余时段」
+	// 行被标成当前——用户看到的当前价是模型折扣价，实扣却是原价。
+	require.Equal(t, "傍晚档", view.Label, "此刻所处的档位仍要给出")
+	charged := make([]string, 0, 1)
+	for _, w := range view.Windows {
+		if w.Active {
+			charged = append(charged, w.Label)
+		}
+	}
+	require.Equal(t, []string{"傍晚档"}, charged,
+		"×1 的原价档也是计费档，必须标出来")
 
 	// 02:00 命中真正打折的深夜档
 	res = ResolveGroupRatioAt("default", "default", "m", at(t, 0, 2, 0))
-	view, _ = ResolveTimeRatioView("default", "m", at(t, 0, 2, 0), res.Base, res.UserMultiplier())
+	view, _ = ResolveTimeRatioView("default", "m", at(t, 0, 2, 0), res.Base, res.UserMultiplier(), res.NormalRatio*res.UserMultiplier())
 	require.True(t, view.Active)
 	require.Equal(t, "深夜档", view.Label)
+}
+
+// TestTimeRatio_TwoWindowsSameTier 覆盖「一个业务档位拆成两个模板」这种配法。
+//
+// 「工作日高峰」在业务上是一个档位，但它是 09:00-12:00 与 14:00-18:00 两段
+// （午休不算高峰）。一个模板只能表示一个连续区间，所以要建两个模板、在规则里
+// 各绑一条、都填同一个倍率。这条路径的计费与下发数据必须与单模板一样准确——
+// 它是当前唯一能表达这类档位的方式，不能只在单区间的用例上验过就算数。
+func TestTimeRatio_TwoWindowsSameTier(t *testing.T) {
+	// 常规倍率 0.35（未命中时段时走它），高峰两段都是 0.5
+	seedRatios(t, `{"default":1}`, `{}`,
+		`{"default":{"m":{"mode":"multiply","value":0.35}}}`)
+	seedTimeRatio(t, `{
+		"windows": {
+			"am": {"label":"上午工作时间","start":"09:00","end":"12:00","days":[1,2,3,4,5]},
+			"pm": {"label":"下午工作时间","start":"14:00","end":"18:00","days":[1,2,3,4,5]}
+		},
+		"rules": {"default": {"m": [
+			{"window":"am","value":0.5},
+			{"window":"pm","value":0.5}
+		]}}
+	}`)
+
+	// 两段不重叠，保存校验必须放行
+	require.NoError(t, CheckGroupTimeRatio(GroupTimeRatio2JSONString()))
+
+	billing := []struct {
+		name  string
+		at    time.Time
+		final float64
+	}{
+		{"周一 上午高峰", at(t, 0, 10, 0), 0.5},
+		{"周一 午休", at(t, 0, 13, 0), 0.35},
+		{"周一 下午高峰", at(t, 0, 15, 0), 0.5},
+		{"周一 晚间", at(t, 0, 20, 0), 0.35},
+		{"周一 高峰起点", at(t, 0, 9, 0), 0.5},
+		{"周一 高峰终点(开区间)", at(t, 0, 12, 0), 0.35},
+		{"周六 同一钟点", at(t, 5, 10, 0), 0.35},
+		{"周日 同一钟点", at(t, 6, 15, 0), 0.35},
+	}
+	for _, c := range billing {
+		t.Run("计费/"+c.name, func(t *testing.T) {
+			require.InDelta(t, c.final,
+				ResolveGroupRatioAt("default", "default", "m", c.at).Final, 1e-9)
+		})
+	}
+
+	viewAt := func(t *testing.T, ts time.Time) TimeRatioView {
+		t.Helper()
+		res := ResolveGroupRatioAt("default", "default", "m", ts)
+		v, ok := ResolveTimeRatioView("default", "m", ts, res.Base, res.UserMultiplier(),
+			res.NormalRatio*res.UserMultiplier())
+		require.True(t, ok)
+		// 下发给广场的每一档终值，必须就是那个时刻真正会扣的数
+		require.InDelta(t, 0.35, v.NormalRatio, 1e-9)
+		require.Len(t, v.Windows, 2)
+		for _, w := range v.Windows {
+			require.InDelta(t, 0.5, w.Ratio, 1e-9)
+		}
+		return v
+	}
+
+	t.Run("展示/上午高峰进行中", func(t *testing.T) {
+		v := viewAt(t, at(t, 0, 10, 0))
+		require.True(t, v.Active)
+		require.Equal(t, "上午工作时间", v.Label)
+		require.True(t, v.Windows[0].Active)
+		require.False(t, v.Windows[1].Active, "同一时刻只能有一档在进行中")
+		// 下一次状态翻转是上午档结束
+		require.Equal(t, at(t, 0, 12, 0).Format(time.RFC3339), v.Until)
+	})
+
+	t.Run("展示/午休时下一档是下午", func(t *testing.T) {
+		v := viewAt(t, at(t, 0, 13, 0))
+		require.False(t, v.Active)
+		require.False(t, v.Windows[0].Active)
+		require.False(t, v.Windows[1].Active)
+		require.Equal(t, at(t, 0, 14, 0).Format(time.RFC3339), v.Until)
+	})
+
+	t.Run("展示/下午高峰进行中", func(t *testing.T) {
+		v := viewAt(t, at(t, 0, 15, 0))
+		require.True(t, v.Active)
+		require.Equal(t, "下午工作时间", v.Label)
+		require.False(t, v.Windows[0].Active)
+		require.True(t, v.Windows[1].Active)
+		require.Equal(t, at(t, 0, 18, 0).Format(time.RFC3339), v.Until)
+	})
+
+	t.Run("展示/周五晚跳过周末到周一", func(t *testing.T) {
+		v := viewAt(t, at(t, 4, 20, 0))
+		require.False(t, v.Active)
+		require.Equal(t, at(t, 7, 9, 0).Format(time.RFC3339), v.Until)
+	})
+
+	t.Run("展示/最优档是高峰价且两档同价", func(t *testing.T) {
+		v := viewAt(t, at(t, 0, 20, 0))
+		// 高峰比常规贵，BestRatio 仍取时段里的最优（最小）值——它回答的是
+		// 「这些时段里最便宜的是多少」，与「比常规便宜吗」是两个问题，
+		// 后者由前端拿 normal_ratio 比较后决定角标用不用优惠色
+		require.InDelta(t, 0.5, v.BestRatio, 1e-9)
+		require.NotEmpty(t, v.BestLabel)
+	})
+}
+
+// TestResolveTimeRatioView_OverlapMarksOnlyChargedWindow 重叠时只标计费实际取用的
+// 那一档。
+//
+// 保存校验会拒绝重叠配置，所以这条只在手改 JSON 绕过校验时才会走到——但那正是
+// activeIdx 那段逻辑存在的理由。不测它的话，「把每个命中的档都标成进行中」这种
+// 改动不会被任何用例拦住（两个不重叠的档永不同时生效，用它们做断言是空的），
+// 而表现是详情页同时标出两个「进行中」，其中一个是用户并没有在享受的价。
+func TestResolveTimeRatioView_OverlapMarksOnlyChargedWindow(t *testing.T) {
+	seedRatios(t, `{"default":1}`, `{}`, `{}`)
+	seedTimeRatio(t, `{
+		"windows": {
+			"wide":   {"label":"宽档","start":"00:00","end":"08:00"},
+			"narrow": {"label":"窄档","start":"02:00","end":"04:00"}
+		},
+		"rules": {"default": {"m": [
+			{"window":"wide","value":0.8},
+			{"window":"narrow","value":0.5}
+		]}}
+	}`)
+
+	ts := at(t, 0, 3, 0) // 两档同时生效
+	res := ResolveGroupRatioAt("default", "default", "m", ts)
+	require.InDelta(t, 0.5, res.Final, 1e-9, "计费取最小值")
+
+	v, ok := ResolveTimeRatioView("default", "m", ts, res.Base, res.UserMultiplier(),
+		res.NormalRatio*res.UserMultiplier())
+	require.True(t, ok)
+	require.True(t, v.Active)
+	require.Equal(t, "窄档", v.Label)
+
+	active := make([]string, 0, 1)
+	for _, w := range v.Windows {
+		if w.Active {
+			active = append(active, w.Label)
+		}
+	}
+	require.Equal(t, []string{"窄档"}, active,
+		"只有计费实际取用的那一档能标「进行中」")
 }

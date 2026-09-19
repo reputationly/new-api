@@ -365,8 +365,15 @@ const PricingCardView = ({
                           shape='circle'
                           size='small'
                           style={{
-                            backgroundColor: DISCOUNT_HEX.cyan.bg,
-                            color: DISCOUNT_HEX.cyan.fg,
+                            // 用 timeInfo.color 而不是写死青色：本页面青色通篇
+                            // 表示优惠，而时段档完全可能比此刻更贵（常规倍率
+                            // 0.35、高峰 0.5），那时它是涨价提示，不是促销。
+                            backgroundColor: (
+                              DISCOUNT_HEX[timeInfo.color] || DISCOUNT_HEX.cyan
+                            ).bg,
+                            color: (
+                              DISCOUNT_HEX[timeInfo.color] || DISCOUNT_HEX.cyan
+                            ).fg,
                           }}
                         >
                           {timeInfo.text}
