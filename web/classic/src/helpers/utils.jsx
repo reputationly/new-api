@@ -47,21 +47,15 @@ import {
 // vite 配置整模块 shim 掉，放这里手机端拿不到）
 import {
   getGroupDiscountInfo,
-  getTimeDiscountInfo,
   formatWindowDays,
   formatWindowRange,
-  formatWindowLine,
-  formatTimeUntil,
   buildTimeWindowRows,
 } from './discount';
 
 export {
   getGroupDiscountInfo,
-  getTimeDiscountInfo,
   formatWindowDays,
   formatWindowRange,
-  formatWindowLine,
-  formatTimeUntil,
   buildTimeWindowRows,
 };
 

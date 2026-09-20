@@ -27,16 +27,13 @@ import {
   formatVideoMatrixSummary,
   getLobeHubIcon,
   getGroupDiscountInfo,
-  getTimeDiscountInfo,
-  formatWindowLine,
-  formatTimeUntil,
 } from '../../../../../helpers';
-import { DISCOUNT_HEX } from '../../../../../helpers/discount';
 import {
   renderLimitedItems,
   renderDescription,
 } from '../../../../common/ui/RenderUtils';
 import { useIsMobile } from '../../../../../hooks/common/useIsMobile';
+import TimeRulesTooltip from '../../TimeRulesTooltip';
 
 // record 可选：视频计费矩阵不是 quota_type 的取值，得看 record 本身。
 function renderQuotaType(type, t, record) {
@@ -186,11 +183,6 @@ export const getPricingTableColumns = ({
       // 折扣标签跟在模型名后面。这里没有 truncate，长名字会自然换行，
       // 不会像卡片视图那样把标签挤掉。
       const d = getGroupDiscountInfo(getPriceData(record)?.usedGroupRatio);
-      // 时段折扣按 calculateModelPrice 实际选中的那个分组查表，不能用 selectedGroup：
-      // 选「全部分组」时它是 'all'，而价格算的是最优分组那一档。
-      const timeInfo = getTimeDiscountInfo(
-        groupTimeRatio?.[getPriceData(record)?.usedGroup]?.[record.model_name],
-      );
       return (
         <div className='flex items-center gap-1 flex-wrap'>
           {renderModelTag(text, {
@@ -198,41 +190,33 @@ export const getPricingTableColumns = ({
               copyText(text);
             },
           })}
+          {/*
+            已知限制（有意接受）：分时规则挂在折扣角标的 tooltip 上，而角标只在此刻
+            有折扣时出现——「平时原价、只在夜里打折」的模型白天没有分时标识。
+            不为此新增角标，详见 PricingCardView 同处注释；归宿是详情弹窗的分时定价表。
+          */}
           {d && (
             <Tooltip
-              content={t('{{group}} 分组，已按 {{text}} 计价', {
-                group: getPriceData(record).usedGroup,
-                text: d.text,
-              })}
+              content={
+                <div>
+                  <div>
+                    {t('{{group}} 分组，已按 {{text}} 计价', {
+                      group: getPriceData(record).usedGroup,
+                      text: d.text,
+                    })}
+                  </div>
+                  {/* 分时规则挂在已有角标上，不另起角标——理由同卡片视图 */}
+                  <TimeRulesTooltip
+                    group={getPriceData(record).usedGroup}
+                    modelName={record.model_name}
+                    groupTimeRatio={groupTimeRatio}
+                    t={t}
+                  />
+                </div>
+              }
             >
               <Tag color={d.color} shape='circle' size='small'>
                 {d.text}
-              </Tag>
-            </Tooltip>
-          )}
-          {timeInfo && (
-            <Tooltip
-              content={
-                timeInfo.active
-                  ? t('{{label}}，{{until}} 结束', {
-                      label: timeInfo.text,
-                      until: formatTimeUntil(timeInfo.until),
-                    })
-                  : timeInfo.windows.map((w) => formatWindowLine(w)).join('；')
-              }
-            >
-              <Tag
-                shape='circle'
-                size='small'
-                style={{
-                  // 同卡片视图：涨价档不能用表示优惠的青色
-                  backgroundColor: (
-                    DISCOUNT_HEX[timeInfo.color] || DISCOUNT_HEX.cyan
-                  ).bg,
-                  color: (DISCOUNT_HEX[timeInfo.color] || DISCOUNT_HEX.cyan).fg,
-                }}
-              >
-                {timeInfo.text}
               </Tag>
             </Tooltip>
           )}

@@ -21,8 +21,6 @@ import {
 import { formatPriceWithCeiling } from '@classic/helpers/priceFormat';
 import {
   getGroupDiscountInfo,
-  getTimeDiscountInfo,
-  formatTimeUntil,
   buildTimeWindowRows,
   DISCOUNT_HEX,
 } from '@classic/helpers/discount';
@@ -221,40 +219,6 @@ const Models = () => {
     );
   };
 
-  // 某模型此刻的时段折扣。按 resolveGroupRatio 实际选中的那个分组查表——
-  // 「全部分组」时选的是最优分组，拿 group 去查会得到另一个分组的时段规则。
-  const timeInfoOf = (m) =>
-    getTimeDiscountInfo(
-      groupTimeRatioMap[resolveGroupRatio(m).group]?.[m.model_name],
-    );
-
-  // 时段角标。与上面的折扣标签并列而不是二选一：分组折扣和时段折扣是两层，
-  // 只显示其一会让用户按单层去反算价格，怎么算都对不上。
-  const timeTag = (m) => {
-    const info = timeInfoOf(m);
-    if (!info) return null;
-    // 用 info.color 而不是写死青色：青色在两端都表示优惠，而时段档完全可能
-    // 比此刻更贵（常规倍率 0.35、高峰 0.5），那时它是涨价提示。
-    const c = DISCOUNT_HEX[info.color] || DISCOUNT_HEX.cyan;
-    return (
-      <span
-        style={{
-          flexShrink: 0,
-          fontSize: 11,
-          lineHeight: '16px',
-          padding: '0 6px',
-          borderRadius: 8,
-          background: c.bg,
-          color: c.fg,
-        }}
-      >
-        {info.active && info.until
-          ? `${info.text}·至${formatTimeUntil(info.until)}`
-          : info.text}
-      </span>
-    );
-  };
-
   const inputPricePerM = (m) => m.model_ratio * 2 * resolveGroupRatio(m).ratio;
   // 折前价：少乘一个分组倍率。仅在有折扣时给，用于详情里的划线对比。
   const originalInputPricePerM = (m) => m.model_ratio * 2;
@@ -406,7 +370,6 @@ const Models = () => {
                     {m.model_name}
                   </div>
                   {discountTag(resolveGroupRatio(m).ratio)}
-                  {timeTag(m)}
                 </div>
                 {vendorName(m.vendor_id) && (
                   <div
@@ -715,7 +678,6 @@ const Models = () => {
                 normalLabel: '其余时段',
               });
               if (rows.length === 0) return null;
-              const current = rows.find((r) => r.active);
               return (
                 <div style={{ marginTop: 12 }}>
                   <div
@@ -742,13 +704,6 @@ const Models = () => {
                       </span>
                     </div>
                   ))}
-                  {current?.until && (
-                    <div
-                      style={{ fontSize: 12, color: '#9aa1ad', marginTop: 4 }}
-                    >
-                      当前档位至 {formatTimeUntil(current.until)} 结束
-                    </div>
-                  )}
                 </div>
               );
             })()}

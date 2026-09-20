@@ -41,11 +41,8 @@ import {
   formatVideoMatrixSummary,
   getLobeHubIcon,
   getGroupDiscountInfo,
-  getTimeDiscountInfo,
-  formatWindowLine,
-  formatTimeUntil,
 } from '../../../../../helpers';
-import { DISCOUNT_HEX } from '../../../../../helpers/discount';
+import TimeRulesTooltip from '../../TimeRulesTooltip';
 import PricingCardSkeleton from './PricingCardSkeleton';
 import { useMinimumLoadingTime } from '../../../../../hooks/common/useMinimumLoadingTime';
 import { renderLimitedItems } from '../../../../common/ui/RenderUtils';
@@ -287,21 +284,6 @@ const PricingCardView = ({
             pointsEnabledModels: pointsConfig?.enabledModels,
           });
 
-          // 时段折扣按 calculateModelPrice 实际选中的那个分组查表。
-          // 不能用 selectedGroup：选「全部分组」时它是 'all'，而价格算的是最优分组
-          // 那一档——查错分组会让标签和价格来自两个不同的分组。
-          const timeInfo = getTimeDiscountInfo(
-            groupTimeRatio?.[priceData?.usedGroup]?.[model.model_name],
-          );
-          const timeTooltip = timeInfo
-            ? timeInfo.active
-              ? t('{{label}}，{{until}} 结束', {
-                  label: timeInfo.text,
-                  until: formatTimeUntil(timeInfo.until),
-                })
-              : timeInfo.windows.map((w) => formatWindowLine(w)).join('；')
-            : '';
-
           return (
             <Card
               key={modelKey || index}
@@ -339,13 +321,38 @@ const PricingCardView = ({
                     */}
                     {(() => {
                       const d = getGroupDiscountInfo(priceData?.usedGroupRatio);
+                      // 已知限制（有意接受）：分时规则挂在这个折扣角标的 tooltip 上，
+                      // 而角标只在**此刻**有折扣时出现。于是「平时原价、只在夜里打折」
+                      // 的模型，白天在列表上没有任何分时标识——没有角标就没有挂载点。
+                      //
+                      // 不为此新增角标：曾经加过一个，拼上运营自定义的时段模板名后
+                      // 长度失控，把卡片左列压到模型名截断、价格逐行折行。
+                      // 分时信息的归宿是详情弹窗的「分时定价」表（卡片可点击进入），
+                      // 那里逐条列出各时段与「其余时段」，并标出当前生效的一档。
                       if (!d) return null;
                       return (
                         <Tooltip
-                          content={t('{{group}} 分组，已按 {{text}} 计价', {
-                            group: priceData.usedGroup,
-                            text: d.text,
-                          })}
+                          content={
+                            <div>
+                              <div>
+                                {t('{{group}} 分组，已按 {{text}} 计价', {
+                                  group: priceData.usedGroup,
+                                  text: d.text,
+                                })}
+                              </div>
+                              {/*
+                                分时规则挂在已有的折扣角标上，不另起角标：角标与模型名
+                                共用卡片头部这一行的宽度，多一个就会把左列压到模型名
+                                截断、价格逐行折行。没配分时的模型这里渲染为空。
+                              */}
+                              <TimeRulesTooltip
+                                group={priceData.usedGroup}
+                                modelName={model.model_name}
+                                groupTimeRatio={groupTimeRatio}
+                                t={t}
+                              />
+                            </div>
+                          }
                         >
                           <Tag color={d.color} shape='circle' size='small'>
                             {d.text}
@@ -353,33 +360,6 @@ const PricingCardView = ({
                         </Tooltip>
                       );
                     })()}
-
-                    {/*
-                      时段折扣角标。与上面的分组折扣标签并列而不是二选一：两者是
-                      正交的两层（分组打几折 × 此刻时段打几折），只显示其一会让
-                      用户按单层折扣去反算价格，怎么算都对不上。
-                    */}
-                    {timeInfo && (
-                      <Tooltip content={timeTooltip}>
-                        <Tag
-                          shape='circle'
-                          size='small'
-                          style={{
-                            // 用 timeInfo.color 而不是写死青色：本页面青色通篇
-                            // 表示优惠，而时段档完全可能比此刻更贵（常规倍率
-                            // 0.35、高峰 0.5），那时它是涨价提示，不是促销。
-                            backgroundColor: (
-                              DISCOUNT_HEX[timeInfo.color] || DISCOUNT_HEX.cyan
-                            ).bg,
-                            color: (
-                              DISCOUNT_HEX[timeInfo.color] || DISCOUNT_HEX.cyan
-                            ).fg,
-                          }}
-                        >
-                          {timeInfo.text}
-                        </Tag>
-                      </Tooltip>
-                    )}
 
                     {/* 复制按钮 */}
                     <Button

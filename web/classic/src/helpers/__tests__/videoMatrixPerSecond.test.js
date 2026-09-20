@@ -99,7 +99,9 @@ describe('分辨率排序权重', () => {
     expect(videoResolutionRank('2k')).toBeGreaterThan(
       videoResolutionRank('1080p'),
     );
-    expect(videoResolutionRank('4k')).toBeGreaterThan(videoResolutionRank('2k'));
+    expect(videoResolutionRank('4k')).toBeGreaterThan(
+      videoResolutionRank('2k'),
+    );
   });
 
   it('兜底行排最后', () => {

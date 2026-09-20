@@ -25,7 +25,6 @@ import {
   getEffectiveGroupRatio,
   getModelPriceItems,
   formatVideoMatrixSummary,
-  formatTimeUntil,
   buildTimeWindowRows,
 } from '../../../../../helpers';
 import { DISCOUNT_HEX } from '../../../../../helpers/discount';
@@ -272,9 +271,7 @@ const ModelPricingTable = ({
                         color: DISCOUNT_HEX.cyan.fg,
                       }}
                     >
-                      {t('进行中 · 至 {{until}}', {
-                        until: formatTimeUntil(record.until),
-                      })}
+                      {t('进行中')}
                     </Tag>
                   )}
                 </span>

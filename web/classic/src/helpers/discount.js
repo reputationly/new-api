@@ -46,94 +46,6 @@ export const DISCOUNT_HEX = {
   // 时段折扣单独一档冷色：它与上面三档（分组折扣力度）是两个维度，同一个模型
   // 可能两种标签并排，用同色系会让人以为是同一件事的两种说法。
   cyan: { bg: '#e6fffb', fg: '#08979c' },
-  // 中性：用于「该时段更贵」的提示。青色在本页面通篇表示优惠，
-  // 拿它去标一个涨价档等于在推销涨价。
-  neutral: { bg: '#f5f5f5', fg: '#595959' },
-};
-
-/**
- * 把后端下发的时段折扣数据翻译成展示信息。
- *
- * 入参是 /api/pricing 的 `group_time_ratio[group][model]`，形如：
- *   { active, best_ratio, best_label, normal_ratio, label, until,
- *     windows: [{label,start,end,days,tz,value,ratio,active}] }
- *
- * `best_ratio` 与每档的 `ratio` 都是后端算好的**最终倍率**，与列表价读的
- * group_model_ratio 同口径。所以这里只做「倍率 → 折扣文案」的翻译，不做任何乘法：
- * 时段折扣取代模型折扣而非叠乘（见 ResolveGroupRatioAt 的 Layer 4），
- * 「常规 8 折 / 空闲时段 5.6 折」是两个能直接比较的绝对值，用户不必心算。
- *
- * **active / until 是后端算好的，这里一个时间判断都不做。** 客户端时钟和时区都不可信
- * ——用户把手机时区改成 UTC，前端自算就会显示错误的「空闲时段中」，而价格是后端算的，
- * 于是标签和价格当场互相矛盾。
- *
- * 返回 null 表示不显示任何时段相关 UI（没配规则、或配了但折扣无效）。
- *
- * 不返回「折前价」之类的数：列表价的划线原价由既有的 originalInputPrice /
- * originalPrice 负责，而它们划的是**完全不打折**的价。时段系数已经被后端折进
- * usedGroupRatio，那套逻辑不改就已经是对的——在这里再算一个折前价，等于给同一件事
- * 造第二个口径。
- *
- * @returns {null | {
- *   active: boolean,  // 此刻是否在优惠时段内
- *   text: string,     // 角标文案
- *   color: string,    // DISCOUNT_HEX 的键：比常规便宜用 cyan，更贵用 neutral
- *   until: string,    // 当前状态结束时刻（RFC3339），可能为空
- *   windows: Array,   // 详情页分时价格表用
- * }}
- */
-export const getTimeDiscountInfo = (entry) => {
-  if (!entry || !Array.isArray(entry.windows) || entry.windows.length === 0) {
-    return null;
-  }
-  // best_ratio >= 1 表示全天各档都不算折扣——配了规则但没有优惠，标个角标只是噪音
-  const bestInfo = getGroupDiscountInfo(entry.best_ratio);
-  if (!bestInfo) return null;
-
-  // 参照物是**常规倍率**（未命中任何时段时的价），不是「此刻的最终倍率」。
-  //
-  // 角标要回答的是「这个时段比平时贵还是便宜」。拿此刻的最终倍率做参照，在命中
-  // 时段时它就等于那个时段自己的倍率——一个档跟它自己比，恒不成立，于是
-  // 「常规 0.35、高峰 0.5」这种配置在高峰时段内会渲染成青色促销角标，
-  // 而用户此刻付的比平时贵。
-  const normal = Number(entry.normal_ratio);
-  const isCheaper = (ratio) =>
-    !Number.isFinite(normal) || Number(ratio) < normal;
-
-  if (entry.active) {
-    // 命中档的倍率：拿它跟常规比，才知道此刻是优惠还是溢价
-    const activeRatio = entry.windows.find((w) => w.active)?.ratio;
-    return {
-      active: true,
-      text: entry.label ? `${entry.label}进行中` : '空闲时段进行中',
-      color: isCheaper(activeRatio) ? 'cyan' : 'neutral',
-      until: entry.until || '',
-      windows: entry.windows,
-    };
-  }
-
-  // 档位名取自后端（best_label），不能硬编码「空闲时段」：管理员完全可能只配一个
-  // **更贵**的高峰档（常规倍率 0.35、高峰 0.5），硬编码会显示「空闲时段 5折」
-  // ——标签指向错的时段，数字也让人以为非高峰时反而只有 5 折。
-  //
-  // 同价的时段可能不止一个（「上午工作时间」与「下午工作时间」都配 0.5）。
-  // 只点其中一个名字会让用户以为另一段不享受——best_label 取的是第一个命中最优值的
-  // 档位，另一个同价档被静默略过。多于一个时改说「等 N 个时段」。
-  const tiedCount = entry.windows.filter(
-    (w) => Number(w?.ratio) === Number(entry.best_ratio),
-  ).length;
-  const label = entry.best_label || '空闲时段';
-  return {
-    active: false,
-    // 绝对折扣，不说「再」：时段倍率取代模型倍率，不是在它之上再打一次
-    text:
-      tiedCount > 1
-        ? `${label}等${tiedCount}个时段 ${bestInfo.text}`
-        : `${label} ${bestInfo.text}`,
-    color: isCheaper(entry.best_ratio) ? 'cyan' : 'neutral',
-    until: entry.until || '',
-    windows: entry.windows,
-  };
 };
 
 // 与后端 setting/ratio_setting/group_time_ratio.go 的 defaultTimeRatioZone 一致。
@@ -156,20 +68,6 @@ export const formatWindowDays = (days) => {
   if (key === '0,6') return '周末';
   if (key === '0,1,2,3,4,5,6') return '每天';
   return set.map((d) => `周${WEEKDAY_LABELS[d] ?? d}`).join('、');
-};
-
-/**
- * 从后端下发的 RFC3339 时刻里取出「HH:MM」。
- *
- * **直接截字符串，不经过 Date。** 后端给的时刻已经带了时段自己的时区偏移
- * （如 2026-09-19T08:00:00+08:00），用 `new Date(...).getHours()` 会按**浏览器**
- * 时区重新渲染——用户手机设成 UTC 时，「至 08:00」会显示成「至 00:00」，而那个
- * 08:00 才是规则里写的那个数。
- */
-export const formatTimeUntil = (until) => {
-  if (typeof until !== 'string') return '';
-  const m = until.match(/T(\d{2}):(\d{2})/);
-  return m ? `${m[1]}:${m[2]}` : '';
 };
 
 const clockMinutes = (s) => {
@@ -207,19 +105,6 @@ export const formatWindowRange = (win) => {
   // 对所有人都一样的尾巴。
   const tz = String(win.tz ?? '').trim();
   return tz && tz !== DEFAULT_TIME_ZONE ? `${range}(${tz})` : range;
-};
-
-/**
- * 时段档位的一行文案，供角标 tooltip 使用。
- *
- * 折扣取 `w.ratio`（最终倍率）而不是 `w.value`（配置系数）：两者在分组基础倍率
- * 不为 1、或该用户有档位折扣时会分叉，于是 tooltip 说「×0.56」而紧挨着的角标
- * 说「5.0折」。角标与 tooltip 是同一次悬停里前后脚看到的两个数，必须同口径。
- */
-export const formatWindowLine = (w) => {
-  const d = getGroupDiscountInfo(w?.ratio);
-  const discount = d ? d.text : `${Number(Number(w?.ratio ?? 1).toFixed(4))}x`;
-  return `${formatWindowDays(w?.days)} ${formatWindowRange(w)} ${discount}`;
 };
 
 /**
@@ -273,7 +158,6 @@ export const buildTimeWindowRows = ({
         discount: getGroupDiscountInfo(w.ratio),
         ratio: Number(w.ratio),
         active,
-        until: entry.until || '',
       });
     });
 
@@ -289,7 +173,6 @@ export const buildTimeWindowRows = ({
         discount: getGroupDiscountInfo(entry.normal_ratio),
         ratio: Number(entry.normal_ratio),
         active: !anyActive,
-        until: entry.until || '',
       });
     }
   });
