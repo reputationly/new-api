@@ -1455,7 +1455,7 @@ function renderPriceSimpleCore({
       if (shouldShowCache) {
         segments.push({
           tone: 'secondary',
-          text: i18next.t('缓存读 {{price}} / 1M tokens', {
+          text: i18next.t('缓存命中 {{price}} / 1M tokens', {
             price: formatCompactDisplayPrice(modelRatio * 2.0 * cacheRatio),
           }),
         });
@@ -1612,7 +1612,7 @@ function renderPriceSimpleCore({
 
     if (shouldShowCache) {
       parts.push(
-        i18next.t('缓存读 {{price}} / 1M tokens', {
+        i18next.t('缓存命中 {{price}} / 1M tokens', {
           price: formatCompactDisplayPrice(modelRatio * 2.0 * cacheRatio),
         }),
       );
@@ -1818,7 +1818,7 @@ export function renderModelPrice(opts) {
       );
     } else if (cacheTokens > 0) {
       inputDesc = buildBillingText(
-        '(输入 {{nonCacheInput}} tokens / 1M tokens * {{symbol}}{{price}} + 缓存 {{cacheInput}} tokens / 1M tokens * {{symbol}}{{cachePrice}}',
+        '(输入 {{nonCacheInput}} tokens / 1M tokens * {{symbol}}{{price}} + 缓存命中 {{cacheInput}} tokens / 1M tokens * {{symbol}}{{cachePrice}}',
         {
           nonCacheInput: inputTokens - cacheTokens,
           cacheInput: cacheTokens,
@@ -1922,7 +1922,7 @@ export function renderModelPrice(opts) {
       }),
       cacheTokens > 0
         ? buildBillingPriceText(
-            '缓存输入价格：{{symbol}}{{total}} / 1M tokens',
+            '缓存命中价格：{{symbol}}{{total}} / 1M tokens',
             {
               symbol,
               usdAmount: inputRatioPrice * cacheRatio,
@@ -2053,7 +2053,7 @@ export function renderModelPrice(opts) {
         completionRatio: completionRatioValue,
       }),
       cacheInputTokens > 0
-        ? buildBillingText('缓存倍率 {{cacheRatio}}', {
+        ? buildBillingText('缓存命中倍率 {{cacheRatio}}', {
             cacheRatio: cacheRatioValue,
           })
         : null,
@@ -2088,7 +2088,7 @@ export function renderModelPrice(opts) {
       : null,
     cacheInputTokens > 0
       ? buildBillingText(
-          '缓存输入：{{tokens}} / 1M * 模型倍率 {{modelRatio}} * 缓存倍率 {{cacheRatio}} * {{ratioType}} {{ratio}} = {{amount}}',
+          '缓存命中：{{tokens}} / 1M * 模型倍率 {{modelRatio}} * 缓存命中倍率 {{cacheRatio}} * {{ratioType}} {{ratio}} = {{amount}}',
           {
             tokens: cacheInputTokens,
             modelRatio: modelRatioValue,
@@ -2226,7 +2226,7 @@ export function renderLogContent(opts) {
     appendPricePart(
       parts,
       cacheRatio !== 1.0,
-      '缓存输入价格 {{symbol}}{{price}} / 1M tokens',
+      '缓存命中价格 {{symbol}}{{price}} / 1M tokens',
       {
         symbol,
         price: (modelRatio * 2.0 * cacheRatio * rate).toFixed(6),
@@ -2271,7 +2271,7 @@ export function renderLogContent(opts) {
   } else {
     if (image) {
       return i18next.t(
-        '模型倍率 {{modelRatio}}，缓存倍率 {{cacheRatio}}，输出倍率 {{completionRatio}}，图片输入倍率 {{imageRatio}}，{{ratioType}} {{ratio}}',
+        '模型倍率 {{modelRatio}}，缓存命中倍率 {{cacheRatio}}，输出倍率 {{completionRatio}}，图片输入倍率 {{imageRatio}}，{{ratioType}} {{ratio}}',
         {
           modelRatio: modelRatio,
           cacheRatio: cacheRatio,
@@ -2283,7 +2283,7 @@ export function renderLogContent(opts) {
       );
     } else if (webSearch) {
       return i18next.t(
-        '模型倍率 {{modelRatio}}，缓存倍率 {{cacheRatio}}，输出倍率 {{completionRatio}}，{{ratioType}} {{ratio}}，Web 搜索调用 {{webSearchCallCount}} 次',
+        '模型倍率 {{modelRatio}}，缓存命中倍率 {{cacheRatio}}，输出倍率 {{completionRatio}}，{{ratioType}} {{ratio}}，Web 搜索调用 {{webSearchCallCount}} 次',
         {
           modelRatio: modelRatio,
           cacheRatio: cacheRatio,
@@ -2295,7 +2295,7 @@ export function renderLogContent(opts) {
       );
     } else {
       return i18next.t(
-        '模型倍率 {{modelRatio}}，缓存倍率 {{cacheRatio}}，输出倍率 {{completionRatio}}，{{ratioType}} {{ratio}}',
+        '模型倍率 {{modelRatio}}，缓存命中倍率 {{cacheRatio}}，输出倍率 {{completionRatio}}，{{ratioType}} {{ratio}}',
         {
           modelRatio: modelRatio,
           cacheRatio: cacheRatio,
@@ -2844,7 +2844,7 @@ export function renderAudioModelPrice(opts) {
       }),
       cacheTokens > 0
         ? buildBillingPriceText(
-            '缓存输入价格：{{symbol}}{{price}} / 1M tokens',
+            '缓存命中价格：{{symbol}}{{price}} / 1M tokens',
             {
               symbol,
               usdAmount: inputRatioPrice * cacheRatio,
@@ -2939,7 +2939,7 @@ export function renderAudioModelPrice(opts) {
         audioCompletionRatio: audioCompletionRatioValue,
         cachePart:
           cacheTokens > 0
-            ? `${i18next.t('缓存倍率')} ${cacheRatioValue}，`
+            ? `${i18next.t('缓存命中倍率')} ${cacheRatioValue}，`
             : '',
         ratioType: ratioLabel,
         ratio: groupRatio,
@@ -2961,7 +2961,7 @@ export function renderAudioModelPrice(opts) {
     ),
     cacheTokens > 0
       ? buildBillingText(
-          '缓存输入：{{tokens}} / 1M * 模型倍率 {{modelRatio}} * 缓存倍率 {{cacheRatio}} * {{ratioType}} {{ratio}} = {{amount}}',
+          '缓存命中：{{tokens}} / 1M * 模型倍率 {{modelRatio}} * 缓存命中倍率 {{cacheRatio}} * {{ratioType}} {{ratio}} = {{amount}}',
           {
             tokens: cacheTokens,
             modelRatio: modelRatioValue,
@@ -3143,11 +3143,14 @@ export function renderClaudeModelPrice(opts) {
 
     if (shouldShowCache) {
       breakdownSegments.push(
-        i18next.t('缓存 {{tokens}} tokens / 1M tokens * {{symbol}}{{price}}', {
-          tokens: cacheTokens,
-          symbol,
-          price: cacheUnitPrice.toFixed(6),
-        }),
+        i18next.t(
+          '缓存命中 {{tokens}} tokens / 1M tokens * {{symbol}}{{price}}',
+          {
+            tokens: cacheTokens,
+            symbol,
+            price: cacheUnitPrice.toFixed(6),
+          },
+        ),
       );
     }
 
@@ -3216,7 +3219,7 @@ export function renderClaudeModelPrice(opts) {
       }),
       cacheTokens > 0
         ? buildBillingPriceText(
-            '缓存输入价格：{{symbol}}{{price}} / 1M tokens',
+            '缓存命中价格：{{symbol}}{{price}} / 1M tokens',
             {
               symbol,
               usdAmount: cacheRatioPrice,
@@ -3316,7 +3319,7 @@ export function renderClaudeModelPrice(opts) {
 
   return renderBillingArticle([
     buildBillingText(
-      '模型倍率 {{modelRatio}}，输出倍率 {{completionRatio}}，缓存倍率 {{cacheRatio}}，{{ratioType}} {{ratio}}',
+      '模型倍率 {{modelRatio}}，输出倍率 {{completionRatio}}，缓存命中倍率 {{cacheRatio}}，{{ratioType}} {{ratio}}',
       {
         modelRatio: modelRatioValue,
         completionRatio: completionRatioValue,
@@ -3350,7 +3353,7 @@ export function renderClaudeModelPrice(opts) {
     ),
     shouldShowCache
       ? buildBillingText(
-          '缓存输入：{{tokens}} / 1M * 模型倍率 {{modelRatio}} * 缓存倍率 {{cacheRatio}} * {{ratioType}} {{ratio}} = {{amount}}',
+          '缓存命中：{{tokens}} / 1M * 模型倍率 {{modelRatio}} * 缓存命中倍率 {{cacheRatio}} * {{ratioType}} {{ratio}} = {{amount}}',
           {
             tokens: cacheTokens,
             modelRatio: modelRatioValue,
@@ -3493,7 +3496,7 @@ export function renderClaudeLogContent(opts) {
         symbol,
         price: (modelRatio * 2.0 * completionRatio * rate).toFixed(6),
       }),
-      i18next.t('缓存输入价格 {{symbol}}{{price}} / 1M tokens', {
+      i18next.t('缓存命中价格 {{symbol}}{{price}} / 1M tokens', {
         symbol,
         price: (modelRatio * 2.0 * cacheRatio * rate).toFixed(6),
       }),
@@ -3582,7 +3585,7 @@ export function renderClaudeLogContent(opts) {
     const parts = [
       i18next.t('模型倍率 {{modelRatio}}', { modelRatio }),
       i18next.t('输出倍率 {{completionRatio}}', { completionRatio }),
-      i18next.t('缓存倍率 {{cacheRatio}}', { cacheRatio }),
+      i18next.t('缓存命中倍率 {{cacheRatio}}', { cacheRatio }),
       cacheCreationPart,
       i18next.t('{{ratioType}} {{ratio}}', {
         ratioType: ratioLabel,

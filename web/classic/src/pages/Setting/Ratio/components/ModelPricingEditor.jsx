@@ -600,7 +600,7 @@ export default function ModelPricingEditor({
                         }
                       />
                       <PriceInput
-                        label={t('缓存输入价格')}
+                        label={t('缓存命中价格')}
                         value={selectedModel.cachePrice}
                         placeholder={t('输入 ¥/1M tokens')}
                         onChange={(value) =>

@@ -185,7 +185,7 @@ export default function ModelRatioSettings(props) {
         <Row gutter={16}>
           <Col xs={24} sm={16}>
             <Form.TextArea
-              label={t('提示缓存倍率')}
+              label={t('缓存命中倍率')}
               placeholder={t('为一个 JSON 文本，键为模型名称，值为倍率')}
               field={'CacheRatio'}
               autosize={{ minRows: 6, maxRows: 12 }}

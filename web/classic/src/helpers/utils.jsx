@@ -1100,7 +1100,7 @@ export const getModelPriceItems = (priceData, t, quotaDisplayType = 'USD') => {
         },
         {
           key: 'cache-ratio',
-          label: t('缓存输入倍率'),
+          label: t('缓存命中倍率'),
           value: priceData.cacheRatio,
           suffix: 'x',
         },
@@ -1154,7 +1154,7 @@ export const getModelPriceItems = (priceData, t, quotaDisplayType = 'USD') => {
       },
       {
         key: 'cache',
-        label: t('缓存输入价格'),
+        label: t('缓存命中价格'),
         value: priceData.cachePrice,
         suffix: unitSuffix,
       },

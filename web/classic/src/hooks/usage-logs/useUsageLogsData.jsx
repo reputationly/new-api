@@ -78,7 +78,10 @@ export const useLogsData = () => {
 
   // Export state
   const [exporting, setExporting] = useState(false);
-  const [exportProgress, setExportProgress] = useState({ current: 0, total: 0 });
+  const [exportProgress, setExportProgress] = useState({
+    current: 0,
+    total: 0,
+  });
 
   // User and admin
   const isAdminUser = isAdmin();
@@ -189,7 +192,9 @@ export const useLogsData = () => {
   };
 
   // Column visibility state
-  const [visibleColumns, setVisibleColumns] = useState(getInitialVisibleColumns);
+  const [visibleColumns, setVisibleColumns] = useState(
+    getInitialVisibleColumns,
+  );
   const [showColumnSelector, setShowColumnSelector] = useState(false);
   const [billingDisplayMode, setBillingDisplayMode] = useState(
     getInitialBillingDisplayMode,
@@ -273,7 +278,9 @@ export const useLogsData = () => {
       end_timestamp = formValues.dateRange[1];
     }
 
-    const rawIds = Array.isArray(formValues.channelIds) ? formValues.channelIds : [];
+    const rawIds = Array.isArray(formValues.channelIds)
+      ? formValues.channelIds
+      : [];
     const channelIds = rawIds
       .map((x) => Number(x))
       .filter((x) => Number.isFinite(x) && x > 0);
@@ -422,7 +429,10 @@ export const useLogsData = () => {
       // 在这条路上只是预扣锚点、没参与最终扣费。与 tiered_expr 同一套处理方式。
       const isVideoMatrix = !!other?.video_price_mode;
 
-      if (isAdminUser && (logs[i].type === 0 || logs[i].type === 2 || logs[i].type === 6)) {
+      if (
+        isAdminUser &&
+        (logs[i].type === 0 || logs[i].type === 2 || logs[i].type === 6)
+      ) {
         expandDataLocal.push({
           key: t('渠道信息'),
           value: `${logs[i].channel} - ${logs[i].channel_name || '[未知]'}`,
@@ -454,7 +464,7 @@ export const useLogsData = () => {
       }
       if (other?.cache_tokens > 0) {
         expandDataLocal.push({
-          key: t('缓存 Tokens'),
+          key: t('缓存命中 Tokens'),
           value: other.cache_tokens,
         });
       }
@@ -469,7 +479,10 @@ export const useLogsData = () => {
           expandDataLocal.push({
             key: t('日志详情'),
             value: other?.claude
-              ? renderClaudeLogContent({ ...other, displayMode: billingDisplayMode })
+              ? renderClaudeLogContent({
+                  ...other,
+                  displayMode: billingDisplayMode,
+                })
               : renderLogContent({ ...other, displayMode: billingDisplayMode }),
           });
         }
@@ -570,7 +583,14 @@ export const useLogsData = () => {
           expandDataLocal.push({
             key: t('失败原因'),
             value: (
-              <div style={{ maxWidth: 600, whiteSpace: 'normal', wordBreak: 'break-word', lineHeight: 1.6 }}>
+              <div
+                style={{
+                  maxWidth: 600,
+                  whiteSpace: 'normal',
+                  wordBreak: 'break-word',
+                  lineHeight: 1.6,
+                }}
+              >
                 {other.reason}
               </div>
             ),
@@ -587,7 +607,8 @@ export const useLogsData = () => {
         const ss = other.stream_status;
         const isOk = ss.status === 'ok';
         const statusLabel = isOk ? '✓ ' + t('正常') : '✗ ' + t('异常');
-        let streamValue = statusLabel + ' (' + (ss.end_reason || 'unknown') + ')';
+        let streamValue =
+          statusLabel + ' (' + (ss.end_reason || 'unknown') + ')';
         if (ss.error_count > 0) {
           streamValue += ` [${t('软错误')}: ${ss.error_count}]`;
         }
@@ -602,7 +623,14 @@ export const useLogsData = () => {
           expandDataLocal.push({
             key: t('流错误详情'),
             value: (
-              <div style={{ maxWidth: 600, whiteSpace: 'pre-line', wordBreak: 'break-word', lineHeight: 1.6 }}>
+              <div
+                style={{
+                  maxWidth: 600,
+                  whiteSpace: 'pre-line',
+                  wordBreak: 'break-word',
+                  lineHeight: 1.6,
+                }}
+              >
                 {ss.errors.join('\n')}
               </div>
             ),
@@ -841,8 +869,7 @@ export const useLogsData = () => {
       logType: formLogType,
     } = getFormValues();
 
-    const currentLogType =
-      formLogType !== undefined ? formLogType : logType;
+    const currentLogType = formLogType !== undefined ? formLogType : logType;
     const localStartTimestamp = Date.parse(start_timestamp) / 1000;
     const localEndTimestamp = Date.parse(end_timestamp) / 1000;
 
@@ -863,7 +890,10 @@ export const useLogsData = () => {
         disableDuplicate: true,
         onDownloadProgress: (evt) => {
           // 后端流式返回 Content-Length 通常缺失，evt.total 大多为 0，只展示已下载字节数
-          setExportProgress({ current: evt.loaded || 0, total: evt.total || 0 });
+          setExportProgress({
+            current: evt.loaded || 0,
+            total: evt.total || 0,
+          });
         },
       });
 

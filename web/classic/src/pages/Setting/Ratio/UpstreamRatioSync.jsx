@@ -283,7 +283,7 @@ export default function UpstreamRatioSync(props) {
     const typeMap = {
       model_ratio: t('模型倍率'),
       completion_ratio: t('补全倍率'),
-      cache_ratio: t('缓存倍率'),
+      cache_ratio: t('缓存命中倍率'),
       create_cache_ratio: t('缓存创建倍率'),
       image_ratio: t('图片倍率'),
       audio_ratio: t('音频倍率'),
@@ -679,7 +679,9 @@ export default function UpstreamRatioSync(props) {
               <Select.Option value='completion_ratio'>
                 {t('补全倍率')}
               </Select.Option>
-              <Select.Option value='cache_ratio'>{t('缓存倍率')}</Select.Option>
+              <Select.Option value='cache_ratio'>
+                {t('缓存命中倍率')}
+              </Select.Option>
               <Select.Option value='create_cache_ratio'>
                 {t('缓存创建倍率')}
               </Select.Option>
