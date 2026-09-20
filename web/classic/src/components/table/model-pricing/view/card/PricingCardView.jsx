@@ -332,8 +332,11 @@ const PricingCardView = ({
                       if (!d) return null;
                       return (
                         <Tooltip
+                          // 解除 Semi 默认的 240px 上限：分时规则每行不折行，
+                          // 宽度由最长的一行决定
+                          style={{ maxWidth: 'none' }}
                           content={
-                            <div>
+                            <div style={{ whiteSpace: 'nowrap' }}>
                               <div>
                                 {t('{{group}} 分组，已按 {{text}} 计价', {
                                   group: priceData.usedGroup,

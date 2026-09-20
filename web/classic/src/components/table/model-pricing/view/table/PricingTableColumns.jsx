@@ -197,8 +197,10 @@ export const getPricingTableColumns = ({
           */}
           {d && (
             <Tooltip
+              // 解除 Semi 默认的 240px 上限，理由同卡片视图
+              style={{ maxWidth: 'none' }}
               content={
-                <div>
+                <div style={{ whiteSpace: 'nowrap' }}>
                   <div>
                     {t('{{group}} 分组，已按 {{text}} 计价', {
                       group: getPriceData(record).usedGroup,

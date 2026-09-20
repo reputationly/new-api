@@ -19,8 +19,11 @@ const TimeRulesTooltip = ({ group, modelName, groupTimeRatio, t }) => {
   });
   if (rows.length === 0) return null;
 
+  // 每行不折行。Semi 的 .semi-tooltip-wrapper 硬编码 max-width:240px，
+  // 「工作时间（上午） 工作日 09:00-12:00 · 5折」这种一行会被折成两行，
+  // 读起来像两条规则。配合调用处的 maxWidth:'none'，由最长的一行决定浮层宽度。
   return (
-    <div className='text-xs leading-5'>
+    <div className='text-xs leading-5' style={{ whiteSpace: 'nowrap' }}>
       <div className='mb-1 opacity-80'>{t('分时定价')}</div>
       {rows.map((r) => (
         <div key={r.key}>
