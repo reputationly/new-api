@@ -52,8 +52,10 @@ type textDialect interface {
 
 	// MaxTokens 判定调用的 max_tokens。
 	//
-	// 各模型差异很大且**调小有真实危险**，所以由 dialect 而不是配置项决定：
-	// 见 zhongsenTextDialect 里关于 sec/se 截断的说明。
+	// 由 dialect 而不是配置项决定，因为**它在各模型下的语义根本不同**：输出会
+	// 自然停止的（qwen3guard）这只是个够不着的上限，不会自己停的（zhongsen）
+	// 它就是实际解码量，直接决定时延。差一个量级，且没法从配置页看出来。
+	// 两者的取值理由分别见各自 dialect 的 MaxTokens。
 	MaxTokens() int
 
 	// DefaultInputLimit 节点没填 input_limit 时的分段长度兜底（rune）。

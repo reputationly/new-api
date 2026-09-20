@@ -21,8 +21,9 @@ import (
 //  1. **没有 Controversial 这一档**。判定是二分的（sec vs 28 个风险码），
 //     所以 strictness 对这个 dialect 完全无效，松紧只能靠类别处置表调。
 //  2. **能给归因理由，但默认不取**。<explanation> 对每个请求（包括判成 sec 的）
-//     都会写，约 108 个 completion token，而这条路在全站同步路径上——
-//     所以 MaxTokens 压在 16，理由拿不到。取舍的完整说明见 MaxTokens。
+//     都会写，约 108 个 completion token，而且它**不会自己停**——这条路在全站
+//     同步路径上，所以 MaxTokens 压到 1（厂商所称的极速判定模式），理由拿不到。
+//     取舍的完整说明见 MaxTokens。
 //
 // 本文件的所有判断都对着模型自带的 chat template 核过
 // （tokenizer_config.json 里的 chat_template 字段），不是照文档写的。
@@ -97,30 +98,42 @@ type zhongsenTextDialect struct{}
 
 func (zhongsenTextDialect) Name() string { return system_setting.DialectZhongsenText }
 
-// MaxTokens 16。两个方向都有约束，这个值是夹出来的。
+// MaxTokens 1，即厂商文档所称的「极速判定模式」。
 //
-// **下界：绝不能按厂商文档的「极速模式」设成 1。** 29 个码里同时有 sec（安全）和
-// se（伦理违规），而 max_tokens=1 只保证拿到一个 token——如果 "sec" 在这个模型的
-// 词表里不是单 token，截断的结果就是 "se"，于是一次**安全放行被读成伦理类违规**。
-// 安全与违规在这里只差一个字符，是这个 dialect 最隐蔽的失效方式。
+// 这个值不是微优化，是**换用这个模型的前提**。它与 qwen3guard 的 MaxTokens 语义
+// 完全不同，别按同一套直觉去调：
 //
-// **上界：不能大到让它把 <explanation> 写出来。** 读模型自带的 chat template
-// 可以确认（tokenizer_config.json 里的 chat_template，`# Instructions` 段）：
+//   - qwen3guard 写完 "Safety: X\nCategories: Y" 就遇到 EOS，finish_reason=stop，
+//     实测恒为 8–12 token。那里的 max_tokens 是个够不着的**上限**，调它一个 token
+//     都省不下来。
+//   - 这个模型的模板指令是无条件的「类别码 + 下一行 <explanation> 理由」，没有
+//     safe/unsafe 分支，判成 sec 的请求照写。它**不会自己停**，finish_reason=length，
+//     给多少写多少。所以这里的 max_tokens 就是**实际解码量**。
 //
-//   - Identify the single most relevant category ID for the input text.
-//   - On the next line, provide a concise justification ... <explanation> ...
+// 而文本审核在每个请求的同步路径上、预扣费之前。A100-40G 单副本实测（输入 500 字、
+// 固定 20 QPS）：本值取 1 时 p50 38ms，取 16 时 p50 239ms，而线上 qwen3guard 是 121ms。
+// 也就是说取 16 会让换模型变成全站每请求 +100ms 以上的净劣化，取 1 才是净改善。
+// 厂商标称的 P95 50ms 同样是按 max_tokens=1 标定的。
 //
-// 这两条指令是**无条件**的，没有 safe/unsafe 分支——判成 sec 的请求同样会接着
-// 写那段理由（实测约 108 个 completion token）。而文本审核在每个请求的同步路径上、
-// 预扣费之前，99% 的流量都是安全的：给足预算等于**给每一个正常请求都加上一次
-// 百来 token 的解码**。对比 qwen3guard 实测输出只有 8–9 token、P99 415ms，
-// 那是五倍以上的时延回归。
+// **为什么 1 不会截断首行。** 早先这里写的是「绝不能设成 1」，理由是 29 个码里
+// sec（安全）与 se（伦理违规）只差一个字符，截断会把安全放行读成违规。那个担心
+// 依赖「一个 token 至少一个字符」，而 BPE 不是这样——实测 29 个码在本模型词表里
+// **全部是单 token**，且模板结尾已经把 `<think>\n\n</think>\n\n` 喂进 prompt，
+// 模型第一个生成的 token 就是类别码本身。30 条覆盖各类别的样本上，
+// max_tokens=1 与 16 的判定**完全一致**。
 //
-// 代价是拿不到 <explanation>，Verdict.Reason 对这个 dialect 恒为空。想要归因理由
-// 就把这个值调到 256 左右——那是一个「用全站时延换复核信息」的取舍，不该是默认。
-// 调之前先确认 reason_first 仍是 false（见 ChatTemplateKwargs），否则首行会变成
-// 理由，而调小这个值就直接把判定截没了。
-func (zhongsenTextDialect) MaxTokens() int { return 16 }
+// 换模型版本或换 chat template 之后要重新验证这一点，两步：
+//
+//	tokenizer.encode(code) 对 29 个码逐个断言 len == 1
+//	同一批样本跑 max_tokens=1 与较大值，断言首行一致
+//
+// 代价是拿不到 <explanation>，Verdict.Reason 对这个 dialect 恒为空——但这不是本次
+// 改动引入的：取 16 时预算只够首行，截断点必然落在 <explanation> 刚开头，
+// extractExplanation 因为缺闭合标签本来就返回空。想要归因理由得调到 200 以上
+// （实测完整一段约 108 token），那是「用全站时延换复核信息」的显式取舍。
+// 调之前先确认 reason_first 仍是 false（见 ChatTemplateKwargs），否则首行会变成理由，
+// 而这个值一小就直接把判定截没了。
+func (zhongsenTextDialect) MaxTokens() int { return 1 }
 
 // ChatTemplateKwargs 显式钉住输出顺序。
 //
@@ -193,10 +206,13 @@ func firstNonEmptyLine(s string) string {
 // **闭合标签缺失时返回空，而不是取到结尾。**
 //
 // 早先这里是「取到结尾」，理由写的是「半段理由对复核仍然有用」。那个判断在
-// max_tokens=16 的默认下是错的：那个预算刚够首行的类别码，输出必然止于
-// `<explanation>` 刚开头几个字，于是这一列存进去的是 "The" / "输入" 这种
-// 一两个词的碎片。复核看到它既读不懂也不能据它判断，而它长得**像**一条理由——
-// 比空着更有害。要完整理由就得把 MaxTokens 调上去，那时闭合标签自然在。
+// 默认预算下是错的：预算只够首行的类别码，输出必然止于 `<explanation>` 刚开头
+// 几个字，于是这一列存进去的是 "The" / "输入" 这种一两个词的碎片。复核看到它
+// 既读不懂也不能据它判断，而它长得**像**一条理由——比空着更有害。
+// 要完整理由就得把 MaxTokens 调上去，那时闭合标签自然在。
+//
+// 现在 MaxTokens=1，连 `<explanation>` 开标签都不会出现，这里恒走第一个 return。
+// 函数保留是因为它是 MaxTokens 调大后唯一的解析入口。
 func extractExplanation(content string) string {
 	const open = "<explanation>"
 	const close = "</explanation>"

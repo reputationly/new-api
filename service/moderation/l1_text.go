@@ -307,9 +307,10 @@ func callGuardWithKey(
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
-	// max_tokens 与 chat_template_kwargs 都由 dialect 给：前者各模型差一个量级、
-	// 而且**两个方向调错都有真实危险**（见 zhongsenTextDialect.MaxTokens），
-	// 后者是模板变量。所以它们不是配置项。
+	// max_tokens 与 chat_template_kwargs 都由 dialect 给：前者各模型差一个量级，
+	// 而且**它在各模型下的语义根本不同**——输出会自然停止的模型那里它只是个
+	// 够不着的上限，不会自己停的模型那里它就是实际解码量，直接决定全站时延
+	// （见 zhongsenTextDialect.MaxTokens）。后者是模板变量。所以它们不是配置项。
 	//
 	// 只发一条 user message：护栏模型的判定 prompt 内置在 chat template 里，
 	// **绝不能自己塞 system message** —— 有些模板（如 ZSWS）在检测到调用方给了

@@ -40,10 +40,12 @@ func TestZhongsenCodeTableIsComplete(t *testing.T) {
 
 // TestZhongsenSafeCodeNotConfusedWithEthicsCode 这个 dialect 最隐蔽的失效方式。
 //
-// 29 个码里同时有 sec（安全）和 se（伦理违规），两者只差一个字符。
-// 厂商文档推荐 max_tokens=1 的「极速模式」——如果 "sec" 在模型词表里不是单 token，
-// 截断的结果就是 "se"，于是一次**安全放行被读成伦理类违规**。
-// 这条用例钉住解析侧不做前缀匹配；MaxTokens 那一侧由下面那条钉。
+// 29 个码里同时有 sec（安全）和 se（伦理违规），两者只差一个字符——安全与违规
+// 在这里是一个字符的距离。任何「前缀匹配」「包含匹配」的解析写法都会在这一对上
+// 翻车，而翻车的方向是**安全放行被读成违规**，或者反过来。
+//
+// 这条钉住解析侧必须精确匹配。注意它不依赖 max_tokens 取值：解析拿到什么字符串
+// 就得判对什么，上游给的是完整码还是被截断的碎片，都不该让这一对混淆。
 func TestZhongsenSafeCodeNotConfusedWithEthicsCode(t *testing.T) {
 	d := zhongsenTextDialect{}
 
@@ -60,42 +62,24 @@ func TestZhongsenSafeCodeNotConfusedWithEthicsCode(t *testing.T) {
 	}
 }
 
-// TestZhongsenMaxTokensCannotTruncateFirstLine max_tokens 不能小到可能截断首行。
-//
-// 这条不是在测某个具体数字，是在拦一类改动：有人读了厂商文档的「极速模式」
-// 把 MaxTokens 调成 1 或 2 来降时延。最长的码是 3 个字符（sec/def/sci/ter/ext/acc/fin/med/law），
-// 而 sec→se 这一截就是安全与违规的反转。
-func TestZhongsenMaxTokensCannotTruncateFirstLine(t *testing.T) {
-	longest := 0
-	for code := range zhongsenCodes {
-		if len(code) > longest {
-			longest = len(code)
-		}
-	}
-	if len(zhongsenSafeCode) > longest {
-		longest = len(zhongsenSafeCode)
-	}
-	// 一个 token 最少一个字符，所以 max_tokens 至少要够最长的码，
-	// 再加一个换行/结束符的余量。
-	got := (zhongsenTextDialect{}).MaxTokens()
-	if got < longest+1 {
-		t.Fatalf("max_tokens=%d 可能截断首行（最长码 %d 字符）；"+
-			"截断 sec 会得到 se，把安全放行读成伦理违规", got, longest)
-	}
-}
-
 // TestZhongsenMaxTokensStaysOnFastPath max_tokens 不能大到让模型写出 <explanation>。
 //
 // 模型自带模板的 `# Instructions` 段是**无条件**的两条：先给类别 ID，下一行给
-// <explanation> 理由。没有 safe/unsafe 分支 —— 判成 sec 的请求同样会接着写那段
-// （实测约 108 个 completion token）。
+// <explanation> 理由。没有 safe/unsafe 分支 —— 判成 sec 的请求同样会接着写那段，
+// 而且它**不会自己停**（finish_reason=length），给多少写多少，实测完整一段约
+// 108 个 completion token。
 //
 // 而文本审核在每个请求的同步路径上、预扣费之前，99% 的流量是安全的：给足预算
-// 等于给每一个正常请求都加一次百来 token 的解码。对比 qwen3guard 实测输出
-// 只有 8–9 token、P99 415ms，那是五倍以上的时延回归。
+// 等于给每一个正常请求都加一次百来 token 的解码。A100-40G 单副本、输入 500 字、
+// 固定 20 QPS 实测，max_tokens 取 1 是 p50 38ms，取 16 就涨到 239ms，
+// 而线上 qwen3guard 是 121ms —— 也就是说这个值一调大，换模型就从净改善变成净劣化。
 //
 // 这条拦的是「为了拿归因理由把它调上去」这类改动 —— 那是个要显式决策的取舍，
 // 不该悄悄变成默认。
+//
+// 注：这里只钉上界。**下界不设**，因为 29 个码在本模型词表里全部是单 token
+// （已实测），max_tokens=1 就能拿到完整类别码；曾经有一条按「一个 token 至少
+// 一个字符」推出下界的用例，那个前提对 BPE 不成立，已删。理由见 MaxTokens 注释。
 func TestZhongsenMaxTokensStaysOnFastPath(t *testing.T) {
 	got := (zhongsenTextDialect{}).MaxTokens()
 	if got > 32 {
@@ -231,9 +215,10 @@ func TestZhongsenExtractExplanation(t *testing.T) {
 
 	// 闭合标签缺失（被 max_tokens 截断）：**返回空，不要碎片**。
 	//
-	// 默认 MaxTokens=16 只够首行的类别码，所以截断点必然落在 <explanation> 刚开头，
-	// 「取到结尾」会把 "The" 这种一两个词的碎片存进 detail。它读不懂又长得**像**
-	// 一条理由，比空着更有害。
+	// 默认 MaxTokens=1 根本走不到这里（整段输出就是一个类别码），这条覆盖的是
+	// 把 MaxTokens 调大、但又不够写完整一段理由的中间值：截断点落在 <explanation>
+	// 里面，「取到结尾」会把 "The" 这种一两个词的碎片存进 detail。它读不懂又长得
+	// **像**一条理由，比空着更有害。
 	j = d.Parse("dw\n<explanation>\nThe input requests bomb-making")
 	if j.Reason != "" {
 		t.Fatalf("理由不完整时应返回空而不是碎片，得到 %q", j.Reason)
