@@ -78,12 +78,25 @@ func AddRedemption(c *gin.Context) {
 		common.ApiErrorI18n(c, i18n.MsgRedemptionCountMax)
 		return
 	}
-	// 归一奖励类型；积分码需积分系统已启用（总开关关闭时禁建）
+	// 归一奖励类型。积分系统启用时一律发积分：额度码会把赠送混进 User.Quota（现金池），
+	// 令「真实入账」口径虚高（见 docs/revenue-reconciliation-design.md §6.1）。
+	// 未启用积分系统时整个赠送体系不存在，退回额度码，否则兑换码功能直接不可用。
+	//
+	// 只管新建。已发出的额度码照常兑换（model.Redeem 不受影响），否则等于没收用户资产。
+	pointsEnabled := operation_setting.GetPointsSetting().Enabled
 	if redemption.RewardType == "" {
-		redemption.RewardType = model.RedemptionRewardQuota
+		if pointsEnabled {
+			redemption.RewardType = model.RedemptionRewardPoints
+		} else {
+			redemption.RewardType = model.RedemptionRewardQuota
+		}
 	}
-	if redemption.RewardType == model.RedemptionRewardPoints && !operation_setting.GetPointsSetting().Enabled {
+	if redemption.RewardType == model.RedemptionRewardPoints && !pointsEnabled {
 		common.ApiErrorMsg(c, "积分系统未启用，无法创建积分兑换码")
+		return
+	}
+	if redemption.RewardType == model.RedemptionRewardQuota && pointsEnabled {
+		common.ApiErrorMsg(c, "兑换码已统一为积分：发放额度会使赠送混入现金池，导致入账对账口径失真")
 		return
 	}
 	if valid, msg := validateExpiredTime(c, redemption.ExpiredTime); !valid {
@@ -152,6 +165,16 @@ func UpdateRedemption(c *gin.Context) {
 	if statusOnly == "" {
 		if valid, msg := validateExpiredTime(c, redemption.ExpiredTime); !valid {
 			c.JSON(http.StatusOK, gin.H{"success": false, "message": msg})
+			return
+		}
+		// 积分系统启用后额度码只出不进：面额不可再改。否则拿一张存量未使用的额度码
+		// 改大面额，就等价于新发了一张大额额度码，绕开 AddRedemption 那道门。
+		// 改小一并禁止——请求里区分不出意图，而「改小」的正当需求极少（禁用后重发
+		// 积分码即可），留口子不如堵死。名称/有效期/状态不涉及资金，照常可改。
+		if cleanRedemption.RewardType == model.RedemptionRewardQuota &&
+			redemption.Quota != cleanRedemption.Quota &&
+			operation_setting.GetPointsSetting().Enabled {
+			common.ApiErrorMsg(c, "额度码已弃用，面额不可修改；如需调整请禁用后改用积分码")
 			return
 		}
 		// If you add more fields, please also update redemption.Update()

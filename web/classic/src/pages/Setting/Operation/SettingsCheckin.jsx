@@ -26,6 +26,7 @@ import {
   showSuccess,
   showWarning,
 } from '../../../helpers';
+import { isPointsEnabled } from '../../../helpers/quota';
 import { useTranslation } from 'react-i18next';
 
 export default function SettingsCheckin(props) {
@@ -47,6 +48,26 @@ export default function SettingsCheckin(props) {
       setInputs((inputs) => ({ ...inputs, [fieldName]: value }));
     };
   }
+
+  // 积分系统启用后签到只能发积分：发额度会把营销赠送混进现金池，令「真实入账」
+  // 口径虚高（后端 controller/option.go 同名 key 处有对应校验）。
+  // 未启用积分系统时整个赠送体系不存在，保留额度选项，否则签到无奖励可发。
+  //
+  // 存量已是额度时保留一个禁用项：Select 的值若不在 optionList 中会显示空白，
+  // 运营反而看不出当前处于什么模式，也就不知道要切。
+  const pointsEnabled = isPointsEnabled();
+  const currentRewardType = inputs['checkin_setting.reward_type'];
+  const rewardTypeOptions = pointsEnabled
+    ? [
+        ...(currentRewardType === 'quota'
+          ? [{ label: t('额度（已弃用）'), value: 'quota', disabled: true }]
+          : []),
+        { label: t('积分'), value: 'points' },
+      ]
+    : [
+        { label: t('额度'), value: 'quota' },
+        { label: t('积分'), value: 'points' },
+      ];
 
   function onSubmit() {
     const updateArray = compareObjects(inputs, inputsRow);
@@ -147,10 +168,14 @@ export default function SettingsCheckin(props) {
                 <Form.Select
                   field={'checkin_setting.reward_type'}
                   label={t('签到奖励类型')}
-                  optionList={[
-                    { label: t('额度'), value: 'quota' },
-                    { label: t('积分'), value: 'points' },
-                  ]}
+                  optionList={rewardTypeOptions}
+                  extraText={
+                    pointsEnabled && currentRewardType === 'quota'
+                      ? t(
+                          '额度模式已弃用：赠送混入现金池会使入账对账口径失真，请切换为积分',
+                        )
+                      : undefined
+                  }
                   onChange={handleFieldChange('checkin_setting.reward_type')}
                   disabled={!inputs['checkin_setting.enabled']}
                   style={{ width: '100%' }}

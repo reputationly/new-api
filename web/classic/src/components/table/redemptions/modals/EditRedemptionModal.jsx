@@ -324,8 +324,20 @@ const EditRedemptionModal = (props) => {
                           field='reward_type'
                           label={t('奖励类型')}
                           disabled={isEdit}
+                          // 本段仅在积分系统启用时渲染，此时新建一律发积分：额度码会把
+                          // 赠送混进现金池，令「真实入账」口径虚高（后端 CreateRedemption
+                          // 有对应校验）。历史额度码保留一个禁用项，否则编辑态下 Select
+                          // 的值不在 optionList 中会显示空白。
                           optionList={[
-                            { label: t('额度'), value: 'quota' },
+                            ...(values.reward_type === 'quota'
+                              ? [
+                                  {
+                                    label: t('额度（已弃用）'),
+                                    value: 'quota',
+                                    disabled: true,
+                                  },
+                                ]
+                              : []),
                             { label: t('积分'), value: 'points' },
                           ]}
                           style={{ width: '100%' }}

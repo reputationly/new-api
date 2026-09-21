@@ -76,11 +76,23 @@ func UserCheckin(userId int) (*Checkin, error) {
 	}
 
 	isPoints := setting.RewardType == CheckinRewardPoints
+	pointsEnabled := operation_setting.GetPointsSetting().Enabled
 
 	// 积分总开关关闭时停止发放（§11）：报错而非静默回退发额度，
 	// 避免管理员误配置下发出真金白银的 quota
-	if isPoints && !operation_setting.GetPointsSetting().Enabled {
+	if isPoints && !pointsEnabled {
 		return nil, errors.New("积分系统已关闭，签到积分奖励暂不可用")
+	}
+
+	// 与上一道门对称：积分系统已启用时不得再发额度——赠送进 User.Quota（现金池）
+	// 会让「真实入账」口径虚高，赠送一律走积分池。
+	// 同样选择拒绝而非静默降级，理由与上一道门一致：宁可暴露误配置，也不要在管理员
+	// 没意识到的情况下发出真金白银的 quota。不写签到记录，改好配置后当天仍可签。
+	//
+	// controller/option.go 已拦截「把 reward_type 改回 quota」，这里守的是存量配置
+	// 与绕过 API 直接改库的情况。
+	if !isPoints && pointsEnabled {
+		return nil, errors.New("签到奖励配置有误（额度模式已弃用），请联系管理员")
 	}
 
 	// 积分模式：未实名用户拦截并引导实名（§8.1，引导实名优先）

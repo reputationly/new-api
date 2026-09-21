@@ -171,6 +171,22 @@ func UpdateOption(c *gin.Context) {
 			})
 			return
 		}
+	case "checkin_setting.reward_type":
+		// 签到奖励发额度会把营销赠送混进 User.Quota（现金池），令「真实入账」口径虚高。
+		// 赠送一律走积分池，现金池只留真金白银。
+		//
+		// 只在积分系统启用时拦截：未启用积分系统时整个赠送体系不存在，此时拒绝 quota
+		// 会让签到功能无奖励可发、直接不可配置。
+		//
+		// 拦的是「把奖励类型设成 quota」这个动作本身，不是「存量为 quota 时的任何保存」——
+		// 分层配置按 key 逐个更新，运营改 min_quota 等其它字段不会撞上这道门。
+		if option.Value == model.CheckinRewardQuota && operation_setting.GetPointsSetting().Enabled {
+			c.JSON(http.StatusOK, gin.H{
+				"success": false,
+				"message": "签到奖励已统一为积分：发放额度会使赠送混入现金池，导致入账对账口径失真",
+			})
+			return
+		}
 	case "LinuxDOOAuthEnabled":
 		if option.Value == "true" && common.LinuxDOClientId == "" {
 			c.JSON(http.StatusOK, gin.H{
