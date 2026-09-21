@@ -246,6 +246,28 @@ func ApproveBankTransferOrder(id int, reviewerId int, creditedFen int64, reviewR
 			return err
 		}
 
+		// 入账流水。CashFen 取管理员确认的**实际到账**金额而非用户申报的 AmountFen——
+		// 申报与实收不符时以银行回单为准，营收只认真正进账的钱。
+		//
+		// ⚠️ 必须用 creditedFen / reviewRemark 这两个入参，不能读 order 上的同名字段：
+		// order 是上面 tx.First 取的**审批前**快照（见该处注释「仅读取不可变字段」），
+		// 而这两个值由本函数的条件 Updates(map) 写库，GORM 不回填结构体。
+		// 读 order.CreditedFen 拿到的是 pending 订单的 0，对公转账营收会被整体清零。
+		if _, err := insertFundEntryTx(tx, &FundEntry{
+			UserId:     order.UserId,
+			Account:    FundAccountCash,
+			Kind:       FundKindPrepay,
+			QuotaDelta: int64(quotaToAdd),
+			CashFen:    creditedFen,
+			Source:     FundSourceBankTransfer,
+			RefType:    FundRefBankTransfer,
+			RefId:      order.TradeNo,
+			OperatorId: reviewerId,
+			Remark:     reviewRemark,
+		}); err != nil {
+			return err
+		}
+
 		userId = order.UserId
 		amountFen = order.AmountFen
 		return nil

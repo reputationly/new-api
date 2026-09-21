@@ -163,6 +163,26 @@ func Redeem(key string, userId int) (quota int, rewardType string, err error) {
 		if err != nil {
 			return err
 		}
+		// 入账流水。兑换码是赠送物（CashFen=0，不计营收）——即使是卖出去的码，收入也已在
+		// 售卖那一刻由支付流水记过，这里再记一次就是重复确认收入。
+		// 幂等键取兑换码 id：一张码只能兑一次（Status 已置 used），天然唯一。
+		account := FundAccountCash
+		if redemption.RewardType == RedemptionRewardPoints {
+			account = FundAccountPoints
+		}
+		if _, err := insertFundEntryTx(tx, &FundEntry{
+			UserId:     userId,
+			Account:    account,
+			Kind:       FundKindGift,
+			QuotaDelta: int64(redemption.Quota),
+			CashFen:    0,
+			Source:     FundSourceRedemption,
+			RefType:    FundRefRedemption,
+			RefId:      strconv.Itoa(redemption.Id),
+			Remark:     redemption.Name,
+		}); err != nil {
+			return err
+		}
 		redemption.RedeemedTime = common.GetTimestamp()
 		redemption.Status = common.RedemptionCodeStatusUsed
 		redemption.UsedUserId = userId

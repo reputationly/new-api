@@ -11,6 +11,7 @@ import (
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/logger"
+	"github.com/QuantumNous/new-api/setting/operation_setting"
 
 	"github.com/bytedance/gopkg/util/gopool"
 	"gorm.io/gorm"
@@ -21,37 +22,43 @@ const UserNameMaxLength = 20
 // User if you add sensitive fields, don't forget to clean them in setupLogin function.
 // Otherwise, the sensitive information will be saved on local storage in plain text!
 type User struct {
-	Id               int            `json:"id"`
-	Username         string         `json:"username" gorm:"unique;index" validate:"max=20"`
-	Password         string         `json:"password" gorm:"not null;" validate:"min=8,max=20"`
-	OriginalPassword string         `json:"original_password" gorm:"-:all"` // this field is only for Password change verification, don't save it to database!
-	DisplayName      string         `json:"display_name" gorm:"index" validate:"max=20"`
-	Role             int            `json:"role" gorm:"type:int;default:1"`                                       // admin, common
-	Status           int            `json:"status" gorm:"type:int;default:1"`                                     // enabled, disabled
-	KycStatus        int            `json:"kyc_status" gorm:"type:int;default:0;column:kyc_status"`               // 0=未认证 1=审核中 2=已通过 3=已拒绝
-	EnterpriseStatus int            `json:"enterprise_status" gorm:"type:int;default:0;column:enterprise_status"` // 0=未认证 1=审核中 2=已通过 3=已拒绝
-	ParentUserId     int            `json:"parent_user_id" gorm:"type:int;default:0;index;column:parent_user_id"` // >0 表示子账户，值为所属企业主账户 user_id；恒为只读视图，不参与计费
-	ParentUsername   string         `json:"parent_username,omitempty" gorm:"-:all"`                               // 瞬态：子账户所属企业主账户的用户名，仅管理员列表按需填充展示归属，不入库
-	Email            string         `json:"email" gorm:"index" validate:"max=50"`
-	GitHubId         string         `json:"github_id" gorm:"column:github_id;index"`
-	DiscordId        string         `json:"discord_id" gorm:"column:discord_id;index"`
-	OidcId           string         `json:"oidc_id" gorm:"column:oidc_id;index"`
-	WeChatId         string         `json:"wechat_id" gorm:"column:wechat_id;index"`
-	TelegramId       string         `json:"telegram_id" gorm:"column:telegram_id;index"`
-	VerificationCode string         `json:"verification_code" gorm:"-:all"`                                    // this field is only for Email verification, don't save it to database!
-	AccessToken      *string        `json:"access_token" gorm:"type:char(32);column:access_token;uniqueIndex"` // this token is for system management
-	Quota            int            `json:"quota" gorm:"type:bigint;default:0"`                                // bigint：32 位列上限仅 ~$4294（¥3.1万），对公转账大额入账必溢出（PG 报错/MySQL 截断）
-	UsedQuota        int            `json:"used_quota" gorm:"type:bigint;default:0;column:used_quota"`         // used quota，同 Quota 升为 bigint
-	PointsBalance    int            `json:"points_balance" gorm:"type:bigint;default:0;column:points_balance"` // 积分余额(quota unit)，与 Quota 同单位；bigint 防溢出（积分内部放大约 68 倍）
-	PointsUsed       int            `json:"points_used" gorm:"type:bigint;default:0;column:points_used"`       // 已用积分(quota unit)
+	Id               int     `json:"id"`
+	Username         string  `json:"username" gorm:"unique;index" validate:"max=20"`
+	Password         string  `json:"password" gorm:"not null;" validate:"min=8,max=20"`
+	OriginalPassword string  `json:"original_password" gorm:"-:all"` // this field is only for Password change verification, don't save it to database!
+	DisplayName      string  `json:"display_name" gorm:"index" validate:"max=20"`
+	Role             int     `json:"role" gorm:"type:int;default:1"`                                       // admin, common
+	Status           int     `json:"status" gorm:"type:int;default:1"`                                     // enabled, disabled
+	KycStatus        int     `json:"kyc_status" gorm:"type:int;default:0;column:kyc_status"`               // 0=未认证 1=审核中 2=已通过 3=已拒绝
+	EnterpriseStatus int     `json:"enterprise_status" gorm:"type:int;default:0;column:enterprise_status"` // 0=未认证 1=审核中 2=已通过 3=已拒绝
+	ParentUserId     int     `json:"parent_user_id" gorm:"type:int;default:0;index;column:parent_user_id"` // >0 表示子账户，值为所属企业主账户 user_id；恒为只读视图，不参与计费
+	ParentUsername   string  `json:"parent_username,omitempty" gorm:"-:all"`                               // 瞬态：子账户所属企业主账户的用户名，仅管理员列表按需填充展示归属，不入库
+	Email            string  `json:"email" gorm:"index" validate:"max=50"`
+	GitHubId         string  `json:"github_id" gorm:"column:github_id;index"`
+	DiscordId        string  `json:"discord_id" gorm:"column:discord_id;index"`
+	OidcId           string  `json:"oidc_id" gorm:"column:oidc_id;index"`
+	WeChatId         string  `json:"wechat_id" gorm:"column:wechat_id;index"`
+	TelegramId       string  `json:"telegram_id" gorm:"column:telegram_id;index"`
+	VerificationCode string  `json:"verification_code" gorm:"-:all"`                                    // this field is only for Email verification, don't save it to database!
+	AccessToken      *string `json:"access_token" gorm:"type:char(32);column:access_token;uniqueIndex"` // this token is for system management
+	Quota            int     `json:"quota" gorm:"type:bigint;default:0"`                                // bigint：32 位列上限仅 ~$4294（¥3.1万），对公转账大额入账必溢出（PG 报错/MySQL 截断）
+	UsedQuota        int     `json:"used_quota" gorm:"type:bigint;default:0;column:used_quota"`         // used quota，同 Quota 升为 bigint
+	PointsBalance    int     `json:"points_balance" gorm:"type:bigint;default:0;column:points_balance"` // 积分余额(quota unit)，与 Quota 同单位；bigint 防溢出（积分内部放大约 68 倍）
+	PointsUsed       int     `json:"points_used" gorm:"type:bigint;default:0;column:points_used"`       // 已用积分(quota unit)
+	// 信用账户（先用后付）。与 Quota / PointsBalance 并列的第三个资金形态，但性质不同：
+	// 消耗产生**应收账款**，不是成本也不是已实现收入。刻意不进 Quota——进了用户会看到
+	// 虚高余额并能透支，风控与展示口径双双失真。单位同为 quota unit。
+	CreditLimit      int64          `json:"credit_limit" gorm:"type:bigint;default:0;column:credit_limit"`     // 授信上限，0 = 未开授信
+	CreditUsed       int64          `json:"credit_used" gorm:"type:bigint;default:0;column:credit_used"`       // 已用未结（应收余额）
+	CreditSettled    int64          `json:"credit_settled" gorm:"type:bigint;default:0;column:credit_settled"` // 累计已回款核销
 	KycPointsGranted bool           `json:"kyc_points_granted" gorm:"default:false;column:kyc_points_granted"` // 实名积分是否已发放(防 KYC reset 后重复领取)
 	RequestCount     int            `json:"request_count" gorm:"type:int;default:0;"`                          // request number
 	Group            string         `json:"group" gorm:"type:varchar(64);default:'default'"`
 	AffCode          string         `json:"aff_code" gorm:"type:varchar(32);column:aff_code;uniqueIndex"`
 	AffCount         int            `json:"aff_count" gorm:"type:int;default:0;column:aff_count"`
-	AffQuota         int            `json:"aff_quota" gorm:"type:int;default:0;column:aff_quota"`           // 邀请剩余额度
-	AffHistoryQuota  int            `json:"aff_history_quota" gorm:"type:int;default:0;column:aff_history"`             // 邀请历史额度
-	AffPointsEarned  int            `json:"aff_points_earned" gorm:"type:bigint;default:0;column:aff_points_earned"`    // 累计通过邀请获得的积分(quota unit)，被邀请人实名后累加
+	AffQuota         int            `json:"aff_quota" gorm:"type:int;default:0;column:aff_quota"`                    // 邀请剩余额度
+	AffHistoryQuota  int            `json:"aff_history_quota" gorm:"type:int;default:0;column:aff_history"`          // 邀请历史额度
+	AffPointsEarned  int            `json:"aff_points_earned" gorm:"type:bigint;default:0;column:aff_points_earned"` // 累计通过邀请获得的积分(quota unit)，被邀请人实名后累加
 	InviterId        int            `json:"inviter_id" gorm:"type:int;column:inviter_id;index"`
 	DeletedAt        gorm.DeletedAt `gorm:"index"`
 	LinuxDOId        string         `json:"linux_do_id" gorm:"column:linux_do_id;index"`
@@ -590,12 +597,11 @@ func (user *User) Insert(inviterId int) error {
 			return err
 		}
 	}
-	user.Quota = common.QuotaForNewUser
-	// 注册礼额度与积分两路独立：额度是真金白银的钱包，积分是营销赠送钱包（白名单分组下
-	// 优先抵扣）。运营可只发其一、都发或都不发，互不影响。随 Create 一起落库而不是建完
-	// 再 Increase——新号还没有缓存，一次写入即最终态，省掉一次写和一次缓存失效。
+	applyNewUserRegisterGrant(user)
+	// 注册礼分两路配置（QuotaForNewUser 与积分设置），运营可只发其一、都发或都不发。
+	// 积分系统启用时两者都落进积分池（见 applyNewUserRegisterGrant），现金池只留真金白银。
 	newUserPoints, newUserPointsQuota, pointsChannel := NewUserPointsGrant(inviterId)
-	user.PointsBalance = newUserPointsQuota
+	user.PointsBalance += newUserPointsQuota
 	//user.SetAccessToken(common.GetUUID())
 	user.AffCode = common.GetRandomString(4)
 	// 持久化邀请关系：邮箱注册由 controller 预设 InviterId，但 GitHub/LinuxDO 走本函数时未预设。
@@ -630,7 +636,7 @@ func (user *User) Insert(inviterId int) error {
 	}
 
 	if common.QuotaForNewUser > 0 {
-		RecordLog(user.Id, LogTypeSystem, fmt.Sprintf("新用户注册赠送 %s", logger.LogQuota(common.QuotaForNewUser)))
+		RecordLog(user.Id, LogTypeSystem, newUserRegisterGrantLog())
 	}
 	// 额度与积分各记一条：两者是两个钱包，合成一条反而看不出哪份进了哪边。
 	// 渠道奖励额度通常远高于默认值，日志里必须带上是哪个渠道给的，否则对账时
@@ -638,6 +644,10 @@ func (user *User) Insert(inviterId int) error {
 	if newUserPoints > 0 {
 		RecordLog(user.Id, LogTypeSystem, newUserPointsLog(newUserPoints, pointsChannel))
 	}
+	// 第三参传本次**赠分**的 quota，不能传 user.PointsBalance：积分系统启用时
+	// applyNewUserRegisterGrant 已把 QuotaForNewUser 折进 PointsBalance，再传总余额会让
+	// 注册礼额度被两条流水各记一次，合计比真实余额变化多出一个 QuotaForNewUser。
+	recordNewUserGrantEntries(user.Id, common.QuotaForNewUser, newUserPointsQuota, pointsChannel)
 	// 只要存在邀请人就记录邀请关系（aff_count++），与奖励解耦。
 	// 邀请奖励改为被邀请人实名后发放积分（service.GrantKycPoints），此处不再发放任何额度。
 	if inviterId != 0 {
@@ -657,11 +667,11 @@ func (user *User) InsertWithTx(tx *gorm.DB, inviterId int) error {
 			return err
 		}
 	}
-	user.Quota = common.QuotaForNewUser
+	applyNewUserRegisterGrant(user)
 	// 注册礼见 Insert 处注释；OAuth 路径同样随 tx.Create 一起落库，
 	// 积分数带给提交后的 FinalizeOAuthUserCreation 记日志
 	newUserPoints, newUserPointsQuota, pointsChannel := NewUserPointsGrant(inviterId)
-	user.PointsBalance = newUserPointsQuota
+	user.PointsBalance += newUserPointsQuota
 	user.newUserPointsGranted = newUserPoints
 	user.newUserPointsChannel = pointsChannel
 	user.AffCode = common.GetRandomString(4)
@@ -700,13 +710,18 @@ func (user *User) FinalizeOAuthUserCreation(inviterId int) {
 	}
 
 	if common.QuotaForNewUser > 0 {
-		RecordLog(user.Id, LogTypeSystem, fmt.Sprintf("新用户注册赠送 %s", logger.LogQuota(common.QuotaForNewUser)))
+		RecordLog(user.Id, LogTypeSystem, newUserRegisterGrantLog())
 	}
 	// 用 InsertWithTx 带过来的发放数（user 就是写库时那个实例），与 Insert 路径同源
 	if user.newUserPointsGranted > 0 {
 		RecordLog(user.Id, LogTypeSystem,
 			newUserPointsLog(user.newUserPointsGranted, user.newUserPointsChannel))
 	}
+	// 同 Insert 路径：传本次赠分的 quota 而非总余额。此处没有 newUserPointsQuota 局部变量，
+	// 用发放数换算——NewUserPointsGrant 返回的就是 (points, PointsToQuota(points), channel)，
+	// 两者恒等。
+	recordNewUserGrantEntries(user.Id, common.QuotaForNewUser,
+		common.PointsToQuota(user.newUserPointsGranted), user.newUserPointsChannel)
 	// 只要存在邀请人就记录邀请关系（aff_count++），与奖励解耦。
 	// 邀请奖励改为被邀请人实名后发放积分（service.GrantKycPoints），此处不再发放任何额度。
 	if inviterId != 0 {
@@ -1332,4 +1347,79 @@ func RootUserExists() bool {
 		return false
 	}
 	return true
+}
+
+// recordNewUserGrantEntries 为注册礼补记流水（注册额度 + 注册赠分）。
+//
+// 两份都是赠送（CashFen=0，不计营收）。幂等键用 userId——一个用户只注册一次。
+// 额度与积分分两条：它们进的是两个钱包，合成一条就看不出哪份落在哪边，
+// 而「现金池里混了多少赠送」正是资金对账要回答的问题。
+//
+// Account 跟随注册礼的实际落点（applyNewUserRegisterGrant）：积分系统启用时进积分池，
+// 未启用时仍进现金池。流水账户与余额实际变动的那个池子必须一致，否则自洽校验不平。
+func recordNewUserGrantEntries(userId int, quotaGranted int, pointsQuota int, pointsChannel string) {
+	if quotaGranted > 0 {
+		RecordFundEntry(&FundEntry{
+			UserId:     userId,
+			Account:    newUserRegisterGrantAccount(),
+			Kind:       FundKindGift,
+			QuotaDelta: int64(quotaGranted),
+			CashFen:    0,
+			Source:     FundSourceRegister,
+			RefType:    FundRefUser,
+			RefId:      fmt.Sprintf("register-quota:%d", userId),
+		})
+	}
+	if pointsQuota > 0 {
+		RecordFundEntry(&FundEntry{
+			UserId:     userId,
+			Account:    FundAccountPoints,
+			Kind:       FundKindGift,
+			QuotaDelta: int64(pointsQuota),
+			CashFen:    0,
+			Source:     FundSourceRegister,
+			RefType:    FundRefUser,
+			RefId:      fmt.Sprintf("register-points:%d", userId),
+			Remark:     pointsChannel,
+		})
+	}
+}
+
+// applyNewUserRegisterGrant 决定注册礼落到哪个钱包。
+//
+// 赠送一律走积分池：发进 User.Quota（现金池）会让资金对账的「真实入账」虚高，
+// 与签到、兑换码已收敛的口径一致。QuotaForNewUser 配的就是 quota unit，
+// 与 PointsBalance 同单位，直接并入即可，无需换算。
+//
+// 积分系统未启用时保持原样发额度——那种部署里整个赠送体系不存在，
+// 收敛过去等于把注册礼作废（积分不可用），与签到/兑换码的降级逻辑同理。
+//
+// 随 Create 一起落库而不是建完再 Increase：新号还没有缓存，一次写入即最终态。
+func applyNewUserRegisterGrant(user *User) {
+	if common.QuotaForNewUser <= 0 {
+		return
+	}
+	if operation_setting.GetPointsSetting().Enabled {
+		user.PointsBalance += common.QuotaForNewUser
+		return
+	}
+	user.Quota = common.QuotaForNewUser
+}
+
+// newUserRegisterGrantAccount 注册礼额度实际落到的账户，供流水记账取用。
+func newUserRegisterGrantAccount() string {
+	if operation_setting.GetPointsSetting().Enabled {
+		return FundAccountPoints
+	}
+	return FundAccountCash
+}
+
+// newUserRegisterGrantLog 注册礼的日志文案，口径跟随实际落点：
+// 进积分池就按积分数展示，进现金池才按额度展示。两者数字量级差约 685 倍，
+// 用错口径会让运营在日志里看到一个完全对不上的数。
+func newUserRegisterGrantLog() string {
+	if operation_setting.GetPointsSetting().Enabled {
+		return fmt.Sprintf("新用户注册赠送 %d 积分", common.QuotaToPoints(common.QuotaForNewUser))
+	}
+	return fmt.Sprintf("新用户注册赠送 %s", logger.LogQuota(common.QuotaForNewUser))
 }

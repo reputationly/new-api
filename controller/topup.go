@@ -540,6 +540,20 @@ func EpayNotify(c *gin.Context) {
 				logger.LogError(c.Request.Context(), fmt.Sprintf("易支付 更新用户额度失败 trade_no=%s user_id=%d client_ip=%s quota_to_add=%d error=%q topup=%q", topUp.TradeNo, topUp.UserId, c.ClientIP(), quotaToAdd, err.Error(), common.GetJsonString(topUp)))
 				return
 			}
+			// 入账流水。这条路径的余额变更不在事务内（IncreaseUserQuota 是独立调用），
+			// 故用 best-effort 记账：主流程是「用户的钱已经到账」，不该因记账失败而中断。
+			// 漏记由每日自洽校验兜底发现。幂等键取 trade_no，回调重投只记一次。
+			model.RecordFundEntry(&model.FundEntry{
+				UserId:     topUp.UserId,
+				Account:    model.FundAccountCash,
+				Kind:       model.FundKindPrepay,
+				QuotaDelta: int64(quotaToAdd),
+				CashFen:    model.YuanToFen(topUp.Money),
+				Source:     model.FundSourceOnlinePay,
+				RefType:    model.FundRefTopUp,
+				RefId:      topUp.TradeNo,
+				Remark:     topUp.PaymentMethod,
+			})
 			logger.LogInfo(c.Request.Context(), fmt.Sprintf("易支付 充值成功 trade_no=%s user_id=%d client_ip=%s quota_to_add=%d money=%.2f topup=%q", topUp.TradeNo, topUp.UserId, c.ClientIP(), quotaToAdd, topUp.Money, common.GetJsonString(topUp)))
 			model.RecordTopupLog(topUp.UserId, fmt.Sprintf("使用在线充值成功，充值金额: %v，支付金额：%f", logger.LogQuota(quotaToAdd), topUp.Money), c.ClientIP(), topUp.PaymentMethod, "epay")
 		}

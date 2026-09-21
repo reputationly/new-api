@@ -307,6 +307,7 @@ func migrateDB() error {
 		&ModerationLog{},
 		&ChannelModelCost{},
 		&TopupPackage{},
+		&FundEntry{},
 	)
 	if err != nil {
 		return err

@@ -555,6 +555,35 @@ func CompleteSubscriptionOrder(tradeNo string, providerPayload string, expectedP
 		if err := upsertSubscriptionTopUpTx(tx, &order); err != nil {
 			return err
 		}
+		// 套餐售卖收入。幂等键用 (subscription_order, trade_no)。
+		//
+		// CashFen 取 order.Money（= plan.PriceAmount），记的是**支付网关实收的那个数**：
+		//   支付宝/微信  下单前强制校验 plan.Currency == CNY，收 ¥PriceAmount；
+		//   易支付        不校验币种，但把 PriceAmount 直接当人民币金额提交给网关；
+		// 两者实收都是 ¥PriceAmount，故直接换算成分。
+		//
+		// ⚠️ plan.Currency 在此**有意不参与计算**——它默认是 'USD'，且前端价格展示走的是
+		// 站点全局币种配置而非该字段，语义并不可靠。若日后启用 Stripe/Creem
+		// （按 plan 币种实收），必须改为按实收币种折算，否则非 CNY 套餐的营收会 1:1 记账。
+		//
+		// ⚠️ 埋点只能挂在这一处：upsertSubscriptionTopUpTx 上一行刚往 topups 写了一条
+		// 影子记录（Amount=0、trade_no 与本订单相同）。那条记录不经过 topup.go 的任何
+		// 充值函数（它们要求 Status=Pending，而影子记录直接是 Success），所以不会被
+		// 重复埋点；但若将来有人给 topups 加通用埋点，务必按 Amount=0 把影子记录排除，
+		// 否则同一笔套餐收入会被记两次、营收翻倍。
+		if _, err := insertFundEntryTx(tx, &FundEntry{
+			UserId:     order.UserId,
+			Account:    FundAccountSubscription,
+			Kind:       FundKindPrepay,
+			QuotaDelta: plan.TotalAmount,
+			CashFen:    YuanToFen(order.Money),
+			Source:     FundSourceSubscription,
+			RefType:    FundRefSubscriptionOrder,
+			RefId:      order.TradeNo,
+			Remark:     plan.Title,
+		}); err != nil {
+			return err
+		}
 		order.Status = common.TopUpStatusSuccess
 		order.CompleteTime = common.GetTimestamp()
 		if providerPayload != "" {

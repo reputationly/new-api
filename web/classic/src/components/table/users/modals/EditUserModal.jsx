@@ -34,6 +34,7 @@ import {
   isPointsEnabled,
 } from '../../../../helpers/quota';
 import { useIsMobile } from '../../../../hooks/common/useIsMobile';
+import FundOperationModal from './FundOperationModal';
 import {
   Button,
   Modal,
@@ -73,6 +74,7 @@ const EditUserModal = (props) => {
   const [adjustMode, setAdjustMode] = useState('add');
   const [adjustLoading, setAdjustLoading] = useState(false);
   const [adjustPointsModalOpen, setAdjustPointsModalOpen] = useState(false);
+  const [fundModalOpen, setFundModalOpen] = useState(false);
   const [adjustPointsLocal, setAdjustPointsLocal] = useState('');
   const [adjustPointsMode, setAdjustPointsMode] = useState('add');
   const [adjustPointsLoading, setAdjustPointsLoading] = useState(false);
@@ -451,6 +453,18 @@ const EditUserModal = (props) => {
                         />
                       </Col>
 
+                      <Col span={24}>
+                        <Form.Slot label={t('资金操作')}>
+                          <Button
+                            icon={<IconEdit />}
+                            theme='solid'
+                            onClick={() => setFundModalOpen(true)}
+                          >
+                            {t('入账 / 赠送 / 授信 / 回款')}
+                          </Button>
+                        </Form.Slot>
+                      </Col>
+
                       <Col span={14}>
                         <Form.Slot label={t('调整额度')}>
                           <Button
@@ -547,6 +561,14 @@ const EditUserModal = (props) => {
         userId={userId}
         isMobile={isMobile}
         formApiRef={formApiRef}
+      />
+
+      <FundOperationModal
+        visible={fundModalOpen}
+        userId={userId ? parseInt(userId) : undefined}
+        username={inputs?.username}
+        onClose={() => setFundModalOpen(false)}
+        refresh={props.refresh}
       />
 
       {/* 调整额度模态框 */}

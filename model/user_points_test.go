@@ -93,12 +93,18 @@ func TestTryDecreaseUserPoints_Concurrent(t *testing.T) {
 	require.GreaterOrEqual(t, final, 0, "积分永不为负")
 }
 
-// DecreaseUserPoints 扣超余额时钳到 0，不产生负数。
+// DecreaseUserPoints 扣超余额时钳到 0，不产生负数，并返回**实际**扣减量。
+//
+// 返回值这条很关键：调用方（管理员 subtract）要拿它落资金流水。若记请求值 500 而实扣
+// 300，流水金额与余额变化差 200，每日自洽校验就会不平——而那个告警本来是用来发现
+// 「有代码绕过流水表」的，噪声会淹掉真信号。
 func TestDecreaseUserPoints_ClampToZero(t *testing.T) {
 	truncateTables(t)
 	seedPointsUser(t, 105, 300)
 
-	require.NoError(t, DecreaseUserPoints(105, 500, false))
+	applied, err := DecreaseUserPoints(105, 500, false)
+	require.NoError(t, err)
+	require.Equal(t, 300, applied, "返回的必须是钳位后的实际扣减量，不是请求值")
 	require.Equal(t, 0, readPoints(t, 105))
 }
 

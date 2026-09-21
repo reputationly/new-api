@@ -161,6 +161,21 @@ func userCheckinWithTransaction(checkin *Checkin, userId int, quotaAwarded int, 
 			return errors.New("签到失败：更新额度出错")
 		}
 
+		// 入账流水。签到是赠送（CashFen=0，不计营收）。幂等键取 userId:date——
+		// 同一用户同一天只能签到一次，与 checkins 表的 (user_id, checkin_date) 唯一约束同源。
+		if _, err := insertFundEntryTx(tx, &FundEntry{
+			UserId:     userId,
+			Account:    fundAccountForCheckin(isPoints),
+			Kind:       FundKindGift,
+			QuotaDelta: int64(quotaAwarded),
+			CashFen:    0,
+			Source:     FundSourceCheckin,
+			RefType:    FundRefCheckin,
+			RefId:      CheckinRefId(userId, checkin.CheckinDate),
+		}); err != nil {
+			return err
+		}
+
 		return nil
 	})
 
@@ -202,7 +217,30 @@ func userCheckinWithoutTransaction(checkin *Checkin, userId int, quotaAwarded in
 		return nil, errors.New("签到失败：更新额度出错")
 	}
 
+	// 入账流水。签到是赠送（CashFen=0，不计营收）。幂等键取 userId:date——
+	// 同一用户同一天只能签到一次，与 checkins 表的 (user_id, checkin_date) 唯一约束同源。
+	// SQLite 路径无事务可依附，best-effort 记账：余额已到账，不因记账失败回滚签到。
+	RecordFundEntry(&FundEntry{
+		UserId:     userId,
+		Account:    fundAccountForCheckin(isPoints),
+		Kind:       FundKindGift,
+		QuotaDelta: int64(quotaAwarded),
+		CashFen:    0,
+		Source:     FundSourceCheckin,
+		RefType:    FundRefCheckin,
+		RefId:      CheckinRefId(userId, checkin.CheckinDate),
+	})
+
 	return checkin, nil
+}
+
+// fundAccountForCheckin 签到奖励落到哪个账户。积分模式进积分池，额度模式进现金池
+// （后者仅存在于未启用积分系统的部署，见 UserCheckin 的发放层守卫）。
+func fundAccountForCheckin(isPoints bool) string {
+	if isPoints {
+		return FundAccountPoints
+	}
+	return FundAccountCash
 }
 
 // GetUserCheckinStats 获取用户签到统计信息

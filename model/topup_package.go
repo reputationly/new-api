@@ -1,6 +1,7 @@
 package model
 
 import (
+	"context"
 	"errors"
 	"fmt"
 
@@ -175,15 +176,49 @@ func GrantTopupPackageBonus(topUp *TopUp) {
 	if pkg.GrantPoints <= 0 {
 		return
 	}
-	if err := IncreaseUserPoints(topUp.UserId, pkg.GrantPoints, true); err != nil {
+	// 幂等闸门。调用点虽已用订单状态挡住重复调用（见上方函数注释），但**余额变更本身
+	// 必须也设防**：流水侧有唯一索引、发放侧没有，一旦将来新增调用点漏判状态，就会出现
+	// 「钱加了两次、流水只有一条」——那正是流水表要避免的失败模式，而且从报表上看不出来。
+	//
+	// 先查后发有极小的并发窗口（两个并发调用同时查到不存在）。对这条低频路径可接受：
+	// 调用点本身已有状态闸门，这里是第二道防线而非唯一防线。
+	bonusRefId := "bonus:" + topUp.TradeNo
+	if FundEntryExists(FundRefTopUp, bonusRefId) {
+		return
+	}
+	// GrantPoints 是积分数，而 IncreaseUserPoints 收的是 quota unit（points_balance 列的
+	// 单位，两者差 QuotaPerPoint ≈ 685 倍），必须先换算。
+	//
+	// 此前这里直传 GrantPoints，等于把积分数当 quota unit 加：配置「赠送 500 积分」实发
+	// 500 quota unit，用户账户页按 floor 展示就是 0 积分——看起来是「赠品完全没发」，
+	// 而不是「发少了」。修复时生产尚无任何套餐赠品订单，无需补发历史。
+	q := common.PointsToQuota(pkg.GrantPoints)
+	if err := IncreaseUserPoints(topUp.UserId, q, true); err != nil {
 		common.SysError(fmt.Sprintf(
 			"failed to grant %d points for topup %s: %s",
 			pkg.GrantPoints, topUp.TradeNo, err.Error()))
 		return
 	}
+	// 赠品入账流水。CashFen=0：这笔充值的收入已由充值流水记过，赠品本身是市场成本，
+	// 再记一次现金就是重复确认收入。幂等键挂在订单号上，补发不会重复记账。
+	// QuotaDelta 取换算后的 q，与实际余额变化一致——流水与余额必须同值，否则自洽校验不平。
+	RecordFundEntry(&FundEntry{
+		UserId:     topUp.UserId,
+		Account:    FundAccountPoints,
+		Kind:       FundKindGift,
+		QuotaDelta: int64(q),
+		CashFen:    0,
+		Source:     FundSourcePackageBonus,
+		RefType:    FundRefTopUp,
+		RefId:      bonusRefId,
+		Remark:     pkg.Title,
+	})
 	RecordLog(topUp.UserId, LogTypeTopup, fmt.Sprintf(
 		"购买套餐「%s」赠送积分 %d（订单 %s）",
 		pkg.Title, pkg.GrantPoints, topUp.TradeNo))
-	logger.LogInfo(nil, fmt.Sprintf("granted %d points to user %d for package %d",
+	// 不能传 nil：logger.logHelper 第一行就是 ctx.Value(...)，nil 必 panic。
+	// 这是全仓唯一一处传 nil 的调用，此前未暴露是因为套餐赠品从未成功发放过
+	// （单位换算 bug 之外的第二个隐患）。
+	logger.LogInfo(context.Background(), fmt.Sprintf("granted %d points to user %d for package %d",
 		pkg.GrantPoints, topUp.UserId, pkg.Id))
 }

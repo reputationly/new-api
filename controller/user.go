@@ -920,6 +920,12 @@ type ManageRequest struct {
 	Action string `json:"action"`
 	Value  int    `json:"value"`
 	Mode   string `json:"mode"`
+
+	// 以下字段服务于 action=fund_op（资金操作），旧的 add_quota/add_points 不使用。
+	Op      string `json:"op"`       // prepay | gift | credit_grant | ar_settle
+	CashFen int64  `json:"cash_fen"` // 实收人民币（分），仅 prepay / ar_settle 必填且 > 0
+	Ref     string `json:"ref"`      // 凭证号 / 合同号 / 授信协议号 / 回款凭证
+	Remark  string `json:"remark"`   // 备注；gift 用作赠送事由
 }
 
 // ManageUser Only admin user can do this
@@ -1001,6 +1007,12 @@ func ManageUser(c *gin.Context) {
 			return
 		}
 		user.Role = common.RoleCommonUser
+	case "fund_op":
+		// 资金操作：四个语义明确的动作，每个都落一条 fund_entries 流水。
+		// 旧的 add_quota / add_points 保留（web/default 仍在调用），但它们不说明
+		// 资金性质，流水只能记为 kind=adjust 供报表单列做异常监控。
+		handleFundOperation(c, &user, req)
+		return
 	case "add_quota":
 		adminName := c.GetString("username")
 		adminId := c.GetInt("id")
@@ -1018,6 +1030,7 @@ func ManageUser(c *gin.Context) {
 				common.ApiError(c, err)
 				return
 			}
+			recordAdjustEntry(user.Id, adminId, model.FundAccountCash, int64(req.Value), "add_quota/add")
 			model.RecordLogWithAdminInfo(user.Id, model.LogTypeManage,
 				fmt.Sprintf("管理员增加用户额度 %s", logger.LogQuotaShort(req.Value)), adminInfo)
 		case "subtract":
@@ -1029,6 +1042,7 @@ func ManageUser(c *gin.Context) {
 				common.ApiError(c, err)
 				return
 			}
+			recordAdjustEntry(user.Id, adminId, model.FundAccountCash, -int64(req.Value), "add_quota/subtract")
 			model.RecordLogWithAdminInfo(user.Id, model.LogTypeManage,
 				fmt.Sprintf("管理员减少用户额度 %s", logger.LogQuotaShort(req.Value)), adminInfo)
 		case "override":
@@ -1037,6 +1051,9 @@ func ManageUser(c *gin.Context) {
 				common.ApiError(c, err)
 				return
 			}
+			// 覆盖式改余额是账本黑洞：差额是收了钱还是送的无从判定。流水按差额记，
+			// 至少让自洽校验能平、让报表看得见这笔性质不明的变动。
+			recordAdjustEntry(user.Id, adminId, model.FundAccountCash, int64(req.Value-oldQuota), "add_quota/override")
 			model.RecordLogWithAdminInfo(user.Id, model.LogTypeManage,
 				fmt.Sprintf("管理员覆盖用户额度从 %s 为 %s", logger.LogQuotaShort(oldQuota), logger.LogQuotaShort(req.Value)), adminInfo)
 		default:
@@ -1066,6 +1083,7 @@ func ManageUser(c *gin.Context) {
 				common.ApiError(c, err)
 				return
 			}
+			recordAdjustEntry(user.Id, adminId, model.FundAccountPoints, int64(req.Value), "add_points/add")
 			model.RecordLogWithAdminInfo(user.Id, model.LogTypeManage,
 				fmt.Sprintf("管理员增加用户积分 %d", common.QuotaToPoints(req.Value)), adminInfo)
 		case "subtract":
@@ -1073,12 +1091,23 @@ func ManageUser(c *gin.Context) {
 				common.ApiErrorI18n(c, i18n.MsgUserQuotaChangeZero)
 				return
 			}
-			if err := model.DecreaseUserPoints(user.Id, req.Value, true); err != nil {
+			// 记 applied 而非 req.Value：DecreaseUserPoints 会把扣减量钳到当前余额，
+			// 扣 1000 而用户只有 300 时实扣 300。流水必须等于实际余额变化，否则
+			// 每日自洽校验会不平。
+			applied, err := model.DecreaseUserPoints(user.Id, req.Value, true)
+			if err != nil {
 				common.ApiError(c, err)
 				return
 			}
-			model.RecordLogWithAdminInfo(user.Id, model.LogTypeManage,
-				fmt.Sprintf("管理员减少用户积分 %d", common.QuotaToPoints(req.Value)), adminInfo)
+			recordAdjustEntry(user.Id, adminId, model.FundAccountPoints, -int64(applied), "add_points/subtract")
+			// 日志同样报 applied：报请求值会和流水、和实际余额三者对不上。
+			// 钳位时额外标注请求值——只说「减少 300」运营会困惑「我明明填了 1000」，
+			// 而余额不足这件事他需要知道。
+			subtractMsg := fmt.Sprintf("管理员减少用户积分 %d", common.QuotaToPoints(applied))
+			if applied < req.Value {
+				subtractMsg += fmt.Sprintf("（请求 %d，余额不足已钳位）", common.QuotaToPoints(req.Value))
+			}
+			model.RecordLogWithAdminInfo(user.Id, model.LogTypeManage, subtractMsg, adminInfo)
 		case "override":
 			// 单列赋值式 Update（非 Updates(struct)）→ 目标为 0 也写入，绕过零值陷阱
 			oldPoints := user.PointsBalance
@@ -1089,6 +1118,7 @@ func ManageUser(c *gin.Context) {
 			if err := model.InvalidateUserCache(user.Id); err != nil {
 				common.SysLog(fmt.Sprintf("failed to invalidate user cache for user %d: %s", user.Id, err.Error()))
 			}
+			recordAdjustEntry(user.Id, adminId, model.FundAccountPoints, int64(req.Value-oldPoints), "add_points/override")
 			model.RecordLogWithAdminInfo(user.Id, model.LogTypeManage,
 				fmt.Sprintf("管理员覆盖用户积分从 %d 为 %d", common.QuotaToPoints(oldPoints), common.QuotaToPoints(req.Value)), adminInfo)
 		default:

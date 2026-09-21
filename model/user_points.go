@@ -72,29 +72,35 @@ func newUserPointsLog(points int, channel string) string {
 // 积分账户原子增减，镜像 user.go 的 quota 操作（Redis Hash 异步缓存 + 可选批量更新）。
 // 积分内部以 quota unit 记账，与 User.Quota 同单位；混扣扣减用 TryDecreaseUserPoints
 // 条件更新以防透支（§6.4），积分永不为负。
+//
+// ⚠️ 下列函数的数量参数一律是 **quota unit，不是积分数**，二者相差
+// QuotaPerPoint ≈ 685 倍。传入前必须用 common.PointsToQuota 换算。
+// 参数名原本叫 points，与「积分数」同名而语义不同，已造成过一次真实事故：
+// GrantTopupPackageBonus 直传积分数，结果配置「赠送 500 积分」实发 500 quota unit，
+// 用户账户页按 floor 展示就是 0 积分。故统一改名为 quotaUnits 以正视听。
 
 // IncreaseUserPoints 增加积分（发放/退款）。
 // ⚠️ 批量模式陷阱：db=false 且 BatchUpdateEnabled 时 DB 写入进队列延迟落库，而
 // TryDecreaseUserPoints 条件扣减直击 DB——窗口内 Redis 超前、DB 滞后，会误判积分
 // 不足（混扣积分优先失效甚至误拒请求）。凡与混扣扣减同账户交织的回补
 // （funding_hybrid 退款/回滚）必须传 db=true 直写；纯发放路径本就直写。
-func IncreaseUserPoints(id int, points int, db bool) (err error) {
-	if points < 0 {
+func IncreaseUserPoints(id int, quotaUnits int, db bool) (err error) {
+	if quotaUnits < 0 {
 		return errors.New("points 不能为负数！")
 	}
-	if points == 0 {
+	if quotaUnits == 0 {
 		return nil
 	}
 	gopool.Go(func() {
-		if err := cacheIncrUserPoints(id, int64(points)); err != nil {
+		if err := cacheIncrUserPoints(id, int64(quotaUnits)); err != nil {
 			common.SysLog("failed to increase user points: " + err.Error())
 		}
 	})
 	if !db && common.BatchUpdateEnabled {
-		addNewRecord(BatchUpdateTypeUserPoints, id, points)
+		addNewRecord(BatchUpdateTypeUserPoints, id, quotaUnits)
 		return nil
 	}
-	return increaseUserPoints(id, points)
+	return increaseUserPoints(id, quotaUnits)
 }
 
 func increaseUserPoints(id int, points int) (err error) {
@@ -104,29 +110,33 @@ func increaseUserPoints(id int, points int) (err error) {
 // DecreaseUserPoints 减少积分并钳到 0（积分永不为负）。用于管理员 subtract 等低频场景；
 // 混扣扣减请用 TryDecreaseUserPoints。低频操作直查 DB 权威余额并失效缓存，避免与
 // HIncrBy 增量写竞态。db 参数保留以对齐签名，低频不入批量队列。
-func DecreaseUserPoints(id int, points int, db bool) (err error) {
-	if points < 0 {
-		return errors.New("points 不能为负数！")
+//
+// 返回 applied 为**实际扣减量**：扣减请求超过余额时会被钳到余额，applied < quotaUnits。
+// 调用方若要落流水，必须记 applied 而非请求值——流水金额与实际余额变化不一致，
+// 每日自洽校验就会不平，而那个告警本来是用来发现「有代码绕过流水表」的。
+func DecreaseUserPoints(id int, quotaUnits int, db bool) (applied int, err error) {
+	if quotaUnits < 0 {
+		return 0, errors.New("points 不能为负数！")
 	}
-	if points == 0 {
-		return nil
+	if quotaUnits == 0 {
+		return 0, nil
 	}
 	var current int
 	if err = DB.Model(&User{}).Where("id = ?", id).Select("points_balance").Find(&current).Error; err != nil {
-		return err
+		return 0, err
 	}
-	dec := points
+	dec := quotaUnits
 	if dec > current {
 		dec = current // 钳到 0
 	}
 	if dec <= 0 {
-		return invalidateUserCache(id)
+		return 0, invalidateUserCache(id)
 	}
 	if err = decreaseUserPoints(id, dec); err != nil {
-		return err
+		return 0, err
 	}
 	// 失效缓存下次回源，避免绝对值/增量写竞态
-	return invalidateUserCache(id)
+	return dec, invalidateUserCache(id)
 }
 
 func decreaseUserPoints(id int, points int) (err error) {
@@ -138,13 +148,13 @@ func decreaseUserPoints(id int, points int) (err error) {
 // 由调用方降级（如混扣时把该部分转由钱包承担）。三库兼容、并发安全。
 // 注意：只减 points_balance，不动 points_used —— points_used 由结算完成后按最终消费
 // 一次性累加（AddUserPointsUsed），否则预扣后退款会使 points_used 虚高（§6.2）。
-func TryDecreaseUserPoints(id int, points int) (ok bool, err error) {
-	if points <= 0 {
+func TryDecreaseUserPoints(id int, quotaUnits int) (ok bool, err error) {
+	if quotaUnits <= 0 {
 		return true, nil
 	}
 	result := DB.Model(&User{}).
-		Where("id = ? AND points_balance >= ?", id, points).
-		Update("points_balance", gorm.Expr("points_balance - ?", points))
+		Where("id = ? AND points_balance >= ?", id, quotaUnits).
+		Update("points_balance", gorm.Expr("points_balance - ?", quotaUnits))
 	if result.Error != nil {
 		return false, result.Error
 	}
@@ -152,7 +162,7 @@ func TryDecreaseUserPoints(id int, points int) (ok bool, err error) {
 		return false, nil
 	}
 	gopool.Go(func() {
-		if err := cacheDecrUserPoints(id, int64(points)); err != nil {
+		if err := cacheDecrUserPoints(id, int64(quotaUnits)); err != nil {
 			common.SysLog("failed to sync user points cache after TryDecrease: " + err.Error())
 		}
 	})

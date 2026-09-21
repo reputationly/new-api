@@ -154,7 +154,8 @@ func Recharge(referenceId string, customerId string, callerIp string) (err error
 			return err
 		}
 
-		return nil
+		return recordCashInflowTx(tx, topUp.UserId, int64(quota), topUp.Money,
+			FundSourceOnlinePay, FundRefTopUp, topUp.TradeNo, topUp.PaymentMethod)
 	})
 
 	if err != nil {
@@ -386,6 +387,11 @@ func ManualCompleteTopUp(tradeNo string, callerIp string) error {
 			return err
 		}
 
+		if err := recordCashInflowTx(tx, topUp.UserId, int64(quotaToAdd), topUp.Money,
+			FundSourceOnlinePay, FundRefTopUp, topUp.TradeNo, topUp.PaymentMethod); err != nil {
+			return err
+		}
+
 		userId = topUp.UserId
 		payMoney = topUp.Money
 		paymentMethod = topUp.PaymentMethod
@@ -466,7 +472,8 @@ func RechargeCreem(referenceId string, customerEmail string, customerName string
 			return err
 		}
 
-		return nil
+		return recordCashInflowTx(tx, topUp.UserId, int64(quota), topUp.Money,
+			FundSourceOnlinePay, FundRefTopUp, topUp.TradeNo, topUp.PaymentMethod)
 	})
 
 	if err != nil {
@@ -527,6 +534,11 @@ func RechargeWaffo(tradeNo string, callerIp string) (err error) {
 			return err
 		}
 
+		if err := recordCashInflowTx(tx, topUp.UserId, int64(quotaToAdd), topUp.Money,
+			FundSourceOnlinePay, FundRefTopUp, topUp.TradeNo, topUp.PaymentMethod); err != nil {
+			return err
+		}
+
 		return nil
 	})
 
@@ -574,7 +586,14 @@ func RechargeAlipay(tradeNo string, callerIp string) error {
 		if err := tx.Save(topUp).Error; err != nil {
 			return err
 		}
-		return tx.Model(&User{}).Where("id = ?", topUp.UserId).Update("quota", gorm.Expr("quota + ?", quotaToAdd)).Error
+		if err := tx.Model(&User{}).Where("id = ?", topUp.UserId).Update("quota", gorm.Expr("quota + ?", quotaToAdd)).Error; err != nil {
+			return err
+		}
+		if err := recordCashInflowTx(tx, topUp.UserId, int64(quotaToAdd), topUp.Money,
+			FundSourceOnlinePay, FundRefTopUp, topUp.TradeNo, topUp.PaymentMethod); err != nil {
+			return err
+		}
+		return nil
 	})
 	if err != nil {
 		common.SysError("alipay direct topup failed: " + err.Error())
@@ -619,7 +638,14 @@ func RechargeWxpay(tradeNo string, callerIp string) error {
 		if err := tx.Save(topUp).Error; err != nil {
 			return err
 		}
-		return tx.Model(&User{}).Where("id = ?", topUp.UserId).Update("quota", gorm.Expr("quota + ?", quotaToAdd)).Error
+		if err := tx.Model(&User{}).Where("id = ?", topUp.UserId).Update("quota", gorm.Expr("quota + ?", quotaToAdd)).Error; err != nil {
+			return err
+		}
+		if err := recordCashInflowTx(tx, topUp.UserId, int64(quotaToAdd), topUp.Money,
+			FundSourceOnlinePay, FundRefTopUp, topUp.TradeNo, topUp.PaymentMethod); err != nil {
+			return err
+		}
+		return nil
 	})
 	if err != nil {
 		common.SysError("wxpay direct topup failed: " + err.Error())
@@ -675,6 +701,11 @@ func RechargeWaffoPancake(tradeNo string) (err error) {
 		}
 
 		if err := tx.Model(&User{}).Where("id = ?", topUp.UserId).Update("quota", gorm.Expr("quota + ?", quotaToAdd)).Error; err != nil {
+			return err
+		}
+
+		if err := recordCashInflowTx(tx, topUp.UserId, int64(quotaToAdd), topUp.Money,
+			FundSourceOnlinePay, FundRefTopUp, topUp.TradeNo, topUp.PaymentMethod); err != nil {
 			return err
 		}
 
