@@ -66,6 +66,20 @@ const (
 	FundKindARSettle    = "ar_settle"    // 信用回款核销，计营收
 	FundKindRefund      = "refund"       // 退款，QuotaDelta 为负
 	FundKindAdjust      = "adjust"       // 差错调整/管理员扣减，报表单列做异常监控
+	// FundKindOpening 期初余额快照，对账基线。
+	//
+	// 流水表是后加的，历史余额没有对应流水，直接做「流水累加 == 当前余额」的校验必然
+	// 不平——而那个告警本该用来发现「有代码绕过流水表」，开局就淹在历史噪声里就废了。
+	// 故在启用对账时把每个用户的当时余额记成一条 opening 流水，之后的校验以此为基线。
+	// CashFen 恒为 0：期初余额是历史沉淀，不是本期收入。
+	FundKindOpening = "opening"
+	// FundKindClosed 账户硬删除冲销。
+	//
+	// 硬删后 users 行不复存在，该用户的余额从 balance 侧消失，但他的期初、入账流水与
+	// 消费日志都还在，自洽校验会凭空差出一截。冲销一笔「删除时的余额」即可让三者重新
+	// 自洽：ledger(期初+入账-冲销) - consume(他的消费) == 0 == 他在 balance 里的贡献。
+	// 比直接删流水好：审计记录完整保留，还能看出这个账户注销时带走了多少余额。
+	FundKindClosed = "closed"
 )
 
 // Source —— 入账渠道，用于报表下钻。

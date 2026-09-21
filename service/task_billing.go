@@ -109,6 +109,14 @@ func LogTaskConsumption(c *gin.Context, info *relaycommon.RelayInfo) {
 	}
 	other := make(map[string]interface{})
 	other["is_task"] = true
+	// 计费来源。这条是**提交时**的消费日志，走 RecordConsumeLog 自建 other，
+	// 不经过 taskBillingOther，所以要单独补。订阅计费扣的是 UserSubscription.AmountUsed、
+	// 不动 users.quota，资金对账靠这一项把它从现金消耗里剔除；漏了的话每个成功的
+	// 订阅异步任务都会让自洽校验报一次假的「现金账不平」。
+	// 调用方先 SettleBilling 后记日志，此时 BillingSource 已由 syncRelayInfo 就绪。
+	if info.BillingSource != "" {
+		other["billing_source"] = info.BillingSource
+	}
 	// 仅「按次/按个」任务才按「个」计费，需打 count_billing 供对账归类
 	// （reconcile_helpers.go 据此把整单算作 TokensCount=1）。token 计费任务必须保留
 	// token 用量，不能标计件——判定与 TaskBillingContext.PerCallBilling 同源。
@@ -249,6 +257,14 @@ func taskAdjustTokenQuota(ctx context.Context, task *model.Task, delta int) {
 // taskBillingOther 从 task 的 BillingContext 构建日志 Other 字段。
 func taskBillingOther(task *model.Task) map[string]interface{} {
 	other := make(map[string]interface{})
+	// 计费来源。同步路径由 appendBillingInfo 写入，异步任务此前漏了这一项，
+	// 造成两个后果：前端的「订阅抵扣」标签只在同步请求上出现；资金对账无法把订阅
+	// 消费从现金消耗里剔除——订阅扣的是 UserSubscription.AmountUsed、不动 users.quota，
+	// 漏剔就等于减掉一笔从未发生的现金支出，每个成功的订阅异步任务都会让自洽校验
+	// 报一次假的「现金账不平」。值在提交时就冻结在 PrivateData 里（controller/relay.go）。
+	if bs := task.PrivateData.BillingSource; bs != "" {
+		other["billing_source"] = bs
+	}
 	if bc := task.PrivateData.BillingContext; bc != nil {
 		other["model_price"] = bc.ModelPrice
 		if bc.ModelRatio > 0 {
@@ -306,6 +322,13 @@ func RefundTaskQuota(ctx context.Context, task *model.Task, reason string) {
 		return
 	}
 
+	// 退款前先取实付积分：taskAdjustHybridFunding 会在退款时把
+	// task.PrivateData.PointsConsumed 减掉已退部分，之后就拿不到原值了。
+	// 全额退款下退还的积分恰好等于这个数（pRefund 以实付封顶，refund=task.Quota 时全退）。
+	// 不记的话退款日志的 points_consumed 恒为 0，资金对账在积分侧减不掉这笔退还，
+	// 每次混扣任务失败都会报一次假的「赠送积分账不平」。
+	pointsRefunded := task.PrivateData.PointsConsumed
+
 	// 1. 退还资金来源（钱包或订阅）
 	if err := taskAdjustFunding(task, -quota); err != nil {
 		logger.LogWarn(ctx, fmt.Sprintf("退还资金来源失败 task %s: %s", task.TaskID, err.Error()))
@@ -345,6 +368,8 @@ func RefundTaskQuota(ctx context.Context, task *model.Task, reason string) {
 		TokenName: task.PrivateData.TokenName,
 		Group:     task.Group,
 		Other:     other,
+		// 退还的积分。与 Quota 同为正数，由对账侧按负消费净额化。
+		PointsConsumed: pointsRefunded,
 	})
 }
 
@@ -394,6 +419,10 @@ func recalculateTaskQuota(ctx context.Context, task *model.Task, actualQuota, co
 		reason,
 	))
 
+	// 资金调整前的实付积分。混扣任务多退少补会改写 PrivateData.PointsConsumed，
+	// 前后差值就是**本次**动用的积分，差额日志要记的是它而不是整单值。
+	pointsBefore := task.PrivateData.PointsConsumed
+
 	// 调整资金来源。预扣是真实发生过的，延迟记账也一样要多退少补。
 	if quotaDelta != 0 {
 		if err := taskAdjustFunding(task, quotaDelta); err != nil {
@@ -434,12 +463,21 @@ func recalculateTaskQuota(ctx context.Context, task *model.Task, actualQuota, co
 		model.UpdateUserUsedQuotaOnly(task.UserId, quotaDelta)
 		model.UpdateChannelUsedQuota(task.ChannelId, quotaDelta)
 
+		// 本次差额里的积分部分，取资金调整前后的实付差。恒取正值：消费日志记
+		// 「这次又扣了多少积分」，退款日志记「这次退回多少积分」，由对账侧按
+		// 日志类型决定正负（getFundConsumeStats 把退款整条取负）。
+		//
+		// 不记的话混扣任务的部分退款会让积分被多算、现金被少算
+		// （CashConsumed = TotalQuota - PointsConsumed），两侧同时报假不平。
+		pointsDelta := task.PrivateData.PointsConsumed - pointsBefore
 		if quotaDelta > 0 {
 			logType = model.LogTypeConsume
 			logQuota = quotaDelta
+			logPoints = max(pointsDelta, 0)
 		} else {
 			logType = model.LogTypeRefund
 			logQuota = -quotaDelta
+			logPoints = max(-pointsDelta, 0)
 		}
 	}
 	other := taskBillingOther(task)

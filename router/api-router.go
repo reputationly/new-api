@@ -302,6 +302,12 @@ func SetApiRouter(router *gin.Engine) {
 		reconcileAdmin.Use(middleware.AdminAuth())
 		{
 			reconcileAdmin.POST("/upload", controller.AdminReconcileUpload)
+			// 收入对账（与上面的成本对账平级：一个对收客户多少，一个对付供应商多少）
+			reconcileAdmin.GET("/fund/summary", controller.AdminFundSummary)
+			reconcileAdmin.GET("/fund/consistency", controller.AdminFundConsistency)
+			reconcileAdmin.GET("/fund/entries", controller.AdminFundEntries)
+			reconcileAdmin.GET("/fund/export", controller.AdminFundExportCSV)
+			reconcileAdmin.POST("/fund/baseline", controller.AdminInitFundBaseline)
 		}
 
 		// Subscription payment callbacks (no auth)

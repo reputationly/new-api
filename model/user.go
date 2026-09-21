@@ -435,6 +435,16 @@ func HardDeleteUserById(id int) error {
 	return DB.Transaction(func(tx *gorm.DB) error {
 		cascadeDeleteSubAccountsForParent(tx, id)
 		_ = tx.Where("sub_user_id = ?", id).Delete(&SubAccountTokenBinding{}).Error
+		// 资金流水不删，改写一笔冲销：硬删后 users 行消失，该用户的余额从 balance 侧
+		// 不见了，但他的期初/入账流水与**消费日志**都还在（日志可能在独立库，删不掉），
+		// 自洽校验会凭空差出一截。冲掉「删除时的余额」后三者重新自洽：
+		//   ledger(期初 + 入账 - 冲销) - consume(他的消费) == 0 == 他在 balance 里的贡献
+		// 删流水只能抵消前半截、抵消不了消费日志，而且会丢掉审计记录。
+		var snapshot User
+		if err := tx.Unscoped().Select("quota", "points_balance").
+			Where("id = ?", id).First(&snapshot).Error; err == nil {
+			closeFundAccountTx(tx, id, snapshot.Quota, snapshot.PointsBalance)
+		}
 		return tx.Unscoped().Delete(&User{}, "id = ?", id).Error
 	})
 }
@@ -1422,4 +1432,28 @@ func newUserRegisterGrantLog() string {
 		return fmt.Sprintf("新用户注册赠送 %d 积分", common.QuotaToPoints(common.QuotaForNewUser))
 	}
 	return fmt.Sprintf("新用户注册赠送 %s", logger.LogQuota(common.QuotaForNewUser))
+}
+
+// closeFundAccountTx 账户硬删除时冲销其余额，保持资金对账自洽（见 FundKindClosed）。
+// 失败只吞不阻断：删号是管理员的显式操作，不该因记账失败而中断；漏冲的后果是
+// 自洽校验报一次不平，有告警可查。
+func closeFundAccountTx(tx *gorm.DB, userId, quota, points int) {
+	if quota != 0 {
+		_, _ = insertFundEntryTx(tx, &FundEntry{
+			UserId: userId, Account: FundAccountCash, Kind: FundKindClosed,
+			QuotaDelta: -int64(quota), CashFen: 0,
+			Source:  FundSourceAdminAdjust,
+			RefType: FundRefUser, RefId: fmt.Sprintf("closed-cash:%d", userId),
+			Remark: "账户硬删除冲销",
+		})
+	}
+	if points != 0 {
+		_, _ = insertFundEntryTx(tx, &FundEntry{
+			UserId: userId, Account: FundAccountPoints, Kind: FundKindClosed,
+			QuotaDelta: -int64(points), CashFen: 0,
+			Source:  FundSourceAdminAdjust,
+			RefType: FundRefUser, RefId: fmt.Sprintf("closed-points:%d", userId),
+			Remark: "账户硬删除冲销",
+		})
+	}
 }

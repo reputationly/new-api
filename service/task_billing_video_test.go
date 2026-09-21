@@ -846,8 +846,14 @@ func TestDeferredBilling_LogCarriesPointsConsumed(t *testing.T) {
 	require.Equal(t, points, log.PointsConsumed)
 }
 
-// 非延迟记账的差额日志不能挂整单积分：那条日志的 Quota 是增量，两者对不上。
-func TestNonDeferred_DeltaLogHasNoPoints(t *testing.T) {
+// 非延迟记账的差额日志挂的是**本次变动**的积分，不是整单实付——那条日志的 Quota
+// 是增量，挂整单值两者对不上。
+//
+// 原先断言为 0。资金对账接入后改成断言增量：退款日志若不记退回的积分，
+// getFundConsumeStats 就净额化不掉这笔退还，会多算积分、少算现金
+// （CashConsumed = TotalQuota - PointsConsumed），现金与积分两侧同时报假不平。
+// 原契约要防的「挂整单值」由下面的 NotEqual 继续守住。
+func TestNonDeferred_DeltaLogRecordsPointsDelta(t *testing.T) {
 	truncate(t)
 	const uid = 9507
 	seedUser(t, uid, 10_000_000)
@@ -863,7 +869,14 @@ func TestNonDeferred_DeltaLogHasNoPoints(t *testing.T) {
 	var log model.Log
 	require.NoError(t, model.DB.Order("id desc").First(&log).Error)
 	require.Equal(t, model.LogTypeRefund, log.Type)
-	require.Zero(t, log.PointsConsumed)
+	// 预扣 873287、实付 159544 → 退款 713743；钱包份额 373287 先退，
+	// 余下 340456 由积分承担（以实付 500000 封顶）。
+	require.Equal(t, 340456, log.PointsConsumed,
+		"差额日志要记本次退还的积分，否则对账净额化不掉这笔退还")
+	require.NotEqual(t, 500_000, log.PointsConsumed,
+		"但不得挂整单实付——那条日志的 Quota 是增量，两者对不上")
+	require.Equal(t, 159544, task.PrivateData.PointsConsumed,
+		"退还后整单实付应相应下降")
 }
 
 // 端到端：从轮询的结算入口进，覆盖「提交时没有分辨率」这条完整链路。
