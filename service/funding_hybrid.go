@@ -21,13 +21,20 @@ var ErrHybridWalletInsufficient = ErrWalletInsufficient
 // ---------------------------------------------------------------------------
 //
 // 积分优先扣、不足部分扣钱包余额（§6.2）。积分扣减走 TryDecreaseUserPoints 条件更新，
-// 保证积分永不透支为负（§6.4）；并发被抢时降级由钱包承担。内部累计 pointsConsumed /
-// walletConsumed 供退款原路退还与结算写 PointsUsed / 日志使用。
+// 保证积分永不透支为负（§6.4）；并发被抢时降级由钱包承担。
+//
+// 扣减/退还的编排已下沉到 LayeredFunding（见 funding_layered.go）——本类型现在只
+// 负责「积分层与钱包层各自怎么扣」，顺序、回滚、逆序退还都由引擎给出。加第三层
+// （信用/权益）时构造一个层数不同的引擎即可，不必再动这里被多轮 review 打磨过的分支。
+//
+// pointsConsumed / walletConsumed 保持为字段而非引擎内部切片：它们是引擎里两个层的
+// counter 指向的同一块内存，不存在两份真相。
 
 type HybridFunding struct {
 	userId         int
 	pointsConsumed int // 累计从积分扣除(含预扣与补扣)
 	walletConsumed int // 累计从钱包扣除
+	engine         *LayeredFunding
 }
 
 func (h *HybridFunding) Source() string { return BillingSourceHybrid }
@@ -35,74 +42,104 @@ func (h *HybridFunding) Source() string { return BillingSourceHybrid }
 // PointsConsumed 返回本会话累计的积分抵扣量（quota unit），供结算写 PointsUsed / 日志。
 func (h *HybridFunding) PointsConsumed() int { return h.pointsConsumed }
 
-// deduct 按「积分优先、不足扣钱包」扣减 amount，成功后累加内部计数。
-// 积分条件扣减失败（并发被抢/缓存偏旧）时重读余额重试，只把真正扣不到的部分交给
-// 钱包——此前失败即整笔甩给钱包，既违背积分优先、又放大钱包透支（codex review P1）。
+// layered 懒构造引擎。调用方一律用 &HybridFunding{userId: N} 构造（测试与生产都是），
+// 没有统一的构造函数可挂，所以在入口处按需建。
+func (h *HybridFunding) layered() *LayeredFunding {
+	if h.engine == nil {
+		h.engine = &LayeredFunding{layers: []fundingLayer{
+			h.pointsLayer(),
+			h.walletLayer(),
+		}}
+	}
+	return h.engine
+}
+
+// pointsLayer 积分层：条件扣减，永不透支为负。
 //
-// enforceWallet 区分两种时机的钱包语义（codex review 第四轮）：
-//   - true（PreConsume/reserveExtra，服务未交付）：钱包走 TryDecreaseUserQuota 条件
-//     扣减，余额不足则回滚已扣积分并拒绝请求——混扣用户可能从未充值，积分被并发
-//     抢光后不允许钱包为积分的承诺透支为负（纯钱包路径靠预检兜底，结构上无此问题）；
-//   - false（Settle 补扣，服务已交付）：保持无条件扣减，成本已发生允许欠费，
+// CAS 失败说明余额被并发变动，重读后再扣；上限 3 次防高并发自旋。首次走 Redis
+// 热路径；CAS 失败后强制回源 DB 权威值——并发扣减的缓存同步是异步的，Redis 可能
+// 短暂超前 DB，重读同一旧值会三连败、整笔误甩钱包；回源 DB 同时会把权威值刷回缓存
+// （GetUserPoints 的回填逻辑）。
+//
+// ⚠️ 已知的既有边界：重试途中 GetUserPoints 报错时返回 0 而非已扣量，于是引擎
+// 不会回滚这次循环里已经 CAS 扣掉的积分，它们既不在账上也不在计数器里。这是泛化
+// 之前就有的行为，本次重构以「行为零变化」为验收标准，原样保留而不顺手改掉——
+// 改它等于在一次本该可证明等价的重构里夹带一个未经单独评审的资金行为变更。
+func (h *HybridFunding) pointsLayer() fundingLayer {
+	return fundingLayer{
+		name:    "points",
+		counter: &h.pointsConsumed,
+		tryTake: func(amount int, _ bool) (int, error) {
+			taken := 0
+			remaining := amount
+			for attempt := 0; attempt < 3 && remaining > 0; attempt++ {
+				points, err := model.GetUserPoints(h.userId, attempt > 0)
+				if err != nil {
+					return 0, err
+				}
+				if points <= 0 {
+					break
+				}
+				take := min(remaining, points)
+				ok, err := model.TryDecreaseUserPoints(h.userId, take)
+				if err != nil {
+					return 0, err
+				}
+				if ok {
+					taken += take
+					remaining -= take
+				}
+			}
+			return taken, nil
+		},
+		giveBack: func(amount int) error {
+			// db=true 直写：批量模式下若进队列延迟落库，Redis 先行超前，
+			// 下一笔 TryDecreaseUserPoints（直击 DB）会误判不足。
+			return model.IncreaseUserPoints(h.userId, amount, true)
+		},
+	}
+}
+
+// walletLayer 钱包层，兜底承担积分扣不到的部分。
+//
+// enforce 区分两种时机：
+//   - true（PreConsume/reserveExtra，服务未交付）：允许透支到可用授信之内
+//     （未开授信者等价于「余额必须充足」），扣不动则整笔失败、由引擎回滚已扣积分。
+//     混扣用户可能从未充值，积分被并发抢光后不允许钱包为积分的承诺无限透支；
+//     而用 TryDecreaseUserQuota 的话，授信客户只要还持有一点营销积分就会走到这条
+//     混扣分支、然后因钱包不足被 403——可用额检查刚刚才把授信算进去放行了它。
+//     透支部分在结算时由 syncCreditConsumed 结转进 credit_used。
+//   - false（Settle 补扣，服务已交付）：无条件扣减，成本已发生允许欠费，
 //     与 WalletFunding.Settle 同语义（改成条件扣会造成结算失败但 token 已消耗）。
-func (h *HybridFunding) deduct(amount int, enforceWallet bool) error {
-	if amount <= 0 {
-		return nil
-	}
-	remaining := amount
-	pTaken := 0
-	// ①② 积分优先：CAS 失败说明余额被并发变动，重读后再扣；上限 3 次防高并发自旋。
-	// 首次走 Redis 热路径；CAS 失败后强制回源 DB 权威值（codex review 第十轮）——
-	// 并发扣减的缓存同步是异步的，Redis 可能短暂超前 DB，重读同一旧值会三连败、
-	// 整笔误甩钱包；回源 DB 同时会把权威值刷回缓存（GetUserPoints 的回填逻辑）
-	for attempt := 0; attempt < 3 && remaining > 0; attempt++ {
-		points, err := model.GetUserPoints(h.userId, attempt > 0)
-		if err != nil {
-			return err
-		}
-		if points <= 0 {
-			break
-		}
-		take := min(remaining, points)
-		ok, err := model.TryDecreaseUserPoints(h.userId, take)
-		if err != nil {
-			return err
-		}
-		if ok {
-			pTaken += take
-			remaining -= take
-		}
-	}
-	// ③ 剩余（积分真正扣不到的部分）走钱包
-	if remaining > 0 {
-		var walletErr error
-		if enforceWallet {
-			// 允许透支到可用授信之内（未开授信者等价于原来的「余额必须充足」）。
-			// 用 TryDecreaseUserQuota 的话，授信客户只要还持有一点营销积分就会走到
-			// 这条混扣分支，然后因钱包不足被 403——而可用额检查刚刚把授信算进去放行了。
-			// 透支部分在结算时由 syncCreditConsumed 结转进 credit_used。
-			ok, err := model.TryDecreaseUserQuotaWithinCredit(h.userId, remaining)
+func (h *HybridFunding) walletLayer() fundingLayer {
+	return fundingLayer{
+		name:    "wallet",
+		counter: &h.walletConsumed,
+		tryTake: func(amount int, enforce bool) (int, error) {
+			if !enforce {
+				if err := model.DecreaseUserQuota(h.userId, amount, false); err != nil {
+					return 0, err
+				}
+				return amount, nil
+			}
+			ok, err := model.TryDecreaseUserQuotaWithinCredit(h.userId, amount)
 			if err != nil {
-				walletErr = err
-			} else if !ok {
-				walletErr = ErrHybridWalletInsufficient
+				return 0, err
 			}
-		} else {
-			walletErr = model.DecreaseUserQuota(h.userId, remaining, false)
-		}
-		if walletErr != nil {
-			// ④ 钱包扣减失败/不足，回滚已扣积分。
-			// 积分回补一律 db=true 直写：批量模式下若进队列延迟落库，Redis 先行超前，
-			// 下一笔 TryDecreaseUserPoints（直击 DB）会误判不足（codex review 第七轮）
-			if pTaken > 0 {
-				_ = model.IncreaseUserPoints(h.userId, pTaken, true)
+			if !ok {
+				return 0, ErrHybridWalletInsufficient
 			}
-			return walletErr
-		}
+			return amount, nil
+		},
+		giveBack: func(amount int) error {
+			return model.IncreaseUserQuota(h.userId, amount, false)
+		},
 	}
-	h.pointsConsumed += pTaken
-	h.walletConsumed += remaining
-	return nil
+}
+
+func (h *HybridFunding) deduct(amount int, enforceWallet bool) error {
+	_, err := h.layered().deduct(amount, enforceWallet, ErrHybridWalletInsufficient)
+	return err
 }
 
 func (h *HybridFunding) PreConsume(amount int) error {
@@ -110,36 +147,18 @@ func (h *HybridFunding) PreConsume(amount int) error {
 }
 
 // reserveExtra 追加预扣 delta，返回本次的积分/钱包拆分，供 unreserveExtra 精确回滚。
-// 回滚必须逆转「刚扣的这一刀」而非套用 Settle 的「先退钱包」全局策略——若原始预扣
-// 走过钱包、追加这笔却走了积分（中途积分被补回），Settle(-delta) 会退错桶，
-// 把原始钱包钱退掉、留着这笔积分不退，余额与内部计数双双错位（codex review P2）。
 func (h *HybridFunding) reserveExtra(delta int) (pPart, wPart int, err error) {
-	pBefore, wBefore := h.pointsConsumed, h.walletConsumed
 	// 补预扣仍在交付前，钱包同样强制余额充足
-	if err = h.deduct(delta, true); err != nil {
+	taken, err := h.layered().deduct(delta, true, ErrHybridWalletInsufficient)
+	if err != nil {
 		return 0, 0, err
 	}
-	return h.pointsConsumed - pBefore, h.walletConsumed - wBefore, nil
+	return taken[0], taken[1], nil
 }
 
 // unreserveExtra 按 reserveExtra 返回的拆分精确原路退还，并反向修正内部计数。
-// 失败仅记日志（与 rollbackFundingReserve 其它分支口径一致），不中断上层错误返回。
 func (h *HybridFunding) unreserveExtra(pPart, wPart int) {
-	if wPart > 0 {
-		if err := model.IncreaseUserQuota(h.userId, wPart, false); err != nil {
-			common.SysLog("error unreserving hybrid wallet part: " + err.Error())
-		} else {
-			h.walletConsumed -= wPart
-		}
-	}
-	if pPart > 0 {
-		// db=true 直写，防批量队列与 TryDecrease 顺序倒置
-		if err := model.IncreaseUserPoints(h.userId, pPart, true); err != nil {
-			common.SysLog("error unreserving hybrid points part: " + err.Error())
-		} else {
-			h.pointsConsumed -= pPart
-		}
-	}
+	h.layered().unreserve([]int{pPart, wPart})
 }
 
 func (h *HybridFunding) Settle(delta int) error {
@@ -150,27 +169,8 @@ func (h *HybridFunding) Settle(delta int) error {
 		// 补扣：仍按积分优先；服务已交付，钱包保持无条件扣减（允许欠费）
 		return h.deduct(delta, false)
 	}
-	// 退还：优先退钱包（保护用户真钱，§6.2），退完再退积分
-	refund := -delta
-	wRefund := refund
-	if wRefund > h.walletConsumed {
-		wRefund = h.walletConsumed
-	}
-	if wRefund > 0 {
-		if err := model.IncreaseUserQuota(h.userId, wRefund, false); err != nil {
-			return err
-		}
-		h.walletConsumed -= wRefund
-	}
-	pRefund := refund - wRefund
-	if pRefund > 0 {
-		// db=true 直写，防批量队列与 TryDecrease 顺序倒置
-		if err := model.IncreaseUserPoints(h.userId, pRefund, true); err != nil {
-			return err
-		}
-		h.pointsConsumed -= pRefund
-	}
-	return nil
+	// 退还：按扣减顺序的逆序，即先退钱包（保护用户真钱，§6.2），退完再退积分
+	return h.layered().refundReverse(-delta)
 }
 
 // roundUpToWholePoints 结算收尾：把本次积分抵扣量向上取整到整积分——不足 1 积分按
@@ -199,18 +199,5 @@ func (h *HybridFunding) roundUpToWholePoints() {
 // Refund 按内部计数原路退还（积分 + 钱包）。与 WalletFunding.Refund 一样是非幂等加法，
 // 不可重试（幂等由 BillingSession.refunded 标志保证）。
 func (h *HybridFunding) Refund() error {
-	if h.pointsConsumed > 0 {
-		// db=true 直写，防批量队列与 TryDecrease 顺序倒置
-		if err := model.IncreaseUserPoints(h.userId, h.pointsConsumed, true); err != nil {
-			return err
-		}
-		h.pointsConsumed = 0
-	}
-	if h.walletConsumed > 0 {
-		if err := model.IncreaseUserQuota(h.userId, h.walletConsumed, false); err != nil {
-			return err
-		}
-		h.walletConsumed = 0
-	}
-	return nil
+	return h.layered().refundAll()
 }
