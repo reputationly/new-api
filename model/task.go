@@ -239,7 +239,17 @@ type TaskPrivateData struct {
 	SubscriptionId int    `json:"subscription_id,omitempty"` // 订阅 ID，用于订阅退款
 	PointsConsumed int    `json:"points_consumed,omitempty"` // 混扣任务提交结算时的积分抵扣量(quota unit)，轮询期退款/重算按原路调整
 	CreditConsumed int    `json:"credit_consumed,omitempty"` // 提交结算时由授信承担的量(quota unit)，轮询期退款须原路冲销欠款
-	TokenId        int    `json:"token_id,omitempty"`        // 令牌 ID，用于令牌额度退款
+	// 套餐权益任务的资金拆分。不记的话轮询期退款会落到钱包分支——退还一笔
+	// 从未从钱包扣过的钱（凭空送真钱），而消耗掉的算力点批次纹丝不动。
+	// 与上面积分、授信那两条是完全同构的套利通道。
+	EntitlementCounterId int                 `json:"entitlement_counter_id,omitempty"` // 次数计数器，失败全额退款时归还 1 次
+	EntitlementSpent     []ComputePointSpend `json:"entitlement_spent,omitempty"`      // 算力点在各批次上的拆分，退款须原路退回
+	// EntitlementDiscount 权益的消耗折扣系数。必须持久化而不是用
+	// totalSpent/billed 反推：totalSpent = ceil(billed × discount)，billed 小的时候
+	// 这一次 ceil 会把比值整个抬高（billed=1、discount=0.5 时反推出 1.0 而非 0.5），
+	// 再乘上 delta 就是成倍的多扣/多退。
+	EntitlementDiscount float64 `json:"entitlement_discount,omitempty"`
+	TokenId             int     `json:"token_id,omitempty"` // 令牌 ID，用于令牌额度退款
 	// TokenName 提交时的令牌名，供异步结算写日志用。**不能靠 TokenId 回查 tokens 表**：
 	// 体验区（/pg）用的是 playgroundSetupContext 造的内存临时令牌，从未入库、Id 恒为 0，
 	// 回查必然落空，日志「令牌」列就空着。真实令牌也可能在任务完成前被删掉。
@@ -435,10 +445,19 @@ func (p *TaskPrivateData) Scan(val interface{}) error {
 }
 
 func (p TaskPrivateData) Value() (driver.Value, error) {
-	if (p == TaskPrivateData{}) {
+	b, err := common.Marshal(p)
+	if err != nil {
+		return nil, err
+	}
+	// 全零时存 NULL，语义与此前的 `p == TaskPrivateData{}` 一致：所有字段都带
+	// omitempty，全零必然序列化成 "{}"。
+	//
+	// 改判序列化结果而不是结构体相等，是因为结构体里一旦出现切片/map（本次加的
+	// EntitlementSpent 就是），== 直接编译不过。判 "{}" 对以后新增字段天然免疫。
+	if string(b) == "{}" {
 		return nil, nil
 	}
-	return common.Marshal(p)
+	return b, nil
 }
 
 // SyncTaskQueryParams 用于包含所有搜索条件的结构体，可以根据需求添加更多字段

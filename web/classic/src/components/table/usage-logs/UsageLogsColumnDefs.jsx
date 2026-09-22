@@ -261,6 +261,15 @@ function renderBillingTag(record, t) {
       </Tag>
     );
   }
+  // 套餐权益与订阅一样不扣钱包，也要有标识——没有标识的话用户看到一笔
+  // 「没花钱」的记录却分不清是被套餐覆盖了还是漏记了。
+  if (other?.billing_source === 'entitlement') {
+    return (
+      <Tag color='cyan' shape='circle'>
+        {t('套餐权益')}
+      </Tag>
+    );
+  }
   return null;
 }
 
@@ -856,7 +865,11 @@ export const getLogsColumns = ({
           return <></>;
         }
         const other = getLogOther(record.other);
-        const isSubscription = other?.billing_source === 'subscription';
+        // 权益与订阅同属「不扣钱包」：钱包一分没动，显示一个真实金额会让用户
+        // 以为被扣了钱。两者在这一列的展示语义完全一致。
+        const isSubscription =
+          other?.billing_source === 'subscription' ||
+          other?.billing_source === 'entitlement';
         const pointsConsumed = record.points_consumed || 0;
         const pointsTag =
           pointsConsumed > 0 ? (
@@ -869,9 +882,15 @@ export const getLogsColumns = ({
             </Tooltip>
           ) : null;
         if (isSubscription) {
-          // Subscription billed: show only tag (no $0), but keep tooltip for equivalent cost.
+          // 不扣钱包的来源只显示标签（不显示 $0），悬浮时给出等价成本。
+          // 文案按来源分开：标签写着「套餐权益」、提示却说「由订阅抵扣」是自相矛盾的，
+          // 而这两种抵扣在用户那里是两件不同的事（一个花订阅额度，一个花算力点）。
+          const coveredBy =
+            other?.billing_source === 'entitlement'
+              ? t('由套餐权益抵扣')
+              : t('由订阅抵扣');
           return (
-            <Tooltip content={`${t('由订阅抵扣')}：${renderQuota(text, 6)}`}>
+            <Tooltip content={`${coveredBy}：${renderQuota(text, 6)}`}>
               <span>{renderBillingTag(record, t)}</span>
             </Tooltip>
           );

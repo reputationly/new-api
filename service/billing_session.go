@@ -31,6 +31,8 @@ type BillingSession struct {
 	preConsumedQuota int // 实际预扣额度（信任用户可能为 0）
 	tokenConsumed    int // 令牌额度实际扣减量
 	extraReserved    int // 发送前补充预扣的额度（订阅退款时需要单独回滚）
+	// 权益追加预扣的批次拆分，与下面 Hybrid 那对同构
+	lastReserveEntitlement []model.ComputePointSpend
 	// Hybrid 追加预扣的积分/钱包拆分（reserveFunding 记录、rollbackFundingReserve
 	// 精确原路回滚用；仅在 Reserve 持锁期间读写）
 	lastReservePoints int
@@ -263,6 +265,24 @@ func (s *BillingSession) reserveFunding(delta int) error {
 		}
 		s.lastReservePoints, s.lastReserveWallet = pPart, wPart
 		return nil
+	case *EntitlementFunding:
+		// 权益追加预扣：继续扣算力点。服务未交付，扣不到就必须拒绝——
+		// 此时已经无法退回现有资金链路（预扣阶段早已过去），与订阅同语义返回 403。
+		spent, ok, err := funding.reserveExtra(delta)
+		if err != nil {
+			return types.NewError(err, types.ErrorCodeUpdateDataError, types.ErrOptionWithSkipRetry())
+		}
+		if !ok {
+			return types.NewErrorWithStatusCode(
+				fmt.Errorf("套餐算力点不足，无法继续本次请求"),
+				types.ErrorCodeInsufficientUserQuota,
+				http.StatusForbidden,
+				types.ErrOptionWithSkipRetry(),
+				types.ErrOptionWithNoRecordErrorLog(),
+			)
+		}
+		s.lastReserveEntitlement = spent
+		return nil
 	case *SubscriptionFunding:
 		if err := model.PostConsumeUserSubscriptionDelta(funding.subscriptionId, int64(delta)); err != nil {
 			return types.NewErrorWithStatusCode(
@@ -293,6 +313,11 @@ func (s *BillingSession) rollbackFundingReserve(delta int) {
 		// 本次追加走积分时会退错桶（codex review P2）
 		funding.unreserveExtra(s.lastReservePoints, s.lastReserveWallet)
 		s.lastReservePoints, s.lastReserveWallet = 0, 0
+	case *EntitlementFunding:
+		// 按快照精确逆转，理由与 Hybrid 那条同构：追加那笔可能落在与原始预扣
+		// 不同的批次上，按总额退会退错批次。
+		funding.unreserveExtra(s.lastReserveEntitlement)
+		s.lastReserveEntitlement = nil
 	case *SubscriptionFunding:
 		if err := model.PostConsumeUserSubscriptionDelta(funding.subscriptionId, -int64(delta)); err != nil {
 			common.SysLog("error rolling back subscription funding reserve: " + err.Error())
@@ -368,6 +393,25 @@ func (s *BillingSession) syncPointsConsumed() {
 	}
 }
 
+// EntitlementSpend 暴露权益会话的资金拆分，供异步任务持久化。
+//
+// 走访问器而不是挂到 RelayInfo 上：拆分的类型是 model.ComputePointSpend，而
+// model 已经导入了 relay/common（model/task.go），反向导入会成环。控制器同时
+// 导入 service 与 model，从这里取是唯一不引入新依赖方向的路径。
+//
+// 非权益会话返回零值，调用方据此跳过。
+func (s *BillingSession) EntitlementSpend() (counterId int, discount float64, spent []model.ComputePointSpend) {
+	ent, ok := s.funding.(*EntitlementFunding)
+	if !ok || ent.match == nil {
+		return 0, 0, nil
+	}
+	d := ent.match.Entitlement.ConsumeDiscount
+	if d <= 0 {
+		d = 1
+	}
+	return ent.match.CounterId, d, ent.spent
+}
+
 // syncRelayInfo 将 BillingSession 的状态同步到 RelayInfo 的兼容字段上。
 func (s *BillingSession) syncRelayInfo() {
 	info := s.relayInfo
@@ -385,6 +429,15 @@ func (s *BillingSession) syncRelayInfo() {
 	} else {
 		info.SubscriptionId = 0
 		info.SubscriptionPreConsumed = 0
+	}
+
+	if ent, ok := s.funding.(*EntitlementFunding); ok {
+		if m := ent.Match(); m != nil {
+			info.EntitlementId = m.Entitlement.Id
+			info.EntitlementPlanId = m.PlanId
+			info.SubscriptionId = m.UserSubscriptionId
+		}
+		info.EntitlementPointsSpent = ent.PointsSpent()
 	}
 }
 
@@ -482,6 +535,37 @@ func NewBillingSession(c *gin.Context, relayInfo *relaycommon.RelayInfo, preCons
 		return session, nil
 	}
 
+	// tryEntitlement 尝试走套餐权益。返回 nil 表示「没走成」——未命中、次数用尽、
+	// 算力点不足、甚至查询报错，一律降级到后面的资金链路而不是让请求失败。
+	//
+	// 降级是这条路径的核心语义：权益是优惠不是准入门槛，任何一个维度不满足都只意味着
+	// 「这次没享受到套餐价」，服务必须照常交付（§6 ④）。所以这里刻意吞掉错误只记日志，
+	// 唯独不能让权益侧的问题变成用户侧的 4xx/5xx。
+	tryEntitlement := func() *BillingSession {
+		// 渠道号从 context 取而不是 relayInfo.ChannelId：本函数跑在 InitChannelMeta
+		// 之前，那时 ChannelMeta 仍是 nil，直接读会 panic（同一个坑见 tryWallet 的说明）。
+		channelId := common.GetContextKeyInt(c, constant.ContextKeyChannelId)
+		match, err := model.MatchUserEntitlement(relayInfo.UserId, relayInfo.OriginModelName, channelId)
+		if err != nil {
+			common.SysLog("entitlement match failed, falling back: " + err.Error())
+			return nil
+		}
+		if match == nil {
+			return nil
+		}
+		session := &BillingSession{
+			relayInfo: relayInfo,
+			funding: &EntitlementFunding{
+				userId: relayInfo.UserId,
+				match:  match,
+			},
+		}
+		if apiErr := session.preConsume(c, preConsumedQuota); apiErr != nil {
+			return nil
+		}
+		return session
+	}
+
 	trySubscription := func() (*BillingSession, *types.NewAPIError) {
 		subConsume := int64(preConsumedQuota)
 		if subConsume <= 0 {
@@ -504,8 +588,14 @@ func NewBillingSession(c *gin.Context, relayInfo *relaycommon.RelayInfo, preCons
 		return session, nil
 	}
 
+	// 权益属于套餐权益，用户显式选了 wallet_only 就不该再动它——那是「这次别用我的
+	// 套餐」的意思。其余偏好下权益都排在订阅额度之前：它更具体（限定了模型与渠道），
+	// 且不消耗订阅的通用额度。
 	switch pref {
 	case "subscription_only":
+		if session := tryEntitlement(); session != nil {
+			return session, nil
+		}
 		return trySubscription()
 	case "wallet_only":
 		return tryWallet()
@@ -513,6 +603,9 @@ func NewBillingSession(c *gin.Context, relayInfo *relaycommon.RelayInfo, preCons
 		session, err := tryWallet()
 		if err != nil {
 			if err.GetErrorCode() == types.ErrorCodeInsufficientUserQuota {
+				if entSession := tryEntitlement(); entSession != nil {
+					return entSession, nil
+				}
 				return trySubscription()
 			}
 			return nil, err
@@ -521,6 +614,9 @@ func NewBillingSession(c *gin.Context, relayInfo *relaycommon.RelayInfo, preCons
 	case "subscription_first":
 		fallthrough
 	default:
+		if session := tryEntitlement(); session != nil {
+			return session, nil
+		}
 		hasSub, subCheckErr := model.HasActiveUserSubscription(relayInfo.UserId)
 		if subCheckErr != nil {
 			return nil, types.NewError(subCheckErr, types.ErrorCodeQueryDataError, types.ErrOptionWithSkipRetry())
@@ -548,12 +644,19 @@ func NewBillingSession(c *gin.Context, relayInfo *relaycommon.RelayInfo, preCons
 // 失败只记日志：服务已交付、钱已扣，不该因记账失败而报错给用户。漏结转的后果是
 // quota 停在负数，由每日自洽校验发现（现金账会差出恰好那一笔）。
 func (s *BillingSession) syncCreditConsumed(actualQuota int) {
-	// 订阅会话不结转：它扣的是 UserSubscription.AmountUsed，根本不动 quota。
-	// 若此时用户 quota 恰好因别的原因为负，这里会把那笔与本请求无关的透支结转掉，
-	// 并记在订阅请求的 CreditConsumed 上——而 getFundConsumeStats 排除订阅日志，
-	// 于是 credit_used 涨了、对账侧看不到，信用账报假不平。
-	// 异步路径的 recalculateTaskQuota 已有同样的 !taskIsSubscription 守卫。
-	if s.funding.Source() == BillingSourceSubscription {
+	// 不动 User.Quota 的资金来源一律不结转：订阅扣的是 UserSubscription.AmountUsed，
+	// 权益扣的是次数与算力点批次，两者都没让 quota 少一分。
+	//
+	// 若此时用户 quota 恰好因别的原因为负（比如上一笔钱包请求的透支还没结转），
+	// 这里会把那笔与本请求无关的透支结转掉、并记在本请求的 CreditConsumed 上——
+	// 而 getFundConsumeStats 把这两种来源的日志都排除在外，于是 credit_used 涨了、
+	// 对账侧看不到，信用账报假不平。
+	//
+	// 用白名单（只有真正扣 quota 的来源才结转）而不是黑名单列出例外：再加资金来源时
+	// 漏改这里的默认结果是「不结转」，比「误结转别人的透支」安全得多。
+	switch s.funding.Source() {
+	case BillingSourceWallet, BillingSourceHybrid:
+	default:
 		return
 	}
 	settled, err := model.SettleOverdraftToCredit(s.relayInfo.UserId, int64(actualQuota))

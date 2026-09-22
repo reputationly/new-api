@@ -147,6 +147,11 @@ type RelayInfo struct {
 	// SubscriptionPlanId / SubscriptionPlanTitle are used for logging/UI display.
 	SubscriptionPlanId    int
 	SubscriptionPlanTitle string
+	// 套餐权益（BillingSource == "entitlement"）的归因字段，供日志与履约率报表使用。
+	// EntitlementPointsSpent 是本次消耗的算力点（quota unit，非展示点数）。
+	EntitlementId          int
+	EntitlementPlanId      int
+	EntitlementPointsSpent int64
 	// RequestId is used for idempotent pre-consume/refund
 	RequestId string
 	// SubscriptionAmountTotal / SubscriptionAmountUsedAfterPreConsume are used to compute remaining in logs.

@@ -718,6 +718,14 @@ func RelayTask(c *gin.Context) {
 		// 而 credit_used 里的欠款纹丝不动——0 余额的授信客户凭空多出一笔真钱、
 		// 欠款照欠，与上面积分那条是完全同构的套利通道。
 		task.PrivateData.CreditConsumed = relayInfo.CreditConsumed
+		// 权益任务的拆分同理持久化。不记的话轮询期退款会落到钱包分支，
+		// 退还一笔从未从钱包扣过的钱，而消耗掉的算力点批次纹丝不动。
+		if bs, ok := relayInfo.Billing.(*service.BillingSession); ok {
+			counterId, discount, spent := bs.EntitlementSpend()
+			task.PrivateData.EntitlementCounterId = counterId
+			task.PrivateData.EntitlementDiscount = discount
+			task.PrivateData.EntitlementSpent = spent
+		}
 		task.PrivateData.TokenId = relayInfo.TokenId
 		task.PrivateData.TokenName = c.GetString("token_name")
 		task.PrivateData.BillingContext = &model.TaskBillingContext{

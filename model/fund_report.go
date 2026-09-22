@@ -128,14 +128,22 @@ func getFundConsumeStats(start, end int64) (*FundConsumeStats, error) {
 	// 不排除的话，现金校验会减去一笔从未减少过 users.quota 的消费，任何订阅客户产生
 	// 用量都会触发假不平。
 	//
+	// 套餐权益同理：EntitlementFunding 扣的是次数与算力点批次，同样不动 User.Quota。
+	// 不排除的话，任何走套餐权益的请求都会被算成现金消耗，现金校验必然假不平——
+	// 与订阅那条是同一个问题的同一个形态。
+	//
 	// 用 other 的 JSON 子串匹配是权宜之计——Log 没有 billing_source 索引列，而它已经
 	// 写在 Other 里（service/log_info_generate.go:164）。COALESCE 不可少：other 为
 	// NULL 时 `NOT LIKE` 求值为 NULL，会把那些行一并排除掉。
-	// 套餐权益系统落地时应把 billing_source 提成独立索引列，届时改掉这里。
+	//
+	// 排除项随资金来源增加而线性增长，已经是第二条了。再加第三条时应当把
+	// billing_source 提成独立索引列，改成「只统计 wallet/points_wallet」的白名单，
+	// 免得哪天新增来源漏改这里、对账静默报假不平。
 	if err := LOG_DB.Model(&Log{}).
 		Where("type IN ? AND created_at >= ? AND created_at <= ?",
 			[]int{LogTypeConsume, LogTypeRefund}, start, end).
 		Where("COALESCE(other, '') NOT LIKE ?", `%"billing_source":"subscription"%`).
+		Where("COALESCE(other, '') NOT LIKE ?", `%"billing_source":"entitlement"%`).
 		Select(fmt.Sprintf(
 			"COALESCE(SUM(CASE WHEN type = %d THEN -quota ELSE quota END),0) as total_quota, "+
 				"COALESCE(SUM(CASE WHEN type = %d THEN -points_consumed ELSE points_consumed END),0) as points_consumed, "+

@@ -279,6 +279,26 @@ func TestCheckFundConsistency_SubscriptionConsumeExcluded(t *testing.T) {
 	require.True(t, rep.AllOK, "订阅消费不得计入现金消耗：%+v", rep.Items)
 }
 
+// 套餐权益扣的是次数与算力点批次，同样一分钱没动 users.quota。
+// 不排除的话，任何走权益的请求都会被算成现金消耗，现金校验必然假不平——
+// 与上面订阅那条是同一个问题的同一个形态。
+func TestCheckFundConsistency_EntitlementConsumeExcluded(t *testing.T) {
+	truncateTables(t)
+	require.NoError(t, DB.Create(&User{Id: 916, Username: "fb_916", Role: 1, Status: 1,
+		Quota: 50000, AffCode: "aff916"}).Error)
+	_, err := InitFundBaseline(1)
+	require.NoError(t, err)
+
+	require.NoError(t, LOG_DB.Create(&Log{
+		UserId: 916, CreatedAt: common.GetTimestamp(), Type: LogTypeConsume,
+		Quota: 8000, Other: `{"billing_source":"entitlement","entitlement_id":3}`,
+	}).Error)
+
+	rep, err := CheckFundConsistency()
+	require.NoError(t, err)
+	require.True(t, rep.AllOK, "权益消费不得计入现金消耗：%+v", rep.Items)
+}
+
 // 硬删用户在基线之后消费过：他的消费日志留在 logs（可能是独立库，删不掉），
 // 而余额与流水都随删号消失。冲销流水要让三者重新自洽。
 func TestCheckFundConsistency_HardDeletedUserWithConsumption(t *testing.T) {

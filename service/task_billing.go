@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"fmt"
+	"math"
 	"strings"
 
 	"github.com/QuantumNous/new-api/common"
@@ -173,6 +174,16 @@ func resolveTokenKey(ctx context.Context, tokenId int, taskID string) string {
 	return token.Key
 }
 
+// taskTouchesWallet 该任务的资金来源是否真的会扣减 User.Quota。
+// 只有这类来源才谈得上「透支结转为信用欠款」。
+func taskTouchesWallet(task *model.Task) bool {
+	switch task.PrivateData.BillingSource {
+	case BillingSourceSubscription, BillingSourceEntitlement:
+		return false
+	}
+	return true
+}
+
 // taskIsSubscription 判断任务是否通过订阅计费。
 func taskIsSubscription(task *model.Task) bool {
 	return task.PrivateData.BillingSource == BillingSourceSubscription && task.PrivateData.SubscriptionId > 0
@@ -188,6 +199,12 @@ func taskAdjustFunding(task *model.Task, delta int) error {
 	// 重算补扣也会漏掉积分优先。调用方随后的 task.Update() 会持久化拆分变更。
 	if task.PrivateData.BillingSource == BillingSourceHybrid {
 		return taskAdjustHybridFunding(task, delta)
+	}
+	// 权益任务：扣的是次数与算力点批次，一分钱没从钱包出。落到下面的钱包分支会
+	// 退还一笔从未扣过的钱（凭空送真钱），而消耗掉的算力点纹丝不动——与积分、
+	// 授信那两条是完全同构的套利通道。
+	if task.PrivateData.BillingSource == BillingSourceEntitlement {
+		return taskAdjustEntitlementFunding(task, delta)
 	}
 	if delta > 0 {
 		return model.DecreaseUserQuota(task.UserId, delta, false)
@@ -472,9 +489,17 @@ func recalculateTaskQuota(ctx context.Context, task *model.Task, actualQuota, co
 	// credit_used 不增、日志 CreditConsumed 记 0——负余额被算进现金口径，
 	// 现金账与信用账**各自都能自洽**，每日校验抓不到，而应收被实实在在地低估。
 	//
-	// 订阅任务排除：它扣的是 UserSubscription.AmountUsed，根本不动 quota。
+	// 只有真正扣 User.Quota 的来源才结转：订阅扣的是 UserSubscription.AmountUsed，
+	// 权益扣的是次数与算力点批次，两者都没让 quota 少一分。对它们结转会把一笔与本
+	// 任务无关的旧透支记到这个任务头上，而对账侧把这两种来源的日志整个排除在外，
+	// 于是 credit_used 涨了、对账看不到，信用账报假不平。
+	//
+	// 与同步路径 BillingSession.syncCreditConsumed 用同一套白名单口径——那条是这条的
+	// 镜像，上一轮只改了同步侧、漏了这里。用白名单而不是继续列黑名单：再加资金来源
+	// 时漏改的默认结果是「不结转」，比「误结转别人的透支」安全得多。
+	//
 	// 退款方向（quotaDelta < 0）由 taskRefundWalletAndCredit 走冲销路径，不在此处。
-	if quotaDelta > 0 && !taskIsSubscription(task) {
+	if quotaDelta > 0 && taskTouchesWallet(task) {
 		if settled, serr := model.SettleOverdraftToCredit(task.UserId, int64(quotaDelta)); serr != nil {
 			common.SysLog(fmt.Sprintf("failed to settle overdraft for task %s: %s", task.TaskID, serr.Error()))
 		} else if settled > 0 {
@@ -739,4 +764,111 @@ func videoInputLabel(hasVideo bool) string {
 		return ratio_setting.VideoPriceKeyWithVideo
 	}
 	return ratio_setting.VideoPriceKeyWithoutVideo
+}
+
+// taskAdjustEntitlementFunding 权益任务的轮询期资金调整。
+//
+// 用持久化的折扣系数重算，公式与同步路径 EntitlementFunding.pointsNeeded 完全一致。
+//
+// 曾经试过「按 totalSpent/billed 的比例缩放」以求省掉一个持久化字段，那是错的：
+// totalSpent = ceil(billed × discount)，billed 小的时候这一次 ceil 会把比值整个抬高
+// （billed=1、discount=0.5 时反推出 1.0 而非 0.5），再乘上 delta 就是成倍的多扣多退。
+// 比例只在 billed × discount 远大于 1 时才近似成立，而那个前提既没有边界检查、
+// 也没法在配置层保证。
+//
+// 调用时 task.Quota 仍是调整前的已计费额（重算在资金调整成功后才改写它）。
+func taskAdjustEntitlementFunding(task *model.Task, delta int) error {
+	pd := &task.PrivateData
+	billed := task.Quota
+	if billed <= 0 || len(pd.EntitlementSpent) == 0 {
+		// 没有拆分可依据（不消耗算力点的权益，或计费额为 0）：次数该退还的仍要退，
+		// 但不能凭空去动钱包。
+		if delta < 0 && -delta >= billed {
+			return model.RefundEntitlementCount(pd.EntitlementCounterId)
+		}
+		return nil
+	}
+
+	totalSpent := int64(0)
+	for _, sp := range pd.EntitlementSpent {
+		totalSpent += sp.Amount
+	}
+
+	discount := pd.EntitlementDiscount
+	if discount <= 0 {
+		discount = 1
+	}
+
+	if delta > 0 {
+		need := entitlementPointsFor(delta, discount)
+		if need <= 0 {
+			return nil
+		}
+		ok, spent, err := model.TryConsumeComputePoints(task.UserId, need)
+		if err != nil {
+			return err
+		}
+		if !ok {
+			// 服务已交付，不能失败。与同步路径 EntitlementFunding.Settle 同语义。
+			common.SysLog(fmt.Sprintf(
+				"entitlement task settle shortfall: task=%s need=%d (算力点不足，差额由平台承担)",
+				task.TaskID, need))
+			return nil
+		}
+		pd.EntitlementSpent = append(pd.EntitlementSpent, spent...)
+		return nil
+	}
+
+	refund := -delta
+	full := refund >= billed
+	// 全额退款直接用实扣总额，不重算——重算会因为 ceil 而与实扣差出一个单位，
+	// 把批次退成负数或者少退给用户。
+	amount := totalSpent
+	if !full {
+		amount = entitlementPointsFor(refund, discount)
+		if amount > totalSpent {
+			amount = totalSpent
+		}
+	}
+	if amount > 0 {
+		// 逆序退：最后扣的那笔最可能来自后备批次，先还它，让快过期的批次保持已消耗，
+		// 与「先烧快过期的」是同一条原则的另一面。
+		remaining := amount
+		refunds := make([]model.ComputePointSpend, 0, len(pd.EntitlementSpent))
+		for i := len(pd.EntitlementSpent) - 1; i >= 0 && remaining > 0; i-- {
+			part := pd.EntitlementSpent[i].Amount
+			if part > remaining {
+				part = remaining
+			}
+			if part <= 0 {
+				continue
+			}
+			refunds = append(refunds, model.ComputePointSpend{
+				LotId: pd.EntitlementSpent[i].LotId, Amount: part,
+			})
+			pd.EntitlementSpent[i].Amount -= part
+			remaining -= part
+		}
+		if err := model.RefundComputePoints(refunds); err != nil {
+			return err
+		}
+	}
+	if full {
+		// 任务整体失败：这次调用不该计入次数配额
+		return model.RefundEntitlementCount(pd.EntitlementCounterId)
+	}
+	return nil
+}
+
+// entitlementPointsFor 把 quota 量按折扣换算成算力点，与同步路径
+// EntitlementFunding.pointsNeeded 同一个公式——两处算不一样就会让同一笔用量
+// 在同步与异步路径下扣出不同的点数。
+func entitlementPointsFor(quota int, discount float64) int64 {
+	if quota <= 0 {
+		return 0
+	}
+	if discount <= 0 {
+		discount = 1
+	}
+	return int64(math.Ceil(float64(quota) * discount))
 }

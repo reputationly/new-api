@@ -13,6 +13,9 @@ const (
 	BillingSourceWallet       = "wallet"
 	BillingSourceSubscription = "subscription"
 	BillingSourceHybrid       = "points_wallet" // 积分+钱包混扣（积分优先，不足扣余额）
+	// BillingSourceEntitlement 套餐权益（次数闸门 + 算力点）。未命中或任一维度用尽时
+	// 降级到上面几种，所以它只出现在「确实走了套餐权益」的请求上。
+	BillingSourceEntitlement = "entitlement"
 )
 
 // PreConsumeBilling 根据用户计费偏好创建 BillingSession 并执行预扣费。
@@ -61,9 +64,14 @@ func SettleBilling(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, actualQuo
 
 		// 发送额度通知（订阅计费使用订阅剩余额度）
 		if actualQuota != 0 {
-			if relayInfo.BillingSource == BillingSourceSubscription {
+			switch relayInfo.BillingSource {
+			case BillingSourceSubscription:
 				checkAndSendSubscriptionQuotaNotify(relayInfo)
-			} else {
+			case BillingSourceEntitlement:
+				// 权益扣的是次数与算力点，钱包余额一分没动。走钱包告警会用
+				// UserQuota 减去一笔根本没从钱包出的消费，凭空触发「余额不足」——
+				// 误报比不报更糟，它会让用户对真正的告警也失去信任。
+			default:
 				checkAndSendQuotaNotify(relayInfo, actualQuota-preConsumed, preConsumed)
 			}
 		}
