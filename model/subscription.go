@@ -180,6 +180,11 @@ type SubscriptionPlan struct {
 	QuotaResetPeriod        string `json:"quota_reset_period" gorm:"type:varchar(16);default:'never'"`
 	QuotaResetCustomSeconds int64  `json:"quota_reset_custom_seconds" gorm:"type:bigint;default:0"`
 
+	// ComputePointsPerPeriod 每期发放的算力点数（quota unit，非展示点数），0 = 不发放。
+	// 复用上面的 QuotaResetPeriod 决定发放周期——算力点与 TotalAmount 是同一个
+	// 订阅生命周期上的两条平行额度，没有理由用两套周期配置（见设计文档 §十三）。
+	ComputePointsPerPeriod int64 `json:"compute_points_per_period" gorm:"type:bigint;not null;default:0"`
+
 	CreatedAt int64 `json:"created_at" gorm:"bigint"`
 	UpdatedAt int64 `json:"updated_at" gorm:"bigint"`
 }
@@ -506,6 +511,27 @@ func CreateUserSubscriptionFromPlanTx(tx *gorm.DB, userId int, plan *Subscriptio
 	}
 	if err := tx.Create(sub).Error; err != nil {
 		return nil, err
+	}
+	// 首期算力点发放。到期时间优先取下一次重置边界（下个周期会发新批次，这批
+	// 不该跨周期累积）；没有重置周期时退回订阅结束时间——一次性发放同样必须
+	// 有明确到期，不能让算力点跨越已失效的订阅继续可用。
+	//
+	// 幂等性靠调用方保证。⚠️ 但那层保证比看上去弱：CompleteSubscriptionOrder 判重
+	// 读的 order.Status 取自 gorm:query_option FOR UPDATE 的查询，而 GORM v2 不消费
+	// 这个 v1 遗留设置，等于没锁，两个并发回调都读到 Pending 时并不互斥。真正拦住
+	// 重复的是 topups.trade_no 唯一索引（后提交的那笔撞唯一键、整个事务回滚，连这里
+	// 发的批次一起撤销）；但若前一笔已提交、后一笔才走到 upsertSubscriptionTopUpTx
+	// 的 SELECT，它走更新分支而非插入，这层兜底就不生效。详见 GrantComputePointLotTx
+	// 的注释——订单完成路径不是本次改动引入的，是否改成条件更新抢占需单独评估。
+	if plan.ComputePointsPerPeriod > 0 {
+		lotExpiresAt := nextReset
+		if lotExpiresAt <= 0 {
+			lotExpiresAt = endUnix
+		}
+		if err := GrantComputePointLotTx(tx, userId, ComputePointLotSourceSubscription, sub.Id,
+			plan.ComputePointsPerPeriod, lotExpiresAt); err != nil {
+			return nil, err
+		}
 	}
 	return sub, nil
 }
@@ -994,10 +1020,56 @@ func maybeResetUserSubscriptionWithPlanTx(tx *gorm.DB, sub *UserSubscription, pl
 		}
 		return nil
 	}
+	// 重置落库用条件更新抢占，而不是 tx.Save 全字段覆盖：本函数的两个调用方
+	// （PreConsumeUserSubscription 与 ResetDueSubscriptions）用来保护它的
+	// gorm:query_option FOR UPDATE 在 GORM v2 下是死代码（不消费这个 v1 遗留
+	// 设置，等于没锁，同一坑见 bank_transfer.go 的说明），后台重置任务与一次
+	// 实时预扣完全可能各自拿着同一份「重置前」快照并发闯进来。
+	//
+	// WHERE next_reset_time = 取出时的值，把「谁完成这次重置」变成数据库层的
+	// 单赢竞争：同一行的并发 UPDATE 由数据库串行执行，只有一个事务能命中
+	// （RowsAffected=1），其余拿到 0。AmountUsed 归零谁做都一样（幂等），但
+	// 算力点发放不是——重复发就是凭空多发一期，所以它必须挂在抢赢的分支里。
+	// 顺带也修掉了全字段 Save 会把别人刚写的 AmountUsed 覆盖回去的问题。
+	prevNextResetTime := sub.NextResetTime
+	res := tx.Model(&UserSubscription{}).
+		Where("id = ? AND next_reset_time = ?", sub.Id, prevNextResetTime).
+		Updates(map[string]interface{}{
+			"amount_used":     0,
+			"last_reset_time": base.Unix(),
+			"next_reset_time": next,
+			// updated_at 不用写进来：GORM 按字段名约定把 UpdatedAt 当自动更新时间，
+			// Updates（区别于 UpdateColumns）每次都会自己带上它。
+		})
+	if res.Error != nil {
+		return res.Error
+	}
 	sub.AmountUsed = 0
 	sub.LastResetTime = base.Unix()
 	sub.NextResetTime = next
-	return tx.Save(sub).Error
+	if res.RowsAffected == 0 {
+		// 没抢到：另一个并发调用已经完成了同一次重置。它用的是同一份快照和
+		// 同一个 plan，calcNextResetTime 是纯函数，算出的 base/next 与这里一致，
+		// 所以上面同步到内存的值依然成立，只是这一份不该再发一次算力点。
+		return nil
+	}
+	// 周期性算力点重置：与 AmountUsed 归零同一个「重置事件」触发一次，不随
+	// advanced 循环跳过的周期数重复发放——躺过多个周期未消费只补发当期一份，
+	// 语义与 TotalAmount 的归零一致（都是「回到满额」而非「累积欠发的期数」）。
+	//
+	// 到期时间优先取下一个重置边界；若这已是订阅生命周期内最后一次重置
+	// （next<=0，例如自定义周期在结束前收尾），退回订阅结束时间兜底。
+	if plan.ComputePointsPerPeriod > 0 {
+		lotExpiresAt := next
+		if lotExpiresAt <= 0 {
+			lotExpiresAt = sub.EndTime
+		}
+		if err := GrantComputePointLotTx(tx, sub.UserId, ComputePointLotSourceSubscription, sub.Id,
+			plan.ComputePointsPerPeriod, lotExpiresAt); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // PreConsumeUserSubscription pre-consumes from any active subscription total quota.

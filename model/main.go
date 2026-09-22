@@ -307,6 +307,7 @@ func migrateDB() error {
 		&ModerationLog{},
 		&ChannelModelCost{},
 		&TopupPackage{},
+		&ComputePointLot{},
 		&FundEntry{},
 	)
 	if err != nil {
@@ -765,6 +766,7 @@ func ensureSubscriptionPlanTableSQLite() error {
 ` + "`total_amount`" + ` bigint NOT NULL DEFAULT 0,
 ` + "`quota_reset_period`" + ` varchar(16) DEFAULT 'never',
 ` + "`quota_reset_custom_seconds`" + ` bigint DEFAULT 0,
+` + "`compute_points_per_period`" + ` bigint NOT NULL DEFAULT 0,
 ` + "`created_at`" + ` bigint,
 ` + "`updated_at`" + ` bigint,
 PRIMARY KEY (` + "`id`" + `)
@@ -798,6 +800,11 @@ PRIMARY KEY (` + "`id`" + `)
 		{Name: "total_amount", DDL: "`total_amount` bigint NOT NULL DEFAULT 0"},
 		{Name: "quota_reset_period", DDL: "`quota_reset_period` varchar(16) DEFAULT 'never'"},
 		{Name: "quota_reset_custom_seconds", DDL: "`quota_reset_custom_seconds` bigint DEFAULT 0"},
+		// compute_points_per_period：SubscriptionPlan 的新字段。SQLite 走的是这条手写 DDL，
+		// 不受 GORM 结构体标签驱动——AutoMigrate 只对 MySQL/PostgreSQL 生效（见上方分支），
+		// 加字段时若只改结构体、不改这里，SQLite 上新建表和存量升级都会漏掉这一列，
+		// 保存算力点 > 0 的套餐会报 "no such column" 直接失败。
+		{Name: "compute_points_per_period", DDL: "`compute_points_per_period` bigint NOT NULL DEFAULT 0"},
 		{Name: "created_at", DDL: "`created_at` bigint"},
 		{Name: "updated_at", DDL: "`updated_at` bigint"},
 	}

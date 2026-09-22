@@ -55,6 +55,7 @@ func TestMain(m *testing.M) {
 		&TopupPackage{},
 		&BankTransferOrder{},
 		&BankTransferReceipt{},
+		&ComputePointLot{},
 	); err != nil {
 		panic("failed to migrate: " + err.Error())
 	}
@@ -81,6 +82,7 @@ func truncateTables(t *testing.T) {
 		DB.Exec("DELETE FROM topup_packages")
 		DB.Exec("DELETE FROM bank_transfer_orders")
 		DB.Exec("DELETE FROM bank_transfer_receipts")
+		DB.Exec("DELETE FROM compute_point_lots")
 	})
 }
 
