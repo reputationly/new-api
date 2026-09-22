@@ -54,6 +54,7 @@ func (s *BillingSession) Settle(actualQuota int) error {
 	delta := actualQuota - s.preConsumedQuota
 	if delta == 0 {
 		s.syncPointsConsumed()
+		s.syncCreditConsumed(actualQuota)
 		s.settled = true
 		return nil
 	}
@@ -83,6 +84,7 @@ func (s *BillingSession) Settle(actualQuota int) error {
 		s.relayInfo.SubscriptionPostDelta += int64(delta)
 	}
 	s.syncPointsConsumed()
+	s.syncCreditConsumed(actualQuota)
 	s.settled = true
 	return tokenErr
 }
@@ -439,13 +441,19 @@ func NewBillingSession(c *gin.Context, relayInfo *relaycommon.RelayInfo, preCons
 			}
 		}
 
+		// 授信额度并入可用性判断：现金花完后允许在授信内继续用（先用后付）。
+		// 取自用户缓存而非另打一次 DB 查询——这里是每请求的热路径。
+		var creditAvailable int
+		if uc, cerr := model.GetUserCache(relayInfo.UserId); cerr == nil {
+			if remain := uc.CreditLimit - uc.CreditUsed; remain > 0 {
+				creditAvailable = int(remain)
+			}
+		}
+
 		// 白名单分组把积分并入可用性判断：余额为 0 但积分充足也放行（营销积分的意义）。
-		available := userQuota + userPoints
+		available := userQuota + userPoints + creditAvailable
 		if available <= 0 {
-			return nil, types.NewErrorWithStatusCode(
-				fmt.Errorf("用户额度不足, 剩余额度: %s", logger.FormatQuota(userQuota)),
-				types.ErrorCodeInsufficientUserQuota, http.StatusForbidden,
-				types.ErrOptionWithSkipRetry(), types.ErrOptionWithNoRecordErrorLog())
+			return nil, newInsufficientFundsError(userQuota, creditAvailable, relayInfo.UserId)
 		}
 		if available-preConsumedQuota < 0 {
 			return nil, types.NewErrorWithStatusCode(
@@ -529,4 +537,51 @@ func NewBillingSession(c *gin.Context, relayInfo *relaycommon.RelayInfo, preCons
 		}
 		return session, nil
 	}
+}
+
+// syncCreditConsumed 结算收尾：把本次消费造成的透支结转为信用欠款。
+//
+// 扣费侧照常扣 User.Quota、允许短暂透支为负；这里把负的那部分挪进 CreditUsed 并让
+// quota 归零，欠款从此有独立科目（应收账款），不与预付余额混在一个数字里。
+// 仅在 Settle 的 settled 闸门内执行一次，与 syncPointsConsumed 同构。
+//
+// 失败只记日志：服务已交付、钱已扣，不该因记账失败而报错给用户。漏结转的后果是
+// quota 停在负数，由每日自洽校验发现（现金账会差出恰好那一笔）。
+func (s *BillingSession) syncCreditConsumed(actualQuota int) {
+	// 订阅会话不结转：它扣的是 UserSubscription.AmountUsed，根本不动 quota。
+	// 若此时用户 quota 恰好因别的原因为负，这里会把那笔与本请求无关的透支结转掉，
+	// 并记在订阅请求的 CreditConsumed 上——而 getFundConsumeStats 排除订阅日志，
+	// 于是 credit_used 涨了、对账侧看不到，信用账报假不平。
+	// 异步路径的 recalculateTaskQuota 已有同样的 !taskIsSubscription 守卫。
+	if s.funding.Source() == BillingSourceSubscription {
+		return
+	}
+	settled, err := model.SettleOverdraftToCredit(s.relayInfo.UserId, int64(actualQuota))
+	if err != nil {
+		common.SysLog(fmt.Sprintf("failed to settle overdraft to credit (userId=%d): %s",
+			s.relayInfo.UserId, err.Error()))
+		return
+	}
+	if settled > 0 {
+		s.relayInfo.CreditConsumed = int(settled)
+	}
+}
+
+// newInsufficientFundsError 区分「余额不足」与「授信用尽」。
+//
+// 两者用户要做的事完全相反：一个去充值，一个去结清账款。给同一句提示会让企业客户
+// 反复充值却仍被拒——他们的账户本来就该是 0 余额 + 授信。
+func newInsufficientFundsError(userQuota, creditAvailable, userId int) *types.NewAPIError {
+	limit, used, _, err := model.GetUserCreditState(userId)
+	if err == nil && limit > 0 && used >= limit && creditAvailable <= 0 {
+		return types.NewErrorWithStatusCode(
+			fmt.Errorf("授信额度已用尽，请结清账款后继续使用（已用 %s / 授信 %s）",
+				logger.FormatQuota(int(used)), logger.FormatQuota(int(limit))),
+			types.ErrorCodeInsufficientUserQuota, http.StatusForbidden,
+			types.ErrOptionWithSkipRetry(), types.ErrOptionWithNoRecordErrorLog())
+	}
+	return types.NewErrorWithStatusCode(
+		fmt.Errorf("用户额度不足, 剩余额度: %s", logger.FormatQuota(userQuota)),
+		types.ErrorCodeInsufficientUserQuota, http.StatusForbidden,
+		types.ErrOptionWithSkipRetry(), types.ErrOptionWithNoRecordErrorLog())
 }

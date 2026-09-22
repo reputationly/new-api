@@ -48,7 +48,7 @@ func TestInitFundBaseline_Idempotent(t *testing.T) {
 
 	created, err := InitFundBaseline(1)
 	require.NoError(t, err)
-	require.Equal(t, 2, created, "现金与积分各一条")
+	require.Equal(t, 2, created, "现金与积分各一条（标记不计入 created）")
 
 	created2, err := InitFundBaseline(1)
 	require.NoError(t, err)
@@ -56,7 +56,23 @@ func TestInitFundBaseline_Idempotent(t *testing.T) {
 
 	var n int64
 	require.NoError(t, DB.Model(&FundEntry{}).Where("kind = ?", FundKindOpening).Count(&n).Error)
-	require.Equal(t, int64(2), n)
+	require.Equal(t, int64(3), n, "两条余额期初 + 一条基线标记")
+}
+
+// 全站无人持有余额时（全新部署），基线仍须成立——否则自洽校验永远不工作，
+// 且页面只会显示「未初始化」，没有任何线索说明为什么点了按钮还是没用。
+func TestInitFundBaseline_MarkerCoversZeroBalance(t *testing.T) {
+	truncateTables(t)
+	require.NoError(t, DB.Create(&User{Id: 920, Username: "fb_920", Role: 1, Status: 1,
+		Quota: 0, AffCode: "aff920"}).Error)
+
+	_, err := InitFundBaseline(1)
+	require.NoError(t, err)
+
+	rep, err := CheckFundConsistency()
+	require.NoError(t, err)
+	require.True(t, rep.HasBaseline, "零余额部署也要能建立基线")
+	require.True(t, rep.AllOK)
 }
 
 // 没有基线时不产出校验结论：流水表是后加的，历史余额无从解释，
@@ -292,4 +308,95 @@ func TestCheckFundConsistency_HardDeletedUserWithConsumption(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, rep.AllOK,
 		"冲销流水要抵消掉残留余额，使消费日志不再造成假不平：%+v", rep.Items)
+}
+
+// 信用自洽校验的完整等式：信用消耗 − 已核销回款 == credit_used。
+//
+// 扣费侧接入前这条只能验个残缺版本（「未消耗时应为 0」）。现在透支结转把欠款
+// 记进了 credit_used、日志记了 credit_consumed，等式才立得住。
+func TestCheckFundConsistency_CreditEquation(t *testing.T) {
+	truncateTables(t)
+	require.NoError(t, DB.Create(&User{Id: 916, Username: "fb_916", Role: 1, Status: 1,
+		Quota: 0, CreditLimit: 100000, AffCode: "aff916"}).Error)
+	_, err := InitFundBaseline(1)
+	require.NoError(t, err)
+	now := common.GetTimestamp()
+
+	// 客户在授信内消费 8000：扣费把 quota 打负，结算结转进 credit_used
+	require.NoError(t, DecreaseUserQuota(916, 8000, true))
+	settled, err := SettleOverdraftToCredit(916, 1<<62)
+	require.NoError(t, err)
+	require.Equal(t, int64(8000), settled)
+	require.NoError(t, LOG_DB.Create(&Log{
+		UserId: 916, CreatedAt: now, Type: LogTypeConsume,
+		Quota: 8000, CreditConsumed: 8000,
+	}).Error)
+
+	rep, err := CheckFundConsistency()
+	require.NoError(t, err)
+	require.True(t, rep.AllOK, "授信消费后三本账都应平：%+v", rep.Items)
+
+	// 回款核销 5000
+	require.NoError(t, SettleUserCredit(916, 5000))
+	_, err = InsertFundEntry(&FundEntry{
+		UserId: 916, CreatedAt: now,
+		Account: FundAccountCredit, Kind: FundKindARSettle,
+		QuotaDelta: -5000, CashFen: 730,
+		Source: FundSourceAdminCash, RefType: FundRefAdminOp, RefId: "AR-1",
+	})
+	require.NoError(t, err)
+
+	rep, err = CheckFundConsistency()
+	require.NoError(t, err)
+	require.True(t, rep.AllOK, "回款核销后仍应账平：%+v", rep.Items)
+
+	var creditItem *FundCheckItem
+	for i := range rep.Items {
+		if rep.Items[i].Name == "信用" {
+			creditItem = &rep.Items[i]
+		}
+	}
+	require.NotNil(t, creditItem)
+	require.Equal(t, int64(3000), creditItem.Actual, "8000 消费 − 5000 回款 = 3000 应收")
+}
+
+// 授信消费不得被算进现金消耗：它减的是 credit_used，不是 users.quota。
+func TestGetFundConsumeStats_CreditSplit(t *testing.T) {
+	truncateTables(t)
+	now := common.GetTimestamp()
+	require.NoError(t, LOG_DB.Create(&Log{
+		UserId: 917, CreatedAt: now, Type: LogTypeConsume,
+		Quota: 10000, PointsConsumed: 2000, CreditConsumed: 3000,
+	}).Error)
+
+	st, err := getFundConsumeStats(now-60, now+60)
+	require.NoError(t, err)
+	require.Equal(t, int64(10000), st.TotalQuota)
+	require.Equal(t, int64(2000), st.PointsConsumed)
+	require.Equal(t, int64(3000), st.CreditConsumed)
+	require.Equal(t, int64(5000), st.CashConsumed,
+		"现金承担 = 总额 − 积分 − 授信，三者互斥且穷尽资金来源")
+}
+
+// 基线必须记录已存在的欠款。
+//
+// 信用校验是「期初欠款 + 信用消耗 − 回款 == credit_used」。基线若只记现金与积分，
+// 任何建基线时已有欠款的部署都会**永久**报「信用账不平」——而这个告警本该只在
+// 流水被绕过时响，恒响等于没有。
+func TestInitFundBaseline_RecordsExistingCreditDebt(t *testing.T) {
+	truncateTables(t)
+	require.NoError(t, DB.Create(&User{Id: 921, Username: "fb_921", Role: 1, Status: 1,
+		Quota: 10000, CreditLimit: 100000, CreditUsed: 25000, AffCode: "aff921"}).Error)
+
+	_, err := InitFundBaseline(1)
+	require.NoError(t, err)
+
+	var opening FundEntry
+	require.NoError(t, DB.Where("account = ? AND kind = ? AND user_id = ?",
+		FundAccountCredit, FundKindOpening, 921).First(&opening).Error)
+	require.Equal(t, int64(25000), opening.QuotaDelta, "期初欠款要如实记录")
+
+	rep, err := CheckFundConsistency()
+	require.NoError(t, err)
+	require.True(t, rep.AllOK, "已有欠款的部署建完基线就该是平的：%+v", rep.Items)
 }

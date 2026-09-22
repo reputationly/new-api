@@ -28,7 +28,8 @@ type FundInflowRow struct {
 type FundConsumeStats struct {
 	TotalQuota     int64 `json:"total_quota"`     // 本期消费总额（quota unit）
 	PointsConsumed int64 `json:"points_consumed"` // 其中积分抵扣
-	CashConsumed   int64 `json:"cash_consumed"`   // 其中现金承担 = Total - Points
+	CreditConsumed int64 `json:"credit_consumed"` // 其中由授信承担（应收账款增加）
+	CashConsumed   int64 `json:"cash_consumed"`   // 其中现金承担 = Total − Points − Credit
 }
 
 // FundBalanceStats 余额侧汇总（当前值，无时间维度）。
@@ -118,6 +119,7 @@ func getFundConsumeStats(start, end int64) (*FundConsumeStats, error) {
 	var row struct {
 		TotalQuota     int64
 		PointsConsumed int64
+		CreditConsumed int64
 	}
 	// CASE WHEN 而非两次查询：一次扫表拿净额，且三库通吃（SQLite 无 FILTER 语法）。
 	//
@@ -136,17 +138,18 @@ func getFundConsumeStats(start, end int64) (*FundConsumeStats, error) {
 		Where("COALESCE(other, '') NOT LIKE ?", `%"billing_source":"subscription"%`).
 		Select(fmt.Sprintf(
 			"COALESCE(SUM(CASE WHEN type = %d THEN -quota ELSE quota END),0) as total_quota, "+
-				"COALESCE(SUM(CASE WHEN type = %d THEN -points_consumed ELSE points_consumed END),0) as points_consumed",
-			LogTypeRefund, LogTypeRefund)).
+				"COALESCE(SUM(CASE WHEN type = %d THEN -points_consumed ELSE points_consumed END),0) as points_consumed, "+
+				"COALESCE(SUM(CASE WHEN type = %d THEN -credit_consumed ELSE credit_consumed END),0) as credit_consumed",
+			LogTypeRefund, LogTypeRefund, LogTypeRefund)).
 		Scan(&row).Error; err != nil {
 		return nil, err
 	}
 	return &FundConsumeStats{
 		TotalQuota:     row.TotalQuota,
 		PointsConsumed: row.PointsConsumed,
-		// 现金承担 = 总消费 - 积分抵扣。信用消耗尚未接入扣费链路（见设计文档 ④），
-		// 接入后这里要再减去 credit_consumed。
-		CashConsumed: row.TotalQuota - row.PointsConsumed,
+		CreditConsumed: row.CreditConsumed,
+		// 现金承担 = 总消费 − 积分抵扣 − 授信承担。三者互斥且穷尽这一笔消费的资金来源。
+		CashConsumed: row.TotalQuota - row.PointsConsumed - row.CreditConsumed,
 	}, nil
 }
 
@@ -259,11 +262,24 @@ func CheckFundConsistency() (*FundConsistencyReport, error) {
 	rep.Items = append(rep.Items, buildCheckItem("赠送积分", pointsExpected, balance.Points,
 		"期初 + 发放 - 积分消耗"))
 
-	// 信用：授信开额与回款的净额与 credit_used 的关系要等扣费侧接入后才成立，
-	// 此刻信用消耗恒为 0，故只在已开授信时校验「未发生消耗时 credit_used 应为 0」。
-	if balance.CreditLimit > 0 {
-		rep.Items = append(rep.Items, buildCheckItem("信用", 0, balance.CreditUsed,
-			"扣费侧尚未接入信用层，已用未结应为 0（回款核销除外）"))
+	// 信用：消耗累加、回款核销抵减，净额即当前应收。
+	// ledgerBy[credit] 里 credit_grant 是开额（不构成欠款）、ar_settle 是回款（为负），
+	// 故欠款 = 信用消耗 + 回款净额（后者为负，相当于减去已收回的部分）。
+	if balance.CreditLimit > 0 || balance.CreditUsed != 0 {
+		// 只取 ar_settle（回款，QuotaDelta 为负），不能用整个 credit 账户的净额——
+		// credit_grant 是开额度，它既不构成欠款也不抵减欠款，混进来会让等式凭空偏移。
+		settled, serr := sumFundEntryQuota(FundAccountCredit, FundKindARSettle)
+		if serr != nil {
+			return nil, serr
+		}
+		// 期初欠款要算进来：建基线时已存在的 credit_used 不是本期消耗产生的。
+		opening, oerr := sumFundEntryQuota(FundAccountCredit, FundKindOpening)
+		if oerr != nil {
+			return nil, oerr
+		}
+		creditExpected := opening + consume.CreditConsumed + settled
+		rep.Items = append(rep.Items, buildCheckItem("信用", creditExpected, balance.CreditUsed,
+			"期初欠款 + 信用消耗 − 已核销回款"))
 	}
 
 	rep.AllOK = true
@@ -305,6 +321,21 @@ func InitFundBaseline(operatorId int) (created int, err error) {
 	const batchSize = 500
 	now := common.GetTimestamp()
 
+	// 基线建立标记。余额为 0 的用户不写期初流水（没有意义），但若全站恰好无人持有
+	// 余额——全新部署就是这样——基线就会是空集，HasBaseline 判定为 false，
+	// 自洽校验从此永远不工作且没有任何提示。用一条 QuotaDelta=0 的标记兜住：
+	// 它不参与任何等式，只证明「基线已建立」。
+	if _, err = InsertFundEntry(&FundEntry{
+		UserId: 0, CreatedAt: now,
+		Account: FundAccountCash, Kind: FundKindOpening,
+		QuotaDelta: 0, CashFen: 0,
+		Source:  FundSourceAdminAdjust,
+		RefType: FundRefUser, RefId: "opening-marker",
+		OperatorId: operatorId, Remark: "对账基线建立标记",
+	}); err != nil {
+		return 0, err
+	}
+
 	var users []User
 	// Unscoped：与 GetFundBalanceStats 一致地涵盖软删用户。若基线漏掉他们而余额统计
 	// 算上了，初始化完成的那一刻就会差出「软删用户的残留余额」——一个开局就存在的假不平。
@@ -319,6 +350,25 @@ func InitFundBaseline(operatorId int) (created int, err error) {
 						QuotaDelta: int64(u.Quota), CashFen: 0,
 						Source:  FundSourceAdminAdjust,
 						RefType: FundRefUser, RefId: fmt.Sprintf("opening-cash:%d", u.Id),
+						OperatorId: operatorId, Remark: "期初余额基线",
+					})
+					if e != nil {
+						return e
+					}
+					if ok {
+						created++
+					}
+				}
+				if u.CreditUsed != 0 {
+					// 信用期初：建基线时已存在的欠款。不记的话信用校验
+					// （信用消耗 − 回款 == credit_used）隐含假设期初欠款为 0，
+					// 任何已有欠款的部署建完基线就永久报「信用账不平」。
+					ok, e := InsertFundEntry(&FundEntry{
+						UserId: u.Id, CreatedAt: now,
+						Account: FundAccountCredit, Kind: FundKindOpening,
+						QuotaDelta: u.CreditUsed, CashFen: 0,
+						Source:  FundSourceAdminAdjust,
+						RefType: FundRefUser, RefId: fmt.Sprintf("opening-credit:%d", u.Id),
 						OperatorId: operatorId, Remark: "期初余额基线",
 					})
 					if e != nil {
@@ -397,4 +447,13 @@ func ListFundEntries(q FundEntryQuery, offset, limit int) ([]*FundEntry, int64, 
 	var list []*FundEntry
 	err := tx.Order("created_at desc, id desc").Offset(offset).Limit(limit).Find(&list).Error
 	return list, total, err
+}
+
+// sumFundEntryQuota 汇总某账户某性质的流水净额。
+func sumFundEntryQuota(account, kind string) (int64, error) {
+	var total int64
+	err := DB.Model(&FundEntry{}).
+		Where("account = ? AND kind = ?", account, kind).
+		Select("COALESCE(SUM(quota_delta),0)").Scan(&total).Error
+	return total, err
 }

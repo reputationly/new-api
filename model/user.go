@@ -83,6 +83,8 @@ func (user *User) ToBaseUser() *UserBase {
 		Group:            user.Group,
 		Quota:            user.Quota,
 		PointsBalance:    user.PointsBalance,
+		CreditLimit:      user.CreditLimit,
+		CreditUsed:       user.CreditUsed,
 		Status:           user.Status,
 		Username:         user.Username,
 		Setting:          user.Setting,

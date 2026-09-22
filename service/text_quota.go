@@ -473,6 +473,7 @@ func PostTextConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, us
 		Quota:            summary.Quota,
 		// SettleBilling 已在前面完成，混扣的积分抵扣量已由 syncPointsConsumed 写入
 		PointsConsumed: relayInfo.PointsConsumed,
+		CreditConsumed: relayInfo.CreditConsumed,
 		Content:        logContent,
 		TokenId:        relayInfo.TokenId,
 		UseTimeSeconds: int(summary.UseTimeSeconds),

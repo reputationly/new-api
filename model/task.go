@@ -238,6 +238,7 @@ type TaskPrivateData struct {
 	BillingSource  string `json:"billing_source,omitempty"`  // "wallet" / "subscription" / "points_wallet"
 	SubscriptionId int    `json:"subscription_id,omitempty"` // 订阅 ID，用于订阅退款
 	PointsConsumed int    `json:"points_consumed,omitempty"` // 混扣任务提交结算时的积分抵扣量(quota unit)，轮询期退款/重算按原路调整
+	CreditConsumed int    `json:"credit_consumed,omitempty"` // 提交结算时由授信承担的量(quota unit)，轮询期退款须原路冲销欠款
 	TokenId        int    `json:"token_id,omitempty"`        // 令牌 ID，用于令牌额度退款
 	// TokenName 提交时的令牌名，供异步结算写日志用。**不能靠 TokenId 回查 tokens 表**：
 	// 体验区（/pg）用的是 playgroundSetupContext 造的内存临时令牌，从未入库、Id 恒为 0，

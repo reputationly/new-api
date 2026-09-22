@@ -714,6 +714,10 @@ func RelayTask(c *gin.Context) {
 		// 混扣任务持久化积分拆分（SettleBilling 已完成，syncPointsConsumed 已写入）；
 		// 轮询期失败退款/重算凭此按原路调整，否则积分实付会被退进钱包（套利通道）
 		task.PrivateData.PointsConsumed = relayInfo.PointsConsumed
+		// 授信拆分同理持久化。不记的话任务失败退款会把走信用的那部分退进钱包，
+		// 而 credit_used 里的欠款纹丝不动——0 余额的授信客户凭空多出一笔真钱、
+		// 欠款照欠，与上面积分那条是完全同构的套利通道。
+		task.PrivateData.CreditConsumed = relayInfo.CreditConsumed
 		task.PrivateData.TokenId = relayInfo.TokenId
 		task.PrivateData.TokenName = c.GetString("token_name")
 		task.PrivateData.BillingContext = &model.TaskBillingContext{

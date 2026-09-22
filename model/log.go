@@ -27,6 +27,7 @@ type Log struct {
 	ModelName        string `json:"model_name" gorm:"index;index:index_username_model_name,priority:1;default:''"`
 	Quota            int    `json:"quota" gorm:"default:0"`
 	PointsConsumed   int    `json:"points_consumed" gorm:"default:0"` // 本次消费中积分抵扣的 quota unit（0=纯余额）
+	CreditConsumed   int    `json:"credit_consumed" gorm:"default:0"` // 本次消费中由授信承担的 quota unit（0=未动用授信）
 	PromptTokens     int    `json:"prompt_tokens" gorm:"default:0"`
 	CompletionTokens int    `json:"completion_tokens" gorm:"default:0"`
 	UseTime          int    `json:"use_time" gorm:"default:0"`
@@ -219,6 +220,7 @@ type RecordConsumeLogParams struct {
 	TokenName        string                 `json:"token_name"`
 	Quota            int                    `json:"quota"`
 	PointsConsumed   int                    `json:"points_consumed"`
+	CreditConsumed   int                    `json:"credit_consumed"`
 	Content          string                 `json:"content"`
 	TokenId          int                    `json:"token_id"`
 	UseTimeSeconds   int                    `json:"use_time_seconds"`
@@ -289,6 +291,7 @@ func RecordConsumeLog(c *gin.Context, userId int, params RecordConsumeLogParams)
 		ModelName:        params.ModelName,
 		Quota:            params.Quota,
 		PointsConsumed:   params.PointsConsumed,
+		CreditConsumed:   params.CreditConsumed,
 		ChannelId:        params.ChannelId,
 		TokenId:          params.TokenId,
 		UseTime:          params.UseTimeSeconds,
@@ -336,6 +339,10 @@ type RecordTaskBillingLogParams struct {
 	// 「积分抵扣」标签）会把混扣的单一律显示成纯余额扣费。
 	// 只在记录整单终值时填；差额日志的 Quota 是增量，填整单积分会对不上。
 	PointsConsumed int
+	// CreditConsumed 这一单里由授信承担的 quota。异步任务的结算同样会触发透支结转，
+	// 不记的话资金对账在信用侧减不掉这笔消耗。语义与 PointsConsumed 一致：
+	// 整单终值那条填整单，差额日志填增量。
+	CreditConsumed int
 }
 
 func RecordTaskBillingLog(params RecordTaskBillingLogParams) {
@@ -363,6 +370,7 @@ func RecordTaskBillingLog(params RecordTaskBillingLogParams) {
 		Group:            params.Group,
 		CompletionTokens: params.CompletionTokens,
 		PointsConsumed:   params.PointsConsumed,
+		CreditConsumed:   params.CreditConsumed,
 		Other:            common.MapToJsonStr(params.Other),
 	}
 	err := LOG_DB.Create(log).Error

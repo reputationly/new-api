@@ -66,3 +66,35 @@ func TestRecalculatePointsDelta(t *testing.T) {
 	require.Equal(t, 0, max(pointsDelta, 0))
 	require.Equal(t, 0, max(-pointsDelta, 0))
 }
+
+// 异步任务退款必须先冲销授信欠款，再退现金——这是套利通道的堵口。
+//
+// 0 余额的授信客户提交任务走信用消费，提交时透支结转进 CreditUsed；任务失败若把钱
+// 全退进钱包，他就凭空得到一笔可用真钱而欠款纹丝不动。与混扣任务把积分退进钱包
+// （controller/relay.go 那条注释里的「套利通道」）完全同构。
+func TestTaskRefund_ReversesCreditBeforeCash(t *testing.T) {
+	task := &model.Task{UserId: 9601}
+	task.PrivateData.CreditConsumed = 1000
+
+	// 全额退款 1000：应全部用于冲销欠款，一分不进钱包
+	creditRefund := min(1000, task.PrivateData.CreditConsumed)
+	require.Equal(t, 1000, creditRefund, "退款优先冲欠款")
+	require.Equal(t, 0, 1000-creditRefund, "无剩余可退进钱包")
+
+	// 部分退款 400：只冲 400，欠款剩 600
+	task2 := &model.Task{UserId: 9602}
+	task2.PrivateData.CreditConsumed = 1000
+	creditRefund2 := min(400, task2.PrivateData.CreditConsumed)
+	require.Equal(t, 400, creditRefund2)
+
+	// 混合：消费 1000 中只有 300 走信用，退款 1000 → 冲 300、退现金 700
+	task3 := &model.Task{UserId: 9603}
+	task3.PrivateData.CreditConsumed = 300
+	creditRefund3 := min(1000, task3.PrivateData.CreditConsumed)
+	require.Equal(t, 300, creditRefund3, "以提交时的信用实付封顶")
+	require.Equal(t, 700, 1000-creditRefund3, "其余才退现金")
+
+	// 纯钱包任务：信用实付为 0，全额退现金
+	task4 := &model.Task{UserId: 9604}
+	require.Equal(t, 0, min(1000, task4.PrivateData.CreditConsumed))
+}

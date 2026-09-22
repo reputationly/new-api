@@ -312,6 +312,10 @@ export default function FundReconcilePanel() {
                   value: `${quotaToPoints(summary?.consume?.points_consumed)} ${t('积分')}`,
                 },
                 {
+                  key: t('信用消耗'),
+                  value: `¥${quota2yuan(summary?.consume?.credit_consumed)}`,
+                },
+                {
                   key: t('消费总额'),
                   value: `¥${quota2yuan(summary?.consume?.total_quota)}`,
                 },

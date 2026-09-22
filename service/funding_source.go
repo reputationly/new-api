@@ -33,12 +33,25 @@ type WalletFunding struct {
 
 func (w *WalletFunding) Source() string { return BillingSourceWallet }
 
+// PreConsume 预扣。用授信感知的条件扣减而非无条件递减：授信上限必须在 DB 侧执行。
+//
+// 可用额检查（tryWallet）读的是用户缓存，两个并发请求会读到同一份基线，双双通过
+// 后无条件扣减各自打一笔透支，结转时一起折进 credit_used，授信上限就被越过了。
+// 条件写在 WHERE 里才拦得住——混扣路径已经这么做，纯钱包路径不能是例外，
+// 而「0 积分的纯授信客户」恰恰是最典型的授信客户形态。
+//
+// 结算补扣（Settle）保持无条件：服务已交付，成本已发生，允许欠费。与 HybridFunding
+// 的 enforceWallet 语义一致。
 func (w *WalletFunding) PreConsume(amount int) error {
 	if amount <= 0 {
 		return nil
 	}
-	if err := model.DecreaseUserQuota(w.userId, amount, false); err != nil {
+	ok, err := model.TryDecreaseUserQuotaWithinCredit(w.userId, amount)
+	if err != nil {
 		return err
+	}
+	if !ok {
+		return ErrWalletInsufficient
 	}
 	w.consumed = amount
 	return nil

@@ -7,9 +7,14 @@ import (
 	"github.com/QuantumNous/new-api/model"
 )
 
-// ErrHybridWalletInsufficient 混扣预扣时积分不足（被并发抢占）且钱包余额无法覆盖剩余
-// 部分——拒绝请求而非透支钱包。哨兵错误供 billing_session 映射为 403 额度不足。
-var ErrHybridWalletInsufficient = errors.New("用户额度不足")
+// ErrWalletInsufficient 预扣时钱包（含可用授信）无法覆盖所需额度——拒绝请求而非
+// 无限透支。哨兵错误供 billing_session 映射为 403 额度不足。
+var ErrWalletInsufficient = errors.New("用户额度不足")
+
+// ErrHybridWalletInsufficient 混扣预扣时积分不足（被并发抢占）且钱包无法覆盖剩余部分。
+// 与 ErrWalletInsufficient 同值：两条路径的失败语义一致，errors.Is 互通，
+// 调用方（billing_session 的 403 映射）无需区分。
+var ErrHybridWalletInsufficient = ErrWalletInsufficient
 
 // ---------------------------------------------------------------------------
 // HybridFunding — 积分 + 钱包混合资金来源
@@ -72,7 +77,11 @@ func (h *HybridFunding) deduct(amount int, enforceWallet bool) error {
 	if remaining > 0 {
 		var walletErr error
 		if enforceWallet {
-			ok, err := model.TryDecreaseUserQuota(h.userId, remaining)
+			// 允许透支到可用授信之内（未开授信者等价于原来的「余额必须充足」）。
+			// 用 TryDecreaseUserQuota 的话，授信客户只要还持有一点营销积分就会走到
+			// 这条混扣分支，然后因钱包不足被 403——而可用额检查刚刚把授信算进去放行了。
+			// 透支部分在结算时由 syncCreditConsumed 结转进 credit_used。
+			ok, err := model.TryDecreaseUserQuotaWithinCredit(h.userId, remaining)
 			if err != nil {
 				walletErr = err
 			} else if !ok {

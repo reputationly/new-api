@@ -148,6 +148,7 @@ func LogTaskConsumption(c *gin.Context, info *relaycommon.RelayInfo) {
 		Quota:     info.PriceData.Quota,
 		// 调用方（controller/relay.go）先 SettleBilling 后记日志，混扣积分量已就绪
 		PointsConsumed: info.PointsConsumed,
+		CreditConsumed: info.CreditConsumed,
 		Content:        logContent,
 		TokenId:        info.TokenId,
 		Group:          info.UsingGroup,
@@ -191,7 +192,36 @@ func taskAdjustFunding(task *model.Task, delta int) error {
 	if delta > 0 {
 		return model.DecreaseUserQuota(task.UserId, delta, false)
 	}
-	return model.IncreaseUserQuota(task.UserId, -delta, false)
+	return taskRefundWallet(task, -delta)
+}
+
+// taskRefundWallet 退还「钱包份额」：先冲销授信欠款，余下才进现金。
+//
+// 授信在本设计里是钱包的一种形态（余额扣成负数、结算时结转为欠款），所以凡是要退回
+// 钱包的钱都必须先经过这里。混扣任务的 wRefund 同样要走——只在纯钱包分支冲销的话，
+// 混扣任务的信用部分会被退进钱包而 credit_used 一分不减，与积分被洗成真实余额
+// 是同一条套利通道。
+//
+// 调用点必须是「已经算出钱包份额之后」：若在 funding 分流**之前**先冲信用，
+// HybridFunding 仍会按原始 task.Quota 计算钱包份额（wc := task.Quota − pc），
+// 把已冲销的那部分重复算进钱包，退款拆分就会偏向现金。
+//
+// 以持久化的 CreditConsumed 封顶，全额退款自然还原为精确拆分。
+func taskRefundWallet(task *model.Task, refund int) error {
+	if refund <= 0 {
+		return nil
+	}
+	creditRefund := min(refund, task.PrivateData.CreditConsumed)
+	if creditRefund > 0 {
+		if err := model.ReduceUserCreditUsed(task.UserId, int64(creditRefund)); err != nil {
+			return err
+		}
+		task.PrivateData.CreditConsumed -= creditRefund
+	}
+	if cash := refund - creditRefund; cash > 0 {
+		return model.IncreaseUserQuota(task.UserId, cash, false)
+	}
+	return nil
 }
 
 // taskAdjustHybridFunding 混扣任务的轮询期资金调整，语义与同步路径 HybridFunding 对齐：
@@ -208,7 +238,8 @@ func taskAdjustHybridFunding(task *model.Task, delta int) error {
 		pRefund := min(max(refund-wc, 0), pc) // 钱包份额之外的部分退积分，以实付封顶
 		wRefund := refund - pRefund
 		if wRefund > 0 {
-			if err := model.IncreaseUserQuota(task.UserId, wRefund, false); err != nil {
+			// 钱包份额先冲授信欠款再退现金（见 taskRefundWallet）
+			if err := taskRefundWallet(task, wRefund); err != nil {
 				return err
 			}
 		}
@@ -328,6 +359,9 @@ func RefundTaskQuota(ctx context.Context, task *model.Task, reason string) {
 	// 不记的话退款日志的 points_consumed 恒为 0，资金对账在积分侧减不掉这笔退还，
 	// 每次混扣任务失败都会报一次假的「赠送积分账不平」。
 	pointsRefunded := task.PrivateData.PointsConsumed
+	// 同理取调整前的授信实付：taskRefundWalletAndCredit 会把它减掉。
+	// 不记的话对账在信用侧减不掉这笔冲销，credit 那本账会长期不平。
+	creditRefunded := task.PrivateData.CreditConsumed
 
 	// 1. 退还资金来源（钱包或订阅）
 	if err := taskAdjustFunding(task, -quota); err != nil {
@@ -368,8 +402,9 @@ func RefundTaskQuota(ctx context.Context, task *model.Task, reason string) {
 		TokenName: task.PrivateData.TokenName,
 		Group:     task.Group,
 		Other:     other,
-		// 退还的积分。与 Quota 同为正数，由对账侧按负消费净额化。
+		// 退还的积分与冲销的授信。与 Quota 同为正数，由对账侧按负消费净额化。
 		PointsConsumed: pointsRefunded,
+		CreditConsumed: creditRefunded,
 	})
 }
 
@@ -422,12 +457,28 @@ func recalculateTaskQuota(ctx context.Context, task *model.Task, actualQuota, co
 	// 资金调整前的实付积分。混扣任务多退少补会改写 PrivateData.PointsConsumed，
 	// 前后差值就是**本次**动用的积分，差额日志要记的是它而不是整单值。
 	pointsBefore := task.PrivateData.PointsConsumed
+	creditBefore := task.PrivateData.CreditConsumed
 
 	// 调整资金来源。预扣是真实发生过的，延迟记账也一样要多退少补。
 	if quotaDelta != 0 {
 		if err := taskAdjustFunding(task, quotaDelta); err != nil {
 			logger.LogError(ctx, fmt.Sprintf("差额结算资金调整失败 task %s: %s", task.TaskID, err.Error()))
 			return false
+		}
+	}
+
+	// 补扣后结转透支。同步路径由 BillingSession.syncCreditConsumed 做，异步轮询期
+	// 这条差额结算是另一条入口，不补的话：quota 被补扣打成负数后永久停在那里、
+	// credit_used 不增、日志 CreditConsumed 记 0——负余额被算进现金口径，
+	// 现金账与信用账**各自都能自洽**，每日校验抓不到，而应收被实实在在地低估。
+	//
+	// 订阅任务排除：它扣的是 UserSubscription.AmountUsed，根本不动 quota。
+	// 退款方向（quotaDelta < 0）由 taskRefundWalletAndCredit 走冲销路径，不在此处。
+	if quotaDelta > 0 && !taskIsSubscription(task) {
+		if settled, serr := model.SettleOverdraftToCredit(task.UserId, int64(quotaDelta)); serr != nil {
+			common.SysLog(fmt.Sprintf("failed to settle overdraft for task %s: %s", task.TaskID, serr.Error()))
+		} else if settled > 0 {
+			task.PrivateData.CreditConsumed += int(settled)
 		}
 	}
 
@@ -445,6 +496,7 @@ func recalculateTaskQuota(ctx context.Context, task *model.Task, actualQuota, co
 	// 取值放在 taskAdjustFunding 之后：多退少补会改写 PointsConsumed（退款按实付
 	// 封顶原路退、补扣走积分优先），这里要的是调整**之后**的实付额。
 	var logPoints int
+	var logCredit int
 	if deferred {
 		// 「上游返回用量计费」：提交时既没记 used_quota 也没记次数，这里一次记终值。
 		// 使用日志里这一单因此只有一条、金额就是实收，与供应商账单同形。
@@ -453,6 +505,7 @@ func recalculateTaskQuota(ctx context.Context, task *model.Task, actualQuota, co
 		logType = model.LogTypeConsume
 		logQuota = actualQuota
 		logPoints = task.PrivateData.PointsConsumed
+		logCredit = task.PrivateData.CreditConsumed
 	} else {
 		// 差额结算只调整**额度**，不碰请求次数——那一次请求在提交时（LogTaskConsumption）
 		// 已经计过数了。用 UpdateUserUsedQuotaAndRequestCount 会把同一次请求计成两次。
@@ -470,14 +523,17 @@ func recalculateTaskQuota(ctx context.Context, task *model.Task, actualQuota, co
 		// 不记的话混扣任务的部分退款会让积分被多算、现金被少算
 		// （CashConsumed = TotalQuota - PointsConsumed），两侧同时报假不平。
 		pointsDelta := task.PrivateData.PointsConsumed - pointsBefore
+		creditDelta := task.PrivateData.CreditConsumed - creditBefore
 		if quotaDelta > 0 {
 			logType = model.LogTypeConsume
 			logQuota = quotaDelta
 			logPoints = max(pointsDelta, 0)
+			logCredit = max(creditDelta, 0)
 		} else {
 			logType = model.LogTypeRefund
 			logQuota = -quotaDelta
 			logPoints = max(-pointsDelta, 0)
+			logCredit = max(-creditDelta, 0)
 		}
 	}
 	other := taskBillingOther(task)
@@ -496,6 +552,7 @@ func recalculateTaskQuota(ctx context.Context, task *model.Task, actualQuota, co
 		Group:            task.Group,
 		CompletionTokens: completionTokens,
 		PointsConsumed:   logPoints,
+		CreditConsumed:   logCredit,
 		Other:            other,
 	})
 	return true

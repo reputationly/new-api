@@ -27,6 +27,11 @@ type UserBase struct {
 	KycStatus        int    `json:"kyc_status"`
 	EnterpriseStatus int    `json:"enterprise_status"`
 	ParentUserId     int    `json:"parent_user_id"`
+	// 信用额度。放进缓存是因为预扣费检查在每请求的热路径上，可用额要算
+	// quota + 积分 + (limit - used)，为此多打一次 DB 查询不值当。
+	// 与 Quota 同为快照语义：授信调整/回款核销后由 invalidateUserCache 失效重取。
+	CreditLimit int64 `json:"credit_limit"`
+	CreditUsed  int64 `json:"credit_used"`
 }
 
 func (user *UserBase) WriteContext(c *gin.Context) {
@@ -119,6 +124,8 @@ func GetUserCache(userId int) (userCache *UserBase, err error) {
 		Group:            user.Group,
 		Quota:            user.Quota,
 		PointsBalance:    user.PointsBalance,
+		CreditLimit:      user.CreditLimit,
+		CreditUsed:       user.CreditUsed,
 		Status:           user.Status,
 		Username:         user.Username,
 		Setting:          user.Setting,
