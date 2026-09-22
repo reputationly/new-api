@@ -50,6 +50,31 @@ export const pointsToQuota = (points) => {
   return Math.ceil(p * getQuotaPerPoint());
 };
 
+// ---- 算力点换算（内部 quota unit ↔ 展示算力点数） ----
+//
+// 与积分完全同构，取整方向也必须一致：展示侧 floor、提交侧 ceil。
+// 套餐里存的 compute_points_per_period 是 quota unit，编辑页显示的是点数，
+// 两边换算若用不同取整方向，会出现「配 50000 点、存完再打开变 49999」。
+
+export const getQuotaPerComputePoint = () => {
+  const raw = parseFloat(
+    localStorage.getItem('quota_per_compute_point') || '684.93',
+  );
+  return Number.isFinite(raw) && raw > 0 ? raw : 684.93;
+};
+
+export const quotaToComputePoints = (quota) => {
+  const q = Number(quota || 0);
+  if (!Number.isFinite(q) || q <= 0) return 0;
+  return Math.floor(q / getQuotaPerComputePoint() + 1e-9);
+};
+
+export const computePointsToQuota = (points) => {
+  const p = Number(points || 0);
+  if (!Number.isFinite(p) || p <= 0) return 0;
+  return Math.ceil(p * getQuotaPerComputePoint());
+};
+
 export const quotaToDisplayAmount = (quota) => {
   const q = Number(quota || 0);
   if (!Number.isFinite(q) || q === 0) return 0;

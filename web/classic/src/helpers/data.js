@@ -24,6 +24,7 @@ export function setStatusData(data) {
   localStorage.setItem('footer_html', data.footer_html);
   localStorage.setItem('quota_per_unit', data.quota_per_unit);
   localStorage.setItem('quota_per_point', data.quota_per_point);
+  localStorage.setItem('quota_per_compute_point', data.quota_per_compute_point);
   localStorage.setItem('points_enabled', data.points_enabled);
   // 兼容：保留旧字段，同时写入新的额度展示类型
   localStorage.setItem('display_in_currency', data.display_in_currency);

@@ -38,12 +38,18 @@ import {
   IconCreditCard,
   IconSave,
 } from '@douyinfe/semi-icons';
-import { Clock, RefreshCw } from 'lucide-react';
+import { Clock, RefreshCw, Coins, ShieldCheck } from 'lucide-react';
 import { API, showError, showSuccess } from '../../../../helpers';
 import {
   quotaToDisplayAmount,
   displayAmountToQuota,
+  quotaToComputePoints,
+  computePointsToQuota,
 } from '../../../../helpers/quota';
+import EntitlementEditor, {
+  toEditableEntitlements,
+  validateEntitlements,
+} from './EntitlementEditor';
 import { useIsMobile } from '../../../../hooks/common/useIsMobile';
 
 const { Text, Title } = Typography;
@@ -75,6 +81,8 @@ const AddEditSubscriptionModal = ({
   const [loading, setLoading] = useState(false);
   const [groupOptions, setGroupOptions] = useState([]);
   const [groupLoading, setGroupLoading] = useState(false);
+  const [entitlements, setEntitlements] = useState([]);
+  const [channelOptions, setChannelOptions] = useState([]);
   const isMobile = useIsMobile();
   const formApiRef = useRef(null);
   const isEdit = editingPlan?.plan?.id !== undefined;
@@ -90,6 +98,7 @@ const AddEditSubscriptionModal = ({
     custom_seconds: 0,
     quota_reset_period: 'never',
     quota_reset_custom_seconds: 0,
+    compute_points_per_period: 0,
     enabled: true,
     sort_order: 0,
     max_purchase_per_user: 0,
@@ -114,6 +123,9 @@ const AddEditSubscriptionModal = ({
       custom_seconds: Number(p.custom_seconds || 0),
       quota_reset_period: p.quota_reset_period || 'never',
       quota_reset_custom_seconds: Number(p.quota_reset_custom_seconds || 0),
+      compute_points_per_period: quotaToComputePoints(
+        p.compute_points_per_period || 0,
+      ),
       enabled: p.enabled !== false,
       sort_order: Number(p.sort_order || 0),
       max_purchase_per_user: Number(p.max_purchase_per_user || 0),
@@ -125,6 +137,37 @@ const AddEditSubscriptionModal = ({
       creem_product_id: p.creem_product_id || '',
     };
   };
+
+  // 权益编辑态独立于 Form：增删改序、复制这些操作用受控数组处理最直接，
+  // 塞进 Semi Form 的嵌套数组反而要和它的字段路径较劲。
+  useEffect(() => {
+    if (!visible) return;
+    setEntitlements(toEditableEntitlements(editingPlan?.entitlements));
+  }, [visible, editingPlan]);
+
+  useEffect(() => {
+    if (!visible) return;
+    API.get('/api/channel/?p=0&page_size=1000')
+      .then((res) => {
+        // 分页接口有两种返回形态（带 items 的分页体 / 裸数组），沿用
+        // useUsageLogsData 里已经验证过的解析方式，不另起一套。
+        const { success, data } = res.data || {};
+        const items = success
+          ? Array.isArray(data?.items)
+            ? data.items
+            : Array.isArray(data)
+              ? data
+              : []
+          : [];
+        setChannelOptions(
+          items.map((ch) => ({
+            value: String(ch.id),
+            label: `${ch.name || t('未命名渠道')} (#${ch.id})`,
+          })),
+        );
+      })
+      .catch(() => setChannelOptions([]));
+  }, [visible, t]);
 
   useEffect(() => {
     if (!visible) return;
@@ -146,6 +189,11 @@ const AddEditSubscriptionModal = ({
       showError(t('套餐标题不能为空'));
       return;
     }
+    const entitlementError = validateEntitlements(entitlements, t);
+    if (entitlementError) {
+      showError(entitlementError);
+      return;
+    }
     setLoading(true);
     try {
       const payload = {
@@ -163,8 +211,18 @@ const AddEditSubscriptionModal = ({
           sort_order: Number(values.sort_order || 0),
           max_purchase_per_user: Number(values.max_purchase_per_user || 0),
           total_amount: displayAmountToQuota(values.total_amount),
+          // 编辑页填的是展示点数，落库要换回 quota unit
+          compute_points_per_period: computePointsToQuota(
+            values.compute_points_per_period,
+          ),
           upgrade_group: values.upgrade_group || '',
         },
+        entitlements: entitlements.map((e) => ({
+          ...e,
+          consume_discount: Number(e.consume_discount || 1),
+          limit_count: Number(e.limit_count || 0),
+          rate_limit_rpm: Number(e.rate_limit_rpm || 0),
+        })),
       };
       if (editingPlan?.plan?.id) {
         const res = await API.put(
@@ -499,6 +557,70 @@ const AddEditSubscriptionModal = ({
                       )}
                     </Col>
                   </Row>
+                </Card>
+
+                {/* 算力点 */}
+                <Card className='!rounded-2xl shadow-sm border-0 mb-4'>
+                  <div className='flex items-center mb-2'>
+                    <Avatar
+                      size='small'
+                      color='amber'
+                      className='mr-2 shadow-md'
+                    >
+                      <Coins size={16} />
+                    </Avatar>
+                    <div>
+                      <Text className='text-lg font-medium'>{t('算力点')}</Text>
+                      <div className='text-xs text-gray-600'>
+                        {t(
+                          '套餐的计费单位，按现有倍率体系换算，无需单独配价目表',
+                        )}
+                      </div>
+                    </div>
+                  </div>
+
+                  <Row gutter={12}>
+                    <Col span={24}>
+                      <Form.InputNumber
+                        field='compute_points_per_period'
+                        label={t('每期发放算力点')}
+                        min={0}
+                        precision={0}
+                        style={{ width: '100%' }}
+                        extraText={`${t('0 表示不发放')} · ${t('发放周期跟随上方「额度重置」')} · ${t('原生额度')}：${computePointsToQuota(
+                          values.compute_points_per_period,
+                        )}`}
+                      />
+                    </Col>
+                  </Row>
+                </Card>
+
+                {/* 权益配置 */}
+                <Card className='!rounded-2xl shadow-sm border-0 mb-4'>
+                  <div className='flex items-center mb-2'>
+                    <Avatar
+                      size='small'
+                      color='cyan'
+                      className='mr-2 shadow-md'
+                    >
+                      <ShieldCheck size={16} />
+                    </Avatar>
+                    <div>
+                      <Text className='text-lg font-medium'>
+                        {t('权益配置')}
+                      </Text>
+                      <div className='text-xs text-gray-600'>
+                        {t('限定模型范围与次数上限，防止外采额度被刷爆')}
+                      </div>
+                    </div>
+                  </div>
+
+                  <EntitlementEditor
+                    value={entitlements}
+                    onChange={setEntitlements}
+                    channelOptions={channelOptions}
+                    t={t}
+                  />
                 </Card>
 
                 {/* 第三方支付配置 */}

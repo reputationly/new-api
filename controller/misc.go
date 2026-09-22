@@ -74,6 +74,8 @@ func GetStatus(c *gin.Context) {
 		"quota_per_unit":              common.QuotaPerUnit,
 		"points_enabled":              operation_setting.GetPointsSetting().Enabled,
 		"quota_per_point":             operation_setting.GetPointsSetting().QuotaPerPoint,
+		// 算力点换算率。套餐编辑页要把 quota 换算成展示点数，与积分同一套下发路径。
+		"quota_per_compute_point": operation_setting.GetComputePointSetting().QuotaPerComputePoint,
 		// 兼容旧前端：保留 display_in_currency，同时提供新的 quota_display_type
 		"display_in_currency":           operation_setting.IsCurrencyDisplay(),
 		"quota_display_type":            operation_setting.GetQuotaDisplayType(),
