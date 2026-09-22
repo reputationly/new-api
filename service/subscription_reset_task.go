@@ -100,14 +100,32 @@ func runSubscriptionQuotaResetOnce() {
 			break
 		}
 	}
+	// 权益次数重置。与算力点批次不同，这个必须跑：次数闸门的归零只有这一条路径，
+	// 任务不跑就意味着客户用完本期次数后再也回不来（算力点那边即使任务停摆也只是
+	// 展示状态不同步，扣费判定不受影响）。
+	totalEntitlementReset := 0
+	for {
+		n, err := model.ResetDueUserSubscriptionEntitlements(subscriptionResetBatchSize)
+		if err != nil {
+			logger.LogWarn(ctx, fmt.Sprintf("entitlement reset task failed: %v", err))
+			break
+		}
+		if n == 0 {
+			break
+		}
+		totalEntitlementReset += n
+		if n < subscriptionResetBatchSize {
+			break
+		}
+	}
 	lastCleanup := time.Unix(subscriptionCleanupLast.Load(), 0)
 	if time.Since(lastCleanup) >= subscriptionCleanupInterval {
 		if _, err := model.CleanupSubscriptionPreConsumeRecords(7 * 24 * 3600); err == nil {
 			subscriptionCleanupLast.Store(time.Now().Unix())
 		}
 	}
-	if common.DebugEnabled && (totalReset > 0 || totalExpired > 0 || totalLotSynced > 0) {
-		logger.LogDebug(ctx, "subscription maintenance: reset_count=%d, expired_count=%d, lot_synced=%d",
-			totalReset, totalExpired, totalLotSynced)
+	if common.DebugEnabled && (totalReset > 0 || totalExpired > 0 || totalLotSynced > 0 || totalEntitlementReset > 0) {
+		logger.LogDebug(ctx, "subscription maintenance: reset_count=%d, expired_count=%d, lot_synced=%d, entitlement_reset=%d",
+			totalReset, totalExpired, totalLotSynced, totalEntitlementReset)
 	}
 }

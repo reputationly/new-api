@@ -68,6 +68,40 @@ func TestEnsureSubscriptionPlanTableSQLite_FreshInstall(t *testing.T) {
 	require.Equal(t, int64(500), got.ComputePointsPerPeriod)
 }
 
+// 权益表带一个 float64 系数字段（ConsumeDiscount）。这类字段一旦写成
+// type:decimal(6,4)，SQLite 驱动的 DDL 解析器会因为正则字符集不含逗号而把类型读坏，
+// 每次 AutoMigrate 都误判该列需要变更、走 recreateTable，并在参数替换时把类型写成
+// 残缺的 ?,4) —— 表现正是「第一次启动正常、第二次启动 FATAL」。这个坑
+// SubscriptionPlan.PriceAmount 已经踩过一次，所以这里直接连跑两次 AutoMigrate，
+// 把「能重复迁移」这个性质钉死，而不是只验证建表成功。
+func TestEntitlementTablesSurviveRepeatedSQLiteMigration(t *testing.T) {
+	db := withIsolatedSQLiteDB(t)
+
+	for i := 0; i < 2; i++ {
+		require.NoError(t, db.AutoMigrate(&SubscriptionPlanEntitlement{}, &UserSubscriptionEntitlement{}),
+			"第 %d 次 AutoMigrate 失败", i+1)
+	}
+
+	cols := tableInfoColumns(t, db, "subscription_plan_entitlements")
+	require.Contains(t, cols, "consume_discount")
+	require.Contains(t, cols, "consume_points")
+
+	ent := SubscriptionPlanEntitlement{
+		PlanId:          1,
+		Models:          "gpt-5",
+		ConsumePoints:   false,
+		ConsumeDiscount: 0.5,
+		LimitCount:      500,
+		RateLimitRPM:    60,
+	}
+	require.NoError(t, db.Create(&ent).Error)
+
+	var got SubscriptionPlanEntitlement
+	require.NoError(t, db.First(&got, ent.Id).Error)
+	require.Equal(t, 0.5, got.ConsumeDiscount, "折扣系数必须原样往返，不能被类型写坏")
+	require.False(t, got.ConsumePoints)
+}
+
 // TestEnsureSubscriptionPlanTableSQLite_UpgradeExistingTable 模拟「表已存在但缺
 // compute_points_per_period 列」的存量升级场景（老安装在这个字段加入前建的表），
 // 验证 ALTER TABLE ADD COLUMN 补列路径同样生效。

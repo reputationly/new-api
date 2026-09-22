@@ -94,17 +94,39 @@ func AdminListSubscriptionPlans(c *gin.Context) {
 		common.ApiError(c, err)
 		return
 	}
-	result := make([]SubscriptionPlanDTO, 0, len(plans))
+	// 一次捞全部权益再按 plan_id 归并，不在循环里逐个套餐查——套餐数不大，
+	// 但 N+1 是那种「上线时无感、套餐涨到几十个后才被发现」的退化。
+	grouped, err := model.GroupPlanEntitlementsByPlan()
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	result := make([]AdminSubscriptionPlanDTO, 0, len(plans))
 	for _, p := range plans {
-		result = append(result, SubscriptionPlanDTO{
-			Plan: p,
+		ents := grouped[p.Id]
+		if ents == nil {
+			ents = []*model.SubscriptionPlanEntitlement{}
+		}
+		result = append(result, AdminSubscriptionPlanDTO{
+			Plan:         p,
+			Entitlements: ents,
 		})
 	}
 	common.ApiSuccess(c, result)
 }
 
+// AdminSubscriptionPlanDTO 管理端专用，比用户侧的 SubscriptionPlanDTO 多一层权益配置。
+// 刻意不复用 SubscriptionPlanDTO：权益里的渠道限定属于内部信息，混在同一个结构里
+// 早晚会被哪个用户侧接口顺手返回出去。
+type AdminSubscriptionPlanDTO struct {
+	Plan         model.SubscriptionPlan               `json:"plan"`
+	Entitlements []*model.SubscriptionPlanEntitlement `json:"entitlements"`
+}
+
 type AdminUpsertSubscriptionPlanRequest struct {
 	Plan model.SubscriptionPlan `json:"plan"`
+	// Entitlements 整体替换该套餐的权益配置。顺序即匹配优先级。
+	Entitlements []model.SubscriptionPlanEntitlement `json:"entitlements"`
 }
 
 func AdminCreateSubscriptionPlan(c *gin.Context) {
@@ -156,7 +178,14 @@ func AdminCreateSubscriptionPlan(c *gin.Context) {
 		common.ApiErrorMsg(c, "自定义重置周期需大于0秒")
 		return
 	}
-	err := model.DB.Create(&req.Plan).Error
+	// 套餐与权益必须同一个事务：权益校验不通过时套餐不该被建出来，
+	// 否则运营会得到一个「存在但没有任何权益」的半成品套餐，还以为保存失败了。
+	err := model.DB.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Create(&req.Plan).Error; err != nil {
+			return err
+		}
+		return model.ReplacePlanEntitlementsTx(tx, req.Plan.Id, req.Entitlements)
+	})
 	if err != nil {
 		common.ApiError(c, err)
 		return
@@ -239,12 +268,16 @@ func AdminUpdateSubscriptionPlan(c *gin.Context) {
 			"upgrade_group":              req.Plan.UpgradeGroup,
 			"quota_reset_period":         req.Plan.QuotaResetPeriod,
 			"quota_reset_custom_seconds": req.Plan.QuotaResetCustomSeconds,
-			"updated_at":                 common.GetTimestamp(),
+			// compute_points_per_period 必须列在这里：这个 map 是白名单式更新，
+			// 漏掉的列在编辑页怎么改都不会落库——建套餐时能设、之后永远改不了，
+			// 而且前端不会报错，属于最难被发现的那类静默失效。
+			"compute_points_per_period": req.Plan.ComputePointsPerPeriod,
+			"updated_at":                common.GetTimestamp(),
 		}
 		if err := tx.Model(&model.SubscriptionPlan{}).Where("id = ?", id).Updates(updateMap).Error; err != nil {
 			return err
 		}
-		return nil
+		return model.ReplacePlanEntitlementsTx(tx, id, req.Entitlements)
 	})
 	if err != nil {
 		common.ApiError(c, err)

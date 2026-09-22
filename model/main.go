@@ -308,6 +308,8 @@ func migrateDB() error {
 		&ChannelModelCost{},
 		&TopupPackage{},
 		&ComputePointLot{},
+		&SubscriptionPlanEntitlement{},
+		&UserSubscriptionEntitlement{},
 		&FundEntry{},
 	)
 	if err != nil {

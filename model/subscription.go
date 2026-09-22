@@ -320,7 +320,14 @@ func calcNextResetTime(base time.Time, plan *SubscriptionPlan, endUnix int64) in
 	if plan == nil {
 		return 0
 	}
-	period := NormalizeResetPeriod(plan.QuotaResetPeriod)
+	return calcNextResetTimeFor(base, plan.QuotaResetPeriod, plan.QuotaResetCustomSeconds, endUnix)
+}
+
+// calcNextResetTimeFor 周期对齐的本体，与「周期取自哪个结构体」解耦。
+// 套餐用它算额度重置，权益用它算次数重置——两者的周期字段不同，对齐规则必须相同，
+// 否则同一个套餐里额度和次数会在不同时刻翻篇，用户看到的「本期」对不上。
+func calcNextResetTimeFor(base time.Time, rawPeriod string, customSeconds int64, endUnix int64) int64 {
+	period := NormalizeResetPeriod(rawPeriod)
 	if period == SubscriptionResetNever {
 		return 0
 	}
@@ -344,10 +351,10 @@ func calcNextResetTime(base time.Time, plan *SubscriptionPlan, endUnix int64) in
 		next = time.Date(base.Year(), base.Month(), 1, 0, 0, 0, 0, base.Location()).
 			AddDate(0, 1, 0)
 	case SubscriptionResetCustom:
-		if plan.QuotaResetCustomSeconds <= 0 {
+		if customSeconds <= 0 {
 			return 0
 		}
-		next = base.Add(time.Duration(plan.QuotaResetCustomSeconds) * time.Second)
+		next = base.Add(time.Duration(customSeconds) * time.Second)
 	default:
 		return 0
 	}
@@ -532,6 +539,11 @@ func CreateUserSubscriptionFromPlanTx(tx *gorm.DB, userId int, plan *Subscriptio
 			plan.ComputePointsPerPeriod, lotExpiresAt); err != nil {
 			return nil, err
 		}
+	}
+	// 权益次数计数器实例化。与算力点批次挂在同一个事务里：两者都是「买了套餐就该
+	// 拥有」的东西，不能出现订阅建好了但闸门还没建、请求先一步打进来的空窗。
+	if err := instantiateUserSubscriptionEntitlementsTx(tx, sub, plan, now.Unix()); err != nil {
+		return nil, err
 	}
 	return sub, nil
 }
