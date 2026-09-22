@@ -3,9 +3,11 @@ package controller
 import (
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/model"
+	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/setting/ratio_setting"
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
@@ -413,4 +415,61 @@ func AdminDeleteUserSubscription(c *gin.Context) {
 		return
 	}
 	common.ApiSuccess(c, nil)
+}
+
+// AdminEntitlementCostPreviewRequest 权益最坏成本试算的入参。
+//
+// 试算而非保存，所以不落库、不要求权益已存在——运营在编辑页边填边看，
+// 填到一半的配置也要能算。
+type AdminEntitlementCostPreviewRequest struct {
+	Models     []string `json:"models"`
+	ChannelIds []string `json:"channel_ids"`
+	LimitCount int64    `json:"limit_count"`
+	// 次数上限是**每个重置窗口**的额度，而售价对应**整个套餐周期**，所以要把套餐
+	// 时长与权益的重置周期一并传进来，才能算出「一个计费周期内最坏花多少」。
+	ResetPeriod   string `json:"reset_period"`
+	DurationUnit  string `json:"duration_unit"`
+	DurationValue int    `json:"duration_value"`
+	CustomSeconds int64  `json:"custom_seconds"`
+	// QuotaResetCustomSeconds 权益选「跟随套餐自定义周期」时用它。
+	QuotaResetCustomSeconds int64 `json:"quota_reset_custom_seconds"`
+}
+
+// AdminPreviewEntitlementCost 估算一条权益的最坏外采成本。
+//
+// 计算放在后端而不是前端：成本口径必须与记账侧（appendUpstreamCost）保持同一份
+// 公式，放前端就会分叉成两份，而分叉的那天没人会发现——它只是个展示数字，
+// 不会有任何报错。
+func AdminPreviewEntitlementCost(c *gin.Context) {
+	var req AdminEntitlementCostPreviewRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		common.ApiErrorMsg(c, "参数错误")
+		return
+	}
+	channelIds := make([]int, 0, len(req.ChannelIds))
+	for _, raw := range req.ChannelIds {
+		channelIds = append(channelIds, service.ParseChannelIds(raw)...)
+	}
+	windows, capped := previewResetWindows(req)
+	est := service.EstimateEntitlementWorstCost(req.Models, channelIds, req.LimitCount, windows, capped)
+	common.ApiSuccess(c, est)
+}
+
+// previewResetWindows 算一个套餐周期内会经历几个次数窗口。
+//
+// 时长不合法时退回 1 个窗口：试算是边填边看的，运营还没填完有效期时不该报错，
+// 退回 1 相当于「按单窗口算」，与填写前看到的数一致，不会突然跳变。
+func previewResetWindows(req AdminEntitlementCostPreviewRequest) (int, bool) {
+	plan := &model.SubscriptionPlan{
+		DurationUnit:            req.DurationUnit,
+		DurationValue:           req.DurationValue,
+		CustomSeconds:           req.CustomSeconds,
+		QuotaResetCustomSeconds: req.QuotaResetCustomSeconds,
+	}
+	start := time.Now()
+	endUnix, err := model.CalcPlanEndTime(start, plan)
+	if err != nil || endUnix <= start.Unix() {
+		return 1, false
+	}
+	return model.CountEntitlementResetWindows(start, endUnix, req.ResetPeriod, req.QuotaResetCustomSeconds)
 }

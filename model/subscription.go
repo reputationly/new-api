@@ -281,6 +281,12 @@ type SubscriptionSummary struct {
 	Subscription *UserSubscription `json:"subscription"`
 }
 
+// CalcPlanEndTime 导出版，供成本试算复用。试算与真实建订阅必须用同一套时长口径，
+// 各写一份迟早会分叉，而分叉后试算给出的数字会看起来很正常。
+func CalcPlanEndTime(start time.Time, plan *SubscriptionPlan) (int64, error) {
+	return calcPlanEndTime(start, plan)
+}
+
 func calcPlanEndTime(start time.Time, plan *SubscriptionPlan) (int64, error) {
 	if plan == nil {
 		return 0, errors.New("plan is nil")

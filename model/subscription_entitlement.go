@@ -101,6 +101,48 @@ func (e *SubscriptionPlanEntitlement) ChannelIdList() []string {
 	return splitEntitlementList(e.ChannelIds)
 }
 
+// MatchesModel 判断模型名是否落在这条权益的模型范围内。
+//
+// 通配符只支持 *，语义是「匹配任意字符序列（含空串）」。刻意不用正则实现：
+// 模型名里带 . 的很常见（ltx2.5、gpt-4.1），走正则就必须先转义元字符，漏了
+// 就会让 ltx2x5 被 ltx2.5 匹配上——按段扫描从构造上就不存在这个问题。
+//
+// 前端 helpers/entitlementOverlap.js 有一份同语义的实现（重叠告警要用）。
+// 跨语言无法共用，但两边语义必须一致，改一边就得改另一边。
+func (e *SubscriptionPlanEntitlement) MatchesModel(name string) bool {
+	if e == nil || name == "" {
+		return false
+	}
+	for _, pattern := range e.ModelList() {
+		if matchesModelPattern(name, pattern) {
+			return true
+		}
+	}
+	return false
+}
+
+func matchesModelPattern(name, pattern string) bool {
+	if pattern == "" {
+		return false
+	}
+	if !strings.Contains(pattern, "*") {
+		return name == pattern
+	}
+	parts := strings.Split(pattern, "*")
+	if !strings.HasPrefix(name, parts[0]) {
+		return false
+	}
+	rest := name[len(parts[0]):]
+	for i := 1; i < len(parts)-1; i++ {
+		idx := strings.Index(rest, parts[i])
+		if idx < 0 {
+			return false
+		}
+		rest = rest[idx+len(parts[i]):]
+	}
+	return strings.HasSuffix(rest, parts[len(parts)-1])
+}
+
 func splitEntitlementList(raw string) []string {
 	parts := strings.Split(raw, ",")
 	out := make([]string, 0, len(parts))
@@ -294,6 +336,40 @@ func calcEntitlementNextResetTime(base time.Time, ent *SubscriptionPlanEntitleme
 		customSeconds = plan.QuotaResetCustomSeconds
 	}
 	return calcNextResetTimeFor(base, ent.ResetPeriod, customSeconds, endUnix)
+}
+
+// CountEntitlementResetWindows 数一个套餐周期内，某条权益会经历几个次数窗口。
+//
+// 次数上限是**每个重置窗口**的额度，而套餐售价对应的是**整个套餐周期**。两者只有
+// 在窗口与周期重合时才能直接比大小；月付套餐配每周重置时，客户一个计费周期内能用
+// 到的次数是四五倍，拿单窗口的成本去比售价会系统性低估——而低估正是「保证最坏
+// 不亏」最不能出的方向。
+//
+// 用真实边界迭代而不是「一个月≈30天」这类近似：重置是按自然日/周/月对齐的
+// （见 calcNextResetTimeFor），Jan5 买的月付套餐在 Feb1 就会重置一次，到 Feb5
+// 结束前实际经历两个窗口。近似算法会把这种「掐头去尾多出来的半个窗口」算丢。
+//
+// maxWindows 是防爆护栏：自定义周期允许填很小的秒数，配上年付套餐会让循环次数
+// 达到千万级。真撞上这个上限说明配置本身已经离谱，返回上限值足以让运营看出问题。
+const entitlementResetWindowCap = 10000
+
+func CountEntitlementResetWindows(start time.Time, endUnix int64, resetPeriod string, planCustomSeconds int64) (int, bool) {
+	if NormalizeResetPeriod(resetPeriod) == SubscriptionResetNever {
+		// 不重置：计数器跨整个订阅生命周期，与套餐周期天然同口径。
+		// 续订会新建订阅、连带新建计数器，所以「一个套餐周期一份额度」成立。
+		return 1, false
+	}
+	windows := 1
+	cur := start
+	for windows < entitlementResetWindowCap {
+		next := calcNextResetTimeFor(cur, resetPeriod, planCustomSeconds, endUnix)
+		if next <= 0 {
+			return windows, false
+		}
+		windows++
+		cur = time.Unix(next, 0)
+	}
+	return windows, true
 }
 
 // instantiateUserSubscriptionEntitlementsTx 订阅生效时，把套餐权益实例化成用户侧的

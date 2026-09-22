@@ -2,6 +2,7 @@ package model
 
 import (
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 	"gorm.io/gorm"
@@ -329,4 +330,95 @@ func TestInstantiateEntitlements_NeverResetHasNoNextResetTime(t *testing.T) {
 	n, err := ResetDueUserSubscriptionEntitlements(100)
 	require.NoError(t, err)
 	require.Equal(t, 0, n)
+}
+
+// ---------------------------------------------------------------------------
+// 模型范围匹配
+// ---------------------------------------------------------------------------
+
+// P4 的请求闸门会用这个匹配器判断「这次调用算不算在套餐内」，匹配错就是计费错。
+// 与前端 helpers/entitlementOverlap.js 是同语义的两份实现，改一边必须改另一边。
+func TestEntitlementMatchesModel(t *testing.T) {
+	cases := []struct {
+		patterns string
+		name     string
+		want     bool
+	}{
+		{"gpt-5", "gpt-5", true},
+		{"gpt-5", "gpt-5-mini", false},
+		{"gpt-5", "gpt-4", false},
+		{"claude-opus-*", "claude-opus-4", true},
+		{"claude-opus-*", "claude-opus-", true},
+		{"claude-opus-*", "claude-sonnet-4", false},
+		{"qwen3-*,glm-*", "glm-4-plus", true},
+		{"qwen3-*,glm-*", "gpt-5", false},
+		{"*", "任意模型", true},
+		// 模型名里带 . 很常见（ltx2.5、gpt-4.1）。按段扫描实现天然按字面量处理，
+		// 不像正则那样需要转义——这里把这个性质钉死，防止哪天改成正则实现又踩回去。
+		{"ltx2.5", "ltx2.5", true},
+		{"ltx2.5", "ltx2x5", false},
+		{"gpt-4.1-*", "gpt-4.1-mini", true},
+		{"gpt-4.1-*", "gpt-4x1-mini", false},
+		// 中间带通配
+		{"a*z", "abcz", true},
+		{"a*z", "abc", false},
+		{"", "gpt-5", false},
+	}
+	for _, c := range cases {
+		ent := &SubscriptionPlanEntitlement{Models: c.patterns}
+		require.Equal(t, c.want, ent.MatchesModel(c.name),
+			"patterns=%q name=%q", c.patterns, c.name)
+	}
+}
+
+func TestEntitlementMatchesModel_NilAndEmpty(t *testing.T) {
+	var nilEnt *SubscriptionPlanEntitlement
+	require.False(t, nilEnt.MatchesModel("gpt-5"))
+	require.False(t, (&SubscriptionPlanEntitlement{Models: "gpt-5"}).MatchesModel(""))
+}
+
+// ---------------------------------------------------------------------------
+// 重置窗口计数
+// ---------------------------------------------------------------------------
+
+// 次数上限是每个重置窗口的额度，售价对应整个套餐周期。窗口数算错就会让
+// 「最坏成本 vs 售价」的比较失真——算少了是低估，正是「保证不亏」最怕的方向。
+func TestCountEntitlementResetWindows(t *testing.T) {
+	// 用固定起点，避免测试在月末跑时结果漂移
+	start := time.Date(2026, 1, 5, 10, 0, 0, 0, time.Local)
+
+	monthEnd := start.AddDate(0, 1, 0).Unix()
+	yearEnd := start.AddDate(1, 0, 0).Unix()
+
+	t.Run("不重置视为单个窗口", func(t *testing.T) {
+		n, capped := CountEntitlementResetWindows(start, monthEnd, SubscriptionResetNever, 0)
+		require.Equal(t, 1, n)
+		require.False(t, capped)
+	})
+
+	// Jan5 买的月付套餐，Feb1 会按自然月对齐重置一次，到 Feb5 结束前经历两个窗口。
+	// 「一个月≈30天」的近似算法会把这半个窗口算丢，从而低估最坏成本。
+	t.Run("月付套餐配月重置会跨自然月边界", func(t *testing.T) {
+		n, _ := CountEntitlementResetWindows(start, monthEnd, SubscriptionResetMonthly, 0)
+		require.Equal(t, 2, n)
+	})
+
+	t.Run("月付套餐配周重置约四到五个窗口", func(t *testing.T) {
+		n, _ := CountEntitlementResetWindows(start, monthEnd, SubscriptionResetWeekly, 0)
+		require.GreaterOrEqual(t, n, 4)
+		require.LessOrEqual(t, n, 6)
+	})
+
+	t.Run("年付套餐配月重置约十二个窗口", func(t *testing.T) {
+		n, _ := CountEntitlementResetWindows(start, yearEnd, SubscriptionResetMonthly, 0)
+		require.GreaterOrEqual(t, n, 12)
+		require.LessOrEqual(t, n, 13)
+	})
+
+	// 自定义周期允许填极小的秒数，配上长周期套餐会让循环次数爆炸。
+	t.Run("自定义周期极小时撞护栏而不是卡死", func(t *testing.T) {
+		n, capped := CountEntitlementResetWindows(start, yearEnd, SubscriptionResetCustom, 1)
+		require.True(t, capped, "应撞到护栏上限")
+		require.Equal(t, entitlementResetWindowCap, n)
+	})
 }

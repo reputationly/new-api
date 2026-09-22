@@ -24,6 +24,7 @@ import {
   findEntitlementOverlaps,
   splitModels,
 } from '../../../../helpers/entitlementOverlap';
+import EntitlementCostHint from './EntitlementCostHint';
 
 const { Text } = Typography;
 
@@ -104,6 +105,8 @@ const EntitlementEditor = ({
   value = [],
   onChange,
   channelOptions = [],
+  priceAmount = 0,
+  plan,
   t,
 }) => {
   const overlaps = useMemo(() => findEntitlementOverlaps(value), [value]);
@@ -307,6 +310,15 @@ const EntitlementEditor = ({
                 <Text size='small' type='tertiary'>
                   {unlimited ? t('0 = 不限次') : t('外采模型建议必配')}
                 </Text>
+              </Col>
+
+              <Col span={24} className='mt-2'>
+                <EntitlementCostHint
+                  entitlement={ent}
+                  priceAmount={priceAmount}
+                  plan={plan}
+                  t={t}
+                />
               </Col>
 
               <Col span={12} className='mt-3'>

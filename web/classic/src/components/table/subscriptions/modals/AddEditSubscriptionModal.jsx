@@ -50,6 +50,7 @@ import EntitlementEditor, {
   toEditableEntitlements,
   validateEntitlements,
 } from './EntitlementEditor';
+import ComputePointPreview from './ComputePointPreview';
 import { useIsMobile } from '../../../../hooks/common/useIsMobile';
 
 const { Text, Title } = Typography;
@@ -83,6 +84,8 @@ const AddEditSubscriptionModal = ({
   const [groupLoading, setGroupLoading] = useState(false);
   const [entitlements, setEntitlements] = useState([]);
   const [channelOptions, setChannelOptions] = useState([]);
+  const [modelOptions, setModelOptions] = useState([]);
+  const [previewModel, setPreviewModel] = useState('');
   const isMobile = useIsMobile();
   const formApiRef = useRef(null);
   const isEdit = editingPlan?.plan?.id !== undefined;
@@ -168,6 +171,20 @@ const AddEditSubscriptionModal = ({
       })
       .catch(() => setChannelOptions([]));
   }, [visible, t]);
+
+  // 用未按分组裁剪的管理端那份：配置页问的是「站点上有哪些模型」，
+  // 与配置者本人落在哪个分组无关。
+  useEffect(() => {
+    if (!visible) return;
+    // 预览选中的模型要跟着重置：它是上一次打开时选的，换个套餐编辑时留着既没有
+    // 意义，模型列表若变了还会让 Select 显示一个不在选项里的值。
+    setPreviewModel('');
+    API.get('/api/models/pricing')
+      .then((res) => {
+        setModelOptions(res.data?.success ? res.data.data || [] : []);
+      })
+      .catch(() => setModelOptions([]));
+  }, [visible, editingPlan]);
 
   useEffect(() => {
     if (!visible) return;
@@ -593,6 +610,14 @@ const AddEditSubscriptionModal = ({
                       />
                     </Col>
                   </Row>
+
+                  <ComputePointPreview
+                    points={values.compute_points_per_period}
+                    models={modelOptions}
+                    value={previewModel}
+                    onChange={setPreviewModel}
+                    t={t}
+                  />
                 </Card>
 
                 {/* 权益配置 */}
@@ -619,6 +644,15 @@ const AddEditSubscriptionModal = ({
                     value={entitlements}
                     onChange={setEntitlements}
                     channelOptions={channelOptions}
+                    priceAmount={values.price_amount}
+                    plan={{
+                      duration_unit: values.duration_unit,
+                      duration_value: Number(values.duration_value || 0),
+                      custom_seconds: Number(values.custom_seconds || 0),
+                      quota_reset_custom_seconds: Number(
+                        values.quota_reset_custom_seconds || 0,
+                      ),
+                    }}
                     t={t}
                   />
                 </Card>
