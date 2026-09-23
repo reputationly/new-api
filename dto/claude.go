@@ -171,6 +171,8 @@ func (c *ClaudeMessage) ParseContent() ([]ClaudeMediaMessage, error) {
 }
 
 type Tool struct {
+	// 普通工具为空或 "custom";其余取值是 Anthropic 内置工具(web_search_20250305、bash_20250124 等)
+	Type        string                 `json:"type,omitempty"`
 	Name        string                 `json:"name"`
 	Description string                 `json:"description,omitempty"`
 	InputSchema map[string]interface{} `json:"input_schema"`

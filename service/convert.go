@@ -3,6 +3,7 @@ package service
 import (
 	"encoding/json"
 	"fmt"
+	"net/http"
 	"strings"
 
 	"github.com/QuantumNous/new-api/common"
@@ -11,6 +12,7 @@ import (
 	"github.com/QuantumNous/new-api/relay/channel/openrouter"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relay/reasonmap"
+	"github.com/QuantumNous/new-api/types"
 	"github.com/samber/lo"
 )
 
@@ -79,12 +81,28 @@ func ClaudeToOpenAIRequest(claudeRequest dto.ClaudeRequest, info *relaycommon.Re
 	}
 	openAITools := make([]dto.ToolCallRequest, 0)
 	for _, claudeTool := range tools {
+		// Anthropic 内置工具要么由 Anthropic 服务端执行(web_search 等),要么参数格式只内置在
+		// Claude 模型里(bash 等),非 Claude 上游都无法提供。转成空壳函数只会静默失效,直接 400 说清楚。
+		if claudeTool.Type != "" && claudeTool.Type != "custom" {
+			return nil, types.NewErrorWithStatusCode(
+				fmt.Errorf("当前渠道不支持 Claude 内置工具 %s（type: %s），请移除该工具或改用 Claude 渠道", claudeTool.Name, claudeTool.Type),
+				types.ErrorCodeInvalidRequest, http.StatusBadRequest, types.ErrOptionWithSkipRetry())
+		}
+		// 没有 input_schema 时 InputSchema 是 nil map,装进 any 后接口非 nil,omitempty 不生效,
+		// 会原样发出 "parameters": null——火山方舟等上游据此直接 400。补成无入参的对象 schema。
+		parameters := claudeTool.InputSchema
+		if len(parameters) == 0 {
+			parameters = map[string]interface{}{
+				"type":       "object",
+				"properties": map[string]interface{}{},
+			}
+		}
 		openAITool := dto.ToolCallRequest{
 			Type: "function",
 			Function: dto.FunctionRequest{
 				Name:        claudeTool.Name,
 				Description: claudeTool.Description,
-				Parameters:  claudeTool.InputSchema,
+				Parameters:  parameters,
 			},
 		}
 		openAITools = append(openAITools, openAITool)

@@ -1,11 +1,14 @@
 package service
 
 import (
+	"net/http"
 	"testing"
 
+	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/dto"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
+	"github.com/QuantumNous/new-api/types"
 	"github.com/stretchr/testify/require"
 )
 
@@ -98,6 +101,69 @@ func TestClaudeToOpenAIRequestDoesNotInferProviderToolStreamCapability(t *testin
 
 	require.NoError(t, err)
 	require.Nil(t, request.ToolStream)
+}
+
+// 没有 input_schema 的工具(Claude 内置工具只带 type/name,或客户端漏传)不能转成
+// "parameters": null——火山方舟对此回 400「tools[0].***.parameters must be valid JSON」。
+func TestClaudeToOpenAIRequestToolWithoutInputSchemaKeepsParametersValidJSON(t *testing.T) {
+	request, err := ClaudeToOpenAIRequest(dto.ClaudeRequest{
+		Model: "doubao-seed-1-6",
+		Tools: []any{
+			map[string]any{"name": "no_schema"},
+			map[string]any{"name": "null_schema", "input_schema": nil},
+			map[string]any{"name": "empty_schema", "input_schema": map[string]any{}},
+			map[string]any{"name": "get_weather", "input_schema": map[string]any{"type": "object"}},
+		},
+	}, claudeConversionRelayInfo())
+	require.NoError(t, err)
+
+	body, err := common.Marshal(request)
+	require.NoError(t, err)
+	require.NotContains(t, string(body), `"parameters":null`)
+
+	emptyObjectSchema := map[string]interface{}{
+		"type":       "object",
+		"properties": map[string]interface{}{},
+	}
+	require.Len(t, request.Tools, 4)
+	require.Equal(t, emptyObjectSchema, request.Tools[0].Function.Parameters)
+	require.Equal(t, emptyObjectSchema, request.Tools[1].Function.Parameters)
+	require.Equal(t, emptyObjectSchema, request.Tools[2].Function.Parameters)
+	// 有 schema 的工具原样透传
+	require.Equal(t, map[string]interface{}{"type": "object"}, request.Tools[3].Function.Parameters)
+}
+
+// Claude 内置工具(web_search / bash 等)只能由 Anthropic 执行或依赖 Claude 内置 schema,
+// 转给非 Claude 上游只会变成空壳函数、静默失效,必须明确 400 拒绝且不重试。
+func TestClaudeToOpenAIRequestRejectsBuiltinTools(t *testing.T) {
+	for _, tool := range []map[string]any{
+		{"type": "web_search_20250305", "name": "web_search", "max_uses": 8},
+		{"type": "bash_20250124", "name": "bash"},
+	} {
+		t.Run(tool["type"].(string), func(t *testing.T) {
+			_, err := ClaudeToOpenAIRequest(dto.ClaudeRequest{
+				Model: "doubao-seed-1-6",
+				Tools: []any{map[string]any{"name": "Read", "input_schema": map[string]any{"type": "object"}}, tool},
+			}, claudeConversionRelayInfo())
+			require.Error(t, err)
+			require.Contains(t, err.Error(), tool["type"].(string))
+
+			// claude_handler 会再包一层 NewError,400 与不重试必须穿透保留
+			apiErr := types.NewError(err, types.ErrorCodeConvertRequestFailed, types.ErrOptionWithSkipRetry())
+			require.Equal(t, http.StatusBadRequest, apiErr.StatusCode)
+			require.True(t, types.IsSkipRetryError(apiErr))
+		})
+	}
+}
+
+func TestClaudeToOpenAIRequestAcceptsExplicitCustomToolType(t *testing.T) {
+	request, err := ClaudeToOpenAIRequest(dto.ClaudeRequest{
+		Model: "doubao-seed-1-6",
+		Tools: []any{map[string]any{"type": "custom", "name": "Read", "input_schema": map[string]any{"type": "object"}}},
+	}, claudeConversionRelayInfo())
+	require.NoError(t, err)
+	require.Len(t, request.Tools, 1)
+	require.Equal(t, "Read", request.Tools[0].Function.Name)
 }
 
 func TestStreamResponseOpenAI2ClaudeUsageWithoutFinishReasonStaysIncomplete(t *testing.T) {
