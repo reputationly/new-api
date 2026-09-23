@@ -6,8 +6,8 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-// /api/channel、/api/group、/api/user 各自被拆成了两个中间件不同的分组
-// （管理员可读的共享接口 vs 仅超管的管理接口）。gin 的路由树对同前缀下静态段与
+// /api/channel、/api/group 各自被拆成了两个中间件不同的分组
+// （管理员可读的共享接口 vs 仅超管的管理接口），/api/user 也分成了多个同前缀分组。gin 的路由树对同前缀下静态段与
 // 通配段混用会在注册期直接 panic，这里兜住启动即崩，并锁住拆分后没有漏注册路由。
 // 注意：本测试只覆盖“路由存在”，不覆盖挂的是 AdminAuth 还是 RootAuth。
 func TestSetApiRouterRegistersSplitGroups(t *testing.T) {

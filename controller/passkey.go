@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/i18n"
 	"github.com/QuantumNous/new-api/model"
 	passkeysvc "github.com/QuantumNous/new-api/service/passkey"
 	"github.com/QuantumNous/new-api/setting/system_setting"
@@ -348,6 +349,12 @@ func AdminResetPasskey(c *gin.Context) {
 	user := &model.User{Id: id}
 	if err := user.FillUserById(); err != nil {
 		common.ApiError(c, err)
+		return
+	}
+	// 与用户管理其余接口一致：普通管理员不能动同级或更高角色的账号
+	myRole := c.GetInt("role")
+	if myRole <= user.Role && myRole != common.RoleRootUser {
+		common.ApiErrorI18n(c, i18n.MsgUserNoPermissionHigherLevel)
 		return
 	}
 

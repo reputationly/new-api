@@ -245,9 +245,9 @@ function App() {
         <Route
           path='/console/user'
           element={
-            <RootRoute>
+            <AdminRoute>
               <User />
-            </RootRoute>
+            </AdminRoute>
           }
         />
         <Route

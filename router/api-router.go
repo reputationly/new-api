@@ -196,22 +196,23 @@ func SetApiRouter(router *gin.Engine) {
 				selfRoute.PUT("/feedback/topics/:id/close", controller.CloseFeedbackTopicByUser)
 			}
 
-			// 用户管理页仅超管可见可配（前端 RootRoute），该页用到的增删改查一律 RootAuth
-			rootUserRoute := userRoute.Group("/")
-			rootUserRoute.Use(middleware.RootAuth())
+			// 用户管理页对普通管理员开放（前端 AdminRoute）。越权由各控制器自己挡：
+			// 只能管比自己角色低的用户，提升为管理员仅超管可做
+			userManageRoute := userRoute.Group("/")
+			userManageRoute.Use(middleware.AdminAuth())
 			{
-				rootUserRoute.GET("/", controller.GetAllUsers)
-				rootUserRoute.GET("/search", controller.SearchUsers)
-				rootUserRoute.GET("/:id/oauth/bindings", controller.GetUserOAuthBindingsByAdmin)
-				rootUserRoute.DELETE("/:id/oauth/bindings/:provider_id", controller.UnbindCustomOAuthByAdmin)
-				rootUserRoute.DELETE("/:id/bindings/:binding_type", controller.AdminClearUserBinding)
-				rootUserRoute.POST("/", controller.CreateUser)
-				rootUserRoute.POST("/manage", controller.ManageUser)
-				rootUserRoute.PUT("/", controller.UpdateUser)
-				rootUserRoute.DELETE("/:id", controller.DeleteUser)
-				rootUserRoute.DELETE("/:id/reset_passkey", controller.AdminResetPasskey)
-				rootUserRoute.GET("/2fa/stats", controller.Admin2FAStats)
-				rootUserRoute.DELETE("/:id/2fa", controller.AdminDisable2FA)
+				userManageRoute.GET("/", controller.GetAllUsers)
+				userManageRoute.GET("/search", controller.SearchUsers)
+				userManageRoute.GET("/:id/oauth/bindings", controller.GetUserOAuthBindingsByAdmin)
+				userManageRoute.DELETE("/:id/oauth/bindings/:provider_id", controller.UnbindCustomOAuthByAdmin)
+				userManageRoute.DELETE("/:id/bindings/:binding_type", controller.AdminClearUserBinding)
+				userManageRoute.POST("/", controller.CreateUser)
+				userManageRoute.POST("/manage", controller.ManageUser)
+				userManageRoute.PUT("/", controller.UpdateUser)
+				userManageRoute.DELETE("/:id", controller.DeleteUser)
+				userManageRoute.DELETE("/:id/reset_passkey", controller.AdminResetPasskey)
+				userManageRoute.GET("/2fa/stats", controller.Admin2FAStats)
+				userManageRoute.DELETE("/:id/2fa", controller.AdminDisable2FA)
 			}
 
 			adminRoute := userRoute.Group("/")
