@@ -6,6 +6,7 @@ go 1.25.1
 require (
 	github.com/Calcium-Ion/go-epay v0.0.4
 	github.com/abema/go-mp4 v1.4.1
+	github.com/alicebob/miniredis/v2 v2.39.0
 	github.com/andybalholm/brotli v1.1.1
 	github.com/anknown/ahocorasick v0.0.0-20190904063843-d75dbd5169c0
 	github.com/aws/aws-sdk-go-v2 v1.42.1
@@ -78,6 +79,7 @@ require (
 	github.com/tiendc/go-deepcopy v1.7.2 // indirect
 	github.com/xuri/efp v0.0.1 // indirect
 	github.com/xuri/nfp v0.0.2-0.20250530014748-2ddeb826f9a9 // indirect
+	github.com/yuin/gopher-lua v1.1.1 // indirect
 )
 
 require (

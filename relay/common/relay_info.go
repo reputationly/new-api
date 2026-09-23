@@ -1004,7 +1004,7 @@ func RemoveGeminiDisabledFields(jsonData []byte) ([]byte, error) {
 
 // EntitlementFallback 套餐权益降级记录，写进日志 Other.entitlement_fallback。
 type EntitlementFallback struct {
-	// Reason count_exhausted（次数用尽）| points_insufficient（算力点不足）
+	// Reason count_exhausted（次数用尽）| points_insufficient（算力点不足）| rate_limited（超出每分钟上限）
 	Reason    string `json:"reason"`
 	PlanId    int    `json:"plan_id"`
 	PlanTitle string `json:"plan_title,omitempty"`
@@ -1013,4 +1013,6 @@ type EntitlementFallback struct {
 	PointsNeeded    int   `json:"points_needed,omitempty"`
 	PointsAvailable int   `json:"points_available,omitempty"`
 	LimitCount      int64 `json:"limit_count,omitempty"`
+	// RateLimitRPM reason=rate_limited 时的每分钟上限，供说明文案使用
+	RateLimitRPM int `json:"rate_limit_rpm,omitempty"`
 }

@@ -30,6 +30,10 @@ export const overageText = (fb, billingSource) => {
   if (fb.reason === 'points_insufficient') {
     return `本次需 ${Number(fb.points_needed) || 0} 算力点，「${title}」剩余 ${Number(fb.points_available) || 0} 点不足，本次${charged}`;
   }
+  if (fb.reason === 'rate_limited') {
+    const rpm = Number(fb.rate_limit_rpm) || 0;
+    return `超出「${title}」每分钟 ${rpm} 次的速率上限，本次${charged}`;
+  }
   return `未能使用「${title}」，本次${charged}`;
 };
 

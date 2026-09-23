@@ -285,6 +285,13 @@ func TestEntitlementLogOther_MatchesFrontendGolden(t *testing.T) {
 				LimitCount: 500,
 			},
 		}),
+		"overage_rate": build(&relaycommon.RelayInfo{
+			BillingSource: BillingSourceWallet,
+			EntitlementFallback: &relaycommon.EntitlementFallback{
+				Reason: EntitlementFallbackRateLimited, PlanId: 3, PlanTitle: "专业版",
+				RateLimitRPM: 60,
+			},
+		}),
 		"overage_count": build(&relaycommon.RelayInfo{
 			BillingSource: BillingSourceWallet,
 			EntitlementFallback: &relaycommon.EntitlementFallback{

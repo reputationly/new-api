@@ -567,6 +567,12 @@ func NewBillingSession(c *gin.Context, relayInfo *relaycommon.RelayInfo, preCons
 		if match == nil {
 			return nil
 		}
+		// 速率限制在预扣之前：超了就不占次数、不扣点，直接降级按余额计费
+		if rpm := match.Entitlement.RateLimitRPM; !allowEntitlementRequest(relayInfo.UserId, match.Entitlement.Id, rpm) {
+			relayInfo.EntitlementFallback = buildEntitlementFallback(
+				relayInfo.UserId, match, EntitlementFallbackRateLimited, 0)
+			return nil
+		}
 		funding := &EntitlementFunding{
 			userId: relayInfo.UserId,
 			match:  match,
@@ -727,6 +733,9 @@ func buildEntitlementFallback(userId int, match *model.EntitlementMatch, reason 
 		PlanId:     match.PlanId,
 		PlanTitle:  planTitleOf(match.PlanId),
 		LimitCount: match.LimitCount,
+	}
+	if reason == EntitlementFallbackRateLimited {
+		fb.RateLimitRPM = match.Entitlement.RateLimitRPM
 	}
 	if reason == EntitlementFallbackPointsInsufficient {
 		fb.PointsNeeded = common.QuotaToComputePointsCeil(int(needQuota))

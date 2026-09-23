@@ -37,5 +37,14 @@
       "points_needed": 120,
       "points_available": 40
     }
+  },
+  "overage_rate": {
+    "billing_source": "wallet",
+    "entitlement_fallback": {
+      "reason": "rate_limited",
+      "plan_id": 3,
+      "plan_title": "专业版",
+      "rate_limit_rpm": 60
+    }
   }
 }

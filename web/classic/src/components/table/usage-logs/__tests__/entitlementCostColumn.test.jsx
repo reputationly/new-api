@@ -52,6 +52,12 @@ describe('golden fixture 能被前端正确解析', () => {
     );
   });
 
+  it('超额：超出速率上限', () => {
+    expect(getEntitlementLogInfo(golden.overage_rate).text).toBe(
+      '超出「专业版」每分钟 60 次的速率上限，本次按账户余额计费',
+    );
+  });
+
   // 积分优先再扣余额：只写「按账户余额计费」会让用户对不上积分为什么少了
   it('超额：积分+余额混扣如实说明', () => {
     expect(getEntitlementLogInfo(golden.overage_hybrid).text).toBe(

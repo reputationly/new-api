@@ -17,6 +17,8 @@ var ErrEntitlementUnavailable = errors.New("套餐权益不可用")
 const (
 	EntitlementFallbackCountExhausted     = "count_exhausted"
 	EntitlementFallbackPointsInsufficient = "points_insufficient"
+	// EntitlementFallbackRateLimited 超出权益的每分钟请求上限（allowEntitlementRequest）
+	EntitlementFallbackRateLimited = "rate_limited"
 )
 
 // ---------------------------------------------------------------------------
