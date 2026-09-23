@@ -76,7 +76,7 @@ const ModelPricingTable = ({
             // 套餐权益：只传该模型自己的覆盖，未命中时为 null，价格展示与加这个功能之前一致
             entitlementCoverage: getModelCoverage(
               entitlementConfig?.coverage,
-              record.model_name,
+              modelData.model_name,
             ),
             quotaPerComputePoint: entitlementConfig?.quotaPerComputePoint,
           })

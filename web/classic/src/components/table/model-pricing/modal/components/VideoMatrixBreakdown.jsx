@@ -7,6 +7,11 @@ import {
   getModelPricingCurrencyConfig,
   VIDEO_PER_SECOND_COLUMN,
 } from '../../../../../helpers';
+import { getQuotaPerUnit } from '../../../../../helpers/quota';
+import {
+  entitlementPointsForUSD,
+  formatVideoEntitlementPoints,
+} from '../../../../../helpers/entitlementPricing';
 
 const { Text } = Typography;
 
@@ -20,7 +25,14 @@ const { Text } = Typography;
  * 版式是**交叉表**：纵轴分辨率、横轴场景、交汇处是价格。与配置页的矩阵编辑器同构，
  * 运营配了什么、用户看到什么，一眼能对上。摊平成一行一价要读 6 行才拼得出全貌。
  */
-export default function VideoMatrixBreakdown({ videoPricing, t }) {
+export default function VideoMatrixBreakdown({
+  videoPricing,
+  t,
+  // 套餐覆盖（null = 未覆盖）与算力点换算率。每格价格下追加该格的套餐内点数，
+  // 口径与本表的货币价一致（基础单价），表下方「按分组倍率折算」的说明对两者同时适用。
+  entitlementCoverage = null,
+  quotaPerComputePoint = 0,
+}) {
   const cells = flattenVideoMatrix(videoPricing);
   if (!cells.length) return null;
 
@@ -73,15 +85,32 @@ export default function VideoMatrixBreakdown({ videoPricing, t }) {
       title: columnLabel(key),
       dataIndex: key,
       align: 'right',
-      render: (priceUSD) =>
-        priceUSD === undefined ? (
-          <Text type='tertiary'>—</Text>
-        ) : (
-          <Text strong>
-            {symbol}
-            {Number((priceUSD * rate).toFixed(4))}
-          </Text>
-        ),
+      render: (priceUSD) => {
+        if (priceUSD === undefined) return <Text type='tertiary'>—</Text>;
+        const points = entitlementPointsForUSD(
+          priceUSD,
+          entitlementCoverage,
+          quotaPerComputePoint,
+          getQuotaPerUnit(),
+        );
+        return (
+          <>
+            <Text strong>
+              {symbol}
+              {Number((priceUSD * rate).toFixed(4))}
+            </Text>
+            {points !== null && (
+              <div className='text-xs text-gray-500'>
+                {formatVideoEntitlementPoints(
+                  videoPricing.mode === 'per_call' ? Math.ceil(points) : points,
+                  videoPricing.mode,
+                )}{' '}
+                {t('算力点')}
+              </div>
+            )}
+          </>
+        );
+      },
     })),
   ];
 

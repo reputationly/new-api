@@ -43,6 +43,10 @@ import {
   flattenVideoMatrix,
   VIDEO_PER_SECOND_COLUMN,
 } from './videoMatrix';
+import {
+  entitlementPointsForUSD,
+  formatVideoEntitlementPoints,
+} from './entitlementPricing';
 // 折扣展示口径同样是纯计算，拆出去给手机端共用（helpers/utils.jsx 被 mobile 的
 // vite 配置整模块 shim 掉，放这里手机端拿不到）
 import {
@@ -849,9 +853,27 @@ export const calculateModelPrice = ({
   // 不短路的话定价页会展示那个预扣锚点（480p 实际 ¥46 却显示 ¥51），还会多出一个
   // 对视频模型毫无意义的「输出价格」。见 docs/video-billing-matrix-design.md §2.6。
   if (record.video_pricing?.mode) {
+    // 套餐内价：扣费侧把矩阵算出的 quota 同样乘权益折扣换成算力点，这里不给的话，
+    // 被套餐覆盖的视频模型只显示原价，页面和账单对不上。按分组折后价逐格换算，
+    // 取区间与货币价同口径；按次一次调用结算一次，ceil。
+    const perCall = record.video_pricing.mode === 'per_call';
+    const entPoints = flattenVideoMatrix(record.video_pricing, usedGroupRatio)
+      .map((r) =>
+        entitlementPointsForUSD(
+          r.priceUSD,
+          entitlementCoverage,
+          quotaPerComputePoint,
+          getQuotaPerUnit(),
+        ),
+      )
+      .filter((p) => p !== null)
+      .map((p) => (perCall ? Math.ceil(p) : p));
     return {
       isVideoMatrix: true,
       videoPricing: record.video_pricing,
+      entitlementRange: entPoints.length
+        ? { lo: Math.min(...entPoints), hi: Math.max(...entPoints) }
+        : null,
       usedGroup,
       usedGroupRatio,
     };
@@ -922,18 +944,15 @@ export const calculateModelPrice = ({
         : null;
     // 套餐内价：与 usdToPoints 同构，只是多乘一个权益折扣。
     // 折扣作用在消耗侧（与后端 pointsNeeded 一致）：×0.5 就是同样的调用只烧一半点数。
-    const usdToEntitlementPoints = (usd) =>
-      entitlementCoverage &&
-      entitlementCoverage.consume_points &&
-      quotaPerComputePoint > 0
-        ? (usd *
-            getQuotaPerUnit() *
-            (Number(entitlementCoverage.discount) > 0
-              ? Number(entitlementCoverage.discount)
-              : 1)) /
-          quotaPerComputePoint /
-          unitDivisor
-        : null;
+    const usdToEntitlementPoints = (usd) => {
+      const p = entitlementPointsForUSD(
+        usd,
+        entitlementCoverage,
+        quotaPerComputePoint,
+        getQuotaPerUnit(),
+      );
+      return p === null ? null : p / unitDivisor;
+    };
     // 各价格项的 USD 单价，积分价与套餐内价都从这一张表映射出来。
     // 分开各写一份的话，加一个价格项就得记得改两处——套餐内价当初就只抄了
     // 前三项，带图片 / 音频倍率的模型因此少了套餐内价行。
@@ -1045,19 +1064,15 @@ export const calculateModelPrice = ({
       },
       entitlement: {
         // 同样 ceil，理由与积分那行一致：按次模型一次调用一次结算
-        fixed:
-          entitlementCoverage &&
-          entitlementCoverage.consume_points &&
-          quotaPerComputePoint > 0
-            ? Math.ceil(
-                (priceUSD *
-                  getQuotaPerUnit() *
-                  (Number(entitlementCoverage.discount) > 0
-                    ? Number(entitlementCoverage.discount)
-                    : 1)) /
-                  quotaPerComputePoint,
-              )
-            : null,
+        fixed: (() => {
+          const p = entitlementPointsForUSD(
+            priceUSD,
+            entitlementCoverage,
+            quotaPerComputePoint,
+            getQuotaPerUnit(),
+          );
+          return p === null ? null : Math.ceil(p);
+        })(),
       },
       isPerToken: false,
       isTokensDisplay: false,
@@ -1444,6 +1459,24 @@ export const formatVideoMatrixSummary = (priceData, t) => {
       >
         {t('{{count}} 档', { count: rows.length })}
       </span>
+      {priceData.entitlementRange && (
+        <span
+          style={{
+            display: 'block',
+            color: 'var(--semi-color-text-2)',
+            fontSize: 12,
+          }}
+        >
+          {t('套餐内')}{' '}
+          {(() => {
+            const { lo: elo, hi: ehi } = priceData.entitlementRange;
+            const f = (v) => formatVideoEntitlementPoints(v, mode);
+            return elo === ehi ? f(elo) : `${f(elo)} ~ ${f(ehi)}`;
+          })()}{' '}
+          {t('算力点')}
+          {unit}
+        </span>
+      )}
     </>
   );
 };

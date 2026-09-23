@@ -28,6 +28,7 @@ import ModelEndpoints from './components/ModelEndpoints';
 import ModelPricingTable from './components/ModelPricingTable';
 import DynamicPricingBreakdown from './components/DynamicPricingBreakdown';
 import VideoMatrixBreakdown from './components/VideoMatrixBreakdown';
+import { getModelCoverage } from '../../../../helpers/entitlementPricing';
 
 const { Text } = Typography;
 
@@ -120,6 +121,13 @@ const ModelDetailSideSheet = ({
                   <VideoMatrixBreakdown
                     videoPricing={modelData.video_pricing}
                     t={t}
+                    entitlementCoverage={getModelCoverage(
+                      entitlementConfig?.coverage,
+                      modelData.model_name,
+                    )}
+                    quotaPerComputePoint={
+                      entitlementConfig?.quotaPerComputePoint
+                    }
                   />
                 </div>
               </>

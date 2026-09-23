@@ -39,6 +39,39 @@ export const getModelCoverage = (coverage, modelName) => {
 };
 
 /**
+ * 把 USD 单价换成套餐内要烧的算力点（不取整，由调用方按计费方式决定取整）。
+ *
+ * 与后端 EntitlementFunding.pointsNeeded 同一个公式：折扣作用在消耗侧，×0.5 就是
+ * 同样的调用只烧一半点数。按量、按次、视频矩阵三处都走这里——各写一份的话，
+ * 改折扣口径时总会漏掉一处。quotaPerUnit 由调用方传入，本模块不引 quota.js
+ * （它会带进 render.jsx，mobile 复用时就把 Semi 打进移动端包）。
+ *
+ * 不消耗算力点、无覆盖、换算率缺失时返回 null：调用方据此不出这一行。
+ */
+export const entitlementPointsForUSD = (
+  usd,
+  coverage,
+  quotaPerComputePoint,
+  quotaPerUnit,
+) => {
+  if (!coverage || !coverage.consume_points) return null;
+  if (!(quotaPerComputePoint > 0) || !(quotaPerUnit > 0)) return null;
+  const discount =
+    Number(coverage.discount) > 0 ? Number(coverage.discount) : 1;
+  return (usd * quotaPerUnit * discount) / quotaPerComputePoint;
+};
+
+/**
+ * 视频矩阵的套餐内点数显示。按次整数（一次调用结算一次，调用方已 ceil）；
+ * 按秒 / 按 token 保留两位小数——实收是单价 × 时长或 token 数，结算时才取整，
+ * 这里向下取整会系统性少报。
+ */
+export const formatVideoEntitlementPoints = (n, mode) =>
+  Number(n).toLocaleString('en-US', {
+    maximumFractionDigits: mode === 'per_call' ? 0 : 2,
+  });
+
+/**
  * 生成该模型要显示的角标。
  *
  * 顺序固定：套餐名 → 免费 / 次数上限 → 限渠道。套餐名放最前是因为用户扫一眼

@@ -153,6 +153,9 @@ const PricingVendorIntro = memo(
     filterPointsOnly,
     setFilterPointsOnly,
     pointsEnabled,
+    filterEntitlementOnly,
+    setFilterEntitlementOnly,
+    entitlementConfig,
   }) => {
     const [currentOffset, setCurrentOffset] = useState(0);
     const [descModalVisible, setDescModalVisible] = useState(false);
@@ -285,6 +288,9 @@ const PricingVendorIntro = memo(
           filterPointsOnly={filterPointsOnly}
           setFilterPointsOnly={setFilterPointsOnly}
           pointsEnabled={pointsEnabled}
+          filterEntitlementOnly={filterEntitlementOnly}
+          setFilterEntitlementOnly={setFilterEntitlementOnly}
+          entitlementConfig={entitlementConfig}
           t={t}
         />
       ),
@@ -304,6 +310,9 @@ const PricingVendorIntro = memo(
         filterPointsOnly,
         setFilterPointsOnly,
         pointsEnabled,
+        filterEntitlementOnly,
+        setFilterEntitlementOnly,
+        entitlementConfig,
         t,
       ],
     );
