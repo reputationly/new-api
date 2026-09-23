@@ -59,8 +59,8 @@ func GetPlanExpiredPoints(start, end, now int64) ([]PlanExpiredPointsRow, error)
 	return rows, err
 }
 
-// ScanPlanRelatedLogs 逐批扫描时间窗内与套餐有关的消费 / 退款日志：走了权益的，
-// 以及被套餐覆盖却降级（超额）的。
+// ScanPlanRelatedLogs 逐批扫描时间窗内与套餐有关的消费 / 退款日志：走了权益的、
+// 扣老式订阅额度的，以及被套餐覆盖却降级（超额）的。
 //
 // 两类都只能靠 other 里的文本匹配（没有独立列），与日志「计费来源」筛选同一个写法；
 // 由 created_at 索引先收窄到时间窗。走 LOG_DB：日志可能配在独立库。
@@ -70,8 +70,8 @@ func ScanPlanRelatedLogs(start, end int64, fn func(logs []*Log) error) error {
 		Select("id, type, quota, other").
 		Where("created_at >= ? AND created_at <= ? AND type IN ?", start, end,
 			[]int{LogTypeConsume, LogTypeRefund}).
-		Where("(other LIKE ? OR other LIKE ?)",
-			logOtherEntitlementPattern, logOtherOveragePattern).
+		Where("(other LIKE ? OR other LIKE ? OR other LIKE ?)",
+			logOtherEntitlementPattern, logOtherSubscriptionPattern, logOtherOveragePattern).
 		FindInBatches(&batch, 1000, func(tx *gorm.DB, _ int) error {
 			return fn(batch)
 		}).Error

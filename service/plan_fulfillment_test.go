@@ -180,3 +180,41 @@ func TestPlanFulfillmentReport_MatchesFrontendGolden(t *testing.T) {
 	require.NoError(t, err, "golden 缺失：UPDATE_GOLDEN=1 go test ./service/ -run PlanFulfillmentReport_MatchesFrontendGolden")
 	require.JSONEq(t, string(want), string(got))
 }
+
+// 老式套餐的履约成本 = 扣老式订阅额度的那些调用。只统计权益日志的话，老式套餐会显示
+// 「0 次调用、履约率 0%」——等于告诉运营它零成本（端到端测试截图发现）。
+func TestBuildPlanFulfillmentReport_CountsLegacySubscriptionUsage(t *testing.T) {
+	truncate(t)
+	seedUser(t, 96003, 0)
+	require.NoError(t, model.ReplaceChannelModelCosts(fulfillmentChannelCosted, []*model.ChannelModelCost{
+		{ChannelId: fulfillmentChannelCosted, ModelName: "gpt-test", CostRatio: 0.5},
+	}))
+	t.Cleanup(model.InitChannelModelCostCache)
+
+	sub := model.UserSubscription{UserId: 96003, PlanId: 4343, Status: "active",
+		StartTime: common.GetTimestamp() - 60, EndTime: common.GetTimestamp() + 86400}
+	require.NoError(t, model.DB.Create(&sub).Error)
+
+	recordConsume(t, 96003, fulfillmentChannelCosted, 500000, &relaycommon.RelayInfo{
+		BillingSource: BillingSourceSubscription, SubscriptionId: sub.Id, SubscriptionPlanId: 4343,
+	}) // 等值 730，成本 365
+	// 老式订阅的异步任务失败退款：只有订阅 id
+	model.RecordTaskBillingLog(model.RecordTaskBillingLogParams{
+		UserId: 96003, LogType: model.LogTypeRefund, ChannelId: fulfillmentChannelCosted,
+		ModelName: "gpt-test", Quota: 100000,
+		Other: taskBillingOther(&model.Task{PrivateData: model.TaskPrivateData{
+			BillingSource: BillingSourceSubscription, SubscriptionId: sub.Id,
+			BillingContext: &model.TaskBillingContext{GroupRatio: 1},
+		}}),
+	}) // 等值 -146，成本 -73
+
+	now := common.GetTimestamp()
+	report, err := BuildPlanFulfillmentReport(now-3600, now+60)
+	require.NoError(t, err)
+	require.Len(t, report.Rows, 1)
+	row := report.Rows[0]
+	require.Equal(t, 4343, row.PlanId)
+	require.Equal(t, int64(1), row.CallCount)
+	require.Equal(t, int64(730-146), row.ValueFen)
+	require.Equal(t, int64(365-73), row.CostFen)
+}

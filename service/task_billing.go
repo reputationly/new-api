@@ -315,9 +315,10 @@ func taskBillingOther(task *model.Task) map[string]interface{} {
 	if bs := task.PrivateData.BillingSource; bs != "" {
 		other["billing_source"] = bs
 	}
-	// 套餐权益任务的退款 / 差额日志要能归到套餐上（履约率报表按套餐净额化）。
-	// 提交日志有 entitlement_plan_id，这两条只有提交时冻结的订阅 id，报表按它反查套餐。
-	if task.PrivateData.BillingSource == BillingSourceEntitlement && task.PrivateData.SubscriptionId > 0 {
+	// 套餐任务（权益或老式订阅额度）的退款 / 差额日志要能归到套餐上（履约率报表按套餐
+	// 净额化）。提交日志带套餐 id，这两条只有提交时冻结的订阅 id，报表按它反查套餐。
+	if bs := task.PrivateData.BillingSource; (bs == BillingSourceEntitlement || bs == BillingSourceSubscription) &&
+		task.PrivateData.SubscriptionId > 0 {
 		other["subscription_id"] = task.PrivateData.SubscriptionId
 	}
 	if bc := task.PrivateData.BillingContext; bc != nil {

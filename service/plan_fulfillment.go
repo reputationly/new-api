@@ -15,6 +15,8 @@ import (
 //
 // 这个数直接回答「套餐定价亏不亏」。口径：
 //   - 收入：fund_entries 里的套餐售卖流水（与收入对账同源）。
+//   - 套餐内调用：走了权益的，以及扣老式订阅额度的——老式套餐的履约成本就是后者，
+//     只算前者的话老式套餐会显示「0 次调用、履约率 0%」，等于告诉运营它零成本。
 //   - 外采成本：套餐内调用日志里请求时落库的 cost_quota（渠道成本比 × 原价），**不按
 //     当前成本比重算**——运营调过成本比后重算，历史数字就变了。退款日志按负数冲销。
 //   - 没有 cost_quota 的套餐内调用（自有算力，或运营没配成本比）不计入成本，单独列出
@@ -128,9 +130,11 @@ func BuildPlanFulfillmentReport(start, end int64) (*PlanFulfillmentReport, error
 			}
 			quota := float64(l.Quota)
 
-			if other["billing_source"] == BillingSourceEntitlement {
+			if bs := other["billing_source"]; bs == BillingSourceEntitlement || bs == BillingSourceSubscription {
 				var a *planAccum
 				if pid, ok := numberOf(other, "entitlement_plan_id"); ok && pid > 0 {
+					a = get(int(pid))
+				} else if pid, ok := numberOf(other, "subscription_plan_id"); ok && pid > 0 {
 					a = get(int(pid))
 				} else if sid, ok := numberOf(other, "subscription_id"); ok && sid > 0 {
 					a = bySub[int(sid)]

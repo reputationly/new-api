@@ -855,6 +855,8 @@ const (
 	// other 里的匹配串。筛选与履约率报表共用：各写一份的话一边改了另一边就漏数。
 	logOtherEntitlementPattern = `%"billing_source":"entitlement"%`
 	logOtherOveragePattern     = `%"entitlement_fallback":%`
+	// 老式订阅额度的消耗：履约率报表要算它——老式套餐的履约成本就是这部分
+	logOtherSubscriptionPattern = `%"billing_source":"subscription"%`
 )
 
 // applyLogBillingFilter 按计费来源筛选。
