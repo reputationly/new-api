@@ -310,6 +310,8 @@ func SetApiRouter(router *gin.Engine) {
 			reconcileAdmin.GET("/fund/entries", controller.AdminFundEntries)
 			reconcileAdmin.GET("/fund/export", controller.AdminFundExportCSV)
 			reconcileAdmin.POST("/fund/baseline", controller.AdminInitFundBaseline)
+			// 套餐经营：套餐收入 vs 套餐内消耗的外采成本（履约率）
+			reconcileAdmin.GET("/plan/fulfillment", controller.AdminPlanFulfillment)
 		}
 
 		// Subscription payment callbacks (no auth)

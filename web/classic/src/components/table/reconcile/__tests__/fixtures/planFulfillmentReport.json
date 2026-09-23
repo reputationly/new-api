@@ -1,0 +1,40 @@
+{
+  "start": 1700000000,
+  "end": 1702592000,
+  "rows": [
+    {
+      "plan_id": 1,
+      "plan_title": "专业版",
+      "order_count": 3,
+      "revenue_fen": 29900,
+      "call_count": 120,
+      "value_fen": 730,
+      "cost_fen": 365,
+      "uncosted_call_count": 7,
+      "uncosted_value_fen": 73,
+      "overage_count": 2,
+      "overage_fen": 146,
+      "points_expired_granted": 100,
+      "points_expired_unused": 60,
+      "expired_unused_ratio": 0.6,
+      "fulfillment_rate": 0.012207357859531772
+    }
+  ],
+  "total": {
+    "plan_id": 1,
+    "plan_title": "专业版",
+    "order_count": 3,
+    "revenue_fen": 29900,
+    "call_count": 120,
+    "value_fen": 730,
+    "cost_fen": 365,
+    "uncosted_call_count": 7,
+    "uncosted_value_fen": 73,
+    "overage_count": 2,
+    "overage_fen": 146,
+    "points_expired_granted": 100,
+    "points_expired_unused": 60,
+    "expired_unused_ratio": 0.6,
+    "fulfillment_rate": 0.012207357859531772
+  }
+}

@@ -10,6 +10,7 @@ import ByModelTable from '../../components/table/reconcile/ByModelTable';
 import ParseErrorsList from '../../components/table/reconcile/ParseErrorsList';
 import useReconcileUpload from '../../hooks/reconcile/useReconcileUpload';
 import FundReconcilePanel from '../../components/table/reconcile/FundReconcilePanel';
+import PlanFulfillmentPanel from '../../components/table/reconcile/PlanFulfillmentPanel';
 
 const { Text } = Typography;
 
@@ -27,6 +28,16 @@ export default function ReconcilePage() {
   // 收入对账（收客户多少）与成本对账（付供应商多少）是两件正交的事，
   // 合在一页靠 tab 切换，顶层再看利润。默认落在收入侧：它是日常高频查看的。
   const [tab, setTab] = useState('revenue');
+
+  // 套餐经营：套餐收入 vs 套餐内消耗的外采成本（履约率）
+  if (tab === 'plan') {
+    return (
+      <div className='mt-[60px] px-2 flex flex-col gap-3'>
+        <ReconcileTabs tab={tab} setTab={setTab} t={t} />
+        <PlanFulfillmentPanel />
+      </div>
+    );
+  }
 
   if (tab !== 'cost') {
     return (
@@ -110,6 +121,7 @@ function ReconcileTabs({ tab, setTab, t }) {
     <Tabs type='line' activeKey={tab} onChange={setTab}>
       <TabPane tab={t('收入对账')} itemKey='revenue' />
       <TabPane tab={t('成本对账')} itemKey='cost' />
+      <TabPane tab={t('套餐经营')} itemKey='plan' />
     </Tabs>
   );
 }

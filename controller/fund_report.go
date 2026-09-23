@@ -6,6 +6,7 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/model"
+	"github.com/QuantumNous/new-api/service"
 
 	"github.com/gin-gonic/gin"
 )
@@ -53,6 +54,23 @@ func AdminFundSummary(c *gin.Context) {
 		return
 	}
 	common.ApiSuccess(c, summary)
+}
+
+// AdminPlanFulfillment GET /api/reconcile/admin/plan/fulfillment
+//
+// 套餐履约率报表（设计文档 §8.4、P7）。与收入对账同一个时间窗口径与跨度上限：
+// 同样要扫 logs 表。
+func AdminPlanFulfillment(c *gin.Context) {
+	start, end, ok := parseFundRange(c)
+	if !ok {
+		return
+	}
+	report, err := service.BuildPlanFulfillmentReport(start, end)
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	common.ApiSuccess(c, report)
 }
 
 // AdminFundConsistency GET /api/reconcile/admin/fund/consistency

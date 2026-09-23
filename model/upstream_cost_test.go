@@ -3,6 +3,8 @@ package model
 import (
 	"testing"
 
+	"github.com/QuantumNous/new-api/common"
+
 	"github.com/stretchr/testify/require"
 )
 
@@ -129,4 +131,31 @@ func TestGetChannelModelCostRatio(t *testing.T) {
 		_, ok := GetChannelModelCostRatio(7, "Kimi-K3")
 		require.False(t, ok)
 	})
+}
+
+// 异步任务的退款 / 差额日志走 RecordTaskBillingLog，同样要带成本。
+//
+// 提交那条按真实成本比记了 cost_quota，退款这条若没有，对账端会退回
+// quota ÷ group_ratio（相当于成本比 1）去冲销：成本比 0.6 时，退 1500 冲掉的是 1000
+// 而不是 600——本地成本被低估 400，看上去像供应商多收了钱。
+func TestRecordTaskBillingLog_CarriesUpstreamCost(t *testing.T) {
+	truncateTables(t)
+	withCostCache(t, map[int]map[string]float64{
+		7: {"vid": 0.6},
+	})
+
+	RecordTaskBillingLog(RecordTaskBillingLogParams{
+		UserId:    1,
+		LogType:   LogTypeRefund,
+		ChannelId: 7,
+		ModelName: "vid",
+		Quota:     1500,
+		Other:     map[string]interface{}{"group_ratio": 1.5},
+	})
+
+	var log Log
+	require.NoError(t, LOG_DB.Order("id desc").First(&log).Error)
+	var other map[string]interface{}
+	require.NoError(t, common.UnmarshalJsonStr(log.Other, &other))
+	require.InDelta(t, 600.0, other["cost_quota"], 1e-9)
 }

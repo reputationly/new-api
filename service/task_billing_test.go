@@ -49,6 +49,9 @@ func TestMain(m *testing.M) {
 		&model.SubscriptionPlanEntitlement{},
 		&model.UserSubscriptionEntitlement{},
 		&model.ComputePointLot{},
+		&model.FundEntry{},
+		&model.SubscriptionOrder{},
+		&model.ChannelModelCost{},
 	); err != nil {
 		panic("failed to migrate: " + err.Error())
 	}
@@ -75,6 +78,9 @@ func truncate(t *testing.T) {
 		model.DB.Exec("DELETE FROM subscription_plan_entitlements")
 		model.DB.Exec("DELETE FROM user_subscription_entitlements")
 		model.DB.Exec("DELETE FROM compute_point_lots")
+		model.DB.Exec("DELETE FROM fund_entries")
+		model.DB.Exec("DELETE FROM subscription_orders")
+		model.DB.Exec("DELETE FROM channel_model_costs")
 	})
 }
 

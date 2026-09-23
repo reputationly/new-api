@@ -565,6 +565,24 @@ func CreateUserSubscriptionFromPlanTx(tx *gorm.DB, userId int, plan *Subscriptio
 // Complete a subscription order (idempotent). Creates a UserSubscription snapshot from the plan.
 // expectedPaymentProvider guards against cross-gateway callback attacks (empty skips the check).
 // actualPaymentMethod updates the order's PaymentMethod to reflect the real payment type used (empty skips update).
+// SubscriptionOrderFundEntry 套餐订单支付完成时写入的收入流水。
+//
+// 单独成函数是为了让报表测试（履约率、收入对账）用生产代码拼出同一条流水，而不是手写
+// 一份字段：手写的与真实写入的一旦不一致（比如 ref_type 拼错），报表和测试会一起错。
+func SubscriptionOrderFundEntry(order *SubscriptionOrder, plan *SubscriptionPlan) *FundEntry {
+	return &FundEntry{
+		UserId:     order.UserId,
+		Account:    FundAccountSubscription,
+		Kind:       FundKindPrepay,
+		QuotaDelta: plan.TotalAmount,
+		CashFen:    YuanToFen(order.Money),
+		Source:     FundSourceSubscription,
+		RefType:    FundRefSubscriptionOrder,
+		RefId:      order.TradeNo,
+		Remark:     plan.Title,
+	}
+}
+
 func CompleteSubscriptionOrder(tradeNo string, providerPayload string, expectedPaymentProvider string, actualPaymentMethod string) error {
 	if tradeNo == "" {
 		return errors.New("tradeNo is empty")
@@ -623,17 +641,7 @@ func CompleteSubscriptionOrder(tradeNo string, providerPayload string, expectedP
 		// 充值函数（它们要求 Status=Pending，而影子记录直接是 Success），所以不会被
 		// 重复埋点；但若将来有人给 topups 加通用埋点，务必按 Amount=0 把影子记录排除，
 		// 否则同一笔套餐收入会被记两次、营收翻倍。
-		if _, err := insertFundEntryTx(tx, &FundEntry{
-			UserId:     order.UserId,
-			Account:    FundAccountSubscription,
-			Kind:       FundKindPrepay,
-			QuotaDelta: plan.TotalAmount,
-			CashFen:    YuanToFen(order.Money),
-			Source:     FundSourceSubscription,
-			RefType:    FundRefSubscriptionOrder,
-			RefId:      order.TradeNo,
-			Remark:     plan.Title,
-		}); err != nil {
+		if _, err := insertFundEntryTx(tx, SubscriptionOrderFundEntry(&order, plan)); err != nil {
 			return err
 		}
 		order.Status = common.TopUpStatusSuccess

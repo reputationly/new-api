@@ -349,6 +349,11 @@ func RecordTaskBillingLog(params RecordTaskBillingLogParams) {
 	if params.LogType == LogTypeConsume && !common.LogConsumeEnabled {
 		return
 	}
+	// 异步任务的退款与差额结算走这里而不是 RecordConsumeLog——appendUpstreamCost 注释
+	// 里说的「只有一个出口」其实有两个。漏掉的后果：提交时那条按真实成本比记了
+	// cost_quota，失败退款这条却没有，对账端退回 quota ÷ group_ratio（相当于成本比 = 1）
+	// 去冲销——成本比 < 1 时冲多了，本地成本被系统性低估。两条必须同一个口径。
+	appendUpstreamCost(params.Other, params.Quota, params.ChannelId, params.ModelName)
 	username, _ := GetUsernameById(params.UserId, false)
 	tokenName := params.TokenName
 	if tokenName == "" && params.TokenId > 0 {
@@ -846,6 +851,10 @@ const (
 	// LogBillingOverage 超额：模型被套餐覆盖，却因次数用尽或算力点不足按余额计费。
 	// 用户投诉「买了套餐怎么还扣钱」时，让他自己筛这一项看。
 	LogBillingOverage = "overage"
+
+	// other 里的匹配串。筛选与履约率报表共用：各写一份的话一边改了另一边就漏数。
+	logOtherEntitlementPattern = `%"billing_source":"entitlement"%`
+	logOtherOveragePattern     = `%"entitlement_fallback":%`
 )
 
 // applyLogBillingFilter 按计费来源筛选。
@@ -859,9 +868,9 @@ const (
 func applyLogBillingFilter(tx *gorm.DB, billing string) *gorm.DB {
 	switch billing {
 	case LogBillingEntitlement:
-		return tx.Where("logs.other LIKE ?", `%"billing_source":"entitlement"%`)
+		return tx.Where("logs.other LIKE ?", logOtherEntitlementPattern)
 	case LogBillingOverage:
-		return tx.Where("logs.other LIKE ?", `%"entitlement_fallback":%`)
+		return tx.Where("logs.other LIKE ?", logOtherOveragePattern)
 	default:
 		return tx
 	}
