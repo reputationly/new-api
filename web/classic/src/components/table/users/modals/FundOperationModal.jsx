@@ -333,6 +333,16 @@ export default function FundOperationModal(props) {
                 {quotaToDisplayAmount(creditAvailable).toFixed(2)}）
               </Text>
             )}
+            {/* 结算时服务已交付，欠款可以超过上限（下一次请求被拒）——标出来，
+                否则管理员只看到「已用 > 上限」而不知道是怎么回事 */}
+            {creditAvailable < 0 && state.credit_limit > 0 && (
+              <Text type='warning'>
+                {' '}
+                （{t('已超出')} ¥
+                {quotaToDisplayAmount(-creditAvailable).toFixed(2)}，
+                {t('新请求会被拒绝')}）
+              </Text>
+            )}
           </Text>
         </Space>
       </div>

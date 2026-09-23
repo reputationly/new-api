@@ -49,6 +49,7 @@ import { IconGift } from '@douyinfe/semi-icons';
 import { useMinimumLoadingTime } from '../../hooks/common/useMinimumLoadingTime';
 import { getCurrencyConfig, getQuotaPerUnit } from '../../helpers/render';
 import { quotaToPoints, isPointsEnabled } from '../../helpers/quota';
+import { buildCreditSummary } from '../../helpers/creditDisplay';
 import SubscriptionPlansCard from './SubscriptionPlansCard';
 
 const { Text } = Typography;
@@ -112,6 +113,8 @@ const RechargeCard = ({
   // 子账号不参与积分（积分是主账号资产），统计区隐藏积分项
   const showPointsStat =
     isPointsEnabled() && (userState?.user?.parent_user_id || 0) === 0;
+  // 授信客户：余额可以是 0 却照样能调用，不说明的话客户看不懂，也不知道欠了多少
+  const credit = buildCreditSummary(userState?.user);
   // When QuotaDisplayType = CNY, amounts are already in CNY — skip Price conversion.
   const isCNYDisplay =
     (localStorage.getItem('quota_display_type') || 'USD') === 'CNY';
@@ -121,7 +124,11 @@ const RechargeCard = ({
   const hasMixedPayment =
     isCNYDisplay &&
     (enableAlipayDirectTopUp || enableWxpayDirectTopUp) &&
-    (enableOnlineTopUp || enableStripeTopUp || enableWaffoTopUp || enableWaffoPancakeTopUp || enableCreemTopUp);
+    (enableOnlineTopUp ||
+      enableStripeTopUp ||
+      enableWaffoTopUp ||
+      enableWaffoPancakeTopUp ||
+      enableCreemTopUp);
   // True when only direct-pay methods (Alipay/WeChat) are available — input is yuan.
   const isDirectPayOnly =
     !enableOnlineTopUp &&
@@ -142,6 +149,24 @@ const RechargeCard = ({
       setActiveTab('topup');
     }
   }, [shouldShowSubscription, activeTab]);
+  // 放在 Tabs 外面：有套餐时页面默认落在「订阅套餐」页签，放进「额度充值」里就看不到了
+  const creditBanner = credit ? (
+    <Banner
+      type={credit.over > 0 ? 'warning' : 'info'}
+      closeIcon={null}
+      style={{ marginBottom: 12 }}
+      description={
+        <span>
+          {t('信用额度')} {renderQuota(credit.limit)} · {t('已用')}{' '}
+          {renderQuota(credit.used)} ·{' '}
+          {credit.over > 0
+            ? `${t('已超出')} ${renderQuota(credit.over)}，${t('新的请求将被拒绝，请尽快结算')}`
+            : `${t('可用')} ${renderQuota(credit.available)}。${t('余额不足时自动使用信用额度，已用部分按约定结算')}`}
+        </span>
+      }
+    />
+  ) : null;
+
   const topupContent = (
     <Space vertical style={{ width: '100%' }}>
       {/* 统计数据 */}
@@ -280,7 +305,7 @@ const RechargeCard = ({
           <Banner
             type='danger'
             description={t(
-              '检测到配置冲突：人民币直连支付（支付宝/微信）与其他支付方式不能同时启用。直连支付额度以人民币计算，其他通道以汇率换算，混用会导致金额不一致。请在管理后台仅保留一种支付体系。'
+              '检测到配置冲突：人民币直连支付（支付宝/微信）与其他支付方式不能同时启用。直连支付额度以人民币计算，其他通道以汇率换算，混用会导致金额不一致。请在管理后台仅保留一种支付体系。',
             )}
             style={{ marginBottom: 12 }}
           />
@@ -320,7 +345,9 @@ const RechargeCard = ({
                         !enableAlipayDirectTopUp &&
                         !enableWxpayDirectTopUp
                       }
-                      placeholder={t('充值额度，最低 ') + renderQuotaWithAmount(minTopUp)}
+                      placeholder={
+                        t('充值额度，最低 ') + renderQuotaWithAmount(minTopUp)
+                      }
                       value={topUpCount}
                       min={minTopUp}
                       max={999999999}
@@ -370,7 +397,7 @@ const RechargeCard = ({
                               {renderAmount()}
                             </span>
                           </Text>
-                          </Skeleton>
+                        </Skeleton>
                       }
                       style={{ width: '100%' }}
                     />
@@ -487,7 +514,11 @@ const RechargeCard = ({
                 </Row>
               )}
 
-              {(enableOnlineTopUp || enableStripeTopUp || enableWaffoTopUp || enableAlipayDirectTopUp || enableWxpayDirectTopUp) && (
+              {(enableOnlineTopUp ||
+                enableStripeTopUp ||
+                enableWaffoTopUp ||
+                enableAlipayDirectTopUp ||
+                enableWxpayDirectTopUp) && (
                 <Form.Slot
                   label={
                     <div className='flex items-center gap-2'>
@@ -735,6 +766,7 @@ const RechargeCard = ({
         </Button>
       </div>
 
+      {creditBanner}
       {shouldShowSubscription ? (
         <Tabs type='card' activeKey={activeTab} onChange={setActiveTab}>
           <TabPane

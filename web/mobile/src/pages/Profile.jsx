@@ -16,6 +16,8 @@ import { copy, isAdmin, showError, showSuccess } from '../shims/classic-utils';
 import { pointsEnabled, renderPoints, renderQuota } from '../utils/quota';
 import { KYC_USER_STATUS } from '../utils/review';
 import SubscriptionUsageCard from '../components/SubscriptionUsageCard';
+// 与 PC 端钱包页同一份判定（是否展示、可用截到 0、超出额），不引 UI 依赖
+import { buildCreditSummary } from '@classic/helpers/creditDisplay';
 
 const Profile = () => {
   const navigate = useNavigate();
@@ -295,6 +297,20 @@ const Profile = () => {
                   ` · 积分 ${renderPoints(self.points_balance)}（已用 ${renderPoints(self.points_used)}）`}
               </div>
             )}
+            {/* 授信客户余额可以是 0 却照样能调用：不说明的话看不懂，也不知道欠了多少 */}
+            {(() => {
+              const credit = buildCreditSummary(self);
+              if (!credit) return null;
+              return (
+                <div style={{ fontSize: 12.5, opacity: 0.85, marginTop: 2 }}>
+                  信用额度 {renderQuota(credit.limit)} · 已用{' '}
+                  {renderQuota(credit.used)} ·{' '}
+                  {credit.over > 0
+                    ? `已超出 ${renderQuota(credit.over)}，新请求将被拒绝`
+                    : `可用 ${renderQuota(credit.available)}`}
+                </div>
+              );
+            })()}
           </div>
         </div>
       </div>
