@@ -20,7 +20,7 @@ For commercial licensing, please contact support@quantumnous.com
 import React from 'react';
 import { Button } from '@douyinfe/semi-ui';
 
-const SubscriptionsActions = ({ openCreate, t }) => {
+const SubscriptionsActions = ({ openCreate, openShowcase, t }) => {
   return (
     <div className='flex gap-2 w-full md:w-auto'>
       <Button
@@ -30,6 +30,9 @@ const SubscriptionsActions = ({ openCreate, t }) => {
         size='small'
       >
         {t('新建套餐')}
+      </Button>
+      <Button className='w-full md:w-auto' onClick={openShowcase} size='small'>
+        {t('对比表展示模型')}
       </Button>
     </div>
   );

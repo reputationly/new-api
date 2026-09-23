@@ -34,6 +34,7 @@ import { API, showError, showSuccess, renderQuota } from '../../helpers';
 import { getCurrencyConfig } from '../../helpers/render';
 import { RefreshCw, Sparkles } from 'lucide-react';
 import SubscriptionPurchaseModal from './modals/SubscriptionPurchaseModal';
+import PlanComparisonTable from './PlanComparisonTable';
 import DirectPayQRModal from './modals/DirectPayQRModal';
 import { SiAlipay, SiWechat } from 'react-icons/si';
 import {
@@ -695,8 +696,7 @@ const SubscriptionPlansCard = ({
                           const tip = reached
                             ? t('已达到购买上限') + ` (${count}/${limit})`
                             : '';
-                          const isCNY =
-                            plan?.currency?.toUpperCase() === 'CNY';
+                          const isCNY = plan?.currency?.toUpperCase() === 'CNY';
                           const showAlipay =
                             isCNY && enableAlipayDirectTopUp && !reached;
                           const showWxpay =
@@ -715,7 +715,11 @@ const SubscriptionPlansCard = ({
                             </Button>
                           );
                           return (
-                            <Space vertical style={{ width: '100%' }} spacing={6}>
+                            <Space
+                              vertical
+                              style={{ width: '100%' }}
+                              spacing={6}
+                            >
                               {reached ? (
                                 <Tooltip content={tip} position='top'>
                                   {buttonEl}
@@ -769,6 +773,7 @@ const SubscriptionPlansCard = ({
               {t('暂无可购买套餐')}
             </div>
           )}
+          {plans.length > 0 && <PlanComparisonTable plans={plans} t={t} />}
         </Space>
       )}
     </>

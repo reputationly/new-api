@@ -8,6 +8,7 @@ import (
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/service"
+	"github.com/QuantumNous/new-api/setting/operation_setting"
 	"github.com/QuantumNous/new-api/setting/ratio_setting"
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
@@ -38,6 +39,23 @@ func GetSubscriptionPlans(c *gin.Context) {
 		})
 	}
 	common.ApiSuccess(c, result)
+}
+
+// GetSubscriptionPlanComparison 套餐对比表（对外换算表，设计文档 §8.3）。
+// 与 GetSubscriptionPlans 同一批套餐、同一个顺序，前端按 plan_id 拼列。
+func GetSubscriptionPlanComparison(c *gin.Context) {
+	var plans []model.SubscriptionPlan
+	if err := model.DB.Where("enabled = ?", true).Order("sort_order desc, id desc").Find(&plans).Error; err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	grouped, err := model.GroupPlanEntitlementsByPlan()
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	common.ApiSuccess(c, service.BuildPlanComparison(plans, grouped,
+		operation_setting.GetComputePointSetting().ShowcaseModels, model.GetPricing()))
 }
 
 func GetSubscriptionSelf(c *gin.Context) {

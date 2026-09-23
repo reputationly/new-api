@@ -16,10 +16,15 @@ import (
 type ComputePointSetting struct {
 	// QuotaPerComputePoint 1 算力点对应多少 quota unit。默认 ≈684.93（1 点 = 1 分钱）。
 	QuotaPerComputePoint float64 `json:"quota_per_compute_point"`
+	// ShowcaseModels 套餐对比表里展示换算的代表模型（设计文档 §8.3）。
+	// 由运营挑而不是按权益范围自动展开：通配符（qwen3-*）一展开就是几十行，
+	// 客户要的是「这点数大概能干多少事」，几个代表模型就回答了。
+	ShowcaseModels []string `json:"showcase_models"`
 }
 
 var computePointSetting = ComputePointSetting{
 	QuotaPerComputePoint: common.QuotaPerUnit / 730.0,
+	ShowcaseModels:       []string{},
 }
 
 func init() {

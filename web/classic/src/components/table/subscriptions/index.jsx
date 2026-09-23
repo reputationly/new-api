@@ -17,13 +17,14 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 
-import React, { useContext } from 'react';
+import React, { useContext, useState } from 'react';
 import { Banner } from '@douyinfe/semi-ui';
 import CardPro from '../../common/ui/CardPro';
 import SubscriptionsTable from './SubscriptionsTable';
 import SubscriptionsActions from './SubscriptionsActions';
 import SubscriptionsDescription from './SubscriptionsDescription';
 import AddEditSubscriptionModal from './modals/AddEditSubscriptionModal';
+import ShowcaseModelsModal from './modals/ShowcaseModelsModal';
 import { useSubscriptionsData } from '../../../hooks/subscriptions/useSubscriptionsData';
 import { useIsMobile } from '../../../hooks/common/useIsMobile';
 import { createCardProPagination } from '../../../helpers/utils';
@@ -34,6 +35,7 @@ const SubscriptionsPage = () => {
   const isMobile = useIsMobile();
   const [statusState] = useContext(StatusContext);
   const enableEpay = !!statusState?.status?.enable_online_topup;
+  const [showShowcase, setShowShowcase] = useState(false);
 
   const {
     showEdit,
@@ -57,6 +59,11 @@ const SubscriptionsPage = () => {
         refresh={refresh}
         t={t}
       />
+      <ShowcaseModelsModal
+        visible={showShowcase}
+        onClose={() => setShowShowcase(false)}
+        t={t}
+      />
 
       <CardPro
         type='type1'
@@ -71,7 +78,11 @@ const SubscriptionsPage = () => {
           <div className='flex flex-col md:flex-row justify-between items-start md:items-center gap-2 w-full'>
             {/* Mobile: actions first; Desktop: actions left */}
             <div className='order-1 md:order-0 w-full md:w-auto'>
-              <SubscriptionsActions openCreate={openCreate} t={t} />
+              <SubscriptionsActions
+                openCreate={openCreate}
+                openShowcase={() => setShowShowcase(true)}
+                t={t}
+              />
             </div>
             <Banner
               type='info'

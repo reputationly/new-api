@@ -65,6 +65,17 @@ describe('previewComputePoints', () => {
     expect(r.kind).toBe('seconds');
   });
 
+  // model_ratio 对表达式计费模型只是预扣锚点，拿它换算出的数字是假的
+  it('表达式动态计费模型返回 unknown，不拿锚点价硬算', () => {
+    const r = previewComputePoints(50000, {
+      quota_type: 0,
+      model_ratio: 2.5,
+      billing_mode: 'tiered_expr',
+      billing_expr: 'p * 2',
+    });
+    expect(r.kind).toBe('unknown');
+  });
+
   it('缺价格或缺模型时如实返回 unknown', () => {
     expect(previewComputePoints(50000, null).kind).toBe('unknown');
     expect(

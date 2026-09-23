@@ -51,6 +51,12 @@ export const previewComputePoints = (points, record) => {
     return { kind: 'unknown', reason: '换算率异常' };
   }
 
+  // 表达式计费的实价由表达式决定，model_ratio 只是预扣锚点——拿它换算会给出一个
+  // 看起来很精确、实际对不上的数字，比「无法换算」更糟。
+  if (record.billing_mode === 'tiered_expr' && record.billing_expr) {
+    return { kind: 'unknown', reason: '该模型按表达式动态计费，无法直接换算' };
+  }
+
   const mode = record.video_pricing?.mode;
   if (mode === 'per_second') {
     const unitPrice = minFlat(record.video_pricing.per_second);
