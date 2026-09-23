@@ -128,17 +128,18 @@ func (e *EntitlementFunding) Settle(delta int) error {
 		if need <= 0 {
 			return nil
 		}
-		ok, spent, err := model.TryConsumeComputePoints(e.userId, need)
+		// 能扣多少扣多少：全有全无的话余量纹丝不动，下一次预扣照样能过——只剩几个点
+		// 就能反复白用整笔服务。扣光之后下一次预扣失败、降级按余额计费，敞口止于这一笔。
+		spent, err := model.ConsumeComputePointsUpTo(e.userId, need)
 		if err != nil {
 			return err
 		}
-		if !ok {
-			common.SysLog(fmt.Sprintf(
-				"entitlement settle shortfall: user=%d entitlement=%d need=%d (算力点不足，差额由平台承担)",
-				e.userId, e.match.Entitlement.Id, need))
-			return nil
-		}
 		e.spent = append(e.spent, spent...)
+		if got := sumSpent(spent); got < need {
+			common.SysLog(fmt.Sprintf(
+				"entitlement settle shortfall: user=%d entitlement=%d need=%d got=%d (算力点不足，差额由平台承担)",
+				e.userId, e.match.Entitlement.Id, need, got))
+		}
 		return nil
 	}
 	return e.refundPoints(e.pointsNeeded(-delta))
@@ -249,4 +250,12 @@ func (e *EntitlementFunding) Refund() error {
 	}
 	e.releaseCount()
 	return nil
+}
+
+func sumSpent(spent []model.ComputePointSpend) int64 {
+	total := int64(0)
+	for _, s := range spent {
+		total += s.Amount
+	}
+	return total
 }

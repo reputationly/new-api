@@ -123,6 +123,21 @@ func GrantComputePointLotTx(tx *gorm.DB, userId int, source string, refId int, p
 var errComputePointsConflict = errors.New("compute point lot conflict, retry")
 
 func TryConsumeComputePoints(userId int, amount int64) (ok bool, spent []ComputePointSpend, err error) {
+	return consumeComputePoints(userId, amount, false)
+}
+
+// ConsumeComputePointsUpTo 扣到 amount 为止，余量不够就把能扣的全扣光。
+//
+// 只给「服务已经交付、结算补扣」用：那时扣不到也不能让请求失败，但必须把剩下的
+// 点数扣掉——全有全无的话用户的余量纹丝不动，下一次请求预扣照样能过、结算照样扣
+// 不到，只剩几个点就能反复白用整笔服务（端到端测试发现）。扣光之后下一次预扣失败，
+// 请求降级按余额计费，敞口止于这一笔。
+func ConsumeComputePointsUpTo(userId int, amount int64) (spent []ComputePointSpend, err error) {
+	_, spent, err = consumeComputePoints(userId, amount, true)
+	return spent, err
+}
+
+func consumeComputePoints(userId int, amount int64, allowPartial bool) (ok bool, spent []ComputePointSpend, err error) {
 	if amount <= 0 {
 		return true, nil, nil
 	}
@@ -166,7 +181,7 @@ func TryConsumeComputePoints(userId int, amount int64) (ok bool, spent []Compute
 				attemptSpent = append(attemptSpent, ComputePointSpend{LotId: lot.Id, Amount: take})
 				remaining -= take
 			}
-			if remaining > 0 {
+			if remaining > 0 && !allowPartial {
 				return ErrComputePointsInsufficient
 			}
 			return nil

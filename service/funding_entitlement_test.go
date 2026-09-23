@@ -123,7 +123,23 @@ func TestEntitlementSettle_ShortfallDoesNotFail(t *testing.T) {
 	require.NoError(t, f.PreConsume(500))
 
 	require.NoError(t, f.Settle(5000), "服务已交付，结算不得失败")
-	require.Equal(t, int64(500), lotUsed(t, 1007), "扣不到就维持原样，不透支批次")
+	// 能扣多少扣多少：把剩下的 100 扣光，但不透支批次（不会超过 600）。
+	// 此前是「扣不到就维持原样」——余量纹丝不动，下一次预扣照样能过（端到端测试发现）。
+	require.Equal(t, int64(600), lotUsed(t, 1007), "余量扣光、但不透支批次")
+	require.Equal(t, int64(600), f.PointsSpent(), "扣掉的部分计入本次，退款时要原路退回")
+}
+
+// 结算补扣不足之后，剩下的几个点不能再被下一次请求拿去预扣——否则只剩几个点
+// 就能反复白用整笔服务：每次预扣只占估算的那一点、结算扣不到由平台承担。
+func TestEntitlementSettle_ShortfallDrainsSoNextRequestFallsBack(t *testing.T) {
+	truncate(t)
+	f := seedEntitlementFunding(t, 1010, 10, true, 1, 600)
+	require.NoError(t, f.PreConsume(500))
+	require.NoError(t, f.Settle(5000))
+
+	next := &EntitlementFunding{userId: 1010, match: f.match}
+	require.ErrorIs(t, next.PreConsume(50), ErrEntitlementUnavailable,
+		"余量已扣光，下一次必须降级按余额计费")
 }
 
 // 退还要原路退回原批次，不能笼统退总额。
@@ -492,4 +508,22 @@ func TestEntitlementReserveExtra_NoPointsIsNoOp(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, ok)
 	require.Empty(t, spent)
+}
+
+// 异步任务的补扣同理：点数不够时把剩下的扣光（不透支），不能全有全无地原样放过。
+// 否则每个视频任务都能用最后几个点预扣、结算补不上由平台承担。
+func TestTaskAdjustEntitlement_ShortfallDrainsRemaining(t *testing.T) {
+	truncate(t)
+	seedBillingUser(t, 1204, 100000, 0)
+	f := seedEntitlementFunding(t, 1204, 10, true, 1, 600)
+	require.NoError(t, f.PreConsume(500))
+
+	task := seedEntitlementTask(t, 1204, 500, f.spent, f.match.CounterId)
+	require.NoError(t, taskAdjustFunding(task, 5000), "服务已交付，补扣不得失败")
+	require.Equal(t, int64(600), lotUsed(t, 1204), "余量扣光、但不透支批次")
+	total := int64(0)
+	for _, sp := range task.PrivateData.EntitlementSpent {
+		total += sp.Amount
+	}
+	require.Equal(t, int64(600), total, "扣掉的部分记进拆分，失败退款时要原路退回")
 }

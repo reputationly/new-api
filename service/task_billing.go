@@ -811,18 +811,17 @@ func taskAdjustEntitlementFunding(task *model.Task, delta int) error {
 		if need <= 0 {
 			return nil
 		}
-		ok, spent, err := model.TryConsumeComputePoints(task.UserId, need)
+		// 服务已交付，不能失败；能扣多少扣多少。与同步路径 EntitlementFunding.Settle 同语义。
+		spent, err := model.ConsumeComputePointsUpTo(task.UserId, need)
 		if err != nil {
 			return err
 		}
-		if !ok {
-			// 服务已交付，不能失败。与同步路径 EntitlementFunding.Settle 同语义。
-			common.SysLog(fmt.Sprintf(
-				"entitlement task settle shortfall: task=%s need=%d (算力点不足，差额由平台承担)",
-				task.TaskID, need))
-			return nil
-		}
 		pd.EntitlementSpent = append(pd.EntitlementSpent, spent...)
+		if got := sumSpent(spent); got < need {
+			common.SysLog(fmt.Sprintf(
+				"entitlement task settle shortfall: task=%s need=%d got=%d (算力点不足，差额由平台承担)",
+				task.TaskID, need, got))
+		}
 		return nil
 	}
 
