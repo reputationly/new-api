@@ -1,8 +1,11 @@
 import React, { useEffect, useState } from 'react';
 import { Typography } from '@douyinfe/semi-ui';
 import { API } from '../../../../helpers';
-import { getQuotaPerUnit } from '../../../../helpers/quota';
-import { convertUSDToCurrency } from '../../../../helpers/render';
+import {
+  formatCNY,
+  isWorstCostOverPrice,
+  quotaToCNY,
+} from '../../../../helpers/planPrice';
 import { splitModels } from '../../../../helpers/entitlementOverlap';
 
 const { Text } = Typography;
@@ -72,20 +75,18 @@ const EntitlementCostHint = ({ entitlement, priceAmount, plan, t }) => {
   // 月付套餐配每周重置时客户一个周期内能用四五倍的量，只按单窗口比会系统性低估。
   const periodQuota = estimate.worst_period_quota || estimate.worst_total_quota;
   const hasNumber = periodQuota > 0;
-  // 统一折到 USD 再比：quota unit 折出来的是展示币种，而 price_amount 存的是
-  // 美元（后端强制 currency=USD，列表页也是用 convertUSDToCurrency 渲染它）。
-  // 拿折成 CNY 的成本去比未折算的售价，在汇率 7.3 的站点上会把赚钱的套餐
-  // 误报成亏本——这个红字的全部意义就是「配亏了要看得见」，乱响等于废掉它。
-  const worstUSD = periodQuota / getQuotaPerUnit();
-  const priceUSD = Number(priceAmount);
-  const over = priceUSD > 0 && worstUSD > priceUSD;
+  // 统一折成人民币再比：price_amount 是实付人民币，成本是 quota unit。两边
+  // 币种不一致会差一个汇率倍数，这个红字的全部意义就是「配亏了要看得见」，
+  // 乱响或漏报都等于废掉它。
+  const priceCNY = Number(priceAmount) || 0;
+  const over = isWorstCostOverPrice(periodQuota, priceCNY);
   const windows = Number(estimate.reset_windows) || 1;
 
   return (
     <div className='mt-1'>
       {hasNumber && (
         <Text size='small' type={over ? 'danger' : 'secondary'}>
-          {t('整个计费周期最坏成本')} ≈ {convertUSDToCurrency(worstUSD, 2)}
+          {t('整个计费周期最坏成本')} ≈ {formatCNY(quotaToCNY(periodQuota))}
           {'　'}
           {windows > 1
             ? t('（{{w}} 个重置窗口 × {{n}} 次 × 最贵的 {{m}}）')
@@ -95,8 +96,7 @@ const EntitlementCostHint = ({ entitlement, priceAmount, plan, t }) => {
             : t('（{{n}} 次 × 最贵的 {{m}}）')
                 .replace('{{n}}', String(estimate.limit_count))
                 .replace('{{m}}', estimate.worst_model)}
-          {priceUSD > 0 &&
-            `　${t('套餐售价')} ${convertUSDToCurrency(priceUSD, 2)}`}
+          {priceCNY > 0 && `　${t('套餐售价')} ${formatCNY(priceCNY)}`}
         </Text>
       )}
       {estimate.reset_windows_capped && (

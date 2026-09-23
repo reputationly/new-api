@@ -31,7 +31,6 @@ import {
   Typography,
 } from '@douyinfe/semi-ui';
 import { API, showError, showSuccess, renderQuota } from '../../helpers';
-import { getCurrencyConfig } from '../../helpers/render';
 import { quotaToComputePoints } from '../../helpers/quota';
 import { RefreshCw, Sparkles } from 'lucide-react';
 import SubscriptionPurchaseModal from './modals/SubscriptionPurchaseModal';
@@ -592,11 +591,11 @@ const SubscriptionPlansCard = ({
               {plans.map((p, index) => {
                 const plan = p?.plan;
                 const totalAmount = Number(plan?.total_amount || 0);
-                const { symbol, rate } = getCurrencyConfig();
+                // 套餐价就是实付人民币（见 helpers/planPrice.js），不随展示币种换算
+                const symbol = '¥';
                 const price = Number(plan?.price_amount || 0);
-                const convertedPrice = price * rate;
-                const displayPrice = convertedPrice.toFixed(
-                  Number.isInteger(convertedPrice) ? 0 : 2,
+                const displayPrice = price.toFixed(
+                  Number.isInteger(price) ? 0 : 2,
                 );
                 const isPopular = index === 0 && plans.length > 1;
                 const limit = Number(plan?.max_purchase_per_user || 0);

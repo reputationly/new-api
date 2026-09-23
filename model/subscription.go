@@ -632,8 +632,8 @@ func CompleteSubscriptionOrder(tradeNo string, providerPayload string, expectedP
 		//   易支付        不校验币种，但把 PriceAmount 直接当人民币金额提交给网关；
 		// 两者实收都是 ¥PriceAmount，故直接换算成分。
 		//
-		// ⚠️ plan.Currency 在此**有意不参与计算**——它默认是 'USD'，且前端价格展示走的是
-		// 站点全局币种配置而非该字段，语义并不可靠。若日后启用 Stripe/Creem
+		// ⚠️ plan.Currency 在此**有意不参与计算**——新建 / 编辑套餐时后端一律写成 CNY，
+		// 但改口径之前保存的旧套餐仍是 'USD'。若日后启用 Stripe/Creem
 		// （按 plan 币种实收），必须改为按实收币种折算，否则非 CNY 套餐的营收会 1:1 记账。
 		//
 		// ⚠️ 埋点只能挂在这一处：upsertSubscriptionTopUpTx 上一行刚往 topups 写了一条
