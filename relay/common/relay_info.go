@@ -152,6 +152,15 @@ type RelayInfo struct {
 	EntitlementId          int
 	EntitlementPlanId      int
 	EntitlementPointsSpent int64
+	EntitlementPlanTitle   string
+	// EntitlementLimitCount / EntitlementUsedCount 本次请求之后的次数快照，
+	// 供日志展示「剩余 347/500」。LimitCount=0 表示不限次。
+	EntitlementLimitCount int64
+	EntitlementUsedCount  int64
+	// EntitlementFallback 模型被套餐覆盖、却因次数用尽或算力点不足而改走其他资金
+	// 来源时的记录。不记的话这笔在日志里就是一条普通的钱包扣费，用户问「买了套餐
+	// 怎么还扣钱」时无从解释（设计文档 §8.4、§10.3）。
+	EntitlementFallback *EntitlementFallback
 	// RequestId is used for idempotent pre-consume/refund
 	RequestId string
 	// SubscriptionAmountTotal / SubscriptionAmountUsedAfterPreConsume are used to compute remaining in logs.
@@ -991,4 +1000,17 @@ func RemoveGeminiDisabledFields(jsonData []byte) ([]byte, error) {
 		return jsonData, nil
 	}
 	return jsonDataAfter, nil
+}
+
+// EntitlementFallback 套餐权益降级记录，写进日志 Other.entitlement_fallback。
+type EntitlementFallback struct {
+	// Reason count_exhausted（次数用尽）| points_insufficient（算力点不足）
+	Reason    string `json:"reason"`
+	PlanId    int    `json:"plan_id"`
+	PlanTitle string `json:"plan_title,omitempty"`
+	// PointsNeeded / PointsAvailable 展示点数，按当时的换算率落库：
+	// 换算率可调，展示时现算会让历史日志的数字整体变化。
+	PointsNeeded    int   `json:"points_needed,omitempty"`
+	PointsAvailable int   `json:"points_available,omitempty"`
+	LimitCount      int64 `json:"limit_count,omitempty"`
 }

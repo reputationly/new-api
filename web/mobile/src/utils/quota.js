@@ -24,6 +24,19 @@ export function renderPoints(quota) {
   return String(Math.floor(q / per + 1e-9));
 }
 
+// 算力点展示：quota → 点数（数值）。与 PC 端 helpers/quota.js quotaToComputePoints
+// 完全同口径：floor 取整 + 1e-9 浮点护栏 + quota_per_compute_point 默认 684.93。
+// 不直接引 PC 那份：它带着 render.jsx，会把 Semi 打进移动端包。
+export function quotaToComputePoints(quota) {
+  const raw = parseFloat(
+    localStorage.getItem('quota_per_compute_point') || '684.93',
+  );
+  const per = Number.isFinite(raw) && raw > 0 ? raw : 684.93;
+  const q = Number(quota || 0);
+  if (!Number.isFinite(q) || q <= 0) return 0;
+  return Math.floor(q / per + 1e-9);
+}
+
 // 大数字缩写，拷贝自 PC helpers/render.jsx renderNumber（TOKENS 展示模式用）
 function renderNumber(num) {
   if (num >= 1000000000) {

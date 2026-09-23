@@ -13,6 +13,12 @@ import (
 // 它不是错误而是**降级信号**：调用方收到后退回现有资金链路，服务不中断。
 var ErrEntitlementUnavailable = errors.New("套餐权益不可用")
 
+// 预扣失败原因，写进日志的 entitlement_fallback.reason。
+const (
+	EntitlementFallbackCountExhausted     = "count_exhausted"
+	EntitlementFallbackPointsInsufficient = "points_insufficient"
+)
+
 // ---------------------------------------------------------------------------
 // EntitlementFunding — 套餐权益资金来源（次数闸门 + 算力点）
 // ---------------------------------------------------------------------------
@@ -27,6 +33,11 @@ type EntitlementFunding struct {
 	match  *model.EntitlementMatch
 
 	countTaken bool
+	// failReason / failNeed 预扣失败时的原因与所需算力点（quota unit），
+	// 供会话在降级后写日志。两种原因对外都是 ErrEntitlementUnavailable——
+	// 调用方只需要知道「降级」，而用户需要知道「为什么」。
+	failReason string
+	failNeed   int64
 	// spent 记录算力点在各批次上的精确拆分，退款必须原路退回——否则快过期的批次
 	// 被提前烧光、钱退到长期批次，用户凭空损失额度（§十一 风险 5）。
 	spent []model.ComputePointSpend
@@ -36,6 +47,9 @@ func (e *EntitlementFunding) Source() string { return BillingSourceEntitlement }
 
 // Match 命中的权益，供会话同步日志字段。
 func (e *EntitlementFunding) Match() *model.EntitlementMatch { return e.match }
+
+// FailReason 预扣失败的原因与所需算力点（quota unit）。未失败时 reason 为空。
+func (e *EntitlementFunding) FailReason() (string, int64) { return e.failReason, e.failNeed }
 
 // PointsSpent 本次累计消耗的算力点（quota unit），供日志与对账。
 func (e *EntitlementFunding) PointsSpent() int64 {
@@ -69,6 +83,7 @@ func (e *EntitlementFunding) PreConsume(amount int) error {
 		return err
 	}
 	if !ok {
+		e.failReason = EntitlementFallbackCountExhausted
 		return ErrEntitlementUnavailable
 	}
 	e.countTaken = true
@@ -89,6 +104,8 @@ func (e *EntitlementFunding) PreConsume(amount int) error {
 	if !okPoints {
 		// 算力点不足也要把刚占的次数还回去，否则降级走钱包的同时白白烧掉一次配额
 		e.releaseCount()
+		e.failReason = EntitlementFallbackPointsInsufficient
+		e.failNeed = need
 		return ErrEntitlementUnavailable
 	}
 	e.spent = append(e.spent, spent...)

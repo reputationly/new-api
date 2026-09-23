@@ -15,6 +15,7 @@ import { API, updateAPI } from '@classic/helpers/api';
 import { copy, isAdmin, showError, showSuccess } from '../shims/classic-utils';
 import { pointsEnabled, renderPoints, renderQuota } from '../utils/quota';
 import { KYC_USER_STATUS } from '../utils/review';
+import SubscriptionUsageCard from '../components/SubscriptionUsageCard';
 
 const Profile = () => {
   const navigate = useNavigate();
@@ -28,6 +29,8 @@ const Profile = () => {
   const [pendingCounts, setPendingCounts] = useState(null);
   const [adminTicketUnread, setAdminTicketUnread] = useState(0);
   const [affLink, setAffLink] = useState('');
+  // 活跃套餐的余量（算力点 / 权益次数）。只有新式套餐有这两项，老式套餐不出卡片。
+  const [subscriptions, setSubscriptions] = useState([]);
   const admin = isAdmin();
 
   const loadSelf = useCallback(async () => {
@@ -96,6 +99,23 @@ const Profile = () => {
     }
   }, []);
 
+  const loadSubscriptions = useCallback(async () => {
+    try {
+      const res = await API.get('/api/subscription/self', {
+        skipErrorHandler: true,
+      });
+      if (res.data.success) {
+        setSubscriptions(
+          (res.data.data?.subscriptions || []).filter(
+            (s) => s.compute_points || s.entitlements?.length > 0,
+          ),
+        );
+      }
+    } catch (e) {
+      // 静默：余量卡片是锦上添花，拿不到就不出
+    }
+  }, []);
+
   const loadBadges = useCallback(async () => {
     try {
       const res = await API.get('/api/user/feedback/unread', {
@@ -134,6 +154,7 @@ const Profile = () => {
     loadCheckin();
     loadCheckinLock();
     loadBadges();
+    loadSubscriptions();
     fetchAffLink();
   }, [loadSelf, loadCheckin, loadCheckinLock, loadBadges, fetchAffLink]);
 
@@ -277,6 +298,15 @@ const Profile = () => {
           </div>
         </div>
       </div>
+
+      {subscriptions.length > 0 && (
+        <>
+          <div className='m-section-title'>我的套餐</div>
+          {subscriptions.map((s) => (
+            <SubscriptionUsageCard key={s.subscription?.id} summary={s} />
+          ))}
+        </>
+      )}
 
       <div className='m-section-title'>账户</div>
       <List

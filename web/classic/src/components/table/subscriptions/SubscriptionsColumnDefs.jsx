@@ -176,6 +176,9 @@ const renderTotalAmount = (text, record, t) => {
         <Tooltip content={`${t('原生额度')}：${total}`}>
           <span>{renderQuota(total)}</span>
         </Tooltip>
+      ) : record?.no_legacy_quota ? (
+        // 新式套餐（有算力点或权益）的 0 是「没有通用额度」，不是「不限」
+        t('无')
       ) : (
         t('不限')
       )}

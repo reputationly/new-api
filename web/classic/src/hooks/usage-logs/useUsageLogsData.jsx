@@ -43,6 +43,7 @@ import {
 import { ITEMS_PER_PAGE } from '../../constants';
 import { useTableCompactMode } from '../common/useTableCompactMode';
 import ParamOverrideEntry from '../../components/table/usage-logs/components/ParamOverrideEntry';
+import { getEntitlementLogInfo } from '../../helpers/entitlementLog';
 
 export const useLogsData = () => {
   const { t } = useTranslation();
@@ -109,6 +110,8 @@ export const useLogsData = () => {
     channelIds: [], // empty = all channels
     group: '',
     request_id: '',
+    // 计费来源：'' 全部 / entitlement 套餐内 / overage 超额（后端 model.applyLogBillingFilter）
+    billing: '',
     dateRange: [
       timestamp2string(getTodayStartTimestamp()),
       timestamp2string(now.getTime() / 1000 + 3600),
@@ -294,6 +297,7 @@ export const useLogsData = () => {
       channelIds, // empty array = all channels
       group: formValues.group || '',
       request_id: formValues.request_id || '',
+      billing: formValues.billing || '',
       logType: formValues.logType ? parseInt(formValues.logType) : 0,
     };
   };
@@ -701,6 +705,31 @@ export const useLogsData = () => {
           ),
         });
       }
+      // 套餐权益：命中哪个套餐、烧了多少点、次数还剩多少；超额的那笔说明为什么按余额扣
+      const entInfo = getEntitlementLogInfo(other);
+      if (entInfo?.kind === 'entitlement') {
+        expandDataLocal.push({
+          key: t('套餐'),
+          value: other?.entitlement_plan_id
+            ? `#${other.entitlement_plan_id} ${entInfo.planTitle}`
+            : entInfo.planTitle,
+        });
+        expandDataLocal.push({
+          key: t('消耗算力点'),
+          value: `${entInfo.points.toLocaleString('en-US')} ${t('点')}`,
+        });
+        if (entInfo.limit > 0) {
+          expandDataLocal.push({
+            key: t('本期次数'),
+            value: `${t('剩余')} ${entInfo.remain}/${entInfo.limit}`,
+          });
+        }
+      } else if (entInfo?.kind === 'overage') {
+        expandDataLocal.push({
+          key: t('超额说明'),
+          value: entInfo.text,
+        });
+      }
       if (isAdminUser && logs[i].type !== 6 && logs[i].type !== 1) {
         expandDataLocal.push({
           key: t('请求转换'),
@@ -814,6 +843,7 @@ export const useLogsData = () => {
       channelIds,
       group,
       request_id,
+      billing,
       logType: formLogType,
     } = getFormValues();
 
@@ -829,9 +859,9 @@ export const useLogsData = () => {
 
     let url;
     if (isAdminUser) {
-      url = `/api/log/?p=${startIdx}&page_size=${size}&type=${currentLogType}&username=${username}&token_name=${token_name}&model_name=${model_name}&start_timestamp=${localStartTimestamp}&end_timestamp=${localEndTimestamp}${channelIdsQueryString(channelIds)}&group=${group}&request_id=${request_id}`;
+      url = `/api/log/?p=${startIdx}&page_size=${size}&type=${currentLogType}&username=${username}&token_name=${token_name}&model_name=${model_name}&start_timestamp=${localStartTimestamp}&end_timestamp=${localEndTimestamp}${channelIdsQueryString(channelIds)}&group=${group}&request_id=${request_id}&billing=${billing}`;
     } else {
-      url = `/api/log/self/?p=${startIdx}&page_size=${size}&type=${currentLogType}&token_name=${token_name}&model_name=${model_name}&start_timestamp=${localStartTimestamp}&end_timestamp=${localEndTimestamp}&group=${group}&request_id=${request_id}`;
+      url = `/api/log/self/?p=${startIdx}&page_size=${size}&type=${currentLogType}&token_name=${token_name}&model_name=${model_name}&start_timestamp=${localStartTimestamp}&end_timestamp=${localEndTimestamp}&group=${group}&request_id=${request_id}&billing=${billing}`;
     }
     return encodeURI(url);
   };
@@ -866,6 +896,7 @@ export const useLogsData = () => {
       channelIds,
       group,
       request_id,
+      billing,
       logType: formLogType,
     } = getFormValues();
 
@@ -878,7 +909,7 @@ export const useLogsData = () => {
       ? `&username=${username}${channelIdsQueryString(channelIds)}`
       : '';
     const exportUrl = encodeURI(
-      `${exportPath}?type=${currentLogType}&token_name=${token_name}&model_name=${model_name}&start_timestamp=${localStartTimestamp}&end_timestamp=${localEndTimestamp}&group=${group}&request_id=${request_id}${adminOnly}`,
+      `${exportPath}?type=${currentLogType}&token_name=${token_name}&model_name=${model_name}&start_timestamp=${localStartTimestamp}&end_timestamp=${localEndTimestamp}&group=${group}&request_id=${request_id}&billing=${billing}${adminOnly}`,
     );
 
     setExporting(true);

@@ -20,6 +20,9 @@ func seedEntitlementPlan(t *testing.T, resetPeriod string) *SubscriptionPlan {
 		QuotaResetPeriod: resetPeriod,
 	}
 	require.NoError(t, DB.Create(plan).Error)
+	// SQLite 删行后会复用 id：上一个测试缓存的同 id 套餐会被读到，按套餐判定的逻辑
+	// （如老式额度「无 / 不限」）就会拿到别的测试的配置
+	InvalidateSubscriptionPlanCache(plan.Id)
 	return plan
 }
 

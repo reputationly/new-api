@@ -18,6 +18,9 @@ import (
 
 type SubscriptionPlanDTO struct {
 	Plan model.SubscriptionPlan `json:"plan"`
+	// NoLegacyQuota total_amount=0 表示「没有通用额度」而不是「不限」（新式套餐）。
+	// 规则在 model.PlanHasNoLegacyQuota，前端只读这个标记、不自己推断。
+	NoLegacyQuota bool `json:"no_legacy_quota,omitempty"`
 }
 
 type BillingPreferenceRequest struct {
@@ -32,10 +35,18 @@ func GetSubscriptionPlans(c *gin.Context) {
 		common.ApiError(c, err)
 		return
 	}
+	// 只用来判断「有没有权益」，不下发权益内容（渠道限定是内部信息）
+	grouped, err := model.GroupPlanEntitlementsByPlan()
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
 	result := make([]SubscriptionPlanDTO, 0, len(plans))
 	for _, p := range plans {
+		plan := p
 		result = append(result, SubscriptionPlanDTO{
-			Plan: p,
+			Plan:          plan,
+			NoLegacyQuota: model.PlanHasNoLegacyQuota(&plan, len(grouped[plan.Id]) > 0),
 		})
 	}
 	common.ApiSuccess(c, result)
@@ -73,6 +84,11 @@ func GetSubscriptionSelf(c *gin.Context) {
 	activeSubscriptions, err := model.GetAllActiveUserSubscriptions(userId)
 	if err != nil {
 		activeSubscriptions = []model.SubscriptionSummary{}
+	}
+	// 算力点余量与权益次数（设计文档 §10.2）。取不到只记日志：余量是锦上添花，
+	// 不能因为它把整个「我的订阅」拖垮。
+	if err := model.AttachSubscriptionUsage(activeSubscriptions); err != nil {
+		common.SysLog("attach subscription usage failed: " + err.Error())
 	}
 
 	common.ApiSuccess(c, gin.H{
@@ -127,9 +143,11 @@ func AdminListSubscriptionPlans(c *gin.Context) {
 		if ents == nil {
 			ents = []*model.SubscriptionPlanEntitlement{}
 		}
+		plan := p
 		result = append(result, AdminSubscriptionPlanDTO{
-			Plan:         p,
-			Entitlements: ents,
+			Plan:          plan,
+			Entitlements:  ents,
+			NoLegacyQuota: model.PlanHasNoLegacyQuota(&plan, len(ents) > 0),
 		})
 	}
 	common.ApiSuccess(c, result)
@@ -139,8 +157,9 @@ func AdminListSubscriptionPlans(c *gin.Context) {
 // 刻意不复用 SubscriptionPlanDTO：权益里的渠道限定属于内部信息，混在同一个结构里
 // 早晚会被哪个用户侧接口顺手返回出去。
 type AdminSubscriptionPlanDTO struct {
-	Plan         model.SubscriptionPlan               `json:"plan"`
-	Entitlements []*model.SubscriptionPlanEntitlement `json:"entitlements"`
+	Plan          model.SubscriptionPlan               `json:"plan"`
+	Entitlements  []*model.SubscriptionPlanEntitlement `json:"entitlements"`
+	NoLegacyQuota bool                                 `json:"no_legacy_quota,omitempty"`
 }
 
 type AdminUpsertSubscriptionPlanRequest struct {

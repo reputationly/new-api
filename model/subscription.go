@@ -279,6 +279,14 @@ func (s *UserSubscription) BeforeUpdate(tx *gorm.DB) error {
 
 type SubscriptionSummary struct {
 	Subscription *UserSubscription `json:"subscription"`
+	// 以下两项只在「我的订阅」的活跃订阅上填充（AttachSubscriptionUsage），
+	// 其余路径保持为空、不出现在 JSON 里。
+	PlanTitle     string                          `json:"plan_title,omitempty"`
+	ComputePoints *SubscriptionComputePoints      `json:"compute_points,omitempty"`
+	Entitlements  []SubscriptionEntitlementStatus `json:"entitlements,omitempty"`
+	// NoLegacyQuota amount_total=0 表示「没有老式额度」而不是「不限」（新式套餐），
+	// 前端据此不显示「总额度：不限」。见 noLegacyQuota。
+	NoLegacyQuota bool `json:"no_legacy_quota,omitempty"`
 }
 
 // CalcPlanEndTime 导出版，供成本试算复用。试算与真实建订阅必须用同一套时长口径，
@@ -800,6 +808,7 @@ func buildSubscriptionSummaries(subs []UserSubscription) []SubscriptionSummary {
 			Subscription: &subCopy,
 		})
 	}
+	attachLegacyQuotaFlags(result)
 	return result
 }
 
@@ -1145,6 +1154,15 @@ func PreConsumeUserSubscription(requestId string, userId int, modelName string, 
 			}
 			if err := maybeResetUserSubscriptionWithPlanTx(tx, &sub, plan, now); err != nil {
 				return err
+			}
+			// 新式套餐的 0 是「没有老式额度」，不是「不限」——沿用老语义等于让套餐外
+			// 的请求免费用任意模型。跳过它，调用方拿到「额度不足」后按偏好降级到余额。
+			noLegacy, err := subscriptionHasNoLegacyQuotaTx(tx, &sub, plan)
+			if err != nil {
+				return err
+			}
+			if noLegacy {
+				continue
 			}
 			usedBefore := sub.AmountUsed
 			if sub.AmountTotal > 0 {

@@ -390,7 +390,15 @@ const AddEditSubscriptionModal = ({
                         min={0}
                         precision={2}
                         rules={[{ required: true, message: t('请输入总额度') }]}
-                        extraText={`${t('0 表示不限')} · ${t('原生额度')}：${displayAmountToQuota(
+                        // 与后端 model.noLegacyQuota 同一条规则：配了算力点或权益的套餐，
+                        // 0 表示「不提供通用额度」而不是「不限」。这里读的是未保存的表单值，
+                        // 拿不到后端下发的标记，只能按同一规则现算。
+                        extraText={`${
+                          Number(values.compute_points_per_period) > 0 ||
+                          entitlements.length > 0
+                            ? t('0 表示不提供通用额度，套餐外按余额计费')
+                            : t('0 表示不限')
+                        } · ${t('原生额度')}：${displayAmountToQuota(
                           values.total_amount,
                         )}`}
                         style={{ width: '100%' }}

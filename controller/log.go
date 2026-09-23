@@ -45,7 +45,7 @@ func GetAllLogs(c *gin.Context) {
 	channelIds := parseChannelIdsQuery(c)
 	group := c.Query("group")
 	requestId := c.Query("request_id")
-	logs, total, err := model.GetAllLogs(logType, startTimestamp, endTimestamp, modelName, username, tokenName, pageInfo.GetStartIdx(), pageInfo.GetPageSize(), channelIds, group, requestId)
+	logs, total, err := model.GetAllLogs(logType, startTimestamp, endTimestamp, modelName, username, tokenName, pageInfo.GetStartIdx(), pageInfo.GetPageSize(), channelIds, group, requestId, c.Query("billing"))
 	if err != nil {
 		common.ApiError(c, err)
 		return
@@ -77,7 +77,7 @@ func GetUserLogs(c *gin.Context) {
 		common.ApiSuccess(c, pageInfo)
 		return
 	}
-	logs, total, err := model.GetUserLogs(scope.userId, logType, startTimestamp, endTimestamp, modelName, tokenName, pageInfo.GetStartIdx(), pageInfo.GetPageSize(), group, requestId, scope.tokenIds)
+	logs, total, err := model.GetUserLogs(scope.userId, logType, startTimestamp, endTimestamp, modelName, tokenName, pageInfo.GetStartIdx(), pageInfo.GetPageSize(), group, requestId, scope.tokenIds, c.Query("billing"))
 	if err != nil {
 		common.ApiError(c, err)
 		return
@@ -325,7 +325,7 @@ func ExportAllLogs(c *gin.Context) {
 
 	var firstBatchErr error
 	csvStarted := streamExportCSV(c, true, func(perBatch func(logs []*model.Log) error) error {
-		err := model.ExportAllLogs(logType, startTimestamp, endTimestamp, modelName, username, tokenName, channelIds, group, requestId, 1000, perBatch)
+		err := model.ExportAllLogs(logType, startTimestamp, endTimestamp, modelName, username, tokenName, channelIds, group, requestId, c.Query("billing"), 1000, perBatch)
 		firstBatchErr = err
 		return err
 	})
@@ -355,7 +355,7 @@ func ExportUserLogs(c *gin.Context) {
 		if scope.emptyForSubAccount() {
 			return nil
 		}
-		err := model.ExportUserLogs(scope.userId, logType, startTimestamp, endTimestamp, modelName, tokenName, group, requestId, scope.tokenIds, 1000, perBatch)
+		err := model.ExportUserLogs(scope.userId, logType, startTimestamp, endTimestamp, modelName, tokenName, group, requestId, scope.tokenIds, c.Query("billing"), 1000, perBatch)
 		firstBatchErr = err
 		return err
 	})

@@ -81,9 +81,14 @@ func (s *BillingSession) Settle(actualQuota int) error {
 				s.relayInfo.UserId, s.relayInfo.TokenId, delta, tokenErr.Error()))
 		}
 	}
-	// 3) 更新 relayInfo 上的订阅 PostDelta（用于日志）
+	// 3) 更新 relayInfo 上的订阅 PostDelta / 权益实耗算力点（用于日志）。
+	// 权益的点数在预扣时同步过一次，那是估算值；结算补扣或退还之后必须再同步，
+	// 否则日志记的是预扣量而不是真正烧掉的点数。
 	if s.funding.Source() == BillingSourceSubscription {
 		s.relayInfo.SubscriptionPostDelta += int64(delta)
+	}
+	if ent, ok := s.funding.(*EntitlementFunding); ok {
+		s.relayInfo.EntitlementPointsSpent = ent.PointsSpent()
 	}
 	s.syncPointsConsumed()
 	s.syncCreditConsumed(actualQuota)
@@ -436,6 +441,13 @@ func (s *BillingSession) syncRelayInfo() {
 			info.EntitlementId = m.Entitlement.Id
 			info.EntitlementPlanId = m.PlanId
 			info.SubscriptionId = m.UserSubscriptionId
+			if info.EntitlementPlanTitle == "" {
+				info.EntitlementPlanTitle = planTitleOf(m.PlanId)
+			}
+			// 次数快照：匹配时读到的已用次数 + 本次占用的 1 次。并发请求下可能与库里
+			// 的实时值差几次——只用于日志展示，真正的闸门在条件更新里，不看这个数。
+			info.EntitlementLimitCount = m.LimitCount
+			info.EntitlementUsedCount = m.UsedCount + 1
 		}
 		info.EntitlementPointsSpent = ent.PointsSpent()
 	}
@@ -542,6 +554,8 @@ func NewBillingSession(c *gin.Context, relayInfo *relaycommon.RelayInfo, preCons
 	// 「这次没享受到套餐价」，服务必须照常交付（§6 ④）。所以这里刻意吞掉错误只记日志，
 	// 唯独不能让权益侧的问题变成用户侧的 4xx/5xx。
 	tryEntitlement := func() *BillingSession {
+		// 重试时会重新走一遍，上一轮的降级记录不能留到这一轮的日志里
+		relayInfo.EntitlementFallback = nil
 		// 渠道号从 context 取而不是 relayInfo.ChannelId：本函数跑在 InitChannelMeta
 		// 之前，那时 ChannelMeta 仍是 nil，直接读会 panic（同一个坑见 tryWallet 的说明）。
 		channelId := common.GetContextKeyInt(c, constant.ContextKeyChannelId)
@@ -553,14 +567,19 @@ func NewBillingSession(c *gin.Context, relayInfo *relaycommon.RelayInfo, preCons
 		if match == nil {
 			return nil
 		}
+		funding := &EntitlementFunding{
+			userId: relayInfo.UserId,
+			match:  match,
+		}
 		session := &BillingSession{
 			relayInfo: relayInfo,
-			funding: &EntitlementFunding{
-				userId: relayInfo.UserId,
-				match:  match,
-			},
+			funding:   funding,
 		}
 		if apiErr := session.preConsume(c, preConsumedQuota); apiErr != nil {
+			if reason, need := funding.FailReason(); reason != "" {
+				relayInfo.EntitlementFallback = buildEntitlementFallback(
+					relayInfo.UserId, match, reason, need)
+			}
 			return nil
 		}
 		return session
@@ -687,4 +706,33 @@ func newInsufficientFundsError(userQuota, creditAvailable, userId int) *types.Ne
 		fmt.Errorf("用户额度不足, 剩余额度: %s", logger.FormatQuota(userQuota)),
 		types.ErrorCodeInsufficientUserQuota, http.StatusForbidden,
 		types.ErrOptionWithSkipRetry(), types.ErrOptionWithNoRecordErrorLog())
+}
+
+// planTitleOf 取套餐名供日志展示。走套餐缓存；取不到时返回空串——日志缺一个名字
+// 不该影响扣费。
+func planTitleOf(planId int) string {
+	plan, err := model.GetSubscriptionPlanById(planId)
+	if err != nil || plan == nil {
+		return ""
+	}
+	return plan.Title
+}
+
+// buildEntitlementFallback 组装降级记录。点数按当时的换算率换成展示点数落库：
+// 所需点数向上取整（与扣费侧 ceil 一致，「需要 N 点」必须是真正要扣的量），
+// 剩余点数向下取整（与余额展示同口径，不虚报）。
+func buildEntitlementFallback(userId int, match *model.EntitlementMatch, reason string, needQuota int64) *relaycommon.EntitlementFallback {
+	fb := &relaycommon.EntitlementFallback{
+		Reason:     reason,
+		PlanId:     match.PlanId,
+		PlanTitle:  planTitleOf(match.PlanId),
+		LimitCount: match.LimitCount,
+	}
+	if reason == EntitlementFallbackPointsInsufficient {
+		fb.PointsNeeded = common.QuotaToComputePointsCeil(int(needQuota))
+		if bal, err := model.GetComputePointBalance(userId); err == nil && bal != nil {
+			fb.PointsAvailable = common.QuotaToComputePoints(int(bal.Available))
+		}
+	}
+	return fb
 }

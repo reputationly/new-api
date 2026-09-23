@@ -37,6 +37,10 @@ import {
   renderVideoMatrixPriceSimple,
 } from '../../../helpers';
 import { quotaToPoints } from '../../../helpers/quota';
+import {
+  getEntitlementLogInfo,
+  entitlementTagText,
+} from '../../../helpers/entitlementLog';
 import { IconHelpCircle } from '@douyinfe/semi-icons';
 import { CircleAlert, Route, Sparkles } from 'lucide-react';
 
@@ -258,15 +262,6 @@ function renderBillingTag(record, t) {
     return (
       <Tag color='green' shape='circle'>
         {t('订阅抵扣')}
-      </Tag>
-    );
-  }
-  // 套餐权益与订阅一样不扣钱包，也要有标识——没有标识的话用户看到一笔
-  // 「没花钱」的记录却分不清是被套餐覆盖了还是漏记了。
-  if (other?.billing_source === 'entitlement') {
-    return (
-      <Tag color='cyan' shape='circle'>
-        {t('套餐权益')}
       </Tag>
     );
   }
@@ -865,11 +860,41 @@ export const getLogsColumns = ({
           return <></>;
         }
         const other = getLogOther(record.other);
-        // 权益与订阅同属「不扣钱包」：钱包一分没动，显示一个真实金额会让用户
-        // 以为被扣了钱。两者在这一列的展示语义完全一致。
-        const isSubscription =
-          other?.billing_source === 'subscription' ||
-          other?.billing_source === 'entitlement';
+        const entInfo = getEntitlementLogInfo(other);
+        // 套餐内：只显示「套餐名 N点」标签、不显示金额——钱包一分没动，显示一个真实金额
+        // 会让用户以为被扣了钱。悬浮展开完整拆解，「等值金额」让用户算得出套餐帮他
+        // 省了多少（设计文档 §8.4）。
+        if (entInfo?.kind === 'entitlement') {
+          const lines = [
+            `${t('算力点')}：${entInfo.points.toLocaleString('en-US')} ${t('点')} · ${entInfo.planTitle}`,
+            entInfo.limit > 0
+              ? `${t('次数')}：${t('剩余')} ${entInfo.remain}/${entInfo.limit}`
+              : null,
+            `${t('等值金额')}：${renderQuota(text, 6)}`,
+          ].filter(Boolean);
+          return (
+            <Tooltip
+              content={
+                <div style={{ whiteSpace: 'pre-line' }}>{lines.join('\n')}</div>
+              }
+            >
+              <Tag color='violet' shape='circle' size='small'>
+                {entitlementTagText(entInfo)}
+              </Tag>
+            </Tooltip>
+          );
+        }
+        const isSubscription = other?.billing_source === 'subscription';
+        // 超额：模型在套餐里，却因次数用尽或点数不足按余额扣了。不标出来的话这笔就是
+        // 一条普通的扣费，用户看到只会觉得「买了套餐怎么还扣钱」。
+        const overageTag =
+          entInfo?.kind === 'overage' ? (
+            <Tooltip content={entInfo.text}>
+              <Tag color='amber' shape='circle' size='small'>
+                {t('超额')}
+              </Tag>
+            </Tooltip>
+          ) : null;
         const pointsConsumed = record.points_consumed || 0;
         const pointsTag =
           pointsConsumed > 0 ? (
@@ -883,14 +908,8 @@ export const getLogsColumns = ({
           ) : null;
         if (isSubscription) {
           // 不扣钱包的来源只显示标签（不显示 $0），悬浮时给出等价成本。
-          // 文案按来源分开：标签写着「套餐权益」、提示却说「由订阅抵扣」是自相矛盾的，
-          // 而这两种抵扣在用户那里是两件不同的事（一个花订阅额度，一个花算力点）。
-          const coveredBy =
-            other?.billing_source === 'entitlement'
-              ? t('由套餐权益抵扣')
-              : t('由订阅抵扣');
           return (
-            <Tooltip content={`${coveredBy}：${renderQuota(text, 6)}`}>
+            <Tooltip content={`${t('由订阅抵扣')}：${renderQuota(text, 6)}`}>
               <span>{renderBillingTag(record, t)}</span>
             </Tooltip>
           );
@@ -899,6 +918,7 @@ export const getLogsColumns = ({
           <Space spacing={2} align='center'>
             {renderQuota(text, 6)}
             {pointsTag}
+            {overageTag}
           </Space>
         );
       },

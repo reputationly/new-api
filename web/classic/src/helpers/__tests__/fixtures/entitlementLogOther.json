@@ -1,0 +1,41 @@
+{
+  "entitlement": {
+    "billing_source": "entitlement",
+    "compute_points": 120,
+    "compute_points_quota": 12000,
+    "entitlement_id": 7,
+    "entitlement_limit_count": 500,
+    "entitlement_plan_id": 3,
+    "entitlement_plan_title": "专业版",
+    "entitlement_used_count": 153,
+    "subscription_id": 42
+  },
+  "overage_count": {
+    "billing_source": "wallet",
+    "entitlement_fallback": {
+      "reason": "count_exhausted",
+      "plan_id": 3,
+      "plan_title": "专业版",
+      "limit_count": 500
+    }
+  },
+  "overage_hybrid": {
+    "billing_source": "points_wallet",
+    "entitlement_fallback": {
+      "reason": "count_exhausted",
+      "plan_id": 3,
+      "plan_title": "专业版",
+      "limit_count": 500
+    }
+  },
+  "overage_points": {
+    "billing_source": "wallet",
+    "entitlement_fallback": {
+      "reason": "points_insufficient",
+      "plan_id": 3,
+      "plan_title": "专业版",
+      "points_needed": 120,
+      "points_available": 40
+    }
+  }
+}

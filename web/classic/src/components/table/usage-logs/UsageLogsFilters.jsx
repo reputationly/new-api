@@ -162,6 +162,29 @@ const LogsFilters = ({
               <Form.Select.Option value='5'>{t('错误')}</Form.Select.Option>
               <Form.Select.Option value='6'>{t('退款')}</Form.Select.Option>
             </Form.Select>
+            {/* 计费来源。「超额」是最有价值的一项：用户问「买了套餐怎么还扣钱」时，
+                让他自己筛这一项看（设计文档 §8.4） */}
+            <Form.Select
+              field='billing'
+              placeholder={t('计费来源')}
+              className='w-full sm:w-auto min-w-[120px] sm:ml-2'
+              showClear
+              pure
+              onChange={() => {
+                setTimeout(() => {
+                  refresh();
+                }, 0);
+              }}
+              size='small'
+            >
+              <Form.Select.Option value=''>{t('全部计费')}</Form.Select.Option>
+              <Form.Select.Option value='entitlement'>
+                {t('套餐内')}
+              </Form.Select.Option>
+              <Form.Select.Option value='overage'>
+                {t('超额')}
+              </Form.Select.Option>
+            </Form.Select>
           </div>
 
           <div className='flex gap-2 w-full sm:w-auto justify-end'>

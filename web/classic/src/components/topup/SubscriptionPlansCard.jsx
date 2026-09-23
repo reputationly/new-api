@@ -32,9 +32,11 @@ import {
 } from '@douyinfe/semi-ui';
 import { API, showError, showSuccess, renderQuota } from '../../helpers';
 import { getCurrencyConfig } from '../../helpers/render';
+import { quotaToComputePoints } from '../../helpers/quota';
 import { RefreshCw, Sparkles } from 'lucide-react';
 import SubscriptionPurchaseModal from './modals/SubscriptionPurchaseModal';
 import PlanComparisonTable from './PlanComparisonTable';
+import SubscriptionUsagePanel from './SubscriptionUsagePanel';
 import DirectPayQRModal from './modals/DirectPayQRModal';
 import { SiAlipay, SiWechat } from 'react-icons/si';
 import {
@@ -313,6 +315,15 @@ const SubscriptionPlansCard = ({
     return map;
   }, [plans]);
 
+  // 余量数据（算力点、权益次数）只挂在活跃订阅上，而列表遍历的是全部订阅，按 id 对上
+  const usageBySubId = useMemo(() => {
+    const map = new Map();
+    (activeSubscriptions || []).forEach((s) => {
+      if (s?.subscription?.id) map.set(s.subscription.id, s);
+    });
+    return map;
+  }, [activeSubscriptions]);
+
   const getPlanPurchaseCount = (planId) =>
     planPurchaseCountMap.get(planId) || 0;
 
@@ -531,27 +542,37 @@ const SubscriptionPlansCard = ({
                             ).toLocaleString()}
                           </div>
                         )}
-                        <div className='text-xs text-gray-500 mb-2'>
-                          {t('总额度')}:{' '}
-                          {totalAmount > 0 ? (
-                            <Tooltip
-                              content={`${t('原生额度')}：${usedAmount}/${totalAmount} · ${t('剩余')} ${remainAmount}`}
-                            >
-                              <span>
-                                {renderQuota(usedAmount)}/
-                                {renderQuota(totalAmount)} · {t('剩余')}{' '}
-                                {renderQuota(remainAmount)}
+                        {isActive && usageBySubId.has(subscription?.id) && (
+                          <SubscriptionUsagePanel
+                            summary={usageBySubId.get(subscription.id)}
+                            t={t}
+                          />
+                        )}
+                        {/* 新式套餐的 0 是「没有通用额度」而不是「不限」，写「不限」会让
+                            用户以为套餐外的模型也能随便用 */}
+                        {!sub.no_legacy_quota && (
+                          <div className='text-xs text-gray-500 mb-2'>
+                            {t('总额度')}:{' '}
+                            {totalAmount > 0 ? (
+                              <Tooltip
+                                content={`${t('原生额度')}：${usedAmount}/${totalAmount} · ${t('剩余')} ${remainAmount}`}
+                              >
+                                <span>
+                                  {renderQuota(usedAmount)}/
+                                  {renderQuota(totalAmount)} · {t('剩余')}{' '}
+                                  {renderQuota(remainAmount)}
+                                </span>
+                              </Tooltip>
+                            ) : (
+                              t('不限')
+                            )}
+                            {totalAmount > 0 && (
+                              <span className='ml-2'>
+                                {t('已用')} {usagePercent}%
                               </span>
-                            </Tooltip>
-                          ) : (
-                            t('不限')
-                          )}
-                          {totalAmount > 0 && (
-                            <span className='ml-2'>
-                              {t('已用')} {usagePercent}%
-                            </span>
-                          )}
-                        </div>
+                            )}
+                          </div>
+                        )}
                         {!isLast && <Divider margin={12} />}
                       </div>
                     );
@@ -591,17 +612,29 @@ const SubscriptionPlansCard = ({
                   formatSubscriptionResetPeriod(plan, t) === t('不重置')
                     ? null
                     : `${t('额度重置')}: ${formatSubscriptionResetPeriod(plan, t)}`;
+                const computePoints = quotaToComputePoints(
+                  plan?.compute_points_per_period,
+                );
                 const planBenefits = [
                   {
                     label: `${t('有效期')}: ${formatSubscriptionDuration(plan, t)}`,
                   },
                   resetLabel ? { label: resetLabel } : null,
-                  totalAmount > 0
+                  computePoints > 0
                     ? {
-                        label: totalLabel,
-                        tooltip: `${t('原生额度')}：${totalAmount}`,
+                        label: `${t('每期算力点')}: ${computePoints.toLocaleString('en-US')}`,
                       }
-                    : { label: totalLabel },
+                    : null,
+                  // 新式套餐的 0 是「没有通用额度」：不写「总额度：不限」，而是说清楚
+                  // 套餐外按余额计费——设计文档 §10.1 称之为防客诉的关键一行
+                  p?.no_legacy_quota
+                    ? { label: t('超出套餐的部分按账户余额计费') }
+                    : totalAmount > 0
+                      ? {
+                          label: totalLabel,
+                          tooltip: `${t('原生额度')}：${totalAmount}`,
+                        }
+                      : { label: totalLabel },
                   limitLabel ? { label: limitLabel } : null,
                   upgradeLabel ? { label: upgradeLabel } : null,
                 ].filter(Boolean);

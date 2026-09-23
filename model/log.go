@@ -400,7 +400,10 @@ func sanitizeLogChannelIds(ids []int) []int {
 	return out
 }
 
-func GetAllLogs(logType int, startTimestamp int64, endTimestamp int64, modelName string, username string, tokenName string, startIdx int, num int, channelIds []int, group string, requestId string) (logs []*Log, total int64, err error) {
+func GetAllLogs(logType int, startTimestamp int64, endTimestamp int64, modelName string, username string, tokenName string, startIdx int, num int, channelIds []int, group string, requestId string, billing string) (logs []*Log, total int64, err error) {
+	if err := requireStartForBillingFilter(billing, startTimestamp); err != nil {
+		return nil, 0, err
+	}
 	var tx *gorm.DB
 	if logType == LogTypeUnknown {
 		tx = LOG_DB
@@ -420,6 +423,7 @@ func GetAllLogs(logType int, startTimestamp int64, endTimestamp int64, modelName
 	if requestId != "" {
 		tx = tx.Where("logs.request_id = ?", requestId)
 	}
+	tx = applyLogBillingFilter(tx, billing)
 	if startTimestamp != 0 {
 		tx = tx.Where("logs.created_at >= ?", startTimestamp)
 	}
@@ -491,7 +495,7 @@ const logSearchCountLimit = 10000
 
 // GetUserLogs 普通用户视角查询日志。tokenIds 非空时额外限定 token_id ∈ 集合，
 // 供企业子账户「仅看绑定 key」的只读视图使用（设计 §4.5）；普通用户传 nil 即不过滤。
-func GetUserLogs(userId int, logType int, startTimestamp int64, endTimestamp int64, modelName string, tokenName string, startIdx int, num int, group string, requestId string, tokenIds []int) (logs []*Log, total int64, err error) {
+func GetUserLogs(userId int, logType int, startTimestamp int64, endTimestamp int64, modelName string, tokenName string, startIdx int, num int, group string, requestId string, tokenIds []int, billing string) (logs []*Log, total int64, err error) {
 	var tx *gorm.DB
 	if logType == LogTypeUnknown {
 		tx = LOG_DB.Where("logs.user_id = ?", userId)
@@ -515,6 +519,7 @@ func GetUserLogs(userId int, logType int, startTimestamp int64, endTimestamp int
 	if requestId != "" {
 		tx = tx.Where("logs.request_id = ?", requestId)
 	}
+	tx = applyLogBillingFilter(tx, billing)
 	if startTimestamp != 0 {
 		tx = tx.Where("logs.created_at >= ?", startTimestamp)
 	}
@@ -617,7 +622,10 @@ func streamLogsByCursor(applyFilters func(*gorm.DB) *gorm.DB, batchSize int, per
 
 // ExportAllLogs 按管理员视角流式遍历匹配的日志，使用手动游标分页保证不重不漏。
 // callback 收到的 logs 切片仅在本次调用内有效，回调返回 error 会中止遍历。
-func ExportAllLogs(logType int, startTimestamp int64, endTimestamp int64, modelName string, username string, tokenName string, channelIds []int, group string, requestId string, batchSize int, callback func(logs []*Log) error) error {
+func ExportAllLogs(logType int, startTimestamp int64, endTimestamp int64, modelName string, username string, tokenName string, channelIds []int, group string, requestId string, billing string, batchSize int, callback func(logs []*Log) error) error {
+	if err := requireStartForBillingFilter(billing, startTimestamp); err != nil {
+		return err
+	}
 	applyFilters := func(tx *gorm.DB) *gorm.DB {
 		if logType != LogTypeUnknown {
 			tx = tx.Where("logs.type = ?", logType)
@@ -634,6 +642,7 @@ func ExportAllLogs(logType int, startTimestamp int64, endTimestamp int64, modelN
 		if requestId != "" {
 			tx = tx.Where("logs.request_id = ?", requestId)
 		}
+		tx = applyLogBillingFilter(tx, billing)
 		if startTimestamp != 0 {
 			tx = tx.Where("logs.created_at >= ?", startTimestamp)
 		}
@@ -671,7 +680,7 @@ func ExportAllLogs(logType int, startTimestamp int64, endTimestamp int64, modelN
 
 // ExportUserLogs 按普通用户视角流式遍历自己的日志，使用手动游标分页保证不重不漏。
 // 与 GetUserLogs 一致：不回填 ChannelName、对 model_name 做 LIKE escape。
-func ExportUserLogs(userId int, logType int, startTimestamp int64, endTimestamp int64, modelName string, tokenName string, group string, requestId string, tokenIds []int, batchSize int, callback func(logs []*Log) error) error {
+func ExportUserLogs(userId int, logType int, startTimestamp int64, endTimestamp int64, modelName string, tokenName string, group string, requestId string, tokenIds []int, billing string, batchSize int, callback func(logs []*Log) error) error {
 	var modelLikePattern string
 	if modelName != "" {
 		pattern, err := sanitizeLikePattern(modelName)
@@ -698,6 +707,7 @@ func ExportUserLogs(userId int, logType int, startTimestamp int64, endTimestamp 
 		if requestId != "" {
 			tx = tx.Where("logs.request_id = ?", requestId)
 		}
+		tx = applyLogBillingFilter(tx, billing)
 		if startTimestamp != 0 {
 			tx = tx.Where("logs.created_at >= ?", startTimestamp)
 		}
@@ -827,4 +837,47 @@ func DeleteOldLog(ctx context.Context, targetTimestamp int64, limit int) (int64,
 	}
 
 	return total, nil
+}
+
+// 日志的「计费来源」筛选（设计文档 §8.4）。
+const (
+	// LogBillingEntitlement 套餐内：走了套餐权益（扣次数 / 算力点）
+	LogBillingEntitlement = "entitlement"
+	// LogBillingOverage 超额：模型被套餐覆盖，却因次数用尽或算力点不足按余额计费。
+	// 用户投诉「买了套餐怎么还扣钱」时，让他自己筛这一项看。
+	LogBillingOverage = "overage"
+)
+
+// applyLogBillingFilter 按计费来源筛选。
+//
+// 这两项存在 other（JSON 文本）里，没有独立列，只能 LIKE——与资金报表排除权益日志
+// 同一个做法（fund_report.go）。LIKE 用不上索引，代价取决于它之前的条件把行收窄到
+// 多少：用户侧先被 user_id 索引收窄；管理端没有 user_id，只能靠 created_at 索引，
+// 所以管理端强制要求起始时间（requireStartForBillingFilter），否则就是全表扫描。
+// other 由 common.Marshal 生成：键无空格、值紧跟冒号，匹配串是稳定的。
+// 未知取值直接忽略，不报错也不筛空。
+func applyLogBillingFilter(tx *gorm.DB, billing string) *gorm.DB {
+	switch billing {
+	case LogBillingEntitlement:
+		return tx.Where("logs.other LIKE ?", `%"billing_source":"entitlement"%`)
+	case LogBillingOverage:
+		return tx.Where("logs.other LIKE ?", `%"entitlement_fallback":%`)
+	default:
+		return tx
+	}
+}
+
+// requireStartForBillingFilter 管理端按计费来源筛选时必须带起始时间。
+//
+// 页面上清空日期框会回退到「今天零点」，所以正常操作走不到这里；拦的是直接调接口
+// 不带时间参数的情况——那会对整张日志表逐行做 LIKE。未知的 billing 取值本来就不筛，
+// 不必拦。
+func requireStartForBillingFilter(billing string, startTimestamp int64) error {
+	switch billing {
+	case LogBillingEntitlement, LogBillingOverage:
+		if startTimestamp <= 0 {
+			return errors.New("按计费来源筛选需要指定起始时间")
+		}
+	}
+	return nil
 }

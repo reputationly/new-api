@@ -133,7 +133,11 @@ func TestNewBillingSession_UnmatchedModelKeepsLegacyPath(t *testing.T) {
 	)
 	require.Nil(t, apiErr)
 	require.NotNil(t, session)
-	require.NotEqual(t, BillingSourceEntitlement, session.funding.Source())
+	// 必须是余额，而不只是「不是权益」：这个套餐只配了算力点与权益、总额度留 0，
+	// 旧语义把 0 当「老式额度不限」，这里就会落到订阅额度上——任意模型免费用，
+	// 而只断言「不是权益」的话那种情况照样全绿。
+	require.Equal(t, BillingSourceWallet, session.funding.Source(),
+		"套餐外的请求必须按余额计费")
 }
 
 // 追加预扣的接线。

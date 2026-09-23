@@ -118,6 +118,8 @@ func LogTaskConsumption(c *gin.Context, info *relaycommon.RelayInfo) {
 	if info.BillingSource != "" {
 		other["billing_source"] = info.BillingSource
 	}
+	// 套餐权益的归因与降级记录，与同步请求同一份（appendEntitlementInfo）
+	appendEntitlementInfo(info, other)
 	// 仅「按次/按个」任务才按「个」计费，需打 count_billing 供对账归类
 	// （reconcile_helpers.go 据此把整单算作 TokensCount=1）。token 计费任务必须保留
 	// token 用量，不能标计件——判定与 TaskBillingContext.PerCallBilling 同源。

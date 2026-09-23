@@ -207,6 +207,47 @@ func appendBillingInfo(relayInfo *relaycommon.RelayInfo, other map[string]interf
 		// Wallet quota is not deducted when billed from subscription.
 		other["wallet_quota_deducted"] = 0
 	}
+	appendEntitlementInfo(relayInfo, other)
+}
+
+// appendEntitlementInfo 写套餐权益的归因与降级记录（设计文档 §8.4）。
+// 同步请求走 appendBillingInfo，异步任务的提交日志自建 other，两处共用这一份。
+//
+// 点数按当时的换算率落展示值（compute_points），同时存 quota 作为权威值
+// （compute_points_quota）：换算率可调，展示时现算会让历史日志的数字整体变化、
+// 对账崩掉——这一点与积分不同，积分面值上线后从未调整过。
+func appendEntitlementInfo(relayInfo *relaycommon.RelayInfo, other map[string]interface{}) {
+	if relayInfo == nil || other == nil {
+		return
+	}
+	if relayInfo.BillingSource == BillingSourceEntitlement {
+		other["entitlement_id"] = relayInfo.EntitlementId
+		other["entitlement_plan_id"] = relayInfo.EntitlementPlanId
+		if relayInfo.EntitlementPlanTitle != "" {
+			other["entitlement_plan_title"] = relayInfo.EntitlementPlanTitle
+		}
+		if relayInfo.SubscriptionId != 0 {
+			other["subscription_id"] = relayInfo.SubscriptionId
+		}
+		// 消费侧向上取整：不足 1 点按 1 点计，与批次里真正扣掉的量同方向
+		other["compute_points"] = common.QuotaToComputePointsCeil(int(relayInfo.EntitlementPointsSpent))
+		other["compute_points_quota"] = relayInfo.EntitlementPointsSpent
+		if relayInfo.EntitlementLimitCount > 0 {
+			other["entitlement_limit_count"] = relayInfo.EntitlementLimitCount
+			other["entitlement_used_count"] = relayInfo.EntitlementUsedCount
+		}
+		return
+	}
+	// 「超额」= 套餐覆盖不了、并且真的花了钱。降级后落到老式订阅额度的那笔用户一分没花，
+	// 就是一条普通的订阅抵扣，标超额会让它出现在「超额」筛选里、详情写「按余额计费」。
+	// 白名单而非黑名单：再加资金来源时，漏改这里的默认结果是「不标」而不是「标错」。
+	if relayInfo.EntitlementFallback == nil {
+		return
+	}
+	switch relayInfo.BillingSource {
+	case BillingSourceWallet, BillingSourceHybrid:
+		other["entitlement_fallback"] = relayInfo.EntitlementFallback
+	}
 }
 
 func appendRequestConversionChain(relayInfo *relaycommon.RelayInfo, other map[string]interface{}) {

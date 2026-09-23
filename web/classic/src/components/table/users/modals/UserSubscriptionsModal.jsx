@@ -306,7 +306,11 @@ const UserSubscriptionsModal = ({ visible, onCancel, user, t, onSuccess }) => {
           const used = Number(sub?.amount_used || 0);
           return (
             <Text type={total > 0 ? 'secondary' : 'tertiary'}>
-              {total > 0 ? `${used}/${total}` : t('不限')}
+              {total > 0
+                ? `${used}/${total}`
+                : record?.no_legacy_quota
+                  ? t('无')
+                  : t('不限')}
             </Text>
           );
         },

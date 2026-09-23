@@ -127,25 +127,38 @@ const SubscriptionPurchaseModal = ({
                   </Text>
                 </div>
               )}
-              <div className='flex justify-between items-center'>
-                <Text strong className='text-slate-700 dark:text-slate-200'>
-                  {t('总额度')}：
-                </Text>
-                <div className='flex items-center'>
-                  <Package size={14} className='mr-1 text-slate-500' />
-                  {totalAmount > 0 ? (
-                    <Tooltip content={`${t('原生额度')}：${totalAmount}`}>
-                      <Text className='text-slate-900 dark:text-slate-100'>
-                        {renderQuota(totalAmount)}
-                      </Text>
-                    </Tooltip>
-                  ) : (
-                    <Text className='text-slate-900 dark:text-slate-100'>
-                      {t('不限')}
-                    </Text>
-                  )}
+              {/* 新式套餐的 0 是「没有通用额度」而不是「不限」：付款前的最后一屏
+                  必须说清楚套餐外怎么计费，写「不限」等于误导用户下单 */}
+              {selectedPlan?.no_legacy_quota ? (
+                <div className='flex justify-between items-center'>
+                  <Text strong className='text-slate-700 dark:text-slate-200'>
+                    {t('套餐外')}：
+                  </Text>
+                  <Text className='text-slate-900 dark:text-slate-100'>
+                    {t('按账户余额计费')}
+                  </Text>
                 </div>
-              </div>
+              ) : (
+                <div className='flex justify-between items-center'>
+                  <Text strong className='text-slate-700 dark:text-slate-200'>
+                    {t('总额度')}：
+                  </Text>
+                  <div className='flex items-center'>
+                    <Package size={14} className='mr-1 text-slate-500' />
+                    {totalAmount > 0 ? (
+                      <Tooltip content={`${t('原生额度')}：${totalAmount}`}>
+                        <Text className='text-slate-900 dark:text-slate-100'>
+                          {renderQuota(totalAmount)}
+                        </Text>
+                      </Tooltip>
+                    ) : (
+                      <Text className='text-slate-900 dark:text-slate-100'>
+                        {t('不限')}
+                      </Text>
+                    )}
+                  </div>
+                </div>
+              )}
               {plan?.upgrade_group ? (
                 <div className='flex justify-between items-center'>
                   <Text strong className='text-slate-700 dark:text-slate-200'>
