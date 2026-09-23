@@ -234,6 +234,11 @@ type TaskPrivateData struct {
 	Key            string `json:"key,omitempty"`
 	UpstreamTaskID string `json:"upstream_task_id,omitempty"` // 上游真实 task ID
 	ResultURL      string `json:"result_url,omitempty"`       // 任务成功后的结果 URL（视频地址等）
+	// ScoreABC 音乐引擎随成品写出的 ABC 乐谱（YuE2 的 <stem>.abc 旁挂），对外经
+	// metadata.score_abc 原样返回，调用方改完作为 metadata.abc 交回即可重渲染。
+	// 只存文本（实测 0.5~2.5 KB，读取封顶 64 KiB），不落 OBS：它要被编辑后回传，
+	// 内联比再签一个下载地址省一跳。见 service/music_score.go。
+	ScoreABC string `json:"score_abc,omitempty"`
 	// 计费上下文：用于异步退款/差额结算（轮询阶段读取）
 	BillingSource  string `json:"billing_source,omitempty"`  // "wallet" / "subscription" / "points_wallet"
 	SubscriptionId int    `json:"subscription_id,omitempty"` // 订阅 ID，用于订阅退款
@@ -925,5 +930,8 @@ func (t *Task) ToOpenAIVideo() *dto.OpenAIVideo {
 	}
 	// obs:// 占位符 → 实时签名 URL（§5.4）；非 obs 引用原样返回。
 	openAIVideo.SetMetadata("url", mediastore.ResolveResultURL(context.Background(), t.GetResultURL()))
+	if t.PrivateData.ScoreABC != "" {
+		openAIVideo.SetMetadata("score_abc", t.PrivateData.ScoreABC)
+	}
 	return openAIVideo
 }

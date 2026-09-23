@@ -536,6 +536,10 @@ func updateVideoSingleTask(ctx context.Context, adaptor TaskPollingAdaptor, ch *
 		if task.FinishTime == 0 {
 			task.FinishTime = now
 		}
+		// 音乐引擎(YuE2)写在成品旁的乐谱,随任务返回;没有就是空串,不影响下面的落盘与结算。
+		if score := ReadScoreSidecar(taskResult.NFSPath); score != "" {
+			task.PrivateData.ScoreABC = score
+		}
 		if ref, ok := PersistTaskResultToOBS(ctx, task, taskResult.NFSPath, taskResult.Url); ok {
 			// 落盘成功：DB 只存内部占位符 obs://<key>，签名 URL 在序列化时实时生成（§5.2/§5.4）
 			task.PrivateData.ResultURL = ref

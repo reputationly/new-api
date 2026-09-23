@@ -114,3 +114,23 @@ func TestToOpenAIVideoRendersCancelled(t *testing.T) {
 	normal := &Task{TaskID: "task_y", Status: TaskStatusFailure, FailReason: "上游超时"}
 	require.Equal(t, "failed", normal.ToOpenAIVideo().Status)
 }
+
+// 音乐引擎(YuE2)的乐谱随成功任务在 metadata.score_abc 返回,失败任务不带 —— 失败分支
+// 提前返回,残留的谱不能跟着错误一起发出去。
+func TestToOpenAIVideoReturnsTheScoreOnlyOnSuccess(t *testing.T) {
+	score := "X:1\nK:C\nV: Vocal\nCDEF|\n"
+	done := &Task{TaskID: "task_s", Status: TaskStatusSuccess}
+	done.PrivateData.ResultURL = "https://example.com/song.mp3"
+	done.PrivateData.ScoreABC = score
+	require.Equal(t, score, done.ToOpenAIVideo().Metadata["score_abc"])
+
+	failed := &Task{TaskID: "task_f", Status: TaskStatusFailure, FailReason: "truncated"}
+	failed.PrivateData.ScoreABC = score
+	_, present := failed.ToOpenAIVideo().Metadata["score_abc"]
+	require.False(t, present)
+
+	noScore := &Task{TaskID: "task_n", Status: TaskStatusSuccess}
+	noScore.PrivateData.ResultURL = "https://example.com/song.mp3"
+	_, present = noScore.ToOpenAIVideo().Metadata["score_abc"]
+	require.False(t, present)
+}
