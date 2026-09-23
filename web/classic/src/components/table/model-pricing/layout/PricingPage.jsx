@@ -69,6 +69,7 @@ const PricingPage = () => {
         endpointMap={pricingData.endpointMap}
         autoGroups={pricingData.autoGroups}
         pointsConfig={pricingData.pointsConfig}
+        entitlementConfig={pricingData.entitlementConfig}
         t={pricingData.t}
       />
     </div>

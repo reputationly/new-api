@@ -29,6 +29,7 @@ import {
 } from '../../../../../helpers';
 import { DISCOUNT_HEX } from '../../../../../helpers/discount';
 
+import { getModelCoverage } from '../../../../../helpers/entitlementPricing';
 const { Text } = Typography;
 
 const ModelPricingTable = ({
@@ -42,6 +43,7 @@ const ModelPricingTable = ({
   usableGroup,
   autoGroups = [],
   pointsConfig,
+  entitlementConfig,
   t,
 }) => {
   const modelEnableGroups = Array.isArray(modelData?.enable_groups)
@@ -71,6 +73,12 @@ const ModelPricingTable = ({
             quotaPerPoint: pointsConfig?.quotaPerPoint,
             pointsEnabledGroups: pointsConfig?.enabledGroups,
             pointsEnabledModels: pointsConfig?.enabledModels,
+            // 套餐权益：只传该模型自己的覆盖，未命中时为 null，价格展示与加这个功能之前一致
+            entitlementCoverage: getModelCoverage(
+              entitlementConfig?.coverage,
+              record.model_name,
+            ),
+            quotaPerComputePoint: entitlementConfig?.quotaPerComputePoint,
           })
         : { inputPrice: '-', outputPrice: '-', price: '-' };
 

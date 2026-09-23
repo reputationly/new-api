@@ -44,6 +44,9 @@ const PricingTopSection = memo(
     filterPointsOnly,
     setFilterPointsOnly,
     pointsEnabled,
+    filterEntitlementOnly,
+    setFilterEntitlementOnly,
+    entitlementConfig,
     t,
   }) => {
     const [showFilterModal, setShowFilterModal] = useState(false);
@@ -70,6 +73,9 @@ const PricingTopSection = memo(
                 filterPointsOnly={filterPointsOnly}
                 setFilterPointsOnly={setFilterPointsOnly}
                 pointsEnabled={pointsEnabled}
+                filterEntitlementOnly={filterEntitlementOnly}
+                setFilterEntitlementOnly={setFilterEntitlementOnly}
+                entitlementConfig={entitlementConfig}
                 t={t}
               />
             </div>
@@ -103,6 +109,9 @@ const PricingTopSection = memo(
             filterPointsOnly={filterPointsOnly}
             setFilterPointsOnly={setFilterPointsOnly}
             pointsEnabled={pointsEnabled}
+            filterEntitlementOnly={filterEntitlementOnly}
+            setFilterEntitlementOnly={setFilterEntitlementOnly}
+            entitlementConfig={entitlementConfig}
           />
         )}
       </>

@@ -34,6 +34,11 @@ import {
 } from '../../../../common/ui/RenderUtils';
 import { useIsMobile } from '../../../../../hooks/common/useIsMobile';
 import TimeRulesTooltip from '../../TimeRulesTooltip';
+import {
+  getModelCoverage,
+  buildEntitlementBadges,
+  buildCoverageTooltip,
+} from '../../../../../helpers/entitlementPricing';
 
 // record 可选：视频计费矩阵不是 quota_type 的取值，得看 record 本身。
 function renderQuotaType(type, t, record) {
@@ -143,6 +148,7 @@ export const getPricingTableColumns = ({
   siteDisplayType,
   displayPrice,
   pointsConfig,
+  entitlementConfig,
 }) => {
   const isMobile = useIsMobile();
   const priceDataCache = new WeakMap();
@@ -162,6 +168,12 @@ export const getPricingTableColumns = ({
         quotaPerPoint: pointsConfig?.quotaPerPoint,
         pointsEnabledGroups: pointsConfig?.enabledGroups,
         pointsEnabledModels: pointsConfig?.enabledModels,
+        // 套餐权益：只传该模型自己的覆盖，未命中时为 null，价格展示与加这个功能之前一致
+        entitlementCoverage: getModelCoverage(
+          entitlementConfig?.coverage,
+          record.model_name,
+        ),
+        quotaPerComputePoint: entitlementConfig?.quotaPerComputePoint,
       });
       priceDataCache.set(record, cache);
     }
@@ -174,6 +186,34 @@ export const getPricingTableColumns = ({
     render: (text, record, index) => {
       return renderSupportedEndpoints(text);
     },
+  };
+
+  // 套餐权益角标。未登录 / 无套餐 / 该模型未被覆盖时返回 null——
+  // 这三种情况的展示与加这个功能之前完全一致（设计文档 §8.2）。
+  const renderEntitlementBadges = (record) => {
+    const coverage = getModelCoverage(
+      entitlementConfig?.coverage,
+      record.model_name,
+    );
+    if (!coverage) return null;
+    const badges = buildEntitlementBadges(coverage);
+    if (badges.length === 0) return null;
+    // 多套餐覆盖时才给说明：单套餐没什么要解释的，多一层 tooltip 只是噪音
+    const tip = buildCoverageTooltip(coverage);
+    const nodes = badges.map((b) => (
+      <Tag key={b.key} color={b.color} shape='circle' size='small'>
+        {t(b.text)}
+      </Tag>
+    ));
+    if (!tip) return nodes;
+    return (
+      <Tooltip
+        style={{ maxWidth: 'none' }}
+        content={<div style={{ whiteSpace: 'pre-line' }}>{tip}</div>}
+      >
+        <span className='flex items-center gap-1'>{nodes}</span>
+      </Tooltip>
+    );
   };
 
   const modelNameColumn = {
@@ -222,6 +262,7 @@ export const getPricingTableColumns = ({
               </Tag>
             </Tooltip>
           )}
+          {renderEntitlementBadges(record)}
         </div>
       );
     },

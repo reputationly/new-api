@@ -55,6 +55,38 @@ describe('重置要清掉「仅看可积分抵扣」', () => {
   });
 });
 
+// 「仅看套餐可用」与积分那个开关同构，重置同样必须两端都清。
+// 上面那条注释记着积分这条曾经真漏过移动端——同一个坑不该踩第二次。
+describe('重置要清掉「仅看套餐可用」', () => {
+  it('桌面端侧栏', () => {
+    const setFilterEntitlementOnly = vi.fn();
+    render(
+      <PricingSidebar
+        setFilterEntitlementOnly={setFilterEntitlementOnly}
+        models={[]}
+        allModels={[]}
+        t={(s) => s}
+      />,
+    );
+    screen.getByText('重置').closest('button').click();
+    expect(setFilterEntitlementOnly).toHaveBeenCalledWith(false);
+  });
+
+  it('移动端筛选弹窗', () => {
+    const setFilterEntitlementOnly = vi.fn();
+    render(
+      <PricingFilterModal
+        visible
+        onClose={() => {}}
+        sidebarProps={{ setFilterEntitlementOnly }}
+        t={(s) => s}
+      />,
+    );
+    screen.getByText('重置').closest('button').click();
+    expect(setFilterEntitlementOnly).toHaveBeenCalledWith(false);
+  });
+});
+
 describe('resetPricingFilters 本身', () => {
   it('把 filterPointsOnly 重置回默认的关闭态', async () => {
     const { resetPricingFilters } = await import('../../../../helpers/utils');

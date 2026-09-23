@@ -25,6 +25,12 @@ import {
   DISCOUNT_HEX,
 } from '@classic/helpers/discount';
 import {
+  getModelCoverage,
+  buildEntitlementBadges,
+  buildCoverageTooltip,
+  remainingCount,
+} from '@classic/helpers/entitlementPricing';
+import {
   MODEL_CATEGORIES,
   buildModelCategoryIndex,
   resolveModelCategory,
@@ -33,6 +39,15 @@ import {
 import { showError } from '../shims/classic-utils';
 
 const PAGE = 30;
+
+// 套餐权益角标配色。与 PC 端 buildEntitlementBadges 给出的 Semi 色名一一对应；
+// 手机端没有 Semi 色板，只能落成十六进制。
+const ENTITLEMENT_HEX = {
+  violet: { bg: '#f4f0ff', fg: '#6b3fd4' },
+  green: { bg: '#f0fff4', fg: '#1f8a3e' },
+  teal: { bg: '#e6fffb', fg: '#08979c' },
+  amber: { bg: '#fffbe6', fg: '#ad8b00' },
+};
 
 // 模型广场：搜索 + 分组/大类筛选 + 紧凑列表 + 点击查看详情。
 // 手机端不做供应商筛选（供应商有二十多家，胶囊铺满两屏还选不准），供应商信息在列表行里展示。
@@ -48,6 +63,9 @@ const Models = () => {
   // 分组内按模型的倍率。后端已展开通配并算完三层，这里只查表（同 PC getEffectiveGroupRatio）
   const [groupModelRatioMap, setGroupModelRatioMap] = useState({});
   const [usableGroupMap, setUsableGroupMap] = useState({});
+  // 当前用户套餐对各模型的覆盖。未登录 / 无套餐 / 没覆盖任何模型时后端都给 null，
+  // 此时页面必须与没有这个功能时完全一致。
+  const [entitlementCoverage, setEntitlementCoverage] = useState(null);
   const [keyword, setKeyword] = useState('');
   const [group, setGroup] = useState('');
   const [category, setCategory] = useState('');
@@ -66,6 +84,7 @@ const Models = () => {
           setGroupTimeRatioMap(res.data.group_time_ratio || {});
           setGroupModelRatioMap(res.data.group_model_ratio || {});
           setUsableGroupMap(res.data.usable_group || {});
+          setEntitlementCoverage(res.data.entitlement_coverage || null);
         } else {
           showError(res.data.message);
         }
@@ -219,6 +238,29 @@ const Models = () => {
     );
   };
 
+  const entitlementBadgeStyle = (color) => {
+    const c = ENTITLEMENT_HEX[color] || ENTITLEMENT_HEX.violet;
+    return {
+      flexShrink: 0,
+      fontSize: 11,
+      lineHeight: '16px',
+      padding: '0 6px',
+      borderRadius: 8,
+      background: c.bg,
+      color: c.fg,
+    };
+  };
+
+  // 列表行只出一个角标（套餐名）：行宽本来就被模型名和价格挤满，
+  // 次数、限渠道、多套餐说明都放进点开后的详情（设计 §8.2）。
+  const entitlementTag = (m) => {
+    const badge = buildEntitlementBadges(
+      getModelCoverage(entitlementCoverage, m.model_name),
+    )[0];
+    if (!badge) return null;
+    return <span style={entitlementBadgeStyle(badge.color)}>{badge.text}</span>;
+  };
+
   const inputPricePerM = (m) => m.model_ratio * 2 * resolveGroupRatio(m).ratio;
   // 折前价：少乘一个分组倍率。仅在有折扣时给，用于详情里的划线对比。
   const originalInputPricePerM = (m) => m.model_ratio * 2;
@@ -370,6 +412,7 @@ const Models = () => {
                     {m.model_name}
                   </div>
                   {discountTag(resolveGroupRatio(m).ratio)}
+                  {entitlementTag(m)}
                 </div>
                 {vendorName(m.vendor_id) && (
                   <div
@@ -704,6 +747,48 @@ const Models = () => {
                       </span>
                     </div>
                   ))}
+                </div>
+              );
+            })()}
+            {(() => {
+              const cov = getModelCoverage(
+                entitlementCoverage,
+                detail.model_name,
+              );
+              if (!cov) return null;
+              const left = remainingCount(cov);
+              const multi = buildCoverageTooltip(cov);
+              return (
+                <div style={{ marginTop: 12 }}>
+                  <div
+                    style={{ fontSize: 12, color: '#9aa1ad', marginBottom: 6 }}
+                  >
+                    套餐权益
+                  </div>
+                  <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                    {buildEntitlementBadges(cov).map((b) => (
+                      <span key={b.key} style={entitlementBadgeStyle(b.color)}>
+                        {b.text}
+                      </span>
+                    ))}
+                  </div>
+                  {left !== null && (
+                    <div style={{ fontSize: 13, marginTop: 6 }}>
+                      本期剩余 {left} 次
+                    </div>
+                  )}
+                  {multi && (
+                    <div
+                      style={{
+                        fontSize: 12,
+                        color: '#6b7280',
+                        marginTop: 6,
+                        whiteSpace: 'pre-line',
+                      }}
+                    >
+                      {multi}
+                    </div>
+                  )}
                 </div>
               );
             })()}

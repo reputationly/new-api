@@ -46,6 +46,11 @@ import TimeRulesTooltip from '../../TimeRulesTooltip';
 import PricingCardSkeleton from './PricingCardSkeleton';
 import { useMinimumLoadingTime } from '../../../../../hooks/common/useMinimumLoadingTime';
 import { renderLimitedItems } from '../../../../common/ui/RenderUtils';
+import {
+  getModelCoverage,
+  buildEntitlementBadges,
+  buildCoverageTooltip,
+} from '../../../../../helpers/entitlementPricing';
 import { useIsMobile } from '../../../../../hooks/common/useIsMobile';
 
 const CARD_STYLES = {
@@ -77,6 +82,7 @@ const PricingCardView = ({
   setSelectedRowKeys,
   openModelDetail,
   pointsConfig,
+  entitlementConfig,
 }) => {
   const showSkeleton = useMinimumLoadingTime(loading);
   const startIndex = (currentPage - 1) * pageSize;
@@ -153,6 +159,47 @@ const PricingCardView = ({
     return record.description || '';
   };
 
+  // 套餐权益角标。卡片只出**一个**（套餐名），其余压进 tooltip。
+  //
+  // 卡片头部那一行的宽度由模型名与角标共用，代码里记着曾经加过一个角标、拼上
+  // 运营自定义的时段模板名后长度失控，把左列压到模型名截断、价格逐行折行。
+  // 表格视图没有这个约束（不 truncate、长名字自然换行），所以那边出全部四个。
+  //
+  // 挂在计费类型标签旁边而不是模型名后面：那个位置固定、每张卡片对齐。
+  const renderEntitlementTag = (record) => {
+    const coverage = getModelCoverage(
+      entitlementConfig?.coverage,
+      record.model_name,
+    );
+    if (!coverage) return null;
+    const badges = buildEntitlementBadges(coverage);
+    if (badges.length === 0) return null;
+    const rest = badges.slice(1).map((b) => t(b.text));
+    const multi = buildCoverageTooltip(coverage);
+    const lines = [...rest, multi].filter(Boolean);
+    const tag = (
+      <Tag
+        key='entitlement'
+        shape='circle'
+        color={badges[0].color}
+        size='small'
+      >
+        {t(badges[0].text)}
+      </Tag>
+    );
+    if (lines.length === 0) return tag;
+    return (
+      <Tooltip
+        style={{ maxWidth: 'none' }}
+        content={
+          <div style={{ whiteSpace: 'pre-line' }}>{lines.join('\n')}</div>
+        }
+      >
+        {tag}
+      </Tooltip>
+    );
+  };
+
   // 渲染标签
   const renderTags = (record) => {
     // 计费类型标签（左边）
@@ -227,7 +274,10 @@ const PricingCardView = ({
 
     return (
       <div className='flex items-center justify-between'>
-        <div className='flex items-center gap-2'>{billingTag}</div>
+        <div className='flex items-center gap-2'>
+          {billingTag}
+          {renderEntitlementTag(record)}
+        </div>
         <div className='flex items-center gap-1 flex-wrap justify-end'>
           {capabilityTags}
           {customTags.length > 0 &&
@@ -282,6 +332,12 @@ const PricingCardView = ({
             quotaPerPoint: pointsConfig?.quotaPerPoint,
             pointsEnabledGroups: pointsConfig?.enabledGroups,
             pointsEnabledModels: pointsConfig?.enabledModels,
+            // 套餐权益：只传该模型自己的覆盖，未命中时为 null，价格展示与加这个功能之前一致
+            entitlementCoverage: getModelCoverage(
+              entitlementConfig?.coverage,
+              record.model_name,
+            ),
+            quotaPerComputePoint: entitlementConfig?.quotaPerComputePoint,
           });
 
           return (

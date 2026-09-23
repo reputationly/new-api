@@ -32,6 +32,7 @@ const PricingSidebar = ({
   currency,
   setCurrency,
   setFilterPointsOnly,
+  setFilterEntitlementOnly,
   handleChange,
   setActiveKey,
   viewMode,
@@ -81,6 +82,9 @@ const PricingSidebar = ({
       // 桌面端「重置」也要清掉「仅看可积分抵扣」——移动端弹窗的重置清了，
       // 两边不一致的话，用户在桌面端点完重置会发现列表还是被筛过的。
       setFilterPointsOnly,
+      // 「套餐可用」同理：两端的重置必须一致，漏一个不会报错，
+      // 只会让用户点完重置发现列表还是被筛过的。
+      setFilterEntitlementOnly,
       setFilterGroup,
       setFilterQuotaType,
       setFilterEndpointType,

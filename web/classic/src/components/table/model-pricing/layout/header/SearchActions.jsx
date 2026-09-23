@@ -36,6 +36,10 @@ const SearchActions = memo(
     filterPointsOnly,
     setFilterPointsOnly,
     pointsEnabled = false,
+    filterEntitlementOnly = false,
+    setFilterEntitlementOnly,
+    // 有活跃套餐覆盖才出「仅看套餐可用」开关
+    entitlementConfig,
     siteDisplayType,
     viewMode,
     setViewMode,
@@ -110,6 +114,22 @@ const SearchActions = memo(
                 <Switch
                   checked={filterPointsOnly}
                   onChange={setFilterPointsOnly}
+                />
+              </div>
+            )}
+
+            {/*
+              仅看套餐可用。没有活跃套餐的用户不出这一项——理由同积分那条：
+              开了也筛不出任何模型，白占一行还让人以为自己该有套餐。
+            */}
+            {!!entitlementConfig?.coverage && (
+              <div className='flex items-center gap-2'>
+                <span className='text-sm text-gray-600'>
+                  {t('仅看套餐可用')}
+                </span>
+                <Switch
+                  checked={filterEntitlementOnly}
+                  onChange={setFilterEntitlementOnly}
                 />
               </div>
             )}

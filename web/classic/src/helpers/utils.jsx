@@ -789,6 +789,11 @@ export const calculateModelPrice = ({
   // 允许积分抵扣的模型名单。null = 后端未启用渠道白名单，只按分组判（旧口径）。
   // 分组合并之后单看分组会把外采模型也标成「可用积分」，实际扣的是余额。
   pointsEnabledModels = null,
+  // 套餐权益：该模型的覆盖情况（null = 未登录 / 无套餐 / 未被覆盖）与算力点换算率。
+  // 与积分同构地追加一行「套餐内」价，不改变原价的主次地位——算力点烧完就按原价扣，
+  // 把原价弱化恰恰是在用户最需要知道「超了要花多少」的时候把它藏起来。
+  entitlementCoverage = null,
+  quotaPerComputePoint = 0,
 }) => {
   // 1. 选择实际使用的分组
   let usedGroup = selectedGroup;
@@ -915,33 +920,55 @@ export const calculateModelPrice = ({
       modelAllowsPoints
         ? (usd * getQuotaPerUnit()) / quotaPerPoint / unitDivisor
         : null;
-    const pointsMap = {
-      input: usdToPoints(inputRatioPriceUSD),
-      completion: usdToPoints(
-        inputRatioPriceUSD * Number(record.completion_ratio),
-      ),
+    // 套餐内价：与 usdToPoints 同构，只是多乘一个权益折扣。
+    // 折扣作用在消耗侧（与后端 pointsNeeded 一致）：×0.5 就是同样的调用只烧一半点数。
+    const usdToEntitlementPoints = (usd) =>
+      entitlementCoverage &&
+      entitlementCoverage.consume_points &&
+      quotaPerComputePoint > 0
+        ? (usd *
+            getQuotaPerUnit() *
+            (Number(entitlementCoverage.discount) > 0
+              ? Number(entitlementCoverage.discount)
+              : 1)) /
+          quotaPerComputePoint /
+          unitDivisor
+        : null;
+    // 各价格项的 USD 单价，积分价与套餐内价都从这一张表映射出来。
+    // 分开各写一份的话，加一个价格项就得记得改两处——套餐内价当初就只抄了
+    // 前三项，带图片 / 音频倍率的模型因此少了套餐内价行。
+    const componentUSD = {
+      input: inputRatioPriceUSD,
+      completion: inputRatioPriceUSD * Number(record.completion_ratio),
       cache: hasRatioValue(record.cache_ratio)
-        ? usdToPoints(inputRatioPriceUSD * Number(record.cache_ratio))
+        ? inputRatioPriceUSD * Number(record.cache_ratio)
         : null,
       'create-cache': hasRatioValue(record.create_cache_ratio)
-        ? usdToPoints(inputRatioPriceUSD * Number(record.create_cache_ratio))
+        ? inputRatioPriceUSD * Number(record.create_cache_ratio)
         : null,
       image: hasRatioValue(record.image_ratio)
-        ? usdToPoints(inputRatioPriceUSD * Number(record.image_ratio))
+        ? inputRatioPriceUSD * Number(record.image_ratio)
         : null,
       'audio-input': hasRatioValue(record.audio_ratio)
-        ? usdToPoints(inputRatioPriceUSD * Number(record.audio_ratio))
+        ? inputRatioPriceUSD * Number(record.audio_ratio)
         : null,
       'audio-output':
         hasRatioValue(record.audio_ratio) &&
         hasRatioValue(record.audio_completion_ratio)
-          ? usdToPoints(
-              inputRatioPriceUSD *
-                Number(record.audio_ratio) *
-                Number(record.audio_completion_ratio),
-            )
+          ? inputRatioPriceUSD *
+            Number(record.audio_ratio) *
+            Number(record.audio_completion_ratio)
           : null,
     };
+    const mapComponents = (convert) =>
+      Object.fromEntries(
+        Object.entries(componentUSD).map(([key, usd]) => [
+          key,
+          usd === null ? null : convert(usd),
+        ]),
+      );
+    const pointsMap = mapComponents(usdToPoints);
+    const entitlementMap = mapComponents(usdToEntitlementPoints);
 
     return {
       inputPrice,
@@ -956,6 +983,7 @@ export const calculateModelPrice = ({
             )
           : null,
       points: pointsMap,
+      entitlement: entitlementMap,
       completionPrice: formatTokenPrice(
         inputRatioPriceUSD * Number(record.completion_ratio),
       ),
@@ -1015,6 +1043,22 @@ export const calculateModelPrice = ({
             ? Math.ceil((priceUSD * getQuotaPerUnit()) / quotaPerPoint)
             : null,
       },
+      entitlement: {
+        // 同样 ceil，理由与积分那行一致：按次模型一次调用一次结算
+        fixed:
+          entitlementCoverage &&
+          entitlementCoverage.consume_points &&
+          quotaPerComputePoint > 0
+            ? Math.ceil(
+                (priceUSD *
+                  getQuotaPerUnit() *
+                  (Number(entitlementCoverage.discount) > 0
+                    ? Number(entitlementCoverage.discount)
+                    : 1)) /
+                  quotaPerComputePoint,
+              )
+            : null,
+      },
       isPerToken: false,
       isTokensDisplay: false,
       usedGroup,
@@ -1053,6 +1097,34 @@ export const getModelPriceItems = (priceData, t, quotaDisplayType = 'USD') => {
           value: `${pointsText} ${t('积分')}`,
           suffix: item.suffix,
           isPoints: true,
+        });
+      }
+    });
+    return out;
+  };
+
+  // 套餐内价：与 appendPoints 同构，追加在每个货币价格行之后。
+  //
+  // 刻意不把它抬成主价：算力点烧完就按原价扣，把原价降级成副信息，恰恰是在用户
+  // 最需要知道「超出套餐后要花多少钱」的时候把它弱化了。而且积分与算力点同为
+  // 抵扣物，地位平等，同一个列表里不该一个当主价一个当副价。
+  const appendEntitlement = (items) => {
+    const em = priceData.entitlement;
+    if (!em) return items;
+    const out = [];
+    items.forEach((item) => {
+      out.push(item);
+      const p = em[item.key];
+      if (p !== null && p !== undefined) {
+        const n = Number(p);
+        // 与积分同一套取整口径：(0,1) 显示「<1」防免费假象——结算每笔至少烧 1 点
+        const text = n > 0 && n < 1 ? '<1' : Math.floor(n).toLocaleString();
+        out.push({
+          key: `${item.key}-entitlement`,
+          label: t('套餐内'),
+          value: `${text} ${t('算力点')}`,
+          suffix: item.suffix,
+          isEntitlement: true,
         });
       }
     });
@@ -1135,71 +1207,75 @@ export const getModelPriceItems = (priceData, t, quotaDisplayType = 'USD') => {
     }
 
     const unitSuffix = ` / 1${priceData.unitLabel} Tokens`;
-    return appendPoints([
-      {
-        key: 'input',
-        label: t('输入价格'),
-        value: priceData.inputPrice,
-        suffix: unitSuffix,
-        // 折前价，仅输入/输出两项给。缓存、图片、音频同样是折后价，但逐行划线
-        // 会把价格区挤成一团——折扣力度由模型名旁的标签统一表达。
-        originalValue: priceData.originalInputPrice,
-      },
-      {
-        key: 'completion',
-        label: t('输出价格'),
-        value: priceData.completionPrice,
-        suffix: unitSuffix,
-        originalValue: priceData.originalCompletionPrice,
-      },
-      {
-        key: 'cache',
-        label: t('缓存命中价格'),
-        value: priceData.cachePrice,
-        suffix: unitSuffix,
-      },
-      {
-        key: 'create-cache',
-        label: t('缓存创建价格'),
-        value: priceData.createCachePrice,
-        suffix: unitSuffix,
-      },
-      {
-        key: 'image',
-        label: t('图片输入价格'),
-        value: priceData.imagePrice,
-        suffix: unitSuffix,
-      },
-      {
-        key: 'audio-input',
-        label: t('音频输入价格'),
-        value: priceData.audioInputPrice,
-        suffix: unitSuffix,
-      },
-      {
-        key: 'audio-output',
-        label: t('音频输出价格'),
-        value: priceData.audioOutputPrice,
-        suffix: unitSuffix,
-      },
-    ]).filter(
+    return appendPoints(
+      appendEntitlement([
+        {
+          key: 'input',
+          label: t('输入价格'),
+          value: priceData.inputPrice,
+          suffix: unitSuffix,
+          // 折前价，仅输入/输出两项给。缓存、图片、音频同样是折后价，但逐行划线
+          // 会把价格区挤成一团——折扣力度由模型名旁的标签统一表达。
+          originalValue: priceData.originalInputPrice,
+        },
+        {
+          key: 'completion',
+          label: t('输出价格'),
+          value: priceData.completionPrice,
+          suffix: unitSuffix,
+          originalValue: priceData.originalCompletionPrice,
+        },
+        {
+          key: 'cache',
+          label: t('缓存命中价格'),
+          value: priceData.cachePrice,
+          suffix: unitSuffix,
+        },
+        {
+          key: 'create-cache',
+          label: t('缓存创建价格'),
+          value: priceData.createCachePrice,
+          suffix: unitSuffix,
+        },
+        {
+          key: 'image',
+          label: t('图片输入价格'),
+          value: priceData.imagePrice,
+          suffix: unitSuffix,
+        },
+        {
+          key: 'audio-input',
+          label: t('音频输入价格'),
+          value: priceData.audioInputPrice,
+          suffix: unitSuffix,
+        },
+        {
+          key: 'audio-output',
+          label: t('音频输出价格'),
+          value: priceData.audioOutputPrice,
+          suffix: unitSuffix,
+        },
+      ]),
+    ).filter(
       (item) =>
         item.value !== null && item.value !== undefined && item.value !== '',
     );
   }
 
   return appendPoints(
-    [
-      {
-        key: 'fixed',
-        label: t('模型价格'),
-        value: priceData.price,
-        suffix: ` / ${t('次')}`,
-        originalValue: priceData.originalPrice,
-      },
-    ].filter(
-      (item) =>
-        item.value !== null && item.value !== undefined && item.value !== '',
+    appendEntitlement(
+      [
+        {
+          key: 'fixed',
+          label: t('模型价格'),
+          value: priceData.price,
+          suffix: ` / ${t('次')}`,
+          originalValue: priceData.originalPrice,
+        },
+      ].filter(
+        (item) =>
+          item.value !== null && item.value !== undefined && item.value !== '',
+      ),
     ),
   );
 };
@@ -1455,6 +1531,7 @@ const DEFAULT_PRICING_FILTERS = {
   viewMode: 'card',
   filterGroup: 'all',
   filterPointsOnly: false,
+  filterEntitlementOnly: false,
   filterQuotaType: 'all',
   filterEndpointType: 'all',
   filterVendor: 'all',
@@ -1469,6 +1546,7 @@ export const resetPricingFilters = ({
   setCurrency,
   setViewMode,
   setFilterPointsOnly,
+  setFilterEntitlementOnly,
   setFilterGroup,
   setFilterQuotaType,
   setFilterEndpointType,
@@ -1481,6 +1559,7 @@ export const resetPricingFilters = ({
   setCurrency?.(DEFAULT_PRICING_FILTERS.currency);
   setViewMode?.(DEFAULT_PRICING_FILTERS.viewMode);
   setFilterPointsOnly?.(DEFAULT_PRICING_FILTERS.filterPointsOnly);
+  setFilterEntitlementOnly?.(DEFAULT_PRICING_FILTERS.filterEntitlementOnly);
   setFilterGroup?.(DEFAULT_PRICING_FILTERS.filterGroup);
   setFilterQuotaType?.(DEFAULT_PRICING_FILTERS.filterQuotaType);
   setFilterEndpointType?.(DEFAULT_PRICING_FILTERS.filterEndpointType);

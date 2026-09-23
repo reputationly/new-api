@@ -207,12 +207,36 @@ func GetPricing(c *gin.Context) {
 		}
 	}
 
+	// 权益覆盖：只对已登录且持有活跃套餐的用户有值。模型广场是公开页面，
+	// 未登录时这里是 nil，前端据此完全不显示算力点——与加这个功能之前一致。
+	//
+	// ⚠️ 不缓存：算力点价依赖用户当前持有的权益，而权益会到期。要缓存就必须让
+	// key 带上最近一个套餐的到期时间、TTL 不超过到那个时间点的剩余时长，否则
+	// 套餐到期后广场仍显示套餐价、用户点进去发现扣的是现金（设计文档 §8.2 的
+	// 缓存陷阱）。这里每次实时算：两条索引查询，比一个会过期的缓存便宜得多。
+	var entitlementCoverage map[string]*model.EntitlementCoverage
+	if exists {
+		names := make([]string, 0, len(pricing))
+		for _, item := range pricing {
+			names = append(names, item.ModelName)
+		}
+		if cov, cerr := model.ListUserEntitlementCoverage(userId.(int), names); cerr == nil {
+			entitlementCoverage = cov
+		} else {
+			common.SysLog("failed to load entitlement coverage for pricing: " + cerr.Error())
+		}
+	}
+
 	c.JSON(200, gin.H{
-		"success":           true,
-		"data":              pricing,
-		"vendors":           model.GetVendors(),
-		"group_ratio":       groupRatio,
-		"group_model_ratio": groupModelRatio,
+		"success": true,
+		"data":    pricing,
+		// nil = 未登录或无活跃套餐，前端退回原价展示
+		"entitlement_coverage": entitlementCoverage,
+		// 算力点换算率，供前端把 quota 换算成展示点数（与积分同一套下发方式）
+		"quota_per_compute_point": operation_setting.GetComputePointSetting().QuotaPerComputePoint,
+		"vendors":                 model.GetVendors(),
+		"group_ratio":             groupRatio,
+		"group_model_ratio":       groupModelRatio,
 		// 时段折扣的展示数据。group_model_ratio 里的终值**已含**当前时段系数，
 		// 所以列表价天生就是「此刻下单的真实价」；这份只用来渲染角标、划线原价与
 		// 详情里的分时价格表。active / until 由后端算好，前端不做任何时间判断。

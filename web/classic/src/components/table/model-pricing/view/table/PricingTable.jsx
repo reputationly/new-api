@@ -41,6 +41,7 @@ const PricingTable = ({
   displayPrice,
   searchValue,
   pointsConfig,
+  entitlementConfig,
   compactMode = false,
   openModelDetail,
   t,
@@ -57,6 +58,7 @@ const PricingTable = ({
       siteDisplayType,
       displayPrice,
       pointsConfig,
+      entitlementConfig,
     });
   }, [
     t,
@@ -69,6 +71,7 @@ const PricingTable = ({
     siteDisplayType,
     displayPrice,
     pointsConfig,
+    entitlementConfig,
   ]);
 
   // 更新列定义中的 searchValue

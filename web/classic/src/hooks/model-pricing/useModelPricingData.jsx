@@ -45,6 +45,8 @@ export const useModelPricingData = () => {
   // 「仅显示可积分抵扣的模型」。默认关：积分是少数用户才关心的口子，默认开会让
   // 大部分人看到一个被裁剪过的模型列表却不知道为什么。
   const [filterPointsOnly, setFilterPointsOnly] = useState(false);
+  // 「套餐可用」：套餐用户最高频的需求是「我的套餐能覆盖哪些模型」（设计文档 §8.2）
+  const [filterEntitlementOnly, setFilterEntitlementOnly] = useState(false);
   const [models, setModels] = useState([]);
   const [vendorsMap, setVendorsMap] = useState({});
   const [loading, setLoading] = useState(true);
@@ -55,6 +57,12 @@ export const useModelPricingData = () => {
   // 价格本身已经含时段系数（后端把终值折进了 group_model_ratio），这里再参与算价
   // 就是乘两遍。active / until 也由后端算好，前端不碰客户端时钟。
   const [groupTimeRatio, setGroupTimeRatio] = useState({});
+  // 权益覆盖：null = 未登录 / 无活跃套餐 / 有套餐但没覆盖任何模型。
+  // 三者在展示上是同一件事，后端已经统一成 null，这里不必再分情况。
+  const [entitlementConfig, setEntitlementConfig] = useState({
+    coverage: null,
+    quotaPerComputePoint: 0,
+  });
   const [pointsConfig, setPointsConfig] = useState({
     enabled: false,
     quotaPerPoint: 0,
@@ -183,6 +191,17 @@ export const useModelPricingData = () => {
       );
     }
 
+    // 仅显示套餐覆盖的模型。判据直接看后端给的覆盖表——与价格展示、角标共用同一份
+    // 数据，不在这里另写一套匹配，否则会出现「筛出来的模型点进去没有套餐内价」。
+    //
+    // 没有覆盖数据时筛选不生效，而不是筛成空列表：那时开关本身是隐藏的
+    // （SearchActions 按覆盖数据显隐），套餐到期后刷新页面数据，用户会面对一个
+    // 空列表却找不到关掉筛选的地方。
+    const coverage = entitlementConfig?.coverage;
+    if (filterEntitlementOnly && coverage) {
+      result = result.filter((model) => !!coverage[model.model_name]);
+    }
+
     // 搜索筛选
     if (searchValue.length > 0) {
       const searchTerm = searchValue.toLowerCase();
@@ -206,6 +225,7 @@ export const useModelPricingData = () => {
     models,
     searchValue,
     filterPointsOnly,
+    filterEntitlementOnly,
     pointsConfig,
     filterGroup,
     filterQuotaType,
@@ -288,6 +308,8 @@ export const useModelPricingData = () => {
       quota_per_point,
       points_enabled_groups,
       points_enabled_models,
+      entitlement_coverage,
+      quota_per_compute_point,
     } = res.data;
     if (success) {
       setGroupRatio(group_ratio);
@@ -311,6 +333,10 @@ export const useModelPricingData = () => {
         enabledGroups: points_enabled_groups || [],
         // null = 未启用渠道白名单，判定退回只看分组的旧口径
         enabledModels: points_enabled_models ?? null,
+      });
+      setEntitlementConfig({
+        coverage: entitlement_coverage || null,
+        quotaPerComputePoint: Number(quota_per_compute_point) || 0,
       });
       setModelsFormat(data, group_ratio, vendorMap);
     } else {
@@ -397,6 +423,7 @@ export const useModelPricingData = () => {
     // 漏一个就会出现「在第 2 页打开这个筛选 → 列表变短 → 页码越界 → 空白网格」，
     // 而分页器还停在旧页码上，用户只能靠点别的筛选把自己救回来。
     filterPointsOnly,
+    filterEntitlementOnly,
     searchValue,
   ]);
 
@@ -430,7 +457,9 @@ export const useModelPricingData = () => {
     setCurrentPage,
     currency,
     filterPointsOnly,
+    filterEntitlementOnly,
     setFilterPointsOnly,
+    setFilterEntitlementOnly,
     setCurrency,
     siteDisplayType,
     models,
@@ -442,6 +471,7 @@ export const useModelPricingData = () => {
     endpointMap,
     autoGroups,
     pointsConfig,
+    entitlementConfig,
 
     // 计算属性
     usdExchangeRate,
