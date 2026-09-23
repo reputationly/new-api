@@ -420,3 +420,33 @@ func TestInitFundBaseline_RecordsExistingCreditDebt(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, rep.AllOK, "已有欠款的部署建完基线就该是平的：%+v", rep.Items)
 }
+
+// 积分向上取整不能被算成现金入账（端到端测试发现）。
+//
+// HybridFunding 结算时把积分抵扣向上取整到整积分：一笔 15000 的请求扣掉 15069 的积分，
+// 多出的 69 出自积分账户、钱包一分没动。用「总额 − 积分 − 授信」算现金消耗会得到 −69，
+// 等于给现金账户凭空记了 69 的入账——每次取整都让现金自洽多偏一点，生产上会持续假告警。
+func TestCheckFundConsistency_PointsRoundUpNotCashIncome(t *testing.T) {
+	truncateTables(t)
+	require.NoError(t, DB.Create(&User{Id: 931, Username: "fb_931", Role: 1, Status: 1,
+		Quota: 50000, PointsBalance: 68493}).Error)
+	_, err := InitFundBaseline(1)
+	require.NoError(t, err)
+	now := common.GetTimestamp()
+
+	applied, err := DecreaseUserPoints(931, 15069, true)
+	require.NoError(t, err)
+	require.Equal(t, 15069, applied)
+	require.NoError(t, LOG_DB.Create(&Log{
+		UserId: 931, CreatedAt: now, Type: LogTypeConsume,
+		Quota: 15000, PointsConsumed: 15069,
+	}).Error)
+
+	st, err := getFundConsumeStats(now-60, now+60)
+	require.NoError(t, err)
+	require.Equal(t, int64(0), st.CashConsumed, "取整多扣的是积分，现金消耗不能是负数")
+
+	rep, err := CheckFundConsistency()
+	require.NoError(t, err)
+	require.True(t, rep.AllOK, "积分取整后应账平：%+v", rep.Items)
+}

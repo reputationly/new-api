@@ -29,7 +29,7 @@ type FundConsumeStats struct {
 	TotalQuota     int64 `json:"total_quota"`     // 本期消费总额（quota unit）
 	PointsConsumed int64 `json:"points_consumed"` // 其中积分抵扣
 	CreditConsumed int64 `json:"credit_consumed"` // 其中由授信承担（应收账款增加）
-	CashConsumed   int64 `json:"cash_consumed"`   // 其中现金承担 = Total − Points − Credit
+	CashConsumed   int64 `json:"cash_consumed"`   // 其中现金承担：逐条 max(消费 − 积分 − 授信, 0) 的净额
 }
 
 // FundBalanceStats 余额侧汇总（当前值，无时间维度）。
@@ -120,6 +120,7 @@ func getFundConsumeStats(start, end int64) (*FundConsumeStats, error) {
 		TotalQuota     int64
 		PointsConsumed int64
 		CreditConsumed int64
+		CashConsumed   int64
 	}
 	// CASE WHEN 而非两次查询：一次扫表拿净额，且三库通吃（SQLite 无 FILTER 语法）。
 	//
@@ -144,11 +145,19 @@ func getFundConsumeStats(start, end int64) (*FundConsumeStats, error) {
 			[]int{LogTypeConsume, LogTypeRefund}, start, end).
 		Where("COALESCE(other, '') NOT LIKE ?", `%"billing_source":"subscription"%`).
 		Where("COALESCE(other, '') NOT LIKE ?", `%"billing_source":"entitlement"%`).
+		// 现金部分**按行**算、截到 0，不能用总额相减：积分抵扣会向上取整到整积分
+		// （HybridFunding.roundUpToWholePoints，加速营销积分消耗），一笔 15000 的请求
+		// 可能扣掉 15069 的积分。那多出的 69 出自积分账户、不是现金，相减会得到 −69，
+		// 等于凭空给现金账户记了一笔入账——每次取整都让现金自洽多偏一点。
+		// 取整只在积分已经覆盖整笔时才可能发生（积分不够时先被扣光，取整拿不到多余的），
+		// 所以「积分 + 授信 > 消费额」只来自取整，按行截到 0 是精确的。
 		Select(fmt.Sprintf(
-			"COALESCE(SUM(CASE WHEN type = %d THEN -quota ELSE quota END),0) as total_quota, "+
-				"COALESCE(SUM(CASE WHEN type = %d THEN -points_consumed ELSE points_consumed END),0) as points_consumed, "+
-				"COALESCE(SUM(CASE WHEN type = %d THEN -credit_consumed ELSE credit_consumed END),0) as credit_consumed",
-			LogTypeRefund, LogTypeRefund, LogTypeRefund)).
+			"COALESCE(SUM(CASE WHEN type = %[1]d THEN -quota ELSE quota END),0) as total_quota, "+
+				"COALESCE(SUM(CASE WHEN type = %[1]d THEN -points_consumed ELSE points_consumed END),0) as points_consumed, "+
+				"COALESCE(SUM(CASE WHEN type = %[1]d THEN -credit_consumed ELSE credit_consumed END),0) as credit_consumed, "+
+				"COALESCE(SUM((CASE WHEN type = %[1]d THEN -1 ELSE 1 END) * "+
+				"(CASE WHEN quota - points_consumed - credit_consumed > 0 THEN quota - points_consumed - credit_consumed ELSE 0 END)),0) as cash_consumed",
+			LogTypeRefund)).
 		Scan(&row).Error; err != nil {
 		return nil, err
 	}
@@ -156,8 +165,8 @@ func getFundConsumeStats(start, end int64) (*FundConsumeStats, error) {
 		TotalQuota:     row.TotalQuota,
 		PointsConsumed: row.PointsConsumed,
 		CreditConsumed: row.CreditConsumed,
-		// 现金承担 = 总消费 − 积分抵扣 − 授信承担。三者互斥且穷尽这一笔消费的资金来源。
-		CashConsumed: row.TotalQuota - row.PointsConsumed - row.CreditConsumed,
+		// 现金承担：每条日志 max(消费 − 积分 − 授信, 0) 的净额，见上面 SQL 的说明
+		CashConsumed: row.CashConsumed,
 	}, nil
 }
 
