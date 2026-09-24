@@ -272,58 +272,39 @@ func RedisIncr(key string, delta int64) error {
 	return nil
 }
 
+// 局部写入 hash 缓存（单个字段）的前提是缓存还在：key 已过期或被删时绝不能新建，
+// 否则会凭空建出只有这一个字段的残缺 hash——读取方 HGETALL 非空即当命中，其余字段
+// 全是零值（用户缓存的 CreditLimit/Status、令牌缓存的状态与额度）。
+//
+// 「查 TTL → 写」必须在 Redis 端原子完成。旧实现先 TTL 再另起事务写，两步之间 key
+// 被删就会中招；授信结转、积分扣减每次都删用户缓存，高并发下会频繁撞上。
+// PTTL > 0 与旧实现 TTL > 0 同语义：没有过期时间的 key 也不写。HINCRBY/HSET 不改 TTL，
+// 无需再 EXPIRE。
+var (
+	hashIncrIfLiveScript = redis.NewScript(`
+if redis.call('PTTL', KEYS[1]) > 0 then
+  redis.call('HINCRBY', KEYS[1], ARGV[1], ARGV[2])
+end
+return 0`)
+	hashSetIfLiveScript = redis.NewScript(`
+if redis.call('PTTL', KEYS[1]) > 0 then
+  redis.call('HSET', KEYS[1], ARGV[1], ARGV[2])
+end
+return 0`)
+)
+
 func RedisHIncrBy(key, field string, delta int64) error {
 	if DebugEnabled {
 		SysLog(fmt.Sprintf("Redis HINCRBY: key=%s, field=%s, delta=%d", key, field, delta))
 	}
-	ttlCmd := RDB.TTL(context.Background(), key)
-	ttl, err := ttlCmd.Result()
-	if err != nil && !errors.Is(err, redis.Nil) {
-		return fmt.Errorf("failed to get TTL: %w", err)
-	}
-
-	if ttl > 0 {
-		ctx := context.Background()
-		txn := RDB.TxPipeline()
-
-		incrCmd := txn.HIncrBy(ctx, key, field, delta)
-		if err := incrCmd.Err(); err != nil {
-			return err
-		}
-
-		txn.Expire(ctx, key, ttl)
-
-		_, err = txn.Exec(ctx)
-		return err
-	}
-	return nil
+	return hashIncrIfLiveScript.Run(context.Background(), RDB, []string{key}, field, delta).Err()
 }
 
 func RedisHSetField(key, field string, value interface{}) error {
 	if DebugEnabled {
 		SysLog(fmt.Sprintf("Redis HSET field: key=%s, field=%s, value=%v", key, field, value))
 	}
-	ttlCmd := RDB.TTL(context.Background(), key)
-	ttl, err := ttlCmd.Result()
-	if err != nil && !errors.Is(err, redis.Nil) {
-		return fmt.Errorf("failed to get TTL: %w", err)
-	}
-
-	if ttl > 0 {
-		ctx := context.Background()
-		txn := RDB.TxPipeline()
-
-		hsetCmd := txn.HSet(ctx, key, field, value)
-		if err := hsetCmd.Err(); err != nil {
-			return err
-		}
-
-		txn.Expire(ctx, key, ttl)
-
-		_, err = txn.Exec(ctx)
-		return err
-	}
-	return nil
+	return hashSetIfLiveScript.Run(context.Background(), RDB, []string{key}, field, value).Err()
 }
 
 // RedisHGetField 读 hash 的单个字段；key 或字段不存在时返回 redis.Nil。
