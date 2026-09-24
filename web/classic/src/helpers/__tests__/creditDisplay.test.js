@@ -25,4 +25,20 @@ describe('buildCreditSummary', () => {
       buildCreditSummary({ credit_limit: 10000, credit_used: 15000 }),
     ).toEqual({ limit: 10000, used: 15000, available: 0, over: 5000 });
   });
+
+  // 在途请求的透支还停在负余额上、尚未结转进 credit_used，同样占用授信
+  it('负余额计入已用', () => {
+    expect(
+      buildCreditSummary({ credit_limit: 1000, credit_used: 230, quota: -160 }),
+    ).toEqual({ limit: 1000, used: 390, available: 610, over: 0 });
+    expect(
+      buildCreditSummary({ credit_limit: 1000, credit_used: 950, quota: -100 }),
+    ).toEqual({ limit: 1000, used: 1050, available: 0, over: 50 });
+  });
+
+  it('正余额不抵减已用', () => {
+    expect(
+      buildCreditSummary({ credit_limit: 1000, credit_used: 300, quota: 500 }),
+    ).toEqual({ limit: 1000, used: 300, available: 700, over: 0 });
+  });
 });

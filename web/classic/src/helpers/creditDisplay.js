@@ -7,6 +7,10 @@
  * 欠款允许超过上限（结算时服务已交付，超出的那笔照样记欠款、下一次请求被拒，
  * 见 model.SettleOverdraftToCredit），所以「可用」要截到 0，超出部分单独给出。
  *
+ * 负余额也是欠款：请求在途（预扣已扣、尚未结算）时透支先落在 quota 上，结算后才
+ * 挪进 credit_used。只看 credit_used 会高估可用额，与后端拦截口径
+ * （quota − x >= −(limit − used)）对不上。
+ *
  * @returns {null | {limit:number, used:number, available:number, over:number}} 单位 quota
  */
 export const buildCreditSummary = (user) => {
@@ -14,7 +18,8 @@ export const buildCreditSummary = (user) => {
   if (limit <= 0) return null;
   // 子账户不参与计费（恒为只读视图），额度与欠款都挂在企业主账户上
   if ((Number(user?.parent_user_id) || 0) > 0) return null;
-  const used = Math.max(Number(user?.credit_used) || 0, 0);
+  const overdraft = Math.max(-(Number(user?.quota) || 0), 0);
+  const used = Math.max(Number(user?.credit_used) || 0, 0) + overdraft;
   return {
     limit,
     used,
