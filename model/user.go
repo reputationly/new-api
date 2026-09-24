@@ -1160,11 +1160,35 @@ func IncreaseUserQuota(id int, quota int, db bool) (err error) {
 			common.SysLog("failed to increase user quota: " + err.Error())
 		}
 	})
-	if !db && common.BatchUpdateEnabled {
+	if !db && common.BatchUpdateEnabled && !hasCreditLine(id) {
 		addNewRecord(BatchUpdateTypeUserQuota, id, quota)
 		return nil
 	}
 	return increaseUserQuota(id, quota)
+}
+
+// hasCreditLine 授信用户的 quota 写入不走批量队列。
+//
+// SettleOverdraftToCredit 读 DB 里的 quota 决定结转多少；队列里还没落库的补扣/退款
+// 会让它读到旧值——生产上同一刷新周期内两笔结算，后一笔读到 0、整笔漏结转，
+// 透支永久停在负 quota 里、credit_used 少记。直写只对授信用户开，普通用户写库量不变。
+//
+// 只读 credit_limit 一个字段、且不回填缓存：这里在每次批量写入前都会调用，
+// 走 GetUserCache 会在未命中时读整行并整行回填（回填的 quota 是尚未刷新的旧值）。
+// 读不到时按授信处理：多一次直写无害，漏结转有害。
+func hasCreditLine(id int) bool {
+	if common.RedisEnabled {
+		if v, err := common.RedisHGetField(getUserCacheKey(id), "CreditLimit"); err == nil {
+			if limit, perr := strconv.ParseInt(v, 10, 64); perr == nil {
+				return limit > 0
+			}
+		}
+	}
+	var limit int64
+	if err := DB.Model(&User{}).Where("id = ?", id).Select("credit_limit").Scan(&limit).Error; err != nil {
+		return true
+	}
+	return limit > 0
 }
 
 func increaseUserQuota(id int, quota int) (err error) {
@@ -1185,7 +1209,7 @@ func DecreaseUserQuota(id int, quota int, db bool) (err error) {
 			common.SysLog("failed to decrease user quota: " + err.Error())
 		}
 	})
-	if !db && common.BatchUpdateEnabled {
+	if !db && common.BatchUpdateEnabled && !hasCreditLine(id) {
 		addNewRecord(BatchUpdateTypeUserQuota, id, -quota)
 		return nil
 	}

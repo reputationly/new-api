@@ -325,3 +325,11 @@ func RedisHSetField(key, field string, value interface{}) error {
 	}
 	return nil
 }
+
+// RedisHGetField 读 hash 的单个字段；key 或字段不存在时返回 redis.Nil。
+func RedisHGetField(key, field string) (string, error) {
+	if DebugEnabled {
+		SysLog(fmt.Sprintf("Redis HGET field: key=%s, field=%s", key, field))
+	}
+	return RDB.HGet(context.Background(), key, field).Result()
+}

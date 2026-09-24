@@ -3,10 +3,14 @@ package model
 import (
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/QuantumNous/new-api/common"
 
+	"github.com/bytedance/gopkg/util/gopool"
+
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 // 信用账户（先用后付）的余额操作。与 Quota / PointsBalance 并列但性质不同：
@@ -41,6 +45,15 @@ func SetUserCreditLimit(id int, limit int64) error {
 	if result.RowsAffected == 0 {
 		return ErrCreditLimitBelowUsed
 	}
+	// 延迟双删：GetUserCache 未命中时读库、再异步回填缓存。若回填前读到的是改前的
+	// 行，缓存会带着旧 CreditLimit 活到 TTL——hasCreditLine 据此把授信用户的 quota
+	// 写入放进批量队列，结转读到旧 quota 而少结转。1 秒后再删一次清掉这次回填。
+	gopool.Go(func() {
+		time.Sleep(time.Second)
+		if err := invalidateUserCache(id); err != nil {
+			common.SysLog(fmt.Sprintf("delayed credit cache invalidation failed: user=%d err=%s", id, err.Error()))
+		}
+	})
 	return invalidateUserCache(id)
 }
 
@@ -92,10 +105,14 @@ func GetUserCreditState(id int) (limit, used, settled int64, err error) {
 //
 // 透支窗口只存在于「扣费完成 → 结算结转」之间，且 quota 短暂为负在现有代码里本就允许。
 //
-// 用读-条件更新-重试而非单条 UPDATE：单条语句写得出
+// 用事务内「行锁读 + 条件更新」而非单条 UPDATE：单条语句写得出
 // （SET credit_used = credit_used - quota, quota = 0）但拿不到结转额，
-// 而日志要记 CreditConsumed。乐观锁失败说明并发扣费正在进行，重试即可；
-// 三次耗尽就放弃，留给下一次结算或每日自洽校验发现——这是统计口径，不是扣费依据。
+// 而日志要记 CreditConsumed。PG/MySQL 下 FOR UPDATE 让并发结算排队，条件更新必然命中——
+// 纯乐观锁在单用户高 QPS 下会三次重试耗尽、整笔漏结转。SQLite 驱动忽略行锁子句
+// （写本就整库串行），由 WHERE quota = ? 与重试兜底。
+//
+// 读到的 quota 必须是最新值：授信用户的 quota 写入不走批量队列（见 hasCreditLine），
+// 否则队列里未落库的补扣会让这里读到旧值而少结转。
 // maxAmount 封顶本次结转额，取本次请求的实际消费额。
 //
 // 不封顶会导致并发归因错乱：同一客户两个请求都透支、都还没结算时，先结算的那个
@@ -107,55 +124,64 @@ func SettleOverdraftToCredit(id int, maxAmount int64) (settled int64, err error)
 	if maxAmount <= 0 {
 		return 0, nil
 	}
+	// 无锁预检：每个钱包/混扣请求都会走到这里，未开授信或没有透支的（绝大多数）
+	// 不该为此开事务、拿行锁——行锁会挡住同一用户并发的预扣 UPDATE。
+	var probe struct {
+		Quota       int
+		CreditLimit int64
+	}
+	if err = DB.Model(&User{}).Where("id = ?", id).
+		Select("quota", "credit_limit").Scan(&probe).Error; err != nil {
+		return 0, err
+	}
+	if probe.CreditLimit <= 0 || probe.Quota >= 0 {
+		return 0, nil
+	}
 	for attempt := 0; attempt < 3; attempt++ {
-		var row struct {
-			Quota       int
-			CreditLimit int64
-		}
-		if err = DB.Model(&User{}).Where("id = ?", id).
-			Select("quota", "credit_limit").Scan(&row).Error; err != nil {
+		var done bool
+		err = DB.Transaction(func(tx *gorm.DB) error {
+			var row struct {
+				Quota       int
+				CreditLimit int64
+			}
+			if err := tx.Model(&User{}).Clauses(clause.Locking{Strength: "UPDATE"}).
+				Where("id = ?", id).Select("quota", "credit_limit").Scan(&row).Error; err != nil {
+				return err
+			}
+			// 未开授信的用户不结转。他们的负余额来自结算补扣（服务已交付、允许欠费，
+			// 见 WalletFunding.Settle），是预估不准造成的系统性透支，不是授信——
+			// 把它记成应收账款没有依据，还会让「授信敞口」= limit − used 变成负数。
+			// 保持为负 quota 即改动前的既有语义：下次充值自然填平，现金账照样自洽
+			// （那笔超支已计入现金消耗，期初 − 消耗 == 负余额，等式成立）。
+			if row.CreditLimit <= 0 || row.Quota >= 0 {
+				done = true
+				return nil
+			}
+			amount := min(int64(-row.Quota), maxAmount)
+			res := tx.Model(&User{}).
+				Where("id = ? AND quota = ?", id, row.Quota).
+				Updates(map[string]interface{}{
+					"credit_used": gorm.Expr("credit_used + ?", amount),
+					// 加而非置 0：封顶后可能只结转了一部分，余下的透支留给并发的
+					// 那个请求结算时处理。
+					"quota": gorm.Expr("quota + ?", amount),
+				})
+			if res.Error != nil {
+				return res.Error
+			}
+			if res.RowsAffected == 1 {
+				settled = amount
+				done = true
+			}
+			return nil
+		})
+		if err != nil {
 			return 0, err
 		}
-		// 未开授信的用户不结转。他们的负余额来自结算补扣（服务已交付、允许欠费，
-		// 见 WalletFunding.Settle），是预估不准造成的系统性透支，不是授信——
-		// 把它记成应收账款没有依据，还会让「授信敞口」= limit − used 变成负数。
-		// 保持为负 quota 即改动前的既有语义：下次充值自然填平，现金账照样自洽
-		// （那笔超支已计入现金消耗，期初 − 消耗 == 负余额，等式成立）。
-		if row.CreditLimit <= 0 {
-			return 0, nil
+		if !done {
+			continue
 		}
-		current := row.Quota
-		if current >= 0 {
-			// 批量更新模式下这里可能读到**陈旧**值：Settle 补扣走
-			// DecreaseUserQuota(..., db=false)，开启 BATCH_UPDATE_ENABLED 时它只入队、
-			// 不立即落库，等队列刷新后 quota 才变负——而那时结转早已返回 0，
-			// 这笔透支就永远不会折进 credit_used（应收低估、授信上限对这部分失效）。
-			//
-			// 预扣路径不受影响：WalletFunding/HybridFunding 的预扣都走
-			// TryDecreaseUserQuotaWithinCredit，那是条件更新、恒直写。
-			// 受影响的只有结算补扣的差额，金额远小于预扣，且 BATCH_UPDATE_ENABLED
-			// 默认关闭。真要根治需要在结转前 flush 该用户的批量队列，
-			// 那要动批量更新的架构，收益不抵成本。此处留日志供排查。
-			if common.BatchUpdateEnabled {
-				common.SysLog(fmt.Sprintf(
-					"overdraft settle read non-negative quota under batch mode (user=%d); "+
-						"a queued decrement may settle late", id))
-			}
-			return 0, nil
-		}
-		amount := min(int64(-current), maxAmount)
-		res := DB.Model(&User{}).
-			Where("id = ? AND quota = ?", id, current).
-			Updates(map[string]interface{}{
-				"credit_used": gorm.Expr("credit_used + ?", amount),
-				// 加而非置 0：封顶后可能只结转了一部分，余下的透支留给并发的
-				// 那个请求结算时处理。
-				"quota": gorm.Expr("quota + ?", amount),
-			})
-		if res.Error != nil {
-			return 0, res.Error
-		}
-		if res.RowsAffected == 1 {
+		if settled > 0 {
 			// 缓存失效失败**不能**让结转结果丢失：DB 里 credit_used 已经加上了，
 			// 调用方若因这个错误把 settled 当成 0，消费日志就会记 CreditConsumed=0，
 			// 而欠款真实存在——每日自洽校验会对信用账报假不平。
@@ -163,11 +189,12 @@ func SettleOverdraftToCredit(id int, maxAmount int64) (settled int64, err error)
 			if cerr := invalidateUserCache(id); cerr != nil {
 				common.SysLog(fmt.Sprintf(
 					"credit settled but cache invalidation failed: user=%d amount=%d err=%s",
-					id, amount, cerr.Error()))
+					id, settled, cerr.Error()))
 			}
-			return amount, nil
 		}
+		return settled, nil
 	}
+	common.SysLog(fmt.Sprintf("overdraft settle gave up after retries (user=%d); quota stays negative", id))
 	return 0, nil
 }
 
