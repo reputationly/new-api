@@ -102,6 +102,38 @@ func TestCheckFundConsistency_BalancedAfterBaseline(t *testing.T) {
 	require.True(t, rep.AllOK, "刚建基线就应当账平：%+v", rep.Items)
 }
 
+// 生产复现（2026-09-24）：流水表先上线、几小时后才建基线。建基线前做的调整与回款，
+// 效果已经拍进期初快照，流水又被全量求和再算一遍——现金差 ¥51.06、信用差 ¥1.04，
+// 恰好等于那几笔基线前流水。补钱消不掉：补的那笔流水和余额同时动，差额不变。
+func TestCheckFundConsistency_IgnoresEntriesBeforeBaseline(t *testing.T) {
+	truncateTables(t)
+	require.NoError(t, DB.Create(&User{Id: 921, Username: "fb_921", Role: 1, Status: 1,
+		Quota: 50000, CreditLimit: 100000, CreditUsed: 2000, AffCode: "aff921"}).Error)
+	before := common.GetTimestamp() - 3600
+
+	// 基线前：旧入口扣余额（余额与流水同动）
+	require.NoError(t, DecreaseUserQuota(921, 1000, true))
+	_, err := InsertFundEntry(&FundEntry{
+		UserId: 921, CreatedAt: before, Account: FundAccountCash, Kind: FundKindAdjust,
+		QuotaDelta: -1000, Source: FundSourceAdminAdjust, RefType: FundRefAdminOp, RefId: "PRE-ADJ",
+	})
+	require.NoError(t, err)
+	// 基线前：回款核销
+	require.NoError(t, SettleUserCredit(921, 500))
+	_, err = InsertFundEntry(&FundEntry{
+		UserId: 921, CreatedAt: before, Account: FundAccountCredit, Kind: FundKindARSettle,
+		QuotaDelta: -500, CashFen: 7, Source: FundSourceAdminCash, RefType: FundRefAdminOp, RefId: "PRE-AR",
+	})
+	require.NoError(t, err)
+
+	_, err = InitFundBaseline(1)
+	require.NoError(t, err)
+
+	rep, err := CheckFundConsistency()
+	require.NoError(t, err)
+	require.True(t, rep.AllOK, "基线前的流水已体现在期初快照里，不得再计一遍：%+v", rep.Items)
+}
+
 // 这条是整个功能存在的理由：有代码绕过流水表直接改了余额，校验必须报不平。
 //
 // 不平几乎不是算错——余额和流水是两套独立写入，对不上就说明有一条写入路径漏了埋点。

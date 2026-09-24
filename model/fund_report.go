@@ -239,12 +239,20 @@ func CheckFundConsistency() (*FundConsistencyReport, error) {
 		return rep, nil
 	}
 
+	// 流水只算基线及之后的：基线前的流水效果已拍进期初快照，再求和就算了两遍。
+	// 与下面消耗只取基线之后是同一条理由。用 id 而非时间戳切分——基线标记是建基线时
+	// 第一条写入，同一秒内先操作、后建基线的流水按时间戳分不开，按 id 分得开。
+	baselineId, err := fundBaselineStartId()
+	if err != nil {
+		return nil, err
+	}
+
 	// 各账户的流水净额（含期初基线）
 	var ledger []struct {
 		Account string
 		Total   int64
 	}
-	if err := DB.Model(&FundEntry{}).
+	if err := DB.Model(&FundEntry{}).Where("id >= ?", baselineId).
 		Select("account, COALESCE(SUM(quota_delta),0) as total").
 		Group("account").Scan(&ledger).Error; err != nil {
 		return nil, err
@@ -285,12 +293,12 @@ func CheckFundConsistency() (*FundConsistencyReport, error) {
 	if balance.CreditLimit > 0 || balance.CreditUsed != 0 {
 		// 只取 ar_settle（回款，QuotaDelta 为负），不能用整个 credit 账户的净额——
 		// credit_grant 是开额度，它既不构成欠款也不抵减欠款，混进来会让等式凭空偏移。
-		settled, serr := sumFundEntryQuota(FundAccountCredit, FundKindARSettle)
+		settled, serr := sumFundEntryQuota(FundAccountCredit, FundKindARSettle, baselineId)
 		if serr != nil {
 			return nil, serr
 		}
 		// 期初欠款要算进来：建基线时已存在的 credit_used 不是本期消耗产生的。
-		opening, oerr := sumFundEntryQuota(FundAccountCredit, FundKindOpening)
+		opening, oerr := sumFundEntryQuota(FundAccountCredit, FundKindOpening, baselineId)
 		if oerr != nil {
 			return nil, oerr
 		}
@@ -326,6 +334,14 @@ func fundBaselineTimestamp() (int64, error) {
 	err := DB.Model(&FundEntry{}).Where("kind = ?", FundKindOpening).
 		Select("COALESCE(MAX(created_at),0)").Scan(&at).Error
 	return at, err
+}
+
+// fundBaselineStartId 基线的起点：最早一条期初流水（即基线标记）的 id。
+func fundBaselineStartId() (int64, error) {
+	var id int64
+	err := DB.Model(&FundEntry{}).Where("kind = ?", FundKindOpening).
+		Select("COALESCE(MIN(id),0)").Scan(&id).Error
+	return id, err
 }
 
 // InitFundBaseline 把当前所有用户的余额记成期初流水，作为自洽校验的起点。
@@ -466,11 +482,11 @@ func ListFundEntries(q FundEntryQuery, offset, limit int) ([]*FundEntry, int64, 
 	return list, total, err
 }
 
-// sumFundEntryQuota 汇总某账户某性质的流水净额。
-func sumFundEntryQuota(account, kind string) (int64, error) {
+// sumFundEntryQuota 汇总某账户某性质、id >= minId 的流水净额。
+func sumFundEntryQuota(account, kind string, minId int64) (int64, error) {
 	var total int64
 	err := DB.Model(&FundEntry{}).
-		Where("account = ? AND kind = ?", account, kind).
+		Where("account = ? AND kind = ? AND id >= ?", account, kind, minId).
 		Select("COALESCE(SUM(quota_delta),0)").Scan(&total).Error
 	return total, err
 }
