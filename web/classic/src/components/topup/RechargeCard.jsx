@@ -34,6 +34,7 @@ import {
   Tag,
   Tabs,
   TabPane,
+  Progress,
 } from '@douyinfe/semi-ui';
 import { SiAlipay, SiWechat, SiStripe } from 'react-icons/si';
 import {
@@ -49,7 +50,7 @@ import { IconGift } from '@douyinfe/semi-icons';
 import { useMinimumLoadingTime } from '../../hooks/common/useMinimumLoadingTime';
 import { getCurrencyConfig, getQuotaPerUnit } from '../../helpers/render';
 import { quotaToPoints, isPointsEnabled } from '../../helpers/quota';
-import { buildCreditSummary } from '../../helpers/creditDisplay';
+import { buildWalletSummary } from '../../helpers/walletSummary';
 import SubscriptionPlansCard from './SubscriptionPlansCard';
 
 const { Text } = Typography;
@@ -110,11 +111,12 @@ const RechargeCard = ({
   const shouldShowSubscription =
     !subscriptionLoading && subscriptionPlans.length > 0;
   const regularPayMethods = payMethods || [];
-  // 子账号不参与积分（积分是主账号资产），统计区隐藏积分项
-  const showPointsStat =
-    isPointsEnabled() && (userState?.user?.parent_user_id || 0) === 0;
-  // 授信客户：余额可以是 0 却照样能调用，不说明的话客户看不懂，也不知道欠了多少
-  const credit = buildCreditSummary(userState?.user);
+  // 页面先回答「还能用多少」：可用总额与后端预扣检查同口径（余额 + 积分 + 授信可用），
+  // 三个来源列在下面。授信用户的在途透支只记在授信「已用」里，余额一格截到 0。
+  const wallet = buildWalletSummary(userState?.user, {
+    pointsEnabled: isPointsEnabled(),
+  });
+  const credit = wallet.credit;
   // When QuotaDisplayType = CNY, amounts are already in CNY — skip Price conversion.
   const isCNYDisplay =
     (localStorage.getItem('quota_display_type') || 'USD') === 'CNY';
@@ -149,22 +151,61 @@ const RechargeCard = ({
       setActiveTab('topup');
     }
   }, [shouldShowSubscription, activeTab]);
-  // 放在 Tabs 外面：有套餐时页面默认落在「订阅套餐」页签，放进「额度充值」里就看不到了
-  const creditBanner = credit ? (
-    <Banner
-      type={credit.over > 0 ? 'warning' : 'info'}
-      closeIcon={null}
-      style={{ marginBottom: 12 }}
-      description={
+  // 放在 Tabs 外面：有套餐时页面默认落在「订阅套餐」页签，放进「额度充值」里就看不到了。
+  // 按信用卡的方式呈现：额度 / 已用 进度条，待结清就是已用（含在途透支），超限变红。
+  const creditPanel = credit ? (
+    <div
+      className='rounded-lg border p-3 mb-3'
+      style={{
+        borderColor:
+          credit.over > 0
+            ? 'var(--semi-color-danger)'
+            : 'var(--semi-color-border)',
+      }}
+      data-testid='credit-panel'
+    >
+      <div className='flex items-center justify-between mb-2'>
+        <div className='flex items-center gap-2 text-sm'>
+          <CreditCard size={16} />
+          <Text strong>{t('授信额度')}</Text>
+          <Text>{renderQuota(credit.limit)}</Text>
+        </div>
+        <Tag
+          color={credit.over > 0 ? 'red' : 'green'}
+          shape='circle'
+          size='small'
+        >
+          {credit.over > 0 ? t('已超限') : t('正常')}
+        </Tag>
+      </div>
+      <Progress
+        percent={
+          credit.limit > 0
+            ? Math.min(Math.round((credit.used / credit.limit) * 100), 100)
+            : 0
+        }
+        showInfo={false}
+        size='small'
+        stroke={
+          credit.over > 0
+            ? 'var(--semi-color-danger)'
+            : 'var(--semi-color-primary)'
+        }
+        aria-label={t('授信额度')}
+      />
+      <div className='flex items-center justify-between text-xs text-gray-500 mt-2 flex-wrap gap-1'>
         <span>
-          {t('信用额度')} {renderQuota(credit.limit)} · {t('已用')}{' '}
-          {renderQuota(credit.used)} ·{' '}
+          {t('待结清')} {renderQuota(credit.used)}
+          {' · '}
+          {t('按约定周期结算')}
+        </span>
+        <span>
           {credit.over > 0
             ? `${t('已超出')} ${renderQuota(credit.over)}，${t('新的请求将被拒绝，请尽快结算')}`
-            : `${t('可用')} ${renderQuota(credit.available)}。${t('余额不足时自动使用信用额度，已用部分按约定结算')}`}
+            : `${t('可用')} ${renderQuota(credit.available)}`}
         </span>
-      }
-    />
+      </div>
+    </div>
   ) : null;
 
   const topupContent = (
@@ -174,7 +215,7 @@ const RechargeCard = ({
         className='!rounded-xl w-full'
         cover={
           <div
-            className='relative h-30'
+            className='relative'
             style={{
               '--palette-primary-darkerChannel': '37 99 235',
               backgroundImage: `linear-gradient(0deg, rgba(var(--palette-primary-darkerChannel) / 80%), rgba(var(--palette-primary-darkerChannel) / 80%)), url('/cover-4.webp')`,
@@ -190,19 +231,17 @@ const RechargeCard = ({
                 </Text>
               </div>
 
-              {/* 统计数据（子账号不参与积分，隐藏积分项） */}
-              <div
-                className={`grid ${showPointsStat ? 'grid-cols-2 sm:grid-cols-4' : 'grid-cols-3'} gap-6 mt-4`}
-              >
-                {/* 当前余额 */}
-                <div className='text-center'>
+              {/* 可用总额：唯一的大数字，与后端预扣检查同口径 */}
+              <div className='mt-3'>
+                <div className='flex items-end gap-3 flex-wrap'>
                   <div
-                    className='text-base sm:text-2xl font-bold mb-2'
+                    className='text-2xl sm:text-3xl font-bold'
                     style={{ color: 'white' }}
+                    data-testid='wallet-available'
                   >
-                    {renderQuota(userState?.user?.quota)}
+                    {renderQuota(wallet.available)}
                   </div>
-                  <div className='flex items-center justify-center text-sm'>
+                  <div className='flex items-center pb-1'>
                     <Wallet
                       size={14}
                       className='mr-1'
@@ -214,86 +253,72 @@ const RechargeCard = ({
                         fontSize: '12px',
                       }}
                     >
-                      {t('当前余额')}
+                      {t('可用总额')}
                     </Text>
+                    {wallet.overdue > 0 && (
+                      <Tag color='red' size='small' className='ml-2'>
+                        {t('欠费')} {renderQuota(wallet.overdue)}
+                      </Tag>
+                    )}
                   </div>
                 </div>
 
-                {/* 积分余额 */}
-                {showPointsStat && (
-                  <div className='text-center'>
-                    <div
-                      className='text-base sm:text-2xl font-bold mb-2'
-                      style={{ color: 'white' }}
-                    >
-                      {quotaToPoints(userState?.user?.points_balance)}
-                    </div>
-                    <div className='flex items-center justify-center text-sm'>
-                      <Coins
-                        size={14}
-                        className='mr-1'
-                        style={{ color: 'rgba(255,255,255,0.8)' }}
-                      />
-                      <Text
-                        style={{
-                          color: 'rgba(255,255,255,0.8)',
-                          fontSize: '12px',
-                        }}
-                      >
-                        {t('积分余额')}
-                      </Text>
-                    </div>
-                  </div>
-                )}
-
-                {/* 历史消耗 */}
-                <div className='text-center'>
-                  <div
-                    className='text-base sm:text-2xl font-bold mb-2'
-                    style={{ color: 'white' }}
-                  >
-                    {renderQuota(userState?.user?.used_quota)}
-                  </div>
-                  <div className='flex items-center justify-center text-sm'>
-                    <TrendingUp
-                      size={14}
-                      className='mr-1'
-                      style={{ color: 'rgba(255,255,255,0.8)' }}
-                    />
-                    <Text
-                      style={{
-                        color: 'rgba(255,255,255,0.8)',
-                        fontSize: '12px',
-                      }}
-                    >
-                      {t('历史消耗')}
-                    </Text>
-                  </div>
+                {/* 三个来源 */}
+                <div
+                  className='flex flex-wrap gap-x-4 gap-y-1 mt-2 text-xs'
+                  style={{ color: 'rgba(255,255,255,0.9)' }}
+                >
+                  <span>
+                    {t('账户余额')} {renderQuota(wallet.balance)}
+                  </span>
+                  {wallet.showPoints && (
+                    <span className='flex items-center'>
+                      <Coins size={12} className='mr-1' />
+                      {t('积分')} {quotaToPoints(wallet.points)}
+                      {`（≈${renderQuota(wallet.points)}）`}
+                    </span>
+                  )}
+                  {credit && (
+                    <span className='flex items-center'>
+                      <CreditCard size={12} className='mr-1' />
+                      {t('授信可用')} {renderQuota(wallet.creditAvailable)}
+                    </span>
+                  )}
                 </div>
 
-                {/* 请求次数 */}
-                <div className='text-center'>
-                  <div
-                    className='text-base sm:text-2xl font-bold mb-2'
-                    style={{ color: 'white' }}
-                  >
-                    {userState?.user?.request_count || 0}
-                  </div>
-                  <div className='flex items-center justify-center text-sm'>
-                    <BarChart2
-                      size={14}
-                      className='mr-1'
-                      style={{ color: 'rgba(255,255,255,0.8)' }}
-                    />
-                    <Text
-                      style={{
-                        color: 'rgba(255,255,255,0.8)',
-                        fontSize: '12px',
-                      }}
+                {/* 扣费顺序 + 累计统计 */}
+                <div
+                  className='flex flex-wrap justify-between gap-x-4 gap-y-1 mt-3 text-xs'
+                  style={{ color: 'rgba(255,255,255,0.75)' }}
+                >
+                  <span>
+                    {t('自动扣费顺序')}：
+                    {[
+                      wallet.showPoints ? t('积分') : null,
+                      t('余额'),
+                      credit ? t('授信') : null,
+                    ]
+                      .filter(Boolean)
+                      .join(' → ')}
+                  </span>
+                  <span className='flex items-center gap-x-3'>
+                    <Tooltip
+                      content={t(
+                        '按账单原价累计，含积分抵扣与套餐内用量，不等于余额减少额',
+                      )}
                     >
-                      {t('请求次数')}
-                    </Text>
-                  </div>
+                      <span className='flex items-center cursor-help'>
+                        <TrendingUp size={12} className='mr-1' />
+                        {t('累计消费')}{' '}
+                        {renderQuota(userState?.user?.used_quota)}
+                      </span>
+                    </Tooltip>
+                    <span className='flex items-center'>
+                      <BarChart2 size={12} className='mr-1' />
+                      {t('请求')} {userState?.user?.request_count || 0}{' '}
+                      {t('次')}
+                    </span>
+                  </span>
                 </div>
               </div>
             </div>
@@ -766,7 +791,7 @@ const RechargeCard = ({
         </Button>
       </div>
 
-      {creditBanner}
+      {creditPanel}
       {shouldShowSubscription ? (
         <Tabs type='card' activeKey={activeTab} onChange={setActiveTab}>
           <TabPane

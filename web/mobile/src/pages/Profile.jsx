@@ -17,7 +17,7 @@ import { pointsEnabled, renderPoints, renderQuota } from '../utils/quota';
 import { KYC_USER_STATUS } from '../utils/review';
 import SubscriptionUsageCard from '../components/SubscriptionUsageCard';
 // 与 PC 端钱包页同一份判定（是否展示、可用截到 0、超出额），不引 UI 依赖
-import { buildCreditSummary } from '@classic/helpers/creditDisplay';
+import { buildWalletSummary } from '@classic/helpers/walletSummary';
 
 const Profile = () => {
   const navigate = useNavigate();
@@ -289,28 +289,45 @@ const Profile = () => {
             <div style={{ fontSize: 18, fontWeight: 600 }}>
               {user.display_name || user.username}
             </div>
-            {self && (
-              <div style={{ fontSize: 13, opacity: 0.85, marginTop: 2 }}>
-                剩余额度 {renderQuota(self.quota)} · 已用{' '}
-                {renderQuota(self.used_quota)}
-                {pointsEnabled() &&
-                  ` · 积分 ${renderPoints(self.points_balance)}（已用 ${renderPoints(self.points_used)}）`}
-              </div>
-            )}
-            {/* 授信客户余额可以是 0 却照样能调用：不说明的话看不懂，也不知道欠了多少 */}
-            {(() => {
-              const credit = buildCreditSummary(self);
-              if (!credit) return null;
-              return (
-                <div style={{ fontSize: 12.5, opacity: 0.85, marginTop: 2 }}>
-                  信用额度 {renderQuota(credit.limit)} · 已用{' '}
-                  {renderQuota(credit.used)} ·{' '}
-                  {credit.over > 0
-                    ? `已超出 ${renderQuota(credit.over)}，新请求将被拒绝`
-                    : `可用 ${renderQuota(credit.available)}`}
-                </div>
-              );
-            })()}
+            {/* 先答「还能用多少」（与后端预扣同口径），再列来源；授信单独一行按额度/待结清呈现 */}
+            {self &&
+              (() => {
+                const w = buildWalletSummary(self, {
+                  pointsEnabled: pointsEnabled(),
+                });
+                const sources = [`余额 ${renderQuota(w.balance)}`];
+                if (w.showPoints) {
+                  sources.push(
+                    `积分 ${renderPoints(w.points)}（≈${renderQuota(w.points)}）`,
+                  );
+                }
+                if (w.credit) {
+                  sources.push(`授信可用 ${renderQuota(w.creditAvailable)}`);
+                }
+                return (
+                  <>
+                    <div style={{ fontSize: 13, opacity: 0.85, marginTop: 2 }}>
+                      可用 {renderQuota(w.available)}
+                      {w.overdue > 0 && ` · 欠费 ${renderQuota(w.overdue)}`}
+                      {' · '}
+                      {sources.join(' · ')}
+                    </div>
+                    {w.credit && (
+                      <div
+                        style={{ fontSize: 12.5, opacity: 0.85, marginTop: 2 }}
+                      >
+                        授信额度 {renderQuota(w.credit.limit)} · 待结清{' '}
+                        {renderQuota(w.credit.used)}
+                        {w.credit.over > 0 &&
+                          ` · 已超出 ${renderQuota(w.credit.over)}，新请求将被拒绝`}
+                      </div>
+                    )}
+                    <div style={{ fontSize: 12, opacity: 0.7, marginTop: 2 }}>
+                      累计消费 {renderQuota(self.used_quota)}（含积分与套餐）
+                    </div>
+                  </>
+                );
+              })()}
           </div>
         </div>
       </div>
