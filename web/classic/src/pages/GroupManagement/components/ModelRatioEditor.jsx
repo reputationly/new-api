@@ -195,7 +195,7 @@ function TimeRuleCell({ t, pattern, list, windowOptions, onChange }) {
             step={0.05}
             style={{ width: 80 }}
             value={val}
-            onChange={(v) => setVal(v ?? 0.7)}
+            onChange={(v) => setVal(typeof v === 'number' ? v : 0.7)}
           />
           <Button
             size='small'
@@ -834,7 +834,9 @@ export default function ModelRatioEditor({
             step={0.1}
             value={record.value}
             style={{ width: '100%' }}
-            onChange={(v) => updateRow(record._id, 'value', v ?? 0)}
+            onChange={(v) =>
+              updateRow(record._id, 'value', typeof v === 'number' ? v : 0)
+            }
           />
         ),
       },
@@ -1135,7 +1137,7 @@ export default function ModelRatioEditor({
             step={0.1}
             value={batchValue}
             style={{ width: 100 }}
-            onChange={(v) => setBatchValue(v ?? 0)}
+            onChange={(v) => setBatchValue(typeof v === 'number' ? v : 0)}
           />
           <Button size='small' theme='solid' onClick={applyBatch}>
             {t('批量应用')}
@@ -1158,7 +1160,9 @@ export default function ModelRatioEditor({
                 step={0.05}
                 value={batchWindowValue}
                 style={{ width: 80 }}
-                onChange={(v) => setBatchWindowValue(v ?? 0.7)}
+                onChange={(v) =>
+                  setBatchWindowValue(typeof v === 'number' ? v : 0.7)
+                }
               />
               <Button
                 size='small'

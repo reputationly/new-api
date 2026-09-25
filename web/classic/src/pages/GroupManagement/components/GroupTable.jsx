@@ -321,7 +321,10 @@ export default function GroupTable({
               step={0.1}
               value={record.ratio}
               style={{ width: '100%' }}
-              onChange={(v) => updateRow(record._id, 'ratio', v ?? 0)}
+              // 清空时 Semi 给 ''，写进 GroupRatio 会让后端解析失败，按 0 处理
+              onChange={(v) =>
+                updateRow(record._id, 'ratio', typeof v === 'number' ? v : 0)
+              }
             />
             {healthRef.current[record.name]?.rule_count > 0 && (
               <Text type='tertiary' size='small'>

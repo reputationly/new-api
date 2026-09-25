@@ -150,7 +150,9 @@ function GroupSection({
                 step={0.1}
                 value={rule.ratio}
                 style={{ width: 100 }}
-                onChange={(v) => onUpdate(rule._id, 'ratio', v ?? 0)}
+                onChange={(v) =>
+                  onUpdate(rule._id, 'ratio', typeof v === 'number' ? v : 0)
+                }
               />
               <Popconfirm
                 title={t('确认删除该规则？')}

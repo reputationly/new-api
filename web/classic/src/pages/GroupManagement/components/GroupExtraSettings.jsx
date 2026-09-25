@@ -73,9 +73,12 @@ export default function GroupExtraSettings({
   const onChangeRef = useRef(onChange);
   onChangeRef.current = onChange;
 
+  // Semi InputNumber 清空时 onChange 给的是 ''，不是 null。'' 原样写进 JSON 会变成
+  // {"svip": ""}，后端按 map[string]float64 解析直接报错，整次保存失败——而运营
+  // 想做的只是「删掉这一格」。
   const setTopup = useCallback((name, value) => {
     const next = { ...topupRef.current };
-    if (value === null || value === undefined) {
+    if (value === null || value === undefined || value === '') {
       delete next[name];
     } else {
       next[name] = value;
@@ -86,7 +89,7 @@ export default function GroupExtraSettings({
   const setRateLimit = useCallback((name, index, value) => {
     const next = { ...rateLimitRef.current };
     const current = Array.isArray(next[name]) ? [...next[name]] : [0, 0];
-    current[index] = value ?? 0;
+    current[index] = typeof value === 'number' ? value : 0;
     // 两个值都归零视为「不限」，直接摘掉这条，避免留下一条语义暧昧的 [0,0]
     if (current[0] === 0 && current[1] === 0) {
       delete next[name];
