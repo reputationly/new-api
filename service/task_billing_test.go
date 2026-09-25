@@ -342,6 +342,33 @@ func TestRecalculate_PositiveDelta(t *testing.T) {
 	assert.Equal(t, actualQuota-preConsumed, log.Quota)
 }
 
+// 真实时序：轮询先把终态落盘、再结算。结算改的 quota 必须写回库里，
+// 否则 /api/task 与 tasks 表永远显示预扣值。
+func TestRecalculate_PersistsQuotaToDB(t *testing.T) {
+	truncate(t)
+	ctx := context.Background()
+
+	const userID, tokenID, channelID = 13, 13, 13
+	const initQuota, preConsumed, actualQuota = 10000, 8000, 1300
+
+	seedUser(t, userID, initQuota)
+	seedToken(t, tokenID, userID, "sk-recalc-persist", 5000)
+	seedChannel(t, channelID)
+
+	task := makeTask(userID, channelID, preConsumed, tokenID, BillingSourceWallet, 0)
+	task.Status = model.TaskStatusSuccess
+	require.NoError(t, model.DB.Create(task).Error)
+
+	RecalculateTaskQuota(ctx, task, actualQuota, "adaptor adjustment")
+
+	var reloaded model.Task
+	require.NoError(t, model.DB.First(&reloaded, task.ID).Error)
+	assert.Equal(t, actualQuota, reloaded.Quota)
+	assert.Equal(t, model.TaskStatus(model.TaskStatusSuccess), reloaded.Status)
+	assert.Equal(t, tokenID, reloaded.PrivateData.TokenId)
+	assert.Equal(t, BillingSourceWallet, reloaded.PrivateData.BillingSource)
+}
+
 func TestRecalculate_NegativeDelta(t *testing.T) {
 	truncate(t)
 	ctx := context.Background()

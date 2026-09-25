@@ -802,6 +802,21 @@ func (t *Task) UpdateWithStatus(fromStatus TaskStatus) (bool, error) {
 	return result.RowsAffected > 0, nil
 }
 
+// UpdateBillingFields 只写回差额结算改动的两列：quota（实收）与 private_data（积分/授信实付）。
+//
+// 结算发生在任务落终态**之后**（task_polling 先 CAS 存盘再结算），不能走 UpdateWithStatus——
+// 库里状态已是终态，CAS 条件永远不成立；也不整行 Select("*") 覆盖，只动结算碰过的列。
+// 用 UpdateColumns 跳过 BeforeSave 钩子，避免它顺手改写 token_id / api_protocol。
+func (t *Task) UpdateBillingFields() error {
+	if t.ID == 0 {
+		return nil
+	}
+	return DB.Model(&Task{}).Where("id = ?", t.ID).UpdateColumns(map[string]any{
+		"quota":        t.Quota,
+		"private_data": t.PrivateData,
+	}).Error
+}
+
 // TaskBulkUpdate performs an unconditional bulk UPDATE by upstream task_id strings.
 // Same caveats as TaskBulkUpdateByID — no CAS guard.
 func TaskBulkUpdate(taskIds []string, params map[string]any) error {

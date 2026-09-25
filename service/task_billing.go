@@ -588,6 +588,13 @@ func recalculateTaskQuota(ctx context.Context, task *model.Task, actualQuota, co
 		CreditConsumed:   logCredit,
 		Other:            other,
 	})
+
+	// 调用方在结算前已把终态落盘，这里不写回的话 tasks.quota 永远停在预扣值，
+	// private_data 里的积分/授信实付也是调整前的。钱与日志此时都已落定，写回失败
+	// 只记日志、不回滚——回滚反而造成账实不符。
+	if err := task.UpdateBillingFields(); err != nil {
+		logger.LogError(ctx, fmt.Sprintf("差额结算写回任务失败 task %s: %s", task.TaskID, err.Error()))
+	}
 	return true
 }
 
