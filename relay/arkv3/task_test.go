@@ -343,3 +343,11 @@ func TestErrorEnvelope(t *testing.T) {
 	require.False(t, IsErrorEnvelope([]byte(`{"code":"x","message":"y"}`)))
 	require.False(t, IsErrorEnvelope(nil))
 }
+
+// output_format 与其它回显字段同一优先级：上游回执 > 提交快照。
+func TestBuildTaskEchoesOutputFormat(t *testing.T) {
+	props := &model.ArkV3Properties{OutputFormat: "mov"}
+	require.Equal(t, "mov", BuildTask(arkTask(model.TaskStatusSubmitted, props, `{"id":"cgt-1"}`)).OutputFormat)
+	require.Equal(t, "mp4", BuildTask(arkTask(model.TaskStatusSuccess, props,
+		`{"id":"cgt-1","status":"succeeded","output_format":"mp4"}`)).OutputFormat)
+}

@@ -63,6 +63,9 @@ type CreateRequest struct {
 	Seed                  *arkInt `json:"seed"`
 	CameraFixed           *bool   `json:"camera_fixed"`
 	Watermark             *bool   `json:"watermark"`
+	// 仅 Seedance 2.5。不收的话会被 Unmarshal 静默丢掉，调用方以为生效了。
+	OmniReferenceTaskType string `json:"omni_reference_task_type"`
+	OutputFormat          string `json:"output_format"`
 }
 
 // arkInt 是一个能收下**整值浮点**的整数。
@@ -183,6 +186,7 @@ type Task struct {
 	Draft                 *bool  `json:"draft,omitempty"`
 	ServiceTier           string `json:"service_tier,omitempty"`
 	ExecutionExpiresAfter int    `json:"execution_expires_after,omitempty"`
+	OutputFormat          string `json:"output_format,omitempty"`
 
 	Usage *Usage `json:"usage,omitempty"`
 }
@@ -232,6 +236,12 @@ var officialStatuses = map[string]bool{
 const (
 	ServiceTierDefault = "default"
 	ServiceTierFlex    = "flex"
+)
+
+// 官方 omni_reference_task_type / output_format 枚举（仅 Seedance 2.5）。
+var (
+	omniReferenceTaskTypes = map[string]bool{"auto": true, "reference": true, "edit": true, "extend": true}
+	outputFormats          = map[string]bool{"mp4": true, "mov": true}
 )
 
 // ── 错误 ─────────────────────────────────────────────────────────────────────

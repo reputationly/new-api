@@ -292,3 +292,24 @@ func TestConvertAllowsImageOnlyRequest(t *testing.T) {
 	require.Equal(t, "", body["prompt"])
 	require.Equal(t, []any{"https://x/a.jpg"}, body["images"])
 }
+
+// Seedance 2.5 的两个枚举参数：合法值归一化后下发并进快照，非法值就地 400——
+// 不收或静默丢弃都会让调用方以为参数生效了。
+func TestConvertSeedance25EnumParams(t *testing.T) {
+	base := `{"model": "m", "content": [{"type": "text", "text": "x"}]`
+
+	body, snap := convert(t, base+`, "omni_reference_task_type": "Reference", "output_format": "MOV"}`)
+	md := metadataOf(t, body)
+	require.Equal(t, "reference", md["omni_reference_task_type"])
+	require.Equal(t, "mov", md["output_format"])
+	require.Equal(t, "reference", snap.OmniReferenceTaskType)
+	require.Equal(t, "mov", snap.OutputFormat)
+
+	body, _ = convert(t, base+`}`)
+	md = metadataOf(t, body)
+	require.NotContains(t, md, "omni_reference_task_type", "没传就不下发，让上游用自己的默认值")
+	require.NotContains(t, md, "output_format")
+
+	require.Contains(t, convertErr(t, base+`, "omni_reference_task_type": "remix"}`).Message, "omni_reference_task_type")
+	require.Contains(t, convertErr(t, base+`, "output_format": "webm"}`).Message, "output_format")
+}

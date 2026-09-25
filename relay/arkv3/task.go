@@ -65,6 +65,7 @@ type upstreamEcho struct {
 	GenerateAudio   *bool  `json:"generate_audio"`
 	Tools           []Tool `json:"tools"`
 	ServiceTier     string `json:"service_tier"`
+	OutputFormat    string `json:"output_format"`
 	// Output.Duration：方舟文档把实际时长放顶层，部分兼容网关放在 output 下。两处都读，
 	// 只读一处的话换个上游就静默取到 0（与 doubao adaptor 的 actualDuration 同一理由）。
 	Output struct {
@@ -125,6 +126,7 @@ func BuildTask(task *model.Task) Task {
 		Frames:          firstNonZero(echo.Frames, props.Frames),
 		FramesPerSecond: echo.FramesPerSecond,
 		ServiceTier:     firstNonEmpty(echo.ServiceTier, props.ServiceTier),
+		OutputFormat:    firstNonEmpty(echo.OutputFormat, props.OutputFormat),
 
 		SafetyIdentifier:      props.SafetyIdentifier,
 		Priority:              props.Priority,

@@ -298,3 +298,22 @@ func TestArkV3RoundTripKeepsBillingDimensionsReadable(t *testing.T) {
 	require.True(t, hasVideoInMetadata(req.Metadata))
 	require.Less(t, ratio, 1.0)
 }
+
+// Seedance 2.5 新增的两个参数必须一路到达上游。结构体缺字段时它们被静默丢弃、请求照常 200，
+// 只有端到端才测得出来（见文件头）。
+func TestArkV3RoundTripSeedance25Params(t *testing.T) {
+	p := arkRoundTrip(t, `{
+		"model": "doubao-seedance-2-5",
+		"content": [
+			{"type": "text", "text": "把画面里的天空换成晚霞"},
+			{"type": "video_url", "video_url": {"url": "https://x/src.mp4"}, "role": "reference_video"}
+		],
+		"ratio": "adaptive",
+		"duration": -1,
+		"omni_reference_task_type": "EDIT",
+		"output_format": "mov"
+	}`)
+
+	require.Equal(t, "edit", p.OmniReferenceTaskType)
+	require.Equal(t, "mov", p.OutputFormat)
+}

@@ -208,6 +208,8 @@ type ArkV3Properties struct {
 	Priority              *int     `json:"priority,omitempty"`
 	ServiceTier           string   `json:"service_tier,omitempty"`
 	ExecutionExpiresAfter int      `json:"execution_expires_after,omitempty"`
+	OmniReferenceTaskType string   `json:"omni_reference_task_type,omitempty"`
+	OutputFormat          string   `json:"output_format,omitempty"`
 	// Deleted 是方舟协议侧的软删标记，语义与 MiniMaxV2Properties.Deleted 完全一致
 	// （任务从本协议的查询与列表里消失，但行保留 —— 同一行还背着产物代理、下载、
 	// 分享链接等与本协议无关的功能）。

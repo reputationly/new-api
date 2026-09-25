@@ -65,6 +65,9 @@ type requestPayload struct {
 	// 两者与上面的字段一样从 metadata 透传——结构体没有对应字段的话 UnmarshalMetadata 会直接丢弃。
 	Priority         *dto.IntValue `json:"priority,omitempty"`
 	SafetyIdentifier string        `json:"safety_identifier,omitempty"`
+	// 仅 Seedance 2.5:全模态参考的子任务类型(auto/reference/edit/extend)与输出格式(mp4/mov)。
+	OmniReferenceTaskType string `json:"omni_reference_task_type,omitempty"`
+	OutputFormat          string `json:"output_format,omitempty"`
 }
 
 type responsePayload struct {

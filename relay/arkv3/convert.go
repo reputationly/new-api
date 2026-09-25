@@ -119,6 +119,8 @@ func ConvertCreateRequest(raw []byte) (map[string]any, *Snapshot, *APIError) {
 	putString(metadata, "ratio", ratio)
 	putString(metadata, "service_tier", req.ServiceTier)
 	putString(metadata, "safety_identifier", req.SafetyIdentifier)
+	putString(metadata, "omni_reference_task_type", req.OmniReferenceTaskType)
+	putString(metadata, "output_format", req.OutputFormat)
 	putInt(metadata, "duration", req.Duration.intPtr())
 	putInt(metadata, "frames", req.Frames.intPtr())
 	putInt(metadata, "seed", req.Seed.intPtr())
@@ -176,6 +178,8 @@ func ConvertCreateRequest(raw []byte) (map[string]any, *Snapshot, *APIError) {
 		Priority:              req.Priority.intPtr(),
 		ServiceTier:           req.ServiceTier,
 		ExecutionExpiresAfter: req.ExecutionExpiresAfter.intOrZero(),
+		OmniReferenceTaskType: req.OmniReferenceTaskType,
+		OutputFormat:          req.OutputFormat,
 	}, nil
 }
 
@@ -369,6 +373,18 @@ func validateScalars(req *CreateRequest) *APIError {
 		if v := int(*req.Seed); v < minSeed || v > maxSeed {
 			return badRequest(fmt.Sprintf("seed must be between %d and %d, got %d", minSeed, maxSeed, v))
 		}
+	}
+	if v := strings.ToLower(strings.TrimSpace(req.OmniReferenceTaskType)); v != "" {
+		if !omniReferenceTaskTypes[v] {
+			return badRequest(fmt.Sprintf("omni_reference_task_type=%q is not supported (expected auto / reference / edit / extend)", req.OmniReferenceTaskType))
+		}
+		req.OmniReferenceTaskType = v
+	}
+	if v := strings.ToLower(strings.TrimSpace(req.OutputFormat)); v != "" {
+		if !outputFormats[v] {
+			return badRequest(fmt.Sprintf("output_format=%q is not supported (expected mp4 / mov)", req.OutputFormat))
+		}
+		req.OutputFormat = v
 	}
 	if len(req.SafetyIdentifier) > maxSafetyIdentifierLen {
 		return badRequest(fmt.Sprintf("safety_identifier must be at most %d characters, got %d",
