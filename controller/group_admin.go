@@ -10,6 +10,7 @@ import (
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/setting"
+	"github.com/QuantumNous/new-api/setting/operation_setting"
 	"github.com/QuantumNous/new-api/setting/ratio_setting"
 
 	"github.com/gin-gonic/gin"
@@ -142,13 +143,100 @@ func GetGroupOverview(c *gin.Context) {
 		})
 	}
 
+	// 用户档 → 最终可用线路。可用性由五个来源合成（全局勾选、用户自身分组、特殊
+	// 增减规则、停用态、auto 池），运营看规则推不出结果，这里直接给结果。
+	usableMatrix := make(map[string][]string, len(names))
+	for _, name := range names {
+		if name == pseudoGroupAuto {
+			continue
+		}
+		usable := service.GetUserUsableGroups(name)
+		lines := make([]string, 0, len(usable))
+		for g := range usable {
+			lines = append(lines, g)
+		}
+		sort.Strings(lines)
+		usableMatrix[name] = lines
+	}
+
+	dangling := danglingGroupRefs(ratios, collectGroupRefs())
+
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
 		"data": gin.H{
-			"groups":       list,
-			"unconfigured": unconfigured,
+			"groups":        list,
+			"unconfigured":  unconfigured,
+			"usable_matrix": usableMatrix,
+			"dangling":      dangling,
 		},
 	})
+}
+
+// groupRef 是分组配置中对某个线路名的一次引用。
+type groupRef struct {
+	Source string `json:"source"` // auto_groups | group_group_ratio | special_usable | topup_ratio | rate_limit | points
+	Owner  string `json:"owner"`  // 引用发生在哪个用户档下，无则为空
+	Name   string `json:"name"`   // 被引用的线路名
+}
+
+// collectGroupRefs 汇总所有会引用「线路名」的配置项。
+//
+// 刻意不收用户档一侧的 key（GroupGroupRatio / 特殊可用规则 / 档位折扣的外层 key）：
+// 用户档允许是任意字符串（谈判客户名），不在 GroupRatio 里是正常的。
+func collectGroupRefs() []groupRef {
+	refs := make([]groupRef, 0)
+	for _, g := range setting.GetAutoGroups() {
+		refs = append(refs, groupRef{Source: "auto_groups", Name: g})
+	}
+	for owner, targets := range ratio_setting.GetGroupRatioSetting().GroupGroupRatio.ReadAll() {
+		for using := range targets {
+			refs = append(refs, groupRef{Source: "group_group_ratio", Owner: owner, Name: using})
+		}
+	}
+	for owner, rule := range ratio_setting.GetGroupRatioSetting().GroupSpecialUsableGroup.ReadAll() {
+		for target := range rule {
+			name := strings.TrimPrefix(strings.TrimPrefix(target, "+:"), "-:")
+			refs = append(refs, groupRef{Source: "special_usable", Owner: owner, Name: name})
+		}
+	}
+	for g := range common.GetTopupGroupRatioCopy() {
+		refs = append(refs, groupRef{Source: "topup_ratio", Name: g})
+	}
+	for g := range setting.GetModelRequestRateLimitGroupCopy() {
+		refs = append(refs, groupRef{Source: "rate_limit", Name: g})
+	}
+	for _, g := range operation_setting.GetPointsSetting().EnabledGroups {
+		refs = append(refs, groupRef{Source: "points", Name: g})
+	}
+	return refs
+}
+
+// danglingGroupRefs 过滤出指向不存在线路的引用。
+//
+// 这类引用不会报错，只会静默不生效（auto 池里一个不存在的名字永远选不中；
+// 一条给 vip 的特殊倍率指向已删的线路永远不命中）。删线路时前端会查 user / token /
+// channel / plan 四类引用，但查不到这些 option 内部的引用，所以在这里补上。
+func danglingGroupRefs(configured map[string]float64, refs []groupRef) []groupRef {
+	out := make([]groupRef, 0)
+	for _, r := range refs {
+		if r.Name == "" || r.Name == pseudoGroupAuto {
+			continue
+		}
+		if _, ok := configured[r.Name]; ok {
+			continue
+		}
+		out = append(out, r)
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Source != out[j].Source {
+			return out[i].Source < out[j].Source
+		}
+		if out[i].Owner != out[j].Owner {
+			return out[i].Owner < out[j].Owner
+		}
+		return out[i].Name < out[j].Name
+	})
+	return out
 }
 
 // groupStatus 判定一个分组的健康度。

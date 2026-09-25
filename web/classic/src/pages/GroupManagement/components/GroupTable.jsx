@@ -27,17 +27,17 @@ const STATUS_META = {
   no_channel: {
     color: 'red',
     label: '无渠道挂载',
-    hint: '该分组没有任何启用渠道，用户一旦选中必然报「无可用渠道」。去渠道管理把渠道挂到这个分组上。',
+    hint: '该线路没有任何启用渠道，用户一旦选中必然报「无可用渠道」。去渠道管理把渠道挂到这条线路上。',
   },
   unreachable: {
     color: 'orange',
     label: '无人可用',
-    hint: '该分组有渠道，但既没勾「用户可选」、也没有用户属于它、不在自动分组池里、也没有特殊可用规则追加——没有任何路径能让用户用上它。',
+    hint: '该线路有渠道，但既没勾「用户可选」、也没有用户属于同名用户档、不在自动分组池里、也没有可用线路规则添加——没有任何路径能让用户用上它。',
   },
   virtual: {
     color: 'blue',
     label: '伪分组',
-    hint: 'auto 不对应任何渠道，运行时会被替换成自动分组池里的某个真实分组。它没有渠道是正常的，倍率也不参与计费。',
+    hint: 'auto 不对应任何渠道，运行时会被替换成自动分组池里的某条真实线路。它没有渠道是正常的，倍率也不参与计费。',
   },
 };
 
@@ -92,7 +92,12 @@ export function serializeGroupTable(rows) {
 
   rows.forEach((row) => {
     if (!row.name) return;
-    groupRatio[row.name] = row.ratio;
+    // auto 是伪分组，不是线路：它只该存在于 UserUsableGroups（决定用户能否选 auto）。
+    // 写进 GroupRatio 会让渠道/用户编辑的下拉里多出一个选不得的 auto，
+    // 健康列表里也会多一行永远「伪分组」的记录。
+    if (row.name !== 'auto') {
+      groupRatio[row.name] = row.ratio;
+    }
     groupDescription[row.name] = row.description;
     if (row.selectable) {
       userUsableGroups[row.name] = row.description;
@@ -253,11 +258,11 @@ export default function GroupTable({
       }
 
       Modal.confirm({
-        title: t('分组 {{name}} 仍被引用', { name: record.name }),
+        title: t('线路 {{name}} 仍被引用', { name: record.name }),
         type: 'warning',
         content: (
           <div className='text-sm leading-7'>
-            <div>{t('删除后这些引用会指向一个不存在的分组：')}</div>
+            <div>{t('删除后这些引用会指向一个不存在的线路：')}</div>
             <ul className='ml-4 list-disc'>
               {refs.users > 0 && (
                 <li>{t('用户 {{n}} 个', { n: refs.users })}</li>
@@ -288,7 +293,7 @@ export default function GroupTable({
   const columns = useMemo(
     () => [
       {
-        title: t('分组名称'),
+        title: t('线路名称'),
         dataIndex: 'name',
         key: 'name',
         width: 180,
@@ -304,7 +309,7 @@ export default function GroupTable({
         ),
       },
       {
-        title: t('倍率'),
+        title: t('基础倍率'),
         dataIndex: 'ratio',
         key: 'ratio',
         width: 120,
@@ -332,14 +337,18 @@ export default function GroupTable({
         width: 110,
         render: (_, record) => {
           const h = healthRef.current[record.name];
-          if (!h) {
+          // auto 不再写入 GroupRatio，overview 里没有它的健康记录，直接按伪分组渲染
+          if (!h && record.name !== 'auto') {
             return (
               <Tag size='small' color='grey' shape='circle'>
                 {t('未保存')}
               </Tag>
             );
           }
-          const meta = STATUS_META[h.status] || STATUS_META.ok;
+          const meta =
+            record.name === 'auto'
+              ? STATUS_META.virtual
+              : STATUS_META[h.status] || STATUS_META.ok;
           const tag = (
             <Tag size='small' color={meta.color} shape='circle'>
               {t(meta.label)}
@@ -369,7 +378,7 @@ export default function GroupTable({
         },
       },
       {
-        title: t('模型折扣'),
+        title: t('模型定价'),
         key: 'rules',
         width: 130,
         render: (_, record) => {
@@ -388,7 +397,7 @@ export default function GroupTable({
               {stale.length > 0 && (
                 <Tooltip
                   content={t(
-                    '这些规则匹配不到本分组的任何模型，当前不生效：{{list}}',
+                    '这些规则匹配不到本线路的任何模型，当前不生效：{{list}}',
                     {
                       list: stale.join(', '),
                     },
@@ -440,7 +449,9 @@ export default function GroupTable({
             size='small'
             value={record.description}
             placeholder={
-              record.selectable ? t('分组描述') : t('备注（用户不可见）')
+              record.selectable
+                ? t('线路描述（用户可见）')
+                : t('备注（用户不可见）')
             }
             onChange={(v) => updateRow(record._id, 'description', v)}
           />
@@ -472,16 +483,16 @@ export default function GroupTable({
         rowKey='_id'
         hidePagination
         size='small'
-        empty={<Text type='tertiary'>{t('暂无分组，点击下方按钮添加')}</Text>}
+        empty={<Text type='tertiary'>{t('暂无线路，点击下方按钮添加')}</Text>}
       />
       <div className='mt-3 flex justify-center'>
         <Button icon={<IconPlus />} theme='outline' onClick={addRow}>
-          {t('添加分组')}
+          {t('添加线路')}
         </Button>
       </div>
       {duplicateNames.size > 0 && (
         <Text type='warning' size='small' className='mt-2 block'>
-          {t('存在重复的分组名称：')}
+          {t('存在重复的线路名称：')}
           {Array.from(duplicateNames).join(', ')}
         </Text>
       )}

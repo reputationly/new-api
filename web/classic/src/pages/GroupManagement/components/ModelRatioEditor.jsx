@@ -646,7 +646,7 @@ export default function ModelRatioEditor({
     const text = JSON.stringify(rowsToRules(rows), null, 2);
     try {
       await navigator.clipboard.writeText(text);
-      showSuccess(t('已复制当前分组的规则 JSON'));
+      showSuccess(t('已复制当前规则 JSON'));
     } catch {
       // 非 https 或浏览器不给权限时剪贴板不可用，退回到让人自己选中复制
       setJsonText(text);
@@ -969,7 +969,7 @@ export default function ModelRatioEditor({
   );
 
   if (!group) {
-    return <Empty description={texts.emptyHint || t('请先选择一个分组')} />;
+    return <Empty description={texts.emptyHint || t('请先选择一条线路')} />;
   }
 
   return (
@@ -983,16 +983,16 @@ export default function ModelRatioEditor({
               <>
                 <div>
                   {t(
-                    '折扣 ×：在分组基础倍率上再乘，改分组倍率时所有模型的优惠自动跟随。',
+                    '折扣 ×：在线路基础倍率上再乘，改线路基础倍率时所有模型的优惠自动跟随。',
                   )}
                 </div>
                 <div>
                   {t(
-                    '定价 =：该模型就是这个倍率，与分组基础倍率、用户身份折扣全部脱钩。',
+                    '定价 =：该模型就是这个倍率，与线路基础倍率、「按线路覆盖」全部脱钩（用户档折扣仍会叠乘）。',
                   )}
                 </div>
                 <div>
-                  {t('当前分组基础倍率')}：
+                  {t('当前线路基础倍率')}：
                   <Text strong>{groupRatio ?? 1}x</Text>
                 </div>
               </>
@@ -1007,7 +1007,7 @@ export default function ModelRatioEditor({
           type='warning'
           closeIcon={null}
           description={t(
-            '该分组存在「定价 =」规则：改分组基础倍率时这些模型不会跟随，且它们会覆盖掉针对用户分组配置的身份折扣。可用下方试算器确认最终倍率。',
+            '该线路存在「定价 =」规则：改线路基础倍率时这些模型不会跟随，且它们会覆盖「按线路覆盖」的值。可用下方试算器确认最终倍率。',
           )}
         />
       )}
@@ -1025,14 +1025,14 @@ export default function ModelRatioEditor({
             />
             <Select
               filter
-              placeholder={t('从本分组可用模型中添加')}
+              placeholder={t('从本线路可用模型中添加')}
               style={{ width: 260 }}
               optionList={modelOptions}
               value={null}
               onChange={(v) => v && addRow(v)}
               emptyContent={
                 groupModels.length === 0
-                  ? t('该分组暂无渠道覆盖的模型')
+                  ? t('该线路暂无渠道覆盖的模型')
                   : t('全部模型已配置')
               }
             />
@@ -1069,7 +1069,7 @@ export default function ModelRatioEditor({
               }
             >
               <Button size='small' theme='borderless'>
-                {t('同步到其他分组')}
+                {t(texts.syncLabel || '同步到其他线路')}
               </Button>
             </Dropdown>
           )}
@@ -1090,7 +1090,7 @@ export default function ModelRatioEditor({
         <div className='mt-3'>
           <Text type='tertiary' size='small' className='mb-1 block'>
             {t(
-              '这里是「{{g}}」这一个分组的规则，与上方表格逐条对应。整段粘贴即可批量配置；改完可用「同步到其他分组」把同一份规则复制过去。',
+              '这里是「{{g}}」这一条的规则，与上方表格逐条对应。整段粘贴即可批量配置；改完可用「同步」按钮把同一份规则复制过去。',
               { g: group },
             )}
           </Text>
@@ -1215,7 +1215,7 @@ export default function ModelRatioEditor({
             }}
             empty={
               <Text type='tertiary'>
-                {t('该分组暂无模型折扣，所有模型按分组基础倍率计费')}
+                {t('该线路暂无模型定价规则，所有模型按线路基础倍率计费')}
               </Text>
             }
           />
@@ -1230,7 +1230,7 @@ export default function ModelRatioEditor({
       )}
       {staleRules.length > 0 && (
         <Text type='warning' size='small' className='mt-2 block'>
-          {t('以下规则在本分组匹配不到任何模型，当前不会生效：')}
+          {t('以下规则在本线路匹配不到任何模型，当前不会生效：')}
           {staleRules.join(', ')}
         </Text>
       )}

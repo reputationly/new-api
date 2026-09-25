@@ -730,12 +730,11 @@ const EditTagModal = (props) => {
                 <div className='space-y-4'>
                   <Form.Select
                     field='groups'
-                    label={t('分组')}
-                    placeholder={t('请选择可以使用该渠道的分组，留空则不更改')}
+                    label={t('线路（分组）')}
+                    placeholder={t('请选择可以使用该渠道的线路，留空则不更改')}
                     multiple
-                    allowAdditions
-                    additionLabel={t(
-                      '请在系统设置页面编辑分组倍率以添加新的分组：',
+                    extraText={t(
+                      '线路需先在「分组管理」中创建。挂到未配置的线路上，该渠道对用户不可用。',
                     )}
                     optionList={groupOptions}
                     style={{ width: '100%' }}

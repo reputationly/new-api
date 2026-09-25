@@ -71,3 +71,14 @@ func CheckModelRequestRateLimitGroup(jsonStr string) error {
 
 	return nil
 }
+
+// GetModelRequestRateLimitGroupCopy 返回分组限流表的副本，供分组管理页做悬空引用检查。
+func GetModelRequestRateLimitGroupCopy() map[string][2]int {
+	ModelRequestRateLimitMutex.RLock()
+	defer ModelRequestRateLimitMutex.RUnlock()
+	out := make(map[string][2]int, len(ModelRequestRateLimitGroup))
+	for k, v := range ModelRequestRateLimitGroup {
+		out[k] = v
+	}
+	return out
+}

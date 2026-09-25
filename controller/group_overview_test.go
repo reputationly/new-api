@@ -46,3 +46,28 @@ func TestStaleRulePatterns_NoRules(t *testing.T) {
 	require.Empty(t, staleRulePatterns("premium", map[string]ratio_setting.ModelRatioRule{}, nil))
 	require.Empty(t, staleRulePatterns("premium", nil, []string{}))
 }
+
+// TestDanglingGroupRefs 悬空引用检查：只报指向不存在线路的引用，auto 与空名跳过。
+func TestDanglingGroupRefs(t *testing.T) {
+	configured := map[string]float64{"default": 1, "premium": 1.5}
+	refs := []groupRef{
+		{Source: "auto_groups", Name: "default"},
+		{Source: "auto_groups", Name: "gone"},
+		{Source: "auto_groups", Name: "auto"},
+		{Source: "special_usable", Owner: "vip", Name: "premium"},
+		{Source: "special_usable", Owner: "vip", Name: "removed"},
+		{Source: "points", Name: ""},
+	}
+	got := danglingGroupRefs(configured, refs)
+	require.Equal(t, []groupRef{
+		{Source: "auto_groups", Name: "gone"},
+		{Source: "special_usable", Owner: "vip", Name: "removed"},
+	}, got)
+}
+
+// TestDanglingGroupRefs_Empty 没有悬空引用时返回空切片而不是 nil，前端拿到的是 [] 不是 null。
+func TestDanglingGroupRefs_Empty(t *testing.T) {
+	got := danglingGroupRefs(map[string]float64{"default": 1}, []groupRef{{Source: "auto_groups", Name: "default"}})
+	require.NotNil(t, got)
+	require.Empty(t, got)
+}

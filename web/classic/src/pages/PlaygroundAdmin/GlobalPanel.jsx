@@ -19,7 +19,7 @@ const GlobalPanel = ({ draft }) => {
   const { t } = useTranslation();
   const global = getPromptOptimizeGlobal(draft.tabConfig);
 
-  // 「用户可用分组」表（运营设置里那张）——它决定一个分组是不是「所有人都能访问」。
+  // 「用户可选」线路表（分组管理 → 线路列表里的勾选）——它决定一条线路是不是「所有人都能访问」。
   // GetUserUsableGroups(userGroup) 就是从这张表出发，再叠加各分组的 +:/-: 特殊增删。
   const universalGroups = useMemo(() => {
     try {

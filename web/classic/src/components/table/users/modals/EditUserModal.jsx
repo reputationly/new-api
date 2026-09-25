@@ -430,10 +430,12 @@ const EditUserModal = (props) => {
                       <Col span={24}>
                         <Form.Select
                           field='group'
-                          label={t('用户分组')}
-                          placeholder={t('请选择用户分组')}
+                          label={t('用户档（分组）')}
+                          placeholder={t('请选择用户档')}
                           optionList={groupOptions}
-                          allowAdditions
+                          extraText={t(
+                            '决定该用户的折扣、充值倍率、限流与可用线路。候选来自「分组管理」。',
+                          )}
                           search
                           rules={[
                             { required: true, message: t('请选择用户分组') },

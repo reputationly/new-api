@@ -61,3 +61,15 @@ func TestGetUserUsableGroups_NoDisabledConfigUnchanged(t *testing.T) {
 	require.Contains(t, got, "default")
 	require.Contains(t, got, "free")
 }
+
+// TestGetUserUsableGroups_DescriptionSingleSource 描述只认 GroupDescription：
+// 特殊可用规则里的 value 与 UserUsableGroups 里的 value 都不再直接下发，否则模型广场
+// （/api/pricing）与令牌页（/api/user/self/groups）会给同一个线路显示两种描述。
+func TestGetUserUsableGroups_DescriptionSingleSource(t *testing.T) {
+	withGroupsForDisableTest(t, `{"default":"老描述"}`, ``, `["default"]`)
+	require.NoError(t, setting.UpdateGroupDescriptionsByJSONString(`{"default":"新描述"}`))
+	t.Cleanup(func() { _ = setting.UpdateGroupDescriptionsByJSONString("") })
+
+	got := GetUserUsableGroups("default")
+	require.Equal(t, "新描述", got["default"])
+}

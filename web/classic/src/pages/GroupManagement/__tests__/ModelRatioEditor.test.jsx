@@ -121,7 +121,7 @@ describe('ModelRatioEditor 序列化', () => {
         })}
       />,
     );
-    expect(screen.queryByText(/会覆盖掉针对用户分组配置的身份折扣/)).toBeNull();
+    expect(screen.queryByText(/会覆盖「按线路覆盖」的值/)).toBeNull();
   });
 
   it('存在「定价 =」规则时弹出覆盖警告', () => {
@@ -133,7 +133,7 @@ describe('ModelRatioEditor 序列化', () => {
       />,
     );
     expect(
-      screen.getByText(/会覆盖掉针对用户分组配置的身份折扣/),
+      screen.getByText(/会覆盖「按线路覆盖」的值/),
     ).toBeInTheDocument();
   });
 });

@@ -3,7 +3,7 @@ import { Banner, Button, Tag } from '@douyinfe/semi-ui';
 import { useTranslation } from 'react-i18next';
 
 /**
- * 失配提示条：被渠道挂载、但分组配置里没有的分组名。
+ * 失配提示条：被渠道挂载、但线路配置里没有的名字。
  *
  * 这类渠道当前**完全不可用**——middleware/auth.go 判「分组已被弃用」直接拒绝，
  * 而在改造前没有任何页面能发现，只能等用户报错反推。现网大概率已经存在这类失配。
@@ -21,7 +21,7 @@ export default function MismatchBanner({ unconfigured = [], onCreateMissing }) {
         <div className='text-sm leading-6'>
           <div>
             {t(
-              '检测到 {{n}} 个分组被渠道引用但未配置，这些渠道当前完全不可用：',
+              '检测到 {{n}} 条线路被渠道引用但未配置，这些渠道当前完全不可用：',
               {
                 n: unconfigured.length,
               },

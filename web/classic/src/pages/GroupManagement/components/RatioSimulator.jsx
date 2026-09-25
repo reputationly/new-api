@@ -25,7 +25,7 @@ const { Text } = Typography;
  * 刻意走后端 /api/group/resolve 而不是在前端复算：前端复算一份就意味着有两个
  * 实现，一旦分叉，试算器就从「敢不敢上线的依据」变成误导源。
  */
-export default function RatioSimulator({ groupNames = [] }) {
+export default function RatioSimulator({ groupNames = [], tierNames = [] }) {
   const { t } = useTranslation();
   const [userGroup, setUserGroup] = useState('');
   const [usingGroup, setUsingGroup] = useState('');
@@ -39,7 +39,7 @@ export default function RatioSimulator({ groupNames = [] }) {
 
   const run = useCallback(async () => {
     if (!usingGroup) {
-      showError(t('请选择令牌分组'));
+      showError(t('请选择线路'));
       return;
     }
     setLoading(true);
@@ -65,6 +65,10 @@ export default function RatioSimulator({ groupNames = [] }) {
   }, [userGroup, usingGroup, modelName, at, t]);
 
   const groupOptions = groupNames.map((g) => ({ label: g, value: g }));
+  // 用户档可以是不在 GroupRatio 里的谈判档名，只给线路名的话那些档永远试算不到
+  const tierOptions = Array.from(new Set([...tierNames, ...groupNames])).map(
+    (g) => ({ label: g, value: g }),
+  );
 
   const renderLayer = (label, hit, detail, value) => (
     <Row className='py-1' gutter={8}>
@@ -102,22 +106,23 @@ export default function RatioSimulator({ groupNames = [] }) {
       <Row gutter={12} className='mb-3'>
         <Col xs={24} sm={7}>
           <Text type='tertiary' size='small' className='mb-1 block'>
-            {t('用户分组')}
+            {t('用户档')}
           </Text>
           <Select
             data-testid='sim-user-group'
             style={{ width: '100%' }}
             placeholder={t('（不限）')}
             value={userGroup || null}
-            optionList={groupOptions}
+            optionList={tierOptions}
             onChange={setUserGroup}
             showClear
             filter
+            allowCreate
           />
         </Col>
         <Col xs={24} sm={7}>
           <Text type='tertiary' size='small' className='mb-1 block'>
-            {t('令牌分组')}
+            {t('线路')}
           </Text>
           <Select
             data-testid='sim-using-group'
@@ -178,23 +183,26 @@ export default function RatioSimulator({ groupNames = [] }) {
         >
           {!result.usable && (
             <Tag color='orange' shape='circle' className='mb-2'>
-              {t('该用户分组当前用不到这个令牌分组')}
+              {t('该用户档当前用不到这条线路')}
             </Tag>
           )}
           {renderLayer(
-            t('分组基础倍率'),
+            t('线路基础倍率'),
             true,
             usingGroup,
             `${result.group_ratio}x`,
           )}
           {renderLayer(
-            t('用户身份折扣'),
+            t('按线路覆盖（高级）'),
             result.has_special_ratio,
-            t('{{u}} 使用 {{g}} 时覆盖', { u: userGroup, g: usingGroup }),
+            t('{{u}} 使用 {{g}} 时替换基础倍率', {
+              u: userGroup,
+              g: usingGroup,
+            }),
             result.has_special_ratio ? `${result.special_ratio}x` : '—',
           )}
           {renderLayer(
-            t('模型折扣'),
+            t('模型定价'),
             !!result.rule_match,
             result.rule_match
               ? `${result.rule_match} · ${
@@ -218,7 +226,7 @@ export default function RatioSimulator({ groupNames = [] }) {
             result.user_rule_match ? `×${result.user_rule_value}` : '—',
           )}
           {renderLayer(
-            t('时段折扣'),
+            t('时段价'),
             !!result.time_window,
             result.time_window
               ? `${result.time_label || result.time_window} · ${t('折扣 ×')} ${
@@ -241,7 +249,7 @@ export default function RatioSimulator({ groupNames = [] }) {
           {result.rule_mode === 'override' && result.has_special_ratio && (
             <Text type='warning' size='small' className='mt-2 block'>
               {t(
-                '注意：「定价 =」已覆盖用户身份折扣（{{base}}x），身份折扣在本次计费中不生效。',
+                '注意：「定价 =」已覆盖「按线路覆盖」的值（{{base}}x），该覆盖在本次计费中不生效。',
                 { base: result.special_ratio },
               )}
             </Text>

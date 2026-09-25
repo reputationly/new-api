@@ -60,7 +60,7 @@ const typeJson = async (el, obj) => {
 
 /** 展开「同步到其他分组」的 Dropdown 并点中目标分组——菜单渲染在 portal 里 */
 const pickSyncTarget = async (target) => {
-  await userEvent.click(screen.getByText('同步到其他分组'));
+  await userEvent.click(screen.getByText('同步到其他线路'));
   const item = await waitFor(() => {
     const el = Array.from(
       document.querySelectorAll('.semi-dropdown-item'),
@@ -237,6 +237,6 @@ describe('模型折扣的 JSON 视图', () => {
   it('没有可同步的目标时不渲染同步下拉', async () => {
     render(<Harness initial='{}' syncTargets={['default']} />);
     await screen.findByText('切换到 JSON');
-    expect(screen.queryByText('同步到其他分组')).toBeNull();
+    expect(screen.queryByText('同步到其他线路')).toBeNull();
   });
 });

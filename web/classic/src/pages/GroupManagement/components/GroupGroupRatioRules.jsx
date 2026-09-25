@@ -138,11 +138,10 @@ function GroupSection({
                 size='small'
                 filter
                 value={rule.usingGroup || undefined}
-                placeholder={t('选择使用分组')}
+                placeholder={t('选择线路')}
                 optionList={groupOptions}
                 onChange={(v) => onUpdate(rule._id, 'usingGroup', v)}
                 style={{ flex: 1 }}
-                allowCreate
                 position='bottomLeft'
               />
               <InputNumber
@@ -176,6 +175,7 @@ function GroupSection({
 export default function GroupGroupRatioRules({
   value,
   groupNames = [],
+  tierNames = [],
   onChange,
 }) {
   const { t } = useTranslation();
@@ -228,6 +228,15 @@ export default function GroupGroupRatioRules({
     () => groupNames.map((n) => ({ value: n, label: n })),
     [groupNames],
   );
+  // 外层 key 是用户档：允许是任意字符串（谈判客户名），所以候选并入 tierNames 且可新建
+  const tierOptions = useMemo(
+    () =>
+      (tierNames.length ? tierNames : groupNames).map((n) => ({
+        value: n,
+        label: n,
+      })),
+    [tierNames, groupNames],
+  );
 
   const grouped = useMemo(() => {
     const map = {};
@@ -254,15 +263,15 @@ export default function GroupGroupRatioRules({
             size='small'
             filter
             allowCreate
-            placeholder={t('选择用户分组')}
-            optionList={groupOptions}
+            placeholder={t('选择用户档')}
+            optionList={tierOptions}
             value={newGroupName || undefined}
             onChange={setNewGroupName}
             style={{ width: 200 }}
             position='bottomLeft'
           />
           <Button icon={<IconPlus />} theme='outline' onClick={addNewGroup}>
-            {t('添加分组规则')}
+            {t('添加用户档规则')}
           </Button>
         </div>
       </div>
@@ -288,15 +297,15 @@ export default function GroupGroupRatioRules({
           size='small'
           filter
           allowCreate
-          placeholder={t('选择用户分组')}
-          optionList={groupOptions}
+          placeholder={t('选择用户档')}
+          optionList={tierOptions}
           value={newGroupName || undefined}
           onChange={setNewGroupName}
           style={{ width: 200 }}
           position='bottomLeft'
         />
         <Button icon={<IconPlus />} theme='outline' onClick={addNewGroup}>
-          {t('添加分组规则')}
+          {t('添加用户档规则')}
         </Button>
       </div>
     </div>

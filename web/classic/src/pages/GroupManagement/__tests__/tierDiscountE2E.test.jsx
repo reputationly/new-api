@@ -118,6 +118,9 @@ async function openTierTab(user) {
     </MemoryRouter>,
   );
   await waitFor(() => expect(API.get).toHaveBeenCalled());
+  // 档位折扣是「用户档」下的二级 Tab：先切到用户档，否则二级 Tab 的内容
+  // 仍在隐藏的一级面板里，role 查询会把隐藏元素排除掉
+  await user.click(await screen.findByRole('tab', { name: '用户档' }));
   await user.click(await screen.findByText('档位折扣'));
   await screen.findByText('batch2026q3');
 }

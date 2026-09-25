@@ -20,7 +20,6 @@ import React, { useState, useCallback, useMemo } from 'react';
 import {
   Button,
   Collapsible,
-  Input,
   Select,
   Tag,
   Typography,
@@ -41,20 +40,28 @@ const uid = () => `gsu_${++_idCounter}`;
 
 const OP_ADD = 'add';
 const OP_REMOVE = 'remove';
-const OP_APPEND = 'append';
 
+/**
+ * 存储格式（group_ratio_setting.group_special_usable_group）：
+ *   { 用户档: { "+:线路": "", "-:线路": "remove" } }
+ *
+ * 后端 service/group.go 把三种 key 写法都当作合法：`+:x` 添加、`-:x` 移除、
+ * 裸 `x` 也是添加。这里读取时把裸写法归入「添加」，写回时一律带 `+:`——
+ * 两种写法语义相同，UI 上并排出现只会让人猜区别。
+ *
+ * value 曾被当作线路描述下发给用户，现在描述只认 GroupDescription（见
+ * service/group.go），所以这里不再提供描述输入，添加规则的 value 写空串。
+ */
 function parsePrefix(rawKey) {
-  if (rawKey.startsWith('+:'))
-    return { op: OP_ADD, groupName: rawKey.slice(2) };
   if (rawKey.startsWith('-:'))
     return { op: OP_REMOVE, groupName: rawKey.slice(2) };
-  return { op: OP_APPEND, groupName: rawKey };
+  if (rawKey.startsWith('+:'))
+    return { op: OP_ADD, groupName: rawKey.slice(2) };
+  return { op: OP_ADD, groupName: rawKey };
 }
 
 function toRawKey(op, groupName) {
-  if (op === OP_ADD) return `+:${groupName}`;
-  if (op === OP_REMOVE) return `-:${groupName}`;
-  return groupName;
+  return op === OP_REMOVE ? `-:${groupName}` : `+:${groupName}`;
 }
 
 function parseJSON(str) {
@@ -70,16 +77,9 @@ function flattenRules(nested) {
   const rules = [];
   for (const [userGroup, inner] of Object.entries(nested)) {
     if (typeof inner !== 'object' || inner === null) continue;
-    for (const [rawKey, desc] of Object.entries(inner)) {
+    for (const rawKey of Object.keys(inner)) {
       const { op, groupName } = parsePrefix(rawKey);
-      rules.push({
-        _id: uid(),
-        userGroup,
-        op,
-        targetGroup: groupName,
-        description:
-          op === OP_REMOVE ? 'remove' : typeof desc === 'string' ? desc : '',
-      });
+      rules.push({ _id: uid(), userGroup, op, targetGroup: groupName });
     }
   }
   return rules;
@@ -87,10 +87,11 @@ function flattenRules(nested) {
 
 function nestRules(rules) {
   const result = {};
-  rules.forEach(({ userGroup, op, targetGroup, description }) => {
+  rules.forEach(({ userGroup, op, targetGroup }) => {
     if (!userGroup || !targetGroup) return;
     if (!result[userGroup]) result[userGroup] = {};
-    result[userGroup][toRawKey(op, targetGroup)] = description;
+    result[userGroup][toRawKey(op, targetGroup)] =
+      op === OP_REMOVE ? 'remove' : '';
   });
   return result;
 }
@@ -103,21 +104,21 @@ export function serializeGroupSpecialUsable(rules) {
 }
 
 const OP_TAG_MAP = {
-  [OP_ADD]: { color: 'green', label: '添加 (+:)' },
-  [OP_REMOVE]: { color: 'red', label: '移除 (-:)' },
-  [OP_APPEND]: { color: 'blue', label: '追加' },
+  [OP_ADD]: { color: 'green', label: '添加' },
+  [OP_REMOVE]: { color: 'red', label: '移除' },
 };
 
 function UsableGroupSection({
   groupName,
   items,
   opOptions,
+  lineOptions,
   onUpdate,
   onRemove,
   onAdd,
   t,
 }) {
-  const [open, setOpen] = useState(false);
+  const [open, setOpen] = useState(true);
 
   return (
     <div
@@ -157,7 +158,7 @@ function UsableGroupSection({
             onClick={() => onAdd(groupName)}
           />
           <Popconfirm
-            title={t('确认删除该分组的所有规则？')}
+            title={t('确认删除该用户档的所有规则？')}
             onConfirm={() => items.forEach((item) => onRemove(item._id))}
             position='left'
           >
@@ -183,7 +184,7 @@ function UsableGroupSection({
                 value={rule.op}
                 optionList={opOptions}
                 onChange={(v) => onUpdate(rule._id, 'op', v)}
-                style={{ width: 120 }}
+                style={{ width: 100 }}
                 renderSelectedItem={(optionNode) => {
                   const info = OP_TAG_MAP[optionNode.value] || {};
                   return (
@@ -193,28 +194,16 @@ function UsableGroupSection({
                   );
                 }}
               />
-              <Input
+              <Select
                 size='small'
-                value={rule.targetGroup}
-                placeholder={t('分组名称')}
+                filter
+                value={rule.targetGroup || undefined}
+                placeholder={t('选择线路')}
+                optionList={lineOptions}
                 onChange={(v) => onUpdate(rule._id, 'targetGroup', v)}
                 style={{ flex: 1 }}
+                position='bottomLeft'
               />
-              {rule.op !== OP_REMOVE ? (
-                <Input
-                  size='small'
-                  value={rule.description}
-                  placeholder={t('分组描述')}
-                  onChange={(v) => onUpdate(rule._id, 'description', v)}
-                  style={{ flex: 1 }}
-                />
-              ) : (
-                <div style={{ flex: 1 }}>
-                  <Text type='tertiary' size='small'>
-                    -
-                  </Text>
-                </div>
-              )}
               <Popconfirm
                 title={t('确认删除该规则？')}
                 onConfirm={() => onRemove(rule._id)}
@@ -238,6 +227,7 @@ function UsableGroupSection({
 export default function GroupSpecialUsableRules({
   value,
   groupNames = [],
+  tierNames = [],
   onChange,
 }) {
   const { t } = useTranslation();
@@ -254,18 +244,7 @@ export default function GroupSpecialUsableRules({
 
   const updateRule = useCallback(
     (id, field, val) => {
-      emitChange(
-        rules.map((r) => {
-          if (r._id !== id) return r;
-          const updated = { ...r, [field]: val };
-          if (field === 'op' && val === OP_REMOVE)
-            updated.description = 'remove';
-          else if (field === 'op' && r.op === OP_REMOVE && val !== OP_REMOVE) {
-            if (updated.description === 'remove') updated.description = '';
-          }
-          return updated;
-        }),
-      );
+      emitChange(rules.map((r) => (r._id === id ? { ...r, [field]: val } : r)));
     },
     [rules, emitChange],
   );
@@ -279,13 +258,7 @@ export default function GroupSpecialUsableRules({
     (groupName) => {
       emitChange([
         ...rules,
-        {
-          _id: uid(),
-          userGroup: groupName,
-          op: OP_APPEND,
-          targetGroup: '',
-          description: '',
-        },
+        { _id: uid(), userGroup: groupName, op: OP_ADD, targetGroup: '' },
       ]);
     },
     [rules, emitChange],
@@ -296,27 +269,30 @@ export default function GroupSpecialUsableRules({
     if (!name) return;
     emitChange([
       ...rules,
-      {
-        _id: uid(),
-        userGroup: name,
-        op: OP_APPEND,
-        targetGroup: '',
-        description: '',
-      },
+      { _id: uid(), userGroup: name, op: OP_ADD, targetGroup: '' },
     ]);
     setNewGroupName('');
   }, [rules, emitChange, newGroupName]);
 
-  const groupOptions = useMemo(
+  // 目标只能是已存在的线路：指向不存在线路的规则永远不命中，是无声失效的配置
+  const lineOptions = useMemo(
     () => groupNames.map((n) => ({ value: n, label: n })),
     [groupNames],
+  );
+  // 用户档允许是任意字符串（谈判客户名），候选并入 tierNames 且可新建
+  const tierOptions = useMemo(
+    () =>
+      (tierNames.length ? tierNames : groupNames).map((n) => ({
+        value: n,
+        label: n,
+      })),
+    [tierNames, groupNames],
   );
 
   const opOptions = useMemo(
     () => [
-      { value: OP_ADD, label: t('添加 (+:)') },
-      { value: OP_REMOVE, label: t('移除 (-:)') },
-      { value: OP_APPEND, label: t('追加') },
+      { value: OP_ADD, label: t('添加') },
+      { value: OP_REMOVE, label: t('移除') },
     ],
     [t],
   );
@@ -335,28 +311,32 @@ export default function GroupSpecialUsableRules({
     return order.map((name) => ({ name, items: map[name] }));
   }, [rules]);
 
+  const adder = (
+    <div className='mt-3 flex justify-center gap-2'>
+      <Select
+        size='small'
+        filter
+        allowCreate
+        placeholder={t('选择用户档')}
+        optionList={tierOptions}
+        value={newGroupName || undefined}
+        onChange={setNewGroupName}
+        style={{ width: 200 }}
+        position='bottomLeft'
+      />
+      <Button icon={<IconPlus />} theme='outline' onClick={addNewGroup}>
+        {t('添加用户档规则')}
+      </Button>
+    </div>
+  );
+
   if (grouped.length === 0 && rules.length === 0) {
     return (
       <div>
         <Text type='tertiary' className='block text-center py-4'>
           {t('暂无规则，点击下方按钮添加')}
         </Text>
-        <div className='mt-2 flex justify-center gap-2'>
-          <Select
-            size='small'
-            filter
-            allowCreate
-            placeholder={t('选择用户分组')}
-            optionList={groupOptions}
-            value={newGroupName || undefined}
-            onChange={setNewGroupName}
-            style={{ width: 200 }}
-            position='bottomLeft'
-          />
-          <Button icon={<IconPlus />} theme='outline' onClick={addNewGroup}>
-            {t('添加分组规则')}
-          </Button>
-        </div>
+        {adder}
       </div>
     );
   }
@@ -369,28 +349,14 @@ export default function GroupSpecialUsableRules({
           groupName={group.name}
           items={group.items}
           opOptions={opOptions}
+          lineOptions={lineOptions}
           onUpdate={updateRule}
           onRemove={removeRule}
           onAdd={addRuleToGroup}
           t={t}
         />
       ))}
-      <div className='mt-3 flex justify-center gap-2'>
-        <Select
-          size='small'
-          filter
-          allowCreate
-          placeholder={t('选择用户分组')}
-          optionList={groupOptions}
-          value={newGroupName || undefined}
-          onChange={setNewGroupName}
-          style={{ width: 200 }}
-          position='bottomLeft'
-        />
-        <Button icon={<IconPlus />} theme='outline' onClick={addNewGroup}>
-          {t('添加分组规则')}
-        </Button>
-      </div>
+      {adder}
     </div>
   );
 }

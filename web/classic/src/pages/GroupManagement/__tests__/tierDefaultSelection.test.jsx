@@ -82,6 +82,7 @@ async function openTierTab() {
     </MemoryRouter>,
   );
   await waitFor(() => expect(API.get).toHaveBeenCalled());
+  await userEvent.click(await screen.findByRole('tab', { name: '用户档' }));
   await userEvent.click(await screen.findByText('档位折扣'));
 }
 

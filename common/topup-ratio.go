@@ -43,3 +43,14 @@ func GetTopupGroupRatio(name string) float64 {
 	}
 	return ratio
 }
+
+// GetTopupGroupRatioCopy 返回充值倍率表的副本，供分组管理页做悬空引用检查。
+func GetTopupGroupRatioCopy() map[string]float64 {
+	topupGroupRatioMutex.RLock()
+	defer topupGroupRatioMutex.RUnlock()
+	out := make(map[string]float64, len(topupGroupRatio))
+	for k, v := range topupGroupRatio {
+		out[k] = v
+	}
+	return out
+}

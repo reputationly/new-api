@@ -91,11 +91,11 @@ export default function AutoGroupList({ value, groupNames = [], onChange }) {
     return (
       <div>
         <Text type='tertiary' className='block text-center py-4'>
-          {t('暂无自动分组，点击下方按钮添加')}
+          {t('暂无自动分组顺序，点击下方按钮添加线路')}
         </Text>
         <div className='mt-2 flex justify-center'>
           <Button icon={<IconPlus />} theme='outline' onClick={addItem}>
-            {t('添加分组')}
+            {t('添加线路')}
           </Button>
         </div>
       </div>
@@ -114,11 +114,10 @@ export default function AutoGroupList({ value, groupNames = [], onChange }) {
               size='small'
               filter
               value={item.name || undefined}
-              placeholder={t('选择分组')}
+              placeholder={t('选择线路')}
               optionList={groupOptions}
               onChange={(v) => updateItem(item._id, v)}
               style={{ flex: 1 }}
-              allowCreate
               position='bottomLeft'
             />
             <Button
@@ -152,7 +151,7 @@ export default function AutoGroupList({ value, groupNames = [], onChange }) {
       </div>
       <div className='mt-3 flex justify-center'>
         <Button icon={<IconPlus />} theme='outline' onClick={addItem}>
-          {t('添加分组')}
+          {t('添加线路')}
         </Button>
       </div>
     </div>

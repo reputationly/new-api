@@ -3,8 +3,8 @@ import {
   Button,
   Empty,
   InputNumber,
+  Select,
   Switch,
-  TagInput,
   Typography,
 } from '@douyinfe/semi-ui';
 import { useTranslation } from 'react-i18next';
@@ -23,10 +23,12 @@ function parseJSON(str, fallback) {
 }
 
 /**
- * 分组的三项「散配置」：充值倍率、请求速率限制、积分抵扣白名单。
+ * 用户档的三项「散配置」：充值倍率、请求速率限制、积分抵扣白名单。
+ * 三者都按 user.group 索引，与令牌选了哪条线路无关。
  *
  * 它们原本分别住在支付设置、速率限制设置、运营设置三个页面，各自一个 JSON 文本框。
- * 这里按分组一行铺开——同一个分组的所有配置摆在一起才看得出「这个分组是什么档位」。
+ * 这里按用户档一行铺开——同一个档的所有配置摆在一起才看得出「这个档是什么待遇」。
+ * 行的候选取线路名：用户档与线路共用名字空间，绝大多数用户档都有一条同名线路。
  *
  * 只搬 UI 不搬存储：三项仍然写回各自原本的 option key。
  */
@@ -112,7 +114,7 @@ export default function GroupExtraSettings({
   const columns = useMemo(
     () => [
       {
-        title: t('分组'),
+        title: t('用户档'),
         dataIndex: 'name',
         key: 'name',
         width: 160,
@@ -169,14 +171,14 @@ export default function GroupExtraSettings({
   );
 
   if (!groupNames.length) {
-    return <Empty description={t('请先在「分组」标签页创建分组')} />;
+    return <Empty description={t('请先在「线路」标签页创建分组')} />;
   }
 
   return (
     <div>
       <Text type='tertiary' size='small' className='mb-3 block'>
         {t(
-          '充值倍率决定该分组用户充值时的到账比例；速率限制留空表示不限，配置后优先级高于全局限制，限制周期沿用「速率限制设置」里的全局周期。',
+          '充值倍率决定该档用户充值时的到账比例；速率限制留空表示不限，配置后优先级高于全局限制，限制周期沿用「速率限制设置」里的全局周期。',
         )}
       </Text>
 
@@ -212,14 +214,21 @@ export default function GroupExtraSettings({
         </Button>
       </div>
       <Text type='tertiary' size='small' className='mb-2 block'>
-        {t('留空 = 所有分组只扣余额。采购分组零配置即安全。')}
+        {t('留空 = 所有用户档只扣余额。采购档零配置即安全。')}
       </Text>
-      <TagInput
-        placeholder={t('输入分组名后回车')}
+      <Select
+        multiple
+        filter
+        placeholder={t('选择允许积分抵扣的用户档')}
         value={pointsGroups}
         disabled={!inputs['points_setting.enabled']}
+        // 候选是线路名并入已选值：已选里可能有历史上手输、现已不存在的名字，
+        // 不并进来的话它们显示不出来、也删不掉
+        optionList={Array.from(new Set([...groupNames, ...pointsGroups])).map(
+          (g) => ({ label: g, value: g }),
+        )}
         onChange={(arr) =>
-          onChange('points_setting.enabled_groups', JSON.stringify(arr))
+          onChange('points_setting.enabled_groups', JSON.stringify(arr || []))
         }
         style={{ width: '100%', maxWidth: 640 }}
       />

@@ -4101,11 +4101,11 @@ const EditChannelModal = (props) => {
                       */}
                       <Form.Select
                         field='groups'
-                        label={t('分组')}
-                        placeholder={t('请选择可以使用该渠道的分组')}
+                        label={t('线路（分组）')}
+                        placeholder={t('请选择可以使用该渠道的线路')}
                         multiple
                         extraText={t(
-                          '分组需先在「分组管理」中创建。挂到未配置的分组上，该渠道对用户不可用。',
+                          '线路需先在「分组管理」中创建。挂到未配置的线路上，该渠道对用户不可用。',
                         )}
                         optionList={groupOptions}
                         style={{ width: '100%' }}

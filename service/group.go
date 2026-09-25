@@ -40,6 +40,12 @@ func GetUserUsableGroups(userGroup string) map[string]string {
 			delete(groupsCopy, name)
 		}
 	}
+	// 描述只认 GroupDescription 这一个来源。此前 value 来自三处（UserUsableGroups
+	// 的值、特殊可用规则的值、写死的「用户分组」），/api/pricing 与 /api/user/self/groups
+	// 会给同一个线路显示两种描述。GetGroupDescription 内部已兼容老数据的回退。
+	for name := range groupsCopy {
+		groupsCopy[name] = setting.GetGroupDescription(name)
+	}
 	return groupsCopy
 }
 
