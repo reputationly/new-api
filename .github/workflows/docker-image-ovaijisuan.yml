@@ -231,6 +231,13 @@ jobs:
           > ACR 镜像同步推送，国内服务器建议使用 ACR 地址拉取。
           EOF
 
+          # 幂等：同一个 SHA 同一天再跑一次（手动 dispatch、或 tag 与 main 各触发一次），
+          # 版本号相同、Release 已存在，gh 会报 "tag_name already exists" 把整轮标红——
+          # 而镜像那时早已推成功。Release 已存在就跳过，别让最后一步吞掉前面的绿。
+          if gh release view "${VERSION}" --repo "${{ github.repository }}" >/dev/null 2>&1; then
+            echo "Release ${VERSION} already exists, skipping"
+            exit 0
+          fi
           gh release create "${VERSION}" \
             --repo "${{ github.repository }}" \
             --title "${VERSION}" \
