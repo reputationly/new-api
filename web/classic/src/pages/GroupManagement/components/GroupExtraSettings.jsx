@@ -3,10 +3,13 @@ import {
   Button,
   Empty,
   InputNumber,
+  Popconfirm,
   Select,
   Switch,
+  Tag,
   Typography,
 } from '@douyinfe/semi-ui';
+import { IconDelete } from '@douyinfe/semi-icons';
 import { useTranslation } from 'react-i18next';
 import { useNavigate } from 'react-router-dom';
 import CardTable from '../../../components/common/ui/CardTable';
@@ -102,6 +105,39 @@ export default function GroupExtraSettings({
     );
   }, []);
 
+  const pointsRef = useRef(pointsGroups);
+  pointsRef.current = pointsGroups;
+
+  // 删掉一个名字在三项配置里的全部记录。像 svip 这种只存在于充值倍率里的历史残留
+  // （上游出厂默认值），既不是线路也不是配过折扣的用户档，没有别的入口能删它。
+  const clearRow = useCallback((name) => {
+    const topup = { ...topupRef.current };
+    delete topup[name];
+    onChangeRef.current('TopupGroupRatio', JSON.stringify(topup, null, 2));
+
+    const limits = { ...rateLimitRef.current };
+    delete limits[name];
+    onChangeRef.current(
+      'ModelRequestRateLimitGroup',
+      JSON.stringify(limits, null, 2),
+    );
+
+    const points = pointsRef.current.filter((g) => g !== name);
+    if (points.length !== pointsRef.current.length) {
+      onChangeRef.current(
+        'points_setting.enabled_groups',
+        JSON.stringify(points),
+      );
+    }
+  }, []);
+
+  const knownNames = useMemo(
+    () => new Set([...groupNames, ...tierNames]),
+    [groupNames, tierNames],
+  );
+  const knownNamesRef = useRef(knownNames);
+  knownNamesRef.current = knownNames;
+
   const rowNames = useMemo(
     () =>
       Array.from(
@@ -136,8 +172,17 @@ export default function GroupExtraSettings({
         title: t('用户档'),
         dataIndex: 'name',
         key: 'name',
-        width: 160,
-        render: (v) => <Text strong>{v}</Text>,
+        width: 200,
+        render: (v) => (
+          <div className='flex items-center gap-2'>
+            <Text strong>{v}</Text>
+            {!knownNamesRef.current.has(v) && (
+              <Tag size='small' color='orange' shape='circle'>
+                {t('无对应线路')}
+              </Tag>
+            )}
+          </div>
+        ),
       },
       {
         title: t('充值倍率'),
@@ -185,8 +230,32 @@ export default function GroupExtraSettings({
           />
         ),
       },
+      {
+        title: '',
+        key: 'actions',
+        width: 50,
+        render: (_, record) => (
+          <Popconfirm
+            title={t(
+              '删除 {{name}} 在充值倍率、限流、积分白名单里的全部记录？',
+              {
+                name: record.name,
+              },
+            )}
+            onConfirm={() => clearRow(record.name)}
+            position='left'
+          >
+            <Button
+              icon={<IconDelete />}
+              type='danger'
+              theme='borderless'
+              size='small'
+            />
+          </Popconfirm>
+        ),
+      },
     ],
-    [t, setTopup, setRateLimit],
+    [t, setTopup, setRateLimit, clearRow],
   );
 
   if (!rowNames.length) {
