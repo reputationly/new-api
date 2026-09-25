@@ -69,6 +69,12 @@ var (
 // ratio_follow 1→0、副标题误改 1→0、编辑里逐字列出的保留文字 2→7 串（PE 是 8），
 // 保字仍 100%。含糊词没有改善（0.6→0.8/条，多是 "stone or tile" 这类材质二选一，
 // PE 自己也有 1.3/条），留着这条规则是因为它至少把位置写死了。
+//
+// 最后三条是端到端出图后补的（第三版）：首轮出图里香水被"蓝色环境光"染成蓝玻璃、
+// 静物合成把手表叠在香水瓶上、改电话把"电话"标签一起删掉。三条各对一处。同一条
+// 直连管线（改写 → 定尺寸 → qwen-image-pro）v2/v3 各出 3 张 × 3 用例：静物合成
+// v3 3/3 互不重叠且完整入镜（v2 有 1 张裁掉了物体、1 张没给比例），香水与名片两
+// 版都 3/3 正确 —— 首轮那两处缺陷有随机成分，但规则不伤画面。
 const qwenPEEscapeRule = `JSON escaping: the whole reply is parsed with a strict JSON parser. Every straight double quote that appears INSIDE a string value — including the quotes around text rendered in the image — must be escaped as \" (for example: {"rewritten_prompt": "a sign that reads \"OPEN\""}). Never emit a bare " inside a value. The reply must begin with { and end with } — no code fences, no tags, no words before or after the object.
 
 Additional rules (they refine, never override, the instructions above):
@@ -76,7 +82,10 @@ Additional rules (they refine, never override, the instructions above):
 - Commit. Give every object and every string of text one exact position and size. Never hedge with "or", "such as", "possibly", "或", "如", "可能" — decide, and state it as fact.
 - Content before finish. The opening sentence names the medium, style, subject and orientation. Then describe what is in the frame — subjects, layout, every text string in quotes — and only after that the lighting, materials and mood.
 - When several input images are combined into a new scene, there is no canvas: set wh_ratio to the ratio you chose and leave ratio_follow empty. ratio_follow is only for editing one existing picture.
-- Read the request narrowly. Change exactly the element the user named and nothing next to it (a "main title" is only the largest title line, not the subtitle). When the input contains readable text that must survive, list each of those strings verbatim in the preservation clause instead of summarising them.`
+- Read the request narrowly. Change exactly the element the user named and nothing next to it (a "main title" is only the largest title line, not the subtitle). When the input contains readable text that must survive, list each of those strings verbatim in the preservation clause instead of summarising them.
+- Objects taken from an input image keep their own materials and colours exactly: clear glass stays clear, a liquid keeps its tint, a label keeps its text and layout. Scene lighting may add highlights, reflections and shadows on them, but it never recolours them — describe the object's own colour, then the light falling on it, as two separate facts.
+- When several objects are arranged together, give each its own non-overlapping spot on the surface with a concrete position ("upper left", "lower right", "centre"), resting flat or standing on the surface. Objects never stack on, lean against or overlap each other unless the user asks for that.
+- When editing text, replace only the characters the user changed; the label or words next to them (such as "电话" before a phone number) stay exactly where they are.`
 
 // qwenPEEditClosing 官方编辑提示词的收尾句，紧跟着就是用户的指令。
 const qwenPEEditClosing = "The user's edit instruction to rewrite is:"
