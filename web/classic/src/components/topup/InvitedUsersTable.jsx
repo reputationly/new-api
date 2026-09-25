@@ -4,20 +4,31 @@ import {
   IllustrationNoResult,
   IllustrationNoResultDark,
 } from '@douyinfe/semi-illustrations';
-import { API, showError, timestamp2string, renderQuota } from '../../helpers';
-import { quotaToPoints, isPointsEnabled } from '../../helpers/quota';
+import { API, showError, timestamp2string } from '../../helpers';
 
 const { Text } = Typography;
 
+// 后端 cash_paid_fen 以「分」存整数，这里只做展示换算，不引入浮点。
+function fenToYuanText(fen) {
+  const n = parseInt(fen, 10);
+  if (!Number.isFinite(n)) return '0.00';
+  const whole = Math.trunc(n / 100);
+  const frac = String(Math.abs(n % 100)).padStart(2, '0');
+  return `${whole}.${frac}`;
+}
+
 // 「我邀请的用户」列表：分页展示被当前用户邀请注册的下线，按注册时间由近到远。
 // 数据来自 GET /api/user/aff/invitees（{ items, total, verified_total }）。
+//
+// 只展示「是不是真人、还在不在用、付了多少真钱」。不展示余额与消耗：余额是对方的
+// 私人财务信息；消耗按账单原价累计，积分抵扣和套餐内调用都混在里面，会让白嫖用户
+// 看起来和付费用户一样；积分字段还会暴露平台的赠送力度。
 const InvitedUsersTable = ({ t, onStats }) => {
   const [loading, setLoading] = useState(false);
   const [items, setItems] = useState([]);
   const [total, setTotal] = useState(0);
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(10);
-  const pointsOn = isPointsEnabled();
 
   const load = async (currentPage, currentPageSize) => {
     setLoading(true);
@@ -74,33 +85,10 @@ const InvitedUsersTable = ({ t, onStats }) => {
       dataIndex: 'last_used',
       render: renderTime,
     },
-    ...(pointsOn
-      ? [
-          {
-            title: t('积分余额'),
-            dataIndex: 'points_balance',
-            render: (v) => quotaToPoints(v),
-          },
-        ]
-      : []),
     {
-      title: t('账户余额'),
-      dataIndex: 'quota',
-      render: (v) => renderQuota(v),
-    },
-    ...(pointsOn
-      ? [
-          {
-            title: t('积分消耗'),
-            dataIndex: 'points_used',
-            render: (v) => quotaToPoints(v),
-          },
-        ]
-      : []),
-    {
-      title: t('余额消耗'),
-      dataIndex: 'used_quota',
-      render: (v) => renderQuota(v),
+      title: t('累计实付'),
+      dataIndex: 'cash_paid_fen',
+      render: (v) => `¥${fenToYuanText(v)}`,
     },
   ];
 

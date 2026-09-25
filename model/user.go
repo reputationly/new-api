@@ -459,16 +459,18 @@ func inviteUser(inviterId int) error {
 }
 
 // InviteeInfo 「我邀请的用户列表」的行数据。
+//
+// 刻意不带余额与消耗：余额是被邀请人的私人财务信息；used_quota 按账单原价累计，
+// 积分抵扣、套餐内调用、授信透支全混在里面，一个只靠赠送积分白嫖的用户看起来和
+// 付费用户一样「活跃」；积分字段还会让邀请人反推出平台的赠送力度。邀请人真正关心
+// 的只有「这个人给平台带来了多少真钱」，即 fund_entries 里计营收的那部分。
 type InviteeInfo struct {
-	Id            int    `json:"id"`
-	Username      string `json:"username"`
-	Verified      bool   `json:"verified"`       // 已实名/已认证：个人 KYC 或企业认证任一通过（与积分资格口径一致）
-	CreatedAt     int64  `json:"created_at"`     // 注册时间(unix 秒)
-	LastUsed      int64  `json:"last_used"`      // max(last_login_at, token 最近 accessed_time)
-	PointsBalance int    `json:"points_balance"` // 积分余额(quota unit)
-	Quota         int    `json:"quota"`          // 账户余额
-	PointsUsed    int    `json:"points_used"`    // 积分消耗(quota unit)
-	UsedQuota     int    `json:"used_quota"`     // 余额消耗
+	Id          int    `json:"id"`
+	Username    string `json:"username"`
+	Verified    bool   `json:"verified"`      // 已实名/已认证：个人 KYC 或企业认证任一通过（与积分资格口径一致）
+	CreatedAt   int64  `json:"created_at"`    // 注册时间(unix 秒)
+	LastUsed    int64  `json:"last_used"`     // max(last_login_at, token 最近 accessed_time)
+	CashPaidFen int64  `json:"cash_paid_fen"` // 累计实付人民币（分）：prepay + ar_settle 的 cash_fen，与收入对账报表同口径
 }
 
 // GetInviteesByInviter 分页返回某邀请人名下被邀请用户列表，按注册时间由近到远。
@@ -505,14 +507,10 @@ func GetInviteesByInviter(inviterId, page, pageSize int) (list []InviteeInfo, to
 		EnterpriseStatus int
 		CreatedAt        int64
 		LastLoginAt      int64
-		PointsBalance    int
-		Quota            int
-		PointsUsed       int
-		UsedQuota        int
 	}
 	var rows []row
 	if err = DB.Model(&User{}).
-		Select("id, username, kyc_status, enterprise_status, created_at, last_login_at, points_balance, quota, points_used, used_quota").
+		Select("id, username, kyc_status, enterprise_status, created_at, last_login_at").
 		Where("inviter_id = ?", inviterId).
 		Order("created_at DESC").
 		Limit(pageSize).Offset(offset).
@@ -543,6 +541,28 @@ func GetInviteesByInviter(inviterId, page, pageSize int) (list []InviteeInfo, to
 		}
 	}
 
+	// 累计实付：只认 prepay（充值/对公/管理员实收入账）与 ar_settle（授信回款），
+	// 与 fund_report 的营收口径一致。gift / credit_grant / adjust 的 cash_fen 恒为 0，
+	// 但这里仍按 kind 过滤而不是只看 cash_fen > 0：口径由记账铁律定义，不依赖写入方守约。
+	cashPaid := make(map[int]int64, len(userIds))
+	if len(userIds) > 0 {
+		type cashRow struct {
+			UserId  int
+			CashFen int64
+		}
+		var cashRows []cashRow
+		if err = DB.Model(&FundEntry{}).
+			Select("user_id, COALESCE(SUM(cash_fen), 0) as cash_fen").
+			Where("user_id IN ? AND kind IN ?", userIds, []string{FundKindPrepay, FundKindARSettle}).
+			Group("user_id").
+			Scan(&cashRows).Error; err != nil {
+			return nil, 0, 0, err
+		}
+		for _, cr := range cashRows {
+			cashPaid[cr.UserId] = cr.CashFen
+		}
+	}
+
 	result := make([]InviteeInfo, 0, len(rows))
 	for _, r := range rows {
 		lastUsed := r.LastLoginAt
@@ -550,15 +570,12 @@ func GetInviteesByInviter(inviterId, page, pageSize int) (list []InviteeInfo, to
 			lastUsed = tu
 		}
 		result = append(result, InviteeInfo{
-			Id:            r.Id,
-			Username:      r.Username,
-			Verified:      r.KycStatus == KYCStatusApproved || r.EnterpriseStatus == EnterpriseStatusApproved,
-			CreatedAt:     r.CreatedAt,
-			LastUsed:      lastUsed,
-			PointsBalance: r.PointsBalance,
-			Quota:         r.Quota,
-			PointsUsed:    r.PointsUsed,
-			UsedQuota:     r.UsedQuota,
+			Id:          r.Id,
+			Username:    r.Username,
+			Verified:    r.KycStatus == KYCStatusApproved || r.EnterpriseStatus == EnterpriseStatusApproved,
+			CreatedAt:   r.CreatedAt,
+			LastUsed:    lastUsed,
+			CashPaidFen: cashPaid[r.Id],
 		})
 	}
 	return result, total, verifiedTotal, nil
