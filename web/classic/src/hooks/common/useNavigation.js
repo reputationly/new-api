@@ -17,13 +17,9 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 
-import { useContext, useMemo } from 'react';
-import { UserContext } from '../../context/User';
+import { useMemo } from 'react';
 
 export const useNavigation = (t, docsLink, headerNavModules) => {
-  const [userState] = useContext(UserContext);
-  const userRole = userState?.user?.role ?? 0;
-
   const mainNavLinks = useMemo(() => {
     // 默认配置，如果没有传入配置则显示所有模块
     const defaultModules = {
@@ -64,12 +60,6 @@ export const useNavigation = (t, docsLink, headerNavModules) => {
           ]
         : []),
       {
-        text: t('画布'),
-        itemKey: 'canvas',
-        isExternal: true,
-        externalLink: '/canvas-app/',
-      },
-      {
         text: t('关于'),
         itemKey: 'about',
         to: '/about',
@@ -81,10 +71,6 @@ export const useNavigation = (t, docsLink, headerNavModules) => {
       if (link.itemKey === 'docs') {
         return docsLink && modules.docs;
       }
-      if (link.itemKey === 'canvas') {
-        // 画布仅管理员及以上（role >= 10）可见；普通用户/企业账户/企业子账户均隐藏
-        return userRole >= 10;
-      }
       if (link.itemKey === 'pricing') {
         // 支持新的pricing配置格式
         return typeof modules.pricing === 'object'
@@ -93,7 +79,7 @@ export const useNavigation = (t, docsLink, headerNavModules) => {
       }
       return modules[link.itemKey] === true;
     });
-  }, [t, docsLink, headerNavModules, userRole]);
+  }, [t, docsLink, headerNavModules]);
 
   return {
     mainNavLinks,

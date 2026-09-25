@@ -41,23 +41,11 @@ import (
 	_ "net/http/pprof"
 )
 
-//go:embed web/default/dist
-var buildFS embed.FS
-
-//go:embed web/default/dist/index.html
-var indexPage []byte
-
 //go:embed web/classic/dist
 var classicBuildFS embed.FS
 
 //go:embed web/classic/dist/index.html
 var classicIndexPage []byte
-
-// 画布构建产物(Vite,单页应用)。保留 all: 前缀:Vite 产物目前无下划线目录,
-// 但上游随时可能加,加了而没有 all: 会静默跳过、构建成功而运行时 404。
-//
-//go:embed all:web/canvas/dist
-var canvasBuildFS embed.FS
 
 //go:embed web/mobile/dist
 var mobileBuildFS embed.FS
@@ -281,11 +269,8 @@ func main() {
 
 	// 设置路由
 	router.SetRouter(server, router.ThemeAssets{
-		DefaultBuildFS:   buildFS,
-		DefaultIndexPage: indexPage,
 		ClassicBuildFS:   classicBuildFS,
 		ClassicIndexPage: classicIndexPage,
-		CanvasBuildFS:    canvasBuildFS,
 		MobileBuildFS:    mobileBuildFS,
 		MobileIndexPage:  mobileIndexPage,
 	})
@@ -320,7 +305,6 @@ func InjectUmamiAnalytics() {
 	analyticsInjectBuilder.WriteString("<!--Umami QuantumNous-->\n")
 	analyticsInject := []byte(analyticsInjectBuilder.String())
 	placeholder := []byte("<!--umami-->\n")
-	indexPage = bytes.ReplaceAll(indexPage, placeholder, analyticsInject)
 	classicIndexPage = bytes.ReplaceAll(classicIndexPage, placeholder, analyticsInject)
 }
 
@@ -344,7 +328,6 @@ func InjectGoogleAnalytics() {
 	analyticsInjectBuilder.WriteString("<!--Google Analytics QuantumNous-->\n")
 	analyticsInject := []byte(analyticsInjectBuilder.String())
 	placeholder := []byte("<!--Google Analytics-->\n")
-	indexPage = bytes.ReplaceAll(indexPage, placeholder, analyticsInject)
 	classicIndexPage = bytes.ReplaceAll(classicIndexPage, placeholder, analyticsInject)
 }
 

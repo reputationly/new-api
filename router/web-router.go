@@ -13,26 +13,21 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-// ThemeAssets holds the embedded frontend assets for both themes.
+// ThemeAssets holds the embedded frontend assets.
 type ThemeAssets struct {
-	DefaultBuildFS   embed.FS
-	DefaultIndexPage []byte
 	ClassicBuildFS   embed.FS
 	ClassicIndexPage []byte
-	CanvasBuildFS    embed.FS
 	MobileBuildFS    embed.FS
 	MobileIndexPage  []byte
 }
 
 func SetWebRouter(router *gin.Engine, assets ThemeAssets) {
-	defaultFS := common.EmbedFolder(assets.DefaultBuildFS, "web/default/dist")
 	classicFS := common.EmbedFolder(assets.ClassicBuildFS, "web/classic/dist")
-	themeFS := common.NewThemeAwareFS(defaultFS, classicFS)
 
 	router.Use(gzip.Gzip(gzip.DefaultCompression))
 	router.Use(middleware.GlobalWebRateLimit())
 	router.Use(middleware.Cache())
-	router.Use(static.Serve("/", themeFS))
+	router.Use(static.Serve("/", classicFS))
 	router.NoRoute(func(c *gin.Context) {
 		c.Set(middleware.RouteTagKey, "web")
 		if strings.HasPrefix(c.Request.RequestURI, "/v1") || strings.HasPrefix(c.Request.RequestURI, "/api") || strings.HasPrefix(c.Request.RequestURI, "/pg") || strings.HasPrefix(c.Request.RequestURI, "/assets") {
@@ -47,11 +42,7 @@ func SetWebRouter(router *gin.Engine, assets ThemeAssets) {
 		// 必须 Add 不能 Set：gzip 中间件跑在前面，已经写过 Vary: Accept-Encoding，
 		// 用 c.Header 会把它整个覆盖掉，中间层就可能把压缩过的 HTML 发给不收 gzip 的客户端。
 		c.Writer.Header().Add("Vary", "User-Agent, Cookie")
-		page := assets.DefaultIndexPage
-		if common.GetTheme() == "classic" {
-			page = assets.ClassicIndexPage
-		}
 		c.Data(http.StatusOK, "text/html; charset=utf-8",
-			withMobileSwitchBar(BrandIndexHTML(page), mobileSwitchBarHref(c)))
+			withMobileSwitchBar(BrandIndexHTML(assets.ClassicIndexPage), mobileSwitchBarHref(c)))
 	})
 }

@@ -205,7 +205,7 @@ func SetMobileRouter(router *gin.Engine, assets ThemeAssets) {
 		}
 		// index 与 SPA fallback 都走内存字节并做品牌替换，
 		// 避免首屏闪现构建期的默认标题/图标
-		if p == "/" || p == "/index.html" || !canvasFileExists(httpFS, p) {
+		if p == "/" || p == "/index.html" || !staticFileExists(httpFS, p) {
 			// no-store 而不是 no-cache：后者的语义是「可以存，用之前回源校验」，
 			// 微信 X5 这类内核对它并不老实，会直接拿旧的用。而这份 HTML 里写死了带
 			// 内容 hash 的 chunk 文件名，上一版的那些文件在新部署后已经不存在——
@@ -256,4 +256,33 @@ func SetMobileRouter(router *gin.Engine, assets ThemeAssets) {
 	router.HEAD("/audio-presets/*filepath", serveClassicAsset)
 	router.GET("/playground-samples/*filepath", serveClassicAsset)
 	router.HEAD("/playground-samples/*filepath", serveClassicAsset)
+}
+
+// staticFileExists 判断路径是否可服务:普通文件直接可服务;
+// 目录必须包含 index.html(trailingSlash 导出布局),否则视为不存在,
+// 同时避免 http.FileServer 渲染目录列表。
+func staticFileExists(httpFS http.FileSystem, path string) bool {
+	// http.FS 不接受带尾斜杠的路径(fs.ValidPath),统一去掉再查
+	name := strings.TrimSuffix(path, "/")
+	if name == "" {
+		name = "/"
+	}
+	f, err := httpFS.Open(name)
+	if err != nil {
+		return false
+	}
+	defer f.Close()
+	info, err := f.Stat()
+	if err != nil {
+		return false
+	}
+	if !info.IsDir() {
+		return true
+	}
+	index, err := httpFS.Open(strings.TrimSuffix(name, "/") + "/index.html")
+	if err != nil {
+		return false
+	}
+	_ = index.Close()
+	return true
 }

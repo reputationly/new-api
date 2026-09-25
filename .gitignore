@@ -46,12 +46,6 @@ tmp/
 # air 热重载构建日志
 build-errors.log
 
-# 画布(vendored infinite-canvas)构建产物
-web/canvas/dist
-
-web/canvas/node_modules
-web/canvas/tsconfig.tsbuildinfo
-
 # 移动端 H5 构建产物
 web/mobile/dist
 web/mobile/node_modules

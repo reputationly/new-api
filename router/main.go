@@ -20,12 +20,9 @@ func SetRouter(router *gin.Engine, assets ThemeAssets) {
 	SetDashboardRouter(router)
 	SetRelayRouter(router)
 	SetVideoRouter(router)
-	// MiniMax Design 客户端的云侧接口。必须在 FRONTEND_BASE_URL 判断之前,
-	// 和 SetCanvasRouter 同理:它服务的是本地 gateway,不能被重定向到外置前端。
+	// MiniMax Design 客户端的云侧接口。必须在 FRONTEND_BASE_URL 判断之前:
+	// 它服务的是本地 gateway,不能被重定向到外置前端。
 	SetHiloRouter(router)
-	// 画布静态应用必须早于 FRONTEND_BASE_URL 分支挂载：
-	// 外置前端部署下 /canvas-app/* 仍由 Go 单二进制伺服
-	SetCanvasRouter(router, assets)
 	// 移动端 H5 同理：/m/* 永远由 Go 单二进制内置伺服
 	SetMobileRouter(router, assets)
 	// 免登录分享落地页同理：/s/* 由 Go 直出，且必须早于 SetWebRouter 的 SPA fallback

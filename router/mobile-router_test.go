@@ -125,7 +125,7 @@ func TestMobileSwitchBarHref(t *testing.T) {
 // 中间层就可能把压缩过的 HTML 发给不收 gzip 的客户端。必须 Add。
 func TestDesktopHTMLVaryKeepsAcceptEncoding(t *testing.T) {
 	r := gin.New()
-	SetWebRouter(r, ThemeAssets{DefaultIndexPage: []byte("<html><body></body></html>")})
+	SetWebRouter(r, ThemeAssets{ClassicIndexPage: []byte("<html><body></body></html>")})
 
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest("GET", "/login", nil)
