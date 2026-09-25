@@ -70,10 +70,13 @@ func requestUserText(t *testing.T, raw []byte) string {
 func TestQwenPESystemPicksPromptAndEscapeRule(t *testing.T) {
 	t2i := buildQwenPESystem(0)
 	require.True(t, strings.HasPrefix(t2i, strings.TrimRight(qwenPESystemT2I, "\n")), "t2i 原文必须原样在前")
-	require.True(t, strings.HasSuffix(strings.TrimSpace(t2i), qwenPEEscapeRule), "t2i 转义说明追加在末尾")
+	require.Contains(t, t2i, qwenPEEscapeRule, "t2i 要带转义说明")
+	require.True(t, strings.HasSuffix(strings.TrimSpace(t2i), qwenPEAnalysisRule), "t2i 的先分析后改写追加在最末")
+	require.Less(t, strings.Index(t2i, qwenPEEscapeRule), strings.Index(t2i, qwenPEAnalysisRule), "转义说明在分析规则之前")
 
 	edit := buildQwenPESystem(2)
 	require.NotContains(t, edit, "Step 2 — Fix the frame", "有图时不能发 t2i 那份")
+	require.NotContains(t, edit, qwenPEAnalysisRule, "编辑不加先分析后改写：实测会拖累多图 <imageN> 标签")
 	require.True(t, strings.HasSuffix(strings.TrimSpace(edit), qwenPEEditClosing), "收尾句必须仍在最后")
 	require.Less(t, strings.Index(edit, qwenPEEscapeRule), strings.LastIndex(edit, qwenPEEditClosing),
 		"转义说明必须在收尾句之前")
@@ -86,6 +89,23 @@ func TestQwenPEEmbeddedPromptsAreOfficial(t *testing.T) {
 	require.True(t, strings.HasSuffix(strings.TrimRight(qwenPESystemEdit, "\n"), qwenPEEditClosing))
 	require.Contains(t, qwenPESystemT2I, `{"rewritten_prompt": "<the description>", "wh_ratio": "<e.g. 3:2>"}`)
 	require.Contains(t, qwenPESystemEdit, "## Output Size Determination")
+}
+
+// 文生图让模型先写 analysis 再写改写结果:analysis 是第一个键,里面还带一个
+// 叫 ratio 的字段。严格解析要忽略它只取顶层字段;裸引号兜底不能被它的键名带偏。
+func TestExtractQwenPEIgnoresLeadingAnalysis(t *testing.T) {
+	raw := `{"analysis": {"fixed": ["\"OPEN\""], "canvas": "none", "orientation": "horizontal — a wide shop sign", "ratio": "3:2"}, "rewritten_prompt": "a wide shot of a sign that reads \"OPEN\"", "wh_ratio": "3:2"}`
+	out, ok := extractQwenPE(raw)
+	require.True(t, ok)
+	require.Equal(t, `a wide shot of a sign that reads "OPEN"`, out.Prompt)
+	require.Equal(t, "3:2", out.WHRatio)
+
+	// 正文里一个裸引号把 JSON 弄坏,兜底仍要取到顶层字段而不是 analysis 里的。
+	broken := `{"analysis": {"fixed": ["OPEN"], "ratio": "9:16"}, "rewritten_prompt": "a sign that reads "OPEN" at dusk", "wh_ratio": "3:2"}`
+	out, ok = extractQwenPE(broken)
+	require.True(t, ok)
+	require.Equal(t, `a sign that reads "OPEN" at dusk`, out.Prompt)
+	require.Equal(t, "3:2", out.WHRatio, "要的是顶层 wh_ratio,不是 analysis.ratio")
 }
 
 // 围栏、前后缀要能恢复;裸引号(实测四家模型都会犯)要靠兜底把字段取出来。

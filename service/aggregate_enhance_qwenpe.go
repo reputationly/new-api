@@ -87,16 +87,36 @@ Additional rules (they refine, never override, the instructions above):
 - When several objects are arranged together, give each its own non-overlapping spot on the surface with a concrete position ("upper left", "lower right", "centre"), resting flat or standing on the surface. Objects never stack on, lean against or overlap each other unless the user asks for that.
 - When editing text, replace only the characters the user changed; the label or words next to them (such as "电话" before a phone number) stay exactly where they are.`
 
+// qwenPEAnalysisRule 只给**文生图**加：让模型把一段很短的分析写成 JSON 的第一个
+// 字段，再写改写结果 —— 把"思考"搬进输出里，替代关掉的思考块。
+//
+// 关思考后最明显的退化是画幅不稳（同一用例多次给不同比例）。实测（t2i 17 用例
+// × 3 次）：v3 比例自洽 82%，加这段后 88%，逼近官方 PE 开思考的 84~89%，保字
+// 139/139，慢 1.5 秒。
+//
+// **编辑不加**：同样的实验里编辑侧多图 <imageN> 用齐从 12/12 掉到 10/12，
+// 得不偿失。也**不加篇幅要求**：任何篇幅要求都会把比例自洽拉回 67~80%，
+// 与这段叠加也救不回来（v6：406 词 / 76%）—— 在 qwen3.8 上篇幅与画幅稳定互斥，
+// 比例错一次是整张构图错，篇幅短只是细节少，取后者。
+//
+// 解析侧不用改：extractQwenPE 按合法 JSON 取顶层 rewritten_prompt，多出来的
+// analysis 键被忽略；裸引号兜底按 "rewritten_prompt"…"wh_ratio" 相邻字段取，
+// analysis 里的键名（fixed / canvas / orientation / ratio）不会误配。
+const qwenPEAnalysisRule = `Think inside the reply. Make "analysis" the FIRST key of the JSON object, before rewritten_prompt:
+{"analysis": {"fixed": ["every text string the user wants shown, verbatim", "every named object, count, colour, position"], "canvas": "for edits: which input image is the canvas, what changes, what stays; for new scenes: none", "orientation": "vertical | horizontal | square — and the subject-based reason in ten words", "ratio": "the wh_ratio or ratio_follow you will output"}, "rewritten_prompt": "...", "wh_ratio": "...", "ratio_follow": "..."}
+Keep analysis under 80 words. It is discarded by the caller — only rewritten_prompt and the ratio fields are used — so decide everything in analysis first, then write rewritten_prompt and the ratio fields so they agree with it exactly.`
+
 // qwenPEEditClosing 官方编辑提示词的收尾句，紧跟着就是用户的指令。
 const qwenPEEditClosing = "The user's edit instruction to rewrite is:"
 
 // buildQwenPESystem 按输入图张数选官方提示词，并补上转义说明。
 //
+// 文生图再追加"先分析后改写"（qwenPEAnalysisRule）；编辑不追加，理由见那个常量。
 // 编辑那份的转义说明**必须插在收尾句之前**：收尾句的下一行就是用户指令，
 // 插在它后面，模型会把这段英文当成要改写的指令本身。
 func buildQwenPESystem(numImages int) string {
 	if numImages == 0 {
-		return strings.TrimRight(qwenPESystemT2I, "\n") + "\n\n" + qwenPEEscapeRule + "\n"
+		return strings.TrimRight(qwenPESystemT2I, "\n") + "\n\n" + qwenPEEscapeRule + "\n\n" + qwenPEAnalysisRule + "\n"
 	}
 	s := strings.TrimRight(qwenPESystemEdit, "\n")
 	if strings.HasSuffix(s, qwenPEEditClosing) {
