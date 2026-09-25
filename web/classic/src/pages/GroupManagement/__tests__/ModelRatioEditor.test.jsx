@@ -132,8 +132,6 @@ describe('ModelRatioEditor 序列化', () => {
         })}
       />,
     );
-    expect(
-      screen.getByText(/会覆盖「按线路覆盖」的值/),
-    ).toBeInTheDocument();
+    expect(screen.getByText(/会覆盖「按线路覆盖」的值/)).toBeInTheDocument();
   });
 });

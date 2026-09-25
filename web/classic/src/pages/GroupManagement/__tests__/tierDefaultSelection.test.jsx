@@ -95,7 +95,12 @@ describe('档位折扣的默认选中', () => {
     mockAPIs();
     await openTierTab();
 
-    expect(await screen.findByText('batch2026q3')).toBeInTheDocument();
+    // 档名同时会出现在「充值 · 限流 · 积分」的行里，断言必须落在档位折扣这个面板内
+    expect(
+      (await screen.findAllByText('batch2026q3')).some((el) =>
+        el.closest('.semi-tabs-pane')?.textContent?.includes('配置哪个用户档'),
+      ),
+    ).toBe(true);
 
     // 关键断言：规则确实渲染出来了。
     // 只看下拉框非空是不够的——取 tierNames[0] 会选中 aaa-free，下拉框同样非空，
@@ -135,7 +140,7 @@ describe('档位下拉的选项', () => {
   it('数据加载完成后展开，能看到所有档位', async () => {
     mockAPIs();
     await openTierTab();
-    await screen.findByText('batch2026q3');
+    await screen.findAllByText('batch2026q3');
 
     // 必须精确定位到「档位折扣」那个 Select。页面上同时存在「模型折扣」的分组
     // 下拉（Semi Tabs 会把未激活的 TabPane 也渲染进 DOM），

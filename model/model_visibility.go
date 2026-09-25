@@ -9,7 +9,7 @@ import (
 )
 
 // 模型可见性：按用户档限制谁能看到并调用某个模型。
-// 设计见 docs/user-tier-pricing-and-topup-package-design.md §6bis。
+// 设计见 docs/group-concepts.md §3（原设计文档 §6bis，已丢失）。
 //
 // 语义是**默认允许、显式限制**：未配置的模型所有人可见。受限的是少数（内测、专属
 // 资源、企业定制），公开的是多数，反过来配会让每加一个模型都要记得开权限。

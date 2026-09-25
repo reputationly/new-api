@@ -123,7 +123,6 @@ const OperationSetting = () => {
     'points_setting.enabled': false,
     'points_setting.require_kyc': true,
     'points_setting.quota_per_point': 684.93,
-    'points_setting.enabled_groups': '[]',
     'points_setting.kyc_verified_points': 0,
     'points_setting.kyc_inviter_points': 0,
     'points_setting.new_user_points': 0,

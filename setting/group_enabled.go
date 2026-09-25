@@ -7,7 +7,7 @@ import (
 	"github.com/QuantumNous/new-api/common"
 )
 
-// 分组停用态。设计见 docs/user-tier-pricing-and-topup-package-design.md §10.8。
+// 分组停用态。设计见 docs/group-concepts.md（原设计文档 §10.8，已丢失）。
 //
 // 解决的是一个真实的运营场景：活动分组（如 free）在活动结束后要留着配置等下次再开，
 // 测试分组（如 bailian）暂停但不删。此前系统没有「停用」这个概念，这类**正常待命**

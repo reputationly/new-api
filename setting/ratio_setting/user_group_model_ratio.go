@@ -9,7 +9,7 @@ import (
 	"github.com/QuantumNous/new-api/types"
 )
 
-// 用户档位折扣（解析链 Layer 3）。设计见 docs/user-tier-pricing-and-topup-package-design.md。
+// 用户档位折扣（解析链 Layer 3）。设计见 docs/group-concepts.md §2（原设计文档已丢失）。
 //
 // 与 GroupModelRatio（Layer 2）的分工是这次改造的核心：
 //

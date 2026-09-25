@@ -579,6 +579,7 @@ export default function GroupManagementPage() {
                       key={`ge_${dv}`}
                       inputs={inputs}
                       groupNames={groupNames}
+                      tierNames={tierNames}
                       onChange={setField}
                     />
                   </div>

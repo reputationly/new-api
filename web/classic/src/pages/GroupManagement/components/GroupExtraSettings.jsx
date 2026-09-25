@@ -28,13 +28,16 @@ function parseJSON(str, fallback) {
  *
  * 它们原本分别住在支付设置、速率限制设置、运营设置三个页面，各自一个 JSON 文本框。
  * 这里按用户档一行铺开——同一个档的所有配置摆在一起才看得出「这个档是什么待遇」。
- * 行的候选取线路名：用户档与线路共用名字空间，绝大多数用户档都有一条同名线路。
+ * 行的候选 = 线路名 ∪ 已配过档位折扣的用户档 ∪ 三项配置里已出现的名字：
+ * 用户档与线路共用名字空间，绝大多数用户档都有一条同名线路；谈判档没有同名线路，
+ * 靠后两项并进来，不必为了配充值倍率先建一条占位线路。
  *
  * 只搬 UI 不搬存储：三项仍然写回各自原本的 option key。
  */
 export default function GroupExtraSettings({
   inputs,
   groupNames = [],
+  tierNames = [],
   onChange,
 }) {
   const { t } = useTranslation();
@@ -96,9 +99,22 @@ export default function GroupExtraSettings({
     );
   }, []);
 
+  const rowNames = useMemo(
+    () =>
+      Array.from(
+        new Set([
+          ...groupNames,
+          ...tierNames,
+          ...Object.keys(topup),
+          ...Object.keys(rateLimit),
+        ]),
+      ).sort(),
+    [groupNames, tierNames, topup, rateLimit],
+  );
+
   const rows = useMemo(
     () =>
-      groupNames.map((name) => ({
+      rowNames.map((name) => ({
         name,
         topupRatio: topup[name],
         limitTotal: Array.isArray(rateLimit[name])
@@ -108,7 +124,7 @@ export default function GroupExtraSettings({
           ? rateLimit[name][1]
           : undefined,
       })),
-    [groupNames, topup, rateLimit],
+    [rowNames, topup, rateLimit],
   );
 
   const columns = useMemo(
@@ -170,7 +186,7 @@ export default function GroupExtraSettings({
     [t, setTopup, setRateLimit],
   );
 
-  if (!groupNames.length) {
+  if (!rowNames.length) {
     return <Empty description={t('请先在「线路」标签页创建分组')} />;
   }
 
@@ -224,7 +240,7 @@ export default function GroupExtraSettings({
         disabled={!inputs['points_setting.enabled']}
         // 候选是线路名并入已选值：已选里可能有历史上手输、现已不存在的名字，
         // 不并进来的话它们显示不出来、也删不掉
-        optionList={Array.from(new Set([...groupNames, ...pointsGroups])).map(
+        optionList={Array.from(new Set([...rowNames, ...pointsGroups])).map(
           (g) => ({ label: g, value: g }),
         )}
         onChange={(arr) =>

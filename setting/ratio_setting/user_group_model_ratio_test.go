@@ -53,7 +53,7 @@ func TestResolveGroupRatio_EmptyUserTierIsIdentical(t *testing.T) {
 }
 
 // TestResolveGroupRatio_UserTierMultipliesOverride 锁死本设计最容易写错的一条
-// （docs/user-tier-pricing-and-topup-package-design.md §4）：
+// （docs/group-concepts.md §2；原设计文档 §4 已丢失）：
 // Layer 2 命中 override 时，Layer 3 **照样乘**。
 //
 // override 说的是「这条供应链上这个模型的成本就是这个价」，属于成本侧；用户档

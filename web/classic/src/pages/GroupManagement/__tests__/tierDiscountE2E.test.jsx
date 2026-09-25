@@ -122,7 +122,8 @@ async function openTierTab(user) {
   // 仍在隐藏的一级面板里，role 查询会把隐藏元素排除掉
   await user.click(await screen.findByRole('tab', { name: '用户档' }));
   await user.click(await screen.findByText('档位折扣'));
-  await screen.findByText('batch2026q3');
+  // 档名同时出现在「充值 · 限流 · 积分」的行里，这里只等它出现，定位交给 tierPane()
+  await screen.findAllByText('batch2026q3');
 }
 
 /** 删除按钮包在 Popconfirm 里，点按钮只弹确认框，要再点「确定」才真的删 */

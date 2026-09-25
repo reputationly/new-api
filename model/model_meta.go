@@ -41,7 +41,7 @@ type Model struct {
 
 	// VisibleGroups 限制哪些**用户档**能看到并调用这个模型；空 = 所有人可见。
 	// 逗号分隔，语义是「默认允许、显式限制」——受限的是少数，公开的是多数。
-	// 见 docs/user-tier-pricing-and-topup-package-design.md §6bis。
+	// 见 docs/group-concepts.md §3（原设计文档 §6bis，已丢失）。
 	VisibleGroups string `json:"visible_groups" gorm:"type:varchar(512);default:''"`
 
 	MatchedModels []string `json:"matched_models,omitempty" gorm:"-"`

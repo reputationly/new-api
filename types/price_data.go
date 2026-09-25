@@ -26,7 +26,7 @@ type GroupRatioInfo struct {
 	ModelRuleValue float64
 
 	// Layer 3 用户档折扣的解析痕迹
-	// （docs/user-tier-pricing-and-topup-package-design.md §4）。
+	// （原设计文档 §4，已丢失；解析链见 docs/group-concepts.md §2）。
 	UserRuleMatch string  // 命中的模式串；"" = 未命中
 	UserRuleValue float64 // 恒为 multiply 的乘数
 

@@ -40,7 +40,6 @@ const PaymentSetting = () => {
     EpayKey: '',
     Price: 7.3,
     MinTopUp: 1,
-    TopupGroupRatio: '',
     CustomCallbackAddress: '',
     PayMethods: '',
     AmountOptions: '',
@@ -97,17 +96,6 @@ const PaymentSetting = () => {
       let newInputs = {};
       data.forEach((item) => {
         switch (item.key) {
-          case 'TopupGroupRatio':
-            try {
-              newInputs[item.key] = JSON.stringify(
-                JSON.parse(item.value),
-                null,
-                2,
-              );
-            } catch (error) {
-              newInputs[item.key] = item.value;
-            }
-            break;
           case 'payment_setting.amount_options':
             try {
               newInputs['AmountOptions'] = JSON.stringify(

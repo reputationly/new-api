@@ -295,7 +295,7 @@ func GetUserLanguage(userId int) string {
 //
 // 展示侧必须跟着走同一个口径。否则子账号登录看到的是自己那档的价，实际扣的是
 // 主账号那档的钱——差多少折就差多少，而且方向是**显示价高于实扣**，用户不会投诉，
-// 只会默默觉得贵。详见 docs/user-tier-pricing-and-topup-package-design.md §6ter.2。
+// 只会默默觉得贵。详见 docs/group-concepts.md §1（原设计文档 §6ter.2，已丢失）。
 //
 // 父账号查不到时回退到自身分组：宁可展示一个偏差值，也不让模型广场整个 500。
 func GetBillingUserGroup(userCache *UserBase) string {

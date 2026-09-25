@@ -48,7 +48,7 @@ func appendGroupModelRule(other map[string]interface{}, info types.GroupRatioInf
 		other["group_model_rule"] = info.ModelRuleLog()
 	}
 	// Layer 3 用户档折扣独立判断：它与 Layer 2 是两个正交维度，只配了用户档折扣
-	// 的请求同样要能反算（docs/user-tier-pricing-and-topup-package-design.md §4）。
+	// 的请求同样要能反算（原设计文档 §4，已丢失；解析链见 docs/group-concepts.md §2）。
 	if info.UserRuleMatch != "" {
 		other["user_group_model_rule"] = info.UserRuleLog()
 	}

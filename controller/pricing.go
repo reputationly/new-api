@@ -68,7 +68,7 @@ func resolveGroupModelRatio(userGroup string, groupRatio map[string]float64, pri
 	// Layer 3（用户档折扣）按 userGroup 索引、与使用分组无关，所以是每次调用一个
 	// 定值。它必须参与「跳不跳过」的判断：只看 GroupModelRatio 会漏掉「仅配了
 	// 用户档折扣」的情况，结果是模型广场显示价偏高、实扣正确——最难发现的那类
-	// 不一致（docs/user-tier-pricing-and-topup-package-design.md §8.0）。
+	// 不一致（原设计文档 §8.0，已丢失；结论见 docs/group-concepts.md §2）。
 	hasUserRules := ratio_setting.HasUserGroupModelRules(userGroup)
 	hasAnyTimeRules := false
 	for g := range groupRatio {
