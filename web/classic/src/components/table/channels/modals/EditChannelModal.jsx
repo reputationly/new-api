@@ -208,6 +208,13 @@ const EditChannelModal = (props) => {
     aws_key_type: 'ak_sk',
     // 企业账户设置
     is_enterprise_account: false,
+    // 仅 DoubaoVideo / VolcEngine：方舟素材库（存入 settings.ark_asset_*）
+    ark_asset_enabled: false,
+    ark_asset_access_key: '',
+    ark_asset_secret_key: '',
+    ark_asset_secret_key_set: false,
+    ark_asset_endpoint: '',
+    ark_asset_project_name: '',
     // 字段透传控制默认值
     allow_service_tier: false,
     disable_store: false, // false = 允许透传（默认开启）
@@ -928,6 +935,15 @@ const EditChannelModal = (props) => {
           // 读取企业账户设置
           data.is_enterprise_account =
             parsedSettings.openrouter_enterprise === true;
+          // 读取方舟素材库设置。SK 只写不读：后端只回 ark_asset_secret_key_set 标记
+          data.ark_asset_enabled = parsedSettings.ark_asset_enabled === true;
+          data.ark_asset_access_key = parsedSettings.ark_asset_access_key || '';
+          data.ark_asset_secret_key = '';
+          data.ark_asset_secret_key_set =
+            parsedSettings.ark_asset_secret_key_set === true;
+          data.ark_asset_endpoint = parsedSettings.ark_asset_endpoint || '';
+          data.ark_asset_project_name =
+            parsedSettings.ark_asset_project_name || '';
           // 读取字段透传控制设置
           data.allow_service_tier = parsedSettings.allow_service_tier || false;
           data.disable_store = parsedSettings.disable_store || false;
@@ -1881,6 +1897,13 @@ const EditChannelModal = (props) => {
     delete localInputs.gpustack_affinity;
     delete localInputs.gpustack_affinity_key;
     delete localInputs.is_enterprise_account;
+    // 方舟素材库的值已经由 handleChannelOtherSettingsChange 写进 settings
+    delete localInputs.ark_asset_enabled;
+    delete localInputs.ark_asset_access_key;
+    delete localInputs.ark_asset_secret_key;
+    delete localInputs.ark_asset_secret_key_set;
+    delete localInputs.ark_asset_endpoint;
+    delete localInputs.ark_asset_project_name;
     // 顶层的 vertex_key_type 不应发送给后端
     delete localInputs.vertex_key_type;
     // 顶层的 aws_key_type 不应发送给后端
@@ -2575,6 +2598,94 @@ const EditChannelModal = (props) => {
                       />
                     </Col>
                   </Row>
+
+                  {(inputs.type === 54 || inputs.type === 45) && (
+                    <>
+                      <div className='mt-4 mb-2 text-sm font-medium text-gray-700'>
+                        {t('方舟素材库')}
+                      </div>
+                      <Form.Switch
+                        field='ark_asset_enabled'
+                        label={t('参考图 / 参考视频先入素材库')}
+                        checkedText={t('开')}
+                        uncheckedText={t('关')}
+                        onChange={(value) =>
+                          handleChannelOtherSettingsChange(
+                            'ark_asset_enabled',
+                            value,
+                          )
+                        }
+                        extraText={t(
+                          '开启后，请求里的图片与视频链接会并发上传到方舟素材库，等处理完成后以 asset:// 调用生成，避免 Seedance 对直传人脸素材的拦截。提交会多等几秒（图片约 5 秒）',
+                        )}
+                      />
+                      {inputs.ark_asset_enabled && (
+                        <>
+                          <Form.Input
+                            field='ark_asset_access_key'
+                            label={t('Access Key (AK)')}
+                            placeholder={t('火山引擎访问密钥 AK')}
+                            onChange={(value) =>
+                              handleChannelOtherSettingsChange(
+                                'ark_asset_access_key',
+                                value,
+                              )
+                            }
+                            showClear
+                            extraText={t(
+                              '火山官方素材接口只支持 AK/SK 签名。AK/SK 都留空时，改用本渠道的 API Key 走 Bearer 鉴权（仅界云等兼容网关支持）',
+                            )}
+                          />
+                          <Form.Input
+                            field='ark_asset_secret_key'
+                            label={t('Secret Key (SK)')}
+                            placeholder={
+                              inputs.ark_asset_secret_key_set
+                                ? t('已配置，留空则不修改')
+                                : t('火山引擎访问密钥 SK')
+                            }
+                            type='password'
+                            onChange={(value) =>
+                              handleChannelOtherSettingsChange(
+                                'ark_asset_secret_key',
+                                value,
+                              )
+                            }
+                            showClear
+                            extraText={t(
+                              'SK 保存后不再回显；清空 AK 会同时清除已保存的 SK',
+                            )}
+                          />
+                          <Form.Input
+                            field='ark_asset_endpoint'
+                            label={t('素材库地址')}
+                            placeholder={t(
+                              '留空自动推断：火山官方为 https://ark.cn-beijing.volcengineapi.com，其余与 API 地址相同',
+                            )}
+                            onChange={(value) =>
+                              handleChannelOtherSettingsChange(
+                                'ark_asset_endpoint',
+                                value,
+                              )
+                            }
+                            showClear
+                          />
+                          <Form.Input
+                            field='ark_asset_project_name'
+                            label={t('素材库项目')}
+                            placeholder='default'
+                            onChange={(value) =>
+                              handleChannelOtherSettingsChange(
+                                'ark_asset_project_name',
+                                value,
+                              )
+                            }
+                            showClear
+                          />
+                        </>
+                      )}
+                    </>
+                  )}
 
                   {inputs.type === 1 && (
                     <>

@@ -728,7 +728,7 @@ func ApplyChannelUpstreamModelUpdates(c *gin.Context) {
 			"remaining_models":        remainingModels,
 			"remaining_remove_models": remainingRemoveModels,
 			"models":                  channel.Models,
-			"settings":                channel.OtherSettings,
+			"settings":                redactedSettings(channel),
 		},
 	})
 }
@@ -996,4 +996,11 @@ func DetectAllChannelUpstreamModelUpdates(c *gin.Context) {
 			"channel_detected_results": results,
 		},
 	})
+}
+
+// redactedSettings 对外返回的 settings 去掉写入型密钥（方舟素材库 SK），不改动 channel 本身。
+func redactedSettings(channel *model.Channel) string {
+	copied := model.Channel{OtherSettings: channel.OtherSettings}
+	copied.RedactSecretSettings()
+	return copied.OtherSettings
 }

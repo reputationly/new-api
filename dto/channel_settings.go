@@ -90,6 +90,14 @@ type ChannelOtherSettings struct {
 	UpstreamModelUpdateLastDetectedModels []string      `json:"upstream_model_update_last_detected_models,omitempty"` // 上次检测到的可加入模型
 	UpstreamModelUpdateLastRemovedModels  []string      `json:"upstream_model_update_last_removed_models,omitempty"`  // 上次检测到的可删除模型
 	UpstreamModelUpdateIgnoredModels      []string      `json:"upstream_model_update_ignored_models,omitempty"`       // 手动忽略的模型
+
+	// 方舟素材库（仅 DoubaoVideo / VolcEngine）：开启后参考图与参考视频先入素材库，再以 asset:// 调生成，
+	// 避开 Seedance 对直传人脸素材的输入审核。AK/SK 为空时用渠道 API Key 走 Bearer（仅兼容网关支持）。
+	ArkAssetEnabled     bool   `json:"ark_asset_enabled,omitempty"`
+	ArkAssetAccessKey   string `json:"ark_asset_access_key,omitempty"`
+	ArkAssetSecretKey   string `json:"ark_asset_secret_key,omitempty"`
+	ArkAssetEndpoint    string `json:"ark_asset_endpoint,omitempty"`     // 空 = 按 Base URL 推断
+	ArkAssetProjectName string `json:"ark_asset_project_name,omitempty"` // 空 = default
 }
 
 func (s *ChannelOtherSettings) IsOpenRouterEnterprise() bool {
