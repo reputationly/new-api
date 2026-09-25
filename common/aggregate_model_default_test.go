@@ -64,7 +64,9 @@ func TestDefaultAggregateShipsNoEnhanceStageUntilTemplatesInherit(t *testing.T) 
 		// 但"能继承"是有前提的：生成段模型必须有对应的内置模板。没有的话
 		// 还是会降级 —— 名字叫 enhanced、实际用原始提示词，且不报错。
 		// 所以判据从"有没有写模板"改成"拿不拿得到模板"。
-		if it.PromptEnhance.SystemPrompt == "" && !hasBuiltinEnhanceTemplate(it.Generate.Model) {
+		// qwen_pe 自带官方提示词（service/qwenpe/），不读模板，也不回落 text。
+		if it.PromptEnhance.EnhanceMode() != EnhanceModeQwenPE &&
+			it.PromptEnhance.SystemPrompt == "" && !hasBuiltinEnhanceTemplate(it.Generate.Model) {
 			t.Errorf("%s 启用了增强段，既没写 system_prompt，%s 也没有内置默认模板 —— 会静默降级成不增强",
 				it.Name, it.Generate.Model)
 		}
@@ -149,11 +151,11 @@ func TestDefaultAggregatePinsGenerateStageWithSizeKey(t *testing.T) {
 	}
 }
 
-// **出厂配置必须真的跑 singlecall。**
+// **出厂配置必须真的跑编译模式**：视频（H3）是 singlecall，图片（Qwen-Image-2.1）是 qwen_pe。
 //
 // 这条是钉「默认值本身」的：EnhanceMode() 认不认这个模式、干跑校验放不放行，
-// 都有各自的测试；唯独「出厂那两条到底配没配 mode」没人管 —— 把那两个
-// "mode": "singlecall" 删掉，其余测试全绿，而线上静默跑回 text 模式。
+// 都有各自的测试；唯独「出厂那几条到底配没配 mode」没人管 —— 把
+// "mode" 删掉，其余测试全绿，而线上静默跑回 text 模式。
 func TestDefaultConfigUsesSingleCallMode(t *testing.T) {
 	items, err := ParseAggregateModelList(DefaultAggregateModelConfig)
 	if err != nil {
@@ -167,9 +169,13 @@ func TestDefaultConfigUsesSingleCallMode(t *testing.T) {
 			t.Errorf("%s 没配增强段", m.Name)
 			continue
 		}
-		if got := m.PromptEnhance.EnhanceMode(); got != EnhanceModeSingleCall {
+		want := EnhanceModeSingleCall
+		if m.Type == "image" {
+			want = EnhanceModeQwenPE
+		}
+		if got := m.PromptEnhance.EnhanceMode(); got != want {
 			t.Errorf("%s 的增强模式是 %q，期望 %q —— 少了它线上会静默跑回 text",
-				m.Name, got, EnhanceModeSingleCall)
+				m.Name, got, want)
 		}
 	}
 }

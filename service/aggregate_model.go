@@ -201,12 +201,25 @@ func DryRunAggregateModel(m *common.AggregateModel, peers map[string]int) *Aggre
 		// 写着 ir 的,应该被明确告知它已经不存在了,而不是静默跑 text。
 		if rawMode := strings.TrimSpace(m.PromptEnhance.Mode); rawMode != "" &&
 			!strings.EqualFold(rawMode, common.EnhanceModeText) &&
-			!strings.EqualFold(rawMode, common.EnhanceModeSingleCall) {
+			!strings.EqualFold(rawMode, common.EnhanceModeSingleCall) &&
+			!strings.EqualFold(rawMode, common.EnhanceModeQwenPE) {
 			add("enhance_mode", AggregateCheckWarn,
-				"增强模式 %q 不认识(只支持 %q / %q),运行时会按 %q 处理"+
+				"增强模式 %q 不认识(只支持 %q / %q / %q),运行时会按 %q 处理"+
 					"(\"ir\" 模式已删除:上游废弃了那套架构,见 service/h3v20/README.md)",
 				rawMode, common.EnhanceModeText,
-				common.EnhanceModeSingleCall, common.EnhanceModeText)
+				common.EnhanceModeSingleCall, common.EnhanceModeQwenPE, common.EnhanceModeText)
+		}
+		if m.PromptEnhance.EnhanceMode() == common.EnhanceModeQwenPE {
+			// qwen_pe 用内置的官方 PE 提示词(service/qwenpe/),不读 system_prompt;
+			// 它的产物(改写 + 画幅)也只对图片有意义。
+			if strings.TrimSpace(m.PromptEnhance.SystemPrompt) != "" {
+				add("enhance_mode", AggregateCheckWarn,
+					"mode=qwen_pe 时不使用 system_prompt(用内置的 Qwen-Image-2.1 官方 PE 提示词)")
+			}
+			if m.Type != "image" {
+				add("enhance_mode", AggregateCheckError,
+					"mode=qwen_pe 只适用于图片聚合(type=image),当前 type=%q", m.Type)
+			}
 		}
 		if m.PromptEnhance.EnhanceMode() == common.EnhanceModeSingleCall &&
 			strings.TrimSpace(m.PromptEnhance.SystemPrompt) != "" {
@@ -236,7 +249,9 @@ func DryRunAggregateModel(m *common.AggregateModel, peers map[string]int) *Aggre
 		//
 		// 这段注释以前写的是「后端读不到内置默认模板」,那在补上那一级之前
 		// 是事实,现在不是了。
-		if strings.TrimSpace(m.PromptEnhance.SystemPrompt) == "" &&
+		// qwen_pe 自带提示词、失败也不回落 text,模板与它无关。
+		if m.PromptEnhance.EnhanceMode() != common.EnhanceModeQwenPE &&
+			strings.TrimSpace(m.PromptEnhance.SystemPrompt) == "" &&
 			DefaultEnhanceTemplate(m.Generate.Model) == "" {
 			// singlecall **自带**编译器提示词(service/h3v20/),不读
 			// system_prompt。缺模板时缺的只是**回落那一级** —— 编译失败时

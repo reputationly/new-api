@@ -88,10 +88,14 @@ package common
 // 漂移,而漂移的症状是"不报错、默默出差档"。运营要定制时再在配置里覆盖。
 //
 // 增强对 H3 尤其值:H3 吃的是分镜结构的长提示词,而客户端 agent 给的往往是一句话。
-// 图片那边暂时不配 —— 没有增强的图片聚合等于绕一圈还是裸模型,而图片的改写知识
-// 还没对齐过。图生图那条的 send_input_images
 //
-//	必须为真:增强模型看不到底图只能从文字猜,会写出与底图打架的描述。
+// 图片这边目前只配 qwen-image-pro(Qwen-Image-2.1):它有官方配套的 PE 改写提示词,
+// 改写知识是对齐过的(mode=qwen_pe,见 service/aggregate_enhance_qwenpe.go)。
+// 增强模型选 qwen3.8-flash 是 2026-09-25 五方横评的结论(速度、比例字段、保字最均衡)。
+// 没有配套改写知识的图片模型仍不配 —— 没有增强的图片聚合等于绕一圈还是裸模型。
+// 图生图的 send_input_images
+//
+//	必须为真(漏写即为真):增强模型看不到底图只能从文字猜,会写出与底图打架的描述。
 //
 // ── 为什么帧族和参考族要分两条 ──────────────────────────────────────
 //
@@ -143,5 +147,13 @@ const DefaultAggregateModelConfig = `[
     "prompt_enhance": { "model": "qwen3.8-flash-fp8", "mode": "singlecall" },
     "generate": { "model": "minimax-h3-ref2va", "overrides": { "size": "768P" } },
     "upscale": { "model": "swiftvr", "target_size": "2k" }
+  },
+  {
+    "name": "qwen-image-pro-enhanced",
+    "type": "image",
+    "enabled": true,
+    "note": "Qwen-Image-2.1(qwen-image-pro)+官方 PE 提示词增强(qwen3.8 关思考),自动定画幅",
+    "prompt_enhance": { "model": "qwen3.8-flash-fp8", "mode": "qwen_pe" },
+    "generate": { "model": "qwen-image-pro" }
   }
 ]`

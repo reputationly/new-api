@@ -87,6 +87,9 @@ type EnhanceInput struct {
 	// 见 middleware 的 buildCompilerInput：缺时长、玩法判不出来、
 	// metadata 读不出来，三种。
 	Compiler *hilo.CompilerInput
+	// ClientSize 发给生成段的 size(客户传的,或 overrides 定的)。qwen_pe 用它:
+	// 非空时以接口为准,改写按这个画幅构图、不再另定尺寸。
+	ClientSize string
 }
 
 // EnhanceResult 一次增强的结果与过程记录。
@@ -122,6 +125,10 @@ type EnhanceResult struct {
 	// **这是整件事里唯一的反馈来源。** IR 层此前零调用方,没有任何真实
 	// 失败样本,所以校验规则和编译器模板都只能靠想 —— 也就一直不收敛。
 	FallbackReason string
+
+	// Size 增强定下的输出尺寸("WxH",仅 qwen_pe)。空 = 不改客户请求里的 size。
+	// 只在客户没传 size 时才会有值:画幅以接口为准,见 aggregate_enhance_qwenpe.go。
+	Size string
 }
 
 // u15EditClosingMarker 官方 U1.5 编辑模板的收尾句,与前端
@@ -193,6 +200,29 @@ func EnhancePrompt(ctx context.Context, agg *common.AggregateModel, authHeader s
 	// (见 SendInputImages 字段注释),不该散在每个调用点各判一次。
 	in.SendMedia = cfg.IsSendInputImages()
 	in.Thinking = cfg.IsThinking()
+
+	// ── qwen_pe 模式(Qwen-Image-2.1 官方 PE 协议)──────────────
+	//
+	// 失败直接降级为原始提示词,**不回落 text**:text 用的是通用模板,
+	// 对 Q21 没有意义。见 aggregate_enhance_qwenpe.go。
+	if cfg.EnhanceMode() == common.EnhanceModeQwenPE {
+		res.Mode = common.EnhanceModeQwenPE
+		out, err := compileQwenPEWithTimeout(ctx, authHeader, res.Model, in, qwenPEBudget(cfg))
+		if err != nil {
+			return degrade("qwen_pe 改写失败: %v", err)
+		}
+		res.EnhancedPrompt = out.Prompt
+		res.Size = out.Size
+		res.Repaired = out.Repaired
+		res.Usage = out.Usage
+		res.ElapsedMs = time.Since(started).Milliseconds()
+		for _, w := range out.Warnings {
+			common.SysLog(fmt.Sprintf("aggregate enhance: qwen_pe 警告 (model=%s): %s", res.Model, w))
+		}
+		common.SysLog(fmt.Sprintf("aggregate enhance: qwen_pe 完成 (model=%s, %dms, size=%q, repaired=%v)",
+			res.Model, res.ElapsedMs, res.Size, res.Repaired))
+		return res
+	}
 
 	// ── singlecall 模式 ──────────────────────────────────────
 	//

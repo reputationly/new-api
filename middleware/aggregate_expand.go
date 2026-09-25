@@ -174,6 +174,10 @@ func applyAggregateExpansion(c *gin.Context, publicName, realModel string, agg *
 			// 改掉 duration 一类字段,事实要描述真正发出去的那个请求。
 			norm := normalizeTaskRequest(body)
 			resolved := resolveCompilerTaskType(body, norm)
+			// 发给生成段的 size(客户传的,或 overrides 定的)。取 Overrides 之后的值:
+			// 事实要描述真正发出去的那个请求。
+			clientSize, _ := body["size"].(string)
+			clientSize = strings.TrimSpace(clientSize)
 			res := enhancePrompt(c.Request.Context(), agg,
 				c.Request.Header.Get("Authorization"), service.EnhanceInput{
 					Prompt: prompt,
@@ -190,6 +194,7 @@ func applyAggregateExpansion(c *gin.Context, publicName, realModel string, agg *
 					VideoURLs:   compilerVideos(norm, resolved),
 					TaskContext: buildTaskContext(body, norm),
 					Compiler:    buildCompilerInput(body, norm, prompt, resolved),
+					ClientSize:  clientSize,
 				})
 			exp.Enhance = res
 			// 这个判断当前是**冗余**的:EnhanceResult 的契约保证降级时
@@ -199,6 +204,11 @@ func applyAggregateExpansion(c *gin.Context, publicName, realModel string, agg *
 			// 这里也不会跟着出错。
 			if !res.Degraded {
 				body["prompt"] = res.EnhancedPrompt
+				// 增强定的画幅(qwen_pe)。客户传了 size 就以接口为准,永远不覆盖 ——
+				// service 那边在这种情况下本来就不会给出 Size,这里再守一道。
+				if res.Size != "" && clientSize == "" {
+					body["size"] = res.Size
+				}
 			}
 		}
 	}

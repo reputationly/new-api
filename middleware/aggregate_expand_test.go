@@ -1169,3 +1169,43 @@ func TestInferenceAgreesWithGenerationStage(t *testing.T) {
 	require.True(t, ok, "参考族两边一致，应该能推")
 	require.Equal(t, hilo.TaskR2VA, got)
 }
+
+// **qwen_pe 定的画幅要写回生成段请求;客户传了 size 就以接口为准。**
+//
+// 改写产出的提示词是按那个画幅构图的:只写回 prompt 不写回 size,生成段按自己的
+// 默认画幅出图,描述与画布就打架了。而客户显式给了 size 时,改写已经按它构图
+// (service 不会另给 Size),这里无论如何不能覆盖。
+func TestApplyExpansionWritesQwenPESize(t *testing.T) {
+	orig := enhancePrompt
+	t.Cleanup(func() { enhancePrompt = orig })
+	var gotSize string
+	enhancePrompt = func(_ context.Context, _ *common.AggregateModel, _ string,
+		in service.EnhanceInput) *service.EnhanceResult {
+		gotSize = in.ClientSize
+		return &service.EnhanceResult{OriginalPrompt: in.Prompt, EnhancedPrompt: "A wide photo.", Size: "2752x1536"}
+	}
+	withAggregateConfig(t, `[{
+		"name":"qwen-image-pro-enhanced","type":"image","enabled":true,
+		"generate":{"model":"qwen-image-pro"},
+		"prompt_enhance":{"model":"enh","mode":"qwen_pe"}
+	}]`)
+	agg := common.GetAggregateModel("qwen-image-pro-enhanced")
+	require.NotNil(t, agg)
+
+	run := func(reqBody string) map[string]any {
+		rec := httptest.NewRecorder()
+		c, _ := gin.CreateTestContext(rec)
+		c.Request = httptest.NewRequest(http.MethodPost, "/v1/images/generations", strings.NewReader(reqBody))
+		require.NoError(t, applyAggregateExpansion(c, "qwen-image-pro-enhanced", "qwen-image-pro", agg))
+		return readBodyMap(t, c)
+	}
+
+	body := run(`{"model":"qwen-image-pro-enhanced","prompt":"一只猫"}`)
+	require.Equal(t, "A wide photo.", body["prompt"])
+	require.Equal(t, "2752x1536", body["size"], "客户没传 size:用增强定的画幅")
+	require.Empty(t, gotSize)
+
+	body = run(`{"model":"qwen-image-pro-enhanced","prompt":"一只猫","size":"1024x1024"}`)
+	require.Equal(t, "1024x1024", body["size"], "客户传了 size:以接口为准")
+	require.Equal(t, "1024x1024", gotSize, "客户的 size 要交给增强,让改写按它构图")
+}

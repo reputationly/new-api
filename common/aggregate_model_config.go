@@ -80,6 +80,9 @@ type AggregatePromptEnhance struct {
 	//	text        一次改写:模板 + 原提示词 → 模型直接吐出改写后的提示词。
 	//	            输出官方客户端那套中文格式(全局基准 →【镜头N】)。
 	//	            **只有这个模式会用 system_prompt。**
+	//	qwen_pe     Qwen-Image-2.1(图片):官方 PE 系统提示词 + JSON 协议,产出
+	//	            改写提示词与画幅;失败直接用原始提示词(不回落 text)。
+	//	            见 service/aggregate_enhance_qwenpe.go。
 	//
 	// singlecall 换来的是**错误可指认**:文本改写吐出来的东西没有任何地方
 	// 能校验,镜头时长加起来不等于请求时长、参考图被描述成一张根本没传的图、
@@ -148,6 +151,10 @@ const (
 	// EnhanceModeSingleCall 一次调用直接拿到 H3 提示词(移植自上游 v20)。
 	// 见 service/aggregate_enhance_singlecall.go。
 	EnhanceModeSingleCall = "singlecall"
+	// EnhanceModeQwenPE Qwen-Image-2.1 官方 PE 协议:官方系统提示词 → JSON
+	// (rewritten_prompt / wh_ratio / ratio_follow) → 传输检查 → 定画幅。
+	// 见 service/aggregate_enhance_qwenpe.go。
+	EnhanceModeQwenPE = "qwen_pe"
 )
 
 // EnhanceMode 归一化后的增强模式(空/未知 = text)。
@@ -161,6 +168,8 @@ func (p *AggregatePromptEnhance) EnhanceMode() string {
 	switch strings.ToLower(strings.TrimSpace(p.Mode)) {
 	case EnhanceModeSingleCall:
 		return EnhanceModeSingleCall
+	case EnhanceModeQwenPE:
+		return EnhanceModeQwenPE
 	}
 	return EnhanceModeText
 }
