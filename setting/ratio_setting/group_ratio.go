@@ -25,12 +25,13 @@ var defaultGroupGroupRatio = map[string]map[string]float64{
 
 var groupGroupRatioMap = types.NewRWMap[string, map[string]float64]()
 
-var defaultGroupSpecialUsableGroup = map[string]map[string]string{
-	"vip": {
-		"append_1":   "vip_special_group_1",
-		"-:remove_1": "vip_removed_group_1",
-	},
-}
+// 默认没有任何可用线路增减规则。
+//
+// 上游在这里放了一份示例（vip → append_1 / -:remove_1），本意是给管理员看格式，
+// 但它是**生效的配置**：option 为空时这两条示例规则就在内存里跑，vip 档用户的可用
+// 线路里会多出一个不存在的 append_1，分组管理页也会一直挂着「引用了不存在的线路」。
+// 示例格式现在由页面编辑器承担，不再需要靠默认值示范。
+var defaultGroupSpecialUsableGroup = map[string]map[string]string{}
 
 type GroupRatioSetting struct {
 	GroupRatio              *types.RWMap[string, float64]            `json:"group_ratio"`

@@ -98,9 +98,10 @@ function nestRules(rules) {
 
 export function serializeGroupSpecialUsable(rules) {
   const nested = nestRules(rules);
-  return Object.keys(nested).length === 0
-    ? ''
-    : JSON.stringify(nested, null, 2);
+  // 空规则写 '{}' 而不是 ''：这个 key 走 setting/config 的反射加载，空串解析失败会被
+  // 直接跳过，内存里的旧规则原样保留——表现是「删光规则、保存成功、规则仍在生效，
+  // 重启才消失」。
+  return JSON.stringify(nested, null, 2);
 }
 
 const OP_TAG_MAP = {
