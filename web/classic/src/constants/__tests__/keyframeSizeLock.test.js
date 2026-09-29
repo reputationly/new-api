@@ -15,21 +15,21 @@ import {
 // 这一组测试守的是「配了也不作数」这件事——它一旦破防是**静默**的：用户选了 480P，
 // 提交不报错、也不生效，仍出 768P。
 describe('关键帧 sizes 锁定', () => {
-  it('关键帧被锁定成 768P，且带上锁定原因', () => {
+  it('关键帧被锁定成 768P / 1080P 两档，且带上锁定原因', () => {
     const lock = getTabFieldLock('video', 'flf2v', 'sizes');
     expect(lock).toBeTruthy();
-    expect(lock.value).toEqual(['768P']);
+    expect(lock.value).toEqual(['768P', '1080P']);
     expect(lock.reason).toBeTruthy();
   });
 
-  it('H3 仍然锁死', () => {
+  it('H3 仍然吃这把锁', () => {
     const lock = getTabFieldLock(
       'video',
       'flf2v',
       'sizes',
       VIDEO_ENGINE_MINIMAX_H3,
     );
-    expect(lock?.value).toEqual(['768P']);
+    expect(lock?.value).toEqual(['768P', '1080P']);
   });
 
   // wan 的两类关键帧实例 engine 留空，自这把锁上线起就一直吃着它。改成「只对 H3 生效」
@@ -38,7 +38,18 @@ describe('关键帧 sizes 锁定', () => {
   it('引擎族留空（wan）仍然锁死', () => {
     expect(getTabFieldLock('video', 'flf2v', 'sizes', '')?.value).toEqual([
       '768P',
+      '1080P',
     ]);
+  });
+
+  // ⚠️ 这两档里 **1080P 是 H3 专属的**：它只在部署档开了
+  // VLLM_OMNI_H3_EXPERIMENTAL_SHORT_EDGE 时才被引擎接受，wan 的关键帧实例没有这条
+  // 白名单。但锁是**按 tab 生效**的（getTabFieldLock 只按引擎族判豁免，不按档位过滤），
+  // 所以 wan 会跟着看到 1080P —— 这不是新引入的：锁上线时它的值就同时服务于两类引擎，
+  // 而"选了不生效"的档位能不能被运营配出来，取决于模型级 sizes，不取决于这把锁的 value。
+  // 真要按引擎族分档，得把这把锁从 {value} 改成按 engine 取 value 的形状，是另一件事。
+  it('锁定值里的 1080P 只对开了短边白名单的部署有效（已知边界，非回归）', () => {
+    expect(VIDEO_ENGINES_GATEWAY_CANVAS).not.toContain(VIDEO_ENGINE_MINIMAX_H3);
   });
 
   // LTX-2.5 认请求里的 width/height（首帧图由引擎等比放大后居中裁剪去适配画布），
@@ -123,7 +134,7 @@ describe('锁定值挡住 getSizesForVideoModel 的回落链', () => {
   it('锁定值优先于回落结果', () => {
     const lock = getTabFieldLock('video', 'flf2v', 'sizes');
     const native = lock?.value || getSizesForVideoModel(cfg, 'h3', 'flf2v');
-    expect(native).toEqual(['768P']);
+    expect(native).toEqual(['768P', '1080P']);
     expect(native).not.toContain('480P');
   });
 });

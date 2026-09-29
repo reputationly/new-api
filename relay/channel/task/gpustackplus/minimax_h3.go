@@ -24,8 +24,11 @@ import (
 // 以下常量与算法全部核实自 vllm-omni 的
 // vllm_omni/diffusion/models/minimax_h3/pipeline_minimax_h3.py,非文档推测。
 const (
-	// _resolve_output_canvas 的面积上限(pipeline:105 MINIMAX_H3_OUTPUT_MAX_PIXELS)。
-	h3MaxOutputPixels = 768 * 1344 // 1_032_192
+	// 面积上限的**基准值**,只对短边 768 那一档成立(引擎
+	// preprocessing.py:38 MINIMAX_H3_OUTPUT_MAX_PIXELS = 768*1344)。非 768 的档位用
+	// h3MaxOutputPixelsFor —— 引擎的 `_output_max_pixels(short_edge)` 是按档缩放的,
+	// 这里若继续按常量算,1080P 会被静默钳回 768p(线上实测:size=1080P 出 1344×768)。
+	h3MaxOutputPixels768 = 768 * 1344 // 1_032_192
 
 	// 画布两轴都必须对齐到 32(pipeline:889-890 的 int(x)//32*32)。
 	h3CanvasMultiple = 32
@@ -42,15 +45,38 @@ const (
 	// 详见 common.VideoInferenceStepsForModel 的注释。
 	h3DefaultInferenceSteps = 20
 
-	// 时长硬区间(pipeline MINIMAX_H3_MIN/MAX_OUTPUT_SECONDS)。超界引擎 400。
-	h3MinDurationSec = 4.0
-	h3MaxDurationSec = 15.0
+	// 基准短边。引擎 preprocessing.py:37 MINIMAX_H3_OUTPUT_SHORT_EDGE。
+	h3OutputShortEdge = 768
+
+	// full 模式的时长上限(秒):long_video 未开时引擎的上限也是 15。
+	// 超过它就必须带 long_video=true,见 applyMiniMaxH3Request 的长视频开关那段。
+	h3FullModeMaxSec = 15
 
 	// t2va 缺省宽高比。取 16:9 不是随手挑的:引擎的 Ref2VA 分支缺省就是它
 	// (_resolve_minimax_h3_aspect_ratio 的注释 "Ref2VA defaults to 16:9"),
 	// 两处取同一个值,同一个模型才不会因为玩法不同出不同画幅。
 	h3DefaultAspectRatio = "16:9"
 )
+
+// h3MaxOutputPixelsFor 返回某短边档位的画布面积上限,镜像引擎的
+// `_output_max_pixels`(preprocessing.py:58-67):
+//
+//	edge == 768  → 768*1344          (与旧常量逐位相同)
+//	edge != 768  → 768*1344*(edge/768)²
+//
+// **只在 edge >= 768 时启用缩放**(含 1080),768 以下一律返回基准值。这不是漏写,
+// 是刻意的收窄:480P 现状算出 864×480(round 对齐),而引擎公式会给 832×480 ——
+// 改公式会让 480P 出片静默变化 3.8% 像素,而这条路上网关恒发显式 width/height、
+// 引擎从不自己算 480P,所以引擎公式对 480P 并没有参考价值。要动 480P 得单独论证。
+//
+// edge <= 0(像素串路径取不出档位)同样落回基准值。
+func h3MaxOutputPixelsFor(shortEdge int) int {
+	if shortEdge <= h3OutputShortEdge {
+		return h3MaxOutputPixels768
+	}
+	ratio := float64(shortEdge) / float64(h3OutputShortEdge)
+	return int(float64(h3MaxOutputPixels768) * ratio * ratio)
+}
 
 // h3NamedAspectRatios 是 H3 认的六个具名比例(pipeline:109-116
 // MINIMAX_H3_SUPPORTED_ASPECT_RATIOS)。
@@ -201,10 +227,13 @@ func h3Canvas(shortEdge int, ratio float64) (width, height int) {
 	} else {
 		w, h = float64(shortEdge), float64(shortEdge)/ratio
 	}
-	return h3AlignWithinCap(w, h)
+	return h3AlignWithinCap(w, h, h3MaxOutputPixelsFor(shortEdge))
 }
 
 // h3AlignWithinCap 等比缩到面积上限内、对齐到画布网格,并**保证结果不超过上限**。
+//
+// cap 由调用方按短边档位给出(h3MaxOutputPixelsFor)。**不要让本函数自己去猜档位** ——
+// 像素串那条路(h3ClampPixels)根本没有档位可猜,给它塞一个基准值才是对的。
 //
 // 最后那步退格不是多余的:h3AlignMultiple 是 round 不是 floor(引擎的 _align_multiple
 // 就是这么定的,别改),于是"缩到正好等于上限"之后两轴可能双双进位,重新越界 ——
@@ -213,15 +242,15 @@ func h3Canvas(shortEdge int, ratio float64) (width, height int) {
 //
 // 退格只在越界时发生,不影响那些对齐后本就合规的档位(16:9@768 → 1344x768 恰好等于
 // 上限,不触发)。
-func h3AlignWithinCap(w, h float64) (int, int) {
-	if area := w * h; area > h3MaxOutputPixels {
-		scale := math.Sqrt(h3MaxOutputPixels / area)
+func h3AlignWithinCap(w, h float64, cap int) (int, int) {
+	if area := w * h; area > float64(cap) {
+		scale := math.Sqrt(float64(cap) / area)
 		w *= scale
 		h *= scale
 	}
 	aw := h3AlignMultiple(w, h3CanvasMultiple)
 	ah := h3AlignMultiple(h, h3CanvasMultiple)
-	for aw*ah > h3MaxOutputPixels {
+	for aw*ah > cap {
 		if aw >= ah {
 			if aw <= h3CanvasMultiple {
 				break
@@ -243,14 +272,18 @@ func h3AlignWithinCap(w, h float64) (int, int) {
 // (短边, 比例) 推画布,这个从已有的 (宽, 高) 出发。**不要在这里另写一套** ——
 // 两处若对不上,表现是引擎按自己那套再钳一次,而我们记账用的是自己算的那份,
 // 出片尺寸与账单尺寸悄悄分家。
+//
+// **像素串路径取不出短边档位,故恒用 768 的基准上限**。这与现状逐位一致,是刻意的:
+// 调用方直接给 "2560x1440" 时我们没有档位可依据,而这条路本来就是"超限才干预"的保护,
+// 不是画质档位。想要 1080P 请走档位词 size=1080P(h3ApplyCanvas 会推出画布)。
 func h3ClampPixels(w, h int) (int, int) {
 	if w <= 0 || h <= 0 {
 		return w, h
 	}
-	if float64(w)*float64(h) <= h3MaxOutputPixels {
+	if float64(w)*float64(h) <= float64(h3MaxOutputPixels768) {
 		return w, h
 	}
-	return h3AlignWithinCap(float64(w), float64(h))
+	return h3AlignWithinCap(float64(w), float64(h), h3MaxOutputPixels768)
 }
 
 // h3EnsureExtraParams 取出 body["extra_params"] 这个嵌套对象,不存在则建。
@@ -318,6 +351,38 @@ func applyMiniMaxH3Request(body map[string]any, taskType string, durationSec int
 			if _, ok := extra["duration_seconds"]; !ok {
 				extra["duration"] = float64(durationSec)
 			}
+		}
+	}
+
+	// ── 长视频开关 ─────────────────────────────────────────────────────────
+	// H3 的时长上限**不是一个白名单,是三档常量,缺省那档最小**
+	// (引擎 long_video.py:max_output_seconds):
+	//
+	//	long_video 未开                 → 15 s
+	//	long_video=true + full          → 30 s
+	//	long_video=true + continuation  → 300 s,**仅 Ref2VA**
+	//
+	// 所以"把平台白名单配到 30"只做了一半:调用方还得在 extra_params 里带
+	// long_video=true,否则引擎照旧按 15 秒拒(实测报错文案就是 `must be in [4, 15]`,
+	// 那不是网关拦的 —— 网关的运营白名单当时放行了 20)。
+	//
+	// 这里在**白名单已放行**的前提下、时长超过 full 档上限时补上,让运营改一处配置
+	// 就能生效,不必再教每个调用方背这个开关。durationSec 是顶层 duration 校验后的值,
+	// 不是 metadata 里可绕过的原文。
+	//
+	// 只补 full,**绝不补 continuation**:后者只有 Ref2VA 收(引擎 continuation.py:57
+	// 对非 ref2va 直接 raise),而且要求 uncached denoising(`quality=lossless`,
+	// pipeline:3911)。要 continuation 必须由调用方显式声明 —— 那是一条有自己前提
+	// 条件的路,不该被默认打开。
+	//
+	// 调用方显式给了 long_video / long_video_mode 就一律不动,与本文件
+	// "只补默认、不覆盖用户意图" 是同一条原则(见 duration 与 num_inference_steps)。
+	if durationSec > h3FullModeMaxSec {
+		if _, ok := extra["long_video"]; !ok {
+			extra["long_video"] = true
+		}
+		if _, ok := extra["long_video_mode"]; !ok {
+			extra["long_video_mode"] = "full"
 		}
 	}
 	// wan 专属字段:即便上面某处已经写了,对 H3 也要清掉 —— 留着不会报错,只会在
@@ -397,7 +462,8 @@ func applyMiniMaxH3Request(body map[string]any, taskType string, durationSec int
 	// 关键帧(i2v/l2va/flf2v)不在这里算 —— FL2VA 的画幅**永远跟随 images[0]**
 	// (引擎 _resolve_minimax_h3_aspect_ratio 对 fl2va 直接返回 image.width/image.height,
 	// 传来的 aspect_ratio 被静默忽略),而网关这层拿到的图是 URL/base64,不解码就不知道
-	// 宽高比。直连调用方不传画布则由引擎自算,出 768p。
+	// 宽高比。**它的短边同样不由网关算,而是由调用方经 extra_params.short_edge 给出**
+	// (见下面的 h3ApplyKeyframeShortEdge)。
 	//
 	// ⚠️ images[0] **不等于"首帧"**:有首帧时它是首帧,l2va(只给尾帧)整条请求只有
 	// 一张图,那张尾帧就是 images[0],画布跟的是尾帧。adaptor.go 的 l2va 分支正因如此
@@ -415,9 +481,72 @@ func applyMiniMaxH3Request(body map[string]any, taskType string, durationSec int
 	if taskType == "t2v" || taskType == "r2va" {
 		h3ApplyCanvas(body)
 	} else {
-		// 关键帧不推画布,但档位词仍不能漏给引擎(SizeStr 只认 "WxH")。
+		// 关键帧不推画布,但档位词仍不能漏给引擎(SizeStr 只认 "WxH"),
+		// 且它的**短边杠杆**必须在这里补上 —— 读档位词要在清掉它之前。
+		// 体验区给关键帧下发档位词(它的 sizes 字段是超分档的闸门,见
+		// playgroundAdmin 的 flf2v tab),而画幅仍由引擎按首图推,我们只把短边挑出来。
+		h3ApplyKeyframeShortEdge(body, extra)
 		h3DropResolutionToken(body)
 	}
+}
+
+// h3ApplyKeyframeShortEdge 给关键帧(非 t2v/r2va 的玩法)补上生成短边。
+//
+// ⚠️ 这一条是 2026-09-29 实测**推翻了本文件原先写下的判断**之后加的。原先的结论是
+// 「关键帧要 1080p,唯一正确的杠杆是引擎的部署 env `VLLM_OMNI_H3_EXPERIMENTAL_SHORT_EDGE`」
+// —— **那是错的**。引擎里短边的缺省值是**常量**:
+//
+//	encoder_processing.py:208  raw = target.get("short_edge", extra.get("short_edge", 768))
+//	pipeline_minimax_h3.py:2215  同一份常量,同一条读取链
+//
+// env 只喂 `_allowed_output_short_edges()` —— 那是个**白名单**,决定 1080 合法不合法,
+// **不改变缺省值**。实测(fl2va,短边 env 保持只认 768):
+//
+//	不传 short_edge                → 200,出片 1344×768 / 124 帧
+//	传 extra_params.short_edge=1080 → 400 `short_edge must be one of (768,), got 1080`
+//
+// 两条合起来证明:只开 env 的出片仍是 768p,而 short_edge 这条**请求字段**本身就是有效
+// (且是唯一有效)的杠杆。所以生产里两半都要在:档位 env 打开白名单(见 deploy-configs
+// 的两份 VDN 档),网关再把值按档位发下去。只做 env 那一半,用户选了 1080P 会静默拿到 768p。
+//
+// 画布仍然不由我们算 —— 只发短边,画幅继续跟随首图,首图不会被拉伸,这正是
+// h3ApplyCanvas 注释里"关键帧不给比例入口"那条约束所要求的。
+//
+// 只补缺省,不覆盖调用方显式给的值(与 duration / num_inference_steps 同一原则):
+// metadata 是开放透传的,直连调用方自己在 extra_params 或 extra_params.target 里发
+// short_edge 是合法用法,一律不动 —— 与引擎自己的读取顺序一致。
+//
+// 只有**高于基准档**的档位才下发:768 这一档显式发与不发等价(引擎缺省就是 768),
+// 补上只会给每一条既有请求都塞一个不起作用的键;而且它让"网关发了什么"与"引擎默认
+// 是什么"多一个可以漂移的接缝。取不到档位词(调用方像素串 / 运营没配尺寸)就不补,
+// 维持 768,与今天的行为逐位一致。
+//
+// ── 三次实测的完整阶梯(fl2va,同一台机器,5 秒档,短边只此一处变化)──
+//
+//	部署 env   请求 short_edge   结果
+//	 未设          未传            200  1344×768   ← 只开 env 不够,反证见下
+//	 未设          1080            400  `short_edge must be one of (768,), got 1080`
+//	 1080          未传            200  1344×768   ← **决定性的一条**:env 不改缺省值
+//	 1080          1080            200  1888×1088  ← 画幅仍跟随首图,首图没被拉伸
+//
+// 第 3、4 行是同一个进程连发的两条,环境完全相同,唯一差别就是有没有这个字段 ——
+// 这就是"两半都要在"的证据。缺任一半的症状都是**静默**的:缺 env 是硬 400(还算好查),
+// 缺请求字段是用户点了 1080P 却拿到 768p、界面上没有任何提示。
+func h3ApplyKeyframeShortEdge(body, extra map[string]any) {
+	if _, ok := extra["short_edge"]; ok {
+		return
+	}
+	if target, ok := extra["target"].(map[string]any); ok {
+		if _, ok := target["short_edge"]; ok {
+			return
+		}
+	}
+	size, _ := body["size"].(string)
+	edge := h3ShortEdgeFromSizeToken(size)
+	if edge <= h3OutputShortEdge {
+		return
+	}
+	extra["short_edge"] = edge
 }
 
 // h3NormalizeAspectRatio 把体验区实际发出的宽高比字段归一到引擎认的 aspect_ratio。

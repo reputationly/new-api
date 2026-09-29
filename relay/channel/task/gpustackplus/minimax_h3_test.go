@@ -43,6 +43,15 @@ func TestH3Canvas(t *testing.T) {
 		{"480P 16:9 按 round 对齐", 480, "16:9", 864, 480},
 		{"480P 4:3", 480, "4:3", 640, 480},
 		{"480P 1:1", 480, "1:1", 480, 480},
+		// 1080 档。面积上限按 (1080/768)² 缩放(引擎 preprocessing.py:58-67),不是沿用
+		// 768 的常量 —— 那条路上 1080P 会被静默钳回 1344×768,线上实测就是这个现象。
+		// 期望值与引擎的 _resolve_output_canvas 逐位一致。
+		{"1080P 16:9", 1080, "16:9", 1920, 1056},
+		{"1080P 4:3", 1080, "4:3", 1440, 1088},
+		{"1080P 1:1", 1080, "1:1", 1088, 1088},
+		{"1080P 3:4", 1080, "3:4", 1088, 1440},
+		{"1080P 9:16", 1080, "9:16", 1056, 1920},
+		{"1080P 21:9", 1080, "21:9", 2176, 928},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -54,10 +63,39 @@ func TestH3Canvas(t *testing.T) {
 			if w%32 != 0 || h%32 != 0 {
 				t.Fatalf("画布两轴必须是 32 的倍数,得到 %dx%d", w, h)
 			}
-			if w*h > h3MaxOutputPixels {
-				t.Fatalf("画布面积 %d 超过上限 %d", w*h, h3MaxOutputPixels)
+			if w*h > h3MaxOutputPixelsFor(tc.shortEdge) {
+				t.Fatalf("画布面积 %d 超过上限 %d", w*h, h3MaxOutputPixelsFor(tc.shortEdge))
 			}
 		})
+	}
+}
+
+// 1080P 不能被按 768 的上限钳住 —— 这是本次改动的**回归锁**。
+// 线上实测:size=1080P 出片恒为 1344×768,因为 h3Canvas 当时用的是一个包级常量
+// 768*1344。改成按档缩放后必须变成 1920×1056(引擎在 short_edge=1080 下的同一个值)。
+func TestH3Canvas1080PIsNotClampedTo768(t *testing.T) {
+	w, h := h3Canvas(1080, h3NamedAspectRatios["16:9"])
+	if w == 1344 && h == 768 {
+		t.Fatal("1080P 被 768 的面积上限钳住了:得到 1344×768,应为 1920×1056")
+	}
+	if w != 1920 || h != 1056 {
+		t.Fatalf("h3Canvas(1080, 16:9) = %dx%d, want 1920x1056", w, h)
+	}
+	// 而 768 档必须逐位保持原值 —— 最小爆炸半径:只让 1080 变。
+	if w768, h768 := h3Canvas(768, h3NamedAspectRatios["16:9"]); w768 != 1344 || h768 != 768 {
+		t.Fatalf("768P 被改动了:得到 %dx%d,应为 1344x768", w768, h768)
+	}
+}
+
+// 480P 必须**保持**现状(864×480),即 h3MaxOutputPixelsFor 在 768 以下不启用缩放。
+// 原因是刻意的:这条路上网关恒发显式 width/height,引擎自己从不按 short_edge=480 算画布,
+// 而改成引擎公式会静默改变 480P 出片 3.8% 的像素。要动它得单独论证。
+func TestH3Canvas480PKeepsLegacyCap(t *testing.T) {
+	if got := h3MaxOutputPixelsFor(480); got != h3MaxOutputPixels768 {
+		t.Fatalf("480P 的上限应保持基准值 %d,得到 %d", h3MaxOutputPixels768, got)
+	}
+	if w, h := h3Canvas(480, h3NamedAspectRatios["16:9"]); w != 864 || h != 480 {
+		t.Fatalf("h3Canvas(480, 16:9) = %dx%d, want 864x480", w, h)
 	}
 }
 
@@ -69,6 +107,9 @@ func TestH3ShortEdgeFromSizeToken(t *testing.T) {
 		// 2K/4K 是超分档位的「短边档」写法,前端 videoSizeShortEdge 有同一份映射,
 		// 两处必须一起改 —— 漂移了不报错,只会静默选错起步档。
 		"2K": 1440, "2k": 1440, " 4K ": 2160,
+		// 1080P 是本次新增暴露的档位。它与 2K/4K 走同一个 `\d+p` 解析分支,只是从
+		// 「超分档」变成了 H3 自己的生成档(见 h3MaxOutputPixelsFor)。
+		"1080P": 1080, "1080p": 1080, " 1080P ": 1080,
 	}
 	for in, want := range cases {
 		if got := h3ShortEdgeFromSizeToken(in); got != want {
@@ -180,6 +221,80 @@ func TestH3DoesNotOverrideExplicitValues(t *testing.T) {
 	}
 }
 
+// 长视频开关:时长超过 full 档上限(15 s)时补 long_video=true + long_video_mode=full。
+//
+// 引擎的时长上限是三档常量,不是白名单:未开 long_video → 15 s,full → 30 s,
+// continuation → 300 s(仅 Ref2VA)。只放开平台白名单不做这一步,引擎照旧按 15 秒拒
+// (实测报错文案 `must be in [4, 15]`)。
+func TestH3InjectsLongVideoAboveFullModeCap(t *testing.T) {
+	cases := []struct {
+		name       string
+		duration   int
+		wantLong   bool
+		wantInMode bool
+	}{
+		{"15 秒是 full 档上限,不注入", 15, false, false},
+		{"16 秒越过上限,注入", 16, true, true},
+		{"30 秒 —— 本次要开的目标档", 30, true, true},
+		{"5 秒不注入", 5, false, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			body := map[string]any{"aspect_ratio": "16:9"}
+			applyMiniMaxH3Request(body, "t2v", tc.duration, false, 0)
+			extra := body["extra_params"].(map[string]any)
+			got, has := extra["long_video"]
+			if has != tc.wantLong {
+				t.Fatalf("long_video 存在性 = %v (值 %v),want 存在性 %v", has, got, tc.wantLong)
+			}
+			if !tc.wantLong {
+				if _, has := extra["long_video_mode"]; has {
+					t.Fatalf("不该注入 long_video_mode:%v", extra["long_video_mode"])
+				}
+				return
+			}
+			if got != true {
+				t.Fatalf("long_video 应为布尔 true,得到 %#v", got)
+			}
+			// 只补 full。continuation 只有 Ref2VA 收,且要求 quality=lossless ——
+			// 默认打开它会让 fl2va/t2v 的请求直接 400。
+			if extra["long_video_mode"] != "full" {
+				t.Fatalf("应只注入 full,得到 %#v", extra["long_video_mode"])
+			}
+		})
+	}
+}
+
+// 调用方自己声明了长视频模式就一律不动 —— 包括声明了 continuation。
+func TestH3KeepsCallerLongVideoChoice(t *testing.T) {
+	body := map[string]any{
+		"aspect_ratio": "16:9",
+		"extra_params": map[string]any{
+			"long_video":      true,
+			"long_video_mode": "continuation",
+		},
+	}
+	applyMiniMaxH3Request(body, "r2va", 90, false, 0)
+	extra := body["extra_params"].(map[string]any)
+	if extra["long_video_mode"] != "continuation" {
+		t.Fatalf("调用方显式声明的 continuation 被改成了:%v", extra["long_video_mode"])
+	}
+
+	// 只给了 long_video、没给 mode:补 full,但 long_video 保持调用方的值。
+	body2 := map[string]any{
+		"aspect_ratio": "16:9",
+		"extra_params": map[string]any{"long_video": true},
+	}
+	applyMiniMaxH3Request(body2, "t2v", 30, false, 0)
+	extra2 := body2["extra_params"].(map[string]any)
+	if extra2["long_video"] != true {
+		t.Fatalf("调用方给的 long_video 被覆盖:%#v", extra2["long_video"])
+	}
+	if extra2["long_video_mode"] != "full" {
+		t.Fatalf("缺 mode 时应补 full,得到 %#v", extra2["long_video_mode"])
+	}
+}
+
 // 关键帧不在网关侧推画布:FL2VA 的画幅永远跟随 images[0](有首帧就是首帧,只给尾帧时
 // 那张尾帧就是 images[0]),引擎静默忽略 aspect_ratio;而网关拿到的是 URL/base64,
 // 不解码就不知道宽高比。硬算只会算错。
@@ -205,6 +320,119 @@ func TestH3SkipsCanvasOnNonNamedRatio(t *testing.T) {
 	applyMiniMaxH3Request(body, "t2v", 5, false, 0)
 	if _, exists := body["width"]; exists {
 		t.Fatal("非具名比例不该推出画布")
+	}
+}
+
+// ── 关键帧的生成短边 ───────────────────────────────────────────────────────
+//
+// 引擎的短边读取链是 `target.short_edge → extra.short_edge → 常量 768`,而部署 env
+// `VLLM_OMNI_H3_EXPERIMENTAL_SHORT_EDGE` 只决定值**合法不合法**(白名单),不改缺省。
+// 2026-09-29 实测(fl2va,env=1080):
+//
+//	不传 short_edge                → 200,1344×768 / 124 帧
+//	传 extra_params.short_edge=1080 → 200,1888×1088(画幅仍跟随首图)
+//
+// 所以关键帧要出 1080p,网关必须把档位词翻成 short_edge 发进去 —— 只开 env 会静默
+// 出 768p。画幅仍由引擎按首图推,我们一个字的比例/width/height 都不发。
+func TestH3KeyframeTranslatesSizeTokenToShortEdge(t *testing.T) {
+	for _, tt := range []string{"i2v", "l2va", "flf2v"} {
+		t.Run(tt, func(t *testing.T) {
+			body := map[string]any{"size": "1080P", "aspect_ratio": "16:9"}
+			applyMiniMaxH3Request(body, tt, 5, false, 0)
+
+			extra := body["extra_params"].(map[string]any)
+			if extra["short_edge"] != 1080 {
+				t.Fatalf("%s: size=1080P 应翻成 short_edge=1080,得到 %#v", tt, extra["short_edge"])
+			}
+			// 画布仍然不由网关推。
+			if _, exists := body["width"]; exists {
+				t.Fatalf("%s 不该推 width", tt)
+			}
+			// 档位词对引擎的 SizeStr 非法,必须清掉。
+			if _, exists := body["size"]; exists {
+				t.Fatalf("%s: 档位词应被清掉,否则引擎解析 size 直接报错", tt)
+			}
+		})
+	}
+}
+
+// 768 这一档显式发与不发等价(引擎缺省就是 768),所以不补 —— 免得给每一条既有请求
+// 都塞一个不起作用的键,也免得"网关发了什么"与"引擎默认是什么"多一个可漂移的接缝。
+func TestH3KeyframeLeaves768Unset(t *testing.T) {
+	body := map[string]any{"size": "768P"}
+	applyMiniMaxH3Request(body, "flf2v", 5, false, 0)
+	extra := body["extra_params"].(map[string]any)
+	if _, exists := extra["short_edge"]; exists {
+		t.Fatalf("768P 不该下发 short_edge(与引擎缺省等价),得到 %#v", extra["short_edge"])
+	}
+}
+
+// 取不到档位词(像素串 / 运营没配尺寸 / 非档位词)就不补,维持 768 —— 与今天逐位一致。
+func TestH3KeyframeIgnoresNonTierSize(t *testing.T) {
+	for _, size := range []string{"", "1920x1080", "480P", "720P"} {
+		t.Run(size, func(t *testing.T) {
+			body := map[string]any{}
+			if size != "" {
+				body["size"] = size
+			}
+			applyMiniMaxH3Request(body, "flf2v", 5, false, 0)
+			extra := body["extra_params"].(map[string]any)
+			if _, exists := extra["short_edge"]; exists {
+				t.Fatalf("size=%q 不该推出 short_edge,得到 %#v", size, extra["short_edge"])
+			}
+		})
+	}
+}
+
+// 调用方显式给了就一律不动 —— 两条路都要认(引擎自己的读取顺序是
+// target.short_edge 先于 extra.short_edge)。与本文件"只补默认、不覆盖用户意图"同源。
+func TestH3KeyframeRespectsCallerShortEdge(t *testing.T) {
+	t.Run("extra.short_edge", func(t *testing.T) {
+		body := map[string]any{
+			"size":         "1080P",
+			"extra_params": map[string]any{"short_edge": 960},
+		}
+		applyMiniMaxH3Request(body, "flf2v", 5, false, 0)
+		extra := body["extra_params"].(map[string]any)
+		if extra["short_edge"] != 960 {
+			t.Fatalf("调用方给的 short_edge 被覆盖成 %#v", extra["short_edge"])
+		}
+	})
+
+	t.Run("target.short_edge", func(t *testing.T) {
+		body := map[string]any{
+			"size": "1080P",
+			"extra_params": map[string]any{
+				"target": map[string]any{"short_edge": 960},
+			},
+		}
+		applyMiniMaxH3Request(body, "flf2v", 5, false, 0)
+		extra := body["extra_params"].(map[string]any)
+		if _, exists := extra["short_edge"]; exists {
+			t.Fatalf("target 里已有 short_edge 时不该再补,得到 %#v", extra["short_edge"])
+		}
+		target := extra["target"].(map[string]any)
+		if target["short_edge"] != 960 {
+			t.Fatalf("target 里的 short_edge 被改动:%#v", target["short_edge"])
+		}
+	})
+}
+
+// t2v/r2va 走的是**另一条路**(网关算画布、发 width/height),它们不该被塞 short_edge:
+// 那条路上 short_edge 与 width/height 同时存在时引擎读哪个没有实测过,不该引入歧义。
+func TestH3CanvasTasksDoNotGetShortEdge(t *testing.T) {
+	for _, tt := range []string{"t2v", "r2va"} {
+		t.Run(tt, func(t *testing.T) {
+			body := map[string]any{"size": "1080P", "aspect_ratio": "16:9"}
+			applyMiniMaxH3Request(body, tt, 5, false, 0)
+			extra := body["extra_params"].(map[string]any)
+			if _, exists := extra["short_edge"]; exists {
+				t.Fatalf("%s 由网关算画布,不该再发 short_edge", tt)
+			}
+			if _, exists := body["width"]; !exists {
+				t.Fatalf("%s 应推出画布", tt)
+			}
+		})
 	}
 }
 
@@ -647,8 +875,8 @@ func TestH3ApplyCanvasClampsExplicitPixelSize(t *testing.T) {
 		if !ok {
 			t.Fatalf("%s: 钳位后无法解析: %q", c.name, got)
 		}
-		if w*h > h3MaxOutputPixels {
-			t.Errorf("%s: %s → %s 仍超面积上限 (%d > %d)", c.name, c.size, got, w*h, h3MaxOutputPixels)
+		if w*h > h3MaxOutputPixels768 {
+			t.Errorf("%s: %s → %s 仍超面积上限 (%d > %d)", c.name, c.size, got, w*h, h3MaxOutputPixels768)
 		}
 		// 引擎按 32 对齐;我们算的和它算的必须一致,否则出片尺寸与账单尺寸分家。
 		if w%h3CanvasMultiple != 0 || h%h3CanvasMultiple != 0 {

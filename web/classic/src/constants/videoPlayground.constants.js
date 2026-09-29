@@ -430,7 +430,7 @@ export const VIDEO_CAPABILITY_LEGACY_ALIASES = {
 
 // 视频模型「策略类别」：不同类上游对尺寸/时长参数的要求不同。
 // - sora 类（真·OpenAI Sora）：像素尺寸（后端 relay_utils 校验器要求 720x1280 等）+ seconds 字段；
-// - minimax 类（MiniMax / MiniMax-compat）：分辨率档位（720P）+ duration 字段。
+// - minimax 类（MiniMax / MiniMax-compat）：分辨率档位 + duration 字段。
 // durationField 决定提交时把时长写进哪个字段（只发该字段，避免多发被严格上游拒绝）。
 export const VIDEO_MODEL_STRATEGIES = {
   sora: {
@@ -439,8 +439,20 @@ export const VIDEO_MODEL_STRATEGIES = {
     durationField: 'seconds',
   },
   minimax: {
-    sizes: ['720P', '1080P'],
-    durations: ['5'],
+    // 档位词必须是**引擎认的短边**。720P 曾经在这里，但对自建 H3 是无意义的：
+    // 短边白名单只认 768 与（开了 VLLM_OMNI_H3_EXPERIMENTAL_SHORT_EDGE 之后的）1080，
+    // 发 720P 会被 h3ShortEdgeFromSizeToken 解成 720、算出 720 档的画布，
+    // 而引擎侧 short_edge 白名单会把 720 直接拒掉。
+    //
+    // ⚠️ 这仍是「兜底表」，只服务没配进体验区的模型。真正生效的是运营在
+    // 「视频模型配置」里给每个模型/每个 tab 配的 sizes（getSizesForVideoModel 的
+    // tab → 模型级 → default 三级回落，本表排在 default 之后）。
+    sizes: ['768P', '1080P'],
+    // 时长兜底。**16~30 秒不在这里**：那段只有 H3 且要 long_video 才成立
+    // （引擎三档常量 15 / 30 / 300，见 minimax_h3.go 的长视频开关），对本表覆盖的
+    // 其它模型发 30 秒只会让它们在引擎侧 400。H3 的长档请在模型级 durations 里配，
+    // 那一层是真正的白名单，网关按它校验。
+    durations: ['5', '10', '15'],
     durationField: 'duration',
   },
 };
