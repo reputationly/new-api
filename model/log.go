@@ -626,13 +626,12 @@ func streamLogsByCursor(applyFilters func(*gorm.DB) *gorm.DB, batchSize int, per
 	}
 }
 
-// ExportAllLogs 按管理员视角流式遍历匹配的日志，使用手动游标分页保证不重不漏。
-// callback 收到的 logs 切片仅在本次调用内有效，回调返回 error 会中止遍历。
-func ExportAllLogs(logType int, startTimestamp int64, endTimestamp int64, modelName string, username string, tokenName string, channelIds []int, group string, requestId string, billing string, batchSize int, callback func(logs []*Log) error) error {
+// allLogExportFilter 构造管理员导出的筛选条件。导出与计数共用，保证两边口径一致。
+func allLogExportFilter(logType int, startTimestamp int64, endTimestamp int64, modelName string, username string, tokenName string, channelIds []int, group string, requestId string, billing string) (func(*gorm.DB) *gorm.DB, error) {
 	if err := requireStartForBillingFilter(billing, startTimestamp); err != nil {
-		return err
+		return nil, err
 	}
-	applyFilters := func(tx *gorm.DB) *gorm.DB {
+	return func(tx *gorm.DB) *gorm.DB {
 		if logType != LogTypeUnknown {
 			tx = tx.Where("logs.type = ?", logType)
 		}
@@ -662,8 +661,16 @@ func ExportAllLogs(logType int, startTimestamp int64, endTimestamp int64, modelN
 			tx = tx.Where("logs."+logGroupCol+" = ?", group)
 		}
 		return tx
-	}
+	}, nil
+}
 
+// ExportAllLogs 按管理员视角流式遍历匹配的日志，使用手动游标分页保证不重不漏。
+// callback 收到的 logs 切片仅在本次调用内有效，回调返回 error 会中止遍历。
+func ExportAllLogs(logType int, startTimestamp int64, endTimestamp int64, modelName string, username string, tokenName string, channelIds []int, group string, requestId string, billing string, batchSize int, callback func(logs []*Log) error) error {
+	applyFilters, err := allLogExportFilter(logType, startTimestamp, endTimestamp, modelName, username, tokenName, channelIds, group, requestId, billing)
+	if err != nil {
+		return err
+	}
 	return streamLogsByCursor(applyFilters, batchSize, func(batch []*Log) error {
 		ids := types.NewSet[int]()
 		for _, l := range batch {
@@ -684,19 +691,18 @@ func ExportAllLogs(logType int, startTimestamp int64, endTimestamp int64, modelN
 	})
 }
 
-// ExportUserLogs 按普通用户视角流式遍历自己的日志，使用手动游标分页保证不重不漏。
-// 与 GetUserLogs 一致：不回填 ChannelName、对 model_name 做 LIKE escape。
-func ExportUserLogs(userId int, logType int, startTimestamp int64, endTimestamp int64, modelName string, tokenName string, group string, requestId string, tokenIds []int, billing string, batchSize int, callback func(logs []*Log) error) error {
+// userLogExportFilter 构造普通用户导出的筛选条件。导出与计数共用，保证两边口径一致。
+func userLogExportFilter(userId int, logType int, startTimestamp int64, endTimestamp int64, modelName string, tokenName string, group string, requestId string, tokenIds []int, billing string) (func(*gorm.DB) *gorm.DB, error) {
 	var modelLikePattern string
 	if modelName != "" {
 		pattern, err := sanitizeLikePattern(modelName)
 		if err != nil {
-			return err
+			return nil, err
 		}
 		modelLikePattern = pattern
 	}
 
-	applyFilters := func(tx *gorm.DB) *gorm.DB {
+	return func(tx *gorm.DB) *gorm.DB {
 		tx = tx.Where("logs.user_id = ?", userId)
 		if len(tokenIds) > 0 {
 			tx = tx.Where("logs.token_id IN ?", tokenIds)
@@ -724,13 +730,47 @@ func ExportUserLogs(userId int, logType int, startTimestamp int64, endTimestamp 
 			tx = tx.Where("logs."+logGroupCol+" = ?", group)
 		}
 		return tx
-	}
+	}, nil
+}
 
+// ExportUserLogs 按普通用户视角流式遍历自己的日志，使用手动游标分页保证不重不漏。
+// 与 GetUserLogs 一致：不回填 ChannelName、对 model_name 做 LIKE escape。
+func ExportUserLogs(userId int, logType int, startTimestamp int64, endTimestamp int64, modelName string, tokenName string, group string, requestId string, tokenIds []int, billing string, batchSize int, callback func(logs []*Log) error) error {
+	applyFilters, err := userLogExportFilter(userId, logType, startTimestamp, endTimestamp, modelName, tokenName, group, requestId, tokenIds, billing)
+	if err != nil {
+		return err
+	}
 	return streamLogsByCursor(applyFilters, batchSize, func(batch []*Log) error {
 		// 复用 formatUserLogs 的清洗：剥离 ChannelName + admin_info 等
 		formatUserLogs(batch, 0)
 		return callback(batch)
 	})
+}
+
+// countLogsUpTo 在带 LIMIT 的子查询上计数，最多只读取 limit 行，不做全表计数。
+func countLogsUpTo(applyFilters func(*gorm.DB) *gorm.DB, limit int) (int64, error) {
+	sub := applyFilters(LOG_DB.Model(&Log{})).Select("logs.id").Limit(limit)
+	var n int64
+	err := LOG_DB.Table("(?) AS export_rows", sub).Count(&n).Error
+	return n, err
+}
+
+// CountUserLogsForExport 数出普通用户导出会命中的行数，最多数到 limit，用于导出前判断是否超过上限。
+func CountUserLogsForExport(userId int, logType int, startTimestamp int64, endTimestamp int64, modelName string, tokenName string, group string, requestId string, tokenIds []int, billing string, limit int) (int64, error) {
+	applyFilters, err := userLogExportFilter(userId, logType, startTimestamp, endTimestamp, modelName, tokenName, group, requestId, tokenIds, billing)
+	if err != nil {
+		return 0, err
+	}
+	return countLogsUpTo(applyFilters, limit)
+}
+
+// CountAllLogsForExport 数出管理员导出会命中的行数，最多数到 limit，用于导出前判断是否超过上限。
+func CountAllLogsForExport(logType int, startTimestamp int64, endTimestamp int64, modelName string, username string, tokenName string, channelIds []int, group string, requestId string, billing string, limit int) (int64, error) {
+	applyFilters, err := allLogExportFilter(logType, startTimestamp, endTimestamp, modelName, username, tokenName, channelIds, group, requestId, billing)
+	if err != nil {
+		return 0, err
+	}
+	return countLogsUpTo(applyFilters, limit)
 }
 
 type Stat struct {
@@ -739,66 +779,60 @@ type Stat struct {
 	Tpm   int `json:"tpm"`
 }
 
-// SumUsedQuota 汇总消费统计。tokenIds 非空时额外限定 token_id ∈ 集合，
-// 供企业子账户自身看板/统计「仅算绑定 key」使用；其余调用方传 nil 即不过滤。
-func SumUsedQuota(logType int, startTimestamp int64, endTimestamp int64, modelName string, username string, tokenName string, channelIds []int, group string, tokenIds []int) (stat Stat, err error) {
-	tx := LOG_DB.Table("logs").Select("sum(quota) quota")
+// logQuotaExpr 消耗额度的汇总口径：消费计正、退款计负，其它类型不计费。
+// 与导出表格「费用(CNY)」列同一口径，保证页面消耗额度等于表格合计。
+const logQuotaExpr = "COALESCE(SUM(CASE WHEN logs.type = 2 THEN logs.quota WHEN logs.type = 6 THEN -logs.quota ELSE 0 END), 0) AS quota"
 
-	// 为rpm和tpm创建单独的查询
-	rpmTpmQuery := LOG_DB.Table("logs").Select("count(*) rpm, sum(prompt_tokens) + sum(completion_tokens) tpm")
+// logStatFilterBuilder 按给定的类型与时间范围构造筛选条件。统计与导出共用同一套筛选口径。
+type logStatFilterBuilder func(logType int, startTimestamp int64, endTimestamp int64) (func(*gorm.DB) *gorm.DB, error)
 
-	if username != "" {
-		tx = tx.Where("username = ?", username)
-		rpmTpmQuery = rpmTpmQuery.Where("username = ?", username)
-	}
-	if len(tokenIds) > 0 {
-		tx = tx.Where("token_id IN ?", tokenIds)
-		rpmTpmQuery = rpmTpmQuery.Where("token_id IN ?", tokenIds)
-	}
-	if tokenName != "" {
-		tx = tx.Where("token_name = ?", tokenName)
-		rpmTpmQuery = rpmTpmQuery.Where("token_name = ?", tokenName)
-	}
-	if startTimestamp != 0 {
-		tx = tx.Where("created_at >= ?", startTimestamp)
-	}
-	if endTimestamp != 0 {
-		tx = tx.Where("created_at <= ?", endTimestamp)
-	}
-	if modelName != "" {
-		modelNamePattern, err := sanitizeLikePattern(modelName)
-		if err != nil {
-			return stat, err
-		}
-		tx = tx.Where("model_name LIKE ? ESCAPE '!'", modelNamePattern)
-		rpmTpmQuery = rpmTpmQuery.Where("model_name LIKE ? ESCAPE '!'", modelNamePattern)
-	}
-	if filtered := sanitizeLogChannelIds(channelIds); len(filtered) > 0 {
-		tx = tx.Where("channel_id IN ?", filtered)
-		rpmTpmQuery = rpmTpmQuery.Where("channel_id IN ?", filtered)
-	}
-	if group != "" {
-		tx = tx.Where(logGroupCol+" = ?", group)
-		rpmTpmQuery = rpmTpmQuery.Where(logGroupCol+" = ?", group)
-	}
+// sumLogStat 汇总消耗额度（当前筛选条件下的费用合计）；RPM/TPM 只统计最近 60 秒的消费。
+func sumLogStat(build logStatFilterBuilder, logType int, startTimestamp int64, endTimestamp int64) (Stat, error) {
+	var stat Stat
 
-	tx = tx.Where("type = ?", LogTypeConsume)
-	rpmTpmQuery = rpmTpmQuery.Where("type = ?", LogTypeConsume)
-
-	// 只统计最近60秒的rpm和tpm
-	rpmTpmQuery = rpmTpmQuery.Where("created_at >= ?", time.Now().Add(-60*time.Second).Unix())
-
-	// 执行查询
-	if err := tx.Scan(&stat).Error; err != nil {
-		common.SysError("failed to query log stat: " + err.Error())
+	applyFilters, err := build(logType, startTimestamp, endTimestamp)
+	if err != nil {
+		return stat, err
+	}
+	var quota struct {
+		Quota int
+	}
+	if err := applyFilters(LOG_DB.Model(&Log{})).Select(logQuotaExpr).Scan(&quota).Error; err != nil {
+		common.SysError("failed to query log quota stat: " + err.Error())
 		return stat, errors.New("查询统计数据失败")
 	}
-	if err := rpmTpmQuery.Scan(&stat).Error; err != nil {
+	stat.Quota = quota.Quota
+
+	recentFilters, err := build(LogTypeConsume, time.Now().Add(-60*time.Second).Unix(), 0)
+	if err != nil {
+		return stat, err
+	}
+	var rpmTpm struct {
+		Rpm int
+		Tpm int
+	}
+	if err := recentFilters(LOG_DB.Model(&Log{})).Select("COUNT(*) AS rpm, COALESCE(SUM(logs.prompt_tokens + logs.completion_tokens), 0) AS tpm").Scan(&rpmTpm).Error; err != nil {
 		common.SysError("failed to query rpm/tpm stat: " + err.Error())
 		return stat, errors.New("查询统计数据失败")
 	}
-
+	stat.Rpm = rpmTpm.Rpm
+	stat.Tpm = rpmTpm.Tpm
 	return stat, nil
+}
+
+// SumUserLogStat 普通用户的统计（消耗额度、RPM、TPM）。筛选条件与该用户的导出完全一致；
+// tokenIds 非空时只统计这些令牌（企业子账户的「仅绑定 key」视图）。
+func SumUserLogStat(userId int, logType int, startTimestamp int64, endTimestamp int64, modelName string, tokenName string, group string, requestId string, tokenIds []int, billing string) (Stat, error) {
+	return sumLogStat(func(lt int, start int64, end int64) (func(*gorm.DB) *gorm.DB, error) {
+		return userLogExportFilter(userId, lt, start, end, modelName, tokenName, group, requestId, tokenIds, billing)
+	}, logType, startTimestamp, endTimestamp)
+}
+
+// SumAllLogStat 管理员的统计（消耗额度、RPM、TPM）。筛选条件与管理员导出完全一致。
+func SumAllLogStat(logType int, startTimestamp int64, endTimestamp int64, modelName string, username string, tokenName string, channelIds []int, group string, requestId string, billing string) (Stat, error) {
+	return sumLogStat(func(lt int, start int64, end int64) (func(*gorm.DB) *gorm.DB, error) {
+		return allLogExportFilter(lt, start, end, modelName, username, tokenName, channelIds, group, requestId, billing)
+	}, logType, startTimestamp, endTimestamp)
 }
 
 func SumUsedToken(logType int, startTimestamp int64, endTimestamp int64, modelName string, username string, tokenName string) (token int) {

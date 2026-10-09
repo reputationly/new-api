@@ -7,6 +7,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
@@ -287,10 +288,19 @@ func logToRow(l *model.Log, includeAdminCols bool) []string {
 	// 不存历史汇率，所以这一列是"按当前配置回算"的，改过汇率后老日志的 CNY 会漂。
 	// 这是数据模型的固有限制，前端展示也是同样行为。
 	// 汇率 <= 0 时不再 fallback 成 1（那会输出美元数值却挂 CNY 表头），直接留空。
+	// 费用的正负与页面「消耗额度」同一口径：消费计正，退款计负，其它类型不计费。
+	// 原始 quota 列保留库里的值（退款行为正数，它是退回的金额），只有费用列带符号。
+	signedQuota := 0
+	switch l.Type {
+	case model.LogTypeConsume:
+		signedQuota = l.Quota
+	case model.LogTypeRefund:
+		signedQuota = -l.Quota
+	}
 	costCNY := ""
 	rate := operation_setting.USDExchangeRate
 	if common.QuotaPerUnit > 0 && rate > 0 {
-		costCNY = strconv.FormatFloat(float64(l.Quota)/common.QuotaPerUnit*rate, 'f', 6, 64)
+		costCNY = strconv.FormatFloat(float64(signedQuota)/common.QuotaPerUnit*rate, 'f', 6, 64)
 	}
 	cacheRead, cacheWrite := otherCacheTokens(l.Other)
 	row = append(row,
@@ -311,6 +321,43 @@ func logToRow(l *model.Log, includeAdminCols bool) []string {
 	return row
 }
 
+// logExportMaxRows 单次导出允许的最大行数（管理员与普通用户共用）。超过时在开始写 CSV 之前返回
+// 带 code 的 JSON 错误，前端据此弹窗，引导用户缩小时间范围后分次导出。
+// 用 var 而不是 const，便于测试临时调小。
+var logExportMaxRows = 100000
+
+// logExportLimitCode 超过行数上限时，返回给前端的错误码。
+const logExportLimitCode = "export_limit_exceeded"
+
+// logExportInFlight 记录进行中的导出，key 为发起请求的用户 id。
+// 同一用户同时只允许一个导出，防止并发导出把数据库连接耗尽。
+// 这是进程内状态：多实例部署时，每个实例各自计数。
+var logExportInFlight sync.Map
+
+func acquireLogExport(userId int) bool {
+	_, busy := logExportInFlight.LoadOrStore(userId, struct{}{})
+	return !busy
+}
+
+func releaseLogExport(userId int) {
+	logExportInFlight.Delete(userId)
+}
+
+func writeLogExportBusy(c *gin.Context) {
+	c.JSON(http.StatusOK, gin.H{
+		"success": false,
+		"message": "已有导出任务正在进行，请等待其完成后再试",
+	})
+}
+
+func writeLogExportLimitExceeded(c *gin.Context) {
+	c.JSON(http.StatusOK, gin.H{
+		"success": false,
+		"message": fmt.Sprintf("当前筛选条件下的日志超过单次导出上限 %d 条，请缩小时间范围（例如按天）后分次导出", logExportMaxRows),
+		"code":    logExportLimitCode,
+	})
+}
+
 // ExportAllLogs 管理员视角：流式 CSV 导出所有匹配日志，不受分页 100 条上限制。
 func ExportAllLogs(c *gin.Context) {
 	logType, _ := strconv.Atoi(c.Query("type"))
@@ -322,6 +369,22 @@ func ExportAllLogs(c *gin.Context) {
 	channelIds := parseChannelIdsQuery(c)
 	group := c.Query("group")
 	requestId := c.Query("request_id")
+
+	requesterId := c.GetInt("id")
+	if !acquireLogExport(requesterId) {
+		writeLogExportBusy(c)
+		return
+	}
+	defer releaseLogExport(requesterId)
+	n, err := model.CountAllLogsForExport(logType, startTimestamp, endTimestamp, modelName, username, tokenName, channelIds, group, requestId, c.Query("billing"), logExportMaxRows+1)
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	if n > int64(logExportMaxRows) {
+		writeLogExportLimitExceeded(c)
+		return
+	}
 
 	var firstBatchErr error
 	csvStarted := streamExportCSV(c, true, func(perBatch func(logs []*model.Log) error) error {
@@ -348,6 +411,25 @@ func ExportUserLogs(c *gin.Context) {
 	modelName := c.Query("model_name")
 	group := c.Query("group")
 	requestId := c.Query("request_id")
+
+	requesterId := c.GetInt("id")
+	if !acquireLogExport(requesterId) {
+		writeLogExportBusy(c)
+		return
+	}
+	defer releaseLogExport(requesterId)
+	// 子账户无绑定时导出的是空表头，不查库，也就无需计数。
+	if !scope.emptyForSubAccount() {
+		n, err := model.CountUserLogsForExport(scope.userId, logType, startTimestamp, endTimestamp, modelName, tokenName, group, requestId, scope.tokenIds, c.Query("billing"), logExportMaxRows+1)
+		if err != nil {
+			common.ApiError(c, err)
+			return
+		}
+		if n > int64(logExportMaxRows) {
+			writeLogExportLimitExceeded(c)
+			return
+		}
+	}
 
 	var firstBatchErr error
 	csvStarted := streamExportCSV(c, false, func(perBatch func(logs []*model.Log) error) error {
@@ -413,7 +495,8 @@ func GetLogsStat(c *gin.Context) {
 	modelName := c.Query("model_name")
 	channelIds := parseChannelIdsQuery(c)
 	group := c.Query("group")
-	stat, err := model.SumUsedQuota(logType, startTimestamp, endTimestamp, modelName, username, tokenName, channelIds, group, nil)
+	requestId := c.Query("request_id")
+	stat, err := model.SumAllLogStat(logType, startTimestamp, endTimestamp, modelName, username, tokenName, channelIds, group, requestId, c.Query("billing"))
 	if err != nil {
 		common.ApiError(c, err)
 		return
@@ -442,8 +525,8 @@ func GetLogsSelfStat(c *gin.Context) {
 	endTimestamp, _ := strconv.ParseInt(c.Query("end_timestamp"), 10, 64)
 	tokenName := c.Query("token_name")
 	modelName := c.Query("model_name")
-	channelIds := parseChannelIdsQuery(c)
 	group := c.Query("group")
+	requestId := c.Query("request_id")
 	// 子账户无绑定 → 零统计，不查库。
 	if scope.emptyForSubAccount() {
 		c.JSON(200, gin.H{
@@ -453,8 +536,8 @@ func GetLogsSelfStat(c *gin.Context) {
 		})
 		return
 	}
-	// 子账户按企业主账户用户名 + 绑定 token 集合统计；普通用户 tokenIds=nil 不过滤。
-	quotaNum, err := model.SumUsedQuota(logType, startTimestamp, endTimestamp, modelName, scope.username, tokenName, channelIds, group, scope.tokenIds)
+	// 与该用户的导出同一筛选口径；子账户按企业主账户 user_id + 绑定 token 集合统计。
+	stat, err := model.SumUserLogStat(scope.userId, logType, startTimestamp, endTimestamp, modelName, tokenName, group, requestId, scope.tokenIds, c.Query("billing"))
 	if err != nil {
 		common.ApiError(c, err)
 		return
@@ -464,9 +547,9 @@ func GetLogsSelfStat(c *gin.Context) {
 		"success": true,
 		"message": "",
 		"data": gin.H{
-			"quota": quotaNum.Quota,
-			"rpm":   quotaNum.Rpm,
-			"tpm":   quotaNum.Tpm,
+			"quota": stat.Quota,
+			"rpm":   stat.Rpm,
+			"tpm":   stat.Tpm,
 			//"token": tokenNum,
 		},
 	})

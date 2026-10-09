@@ -315,12 +315,14 @@ export const useLogsData = () => {
       start_timestamp,
       end_timestamp,
       group,
+      request_id,
+      billing,
       logType: formLogType,
     } = getFormValues();
     const currentLogType = formLogType !== undefined ? formLogType : logType;
     let localStartTimestamp = Date.parse(start_timestamp) / 1000;
     let localEndTimestamp = Date.parse(end_timestamp) / 1000;
-    let url = `/api/log/self/stat?type=${currentLogType}&token_name=${token_name}&model_name=${model_name}&start_timestamp=${localStartTimestamp}&end_timestamp=${localEndTimestamp}&group=${group}`;
+    let url = `/api/log/self/stat?type=${currentLogType}&token_name=${token_name}&model_name=${model_name}&start_timestamp=${localStartTimestamp}&end_timestamp=${localEndTimestamp}&group=${group}&request_id=${request_id}&billing=${billing}`;
     url = encodeURI(url);
     let res = await API.get(url);
     const { success, message, data } = res.data;
@@ -340,12 +342,14 @@ export const useLogsData = () => {
       end_timestamp,
       channelIds,
       group,
+      request_id,
+      billing,
       logType: formLogType,
     } = getFormValues();
     const currentLogType = formLogType !== undefined ? formLogType : logType;
     let localStartTimestamp = Date.parse(start_timestamp) / 1000;
     let localEndTimestamp = Date.parse(end_timestamp) / 1000;
-    let url = `/api/log/stat?type=${currentLogType}&username=${username}&token_name=${token_name}&model_name=${model_name}&start_timestamp=${localStartTimestamp}&end_timestamp=${localEndTimestamp}${channelIdsQueryString(channelIds)}&group=${group}`;
+    let url = `/api/log/stat?type=${currentLogType}&username=${username}&token_name=${token_name}&model_name=${model_name}&start_timestamp=${localStartTimestamp}&end_timestamp=${localEndTimestamp}${channelIdsQueryString(channelIds)}&group=${group}&request_id=${request_id}&billing=${billing}`;
     url = encodeURI(url);
     let res = await API.get(url);
     const { success, message, data } = res.data;
@@ -934,14 +938,24 @@ export const useLogsData = () => {
         return;
       }
 
-      // 后端在第一批查询失败时会返回 application/json 错误体（仍是 200，但 body 是 JSON）。
+      // 后端在开始导出前（超过行数上限、同用户已有导出在进行）或第一批查询失败时，会返回
+      // application/json 错误体（仍是 200，但 body 是 JSON）。
       // 因为我们用了 responseType=blob，axios 不会自动解析，需要按 Content-Type 兜底处理。
       const contentType = (res.headers?.['content-type'] || '').toLowerCase();
       if (contentType.includes('application/json')) {
         try {
           const text = await blob.text();
           const parsed = JSON.parse(text);
-          showError(parsed?.message || t('导出失败'));
+          if (parsed?.code === 'export_limit_exceeded') {
+            // 超过单次导出上限：弹窗引导用户缩小时间范围后分次导出。
+            Modal.warning({
+              title: t('导出条数超过上限'),
+              content: parsed.message,
+              okText: t('知道了'),
+            });
+          } else {
+            showError(parsed?.message || t('导出失败'));
+          }
         } catch (e) {
           showError(t('导出失败'));
         }
