@@ -610,14 +610,15 @@ func streamLogsByCursor(applyFilters func(*gorm.DB) *gorm.DB, batchSize int, per
 		if len(batch) == 0 {
 			return nil
 		}
+		// batch 已按 id desc 排序，最后一行就是本批最小 id，作为下一轮游标。
+		// 必须在 perBatch 之前取：perBatch 可能改写 batch 里的 Id（如 formatUserLogs 会重排为序号）。
+		lastID = batch[len(batch)-1].Id
 		if err := perBatch(batch); err != nil {
 			return err
 		}
 		if len(batch) < batchSize {
 			return nil
 		}
-		// batch 已按 id desc 排序，最后一行就是本批最小 id，作为下一轮游标。
-		lastID = batch[len(batch)-1].Id
 		if lastID <= 0 {
 			// 兜底：理论不会发生（主键从 1 起算），但避免任何异常导致死循环。
 			return nil
