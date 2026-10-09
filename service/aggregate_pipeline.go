@@ -174,7 +174,7 @@ func TryAdvanceAggregatePipeline(ctx context.Context, adaptor TaskPollingAdaptor
 
 	reqCtx, cancel := context.WithTimeout(ctx, upscaleSubmitTimeout)
 	defer cancel()
-	sub, err := submitUpscaleTask(reqCtx, agg, nfsPath)
+	sub, err := submitUpscaleTask(reqCtx, agg, nfsPath, task.TaskID)
 	if err != nil {
 		// 提交失败不改变任务状态:调用方继续走落盘与结算,客户拿到未超分的成品。
 		common.SysError(fmt.Sprintf("aggregate pipeline: task %s 超分段提交失败,按生成段成品交付: %v",
@@ -200,6 +200,10 @@ func TryAdvanceAggregatePipeline(ctx context.Context, adaptor TaskPollingAdaptor
 	// 令牌用完即擦:第二段已经提交,它不再需要客户凭证,没有理由继续留在库里。
 	agg.CallerKey = ""
 
+	// 生成段成品落盘并过审核,供日志里生成段那一行下载(见 persistStage1Product)。
+	// 只在推进成功时做:提交失败时主路径会照常落盘这份成品,这里再落就是白传一份。
+	agg.Stage1ResultURL = persistStage1Product(ctx, task, nfsPath)
+
 	// **刻意不改** task 的 Platform / ChannelId / UpstreamTaskID / PrivateData.Key。
 	//
 	// 让父任务换上子任务的上游身份看似自然(它就能被轮询到第二段),实际走不通:
@@ -223,6 +227,42 @@ func TryAdvanceAggregatePipeline(ctx context.Context, adaptor TaskPollingAdaptor
 	return true
 }
 
+// persistStage1Product 把生成段成品落盘到 OBS 并过一遍产物审核,返回供日志下载的占位符。
+//
+// 这是生成段成品第一次对外可见的地方,而且只经由日志里生成段那一行下载 —— 整体结果
+// 仍然是超分后的成片。落盘失败或被审核拦截都返回空串:任务照常推进,那一行只是不提供下载。
+// 审核口径与主路径一致:预算用完就不审,共用同一轮的额度。
+func persistStage1Product(ctx context.Context, task *model.Task, nfsPath string) string {
+	ref, ok := persistTaskResult(ctx, task, nfsPath, "")
+	if !ok {
+		common.SysLog(fmt.Sprintf("aggregate pipeline: task %s 生成段成品未能落盘,日志中的生成段不提供下载", task.TaskID))
+		return ""
+	}
+	if ModerateTaskOutputFunc != nil && outputModerationAllowed() {
+		started := time.Now()
+		blocked, reason := ModerateTaskOutputFunc(ctx, task, ref, "")
+		outputModerationSpent += time.Since(started)
+		if blocked {
+			common.SysLog(fmt.Sprintf("aggregate pipeline: task %s 生成段成品被内容审核拦截(%s),不提供下载", task.TaskID, reason))
+			return ""
+		}
+	}
+	return ref
+}
+
+// aggregateUpscaleSRRatio 超分段固定下发的倍率。
+//
+// **别把 sr 理解成「放大 N 倍」**:引擎算的是
+// `min(源面积开方 × sr_ratio, config target 面积开方)`(seedvr_runner.py:151),
+// 这个字段只是个够不着的上限。给一个足够大的定值,就是让 min 恒取目标那项。
+//
+// 不发的后果不是"少放大一点",而是**输出尺寸由引擎的缺省倍率决定** —— 一个我们既没
+// 请求、也没记账的尺寸,账单档位与成片对不上,而且不报错。
+//
+// 与体验区那份 VIDEO_SR_RATIO_UNCAPPED(web/classic/src/constants/
+// videoPlayground.constants.js)是同一个定值,两处要一起改。
+const aggregateUpscaleSRRatio = 4.0
+
 // submitUpscaleTask 以客户身份提交一次超分任务,返回**那条子任务**本身。
 //
 // 返回整条任务而不是散装的 id:父任务要跟上第二段,需要同步的字段不止一个
@@ -232,22 +272,62 @@ func TryAdvanceAggregatePipeline(ctx context.Context, adaptor TaskPollingAdaptor
 // 输入用 metadata.video 传生成段产物的 NFS 绝对路径:nfsinput 的物化层原生支持这种
 // 形态(见 relay/channel/gpustackplus/nfsinput/taskref.go 的绝对路径分支),
 // 因此**不需要把产物读出来再传一遍** —— 那对一个几十 MB 的视频是纯浪费。
-func submitUpscaleTask(ctx context.Context, agg *model.TaskAggregateInfo, nfsPath string) (*model.Task, error) {
+//
+// # 目标档位靠 metadata.target_short_edge,不是顶层 size
+//
+// 顶层 `size` 在超分这条路上**没有任何消费者**:sr 玩法的入参是倍率与目标短边
+// (relay/common/video_dims.go 的注释就写着「超分请求根本不带 size」),
+// materializeSRInputs 只物化源视频。它留在这里是给计费取归档行名的
+// (videoResolution 的第二级 VideoResolutionTier),引擎不看。
+//
+// 只发 size 的话,输出尺寸就落到超分模型部署 config 的那一档上 —— 现网 seedvr2 的
+// config 各档都是 1920×1080,而缺 resize_mode 时引擎走 adaptive、出 **1920×1104**。
+// 于是「客户传 2k、配置 target_size=2k、成片却是 1104p」三件事同时成立且全程无报错。
+// target_short_edge 才是真正生效的那个杠杆:引擎按**源的真实画幅**等比放大到该短边,
+// 画幅零形变、短边精确命中;一个 SwiftVR 实例即可覆盖 1080P/2K/4K,不必每档一套部署。
+//
+// 对不读这个字段的引擎(SeedVR2 只认 sr_ratio + config 档位)它是惰性的,多发无害、
+// 行为不变 —— 所以这里无条件发,不按模型名分叉。⚠️ 但反过来同样成立:**配 SeedVR2 时
+// target_size 写什么都兑现不了**,那类部署一档一套 config;要 2K 必须换 SwiftVR。
+//
+// 不发 resize_mode:体验区那个 fixed_shape 服务的是「按 config 封顶」那条路
+// (中心裁到 config 的精确 target,免得 1080 出成 1104),与按短边等比放大是两种模型,
+// 同时发会把放大好的结果又裁掉。按短边那条路的既定口径是 2K 出 2520×1440 而非
+// 2560×1440 —— 短边精确、画幅不失真,硬凑长边等于横向拉伸 1.6%。
+// billedUpscaleSize 超分段计费与日志采用的档位:交付档位优先,留空回落到客户要的目标。
+func billedUpscaleSize(agg *model.TaskAggregateInfo) string {
+	if s := strings.TrimSpace(agg.UpscaleDelivered); s != "" {
+		return s
+	}
+	return strings.TrimSpace(agg.UpscaleTarget)
+}
+
+func submitUpscaleTask(ctx context.Context, agg *model.TaskAggregateInfo, nfsPath, parentTaskID string) (*model.Task, error) {
 	endpoint := videosEndpoint()
 	if endpoint == "" {
 		return nil, fmt.Errorf("站点未配置服务器地址(ServerAddress)")
 	}
+	meta := map[string]any{
+		"task_type": "sr",
+		"video":     nfsPath,
+		"sr_ratio":  aggregateUpscaleSRRatio,
+	}
+	// target_size 可能是档位词(1080P)、短边档(2k/4k)或精确像素串(2560x1440),
+	// 三种写法都按短边下发。解析不出(空、乱填)就**不发**,退回引擎按部署 config 封顶
+	// —— 与这条改动之前的行为逐位一致,不是新增的降级。
+	if edge := common.SizeShortEdge(agg.UpscaleTarget); edge > 0 {
+		meta["target_short_edge"] = edge
+	}
 	body := map[string]any{
 		"model": agg.UpscaleModel,
 		// 超分不需要提示词,但部分端点要求该字段存在。
-		"prompt": "",
-		"metadata": map[string]any{
-			"task_type": "sr",
-			"video":     nfsPath,
-		},
+		"prompt":   "",
+		"metadata": meta,
 	}
-	if agg.UpscaleTarget != "" {
-		body["size"] = agg.UpscaleTarget
+	// 顶层 size 决定超分段的计费行。这里放的是**交付**档位而不是客户要的目标:计费要跟着
+	// 引擎实际出的画质走。引擎不读这个字段,改它不影响出片。
+	if billed := billedUpscaleSize(agg); billed != "" {
+		body["size"] = billed
 	}
 	payload, err := common.Marshal(body)
 	if err != nil {
@@ -260,6 +340,10 @@ func submitUpscaleTask(ctx context.Context, agg *model.TaskAggregateInfo, nfsPat
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+agg.CallerKey)
+	// 归属头:超分段的提交日志与结算日志据此对回父任务。只影响展示归类。
+	req.Header.Set(AggregateParentTaskHeader, parentTaskID)
+	req.Header.Set(AggregatePublicModelHeader, agg.PublicModel)
+	req.Header.Set(AggregateStageHeader, LogStageUpscale)
 
 	client := GetHttpClient()
 	if client == nil {

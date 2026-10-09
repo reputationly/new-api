@@ -12,6 +12,9 @@ const (
 	// ContextKeyAggregateExpansion 聚合模型展开结果。model 字段在 distributor 里已被
 	// 改写成生成段的真实模型,这里留着客户原本调用的那个聚合模型名与其流水线配置。
 	ContextKeyAggregateExpansion ContextKey = "aggregate_expansion"
+	// ContextKeyAggregateLabels 聚合生成段的使用日志标签(展示归类用,不参与计费)。
+	// 由展开阶段写入,提交日志与任务私有数据各取一次。
+	ContextKeyAggregateLabels ContextKey = "aggregate_labels"
 
 	/* token related keys */
 	ContextKeyTokenUnlimited         ContextKey = "token_unlimited_quota"

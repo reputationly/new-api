@@ -39,6 +39,18 @@ type AggregateExpansion struct {
 	// 增强后的 prompt **不回传给客户**,所以客户报"生成的跟我写的不一样"时,
 	// 这份记录是唯一能解释清楚的证据。未启用增强时为 nil。
 	Enhance *service.EnhanceResult
+
+	// RequestedSize 客户端传来的尺寸 —— **套 Overrides 之前**的原值,可能为空。
+	// 它的语义是「我要的**最终**尺寸」(见下方 Overrides 那段),所以它决定超分段
+	// 跑不跑;而 GenerateSize 决定生成段出多大。两个都要留着:排障时"客户要什么、
+	// 我们发什么"必须各说各的。
+	RequestedSize string
+	// GenerateSize 套完 Overrides 之后真正发给生成段的尺寸档位。
+	GenerateSize string
+	// UpscaleSkipped:客户要的最终档**不高于**生成段能出的档,超分段跳过,
+	// 按生成段成品交付。UpscaleSkipReason 是给人看的原因(跳过时非空)。
+	UpscaleSkipped    bool
+	UpscaleSkipReason string
 }
 
 // expandAggregateModel 若 modelName 是一个启用中的聚合模型,校验访问权限并返回展开后的
@@ -138,12 +150,21 @@ func applyAggregateExpansion(c *gin.Context, publicName, realModel string, agg *
 	if body == nil {
 		return fmt.Errorf("请求体为空,无法展开聚合模型 %s", publicName)
 	}
+	// 客户要的最终尺寸,**必须在套 Overrides 之前读** —— Overrides 干的正是顶掉它这件事。
+	// 只读改写后的那份,得到的永远是生成段的中间档,超分段就再也没有依据判断该不该跑。
+	requestedSize, _ := body["size"].(string)
+	requestedSize = strings.TrimSpace(requestedSize)
 	// 先套 Overrides,再定 model —— 顺序不能反,见下面对 model 的保护。
 	//
 	// Overrides 是聚合模型存在的意义所在,不是可选装饰:客户传的尺寸语义是「我要的**最终**
 	// 尺寸」,而生成段收到的必须是「**中间**尺寸」。以 2K 视频为例,客户传 size=2k,若原样
 	// 透传给 H3 就正好是那个会 OOM / 被钳位的请求(H3 面积上限 768×1344),必须由这里改写
 	// 成生成段吃得下的档位,最终的 2K 交给超分段产出。
+	// 视频聚合的宽高比只能走 metadata,而且必须在 overrides 覆盖 size 之前补齐 —— 之后
+	// 客户像素串里的宽高比就没有地方可以落了(见 alignVideoAspectRatio)。
+	if agg.Type == "video" {
+		alignVideoAspectRatio(body, agg, requestedSize)
+	}
 	for k, v := range agg.Generate.Overrides {
 		body[k] = v
 	}
@@ -151,7 +172,25 @@ func applyAggregateExpansion(c *gin.Context, publicName, realModel string, agg *
 	// 会让请求发去一个既非聚合模型、也非配置的生成段模型的地方,且不报错。
 	body["model"] = realModel
 
-	exp := &AggregateExpansion{PublicName: publicName, Config: agg}
+	generateSize, _ := body["size"].(string)
+	generateSize = strings.TrimSpace(generateSize)
+
+	exp := &AggregateExpansion{
+		PublicName:    publicName,
+		Config:        agg,
+		RequestedSize: requestedSize,
+		GenerateSize:  generateSize,
+	}
+	exp.UpscaleSkipReason = upscaleSkipReason(requestedSize, generateSize)
+	exp.UpscaleSkipped = exp.UpscaleSkipReason != ""
+
+	// 使用日志标签:客户调的是聚合名,两段的日志要能对回这个名字。有超分段真的要跑时,
+	// 生成段那一条标成「生成段」;没有超分段的单段聚合只带聚合名,不标段。仅展示用。
+	labels := map[string]string{"aggregate_model": publicName}
+	if agg.Upscale.IsEnabled() && !exp.UpscaleSkipped {
+		labels["pipeline_stage"] = "generate"
+	}
+	common.SetContextKey(c, constant.ContextKeyAggregateLabels, labels)
 
 	// 提示词增强跑在这里 —— 生成段请求发出**之前**,否则改写就没有意义了。
 	//
@@ -222,6 +261,109 @@ func applyAggregateExpansion(c *gin.Context, publicName, realModel string, agg *
 	}
 	common.SetContextKey(c, constant.ContextKeyAggregateExpansion, exp)
 	return nil
+}
+
+// alignVideoAspectRatio 给视频聚合的生成段补齐宽高比(写进 metadata.aspect_ratio)。
+//
+// 两个缺口都是线上实测过的:
+//  1. 顶层 aspect_ratio 不会被透传 —— 适配器只认 metadata,顶层的键在解析请求时就丢了。
+//     这里把它搬进 metadata。
+//  2. 客户传竖版像素串(1080x1920)时,overrides 把生成段的 size 换成 768P,像素串里的
+//     宽高比就没地方落了,生成段按默认 16:9 出,成片是横版。这里从像素串推导到最近的
+//     具名比例。
+//
+// 优先级:metadata 里显式给的 > 顶层给的 > 从像素串推导。推导只在 overrides 覆盖了 size
+// 时才做 —— 没覆盖时像素串会原样到达适配器,由它自己处理。
+func alignVideoAspectRatio(body map[string]any, agg *common.AggregateModel, requestedSize string) {
+	md, ok := expansionMetadata(body)
+	if !ok {
+		return // metadata 无法解析时不动它,交给后续的校验报错
+	}
+	changed := false
+	if top, _ := body["aspect_ratio"].(string); strings.TrimSpace(top) != "" {
+		if _, has := md["aspect_ratio"]; !has {
+			md["aspect_ratio"] = strings.TrimSpace(top)
+			changed = true
+		}
+	}
+	if _, has := body["aspect_ratio"]; has {
+		delete(body, "aspect_ratio")
+		changed = true
+	}
+	if _, has := md["aspect_ratio"]; !has {
+		if _, overridden := agg.Generate.Overrides["size"]; overridden {
+			if w, h, ok := common.DimsFromSize(requestedSize); ok {
+				if ar := common.NearestH3AspectRatio(w, h); ar != "" {
+					md["aspect_ratio"] = ar
+					changed = true
+				}
+			}
+		}
+	}
+	if changed {
+		body["metadata"] = md
+	}
+}
+
+// expansionMetadata 取请求体里的 metadata 对象。它可能是对象,也可能是 JSON 编码的字符串
+// (TaskSubmitReq 两种都收)。缺失时返回一个新的空对象;无法解析时返回 false。
+func expansionMetadata(body map[string]any) (map[string]any, bool) {
+	switch v := body["metadata"].(type) {
+	case nil:
+		return map[string]any{}, true
+	case map[string]any:
+		return v, true
+	case string:
+		if strings.TrimSpace(v) == "" {
+			return map[string]any{}, true
+		}
+		var md map[string]any
+		if err := common.UnmarshalJsonStr(v, &md); err != nil || md == nil {
+			return nil, false
+		}
+		return md, true
+	}
+	return nil, false
+}
+
+// upscaleSkipReason 判断这次要不要跑超分段,要跑返回空串,不跑返回原因。
+//
+// # 为什么需要这个判断
+//
+// 超分段过去是**无条件**跑的:controller 的 buildTaskAggregateInfo 只看
+// `Upscale.IsEnabled()`,完全不看客户要哪一档。于是配了超分段的流水线,不管客户端
+// 选 768P 还是 2K,最后一段都会跑一次,客户付了超分的钱、拿到的却不是他选的那一档。
+// 现网的实际形态:`generate.overrides.size=768P` + `upscale.model=seedvr2` +
+// `target_size=2k` —— SeedVR2 连请求里的 size 都不读(它只认自己部署 config 的档位),
+// 于是选 768P 的客户拿到的是 1920×1104,而不是他点的 1344×768。
+//
+// 客户传的 size 语义上就是**最终尺寸**(Overrides 那段注释立的定义),那么它等于或
+// 低于生成段的起步档时,超分段没有任何理由存在 —— 直接交生成段的成品,一档不差。
+//
+// # 为什么判据是「不比生成段小就该超分」而不是「和 target_size 比」
+//
+// target_size 是配置的承诺,而客户要的是他点的那一档。拿 2k 承诺去否掉客户的 1080P,
+// 就又回到「客户端选的档位不生效」那个要修的毛病上了。生成段实际出多大才是事实。
+//
+// # 拿不到依据时一律照旧跑超分
+//
+// 客户没传 size(老集成方、以及出厂目录只报 2K 那种「一个模型名只承诺一个档」的用法)、
+// 或者两边任一档解析不出短边 —— 都不跳过。跳过是一次**少干活**的决定,必须有明确
+// 依据;没有依据就维持既有行为,宁可多跑一段也不能让承诺的 2K 静默变成 768P。
+func upscaleSkipReason(requestedSize, generateSize string) string {
+	if requestedSize == "" {
+		return ""
+	}
+	requested := common.SizeShortEdge(requestedSize)
+	generate := common.SizeShortEdge(generateSize)
+	if requested <= 0 || generate <= 0 {
+		return ""
+	}
+	if requested > generate {
+		return ""
+	}
+	return fmt.Sprintf("客户要 %s(短边 %d)不高于生成段的 %s(短边 %d),超分段跳过",
+		requestedSize, requested, generateSize, generate)
 }
 
 // collectInputVideos 本次要给增强模型看的参考视频。

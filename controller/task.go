@@ -1,6 +1,7 @@
 package controller
 
 import (
+	"context"
 	"strconv"
 
 	"github.com/QuantumNous/new-api/common"
@@ -8,6 +9,7 @@ import (
 	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/relay"
+	"github.com/QuantumNous/new-api/relay/channel/task/taskcommon"
 	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/types"
 
@@ -101,7 +103,30 @@ func tasksToDto(tasks []*model.Task, fillUser bool) []*dto.TaskDto {
 				task.Username = user.Username
 			}
 		}
-		result[i] = relay.TaskModel2Dto(task)
+		result[i] = taskToLogDto(task)
 	}
 	return result
+}
+
+// taskToLogDto 日志列表的一行。
+//
+// 推进到超分段的聚合父任务,在日志里代表的是**生成段**:进度视为完成,下载的是生成段成品
+// (Stage1ResultURL)。它的整体进度与整体成片不在这里出现 —— 对外的整体视图由 /v1/videos
+// 的回显链路给出,这里不动它。超分子任务那一行照常显示自己的进度与成片。
+func taskToLogDto(task *model.Task) *dto.TaskDto {
+	d := relay.TaskModel2Dto(task)
+	agg := task.PrivateData.Aggregate
+	if !agg.AdvancedPastStage1() {
+		return d
+	}
+	d.Status = string(model.TaskStatusSuccess)
+	d.Progress = taskcommon.ProgressComplete
+	// 整体任务的失败原因与成片不属于生成段:不带过来,也不能让 GetResultURL 的 FailReason
+	// 兜底把它当成生成段的地址。
+	d.FailReason = ""
+	d.ResultURL = ""
+	if agg.Stage1ResultURL != "" {
+		d.ResultURL = service.ResolveResultURL(context.Background(), agg.Stage1ResultURL)
+	}
+	return d
 }

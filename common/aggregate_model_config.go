@@ -210,6 +210,22 @@ type AggregateUpscale struct {
 	Enabled *bool  `json:"enabled"`
 	Model   string `json:"model"`       // 须具备 sr capability
 	Target  string `json:"target_size"` // 如 2k
+	// DeliveredSize 超分引擎实际交付的档位,如 seedvr2 的部署 config 是 1080 档就填 1080P。
+	// 超分段的计费行与日志按它记 —— 计费要跟着交付走,不跟着客户要的 target_size 走。
+	// 留空 = 与 target_size 相同(SwiftVR 按请求出片时两者本就一致)。
+	// 填错了就是错账:它必须与引擎实际出片的档位对齐,由配置方负责。
+	DeliveredSize string `json:"delivered_size,omitempty"`
+}
+
+// BilledSize 超分段计费与日志采用的档位:交付档位优先,留空回落到 target_size。
+func (u *AggregateUpscale) BilledSize() string {
+	if u == nil {
+		return ""
+	}
+	if s := strings.TrimSpace(u.DeliveredSize); s != "" {
+		return s
+	}
+	return strings.TrimSpace(u.Target)
 }
 
 // IsEnabled 超分段是否启用(段不存在 = 不超分;存在但漏写 enabled = 启用)。

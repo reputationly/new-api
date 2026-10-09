@@ -59,6 +59,14 @@ func respondTaskDownloadURL(c *gin.Context, task *model.Task, exists bool) {
 		return
 	}
 	raw := task.GetResultURL()
+	if agg := task.PrivateData.Aggregate; agg.AdvancedPastStage1() {
+		// 日志里这一行代表生成段,下载的是生成段成品;整体成片在超分子任务那一行上。
+		if agg.Stage1ResultURL == "" {
+			common.ApiErrorMsg(c, "生成段成品不可用(未落盘或未通过内容审核)")
+			return
+		}
+		raw = agg.Stage1ResultURL
+	}
 	if !mediastore.IsOBSRef(raw) {
 		common.ApiSuccess(c, gin.H{
 			"url":        service.ResolveResultURL(c.Request.Context(), raw),

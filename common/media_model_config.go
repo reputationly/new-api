@@ -2,6 +2,7 @@ package common
 
 import (
 	"fmt"
+	"math"
 	"regexp"
 	"sort"
 	"strconv"
@@ -945,6 +946,47 @@ func DimsFromSize(size string) (w, h int, ok bool) {
 	return w, h, true
 }
 
+// SizeShortEdge 取一个 size 所表达的**输出短边**像素;取不到返回 0。
+//
+// 认两种形态:
+//   - 档位词:`\d+p`(数字就是短边,480P/768P/1080P),以及 2K / 4K —— 按消费端通行
+//     口径取 QHD 2560x1440、UHD 3840x2160 的短边(1440 / 2160)。
+//   - 像素串:"WxH" → min(W, H)。
+//
+// 存在的理由是编排层要**比较两个尺寸**(客户端要的最终档 vs 生成段实际出的档),
+// 而那两种形态都会真实出现在 body["size"] 上。
+//
+// ⚠️ 档位词→短边这张表另有两份同口径的副本:relay/channel/task/gpustackplus 的
+// h3ShortEdgeFromSizeToken(只认档位词、不认像素串,所以不能反过来复用这一份),
+// 以及前端 videoPlayground.constants.js 的 videoSizeShortEdge。三处漂移都不报错,
+// 只会静默选错起步档 —— 改这里必须同时看那两处。
+func SizeShortEdge(size string) int {
+	v := strings.ToLower(strings.TrimSpace(size))
+	if v == "" {
+		return 0
+	}
+	switch v {
+	case "2k":
+		return 1440
+	case "4k":
+		return 2160
+	}
+	if strings.HasSuffix(v, "p") {
+		n, err := strconv.Atoi(strings.TrimSuffix(v, "p"))
+		if err != nil || n <= 0 {
+			return 0
+		}
+		return n
+	}
+	if w, h, ok := DimsFromSize(size); ok {
+		if w < h {
+			return w
+		}
+		return h
+	}
+	return 0
+}
+
 // AspectRatioFromSize 把 "WxH" 化简为 "W:H"(约分);无法解析(如 "720P")返回空串。
 func AspectRatioFromSize(size string) string {
 	m := wxhRe.FindStringSubmatch(normalizeSizeToken(size))
@@ -979,4 +1021,46 @@ func IsAspectRatio(s string) bool {
 		return false
 	}
 	return m[1] != "0" && m[2] != "0"
+}
+
+// h3NamedAspectRatioValues 是 H3 认的六个具名宽高比(t2va 只收这六个,其余引擎直接 400)。
+// 与 relay/channel/task/gpustackplus 的 h3NamedAspectRatios 逐项一致 —— 改一处要改两处,
+// 那边的测试会比对两份列表,漂移了测试会红。
+var h3NamedAspectRatioValues = map[string]float64{
+	"21:9": 21.0 / 9.0,
+	"16:9": 16.0 / 9.0,
+	"4:3":  4.0 / 3.0,
+	"1:1":  1.0,
+	"3:4":  3.0 / 4.0,
+	"9:16": 9.0 / 16.0,
+}
+
+// H3NamedAspectRatioNames 返回 H3 认的具名宽高比(已排序),供比对引擎侧列表是否漂移。
+func H3NamedAspectRatioNames() []string {
+	out := make([]string, 0, len(h3NamedAspectRatioValues))
+	for name := range h3NamedAspectRatioValues {
+		out = append(out, name)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// NearestH3AspectRatio 把宽×高映射到最近的 H3 具名宽高比(按宽高比的对数距离比较)。
+//
+// 只用来补救「客户给了像素串、但生成段的 size 被档位词覆盖掉了」的情况:像素串的宽高比
+// 不能原样下发(832x480 约分成 26:15,H3 不认),必须落到具名值上。客户显式给的宽高比
+// 不经过这里。宽或高不合法时返回空串。平局按名字排序决定,结果确定。
+func NearestH3AspectRatio(w, h int) string {
+	if w <= 0 || h <= 0 {
+		return ""
+	}
+	target := math.Log(float64(w) / float64(h))
+	best, bestDist := "", math.Inf(1)
+	for name, v := range h3NamedAspectRatioValues {
+		d := math.Abs(math.Log(v) - target)
+		if d < bestDist || (d == bestDist && name < best) {
+			best, bestDist = name, d
+		}
+	}
+	return best
 }

@@ -236,6 +236,10 @@ type TaskPrivateData struct {
 	Key            string `json:"key,omitempty"`
 	UpstreamTaskID string `json:"upstream_task_id,omitempty"` // 上游真实 task ID
 	ResultURL      string `json:"result_url,omitempty"`       // 任务成功后的结果 URL（视频地址等）
+	// PipelineLabels 聚合流水线两段的日志标签(aggregate_model / pipeline_stage / aggregate_task_id)。
+	// 提交日志在任务落库之前写,结算与退款日志在之后写,所以标签存进私有数据随任务走。
+	// 只用于使用日志的展示归类,不参与任何金额计算。
+	PipelineLabels map[string]string `json:"pipeline_labels,omitempty"`
 	// ScoreABC 音乐引擎随成品写出的 ABC 乐谱（YuE2 的 <stem>.abc 旁挂），对外经
 	// metadata.score_abc 原样返回，调用方改完作为 metadata.abc 交回即可重渲染。
 	// 只存文本（实测 0.5~2.5 KB，读取封顶 64 KiB），不落 OBS：它要被编辑后回传，
@@ -294,6 +298,9 @@ type TaskAggregateInfo struct {
 	// UpscaleModel/UpscaleTarget 超分段配置。为空表示这条流水线不含超分。
 	UpscaleModel  string `json:"upscale_model,omitempty"`
 	UpscaleTarget string `json:"upscale_target,omitempty"`
+	// UpscaleDelivered 超分段计费与日志采用的档位(见 common.AggregateUpscale.DeliveredSize)。
+	// 空 = 回落到 UpscaleTarget。
+	UpscaleDelivered string `json:"upscale_delivered,omitempty"`
 
 	// Stage2TaskID 超分子任务的**本站**任务 id。父任务靠它去查第二段的进度。
 	//
@@ -307,6 +314,13 @@ type TaskAggregateInfo struct {
 	// Stage1NFSPath 生成段产物在共享 NFS 上的路径。超分段失败时用它降级交付 ——
 	// 生成段已经真实烧掉 GPU 并计费,不能因为第二段失败就把成品也丢了。
 	Stage1NFSPath string `json:"stage1_nfs_path,omitempty"`
+
+	// Stage1ResultURL 生成段成品落盘到 OBS 之后的占位符(obs://…),推进到超分段成功时写入。
+	//
+	// 只服务于日志里「生成段」那一行:它的进度视为完成,下载取这里。对外 API 的整体任务
+	// 不读它 —— 整体成片仍是超分后的 ResultURL。为空 = 没能落盘,或没过内容审核,
+	// 那一行就不提供下载。
+	Stage1ResultURL string `json:"stage1_result_url,omitempty"`
 
 	// —— 生成段回执里的计费依据 ——
 	//
@@ -359,6 +373,14 @@ type TaskAggregateInfo struct {
 // HasUpscale 该流水线是否还有一段超分要跑。
 func (a *TaskAggregateInfo) HasUpscale() bool {
 	return a != nil && a.UpscaleModel != ""
+}
+
+// AdvancedPastStage1 聚合父任务是否已推进到超分段(之后的任何终态都算)。
+//
+// 推进之后日志里的这一行代表生成段:进度视为完成,下载取 Stage1ResultURL。
+// 对外 API 的整体视图不看这个判断,见 controller 侧的日志投影。
+func (a *TaskAggregateInfo) AdvancedPastStage1() bool {
+	return a != nil && a.Stage == 2 && a.Stage2TaskID != ""
 }
 
 // TaskBillingContext 记录任务提交时的计费参数，以便轮询阶段可以重新计算额度。

@@ -110,6 +110,19 @@ func LogTaskConsumption(c *gin.Context, info *relaycommon.RelayInfo) {
 	}
 	other := make(map[string]interface{})
 	other["is_task"] = true
+	// 任务 ID:提交日志在任务落库之前写,但对外的公开 ID 在提交前已经生成(PublicTaskID),
+	// 直接用它。结算与退款日志一直带着 task_id,这里补齐,两条就能对回同一个任务。
+	ownTaskID := ""
+	if info.TaskRelayInfo != nil {
+		ownTaskID = info.TaskRelayInfo.PublicTaskID
+	}
+	if ownTaskID != "" {
+		other["task_id"] = ownTaskID
+	}
+	// 聚合流水线两段的归类标签(只展示,不参与金额)。
+	for k, v := range PipelineLogLabels(c, ownTaskID) {
+		other[k] = v
+	}
 	// 计费来源。这条是**提交时**的消费日志，走 RecordConsumeLog 自建 other，
 	// 不经过 taskBillingOther，所以要单独补。订阅计费扣的是 UserSubscription.AmountUsed、
 	// 不动 users.quota，资金对账靠这一项把它从现金消耗里剔除；漏了的话每个成功的
@@ -307,6 +320,10 @@ func taskAdjustTokenQuota(ctx context.Context, task *model.Task, delta int) {
 // taskBillingOther 从 task 的 BillingContext 构建日志 Other 字段。
 func taskBillingOther(task *model.Task) map[string]interface{} {
 	other := make(map[string]interface{})
+	// 聚合流水线两段的归类标签,提交时冻结在私有数据里,结算/退款日志照样带上。
+	for k, v := range task.PrivateData.PipelineLabels {
+		other[k] = v
+	}
 	// 计费来源。同步路径由 appendBillingInfo 写入，异步任务此前漏了这一项，
 	// 造成两个后果：前端的「订阅抵扣」标签只在同步请求上出现；资金对账无法把订阅
 	// 消费从现金消耗里剔除——订阅扣的是 UserSubscription.AmountUsed、不动 users.quota，

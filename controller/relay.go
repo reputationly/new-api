@@ -743,6 +743,19 @@ func RelayTask(c *gin.Context) {
 		// 模型(计费/日志按它走),对外那个聚合模型名只存在这里 —— 响应回显与排障都靠它。
 		if exp := middleware.GetAggregateExpansion(c); exp != nil {
 			task.PrivateData.Aggregate = buildTaskAggregateInfo(c, exp)
+			// 「少跑一段」是个会被客户追问的决定(「我买的是 2K 流水线,怎么只出 768P」),
+			// 而它在任务记录里没有任何痕迹 —— 记一行,带上任务 id。
+			if exp.UpscaleSkipped {
+				common.SysLog(fmt.Sprintf("聚合流水线 %s:任务 %s %s",
+					exp.PublicName, task.TaskID, exp.UpscaleSkipReason))
+			}
+		}
+		// 使用日志的段标签:结算与退款日志在任务落库之后才写,标签要存进私有数据随任务走。
+		// 与提交日志取的是同一个函数、同一份输入,两边不会分叉。
+		if relayInfo.TaskRelayInfo != nil {
+			if labels := service.PipelineLogLabels(c, relayInfo.TaskRelayInfo.PublicTaskID); labels != nil {
+				task.PrivateData.PipelineLabels = labels
+			}
 		}
 		task.Quota = result.Quota
 		task.Data = result.TaskData
@@ -830,12 +843,19 @@ func shouldRetryTaskRelay(c *gin.Context, channelId int, taskErr *dto.TaskError,
 // buildTaskAggregateInfo 把一次聚合展开的结果转成随任务持久化的形态。
 //
 // 只在这里做一次转换,不让 model 包认识 middleware 的类型(那会造成包依赖倒置)。
+//
+// **超分段不是配了就一定跑**:客户要的最终档不高于生成段的起步档时跳过
+// (判据与理由见 middleware 的 upscaleSkipReason)。跳过的表达方式是**不填**
+// UpscaleModel —— `TaskAggregateInfo.HasUpscale()` 就是它的判据,轮询侧
+// `TryAdvanceAggregatePipeline` 据此根本不会提交第二段,不需要再加一个开关。
 func buildTaskAggregateInfo(c *gin.Context, exp *middleware.AggregateExpansion) *model.TaskAggregateInfo {
 	info := &model.TaskAggregateInfo{PublicModel: exp.PublicName}
-	if exp.Config != nil && exp.Config.Upscale.IsEnabled() {
+	if exp.Config != nil && exp.Config.Upscale.IsEnabled() && !exp.UpscaleSkipped {
 		info.Stage = 1
 		info.UpscaleModel = exp.Config.Upscale.Model
 		info.UpscaleTarget = exp.Config.Upscale.Target
+		// 超分段计费按交付档位记(配置里没写交付档位则回落到目标档位)。
+		info.UpscaleDelivered = exp.Config.Upscale.BilledSize()
 		// 只有真要跑第二段时才留客户令牌 —— 没有超分段就没人会用它,
 		// 存了只是白白多一处明文凭证。
 		info.CallerKey = strings.TrimPrefix(c.Request.Header.Get("Authorization"), "Bearer ")

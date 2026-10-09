@@ -12,6 +12,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/model"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
@@ -839,4 +840,64 @@ func TestUpscaleProgressCapsAtCeiling(t *testing.T) {
 	require.Equal(t, "95%", clampUpscaleProgress("100%", "60%"))
 	require.Equal(t, "95%", clampUpscaleProgress("99%", "60%"))
 	require.Equal(t, "93%", clampUpscaleProgress("93%", "60%"))
+}
+
+// ── 超分段的目标档位必须落在引擎**真正读**的字段上 ──────────────────────────
+//
+// 现网实测的原始现象:客户端传 2k、配置也写着 target_size=2k,成片却是 1920×1104。
+// 原因是顶层 `size` 在 sr 这条路上**一个读者都没有**(materializeSRInputs 只物化
+// 源视频),而 metadata.sr_ratio / metadata.target_short_edge 两个都没发 —— 引擎于是
+// 按超分模型部署 config 的那一档出片(seedvr2 现网各档均 1920×1080),
+// 缺 resize_mode 时走 adaptive,正好落在 1920×1104。
+//
+// 三个数同时成立且全程不报错:客户要 2K、配置写 2K、成片 1104p。
+func TestUpscalePayloadCarriesTargetShortEdge(t *testing.T) {
+	cases := []struct {
+		name     string
+		target   string
+		wantEdge any // nil = 这个键必须整个不出现
+	}{
+		{"2k → 短边 1440", "2k", float64(1440)},
+		{"1080P → 1080", "1080P", float64(1080)},
+		{"4K → 2160", "4K", float64(2160)},
+		{"精确像素串取其短边", "2560x1440", float64(1440)},
+		{"没配 target → 不发,退回部署 config", "", nil},
+		{"乱填 → 不发,退回部署 config", "hd", nil},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			calls, lastBody := withFakeVideosEndpoint(t, http.StatusOK, `{"task_id":"pub-2"}`)
+			task := pipelineTask()
+			task.PrivateData.Aggregate.UpscaleTarget = tc.target
+
+			require.True(t, TryAdvanceAggregatePipeline(context.Background(), nil,
+				task, stage1Result(), "/nfs/x.mp4"))
+			require.EqualValues(t, 1, *calls)
+
+			var sent map[string]any
+			require.NoError(t, common.Unmarshal(*lastBody, &sent))
+			meta, ok := sent["metadata"].(map[string]any)
+			require.True(t, ok, "sr 的入参在 metadata 里,不是顶层")
+			require.Equal(t, "sr", meta["task_type"])
+			require.Equal(t, "/nfs/x.mp4", meta["video"])
+
+			if tc.wantEdge == nil {
+				require.NotContains(t, meta, "target_short_edge",
+					"解析不出短边就不能发一个 0 过去 —— 那会被引擎当成目标,比不发更糟")
+			} else {
+				require.Equal(t, tc.wantEdge, meta["target_short_edge"],
+					"顶层 size 引擎不读,档位只有进 target_short_edge 才算发出去了")
+			}
+			// 倍率必须显式给足,否则输出尺寸由引擎缺省倍率决定 —— 一个既没请求
+			// 也没记账的尺寸,账单档位与成片对不上且不报错。
+			require.Contains(t, meta, "sr_ratio", "倍率缺省 = 输出尺寸由引擎说了算")
+			require.GreaterOrEqual(t, meta["sr_ratio"].(float64), 4.0)
+
+			// 顶层 size 仍要留着:计费靠它归档分辨率行名(videoResolution 第二级)。
+			if tc.target != "" {
+				require.Equal(t, tc.target, sent["size"],
+					"size 是计费行名的来源,不能跟着一起删")
+			}
+		})
+	}
 }

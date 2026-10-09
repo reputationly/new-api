@@ -268,6 +268,29 @@ function renderBillingTag(record, t) {
   return null;
 }
 
+// 聚合流水线的两段:模型名是内部的生成段 / 超分段模型,这里补上客户调的聚合名与段标签。
+// 只在日志带了 aggregate_model 时出现,普通请求的展示不变。
+function renderWithAggregateTag(node, record, t) {
+  const other = getLogOther(record.other);
+  if (!other?.aggregate_model) {
+    return node;
+  }
+  const stage =
+    other.pipeline_stage === 'generate'
+      ? t('生成段')
+      : other.pipeline_stage === 'upscale'
+        ? t('超分段')
+        : '';
+  return (
+    <Space vertical align={'start'}>
+      {node}
+      <Tag color='purple' shape='circle'>
+        {stage ? `${other.aggregate_model} · ${stage}` : other.aggregate_model}
+      </Tag>
+    </Space>
+  );
+}
+
 function renderModelName(record, copyText, t) {
   let other = getLogOther(record.other);
   let modelMapped =
@@ -731,7 +754,7 @@ export const getLogsColumns = ({
           record.type === 2 ||
           record.type === 5 ||
           record.type === 6 ? (
-          <>{renderModelName(record, copyText, t)}</>
+          <>{renderWithAggregateTag(renderModelName(record, copyText, t), record, t)}</>
         ) : (
           <></>
         );

@@ -1209,3 +1209,112 @@ func TestApplyExpansionWritesQwenPESize(t *testing.T) {
 	require.Equal(t, "1024x1024", body["size"], "客户传了 size:以接口为准")
 	require.Equal(t, "1024x1024", gotSize, "客户的 size 要交给增强,让改写按它构图")
 }
+
+// ── 超分段跑不跑,由客户端要的最终档决定 ────────────────────────────────────
+//
+// 现网实测的原始现象:配置是 `overrides:{size:768P}` + `upscale:{seedvr2, 2k}`,
+// 客户端选 768P,成片却是 1920×1104 —— 第二段照跑了,而 SeedVR2 连请求里的 size
+// 都不读(adaptor 的 sr 分支只物化源视频,倍率走 sr_ratio),它按自己部署 config
+// 的档位出片。客户点的 768P 和他拿到的成片之间,没有任何一处说过"被超分过一次"。
+//
+// 这组用例锁的是 upscaleSkipReason 的**方向**:客户的档位 ≤ 生成段实际出的档位,
+// 超分段就没有存在的理由;拿不到依据时照旧跑(出厂目录只报 2K 就靠它)。
+func TestUpscaleSkippedByClientRequestedSize(t *testing.T) {
+	withAggregateConfig(t, `[{
+		"name":"h3-2k","type":"video","enabled":true,
+		"generate":{"model":"minimax-h3","overrides":{"size":"768P"}},
+		"upscale":{"model":"seedvr2","target_size":"2k"}
+	}]`)
+	agg := common.GetAggregateModel("h3-2k")
+	require.NotNil(t, agg)
+
+	// body 列是完整请求体 —— 拼字符串那种写法在这里出错过一次(拼出了非法 JSON),
+	// 而非法 JSON 的用例只会得到一个和档位判定毫无关系的解析错误。
+	cases := []struct {
+		name       string
+		body       string
+		wantSkip   bool
+		wantReason string
+	}{
+		{"客户要 768P —— 与生成段同档,跳过", `{"model":"h3-2k","prompt":"a cat","size":"768P"}`, true, "768P"},
+		{"大小写与空格容忍", `{"model":"h3-2k","prompt":"a cat","size":" 768p "}`, true, "768p"},
+		{"客户要 480P —— 比生成段还低,跳过", `{"model":"h3-2k","prompt":"a cat","size":"480P"}`, true, "480P"},
+		{"像素串 1280x720 —— 短边 720 < 768,跳过", `{"model":"h3-2k","prompt":"a cat","size":"1280x720"}`, true, "1280x720"},
+		{"客户要 2K —— 高于生成段,照跑", `{"model":"h3-2k","prompt":"a cat","size":"2k"}`, false, ""},
+		{"客户要 1080P —— 高于生成段,照跑", `{"model":"h3-2k","prompt":"a cat","size":"1080P"}`, false, ""},
+		{"像素串 1920x1080 —— 高于生成段,照跑", `{"model":"h3-2k","prompt":"a cat","size":"1920x1080"}`, false, ""},
+		{"没传 size —— 没有依据,照跑", `{"model":"h3-2k","prompt":"a cat"}`, false, ""},
+		{"认不出的档位 —— 没有依据,照跑", `{"model":"h3-2k","prompt":"a cat","size":"hd"}`, false, ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			rec := httptest.NewRecorder()
+			c, _ := gin.CreateTestContext(rec)
+			c.Request = httptest.NewRequest(http.MethodPost, "/v1/videos",
+				strings.NewReader(tc.body))
+
+			require.NoError(t, applyAggregateExpansion(c, "h3-2k", "minimax-h3", agg))
+
+			exp := GetAggregateExpansion(c)
+			require.NotNil(t, exp)
+			require.Equal(t, tc.wantSkip, exp.UpscaleSkipped)
+			if tc.wantSkip {
+				require.Contains(t, exp.UpscaleSkipReason, tc.wantReason,
+					"跳过必须说得出是哪个档位,否则运营只能回来读代码")
+				// 跳过不等于不改写请求:生成段仍要收到 overrides 钉的中间档。
+				require.Equal(t, "768P", readBodyMap(t, c)["size"])
+				require.Equal(t, "768P", exp.GenerateSize)
+			} else {
+				require.Empty(t, exp.UpscaleSkipReason)
+			}
+		})
+	}
+}
+
+// 比对的两边是「客户要的档」与「生成段实际出的档」,后者来自 overrides 而不是常量 768。
+// 把生成段那侧写死成 768,这条overrides 把起步档改成 1280x720 后客户要 768P 会被误跳过
+// —— 而 768P 短边 768 > 720,他确实还需要一次超分。
+func TestUpscaleSkipComparesAgainstOverridesSizeNotAConstant(t *testing.T) {
+	withAggregateConfig(t, `[{
+		"name":"h3-2k","type":"video","enabled":true,
+		"generate":{"model":"minimax-h3","overrides":{"size":"1280x720"}},
+		"upscale":{"model":"seedvr2","target_size":"2k"}
+	}]`)
+	agg := common.GetAggregateModel("h3-2k")
+
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/videos",
+		strings.NewReader(`{"model":"h3-2k","prompt":"a cat","size":"768P"}`))
+
+	require.NoError(t, applyAggregateExpansion(c, "h3-2k", "minimax-h3", agg))
+
+	exp := GetAggregateExpansion(c)
+	require.False(t, exp.UpscaleSkipped,
+		"生成段被钉在 720,客户要 768P 仍需要超分段 —— 不能拿常量 768 去比")
+	require.Equal(t, "1280x720", exp.GenerateSize)
+}
+
+// 没有 overrides.size 时,发给生成段的就是客户那个档位,两边相等 → 跳过。
+// 这种配置等于"这条流水线只按生成分辨率交付",干跑校验允许它存在。
+func TestUpscaleSkippedWhenNoOverridesSize(t *testing.T) {
+	withAggregateConfig(t, `[{
+		"name":"h3-1080","type":"video","enabled":true,
+		"generate":{"model":"minimax-h3"},
+		"upscale":{"model":"seedvr2","target_size":"2k"}
+	}]`)
+	agg := common.GetAggregateModel("h3-1080")
+
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/videos",
+		strings.NewReader(`{"model":"h3-1080","prompt":"a cat","size":"1080P"}`))
+
+	require.NoError(t, applyAggregateExpansion(c, "h3-1080", "minimax-h3", agg))
+
+	exp := GetAggregateExpansion(c)
+	require.Equal(t, "1080P", exp.RequestedSize)
+	require.Equal(t, "1080P", exp.GenerateSize)
+	require.True(t, exp.UpscaleSkipped,
+		"客户要的就是生成段出的那一档,超分上去只会给他一个他没选的档位")
+}
