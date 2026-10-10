@@ -17,6 +17,7 @@ import {
 } from '../../../helpers';
 import { useTranslation } from 'react-i18next';
 import { useNavigate } from 'react-router-dom';
+import { quotaPerPointHintText } from '../../../helpers/quota';
 import ChannelPointsRewards from './components/ChannelPointsRewards';
 
 export default function SettingsPoints(props) {
@@ -26,7 +27,8 @@ export default function SettingsPoints(props) {
   const [inputs, setInputs] = useState({
     'points_setting.enabled': false,
     'points_setting.require_kyc': true,
-    'points_setting.quota_per_point': 684.93,
+    // 0 = 自动；实际显示的是 /api/option/ 下发的后端值
+    'points_setting.quota_per_point': 0,
     'points_setting.kyc_verified_points': 0,
     'points_setting.kyc_inviter_points': 0,
     'points_setting.new_user_points': 0,
@@ -181,9 +183,7 @@ export default function SettingsPoints(props) {
                 <Form.InputNumber
                   field={'points_setting.quota_per_point'}
                   label={t('每积分对应额度(quota unit)')}
-                  extraText={t(
-                    '1 积分 = 1 分钱时约为 684.93，上线后不建议修改',
-                  )}
+                  extraText={quotaPerPointHintText()}
                   onChange={handleFieldChange('points_setting.quota_per_point')}
                   min={0}
                   step={0.001}

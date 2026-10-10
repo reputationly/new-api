@@ -122,7 +122,9 @@ const OperationSetting = () => {
        toBoolean，否则 "false" 字符串透传给 Form.Switch 会显示为开 */
     'points_setting.enabled': false,
     'points_setting.require_kyc': true,
-    'points_setting.quota_per_point': 684.93,
+    // 0 = 自动（按 QPU / (汇率 × 100) 实时推算）。这里只是加载完成前的占位，
+    // 实际显示的是 /api/option/ 下发的后端值。
+    'points_setting.quota_per_point': 0,
     'points_setting.kyc_verified_points': 0,
     'points_setting.kyc_inviter_points': 0,
     'points_setting.new_user_points': 0,

@@ -162,10 +162,14 @@ func BankTransferQuotaForFen(creditedFen int64) (int, error) {
 	if rate <= 0 {
 		return 0, errors.New("系统汇率参数无效")
 	}
+	// 先乘后除：decimal 除法默认只保留 16 位小数，先算「分 ÷ 100 ÷ 汇率」会把
+	// 1/7.3 截为 0.1369863013698630，再乘 QPU 得 999999.9999999999，IntPart 后
+	// 少 1 quota（¥1 到账只有 ¥0.999999）。把乘法提到除法之前，结果是精确整数。
+	// 截断语义本身不变（用户拿整数部分，误差 < 1 quota）。
 	quota := decimal.NewFromInt(creditedFen).
+		Mul(decimal.NewFromFloat(common.QuotaPerUnit)).
 		Div(decimal.NewFromInt(100)).
 		Div(decimal.NewFromFloat(rate)).
-		Mul(decimal.NewFromFloat(common.QuotaPerUnit)).
 		IntPart()
 	if quota <= 0 {
 		return 0, ErrBankTransferInvalidAmount

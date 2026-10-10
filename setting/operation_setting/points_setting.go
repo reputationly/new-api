@@ -9,12 +9,17 @@ import (
 	"github.com/QuantumNous/new-api/setting/config"
 )
 
+// QuotaPerPointAuto 是 QuotaPerPoint 的「自动」取值：按当前 QPU 与汇率实时推算
+// （common.DefaultQuotaPerPoint）。写成 0 而不是初始化期常量，是为了让换算率跟随
+// 运行时配置变化（单位切换 / 汇率调整）。
+const QuotaPerPointAuto = 0.0
+
 // PointsSetting 积分系统配置。积分是独立于 Quota 余额的营销赠送钱包，
 // 内部以 quota unit 记账（与 Quota 同单位），1 积分 = 1 分钱（初始值）。
 type PointsSetting struct {
 	Enabled       bool     `json:"enabled"`         // 积分系统总开关
 	RequireKyc    bool     `json:"require_kyc"`     // 未实名用户不得参加积分活动（只卡发放：签到、邀请人赠分；不卡消费）
-	QuotaPerPoint float64  `json:"quota_per_point"` // 1 积分对应 quota unit，默认 ≈684.93
+	QuotaPerPoint float64  `json:"quota_per_point"` // 1 积分对应 quota unit；0 = 自动（按 QPU / (汇率 × 100) 推算）
 	EnabledGroups []string `json:"enabled_groups"`  // 允许积分抵扣的分组白名单（空=所有分组只扣余额）
 	// EnabledChannels 允许积分抵扣的渠道白名单，空 = 不按渠道限制。
 	//
@@ -111,7 +116,7 @@ func GetChannelPointsReward(inviterId int) (*ChannelPointsReward, bool) {
 var pointsSetting = PointsSetting{
 	Enabled:           false,
 	RequireKyc:        true,
-	QuotaPerPoint:     common.QuotaPerUnit / 730.0, // ≈684.93，1 积分 = 1 分钱
+	QuotaPerPoint:     QuotaPerPointAuto, // 0 = 自动：按 QPU / (汇率 × 100) 实时推算（汇率 7.3 时 1 积分 = 1 分钱）
 	EnabledGroups:     []string{},
 	EnabledChannels:   []int{},
 	KycVerifiedPoints: 0,

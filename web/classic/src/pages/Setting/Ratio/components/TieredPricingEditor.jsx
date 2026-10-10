@@ -33,6 +33,7 @@ import {
 } from '@douyinfe/semi-ui';
 import { IconCopy, IconDelete, IconPlus } from '@douyinfe/semi-icons';
 import { renderQuota } from '../../../../helpers/render';
+import { getQuotaPerUnit } from '../../../../helpers/quota';
 import { copy, showSuccess } from '../../../../helpers';
 import {
   BILLING_EXTRA_VARS,
@@ -1847,9 +1848,7 @@ export default function TieredPricingEditor({
       extraTokenValues,
     );
     if (!result.error) {
-      result.cost =
-        (result.cost / 1000000) *
-        (parseFloat(localStorage.getItem('quota_per_unit')) || 500000);
+      result.cost = (result.cost / 1000000) * getQuotaPerUnit();
     }
     return result;
   }, [

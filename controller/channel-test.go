@@ -535,14 +535,15 @@ func settleTestQuota(info *relaycommon.RelayInfo, priceData types.PriceData, usa
 	quota := 0
 	if !priceData.UsePrice {
 		quota = usage.PromptTokens + int(math.Round(float64(usage.CompletionTokens)*priceData.CompletionRatio))
-		quota = int(math.Round(float64(quota) * priceData.ModelRatio))
+		// 倍率路径必须乘 QuotaScale()（见 service/text_quota.go）。
+		quota = int(math.Round(float64(quota) * priceData.ModelRatio * common.QuotaScale()))
 		if priceData.ModelRatio != 0 && quota <= 0 {
 			quota = 1
 		}
 		return quota, nil
 	}
 
-	return int(priceData.ModelPrice * common.QuotaPerUnit), nil
+	return int(math.Round(priceData.ModelPrice * common.QuotaPerUnit)), nil
 }
 
 func buildTestLogOther(c *gin.Context, info *relaycommon.RelayInfo, priceData types.PriceData, usage *dto.Usage, tieredResult *billingexpr.TieredResult) map[string]interface{} {

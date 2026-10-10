@@ -13,8 +13,14 @@ import (
 //
 // 运营唯一要决策的就是这个面值。数字太小（1 元 = 10 点）套餐显得小气，太大
 // （1 元 = 10000 点）用户算不清。默认 1 元 = 100 点，与积分同口径。
+
+// QuotaPerComputePointAuto 是 QuotaPerComputePoint 的「自动」取值：按当前 QPU 与汇率
+// 实时推算（common.DefaultQuotaPerComputePoint）。
+const QuotaPerComputePointAuto = 0.0
+
 type ComputePointSetting struct {
-	// QuotaPerComputePoint 1 算力点对应多少 quota unit。默认 ≈684.93（1 点 = 1 分钱）。
+	// QuotaPerComputePoint 1 算力点对应多少 quota unit；0 = 自动（按 QPU / (汇率 × 100) 推算，
+	// 汇率 7.3 时 1 点 = 1 分钱）。写成 0 而不是初始化期常量，才能跟随运行时 QPU / 汇率变化。
 	QuotaPerComputePoint float64 `json:"quota_per_compute_point"`
 	// ShowcaseModels 套餐对比表里展示换算的代表模型（设计文档 §8.3）。
 	// 由运营挑而不是按权益范围自动展开：通配符（qwen3-*）一展开就是几十行，
@@ -23,7 +29,7 @@ type ComputePointSetting struct {
 }
 
 var computePointSetting = ComputePointSetting{
-	QuotaPerComputePoint: common.QuotaPerUnit / 730.0,
+	QuotaPerComputePoint: QuotaPerComputePointAuto,
 	ShowcaseModels:       []string{},
 }
 

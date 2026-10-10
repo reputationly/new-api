@@ -28,6 +28,7 @@ import (
 	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/service/mediastore"
 	"github.com/QuantumNous/new-api/service/moderation"
+	"github.com/QuantumNous/new-api/service/quotaunitmigration"
 	_ "github.com/QuantumNous/new-api/setting/performance_setting"
 	"github.com/QuantumNous/new-api/setting/ratio_setting"
 	"github.com/QuantumNous/new-api/setting/system_setting"
@@ -59,6 +60,15 @@ func main() {
 	err := InitResources()
 	if err != nil {
 		common.FatalLog("failed to initialize resources: " + err.Error())
+		return
+	}
+
+	// 额度单位迁移模式：环境与数据库已就绪，只跑迁移并退出——不起 HTTP 服务、
+	// 不起定时任务、不碰渠道缓存，因此也不受 NFS / ffmpeg 等运行时依赖影响。
+	if *common.QuotaUnitMigrationMode != "" {
+		if err := quotaunitmigration.Run(*common.QuotaUnitMigrationMode, os.Stdout); err != nil {
+			common.FatalLog("quota unit migration failed: " + err.Error())
+		}
 		return
 	}
 

@@ -2,29 +2,36 @@ package common
 
 import "github.com/shopspring/decimal"
 
-// QuotaPerPoint 表示「1 积分」对应多少内部 quota unit（初始值 1 积分 = 1 分钱人民币）。
+// 积分换算率：1 积分 = 1 分钱人民币 = 0.01 元，即 QuotaPerUnit / (汇率 × 100)。
 //
-// 推导：1 USD = QuotaPerUnit(=500000) quota = 7.3 元；1 积分 = 1 分 = 0.01 元
+// 换算率不能在包初始化时固定：QuotaPerUnit 与汇率都是运行时可变的配置，
+// 初始化期算出的值不会跟着变，单位切换后就会读到过期值。
 //
-//	=> QuotaPerPoint = 500000 / (7.3 * 100) = 500000 / 730 ≈ 684.93
-//
-// 与 QuotaPerUnit 一样作为 common 包全局默认值，扣费/发放全链路只以 quota unit 记账，
-// QuotaPerPoint 仅用于「发放输入」「UI 展示」「结算取整」三个边界的换算，不进高频扣费热路径。
-var QuotaPerPoint = QuotaPerUnit / 730.0
+// 扣费/发放全链路只以 quota unit 记账，换算只发生在「发放输入」「UI 展示」「结算取整」
+// 三个边界，不进高频扣费热路径。
 
 // QuotaPerPointFunc 由上层配置包（setting/operation_setting）在 init 时注入，返回
-// PointsSetting.QuotaPerPoint 的实时值。common 不能 import operation_setting（会循环），
-// 故用依赖倒置：注入后换算读实时配置值，未注入则回退默认 QuotaPerPoint。
+// PointsSetting.QuotaPerPoint 的实时值（0 = 自动，按 QPU 与汇率推算）。common 不能
+// import operation_setting（会循环），故用依赖倒置。
 var QuotaPerPointFunc func() float64
 
-func getQuotaPerPoint() float64 {
+// DefaultQuotaPerPoint 按当前配置实时推算积分换算率：QuotaPerUnit / (汇率 × 100)。
+// 汇率 7.3 时 QPU 500000 → 684.93，QPU 7300000 → 10000（两种单位下 1 元都是 100 积分）。
+func DefaultQuotaPerPoint() float64 {
+	return QuotaPerUnit / (getUSDExchangeRate() * 100)
+}
+
+// GetQuotaPerPoint 返回生效的积分换算率：配置值 > 0 用配置值，否则实时推算。
+func GetQuotaPerPoint() float64 {
 	if QuotaPerPointFunc != nil {
 		if v := QuotaPerPointFunc(); v > 0 {
 			return v
 		}
 	}
-	return QuotaPerPoint
+	return DefaultQuotaPerPoint()
 }
+
+func getQuotaPerPoint() float64 { return GetQuotaPerPoint() }
 
 // PointsToQuota 把「积分数」换算为内部 quota unit（发放/输入边界用），向上取整。
 // 用 Ceil 而非 Round：保证 QuotaToPoints(PointsToQuota(n)) == n 精确往返——

@@ -16,19 +16,57 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
+import i18next from 'i18next';
 import { getCurrencyConfig } from './render';
 
+// ---- quota ↔ 展示币种的换算率 ----
+//
+// 这三个值正常情况下都由 /api/status 在页面渲染前写入 localStorage，下面的 fallback
+// 只在读不到时生效（例如直接打开某个子页面、localStorage 被单独清理）。全站金额都按这些
+// 换算率算，取错就是系统性错价，所以 fallback 只在 console 里告警一次，不刷屏。
+export const FALLBACK_QUOTA_PER_UNIT = 500000; // 与后端 QuotaPerUnit 的出厂默认一致
+export const FALLBACK_QUOTA_PER_POINT = 684.93;
+
+const warnedFallbacks = new Set();
+
+function readPositiveNumber(key) {
+  const raw = parseFloat(localStorage.getItem(key) || '');
+  return Number.isFinite(raw) && raw > 0 ? raw : null;
+}
+
+function warnQuotaFallback(key, fallback) {
+  if (warnedFallbacks.has(key)) return;
+  warnedFallbacks.add(key);
+  console.warn(
+    `localStorage 缺少可用的 ${key}（应由 /api/status 写入），暂按 ${fallback} 换算金额展示`,
+  );
+}
+
 export const getQuotaPerUnit = () => {
-  const raw = parseFloat(localStorage.getItem('quota_per_unit') || '1');
-  return Number.isFinite(raw) && raw > 0 ? raw : 1;
+  const raw = readPositiveNumber('quota_per_unit');
+  if (raw !== null) return raw;
+  warnQuotaFallback('quota_per_unit', FALLBACK_QUOTA_PER_UNIT);
+  return FALLBACK_QUOTA_PER_UNIT;
 };
 
 // ---- 积分换算（内部 quota unit ↔ 展示积分数） ----
 
 export const getQuotaPerPoint = () => {
-  const raw = parseFloat(localStorage.getItem('quota_per_point') || '684.93');
-  return Number.isFinite(raw) && raw > 0 ? raw : 684.93;
+  const raw = readPositiveNumber('quota_per_point');
+  if (raw !== null) return raw;
+  warnQuotaFallback('quota_per_point', FALLBACK_QUOTA_PER_POINT);
+  return FALLBACK_QUOTA_PER_POINT;
 };
+
+// 后台「积分设置」里换算率输入框的说明文案：写死的数字会在单位/汇率变动后变成误导
+// （管理员很可能照着填回去），所以显示当前生效值。
+export const quotaPerPointHintText = () =>
+  i18next.t(
+    '0 = 自动（1 积分 = 1 分钱）；当前生效 {{value}}，上线后不建议修改',
+    {
+      value: getQuotaPerPoint(),
+    },
+  );
 
 export const isPointsEnabled = () =>
   localStorage.getItem('points_enabled') === 'true';
@@ -57,10 +95,10 @@ export const pointsToQuota = (points) => {
 // 两边换算若用不同取整方向，会出现「配 50000 点、存完再打开变 49999」。
 
 export const getQuotaPerComputePoint = () => {
-  const raw = parseFloat(
-    localStorage.getItem('quota_per_compute_point') || '684.93',
-  );
-  return Number.isFinite(raw) && raw > 0 ? raw : 684.93;
+  const raw = readPositiveNumber('quota_per_compute_point');
+  if (raw !== null) return raw;
+  warnQuotaFallback('quota_per_compute_point', FALLBACK_QUOTA_PER_POINT);
+  return FALLBACK_QUOTA_PER_POINT;
 };
 
 export const quotaToComputePoints = (quota) => {

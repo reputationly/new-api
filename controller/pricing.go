@@ -233,7 +233,7 @@ func GetPricing(c *gin.Context) {
 		// nil = 未登录或无活跃套餐，前端退回原价展示
 		"entitlement_coverage": entitlementCoverage,
 		// 算力点换算率，供前端把 quota 换算成展示点数（与积分同一套下发方式）
-		"quota_per_compute_point": operation_setting.GetComputePointSetting().QuotaPerComputePoint,
+		"quota_per_compute_point": common.GetQuotaPerComputePoint(),
 		"vendors":                 model.GetVendors(),
 		"group_ratio":             groupRatio,
 		"group_model_ratio":       groupModelRatio,
@@ -245,7 +245,7 @@ func GetPricing(c *gin.Context) {
 		"supported_endpoint":    model.GetSupportedEndpointMap(),
 		"auto_groups":           service.GetUserAutoGroup(group),
 		"points_enabled":        pointsSetting.Enabled,
-		"quota_per_point":       pointsSetting.QuotaPerPoint,
+		"quota_per_point":       common.GetQuotaPerPoint(),
 		"points_enabled_groups": pointsEnabledGroups,
 		// nil = 未启用渠道白名单，前端退回只看分组的旧口径
 		"points_enabled_models": pointsEnabledModels,

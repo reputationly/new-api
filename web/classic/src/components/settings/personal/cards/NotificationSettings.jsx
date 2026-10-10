@@ -36,10 +36,12 @@ import { IconMail, IconKey, IconBell, IconLink } from '@douyinfe/semi-icons';
 import { ShieldCheck, Bell, DollarSign, Settings } from 'lucide-react';
 import {
   renderQuotaWithPrompt,
+  renderQuota,
   API,
   showSuccess,
   showError,
 } from '../../../../helpers';
+import { getQuotaPerUnit } from '../../../../helpers/quota';
 import CodeViewer from '../../../playground/CodeViewer';
 import { StatusContext } from '../../../../context/Status';
 import { UserContext } from '../../../../context/User';
@@ -48,6 +50,28 @@ import {
   mergeAdminConfig,
   useSidebar,
 } from '../../../../hooks/common/useSidebar';
+
+// 预警阈值预设按人民币面额生成：quota = 人民币 ÷ 汇率 × quota_per_unit。
+// 预设的真身是「¥1 / ¥10 / ¥100」这三档，不是某几个写死的 quota 整数——写死的话
+// quota 单位一换（QuotaPerUnit 500000 → 7300000）这三档就变成完全不同的人民币金额。
+const WARNING_THRESHOLD_PRESET_CNY = [1, 10, 100];
+
+export function buildWarningThresholdPresets() {
+  let rate = 7.3;
+  try {
+    const statusStr = localStorage.getItem('status');
+    if (statusStr) {
+      const s = JSON.parse(statusStr);
+      rate = Number(s?.usd_exchange_rate) || 7.3;
+    }
+  } catch (e) {}
+  const quotaPerUnit = getQuotaPerUnit();
+  return WARNING_THRESHOLD_PRESET_CNY.map((cny) => {
+    const value = Math.round((cny / rate) * quotaPerUnit);
+    // 标签跟随当前展示币种（CNY → ¥1.00、USD → $0.14），不再写死 "1$" 这种混排。
+    return { value, label: renderQuota(value) };
+  });
+}
 
 const NotificationSettings = ({
   t,
@@ -445,12 +469,7 @@ const NotificationSettings = ({
                     </span>
                   }
                   placeholder={t('请输入预警额度')}
-                  data={[
-                    { value: 100000, label: '0.2$' },
-                    { value: 500000, label: '1$' },
-                    { value: 1000000, label: '2$' },
-                    { value: 5000000, label: '10$' },
-                  ]}
+                  data={buildWarningThresholdPresets()}
                   onChange={(val) => handleFormChange('warningThreshold', val)}
                   prefix={<IconBell />}
                   extraText={t(

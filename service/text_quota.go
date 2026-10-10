@@ -224,8 +224,12 @@ func calculateTextQuotaSummary(ctx *gin.Context, relayInfo *relaycommon.RelayInf
 	dCacheCreationRatio5m := decimal.NewFromFloat(summary.CacheCreationRatio5m)
 	dCacheCreationRatio1h := decimal.NewFromFloat(summary.CacheCreationRatio1h)
 	dQuotaPerUnit := decimal.NewFromFloat(common.QuotaPerUnit)
+	dQuotaScale := decimal.NewFromFloat(common.QuotaScale())
 
-	ratio := dModelRatio.Mul(dGroupRatio)
+	// 倍率路径：quota/token = ratio 只在 QuotaPerUnit == RatioQuotaBase 时成立，
+	// 所以这里必须乘 QuotaScale()。工具附加费 / Gemini 音频等价格路径已经乘过
+	// QuotaPerUnit，在本行之后相加，不得再乘 scale。
+	ratio := dModelRatio.Mul(dGroupRatio).Mul(dQuotaScale)
 	summary.ToolCallSurchargeQuota = calculateTextToolCallSurcharge(ctx, relayInfo, &summary)
 
 	var audioInputQuota decimal.Decimal

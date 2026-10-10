@@ -32,6 +32,7 @@ import {
   quotaToPoints,
   pointsToQuota,
   isPointsEnabled,
+  getQuotaPerUnit,
 } from '../../../../helpers/quota';
 import { useIsMobile } from '../../../../hooks/common/useIsMobile';
 import FundOperationModal from './FundOperationModal';
@@ -676,7 +677,7 @@ const EditUserModal = (props) => {
             }}
             style={{ width: '100%' }}
             showClear
-            step={500000}
+            step={getQuotaPerUnit()}
           />
         </div>
       </Modal>

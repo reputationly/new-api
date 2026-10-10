@@ -1,6 +1,7 @@
 package service
 
 import (
+	"math"
 	"strconv"
 	"strings"
 
@@ -173,7 +174,7 @@ func estimateModelCost(
 	}
 
 	item.CostRatio = ratio
-	item.UnitQuota = int64(unitPrice * common.QuotaPerUnit * ratio)
+	item.UnitQuota = int64(math.Round(unitPrice * common.QuotaPerUnit * ratio))
 	item.Resolvable = true
 	return item
 }

@@ -130,16 +130,11 @@ export default function GeneralSettings(props) {
 
   const showTokensOption = useMemo(() => {
     const initialType = props.options?.['general_setting.quota_display_type'];
-    const initialQuotaPerUnit = parseFloat(props.options?.QuotaPerUnit);
     const legacyTokensMode =
       initialType === undefined &&
       props.options?.DisplayInCurrencyEnabled !== undefined &&
       !props.options.DisplayInCurrencyEnabled;
-    return (
-      initialType === 'TOKENS' ||
-      legacyTokensMode ||
-      (!isNaN(initialQuotaPerUnit) && initialQuotaPerUnit !== 500000)
-    );
+    return initialType === 'TOKENS' || legacyTokensMode;
   }, [props.options]);
 
   const quotaDisplayType = inputs['general_setting.quota_display_type'];
@@ -412,7 +407,7 @@ export default function GeneralSettings(props) {
         <Banner
           type='warning'
           description={t(
-            '此设置用于系统内部计算，默认值500000是为了精确到6位小数点设计，不推荐修改。',
+            '此设置用于系统内部计费精度，与汇率联动（1 额度 = ¥0.000001），修改会导致计费与展示口径不一致，不推荐修改。',
           )}
           bordered
           fullMode={false}

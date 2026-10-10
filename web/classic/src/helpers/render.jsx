@@ -1357,6 +1357,34 @@ function formatBillingDisplayPrice(usdAmount, rate, digits = 6) {
   return (usdAmount * rate).toFixed(digits);
 }
 
+/**
+ * 按显示精度四舍五入，远离零——与后端 `decimal.Round(0)` 同向。
+ *
+ * 不能用 toFixed 承担舍入：它是「先取二进制近似，再按近似值决定进位」，落在边界上
+ * 的数会被推到错误的一侧。这里把值放大到精度网格上，加一个相对 Number.EPSILON 的
+ * 修正吸收浮点噪声，再 Math.round；符号单独处理，因为 Math.round(-0.5) 得到的是 -0
+ * （向 +∞ 取整），而我们要的是远离零的 -1。
+ *
+ * @param {number} value - 已是显示币种的金额（美元金额请先乘汇率）
+ * @param {number} digits - 小数位数，默认 6
+ * @returns {number} 舍入后的数值（需要固定位数的文本时由调用方再 toFixed）
+ */
+export function roundToDisplay(value, digits = 6) {
+  const num = Number(value);
+  if (!Number.isFinite(num) || num === 0) return num;
+  const factor = 10 ** digits;
+  const scaled = num * factor;
+  const corrected = scaled + scaled * Number.EPSILON;
+  return (Math.sign(corrected) * Math.round(Math.abs(corrected))) / factor;
+}
+
+// 计费过程的「合计」：必须在**显示币种金额**上按 6 位四舍五入后再定宽。
+// 与单价行不同，合计要与花费列（logs.quota 四舍五入后的金额）逐位对上，
+// 所以除不尽的单价行沿用原格式，只有合计走 roundToDisplay。
+function formatBillingDisplayTotal(usdAmount, rate, digits = 6) {
+  return roundToDisplay(usdAmount * rate, digits).toFixed(digits);
+}
+
 function buildBillingText(key, vars) {
   return i18next.t(key, vars);
 }
@@ -1777,7 +1805,7 @@ export function renderModelPrice(opts) {
             ratioType: ratioLabel,
             ratio: groupRatio,
             amountKey: 'price',
-            total: formatBillingDisplayPrice(modelPrice * groupRatio, rate),
+            total: formatBillingDisplayTotal(modelPrice * groupRatio, rate),
           },
         ),
       ]);
@@ -1970,7 +1998,7 @@ export function renderModelPrice(opts) {
           outputDesc,
           extraServices,
           symbol,
-          total: formatBillingDisplayPrice(price, rate),
+          total: formatBillingDisplayTotal(price, rate),
         },
       ),
     ];
@@ -2577,7 +2605,7 @@ export function renderVideoMatrixPriceSimple(opts) {
         price: formatCompactDisplayPrice(unitPrice),
         seconds,
         ratio: formatRatioValue(ratio, 4),
-        amount: `${symbol}${Number((amount * rate).toFixed(6))}`,
+        amount: `${symbol}${Number(roundToDisplay(amount * rate, 6).toFixed(6))}`,
       },
     );
   } else if (isTokenMode && tokens > 0) {
@@ -2592,7 +2620,7 @@ export function renderVideoMatrixPriceSimple(opts) {
         tokens: Number(tokens).toLocaleString(),
         price: formatCompactDisplayPrice(unitPrice),
         ratio: formatRatioValue(ratio, 4),
-        amount: `${symbol}${Number((amount * rate).toFixed(6))}`,
+        amount: `${symbol}${Number(roundToDisplay(amount * rate, 6).toFixed(6))}`,
       },
     );
   }
@@ -2703,19 +2731,19 @@ export function buildVideoMatrixDetailRows(opts) {
     const amount = Number(unitPrice) * seconds * ratio;
     rows.push({
       key: i18next.t('计费过程'),
-      value: `${symbol}${(Number(unitPrice) * rate).toFixed(4)} / ${i18next.t('秒')} × ${seconds} × ${formatRatioValue(ratio, 4)} = ${symbol}${(amount * rate).toFixed(6)}`,
+      value: `${symbol}${(Number(unitPrice) * rate).toFixed(4)} / ${i18next.t('秒')} × ${seconds} × ${formatRatioValue(ratio, 4)} = ${symbol}${roundToDisplay(amount * rate, 6).toFixed(6)}`,
     });
   } else if (isTokenMode && tokens > 0) {
     const amount = (tokens / 1e6) * Number(unitPrice) * ratio;
     rows.push({
       key: i18next.t('计费过程'),
-      value: `${Number(tokens).toLocaleString()} × ${symbol}${(Number(unitPrice) * rate).toFixed(4)} / 1M Tokens × ${formatRatioValue(ratio, 4)} = ${symbol}${(amount * rate).toFixed(6)}`,
+      value: `${Number(tokens).toLocaleString()} × ${symbol}${(Number(unitPrice) * rate).toFixed(4)} / 1M Tokens × ${formatRatioValue(ratio, 4)} = ${symbol}${roundToDisplay(amount * rate, 6).toFixed(6)}`,
     });
   } else if (!isTokenMode && !isPerSecond) {
     const amount = Number(unitPrice) * ratio;
     rows.push({
       key: i18next.t('计费过程'),
-      value: `${symbol}${(Number(unitPrice) * rate).toFixed(4)} / ${i18next.t('次')} × ${formatRatioValue(ratio, 4)} = ${symbol}${(amount * rate).toFixed(6)}`,
+      value: `${symbol}${(Number(unitPrice) * rate).toFixed(4)} / ${i18next.t('次')} × ${formatRatioValue(ratio, 4)} = ${symbol}${roundToDisplay(amount * rate, 6).toFixed(6)}`,
     });
   }
 
@@ -2809,7 +2837,7 @@ export function renderAudioModelPrice(opts) {
             rate,
             ratioType: ratioLabel,
             ratio: groupRatio,
-            total: formatBillingDisplayPrice(modelPrice * groupRatio, rate),
+            total: formatBillingDisplayTotal(modelPrice * groupRatio, rate),
           },
         ),
       ]);
@@ -2882,7 +2910,7 @@ export function renderAudioModelPrice(opts) {
           ratioType: ratioLabel,
           ratio: groupRatio,
           symbol,
-          total: formatBillingDisplayPrice(totalPrice, rate),
+          total: formatBillingDisplayTotal(totalPrice, rate),
         },
       ),
     ]);
@@ -3091,7 +3119,7 @@ export function renderClaudeModelPrice(opts) {
             rate,
             ratioType: ratioLabel,
             ratio: groupRatio,
-            total: formatBillingDisplayPrice(modelPrice * groupRatio, rate),
+            total: formatBillingDisplayTotal(modelPrice * groupRatio, rate),
           },
         ),
       ]);
@@ -3264,7 +3292,7 @@ export function renderClaudeModelPrice(opts) {
           ratioType: ratioLabel,
           ratio: groupRatio,
           symbol,
-          total: formatBillingDisplayPrice(price, rate),
+          total: formatBillingDisplayTotal(price, rate),
         },
       ),
     ]);

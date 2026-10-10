@@ -649,8 +649,9 @@ func RecalculateTaskQuotaByTokens(ctx context.Context, task *model.Task, totalTo
 		}
 	}
 
-	// 计算实际应扣费额度: totalTokens * modelRatio * groupRatio * otherMultiplier
-	actualQuota := int(float64(totalTokens) * modelRatio * finalGroupRatio * otherMultiplier)
+	// 计算实际应扣费额度: totalTokens * modelRatio * groupRatio * otherMultiplier * scale
+	// 倍率路径必须乘 QuotaScale()，理由见 service/text_quota.go 同一处注释。
+	actualQuota := int(math.Round(float64(totalTokens) * modelRatio * finalGroupRatio * otherMultiplier * common.QuotaScale()))
 
 	reason := fmt.Sprintf("token重算：tokens=%d, modelRatio=%.2f, groupRatio=%.2f, otherMultiplier=%.4f", totalTokens, modelRatio, finalGroupRatio, otherMultiplier)
 	return recalculateTaskQuota(ctx, task, actualQuota, totalTokens, reason)
@@ -750,7 +751,7 @@ func RecalculateTaskQuotaByVideoMatrix(ctx context.Context, task *model.Task, to
 		return false
 	}
 
-	actualQuota := int(float64(totalTokens) / 1e6 * vb.UnitPrice * common.QuotaPerUnit * finalGroupRatio)
+	actualQuota := int(math.Round(float64(totalTokens) / 1e6 * vb.UnitPrice * common.QuotaPerUnit * finalGroupRatio))
 
 	reason := fmt.Sprintf("视频矩阵重算：tokens=%d, %s/%s, unitPrice=%g, groupRatio=%.2f",
 		totalTokens, vb.Resolution, videoInputLabel(vb.HasVideoInput), vb.UnitPrice, finalGroupRatio)

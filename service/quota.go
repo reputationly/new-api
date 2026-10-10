@@ -54,7 +54,7 @@ func calculateAudioQuota(info QuotaInfo) int {
 		groupRatio := decimal.NewFromFloat(info.GroupRatio)
 
 		quota := modelPrice.Mul(quotaPerUnit).Mul(groupRatio)
-		return int(quota.IntPart())
+		return int(quota.Round(0).IntPart())
 	}
 
 	completionRatio := decimal.NewFromFloat(ratio_setting.GetCompletionRatio(info.ModelName))
@@ -63,7 +63,8 @@ func calculateAudioQuota(info QuotaInfo) int {
 
 	groupRatio := decimal.NewFromFloat(info.GroupRatio)
 	modelRatio := decimal.NewFromFloat(info.ModelRatio)
-	ratio := groupRatio.Mul(modelRatio)
+	// 倍率路径：与 service/text_quota.go 同一约定，ratio 必须乘 QuotaScale() 才是 quota/token。
+	ratio := groupRatio.Mul(modelRatio).Mul(decimal.NewFromFloat(common.QuotaScale()))
 
 	inputTextTokens := decimal.NewFromInt(int64(info.InputDetails.TextTokens))
 	outputTextTokens := decimal.NewFromInt(int64(info.OutputDetails.TextTokens))
@@ -260,7 +261,10 @@ func CalcOpenRouterCacheCreateTokens(usage dto.Usage, priceData types.PriceData)
 	if priceData.CacheCreationRatio == 1 {
 		return 0
 	}
-	quotaPrice := priceData.ModelRatio / common.QuotaPerUnit
+	// 语义是「倍率 → 美元/token」：倍率 1 = $2/1M tokens。这个换算与内部记账单位
+	// （QuotaPerUnit）无关，必须用 RatioQuotaBase，否则切换 QPU 后算出的缓存创建
+	// token 数会跟着变。
+	quotaPrice := priceData.ModelRatio / common.RatioQuotaBase
 	promptCacheCreatePrice := quotaPrice * priceData.CacheCreationRatio
 	promptCacheReadPrice := quotaPrice * priceData.CacheRatio
 	completionPrice := quotaPrice * priceData.CompletionRatio

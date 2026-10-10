@@ -86,9 +86,9 @@ func TestVideoMatrix_ReconcilesWithSupplierBill(t *testing.T) {
 	require.InDeltaf(t, supplierCNY, oursCNY, 0.0001,
 		"对账不上：供应商 ¥%.6f，我们 ¥%.6f", supplierCNY, oursCNY)
 
-	// 截断只会少收，且不超过 1 quota
-	require.LessOrEqual(t, oursCNY, supplierCNY)
-	require.LessOrEqual(t, supplierCNY-oursCNY, quotaToCNY(1, testRate))
+	// 取整偏差不超过 1 quota。B4 把截断改成四舍五入后不再保证「只少收」，
+	// 方向可能相反——对齐供应商账单的要求是 |偏差| ≤ 1 quota，不是单向。
+	require.LessOrEqual(t, math.Abs(supplierCNY-oursCNY), quotaToCNY(1, testRate))
 }
 
 // 1080p 必须比 720p 贵——这正是改造前缺失的那一维（此前一律少收约 10%）。
@@ -290,7 +290,9 @@ func seedVideoSettleFixture(t *testing.T, userID int) *model.Task {
 }
 
 func expectedSeedanceQuota() int {
-	return int(float64(seedanceTokens) / 1e6 * (seedanceCNYRate / testRate) * common.QuotaPerUnit)
+	// 与生产同一条公式与同一个取整规则（B4 已把截断改成四舍五入）：
+	// tokens ÷ 1e6 × 单价($/1M) × QuotaPerUnit × 分组倍率，末值 math.Round。
+	return int(math.Round(float64(seedanceTokens) / 1e6 * (seedanceCNYRate / testRate) * common.QuotaPerUnit))
 }
 
 // 中转商可能只透传 completion_tokens。doubao 的 usage 里没有 prompt_tokens，
@@ -778,7 +780,7 @@ func TestVideoMatrix_UpstreamResolutionKeepsVideoInputColumn(t *testing.T) {
 	require.Equal(t, true, other["video_has_input"])
 	require.InDelta(t, seedanceWithVideoUSD, other["video_unit_price"].(float64), 1e-9)
 
-	expected := int(float64(seedanceTokens) / 1e6 * seedanceWithVideoUSD * common.QuotaPerUnit)
+	expected := int(math.Round(float64(seedanceTokens) / 1e6 * seedanceWithVideoUSD * common.QuotaPerUnit))
 	require.Equal(t, expected, task.Quota)
 }
 
@@ -902,8 +904,8 @@ func TestSettle_VideoMatrix_UsesUpstreamResolution(t *testing.T) {
 	require.Equal(t, int64(1), countLogs(t))
 }
 
-func TestQuotaTruncationBoundIsNegligible(t *testing.T) {
-	// 每单最多少收 1 quota；1 万单累计上限。
+func TestQuotaRoundingBoundIsNegligible(t *testing.T) {
+	// 每单取整偏差不超过 1 quota（B4 后为四舍五入）；1 万单累计上限。
 	perOrder := quotaToCNY(1, testRate)
 	require.Less(t, perOrder, 0.00002)
 	require.Less(t, math.Abs(perOrder*10000), 0.2)

@@ -39,6 +39,16 @@ func SetTheme(t string) {
 // var ChatLink = ""
 // var ChatLink2 = ""
 var QuotaPerUnit = 500 * 1000.0 // $0.002 / 1K tokens
+
+// RatioQuotaBase 是「倍率 1 = $2 / 1M tokens = 1 quota / token」成立时的 QuotaPerUnit。
+// 倍率路径（quota/token = ratio）只在 QuotaPerUnit 恰好等于它时才成立，所以该路径必须
+// 乘 QuotaScale() 才能与 QuotaPerUnit 解耦；价格路径已经乘过 QuotaPerUnit，不得再乘。
+const RatioQuotaBase = 500000.0
+
+// QuotaScale 返回当前 QuotaPerUnit 相对 RatioQuotaBase 的倍数（500000 → 1，7300000 → 14.6）。
+// 单位约定：QuotaPerUnit = 汇率 × 10^6 时 1 quota = ¥0.000001。
+func QuotaScale() float64 { return QuotaPerUnit / RatioQuotaBase }
+
 // 保留旧变量以兼容历史逻辑，实际展示由 general_setting.quota_display_type 控制
 var DisplayInCurrencyEnabled = true
 var DisplayTokenStatEnabled = true

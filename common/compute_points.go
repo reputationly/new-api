@@ -23,26 +23,32 @@ import "github.com/shopspring/decimal"
 // 占用，两个词在任何界面上都不可混用、不可互相简称——积分是签到/赠送来的，
 // 算力点是套餐给的，来源、有效期、适用范围三者皆不同。
 
-// QuotaPerComputePoint 表示「1 算力点」对应多少内部 quota unit。
+// 算力点换算率：默认 1 元 = 100 算力点（即 1 算力点 = 1 分钱），与积分同口径，
+// 运营心智统一，即 QuotaPerUnit / (汇率 × 100)。
 //
-// 默认 1 元 = 100 算力点（即 1 算力点 = 1 分钱），与积分同口径，运营心智统一。
-// 推导：1 USD = QuotaPerUnit(=500000) quota = 7.3 元；1 算力点 = 0.01 元
-//
-//	=> QuotaPerComputePoint = 500000 / (7.3 * 100) = 500000 / 730 ≈ 684.93
-var QuotaPerComputePoint = QuotaPerUnit / 730.0
+// 与积分完全同构：换算率不能在包初始化时固定，否则 QPU 切换后会读到过期值。
 
-// QuotaPerComputePointFunc 由上层配置包在 init 时注入，返回实时配置值。
+// QuotaPerComputePointFunc 由上层配置包在 init 时注入，返回实时配置值（0 = 自动）。
 // common 不能 import operation_setting（会循环），故用依赖倒置——与积分同构。
 var QuotaPerComputePointFunc func() float64
 
-func getQuotaPerComputePoint() float64 {
+// DefaultQuotaPerComputePoint 按当前配置实时推算算力点换算率：QuotaPerUnit / (汇率 × 100)。
+// 汇率 7.3 时 QPU 500000 → 684.93，QPU 7300000 → 10000（两种单位下 1 元都是 100 点）。
+func DefaultQuotaPerComputePoint() float64 {
+	return QuotaPerUnit / (getUSDExchangeRate() * 100)
+}
+
+// GetQuotaPerComputePoint 返回生效的算力点换算率：配置值 > 0 用配置值，否则实时推算。
+func GetQuotaPerComputePoint() float64 {
 	if QuotaPerComputePointFunc != nil {
 		if v := QuotaPerComputePointFunc(); v > 0 {
 			return v
 		}
 	}
-	return QuotaPerComputePoint
+	return DefaultQuotaPerComputePoint()
 }
+
+func getQuotaPerComputePoint() float64 { return GetQuotaPerComputePoint() }
 
 // ComputePointsToQuota 把「算力点数」换算为内部 quota unit（发放/输入边界用），向上取整。
 //

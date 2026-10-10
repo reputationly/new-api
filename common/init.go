@@ -19,6 +19,9 @@ var (
 	PrintVersion = flag.Bool("version", false, "print version and exit")
 	PrintHelp    = flag.Bool("help", false, "print help and exit")
 	LogDir       = flag.String("log-dir", "./logs", "specify the log directory")
+	// QuotaUnitMigrationMode 额度单位迁移。
+	// 取值 dry-run / apply；为空时按正常启动流程走。
+	QuotaUnitMigrationMode = flag.String("migrate-quota-unit", "", "run the quota unit migration and exit: dry-run | apply")
 )
 
 func printHelp() {

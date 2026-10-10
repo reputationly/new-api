@@ -79,22 +79,35 @@ func TestYuanToComputePoints(t *testing.T) {
 	require.Equal(t, 0, YuanToComputePoints(-5), "负数不产生点数")
 }
 
-// 汇率变动不影响「模型消耗多少点」——这正是不建价目表的关键收益。
+// 算力点面值固定为「1 点 = 1 分钱」，即换算率 = QuotaPerUnit / (汇率 × 100)。
 //
-// 模型的 quota 消耗只取决于 token 数 × 倍率，与汇率无关；汇率只影响「1 元买多少 quota」。
-// 所以汇率波动只改变套餐的「元→点」定价预览，不改变点数的消耗速度。
-func TestComputePoints_ModelCostUnaffectedByExchangeRate(t *testing.T) {
+// 只要 §10.1 的不变量 QuotaPerUnit = 汇率 × 10⁶ 成立，它就恒为 10⁴：同一笔人民币消耗
+// 换出同样的点数，改汇率不改变「模型消耗多少点」——这正是不建价目表的关键收益。
+//
+// 与旧实现的差异：旧实现把换算率在包初始化时冻结成 QuotaPerUnit/730，等价于把汇率 7.3
+// 写死进常量；一旦只改汇率（不改 QPU），1 点就不再值 1 分钱。新实现跟随当前汇率，
+// 面值恒定，代价是「只改汇率不改 QPU」这个 §10.1 明令禁止的配置会改变点数消耗速度。
+func TestComputePoints_RateAndQuotaPerUnitInvariant(t *testing.T) {
 	origRate := USDExchangeRateFunc
-	t.Cleanup(func() { USDExchangeRateFunc = origRate })
+	origQPU := QuotaPerUnit
+	t.Cleanup(func() {
+		USDExchangeRateFunc = origRate
+		QuotaPerUnit = origQPU
+	})
 
-	const modelQuota = 68493 // 某次调用按倍率算出的 quota
+	for _, c := range []struct{ rate, qpu float64 }{
+		{7.3, 7_300_000},
+		{8.5, 8_500_000},
+		{7, 7_000_000},
+	} {
+		USDExchangeRateFunc = func() float64 { return c.rate }
+		QuotaPerUnit = c.qpu // §10.1：改汇率必须同步改 QPU
 
-	USDExchangeRateFunc = func() float64 { return 7.3 }
-	before := QuotaToComputePoints(modelQuota)
-
-	USDExchangeRateFunc = func() float64 { return 8.5 } // 汇率变动
-	after := QuotaToComputePoints(modelQuota)
-
-	require.Equal(t, before, after,
-		"同一笔 quota 消耗的算力点数不得随汇率变化，否则套餐消耗速度会被汇率牵动")
+		require.Equal(t, 10000.0, DefaultQuotaPerComputePoint(),
+			"汇率 %v 下换算率应为 10⁴", c.rate)
+		require.Equal(t, 100, YuanToComputePoints(1),
+			"汇率 %v 下 1 元仍应是 100 点", c.rate)
+		require.Equal(t, 100, QuotaToComputePoints(1_000_000),
+			"汇率 %v 下 ¥1 对应的 quota 消耗仍应是 100 点（1 quota = ¥10⁻⁶）", c.rate)
+	}
 }

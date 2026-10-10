@@ -360,13 +360,20 @@ func ManualCompleteTopUp(tradeNo string, callerIp string) error {
 			return errors.New("订单状态不是待支付，无法补单")
 		}
 
-		// 计算应充值额度：
-		// - Stripe 订单：Money 代表经分组倍率换算后的美元数量，直接 * QuotaPerUnit
-		// - 其他订单（如易支付）：Amount 为美元数量，* QuotaPerUnit
-		if topUp.PaymentProvider == PaymentProviderStripe {
+		// 计算应充值额度。Amount 的单位随 payment_provider 而异，必须分开处理：
+		// - 直连渠道（支付宝 / 微信直连）与 Creem、对公转账：Amount 创建订单时写的就是
+		//   到账 quota（internalQuota / selectedProduct.Quota / quotaToAdd），再乘
+		//   QuotaPerUnit 会按 QPU 倍多发。
+		// - Stripe：Money 是经分组倍率换算后的美元数量。
+		// - epay / waffo / waffo_pancake：Amount 是美元数量。
+		switch topUp.PaymentProvider {
+		case PaymentProviderAlipayDirect, PaymentProviderWxpayDirect,
+			PaymentProviderCreem, PaymentProviderBankTransfer:
+			quotaToAdd = int(topUp.Amount)
+		case PaymentProviderStripe:
 			dQuotaPerUnit := decimal.NewFromFloat(common.QuotaPerUnit)
 			quotaToAdd = int(decimal.NewFromFloat(topUp.Money).Mul(dQuotaPerUnit).IntPart())
-		} else {
+		default:
 			dAmount := decimal.NewFromInt(topUp.Amount)
 			dQuotaPerUnit := decimal.NewFromFloat(common.QuotaPerUnit)
 			quotaToAdd = int(dAmount.Mul(dQuotaPerUnit).IntPart())

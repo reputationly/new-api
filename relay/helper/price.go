@@ -2,6 +2,7 @@ package helper
 
 import (
 	"fmt"
+	"math"
 	"strings"
 
 	"github.com/QuantumNous/new-api/common"
@@ -121,13 +122,16 @@ func ModelPriceHelper(c *gin.Context, info *relaycommon.RelayInfo, promptTokens 
 		imageRatio, _ = ratio_setting.GetImageRatio(info.OriginModelName)
 		audioRatio = ratio_setting.GetAudioRatio(info.OriginModelName)
 		audioCompletionRatio = ratio_setting.GetAudioCompletionRatio(info.OriginModelName)
-		ratio := modelRatio * groupRatioInfo.GroupRatio
-		preConsumedQuota = int(float64(preConsumedTokens) * ratio)
+		// common.PreConsumedQuota 名字里带 quota，实际是**预扣 token 数下限**，
+		// 所以它不乘 QuotaScale()、迁移也不改它：再乘一次会把冻结额放大两次。
+		// 倍率换算只发生在下面 ratio 这一步。
+		ratio := modelRatio * groupRatioInfo.GroupRatio * common.QuotaScale()
+		preConsumedQuota = int(math.Round(float64(preConsumedTokens) * ratio))
 	} else {
 		if meta.ImagePriceRatio != 0 {
 			modelPrice = modelPrice * meta.ImagePriceRatio
 		}
-		preConsumedQuota = int(modelPrice * common.QuotaPerUnit * groupRatioInfo.GroupRatio)
+		preConsumedQuota = int(math.Round(modelPrice * common.QuotaPerUnit * groupRatioInfo.GroupRatio))
 	}
 
 	// check if free model pre-consume is disabled
@@ -204,7 +208,7 @@ func ModelPriceHelperPerCall(c *gin.Context, info *relaycommon.RelayInfo) (types
 	freeModel := false
 
 	if usePrice {
-		quota = int(modelPrice * common.QuotaPerUnit * groupRatioInfo.GroupRatio)
+		quota = int(math.Round(modelPrice * common.QuotaPerUnit * groupRatioInfo.GroupRatio))
 		if !operation_setting.GetQuotaSetting().EnableFreeModelPreConsume {
 			if groupRatioInfo.GroupRatio == 0 || modelPrice == 0 {
 				quota = 0
@@ -212,8 +216,9 @@ func ModelPriceHelperPerCall(c *gin.Context, info *relaycommon.RelayInfo) (types
 			}
 		}
 	} else {
-		// 按量计费：以模型倍率的一半作为预扣额度
-		quota = int(modelRatio / 2 * common.QuotaPerUnit * groupRatioInfo.GroupRatio)
+		// 按量计费：以模型倍率的一半作为预扣额度。倍率已经通过 QuotaPerUnit 换算成
+		// quota，属于价格路径，不得再乘 QuotaScale()。
+		quota = int(math.Round(modelRatio / 2 * common.QuotaPerUnit * groupRatioInfo.GroupRatio))
 		modelPrice = -1
 		if !operation_setting.GetQuotaSetting().EnableFreeModelPreConsume {
 			if groupRatioInfo.GroupRatio == 0 || modelRatio == 0 {

@@ -14,6 +14,7 @@ import {
 import { Landmark } from 'lucide-react';
 import { API, showError, showSuccess } from '../../helpers';
 import { renderQuota } from '../../helpers/render';
+import { getQuotaPerUnit } from '../../helpers/quota';
 import { useTranslation } from 'react-i18next';
 import { useIsMobile } from '../../hooks/common/useIsMobile';
 import { useTableCompactMode } from '../../hooks/common/useTableCompactMode';
@@ -153,8 +154,7 @@ export default function TransferTab() {
     const fen = yuanStringToFen(creditedAmount);
     if (fen === null || fen <= 0 || !usdRate) return '';
     const usd = fen / 100 / usdRate; // 元 → 美元额度
-    const quotaPerUnit =
-      parseFloat(localStorage.getItem('quota_per_unit')) || 500000;
+    const quotaPerUnit = getQuotaPerUnit();
     return renderQuota(usd * quotaPerUnit);
   }, [creditedAmount, usdRate]);
 

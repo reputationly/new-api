@@ -215,8 +215,8 @@ func TestApplyVideoPricing_Misses(t *testing.T) {
 func TestApplyVideoPricing_TokenModeFreezesWithoutResolution(t *testing.T) {
 	cases := map[string]relaycommon.TaskSubmitReq{
 		"不下发 size（图生视频）": {},
-		"只有宽高比":           {Size: "16:9"},
-		"档位未配价":           {Size: "4k"},
+		"只有宽高比":          {Size: "16:9"},
+		"档位未配价":          {Size: "4k"},
 	}
 	for name, req := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -411,4 +411,27 @@ func TestVideoPerCallPriceable_SecondsMatchesApply(t *testing.T) {
 	c, info = videoPricingCtxOnPlatform(t, constant.ChannelTypeKling, "ltx2.5",
 		relaycommon.TaskSubmitReq{Size: "1080p", Seconds: "10"})
 	require.False(t, videoPerCallPriceable(c, info))
+}
+
+// 按次视频：矩阵单价 × QPU 会落在 N−ε 上（运营填 ¥0.1 → 0.1/7.3 美元，
+// QPU = 7300000 时算出 99999.9999…），截断会少收 1 quota。
+func TestApplyVideoPricing_PerCallRoundsUp(t *testing.T) {
+	const cfg = `{"rounding-video":{"mode":"per_call","per_call":{"720p":{"5":0.013698630136986301}}}}`
+	require.NoError(t, ratio_setting.UpdateVideoPricingByJSONString(cfg))
+	t.Cleanup(func() { _ = ratio_setting.UpdateVideoPricingByJSONString("") })
+
+	gin.SetMode(gin.TestMode)
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	c.Set("task_request", relaycommon.TaskSubmitReq{Size: "720p", Duration: 5})
+
+	info := &relaycommon.RelayInfo{OriginModelName: "rounding-video"}
+	info.TaskRelayInfo = &relaycommon.TaskRelayInfo{}
+	info.PriceData = types.PriceData{GroupRatioInfo: types.GroupRatioInfo{GroupRatio: 1}}
+
+	original := common.QuotaPerUnit
+	t.Cleanup(func() { common.QuotaPerUnit = original })
+	common.QuotaPerUnit = 7300000
+
+	require.True(t, applyVideoPricing(c, info))
+	require.Equal(t, 100000, info.PriceData.Quota, "¥0.1 应按 100000 quota 冻结")
 }
