@@ -2,7 +2,7 @@ import React from 'react';
 import { describe, it, expect, beforeEach } from 'vitest';
 import { render, screen } from '@testing-library/react';
 
-import { getLogsColumns } from '../UsageLogsColumnDefs';
+import { getCostColumnWidth, getLogsColumns } from '../UsageLogsColumnDefs';
 import golden from '../../../../helpers/__tests__/fixtures/entitlementLogOther.json';
 import { getEntitlementLogInfo } from '../../../../helpers/entitlementLog';
 
@@ -83,5 +83,53 @@ describe('花费列', () => {
   it('普通钱包消费不标超额', () => {
     costCell({ billing_source: 'wallet' });
     expect(screen.queryByText('超额')).toBeNull();
+  });
+});
+
+describe('getCostColumnWidth', () => {
+  beforeEach(() => {
+    localStorage.setItem('quota_display_type', 'CNY');
+  });
+
+  it('空列表使用最小宽度', () => {
+    expect(getCostColumnWidth([])).toBe(100);
+  });
+
+  it('按 CNY 金额文本估算宽度并保留单元格内边距', () => {
+    const width = getCostColumnWidth([{ type: 2, quota: 1490 }]);
+    const amountWidth = 14 + 10 * 8.5;
+    expect(width).toBeGreaterThanOrEqual(amountWidth + 32);
+    expect(width).toBeGreaterThanOrEqual(100);
+  });
+
+  it('积分标签会增加列宽', () => {
+    const record = { type: 2, quota: 1490 };
+    const amountWidth = getCostColumnWidth([record]);
+    const amountAndPointsWidth = getCostColumnWidth([
+      { ...record, points_consumed: 10000000 },
+    ]);
+    expect(amountAndPointsWidth).toBeGreaterThan(amountWidth);
+  });
+
+  it('不计入非计费类型的行', () => {
+    const record = { type: 2, quota: 1490 };
+    expect(
+      getCostColumnWidth([
+        record,
+        { type: 1, quota: Number.MAX_VALUE, points_consumed: Number.MAX_VALUE },
+      ]),
+    ).toBe(getCostColumnWidth([record]));
+  });
+
+  it('超出最大宽度时限制为 320px', () => {
+    expect(
+      getCostColumnWidth([
+        {
+          type: 2,
+          quota: 9e29,
+          points_consumed: Number.MAX_SAFE_INTEGER,
+        },
+      ]),
+    ).toBe(320);
   });
 });

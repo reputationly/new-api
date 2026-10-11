@@ -28,7 +28,7 @@ import {
 } from '@douyinfe/semi-ui';
 import {
   renderGroup,
-  renderQuota,
+  renderQuotaTrimmed,
   stringToColor,
   getLogOther,
   normalizeLogPricing,
@@ -504,7 +504,7 @@ function buildUsageLogDetailSummary(record, text, billingDisplayMode, t) {
         groupText ? { text: groupText, tone: 'primary' } : null,
         { text: t('违规扣费'), tone: 'primary' },
         {
-          text: `${t('扣费')}：${renderQuota(feeQuota, 9)}`,
+          text: `${t('扣费')}：${renderQuotaTrimmed(feeQuota)}`,
           tone: 'secondary',
         },
         text ? { text: `${t('详情')}：${text}`, tone: 'secondary' } : null,
@@ -540,6 +540,42 @@ function buildUsageLogDetailSummary(record, text, billingDisplayMode, t) {
   };
 }
 
+const estimateTextWidth = (text) =>
+  Array.from(String(text)).reduce(
+    (width, char) => width + (char.charCodeAt(0) <= 0x7f ? 8.5 : 14),
+    0,
+  );
+
+export const getCostColumnWidth = (logs) => {
+  const maxContentWidth = (Array.isArray(logs) ? logs : [])
+    .filter((record) => [0, 2, 5, 6].includes(record.type))
+    .map((record) => {
+      const other = getLogOther(record.other);
+      const entInfo = getEntitlementLogInfo(other);
+      if (entInfo?.kind === 'entitlement') {
+        return estimateTextWidth(entitlementTagText(entInfo)) + 24;
+      }
+      if (other?.billing_source === 'subscription') {
+        return 80;
+      }
+
+      let width = estimateTextWidth(renderQuotaTrimmed(record.quota));
+      if (record.points_consumed > 0) {
+        width +=
+          estimateTextWidth(`积分 ${quotaToPoints(record.points_consumed)}`) +
+          24 +
+          2;
+      }
+      if (entInfo?.kind === 'overage') {
+        width += estimateTextWidth('超额') + 24 + 2;
+      }
+      return width;
+    })
+    .reduce((max, width) => Math.max(max, width), 0);
+
+  return Math.min(320, Math.max(100, maxContentWidth + 32));
+};
+
 export const getLogsColumns = ({
   t,
   COLUMN_KEYS,
@@ -548,6 +584,7 @@ export const getLogsColumns = ({
   openChannelAffinityUsageCacheModal,
   isAdminUser,
   billingDisplayMode = 'price',
+  costColumnWidth = 100,
 }) => {
   return [
     {
@@ -873,6 +910,7 @@ export const getLogsColumns = ({
       key: COLUMN_KEYS.COST,
       title: t('花费'),
       dataIndex: 'quota',
+      width: costColumnWidth,
       render: (text, record, index) => {
         if (
           !(
@@ -895,7 +933,7 @@ export const getLogsColumns = ({
             entInfo.limit > 0
               ? `${t('次数')}：${t('剩余')} ${entInfo.remain}/${entInfo.limit}`
               : null,
-            `${t('等值金额')}：${renderQuota(text, 9)}`,
+            `${t('等值金额')}：${renderQuotaTrimmed(text)}`,
           ].filter(Boolean);
           return (
             <Tooltip
@@ -924,7 +962,7 @@ export const getLogsColumns = ({
         const pointsTag =
           pointsConsumed > 0 ? (
             <Tooltip
-              content={`${t('积分抵扣')}：${renderQuota(pointsConsumed, 9)}`}
+              content={`${t('积分抵扣')}：${renderQuotaTrimmed(pointsConsumed)}`}
             >
               <Tag color='orange' shape='circle' size='small'>
                 {t('积分')} {quotaToPoints(pointsConsumed)}
@@ -934,14 +972,23 @@ export const getLogsColumns = ({
         if (isSubscription) {
           // 不扣钱包的来源只显示标签（不显示 $0），悬浮时给出等价成本。
           return (
-            <Tooltip content={`${t('由订阅抵扣')}：${renderQuota(text, 9)}`}>
-              <span>{renderBillingTag(record, t)}</span>
+            <Tooltip
+              content={`${t('由订阅抵扣')}：${renderQuotaTrimmed(text)}`}
+            >
+              <span style={{ whiteSpace: 'nowrap' }}>
+                {renderBillingTag(record, t)}
+              </span>
             </Tooltip>
           );
         }
         return (
-          <Space spacing={2} align='center'>
-            {renderQuota(text, 9)}
+          <Space
+            spacing={2}
+            align='center'
+            wrap={false}
+            style={{ whiteSpace: 'nowrap' }}
+          >
+            {renderQuotaTrimmed(text)}
             {pointsTag}
             {overageTag}
           </Space>

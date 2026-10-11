@@ -1269,6 +1269,20 @@ export function renderQuota(quota, digits = 2) {
   return symbol + fixedResult;
 }
 
+export function renderQuotaTrimmed(quota, digits = 9) {
+  const quotaDisplayType = localStorage.getItem('quota_display_type') || 'USD';
+  if (quotaDisplayType === 'TOKENS') {
+    return renderNumber(quota);
+  }
+  const { symbol, ratePerCny } = getDisplayCurrency();
+  const value = (quota / getQuotaPerYuan()) * ratePerCny;
+  const text = formatCompactAmount(value, digits);
+  if (text === '0' && quota > 0) {
+    return symbol + (10 ** -digits).toFixed(digits);
+  }
+  return `${symbol}${text}`;
+}
+
 function isValidGroupRatio(ratio) {
   return Number.isFinite(ratio) && ratio !== -1;
 }
@@ -1369,7 +1383,7 @@ function renderDisplayAmountFromCny(cnyAmount, digits = 9) {
     return renderNumber(Math.round(roundedValue * getQuotaPerYuan()));
   }
   const { symbol, ratePerCny } = getDisplayCurrency();
-  return `${symbol}${roundToDisplay(value * ratePerCny, digits).toFixed(9)}`;
+  return `${symbol}${formatCompactAmount(value * ratePerCny, digits)}`;
 }
 
 // 单价的显示格式：最多 6 位小数，去掉末尾的 0（¥14.6 而不是 ¥14.600000）。
@@ -1399,13 +1413,13 @@ export function roundToDisplay(value, digits = 9) {
   return (Math.sign(corrected) * Math.round(Math.abs(corrected))) / factor;
 }
 
-// 计费过程的「合计」先按日志原本的 quota 网格舍入，再固定显示 9 位。
+// 计费过程的「合计」按日志原本的 quota 网格舍入，并去掉末尾的 0。
 function formatBillingDisplayTotal(
   cnyAmount,
   ratePerCny,
   totalRoundDigits = 9,
 ) {
-  return roundToDisplay(cnyAmount * ratePerCny, totalRoundDigits).toFixed(9);
+  return formatCompactAmount(cnyAmount * ratePerCny, totalRoundDigits);
 }
 
 function buildBillingText(key, vars) {
@@ -2829,19 +2843,19 @@ export function buildVideoMatrixDetailRows(opts) {
     const amount = Number(unitPrice) * seconds * ratio;
     rows.push({
       key: i18next.t('计费过程'),
-      value: `${symbol}${(Number(unitPrice) * ratePerCny).toFixed(4)} / ${i18next.t('秒')} × ${seconds} × ${formatRatioValue(ratio, 4)} = ${symbol}${roundToDisplay(amount * ratePerCny, totalRoundDigits).toFixed(9)}`,
+      value: `${symbol}${formatBillingDisplayPrice(unitPrice, ratePerCny, 4)} / ${i18next.t('秒')} × ${seconds} × ${formatRatioValue(ratio, 4)} = ${symbol}${formatCompactAmount(amount * ratePerCny, totalRoundDigits)}`,
     });
   } else if (isTokenMode && tokens > 0) {
     const amount = (tokens / 1e6) * Number(unitPrice) * ratio;
     rows.push({
       key: i18next.t('计费过程'),
-      value: `${Number(tokens).toLocaleString()} × ${symbol}${(Number(unitPrice) * ratePerCny).toFixed(4)} / 1M Tokens × ${formatRatioValue(ratio, 4)} = ${symbol}${roundToDisplay(amount * ratePerCny, totalRoundDigits).toFixed(9)}`,
+      value: `${Number(tokens).toLocaleString()} × ${symbol}${formatBillingDisplayPrice(unitPrice, ratePerCny, 4)} / 1M Tokens × ${formatRatioValue(ratio, 4)} = ${symbol}${formatCompactAmount(amount * ratePerCny, totalRoundDigits)}`,
     });
   } else if (!isTokenMode && !isPerSecond) {
     const amount = Number(unitPrice) * ratio;
     rows.push({
       key: i18next.t('计费过程'),
-      value: `${symbol}${(Number(unitPrice) * ratePerCny).toFixed(4)} / ${i18next.t('次')} × ${formatRatioValue(ratio, 4)} = ${symbol}${roundToDisplay(amount * ratePerCny, totalRoundDigits).toFixed(9)}`,
+      value: `${symbol}${formatBillingDisplayPrice(unitPrice, ratePerCny, 4)} / ${i18next.t('次')} × ${formatRatioValue(ratio, 4)} = ${symbol}${formatCompactAmount(amount * ratePerCny, totalRoundDigits)}`,
     });
   }
 

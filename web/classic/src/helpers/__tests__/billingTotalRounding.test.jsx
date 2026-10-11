@@ -8,11 +8,11 @@ import {
   renderClaudeModelPrice,
   renderVideoMatrixPriceSimple,
   buildVideoMatrixDetailRows,
-  renderQuota,
+  renderQuotaTrimmed,
 } from '../render';
 
 /**
- * F2 / F5：计费过程的「合计」按人民币 9 位四舍五入（远离零），与花费列逐位一致。
+ * F2 / F5：计费过程的「合计」按人民币 quota 网格四舍五入（远离零），与花费列逐位一致。
  *
  * 1 quota = ¥0.000000001，后端把 quota 取整到整数，所以合计必须落在同一张网格上：
  * 若只做 `(金额).toFixed(9)`，二进制近似会把落在边界上的金额推向错误的一侧。
@@ -20,7 +20,7 @@ import {
  * 计费过程里的定价字段（model_ratio / model_price / 视频单价）现在都是人民币，
  * 不再有 × 2 与 × 汇率。
  *
- * 断言口径统一为：合计 === renderQuota(round(人民币金额 × 10⁹), 9)。
+ * 断言口径统一为：合计 === renderQuotaTrimmed(round(人民币金额 × 10⁹))。
  */
 
 const QPY = 1000000000; // 1 元 = 10⁹ quota（后端 QuotaPerYuan）
@@ -40,13 +40,13 @@ const totalText = (text) => {
   return matches[matches.length - 1][1];
 };
 
-// 与花费列（renderQuota(quota, 9)）逐位一致。
+// 与花费列（renderQuotaTrimmed(quota)）逐位一致。
 // quota = 后端把人民币金额取整到 10⁻⁹（远离零）；后端用精确十进制，所以这里也用
 // 同一条规则算 quota —— 直接用 Math.round(浮点 × 10⁹) 会在 .5 边界上给出少 1 的结果，
 // 那正是本次要修的现象。
 const chargeColumnText = (amountCny) => {
   const quota = Math.round(roundToDisplay(amountCny, 9) * 1e9);
-  return renderQuota(quota, 9).slice(1);
+  return renderQuotaTrimmed(quota).slice(1);
 };
 
 const expectTotalMatchesChargeColumn = (text, amountCny) => {
@@ -89,7 +89,7 @@ describe('F2.1-1 renderModelPrice 的合计', () => {
   const modelRatio = 2;
   const completionRatio = 4;
 
-  it('按 token 分支（E1）：199 / 4096 tokens → 合计 ¥0.016583000', () => {
+  it('按 token 分支（E1）：199 / 4096 tokens → 合计 ¥0.016583', () => {
     const text = renderText(
       renderModelPrice({
         prompt_tokens: 199,
@@ -107,8 +107,8 @@ describe('F2.1-1 renderModelPrice 的合计', () => {
       (4096 / 1e6) * modelRatio * completionRatio * 0.5;
     expect(amountCny * QPY).toBeCloseTo(16583000, 6);
     expectTotalMatchesChargeColumn(text, amountCny);
-    expect(totalText(text)).toBe('0.016583000');
-    expect(renderQuota(16583000, 9)).toBe('¥0.016583000');
+    expect(totalText(text)).toBe('0.016583');
+    expect(renderQuotaTrimmed(16583000)).toBe('¥0.016583');
   });
 
   it('按 token 分支：缓存命中与分组倍率一起进合计', () => {
@@ -494,7 +494,7 @@ describe('TOKENS 展示模式：合计显示成 quota 数，与花费列同口�
     );
     const amountCny = (199 / 1e6) * 2 * 0.5 + (4096 / 1e6) * 2 * 4 * 0.5;
     expect(Math.round(amountCny * QPY)).toBe(16583000);
-    expect(text).toContain(`合计：${renderQuota(16583000, 9)}`);
+    expect(text).toContain(`合计：${renderQuotaTrimmed(16583000)}`);
   });
 });
 

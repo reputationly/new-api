@@ -24,7 +24,7 @@ import {
   IllustrationNoResult,
   IllustrationNoResultDark,
 } from '@douyinfe/semi-illustrations';
-import { getLogsColumns } from './UsageLogsColumnDefs';
+import { getCostColumnWidth, getLogsColumns } from './UsageLogsColumnDefs';
 
 const LogsTable = (logsData) => {
   const {
@@ -48,6 +48,8 @@ const LogsTable = (logsData) => {
     COLUMN_KEYS,
   } = logsData;
 
+  const costColumnWidth = useMemo(() => getCostColumnWidth(logs), [logs]);
+
   // Get all columns
   const allColumns = useMemo(() => {
     return getLogsColumns({
@@ -58,6 +60,7 @@ const LogsTable = (logsData) => {
       openChannelAffinityUsageCacheModal,
       isAdminUser,
       billingDisplayMode,
+      costColumnWidth,
     });
   }, [
     t,
@@ -67,6 +70,7 @@ const LogsTable = (logsData) => {
     openChannelAffinityUsageCacheModal,
     isAdminUser,
     billingDisplayMode,
+    costColumnWidth,
   ]);
 
   // Filter columns based on visibility settings
