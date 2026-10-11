@@ -49,7 +49,7 @@ func TestManualCompleteTopUpMatchesProviderSemantics(t *testing.T) {
 
 	const (
 		quotaOrderAmount  = int64(common.QuotaPerYuan) // 直连渠道：Amount 已经是 quota（¥1）
-		dollarOrderAmount = int64(1)         // 外币渠道：Amount 是美元数量（$1）
+		dollarOrderAmount = int64(1)                   // 外币渠道：Amount 是美元数量（$1）
 	)
 
 	cases := []struct {
