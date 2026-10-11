@@ -19,7 +19,7 @@ const QuotaPerPointAuto = 0.0
 type PointsSetting struct {
 	Enabled       bool     `json:"enabled"`         // 积分系统总开关
 	RequireKyc    bool     `json:"require_kyc"`     // 未实名用户不得参加积分活动（只卡发放：签到、邀请人赠分；不卡消费）
-	QuotaPerPoint float64  `json:"quota_per_point"` // 1 积分对应 quota unit；0 = 自动（按 QPU / (汇率 × 100) 推算）
+	QuotaPerPoint float64  `json:"quota_per_point"` // 1 积分对应 quota unit；0 = 自动（1 积分 = 1 分钱，即 QuotaPerYuan / 100）
 	EnabledGroups []string `json:"enabled_groups"`  // 允许积分抵扣的分组白名单（空=所有分组只扣余额）
 	// EnabledChannels 允许积分抵扣的渠道白名单，空 = 不按渠道限制。
 	//
@@ -116,7 +116,7 @@ func GetChannelPointsReward(inviterId int) (*ChannelPointsReward, bool) {
 var pointsSetting = PointsSetting{
 	Enabled:           false,
 	RequireKyc:        true,
-	QuotaPerPoint:     QuotaPerPointAuto, // 0 = 自动：按 QPU / (汇率 × 100) 实时推算（汇率 7.3 时 1 积分 = 1 分钱）
+	QuotaPerPoint:     QuotaPerPointAuto, // 0 = 自动：QuotaPerYuan / 100（1 积分 = 1 分钱，与汇率无关）
 	EnabledGroups:     []string{},
 	EnabledChannels:   []int{},
 	KycVerifiedPoints: 0,

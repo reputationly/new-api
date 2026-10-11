@@ -88,7 +88,7 @@ quota 已经是人民币口径，但定价配置大多还是美元口径：
 ```go
 // common/constants.go
 const QuotaPerYuan = 1_000_000_000        // 1 元 = 10⁹ quota；计费换算只用它
-var   QuotaPerUnit = 730_000_000.0        // 1 美元对应的 quota = 汇率 × QuotaPerYuan，运行时配置
+var   QuotaPerUnit = 7_300_000_000.0      // 1 美元对应的 quota = 汇率 × QuotaPerYuan，运行时配置
 ```
 
 - 计费路径一律用 `¥ × QuotaPerYuan`，**不读汇率，不读 QPU**。
@@ -128,7 +128,7 @@ var   QuotaPerUnit = 730_000_000.0        // 1 美元对应的 quota = 汇率 ×
 | E6 | 联网搜索 ¥73/千次（原 $10），调用 3 次，分组 1 | prices.web_search = 73 | 73 / 1000 × 3 × 10⁹ = 219,000,000 | ¥0.219 |
 | E7 | 视频按秒 ¥0.73/秒，5 秒，分组 0.8 | 矩阵格子 = 0.73 | 0.73 × 5 × 10⁹ × 0.8 = 2,920,000,000 | ¥2.92 |
 
-E1 与 V1 文档 §2.3 的同一样例做对照：迁移前是 16,583 quota（¥0.016583），迁移后是 1,658,300 quota，人民币金额相同。
+E1 与 V1 文档 §2.3 的同一样例做对照：迁移前是 16,583 quota（¥0.016583），迁移后是 16,583,000 quota，人民币金额相同。
 
 ### 2.4 取整与最低扣费
 
@@ -297,7 +297,7 @@ E1 与 V1 文档 §2.3 的同一样例做对照：迁移前是 16,583 quota（¥
 
 **B1 单位常量**
 - 新增 `common.QuotaPerYuan = 1_000_000_000`。
-- `QuotaPerUnit` 默认值改为 `730_000_000`。
+- `QuotaPerUnit` 默认值改为 `7_300_000_000`。
 - 删除 `QuotaScale()` 和 `RatioQuotaBase`，删掉后编译报错的地方就是待改清单。
 - 积分、算力点的默认换算率改为 `QuotaPerYuan / 100`。
 - 完成标准：`rg "QuotaScale|RatioQuotaBase"` 为空；`/api/status` 返回 `quota_per_yuan=1000000000`、`quota_per_point=10000000`、`quota_per_compute_point=10000000`。
