@@ -540,6 +540,42 @@ function buildUsageLogDetailSummary(record, text, billingDisplayMode, t) {
   };
 }
 
+const estimateTextWidth = (text) =>
+  Array.from(String(text)).reduce(
+    (width, char) => width + (char.charCodeAt(0) <= 0x7f ? 8.5 : 14),
+    0,
+  );
+
+export const getCostColumnWidth = (logs) => {
+  const maxContentWidth = (Array.isArray(logs) ? logs : [])
+    .filter((record) => [0, 2, 5, 6].includes(record.type))
+    .map((record) => {
+      const other = getLogOther(record.other);
+      const entInfo = getEntitlementLogInfo(other);
+      if (entInfo?.kind === 'entitlement') {
+        return estimateTextWidth(entitlementTagText(entInfo)) + 24;
+      }
+      if (other?.billing_source === 'subscription') {
+        return 80;
+      }
+
+      let width = estimateTextWidth(renderQuotaTrimmed(record.quota));
+      if (record.points_consumed > 0) {
+        width +=
+          estimateTextWidth(`积分 ${quotaToPoints(record.points_consumed)}`) +
+          24 +
+          2;
+      }
+      if (entInfo?.kind === 'overage') {
+        width += estimateTextWidth('超额') + 24 + 2;
+      }
+      return width;
+    })
+    .reduce((max, width) => Math.max(max, width), 0);
+
+  return Math.min(320, Math.max(100, maxContentWidth + 32));
+};
+
 export const getLogsColumns = ({
   t,
   COLUMN_KEYS,
@@ -548,6 +584,7 @@ export const getLogsColumns = ({
   openChannelAffinityUsageCacheModal,
   isAdminUser,
   billingDisplayMode = 'price',
+  costColumnWidth = 100,
 }) => {
   return [
     {
@@ -756,13 +793,7 @@ export const getLogsColumns = ({
           record.type === 2 ||
           record.type === 5 ||
           record.type === 6 ? (
-          <>
-            {renderWithAggregateTag(
-              renderModelName(record, copyText, t),
-              record,
-              t,
-            )}
-          </>
+          <>{renderWithAggregateTag(renderModelName(record, copyText, t), record, t)}</>
         ) : (
           <></>
         );
@@ -879,6 +910,7 @@ export const getLogsColumns = ({
       key: COLUMN_KEYS.COST,
       title: t('花费'),
       dataIndex: 'quota',
+      width: costColumnWidth,
       render: (text, record, index) => {
         if (
           !(
