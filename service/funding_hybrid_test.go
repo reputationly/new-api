@@ -226,19 +226,19 @@ func TestHybridReserveExtra_ExactRollback(t *testing.T) {
 	require.Equal(t, 1000, q)
 }
 
-// 消费结算向上取整到整积分：不足 1 积分按 1 积分烧（qpp≈684.93 默认值：
-// 1000 unit ≈ 1.46 积分 → 取整 2 积分 = 1370 unit，补烧 370）。
+// 消费结算向上取整到整积分：不足 1 积分按 1 积分烧（qpp = 1e7 默认值：
+// 14_600_000 unit ≈ 1.46 积分 → 取整 2 积分 = 20_000_000 unit，补烧 5_400_000）。
 func TestHybridRoundUp_WholePoints(t *testing.T) {
 	cleanHybridUsers(t)
-	seedHybridUser(t, 209, 10000, 0)
+	seedHybridUser(t, 209, 30_000_000, 0)
 
 	h := &HybridFunding{userId: 209}
-	require.NoError(t, h.PreConsume(1000)) // pc=1000，余额 9000
+	require.NoError(t, h.PreConsume(14_600_000)) // pc=14_600_000
 
 	h.roundUpToWholePoints()
-	require.Equal(t, 1370, h.pointsConsumed, "1.46 积分应取整为 2 积分 = 1370 unit")
+	require.Equal(t, 20_000_000, h.pointsConsumed, "1.46 积分应取整为 2 积分 = 20_000_000 unit")
 	p, _ := hybridBalances(t, 209)
-	require.Equal(t, 10000-1370, p, "差额 370 从余额补烧")
+	require.Equal(t, 30_000_000-20_000_000, p, "差额 5_400_000 从余额补烧")
 }
 
 // 取整差额余额不足（或并发被抢）→ 放弃取整，pointsConsumed 与实际扣减保持一致。
@@ -260,21 +260,21 @@ func TestHybridRoundUp_InsufficientExtra(t *testing.T) {
 // PointsConsumed（日志）与 points_used（对账）均为取整后的值，重复 Settle 不再取整。
 func TestBillingSessionSettle_RoundsUpPoints(t *testing.T) {
 	cleanHybridUsers(t)
-	seedHybridUser(t, 211, 10000, 0)
+	seedHybridUser(t, 211, 30_000_000, 0)
 
 	relayInfo := &relaycommon.RelayInfo{UserId: 211, IsPlayground: true}
 	s := &BillingSession{relayInfo: relayInfo, funding: &HybridFunding{userId: 211}}
 
-	require.NoError(t, s.Settle(1000)) // 信任旁路语义：预扣 0，结算全额
-	require.Equal(t, 1370, relayInfo.PointsConsumed)
+	require.NoError(t, s.Settle(14_600_000)) // 信任旁路语义：预扣 0，结算全额
+	require.Equal(t, 20_000_000, relayInfo.PointsConsumed)
 	p, _ := hybridBalances(t, 211)
-	require.Equal(t, 10000-1370, p)
+	require.Equal(t, 30_000_000-20_000_000, p)
 	var used int
 	require.NoError(t, model.DB.Model(&model.User{}).Where("id = ?", 211).Select("points_used").Find(&used).Error)
-	require.Equal(t, 1370, used)
+	require.Equal(t, 20_000_000, used)
 
 	// 幂等：重复 Settle 不重复取整/记账
-	require.NoError(t, s.Settle(1000))
+	require.NoError(t, s.Settle(14_600_000))
 	p2, _ := hybridBalances(t, 211)
 	require.Equal(t, p, p2)
 }

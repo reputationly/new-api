@@ -12,14 +12,15 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// 异步任务的「按 token 差额结算」走的是倍率路径，必须跟着单位乘 scale。
-func TestRecalculateTaskQuotaByTokensScalesRatioPath(t *testing.T) {
+// 异步任务的「按 token 差额结算」走的是倍率路径：quota = tokens × 倍率 × 1000
+// （倍率是 ¥/百万 tokens），与 QuotaPerUnit、汇率都无关。
+func TestRecalculateTaskQuotaByTokensUsesRatioPathThousand(t *testing.T) {
 	truncate(t)
 	ratio_setting.InitRatioSettings()
 
 	const uid = 9201
-	seedUser(t, uid, 100_000_000)
-	seedToken(t, uid, uid, "sk-scale-task", 100_000_000)
+	seedUser(t, uid, 1_000_000_000)
+	seedToken(t, uid, uid, "sk-scale-task", 1_000_000_000)
 	seedChannel(t, uid)
 
 	const modelName = "gpt-4o"
@@ -47,13 +48,7 @@ func TestRecalculateTaskQuotaByTokensScalesRatioPath(t *testing.T) {
 		return task.Quota
 	}
 
-	common.QuotaPerUnit = 500000
-	require.Equal(t,
-		int(math.Round(totalTokens*modelRatio*groupRatio)),
-		settle(500000))
-
-	const qpuNew = 7300000.0
-	require.Equal(t,
-		int(math.Round(totalTokens*modelRatio*groupRatio*(qpuNew/common.RatioQuotaBase))),
-		settle(qpuNew))
+	want := int(math.Round(totalTokens * modelRatio * groupRatio * common.QuotaPerMillionTokens))
+	require.Equal(t, want, settle(7_300_000), "新单位下的期望值")
+	require.Equal(t, want, settle(7_300_000_000), "任务重算不得随 QuotaPerUnit 变化")
 }

@@ -27,7 +27,7 @@ const costCell = (other, quota = 500000) => {
 };
 
 beforeEach(() => {
-  localStorage.setItem('quota_per_unit', '500000');
+  localStorage.setItem('quota_per_yuan', '1000000000');
   localStorage.setItem('quota_display_type', 'USD');
 });
 

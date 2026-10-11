@@ -44,7 +44,7 @@ const renderCards = (entitlementConfig) =>
   );
 
 beforeEach(() => {
-  localStorage.setItem('quota_per_unit', '500000');
+  localStorage.setItem('quota_per_yuan', '500000');
   localStorage.setItem('quota_display_type', 'USD');
 });
 
@@ -62,7 +62,7 @@ describe('卡片视图', () => {
       quotaPerComputePoint: 100,
     });
     expect(screen.getByText('专业版')).toBeTruthy();
-    // 0.04 美元 × 500000 / 100 = 200 点
+    // ¥0.04 × 500000 / 100 = 200 点
     expect(screen.getByText(/200 算力点/)).toBeTruthy();
   });
 });

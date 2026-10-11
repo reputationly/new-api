@@ -11,7 +11,7 @@ import { calculateModelPrice, getModelPriceItems } from '../utils';
 const t = (s) => s;
 
 beforeEach(() => {
-  localStorage.setItem('quota_per_unit', '500000');
+  localStorage.setItem('quota_per_yuan', '500000');
   localStorage.setItem('quota_per_compute_point', '100');
   localStorage.setItem('quota_display_type', 'USD');
 });
@@ -84,7 +84,7 @@ describe('有覆盖时追加「套餐内」行', () => {
   it('按次计费追加一行', () => {
     const rows = entitlementRows(itemsOf(perCallRecord, coverage()));
     expect(rows).toHaveLength(1);
-    // 0.04 美元 × 500000 quota/美元 ÷ 100 quota/点 = 200 点
+    // ¥0.04 × 500000 quota/元 ÷ 100 quota/点 = 200 点
     expect(rows[0].value).toBe('200 算力点');
   });
 

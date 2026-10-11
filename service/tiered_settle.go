@@ -1,6 +1,10 @@
 package service
 
 import (
+	"errors"
+	"fmt"
+
+	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/pkg/billingexpr"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
@@ -105,6 +109,17 @@ func TryTieredSettle(relayInfo *relaycommon.RelayInfo, params billingexpr.TokenP
 
 	tr, err := billingexpr.ComputeTieredQuotaWithRequest(snap, params, requestInput)
 	if err != nil {
+		// v1（美元口径）快照无法与当前余额同单位结算，按预扣额结账。
+		//
+		// 新请求在预扣阶段就被拒绝（relay/helper/price.go 的 ModelPriceHelper），所以走到
+		// 这里的只可能是「升级前提交、升级后完成」的在途任务。这类任务已经产出，不能因为
+		// 旧表达式让计费流水卡住，但**绝不能静默**：必须留下一条可检索的告警，运营才知道
+		// 哪个模型需要把表达式重录为 v2。
+		if errors.Is(err, billingexpr.ErrExprV1Unsupported) {
+			common.SysError(fmt.Sprintf(
+				"分段表达式 v1 快照按预扣额结账（model=%s, expr_hash=%s, 预扣=%d）：%v",
+				snap.ModelName, snap.ExprHash, relayInfo.FinalPreConsumedQuota, err))
+		}
 		quota = relayInfo.FinalPreConsumedQuota
 		if quota <= 0 {
 			quota = snap.EstimatedQuotaAfterGroup

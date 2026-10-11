@@ -34,7 +34,7 @@ type jsonStat struct {
 // jsonRewriter 在已解码的顶层对象上改写目标键，返回是否有改写。
 type jsonRewriter func(fields map[string]json.RawMessage, stat *jsonStat) bool
 
-// scaleRawNumber 把 JSON 数字字面量 ×14.6 四舍五入成整数。
+// scaleRawNumber 按当前方案的倍数（V1 ×14.6、V2 ×1000）把 JSON 数字字面量四舍五入成整数。
 // 用 decimal 解析原始字节：不经过 float64，大整数逐位保留。
 // 返回 false 表示这个字面量不是数字（null / 字符串 / 对象 / 数组 / 非法数字），
 // 调用方按「未改写」计数。
@@ -47,9 +47,8 @@ func scaleRawNumber(raw json.RawMessage) (json.RawMessage, bool) {
 	if err != nil {
 		return nil, false
 	}
-	// ×14.6 = ×146 ÷10：整数部分精确（decimal 的除法精度只约束小数位），
-	// 且 14.6 × n 的小数部分永远不落在 .5 上，Round 的舍入方向不影响结果。
-	scaled := value.Mul(decimal.NewFromInt(146)).Div(decimal.NewFromInt(10)).Round(0)
+	// 缩放倍数由方案决定（V1 ×14.6 = ×146÷10，V2 ×1000），整数部分始终精确。
+	scaled := activeScaling.apply(value)
 	return json.RawMessage(scaled.String()), true
 }
 
@@ -151,6 +150,93 @@ func rewriteTaskPrivateData(fields map[string]json.RawMessage, stat *jsonStat) b
 		changed = true
 	}
 	return changed
+}
+
+// rewriteTaskPrivateDataV2 在 V1 的 quota 键改写之上，把任务冻结的定价字段
+// （billing_context.model_price / model_ratio、video_billing.unit_price）从美元换成
+// 人民币，并补上 price_unit = cny 标记。
+//
+// 迁移范围包含**已完成任务**（评审 §12.2 R3），不区分任务状态。理由是两个真实消费者：
+//  1. 视频矩阵任务在轮询阶段按冻结的 video_billing.unit_price 做差额结算（真的在算钱，
+//     service/task_billing.go 的 RecalculateTaskQuotaByVideoMatrix ×QuotaPerYuan）；
+//  2. 退款/差额日志通过 taskBillingOther 把 model_price / model_ratio 写进 other，
+//     前端渲染的就是这份日志。
+//
+// （Task.PrivateData 本身是 json:"-"，不对外暴露，所以这里不是为了接口展示，而是为了
+// 让库里与日志里只剩人民币一种口径。）
+func rewriteTaskPrivateDataV2(fields map[string]json.RawMessage, stat *jsonStat) bool {
+	raw, ok := fields["billing_context"]
+	if !ok {
+		return rewriteTaskPrivateData(fields, stat)
+	}
+	var bc map[string]json.RawMessage
+	if err := common.Unmarshal(raw, &bc); err != nil || bc == nil {
+		return rewriteTaskPrivateData(fields, stat)
+	}
+	// 行级幂等：带 price_unit 的行整行已迁过（标记与缩放同在一个事务里写），直接跳过，
+	// 否则续跑/重跑会把三个价格字段再乘一遍。
+	if _, migrated := bc["price_unit"]; migrated {
+		return false
+	}
+
+	changed := rewriteTaskPrivateData(fields, stat)
+	bcChanged := false
+	if scalePricingField(bc, "model_price", pricingScalePriceNum, pricingScalePriceDen) {
+		bcChanged = true
+	}
+	if scalePricingField(bc, "model_ratio", pricingScaleRatioNum, pricingScaleRatioDen) {
+		bcChanged = true
+	}
+	if videoRaw, ok := bc["video_billing"]; ok {
+		var vb map[string]json.RawMessage
+		if err := common.Unmarshal(videoRaw, &vb); err == nil && vb != nil {
+			if scalePricingField(vb, "unit_price", pricingScalePriceNum, pricingScalePriceDen) {
+				if encoded, err := common.Marshal(vb); err == nil {
+					bc["video_billing"] = encoded
+					bcChanged = true
+				}
+			}
+		}
+	}
+	if _, exists := bc["price_unit"]; !exists {
+		bc["price_unit"] = json.RawMessage(`"` + common.PriceUnitCNY + `"`)
+		bcChanged = true
+	}
+	if bcChanged {
+		if encoded, err := common.Marshal(bc); err == nil {
+			fields["billing_context"] = encoded
+			changed = true
+		}
+	}
+	return changed
+}
+
+// scalePricingField 把一个定价字段按整数比换算成人民币（保留 6 位小数）。
+// 跳过 0 与负值（`-1` 是「按量计费」哨兵，不是价格）。
+func scalePricingField(fields map[string]json.RawMessage, key string, num, den int64) bool {
+	raw, ok := fields[key]
+	if !ok {
+		return false
+	}
+	value, ok := parsePricingNumber(raw)
+	if !ok {
+		return false
+	}
+	fields[key] = json.RawMessage(scalePricing(value, num, den).String())
+	return true
+}
+
+// parsePricingNumber 解析定价字段的数字字面量；非数字、0、负数一律算「不换算」。
+func parsePricingNumber(raw json.RawMessage) (decimal.Decimal, bool) {
+	text := strings.TrimSpace(string(raw))
+	if text == "" || text == "null" {
+		return decimal.Zero, false
+	}
+	value, err := decimal.NewFromString(text)
+	if err != nil || value.IsZero() || value.IsNegative() {
+		return decimal.Zero, false
+	}
+	return value, true
 }
 
 func rewriteUserSetting(fields map[string]json.RawMessage, stat *jsonStat) bool {

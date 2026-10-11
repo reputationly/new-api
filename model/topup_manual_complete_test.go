@@ -45,11 +45,11 @@ func userQuota(t *testing.T, userId int) int {
 func TestManualCompleteTopUpMatchesProviderSemantics(t *testing.T) {
 	originalQPU := common.QuotaPerUnit
 	t.Cleanup(func() { common.QuotaPerUnit = originalQPU })
-	common.QuotaPerUnit = 7300000
+	common.QuotaPerUnit = 7300000000
 
 	const (
-		quotaOrderAmount  = int64(1_000_000) // 直连渠道：Amount 已经是 quota（¥1）
-		dollarOrderAmount = int64(1)         // 外币渠道：Amount 是美元数量（$1）
+		quotaOrderAmount  = int64(common.QuotaPerYuan) // 直连渠道：Amount 已经是 quota（¥1）
+		dollarOrderAmount = int64(1)                   // 外币渠道：Amount 是美元数量（$1）
 	)
 
 	cases := []struct {
@@ -59,14 +59,14 @@ func TestManualCompleteTopUpMatchesProviderSemantics(t *testing.T) {
 		money    float64
 		want     int
 	}{
-		{"支付宝直连", PaymentProviderAlipayDirect, quotaOrderAmount, 1, 1_000_000},
-		{"微信直连", PaymentProviderWxpayDirect, quotaOrderAmount, 1, 1_000_000},
-		{"Creem", PaymentProviderCreem, quotaOrderAmount, 1, 1_000_000},
-		{"对公转账补单", PaymentProviderBankTransfer, quotaOrderAmount, 1, 1_000_000},
-		{"易支付", PaymentProviderEpay, dollarOrderAmount, 7.3, 7_300_000},
-		{"Waffo", PaymentProviderWaffo, dollarOrderAmount, 7.3, 7_300_000},
-		{"Waffo Pancake", PaymentProviderWaffoPancake, dollarOrderAmount, 7.3, 7_300_000},
-		{"Stripe", PaymentProviderStripe, 1_000_000, 1, 7_300_000},
+		{"支付宝直连", PaymentProviderAlipayDirect, quotaOrderAmount, 1, int(common.QuotaPerYuan)},
+		{"微信直连", PaymentProviderWxpayDirect, quotaOrderAmount, 1, int(common.QuotaPerYuan)},
+		{"Creem", PaymentProviderCreem, quotaOrderAmount, 1, int(common.QuotaPerYuan)},
+		{"对公转账补单", PaymentProviderBankTransfer, quotaOrderAmount, 1, int(common.QuotaPerYuan)},
+		{"易支付", PaymentProviderEpay, dollarOrderAmount, 7.3, int(common.QuotaPerUnit)},
+		{"Waffo", PaymentProviderWaffo, dollarOrderAmount, 7.3, int(common.QuotaPerUnit)},
+		{"Waffo Pancake", PaymentProviderWaffoPancake, dollarOrderAmount, 7.3, int(common.QuotaPerUnit)},
+		{"Stripe", PaymentProviderStripe, quotaOrderAmount, 1, int(common.QuotaPerUnit)},
 	}
 
 	for i, c := range cases {

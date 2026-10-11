@@ -6,7 +6,6 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/model"
-	"github.com/QuantumNous/new-api/setting/operation_setting"
 )
 
 // 套餐履约率报表（设计文档 §8.4、P7）。
@@ -78,7 +77,8 @@ type planAccum struct {
 
 // quotaToFen quota → 人民币分，与成本对账（reconcile_helpers.upstreamAmountCNY）同一换算。
 func quotaToFen(q float64) int64 {
-	return int64(math.Round(q / common.QuotaPerUnit * operation_setting.USDExchangeRate * 100))
+	// 先乘后除：quota → 分。1 分 = ¥0.01 = 10⁷ quota。
+	return int64(math.Round(float64(q) * 100 / common.QuotaPerYuan))
 }
 
 func ratio(num, den int64) *float64 {

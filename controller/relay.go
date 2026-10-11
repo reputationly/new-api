@@ -735,6 +735,7 @@ func RelayTask(c *gin.Context) {
 			OtherRatios:     relayInfo.PriceData.OtherRatios,
 			OriginModelName: relayInfo.OriginModelName,
 			// 与消费日志的 count_billing 同源，见 service.IsTaskPerCallBilling
+			PriceUnit:      common.PriceUnitCNY,
 			PerCallBilling: service.IsTaskPerCallBilling(relayInfo),
 			VideoBilling:   freezeVideoBilling(relayInfo),
 			TimeRule:       relayInfo.PriceData.GroupRatioInfo.TimeRuleLog(),

@@ -17,15 +17,18 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import i18next from 'i18next';
-import { getCurrencyConfig } from './render';
 
 // ---- quota ↔ 展示币种的换算率 ----
 //
-// 这三个值正常情况下都由 /api/status 在页面渲染前写入 localStorage，下面的 fallback
+// 这几个值正常情况下都由 /api/status 在页面渲染前写入 localStorage，下面的 fallback
 // 只在读不到时生效（例如直接打开某个子页面、localStorage 被单独清理）。全站金额都按这些
 // 换算率算，取错就是系统性错价，所以 fallback 只在 console 里告警一次，不刷屏。
-export const FALLBACK_QUOTA_PER_UNIT = 500000; // 与后端 QuotaPerUnit 的出厂默认一致
-export const FALLBACK_QUOTA_PER_POINT = 684.93;
+//
+// quota_per_unit 是「1 美元对应的 quota」，只留给美元语义的地方（余额/充值/令牌额度
+// 这类按美元记数的旧数据）。人民币金额一律用 quota_per_yuan，**不再乘汇率**。
+export const FALLBACK_QUOTA_PER_UNIT = 7300000000; // 与后端 QuotaPerUnit 的出厂默认一致
+export const FALLBACK_QUOTA_PER_YUAN = 1000000000; // 1 元 = 10⁹ quota（后端 QuotaPerYuan）
+export const FALLBACK_QUOTA_PER_POINT = 10000000;
 
 const warnedFallbacks = new Set();
 
@@ -47,6 +50,64 @@ export const getQuotaPerUnit = () => {
   if (raw !== null) return raw;
   warnQuotaFallback('quota_per_unit', FALLBACK_QUOTA_PER_UNIT);
   return FALLBACK_QUOTA_PER_UNIT;
+};
+
+export const getQuotaPerYuan = () => {
+  const raw = readPositiveNumber('quota_per_yuan');
+  if (raw !== null) return raw;
+  warnQuotaFallback('quota_per_yuan', FALLBACK_QUOTA_PER_YUAN);
+  return FALLBACK_QUOTA_PER_YUAN;
+};
+
+/**
+ * 站点汇率（1 美元 = X 元）。只有两处该读它：
+ *   1. 展示币种换算（getDisplayCurrency，USD/CUSTOM 模式要把人民币折回美元）；
+ *   2. 历史日志/历史表达式里的美元口径定价字段（normalizeLogPricing）。
+ * 计费与定价配置一律不读它——它们已经是人民币。
+ */
+export const getUsdExchangeRate = () => {
+  try {
+    const status = JSON.parse(localStorage.getItem('status') || '{}');
+    const rate = Number(status?.usd_exchange_rate);
+    return Number.isFinite(rate) && rate > 0 ? rate : 7.3;
+  } catch (e) {
+    return 7.3;
+  }
+};
+
+/**
+ * 当前展示币种的配置。
+ *
+ * 基准是**人民币**：`人民币金额 = quota / quota_per_yuan`，再按 ratePerCny 折成展示币种。
+ *   - CNY    → 1（原样显示人民币）
+ *   - USD    → 1 / 汇率
+ *   - CUSTOM → 自定义汇率 / 汇率（自定义汇率原本是「1 美元 = X 自定义币」）
+ *   - TOKENS → 金额不折算（调用方直接显示 quota 原值），symbol 只作占位。
+ *
+ * @returns {{symbol: string, ratePerCny: number, type: string}}
+ */
+export const getDisplayCurrency = () => {
+  const type = localStorage.getItem('quota_display_type') || 'USD';
+  let status = {};
+  try {
+    status = JSON.parse(localStorage.getItem('status') || '{}') || {};
+  } catch (e) {}
+  const usdRate = getUsdExchangeRate();
+
+  if (type === 'CNY') {
+    return { symbol: '¥', ratePerCny: 1, type };
+  }
+  if (type === 'CUSTOM') {
+    const customRate = Number(status?.custom_currency_exchange_rate);
+    return {
+      symbol: status?.custom_currency_symbol || '¤',
+      ratePerCny:
+        (Number.isFinite(customRate) && customRate > 0 ? customRate : 1) /
+        usdRate,
+      type,
+    };
+  }
+  return { symbol: '$', ratePerCny: 1 / usdRate, type };
 };
 
 // ---- 积分换算（内部 quota unit ↔ 展示积分数） ----
@@ -118,11 +179,11 @@ export const quotaToDisplayAmount = (quota) => {
   if (!Number.isFinite(q) || q === 0) return 0;
   const sign = Math.sign(q);
   const abs = Math.abs(q);
-  const { type, rate } = getCurrencyConfig();
+  const { type, ratePerCny } = getDisplayCurrency();
   if (type === 'TOKENS') return q;
-  const usd = abs / getQuotaPerUnit();
-  if (type === 'USD') return sign * usd;
-  return sign * usd * (rate || 1);
+  const cny = abs / getQuotaPerYuan();
+  if (type === 'CNY') return sign * cny;
+  return sign * cny * (ratePerCny || 1);
 };
 
 export const displayAmountToQuota = (amount) => {
@@ -130,8 +191,8 @@ export const displayAmountToQuota = (amount) => {
   if (!Number.isFinite(val) || val === 0) return 0;
   const sign = Math.sign(val);
   const abs = Math.abs(val);
-  const { type, rate } = getCurrencyConfig();
+  const { type, ratePerCny } = getDisplayCurrency();
   if (type === 'TOKENS') return Math.round(val);
-  const usd = type === 'USD' ? abs : abs / (rate || 1);
-  return sign * Math.round(usd * getQuotaPerUnit());
+  const cny = type === 'CNY' ? abs : abs / (ratePerCny || 1);
+  return sign * Math.round(cny * getQuotaPerYuan());
 };

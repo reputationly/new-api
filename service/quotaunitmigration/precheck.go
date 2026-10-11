@@ -11,13 +11,14 @@ import (
 	"gorm.io/gorm"
 )
 
-// M1.0 列类型预检：数值放大 14.6 倍后，32 位列在值 ≥ 147,087,541（旧单位，约 ¥2,147）时会溢出
-// （PostgreSQL 报 out of range，MySQL 静默截断/报错）。迁移程序不自动改表结构，只拒绝执行
-// 并打印对应方言的 DDL，由运维在停服窗口内手动执行后重跑。
+// 列类型预检确保迁移涉及的数值列均为 64 位整数（PostgreSQL 报 out of range，MySQL 静默
+// 截断/报错）。迁移程序不自动改表结构，只拒绝执行并打印对应方言的 DDL，由运维在停服窗口内
+// 手动执行后重跑。
 //
 // 项目里 users.aff_quota / aff_history 的标签是 gorm:"type:int"，但 GORM v1.25 把它识别成
 // 通用整数类型 schema.Int，宽度取 Go 字段的 64 位，三库建出来都是 64 位整数
 // （gorm.io/gorm/schema/field.go 的 TYPE 标签处理 + gorm.io/driver/postgres 的 DataTypeOf）。
+// 标签保持 type:int 不改：改成 type:bigint 会让已有库的 AutoMigrate 比对出类型差异并尝试改列，收益为零。
 // 预检只是兜底，防止有人手工建过表。
 const maxSafeNumeric = 9.2e18
 
@@ -47,11 +48,47 @@ func numericColumnRefs() []columnRef {
 	return refs
 }
 
+// jsSafeInteger 是 JS 能精确表示的最大整数（2⁵³-1）。前端用 Number 读 quota，
+// 超过这个值就开始丢精度，所以迁移后（×1000）逼近它的余额必须在报告里点名。
+const jsSafeInteger = int64(1)<<53 - 1
+
+// precheckJSSafeInteger 检查迁移后的余额是否逼近 JS 安全整数。
+//
+// 只警告不拒绝：前端展示不准不会算错账（计费在服务端按 int64 做），但运营需要知道
+// 哪个用户的余额已经大到页面显示会漂。2⁵³ quota ≈ ¥900.7 万。
+func precheckJSSafeInteger(rep *report) error {
+	multiplier := currentPlan().maxMultiplier()
+	for _, table := range []struct{ table, column string }{
+		{"users", "quota"},
+		{"tokens", "remain_quota"},
+		{"users", "used_quota"},
+	} {
+		var maxAbs int64
+		query := fmt.Sprintf("SELECT COALESCE(MAX(ABS(%s)), 0) FROM %s", table.column, table.table)
+		if err := dbForTable(table.table).Raw(query).Scan(&maxAbs).Error; err != nil {
+			// 表可能不存在（老库），不是致命问题
+			rep.line("（跳过 %s.%s 的安全整数检查：%v）", table.table, table.column, err)
+			continue
+		}
+		projected := float64(maxAbs) * multiplier
+		if projected <= float64(jsSafeInteger) {
+			continue
+		}
+		rep.line("⚠️ %s.%s 最大值 %d，迁移后约 %.0f，超过 JS 安全整数 2⁵³（前端展示会丢精度，服务端计费不受影响）",
+			table.table, table.column, maxAbs, projected)
+	}
+	return nil
+}
+
 func precheckColumnTypes(rep *report) error {
 	refs := numericColumnRefs()
 
 	rep.blank()
 	rep.line("[M1.0 列类型预检]")
+	// JS 安全整数检查与方言无关，放在 SQLite 早退之前。
+	if err := precheckJSSafeInteger(rep); err != nil {
+		return err
+	}
 	if common.UsingSQLite {
 		rep.line("SQLite：INTEGER 本身是 64 位，跳过类型检查。")
 		return nil
@@ -78,7 +115,7 @@ func precheckColumnTypes(rep *report) error {
 			}
 			return bad[i].column < bad[j].column
 		})
-		rep.line("以下列不是 64 位整数，×14.6 会溢出，拒绝执行：")
+		rep.line("以下列不是 64 位整数，×%s 会溢出，拒绝执行：", currentPlan().scaleLabel())
 		for _, ref := range bad {
 			rep.line("  - %s.%s", ref.table, ref.column)
 		}
@@ -89,18 +126,19 @@ func precheckColumnTypes(rep *report) error {
 		return fmt.Errorf("列类型预检未通过：%d 列不是 64 位整数", len(bad))
 	}
 
-	// 溢出保险：理论上不会触发（64 位列上限 9.2e18 / 14.6 ≈ 6.3e17 quota）。
+	// 溢出保险：64 位列上限按当前迁移倍数计算。
 	for _, ref := range refs {
 		maxAbs, err := columnMaxAbs(dbForTable(ref.table), ref)
 		if err != nil {
 			return fmt.Errorf("检查 %s.%s 的最大值失败: %w", ref.table, ref.column, err)
 		}
-		if float64(maxAbs)*scale > maxSafeNumeric {
-			return fmt.Errorf("%s.%s 最大值 %d × %v 会溢出 int64，拒绝执行", ref.table, ref.column, maxAbs, scale)
+		multiplier := currentPlan().maxMultiplier()
+		if float64(maxAbs)*multiplier > maxSafeNumeric {
+			return fmt.Errorf("%s.%s 最大值 %d × %v 会溢出 int64，拒绝执行", ref.table, ref.column, maxAbs, multiplier)
 		}
 	}
 
-	rep.line("%d 列全部是 64 位整数，且放大 %v 倍后不会溢出。", len(refs), scale)
+	rep.line("%d 列全部是 64 位整数，且放大 %v 倍后不会溢出。", len(refs), currentPlan().maxMultiplier())
 	return nil
 }
 

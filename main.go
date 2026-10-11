@@ -72,6 +72,21 @@ func main() {
 		return
 	}
 
+	if *common.QuotaUnitMigrationV2Mode != "" {
+		if err := quotaunitmigration.RunV2(*common.QuotaUnitMigrationV2Mode, os.Stdout); err != nil {
+			common.FatalLog("quota unit migration V2 failed: " + err.Error())
+		}
+		return
+	}
+
+	// 启动保护（设计文档 §4 B9）：未完成 V2 迁移而库里已有数据时，配置仍是美元口径而代码已按
+	// 人民币与更细的 quota 单位计算，每条请求会按错误倍数扣费（倍率路径约 68.5 倍、按次/
+	// 视频/工具路径约 137 倍），因此整个进程拒绝启动，只允许用上面的迁移参数跑完再起。
+	if err := quotaunitmigration.EnsurePriceUnitReady(); err != nil {
+		common.FatalLog(err.Error())
+		return
+	}
+
 	common.SysLog("New API " + common.Version + " started")
 
 	// Surface KYC key (mis)configuration warnings at startup rather than first use.

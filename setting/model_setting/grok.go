@@ -10,7 +10,8 @@ type GrokSettings struct {
 
 var defaultGrokSettings = GrokSettings{
 	ViolationDeductionEnabled: true,
-	ViolationDeductionAmount:  0.05,
+	// 人民币（¥/次）；原为上游的 $0.05（0.05 × 7.3 = 0.365）。
+	ViolationDeductionAmount: 0.365,
 }
 
 var grokSettings = defaultGrokSettings

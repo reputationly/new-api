@@ -144,6 +144,7 @@ func LogTaskConsumption(c *gin.Context, info *relaycommon.RelayInfo) {
 		fillVideoBillingOther(other, vb.Mode, vb.Resolution, vb.UnitPrice, vb.HasVideoInput, vb.Seconds)
 	}
 	other["request_path"] = c.Request.URL.Path
+	other["price_unit"] = common.PriceUnitCNY
 	other["model_price"] = info.PriceData.ModelPrice
 	if info.PriceData.ModelRatio > 0 {
 		other["model_ratio"] = info.PriceData.ModelRatio
@@ -339,6 +340,10 @@ func taskBillingOther(task *model.Task) map[string]interface{} {
 		other["subscription_id"] = task.PrivateData.SubscriptionId
 	}
 	if bc := task.PrivateData.BillingContext; bc != nil {
+		// 标记随任务一起冻结：迁移会把历史任务补齐为 "cny"
+		if bc.PriceUnit != "" {
+			other["price_unit"] = bc.PriceUnit
+		}
 		other["model_price"] = bc.ModelPrice
 		if bc.ModelRatio > 0 {
 			other["model_ratio"] = bc.ModelRatio
@@ -650,8 +655,8 @@ func RecalculateTaskQuotaByTokens(ctx context.Context, task *model.Task, totalTo
 	}
 
 	// 计算实际应扣费额度: totalTokens * modelRatio * groupRatio * otherMultiplier * scale
-	// 倍率路径必须乘 QuotaScale()，理由见 service/text_quota.go 同一处注释。
-	actualQuota := int(math.Round(float64(totalTokens) * modelRatio * finalGroupRatio * otherMultiplier * common.QuotaScale()))
+	// 倍率路径必须乘 QuotaPerMillionTokens（倍率是 ¥/百万 tokens），理由见 service/text_quota.go。
+	actualQuota := int(math.Round(float64(totalTokens) * modelRatio * finalGroupRatio * otherMultiplier * common.QuotaPerMillionTokens))
 
 	reason := fmt.Sprintf("token重算：tokens=%d, modelRatio=%.2f, groupRatio=%.2f, otherMultiplier=%.4f", totalTokens, modelRatio, finalGroupRatio, otherMultiplier)
 	return recalculateTaskQuota(ctx, task, actualQuota, totalTokens, reason)
@@ -708,7 +713,7 @@ func taskGroupRatio(task *model.Task) (float64, bool) {
 // RecalculateTaskQuotaByVideoMatrix 按提交时冻结的视频计费矩阵单价做差额结算。
 // 设计见 docs/video-billing-matrix-design.md。
 //
-//	quota = tokens ÷ 1e6 × 单价($/百万 tokens) × QuotaPerUnit × groupRatio
+//	quota = tokens ÷ 1e6 × 单价(¥/百万 tokens) × QuotaPerYuan × groupRatio
 //
 // 与 RecalculateTaskQuotaByTokens 的三点区别，都是刻意的：
 //   - **不读 GetModelRatio**：模型可能配的是固定价格（hasRatioSetting=false），
@@ -751,7 +756,7 @@ func RecalculateTaskQuotaByVideoMatrix(ctx context.Context, task *model.Task, to
 		return false
 	}
 
-	actualQuota := int(math.Round(float64(totalTokens) / 1e6 * vb.UnitPrice * common.QuotaPerUnit * finalGroupRatio))
+	actualQuota := int(math.Round(float64(totalTokens) / 1e6 * vb.UnitPrice * common.QuotaPerYuan * finalGroupRatio))
 
 	reason := fmt.Sprintf("视频矩阵重算：tokens=%d, %s/%s, unitPrice=%g, groupRatio=%.2f",
 		totalTokens, vb.Resolution, videoInputLabel(vb.HasVideoInput), vb.UnitPrice, finalGroupRatio)

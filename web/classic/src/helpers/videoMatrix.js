@@ -49,12 +49,12 @@ export const videoSecondsRank = (c) => {
 export const VIDEO_PER_SECOND_COLUMN = '__per_second__';
 
 /**
- * 把视频计费矩阵的所有格子摊平成 [{resolution, column, priceUSD, originalPriceUSD}]。
+ * 把视频计费矩阵的所有格子摊平成 [{resolution, column, priceCNY, originalPriceCNY}]。
  *
  * 列的语义随 mode 变：token 是「输入是否含视频」，per_call 是秒数，
  * per_second 只有一列（每秒单价），由本函数把一维表升成二维。
  *
- * originalPriceUSD 是**折前价**（少乘一个分组倍率），口径与按量/按次两条路的
+ * originalPriceCNY 是**折前价**（少乘一个分组倍率），口径与按量/按次两条路的
  * originalInputPrice / originalPrice 一致：仅在 0 <= 倍率 < 1 时给，其余为 null。
  * 倍率 > 1 是涨价，划线会显示成「原价更便宜」，比不显示更糟。
  */
@@ -62,7 +62,7 @@ export const flattenVideoMatrix = (videoPricing, groupRatio) => {
   if (!videoPricing?.mode) return [];
   const isToken = videoPricing.mode === 'token';
   const isPerSecond = videoPricing.mode === 'per_second';
-  // per_second 的后端表是一维的 { 分辨率: $/秒 }，先升成二维走同一套摊平逻辑
+  // per_second 的后端表是一维的 { 分辨率: ¥/秒 }，先升成二维走同一套摊平逻辑
   let table;
   if (isToken) table = videoPricing.token || {};
   else if (isPerSecond) {
@@ -88,8 +88,8 @@ export const flattenVideoMatrix = (videoPricing, groupRatio) => {
       rows.push({
         resolution,
         column,
-        priceUSD: base * gr,
-        originalPriceUSD: discounted ? base : null,
+        priceCNY: base * gr,
+        originalPriceCNY: discounted ? base : null,
       });
     });
   });

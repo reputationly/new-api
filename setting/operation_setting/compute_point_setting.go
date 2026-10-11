@@ -19,8 +19,8 @@ import (
 const QuotaPerComputePointAuto = 0.0
 
 type ComputePointSetting struct {
-	// QuotaPerComputePoint 1 算力点对应多少 quota unit；0 = 自动（按 QPU / (汇率 × 100) 推算，
-	// 汇率 7.3 时 1 点 = 1 分钱）。写成 0 而不是初始化期常量，才能跟随运行时 QPU / 汇率变化。
+	// QuotaPerComputePoint 1 算力点对应多少 quota unit；0 = 自动（1 点 = 1 分钱，
+	// 即 QuotaPerYuan / 100 = 1,000,000，与汇率无关）。
 	QuotaPerComputePoint float64 `json:"quota_per_compute_point"`
 	// ShowcaseModels 套餐对比表里展示换算的代表模型（设计文档 §8.3）。
 	// 由运营挑而不是按权益范围自动展开：通配符（qwen3-*）一展开就是几十行，
@@ -37,8 +37,6 @@ func init() {
 	config.GlobalConfig.Register("compute_point_setting", &computePointSetting)
 	// 依赖倒置：把实时换算率注入 common 换算层（common 不能 import 本包）
 	common.QuotaPerComputePointFunc = func() float64 { return computePointSetting.QuotaPerComputePoint }
-	// 汇率同理注入。算力点的「元 ↔ 点」预览要用它，而 Price 定义在本包。
-	common.USDExchangeRateFunc = func() float64 { return Price }
 }
 
 // GetComputePointSetting 获取算力点配置。

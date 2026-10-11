@@ -31,6 +31,7 @@ import {
   renderQuota,
   stringToColor,
   getLogOther,
+  normalizeLogPricing,
   renderModelTag,
   renderModelPriceSimple,
   renderTieredModelPriceSimple,
@@ -474,7 +475,8 @@ function getUsageLogDetailSummary(record, text, billingDisplayMode, t) {
 }
 
 function buildUsageLogDetailSummary(record, text, billingDisplayMode, t) {
-  const other = getLogOther(record.other);
+  // 同 useUsageLogsData：定价字段先统一成人民币，渲染函数只处理人民币。
+  const other = normalizeLogPricing(getLogOther(record.other));
 
   if (record.type === 6) {
     return {
@@ -502,7 +504,7 @@ function buildUsageLogDetailSummary(record, text, billingDisplayMode, t) {
         groupText ? { text: groupText, tone: 'primary' } : null,
         { text: t('违规扣费'), tone: 'primary' },
         {
-          text: `${t('扣费')}：${renderQuota(feeQuota, 6)}`,
+          text: `${t('扣费')}：${renderQuota(feeQuota, 9)}`,
           tone: 'secondary',
         },
         text ? { text: `${t('详情')}：${text}`, tone: 'secondary' } : null,
@@ -893,7 +895,7 @@ export const getLogsColumns = ({
             entInfo.limit > 0
               ? `${t('次数')}：${t('剩余')} ${entInfo.remain}/${entInfo.limit}`
               : null,
-            `${t('等值金额')}：${renderQuota(text, 6)}`,
+            `${t('等值金额')}：${renderQuota(text, 9)}`,
           ].filter(Boolean);
           return (
             <Tooltip
@@ -922,7 +924,7 @@ export const getLogsColumns = ({
         const pointsTag =
           pointsConsumed > 0 ? (
             <Tooltip
-              content={`${t('积分抵扣')}：${renderQuota(pointsConsumed, 6)}`}
+              content={`${t('积分抵扣')}：${renderQuota(pointsConsumed, 9)}`}
             >
               <Tag color='orange' shape='circle' size='small'>
                 {t('积分')} {quotaToPoints(pointsConsumed)}
@@ -932,14 +934,14 @@ export const getLogsColumns = ({
         if (isSubscription) {
           // 不扣钱包的来源只显示标签（不显示 $0），悬浮时给出等价成本。
           return (
-            <Tooltip content={`${t('由订阅抵扣')}：${renderQuota(text, 6)}`}>
+            <Tooltip content={`${t('由订阅抵扣')}：${renderQuota(text, 9)}`}>
               <span>{renderBillingTag(record, t)}</span>
             </Tooltip>
           );
         }
         return (
           <Space spacing={2} align='center'>
-            {renderQuota(text, 6)}
+            {renderQuota(text, 9)}
             {pointsTag}
             {overageTag}
           </Space>

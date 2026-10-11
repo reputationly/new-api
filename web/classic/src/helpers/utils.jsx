@@ -23,7 +23,8 @@ import {
   BILLING_PRICING_VARS,
   BILLING_VAR_REGEX,
 } from '../constants';
-import { getQuotaPerUnit } from './quota';
+import { getDisplayCurrency, getQuotaPerYuan } from './quota';
+import { getExprPriceScale } from './exprPrice';
 import React from 'react';
 import { toast } from 'react-toastify';
 import {
@@ -44,7 +45,7 @@ import {
   VIDEO_PER_SECOND_COLUMN,
 } from './videoMatrix';
 import {
-  entitlementPointsForUSD,
+  entitlementPointsForCny,
   formatVideoEntitlementPoints,
 } from './entitlementPricing';
 // 折扣展示口径同样是纯计算，拆出去给手机端共用（helpers/utils.jsx 被 mobile 的
@@ -710,22 +711,10 @@ export const selectFilter = (input, option) => {
 export { formatPriceWithCeiling };
 
 export const getModelPricingCurrencyConfig = () => {
-  const quotaDisplayType = localStorage.getItem('quota_display_type') || 'USD';
-  let symbol = '$';
-  let rate = quotaDisplayType === 'CNY' ? 7.3 : 1;
-
-  try {
-    const status = JSON.parse(localStorage.getItem('status') || '{}');
-    if (quotaDisplayType === 'CNY') {
-      symbol = '¥';
-      rate = status?.usd_exchange_rate || 7.3;
-    } else if (quotaDisplayType === 'CUSTOM') {
-      symbol = status?.custom_currency_symbol || '¤';
-      rate = status?.custom_currency_exchange_rate || 1;
-    }
-  } catch (e) {}
-
-  return { symbol, rate };
+  // 定价配置（ModelRatio / ModelPrice / 视频矩阵 / 表达式系数）存的就是人民币，
+  // 所以折算基准是人民币：`人民币 × ratePerCny`。
+  const { symbol, ratePerCny } = getDisplayCurrency();
+  return { symbol, ratePerCny };
 };
 
 /**
@@ -859,11 +848,11 @@ export const calculateModelPrice = ({
     const perCall = record.video_pricing.mode === 'per_call';
     const entPoints = flattenVideoMatrix(record.video_pricing, usedGroupRatio)
       .map((r) =>
-        entitlementPointsForUSD(
-          r.priceUSD,
+        entitlementPointsForCny(
+          r.priceCNY,
           entitlementCoverage,
           quotaPerComputePoint,
-          getQuotaPerUnit(),
+          getQuotaPerYuan(),
         ),
       )
       .filter((p) => p !== null)
@@ -883,7 +872,7 @@ export const calculateModelPrice = ({
   if (record.quota_type === 0) {
     // 按量计费
     const isTokensDisplay = quotaDisplayType === 'TOKENS';
-    const inputRatioPriceUSD = record.model_ratio * 2 * usedGroupRatio;
+    const inputRatioPriceCNY = record.model_ratio * usedGroupRatio;
     // 价格一律按每 1M token 计。曾经有个 K/M 切换开关，切完只是把同一个数字挪个
     // 小数点，对判断"贵不贵"没有帮助，已下线。
     const unitDivisor = 1;
@@ -913,17 +902,17 @@ export const calculateModelPrice = ({
       };
     }
 
-    const formatTokenPrice = (priceUSD) => {
-      const rawDisplayPrice = displayPrice(priceUSD, 12);
+    const formatTokenPrice = (priceCNY) => {
+      const rawDisplayPrice = displayPrice(priceCNY, 12);
       const symbol = rawDisplayPrice.replace(/[-\d.,\s]/g, '');
       const numericPrice =
         Number(rawDisplayPrice.replace(/[^0-9.-]/g, '')) / unitDivisor;
       return `${symbol}${formatPriceWithCeiling(numericPrice, precision)}`;
     };
 
-    const inputPrice = formatTokenPrice(inputRatioPriceUSD);
+    const inputPrice = formatTokenPrice(inputRatioPriceCNY);
     const audioInputPrice = hasRatioValue(record.audio_ratio)
-      ? formatTokenPrice(inputRatioPriceUSD * Number(record.audio_ratio))
+      ? formatTokenPrice(inputRatioPriceCNY * Number(record.audio_ratio))
       : null;
 
     // 积分价：仅当积分启用且该模型实际使用的分组在白名单时，按 quota unit 换算积分数。
@@ -934,94 +923,94 @@ export const calculateModelPrice = ({
     const modelAllowsPoints =
       !Array.isArray(pointsEnabledModels) ||
       pointsEnabledModels.includes(record.model_name);
-    const usdToPoints = (usd) =>
+    const cnyToPoints = (cny) =>
       pointsEnabled &&
       quotaPerPoint > 0 &&
       Array.isArray(pointsEnabledGroups) &&
       pointsEnabledGroups.includes(usedGroup) &&
       modelAllowsPoints
-        ? (usd * getQuotaPerUnit()) / quotaPerPoint / unitDivisor
+        ? (cny * getQuotaPerYuan()) / quotaPerPoint / unitDivisor
         : null;
-    // 套餐内价：与 usdToPoints 同构，只是多乘一个权益折扣。
+    // 套餐内价：与 cnyToPoints 同构，只是多乘一个权益折扣。
     // 折扣作用在消耗侧（与后端 pointsNeeded 一致）：×0.5 就是同样的调用只烧一半点数。
-    const usdToEntitlementPoints = (usd) => {
-      const p = entitlementPointsForUSD(
-        usd,
+    const cnyToEntitlementPoints = (cny) => {
+      const p = entitlementPointsForCny(
+        cny,
         entitlementCoverage,
         quotaPerComputePoint,
-        getQuotaPerUnit(),
+        getQuotaPerYuan(),
       );
       return p === null ? null : p / unitDivisor;
     };
-    // 各价格项的 USD 单价，积分价与套餐内价都从这一张表映射出来。
+    // 各价格项的人民币单价，积分价与套餐内价都从这一张表映射出来。
     // 分开各写一份的话，加一个价格项就得记得改两处——套餐内价当初就只抄了
     // 前三项，带图片 / 音频倍率的模型因此少了套餐内价行。
-    const componentUSD = {
-      input: inputRatioPriceUSD,
-      completion: inputRatioPriceUSD * Number(record.completion_ratio),
+    const componentCNY = {
+      input: inputRatioPriceCNY,
+      completion: inputRatioPriceCNY * Number(record.completion_ratio),
       cache: hasRatioValue(record.cache_ratio)
-        ? inputRatioPriceUSD * Number(record.cache_ratio)
+        ? inputRatioPriceCNY * Number(record.cache_ratio)
         : null,
       'create-cache': hasRatioValue(record.create_cache_ratio)
-        ? inputRatioPriceUSD * Number(record.create_cache_ratio)
+        ? inputRatioPriceCNY * Number(record.create_cache_ratio)
         : null,
       image: hasRatioValue(record.image_ratio)
-        ? inputRatioPriceUSD * Number(record.image_ratio)
+        ? inputRatioPriceCNY * Number(record.image_ratio)
         : null,
       'audio-input': hasRatioValue(record.audio_ratio)
-        ? inputRatioPriceUSD * Number(record.audio_ratio)
+        ? inputRatioPriceCNY * Number(record.audio_ratio)
         : null,
       'audio-output':
         hasRatioValue(record.audio_ratio) &&
         hasRatioValue(record.audio_completion_ratio)
-          ? inputRatioPriceUSD *
+          ? inputRatioPriceCNY *
             Number(record.audio_ratio) *
             Number(record.audio_completion_ratio)
           : null,
     };
     const mapComponents = (convert) =>
       Object.fromEntries(
-        Object.entries(componentUSD).map(([key, usd]) => [
+        Object.entries(componentCNY).map(([key, cny]) => [
           key,
-          usd === null ? null : convert(usd),
+          cny === null ? null : convert(cny),
         ]),
       );
-    const pointsMap = mapComponents(usdToPoints);
-    const entitlementMap = mapComponents(usdToEntitlementPoints);
+    const pointsMap = mapComponents(cnyToPoints);
+    const entitlementMap = mapComponents(cnyToEntitlementPoints);
 
     return {
       inputPrice,
       // 折前价：少乘一个 usedGroupRatio。只给输入/输出出对比价——缓存、图片、音频
       // 那几项同样是折后价，但每行都划一道会把价格区挤成一团，顶部的折扣标签统管全部。
       originalInputPrice:
-        usedGroupRatio < 1 ? formatTokenPrice(record.model_ratio * 2) : null,
+        usedGroupRatio < 1 ? formatTokenPrice(record.model_ratio) : null,
       originalCompletionPrice:
         usedGroupRatio < 1
           ? formatTokenPrice(
-              record.model_ratio * 2 * Number(record.completion_ratio),
+              record.model_ratio * Number(record.completion_ratio),
             )
           : null,
       points: pointsMap,
       entitlement: entitlementMap,
       completionPrice: formatTokenPrice(
-        inputRatioPriceUSD * Number(record.completion_ratio),
+        inputRatioPriceCNY * Number(record.completion_ratio),
       ),
       cachePrice: hasRatioValue(record.cache_ratio)
-        ? formatTokenPrice(inputRatioPriceUSD * Number(record.cache_ratio))
+        ? formatTokenPrice(inputRatioPriceCNY * Number(record.cache_ratio))
         : null,
       createCachePrice: hasRatioValue(record.create_cache_ratio)
         ? formatTokenPrice(
-            inputRatioPriceUSD * Number(record.create_cache_ratio),
+            inputRatioPriceCNY * Number(record.create_cache_ratio),
           )
         : null,
       imagePrice: hasRatioValue(record.image_ratio)
-        ? formatTokenPrice(inputRatioPriceUSD * Number(record.image_ratio))
+        ? formatTokenPrice(inputRatioPriceCNY * Number(record.image_ratio))
         : null,
       audioInputPrice,
       audioOutputPrice:
         audioInputPrice && hasRatioValue(record.audio_completion_ratio)
           ? formatTokenPrice(
-              inputRatioPriceUSD *
+              inputRatioPriceCNY *
                 Number(record.audio_ratio) *
                 Number(record.audio_completion_ratio),
             )
@@ -1036,21 +1025,21 @@ export const calculateModelPrice = ({
 
   if (record.quota_type === 1) {
     // 按次计费
-    const formatPerCall = (usd) => {
-      const raw = displayPrice(usd, 12);
+    const formatPerCall = (cny) => {
+      const raw = displayPrice(cny, 12);
       const symbol = raw.replace(/[-\d.,\s]/g, '');
       const numeric = Number(raw.replace(/[^0-9.-]/g, ''));
       return `${symbol}${formatPriceWithCeiling(numeric, precision)}`;
     };
-    const basePriceUSD = parseFloat(record.model_price);
-    const priceUSD = basePriceUSD * usedGroupRatio;
+    const basePriceCNY = parseFloat(record.model_price);
+    const priceCNY = basePriceCNY * usedGroupRatio;
 
     return {
-      price: formatPerCall(priceUSD),
+      price: formatPerCall(priceCNY),
       // 折前价：少乘一个分组倍率，口径同按量计费的 originalInputPrice。
       // 自建的媒体类模型几乎全是按次计费，也正是折扣力度最大的一批（5 折），
       // 漏了这一项的结果是打折最狠的模型反而看不到划线原价。
-      originalPrice: usedGroupRatio < 1 ? formatPerCall(basePriceUSD) : null,
+      originalPrice: usedGroupRatio < 1 ? formatPerCall(basePriceCNY) : null,
       points: {
         // 按次价 ceil：一次调用一次结算，实际就烧 ceil(积分价) 个整积分，
         // ceil 显示的即真实扣费（floor 会把不足 1 积分的按次价显示成免费）
@@ -1059,17 +1048,17 @@ export const calculateModelPrice = ({
           quotaPerPoint > 0 &&
           Array.isArray(pointsEnabledGroups) &&
           pointsEnabledGroups.includes(usedGroup)
-            ? Math.ceil((priceUSD * getQuotaPerUnit()) / quotaPerPoint)
+            ? Math.ceil((priceCNY * getQuotaPerYuan()) / quotaPerPoint)
             : null,
       },
       entitlement: {
         // 同样 ceil，理由与积分那行一致：按次模型一次调用一次结算
         fixed: (() => {
-          const p = entitlementPointsForUSD(
-            priceUSD,
+          const p = entitlementPointsForCny(
+            priceCNY,
             entitlementCoverage,
             quotaPerComputePoint,
-            getQuotaPerUnit(),
+            getQuotaPerYuan(),
           );
           return p === null ? null : Math.ceil(p);
         })(),
@@ -1302,9 +1291,12 @@ export const formatDynamicPriceSummary = (billingExpr, t, groupRatio = 1) => {
       <span style={{ color: 'var(--semi-color-text-1)' }}>{t('动态计费')}</span>
     );
 
-  const { symbol, rate } = getModelPricingCurrencyConfig();
+  const { symbol, ratePerCny } = getModelPricingCurrencyConfig();
 
   const gr = groupRatio || 1;
+  // v1 表达式是历史美元口径（后端已拒绝结算），这里的系数先按汇率折成人民币，
+  // 只保证展示数字与历史价格一致；v2 的系数本身已是 ¥/百万 tokens。
+  const exprPriceScale = getExprPriceScale(billingExpr);
   const exprBody = billingExpr.replace(/^v\d+:/, '');
   const tierMatches = exprBody.match(/tier\(/g) || [];
   const tierCount = tierMatches.length;
@@ -1339,7 +1331,7 @@ export const formatDynamicPriceSummary = (billingExpr, t, groupRatio = 1) => {
           {varLabels.map(([key, label]) =>
             key in varCoeffs ? (
               <span key={key} style={lineStyle}>
-                {`${t(label)} ${symbol}${formatPriceWithCeiling(varCoeffs[key] * gr * rate)}${unitSuffix}`}
+                {`${t(label)} ${symbol}${formatPriceWithCeiling(varCoeffs[key] * exprPriceScale * gr * ratePerCny)}${unitSuffix}`}
               </span>
             ) : null,
           )}
@@ -1406,8 +1398,8 @@ export const formatVideoMatrixSummary = (priceData, t) => {
     );
   }
 
-  const { symbol, rate } = getModelPricingCurrencyConfig();
-  const prices = rows.map((r) => r.priceUSD * rate);
+  const { symbol, ratePerCny } = getModelPricingCurrencyConfig();
+  const prices = rows.map((r) => r.priceCNY * ratePerCny);
   const lo = Math.min(...prices);
   const hi = Math.max(...prices);
   const fmt = (v) => `${symbol}${Number(v.toFixed(2))}`;
@@ -1419,11 +1411,11 @@ export const formatVideoMatrixSummary = (priceData, t) => {
   // 折前区间：与按量/按次两条路同口径，仅在有折扣时给。矩阵模型此前只显示一个
   // 折后区间，同一个模型打没打折、打了多少，用户在这一行完全看不出来。
   const originals = rows
-    .map((r) => r.originalPriceUSD)
+    .map((r) => r.originalPriceCNY)
     .filter((v) => v !== null && v !== undefined);
   const originalText =
     originals.length === rows.length && rows.length > 0
-      ? range(originals.map((v) => v * rate))
+      ? range(originals.map((v) => v * ratePerCny))
       : null;
   const mode = priceData.videoPricing.mode;
   // 单位必须跟着 mode 走：per_second 的数是「每秒」单价，标成「/次」会让用户

@@ -1,14 +1,13 @@
 package quotaunitmigration
 
-import "math"
-
 // 单位迁移的「改什么」清单：数值列、JSON 键、options。
 //
-// 单位换算只有一条规则：旧 quota × 14.6 = 新 quota（因为 QuotaPerUnit 从 500000 变成
-// 7300000，而 1 quota 从 ¥0.0000146 变成 ¥0.000001）。名字里带 quota 的字段不一定是
-// quota（见 PreConsumedQuota 的教训），所以下面每一列都按「它在计费代码里的单位」挑选。
+// V1 单位换算：旧 quota × 14.6 = 新 quota（因为 QuotaPerUnit 从 500000 变成
+// 7300000，而 1 quota 从 ¥0.0000146 变成 ¥0.000001）。V2 再按 plan 缩放 ×1000。
+// 名字里带 quota 的字段不一定是 quota（见 PreConsumedQuota 的教训），所以下面每一列都按
+// 「它在计费代码里的单位」挑选。
 
-// numericScope 一批需要 ×14.6 的整数列。
+// numericScope 一批需要按迁移方案缩放的整数列。
 type numericScope struct {
 	table   string
 	columns []string
@@ -122,7 +121,39 @@ var optionSpecs = []optionSpec{
 	{key: "QuotaPerUnit", mode: optionFixed, fixedValue: "7300000", missingValue: "7300000"},
 }
 
-// scaleValue 把旧单位的数值换算成新单位（四舍五入到整数）。
-func scaleValue(v float64) int64 {
-	return int64(math.Round(v * scale))
+// optionSpecsV2 V2 的 options 清单：quota 类 ×1000，换算率与 QuotaPerUnit 写固定值。
+var optionSpecsV2 = []optionSpec{
+	{key: "QuotaForNewUser", mode: optionScaleInt},
+	{key: "QuotaForInviter", mode: optionScaleInt},
+	{key: "QuotaForInvitee", mode: optionScaleInt},
+	{key: "QuotaRemindThreshold", mode: optionScaleInt, missingValue: "14600000"},
+	{key: "checkin_setting.min_quota", mode: optionScaleFloat},
+	{key: "checkin_setting.max_quota", mode: optionScaleFloat},
+	{key: "points_setting.quota_per_point", mode: optionFixed, fixedValue: "10000000", missingValue: "10000000"},
+	{key: "compute_point_setting.quota_per_compute_point", mode: optionFixed, fixedValue: "10000000", missingValue: "10000000"},
+	{key: "QuotaPerUnit", mode: optionFixed, fixedValue: "7300000000", missingValue: "7300000000"},
 }
+
+// smallJSONScopesV2 V2 的小表 JSON 清单：tasks 既要 ×1000（quota 键）、也要把冻结的
+// 定价字段换成人民币并打 price_unit 标记（两者合并成一次改写），users.setting 同 V1。
+var smallJSONScopesV2 = []jsonScope{
+	{
+		table:   "tasks",
+		jsonCol: "private_data",
+		keys: []string{
+			"points_consumed", "credit_consumed", "stage1_adaptor_quota", "entitlement_spent[].amount",
+			"billing_context.model_ratio", "billing_context.model_price",
+			"billing_context.video_billing.unit_price", "billing_context.price_unit",
+		},
+		rewrite: rewriteTaskPrivateDataV2,
+	},
+	{
+		table:   "users",
+		jsonCol: "setting",
+		keys:    []string{"quota_warning_threshold"},
+		rewrite: rewriteUserSetting,
+	},
+}
+
+// scaleValue 把旧单位的数值换算成新单位（四舍五入到整数）。
+func scaleValue(v float64) int64 { return currentPlan().scaleValue(v) }

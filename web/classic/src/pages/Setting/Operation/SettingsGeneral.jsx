@@ -407,7 +407,7 @@ export default function GeneralSettings(props) {
         <Banner
           type='warning'
           description={t(
-            '此设置用于系统内部计费精度，与汇率联动（1 额度 = ¥0.000001），修改会导致计费与展示口径不一致，不推荐修改。',
+            '此设置是「1 美元对应的额度」，只影响美元支付与 USD 展示模式；人民币计费与展示由固定的 QuotaPerYuan（1 额度 = ¥0.000000001）决定，不受它影响。除运营需要自行调整美元换算外，不推荐修改。',
           )}
           bordered
           fullMode={false}

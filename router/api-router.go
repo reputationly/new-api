@@ -51,7 +51,6 @@ func SetApiRouter(router *gin.Engine) {
 		apiRouter.GET("/oauth/telegram/bind", middleware.CriticalRateLimit(), controller.TelegramBind)
 		// Standard OAuth providers (GitHub, Discord, OIDC, LinuxDO) - unified route
 		apiRouter.GET("/oauth/:provider", middleware.CriticalRateLimit(), controller.HandleOAuth)
-		apiRouter.GET("/ratio_config", middleware.CriticalRateLimit(), controller.GetRatioConfig)
 
 		apiRouter.POST("/stripe/webhook", controller.StripeWebhook)
 		apiRouter.POST("/creem/webhook", controller.CreemWebhook)
@@ -355,12 +354,6 @@ func SetApiRouter(router *gin.Engine) {
 			mediaStoreRoute.POST("/snapshot", controller.RefreshMediaStoreStats)
 		}
 
-		ratioSyncRoute := apiRouter.Group("/ratio_sync")
-		ratioSyncRoute.Use(middleware.RootAuth())
-		{
-			ratioSyncRoute.GET("/channels", controller.GetSyncableChannels)
-			ratioSyncRoute.POST("/fetch", controller.FetchUpstreamRatios)
-		}
 		// 渠道列表与建渠道留在 AdminAuth：对账管理（上传对账）、日志页（渠道筛选）
 		// 要读列表，模型部署创建集群后要建对应渠道——这三个页面仍对普通管理员开放。
 		channelSharedRoute := apiRouter.Group("/channel")

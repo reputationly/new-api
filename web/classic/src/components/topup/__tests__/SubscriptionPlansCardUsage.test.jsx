@@ -77,7 +77,7 @@ const renderCard = (props) =>
 beforeEach(() => {
   // 1 点 = 100 quota
   localStorage.setItem('quota_per_compute_point', '100');
-  localStorage.setItem('quota_per_unit', '500000');
+  localStorage.setItem('quota_per_yuan', '1000000000');
 });
 
 describe('我的订阅：余量面板', () => {

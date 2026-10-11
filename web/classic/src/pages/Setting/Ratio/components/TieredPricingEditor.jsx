@@ -33,7 +33,7 @@ import {
 } from '@douyinfe/semi-ui';
 import { IconCopy, IconDelete, IconPlus } from '@douyinfe/semi-icons';
 import { renderQuota } from '../../../../helpers/render';
-import { getQuotaPerUnit } from '../../../../helpers/quota';
+import { getQuotaPerYuan } from '../../../../helpers/quota';
 import { copy, showSuccess } from '../../../../helpers';
 import {
   BILLING_EXTRA_VARS,
@@ -65,7 +65,7 @@ import {
 
 const { Text } = Typography;
 
-const PRICE_SUFFIX = '$/1M tokens';
+const PRICE_SUFFIX = '¥/1M tokens';
 
 function unitCostToPrice(uc) {
   return Number(uc) || 0;
@@ -784,20 +784,27 @@ function VisualEditor({ visualConfig, onChange, t }) {
 // Raw Expr editor with preset templates
 // ---------------------------------------------------------------------------
 
+// 预设里的系数是人民币（¥/百万 tokens），由上游报价 × 7.3 折算而来——与后端把静态
+// 美元默认表换算成人民币用的是同一个常量。表达式一律带 v2: 前缀：不带前缀 / v1: 的
+// 是美元口径的旧表达式，后端已拒绝结算。
 const PRESET_GROUPS = [
   {
     group: '固定价格',
     presets: [
-      { key: 'flat', label: 'Flat', expr: 'tier("base", p * 2 + c * 4)' },
+      {
+        key: 'flat',
+        label: 'Flat',
+        expr: 'v2:tier("base", p * 14.6 + c * 29.2)',
+      },
       {
         key: 'claude-opus',
         label: 'Claude Opus 4.6',
-        expr: 'tier("base", p * 5 + c * 25 + cr * 0.5 + cc * 6.25 + cc1h * 10)',
+        expr: 'v2:tier("base", p * 36.5 + c * 182.5 + cr * 3.65 + cc * 45.625 + cc1h * 73)',
       },
       {
         key: 'gpt-5.4',
         label: 'GPT-5.4',
-        expr: 'len <= 272000 ? tier("standard", p * 2.5 + c * 15 + cr * 0.25) : tier("long_context", p * 5 + c * 22.5 + cr * 0.5)',
+        expr: 'v2:len <= 272000 ? tier("standard", p * 18.25 + c * 109.5 + cr * 1.825) : tier("long_context", p * 36.5 + c * 164.25 + cr * 3.65)',
       },
     ],
   },
@@ -807,22 +814,22 @@ const PRESET_GROUPS = [
       {
         key: 'claude-sonnet',
         label: 'Claude Sonnet 4.5',
-        expr: 'len <= 200000 ? tier("standard", p * 3 + c * 15 + cr * 0.3 + cc * 3.75 + cc1h * 6) : tier("long_context", p * 6 + c * 22.5 + cr * 0.6 + cc * 7.5 + cc1h * 12)',
+        expr: 'v2:len <= 200000 ? tier("standard", p * 21.9 + c * 109.5 + cr * 2.19 + cc * 27.375 + cc1h * 43.8) : tier("long_context", p * 43.8 + c * 164.25 + cr * 4.38 + cc * 54.75 + cc1h * 87.6)',
       },
       {
         key: 'qwen3-max',
         label: 'Qwen3 Max',
-        expr: 'len <= 32000 ? tier("short", p * 1.2 + c * 6 + cr * 0.24 + cc * 1.5) : len <= 128000 ? tier("mid", p * 2.4 + c * 12 + cr * 0.48 + cc * 3) : tier("long", p * 3 + c * 15 + cr * 0.6 + cc * 3.75)',
+        expr: 'v2:len <= 32000 ? tier("short", p * 8.76 + c * 43.8 + cr * 1.752 + cc * 10.95) : len <= 128000 ? tier("mid", p * 17.52 + c * 87.6 + cr * 3.504 + cc * 21.9) : tier("long", p * 21.9 + c * 109.5 + cr * 4.38 + cc * 27.375)',
       },
       {
         key: 'glm-4.5-air',
         label: 'GLM-4.5 Air',
-        expr: 'len < 32000 && c < 200 ? tier("short_output", p * 0.8 + c * 2 + cr * 0.16) : len < 32000 && c >= 200 ? tier("long_output", p * 0.8 + c * 6 + cr * 0.16) : tier("mid_context", p * 1.2 + c * 8 + cr * 0.24)',
+        expr: 'v2:len < 32000 && c < 200 ? tier("short_output", p * 5.84 + c * 14.6 + cr * 1.168) : len < 32000 && c >= 200 ? tier("long_output", p * 5.84 + c * 43.8 + cr * 1.168) : tier("mid_context", p * 8.76 + c * 58.4 + cr * 1.752)',
       },
       {
         key: 'doubao-seed-1.8',
         label: 'Doubao Seed 1.8',
-        expr: 'len <= 32000 && c <= 200 ? tier("discount", p * 0.8 + c * 2 + cr * 0.16 + cc * 0.17) : len <= 32000 ? tier("short", p * 0.8 + c * 8 + cr * 0.16 + cc * 0.17) : len <= 128000 ? tier("mid", p * 1.2 + c * 16 + cr * 0.16 + cc * 0.17) : tier("long", p * 2.4 + c * 24 + cr * 0.16 + cc * 0.17)',
+        expr: 'v2:len <= 32000 && c <= 200 ? tier("discount", p * 5.84 + c * 14.6 + cr * 1.168 + cc * 1.241) : len <= 32000 ? tier("short", p * 5.84 + c * 58.4 + cr * 1.168 + cc * 1.241) : len <= 128000 ? tier("mid", p * 8.76 + c * 116.8 + cr * 1.168 + cc * 1.241) : tier("long", p * 17.52 + c * 175.2 + cr * 1.168 + cc * 1.241)',
       },
     ],
   },
@@ -832,22 +839,22 @@ const PRESET_GROUPS = [
       {
         key: 'gpt-image-1-mini',
         label: 'GPT Image 1 Mini',
-        expr: 'tier("base", p * 2 + c * 8 + img * 2.5)',
+        expr: 'v2:tier("base", p * 14.6 + c * 58.4 + img * 18.25)',
       },
       {
         key: 'gemini-2.5-flash',
         label: 'Gemini 2.5 Flash',
-        expr: 'tier("base", p * 0.3 + c * 2.5 + cr * 0.03 + ai * 1.0)',
+        expr: 'v2:tier("base", p * 2.19 + c * 18.25 + cr * 0.219 + ai * 7.3)',
       },
       {
         key: 'gemini-3-pro-image',
         label: 'Gemini 3 Pro Image',
-        expr: 'tier("base", p * 2 + c * 12 + img_o * 120)',
+        expr: 'v2:tier("base", p * 14.6 + c * 87.6 + img_o * 876)',
       },
       {
         key: 'qwen3-omni-flash',
         label: 'Qwen3 Omni Flash',
-        expr: 'tier("base", p * 0.43 + c * 3.06 + img * 0.78 + ai * 3.81 + ao * 15.11)',
+        expr: 'v2:tier("base", p * 3.139 + c * 22.338 + img * 5.694 + ai * 27.813 + ao * 110.303)',
       },
     ],
   },
@@ -857,7 +864,7 @@ const PRESET_GROUPS = [
       {
         key: 'claude-opus-fast',
         label: 'Claude Opus 4.6 Fast',
-        expr: 'tier("base", p * 5 + c * 25 + cr * 0.5 + cc * 6.25 + cc1h * 10)',
+        expr: 'v2:tier("base", p * 36.5 + c * 182.5 + cr * 3.65 + cc * 45.625 + cc1h * 73)',
         requestRules: [
           {
             conditions: [
@@ -875,7 +882,7 @@ const PRESET_GROUPS = [
       {
         key: 'gpt-5.4-tiers',
         label: 'GPT-5.4 Priority/Flex',
-        expr: 'len <= 272000 ? tier("standard", p * 2.5 + c * 15 + cr * 0.25) : tier("long_context", p * 5 + c * 22.5 + cr * 0.5)',
+        expr: 'v2:len <= 272000 ? tier("standard", p * 18.25 + c * 109.5 + cr * 1.825) : tier("long_context", p * 36.5 + c * 164.25 + cr * 3.65)',
         requestRules: [
           {
             conditions: [
@@ -909,7 +916,7 @@ const PRESET_GROUPS = [
       {
         key: 'night-discount',
         label: '夜间半价',
-        expr: 'tier("base", p * 3 + c * 15)',
+        expr: 'v2:tier("base", p * 21.9 + c * 109.5)',
         requestRules: [
           {
             conditions: [
@@ -929,7 +936,7 @@ const PRESET_GROUPS = [
       {
         key: 'weekend-discount',
         label: '周末8折',
-        expr: 'tier("base", p * 3 + c * 15)',
+        expr: 'v2:tier("base", p * 21.9 + c * 109.5)',
         requestRules: [
           {
             conditions: [
@@ -960,7 +967,7 @@ const PRESET_GROUPS = [
       {
         key: 'new-year-promo',
         label: '新年促销',
-        expr: 'tier("base", p * 3 + c * 15)',
+        expr: 'v2:tier("base", p * 21.9 + c * 109.5)',
         requestRules: [
           {
             conditions: [
@@ -1576,33 +1583,33 @@ p 和 c 是兜底变量，代表所有没有被表达式单独定价的 token。
 
 ### 价格系数
 
-表达式中的数字系数是 $/1M tokens 的价格。例如 p * 2.5 表示输入 $2.50/1M tokens。
+表达式中的数字系数是 ¥/1M tokens 的价格。例如 p * 18.25 表示输入 ¥18.25/1M tokens。
 
 ## 表达式示例
 
 简单定价：
-tier("base", p * 2.5 + c * 15)
+tier("base", p * 18.25 + c * 109.5)
 
 带缓存的定价：
-tier("base", p * 2.5 + c * 15 + cr * 0.25)
+tier("base", p * 18.25 + c * 109.5 + cr * 1.825)
 
 多档阶梯（用 len 做条件）：
 len <= 200000
-  ? tier("standard", p * 3 + c * 15 + cr * 0.3 + cc * 3.75 + cc1h * 6)
-  : tier("long_context", p * 6 + c * 22.5 + cr * 0.6 + cc * 7.5 + cc1h * 12)
+  ? tier("standard", p * 21.9 + c * 109.5 + cr * 2.19 + cc * 27.375 + cc1h * 43.8)
+  : tier("long_context", p * 43.8 + c * 164.25 + cr * 4.38 + cc * 54.75 + cc1h * 87.6)
 
 图片模型：
-tier("base", p * 2 + c * 8 + img * 2.5)
+tier("base", p * 14.6 + c * 58.4 + img * 18.25)
 
 多模态含音频：
-tier("base", p * 0.43 + c * 3.06 + img * 0.78 + ai * 3.81 + ao * 15.11)
+tier("base", p * 3.139 + c * 22.338 + img * 5.694 + ai * 27.813 + ao * 110.303)
 
 三档阶梯示例：
 len <= 128000
-  ? tier("standard", p * 1.1 + c * 4.4)
+  ? tier("standard", p * 8.03 + c * 32.12)
   : (len <= 1000000
-    ? tier("medium", p * 2.2 + c * 8.8)
-    : tier("long", p * 4.4 + c * 17.6))
+    ? tier("medium", p * 16.06 + c * 64.24)
+    : tier("long", p * 32.12 + c * 128.48))
 
 ## 规则
 
@@ -1610,7 +1617,7 @@ len <= 128000
 2. tier 名称用英文，如 "base"、"standard"、"long_context"
 3. 阶梯条件用 len（不要用 p），支持 <、<=、>、>=
 4. 多档用嵌套三元运算符：条件1 ? tier(...) : (条件2 ? tier(...) : tier(...))
-5. 价格系数直接写供应商官方 $/1M tokens 价格
+5. 价格系数直接写供应商官方人民币价（¥/1M tokens）
 6. 不需要缓存/图片/音频单独定价时可以不写对应变量，它们的 token 会自动包含在 p/c 中
 
 请根据用户提供的模型信息和定价需求，生成计费表达式。`;
@@ -1848,7 +1855,8 @@ export default function TieredPricingEditor({
       extraTokenValues,
     );
     if (!result.error) {
-      result.cost = (result.cost / 1000000) * getQuotaPerUnit();
+      // 表达式系数是 ¥/百万 tokens，输出单位就是元：先除 10⁶ 得元，再乘 QuotaPerYuan
+      result.cost = (result.cost / 1000000) * getQuotaPerYuan();
     }
     return result;
   }, [
@@ -1866,6 +1874,19 @@ export default function TieredPricingEditor({
 
   return (
     <div>
+      {model?.billingExprVersion === 1 ? (
+        <Banner
+          type='warning'
+          bordered
+          fullMode={false}
+          closeIcon={null}
+          style={{ marginBottom: 12 }}
+          description={t(
+            '这是美元口径的旧表达式（v1），已不能用于结算，需要重录为 v2：请按「¥/百万 tokens」核对每个系数后保存，保存时会自动带上 v2: 前缀。',
+          )}
+        />
+      ) : null}
+
       <div style={{ marginBottom: 12 }}>
         <RadioGroup
           type='button'
@@ -2038,7 +2059,7 @@ export default function TieredPricingEditor({
             <div>
               <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                 <Text strong style={{ fontSize: 15 }}>
-                  {t('预计费用')}：{renderQuota(evalResult.cost, 4)}
+                  {t('预计费用')}：{renderQuota(evalResult.cost, 9)}
                 </Text>
                 {evalResult.matchedTier && (
                   <Tag size='small' color='blue' type='light'>

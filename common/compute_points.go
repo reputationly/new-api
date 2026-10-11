@@ -24,18 +24,18 @@ import "github.com/shopspring/decimal"
 // 算力点是套餐给的，来源、有效期、适用范围三者皆不同。
 
 // 算力点换算率：默认 1 元 = 100 算力点（即 1 算力点 = 1 分钱），与积分同口径，
-// 运营心智统一，即 QuotaPerUnit / (汇率 × 100)。
+// 运营心智统一，即 QuotaPerYuan / 100 = 10,000,000 quota。
 //
-// 与积分完全同构：换算率不能在包初始化时固定，否则 QPU 切换后会读到过期值。
+// 与积分完全同构：面值固定为 1 分钱，不依赖汇率或 QuotaPerUnit。
 
 // QuotaPerComputePointFunc 由上层配置包在 init 时注入，返回实时配置值（0 = 自动）。
 // common 不能 import operation_setting（会循环），故用依赖倒置——与积分同构。
 var QuotaPerComputePointFunc func() float64
 
-// DefaultQuotaPerComputePoint 按当前配置实时推算算力点换算率：QuotaPerUnit / (汇率 × 100)。
-// 汇率 7.3 时 QPU 500000 → 684.93，QPU 7300000 → 10000（两种单位下 1 元都是 100 点）。
+// DefaultQuotaPerComputePoint 返回「自动」模式下的算力点换算率：
+// QuotaPerYuan / 100 = 10,000,000（1 算力点 = 1 分钱 = 0.01 元，即 1 元 = 100 点）。
 func DefaultQuotaPerComputePoint() float64 {
-	return QuotaPerUnit / (getUSDExchangeRate() * 100)
+	return QuotaPerYuan / 100
 }
 
 // GetQuotaPerComputePoint 返回生效的算力点换算率：配置值 > 0 用配置值，否则实时推算。
@@ -95,22 +95,8 @@ func YuanToComputePoints(yuan float64) int {
 	if yuan <= 0 || qpc <= 0 {
 		return 0
 	}
-	// 1 元对应的 quota = QuotaPerUnit / 汇率；此处复用 quota 口径避免二次引入汇率常量
-	quotaPerYuan := decimal.NewFromFloat(QuotaPerUnit).Div(decimal.NewFromFloat(getUSDExchangeRate()))
-	q := decimal.NewFromFloat(yuan).Mul(quotaPerYuan)
+	// 1 元就是 QuotaPerYuan 个 quota（常量，与汇率无关）
+	q := decimal.NewFromFloat(yuan).Mul(decimal.NewFromInt(QuotaPerYuan))
 	p := q.Div(decimal.NewFromFloat(qpc))
 	return int(p.Floor().IntPart())
-}
-
-// USDExchangeRateFunc 由上层配置包注入实时汇率（operation_setting.Price）。
-// 同样是依赖倒置：common 不能 import operation_setting。
-var USDExchangeRateFunc func() float64
-
-func getUSDExchangeRate() float64 {
-	if USDExchangeRateFunc != nil {
-		if v := USDExchangeRateFunc(); v > 0 {
-			return v
-		}
-	}
-	return 7.3
 }

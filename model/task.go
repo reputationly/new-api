@@ -392,6 +392,10 @@ type TaskBillingContext struct {
 	OriginModelName string             `json:"origin_model_name,omitempty"` // 模型名称，必须为OriginModelName
 	PerCallBilling  bool               `json:"per_call_billing,omitempty"`  // 按次计费：跳过轮询阶段的差额结算
 
+	// PriceUnit 标记这份冻结价的口径："cny" = 人民币（新任务）。
+	// 空值表示历史美元口径（1 quota = ¥1e-9 之前的任务），迁移会补齐为 "cny"。
+	PriceUnit string `json:"price_unit,omitempty"`
+
 	// TimeRule 是提交时命中的时段折扣，紧凑表示如「深夜档:×0.7」。
 	//
 	// 必须冻结：GroupRatio 本身已经冻结了含时段系数的终值，但结算发生在几百秒后的
@@ -409,8 +413,8 @@ type TaskBillingContext struct {
 // 冻结是必需的：视频任务的结算发生在几百秒后的异步轮询里，那时既没有 gin context
 // 也没有请求体，无从重新解析分辨率 / 秒数 / 是否含视频输入。
 //
-// UnitPrice 单位是**美元**——token 模式为 $/百万 tokens，per_call 模式为 $/次。
-// 货币换算只发生在管理端编辑器里，后端全程不碰汇率。
+// UnitPrice 单位是**人民币**——token 模式为 ¥/百万 tokens，per_call 模式为 ¥/次。
+// 定价配置本身就是人民币价，后端不碰汇率。
 type TaskVideoBilling struct {
 	Mode          string  `json:"mode,omitempty"`
 	UnitPrice     float64 `json:"unit_price,omitempty"`

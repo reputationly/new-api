@@ -17,7 +17,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 
-import React, { useCallback, useContext, useMemo, useState } from 'react';
+import React, { useCallback, useMemo, useState } from 'react';
 import {
   Banner,
   Button,
@@ -51,11 +51,9 @@ import {
   videoResolutionOptionsForModel,
   formatDisplayPrice,
   hasValue,
-  normalizeRate,
   useModelPricingEditorState,
 } from '../hooks/useModelPricingEditorState';
 import { useIsMobile } from '../../../../hooks/common/useIsMobile';
-import { StatusContext } from '../../../../context/Status';
 import TieredPricingEditor from './TieredPricingEditor';
 import VideoMatrixEditor from './VideoMatrixEditor';
 
@@ -123,12 +121,6 @@ export default function ModelPricingEditor({
 }) {
   const { t } = useTranslation();
   const isMobile = useIsMobile();
-  const [statusState] = useContext(StatusContext);
-  // 优先用页面级、随保存刷新的 options.USDExchangeRate；StatusContext 仅 app 启动加载一次，
-  // 改汇率后同会话不刷新会折算错（写错计费倍率），故仅作兜底。
-  const rate = normalizeRate(
-    options?.USDExchangeRate ?? statusState?.status?.usd_exchange_rate,
-  );
   const [addVisible, setAddVisible] = useState(false);
   const [batchVisible, setBatchVisible] = useState(false);
   const [newModelName, setNewModelName] = useState('');
@@ -168,7 +160,6 @@ export default function ModelPricingEditor({
     t,
     candidateModelNames,
     filterMode,
-    rate,
   });
 
   const getExprModeLabel = useCallback(
@@ -296,8 +287,7 @@ export default function ModelPricingEditor({
           closeIcon={null}
           style={{ width: '100%' }}
           description={t(
-            '价格单位为人民币（¥），按运营设置的「美元兑人民币汇率」{{rate}} 自动折算为后端倍率存储；价格显示保留 2 位小数，存储仍为高精度，计费不受影响。（注：表达式/阶梯计费仍按美元 $ 计价，不受此折算影响。）',
-            { rate },
+            '价格单位统一为人民币（¥）：输入价是 ¥/百万 tokens，按次价是 ¥/次，视频矩阵是 ¥/秒 或 ¥/次。填什么就存什么，不再按汇率折算。价格显示保留 2 位小数，存储仍为高精度，计费不受影响。',
           )}
         />
         <Space wrap className='mt-2'>
@@ -868,8 +858,7 @@ export default function ModelPricingEditor({
                       />
                       <div className='mt-3 text-xs text-gray-500'>
                         {t(
-                          '价格填人民币，按运营设置的汇率 {{rate}} 折算为美元存储。留空的格子视为未配置，命中不到时该次请求回退到上面的价格路径。',
-                          { rate },
+                          '价格填人民币（¥/百万 tokens、¥/秒、¥/次），原样存储。留空的格子视为未配置，命中不到时该次请求回退到上面的价格路径。',
                         )}
                       </div>
                     </>

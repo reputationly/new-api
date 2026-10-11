@@ -21,7 +21,7 @@ const plans = [{ plan: { id: 1, title: '专业版' } }];
 
 beforeEach(() => {
   localStorage.setItem('quota_per_compute_point', '100');
-  localStorage.setItem('quota_per_unit', '500000');
+  localStorage.setItem('quota_per_yuan', '500000');
   API.get.mockReset();
 });
 

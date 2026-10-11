@@ -91,7 +91,7 @@ func TestApplyVideoPricing_PerCallSetsFinalQuota(t *testing.T) {
 	require.True(t, applyVideoPricing(c, info))
 	require.True(t, info.PriceData.UsePrice)
 	require.InDelta(t, 0.4, info.PriceData.ModelPrice, 1e-9)
-	require.Equal(t, int(0.4*common.QuotaPerUnit), info.PriceData.Quota)
+	require.Equal(t, int(0.4*common.QuotaPerYuan), info.PriceData.Quota)
 }
 
 func TestApplyVideoPricing_PerCallScalesByGroupRatio(t *testing.T) {
@@ -100,7 +100,7 @@ func TestApplyVideoPricing_PerCallScalesByGroupRatio(t *testing.T) {
 	info.PriceData.GroupRatioInfo.GroupRatio = 0.5
 
 	require.True(t, applyVideoPricing(c, info))
-	require.Equal(t, int(0.2*common.QuotaPerUnit*0.5), info.PriceData.Quota)
+	require.Equal(t, int(0.2*common.QuotaPerYuan*0.5), info.PriceData.Quota)
 }
 
 // 客户端只给 seconds 时，kling 等按次渠道上游会用自己的默认值（5 秒），
@@ -276,7 +276,7 @@ func TestApplyVideoPricing_PerSecondMultipliesByDuration(t *testing.T) {
 
 	require.True(t, info.PriceData.UsePrice)
 	require.InDelta(t, 0.05*12, info.PriceData.ModelPrice, 1e-9)
-	require.Equal(t, int(0.05*12*common.QuotaPerUnit), info.PriceData.Quota)
+	require.Equal(t, int(0.05*12*common.QuotaPerYuan), info.PriceData.Quota)
 }
 
 // 同一分辨率下时长翻倍，价格必须跟着翻倍——这正是改造前做不到的：
@@ -308,7 +308,7 @@ func TestApplyVideoPricing_PerSecondScalesByGroupRatio(t *testing.T) {
 	info.PriceData.GroupRatioInfo.GroupRatio = 0.5
 
 	require.True(t, applyVideoPricing(c, info))
-	require.Equal(t, int(0.01*8*common.QuotaPerUnit*0.5), info.PriceData.Quota)
+	require.Equal(t, int(0.01*8*common.QuotaPerYuan*0.5), info.PriceData.Quota)
 }
 
 // 秒数缺失时不能按 0 秒算出 0 元——那等于白送。必须未命中、回退旧路径。
@@ -413,10 +413,10 @@ func TestVideoPerCallPriceable_SecondsMatchesApply(t *testing.T) {
 	require.False(t, videoPerCallPriceable(c, info))
 }
 
-// 按次视频：矩阵单价 × QPU 会落在 N−ε 上（运营填 ¥0.1 → 0.1/7.3 美元，
-// QPU = 7300000 时算出 99999.9999…），截断会少收 1 quota。
+// 按次视频：矩阵单价（¥/次）× QuotaPerYuan 会落在 N−ε 上
+// （¥0.0099999999 × 10⁹ = 9,999,999.9），截断会少收 1 quota。
 func TestApplyVideoPricing_PerCallRoundsUp(t *testing.T) {
-	const cfg = `{"rounding-video":{"mode":"per_call","per_call":{"720p":{"5":0.013698630136986301}}}}`
+	const cfg = `{"rounding-video":{"mode":"per_call","per_call":{"720p":{"5":0.0099999999}}}}`
 	require.NoError(t, ratio_setting.UpdateVideoPricingByJSONString(cfg))
 	t.Cleanup(func() { _ = ratio_setting.UpdateVideoPricingByJSONString("") })
 
@@ -428,10 +428,6 @@ func TestApplyVideoPricing_PerCallRoundsUp(t *testing.T) {
 	info.TaskRelayInfo = &relaycommon.TaskRelayInfo{}
 	info.PriceData = types.PriceData{GroupRatioInfo: types.GroupRatioInfo{GroupRatio: 1}}
 
-	original := common.QuotaPerUnit
-	t.Cleanup(func() { common.QuotaPerUnit = original })
-	common.QuotaPerUnit = 7300000
-
 	require.True(t, applyVideoPricing(c, info))
-	require.Equal(t, 100000, info.PriceData.Quota, "¥0.1 应按 100000 quota 冻结")
+	require.Equal(t, 10_000_000, info.PriceData.Quota, "¥0.0099999999 应四舍五入为 10,000,000 quota")
 }

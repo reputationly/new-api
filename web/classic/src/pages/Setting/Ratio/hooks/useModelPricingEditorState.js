@@ -17,7 +17,12 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import { useEffect, useMemo, useState } from 'react';
-import { API, showError, showSuccess } from '../../../../helpers';
+import {
+  API,
+  showError,
+  showSuccess,
+  stripExprVersion,
+} from '../../../../helpers';
 import {
   combineBillingExpr,
   splitBillingExprAndRequestRules,
@@ -25,14 +30,7 @@ import {
 
 export const PAGE_SIZE = 10;
 export const PRICE_SUFFIX = '¥/1M tokens';
-export const DEFAULT_USD2RMB_RATE = 7.3;
 const EMPTY_CANDIDATE_MODEL_NAMES = [];
-
-// 汇率兜底：无效（0 / 空 / 非有限）时回退常量，避免 ÷0 导致价格爆炸。
-export const normalizeRate = (rate) => {
-  const num = Number(rate);
-  return Number.isFinite(num) && num > 0 ? num : DEFAULT_USD2RMB_RATE;
-};
 
 // 显示精度：按实际数字精度展示，小数不足 2 位时补 0 到 2 位（¥4 → 4.00、
 // ¥0.876 → 0.876、¥0.0146 → 0.0146）。先收敛到 10 位去掉往返浮点漂移尾巴
@@ -65,6 +63,8 @@ const EMPTY_MODEL = {
   audioOutputPrice: '',
   billingExpr: '',
   requestRuleExpr: '',
+  // 表达式口径版本：0 = 无表达式，1 = 美元口径旧表达式（后端拒绝结算），2 = 人民币口径
+  billingExprVersion: 0,
   // null = 未启用视频计费矩阵；对象 = 已启用（形状见 emptyVideoMatrix）
   videoMatrix: null,
   rawRatios: {
@@ -213,12 +213,10 @@ export const emptyVideoMatrix = () => ({
 /**
  * 把后端的 VideoPriceEntry 解析成编辑器状态；entry 为空返回 null（= 未启用矩阵）。
  *
- * 货币边界：后端存美元，界面填人民币。与 ModelPrice 同口径——只乘汇率，不再乘 2
- * （那个 2 是 ModelRatio 的基准价约定，价格字段没有）。
+ * 货币边界：后端存的就是人民币，界面直接填、直接存，不经任何汇率换算。
  */
-export const parseVideoMatrixEntry = (entry, rate) => {
+export const parseVideoMatrixEntry = (entry) => {
   if (!entry || typeof entry !== 'object') return null;
-  const usd2rmb = normalizeRate(rate);
   // 未知 mode 一律回落 token（既有行为）。回落到 per_second 会让整表落进另一个
   // 字段名下，后端 validate 照样通过、查表却永远未命中——静默错账。
   let mode = VIDEO_MODE_TOKEN;
@@ -231,18 +229,16 @@ export const parseVideoMatrixEntry = (entry, rate) => {
   else if (mode === VIDEO_MODE_PER_CALL) table = entry.per_call || {};
   else {
     table = {};
-    Object.entries(entry.per_second || {}).forEach(([resolution, usd]) => {
-      table[resolution] = { [VIDEO_COL_PER_SECOND]: usd };
+    Object.entries(entry.per_second || {}).forEach(([resolution, price]) => {
+      table[resolution] = { [VIDEO_COL_PER_SECOND]: price };
     });
   }
 
   const cells = {};
   const cols = new Set();
   Object.entries(table).forEach(([resolution, row]) => {
-    Object.entries(row || {}).forEach(([col, usd]) => {
-      cells[videoCellKey(resolution, col)] = formatDisplayPrice(
-        Number(usd) * usd2rmb,
-      );
+    Object.entries(row || {}).forEach(([col, price]) => {
+      cells[videoCellKey(resolution, col)] = formatDisplayPrice(Number(price));
       cols.add(col);
     });
   });
@@ -262,9 +258,8 @@ export const parseVideoMatrixEntry = (entry, rate) => {
 };
 
 /** 序列化回后端的 VideoPriceEntry；一格都没填时返回 null（不写进配置）。 */
-export const serializeVideoMatrix = (matrix, rate) => {
+export const serializeVideoMatrix = (matrix) => {
   if (!matrix) return null;
-  const usd2rmb = normalizeRate(rate);
   let cols;
   if (matrix.mode === VIDEO_MODE_TOKEN) {
     cols = [VIDEO_COL_WITHOUT_VIDEO, VIDEO_COL_WITH_VIDEO];
@@ -284,9 +279,9 @@ export const serializeVideoMatrix = (matrix, rate) => {
       // 留空 = 该格未配置，不写入。后端查不到会回退旧计费路径，
       // 写个 0 反而会被当成「未配置」的另一种形态，徒增歧义。
       if (raw === '' || raw === null || raw === undefined) return;
-      const usd = toNormalizedNumber(Number(raw) / usd2rmb);
-      if (usd === null || !(usd > 0)) return;
-      bucket[col] = usd;
+      const price = toNormalizedNumber(Number(raw));
+      if (price === null || !(price > 0)) return;
+      bucket[col] = price;
     });
     if (Object.keys(bucket).length) table[key] = bucket;
   });
@@ -306,11 +301,11 @@ export const serializeVideoMatrix = (matrix, rate) => {
   return { mode: VIDEO_MODE_PER_CALL, per_call: table };
 };
 
-// 货币边界：倍率 → 人民币输入价（倍率 × 基准价 2 × 汇率）。
-const ratioToBasePrice = (ratio, rate) => {
+// 货币边界：倍率就是 ¥/百万 tokens，输入价与它同值，不做任何换算。
+const ratioToBasePrice = (ratio) => {
   const num = toNumberOrNull(ratio);
   if (num === null) return '';
-  return formatNumber(num * 2 * normalizeRate(rate));
+  return formatNumber(num);
 };
 
 const normalizeCompletionRatioMeta = (rawMeta) => {
@@ -327,11 +322,8 @@ const normalizeCompletionRatioMeta = (rawMeta) => {
   };
 };
 
-const buildModelState = (name, sourceMaps, rate) => {
-  const videoMatrix = parseVideoMatrixEntry(
-    sourceMaps.VideoPricing?.[name],
-    rate,
-  );
+const buildModelState = (name, sourceMaps) => {
+  const videoMatrix = parseVideoMatrixEntry(sourceMaps.VideoPricing?.[name]);
   const billingMode = sourceMaps.ModelBillingMode?.[name];
 
   const modelRatio = toNumericString(sourceMaps.ModelRatio[name]);
@@ -346,13 +338,10 @@ const buildModelState = (name, sourceMaps, rate) => {
   const audioCompletionRatio = toNumericString(
     sourceMaps.AudioCompletionRatio[name],
   );
-  // 货币边界：ModelPrice 是绝对美元金额，× 汇率得人民币按次价。
+  // 货币边界：ModelPrice 就是人民币按次价，原样进输入框。
   const rawFixedPrice = toNumberOrNull(sourceMaps.ModelPrice[name]);
-  const fixedPrice =
-    rawFixedPrice === null
-      ? ''
-      : formatNumber(rawFixedPrice * normalizeRate(rate));
-  const inputPrice = ratioToBasePrice(modelRatio, rate);
+  const fixedPrice = rawFixedPrice === null ? '' : formatNumber(rawFixedPrice);
+  const inputPrice = ratioToBasePrice(modelRatio);
   const inputPriceNumber = toNumberOrNull(inputPrice);
   const audioInputPrice =
     inputPriceNumber !== null && hasValue(audioRatio)
@@ -370,15 +359,21 @@ const buildModelState = (name, sourceMaps, rate) => {
   };
 
   if (billingMode === 'tiered_expr') {
+    // 表达式原文带版本前缀（v2: 是人民币口径；无前缀 / v1: 是美元口径旧表达式，
+    // 后端已拒绝结算）。状态里只留表达式正文，版本单独记着给界面出提示。
     const fullBillingExpr = sourceMaps.ModelBillingExpr?.[name] || '';
-    const { billingExpr, requestRuleExpr } =
-      splitBillingExprAndRequestRules(fullBillingExpr);
+    const { version: billingExprVersion, body } =
+      stripExprVersion(fullBillingExpr);
+    const { billingExpr, requestRuleExpr } = splitBillingExprAndRequestRules(
+      body,
+    );
     return {
       ...EMPTY_MODEL,
       name,
       billingMode: 'tiered_expr',
       billingExpr,
       requestRuleExpr,
+      billingExprVersion,
       // 阶梯表达式只作用于同步请求（ModelPriceHelper），视频矩阵只作用于异步任务
       // （ModelPriceHelperPerCall → applyVideoPricing），两者可以共存且都生效。
       videoMatrix,
@@ -697,8 +692,7 @@ export const buildOptionalFieldToggles = (model) => ({
   audioOutputPrice: hasValue(model.audioOutputPrice),
 });
 
-const serializeModel = (model, t, rate) => {
-  const usd2rmb = normalizeRate(rate);
+const serializeModel = (model, t) => {
   const result = {
     ModelPrice: null,
     ModelRatio: null,
@@ -718,10 +712,8 @@ const serializeModel = (model, t, rate) => {
     model.billingMode === 'tiered_expr'
   ) {
     if (hasValue(model.fixedPrice)) {
-      // 人民币按次价 ÷ 汇率 = 后端存储的美元 ModelPrice。
-      result.ModelPrice = toNormalizedNumber(
-        Number(model.fixedPrice) / usd2rmb,
-      );
+      // 编辑器里填的就是人民币按次价，原样存。
+      result.ModelPrice = toNormalizedNumber(Number(model.fixedPrice));
     }
     // per-request 到此为止：这类模型按次定价，倍率无意义，不回写。
     // tiered_expr 不能停在这——它的 ModelRatio 也要原样保住，继续往下走。
@@ -789,8 +781,9 @@ const serializeModel = (model, t, rate) => {
     return result;
   }
 
-  // 货币边界：人民币输入价 ÷ 汇率 ÷ 基准价 2 = 后端倍率。派生项为同币种比值，汇率自动约掉，不参与换算。
-  result.ModelRatio = toNormalizedNumber(inputPrice / usd2rmb / 2);
+  // 货币边界：输入价（人民币）就是后端倍率（¥/百万 tokens）。
+  // 派生项是倍率的比值，无量纲，本来就不参与换算。
+  result.ModelRatio = toNormalizedNumber(inputPrice);
 
   if (!model.completionRatioLocked && completionPrice !== null) {
     result.CompletionRatio = toNormalizedNumber(completionPrice / inputPrice);
@@ -830,9 +823,8 @@ const serializeModel = (model, t, rate) => {
   return result;
 };
 
-export const buildPreviewRows = (model, t, rate) => {
+export const buildPreviewRows = (model, t) => {
   if (!model) return [];
-  const usd2rmb = normalizeRate(rate);
   const finalBillingExpr = combineBillingExpr(
     model.billingExpr,
     model.requestRuleExpr,
@@ -872,7 +864,7 @@ export const buildPreviewRows = (model, t, rate) => {
         key: 'ModelPrice',
         label: 'ModelPrice',
         value: hasValue(model.fixedPrice)
-          ? formatNumber(Number(model.fixedPrice) / usd2rmb)
+          ? formatNumber(Number(model.fixedPrice))
           : t('空'),
       },
     ];
@@ -946,7 +938,7 @@ export const buildPreviewRows = (model, t, rate) => {
     {
       key: 'ModelRatio',
       label: 'ModelRatio',
-      value: formatNumber(inputPrice / usd2rmb / 2),
+      value: formatNumber(inputPrice),
     },
     {
       key: 'CompletionRatio',
@@ -1005,7 +997,6 @@ export function useModelPricingEditorState({
   t,
   candidateModelNames = EMPTY_CANDIDATE_MODEL_NAMES,
   filterMode = 'all',
-  rate = DEFAULT_USD2RMB_RATE,
 }) {
   const [models, setModels] = useState([]);
   const [initialVisibleModelNames, setInitialVisibleModelNames] = useState([]);
@@ -1056,7 +1047,7 @@ export function useModelPricingEditorState({
     ]);
 
     const nextModels = Array.from(names)
-      .map((name) => buildModelState(name, sourceMaps, rate))
+      .map((name) => buildModelState(name, sourceMaps))
       .sort((a, b) => a.name.localeCompare(b.name));
 
     setModels(nextModels);
@@ -1083,7 +1074,7 @@ export function useModelPricingEditorState({
           : nextModels;
       return nextVisibleModels[0]?.name || '';
     });
-  }, [candidateModelNames, filterMode, options, rate]);
+  }, [candidateModelNames, filterMode, options]);
 
   const visibleModels = useMemo(() => {
     return filterMode === 'unset'
@@ -1119,8 +1110,8 @@ export function useModelPricingEditorState({
   );
 
   const previewRows = useMemo(
-    () => buildPreviewRows(selectedModel, t, rate),
-    [selectedModel, t, rate],
+    () => buildPreviewRows(selectedModel, t),
+    [selectedModel, t],
   );
 
   useEffect(() => {
@@ -1548,7 +1539,7 @@ export function useModelPricingEditorState({
               ),
             );
           }
-          const entry = serializeVideoMatrix(model.videoMatrix, rate);
+          const entry = serializeVideoMatrix(model.videoMatrix);
           if (entry) {
             videoOutput.VideoPricingConfig[model.name] = entry;
           }
@@ -1562,8 +1553,9 @@ export function useModelPricingEditorState({
           if (finalBillingExpr) {
             tieredOutput['billing_setting.billing_mode'][model.name] =
               'tiered_expr';
+            // 新保存的表达式一律是人民币口径的 v2（后端拒绝写入 v1）
             tieredOutput['billing_setting.billing_expr'][model.name] =
-              finalBillingExpr;
+              `v2:${finalBillingExpr}`;
           }
         }
 
@@ -1572,7 +1564,7 @@ export function useModelPricingEditorState({
         // delay.  ModelPriceHelper checks billing_mode first, so these values
         // are only used when billing_setting hasn't propagated yet.
         const writeSerialized = (source) => {
-          Object.entries(serializeModel(source, t, rate)).forEach(
+          Object.entries(serializeModel(source, t)).forEach(
             ([key, value]) => {
               if (value !== null) {
                 output[key][model.name] = value;

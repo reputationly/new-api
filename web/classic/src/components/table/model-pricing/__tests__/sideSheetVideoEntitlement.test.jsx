@@ -43,7 +43,7 @@ const renderSheet = (entitlementConfig) =>
   );
 
 beforeEach(() => {
-  localStorage.setItem('quota_per_unit', '500000');
+  localStorage.setItem('quota_per_yuan', '500000');
   localStorage.setItem('quota_display_type', 'USD');
 });
 
@@ -55,7 +55,7 @@ describe('详情页视频逐格价目的套餐内点数', () => {
       },
       quotaPerComputePoint: 100,
     });
-    // 0.2 美元 × 500000 / 100 = 1000 点（基础单价口径）
+    // ¥0.2 × 500000 / 100 = 1000 点（基础单价口径）
     expect(screen.getAllByText(/^1,000 算力点$/).length).toBeGreaterThan(0);
   });
 

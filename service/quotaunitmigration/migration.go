@@ -30,16 +30,8 @@ const (
 	ModeDryRun = "dry-run"
 	ModeApply  = "apply"
 
-	stateOptionKey = "QuotaUnitMigration"
-	stateLogs      = "logs"
-	stateDone      = "done"
-
-	baseQuotaPerUnit   = 500000.0
-	targetQuotaPerUnit = 7300000.0
-
-	// scale 旧 quota → 新 quota 的倍数：1 quota 的人民币价值缩小 14.6 倍，
-	// 于是同额人民币对应的 quota 数放大 14.6 倍。
-	scale = targetQuotaPerUnit / baseQuotaPerUnit
+	stateLogs = "logs"
+	stateDone = "done"
 )
 
 const (
@@ -70,7 +62,17 @@ type migrationState struct {
 //	状态 key 不存在 且 QuotaPerUnit ≠ 500000  → 拒绝执行（库已是新单位或被人手工改过）
 //	state = logs                              → 从 logs_cursor 续跑
 //	state = done                              → 已完成，退出码 0，不改任何数据
-func Run(mode string, out io.Writer) error {
+//
+// Run 执行 V1 迁移：1 quota 从 ¥0.0000146 变成 ¥0.000001（QuotaPerUnit 500000 → 7300000）。
+func Run(mode string, out io.Writer) error { return run(planV1(), mode, out) }
+
+// RunV2 执行 V2 迁移：1 quota 细化到 ¥0.000000001，同时把定价配置从美元换成人民币。
+func RunV2(mode string, out io.Writer) error { return run(planV2(), mode, out) }
+
+// run 是两种方案共用的主流程。
+func run(pl *plan, mode string, out io.Writer) error {
+	activePlan = pl
+	activeScaling = pl.scaling
 	if mode != ModeDryRun && mode != ModeApply {
 		return fmt.Errorf("未知的迁移模式 %q：只支持 dry-run / apply", mode)
 	}
@@ -81,10 +83,11 @@ func Run(mode string, out io.Writer) error {
 		return err
 	}
 	rep := newReport(out, dryRun, rate)
-	rep.line("=== 额度单位迁移（%s）===", mode)
+	rep.line("=== %s（%s）===", pl.title, mode)
 	rep.line("时间: %s", time.Now().Format("2006-01-02 15:04:05"))
 	rep.line("QuotaPerUnit: %.0f → %.0f（于是 1 quota = ¥%.6f）",
-		baseQuotaPerUnit, targetQuotaPerUnit, rate/targetQuotaPerUnit)
+		pl.baseQPU, pl.targetQPU, rate/pl.targetQPU)
+	rep.line("缩放倍数: ×%s", pl.scaleLabel())
 	rep.line("汇率（只用于报告里的人民币对照）: %v", rate)
 	if model.LOG_DB == model.DB {
 		rep.line("日志库: 与主库同库")
@@ -98,7 +101,7 @@ func Run(mode string, out io.Writer) error {
 	}
 	if hasState && state.State == stateDone {
 		rep.blank()
-		rep.line("迁移已完成（options.%s.state = done），不做任何改动。", stateOptionKey)
+		rep.line("迁移已完成（options.%s.state = done），不做任何改动。", pl.stateKey)
 		return rep.flush()
 	}
 
@@ -109,13 +112,32 @@ func Run(mode string, out io.Writer) error {
 		return err
 	}
 
-	qpu, _, err := loadOptionFloat("QuotaPerUnit", baseQuotaPerUnit)
+	qpu, _, err := loadOptionFloat("QuotaPerUnit", pl.baseQPU)
 	if err != nil {
 		return err
 	}
-	if !hasState && qpu != baseQuotaPerUnit {
+	if !hasState && qpu != pl.baseQPU {
 		return fmt.Errorf("options.QuotaPerUnit = %v（不是 %v）且没有迁移状态，拒绝执行："+
-			"这个库要么已经是新单位，要么被人手工改过，无法判断要不要缩放", qpu, baseQuotaPerUnit)
+			"这个库要么已经是新单位，要么被人手工改过，无法判断要不要缩放。\n"+
+			"如果确认数据已经是新单位、只是状态被删掉了，手工写回 options.%s = {\"state\":\"done\"} 即可（不要重跑迁移，会二次放大）",
+			qpu, pl.baseQPU, pl.stateKey)
+	}
+	if pl.requireV1Done {
+		v1State, v1Found, err := loadStateFor(planV1().stateKey)
+		if err != nil {
+			return err
+		}
+		if !v1Found || v1State.State != stateDone {
+			return fmt.Errorf("前置条件不满足：options.%s.state 不是 done（V1 迁移未完成），请先执行 --%s=apply",
+				planV1().stateKey, planV1().flag)
+		}
+	}
+	if pl.requireRate > 0 {
+		if delta := rate - pl.requireRate; delta > 1e-9 || delta < -1e-9 {
+			return fmt.Errorf("前置条件不满足：USDExchangeRate = %v（本方案要求 %v）。"+
+				"倍率的换算倍数（14.6 = 2 × 汇率）依赖它，汇率不同必须先人工确认倍数再迁移",
+				rate, pl.requireRate)
+		}
 	}
 
 	needSmallStage := !hasState
@@ -131,10 +153,22 @@ func Run(mode string, out io.Writer) error {
 		smallStageTime time.Duration
 	)
 
+	pricingStage := (*v2PricingStage)(nil)
+	if pl.pricing {
+		pricingStage = newV2PricingStage()
+		if !dryRun {
+			// 只读前置检查：库里还有 v1（美元口径）表达式就直接拒绝，见 §12.2 R2。
+			// 用独立的 stage 探测，避免污染正式报告的行。
+			if err := newV2PricingStage().checkV1Expressions(); err != nil {
+				return err
+			}
+		}
+	}
+
 	if needSmallStage {
 		// 迁移前合计必须在写之前采集。
 		var err error
-		if smallColumns, err = collectColumnStats(model.DB, smallNumericScopes); err != nil {
+		if smallColumns, err = collectColumnStats(model.DB, pl.smallScopes); err != nil {
 			return err
 		}
 		if optionRows, err = collectOptionRows(); err != nil {
@@ -148,7 +182,7 @@ func Run(mode string, out io.Writer) error {
 			return err
 		}
 		if needSmallStage {
-			if jsonRows, err = scanJSONRows(model.DB, smallJSONScopes); err != nil {
+			if jsonRows, err = scanJSONRows(model.DB, pl.smallJSON); err != nil {
 				return err
 			}
 		}
@@ -157,6 +191,12 @@ func Run(mode string, out io.Writer) error {
 			return err
 		}
 		jsonRows = append(jsonRows, logJSON...)
+		if pricingStage != nil {
+			// dry-run 只读换算，产出与 apply 一致的报告（解析失败同样拒绝执行）。
+			if err := pricingStage.inspectOnly(); err != nil {
+				return err
+			}
+		}
 		if err = fillAfter(model.DB, smallColumns, true); err != nil {
 			return err
 		}
@@ -188,7 +228,7 @@ func Run(mode string, out io.Writer) error {
 	} else {
 		if needSmallStage {
 			var err error
-			if jsonRows, err = applySmallStage(); err != nil {
+			if jsonRows, err = applySmallStage(pricingStage); err != nil {
 				return err
 			}
 			smallStageTime = time.Since(startedAt)
@@ -238,7 +278,7 @@ func Run(mode string, out io.Writer) error {
 	rep.blank()
 	if needSmallStage {
 		rep.line("[数值列] 小表阶段（单事务，%d 表 %d 列）%s",
-			len(smallNumericScopes), len(smallColumns), stageElapsed(dryRun, smallStageTime))
+			len(pl.smallScopes), len(smallColumns), stageElapsed(dryRun, smallStageTime))
 		writeColumnStats(rep, smallColumns, dryRun)
 	} else {
 		rep.line("[数值列] 小表阶段已在本轮之前完成，跳过。")
@@ -268,13 +308,16 @@ func Run(mode string, out io.Writer) error {
 	} else {
 		rep.line("[options] 小表阶段已在本轮之前完成，跳过。")
 	}
+	if pricingStage != nil {
+		pricingStage.writePricingReport(rep)
+	}
 
 	rep.blank()
 	if dryRun {
 		rep.line("[logs] 分批计划：id (%d, %d]，预计 %d 批，每批 %d 行",
 			logStage.from, logStage.cutoff, logStage.batches, logBatchSize)
 		rep.blank()
-		rep.line("dry-run 结束：未写任何数据。执行 --migrate-quota-unit=apply 才会落地。")
+		rep.line("dry-run 结束：未写任何数据。执行 --%s=apply 才会落地。", pl.flag)
 		return rep.flush()
 	}
 
@@ -285,7 +328,7 @@ func Run(mode string, out io.Writer) error {
 		return err
 	}
 	rep.blank()
-	rep.line("apply 结束：options.%s.state = done。", stateOptionKey)
+	rep.line("apply 结束：options.%s.state = done。", pl.stateKey)
 	return rep.flush()
 }
 
@@ -345,14 +388,17 @@ func loadOptionFloat(key string, fallback float64) (float64, bool, error) {
 	return v, true, nil
 }
 
-func loadState() (migrationState, bool, error) {
-	raw, found, err := loadOption(model.DB, stateOptionKey)
+func loadState() (migrationState, bool, error) { return loadStateFor(currentPlan().stateKey) }
+
+// loadStateFor 读指定状态 key（启动保护要单独读 V2 的 key）。
+func loadStateFor(stateKey string) (migrationState, bool, error) {
+	raw, found, err := loadOption(model.DB, stateKey)
 	if err != nil || !found {
 		return migrationState{}, false, err
 	}
 	var state migrationState
 	if err := common.UnmarshalJsonStr(raw, &state); err != nil {
-		return migrationState{}, false, fmt.Errorf("options.%s 不是合法 JSON: %w", stateOptionKey, err)
+		return migrationState{}, false, fmt.Errorf("options.%s 不是合法 JSON: %w", stateKey, err)
 	}
 	return state, true, nil
 }
@@ -362,7 +408,7 @@ func saveState(db *gorm.DB, state migrationState) error {
 	if err != nil {
 		return err
 	}
-	return upsertOption(db, stateOptionKey, string(raw))
+	return upsertOption(db, currentPlan().stateKey, string(raw))
 }
 
 func upsertOption(db *gorm.DB, key, value string) error {
@@ -380,8 +426,8 @@ type optionRow struct {
 }
 
 func collectOptionRows() ([]optionRow, error) {
-	rows := make([]optionRow, 0, len(optionSpecs))
-	for _, spec := range optionSpecs {
+	rows := make([]optionRow, 0, len(currentPlan().optionSpecs))
+	for _, spec := range currentPlan().optionSpecs {
 		raw, found, err := loadOption(model.DB, spec.key)
 		if err != nil {
 			return nil, err
@@ -437,28 +483,28 @@ func finishState() error {
 
 // applySmallStage 在**一个事务**内完成 M1.5（除 logs）、M1.6（tasks/users）、M1.7 与
 // 状态写入（§M1.3），任一步失败整体回滚。返回 JSON 列的改写统计。
-func applySmallStage() ([]jsonStatRow, error) {
+func applySmallStage(pricingStage *v2PricingStage) ([]jsonStatRow, error) {
 	cutoff, err := maxLogID()
 	if err != nil {
 		return nil, err
 	}
 	now := common.GetTimestamp()
-	jsonRows := make([]jsonStatRow, 0, len(smallJSONScopes))
+	jsonRows := make([]jsonStatRow, 0, len(activePlan.smallJSON))
 
 	err = model.DB.Transaction(func(tx *gorm.DB) error {
-		for _, scope := range smallNumericScopes {
+		for _, scope := range activePlan.smallScopes {
 			if err := execScaleUpdate(tx, scope.table, scope.columns, scope.where); err != nil {
 				return err
 			}
 		}
-		for _, scope := range smallJSONScopes {
+		for _, scope := range activePlan.smallJSON {
 			stat, err := rewriteJSONRows(tx, scope, "", true)
 			if err != nil {
 				return err
 			}
 			jsonRows = append(jsonRows, jsonStatRow{scope: scope, stat: stat})
 		}
-		for _, spec := range optionSpecs {
+		for _, spec := range activePlan.optionSpecs {
 			raw, found, err := loadOption(tx, spec.key)
 			if err != nil {
 				return err
@@ -471,6 +517,12 @@ func applySmallStage() ([]jsonStatRow, error) {
 				continue
 			}
 			if err := upsertOption(tx, spec.key, target); err != nil {
+				return err
+			}
+		}
+		if pricingStage != nil {
+			// 定价换算与 options 在同一个事务里提交（评审 §12.2 R3）。
+			if err := pricingStage.runInTx(tx); err != nil {
 				return err
 			}
 		}
@@ -497,9 +549,7 @@ func execScaleUpdate(db *gorm.DB, table string, columns []string, where string) 
 	}
 	sets := make([]string, 0, len(columns))
 	for _, column := range columns {
-		// n × 14.6 的小数部分只可能是 0/0.2/0.4/0.6/0.8，永远不落在 .5 上，
-		// 所以三库的 ROUND 舍入规则差异不影响结果（§M1.4）。
-		sets = append(sets, fmt.Sprintf("%s = ROUND(%s * %v)", column, column, scale))
+		sets = append(sets, fmt.Sprintf("%s = %s", column, activePlan.sqlScale(column)))
 	}
 	sql := fmt.Sprintf("UPDATE %s SET %s", table, strings.Join(sets, ", "))
 	if where != "" {
@@ -713,7 +763,7 @@ func applyLogBatch(from, to int64, state migrationState) (jsonStat, error) {
 		if err := saveState(model.DB, state); err != nil {
 			return stat, fmt.Errorf("日志批次 (id %d, %d] 已提交，但主库 logs_cursor 更新失败: %w。"+
 				"人工把 options.%s 的 logs_cursor 改成 %d 再重跑 apply，否则这批会被重复缩放",
-				from, to, err, stateOptionKey, to)
+				from, to, err, activePlan.stateKey, to)
 		}
 	}
 	return stat, nil
@@ -775,7 +825,7 @@ func fillAfter(db *gorm.DB, stats []columnStat, projected bool) error {
 		st := &stats[i]
 		expr := st.column
 		if projected {
-			expr = fmt.Sprintf("ROUND(%s * %v)", st.column, scale)
+			expr = activePlan.sqlScale(st.column)
 		}
 		sql := fmt.Sprintf("SELECT %s FROM %s", sumInt(expr), st.scope.table)
 		if st.scope.where != "" {
@@ -792,7 +842,7 @@ func writeColumnStats(rep *report, stats []columnStat, projected bool) {
 	rows := make([][]string, 0, len(stats))
 	for _, st := range stats {
 		before, beforeCNY := strconv.FormatInt(st.before, 10),
-			formatCNY(cny(float64(st.before), baseQuotaPerUnit, rep.rate))
+			formatCNY(cny(float64(st.before), activePlan.baseQPU, rep.rate))
 		if !st.beforeKnown {
 			before, beforeCNY = "—", "—"
 		}
@@ -802,12 +852,12 @@ func writeColumnStats(rep *report, stats []columnStat, projected bool) {
 			before,
 			strconv.FormatInt(st.after, 10),
 			beforeCNY,
-			formatCNY(cny(float64(st.after), targetQuotaPerUnit, rep.rate)),
+			formatCNY(cny(float64(st.after), activePlan.targetQPU, rep.rate)),
 		})
 	}
 	rep.table([]string{"表.列", "行数", "迁移前合计", "迁移后合计", "迁移前 CNY", "迁移后 CNY"}, rows)
 	if projected {
-		rep.line("（迁移后合计 = SUM(ROUND(列 × %v))，为预计值；CNY = quota ÷ QPU × 汇率）", scale)
+		rep.line("（迁移后合计 = %s，为预计值；CNY = quota ÷ QPU × 汇率）", activePlan.scaleDescription())
 	}
 }
 
@@ -872,8 +922,8 @@ func writeOptionRows(rep *report, rows []optionRow) {
 		table = append(table, []string{r.spec.key, old, target})
 	}
 	rep.table([]string{"key", "旧值", "新值"}, table)
-	rep.line("PreConsumedQuota 刻意不在清单里：它是预扣 token 数下限而不是 quota，" +
-		"倍率路径乘 scale 已经发生在它之后，再 ×14.6 会把冻结额放大两次。")
+	rep.line("PreConsumedQuota 刻意不在清单里：它是预扣 token 数下限而不是 quota，"+
+		"倍率路径的缩放发生在它之后，再乘一次 ×%s 会把冻结额放大两次。", activePlan.scaleLabel())
 }
 
 func batchCount(cursor, cutoff int64) int64 {

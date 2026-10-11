@@ -30,6 +30,7 @@ import {
   renderQuota,
   renderNumber,
   getLogOther,
+  normalizeLogPricing,
   copy,
   renderClaudeLogContent,
   renderLogContent,
@@ -430,7 +431,9 @@ export const useLogsData = () => {
     for (let i = 0; i < logs.length; i++) {
       logs[i].timestamp2string = timestamp2string(logs[i].created_at);
       logs[i].key = logs[i].id;
-      let other = getLogOther(logs[i].other);
+      // 定价字段统一在这里换算成人民币：后面所有渲染函数只处理人民币一种口径。
+      // 历史日志（含 V1 期）是美元口径，见 normalizeLogPricing 的注释。
+      let other = normalizeLogPricing(getLogOther(logs[i].other));
       let expandDataLocal = [];
       // 视频计费矩阵自带一套展开行（对齐供应商账单），并屏蔽通用的
       // 「日志详情 / 计费过程」——那两行按 model_ratio 展示，而 model_ratio

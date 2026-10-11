@@ -564,3 +564,32 @@ func TestGetTokenKeyRequiresOwnershipAndReturnsFullKey(t *testing.T) {
 		t.Fatalf("unauthorized key response leaked raw token key: %s", unauthorizedRecorder.Body.String())
 	}
 }
+
+// QuotaPerUnit 是运行时可改的 option：运营把它调大（例如按汇率 9.3 调美元换算）后，
+// 1e9 × QPU 会超出 int64。修复前 int(...) 越界得到负数上界，令牌创建/更新会把所有
+// 正额度都拒掉，且报错里的 Max 也是负数——这条用例就是那个回归的护栏。
+func TestUpdateTokenAcceptsPositiveQuotaWhenQuotaPerUnitIsLarge(t *testing.T) {
+	db := setupTokenControllerTestDB(t)
+	seedTokenControllerUser(t, db, 1)
+	seedToken(t, db, 1, "big-quota-token", "abcd1234efgh5678")
+
+	original := common.QuotaPerUnit
+	t.Cleanup(func() { common.QuotaPerUnit = original })
+	common.QuotaPerUnit = 1e10 // 1e9 × 1e10 = 1e19 > MaxInt64
+
+	quota := int64(1) << 62 // 一个很大但仍 ≤ MaxInt64 的正额度
+	ctx, recorder := newAuthenticatedContext(t, http.MethodPut, "/api/token/", map[string]any{
+		"id":              1,
+		"name":            "big-quota-token",
+		"remain_quota":    quota,
+		"unlimited_quota": false,
+		"group":           "default",
+		"expired_time":    -1,
+	}, 1)
+	UpdateToken(ctx)
+
+	response := decodeAPIResponse(t, recorder)
+	if !response.Success {
+		t.Fatalf("QPU 调大后正额度应通过校验，却仍被拒绝：%s", response.Message)
+	}
+}

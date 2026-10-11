@@ -7,7 +7,6 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/model"
-	"github.com/QuantumNous/new-api/setting/operation_setting"
 )
 
 // shanghaiLoc is the timezone supplier bills are anchored to (Asia/Shanghai).
@@ -191,7 +190,7 @@ func upstreamAmountCNY(quota int, other map[string]interface{}) float64 {
 	//      跟走了哪家供应商彻底无关。
 	// 新日志一律走这里；下面的除法只为存量日志保留，不需要回填。
 	if cost := getFloat(other, "cost_quota"); cost > 0 {
-		v := cost / common.QuotaPerUnit * operation_setting.USDExchangeRate
+		v := cost / common.QuotaPerYuan
 		return math.Round(v*1e6) / 1e6
 	}
 
@@ -199,7 +198,7 @@ func upstreamAmountCNY(quota int, other map[string]interface{}) float64 {
 	if r := getFloat(other, "group_ratio"); r > 0 {
 		upstreamQuota /= r
 	}
-	v := upstreamQuota / common.QuotaPerUnit * operation_setting.USDExchangeRate
+	v := upstreamQuota / common.QuotaPerYuan
 	return math.Round(v*1e6) / 1e6
 }
 

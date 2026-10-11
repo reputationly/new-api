@@ -686,13 +686,18 @@ func cellString(v interface{}) string {
 	return fmt.Sprintf("%v", v)
 }
 
+// isMigrationStateKey 判断 options 的某个 key 是不是迁移进度键。
+// V1 与 V2 都要命中：快照辅助函数会在两种方案的测试里复用。
+func isMigrationStateKey(key string) bool {
+	return key == planV1().stateKey || key == planV2().stateKey
+}
+
 // normalizeOptionValue 抹掉迁移状态里的时间戳：状态机的进度值参与比对，
 // 但 started_at / finished_at 天然随运行时刻变化。
-func normalizeOptionValue(t *testing.T, values []interface{}, cell string) string {
-	t.Helper()
+func normalizeOptionValue(t *testing.T, values []interface{}, cell string) string {	t.Helper()
 	isStateKey := false
 	for _, v := range values {
-		if cellString(v) == stateOptionKey {
+		if isMigrationStateKey(cellString(v)) {
 			isStateKey = true
 			break
 		}

@@ -38,16 +38,31 @@ func SetTheme(t string) {
 
 // var ChatLink = ""
 // var ChatLink2 = ""
-var QuotaPerUnit = 500 * 1000.0 // $0.002 / 1K tokens
+// QuotaPerYuan 是「1 元人民币对应的 quota」：1 quota = ¥0.000000001（10⁻⁹ 元）。
+//
+// 计费路径（倍率、按次、视频矩阵、工具附加费、违规罚金、分段表达式）一律用
+// 「人民币金额 × QuotaPerYuan」换算，既不读汇率也不读 QuotaPerUnit ——
+// 定价配置本身就是人民币价（¥/百万 tokens、¥/次、¥/千次…）。
+const QuotaPerYuan = 1_000_000_000
 
-// RatioQuotaBase 是「倍率 1 = $2 / 1M tokens = 1 quota / token」成立时的 QuotaPerUnit。
-// 倍率路径（quota/token = ratio）只在 QuotaPerUnit 恰好等于它时才成立，所以该路径必须
-// 乘 QuotaScale() 才能与 QuotaPerUnit 解耦；价格路径已经乘过 QuotaPerUnit，不得再乘。
-const RatioQuotaBase = 500000.0
+// QuotaPerMillionTokens 是「¥/百万 tokens」换算成 quota/token 的系数：
+// QuotaPerYuan / 10⁶ = 1000，即倍率 1（¥1/百万 tokens）= 1000 quota/token。
+const QuotaPerMillionTokens = QuotaPerYuan / 1_000_000
 
-// QuotaScale 返回当前 QuotaPerUnit 相对 RatioQuotaBase 的倍数（500000 → 1，7300000 → 14.6）。
-// 单位约定：QuotaPerUnit = 汇率 × 10^6 时 1 quota = ¥0.000001。
-func QuotaScale() float64 { return QuotaPerUnit / RatioQuotaBase }
+// PriceUnitCNY 是日志 other / 任务 billing_context 里标记「定价字段已是人民币口径」的值。
+// 没有这个标记的历史数据按美元口径处理（前端 normalizeLogPricing）。
+const PriceUnitCNY = "cny"
+
+// RatioQuotaPerToken 把「¥/百万 tokens」的倍率换成 quota/token。
+// 倍率路径统一走这里，不要在各处手写换算系数。
+func RatioQuotaPerToken(ratio float64) float64 { return ratio * QuotaPerMillionTokens }
+
+// QuotaPerUnit 是「1 美元对应的 quota」，只用于美元金额 ↔ quota 的换算：
+// 美元支付（Stripe / Waffo 等）与 USD 展示模式。
+//
+// 与汇率之间仍应满足 QuotaPerUnit = 汇率 × QuotaPerYuan；但即使这个约束被破坏，
+// 也只会影响美元支付与美元展示，不会影响任何计费结果。
+var QuotaPerUnit = 7300 * 1000 * 1000.0 // 1 美元 = 7.3 元 = 7.3×10⁹ quota
 
 // 保留旧变量以兼容历史逻辑，实际展示由 general_setting.quota_display_type 控制
 var DisplayInCurrencyEnabled = true

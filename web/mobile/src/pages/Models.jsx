@@ -151,8 +151,9 @@ const Models = () => {
     setLimit(PAGE);
   }, [keyword, group, category]);
 
-  // 价格口径与 PC 端一致（helpers/utils.jsx getPriceData）：
-  // 按量:输入价 = model_ratio × 2 × 分组倍率 → $/1M tokens；按次:价格 × 分组倍率。
+  // 价格口径与 PC 端一致（helpers/utils.jsx calculateModelPrice）：
+  // 按量:输入价 = model_ratio × 分组倍率 → ¥/1M tokens；按次:价格 × 分组倍率。
+  // 定价配置存的就是人民币，只有展示币种需要折算。
   //
   // 分组倍率：选中胶囊时就用该分组；「全部分组」时与 PC 的「最优倍率视图」同源
   // （calculateModelPrice 里 selectedGroup === 'all' 的分支）——逐个模型在它自己的
@@ -176,24 +177,24 @@ const Models = () => {
     if (!candidates.length) return { group: '', ratio: 1 };
     return candidates.reduce((a, b) => (b.ratio < a.ratio ? b : a));
   };
+  // 展示币种相对人民币的换算率：CNY → 1；USD → 1/汇率；CUSTOM → 自定义汇率/汇率。
   const currencyConfig = useMemo(() => {
     const displayType =
       siteStatus?.quota_display_type ||
       localStorage.getItem('quota_display_type') ||
       'USD';
+    const usdRate = Number(siteStatus?.usd_exchange_rate) || 7.3;
     if (displayType === 'CNY') {
-      return {
-        symbol: '¥',
-        rate: Number(siteStatus?.usd_exchange_rate) || 7.3,
-      };
+      return { symbol: '¥', ratePerCny: 1 };
     }
     if (displayType === 'CUSTOM') {
       return {
         symbol: siteStatus?.custom_currency_symbol || '¤',
-        rate: Number(siteStatus?.custom_currency_exchange_rate) || 1,
+        ratePerCny:
+          (Number(siteStatus?.custom_currency_exchange_rate) || 1) / usdRate,
       };
     }
-    return { symbol: '$', rate: 1 };
+    return { symbol: '$', ratePerCny: 1 / usdRate };
   }, [siteStatus]);
 
   // 动态计费（tiered_expr）：表达式才是定价事实，静态倍率会误导（同 PC 判定）
@@ -261,11 +262,11 @@ const Models = () => {
     return <span style={entitlementBadgeStyle(badge.color)}>{badge.text}</span>;
   };
 
-  const inputPricePerM = (m) => m.model_ratio * 2 * resolveGroupRatio(m).ratio;
+  const inputPricePerM = (m) => m.model_ratio * resolveGroupRatio(m).ratio;
   // 折前价：少乘一个分组倍率。仅在有折扣时给，用于详情里的划线对比。
-  const originalInputPricePerM = (m) => m.model_ratio * 2;
-  const displayPrice = (usdValue) =>
-    `${currencyConfig.symbol}${formatPrice(usdValue * currencyConfig.rate)}`;
+  const originalInputPricePerM = (m) => m.model_ratio;
+  const displayPrice = (cnyValue) =>
+    `${currencyConfig.symbol}${formatPrice(cnyValue * currencyConfig.ratePerCny)}`;
 
   const priceText = (m) => {
     if (isDynamic(m)) return '动态计费';
@@ -273,7 +274,7 @@ const Models = () => {
       // 矩阵有多格，列表里放不下，给区间；逐格价目在详情里。
       const cells = videoMatrixCells(m);
       if (!cells.length) return '场景计费';
-      const prices = cells.map((c) => c.priceUSD);
+      const prices = cells.map((c) => c.priceCNY);
       const lo = Math.min(...prices);
       const hi = Math.max(...prices);
       // 三种模式，不能用 token 一个布尔切：per_second 落进 else 会显示「/次」，
@@ -608,7 +609,7 @@ const Models = () => {
                       </span>
                     </span>
                     <strong>
-                      {cell.originalPriceUSD != null && (
+                      {cell.originalPriceCNY != null && (
                         <span
                           style={{
                             color: '#9aa1ad',
@@ -617,10 +618,10 @@ const Models = () => {
                             fontWeight: 400,
                           }}
                         >
-                          {displayPrice(cell.originalPriceUSD)}
+                          {displayPrice(cell.originalPriceCNY)}
                         </span>
                       )}
-                      {displayPrice(cell.priceUSD)}
+                      {displayPrice(cell.priceCNY)}
                     </strong>
                   </div>
                 ))}

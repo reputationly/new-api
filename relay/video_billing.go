@@ -187,7 +187,7 @@ func applyVideoPricing(c *gin.Context, info *relaycommon.RelayInfo) bool {
 		// 按次:提交时即定死终价,轮询期不再差额结算。
 		info.PriceData.UsePrice = true
 		info.PriceData.ModelPrice = price
-		info.PriceData.Quota = int(math.Round(price * common.QuotaPerUnit * info.PriceData.GroupRatioInfo.GroupRatio))
+		info.PriceData.Quota = int(math.Round(price * common.QuotaPerYuan * info.PriceData.GroupRatioInfo.GroupRatio))
 
 	case ratio_setting.VideoPriceModePerSecond:
 		// 秒数是价格的乘数,缺了就只能算出 0 元——那等于白送,必须回退旧路径。
@@ -211,7 +211,7 @@ func applyVideoPricing(c *gin.Context, info *relaycommon.RelayInfo) bool {
 		// task_polling.go:641)全是判 token,per_second 天然落进 per_call 这条路。
 		info.PriceData.UsePrice = true
 		info.PriceData.ModelPrice = total
-		info.PriceData.Quota = int(math.Round(total * common.QuotaPerUnit * info.PriceData.GroupRatioInfo.GroupRatio))
+		info.PriceData.Quota = int(math.Round(total * common.QuotaPerYuan * info.PriceData.GroupRatioInfo.GroupRatio))
 
 	default:
 		return false
