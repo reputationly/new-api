@@ -1,6 +1,7 @@
 package ratio_setting
 
 import (
+	"math"
 	"strings"
 
 	"github.com/QuantumNous/new-api/common"
@@ -22,6 +23,30 @@ const (
 // TODO: when a new api is enabled, check the pricing here
 // 1 === $0.002 / 1K tokens
 // 1 === ￥0.014 / 1k tokens
+
+// cnyModelRatios / cnyModelPrices 把代码里静态的美元默认表换算成人民币口径。
+//
+// 默认倍率表沿用上游的「1 = $2/百万 tokens」口径（表内 `* RMB` 写法只是把人民币价
+// 写进同一单位），换算成「¥/百万 tokens」需要 × 2 × USD2RMB；默认按次价是 $/次 → × USD2RMB。
+// 原表刻意保持不动，方便以后合并上游；对外暴露的都是换算后的副本。
+func cnyModelRatios(src map[string]float64) map[string]float64 {
+	out := make(map[string]float64, len(src))
+	for k, v := range src {
+		out[k] = roundTo6(v * 2 * USD2RMB)
+	}
+	return out
+}
+
+func cnyModelPrices(src map[string]float64) map[string]float64 {
+	out := make(map[string]float64, len(src))
+	for k, v := range src {
+		out[k] = roundTo6(v * USD2RMB)
+	}
+	return out
+}
+
+// roundTo6 保留 6 位小数：对应 ¥0.000001/百万 tokens 的精度，比任何实际报价都细。
+func roundTo6(v float64) float64 { return math.Round(v*1e6) / 1e6 }
 
 var defaultModelRatio = map[string]float64{
 	//"midjourney":                50,
@@ -351,8 +376,8 @@ var defaultCompletionRatio = map[string]float64{
 
 // InitRatioSettings initializes all model related settings maps
 func InitRatioSettings() {
-	modelPriceMap.AddAll(defaultModelPrice)
-	modelRatioMap.AddAll(defaultModelRatio)
+	modelPriceMap.AddAll(cnyModelPrices(defaultModelPrice))
+	modelRatioMap.AddAll(cnyModelRatios(defaultModelRatio))
 	completionRatioMap.AddAll(defaultCompletionRatio)
 	cacheRatioMap.AddAll(defaultCacheRatio)
 	createCacheRatioMap.AddAll(defaultCreateCacheRatio)
@@ -427,19 +452,25 @@ func GetModelRatio(name string) (float64, bool, string) {
 }
 
 func DefaultModelRatio2JSONString() string {
-	jsonBytes, err := common.Marshal(defaultModelRatio)
+	jsonBytes, err := common.Marshal(cnyModelRatios(defaultModelRatio))
 	if err != nil {
 		common.SysError("error marshalling model ratio: " + err.Error())
 	}
 	return string(jsonBytes)
 }
 
+// GetDefaultModelRatioMap 返回**人民币口径**的默认倍率表（¥/百万 tokens）。
+//
+// 必须与 InitRatioSettings 用同一条换算：service/quota.go 的 hasCustomModelRatio
+// 拿它和实际生效值比对来判断"管理员是否改过价"，两边口径不一致会让所有默认价模型
+// 都被判成"已改价"。
 func GetDefaultModelRatioMap() map[string]float64 {
-	return defaultModelRatio
+	return cnyModelRatios(defaultModelRatio)
 }
 
+// GetDefaultModelPriceMap 返回**人民币口径**的默认按次价表（¥/次）。
 func GetDefaultModelPriceMap() map[string]float64 {
-	return defaultModelPrice
+	return cnyModelPrices(defaultModelPrice)
 }
 
 func CompletionRatio2JSONString() string {

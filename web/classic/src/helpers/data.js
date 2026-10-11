@@ -23,6 +23,7 @@ export function setStatusData(data) {
   localStorage.setItem('logo', data.logo);
   localStorage.setItem('footer_html', data.footer_html);
   localStorage.setItem('quota_per_unit', data.quota_per_unit);
+  localStorage.setItem('quota_per_yuan', data.quota_per_yuan);
   localStorage.setItem('quota_per_point', data.quota_per_point);
   localStorage.setItem('quota_per_compute_point', data.quota_per_compute_point);
   localStorage.setItem('points_enabled', data.points_enabled);

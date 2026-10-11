@@ -122,7 +122,7 @@ var   QuotaPerUnit = 730_000_000.0        // 1 美元对应的 quota = 汇率 ×
 |---|---|---|---|---|
 | E1 | deepseek：输入 ¥2/百万、输出 ×4、分组 0.5，prompt 199 / completion 4096 | ratio = 2，completion_ratio = 4 | (199 + 4096×4) × 2 × 100 × 0.5 = 1,658,300 | ¥0.016583 |
 | E2 | ¥0.01/百万，1 token | ratio = 0.01 | 1 × 0.01 × 100 = 1 | ¥0.00000001 |
-| E3 | ¥0.01/百万，149 tokens | ratio = 0.01 | 1.49 → 四舍五入为 1 | ¥0.00000001 |
+| E3 | ¥0.01/百万，149 tokens | ratio = 0.01 | 149 × 0.01 × 100 = 149 | ¥0.00000149 |
 | E4 | ¥0.003/百万，1 token | ratio = 0.003 | 0.3 → 0 → 最低扣费 1 | ¥0.00000001 |
 | E5 | 按次生图 ¥0.2/次，分组 1 | ModelPrice = 0.2 | 0.2 × 10⁸ = 20,000,000 | ¥0.2 |
 | E6 | 联网搜索 ¥73/千次（原 $10），调用 3 次，分组 1 | prices.web_search = 73 | 73 / 1000 × 3 × 10⁸ = 21,900,000 | ¥0.219 |
@@ -177,14 +177,14 @@ E1 与 V1 文档 §2.3 的同一样例做对照：迁移前是 16,583 quota（¥
 | 同上 `calculateTextToolCallSurcharge`（:84-138），共 5 处 | `$/千次 × 次数 / 1000 × QPU`；GPT-Image-1 `$/次 × QPU` | `¥ × QuotaPerYuan` |
 | 同上 Gemini 音频（:271-276） | `$/百万 / 10⁶ × tokens × QPU` | `¥/百万 / 10⁶ × tokens × QuotaPerYuan` |
 | 同上 按次价（:296） | `ModelPrice × QPU` | `ModelPrice × QuotaPerYuan` |
-| 同上 extraContent 文案（:357-369） | 拼的是美元花费 | 改为人民币，保留 8 位小数 |
+| 同上 extraContent 文案（:357-369，共 5 条） | 拼的是 **quota 数字**（`price × 次数 / 1000 × 分组 × QuotaPerUnit`） | 改为人民币：`quota / QuotaPerYuan`，或直接拼 `price × 次数 / 1000 × 分组`（本身已是人民币），保留 8 位小数 |
 | `service/quota.go` `calculateAudioQuota`（:53-67） | 倍率 `× QuotaScale()`，价格 `× QPU` | 同上两条 |
 | `service/quota.go` `CalcOpenRouterCacheCreateTokens`（:265-267） | `ModelRatio / RatioQuotaBase` 得到"$/token"，用来和 OpenRouter 回报的美元成本反推 tokens | `ModelRatio / 10⁶` 得到"¥/token"，OpenRouter 的美元成本先 × 汇率。这是**合法保留汇率**的地方之一（上游报的是美元） |
 | `service/quota.go:43` | 读默认倍率表兜底 | 默认表已在加载时换成人民币（§3.2），这里不用再改 |
 | `relay/helper/price.go` `ModelPriceHelper`（:126-134） | 预扣：倍率 `× QuotaScale()`，按次 `× QPU` | 倍率 `× 100`，按次 `× QuotaPerYuan`。`PreConsumedQuota` 是 token 下限，不是 quota，**不动** |
 | 同上 `ModelPriceHelperPerCall`（:189-221） | 按次 `× QPU`；按量预扣 `modelRatio / 2 × QPU`（= 25 万 tokens 的输入价） | 按次 `× QuotaPerYuan`；按量预扣 `250000 × ratio × 100`，即 `ratio × 2.5×10⁷`，语义还是"预扣 25 万 tokens 的输入价" |
 | 同上 `modelPriceHelperTiered`（:288、:311） | `rawCost / 10⁶ × QPU`，快照记录 `QuotaPerUnit` | 改为调用 `billingexpr` 按版本换算（§4 B4），预扣与结算共用同一个函数 |
-| `pkg/billingexpr/settle.go` `quotaConversion` | 只有 v1：`out / 10⁶ × snap.QuotaPerUnit` | 新增 v2：`out / 10⁶ × QuotaPerYuan`；v1 保持原样（快照里冻结了 QPU，仍然正确） |
+| `pkg/billingexpr/settle.go` `quotaConversion` | 只有 v1：`out / 10⁶ × snap.QuotaPerUnit`（输出单位是 V1 的 ¥1e-6） | 新增 v2：`out / 10⁶ × QuotaPerYuan`；**v1 拒绝结算**（见 §12.2 R2：v1 的输出单位与 V2 余额不同，实收只剩 1/100） |
 | `relay/video_billing.go` `applyVideoPricing`（:190、:214） | `$ × QPU × 分组` | `¥ × QuotaPerYuan × 分组` |
 | `service/task_billing.go` `RecalculateTaskQuotaByTokens`（:654） | `tokens × ratio × … × QuotaScale()` | `× 100` |
 | `service/task_billing.go` `RecalculateTaskQuotaByVideoMatrix`（:754） | `tokens / 10⁶ × UnitPrice($) × QPU` | `UnitPrice(¥) × QuotaPerYuan`。**历史任务**里冻结的 `UnitPrice` 由迁移 ×7.3（§5.3） |
@@ -254,7 +254,7 @@ E1 与 V1 文档 §2.3 的同一样例做对照：迁移前是 16,583 quota（¥
 | `other.video_unit_price` / `video_price_mode` | `service/task_billing.go:81-82` | ¥ | 同上 |
 | `other.base_amount`（违规罚金） | `service/violation_fee.go:142` | ¥ | 同上 |
 | `other.expr_b64`（分段表达式原文） | `service/log_info_generate.go:362-363` | 原文带 `v2:` 前缀 | v1 原文，前端按版本区分 |
-| 任务 `private_data.billing_context.model_price` / `model_ratio` | `model/task.go:388-390`，写入见 `service/task_billing.go:147-149` | ¥ + `price_unit` | 迁移 ×7.3 / ×14.6 并打标记（§5.3） |
+| 任务 `private_data.billing_context.model_price` / `model_ratio` | `model/task.go:388-390`，写入见 `service/task_billing.go:147-149` | ¥ + `price_unit` | 迁移 ×7.3 / ×14.6 并打标记（**全部任务，含已完成**，见 §12.2 R3） |
 | 任务 `private_data.video_billing.unit_price` | `model/task.go:412-416`（注释写的是"美元"） | ¥ | 迁移 ×7.3 |
 | `BillingSnapshot.quota_per_unit` / `expr_version` | `pkg/billingexpr/types.go:50-51` | v2 不读 `quota_per_unit` | v1 快照继续按冻结的 QPU 结算 |
 
@@ -321,7 +321,7 @@ E1 与 V1 文档 §2.3 的同一样例做对照：迁移前是 16,583 quota（¥
 - 无前缀的表达式仍按 v1 处理，以兼容历史数据。新保存的表达式由编辑器强制加 `v2:`；后端保存校验拒绝新写入 v1。
 - 更新 `pkg/billingexpr/expr.md`：原则 3 改为"系数是 ¥/1M"，同时补写 Quota Conversion 和 Versioning 两节。
 - 完成标准：
-  - 同一表达式，v1 快照与 v2 快照的结算结果符合 `v1 = v2 × 汇率`；
+  - v1 表达式与 v1 快照**拒绝结算**并返回可读错误（§12.2 R2）；v2 正常结算；
   - 预扣与结算使用同一个换算函数；
   - 保存 v1 表达式被拒。
 
@@ -361,7 +361,7 @@ E1 与 V1 文档 §2.3 的同一样例做对照：迁移前是 16,583 quota（¥
 
 **B9 启动保护**
 - 新镜像启动时检查 `options.QuotaUnitMigrationV2`：
-  - 值不是 `done`，且库里已有用户数据（`users` 表非空）时，打印明确的错误并拒绝启动计费服务。这一条防止"新代码配旧数据"导致按 1/14.6 少收费。
+  - 值不是 `done`，且库里已有用户数据（`users` 表非空）时，**整个进程拒绝启动**（不只是计费），错误信息里直接打印 `--migrate-quota-unit-v2=dry-run|apply` 两条命令与「恢复备份 + 换回旧镜像」提示。这一条防止"新代码配旧数据"导致按 1/14.6 少收费。
   - 全新空库直接写入 `done`。
   - 只有带 `--migrate-quota-unit-v2=...` 参数运行时放行。
 - 完成标准：三种情况各有一个测试。
@@ -479,8 +479,8 @@ E1 与 V1 文档 §2.3 的同一样例做对照：迁移前是 16,583 quota（¥
 | `tool_price_setting.prices` | 每个值 × 7.3；库中没有该 key 时不写，使用代码默认值（已是人民币） | 6 位小数 |
 | `grok.violation_deduction_amount` | × 7.3；库中没有该 key 时不写 | 6 位小数 |
 | `billing_setting.billing_expr` | **不改写**（D3）。dry-run 和 apply 报告逐条列出 v1 表达式；数量大于 0 时报告标红，提示管理员在编辑器中重录为 v2 | — |
-| 在途任务 `tasks.private_data.billing_context` | `model_price × 7.3`（跳过 `-1`）、`model_ratio × 14.6`，写入 `price_unit = cny` | 6 位小数 |
-| 在途任务 `tasks.private_data.video_billing.unit_price` | × 7.3 | 6 位小数 |
+| **全部任务** `tasks.private_data.billing_context`（含已完成，约 2,741 行） | `model_price × 7.3`（跳过 `-1`）、`model_ratio × 14.6`，写入 `price_unit = cny` | 6 位小数 |
+| **全部任务** `tasks.private_data.video_billing.unit_price` | × 7.3 | 6 位小数 |
 
 **舍入的理由**：现有倍率是编辑器按"¥ ÷ 7.3 ÷ 2"计算后，用 `toNormalizedNumber` 存下的，例如 ¥2 存为 `0.13698630137`。乘 14.6 得到 `1.99999999…`，四舍五入到 6 位小数后正好还原为 `2`。6 位小数对应 ¥0.000001/百万 tokens 的精度，比任何实际报价都细。
 
@@ -525,7 +525,7 @@ E1 与 V1 文档 §2.3 的同一样例做对照：迁移前是 16,583 quota（¥
 
 - **计费样例**：E1–E7 各至少一个单测，覆盖文本、音频、预扣、按次、视频（按 token / 按次 / 按秒）、工具附加费、违规罚金、渠道测试、表达式 v1 / v2。
 - **金额守恒**：同一个模型、同一请求，"V1 配置 + V1 代码"算出的人民币金额，与"迁移后配置 + V2 代码"算出的人民币金额，差值不超过 1 个 V1 quota（¥0.000001）。测试数据取 `defaultModelRatio` 的全部模型，逐个跑一遍。
-- **低价**：¥0.01/百万 时 1、50、149、150 tokens 的结果（分别是 1、1、1、2 quota）；¥0.001/百万 时 1 token 扣 1 quota（最低扣费）。
+- **低价**：¥0.01/百万 时 1、50、149、150 tokens 的结果（分别是 1、50、149、150 quota——该单价下 1 token 恰好 1 quota）；最低扣费样例用 ¥0.003/百万（1 token = 0.3 → 0 → 扣 1 quota）与 ¥0.001/百万（0.1 → 0 → 1）；`.5` 的舍入方向（`decimal.Round` half-away-from-zero）单独钉一条：¥0.005/百万、1 token = 0.5 → 1 quota。
 - **溢出**：单笔 10⁷ tokens × ¥1000/百万 = ¥10,000 = 10¹² quota，算到 int 不溢出。
 - **迁移**：
   - V1 迁移测试矩阵的 SQLite、PostgreSQL、MySQL 三库全部复用：dry-run 不写库、apply 结果正确、幂等、断点续跑、日志库独立。
@@ -576,6 +576,7 @@ E1 与 V1 文档 §2.3 的同一样例做对照：迁移前是 16,583 quota（¥
 2. 用生产备份在本地完整演练一遍 §7.3，记录 apply 耗时。V1 的实测耗时约 1.5 分钟（dev-report §12）。
 3. 公告停服窗口。
 4. **停服**：`docker compose stop new-api`，并确认容器状态为 `Exited`。V1 的记录无法确认当时是否已停服，这次必须显式执行这一步。
+   ⚠️ **窗口前不要点「在线升级」、不要 pull V2 镜像**：B9 会让未迁移的库拒绝启动，提前升级 = 计划外停机（§12.2 Q1）。
 5. 拉取 V2 镜像，执行 `--migrate-quota-unit-v2=dry-run`，人工核对报告：
    - 定价差值清单为空，或已逐条确认；
    - v1 表达式数量为 0。
@@ -608,7 +609,7 @@ E1 与 V1 文档 §2.3 的同一样例做对照：迁移前是 16,583 quota（¥
 
 ## 11. 待确认
 
-无。D1–D7 已全部确认，现网数据核对见 §5.0。
+无。D1–D7 已全部确认，现网数据核对见 §5.0；2026-10-11 评审提出的 4 处必须改与 3 项待定口径，结论见 §12。
 
 ---
 
@@ -619,3 +620,38 @@ E1 与 V1 文档 §2.3 的同一样例做对照：迁移前是 16,583 quota（¥
 ## 附录 B：后端命中清单
 
 用 `rg -n -E "QuotaPerUnit|QuotaScale\(\)|RatioQuotaBase" --type go -g '!*_test.go' -g '!service/quotaunitmigration/**'` 生成，共 132 行，涉及 34 个文件（2026-10-11）。§3.1 / §3.4 / §3.5 已对其中每个文件做了分类。
+
+---
+
+## 12. 评审结论与已定口径（2026-10-11）
+
+评审意见全文见 [pricing-cny-and-quota-1e8-review.md](./pricing-cny-and-quota-1e8-review.md)，逐项 grep 核对了代码。
+以下为最终结论，正文与之冲突处已按本节订正。
+
+### 12.1 文档订正
+
+| # | 原写法 | 订正为 |
+|---|---|---|
+| R1 | E3「1.49 → 四舍五入为 1」、§7.1「1、1、1、2 quota」 | E3 = **149 quota**（¥0.00000149）；§7.1 = **1、50、149、150 quota**。这两处原先写的是 V1 单位 |
+| R4 | §3.1「extraContent 拼的是美元花费」 | 实际拼的是 **quota 数字**；改为人民币时用 `quota / QuotaPerYuan` 或直接拼人民币金额 |
+
+### 12.2 已定口径（实现按此执行）
+
+| # | 决定 | 理由与影响 |
+|---|---|---|
+| R2 | **v1 表达式拒绝结算** | v1 分支输出的是 V1 单位（¥1e-6），V2 把余额 ×100 后实收只剩 1/100，不能"保持原样仍然正确"。v1 表达式与 v1 快照一律返回可读错误，要求管理员在编辑器重录为 `v2:`。生产无存量表达式（§5.0） |
+| R3 | **全部任务一起迁** `tasks.private_data` | 含已完成任务（2,741 行）：`model_price ×7.3`、`model_ratio ×14.6`、`video_billing.unit_price ×7.3`，并写 `price_unit = cny`。前端因此不必为任务详情再做 normalize（日志仍需要，见 F2） |
+| Q1 | **B9 整进程拒绝启动** | 未迁移且 `users` 非空时整个进程拒绝启动（不只是计费）。随之而来的流程约束：**V2 镜像不能在窗口前拉取/升级**，否则就是计划外停机（§9 已补提醒） |
+
+### 12.3 其他已核实结论（写进实现）
+
+- `service/entitlement_cost.go` 的 `modelUnitPrice` 只返回按次单价或视频 per_call 最贵格
+  （`p.ModelPrice` / `p.VideoPricing.PerCall[...]`），倍率类返回"不支持"，**不含任何 `× 2`** →
+  `unitPrice × QuotaPerYuan × cost_ratio` 正确，只需同步 `:182` 的"美元口径"注释。
+- `hasCustomModelRatio`（`service/quota.go:42`）依赖 `GetDefaultModelRatioMap()` 与 `InitRatioSettings` 用
+  **同一条**换算，只改一处会让所有默认价模型被判成"已改价"→ 必须同时改，并加断言。
+- `GetUsdToCurrencyRate`（`setting/operation_setting/general_setting.go:77`）已无调用者，随 B8 删除。
+- B6 / B7 的删除范围经 grep 核实安全：后端只有路由与文件自身引用；前端只有 `UpstreamRatioSync.jsx`、
+  `ChannelSelectorModal.jsx`、`RatioSetting.jsx`、`ModelRatioSettings.jsx`。
+- F2 的 `normalizeLogPricing` 必须覆盖 **V1 期日志**：V1 未改比率语义，`other.model_ratio` 仍是美元口径，
+  而 `logs.quota` 已是 ×14.6 后的值。

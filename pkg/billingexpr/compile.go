@@ -13,17 +13,30 @@ import (
 
 const maxCacheSize = 256
 
-// DefaultExprVersion is used when an expression string has no version prefix.
-const DefaultExprVersion = 1
+const (
+	// ExprVersionV1：系数是**美元**/百万 tokens（历史口径）。
+	ExprVersionV1 = 1
+	// ExprVersionV2：系数是**人民币**/百万 tokens（1 quota = ¥0.00000001 之后的口径）。
+	ExprVersionV2 = 2
+	// DefaultExprVersion 无前缀时按 v1 处理，以兼容库里已有的历史表达式。
+	//
+	// v1 的结算会被拒绝（见 QuotaFromExprOutput）：它的输出单位与当前余额不同单位，
+	// 照原样结算会少收 100 倍，必须由管理员在编辑器里重录为 v2。
+	DefaultExprVersion = ExprVersionV1
+)
 
 // ParseExprVersion extracts the version tag and body from an expression string.
-// Format: "v1:tier(...)" → version=1, body="tier(...)".
-// No prefix defaults to DefaultExprVersion.
+// Format: "v2:tier(...)" → version=2, body="tier(...)".
+// No prefix defaults to DefaultExprVersion (v1).
 func ParseExprVersion(exprStr string) (version int, body string) {
-	if strings.HasPrefix(exprStr, "v1:") {
-		return 1, exprStr[3:]
+	switch {
+	case strings.HasPrefix(exprStr, "v2:"):
+		return ExprVersionV2, exprStr[3:]
+	case strings.HasPrefix(exprStr, "v1:"):
+		return ExprVersionV1, exprStr[3:]
+	default:
+		return DefaultExprVersion, exprStr
 	}
-	return DefaultExprVersion, exprStr
 }
 
 type cachedEntry struct {

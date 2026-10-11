@@ -1,11 +1,12 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 
 /**
- * F1：换算率的 fallback 只在读不到配置时生效，且只在 console 里告警一次。
+ * F1/F6：换算率的 fallback 只在读不到配置时生效，且只在 console 里告警一次。
  *
- * 这三个值正常都由 /api/status 在页面渲染前写入 localStorage；一旦它们与后端不一致，
+ * 这几个值正常都由 /api/status 在页面渲染前写入 localStorage；一旦它们与后端不一致，
  * 全站金额都会按错误的口径展示——所以 fallback 必须集中在一处（helpers/quota.js），
- * 而且取值要和后端出厂默认一致，不能像以前那样各处写各的（500000 / 684.93 / 1）。
+ * 而且取值要和后端出厂默认一致：1 美元 = 730000000 quota、1 元 = 100000000 quota、
+ * 1 积分 = 1000000 quota。
  */
 
 let warnSpy;
@@ -27,25 +28,18 @@ const freshQuota = async () => {
 };
 
 describe('getQuotaPerUnit 的 fallback', () => {
-  it('localStorage = 500000 时直接使用，不告警', async () => {
-    localStorage.setItem('quota_per_unit', '500000');
+  it('localStorage = 730000000 时直接使用，不告警', async () => {
+    localStorage.setItem('quota_per_unit', '730000000');
     const { getQuotaPerUnit } = await freshQuota();
-    expect(getQuotaPerUnit()).toBe(500000);
+    expect(getQuotaPerUnit()).toBe(730000000);
     expect(warnSpy).not.toHaveBeenCalled();
   });
 
-  it('localStorage = 7300000 时直接使用，不告警', async () => {
-    localStorage.setItem('quota_per_unit', '7300000');
+  it('读不到时 fallback 到 730000000，且只告警一次', async () => {
     const { getQuotaPerUnit } = await freshQuota();
-    expect(getQuotaPerUnit()).toBe(7300000);
-    expect(warnSpy).not.toHaveBeenCalled();
-  });
-
-  it('读不到时 fallback 到 500000，且只告警一次', async () => {
-    const { getQuotaPerUnit } = await freshQuota();
-    expect(getQuotaPerUnit()).toBe(500000);
-    expect(getQuotaPerUnit()).toBe(500000);
-    expect(getQuotaPerUnit()).toBe(500000);
+    expect(getQuotaPerUnit()).toBe(730000000);
+    expect(getQuotaPerUnit()).toBe(730000000);
+    expect(getQuotaPerUnit()).toBe(730000000);
     expect(warnSpy).toHaveBeenCalledTimes(1);
     expect(String(warnSpy.mock.calls[0][0])).toContain('quota_per_unit');
   });
@@ -53,19 +47,37 @@ describe('getQuotaPerUnit 的 fallback', () => {
   it('非法值（0 / 负数 / 非数字）同样走 fallback', async () => {
     localStorage.setItem('quota_per_unit', '0');
     const { getQuotaPerUnit } = await freshQuota();
-    expect(getQuotaPerUnit()).toBe(500000);
+    expect(getQuotaPerUnit()).toBe(730000000);
     expect(warnSpy).toHaveBeenCalledTimes(1);
 
     localStorage.setItem('quota_per_unit', 'abc');
     const again = await freshQuota();
-    expect(again.getQuotaPerUnit()).toBe(500000);
+    expect(again.getQuotaPerUnit()).toBe(730000000);
     expect(warnSpy).toHaveBeenCalledTimes(2);
   });
 
   it('fallback 常量与实现返回值一致', async () => {
     const { getQuotaPerUnit, FALLBACK_QUOTA_PER_UNIT } = await freshQuota();
-    expect(FALLBACK_QUOTA_PER_UNIT).toBe(500000);
+    expect(FALLBACK_QUOTA_PER_UNIT).toBe(730000000);
     expect(getQuotaPerUnit()).toBe(FALLBACK_QUOTA_PER_UNIT);
+  });
+});
+
+describe('getQuotaPerYuan 的 fallback', () => {
+  it('localStorage 有值时直接使用，不告警', async () => {
+    localStorage.setItem('quota_per_yuan', '100000000');
+    const { getQuotaPerYuan } = await freshQuota();
+    expect(getQuotaPerYuan()).toBe(100000000);
+    expect(warnSpy).not.toHaveBeenCalled();
+  });
+
+  it('读不到时 fallback 到 100000000，且只告警一次', async () => {
+    const { getQuotaPerYuan, FALLBACK_QUOTA_PER_YUAN } = await freshQuota();
+    expect(getQuotaPerYuan()).toBe(100000000);
+    expect(getQuotaPerYuan()).toBe(100000000);
+    expect(FALLBACK_QUOTA_PER_YUAN).toBe(100000000);
+    expect(warnSpy).toHaveBeenCalledTimes(1);
+    expect(String(warnSpy.mock.calls[0][0])).toContain('quota_per_yuan');
   });
 });
 
@@ -79,12 +91,12 @@ describe('getQuotaPerPoint / getQuotaPerComputePoint 的 fallback', () => {
     expect(warnSpy).not.toHaveBeenCalled();
   });
 
-  it('读不到时各自 fallback 到 684.93，且各自只告警一次', async () => {
+  it('读不到时各自 fallback 到 1000000，且各自只告警一次', async () => {
     const { getQuotaPerPoint, getQuotaPerComputePoint } = await freshQuota();
-    expect(getQuotaPerPoint()).toBe(684.93);
-    expect(getQuotaPerPoint()).toBe(684.93);
-    expect(getQuotaPerComputePoint()).toBe(684.93);
-    expect(getQuotaPerComputePoint()).toBe(684.93);
+    expect(getQuotaPerPoint()).toBe(1000000);
+    expect(getQuotaPerPoint()).toBe(1000000);
+    expect(getQuotaPerComputePoint()).toBe(1000000);
+    expect(getQuotaPerComputePoint()).toBe(1000000);
     expect(warnSpy).toHaveBeenCalledTimes(2);
     expect(String(warnSpy.mock.calls[0][0])).toContain('quota_per_point');
     expect(String(warnSpy.mock.calls[1][0])).toContain(

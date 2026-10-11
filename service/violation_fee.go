@@ -89,7 +89,7 @@ func calcViolationFeeQuota(amount, groupRatio float64) int {
 		return 0
 	}
 	quota := decimal.NewFromFloat(amount).
-		Mul(decimal.NewFromFloat(common.QuotaPerUnit)).
+		Mul(decimal.NewFromInt(common.QuotaPerYuan)).
 		Mul(decimal.NewFromFloat(groupRatio)).
 		Round(0).
 		IntPart()
@@ -137,6 +137,7 @@ func ChargeViolationFeeIfNeeded(ctx *gin.Context, relayInfo *relaycommon.RelayIn
 
 	other := map[string]any{
 		"violation_fee":        true,
+		"price_unit":           common.PriceUnitCNY,
 		"violation_fee_code":   string(types.ErrorCodeViolationFeeGrokCSAM),
 		"fee_quota":            feeQuota,
 		"base_amount":          settings.ViolationDeductionAmount,

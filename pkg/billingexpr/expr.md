@@ -12,11 +12,11 @@ The expression is the billing contract between the administrator and the system.
 
 2. **Variables are opt-in** — `p` (prompt) and `c` (completion) are the base. Cache (`cr`, `cc`, `cc1h`), image (`img`), and audio (`ai`, `ao`) variables are optional. If omitted, those tokens are included in `p`/`c` and priced at their rate. The system automatically detects which variables the expression uses (via AST introspection) and adjusts token normalization accordingly.
 
-3. **Prices are real prices** — Expression coefficients are actual $/1M tokens prices as published by providers. No ratio conversion, no `/2` convention. `p * 2.5` means $2.50 per 1M prompt tokens.
+3. **Prices are real prices** — In `v2` expressions the coefficients are actual **¥/1M tokens** prices. No ratio conversion, no `/2` convention. `p * 2.5` means ¥2.50 per 1M prompt tokens. (`v1` coefficients were $/1M tokens; see "Expression Versioning" — v1 is no longer settled.)
 
 4. **Upstream-agnostic** — The expression doesn't need to know whether the upstream API is OpenAI-format (prompt_tokens includes cache) or Claude-format (input_tokens excludes cache). The system normalizes token counts before evaluation based on the upstream response format.
 
-5. **Version-aware** — Expressions carry a version tag (`v1:`, default when omitted). The version controls the compile environment, token normalization, and quota conversion formula, enabling future evolution without breaking existing expressions.
+5. **Version-aware** — Expressions carry a version tag (`v2:` for the current 人民币 format; `v1:`/no prefix means the historical 美元 format). The version controls the compile environment, token normalization, and quota conversion formula, enabling future evolution without breaking existing expressions.
 
 ---
 
@@ -214,22 +214,40 @@ This ensures that heavy cache usage doesn't cause the tier condition to incorrec
 
 ### Quota Conversion
 
-Expression coefficients are $/1M tokens. Conversion to internal quota:
+The conversion depends on the expression version (`billingexpr.QuotaFromExprOutput`), and is the
+single place where expression output becomes quota — both pre-consume (`relay/helper/price.go`)
+and settlement (`settle.go`) call it, so the two can never drift.
+
+**v2 (current)** — coefficients are ¥/1M tokens, and `QuotaPerYuan` is the quota-per-元 constant
+(1 quota = ¥0.00000001):
 
 ```
-quota = exprOutput / 1,000,000 * QuotaPerUnit * groupRatio
+quota = exprOutput / 1,000,000 * QuotaPerYuan * groupRatio
 ```
 
-This matches the per-call billing pattern: `quota = modelPrice * QuotaPerUnit * groupRatio`.
+`exprOutput / 1,000,000` is the 人民币 amount; multiplying by `QuotaPerYuan` gives quota. This is
+the same shape as per-call billing: `quota = 人民币价格 * QuotaPerYuan * groupRatio`.
+
+**v1 (rejected)** — coefficients were $/1M tokens and the result was
+`exprOutput / 1,000,000 * snapshot.QuotaPerUnit`, i.e. expressed in the *old* quota unit
+(1 quota = ¥0.000001). After the unit change the balance is 100× larger per 元, so settling a v1
+expression with its frozen `QuotaPerUnit` would charge only 1/100 of the intended 人民币 amount —
+silently. v1 settlement therefore returns `ErrExprV1Unsupported` and the operator must re-enter the
+expression as `v2:` in the editor (the coefficients must be converted ×14.6 for 倍率-style
+expressions; the editor does the 人民币/美元 display conversion).
 
 ### Expression Versioning
 
-Expressions can carry a version prefix: `v1:tier(...)`. No prefix = v1.
+Expressions can carry a version prefix: `v2:tier(...)` or `v1:tier(...)`. **No prefix = v1.**
 
 Version controls:
-- Compile environment (available variables and functions)
-- Token normalization logic
-- Quota conversion formula
+- Compile environment (available variables and functions) — same for v1 and v2 today
+- Token normalization logic — same for v1 and v2 today
+- Quota conversion formula — v2 settles, v1 is rejected (see above)
+
+`billingexpr.ExprVersion(exprStr)` returns the parsed version; `ParseExprVersion` is the parser.
+The editor writes `v2:` for every newly saved expression, and the backend keeps the prefix in the
+stored string (it is part of the expression, and the snapshot stores it as `expr_version`).
 
 This enables future evolution without breaking existing expressions.
 

@@ -72,6 +72,7 @@ func GetStatus(c *gin.Context) {
 		"turnstile_site_key":          common.TurnstileSiteKey,
 		"docs_link":                   operation_setting.GetGeneralSetting().DocsLink,
 		"quota_per_unit":              common.QuotaPerUnit,
+		"quota_per_yuan":              common.QuotaPerYuan,
 		"points_enabled":              operation_setting.GetPointsSetting().Enabled,
 		"quota_per_point":             common.GetQuotaPerPoint(),
 		// 算力点换算率。套餐编辑页要把 quota 换算成展示点数，与积分同一套下发路径。

@@ -25,6 +25,7 @@ import {
   getModelPricingCurrencyConfig,
   formatPriceWithCeiling,
 } from '../../../../../helpers';
+import { getExprPriceScale } from '../../../../../helpers/exprPrice';
 import { BILLING_PRICING_VARS } from '../../../../../constants';
 import {
   splitBillingExprAndRequestRules,
@@ -98,7 +99,10 @@ function describeGroup(group, t) {
 }
 
 export default function DynamicPricingBreakdown({ billingExpr, t }) {
-  const { symbol, rate } = getModelPricingCurrencyConfig();
+  const { symbol, ratePerCny } = getModelPricingCurrencyConfig();
+  // v1 表达式是历史美元口径（已拒绝结算）：系数展示前先按汇率折成人民币，
+  // 只保证这里的数字与历史价格一致。v2 的系数本身已是 ¥/百万 tokens。
+  const exprPriceScale = getExprPriceScale(billingExpr);
   const { billingExpr: baseExpr, requestRuleExpr: ruleExpr } =
     splitBillingExprAndRequestRules(billingExpr || '');
 
@@ -152,7 +156,9 @@ export default function DynamicPricingBreakdown({ billingExpr, t }) {
         dataIndex: field,
         render: (v) =>
           v > 0 ? (
-            <Text strong>{`${symbol}${formatPriceWithCeiling(v * rate)}`}</Text>
+            <Text
+              strong
+            >{`${symbol}${formatPriceWithCeiling(v * exprPriceScale * ratePerCny)}`}</Text>
           ) : (
             '-'
           ),

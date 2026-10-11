@@ -72,20 +72,3 @@ func GetCurrencySymbol() string {
 		return ""
 	}
 }
-
-// GetUsdToCurrencyRate 返回 1 USD = X <currency> 的 X（TOKENS 不适用）
-func GetUsdToCurrencyRate(usdToCny float64) float64 {
-	switch generalSetting.QuotaDisplayType {
-	case QuotaDisplayTypeUSD:
-		return 1
-	case QuotaDisplayTypeCNY:
-		return usdToCny
-	case QuotaDisplayTypeCustom:
-		if generalSetting.CustomCurrencyExchangeRate > 0 {
-			return generalSetting.CustomCurrencyExchangeRate
-		}
-		return 1
-	default:
-		return 1
-	}
-}

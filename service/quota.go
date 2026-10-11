@@ -14,6 +14,7 @@ import (
 	"github.com/QuantumNous/new-api/pkg/billingexpr"
 	perfmetrics "github.com/QuantumNous/new-api/pkg/perf_metrics"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
+	"github.com/QuantumNous/new-api/setting/operation_setting"
 	"github.com/QuantumNous/new-api/setting/ratio_setting"
 	"github.com/QuantumNous/new-api/setting/system_setting"
 	"github.com/QuantumNous/new-api/types"
@@ -50,10 +51,11 @@ func hasCustomModelRatio(modelName string, currentRatio float64) bool {
 func calculateAudioQuota(info QuotaInfo) int {
 	if info.UsePrice {
 		modelPrice := decimal.NewFromFloat(info.ModelPrice)
-		quotaPerUnit := decimal.NewFromFloat(common.QuotaPerUnit)
+		// 按次价是人民币，直接 × QuotaPerYuan 得 quota。
+		dQuotaPerYuan := decimal.NewFromInt(common.QuotaPerYuan)
 		groupRatio := decimal.NewFromFloat(info.GroupRatio)
 
-		quota := modelPrice.Mul(quotaPerUnit).Mul(groupRatio)
+		quota := modelPrice.Mul(dQuotaPerYuan).Mul(groupRatio)
 		return int(quota.Round(0).IntPart())
 	}
 
@@ -63,8 +65,9 @@ func calculateAudioQuota(info QuotaInfo) int {
 
 	groupRatio := decimal.NewFromFloat(info.GroupRatio)
 	modelRatio := decimal.NewFromFloat(info.ModelRatio)
-	// 倍率路径：与 service/text_quota.go 同一约定，ratio 必须乘 QuotaScale() 才是 quota/token。
-	ratio := groupRatio.Mul(modelRatio).Mul(decimal.NewFromFloat(common.QuotaScale()))
+	// 倍率路径：与 service/text_quota.go 同一约定，倍率是「¥/百万 tokens」，
+	// 乘 QuotaPerMillionTokens（=100）才是 quota/token。
+	ratio := groupRatio.Mul(modelRatio).Mul(decimal.NewFromInt(common.QuotaPerMillionTokens))
 
 	inputTextTokens := decimal.NewFromInt(int64(info.InputDetails.TextTokens))
 	outputTextTokens := decimal.NewFromInt(int64(info.OutputDetails.TextTokens))
@@ -261,15 +264,17 @@ func CalcOpenRouterCacheCreateTokens(usage dto.Usage, priceData types.PriceData)
 	if priceData.CacheCreationRatio == 1 {
 		return 0
 	}
-	// 语义是「倍率 → 美元/token」：倍率 1 = $2/1M tokens。这个换算与内部记账单位
-	// （QuotaPerUnit）无关，必须用 RatioQuotaBase，否则切换 QPU 后算出的缓存创建
-	// token 数会跟着变。
-	quotaPrice := priceData.ModelRatio / common.RatioQuotaBase
+	// 语义是「倍率 → 人民币/token」：倍率是 ¥/百万 tokens，所以 ratio / 10⁶ = ¥/token。
+	// 与内部记账单位（QuotaPerYuan / QuotaPerUnit）无关。
+	quotaPrice := priceData.ModelRatio / 1_000_000
 	promptCacheCreatePrice := quotaPrice * priceData.CacheCreationRatio
 	promptCacheReadPrice := quotaPrice * priceData.CacheRatio
 	completionPrice := quotaPrice * priceData.CompletionRatio
 
 	cost, _ := usage.Cost.(float64)
+	// 上游 OpenRouter 报的成本是**美元**，先按汇率换成人民币再参与反推——
+	// 这是计费路径里唯一合法读取汇率的地方（上游报的就是美元）。
+	cost = cost * operation_setting.USDExchangeRate
 	totalPromptTokens := float64(usage.PromptTokens)
 	completionTokens := float64(usage.CompletionTokens)
 	promptCacheReadTokens := float64(usage.PromptTokensDetails.CachedTokens)

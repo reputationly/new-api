@@ -1,4 +1,4 @@
-import React, { useContext, useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import {
   Button,
   Image,
@@ -14,11 +14,10 @@ import {
 import { Landmark } from 'lucide-react';
 import { API, showError, showSuccess } from '../../helpers';
 import { renderQuota } from '../../helpers/render';
-import { getQuotaPerUnit } from '../../helpers/quota';
+import { getQuotaPerYuan } from '../../helpers/quota';
 import { useTranslation } from 'react-i18next';
 import { useIsMobile } from '../../hooks/common/useIsMobile';
 import { useTableCompactMode } from '../../hooks/common/useTableCompactMode';
-import { StatusContext } from '../../context/Status';
 import CardPro from '../../components/common/ui/CardPro';
 import CardTable from '../../components/common/ui/CardTable';
 import CompactModeToggle from '../../components/common/ui/CompactModeToggle';
@@ -52,7 +51,6 @@ function fenToYuanText(fen) {
 export default function TransferTab() {
   const { t } = useTranslation();
   const isMobile = useIsMobile();
-  const [statusState] = useContext(StatusContext);
   const [list, setList] = useState([]);
   const [total, setTotal] = useState(0);
   const [page, setPage] = useState(1);
@@ -79,8 +77,6 @@ export default function TransferTab() {
   const [rejectId, setRejectId] = useState(null);
   const [rejectReason, setRejectReason] = useState('');
   const [rejectLoading, setRejectLoading] = useState(false);
-
-  const usdRate = statusState?.status?.usd_exchange_rate || 0;
 
   const loadList = async (
     p = page,
@@ -148,15 +144,14 @@ export default function TransferTab() {
     setApproveVisible(true);
   };
 
-  // 折算额度预览（仅展示用；权威折算在后端按固定汇率执行）。
+  // 折算额度预览（仅展示用；权威折算在后端执行）。
+  // 到账金额本身就是人民币，额度 = 人民币 × quota_per_yuan，不再乘汇率。
   // 用 renderQuota 按运营设置的额度展示类型渲染（CNY→¥、USD→$、自定义货币），与全站一致。
   const quotaPreview = useMemo(() => {
     const fen = yuanStringToFen(creditedAmount);
-    if (fen === null || fen <= 0 || !usdRate) return '';
-    const usd = fen / 100 / usdRate; // 元 → 美元额度
-    const quotaPerUnit = getQuotaPerUnit();
-    return renderQuota(usd * quotaPerUnit);
-  }, [creditedAmount, usdRate]);
+    if (fen === null || fen <= 0) return '';
+    return renderQuota((fen / 100) * getQuotaPerYuan());
+  }, [creditedAmount]);
 
   const handleApproveSubmit = async () => {
     const fen = yuanStringToFen(creditedAmount);

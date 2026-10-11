@@ -38,7 +38,7 @@ func TestEstimateWorstCost_PerCallModel(t *testing.T) {
 	require.True(t, est.Models[0].Resolvable)
 	require.Equal(t, "img-hd", est.WorstModel)
 
-	want := int64(0.04 * common.QuotaPerUnit * 0.5)
+	want := int64(0.04 * common.QuotaPerYuan * 0.5)
 	require.Equal(t, want, est.WorstUnitQuota)
 	require.Equal(t, want*500, est.WorstTotalQuota)
 	require.False(t, est.Unlimited)
@@ -50,7 +50,7 @@ func TestEstimateWorstCost_PicksMostExpensiveModel(t *testing.T) {
 		[]string{"img-hd", "img-cheap"}, []int{3}, 10, 1, false)
 
 	require.Equal(t, "img-hd", est.WorstModel)
-	require.Equal(t, int64(0.04*common.QuotaPerUnit)*10, est.WorstTotalQuota)
+	require.Equal(t, int64(0.04*common.QuotaPerYuan)*10, est.WorstTotalQuota)
 }
 
 // 按量计费没有「单次单价」这回事，必须如实说明，而不是拍一个 token 数糊弄。
@@ -72,7 +72,7 @@ func TestEstimateWorstCost_MixedResolvableAndNot(t *testing.T) {
 
 	require.Len(t, est.Models, 2)
 	require.Equal(t, "img-hd", est.WorstModel)
-	require.Equal(t, int64(0.04*common.QuotaPerUnit)*100, est.WorstTotalQuota)
+	require.Equal(t, int64(0.04*common.QuotaPerYuan)*100, est.WorstTotalQuota)
 }
 
 // 不限次的最坏成本是无穷大，给任何有限数字都是错的。
@@ -112,7 +112,7 @@ func TestEstimateWorstCost_TakesMaxCostRatioAcrossChannels(t *testing.T) {
 		[]string{"img-hd"}, []int{1, 2}, 1, 1, false)
 
 	require.Equal(t, 0.9, est.Models[0].CostRatio)
-	require.Equal(t, int64(0.04*common.QuotaPerUnit*0.9), est.WorstUnitQuota)
+	require.Equal(t, int64(0.04*common.QuotaPerYuan*0.9), est.WorstUnitQuota)
 }
 
 // 未限定渠道时要扫该模型的全部可用渠道，而不是当作「没有渠道」直接算不出来。
@@ -172,7 +172,7 @@ func TestEstimateWorstCost_VideoPerCallTakesMostExpensiveCell(t *testing.T) {
 		[]string{"vid"}, []int{3}, 10, 1, false)
 
 	require.True(t, est.Models[0].Resolvable)
-	require.Equal(t, int64(1.2*common.QuotaPerUnit), est.WorstUnitQuota)
+	require.Equal(t, int64(1.2*common.QuotaPerYuan), est.WorstUnitQuota)
 }
 
 func TestEstimateWorstCost_VideoPerSecondIsUnresolvable(t *testing.T) {

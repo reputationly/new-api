@@ -16,7 +16,7 @@ import (
 //
 // 成本口径与记账侧完全一致（model/log.go 的 appendUpstreamCost）：
 //
-//	单次外采成本 = 模型单价 × QuotaPerUnit × cost_ratio
+//	单次外采成本 = 模型单价(¥) × QuotaPerYuan × cost_ratio
 //
 // 其中「模型单价」是未打分组折扣的基准价——分组折扣影响的是**收客户多少**，
 // 不影响**付供应商多少**，把它折进来会系统性低估成本。
@@ -174,12 +174,12 @@ func estimateModelCost(
 	}
 
 	item.CostRatio = ratio
-	item.UnitQuota = int64(math.Round(unitPrice * common.QuotaPerUnit * ratio))
+	item.UnitQuota = int64(math.Round(unitPrice * common.QuotaPerYuan * ratio))
 	item.Resolvable = true
 	return item
 }
 
-// modelUnitPrice 返回单次调用的基准单价（美元口径，与 ModelPrice / 视频矩阵同单位）。
+// modelUnitPrice 返回单次调用的基准单价（人民币口径，与 ModelPrice / 视频矩阵同单位）。
 // 返回的 reason 非空表示这个模型的单次成本在配置时不可知。
 func modelUnitPrice(pricing []model.Pricing, name string) (float64, string) {
 	for _, p := range pricing {

@@ -16,20 +16,19 @@ import {
  * 这里把「两边都按人民币比较」这个不变量钉死。
  */
 
-const RATE = 7.3;
-const QPU = 500000;
-// 人民币金额 → quota：¥x ÷ 汇率 × QuotaPerUnit
-const yuan = (x) => (x / RATE) * QPU;
+const QPY = 100000000; // 1 元 = 10⁸ quota（后端 QuotaPerYuan）
+// 人民币金额 → quota：¥x × quota_per_yuan（不再经汇率）
+const yuan = (x) => x * QPY;
 
 beforeEach(() => {
-  localStorage.setItem('quota_per_unit', String(QPU));
+  localStorage.setItem('quota_per_yuan', String(QPY));
   localStorage.setItem('quota_display_type', 'CNY');
-  localStorage.setItem('status', JSON.stringify({ usd_exchange_rate: RATE }));
 });
 
 describe('最坏成本与售价的币种口径', () => {
-  it('quota 按汇率折成人民币', () => {
-    expect(quotaToCNY(QPU)).toBeCloseTo(RATE, 6);
+  it('quota 直接按 1 元 = 10⁸ quota 折成人民币', () => {
+    expect(quotaToCNY(QPY)).toBeCloseTo(1, 6);
+    expect(quotaToCNY(QPY * 7.3)).toBeCloseTo(7.3, 6);
   });
 
   it('成本 ¥50 对售价 ¥99 不算亏本', () => {
@@ -43,13 +42,13 @@ describe('最坏成本与售价的币种口径', () => {
   // 回归锁：旧实现把售价当美元、成本折到美元再比。成本 $10（≈¥73）对售价
   // ¥20，旧口径得出 10 < 20「不亏」，实际上每卖一份亏 ¥53。
   it('不得把人民币售价当美元比', () => {
-    const worst = 10 * QPU; // $10 ≈ ¥73
-    expect(worst / QPU).toBeLessThan(20); // 旧实现会漏报
+    const worst = 73 * QPY; // ¥73
+    expect(quotaToCNY(worst)).toBeCloseTo(73, 6);
     expect(isWorstCostOverPrice(worst, 20)).toBe(true);
   });
 
   it('售价为 0（未填）时不做亏本判断', () => {
-    expect(isWorstCostOverPrice(999 * QPU, 0)).toBe(false);
+    expect(isWorstCostOverPrice(999 * QPY, 0)).toBe(false);
   });
 
   // 售价不随展示币种换算：切到 USD 展示也还是 ¥

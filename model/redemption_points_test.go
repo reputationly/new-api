@@ -138,7 +138,7 @@ func TestUserCheckin_PointsModeGatedByPointsSwitch(t *testing.T) {
 	require.NoError(t, err)
 	require.False(t, checked, "被拒的签到不得占用当日签到记录")
 
-	// 开启后正常发放：10 积分 = ceil(10*684.93...) = 6850 quota unit
+	// 开启后正常发放：10 积分 = ceil(10 × 1e6) = 10_000_000 quota unit（1 积分 = 1 分钱）
 	ps := operation_setting.GetPointsSetting()
 	ps.Enabled = true
 	ps.RequireKyc = false // 本用例只验开关门，绕开实名门
@@ -147,9 +147,9 @@ func TestUserCheckin_PointsModeGatedByPointsSwitch(t *testing.T) {
 	checkin, err := UserCheckin(305)
 	require.NoError(t, err)
 	require.Equal(t, CheckinRewardPoints, checkin.RewardType)
-	require.Equal(t, 6850, checkin.QuotaAwarded)
+	require.Equal(t, 10_000_000, checkin.QuotaAwarded)
 	p, _ = redeemBalances(t, 305)
-	require.Equal(t, 6850, p, "积分模式签到应充入 points_balance")
+	require.Equal(t, 10_000_000, p, "积分模式签到应充入 points_balance")
 }
 
 // 积分模式零奖励拒绝（codex 第八轮）：min/max_points 默认 0 时切积分模式，

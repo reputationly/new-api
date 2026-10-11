@@ -26,7 +26,9 @@ const perSecond = (ratio) =>
 
 describe('formatVideoMatrixSummary', () => {
   beforeEach(() => {
-    localStorage.clear(); // 默认 USD、rate=1，断言里直接用美元数
+    // 断言只看格式化，不看换算：用 CNY 展示（ratePerCny = 1），数字与配置值一致。
+    localStorage.clear();
+    localStorage.setItem('quota_display_type', 'CNY');
   });
 
   it('per_second 的单位是「秒」而不是「次」', () => {
@@ -64,8 +66,8 @@ describe('formatVideoMatrixSummary', () => {
     const struck = container.querySelector('.line-through');
     expect(struck).toBeTruthy();
     // 折前 0.1~0.5，折后 0.05~0.25
-    expect(struck.textContent).toBe('$0.1 ~ $0.5');
-    expect(container.textContent).toContain('$0.05 ~ $0.25');
+    expect(struck.textContent).toBe('¥0.1 ~ ¥0.5');
+    expect(container.textContent).toContain('¥0.05 ~ ¥0.25');
   });
 
   // 不打折还划一道，用户会以为自己错过了什么
@@ -90,9 +92,9 @@ describe('formatVideoMatrixSummary', () => {
       <div>{formatVideoMatrixSummary(perSecond(0), t)}</div>,
     );
     expect(container.querySelector('.line-through').textContent).toBe(
-      '$0.1 ~ $0.5',
+      '¥0.1 ~ ¥0.5',
     );
-    expect(container.textContent).toContain('$0');
+    expect(container.textContent).toContain('¥0');
   });
 
   it('矩阵为空时退回「场景计费」文案，不炸', () => {

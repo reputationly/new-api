@@ -14,15 +14,16 @@ import (
 )
 
 func TestSettleTestQuotaUsesTieredBilling(t *testing.T) {
+	const expr = `v2:param("stream") == true ? tier("stream", p * 3) : tier("base", p * 2)`
 	info := &relaycommon.RelayInfo{
 		TieredBillingSnapshot: &billingexpr.BillingSnapshot{
 			BillingMode:   "tiered_expr",
-			ExprString:    `param("stream") == true ? tier("stream", p * 3) : tier("base", p * 2)`,
-			ExprHash:      billingexpr.ExprHashString(`param("stream") == true ? tier("stream", p * 3) : tier("base", p * 2)`),
+			ExprString:    expr,
+			ExprHash:      billingexpr.ExprHashString(expr),
 			GroupRatio:    1,
 			EstimatedTier: "stream",
-			QuotaPerUnit:  common.QuotaPerUnit,
-			ExprVersion:   1,
+			QuotaPerUnit:  common.QuotaPerUnit, // v2 快照不读它
+			ExprVersion:   billingexpr.ExprVersionV2,
 		},
 		BillingRequestInput: &billingexpr.RequestInput{
 			Body: []byte(`{"stream":true}`),
@@ -36,7 +37,8 @@ func TestSettleTestQuotaUsesTieredBilling(t *testing.T) {
 		PromptTokens: 1000,
 	})
 
-	require.Equal(t, 1500, quota)
+	// v2 系数是 ¥/百万 tokens：p × 3 = 3000 → 3000 / 10⁶ × 10⁸ = 300,000 quota（¥0.003）
+	require.Equal(t, 300_000, quota)
 	require.NotNil(t, result)
 	require.Equal(t, "stream", result.MatchedTier)
 }

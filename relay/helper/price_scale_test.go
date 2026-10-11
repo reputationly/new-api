@@ -15,11 +15,12 @@ import (
 
 // 预扣的倍率路径（ModelPriceHelper）与「预扣 token 数下限」的关系。
 //
-// 单位约定：倍率路径的 quota/token = ratio × QuotaScale()，而 common.PreConsumedQuota
-// **不是 quota，是 token 数下限**，所以它既不乘 scale、也不参与单位迁移。
-// 这条用例把两者一起钉住：
-// 若有人给下限也乘了 scale，冻结额会放大 14.6 倍，下面的期望值立刻对不上。
-func TestModelPriceHelperPreConsumeScalesRatioNotTokenFloor(t *testing.T) {
+// 单位约定（新口径）：倍率路径的 quota/token = ratio × QuotaPerMillionTokens（=100），
+// 而 common.PreConsumedQuota **不是 quota，是 token 数下限**，所以它既不乘 100、
+// 也不参与单位迁移。这条用例把两者一起钉住：
+//   - 若有人给下限也乘了 100，冻结额会放大 100 倍；
+//   - 若有人把倍率路径写回「× QuotaPerUnit / 汇率」，QPU 变化会让预扣跟着变。
+func TestModelPriceHelperPreConsumeUsesTokenFloorNotQuotaUnit(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	// relay/helper 的测试二进制不跑 InitResources，倍率表要显式加载默认值。
 	ratio_setting.InitRatioSettings()
@@ -50,28 +51,23 @@ func TestModelPriceHelperPreConsumeScalesRatioNotTokenFloor(t *testing.T) {
 		return priceData.QuotaToPreConsume
 	}
 
-	// 旧单位：500 tokens（下限） × ratio，四舍五入后与改造前的 int() 截断同值
-	common.QuotaPerUnit = 500000
-	require.Equal(t, int(math.Round(float64(common.PreConsumedQuota)*modelRatio)), preConsume(500000))
-
-	// 新单位：下限仍是 500 tokens，只有倍率这一步乘了 scale。
-	// 期望值显式用 7300000/RatioQuotaBase 算，不读全局——require.Equal 会先算期望值
-	// 再算 actual，读全局会读到上一行刚设的旧值。
-	const qpuNew = 7300000.0
-	require.Equal(t, int(math.Round(float64(common.PreConsumedQuota)*modelRatio*(qpuNew/common.RatioQuotaBase))), preConsume(qpuNew))
+	// 期望值：token 下限 × 倍率 × 100，与 QuotaPerUnit 无关。
+	want := int(math.Round(float64(common.PreConsumedQuota) * modelRatio * common.QuotaPerMillionTokens))
+	require.Equal(t, want, preConsume(500_000), "倍率路径固定乘 100，不读 QPU")
+	require.Equal(t, want, preConsume(7_300_000), "QPU = ¥1e-6 单位下预扣不变")
+	require.Equal(t, want, preConsume(730_000_000), "QPU = ¥1e-8 单位下预扣不变")
 }
 
-// 按次价分支（ModelPriceHelperPerCall）此前是 int(price × QPU × group)：
-// 运营填 ¥0.1、汇率 7.3 时，落库 0.1/7.3 美元，QPU = 7300000 下算出 99999.9999…，
-// 截断会少收 1 quota。
-func TestModelPriceHelperPerCallRoundsPerCallPrice(t *testing.T) {
+// 按次价分支（ModelPriceHelperPerCall）必须用人民币 × QuotaPerYuan 并四舍五入：
+// 运营填 ¥0.1 时应收 10,000,000 quota（= ¥0.1），且不读 QPU、不受汇率影响。
+func TestModelPriceHelperPerCallPricePath(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
-	const modelName = "percall-rounding-test-model"
+	const modelName = "percall-test-model"
 	saved := ratio_setting.ModelPrice2JSONString()
 	t.Cleanup(func() { _ = ratio_setting.UpdateModelPriceByJSONString(saved) })
 	require.NoError(t, ratio_setting.UpdateModelPriceByJSONString(
-		`{"percall-rounding-test-model":0.013698630136986301}`)) // ¥0.1 ÷ 7.3
+		`{"percall-test-model":0.1}`)) // ¥0.1/次
 
 	original := common.QuotaPerUnit
 	t.Cleanup(func() { common.QuotaPerUnit = original })
@@ -89,21 +85,40 @@ func TestModelPriceHelperPerCallRoundsPerCallPrice(t *testing.T) {
 		return priceData.Quota
 	}
 
-	common.QuotaPerUnit = 7300000
-	require.Equal(t, 100000, perCallQuota(7300000), "¥0.1 应按 100000 quota 收取")
-
-	common.QuotaPerUnit = 500000
-	require.Equal(t, 6849, perCallQuota(500000))
+	require.Equal(t, 10_000_000, perCallQuota(7_300_000), "¥0.1 应按 10,000,000 quota 收取")
+	require.Equal(t, 10_000_000, perCallQuota(730_000_000), "按次价路径不读 QPU")
 }
 
-// 按次缺价时的倍率兜底 modelRatio/2 × QuotaPerUnit 属于价格路径（已乘 QPU），
-// 不得再乘 scale；同时它也要四舍五入。
+// 按次价的取整方向：int() 截断会少收 1 quota，必须是 math.Round。
+// ¥0.099999999 × 1e8 = 9,999,999.9 → 10,000,000。
+func TestModelPriceHelperPerCallRoundsPerCallPrice(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	const modelName = "percall-rounding-test-model"
+	saved := ratio_setting.ModelPrice2JSONString()
+	t.Cleanup(func() { _ = ratio_setting.UpdateModelPriceByJSONString(saved) })
+	require.NoError(t, ratio_setting.UpdateModelPriceByJSONString(
+		`{"percall-rounding-test-model":0.099999999}`))
+
+	ctx, _ := gin.CreateTestContext(nil)
+	info := &relaycommon.RelayInfo{
+		OriginModelName: modelName,
+		UserGroup:       "default",
+		UsingGroup:      "default",
+	}
+	priceData, err := ModelPriceHelperPerCall(ctx, info)
+	require.NoError(t, err)
+	require.Equal(t, 10_000_000, priceData.Quota, "9,999,999.9 必须四舍五入到 10,000,000（不得截断）")
+}
+
+// 按次缺价时的倍率兜底是「预扣 25 万 tokens 的输入价」：250000 × 倍率 × 100。
+// 它是 token 语义，不得再乘 QuotaPerUnit/汇率，也必须四舍五入。
 func TestModelPriceHelperPerCallRatioFallbackDoesNotDoubleScale(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	// relay/helper 的测试二进制不跑 InitResources，倍率表要显式加载默认值。
 	ratio_setting.InitRatioSettings()
 
-	const modelName = "gpt-4o" // 有默认倍率、无按次价
+	const modelName = "gpt-4o" // 有默认倍率、测试内不配按次价
 	modelRatio, ok, _ := ratio_setting.GetModelRatio(modelName)
 	require.True(t, ok)
 
@@ -123,9 +138,7 @@ func TestModelPriceHelperPerCallRatioFallbackDoesNotDoubleScale(t *testing.T) {
 		return priceData.Quota
 	}
 
-	common.QuotaPerUnit = 500000
-	require.Equal(t, int(math.Round(modelRatio/2*500000)), quota(500000))
-
-	common.QuotaPerUnit = 7300000
-	require.Equal(t, int(math.Round(modelRatio/2*7300000)), quota(7300000))
+	want := int(math.Round(250_000 * modelRatio * common.QuotaPerMillionTokens))
+	require.Equal(t, want, quota(7_300_000))
+	require.Equal(t, want, quota(730_000_000), "按量预扣是 token 语义，不读 QPU")
 }

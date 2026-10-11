@@ -12,7 +12,6 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/model"
-	"github.com/QuantumNous/new-api/setting/operation_setting"
 
 	"github.com/gin-gonic/gin"
 )
@@ -284,10 +283,10 @@ func logToRow(l *model.Log, includeAdminCols bool) []string {
 	// 费用按 CNY 输出：quota -> USD -> CNY，与前端 renderQuota 的 CNY 分支同款，
 	// 也与 controller/billing.go:50 的换算一致。
 	//
-	// 注意：QuotaPerUnit 与 USDExchangeRate 都是全局可变配置，日志里只存了整型 quota，
-	// 不存历史汇率，所以这一列是"按当前配置回算"的，改过汇率后老日志的 CNY 会漂。
-	// 这是数据模型的固有限制，前端展示也是同样行为。
-	// 汇率 <= 0 时不再 fallback 成 1（那会输出美元数值却挂 CNY 表头），直接留空。
+	// 人民币金额 = quota / QuotaPerYuan（1 quota = ¥0.00000001，不读汇率）。
+	// 日志里只存整型 quota、不存历史汇率，而人民币口径本身与汇率无关，
+	// 所以这一列不会因为运营改汇率而漂。
+	// 展示币种不是 CNY 时不做换算（那会输出别的币种数值却挂 CNY 表头），直接留空。
 	// 费用的正负与页面「消耗额度」同一口径：消费计正，退款计负，其它类型不计费。
 	// 原始 quota 列保留库里的值（退款行为正数，它是退回的金额），只有费用列带符号。
 	signedQuota := 0
@@ -298,9 +297,8 @@ func logToRow(l *model.Log, includeAdminCols bool) []string {
 		signedQuota = -l.Quota
 	}
 	costCNY := ""
-	rate := operation_setting.USDExchangeRate
-	if common.QuotaPerUnit > 0 && rate > 0 {
-		costCNY = strconv.FormatFloat(float64(signedQuota)/common.QuotaPerUnit*rate, 'f', 6, 64)
+	if common.QuotaPerYuan > 0 {
+		costCNY = strconv.FormatFloat(float64(signedQuota)/common.QuotaPerYuan, 'f', 8, 64)
 	}
 	cacheRead, cacheWrite := otherCacheTokens(l.Other)
 	row = append(row,

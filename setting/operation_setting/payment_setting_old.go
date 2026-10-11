@@ -19,6 +19,13 @@ var Price = 7.3
 var MinTopUp = 1
 var USDExchangeRate = 7.3
 
+// usdToCNY 只用于把**代码里静态的美元报价**（工具价、GPT-Image-1、Gemini 音频价）
+// 在编译期换成人民币：这些是写死的数据，不应该随运营改汇率而漂移。
+//
+// 与 ratio_setting.USD2RMB 同值；那边不能反着 import 本包（ratio_setting 已 import
+// operation_setting），所以只能各留一个常量。
+const usdToCNY = 7.3
+
 var PayMethods = []map[string]string{
 	{
 		"name":  "支付宝",

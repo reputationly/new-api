@@ -47,11 +47,47 @@ func numericColumnRefs() []columnRef {
 	return refs
 }
 
+// jsSafeInteger 是 JS 能精确表示的最大整数（2⁵³-1）。前端用 Number 读 quota，
+// 超过这个值就开始丢精度，所以迁移后（×100）逼近它的余额必须在报告里点名。
+const jsSafeInteger = int64(1)<<53 - 1
+
+// precheckJSSafeInteger 检查迁移后的余额是否逼近 JS 安全整数。
+//
+// 只警告不拒绝：前端展示不准不会算错账（计费在服务端按 int64 做），但运营需要知道
+// 哪个用户的余额已经大到页面显示会漂。2⁵³ quota ≈ ¥9,007 万。
+func precheckJSSafeInteger(rep *report) error {
+	multiplier := currentPlan().maxMultiplier()
+	for _, table := range []struct{ table, column string }{
+		{"users", "quota"},
+		{"tokens", "remain_quota"},
+		{"users", "used_quota"},
+	} {
+		var maxAbs int64
+		query := fmt.Sprintf("SELECT COALESCE(MAX(ABS(%s)), 0) FROM %s", table.column, table.table)
+		if err := dbForTable(table.table).Raw(query).Scan(&maxAbs).Error; err != nil {
+			// 表可能不存在（老库），不是致命问题
+			rep.line("（跳过 %s.%s 的安全整数检查：%v）", table.table, table.column, err)
+			continue
+		}
+		projected := float64(maxAbs) * multiplier
+		if projected <= float64(jsSafeInteger) {
+			continue
+		}
+		rep.line("⚠️ %s.%s 最大值 %d，迁移后约 %.0f，超过 JS 安全整数 2⁵³（前端展示会丢精度，服务端计费不受影响）",
+			table.table, table.column, maxAbs, projected)
+	}
+	return nil
+}
+
 func precheckColumnTypes(rep *report) error {
 	refs := numericColumnRefs()
 
 	rep.blank()
 	rep.line("[M1.0 列类型预检]")
+	// JS 安全整数检查与方言无关，放在 SQLite 早退之前。
+	if err := precheckJSSafeInteger(rep); err != nil {
+		return err
+	}
 	if common.UsingSQLite {
 		rep.line("SQLite：INTEGER 本身是 64 位，跳过类型检查。")
 		return nil
@@ -95,12 +131,13 @@ func precheckColumnTypes(rep *report) error {
 		if err != nil {
 			return fmt.Errorf("检查 %s.%s 的最大值失败: %w", ref.table, ref.column, err)
 		}
-		if float64(maxAbs)*scale > maxSafeNumeric {
-			return fmt.Errorf("%s.%s 最大值 %d × %v 会溢出 int64，拒绝执行", ref.table, ref.column, maxAbs, scale)
+		multiplier := currentPlan().maxMultiplier()
+		if float64(maxAbs)*multiplier > maxSafeNumeric {
+			return fmt.Errorf("%s.%s 最大值 %d × %v 会溢出 int64，拒绝执行", ref.table, ref.column, maxAbs, multiplier)
 		}
 	}
 
-	rep.line("%d 列全部是 64 位整数，且放大 %v 倍后不会溢出。", len(refs), scale)
+	rep.line("%d 列全部是 64 位整数，且放大 %v 倍后不会溢出。", len(refs), currentPlan().maxMultiplier())
 	return nil
 }
 

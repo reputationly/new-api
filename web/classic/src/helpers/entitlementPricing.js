@@ -39,26 +39,26 @@ export const getModelCoverage = (coverage, modelName) => {
 };
 
 /**
- * 把 USD 单价换成套餐内要烧的算力点（不取整，由调用方按计费方式决定取整）。
+ * 把人民币单价换成套餐内要烧的算力点（不取整，由调用方按计费方式决定取整）。
  *
  * 与后端 EntitlementFunding.pointsNeeded 同一个公式：折扣作用在消耗侧，×0.5 就是
  * 同样的调用只烧一半点数。按量、按次、视频矩阵三处都走这里——各写一份的话，
- * 改折扣口径时总会漏掉一处。quotaPerUnit 由调用方传入，本模块不引 quota.js
+ * 改折扣口径时总会漏掉一处。quotaPerYuan 由调用方传入，本模块不引 quota.js
  * （它会带进 render.jsx，mobile 复用时就把 Semi 打进移动端包）。
  *
  * 不消耗算力点、无覆盖、换算率缺失时返回 null：调用方据此不出这一行。
  */
-export const entitlementPointsForUSD = (
-  usd,
+export const entitlementPointsForCny = (
+  cnyAmount,
   coverage,
   quotaPerComputePoint,
-  quotaPerUnit,
+  quotaPerYuan,
 ) => {
   if (!coverage || !coverage.consume_points) return null;
-  if (!(quotaPerComputePoint > 0) || !(quotaPerUnit > 0)) return null;
+  if (!(quotaPerComputePoint > 0) || !(quotaPerYuan > 0)) return null;
   const discount =
     Number(coverage.discount) > 0 ? Number(coverage.discount) : 1;
-  return (usd * quotaPerUnit * discount) / quotaPerComputePoint;
+  return (cnyAmount * quotaPerYuan * discount) / quotaPerComputePoint;
 };
 
 /**

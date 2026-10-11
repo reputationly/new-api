@@ -1,10 +1,10 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { buildPlanComparisonRows } from '../planComparison';
 
-// 1 点 = 100 quota，1 美元 = 500000 quota → 50000 点 = 10 美元
+// 1 点 = 100 quota，1 元 = 500000 quota（测试简化值）→ 50000 点 = 10 元
 beforeEach(() => {
   localStorage.setItem('quota_per_compute_point', '100');
-  localStorage.setItem('quota_per_unit', '500000');
+  localStorage.setItem('quota_per_yuan', '500000');
 });
 
 const POINTS_50K = 50000 * 100; // quota unit
@@ -61,7 +61,7 @@ describe('buildPlanComparisonRows', () => {
       },
       plans,
     );
-    // 10 美元 / 0.04 = 250 次
+    // 10 元 / 0.04 = 250 次
     expect(rowOf(r, 'model-img-hd').cells[0].text).toBe('≈ 250 次');
   });
 
@@ -91,8 +91,9 @@ describe('buildPlanComparisonRows', () => {
       { models: [gpt], plans: [column({ coverage: { 'gpt-5': covered() } })] },
       plans,
     );
-    // 10 美元 / (2.5 × 2 美元每 1M) = 2M tokens = 200 万
-    expect(rowOf(r, 'model-gpt-5').cells[0].text).toBe('约 200 万 tokens');
+    // 10 元 / (¥2.5 每 1M) = 4M tokens = 400 万
+    // （model_ratio 现在就是 ¥/百万 tokens，不再 × 2）
+    expect(rowOf(r, 'model-gpt-5').cells[0].text).toBe('约 400 万 tokens');
   });
 
   it('限渠道的格子要带标记', () => {

@@ -9,7 +9,7 @@ import {
  * 视频计费矩阵的摊平结果。两端共用这一份（手机端直接 import），
  * 所以它错了就是 PC 和手机一起错。
  *
- * per_second 的后端表是一维的 { 分辨率: $/秒 }，由本模块升成二维走同一套逻辑。
+ * per_second 的后端表是一维的 { 分辨率: ¥/秒 }，由本模块升成二维走同一套逻辑。
  * 虚拟列名必须是个哨兵值而不是「秒」这类可读文本——渲染端拿它拼标签会得到
  * 「秒 秒」，而哨兵值逼着渲染端显式分支。
  */
@@ -36,7 +36,7 @@ describe('per_second 摊平', () => {
 
   it('乘上分组倍率', () => {
     const rows = flattenVideoMatrix(perSecond, 0.5);
-    expect(rows.find((r) => r.resolution === '1080p').priceUSD).toBeCloseTo(
+    expect(rows.find((r) => r.resolution === '1080p').priceCNY).toBeCloseTo(
       0.025,
       9,
     );
@@ -49,24 +49,24 @@ describe('折前价', () => {
     const row = flattenVideoMatrix(perSecond, 0.5).find(
       (r) => r.resolution === '1080p',
     );
-    expect(row.priceUSD).toBeCloseTo(0.025, 9);
-    expect(row.originalPriceUSD).toBeCloseTo(0.05, 9);
+    expect(row.priceCNY).toBeCloseTo(0.025, 9);
+    expect(row.originalPriceCNY).toBeCloseTo(0.05, 9);
   });
 
   it('无折扣时不给折前价', () => {
     flattenVideoMatrix(perSecond, 1).forEach((r) =>
-      expect(r.originalPriceUSD).toBeNull(),
+      expect(r.originalPriceCNY).toBeNull(),
     );
     // 详情页展示基础单价时不传倍率，同样不该出现划线
     flattenVideoMatrix(perSecond).forEach((r) =>
-      expect(r.originalPriceUSD).toBeNull(),
+      expect(r.originalPriceCNY).toBeNull(),
     );
   });
 
   // 倍率 > 1 是涨价，划线会显示成「原价更便宜」，比不显示更糟
   it('倍率大于 1 时不给折前价', () => {
     flattenVideoMatrix(perSecond, 1.5).forEach((r) =>
-      expect(r.originalPriceUSD).toBeNull(),
+      expect(r.originalPriceCNY).toBeNull(),
     );
   });
 
@@ -75,8 +75,8 @@ describe('折前价', () => {
     const row = flattenVideoMatrix(perSecond, 0).find(
       (r) => r.resolution === '1080p',
     );
-    expect(row.priceUSD).toBe(0);
-    expect(row.originalPriceUSD).toBeCloseTo(0.05, 9);
+    expect(row.priceCNY).toBe(0);
+    expect(row.originalPriceCNY).toBeCloseTo(0.05, 9);
   });
 
   it('token 与 per_call 同样给折前价', () => {
@@ -84,13 +84,13 @@ describe('折前价', () => {
       { mode: 'token', token: { '720p': { without_video: 8 } } },
       0.5,
     )[0];
-    expect(token.originalPriceUSD).toBeCloseTo(8, 9);
+    expect(token.originalPriceCNY).toBeCloseTo(8, 9);
 
     const perCall = flattenVideoMatrix(
       { mode: 'per_call', per_call: { '720p': { 5: 0.2 } } },
       0.5,
     )[0];
-    expect(perCall.originalPriceUSD).toBeCloseTo(0.2, 9);
+    expect(perCall.originalPriceCNY).toBeCloseTo(0.2, 9);
   });
 });
 

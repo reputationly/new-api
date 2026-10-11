@@ -123,15 +123,15 @@ func ModelPriceHelper(c *gin.Context, info *relaycommon.RelayInfo, promptTokens 
 		audioRatio = ratio_setting.GetAudioRatio(info.OriginModelName)
 		audioCompletionRatio = ratio_setting.GetAudioCompletionRatio(info.OriginModelName)
 		// common.PreConsumedQuota 名字里带 quota，实际是**预扣 token 数下限**，
-		// 所以它不乘 QuotaScale()、迁移也不改它：再乘一次会把冻结额放大两次。
-		// 倍率换算只发生在下面 ratio 这一步。
-		ratio := modelRatio * groupRatioInfo.GroupRatio * common.QuotaScale()
+		// 所以它不乘 QuotaPerMillionTokens、单位迁移也不改它：再乘一次会把冻结额放大两次。
+		// 倍率换算只发生在下面 ratio 这一步（倍率是 ¥/百万 tokens → quota/token = 倍率 × 100）。
+		ratio := modelRatio * groupRatioInfo.GroupRatio * common.QuotaPerMillionTokens
 		preConsumedQuota = int(math.Round(float64(preConsumedTokens) * ratio))
 	} else {
 		if meta.ImagePriceRatio != 0 {
 			modelPrice = modelPrice * meta.ImagePriceRatio
 		}
-		preConsumedQuota = int(math.Round(modelPrice * common.QuotaPerUnit * groupRatioInfo.GroupRatio))
+		preConsumedQuota = int(math.Round(modelPrice * common.QuotaPerYuan * groupRatioInfo.GroupRatio))
 	}
 
 	// check if free model pre-consume is disabled
@@ -208,7 +208,7 @@ func ModelPriceHelperPerCall(c *gin.Context, info *relaycommon.RelayInfo) (types
 	freeModel := false
 
 	if usePrice {
-		quota = int(math.Round(modelPrice * common.QuotaPerUnit * groupRatioInfo.GroupRatio))
+		quota = int(math.Round(modelPrice * common.QuotaPerYuan * groupRatioInfo.GroupRatio))
 		if !operation_setting.GetQuotaSetting().EnableFreeModelPreConsume {
 			if groupRatioInfo.GroupRatio == 0 || modelPrice == 0 {
 				quota = 0
@@ -216,9 +216,9 @@ func ModelPriceHelperPerCall(c *gin.Context, info *relaycommon.RelayInfo) (types
 			}
 		}
 	} else {
-		// 按量计费：以模型倍率的一半作为预扣额度。倍率已经通过 QuotaPerUnit 换算成
-		// quota，属于价格路径，不得再乘 QuotaScale()。
-		quota = int(math.Round(modelRatio / 2 * common.QuotaPerUnit * groupRatioInfo.GroupRatio))
+		// 按量计费：预扣 25 万 tokens 的输入价（= 25 万 × quota/token）。
+		// 这是 token 语义，不是"倍率的一半 × 某个单位"，所以写成显式的 250_000。
+		quota = int(math.Round(250_000 * modelRatio * common.QuotaPerMillionTokens * groupRatioInfo.GroupRatio))
 		modelPrice = -1
 		if !operation_setting.GetQuotaSetting().EnableFreeModelPreConsume {
 			if groupRatioInfo.GroupRatio == 0 || modelRatio == 0 {
@@ -284,8 +284,11 @@ func modelPriceHelperTiered(c *gin.Context, info *relaycommon.RelayInfo, promptT
 		return types.PriceData{}, fmt.Errorf("model %s tiered expr run failed: %w", info.OriginModelName, err)
 	}
 
-	// Expression coefficients are $/1M tokens prices; convert to quota the same way per-call billing does.
-	quotaBeforeGroup := rawCost / 1_000_000 * common.QuotaPerUnit
+	// 表达式系数按版本换算成 quota：v2 是 ¥/百万 tokens，v1 直接拒绝（与结算共用同一函数）。
+	quotaBeforeGroup, err := billingexpr.QuotaFromExprOutput(rawCost, billingexpr.ExprVersion(exprStr))
+	if err != nil {
+		return types.PriceData{}, fmt.Errorf("model %s: %w", info.OriginModelName, err)
+	}
 	preConsumedQuota := billingexpr.QuotaRound(quotaBeforeGroup * groupRatioInfo.GroupRatio)
 
 	freeModel := false
@@ -308,7 +311,7 @@ func modelPriceHelperTiered(c *gin.Context, info *relaycommon.RelayInfo, promptT
 		EstimatedQuotaBeforeGroup: quotaBeforeGroup,
 		EstimatedQuotaAfterGroup:  preConsumedQuota,
 		EstimatedTier:             trace.MatchedTier,
-		QuotaPerUnit:              common.QuotaPerUnit,
+		QuotaPerUnit:              common.QuotaPerUnit, // 仅 v1 快照语义；v2 结算不读它
 		ExprVersion:               billingexpr.ExprVersion(exprStr),
 	}
 	info.TieredBillingSnapshot = snapshot

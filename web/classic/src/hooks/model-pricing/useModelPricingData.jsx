@@ -75,23 +75,30 @@ export const useModelPricingData = () => {
   const [statusState] = useContext(StatusContext);
   const [userState] = useContext(UserContext);
 
-  // 美元兑人民币汇率，只用于按 CNY 展示。
+  // 展示币种相对人民币的换算率。定价配置存的就是人民币，价格展示一律
+  // `人民币 × ratePerCny`：
+  //   CNY → 1；USD → 1 / 汇率；CUSTOM → 自定义汇率 / 汇率。
   //
   // 曾经还有个「充值价格显示」开关，按 price / usd_exchange_rate 再换算一次 ——
   // 那是上游给"充值价高于汇率、体现溢价"的站点用的。本站两个值相等（都是 7.3），
   // 换算恒等于 1，开关点了数字纹丝不动，等于给用户一个坏掉的按钮，已下线。
   const usdExchangeRate = useMemo(
-    () => statusState?.status?.usd_exchange_rate ?? 1,
+    () => Number(statusState?.status?.usd_exchange_rate) || 1,
     [statusState],
   );
   const customExchangeRate = useMemo(
-    () => statusState?.status?.custom_currency_exchange_rate ?? 1,
+    () => Number(statusState?.status?.custom_currency_exchange_rate) || 1,
     [statusState],
   );
   const customCurrencySymbol = useMemo(
     () => statusState?.status?.custom_currency_symbol ?? '¤',
     [statusState],
   );
+  const ratePerCny = useMemo(() => {
+    if (currency === 'CNY') return 1;
+    if (currency === 'CUSTOM') return customExchangeRate / usdExchangeRate;
+    return 1 / usdExchangeRate;
+  }, [currency, customExchangeRate, usdExchangeRate]);
 
   // 默认货币与站点展示类型同步；TOKENS 由视图层走倍率展示
   const siteDisplayType = useMemo(
@@ -245,14 +252,14 @@ export const useModelPricingData = () => {
     [selectedRowKeys],
   );
 
-  const displayPrice = (usdPrice, digits = 3) => {
-    const priceInUSD = usdPrice;
-    if (currency === 'CNY') {
-      return `¥${(priceInUSD * usdExchangeRate).toFixed(digits)}`;
-    } else if (currency === 'CUSTOM') {
-      return `${customCurrencySymbol}${(priceInUSD * customExchangeRate).toFixed(digits)}`;
-    }
-    return `$${priceInUSD.toFixed(digits)}`;
+  const displayPrice = (cnyPrice, digits = 3) => {
+    const symbol =
+      currency === 'CNY'
+        ? '¥'
+        : currency === 'CUSTOM'
+          ? customCurrencySymbol
+          : '$';
+    return `${symbol}${(Number(cnyPrice) * ratePerCny).toFixed(digits)}`;
   };
 
   const setModelsFormat = (models, groupRatio, vendorMap) => {
@@ -474,7 +481,7 @@ export const useModelPricingData = () => {
     entitlementConfig,
 
     // 计算属性
-    usdExchangeRate,
+    ratePerCny,
     filteredModels,
     rowSelection,
 

@@ -7,9 +7,9 @@ import {
   getModelPricingCurrencyConfig,
   VIDEO_PER_SECOND_COLUMN,
 } from '../../../../../helpers';
-import { getQuotaPerUnit } from '../../../../../helpers/quota';
+import { getQuotaPerYuan } from '../../../../../helpers/quota';
 import {
-  entitlementPointsForUSD,
+  entitlementPointsForCny,
   formatVideoEntitlementPoints,
 } from '../../../../../helpers/entitlementPricing';
 
@@ -40,7 +40,7 @@ export default function VideoMatrixBreakdown({
   // 三种模式不能用 isToken 一个布尔切：per_second 落进 else 分支会被当成 per_call，
   // 列头拼成「__per_second__ 秒」、单位写成「/次」，而它实际是每秒单价。
   const isPerSecond = videoPricing.mode === 'per_second';
-  const { symbol, rate } = getModelPricingCurrencyConfig();
+  const { symbol, ratePerCny } = getModelPricingCurrencyConfig();
 
   // 列：token 模式固定两列（与配置页、供应商价目表同序）；按次模式取出现过的秒数。
   // 秒数用 videoSecondsRank 解析——后端接受 '5s' / '5秒' 这类列名，
@@ -63,9 +63,9 @@ export default function VideoMatrixBreakdown({
   // 行：按分辨率聚合，交汇格取价格。未配置的格子留空，显示为「—」——
   // 那是「该档不支持/未定价」的真实状态，填 0 会被误读成免费。
   const byResolution = new Map();
-  cells.forEach(({ resolution, column, priceUSD }) => {
+  cells.forEach(({ resolution, column, priceCNY }) => {
     if (!byResolution.has(resolution)) byResolution.set(resolution, {});
-    byResolution.get(resolution)[column] = priceUSD;
+    byResolution.get(resolution)[column] = priceCNY;
   });
 
   const dataSource = [...byResolution.entries()].map(([resolution, row]) => ({
@@ -85,19 +85,19 @@ export default function VideoMatrixBreakdown({
       title: columnLabel(key),
       dataIndex: key,
       align: 'right',
-      render: (priceUSD) => {
-        if (priceUSD === undefined) return <Text type='tertiary'>—</Text>;
-        const points = entitlementPointsForUSD(
-          priceUSD,
+      render: (priceCNY) => {
+        if (priceCNY === undefined) return <Text type='tertiary'>—</Text>;
+        const points = entitlementPointsForCny(
+          priceCNY,
           entitlementCoverage,
           quotaPerComputePoint,
-          getQuotaPerUnit(),
+          getQuotaPerYuan(),
         );
         return (
           <>
             <Text strong>
               {symbol}
-              {Number((priceUSD * rate).toFixed(4))}
+              {Number((priceCNY * ratePerCny).toFixed(4))}
             </Text>
             {points !== null && (
               <div className='text-xs text-gray-500'>

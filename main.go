@@ -72,6 +72,20 @@ func main() {
 		return
 	}
 
+	if *common.QuotaUnitMigrationV2Mode != "" {
+		if err := quotaunitmigration.RunV2(*common.QuotaUnitMigrationV2Mode, os.Stdout); err != nil {
+			common.FatalLog("quota unit migration V2 failed: " + err.Error())
+		}
+		return
+	}
+
+	// 启动保护（设计文档 §4 B9）：未完成 V2 迁移而库里已有数据时，新代码会在旧单位上
+	// 按 1/100 少收费，因此整个进程拒绝启动，只允许用上面的迁移参数跑完再起。
+	if err := quotaunitmigration.EnsurePriceUnitReady(); err != nil {
+		common.FatalLog(err.Error())
+		return
+	}
+
 	common.SysLog("New API " + common.Version + " started")
 
 	// Surface KYC key (mis)configuration warnings at startup rather than first use.

@@ -24,10 +24,9 @@ import { useNavigate } from 'react-router-dom';
 
 import ModelPricingCombined from '../../pages/Setting/Ratio/ModelPricingCombined';
 import ModelRatioNotSetEditor from '../../pages/Setting/Ratio/ModelRationNotSetEditor';
-import UpstreamRatioSync from '../../pages/Setting/Ratio/UpstreamRatioSync';
 import ToolPriceSettings from '../../pages/Setting/Ratio/ToolPriceSettings';
 
-import { API, showError, toBoolean } from '../../helpers';
+import { API, showError } from '../../helpers';
 
 const RatioSetting = () => {
   const { t } = useTranslation();
@@ -42,7 +41,6 @@ const RatioSetting = () => {
     ImageRatio: '',
     AudioRatio: '',
     AudioCompletionRatio: '',
-    ExposeRatioEnabled: false,
   });
 
   const [loading, setLoading] = useState(false);
@@ -60,11 +58,7 @@ const RatioSetting = () => {
             // 如果后端返回的不是合法 JSON，直接展示
           }
         }
-        if (['ExposeRatioEnabled'].includes(item.key)) {
-          newInputs[item.key] = toBoolean(item.value);
-        } else {
-          newInputs[item.key] = item.value;
-        }
+        newInputs[item.key] = item.value;
       });
       setInputs(newInputs);
     } else {
@@ -118,9 +112,6 @@ const RatioSetting = () => {
           </Tabs.TabPane>
           <Tabs.TabPane tab={t('未设置价格模型')} itemKey='unset_models'>
             <ModelRatioNotSetEditor options={inputs} refresh={onRefresh} />
-          </Tabs.TabPane>
-          <Tabs.TabPane tab={t('上游价格同步')} itemKey='upstream_sync'>
-            <UpstreamRatioSync options={inputs} refresh={onRefresh} />
           </Tabs.TabPane>
           <Tabs.TabPane tab={t('工具调用定价')} itemKey='tool_price'>
             <ToolPriceSettings options={inputs} />
