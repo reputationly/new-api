@@ -1,7 +1,11 @@
 import React from 'react';
 import { describe, it, expect, beforeEach } from 'vitest';
 import { render } from '@testing-library/react';
-import { normalizeLogPricing, renderModelPrice, renderQuota } from '../render';
+import {
+  normalizeLogPricing,
+  renderModelPrice,
+  renderQuotaTrimmed,
+} from '../render';
 
 /**
  * F2：历史日志的定价字段在渲染前统一换算成人民币。
@@ -13,7 +17,7 @@ import { normalizeLogPricing, renderModelPrice, renderQuota } from '../render';
  *     各 *_price / video_unit_price 仍是美元。
  * 换算只能用当前汇率（日志里没冻结当时的汇率）。
  *
- * 这个文件同时钉住 S4 的不变量：计费过程合计（9 位）等于该日志的花费列。
+ * 这个文件同时钉住 S4 的不变量：计费过程合计与花费列的紧凑金额逐位一致。
  */
 
 const RATE = 7.3; // 站点美元汇率
@@ -129,7 +133,7 @@ describe('normalizeLogPricing：新旧两代日志', () => {
   });
 });
 
-describe('历史日志：计费过程合计 == 花费列（9 位）', () => {
+describe('历史日志：计费过程合计 == 花费列（紧凑金额）', () => {
   // E1 同款请求在 V1 期落库：other 是美元口径，logs.quota 已经是迁移后的 quota
   const quota = 16583000; // = ¥0.016583
 
@@ -151,11 +155,11 @@ describe('历史日志：计费过程合计 == 花费列（9 位）', () => {
         displayMode: 'price',
       }),
     );
-    expect(text).toContain('= ¥0.016583000');
-    expect(renderQuota(quota, 9)).toBe('¥0.016583000');
+    expect(text).toContain('= ¥0.016583');
+    expect(renderQuotaTrimmed(quota)).toBe('¥0.016583');
   });
 
-  it('V1 历史日志按 6 位 quota 网格舍入合计，再固定显示 9 位', () => {
+  it('V1 历史日志按 6 位 quota 网格舍入合计，再去掉末尾的 0', () => {
     const other = normalizeLogPricing({
       model_ratio: 0.5,
       completion_ratio: 1,
@@ -170,11 +174,11 @@ describe('历史日志：计费过程合计 == 花费列（9 位）', () => {
         displayMode: 'price',
       }),
     );
-    expect(text).toContain('= ¥0.001088000');
-    expect(renderQuota(1088000, 9)).toBe('¥0.001088000');
+    expect(text).toContain('= ¥0.001088');
+    expect(renderQuotaTrimmed(1088000)).toBe('¥0.001088');
   });
 
-  it('CNY 新日志仍按 9 位 quota 网格显示合计', () => {
+  it('CNY 新日志仍按 9 位 quota 网格显示合计并去掉末尾的 0', () => {
     const other = normalizeLogPricing({
       price_unit: 'cny',
       model_ratio: 0.01,
@@ -190,7 +194,7 @@ describe('历史日志：计费过程合计 == 花费列（9 位）', () => {
         displayMode: 'price',
       }),
     );
-    expect(text).toContain('= ¥0.000001490');
-    expect(renderQuota(1490, 9)).toBe('¥0.000001490');
+    expect(text).toContain('= ¥0.00000149');
+    expect(renderQuotaTrimmed(1490)).toBe('¥0.00000149');
   });
 });

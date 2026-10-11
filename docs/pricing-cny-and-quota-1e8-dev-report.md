@@ -115,7 +115,7 @@
 
 ## 3. 与设计文档的偏差（都是实现时的取舍）
 
-1. **`LogQuotaShort` / `FormatQuotaShort` 保持 2 位小数**。这两个函数的语义就是"用户面值金额"（兑换码、充值），2 位是它们存在的理由（避免 ¥99.999999 这类噪音）；普通人民币展示与 extraContent 使用 9 位小数。
+1. **`LogQuotaShort` / `FormatQuotaShort` 保持 2 位小数**。这两个函数的语义就是"用户面值金额"（兑换码、充值），2 位是它们存在的理由（避免 ¥99.999999 这类噪音）；页面金额去掉末尾的 0（最多 9 位），导出 CSV 固定 9 位，extraContent 使用 9 位小数。
 2. **定价换算报告全量列出**（模型级的每一行），不做抽样。换来的代价是报告较长，但迁移核对要的就是全量可 diff。
 3. **代码默认常量（`QuotaRemindThreshold=1000`、`checkin_setting` 默认值等）没有改**：现网库里这些 key 存在，迁移会写库；只有"全新库且运维从未配过"才会读到偏小的默认值。列为遗留项（§6）。
 4. **新增 `plan.go`/`pricing.go`/`guard.go` 三个文件**：文档只写了"参数化复用"，没有规定文件划分。
@@ -229,7 +229,7 @@ V2 迁移测试复用 V1 的 `seedSmallTables` fixture 而非真实 V1 快照；
 
 v1/v2 的口径判定被抽成**单一实现**：`helpers/exprVersion.js`（前缀解析，叶子模块，避开 `render → utils` 的环）+ `helpers/exprPrice.js`（`getExprPriceScale`），日志侧与定价页共用同一份，不存在第二处前缀语法。
 
-另更新 13 个因换算基准变化而失败的既有测试（`billingTotalRounding` 整体重写为 V2 口径：9 位、人民币、保留 `.5` 边界与 20 组随机值）。
+另更新 13 个因换算基准变化而失败的既有测试（`billingTotalRounding` 整体重写为 V2 口径：最多 9 位并去掉末尾的 0、人民币、保留 `.5` 边界与 20 组随机值）。
 **没有弱化任何断言**（例如 `planComparison` 的 token 数从 200 万变 400 万，是"倍率不再 ×2"的正确结果，不是放宽）。
 
 前端改动共 42 改 / 2 删 / 4 新增（`git status --porcelain web/`）。prettier：原本干净的改动文件全干净，`HEAD` 本来就脏的 4 个文件（`NotificationSettings`、`UsageLogsColumnDefs`、`ToolPriceSettings`、`useModelPricingEditorState`）**格式未动**；eslint 对改动文件无输出；`web/classic` 与 `web/mobile` 均能构建（输出到 `/tmp`，`dist` 零改动）。
@@ -308,7 +308,7 @@ dry-run 报告要重点核对：`logs` 分批计划的行数、`[数值列]` 前
 - `QuotaPerYuan = 1_000_000_000`，`QuotaPerMillionTokens = 1000`，默认 `QuotaPerUnit = 7_300_000_000`。
 - V2 quota 迁移为 ×1000、`targetQPU = 7_300_000_000`；points 与 compute-points 固定换算率均为 `10_000_000`。V1 的 ×14.6、定价字段的 ×7.3 和 6 位小数精度均保持不变。
 - B9 启动保护提示现为倍率路径约 68.5 倍、按次/视频/工具路径约 137 倍。
-- 本分支引入的人民币展示精度由 8 位改为 9 位；`LogQuotaShort` 与 `FormatQuotaShort` 仍为 2 位。
+- 本分支引入的人民币页面金额去掉末尾的 0（最多 9 位），导出 CSV 固定 9 位；`LogQuotaShort` 与 `FormatQuotaShort` 仍为 2 位。
 - Classic/mobile fallback 同步为 QPY 1,000,000,000、QPU 7,300,000,000、每积分/算力点 10,000,000。
 - 回归断言涵盖低价 token 计费、E1 16,583,000、¥0.2 按次 200,000,000、联网搜索 219,000,000、视频 2,920,000,000，以及 V2 迁移 quota ×1000、QPU 与 points 常量。
 - 同步修订银行转账、手动补单和积分换算提示测试的当前单位期望值，并更正倍率路径测试命名、迁移/任务历史单位注释及分到 quota 的注释。

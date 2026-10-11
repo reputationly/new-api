@@ -7,7 +7,12 @@ import {
   quotaToDisplayAmount,
   displayAmountToQuota,
 } from '../quota';
-import { getQuotaWithUnit, renderQuota } from '../render';
+import {
+  getQuotaWithUnit,
+  renderNumber,
+  renderQuota,
+  renderQuotaTrimmed,
+} from '../render';
 
 /**
  * F1：换算基准改为人民币。
@@ -118,6 +123,21 @@ describe('renderQuota：quota / quota_per_yuan × ratePerCny', () => {
     const before = renderQuota(16583000, 9);
     localStorage.setItem('status', JSON.stringify({ usd_exchange_rate: 6.9 }));
     expect(renderQuota(16583000, 9)).toBe(before);
+  });
+});
+
+describe('renderQuotaTrimmed：去掉金额末尾的 0', () => {
+  it('CNY：紧凑显示且保留最多 9 位精度', () => {
+    localStorage.setItem('quota_display_type', 'CNY');
+    expect(renderQuotaTrimmed(1490)).toBe('¥0.00000149');
+    expect(renderQuotaTrimmed(1)).toBe('¥0.000000001');
+    expect(renderQuotaTrimmed(1000000000)).toBe('¥1');
+    expect(renderQuotaTrimmed(0)).toBe('¥0');
+  });
+
+  it('TOKENS：沿用 renderNumber 显示 quota', () => {
+    localStorage.setItem('quota_display_type', 'TOKENS');
+    expect(renderQuotaTrimmed(1490)).toBe(renderNumber(1490));
   });
 });
 

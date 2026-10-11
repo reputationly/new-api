@@ -32,7 +32,7 @@ import {
   Typography,
 } from '@douyinfe/semi-ui';
 import { IconCopy, IconDelete, IconPlus } from '@douyinfe/semi-icons';
-import { renderQuota } from '../../../../helpers/render';
+import { renderQuotaTrimmed } from '../../../../helpers/render';
 import { getQuotaPerYuan } from '../../../../helpers/quota';
 import { copy, showSuccess } from '../../../../helpers';
 import {
@@ -2059,7 +2059,7 @@ export default function TieredPricingEditor({
             <div>
               <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                 <Text strong style={{ fontSize: 15 }}>
-                  {t('预计费用')}：{renderQuota(evalResult.cost, 9)}
+                  {t('预计费用')}：{renderQuotaTrimmed(evalResult.cost)}
                 </Text>
                 {evalResult.matchedTier && (
                   <Tag size='small' color='blue' type='light'>
