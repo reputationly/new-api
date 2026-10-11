@@ -7,7 +7,7 @@ import { normalizeLogPricing, renderModelPrice, renderQuota } from '../render';
  * F2：历史日志的定价字段在渲染前统一换算成人民币。
  *
  * 判定标记是 `other.price_unit === 'cny'`：
- *   - 有标记 → 新日志，字段本身就是人民币，原样返回；
+ *   - 有标记 → 新日志，字段本身就是人民币，仅附加合计舍入精度；
  *   - 没有 → 历史数据，**含 V0 与 V1 两代**：V1 那次改造只细化了 quota 单位，
  *     没有改比率语义，所以 V1 期日志的 model_ratio 仍是「× 2 后为 $/百万 tokens」，
  *     各 *_price / video_unit_price 仍是美元。
@@ -43,6 +43,7 @@ describe('normalizeLogPricing：新旧两代日志', () => {
     expect(out.model_ratio).toBe(2);
     expect(out.model_price).toBe(0.2);
     expect(out.video_unit_price).toBe(0.5);
+    expect(out.totalRoundDigits).toBe(9);
   });
 
   // V0（1 quota = ¥0.000001 之前）与 V1（1 quota = ¥0.000001）的 model_ratio 都是
@@ -63,6 +64,7 @@ describe('normalizeLogPricing：新旧两代日志', () => {
     expect(out.model_ratio).toBeCloseTo(2, 9);
     expect(out.completion_ratio).toBe(4); // 无量纲倍数不动
     expect(out.price_unit).toBeUndefined();
+    expect(out.totalRoundDigits).toBe(6);
   });
 
   it('绝对价格字段乘汇率，其余字段原样保留', () => {
@@ -151,5 +153,44 @@ describe('历史日志：计费过程合计 == 花费列（9 位）', () => {
     );
     expect(text).toContain('= ¥0.016583000');
     expect(renderQuota(quota, 9)).toBe('¥0.016583000');
+  });
+
+  it('V1 历史日志按 6 位 quota 网格舍入合计，再固定显示 9 位', () => {
+    const other = normalizeLogPricing({
+      model_ratio: 0.5,
+      completion_ratio: 1,
+      group_ratio: 1,
+      model_price: -1,
+    });
+    const text = renderText(
+      renderModelPrice({
+        ...other,
+        prompt_tokens: 100,
+        completion_tokens: 49,
+        displayMode: 'price',
+      }),
+    );
+    expect(text).toContain('= ¥0.001088000');
+    expect(renderQuota(1088000, 9)).toBe('¥0.001088000');
+  });
+
+  it('CNY 新日志仍按 9 位 quota 网格显示合计', () => {
+    const other = normalizeLogPricing({
+      price_unit: 'cny',
+      model_ratio: 0.01,
+      completion_ratio: 1,
+      group_ratio: 1,
+      model_price: -1,
+    });
+    const text = renderText(
+      renderModelPrice({
+        ...other,
+        prompt_tokens: 100,
+        completion_tokens: 49,
+        displayMode: 'price',
+      }),
+    );
+    expect(text).toContain('= ¥0.000001490');
+    expect(renderQuota(1490, 9)).toBe('¥0.000001490');
   });
 });

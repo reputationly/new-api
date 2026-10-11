@@ -1364,11 +1364,12 @@ function formatRatioValue(value, digits = 6) {
 // （渠道余额、充值额度的输入框），两者不可互换。
 function renderDisplayAmountFromCny(cnyAmount, digits = 9) {
   const value = Number(cnyAmount || 0);
+  const roundedValue = roundToDisplay(value, digits);
   if (getQuotaDisplayType() === 'TOKENS') {
-    return renderNumber(Math.round(value * getQuotaPerYuan()));
+    return renderNumber(Math.round(roundedValue * getQuotaPerYuan()));
   }
   const { symbol, ratePerCny } = getDisplayCurrency();
-  return `${symbol}${roundToDisplay(value * ratePerCny, digits).toFixed(digits)}`;
+  return `${symbol}${roundToDisplay(value * ratePerCny, digits).toFixed(9)}`;
 }
 
 // 单价的显示格式：最多 6 位小数，去掉末尾的 0（¥14.6 而不是 ¥14.600000）。
@@ -1398,11 +1399,13 @@ export function roundToDisplay(value, digits = 9) {
   return (Math.sign(corrected) * Math.round(Math.abs(corrected))) / factor;
 }
 
-// 计费过程的「合计」：必须在**显示币种金额**上按 9 位四舍五入后再定宽。
-// 与单价行不同，合计要与花费列（logs.quota 换算后的金额，9 位）逐位对上，
-// 所以除不尽的单价行沿用原格式，只有合计走 roundToDisplay。
-function formatBillingDisplayTotal(cnyAmount, ratePerCny, digits = 9) {
-  return roundToDisplay(cnyAmount * ratePerCny, digits).toFixed(digits);
+// 计费过程的「合计」先按日志原本的 quota 网格舍入，再固定显示 9 位。
+function formatBillingDisplayTotal(
+  cnyAmount,
+  ratePerCny,
+  totalRoundDigits = 9,
+) {
+  return roundToDisplay(cnyAmount * ratePerCny, totalRoundDigits).toFixed(9);
 }
 
 function buildBillingText(key, vars) {
@@ -1786,6 +1789,7 @@ export function renderModelPrice(opts) {
     image_generation_call: imageGenerationCall = false,
     image_generation_call_price: imageGenerationCallPrice = 0,
     displayMode = 'price',
+    totalRoundDigits = 9,
   } = opts;
   const { ratio: effectiveGroupRatio, label: ratioLabel } = getEffectiveRatio(
     _groupRatio,
@@ -1816,6 +1820,7 @@ export function renderModelPrice(opts) {
             total: formatBillingDisplayTotal(
               modelPrice * groupRatio,
               ratePerCny,
+              totalRoundDigits,
             ),
           },
         ),
@@ -2009,7 +2014,7 @@ export function renderModelPrice(opts) {
           outputDesc,
           extraServices,
           symbol,
-          total: formatBillingDisplayTotal(price, ratePerCny),
+          total: formatBillingDisplayTotal(price, ratePerCny, totalRoundDigits),
         },
       ),
     ];
@@ -2022,6 +2027,7 @@ export function renderModelPrice(opts) {
     const displayTotal = formatBillingDisplayTotal(
       modelPrice * groupRatio,
       ratePerCny,
+      totalRoundDigits,
     );
     return i18next.t(
       '按次：{{symbol}}{{price}} * {{ratioType}}：{{ratio}} = {{symbol}}{{total}}',
@@ -2214,7 +2220,7 @@ export function renderModelPrice(opts) {
         )
       : null,
     buildBillingText('合计：{{total}}', {
-      total: renderDisplayAmountFromCny(totalAmount),
+      total: renderDisplayAmountFromCny(totalAmount, totalRoundDigits),
     }),
   ]);
 }
@@ -2379,18 +2385,19 @@ const LEGACY_USD_PRICE_KEYS = [
  * 里的人民币单价跟着变。
  *
  * @param {object} other - 日志 other 字段（`getLogOther()` 的产物）
- * @returns {object} 人民币口径的副本；已有 cny 标记或非对象时原样返回
+ * @returns {object} 人民币口径的字段及计费合计舍入精度
  */
 export function normalizeLogPricing(other) {
   if (!other || typeof other !== 'object' || Array.isArray(other)) {
     return other;
   }
   if (other.price_unit === 'cny') {
+    other.totalRoundDigits = 9;
     return other;
   }
 
   const rate = getUsdExchangeRate();
-  const next = { ...other };
+  const next = { ...other, totalRoundDigits: 6 };
 
   // 倍率：1 = $2/百万 tokens → ¥/百万 tokens
   const ratio = Number(other.model_ratio);
@@ -2653,6 +2660,7 @@ export function renderVideoMatrixPriceSimple(opts) {
     group_ratio: groupRatio,
     user_group_ratio,
     completion_tokens: tokens = 0,
+    totalRoundDigits = 9,
   } = opts;
 
   // 三种模式：token 看「是否含视频输入」，per_call / per_second 都看时长。
@@ -2690,7 +2698,9 @@ export function renderVideoMatrixPriceSimple(opts) {
         price: formatCompactDisplayPrice(unitPrice),
         seconds,
         ratio: formatRatioValue(ratio, 4),
-        amount: `${symbol}${formatCompactAmount(amount * ratePerCny)}`,
+        amount: `${symbol}${formatCompactAmount(
+          roundToDisplay(amount * ratePerCny, totalRoundDigits),
+        )}`,
       },
     );
   } else if (isTokenMode && tokens > 0) {
@@ -2705,7 +2715,9 @@ export function renderVideoMatrixPriceSimple(opts) {
         tokens: Number(tokens).toLocaleString(),
         price: formatCompactDisplayPrice(unitPrice),
         ratio: formatRatioValue(ratio, 4),
-        amount: `${symbol}${formatCompactAmount(amount * ratePerCny)}`,
+        amount: `${symbol}${formatCompactAmount(
+          roundToDisplay(amount * ratePerCny, totalRoundDigits),
+        )}`,
       },
     );
   }
@@ -2751,6 +2763,7 @@ export function buildVideoMatrixDetailRows(opts) {
     user_group_ratio,
     completion_tokens: tokens = 0,
     group_name: groupName,
+    totalRoundDigits = 9,
   } = opts;
   if (!mode) return [];
 
@@ -2816,19 +2829,19 @@ export function buildVideoMatrixDetailRows(opts) {
     const amount = Number(unitPrice) * seconds * ratio;
     rows.push({
       key: i18next.t('计费过程'),
-      value: `${symbol}${(Number(unitPrice) * ratePerCny).toFixed(4)} / ${i18next.t('秒')} × ${seconds} × ${formatRatioValue(ratio, 4)} = ${symbol}${roundToDisplay(amount * ratePerCny, 9).toFixed(9)}`,
+      value: `${symbol}${(Number(unitPrice) * ratePerCny).toFixed(4)} / ${i18next.t('秒')} × ${seconds} × ${formatRatioValue(ratio, 4)} = ${symbol}${roundToDisplay(amount * ratePerCny, totalRoundDigits).toFixed(9)}`,
     });
   } else if (isTokenMode && tokens > 0) {
     const amount = (tokens / 1e6) * Number(unitPrice) * ratio;
     rows.push({
       key: i18next.t('计费过程'),
-      value: `${Number(tokens).toLocaleString()} × ${symbol}${(Number(unitPrice) * ratePerCny).toFixed(4)} / 1M Tokens × ${formatRatioValue(ratio, 4)} = ${symbol}${roundToDisplay(amount * ratePerCny, 9).toFixed(9)}`,
+      value: `${Number(tokens).toLocaleString()} × ${symbol}${(Number(unitPrice) * ratePerCny).toFixed(4)} / 1M Tokens × ${formatRatioValue(ratio, 4)} = ${symbol}${roundToDisplay(amount * ratePerCny, totalRoundDigits).toFixed(9)}`,
     });
   } else if (!isTokenMode && !isPerSecond) {
     const amount = Number(unitPrice) * ratio;
     rows.push({
       key: i18next.t('计费过程'),
-      value: `${symbol}${(Number(unitPrice) * ratePerCny).toFixed(4)} / ${i18next.t('次')} × ${formatRatioValue(ratio, 4)} = ${symbol}${roundToDisplay(amount * ratePerCny, 9).toFixed(9)}`,
+      value: `${symbol}${(Number(unitPrice) * ratePerCny).toFixed(4)} / ${i18next.t('次')} × ${formatRatioValue(ratio, 4)} = ${symbol}${roundToDisplay(amount * ratePerCny, totalRoundDigits).toFixed(9)}`,
     });
   }
 
@@ -2893,6 +2906,7 @@ export function renderAudioModelPrice(opts) {
     cache_tokens: cacheTokens = 0,
     cache_ratio: cacheRatio = 1.0,
     displayMode = 'price',
+    totalRoundDigits = 9,
   } = opts;
   const { ratio: effectiveGroupRatio, label: ratioLabel } = getEffectiveRatio(
     _groupRatio,
@@ -2925,6 +2939,7 @@ export function renderAudioModelPrice(opts) {
             total: formatBillingDisplayTotal(
               modelPrice * groupRatio,
               ratePerCny,
+              totalRoundDigits,
             ),
           },
         ),
@@ -3004,7 +3019,11 @@ export function renderAudioModelPrice(opts) {
           ratioType: ratioLabel,
           ratio: groupRatio,
           symbol,
-          total: formatBillingDisplayTotal(totalPrice, ratePerCny),
+          total: formatBillingDisplayTotal(
+            totalPrice,
+            ratePerCny,
+            totalRoundDigits,
+          ),
         },
       ),
     ]);
@@ -3018,7 +3037,11 @@ export function renderAudioModelPrice(opts) {
         symbol: symbol,
         price: formatBillingDisplayPrice(modelPrice, ratePerCny),
         ratio: groupRatio,
-        total: formatBillingDisplayTotal(modelPrice * groupRatio, ratePerCny),
+        total: formatBillingDisplayTotal(
+          modelPrice * groupRatio,
+          ratePerCny,
+          totalRoundDigits,
+        ),
         ratioType: ratioLabel,
       },
     );
@@ -3154,7 +3177,7 @@ export function renderAudioModelPrice(opts) {
       {
         textTotal: renderDisplayAmountFromCny(textPrice),
         audioTotal: renderDisplayAmountFromCny(audioPrice),
-        total: renderDisplayAmountFromCny(totalPrice),
+        total: renderDisplayAmountFromCny(totalPrice, totalRoundDigits),
       },
     ),
   ]);
@@ -3186,6 +3209,7 @@ export function renderClaudeModelPrice(opts) {
     cache_creation_tokens_1h: cacheCreationTokens1h = 0,
     cache_creation_ratio_1h: cacheCreationRatio1h = 1.0,
     displayMode = 'price',
+    totalRoundDigits = 9,
   } = opts;
   const { ratio: effectiveGroupRatio, label: ratioLabel } = getEffectiveRatio(
     _groupRatio,
@@ -3216,6 +3240,7 @@ export function renderClaudeModelPrice(opts) {
             total: formatBillingDisplayTotal(
               modelPrice * groupRatio,
               ratePerCny,
+              totalRoundDigits,
             ),
           },
         ),
@@ -3382,7 +3407,7 @@ export function renderClaudeModelPrice(opts) {
           ratioType: ratioLabel,
           ratio: groupRatio,
           symbol,
-          total: formatBillingDisplayTotal(price, ratePerCny),
+          total: formatBillingDisplayTotal(price, ratePerCny, totalRoundDigits),
         },
       ),
     ]);
@@ -3396,7 +3421,11 @@ export function renderClaudeModelPrice(opts) {
         price: formatBillingDisplayPrice(modelPrice, ratePerCny),
         ratioType: ratioLabel,
         ratio: groupRatio,
-        total: formatBillingDisplayTotal(modelPrice * groupRatio, ratePerCny),
+        total: formatBillingDisplayTotal(
+          modelPrice * groupRatio,
+          ratePerCny,
+          totalRoundDigits,
+        ),
       },
     );
   }
@@ -3565,7 +3594,7 @@ export function renderClaudeModelPrice(opts) {
       },
     ),
     buildBillingText('合计：{{total}}', {
-      total: renderDisplayAmountFromCny(totalAmount),
+      total: renderDisplayAmountFromCny(totalAmount, totalRoundDigits),
     }),
   ]);
 }
