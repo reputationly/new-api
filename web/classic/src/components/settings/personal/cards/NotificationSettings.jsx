@@ -53,7 +53,8 @@ import {
 
 // 预警阈值预设按人民币面额生成：quota = 人民币 × quota_per_yuan。
 // 预设的真身是「¥1 / ¥10 / ¥100」这三档，不是某几个写死的 quota 整数——写死的话
-// quota 单位一换（QuotaPerUnit 500000 → 7300000）这三档就变成完全不同的人民币金额。
+// quota 单位一换（历史上有过 500000 → 7300000 → 7300000000 两次细化）这三档就变成
+// 完全不同的人民币金额。
 const WARNING_THRESHOLD_PRESET_CNY = [1, 10, 100];
 
 export function buildWarningThresholdPresets() {

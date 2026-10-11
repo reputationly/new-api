@@ -66,7 +66,7 @@ func calculateAudioQuota(info QuotaInfo) int {
 	groupRatio := decimal.NewFromFloat(info.GroupRatio)
 	modelRatio := decimal.NewFromFloat(info.ModelRatio)
 	// 倍率路径：与 service/text_quota.go 同一约定，倍率是「¥/百万 tokens」，
-	// 乘 QuotaPerMillionTokens（=100）才是 quota/token。
+	// 乘 QuotaPerMillionTokens（=1000）才是 quota/token。
 	ratio := groupRatio.Mul(modelRatio).Mul(decimal.NewFromInt(common.QuotaPerMillionTokens))
 
 	inputTextTokens := decimal.NewFromInt(int64(info.InputDetails.TextTokens))
