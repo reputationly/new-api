@@ -311,7 +311,7 @@ dry-run 报告要重点核对：`logs` 分批计划的行数、`[数值列]` 前
 
 ### int32 / 列宽审查
 
-- Go quota 字段未发现 `int32`、`uint32` 等 32 位承载。`User.Quota`、`UsedQuota`、points/credit 余额、token/channel/task/log 等 quota 字段使用 Go `int`/`int64`；对应持久化 GORM 列为 bigint。`User.AffQuota` 与 `AffHistoryQuota` 虽为 Go `int`，原标签为 `type:int`，本次已改为 `type:bigint`。
+- Go quota 字段未发现 `int32`、`uint32` 等 32 位承载。`User.Quota`、`UsedQuota`、points/credit 余额、token/channel/task/log 等 quota 字段使用 Go `int`/`int64`；对应持久化 GORM 列为 bigint。`User.AffQuota` 与 `AffHistoryQuota` 虽为 Go `int`，标签是 `type:int`，但 GORM v1.25 按 Go 字段宽度建成 64 位整数（见 `precheck.go` 注释），因此保持不改，避免已有库的 AutoMigrate 改列；迁移 precheck 仍会拒绝任何非 64 位列。
 - `topup_package.GrantPoints` 是积分数量（点数），不是 quota 记账值；其 `int` / `type:int` 不属于 quota 列。
 - 迁移预检的 `numericColumnRefs()` 由 `smallNumericScopes` 中全部 scope columns 与 `logsNumericColumns` 合并去重：涵盖 users、tokens、channels、tasks、midjourneys、quota_data、redemptions、checkins、fund_entries、bank_transfer_orders、subscription_plans、user_subscriptions、subscription_pre_consume_records、compute_point_lots、限定 provider 的 top_ups，以及 logs.quota / points_consumed / credit_consumed。非 SQLite 方言逐列要求 bigint/int8 并检查 ×1000 后溢出；SQLite 使用 64 位 INTEGER。
 

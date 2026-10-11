@@ -14,6 +14,12 @@ import (
 // 列类型预检确保迁移涉及的数值列均为 64 位整数（PostgreSQL 报 out of range，MySQL 静默
 // 截断/报错）。迁移程序不自动改表结构，只拒绝执行并打印对应方言的 DDL，由运维在停服窗口内
 // 手动执行后重跑。
+//
+// 项目里 users.aff_quota / aff_history 的标签是 gorm:"type:int"，但 GORM v1.25 把它识别成
+// 通用整数类型 schema.Int，宽度取 Go 字段的 64 位，三库建出来都是 64 位整数
+// （gorm.io/gorm/schema/field.go 的 TYPE 标签处理 + gorm.io/driver/postgres 的 DataTypeOf）。
+// 标签保持 type:int 不改：改成 type:bigint 会让已有库的 AutoMigrate 比对出类型差异并尝试改列，收益为零。
+// 预检只是兜底，防止有人手工建过表。
 const maxSafeNumeric = 9.2e18
 
 type columnRef struct {
