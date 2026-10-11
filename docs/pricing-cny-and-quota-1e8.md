@@ -1,4 +1,4 @@
-# 定价全面人民币化 + 1 quota = ¥0.00000001 设计文档
+# 定价全面人民币化 + 1 quota = ¥0.000000001 设计文档
 
 > 状态：设计稿，待评审
 > 前置：[quota-unit-cny-micro-migration.md](./quota-unit-cny-micro-migration.md)（下称"V1 文档"，1 quota = ¥0.000001，已于 2026-10-10 上线并完成生产迁移）
@@ -19,11 +19,11 @@
 | # | 问题 | 决定 |
 |---|---|---|
 | D1 | 定价口径 | 方案 B：所有模型定价配置都按人民币存储 |
-| D2 | quota 粒度 | 1 quota = ¥0.00000001（10⁻⁸ 元），支持单价 < ¥1/百万 tokens 的模型 |
+| D2 | quota 粒度 | 1 quota = ¥0.000000001（10⁻⁹ 元），支持单价 < ¥1/百万 tokens 的模型（2026-10-11 由 10⁻⁸ 改为 10⁻⁹，见 §13） |
 | D3 | 分段表达式 | 生产目前没有在用。代码支持 v2（人民币系数）；迁移时不改写 v1，只报告 |
 | D4 | `/api/ratio_config` | 没有下游在用，**删除**接口和"暴露倍率"开关（B7） |
 | D7 | 上游倍率同步 | 管理员都是手动填价，**删除**整个功能（B6），不做美元 → 人民币换算 |
-| D5 | 金额展示精度 | 人民币金额统一显示 8 位小数（与 1 quota 对齐） |
+| D5 | 金额展示精度 | 人民币金额统一显示 9 位小数（与 1 quota 对齐） |
 | D6 | 倍率换算的舍入 | 迁移时 `ModelRatio × 14.6`，结果四舍五入到 6 位小数（见 §5.4） |
 
 ---
@@ -59,7 +59,7 @@ quota 已经是人民币口径，但定价配置大多还是美元口径：
 
 ### 1.3 目标
 
-- **G1**：1 quota = ¥0.00000001。¥0.01/百万 时 1 token = 1 quota；最低扣费从 ¥0.000001 降到 ¥0.00000001。
+- **G1**：1 quota = ¥0.000000001。¥0.01/百万 时 1 token = 10 quota，¥0.001/百万 时 1 token = 1 quota；最低扣费从 ¥0.000001 降到 ¥0.000000001。
 - **G2**：每一项定价配置存的数值就是人民币价格：
   - 倍率：¥/百万 tokens
   - 按次价：¥/次
@@ -87,24 +87,24 @@ quota 已经是人民币口径，但定价配置大多还是美元口径：
 
 ```go
 // common/constants.go
-const QuotaPerYuan = 100_000_000          // 1 元 = 10⁸ quota；计费换算只用它
+const QuotaPerYuan = 1_000_000_000        // 1 元 = 10⁹ quota；计费换算只用它
 var   QuotaPerUnit = 730_000_000.0        // 1 美元对应的 quota = 汇率 × QuotaPerYuan，运行时配置
 ```
 
 - 计费路径一律用 `¥ × QuotaPerYuan`，**不读汇率，不读 QPU**。
-- `QuotaPerUnit` 只留给"美元金额 ↔ quota"的地方用（§3.4 支付、§3.5 美元展示）。它和汇率之间的约束是 `QPU = 汇率 × 10⁸`；即使这个约束被破坏，也只会影响美元支付和美元展示，不会影响计费。
+- `QuotaPerUnit` 只留给"美元金额 ↔ quota"的地方用（§3.4 支付、§3.5 美元展示）。它和汇率之间的约束是 `QPU = 汇率 × 10⁹`；即使这个约束被破坏，也只会影响美元支付和美元展示，不会影响计费。
 - `QuotaScale()`、`RatioQuotaBase` 删除。
 
 ### 2.2 各定价项的新含义
 
 | 配置（options key） | 旧含义 | 新含义 | quota 计算公式 | 迁移换算 |
 |---|---|---|---|---|
-| `ModelRatio` | 1 = $2/百万 tokens | ¥/百万 tokens（输入价） | `tokens × ratio × 100`（100 = 10⁸ / 10⁶） | × 14.6，保留 6 位小数 |
-| `ModelPrice` | $/次 | ¥/次 | `price × 10⁸` | × 7.3，保留 6 位小数 |
+| `ModelRatio` | 1 = $2/百万 tokens | ¥/百万 tokens（输入价） | `tokens × ratio × 1000`（1000 = 10⁹ / 10⁶） | × 14.6，保留 6 位小数 |
+| `ModelPrice` | $/次 | ¥/次 | `price × 10⁹` | × 7.3，保留 6 位小数 |
 | `VideoPricingConfig`（所有格子） | $/百万、$/次、$/秒 | ¥/百万、¥/次、¥/秒 | 同上 | × 7.3，保留 6 位小数 |
-| `billing_setting.billing_expr` | v1 系数 $/百万 | v2 系数 ¥/百万（v1 仍兼容） | v2：`out / 10⁶ × 10⁸` | 不改写，只报告（D3） |
-| `tool_price_setting.prices` | $/千次 | ¥/千次 | `price / 1000 × 次数 × 10⁸` | × 7.3，保留 6 位小数 |
-| `grok.violation_deduction_amount` | $/次 | ¥/次 | `amount × 10⁸` | × 7.3，保留 6 位小数 |
+| `billing_setting.billing_expr` | v1 系数 $/百万 | v2 系数 ¥/百万（v1 仍兼容） | v2：`out / 10⁶ × 10⁹` | 不改写，只报告（D3） |
+| `tool_price_setting.prices` | $/千次 | ¥/千次 | `price / 1000 × 次数 × 10⁹` | × 7.3，保留 6 位小数 |
+| `grok.violation_deduction_amount` | $/次 | ¥/次 | `amount × 10⁹` | × 7.3，保留 6 位小数 |
 
 上表各公式最后都还要乘分组倍率（`groupRatio`），表中省略。
 
@@ -120,25 +120,25 @@ var   QuotaPerUnit = 730_000_000.0        // 1 美元对应的 quota = 汇率 ×
 
 | # | 场景 | 新配置 | 新 quota | 人民币 |
 |---|---|---|---|---|
-| E1 | deepseek：输入 ¥2/百万、输出 ×4、分组 0.5，prompt 199 / completion 4096 | ratio = 2，completion_ratio = 4 | (199 + 4096×4) × 2 × 100 × 0.5 = 1,658,300 | ¥0.016583 |
-| E2 | ¥0.01/百万，1 token | ratio = 0.01 | 1 × 0.01 × 100 = 1 | ¥0.00000001 |
-| E3 | ¥0.01/百万，149 tokens | ratio = 0.01 | 149 × 0.01 × 100 = 149 | ¥0.00000149 |
-| E4 | ¥0.003/百万，1 token | ratio = 0.003 | 0.3 → 0 → 最低扣费 1 | ¥0.00000001 |
-| E5 | 按次生图 ¥0.2/次，分组 1 | ModelPrice = 0.2 | 0.2 × 10⁸ = 20,000,000 | ¥0.2 |
-| E6 | 联网搜索 ¥73/千次（原 $10），调用 3 次，分组 1 | prices.web_search = 73 | 73 / 1000 × 3 × 10⁸ = 21,900,000 | ¥0.219 |
-| E7 | 视频按秒 ¥0.73/秒，5 秒，分组 0.8 | 矩阵格子 = 0.73 | 0.73 × 5 × 10⁸ × 0.8 = 292,000,000 | ¥2.92 |
+| E1 | deepseek：输入 ¥2/百万、输出 ×4、分组 0.5，prompt 199 / completion 4096 | ratio = 2，completion_ratio = 4 | (199 + 4096×4) × 2 × 1000 × 0.5 = 16,583,000 | ¥0.016583 |
+| E2 | ¥0.01/百万，1 token | ratio = 0.01 | 1 × 0.01 × 1000 = 10 | ¥0.00000001 |
+| E3 | ¥0.01/百万，149 tokens | ratio = 0.01 | 149 × 0.01 × 1000 = 1,490 | ¥0.00000149 |
+| E4 | ¥0.0003/百万，1 token | ratio = 0.0003 | 0.3 → 0 → 最低扣费 1 | ¥0.000000001 |
+| E5 | 按次生图 ¥0.2/次，分组 1 | ModelPrice = 0.2 | 0.2 × 10⁹ = 200,000,000 | ¥0.2 |
+| E6 | 联网搜索 ¥73/千次（原 $10），调用 3 次，分组 1 | prices.web_search = 73 | 73 / 1000 × 3 × 10⁹ = 219,000,000 | ¥0.219 |
+| E7 | 视频按秒 ¥0.73/秒，5 秒，分组 0.8 | 矩阵格子 = 0.73 | 0.73 × 5 × 10⁹ × 0.8 = 2,920,000,000 | ¥2.92 |
 
 E1 与 V1 文档 §2.3 的同一样例做对照：迁移前是 16,583 quota（¥0.016583），迁移后是 1,658,300 quota，人民币金额相同。
 
 ### 2.4 取整与最低扣费
 
-- 逐笔四舍五入、以及"倍率非 0 且有 token、算出 0 时扣 1 quota"的规则**保持不变**。最低扣费从 ¥0.000001 降到 ¥0.00000001。
-- 不做跨请求的零头累计。单价低于 ¥0.005/百万 tokens（即 1 token 不足 0.5 quota）时，单 token 请求仍会被抬到 1 quota。这是有意的取舍，记入 §10。
+- 逐笔四舍五入、以及"倍率非 0 且有 token、算出 0 时扣 1 quota"的规则**保持不变**。最低扣费从 ¥0.000001 降到 ¥0.000000001。
+- 不做跨请求的零头累计。单价低于 ¥0.0005/百万 tokens（即 1 token 不足 0.5 quota）时，单 token 请求仍会被抬到 1 quota。这是有意的取舍，记入 §10。
 - 所有价格路径都**先乘后除**，最后只取整一次；`int(...)` 截断统一改为 `math.Round` / `decimal.Round(0)`。这沿用 V1 文档 B4 的规则。
 
 ### 2.5 展示精度（D5）
 
-人民币金额统一显示 8 位小数，包括：
+人民币金额统一显示 9 位小数，包括：
 - 日志花费列；
 - 计费过程合计；
 - 后端 `logger.LogQuota` 文案；
@@ -159,7 +159,7 @@ E1 与 V1 文档 §2.3 的同一样例做对照：迁移前是 16,583 quota（¥
 
 前端在一个地方统一把旧数据换算成人民币（§6.2），后面的渲染代码只处理人民币一种口径。
 
-日志里的 **quota 数值**（`logs.quota`，以及 `other` 里以 quota 为单位的 12 个键）由迁移统一 ×100，不依赖这个标记。
+日志里的 **quota 数值**（`logs.quota`，以及 `other` 里以 quota 为单位的 12 个键）由迁移统一 ×1000，不依赖这个标记。
 
 ---
 ## 3. 现状盘点（改造面全量清单）
@@ -173,25 +173,25 @@ E1 与 V1 文档 §2.3 的同一样例做对照：迁移前是 16,583 quota（¥
 
 | 位置 | 现状 | 改为 |
 |---|---|---|
-| `service/text_quota.go` `calculateTextQuotaSummary`（倍率路径，约 :226-231） | `× QuotaScale()` | `× QuotaPerYuan / 10⁶`（等于 ×100） |
+| `service/text_quota.go` `calculateTextQuotaSummary`（倍率路径，约 :226-231） | `× QuotaScale()` | `× QuotaPerYuan / 10⁶`（等于 ×1000） |
 | 同上 `calculateTextToolCallSurcharge`（:84-138），共 5 处 | `$/千次 × 次数 / 1000 × QPU`；GPT-Image-1 `$/次 × QPU` | `¥ × QuotaPerYuan` |
 | 同上 Gemini 音频（:271-276） | `$/百万 / 10⁶ × tokens × QPU` | `¥/百万 / 10⁶ × tokens × QuotaPerYuan` |
 | 同上 按次价（:296） | `ModelPrice × QPU` | `ModelPrice × QuotaPerYuan` |
-| 同上 extraContent 文案（:357-369，共 5 条） | 拼的是 **quota 数字**（`price × 次数 / 1000 × 分组 × QuotaPerUnit`） | 改为人民币：`quota / QuotaPerYuan`，或直接拼 `price × 次数 / 1000 × 分组`（本身已是人民币），保留 8 位小数 |
+| 同上 extraContent 文案（:357-369，共 5 条） | 拼的是 **quota 数字**（`price × 次数 / 1000 × 分组 × QuotaPerUnit`） | 改为人民币：`quota / QuotaPerYuan`，或直接拼 `price × 次数 / 1000 × 分组`（本身已是人民币），保留 9 位小数 |
 | `service/quota.go` `calculateAudioQuota`（:53-67） | 倍率 `× QuotaScale()`，价格 `× QPU` | 同上两条 |
 | `service/quota.go` `CalcOpenRouterCacheCreateTokens`（:265-267） | `ModelRatio / RatioQuotaBase` 得到"$/token"，用来和 OpenRouter 回报的美元成本反推 tokens | `ModelRatio / 10⁶` 得到"¥/token"，OpenRouter 的美元成本先 × 汇率。这是**合法保留汇率**的地方之一（上游报的是美元） |
 | `service/quota.go:43` | 读默认倍率表兜底 | 默认表已在加载时换成人民币（§3.2），这里不用再改 |
-| `relay/helper/price.go` `ModelPriceHelper`（:126-134） | 预扣：倍率 `× QuotaScale()`，按次 `× QPU` | 倍率 `× 100`，按次 `× QuotaPerYuan`。`PreConsumedQuota` 是 token 下限，不是 quota，**不动** |
-| 同上 `ModelPriceHelperPerCall`（:189-221） | 按次 `× QPU`；按量预扣 `modelRatio / 2 × QPU`（= 25 万 tokens 的输入价） | 按次 `× QuotaPerYuan`；按量预扣 `250000 × ratio × 100`，即 `ratio × 2.5×10⁷`，语义还是"预扣 25 万 tokens 的输入价" |
+| `relay/helper/price.go` `ModelPriceHelper`（:126-134） | 预扣：倍率 `× QuotaScale()`，按次 `× QPU` | 倍率 `× 1000`，按次 `× QuotaPerYuan`。`PreConsumedQuota` 是 token 下限，不是 quota，**不动** |
+| 同上 `ModelPriceHelperPerCall`（:189-221） | 按次 `× QPU`；按量预扣 `modelRatio / 2 × QPU`（= 25 万 tokens 的输入价） | 按次 `× QuotaPerYuan`；按量预扣 `250000 × ratio × 1000`，即 `ratio × 2.5×10⁸`，语义还是"预扣 25 万 tokens 的输入价" |
 | 同上 `modelPriceHelperTiered`（:288、:311） | `rawCost / 10⁶ × QPU`，快照记录 `QuotaPerUnit` | 改为调用 `billingexpr` 按版本换算（§4 B4），预扣与结算共用同一个函数 |
 | `pkg/billingexpr/settle.go` `quotaConversion` | 只有 v1：`out / 10⁶ × snap.QuotaPerUnit`（输出单位是 V1 的 ¥1e-6） | 新增 v2：`out / 10⁶ × QuotaPerYuan`；**v1 拒绝结算**（见 §12.2 R2：v1 的输出单位与 V2 余额不同，实收只剩 1/100） |
 | `relay/video_billing.go` `applyVideoPricing`（:190、:214） | `$ × QPU × 分组` | `¥ × QuotaPerYuan × 分组` |
-| `service/task_billing.go` `RecalculateTaskQuotaByTokens`（:654） | `tokens × ratio × … × QuotaScale()` | `× 100` |
+| `service/task_billing.go` `RecalculateTaskQuotaByTokens`（:654） | `tokens × ratio × … × QuotaScale()` | `× 1000` |
 | `service/task_billing.go` `RecalculateTaskQuotaByVideoMatrix`（:754） | `tokens / 10⁶ × UnitPrice($) × QPU` | `UnitPrice(¥) × QuotaPerYuan`。**历史任务**里冻结的 `UnitPrice` 由迁移 ×7.3（§5.3） |
 | `service/tool_billing.go`（:47-73） | `$/千次 × QPU`；GPT-Image-1 `$ × QPU` | `¥ × QuotaPerYuan` |
 | `service/violation_fee.go` `calcViolationFeeQuota`（:92） | `$ × QPU × 分组` | `¥ × QuotaPerYuan × 分组` |
 | `service/entitlement_cost.go`（:177） | `unitPrice × QPU × cost_ratio` | `unitPrice(¥) × QuotaPerYuan × cost_ratio`。开发时要核实 `modelUnitPrice` 的来源口径，确认它返回的是 ¥/次或 ¥/百万，而不是"倍率 × 2" |
-| `controller/channel-test.go`（:539、:546） | 倍率 `× QuotaScale()`，按次 `× QPU` | `× 100`、`× QuotaPerYuan` |
+| `controller/channel-test.go`（:539、:546） | 倍率 `× QuotaScale()`，按次 `× QPU` | `× 1000`、`× QuotaPerYuan` |
 
 ### 3.2 代码内的美元常量与默认表
 
@@ -238,12 +238,12 @@ E1 与 V1 文档 §2.3 的同一样例做对照：迁移前是 16,583 quota（¥
 | 位置 | 现状 | 改为 |
 |---|---|---|
 | `logger/logger.go` `LogQuota` 一族（:125-234） | CNY 模式：`quota / QPU × 汇率`，`%.6f` | CNY：`quota / QuotaPerYuan`，`%.8f`（D5）；USD：`quota / QPU` |
-| `controller/log.go:287-303` | `cost_cny = quota / QPU × 汇率`，6 位小数 | `quota / QuotaPerYuan`，8 位小数 |
+| `controller/log.go:287-303` | `cost_cny = quota / QPU × 汇率`，6 位小数 | `quota / QuotaPerYuan`，9 位小数 |
 | `controller/billing.go:45-100` | CNY 分支 `quota / QPU × 汇率` | CNY 分支 `quota / QuotaPerYuan`；USD 分支不变 |
 | `service/reconcile_helpers.go:194/202` | `quota / QPU × 汇率` | `quota / QuotaPerYuan` |
 | `service/plan_fulfillment.go:81` `quotaToFen` | `quota / QPU × 汇率 × 100` | `quota × 100 / QuotaPerYuan`（先乘后除） |
-| `common/points.go`、`common/compute_points.go` | 默认换算率 `QPU / (汇率 × 100)`；`YuanToComputePoints` 用 `QPU / 汇率` | `QuotaPerYuan / 100 = 1,000,000`；`YuanToComputePoints` 用 `QuotaPerYuan` |
-| `controller/misc.go:74` `/api/status` | `quota_per_unit` | 新增 `quota_per_yuan: 100000000`。`quota_per_unit` 保留（730000000） |
+| `common/points.go`、`common/compute_points.go` | 默认换算率 `QPU / (汇率 × 100)`；`YuanToComputePoints` 用 `QPU / 汇率` | `QuotaPerYuan / 100 = 10,000,000`；`YuanToComputePoints` 用 `QuotaPerYuan` |
+| `controller/misc.go:74` `/api/status` | `quota_per_unit` | 新增 `quota_per_yuan: 1000000000`。`quota_per_unit` 保留（7300000000） |
 
 ### 3.6 日志与任务里冻结的定价字段
 
@@ -296,11 +296,11 @@ E1 与 V1 文档 §2.3 的同一样例做对照：迁移前是 16,583 quota（¥
 ### B 后端
 
 **B1 单位常量**
-- 新增 `common.QuotaPerYuan = 100_000_000`。
+- 新增 `common.QuotaPerYuan = 1_000_000_000`。
 - `QuotaPerUnit` 默认值改为 `730_000_000`。
 - 删除 `QuotaScale()` 和 `RatioQuotaBase`，删掉后编译报错的地方就是待改清单。
 - 积分、算力点的默认换算率改为 `QuotaPerYuan / 100`。
-- 完成标准：`rg "QuotaScale|RatioQuotaBase"` 为空；`/api/status` 返回 `quota_per_yuan=100000000`、`quota_per_point=1000000`、`quota_per_compute_point=1000000`。
+- 完成标准：`rg "QuotaScale|RatioQuotaBase"` 为空；`/api/status` 返回 `quota_per_yuan=1000000000`、`quota_per_point=10000000`、`quota_per_compute_point=10000000`。
 
 **B2 计费路径**
 - 按 §3.1 逐处修改。倍率路径统一调用新 helper `common.RatioQuotaPerToken(ratio) = ratio × QuotaPerYuan / 10⁶`，不要在各处手写 `100`。
@@ -327,7 +327,7 @@ E1 与 V1 文档 §2.3 的同一样例做对照：迁移前是 16,583 quota（¥
 
 **B5 日志与任务标记**
 - §3.6 中所有"新数据"的写入点都加上 `price_unit: "cny"`。
-- `extraContent` 等文案改成人民币、8 位小数。
+- `extraContent` 等文案改成人民币、9 位小数。
 - 完成标准：消费日志、任务日志、违规罚金日志的单测都断言带有这个标记。
 
 **B6 删除上游倍率同步（D7）**
@@ -355,13 +355,13 @@ E1 与 V1 文档 §2.3 的同一样例做对照：迁移前是 16,583 quota（¥
 **B8 展示、报表、对账**
 - 按 §3.5 修改。
 - 完成标准：`controller/log.go` 的 `cost_cny`、`LogQuota`、对账金额、套餐履约的"分"都有单测，并且三项都要覆盖：
-  - 1 quota → ¥0.00000001；
-  - 10⁸ quota → ¥1；
+  - 1 quota → ¥0.000000001；
+  - 10⁹ quota → ¥1；
   - 修改汇率不影响结果。
 
 **B9 启动保护**
 - 新镜像启动时检查 `options.QuotaUnitMigrationV2`：
-  - 值不是 `done`，且库里已有用户数据（`users` 表非空）时，**整个进程拒绝启动**（不只是计费），错误信息里直接打印 `--migrate-quota-unit-v2=dry-run|apply` 两条命令与「恢复备份 + 换回旧镜像」提示。这一条防止"新代码配旧数据"：那种状态下配置仍是美元口径（倍率 1 = $2/百万、单价 $/次），而代码已按人民币与更细的 quota 单位计算，两边单位不一致 → **每条请求按错误倍数扣费**：倍率路径多扣约 **6.85 倍**（100/14.6），按次 / 视频 / 工具路径多扣约 **13.7 倍**（10⁸/7.3×10⁶）；余额与报表的人民币金额同时错位。
+  - 值不是 `done`，且库里已有用户数据（`users` 表非空）时，**整个进程拒绝启动**（不只是计费），错误信息里直接打印 `--migrate-quota-unit-v2=dry-run|apply` 两条命令与「恢复备份 + 换回旧镜像」提示。这一条防止"新代码配旧数据"：那种状态下配置仍是美元口径（倍率 1 = $2/百万、单价 $/次），而代码已按人民币与更细的 quota 单位计算，两边单位不一致 → **每条请求按错误倍数扣费**：倍率路径多扣约 **68.5 倍**（1000/14.6），按次 / 视频 / 工具路径多扣约 **137 倍**（10⁹/7.3×10⁶）；余额与报表的人民币金额同时错位。
   - 全新空库直接写入 `done`。
   - 只有带 `--migrate-quota-unit-v2=...` 参数运行时放行。
 - 完成标准：三种情况各有一个测试。
@@ -402,14 +402,14 @@ E1 与 V1 文档 §2.3 的同一样例做对照：迁移前是 16,583 quota（¥
 - `priceUSD` 等字段一并改名为 `priceCNY`。
 
 **F5 精度**
-- 人民币花费 8 位小数（D5）：日志花费列、计费过程合计、`roundToDisplay(…, 8)`。
+- 人民币花费 9 位小数（D5）：日志花费列、计费过程合计、`roundToDisplay(…, 9)`。
 - 单价展示保留最多 6 位小数，并去掉末尾的 0。
 
 **F6 兜底值**
 - `helpers/quota.js`：
-  - `FALLBACK_QUOTA_PER_UNIT = 730000000`；
-  - 新增 `FALLBACK_QUOTA_PER_YUAN = 100000000`；
-  - `FALLBACK_QUOTA_PER_POINT = 1000000`。
+  - `FALLBACK_QUOTA_PER_UNIT = 7300000000`；
+  - 新增 `FALLBACK_QUOTA_PER_YUAN = 1000000000`；
+  - `FALLBACK_QUOTA_PER_POINT = 10000000`。
 - `helpers/data.js` 把 `quota_per_yuan` 写入 localStorage。
 
 ### M 迁移程序
@@ -436,11 +436,11 @@ E1 与 V1 文档 §2.3 的同一样例做对照：迁移前是 16,583 quota（¥
 | `VideoPricingConfig` | 14 个模型：2 个 `token` 模式（doubao-seedance-2-0 / 2-5，各 3 档分辨率 × with/without_video），12 个 `per_second` 模式；没有 `per_call`。全部 26 个格子 ×7.3 后按 6 位小数舍入都是干净的人民币价，最大舍入误差 3.3×10⁻¹²，例如 6.301369863014 → ¥46/百万、0.068493150685 → ¥0.5/秒、0.001369863014 → ¥0.01/秒 | 无异常。分辨率键要原样保留，大小写不能动（`ltx2.5-hd` 用 `2K`，`seedvr2`/`swiftvr` 用 `2k` 和通配 `*`）；迁移只改数值，不改键 |
 | `tool_price_setting.prices`、`grok.violation_deduction_amount` | 库里没有这两个 key | 走代码默认值，迁移无需改写，但 B2 的默认常量必须改成人民币 |
 | `ExposeRatioEnabled` 等暴露开关 | 库里没有（默认关闭） | B7 删除 `/api/ratio_config` 不影响现网 |
-| `points_setting.quota_per_point`、`compute_point_setting.quota_per_compute_point` | 10000 / 10000 | V2 改为 1000000 |
-| `QuotaRemindThreshold` | 14600 | ×100 → 1460000 |
-| `QuotaForNewUser` | 0；`QuotaForInviter` / `QuotaForInvitee` 不在库里 | ×100 后仍为 0；不在库里的不写 |
-| `checkin_setting.min_quota` / `max_quota` | 1 / 29，签到功能现网**关闭**（已确认） | 不影响计费；迁移照常 ×100（→ 100 / 2900），以后要启用签到时再按 1 quota = ¥0.00000001 重新设置 |
-| 数值上限 | `users.quota` 最大 9,597,646,121，全站余额合计 13,461,287,423；`logs.quota` 最大 25,674,961，合计 24,786,271,981 | ×100 后最大约 2.5×10¹²，离 JS 安全整数（9×10¹⁵）还有 3,000 多倍余量，离 int64 更远；§5.4 的警告在现网不会触发 |
+| `points_setting.quota_per_point`、`compute_point_setting.quota_per_compute_point` | 10000 / 10000 | V2 改为 10000000 |
+| `QuotaRemindThreshold` | 14600 | ×1000 → 14600000 |
+| `QuotaForNewUser` | 0；`QuotaForInviter` / `QuotaForInvitee` 不在库里 | ×1000 后仍为 0；不在库里的不写 |
+| `checkin_setting.min_quota` / `max_quota` | 1 / 29，签到功能现网**关闭**（已确认） | 不影响计费；迁移照常 ×1000（→ 1000 / 29000），以后要启用签到时再按 1 quota = ¥0.000000001 重新设置 |
+| 数值上限 | `users.quota` 最大 9,597,646,121，全站余额合计 13,461,287,423；`logs.quota` 最大 25,674,961，合计 24,786,271,981 | ×1000 后单值最大约 9.6×10¹²（`users.quota`），全站日志合计约 2.5×10¹³，离 JS 安全整数（9×10¹⁵）还有约 360 倍余量，离 int64 更远；§5.4 的警告在现网不会触发 |
 | `tasks` | SUCCESS 2,547 / FAILURE 194，**没有进行中的任务** | 在途任务换算代码照常实现并测试；上线时按 §9 停服前再查一次，有在途任务就等它们结束 |
 | 近 30 天消费日志 | 102,388 条；quota = 1 的 0 条；**quota 在 2–100 之间的 42,237 条（41%）**；按倍率 101,932 条；视频矩阵 176 条；工具附加费 1 条；生图调用、Gemini 音频、分段表达式、违规罚金均为 0 | 41% 的请求单笔花费不到 ¥0.0001，细化 100 倍有实际收益。测试重点放在倍率路径和视频矩阵；工具附加费、生图、音频、违规罚金几乎不用，只要单测覆盖换算即可 |
 
@@ -455,7 +455,7 @@ E1 与 V1 文档 §2.3 的同一样例做对照：迁移前是 16,583 quota（¥
   - `QuotaPerUnit = 7300000`；
   - `USDExchangeRate = 7.3`。汇率不是 7.3 时，倍率换算的 14.6 也会不同，需要人工确认。
 
-### 5.2 quota 数值 × 100（全部复用 V1 清单，`scope.go`）
+### 5.2 quota 数值 × 1000（全部复用 V1 清单，`scope.go`）
 
 | 范围 | 内容 |
 |---|---|
@@ -464,8 +464,8 @@ E1 与 V1 文档 §2.3 的同一样例做对照：迁移前是 16,583 quota（¥
 | `logs.other` | `logOtherScaledKeys` 中的 12 个键 |
 | `tasks.private_data` | `points_consumed`、`credit_consumed`、`stage1_adaptor_quota`、`entitlement_spent[].amount` |
 | `users.setting` | `quota_warning_threshold` |
-| options × 100 | `QuotaForNewUser`、`QuotaForInviter`、`QuotaForInvitee`、`QuotaRemindThreshold`、`checkin_setting.min_quota`、`checkin_setting.max_quota` |
-| options 固定值 | `points_setting.quota_per_point = 1000000`、`compute_point_setting.quota_per_compute_point = 1000000`、`QuotaPerUnit = 730000000` |
+| options × 1000 | `QuotaForNewUser`、`QuotaForInviter`、`QuotaForInvitee`、`QuotaRemindThreshold`、`checkin_setting.min_quota`、`checkin_setting.max_quota` |
+| options 固定值 | `points_setting.quota_per_point = 10000000`、`compute_point_setting.quota_per_compute_point = 10000000`、`QuotaPerUnit = 7300000000` |
 
 `PreConsumedQuota` 仍然**不在**清单中：它是 token 下限，不是 quota（V1 文档 §10）。
 
@@ -491,8 +491,8 @@ E1 与 V1 文档 §2.3 的同一样例做对照：迁移前是 16,583 quota（¥
 
 ### 5.4 预检
 
-- 列类型与溢出预检（V1 `precheck.go`）改为按 ×100 检查：`max(|列|) × 100 < 9.2×10¹⁸`。
-- 新增 JS 安全整数检查：若任一 `users.quota` 或 `tokens.remain_quota` 乘 100 后超过 `2⁵³`（约 ¥9,007 万），报告警告，但不阻断。
+- 列类型与溢出预检（V1 `precheck.go`）改为按 ×1000 检查：`max(|列|) × 1000 < 9.2×10¹⁸`。
+- 新增 JS 安全整数检查：若任一 `users.quota` 或 `tokens.remain_quota` 乘 1000 后超过 `2⁵³`（约 ¥900.7 万），报告警告，但不阻断。
 - 新增 `ModelRatio`、`ModelPrice` JSON 的解析检查：解析失败直接拒绝执行，不允许跳过。
 
 ### 5.5 幂等与回滚
@@ -508,9 +508,9 @@ E1 与 V1 文档 §2.3 的同一样例做对照：迁移前是 16,583 quota（¥
 
 | `quota_display_type` | 金额 | 单价 |
 |---|---|---|
-| CNY（推荐） | `quota / 10⁸` | 原样（¥/百万、¥/次） |
-| USD | `quota / 10⁸ / usd_exchange_rate` | ÷ `usd_exchange_rate` |
-| CUSTOM | `quota / 10⁸ / usd_exchange_rate × custom_rate` | 同左，按同一系数换算 |
+| CNY（推荐） | `quota / 10⁹` | 原样（¥/百万、¥/次） |
+| USD | `quota / 10⁹ / usd_exchange_rate` | ÷ `usd_exchange_rate` |
+| CUSTOM | `quota / 10⁹ / usd_exchange_rate × custom_rate` | 同左，按同一系数换算 |
 | TOKENS | quota 原值 | — |
 
 ### 6.2 旧日志换算（`normalizeLogPricing`）
@@ -525,7 +525,7 @@ E1 与 V1 文档 §2.3 的同一样例做对照：迁移前是 16,583 quota（¥
 
 - **计费样例**：E1–E7 各至少一个单测，覆盖文本、音频、预扣、按次、视频（按 token / 按次 / 按秒）、工具附加费、违规罚金、渠道测试、表达式 v1 / v2。
 - **金额守恒**：同一个模型、同一请求，"V1 配置 + V1 代码"算出的人民币金额，与"迁移后配置 + V2 代码"算出的人民币金额，差值不超过 1 个 V1 quota（¥0.000001）。测试数据取 `defaultModelRatio` 的全部模型，逐个跑一遍。
-- **低价**：¥0.01/百万 时 1、50、149、150 tokens 的结果（分别是 1、50、149、150 quota——该单价下 1 token 恰好 1 quota）；最低扣费样例用 ¥0.003/百万（1 token = 0.3 → 0 → 扣 1 quota）与 ¥0.001/百万（0.1 → 0 → 1）；`.5` 的舍入方向（`decimal.Round` half-away-from-zero）单独钉一条：¥0.005/百万、1 token = 0.5 → 1 quota。
+- **低价**：¥0.01/百万 时 1、50、149、150 tokens 的结果（分别是 10、500、1490、1500 quota——该单价下 1 token = 10 quota）；¥0.001/百万、1 token = 1 quota；最低扣费样例用 ¥0.0003/百万（1 token = 0.3 → 0 → 扣 1 quota）与 ¥0.0001/百万（0.1 → 0 → 1）；`.5` 的舍入方向（`decimal.Round` half-away-from-zero）单独钉一条：¥0.0005/百万、1 token = 0.5 → 1 quota。
 - **溢出**：单笔 10⁷ tokens × ¥1000/百万 = ¥10,000 = 10¹² quota，算到 int 不溢出。
 - **迁移**：
   - V1 迁移测试矩阵的 SQLite、PostgreSQL、MySQL 三库全部复用：dry-run 不写库、apply 结果正确、幂等、断点续跑、日志库独立。
@@ -537,7 +537,7 @@ E1 与 V1 文档 §2.3 的同一样例做对照：迁移前是 16,583 quota（¥
 - `normalizeLogPricing` 新旧日志的快照测试。
 - 编辑器往返测试（F3）。
 - `getDisplayCurrency` 四种展示模式的测试。
-- 计费过程合计等于花费列（8 位小数）。
+- 计费过程合计等于花费列（9 位小数）。
 - 定价页单价与后端 E1 / E5 一致。
 
 ### 7.3 端到端（PostgreSQL 本地）
@@ -547,7 +547,7 @@ E1 与 V1 文档 §2.3 的同一样例做对照：迁移前是 16,583 quota（¥
 3. 切换到 V2 镜像，执行 dry-run 和 apply。
 4. 比对第 2 步的三项数据，必须完全一致（人民币单价按 6 位小数比对）。
 5. 新发起一次 ¥0.01/百万、1 token 的请求，花费为 ¥0.00000001。
-6. 检查 `/api/status`：`quota_per_yuan=100000000`、`quota_per_unit=730000000`、`quota_per_point=1000000`。
+6. 检查 `/api/status`：`quota_per_yuan=1000000000`、`quota_per_unit=7300000000`、`quota_per_point=10000000`。
 
 ---
 
@@ -600,10 +600,10 @@ E1 与 V1 文档 §2.3 的同一样例做对照：迁移前是 16,583 quota（¥
 2. **`PreConsumedQuota` 是 token 下限**，不是 quota。V1 和 V2 都不迁移它、不缩放它。
 3. **按量预扣的 `modelRatio / 2 × QPU`**：表面上是价格路径，实际语义是"预扣 25 万 tokens 的输入价"，要改写成 token 语义（§3.1），不能简单换成 `QuotaPerYuan`。
 4. **OpenRouter 缓存创建反推**（`CalcOpenRouterCacheCreateTokens`）：上游回报的是美元，这里必须乘汇率，这是计费路径中唯一合法读取汇率的地方。
-5. **低价最低扣费**：单价低于 ¥0.005/百万 tokens 时，1 token 请求仍扣 1 quota（¥0.00000001）。如果以后需要更细的粒度，只能再细化单位或做零头累计，本次不做。
-6. **JS 安全整数**：单个数值上限约 ¥9,007 万。全站多年累计的汇总接口（资金报表、`SUM(logs.quota)`）如果接近这个值，应改为后端按元返回。
+5. **低价最低扣费**：单价低于 ¥0.0005/百万 tokens 时，1 token 请求仍扣 1 quota（¥0.000000001）。如果以后需要更细的粒度，只能再细化单位或做零头累计，本次不做。
+6. **JS 安全整数**：单个数值上限约 ¥900.7 万。全站多年累计的汇总接口（资金报表、`SUM(logs.quota)`）如果接近这个值，应改为后端按元返回。
 7. **合并上游代码**：上游新增的计费代码默认按"美元 × QPU"编写。合并时要用 §8 的 grep 规则把关。
-8. **汇率变更**：改汇率只影响美元支付、USD 展示、OpenRouter 缓存反推和旧日志的计费过程展示，不影响计费和余额。同时仍要遵守 `QPU = 汇率 × 10⁸`，否则美元支付到账的额度会算错。
+8. **汇率变更**：改汇率只影响美元支付、USD 展示、OpenRouter 缓存反推和旧日志的计费过程展示，不影响计费和余额。同时仍要遵守 `QPU = 汇率 × 10⁹`，否则美元支付到账的额度会算错。
 
 ---
 
@@ -657,3 +657,26 @@ E1 与 V1 文档 §2.3 的同一样例做对照：迁移前是 16,583 quota（¥
   `ChannelSelectorModal.jsx`、`RatioSetting.jsx`、`ModelRatioSettings.jsx`。
 - F2 的 `normalizeLogPricing` 必须覆盖 **V1 期日志**：V1 未改比率语义，`other.model_ratio` 仍是美元口径，
   而 `logs.quota` 已是 ×14.6 后的值。
+
+## 13. 单位修订：1 quota 由 ¥10⁻⁸ 改为 ¥10⁻⁹（2026-10-11）
+
+用户决定把单位再细一位。V2 尚未合并、未在生产执行，因此只改常量与倍数，不新增迁移版本，状态 key 仍是 `QuotaUnitMigrationV2`、参数仍是 `--migrate-quota-unit-v2`。正文各节的数字已按新单位就地改过，§12 保留评审当时的原文（其中的 ×100、1/100 等以本节为准）。
+
+| 项 | 原（10⁸） | 现（10⁹） |
+|---|---|---|
+| `QuotaPerYuan` | 100,000,000 | 1,000,000,000 |
+| `QuotaPerMillionTokens`（¥1/百万 → quota/token） | 100 | 1000 |
+| `QuotaPerUnit`（汇率 7.3） | 730,000,000 | 7,300,000,000 |
+| 迁移 quota 倍数（V1 → V2） | ×100 | ×1000 |
+| `quota_per_point` / `quota_per_compute_point` | 1,000,000 | 10,000,000 |
+| 金额展示精度 | 8 位小数 | 9 位小数（`LogQuotaShort`/`FormatQuotaShort` 仍为 2 位） |
+| ¥0.01/百万、1 token | 1 quota | 10 quota |
+| 最低扣费触发 | 单价 < ¥0.005/百万 | 单价 < ¥0.0005/百万 |
+| B9 拒绝启动理由（未迁移时多扣） | 倍率约 6.85 倍、按次约 13.7 倍 | 倍率约 68.5 倍（1000/14.6）、按次约 137 倍（10⁹/7.3×10⁶） |
+| JS 安全整数对应金额 | 约 ¥9,007 万 | 约 ¥900.7 万 |
+| 现网最大值迁移后 | 约 2.5×10¹²，余量约 3,000 倍 | 单值约 9.6×10¹²、日志合计约 2.5×10¹³，余量约 360 倍 |
+
+定价配置（¥/百万、¥/次）的迁移因子 ×14.6 / ×7.3 与 6 位小数**不变**：6 位小数的 ¥/百万 在 10⁹ 下对应 0.001 quota/token，精度足够。
+
+额外风险：任何 32 位整数承载 quota 的地方，上限从约 ¥21.47 降到约 ¥2.147（单笔视频 ¥2.92 即溢出）。实现时必须确认 Go 代码中没有 `int32` 承载 quota、`precheck.go` 的 bigint 检查覆盖全部 quota 列，并按 ×1000 做溢出预检。
+
