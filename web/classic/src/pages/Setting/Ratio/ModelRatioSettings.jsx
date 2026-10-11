@@ -144,9 +144,9 @@ export default function ModelRatioSettings(props) {
           <Col xs={24} sm={16}>
             <Form.TextArea
               label={t('模型固定价格')}
-              extraText={t('一次调用消耗多少刀，优先级大于模型倍率')}
+              extraText={t('一次调用消耗多少元（人民币），优先级大于模型倍率')}
               placeholder={t(
-                '为一个 JSON 文本，键为模型名称，值为一次调用消耗多少刀，比如 "gpt-4-gizmo-*": 0.1，一次消耗0.1刀',
+                '为一个 JSON 文本，键为模型名称，值为一次调用消耗多少元（人民币），比如 "gpt-4-gizmo-*": 0.73，一次消耗 ¥0.73',
               )}
               field={'ModelPrice'}
               autosize={{ minRows: 6, maxRows: 12 }}

@@ -51,7 +51,7 @@ export default function ModelPricingCombined({ options, refresh }) {
             closeIcon={null}
             style={{ marginBottom: 16 }}
             description={t(
-              '高级模式：此处编辑的是后端原始倍率（无量纲系数）与美元按次价（ModelPrice），与上方「可视化编辑」的人民币口径不同，请勿混用。不熟悉倍率的话建议使用可视化编辑。',
+              '高级模式：此处直接编辑后端原始 JSON。模型倍率（ModelRatio）即人民币/百万 tokens 输入价，按次价格（ModelPrice）即人民币/次，与上方「可视化编辑」同一口径；补全、缓存等倍率是相对输入价的无量纲系数。不熟悉 JSON 的话建议使用可视化编辑。',
             )}
           />
           <ModelRatioSettings options={options} refresh={refresh} />
