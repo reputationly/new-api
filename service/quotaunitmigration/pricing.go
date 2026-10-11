@@ -3,6 +3,7 @@ package quotaunitmigration
 import (
 	"encoding/json"
 	"fmt"
+	"reflect"
 	"sort"
 	"strconv"
 	"strings"
@@ -119,7 +120,10 @@ func (s *v2PricingStage) convertNumberMap(db *gorm.DB, tx *gorm.DB, key string, 
 	if err != nil {
 		return err
 	}
-	return upsertOption(tx, key, string(encoded))
+	if err := upsertOption(tx, key, string(encoded)); err != nil {
+		return err
+	}
+	return verifyReadBack(tx, key, converted, allowSentinel)
 }
 
 // convertVideoPricing 改写视频矩阵里所有价格格子，结构与分辨率键原样保留。
@@ -168,7 +172,10 @@ func (s *v2PricingStage) convertVideoPricing(db *gorm.DB, tx *gorm.DB) error {
 	if err != nil {
 		return err
 	}
-	return upsertOption(tx, optVideoPricing, string(encoded))
+	if err := upsertOption(tx, optVideoPricing, string(encoded)); err != nil {
+		return err
+	}
+	return verifyReadBack(tx, optVideoPricing, out, false)
 }
 
 // convertVideoPriceBlock 改写一个价格区块：token / per_call 是两层 map，per_second 是一层。
@@ -234,7 +241,100 @@ func (s *v2PricingStage) convertViolationDeduction(db *gorm.DB, tx *gorm.DB) err
 	if tx == nil {
 		return nil
 	}
-	return upsertOption(tx, optViolationDeduction, after.String())
+	if after.IsNegative() {
+		return fmt.Errorf("options.%s 换算后为负（%s），拒绝执行", optViolationDeduction, after.String())
+	}
+	if err := upsertOption(tx, optViolationDeduction, after.String()); err != nil {
+		return err
+	}
+	if readBack, found, err := loadOption(tx, optViolationDeduction); err != nil {
+		return err
+	} else if !found || readBack != after.String() {
+		return fmt.Errorf("读回校验失败：options.%s 写入 %s，读回 %q", optViolationDeduction, after.String(), readBack)
+	}
+	return nil
+}
+
+// checkV1Expressions 是 apply 之前的只读前置检查：库里若还有 v1（美元口径）分段表达式，
+// 直接拒绝执行迁移。
+//
+// 迁移完成后这些表达式在预扣阶段就会被拒绝（评审 R2），对应模型会整体不可用——不能等到
+// 线上报错才发现。dry-run 仍然只报告，由运维决定是重录为 v2 还是先清掉这些表达式。
+func (s *v2PricingStage) checkV1Expressions() error {
+	if err := s.inspectBillingExpr(model.DB); err != nil {
+		return err
+	}
+	if len(s.v1Exprs) == 0 {
+		return nil
+	}
+	listed := s.v1Exprs
+	if len(listed) > 10 {
+		listed = append(listed[:10:10], "…")
+	}
+	return fmt.Errorf("发现 %d 条 v1（美元口径）分段表达式，拒绝执行迁移：\n  %s\n"+
+		"迁移后它们在预扣阶段会被拒绝（ErrExprV1Unsupported），对应模型会整体不可用。\n"+
+		"请先在「定价设置 → 表达式」里按 ¥/百万 tokens（系数 ×14.6）重录为 v2，"+
+		"或在窗口内先清掉这些表达式，再跑 apply",
+		len(s.v1Exprs), strings.Join(listed, "\n  "))
+}
+
+// verifyReadBack 在同一事务里读回刚写入的 options 值并与期望值比对。
+//
+// 定价表写坏（键丢失、值算错、混入负值）不会让迁移报错，只会让模型价格整体失真，
+// 所以写完必须读回校验，任何不一致都让整个事务回滚。
+func verifyReadBack(tx *gorm.DB, key string, expected any, allowSentinel bool) error {
+	raw, found, err := loadOption(tx, key)
+	if err != nil {
+		return err
+	}
+	if !found {
+		return fmt.Errorf("读回校验失败：options.%s 写入后读不到", key)
+	}
+	actual := map[string]any{}
+	if err := common.UnmarshalJsonStr(raw, &actual); err != nil {
+		return fmt.Errorf("读回校验失败：options.%s 写入后无法解析: %w", key, err)
+	}
+	want := map[string]any{}
+	encoded, err := common.Marshal(expected)
+	if err != nil {
+		return err
+	}
+	if err := common.Unmarshal(encoded, &want); err != nil {
+		return err
+	}
+	if len(actual) != len(want) {
+		return fmt.Errorf("读回校验失败：options.%s 键数是 %d，写入时是 %d", key, len(actual), len(want))
+	}
+	if !reflect.DeepEqual(actual, want) {
+		return fmt.Errorf("读回校验失败：options.%s 读回的值与写入值不一致（期望 %d 个键与换算后的值）", key, len(want))
+	}
+	if bad, ok := findNegative(actual, allowSentinel); ok {
+		return fmt.Errorf("读回校验失败：options.%s 出现负值 %v（只有按次价的 -1 哨兵允许为负）", key, bad)
+	}
+	return nil
+}
+
+// findNegative 在嵌套结构里找第一个负的数值叶子；allowSentinel 为真时忽略 -1 哨兵。
+func findNegative(value any, allowSentinel bool) (any, bool) {
+	switch v := value.(type) {
+	case map[string]any:
+		for _, item := range v {
+			if bad, ok := findNegative(item, allowSentinel); ok {
+				return bad, true
+			}
+		}
+	case []any:
+		for _, item := range v {
+			if bad, ok := findNegative(item, allowSentinel); ok {
+				return bad, true
+			}
+		}
+	case float64:
+		if v < 0 && !(allowSentinel && v == -1) {
+			return v, true
+		}
+	}
+	return nil, false
 }
 
 // inspectBillingExpr 只报告、不改写分段表达式（D3）：v1 的结算会被拒绝，
@@ -251,6 +351,7 @@ func (s *v2PricingStage) inspectBillingExpr(db *gorm.DB) error {
 	if err := common.UnmarshalJsonStr(raw, &exprs); err != nil {
 		return fmt.Errorf("options.%s 解析失败: %w", optBillingExpr, err)
 	}
+	s.v1Exprs = nil
 	names := make([]string, 0, len(exprs))
 	for name := range exprs {
 		names = append(names, name)

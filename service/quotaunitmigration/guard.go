@@ -11,8 +11,10 @@ import (
 //
 //	options.QuotaUnitMigrationV2 != done 且 users 表非空 → 整个进程拒绝启动。
 //
-// 原因是新代码的定价与计费都按 1 quota = ¥0.00000001 写，旧数据（1 quota = ¥0.000001）
-// 上会按 1/100 少收费；这种错误不会自愈也不会报错，只能靠拒绝启动暴露出来。
+// 原因是新代码的定价与计费都按 1 quota = ¥0.00000001 写，旧数据（1 quota = ¥0.000001）上
+// 会让计费整体失真：配置里的美元数值被当人民币用、倍率又少乘了 14.6，于是按次实收只有
+// 应有值的 1/7.3、倍率路径 1/14.6；同时存量余额会被按新单位重新解释而缩水约 14 倍。
+// 这种错误不会自愈也不会报错，只能靠拒绝启动暴露出来。
 // 空库（全新部署）直接标记为 done，不需要迁移。
 //
 // 迁移模式（--migrate-quota-unit-v2=...）在 main 里先返回，不会走到这里。
@@ -44,7 +46,8 @@ func EnsurePriceUnitReady() error {
 
 	return fmt.Errorf(
 		"额度单位迁移 V2 未完成（options.%s 不是 done），而库里已有用户数据。\n"+
-			"新代码在旧单位上会按 1/100 少收费，因此拒绝启动。请按顺序执行：\n"+
+			"新代码在旧单位数据上会让计费整体失真（按次实收约 1/7.3、倍率路径约 1/14.6，\n"+
+			"存量余额也会被按新单位重新解释），因此拒绝启动。请按顺序执行：\n"+
 			"  1) 停服并备份：pg_dump 全库（同时记下 SUM(users.quota) 与行数）\n"+
 			"  2) 预演并核对报告：docker compose run --rm --no-deps new-api --log-dir /app/logs --%s=dry-run\n"+
 			"  3) 落地并保存报告：docker compose run --rm --no-deps new-api --log-dir /app/logs --%s=apply\n"+

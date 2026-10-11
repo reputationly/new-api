@@ -2,6 +2,7 @@ package quotaunitmigration
 
 import (
 	"bytes"
+	"encoding/json"
 	"fmt"
 	"os"
 	"testing"
@@ -41,8 +42,9 @@ func seedV2Fixture(t *testing.T, db *gorm.DB) {
 		`{"v-sec":{"mode":"per_second","per_second":{"2K":0.001369863014},"note":"keep-structure"}}`)
 	seedOption(t, db, "tool_price_setting.prices", `{"web_search":10,"file_search":2.5}`)
 	seedOption(t, db, "grok.violation_deduction_amount", "0.05")
-	// 分段表达式：m1 是 v1（只报告），m2 是 v2（不报告）
-	seedOption(t, db, "billing_setting.billing_expr", `{"m1":"p * 1.5","m2":"v2:p * 2"}`)
+	// 分段表达式：都是 v2。库里若有 v1，apply 会被前置检查拒绝（见
+	// TestV2ApplyRejectsV1Expressions），所以这份供三库 apply 复用的 fixture 不放 v1。
+	seedOption(t, db, "billing_setting.billing_expr", `{"m1":"v2:p * 1.5","m2":"v2:p * 2"}`)
 
 	// 冻结了完整计费上下文的已完成任务（V2 要把定价字段换成人民币并打 price_unit）
 	require.NoError(t, db.Create(&model.Task{
@@ -141,12 +143,11 @@ func assertV2Pricing(t *testing.T, db *gorm.DB, report string) {
 	require.NoError(t, db.Raw("SELECT quota FROM tasks WHERE id = 2").Scan(&taskQuota).Error)
 	require.Equal(t, int64(10000), taskQuota, "100 × 100")
 
-	// v1 表达式只报告、不改写
+	// 表达式原文不得改动（D3）；这份 fixture 里都是 v2，所以没有 v1 告警
 	raw, found = optionValue(t, "billing_setting.billing_expr")
 	require.True(t, found)
-	require.JSONEq(t, `{"m1":"p * 1.5","m2":"v2:p * 2"}`, raw, "表达式原文不得改动（D3）")
-	require.Contains(t, report, "仍是 v1 口径的分段表达式共 1 条")
-	require.Contains(t, report, "m1 = p * 1.5")
+	require.JSONEq(t, `{"m1":"v2:p * 1.5","m2":"v2:p * 2"}`, raw, "表达式原文不得改动（D3）")
+	require.NotContains(t, report, "仍是 v1 口径的分段表达式")
 
 	// options：quota 类 ×100、换算率与 QuotaPerUnit 写固定值
 	for key, want := range map[string]string{
@@ -198,7 +199,7 @@ func runV2DryRunApplyIdempotent(t *testing.T, db *gorm.DB) {
 	require.NoError(t, err, "V2 dry-run 失败")
 	require.Contains(t, dryReport, "dry-run 结束")
 	require.Contains(t, dryReport, "[定价配置]")
-	require.Contains(t, dryReport, "m1 = p * 1.5", "dry-run 也要报告 v1 表达式")
+	require.NotContains(t, dryReport, "仍是 v1 口径的分段表达式", "这份 fixture 没有 v1 表达式")
 	require.Contains(t, dryReport, "倍率 ×14.6")
 	requireSameSnapshot(t, before, snapshotTables(t))
 
@@ -398,4 +399,75 @@ func TestV2SQLScalingIsInteger(t *testing.T) {
 	require.Equal(t, "100", planV2().scaleLabel())
 	require.Equal(t, int64(100), planV2().scaleValue(1))
 	require.Equal(t, int64(40), planV2().scaleValue(0.4), "0.4 × 100 = 40")
+}
+
+// apply 遇到 v1（美元口径）分段表达式必须拒绝：迁移后它们在预扣阶段会被拒
+// （ErrExprV1Unsupported），相关模型会整体不可用，不能等线上报错才发现。
+func TestV2ApplyRejectsV1Expressions(t *testing.T) {
+	db := openTestDB(t)
+	seedV2Fixture(t, db)
+	// 覆盖 fixture 里的表达式：塞一条 v1（无前缀）进去
+	require.NoError(t, db.Model(&model.Option{}).
+		Where(&model.Option{Key: "billing_setting.billing_expr"}).
+		Update("value", `{"m1":"p * 1.5","m2":"v2:p * 2"}`).Error)
+
+	// dry-run 只报告、不报错
+	dryReport, err := runMigrationV2(t, ModeDryRun)
+	require.NoError(t, err, "dry-run 不应因为 v1 表达式失败")
+	require.Contains(t, dryReport, "m1 = p * 1.5", "dry-run 要报告 v1 表达式")
+
+	// apply 拒绝，且一个字节都不写
+	before := snapshotTables(t)
+	_, err = runMigrationV2(t, ModeApply)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "v1（美元口径）分段表达式")
+	require.Contains(t, err.Error(), "m1 = p * 1.5")
+	require.Contains(t, err.Error(), "重录为 v2")
+	requireSameSnapshot(t, before, snapshotTables(t))
+
+	ratios, _ := optionValue(t, "ModelRatio")
+	require.Contains(t, ratios, "0.13698630137", "拒绝后定价配置不得被改写")
+	_, found := optionValue(t, planV2().stateKey)
+	require.False(t, found, "拒绝后不得写入 V2 状态")
+}
+
+// 行级幂等：同一行任务数据被改写两次，值不变。
+func TestV2TaskRewriteIsRowIdempotent(t *testing.T) {
+	db := openTestDB(t)
+	seedV2Fixture(t, db)
+	_, err := runMigrationV2(t, ModeApply)
+	require.NoError(t, err)
+
+	// apply 之后这一行已带 price_unit，再跑一次改写函数必须整行跳过
+	migrated := rawTaskPrivateData(t, db, 2)
+	encoded, err := common.Marshal(migrated)
+	require.NoError(t, err)
+	fields := map[string]json.RawMessage{}
+	require.NoError(t, common.Unmarshal(encoded, &fields))
+
+	require.False(t, rewriteTaskPrivateDataV2(fields, &jsonStat{}), "已有 price_unit 的行必须整行跳过")
+
+	reencoded, err := common.Marshal(fields)
+	require.NoError(t, err)
+	require.JSONEq(t, string(encoded), string(reencoded), "二次改写不得改变任何字段")
+}
+
+// 读回校验发现异常值（负的倍率）时整个事务回滚，库里必须保持原样。
+func TestV2ReadBackVerificationFailureRollsBack(t *testing.T) {
+	db := openTestDB(t)
+	seedV2Fixture(t, db)
+	// 覆盖 fixture 里的 ModelRatio：负值在换算后仍为负，读回校验必须拦下
+	require.NoError(t, db.Model(&model.Option{}).
+		Where(&model.Option{Key: "ModelRatio"}).Update("value", `{"m1":-5}`).Error)
+
+	before := snapshotTables(t)
+	_, err := runMigrationV2(t, ModeApply)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "读回校验失败")
+	requireSameSnapshot(t, before, snapshotTables(t))
+
+	raw, _ := optionValue(t, "ModelRatio")
+	require.JSONEq(t, `{"m1":-5}`, raw, "回滚后定价配置必须是原值")
+	_, found := optionValue(t, planV2().stateKey)
+	require.False(t, found, "回滚后不得写入 V2 状态")
 }

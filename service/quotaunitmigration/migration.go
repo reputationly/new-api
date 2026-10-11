@@ -156,6 +156,13 @@ func run(pl *plan, mode string, out io.Writer) error {
 	pricingStage := (*v2PricingStage)(nil)
 	if pl.pricing {
 		pricingStage = newV2PricingStage()
+		if !dryRun {
+			// 只读前置检查：库里还有 v1（美元口径）表达式就直接拒绝，见 §12.2 R2。
+			// 用独立的 stage 探测，避免污染正式报告的行。
+			if err := newV2PricingStage().checkV1Expressions(); err != nil {
+				return err
+			}
+		}
 	}
 
 	if needSmallStage {

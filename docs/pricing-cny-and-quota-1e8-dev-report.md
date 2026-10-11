@@ -88,6 +88,16 @@
 - `precheck.go` 新增 JS 安全整数提醒（2⁵³ ≈ ¥9,007 万，只警告不拒绝）；倍数改为按方案取。
 - 前置条件：`QuotaUnitMigration.state = done`、`QuotaPerUnit = 7300000`、`USDExchangeRate = 7.3`；`!hasState && QuotaPerUnit != 7300000` 时拒绝执行并给出"状态被删但数据已是新单位"的恢复办法（防止二次放大）。
 - 新增启动参数 `--migrate-quota-unit-v2=dry-run|apply`。
+- **验收后补强（评审 5 条）**：
+  1. **apply 遇到 v1 表达式直接拒绝**（`checkV1Expressions`，只读前置检查，dry-run 仍只报告）——
+     否则迁移完这些模型的预扣会一律报错、模型整体不可用；
+  2. **定价 JSON 写入后在同一事务里读回校验**（`verifyReadBack`）：键集合不变、每个值等于
+     `round(旧值 × 因子, 6)`、非哨兵值非负，任一不符整个事务回滚；
+  3. **任务行级幂等**：`rewriteTaskPrivateDataV2` 遇到已带 `price_unit` 的行整行跳过，
+     避免续跑/重跑把三个价格字段再乘一遍；
+  4. B9 文案的倍数纠正为「按次 1/7.3、倍率路径 1/14.6，且存量余额被按新单位重新解释」；
+  5. 修正 `rewriteTaskPrivateDataV2` 的注释：真实理由是「视频矩阵任务按冻结单价做差额结算
+     （真的在算钱）、退款/差额日志也会带这些字段」，`PrivateData` 本身是 `json:"-"`，不是为了接口展示。
 
 ### 2.10 F1–F6 前端
 
@@ -165,7 +175,9 @@ plan_fulfillment,entitlement_cost}_test`、`controller/channel_test{_scale,_inte
 | `service/quotaunitmigration/migration_v2_test.go`（9） | V2 在 **SQLite+PG+MySQL** 三库的 dry-run 不写库 / apply（倍率×14.6、价格×7.3、`-1` 哨兵、视频未知键与分辨率键保留、tool 价、罚金、**全部任务 private_data** + `price_unit`、options 固定值）/ 幂等 / 断点续跑 / 独立日志库 / v1 表达式只报告不改写 / 前置条件拒绝 / 定价 JSON 写坏拒绝 / **B9 三态** |
 | `router/api-router_removed_routes_test.go`（2） | 路由表里没有 `/api/ratio_config`、`/api/ratio_sync/*`（用 `engine.Routes()`，避免牵动全局限流中间件） |
 
-另由我在评审后补 2 条：`service/tiered_settle_test.go` 的 v1 快照结算回退（见 §3.4）。
+另由我在**验收后**补 5 条：`service/tiered_settle_test.go` 的 v1 快照结算回退（见 §3.5）、以及
+`migration_v2_test.go` 的「apply 拒绝 v1 表达式」「任务行级幂等（同一行改写两次值不变）」
+「读回校验失败 → 整体回滚」三条（对应用户验收意见里"建议补的测试"）。
 
 **4 处语义重写**（旧断言在新口径下已无意义，不是弱化；逐条说明）：
 
@@ -227,7 +239,7 @@ v1/v2 的口径判定被抽成**单一实现**：`helpers/exprVersion.js`（前�
 
 | 项 | 说明 | 建议 |
 |---|---|---|
-| 代码默认常量未跟着单位走 | `common.QuotaRemindThreshold=1000`、`checkin_setting` 默认值等在"全新库 + 从未配置"时表现为偏小的金额 | 后续单独一次改动把它们改成人民币口径的合理默认 |
+| 代码默认常量未跟着单位走 | `common.QuotaRemindThreshold=1000`、`checkin_setting` 默认值等在"全新库 + 从未配置"时表现为偏小的金额。**全新库要特别注意：迁移程序不会在空库上跑（B9 直接写 done），这些 key 会一直用代码默认值 → 需要手工设置 `QuotaRemindThreshold`（建议 1460000 = ¥0.0146）与签到上下限** | 后续单独一次改动把它们改成人民币口径的合理默认；短期在全新部署的初始化清单里加一步 |
 | 历史日志的人民币回算 | 日志只存整型 quota，`logs.other` 的定价字段仍是美元口径，前端 `normalizeLogPricing` 按固定 7.3 换算；**历史上改过汇率的那部分日志会有偏差** | 与 V1 报告 §6 同一限制，短期接受 |
 | `tasks.private_data` 的旧 `TaskVideoBilling` 注释 | 原注释写"单位是美元"，已改为人民币；库里已迁移的任务与新任务口径一致 | 无 |
 | 表达式 v1 拒绝结算 | 现网没有存量表达式（§5.0），但**若有渠道/模型配过 v1**，那个模型会直接报错直到重录 | 迁移报告会点名，窗口内处理 |

@@ -79,8 +79,9 @@ func main() {
 		return
 	}
 
-	// 启动保护（设计文档 §4 B9）：未完成 V2 迁移而库里已有数据时，新代码会在旧单位上
-	// 按 1/100 少收费，因此整个进程拒绝启动，只允许用上面的迁移参数跑完再起。
+	// 启动保护（设计文档 §4 B9）：未完成 V2 迁移而库里已有数据时，新代码会让计费整体失真
+	// （定价按人民币解释、额度按新单位解释），因此整个进程拒绝启动，只允许用上面的迁移
+	// 参数跑完再起。
 	if err := quotaunitmigration.EnsurePriceUnitReady(); err != nil {
 		common.FatalLog(err.Error())
 		return

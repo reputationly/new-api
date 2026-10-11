@@ -156,19 +156,30 @@ func rewriteTaskPrivateData(fields map[string]json.RawMessage, stat *jsonStat) b
 // （billing_context.model_price / model_ratio、video_billing.unit_price）从美元换成
 // 人民币，并补上 price_unit = cny 标记。
 //
-// 任务详情页直接用这份冻结值渲染计费过程，口径标错会让美元数字被当人民币读；
-// 迁移范围包含**已完成任务**（评审 §12.2 R3），所以不区分任务状态。
+// 迁移范围包含**已完成任务**（评审 §12.2 R3），不区分任务状态。理由是两个真实消费者：
+//  1. 视频矩阵任务在轮询阶段按冻结的 video_billing.unit_price 做差额结算（真的在算钱，
+//     service/task_billing.go 的 RecalculateTaskQuotaByVideoMatrix ×QuotaPerYuan）；
+//  2. 退款/差额日志通过 taskBillingOther 把 model_price / model_ratio 写进 other，
+//     前端渲染的就是这份日志。
+//
+// （Task.PrivateData 本身是 json:"-"，不对外暴露，所以这里不是为了接口展示，而是为了
+// 让库里与日志里只剩人民币一种口径。）
 func rewriteTaskPrivateDataV2(fields map[string]json.RawMessage, stat *jsonStat) bool {
-	changed := rewriteTaskPrivateData(fields, stat)
-
 	raw, ok := fields["billing_context"]
 	if !ok {
-		return changed
+		return rewriteTaskPrivateData(fields, stat)
 	}
 	var bc map[string]json.RawMessage
 	if err := common.Unmarshal(raw, &bc); err != nil || bc == nil {
-		return changed
+		return rewriteTaskPrivateData(fields, stat)
 	}
+	// 行级幂等：带 price_unit 的行整行已迁过（标记与缩放同在一个事务里写），直接跳过，
+	// 否则续跑/重跑会把三个价格字段再乘一遍。
+	if _, migrated := bc["price_unit"]; migrated {
+		return false
+	}
+
+	changed := rewriteTaskPrivateData(fields, stat)
 	bcChanged := false
 	if scalePricingField(bc, "model_price", pricingScalePriceNum, pricingScalePriceDen) {
 		bcChanged = true
