@@ -15,8 +15,8 @@ import (
 )
 
 // 单位口径回归护栏（设计文档 §2.2）：
-//   - 倍率路径：quota = tokens × 倍率 × QuotaPerMillionTokens（100），倍率是 ¥/百万 tokens；
-//   - 价格路径：quota = 人民币价 × QuotaPerYuan（10⁸）；
+//   - 倍率路径：quota = tokens × 倍率 × QuotaPerMillionTokens（1000），倍率是 ¥/百万 tokens；
+//   - 价格路径：quota = 人民币价 × QuotaPerYuan（10⁹）；
 //   - 两条路径都不读 QuotaPerUnit、不读汇率。改 QPU 只影响美元支付与美元展示。
 func setQuotaPerUnit(t *testing.T, qpu float64) {
 	t.Helper()
@@ -44,7 +44,7 @@ func textRelayInfo(priceData types.PriceData) *relaycommon.RelayInfo {
 
 // E1：deepseek 输入 ¥2/百万、输出 ×4、分组 0.5，prompt 199 / completion 4096。
 //
-//	(199 + 4096×4) × 2 × 100 × 0.5 = 1,658,300 quota = ¥0.016583
+//	(199 + 4096×4) × 2 × 1000 × 0.5 = 16,583,000 quota = ¥0.016583
 //
 // 同一场景在 V1 单位（1 quota = ¥1e-6）下是 16,583 quota，人民币金额相同。
 func TestCalculateTextQuotaSummaryE1Deepseek(t *testing.T) {
@@ -56,17 +56,17 @@ func TestCalculateTextQuotaSummaryE1Deepseek(t *testing.T) {
 		GroupRatioInfo:  types.GroupRatioInfo{GroupRatio: 0.5},
 	})
 
-	setQuotaPerUnit(t, 730_000_000)
-	require.Equal(t, 1_658_300, calculateTextQuotaSummary(ctx, relayInfo, usage).Quota)
+	setQuotaPerUnit(t, 7_300_000_000)
+	require.Equal(t, 16_583_000, calculateTextQuotaSummary(ctx, relayInfo, usage).Quota)
 
 	// 记账单位不参与计费：QPU 变，结果不变。
 	setQuotaPerUnit(t, 7_300_000)
-	require.Equal(t, 1_658_300, calculateTextQuotaSummary(ctx, relayInfo, usage).Quota)
+	require.Equal(t, 16_583_000, calculateTextQuotaSummary(ctx, relayInfo, usage).Quota)
 }
 
-// 倍率路径的分场景覆盖：期望值直接写成 quotaTokens × 倍率 × 100，并在多个 QPU 下重复，
+// 倍率路径的分场景覆盖：期望值直接写成 quotaTokens × 倍率 × 1000，并在多个 QPU 下重复，
 // 钉住「倍率路径与 QuotaPerUnit 无关」。倍率统一取 1（¥1/百万 tokens）。
-func TestCalculateTextQuotaSummaryRatioPathHundredPerRatio(t *testing.T) {
+func TestCalculateTextQuotaSummaryRatioPathThousandPerRatio(t *testing.T) {
 	ctx := newTextQuotaCtx(t)
 
 	cases := []struct {
@@ -79,7 +79,7 @@ func TestCalculateTextQuotaSummaryRatioPathHundredPerRatio(t *testing.T) {
 			name:      "纯文本",
 			usage:     dto.Usage{PromptTokens: 1000, CompletionTokens: 0},
 			priceData: types.PriceData{ModelRatio: 1, CompletionRatio: 4, GroupRatioInfo: types.GroupRatioInfo{GroupRatio: 1}},
-			want:      100_000, // 1000 × 1 × 100
+			want:      1_000_000, // 1000 × 1 × 1000
 		},
 		{
 			name:  "补全倍率",
@@ -87,7 +87,7 @@ func TestCalculateTextQuotaSummaryRatioPathHundredPerRatio(t *testing.T) {
 			priceData: types.PriceData{
 				ModelRatio: 1, CompletionRatio: 2, GroupRatioInfo: types.GroupRatioInfo{GroupRatio: 1},
 			},
-			want: 30_000, // (100 + 100×2) × 100
+			want: 300_000, // (100 + 100×2) × 1000
 		},
 		{
 			name:  "缓存命中",
@@ -96,7 +96,7 @@ func TestCalculateTextQuotaSummaryRatioPathHundredPerRatio(t *testing.T) {
 				ModelRatio: 1, CompletionRatio: 4, CacheRatio: 0.5,
 				GroupRatioInfo: types.GroupRatioInfo{GroupRatio: 1},
 			},
-			want: 90_000, // ((1000-200) + 200×0.5) × 100
+			want: 900_000, // ((1000-200) + 200×0.5) × 1000
 		},
 		{
 			name:  "图片 token",
@@ -105,7 +105,7 @@ func TestCalculateTextQuotaSummaryRatioPathHundredPerRatio(t *testing.T) {
 				ModelRatio: 1, CompletionRatio: 4, ImageRatio: 2,
 				GroupRatioInfo: types.GroupRatioInfo{GroupRatio: 1},
 			},
-			want: 110_000, // ((1000-100) + 100×2) × 100
+			want: 1_100_000, // ((1000-100) + 100×2) × 1000
 		},
 		{
 			name: "Claude 语义 5m/1h 缓存创建",
@@ -120,7 +120,7 @@ func TestCalculateTextQuotaSummaryRatioPathHundredPerRatio(t *testing.T) {
 				CacheCreationRatio: 1.25, CacheCreation5mRatio: 1.25, CacheCreation1hRatio: 2,
 				GroupRatioInfo: types.GroupRatioInfo{GroupRatio: 1},
 			},
-			want: 132_500, // (1000 + 100×1.25 + 100×2) × 100
+			want: 1_325_000, // (1000 + 100×1.25 + 100×2) × 1000
 		},
 		{
 			name:  "OtherRatios",
@@ -129,7 +129,7 @@ func TestCalculateTextQuotaSummaryRatioPathHundredPerRatio(t *testing.T) {
 				ModelRatio: 1, CompletionRatio: 4, OtherRatios: map[string]float64{"video_input": 0.5},
 				GroupRatioInfo: types.GroupRatioInfo{GroupRatio: 1},
 			},
-			want: 50_000, // 1000 × 0.5 × 100
+			want: 500_000, // 1000 × 0.5 × 1000
 		},
 		{
 			name:  "分组倍率",
@@ -137,14 +137,14 @@ func TestCalculateTextQuotaSummaryRatioPathHundredPerRatio(t *testing.T) {
 			priceData: types.PriceData{
 				ModelRatio: 1, CompletionRatio: 4, GroupRatioInfo: types.GroupRatioInfo{GroupRatio: 0.5},
 			},
-			want: 50_000, // 1000 × 1 × 100 × 0.5
+			want: 500_000, // 1000 × 1 × 1000 × 0.5
 		},
 	}
 
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			relayInfo := textRelayInfo(c.priceData)
-			for _, qpu := range []float64{500_000, 7_300_000, 730_000_000} {
+			for _, qpu := range []float64{500_000, 7_300_000, 7_300_000_000} {
 				setQuotaPerUnit(t, qpu)
 				require.Equal(t, c.want, calculateTextQuotaSummary(ctx, relayInfo, &c.usage).Quota,
 					"QuotaPerUnit=%v 时结果不得变化", qpu)
@@ -154,7 +154,7 @@ func TestCalculateTextQuotaSummaryRatioPathHundredPerRatio(t *testing.T) {
 }
 
 // 最低扣费：倍率非 0、有 token 但算出 0 时扣 1 quota。
-// 新单位下最低扣费是 ¥0.00000001（不再是 ¥0.000001）。
+// 新单位下最低扣费是 ¥0.000000001（不再是 ¥0.000001）。
 func TestCalculateTextQuotaSummaryMinimumOneQuota(t *testing.T) {
 	ctx := newTextQuotaCtx(t)
 	usage := &dto.Usage{PromptTokens: 1}
@@ -164,7 +164,7 @@ func TestCalculateTextQuotaSummaryMinimumOneQuota(t *testing.T) {
 	}
 
 	relayInfo := textRelayInfo(priceData)
-	setQuotaPerUnit(t, 730_000_000)
+	setQuotaPerUnit(t, 7_300_000_000)
 	require.Equal(t, 1, calculateTextQuotaSummary(ctx, relayInfo, usage).Quota)
 
 	// 无 token 时不扣费
@@ -183,21 +183,21 @@ func TestCalculateTextQuotaSummaryPricePathUsesQuotaPerYuan(t *testing.T) {
 	}
 
 	relayInfo := textRelayInfo(priceData)
-	for _, qpu := range []float64{500_000, 7_300_000, 730_000_000} {
+	for _, qpu := range []float64{500_000, 7_300_000, 7_300_000_000} {
 		setQuotaPerUnit(t, qpu)
-		require.Equal(t, 50_000_000, calculateTextQuotaSummary(ctx, relayInfo, usage).Quota,
-			"¥0.5 × 10⁸ = 50,000,000，且不随 QPU 变化")
+		require.Equal(t, 500_000_000, calculateTextQuotaSummary(ctx, relayInfo, usage).Quota,
+			"¥0.5 × 10⁹ = 500,000,000，且不随 QPU 变化")
 	}
 
-	// E5：按次生图 ¥0.2/次、分组 1 → 20,000,000
+	// E5：按次生图 ¥0.2/次、分组 1 → 200,000,000
 	img := textRelayInfo(types.PriceData{
 		UsePrice: true, ModelPrice: 0.2, GroupRatioInfo: types.GroupRatioInfo{GroupRatio: 1},
 	})
-	require.Equal(t, 20_000_000, calculateTextQuotaSummary(ctx, img, usage).Quota)
+	require.Equal(t, 200_000_000, calculateTextQuotaSummary(ctx, img, usage).Quota)
 }
 
 // 音频路径（calculateAudioQuota 倍率分支）：WSS / Realtime / 音频预扣与结算都走它。
-func TestCalculateAudioQuotaRatioPathHundredPerRatio(t *testing.T) {
+func TestCalculateAudioQuotaRatioPathThousandPerRatio(t *testing.T) {
 	original := common.QuotaPerUnit
 	t.Cleanup(func() { common.QuotaPerUnit = original })
 
@@ -210,10 +210,10 @@ func TestCalculateAudioQuotaRatioPathHundredPerRatio(t *testing.T) {
 	}
 
 	// 该模型没有配补全/音频倍率时，GetCompletionRatio 等返回默认 1，于是
-	// quota = 输入文本 token 数 × 倍率 × 100。
-	for _, qpu := range []float64{500_000, 7_300_000, 730_000_000} {
+	// quota = 输入文本 token 数 × 倍率 × 1000。
+	for _, qpu := range []float64{500_000, 7_300_000, 7_300_000_000} {
 		common.QuotaPerUnit = qpu
-		require.Equal(t, 100_000, calculateAudioQuota(info), "QuotaPerUnit=%v", qpu)
+		require.Equal(t, 1_000_000, calculateAudioQuota(info), "QuotaPerUnit=%v", qpu)
 	}
 }
 
@@ -227,13 +227,13 @@ func TestCalculateAudioQuotaUsePriceUsesQuotaPerYuan(t *testing.T) {
 		ModelPrice: 0.1, // ¥0.1/次
 		GroupRatio: 1,
 	}
-	for _, qpu := range []float64{7_300_000, 730_000_000} {
+	for _, qpu := range []float64{7_300_000, 7_300_000_000} {
 		common.QuotaPerUnit = qpu
-		require.Equal(t, 10_000_000, calculateAudioQuota(info), "QuotaPerUnit=%v", qpu)
+		require.Equal(t, 100_000_000, calculateAudioQuota(info), "QuotaPerUnit=%v", qpu)
 	}
 
-	// 取整方向：¥0.099999999 × 1e8 = 9,999,999.9 → 10,000,000
-	fractional := QuotaInfo{UsePrice: true, ModelPrice: 0.099999999, GroupRatio: 1}
+	// 取整方向：¥0.0099999999 × 1e9 = 9,999,999.9 → 10,000,000
+	fractional := QuotaInfo{UsePrice: true, ModelPrice: 0.0099999999, GroupRatio: 1}
 	require.Equal(t, 10_000_000, calculateAudioQuota(fractional))
 }
 
@@ -265,7 +265,7 @@ func TestCalcOpenRouterCacheCreateTokensIgnoresQuotaPerUnit(t *testing.T) {
 	common.QuotaPerUnit = 7_300_000
 	atOld := CalcOpenRouterCacheCreateTokens(usage, priceData)
 
-	common.QuotaPerUnit = 730_000_000
+	common.QuotaPerUnit = 7_300_000_000
 	atNew := CalcOpenRouterCacheCreateTokens(usage, priceData)
 
 	require.Equal(t, 3000, atOld, "换算出的缓存创建 token 数应与构造样例一致")

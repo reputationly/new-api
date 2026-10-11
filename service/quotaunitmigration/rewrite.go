@@ -34,7 +34,7 @@ type jsonStat struct {
 // jsonRewriter 在已解码的顶层对象上改写目标键，返回是否有改写。
 type jsonRewriter func(fields map[string]json.RawMessage, stat *jsonStat) bool
 
-// scaleRawNumber 按当前方案的倍数（V1 ×14.6、V2 ×100）把 JSON 数字字面量四舍五入成整数。
+// scaleRawNumber 按当前方案的倍数（V1 ×14.6、V2 ×1000）把 JSON 数字字面量四舍五入成整数。
 // 用 decimal 解析原始字节：不经过 float64，大整数逐位保留。
 // 返回 false 表示这个字面量不是数字（null / 字符串 / 对象 / 数组 / 非法数字），
 // 调用方按「未改写」计数。
@@ -47,7 +47,7 @@ func scaleRawNumber(raw json.RawMessage) (json.RawMessage, bool) {
 	if err != nil {
 		return nil, false
 	}
-	// 缩放倍数由方案决定（V1 ×14.6 = ×146÷10，V2 ×100），整数部分始终精确。
+	// 缩放倍数由方案决定（V1 ×14.6 = ×146÷10，V2 ×1000），整数部分始终精确。
 	scaled := activeScaling.apply(value)
 	return json.RawMessage(scaled.String()), true
 }

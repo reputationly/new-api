@@ -41,7 +41,7 @@ func videoCNYCtx(t *testing.T, model string, req relaycommon.TaskSubmitReq, grou
 	return c, info
 }
 
-// E7：视频按秒 ¥0.73/秒、5 秒、分组 0.8 → 0.73 × 5 × 10⁸ × 0.8 = 292,000,000 quota。
+// E7：视频按秒 ¥0.73/秒、5 秒、分组 0.8 → 0.73 × 5 × 10⁹ × 0.8 = 2,920,000,000 quota。
 func TestApplyVideoPricingPerSecondE7(t *testing.T) {
 	c, info := videoCNYCtx(t, "e7-persec",
 		relaycommon.TaskSubmitReq{Size: "720p", Duration: 5}, 0.8)
@@ -50,11 +50,11 @@ func TestApplyVideoPricingPerSecondE7(t *testing.T) {
 	require.Equal(t, ratio_setting.VideoPriceModePerSecond, info.VideoBilling.Mode)
 	require.InDelta(t, 0.73, info.VideoBilling.UnitPrice, 1e-9, "冻结的是每秒单价")
 	require.InDelta(t, 0.73*5, info.PriceData.ModelPrice, 1e-9)
-	require.Equal(t, 292_000_000, info.PriceData.Quota)
+	require.Equal(t, 2_920_000_000, info.PriceData.Quota)
 	require.InDelta(t, 2.92, float64(info.PriceData.Quota)/float64(common.QuotaPerYuan), 1e-9)
 }
 
-// 视频按次 ¥0.73/次、分组 0.8 → 0.73 × 10⁸ × 0.8 = 58,400,000 quota。
+// 视频按次 ¥0.73/次、分组 0.8 → 0.73 × 10⁹ × 0.8 = 584,000,000 quota。
 func TestApplyVideoPricingPerCallCNY(t *testing.T) {
 	c, info := videoCNYCtx(t, "e7-percall",
 		relaycommon.TaskSubmitReq{Size: "720p", Duration: 5}, 0.8)
@@ -62,7 +62,7 @@ func TestApplyVideoPricingPerCallCNY(t *testing.T) {
 	require.True(t, applyVideoPricing(c, info))
 	require.Equal(t, ratio_setting.VideoPriceModePerCall, info.VideoBilling.Mode)
 	require.InDelta(t, 0.73, info.PriceData.ModelPrice, 1e-9)
-	require.Equal(t, 58_400_000, info.PriceData.Quota)
+	require.Equal(t, 584_000_000, info.PriceData.Quota)
 }
 
 // 记账单位与汇率都不参与：改 QuotaPerUnit 不影响矩阵定价。
@@ -70,11 +70,11 @@ func TestApplyVideoPricingIgnoresQuotaPerUnit(t *testing.T) {
 	original := common.QuotaPerUnit
 	t.Cleanup(func() { common.QuotaPerUnit = original })
 
-	for _, qpu := range []float64{7_300_000, 730_000_000} {
+	for _, qpu := range []float64{7_300_000, 7_300_000_000} {
 		common.QuotaPerUnit = qpu
 		c, info := videoCNYCtx(t, "e7-persec",
 			relaycommon.TaskSubmitReq{Size: "720p", Duration: 5}, 0.8)
 		require.True(t, applyVideoPricing(c, info))
-		require.Equal(t, 292_000_000, info.PriceData.Quota, "QuotaPerUnit=%v", qpu)
+		require.Equal(t, 2_920_000_000, info.PriceData.Quota, "QuotaPerUnit=%v", qpu)
 	}
 }

@@ -393,7 +393,7 @@ type TaskBillingContext struct {
 	PerCallBilling  bool               `json:"per_call_billing,omitempty"`  // 按次计费：跳过轮询阶段的差额结算
 
 	// PriceUnit 标记这份冻结价的口径："cny" = 人民币（新任务）。
-	// 空值表示历史美元口径（1 quota = ¥1e-8 之前的任务），迁移会补齐为 "cny"。
+	// 空值表示历史美元口径（1 quota = ¥1e-9 之前的任务），迁移会补齐为 "cny"。
 	PriceUnit string `json:"price_unit,omitempty"`
 
 	// TimeRule 是提交时命中的时段折扣，紧凑表示如「深夜档:×0.7」。

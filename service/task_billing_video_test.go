@@ -615,7 +615,7 @@ func TestDeferredBilling_TruncatedToZeroRefundsPreConsumed(t *testing.T) {
 	})
 	task.PrivateData.BillingContext.GroupRatio = 0.0000001
 
-	// 100 / 1e6 × 6.3 × QuotaPerYuan(1e8) × 1e-7 = 0.0063 → round → 0
+	// 100 / 1e6 × 6.3 × QuotaPerYuan(1e9) × 1e-7 = 0.063 → round → 0
 	require.True(t, RecalculateTaskQuotaByVideoMatrix(context.Background(), task, 100, ""))
 
 	require.Equal(t, 0, task.Quota)

@@ -11,7 +11,7 @@ import (
 
 // 分段表达式版本口径（设计文档 §12.2 R2 / B4）：
 //
-//	v2：系数是 ¥/百万 tokens，quota = output / 10⁶ × QuotaPerYuan（= output × 100）；
+//	v2：系数是 ¥/百万 tokens，quota = output / 10⁶ × QuotaPerYuan（= output × 1000）；
 //	v1：系数是美元/百万 tokens，输出单位与当前余额不同单位 → **拒绝结算**。
 //
 // 无前缀按 v1 处理（兼容历史数据），新录入必须带 v2。
@@ -41,9 +41,9 @@ func TestQuotaFromExprOutputV2(t *testing.T) {
 		want   float64
 	}{
 		{0, 0},
-		{1, 100},                    // ¥1/百万 的系数 × 1
-		{3000, 300_000},             // 1000 tokens × ¥3/百万 = ¥0.003
-		{46_000_000, 4_600_000_000}, // 1e6 tokens × ¥46/百万
+		{1, 1000},                      // ¥1/百万 的系数 × 1
+		{3000, 3_000_000},             // 1000 tokens × ¥3/百万 = ¥0.003
+		{46_000_000, 46_000_000_000}, // 1e6 tokens × ¥46/百万
 	}
 	for _, c := range cases {
 		got, err := billingexpr.QuotaFromExprOutput(c.output, billingexpr.ExprVersionV2)
@@ -125,8 +125,8 @@ func TestComputeTieredQuotaV2Success(t *testing.T) {
 	if err != nil {
 		t.Fatalf("v2 结算不该报错：%v", err)
 	}
-	if result.ActualQuotaAfterGroup != 300_000 {
-		t.Fatalf("quota = %d, want 300000", result.ActualQuotaAfterGroup)
+	if result.ActualQuotaAfterGroup != 3_000_000 {
+		t.Fatalf("quota = %d, want 3000000", result.ActualQuotaAfterGroup)
 	}
 	if result.MatchedTier != "base" {
 		t.Fatalf("tier = %q, want base", result.MatchedTier)

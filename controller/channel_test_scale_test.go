@@ -19,16 +19,16 @@ func setQuotaPerUnit(t *testing.T, qpu float64) {
 }
 
 // 渠道测试的日志是真扣费（type 2、写进使用日志），倍率路径必须用新口径：
-// quota = tokens × 倍率 × 100（倍率是 ¥/百万 tokens），且与 QuotaPerUnit 无关。
-func TestSettleTestQuotaRatioPathUsesHundredPerRatio(t *testing.T) {
+// quota = tokens × 倍率 × 1000（倍率是 ¥/百万 tokens），且与 QuotaPerUnit 无关。
+func TestSettleTestQuotaRatioPathUsesThousandPerRatio(t *testing.T) {
 	info := &relaycommon.RelayInfo{}
 	priceData := types.PriceData{ModelRatio: 1, CompletionRatio: 4}
 	usage := &dto.Usage{PromptTokens: 1000}
 
-	for _, qpu := range []float64{500_000, 7_300_000, 730_000_000} {
+	for _, qpu := range []float64{500_000, 7_300_000, 7_300_000_000} {
 		setQuotaPerUnit(t, qpu)
 		quota, _ := settleTestQuota(info, priceData, usage)
-		require.Equal(t, 100_000, quota, "1000 tokens × ¥1/百万 × 100，且不随 QPU 变化")
+		require.Equal(t, 1_000_000, quota, "1000 tokens × ¥1/百万 × 1000，且不随 QPU 变化")
 	}
 }
 
@@ -37,12 +37,12 @@ func TestSettleTestQuotaPerCallUsesQuotaPerYuan(t *testing.T) {
 	info := &relaycommon.RelayInfo{}
 	usage := &dto.Usage{PromptTokens: 1000}
 
-	for _, qpu := range []float64{7_300_000, 730_000_000} {
+	for _, qpu := range []float64{7_300_000, 7_300_000_000} {
 		setQuotaPerUnit(t, qpu)
 		quota, _ := settleTestQuota(info, types.PriceData{UsePrice: true, ModelPrice: 0.1}, usage)
-		require.Equal(t, 10_000_000, quota, "¥0.1 × 10⁸，且不随 QPU 变化")
+		require.Equal(t, 100_000_000, quota, "¥0.1 × 10⁹，且不随 QPU 变化")
 	}
 
-	quota, _ := settleTestQuota(info, types.PriceData{UsePrice: true, ModelPrice: 0.099999999}, usage)
+	quota, _ := settleTestQuota(info, types.PriceData{UsePrice: true, ModelPrice: 0.0099999999}, usage)
 	require.Equal(t, 10_000_000, quota, "9,999,999.9 必须四舍五入")
 }

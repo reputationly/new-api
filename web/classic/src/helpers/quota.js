@@ -26,9 +26,9 @@ import i18next from 'i18next';
 //
 // quota_per_unit 是「1 美元对应的 quota」，只留给美元语义的地方（余额/充值/令牌额度
 // 这类按美元记数的旧数据）。人民币金额一律用 quota_per_yuan，**不再乘汇率**。
-export const FALLBACK_QUOTA_PER_UNIT = 730000000; // 与后端 QuotaPerUnit 的出厂默认一致
-export const FALLBACK_QUOTA_PER_YUAN = 100000000; // 1 元 = 10⁸ quota（后端 QuotaPerYuan）
-export const FALLBACK_QUOTA_PER_POINT = 1000000;
+export const FALLBACK_QUOTA_PER_UNIT = 7300000000; // 与后端 QuotaPerUnit 的出厂默认一致
+export const FALLBACK_QUOTA_PER_YUAN = 1000000000; // 1 元 = 10⁹ quota（后端 QuotaPerYuan）
+export const FALLBACK_QUOTA_PER_POINT = 10000000;
 
 const warnedFallbacks = new Set();
 

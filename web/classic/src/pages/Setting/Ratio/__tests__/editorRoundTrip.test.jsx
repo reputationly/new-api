@@ -102,7 +102,7 @@ const submitAndGetPayload = async () => {
 beforeEach(() => {
   vi.clearAllMocks();
   localStorage.clear();
-  localStorage.setItem('quota_per_yuan', '100000000');
+  localStorage.setItem('quota_per_yuan', '1000000000');
   localStorage.setItem('quota_display_type', 'CNY');
 });
 

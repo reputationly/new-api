@@ -283,7 +283,7 @@ func logToRow(l *model.Log, includeAdminCols bool) []string {
 	// 费用按 CNY 输出：quota -> USD -> CNY，与前端 renderQuota 的 CNY 分支同款，
 	// 也与 controller/billing.go:50 的换算一致。
 	//
-	// 人民币金额 = quota / QuotaPerYuan（1 quota = ¥0.00000001，不读汇率）。
+	// 人民币金额 = quota / QuotaPerYuan（1 quota = ¥0.000000001，不读汇率）。
 	// 日志里只存整型 quota、不存历史汇率，而人民币口径本身与汇率无关，
 	// 所以这一列不会因为运营改汇率而漂。
 	// 展示币种不是 CNY 时不做换算（那会输出别的币种数值却挂 CNY 表头），直接留空。
@@ -298,7 +298,7 @@ func logToRow(l *model.Log, includeAdminCols bool) []string {
 	}
 	costCNY := ""
 	if common.QuotaPerYuan > 0 {
-		costCNY = strconv.FormatFloat(float64(signedQuota)/common.QuotaPerYuan, 'f', 8, 64)
+		costCNY = strconv.FormatFloat(float64(signedQuota)/common.QuotaPerYuan, 'f', 9, 64)
 	}
 	cacheRead, cacheWrite := otherCacheTokens(l.Other)
 	row = append(row,

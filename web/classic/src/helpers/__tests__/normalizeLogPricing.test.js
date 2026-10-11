@@ -13,11 +13,11 @@ import { normalizeLogPricing, renderModelPrice, renderQuota } from '../render';
  *     各 *_price / video_unit_price 仍是美元。
  * 换算只能用当前汇率（日志里没冻结当时的汇率）。
  *
- * 这个文件同时钉住 S4 的不变量：计费过程合计（8 位）等于该日志的花费列。
+ * 这个文件同时钉住 S4 的不变量：计费过程合计（9 位）等于该日志的花费列。
  */
 
 const RATE = 7.3; // 站点美元汇率
-const QPY = 100000000; // 1 元 = 10⁸ quota
+const QPY = 1000000000; // 1 元 = 10⁹ quota
 
 beforeEach(() => {
   localStorage.clear();
@@ -127,9 +127,9 @@ describe('normalizeLogPricing：新旧两代日志', () => {
   });
 });
 
-describe('历史日志：计费过程合计 == 花费列（8 位）', () => {
+describe('历史日志：计费过程合计 == 花费列（9 位）', () => {
   // E1 同款请求在 V1 期落库：other 是美元口径，logs.quota 已经是迁移后的 quota
-  const quota = 1658300; // = ¥0.016583
+  const quota = 16583000; // = ¥0.016583
 
   const renderText = (node) =>
     render(React.createElement('div', null, node)).container.textContent;
@@ -149,7 +149,7 @@ describe('历史日志：计费过程合计 == 花费列（8 位）', () => {
         displayMode: 'price',
       }),
     );
-    expect(text).toContain('= ¥0.01658300');
-    expect(renderQuota(quota, 8)).toBe('¥0.01658300');
+    expect(text).toContain('= ¥0.016583000');
+    expect(renderQuota(quota, 9)).toBe('¥0.016583000');
   });
 });

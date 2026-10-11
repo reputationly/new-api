@@ -16,12 +16,12 @@ const maxCacheSize = 256
 const (
 	// ExprVersionV1：系数是**美元**/百万 tokens（历史口径）。
 	ExprVersionV1 = 1
-	// ExprVersionV2：系数是**人民币**/百万 tokens（1 quota = ¥0.00000001 之后的口径）。
+	// ExprVersionV2：系数是**人民币**/百万 tokens（1 quota = ¥0.000000001 之后的口径）。
 	ExprVersionV2 = 2
 	// DefaultExprVersion 无前缀时按 v1 处理，以兼容库里已有的历史表达式。
 	//
 	// v1 的结算会被拒绝（见 QuotaFromExprOutput）：它的输出单位与当前余额不同单位，
-	// 照原样结算会少收 100 倍，必须由管理员在编辑器里重录为 v2。
+	// 照原样结算会少收 1000 倍，必须由管理员在编辑器里重录为 v2。
 	DefaultExprVersion = ExprVersionV1
 )
 

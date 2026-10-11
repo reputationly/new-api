@@ -65,9 +65,9 @@ func TestCalculateTextQuotaSummaryUnifiedForClaudeSemantic(t *testing.T) {
 	require.Equal(t, messageSummary.CacheCreationTokens5m, chatSummary.CacheCreationTokens5m)
 	require.Equal(t, messageSummary.CacheCreationTokens1h, chatSummary.CacheCreationTokens1h)
 	require.True(t, chatSummary.IsClaudeUsageSemantic)
-	// 倍率 1（¥1/百万 tokens）下 quota = quotaTokens × 100：
-	// 1487.5 × 100 = 148750（只在最后取整一次）
-	require.Equal(t, 148750, chatSummary.Quota)
+	// 倍率 1（¥1/百万 tokens）下 quota = quotaTokens × 1000：
+	// 1487.5 × 1000 = 1487500（只在最后取整一次）
+	require.Equal(t, 1487500, chatSummary.Quota)
 }
 
 func TestCalculateTextQuotaSummaryUsesSplitClaudeCacheCreationRatios(t *testing.T) {
@@ -105,8 +105,8 @@ func TestCalculateTextQuotaSummaryUsesSplitClaudeCacheCreationRatios(t *testing.
 
 	summary := calculateTextQuotaSummary(ctx, relayInfo, usage)
 
-	// (100 + remaining(5)*1 + 2*2 + 3*3) × 100 = 11800
-	require.Equal(t, 11800, summary.Quota)
+	// (100 + remaining(5)*1 + 2*2 + 3*3) × 1000 = 118000
+	require.Equal(t, 118000, summary.Quota)
 }
 
 func TestCalculateTextQuotaSummaryUsesAnthropicUsageSemanticFromUpstreamUsage(t *testing.T) {
@@ -147,8 +147,8 @@ func TestCalculateTextQuotaSummaryUsesAnthropicUsageSemanticFromUpstreamUsage(t 
 
 	require.True(t, summary.IsClaudeUsageSemantic)
 	require.Equal(t, "anthropic", summary.UsageSemantic)
-	// (1000 + 100×0.1 + 50×1.25 + 10×1.25 + 20×2 + 200×2) × 100 = 148750
-	require.Equal(t, 148750, summary.Quota)
+	// (1000 + 100×0.1 + 50×1.25 + 10×1.25 + 20×2 + 200×2) × 1000 = 1487500
+	require.Equal(t, 1487500, summary.Quota)
 }
 
 func TestCacheWriteTokensTotal(t *testing.T) {
@@ -206,8 +206,8 @@ func TestCalculateTextQuotaSummaryHandlesLegacyClaudeDerivedOpenAIUsage(t *testi
 
 	summary := calculateTextQuotaSummary(ctx, relayInfo, usage)
 
-	// (62 + 3544*0.1 + 586*1.25 + 95*5) × 100 = 162390（只在最后取整一次）
-	require.Equal(t, 162390, summary.Quota)
+	// (62 + 3544*0.1 + 586*1.25 + 95*5) × 1000 = 1623900（只在最后取整一次）
+	require.Equal(t, 1623900, summary.Quota)
 }
 
 func TestCalculateTextQuotaSummarySeparatesOpenRouterCacheReadFromPromptBilling(t *testing.T) {
@@ -242,9 +242,9 @@ func TestCalculateTextQuotaSummarySeparatesOpenRouterCacheReadFromPromptBilling(
 
 	// OpenRouter OpenAI-format display keeps prompt_tokens as total input,
 	// but billing still separates normal input from cache read tokens.
-	// quota = ((2604 - 2432) + 2432*0.1 + 383) × 100 = 79820
+	// quota = ((2604 - 2432) + 2432*0.1 + 383) × 1000 = 798200
 	require.Equal(t, 2604, summary.PromptTokens)
-	require.Equal(t, 79820, summary.Quota)
+	require.Equal(t, 798200, summary.Quota)
 }
 
 func TestCalculateTextQuotaSummarySeparatesOpenRouterCacheCreationFromPromptBilling(t *testing.T) {
@@ -277,9 +277,9 @@ func TestCalculateTextQuotaSummarySeparatesOpenRouterCacheCreationFromPromptBill
 	summary := calculateTextQuotaSummary(ctx, relayInfo, usage)
 
 	// prompt_tokens is still logged as total input, but cache creation is billed separately.
-	// quota = ((2604 - 100) + 100*1.25 + 383) × 100 = 301200
+	// quota = ((2604 - 100) + 100*1.25 + 383) × 1000 = 3012000
 	require.Equal(t, 2604, summary.PromptTokens)
-	require.Equal(t, 301200, summary.Quota)
+	require.Equal(t, 3012000, summary.Quota)
 }
 
 func TestCalculateTextQuotaSummaryKeepsPrePRClaudeOpenRouterBilling(t *testing.T) {
@@ -315,10 +315,10 @@ func TestCalculateTextQuotaSummaryKeepsPrePRClaudeOpenRouterBilling(t *testing.T
 
 	// Pre-PR PostClaudeConsumeQuota behavior for OpenRouter:
 	// prompt = 2604 - 2432 = 172
-	// quota = (172 + 2432*0.1 + 383) × 100 = 79820
+	// quota = (172 + 2432*0.1 + 383) × 1000 = 798200
 	require.True(t, summary.IsClaudeUsageSemantic)
 	require.Equal(t, 172, summary.PromptTokens)
-	require.Equal(t, 79820, summary.Quota)
+	require.Equal(t, 798200, summary.Quota)
 }
 
 func TestComposeTieredTextQuotaKeepsToolCallSurcharges(t *testing.T) {
@@ -368,9 +368,9 @@ func TestComposeTieredTextQuotaKeepsToolCallSurcharges(t *testing.T) {
 
 	// 工具价已是人民币：web_search_preview ¥73/千次 ×1 + file_search ¥18.25/千次 ×2
 	// + GPT-Image-1 low 1024x1024 ¥0.0803/次，全部 × QuotaPerYuan（分组 1）
-	require.Equal(t, int64(18980000), summary.ToolCallSurchargeQuota.Round(0).IntPart())
+	require.Equal(t, int64(189800000), summary.ToolCallSurchargeQuota.Round(0).IntPart())
 	// composeTieredTextQuota：tieredResult 分支用 ActualQuotaBeforeGroup × snap.GroupRatio + 附加费
-	require.Equal(t, 18981000, quota)
+	require.Equal(t, 189801000, quota)
 }
 
 func TestComposeTieredTextQuotaFallbackKeepsToolCallSurcharges(t *testing.T) {
@@ -404,8 +404,8 @@ func TestComposeTieredTextQuotaFallbackKeepsToolCallSurcharges(t *testing.T) {
 	quota := composeTieredTextQuota(relayInfo, summary, 1250, nil)
 
 	// Claude web search ¥73/千次 × 2 次 × 分组 1.25 × QuotaPerYuan
-	require.Equal(t, int64(18250000), summary.ToolCallSurchargeQuota.Round(0).IntPart())
-	require.Equal(t, 18251250, quota)
+	require.Equal(t, int64(182500000), summary.ToolCallSurchargeQuota.Round(0).IntPart())
+	require.Equal(t, 182501250, quota)
 }
 
 func TestComposeTieredTextQuotaErrorFallbackUsesPreConsumedQuota(t *testing.T) {
@@ -443,6 +443,6 @@ func TestComposeTieredTextQuotaErrorFallbackUsesPreConsumedQuota(t *testing.T) {
 	preConsumedFallback := 2000
 	quota := composeTieredTextQuota(relayInfo, summary, preConsumedFallback, nil)
 
-	require.Equal(t, int64(18250000), summary.ToolCallSurchargeQuota.Round(0).IntPart())
-	require.Equal(t, 18252000, quota)
+	require.Equal(t, int64(182500000), summary.ToolCallSurchargeQuota.Round(0).IntPart())
+	require.Equal(t, 182502000, quota)
 }

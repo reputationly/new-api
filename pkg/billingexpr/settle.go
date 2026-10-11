@@ -7,8 +7,8 @@ import (
 	"github.com/QuantumNous/new-api/common"
 )
 
-// ErrExprV1Unsupported v1 表达式（系数是美元/百万 tokens）在 1 quota = ¥1e-8 之后
-// 无法与余额同单位结算：它的输出单位是旧单位（1 quota = ¥1e-6），照原样结算会少收 100 倍。
+// ErrExprV1Unsupported v1 表达式（系数是美元/百万 tokens）在 1 quota = ¥1e-9 之后
+// 无法与余额同单位结算：它的输出单位是旧单位（1 quota = ¥1e-6），照原样结算会少收 1000 倍。
 var ErrExprV1Unsupported = errors.New(
 	"分段表达式 v1（美元口径）已不再支持结算，请在「定价设置 → 表达式」里重新录入为 v2（系数为 ¥/百万 tokens）")
 

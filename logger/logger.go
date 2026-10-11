@@ -117,7 +117,7 @@ func logHelper(ctx context.Context, level string, msg string) {
 	}
 }
 
-// cnyFromQuota 把内部 quota 换算成人民币金额：1 quota = ¥0.00000001（不读汇率）。
+// cnyFromQuota 把内部 quota 换算成人民币金额：1 quota = ¥0.000000001（不读汇率）。
 func cnyFromQuota(quota int) float64 {
 	return float64(quota) / common.QuotaPerYuan
 }
@@ -144,14 +144,14 @@ func LogQuota(quota int) string {
 	switch operation_setting.GetQuotaDisplayType() {
 	case operation_setting.QuotaDisplayTypeCNY:
 		// 人民币金额 = quota / QuotaPerYuan；不读汇率（改汇率不影响人民币金额）
-		return fmt.Sprintf("¥%.8f 额度", cnyFromQuota(quota))
+		return fmt.Sprintf("¥%.9f 额度", cnyFromQuota(quota))
 	case operation_setting.QuotaDisplayTypeCustom:
 		rate := operation_setting.GetGeneralSetting().CustomCurrencyExchangeRate
 		symbol := operation_setting.GetGeneralSetting().CustomCurrencySymbol
 		if symbol == "" {
 			symbol = "¤"
 		}
-		return fmt.Sprintf("%s%.8f 额度", symbol, customFromQuota(quota, rate))
+		return fmt.Sprintf("%s%.9f 额度", symbol, customFromQuota(quota, rate))
 	case operation_setting.QuotaDisplayTypeTokens:
 		return fmt.Sprintf("%d 点额度", quota)
 	default: // USD
@@ -188,14 +188,14 @@ func FormatQuota(quota int) string {
 	switch operation_setting.GetQuotaDisplayType() {
 	case operation_setting.QuotaDisplayTypeCNY:
 		// 人民币金额 = quota / QuotaPerYuan；不读汇率（改汇率不影响人民币金额）
-		return fmt.Sprintf("¥%.8f", cnyFromQuota(quota))
+		return fmt.Sprintf("¥%.9f", cnyFromQuota(quota))
 	case operation_setting.QuotaDisplayTypeCustom:
 		rate := operation_setting.GetGeneralSetting().CustomCurrencyExchangeRate
 		symbol := operation_setting.GetGeneralSetting().CustomCurrencySymbol
 		if symbol == "" {
 			symbol = "¤"
 		}
-		return fmt.Sprintf("%s%.8f", symbol, customFromQuota(quota, rate))
+		return fmt.Sprintf("%s%.9f", symbol, customFromQuota(quota, rate))
 	case operation_setting.QuotaDisplayTypeTokens:
 		return fmt.Sprintf("%d", quota)
 	default:

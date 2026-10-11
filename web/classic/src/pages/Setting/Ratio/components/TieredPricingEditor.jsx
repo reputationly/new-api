@@ -2059,7 +2059,7 @@ export default function TieredPricingEditor({
             <div>
               <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                 <Text strong style={{ fontSize: 15 }}>
-                  {t('预计费用')}：{renderQuota(evalResult.cost, 8)}
+                  {t('预计费用')}：{renderQuota(evalResult.cost, 9)}
                 </Text>
                 {evalResult.matchedTier && (
                   <Tag size='small' color='blue' type='light'>

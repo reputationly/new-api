@@ -17,7 +17,7 @@ import (
 //	V1：配置是美元口径的原始倍率 r（1 = $2/百万 tokens）；倍率路径 quota/token = r × 14.6
 //	    （14.6 = 2 × 7.3 = QuotaScale），1 quota = ¥1e-6 → 人民币 = r × 14.6 × 1e-6。
 //	V2：迁移后配置是 cnyModelRatios(r) = round6(r × 14.6)（¥/百万 tokens）；
-//	    quota/token = cny × 100，1 quota = ¥1e-8 → 人民币 = cny × 100 × 1e-8 = cny × 1e-6。
+//	    quota/token = cny × 1000，1 quota = ¥1e-9 → 人民币 = cny × 1000 × 1e-9 = cny × 1e-6。
 //
 // 因此差值只来自 round6，上界 5e-7 < 1e-6。
 func TestDefaultModelRatioAmountConservation(t *testing.T) {

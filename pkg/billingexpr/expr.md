@@ -219,7 +219,7 @@ single place where expression output becomes quota — both pre-consume (`relay/
 and settlement (`settle.go`) call it, so the two can never drift.
 
 **v2 (current)** — coefficients are ¥/1M tokens, and `QuotaPerYuan` is the quota-per-元 constant
-(1 quota = ¥0.00000001):
+(1 quota = ¥0.000000001):
 
 ```
 quota = exprOutput / 1,000,000 * QuotaPerYuan * groupRatio
@@ -230,8 +230,8 @@ the same shape as per-call billing: `quota = 人民币价格 * QuotaPerYuan * gr
 
 **v1 (rejected)** — coefficients were $/1M tokens and the result was
 `exprOutput / 1,000,000 * snapshot.QuotaPerUnit`, i.e. expressed in the *old* quota unit
-(1 quota = ¥0.000001). After the unit change the balance is 100× larger per 元, so settling a v1
-expression with its frozen `QuotaPerUnit` would charge only 1/100 of the intended 人民币 amount —
+(1 quota = ¥0.000001). After the unit change the balance is 1000× larger per 元, so settling a v1
+expression with its frozen `QuotaPerUnit` would charge only 1/1000 of the intended 人民币 amount —
 silently. v1 settlement therefore returns `ErrExprV1Unsupported` and the operator must re-enter the
 expression as `v2:` in the editor (the coefficients must be converted ×14.6 for 倍率-style
 expressions; the editor does the 人民币/美元 display conversion).

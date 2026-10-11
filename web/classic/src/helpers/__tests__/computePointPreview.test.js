@@ -5,11 +5,11 @@ import {
 } from '../computePointPreview';
 
 // 换算率都从 localStorage 读，测试里固定成好算的数：
-// 1 点 = 100 quota，1 元 = 10⁸ quota → 1000 万点 = 10 亿 quota = ¥10
-const POINTS_10_CNY = 10_000_000;
+// 1 点 = 10⁷ quota，1 元 = 10⁹ quota → 1000 点 = 100 亿 quota = ¥10
+const POINTS_10_CNY = 1_000;
 beforeEach(() => {
-  localStorage.setItem('quota_per_compute_point', '100');
-  localStorage.setItem('quota_per_yuan', '100000000');
+  localStorage.setItem('quota_per_compute_point', '10000000');
+  localStorage.setItem('quota_per_yuan', '1000000000');
 });
 
 describe('previewComputePoints', () => {

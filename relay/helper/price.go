@@ -124,7 +124,7 @@ func ModelPriceHelper(c *gin.Context, info *relaycommon.RelayInfo, promptTokens 
 		audioCompletionRatio = ratio_setting.GetAudioCompletionRatio(info.OriginModelName)
 		// common.PreConsumedQuota 名字里带 quota，实际是**预扣 token 数下限**，
 		// 所以它不乘 QuotaPerMillionTokens、单位迁移也不改它：再乘一次会把冻结额放大两次。
-		// 倍率换算只发生在下面 ratio 这一步（倍率是 ¥/百万 tokens → quota/token = 倍率 × 100）。
+		// 倍率换算只发生在下面 ratio 这一步（倍率是 ¥/百万 tokens → quota/token = 倍率 × 1000）。
 		ratio := modelRatio * groupRatioInfo.GroupRatio * common.QuotaPerMillionTokens
 		preConsumedQuota = int(math.Round(float64(preConsumedTokens) * ratio))
 	} else {

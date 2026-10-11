@@ -703,12 +703,12 @@ func TestComputeTieredQuota_BasicSettlement(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// exprOutput = 5000；quota = 5000 / 1M × QuotaPerYuan = 500000
-	if math.Abs(result.ActualQuotaBeforeGroup-500000) > 1e-6 {
-		t.Errorf("before group = %f, want 500000", result.ActualQuotaBeforeGroup)
+	// exprOutput = 5000；quota = 5000 / 1M × QuotaPerYuan = 5000000
+	if math.Abs(result.ActualQuotaBeforeGroup-5000000) > 1e-6 {
+		t.Errorf("before group = %f, want 5000000", result.ActualQuotaBeforeGroup)
 	}
-	if result.ActualQuotaAfterGroup != 500000 {
-		t.Errorf("after group = %d, want 500000", result.ActualQuotaAfterGroup)
+	if result.ActualQuotaAfterGroup != 5000000 {
+		t.Errorf("after group = %d, want 5000000", result.ActualQuotaAfterGroup)
 	}
 	if result.MatchedTier != "default" {
 		t.Errorf("tier = %q, want default", result.MatchedTier)
@@ -730,9 +730,9 @@ func TestComputeTieredQuota_WithGroupRatio(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// exprOutput = 1500; quotaBeforeGroup = 150000; afterGroup = round(150000 × 2.0) = 300000
-	if result.ActualQuotaAfterGroup != 300000 {
-		t.Errorf("after group = %d, want 300000", result.ActualQuotaAfterGroup)
+	// exprOutput = 1500; quotaBeforeGroup = 1500000; afterGroup = round(1500000 × 2.0) = 3000000
+	if result.ActualQuotaAfterGroup != 3000000 {
+		t.Errorf("after group = %d, want 3000000", result.ActualQuotaAfterGroup)
 	}
 }
 
@@ -757,9 +757,9 @@ func TestComputeTieredQuota_ZeroTokens(t *testing.T) {
 }
 
 func TestComputeTieredQuota_RoundingEdge(t *testing.T) {
-	// v2 系数是 ¥/百万 tokens：quota = output / 10⁶ × 10⁸ = output × 100。
-	// 3 × 0.0025 = 0.0075 → × 100 = 0.75 → round(0.75) = 1（必须四舍五入，不得截断成 0）。
-	exprStr := `v2:tier("default", p * 0.0025)`
+	// v2 系数是 ¥/百万 tokens：quota = output / 10⁶ × 10⁹ = output × 1000。
+	// 3 × 0.00025 = 0.00075 → × 1000 = 0.75 → round(0.75) = 1（必须四舍五入，不得截断成 0）。
+	exprStr := `v2:tier("default", p * 0.00025)`
 	snap := &billingexpr.BillingSnapshot{
 		BillingMode:  "tiered_expr",
 		ExprString:   exprStr,
@@ -779,8 +779,8 @@ func TestComputeTieredQuota_RoundingEdge(t *testing.T) {
 }
 
 func TestComputeTieredQuota_RoundingEdgeDown(t *testing.T) {
-	// 3 × 0.00125 = 0.00375 → × 100 = 0.375 → round(0.375) = 0（不足半 quota 归零）。
-	exprStr := `v2:tier("default", p * 0.00125)`
+	// 3 × 0.000125 = 0.000375 → × 1000 = 0.375 → round(0.375) = 0（不足半 quota 归零）。
+	exprStr := `v2:tier("default", p * 0.000125)`
 	snap := &billingexpr.BillingSnapshot{
 		BillingMode:  "tiered_expr",
 		ExprString:   exprStr,
@@ -816,9 +816,9 @@ func TestComputeTieredQuotaWithRequest_ProbeAffectsQuota(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// normal: p*2 = 2000; quota = 2000 / 1M × QuotaPerYuan = 200000
-	if r1.ActualQuotaAfterGroup != 200000 {
-		t.Errorf("normal = %d, want 200000", r1.ActualQuotaAfterGroup)
+	// normal: p*2 = 2000; quota = 2000 / 1M × QuotaPerYuan = 2000000
+	if r1.ActualQuotaAfterGroup != 2000000 {
+		t.Errorf("normal = %d, want 2000000", r1.ActualQuotaAfterGroup)
 	}
 
 	// With request: fast tier
@@ -828,9 +828,9 @@ func TestComputeTieredQuotaWithRequest_ProbeAffectsQuota(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// fast: p*4 = 4000; quota = 4000 / 1M × QuotaPerYuan = 400000
-	if r2.ActualQuotaAfterGroup != 400000 {
-		t.Errorf("fast = %d, want 400000", r2.ActualQuotaAfterGroup)
+	// fast: p*4 = 4000; quota = 4000 / 1M × QuotaPerYuan = 4000000
+	if r2.ActualQuotaAfterGroup != 4000000 {
+		t.Errorf("fast = %d, want 4000000", r2.ActualQuotaAfterGroup)
 	}
 	if !r2.CrossedTier {
 		t.Error("expected CrossedTier = true when probe changes tier")
@@ -849,7 +849,7 @@ func TestComputeTieredQuota_BoundaryTierCrossing(t *testing.T) {
 		ExprVersion:   billingexpr.ExprVersionV2,
 	}
 
-	// At boundary: small, p*1 = 100000; quota = 100000 / 1M × QuotaPerYuan = 10000000
+	// At boundary: small, p*1 = 100000; quota = 100000 / 1M × QuotaPerYuan = 100000000
 	r1, err := billingexpr.ComputeTieredQuota(snap, billingexpr.TokenParams{P: 100000})
 	if err != nil {
 		t.Fatal(err)
@@ -857,11 +857,11 @@ func TestComputeTieredQuota_BoundaryTierCrossing(t *testing.T) {
 	if r1.MatchedTier != "small" {
 		t.Errorf("at boundary: tier = %s, want small", r1.MatchedTier)
 	}
-	if r1.ActualQuotaAfterGroup != 10000000 {
-		t.Errorf("at boundary: quota = %d, want 10000000", r1.ActualQuotaAfterGroup)
+	if r1.ActualQuotaAfterGroup != 100000000 {
+		t.Errorf("at boundary: quota = %d, want 100000000", r1.ActualQuotaAfterGroup)
 	}
 
-	// Past boundary: large, p*2 = 200002; quota = 200002 / 1M × QuotaPerYuan = 20000200
+	// Past boundary: large, p*2 = 200002; quota = 200002 / 1M × QuotaPerYuan = 200002000
 	r2, err := billingexpr.ComputeTieredQuota(snap, billingexpr.TokenParams{P: 100001})
 	if err != nil {
 		t.Fatal(err)
@@ -869,8 +869,8 @@ func TestComputeTieredQuota_BoundaryTierCrossing(t *testing.T) {
 	if r2.MatchedTier != "large" {
 		t.Errorf("past boundary: tier = %s, want large", r2.MatchedTier)
 	}
-	if r2.ActualQuotaAfterGroup != 20000200 {
-		t.Errorf("past boundary: quota = %d, want 20000200", r2.ActualQuotaAfterGroup)
+	if r2.ActualQuotaAfterGroup != 200002000 {
+		t.Errorf("past boundary: quota = %d, want 200002000", r2.ActualQuotaAfterGroup)
 	}
 	if !r2.CrossedTier {
 		t.Error("expected CrossedTier = true")

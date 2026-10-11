@@ -17,20 +17,20 @@ func expectedCNY(upstreamQuota float64) float64 {
 
 // TestUpstreamAmountCNY_PrefersCostQuota 新日志走正算路径，不再依赖 group_ratio 反推。
 //
-// 这里刻意让两条路径给出不同答案：group_ratio=1.5 反推出 1000，而落库的 cost_quota
-// 是 600。若实现仍先看 group_ratio，结果会是 1000——对账每个月都会多算 66%，
+// 这里刻意让两条路径给出不同答案：group_ratio=1.5 反推出 10000，而落库的 cost_quota
+// 是 6000。若实现仍先看 group_ratio，结果会是 10000——对账每个月都会多算 66%，
 // 而且因为数量级正常，只有拿供应商账单逐行核才发现得了。
 func TestUpstreamAmountCNY_PrefersCostQuota(t *testing.T) {
 	other := map[string]interface{}{
 		"group_ratio": 1.5,
-		"cost_quota":  600.0,
+		"cost_quota":  6000.0,
 		"cost_ratio":  0.6,
 	}
 
-	got := upstreamAmountCNY(1500, other)
+	got := upstreamAmountCNY(15000, other)
 
-	require.InDelta(t, expectedCNY(600), got, 1e-6)
-	require.Greater(t, math.Abs(got-expectedCNY(1000)), 1e-6,
+	require.InDelta(t, expectedCNY(6000), got, 1e-9)
+	require.Greater(t, math.Abs(got-expectedCNY(10000)), 1e-9,
 		"不得再走 quota ÷ group_ratio 的反推")
 }
 

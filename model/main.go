@@ -81,7 +81,7 @@ func createRootAccountIfNeed() error {
 			Status:      common.UserStatusEnabled,
 			DisplayName: "Root User",
 			AccessToken: nil,
-			Quota:       100000000,
+			Quota:       common.QuotaPerYuan,
 		}
 		DB.Create(&rootUser)
 	}

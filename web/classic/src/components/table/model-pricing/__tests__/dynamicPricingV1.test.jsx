@@ -15,7 +15,7 @@ const t = (s) => s;
 
 beforeEach(() => {
   localStorage.clear();
-  localStorage.setItem('quota_per_yuan', '100000000');
+  localStorage.setItem('quota_per_yuan', '1000000000');
   localStorage.setItem('quota_display_type', 'CNY');
   localStorage.setItem('status', JSON.stringify({ usd_exchange_rate: 7.3 }));
 });

@@ -414,9 +414,9 @@ func TestVideoPerCallPriceable_SecondsMatchesApply(t *testing.T) {
 }
 
 // 按次视频：矩阵单价（¥/次）× QuotaPerYuan 会落在 N−ε 上
-// （¥0.099999999 × 10⁸ = 9,999,999.9），截断会少收 1 quota。
+// （¥0.0099999999 × 10⁹ = 9,999,999.9），截断会少收 1 quota。
 func TestApplyVideoPricing_PerCallRoundsUp(t *testing.T) {
-	const cfg = `{"rounding-video":{"mode":"per_call","per_call":{"720p":{"5":0.099999999}}}}`
+	const cfg = `{"rounding-video":{"mode":"per_call","per_call":{"720p":{"5":0.0099999999}}}}`
 	require.NoError(t, ratio_setting.UpdateVideoPricingByJSONString(cfg))
 	t.Cleanup(func() { _ = ratio_setting.UpdateVideoPricingByJSONString("") })
 
@@ -429,5 +429,5 @@ func TestApplyVideoPricing_PerCallRoundsUp(t *testing.T) {
 	info.PriceData = types.PriceData{GroupRatioInfo: types.GroupRatioInfo{GroupRatio: 1}}
 
 	require.True(t, applyVideoPricing(c, info))
-	require.Equal(t, 10_000_000, info.PriceData.Quota, "¥0.099999999 应四舍五入为 10,000,000 quota")
+	require.Equal(t, 10_000_000, info.PriceData.Quota, "¥0.0099999999 应四舍五入为 10,000,000 quota")
 }

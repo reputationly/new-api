@@ -72,7 +72,7 @@ describe('getDisplayCurrency 的四种展示模式', () => {
     expect(ratePerCny).toBe(1 / RATE); // 金额不折算，调用方自行绕开
   });
 
-  it('读不到 quota_per_yuan 时按 10⁸ 兜底', () => {
+  it('读不到 quota_per_yuan 时按 10⁹ 兜底', () => {
     localStorage.removeItem('quota_per_yuan');
     expect(getQuotaPerYuan()).toBe(QPY);
     expect(getQuotaPerYuan()).toBe(FALLBACK_QUOTA_PER_YUAN);
@@ -80,16 +80,16 @@ describe('getDisplayCurrency 的四种展示模式', () => {
 });
 
 describe('renderQuota：quota / quota_per_yuan × ratePerCny', () => {
-  it('CNY：10⁸ quota = ¥1，1 quota = ¥0.00000001（8 位）', () => {
+  it('CNY：10⁹ quota = ¥1，1 quota = ¥0.000000001（9 位）', () => {
     localStorage.setItem('quota_display_type', 'CNY');
-    expect(renderQuota(QPY, 8)).toBe('¥1.00000000');
-    expect(renderQuota(1, 8)).toBe('¥0.00000001');
-    expect(renderQuota(1658300, 8)).toBe('¥0.01658300');
+    expect(renderQuota(QPY, 9)).toBe('¥1.000000000');
+    expect(renderQuota(1, 9)).toBe('¥0.000000001');
+    expect(renderQuota(16583000, 9)).toBe('¥0.016583000');
   });
 
   it('USD：按汇率折回美元', () => {
     localStorage.setItem('quota_display_type', 'USD');
-    expect(renderQuota(QPY, 8)).toBe('$0.13698630');
+    expect(renderQuota(QPY, 9)).toBe('$0.136986301');
     // 余额这类大额仍是 2 位
     expect(renderQuota(QPY * 10, 2)).toBe('$1.37');
   });
@@ -115,9 +115,9 @@ describe('renderQuota：quota / quota_per_yuan × ratePerCny', () => {
   // G4：改汇率不再影响人民币金额与余额
   it('CNY 下改汇率，人民币金额一分不变', () => {
     localStorage.setItem('quota_display_type', 'CNY');
-    const before = renderQuota(1658300, 8);
+    const before = renderQuota(16583000, 9);
     localStorage.setItem('status', JSON.stringify({ usd_exchange_rate: 6.9 }));
-    expect(renderQuota(1658300, 8)).toBe(before);
+    expect(renderQuota(16583000, 9)).toBe(before);
   });
 });
 
@@ -126,7 +126,7 @@ describe('getQuotaWithUnit / quotaToDisplayAmount：同一条链', () => {
     localStorage.setItem('quota_display_type', 'CNY');
     expect(getQuotaWithUnit(QPY, 2)).toBe('1.00');
     expect(quotaToDisplayAmount(QPY)).toBe(1);
-    expect(quotaToDisplayAmount(1658300)).toBeCloseTo(0.016583, 9);
+    expect(quotaToDisplayAmount(16583000)).toBeCloseTo(0.016583, 9);
   });
 
   it('USD：金额 = quota / quota_per_yuan / 汇率', () => {
@@ -137,7 +137,7 @@ describe('getQuotaWithUnit / quotaToDisplayAmount：同一条链', () => {
   it('反向：金额 → quota 与正向互逆', () => {
     localStorage.setItem('quota_display_type', 'CNY');
     expect(displayAmountToQuota(1)).toBe(QPY);
-    expect(displayAmountToQuota(quotaToDisplayAmount(1658300))).toBe(1658300);
+    expect(displayAmountToQuota(quotaToDisplayAmount(16583000))).toBe(16583000);
     localStorage.setItem('quota_display_type', 'USD');
     expect(displayAmountToQuota(quotaToDisplayAmount(QPY))).toBe(QPY);
   });

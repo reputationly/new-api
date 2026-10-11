@@ -16,7 +16,7 @@ import {
  * 这里把「两边都按人民币比较」这个不变量钉死。
  */
 
-const QPY = 100000000; // 1 元 = 10⁸ quota（后端 QuotaPerYuan）
+const QPY = 1000000000; // 1 元 = 10⁹ quota（后端 QuotaPerYuan）
 // 人民币金额 → quota：¥x × quota_per_yuan（不再经汇率）
 const yuan = (x) => x * QPY;
 
@@ -26,7 +26,7 @@ beforeEach(() => {
 });
 
 describe('最坏成本与售价的币种口径', () => {
-  it('quota 直接按 1 元 = 10⁸ quota 折成人民币', () => {
+  it('quota 直接按 1 元 = 10⁹ quota 折成人民币', () => {
     expect(quotaToCNY(QPY)).toBeCloseTo(1, 6);
     expect(quotaToCNY(QPY * 7.3)).toBeCloseTo(7.3, 6);
   });

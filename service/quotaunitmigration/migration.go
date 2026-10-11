@@ -66,7 +66,7 @@ type migrationState struct {
 // Run 执行 V1 迁移：1 quota 从 ¥0.0000146 变成 ¥0.000001（QuotaPerUnit 500000 → 7300000）。
 func Run(mode string, out io.Writer) error { return run(planV1(), mode, out) }
 
-// RunV2 执行 V2 迁移：1 quota 细化到 ¥0.00000001，同时把定价配置从美元换成人民币。
+// RunV2 执行 V2 迁移：1 quota 细化到 ¥0.000000001，同时把定价配置从美元换成人民币。
 func RunV2(mode string, out io.Writer) error { return run(planV2(), mode, out) }
 
 // run 是两种方案共用的主流程。

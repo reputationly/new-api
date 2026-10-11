@@ -22,7 +22,7 @@ var (
 	// QuotaUnitMigrationMode 额度单位迁移。
 	// 取值 dry-run / apply；为空时按正常启动流程走。
 	QuotaUnitMigrationMode = flag.String("migrate-quota-unit", "", "run the quota unit migration and exit: dry-run | apply")
-	// QuotaUnitMigrationV2Mode 额度单位迁移 V2（1 quota = ¥0.00000001 + 定价人民币化）。
+	// QuotaUnitMigrationV2Mode 额度单位迁移 V2（1 quota = ¥0.000000001 + 定价人民币化）。
 	QuotaUnitMigrationV2Mode = flag.String("migrate-quota-unit-v2", "", "run the quota unit migration V2 and exit: dry-run | apply")
 )
 

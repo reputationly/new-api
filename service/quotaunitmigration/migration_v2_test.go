@@ -14,7 +14,7 @@ import (
 	"gorm.io/gorm"
 )
 
-// V2 迁移（设计文档 §5.2 / §5.3 / §7.1）：quota ×100 + 定价配置美元 → 人民币。
+// V2 迁移（设计文档 §5.2 / §5.3 / §7.1）：quota ×1000 + 定价配置美元 → 人民币。
 // 覆盖 SQLite 与外部 PostgreSQL / MySQL 三库（DSN 未设置时 Skip，与 V1 用例一致）。
 
 func runMigrationV2(t *testing.T, mode string) (string, error) {
@@ -122,11 +122,11 @@ func assertV2Pricing(t *testing.T, db *gorm.DB, report string) {
 	require.True(t, found)
 	require.Equal(t, "0.365", raw, "原 $0.05 → ¥0.365")
 
-	// 全部任务（含已完成）：quota 键 ×100 + 定价字段换人民币 + price_unit
+	// 全部任务（含已完成）：quota 键 ×1000 + 定价字段换人民币 + price_unit
 	private := rawTaskPrivateData(t, db, 2)
-	require.Equal(t, float64(700), private["points_consumed"], "7 × 100")
+	require.Equal(t, float64(7000), private["points_consumed"], "7 × 1000")
 	spent := private["entitlement_spent"].([]interface{})
-	require.Equal(t, float64(5000), spent[0].(map[string]interface{})["amount"], "50 × 100")
+	require.Equal(t, float64(50000), spent[0].(map[string]interface{})["amount"], "50 × 1000")
 	require.Equal(t, "keep-me-v2", private["token_name"], "无关字段原样保留")
 
 	bc := private["billing_context"].(map[string]interface{})
@@ -138,10 +138,10 @@ func assertV2Pricing(t *testing.T, db *gorm.DB, report string) {
 	require.Equal(t, "token", vb["mode"], "非价格字段原样保留")
 	require.Equal(t, "720p", vb["resolution"])
 
-	// tasks.quota ×100
+	// tasks.quota ×1000
 	var taskQuota int64
 	require.NoError(t, db.Raw("SELECT quota FROM tasks WHERE id = 2").Scan(&taskQuota).Error)
-	require.Equal(t, int64(10000), taskQuota, "100 × 100")
+	require.Equal(t, int64(100000), taskQuota, "100 × 1000")
 
 	// 表达式原文不得改动（D3）；这份 fixture 里都是 v2，所以没有 v1 告警
 	raw, found = optionValue(t, "billing_setting.billing_expr")
@@ -149,14 +149,14 @@ func assertV2Pricing(t *testing.T, db *gorm.DB, report string) {
 	require.JSONEq(t, `{"m1":"v2:p * 1.5","m2":"v2:p * 2"}`, raw, "表达式原文不得改动（D3）")
 	require.NotContains(t, report, "仍是 v1 口径的分段表达式")
 
-	// options：quota 类 ×100、换算率与 QuotaPerUnit 写固定值
+	// options：quota 类 ×1000、换算率与 QuotaPerUnit 写固定值
 	for key, want := range map[string]string{
-		"QuotaPerUnit":                                  "730000000",
-		"QuotaRemindThreshold":                          "100000",
-		"checkin_setting.min_quota":                     "10",
-		"checkin_setting.max_quota":                     "1000000",
-		"points_setting.quota_per_point":                "1000000",
-		"compute_point_setting.quota_per_compute_point": "1000000",
+		"QuotaPerUnit":                                  "7300000000",
+		"QuotaRemindThreshold":                          "1000000",
+		"checkin_setting.min_quota":                     "100",
+		"checkin_setting.max_quota":                     "10000000",
+		"points_setting.quota_per_point":                "10000000",
+		"compute_point_setting.quota_per_compute_point": "10000000",
 		"PreConsumedQuota":                              "500", // token 下限，不缩放
 	} {
 		got, found := optionValue(t, key)
@@ -340,15 +340,15 @@ func TestV2SeparateLogDatabase(t *testing.T) {
 	require.NoError(t, err)
 	require.Contains(t, report, "apply 结束")
 
-	// 日志在日志库里被 ×100
+	// 日志在日志库里被 ×1000
 	var scaledLog int64
 	require.NoError(t, logDB.Raw("SELECT quota FROM logs WHERE id = 1").Scan(&scaledLog).Error)
-	require.Equal(t, fQuota*100, scaledLog)
+	require.Equal(t, fQuota*1000, scaledLog)
 
 	// 小表与定价在主库
 	var userQuota int64
 	require.NoError(t, mainDB.Raw("SELECT quota FROM users WHERE id = 1").Scan(&userQuota).Error)
-	require.Equal(t, fQuota*100, userQuota)
+	require.Equal(t, fQuota*1000, userQuota)
 	raw, _ := optionValue(t, "ModelRatio")
 	require.Contains(t, raw, "2")
 
@@ -392,13 +392,13 @@ func TestEnsurePriceUnitReadyAllowsWhenDone(t *testing.T) {
 	require.NoError(t, EnsurePriceUnitReady(), "state = done 时必须放行")
 }
 
-// 校验规模：V2 的倍数是整数 100，SQL 直接写 col * 100（三库精确），不带 ROUND。
+// 校验规模：V2 的倍数是整数 1000，SQL 直接写 col * 1000（三库精确），不带 ROUND。
 func TestV2SQLScalingIsInteger(t *testing.T) {
 	sql := planV2().sqlScale("quota")
-	require.Equal(t, "quota * 100", sql)
-	require.Equal(t, "100", planV2().scaleLabel())
-	require.Equal(t, int64(100), planV2().scaleValue(1))
-	require.Equal(t, int64(40), planV2().scaleValue(0.4), "0.4 × 100 = 40")
+	require.Equal(t, "quota * 1000", sql)
+	require.Equal(t, "1000", planV2().scaleLabel())
+	require.Equal(t, int64(1000), planV2().scaleValue(1))
+	require.Equal(t, int64(400), planV2().scaleValue(0.4), "0.4 × 1000 = 400")
 }
 
 // apply 遇到 v1（美元口径）分段表达式必须拒绝：迁移后它们在预扣阶段会被拒

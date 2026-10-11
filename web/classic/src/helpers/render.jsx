@@ -1322,8 +1322,8 @@ function formatCompactDisplayPrice(cnyAmount, digits = 6) {
 }
 
 // 金额的「去掉末尾的 0」写法（¥0.00000256 → ¥0.00000256、¥0.00084000 → ¥0.00084）。
-// 不能借道 Number()：小于 1e-6 的数会被写成指数（1e-8），1 quota = ¥1e-8 之后必然出现。
-function formatCompactAmount(value, digits = 8) {
+// 不能借道 Number()：小于 1e-6 的数会被写成指数（1e-9），1 quota = ¥1e-9 之后必然出现。
+function formatCompactAmount(value, digits = 9) {
   const fixed = roundToDisplay(value, digits).toFixed(digits);
   if (!fixed.includes('.')) return fixed;
   return fixed.replace(/0+$/, '').replace(/\.$/, '');
@@ -1362,7 +1362,7 @@ function formatRatioValue(value, digits = 6) {
 //
 // 不复用 renderQuotaWithAmount：那个函数的入参是「已经是美元/展示币种」的金额
 // （渠道余额、充值额度的输入框），两者不可互换。
-function renderDisplayAmountFromCny(cnyAmount, digits = 8) {
+function renderDisplayAmountFromCny(cnyAmount, digits = 9) {
   const value = Number(cnyAmount || 0);
   if (getQuotaDisplayType() === 'TOKENS') {
     return renderNumber(Math.round(value * getQuotaPerYuan()));
@@ -1386,10 +1386,10 @@ function formatBillingDisplayPrice(cnyAmount, ratePerCny, digits = 6) {
  * （向 +∞ 取整），而我们要的是远离零的 -1。
  *
  * @param {number} value - 已是显示币种的金额（人民币金额请先乘 ratePerCny）
- * @param {number} digits - 小数位数，默认 8（与 1 quota = ¥0.00000001 同一网格）
+ * @param {number} digits - 小数位数，默认 9（与 1 quota = ¥0.000000001 同一网格）
  * @returns {number} 舍入后的数值（需要固定位数的文本时由调用方再 toFixed）
  */
-export function roundToDisplay(value, digits = 8) {
+export function roundToDisplay(value, digits = 9) {
   const num = Number(value);
   if (!Number.isFinite(num) || num === 0) return num;
   const factor = 10 ** digits;
@@ -1398,10 +1398,10 @@ export function roundToDisplay(value, digits = 8) {
   return (Math.sign(corrected) * Math.round(Math.abs(corrected))) / factor;
 }
 
-// 计费过程的「合计」：必须在**显示币种金额**上按 8 位四舍五入后再定宽。
-// 与单价行不同，合计要与花费列（logs.quota 换算后的金额，8 位）逐位对上，
+// 计费过程的「合计」：必须在**显示币种金额**上按 9 位四舍五入后再定宽。
+// 与单价行不同，合计要与花费列（logs.quota 换算后的金额，9 位）逐位对上，
 // 所以除不尽的单价行沿用原格式，只有合计走 roundToDisplay。
-function formatBillingDisplayTotal(cnyAmount, ratePerCny, digits = 8) {
+function formatBillingDisplayTotal(cnyAmount, ratePerCny, digits = 9) {
   return roundToDisplay(cnyAmount * ratePerCny, digits).toFixed(digits);
 }
 
@@ -2816,19 +2816,19 @@ export function buildVideoMatrixDetailRows(opts) {
     const amount = Number(unitPrice) * seconds * ratio;
     rows.push({
       key: i18next.t('计费过程'),
-      value: `${symbol}${(Number(unitPrice) * ratePerCny).toFixed(4)} / ${i18next.t('秒')} × ${seconds} × ${formatRatioValue(ratio, 4)} = ${symbol}${roundToDisplay(amount * ratePerCny, 8).toFixed(8)}`,
+      value: `${symbol}${(Number(unitPrice) * ratePerCny).toFixed(4)} / ${i18next.t('秒')} × ${seconds} × ${formatRatioValue(ratio, 4)} = ${symbol}${roundToDisplay(amount * ratePerCny, 9).toFixed(9)}`,
     });
   } else if (isTokenMode && tokens > 0) {
     const amount = (tokens / 1e6) * Number(unitPrice) * ratio;
     rows.push({
       key: i18next.t('计费过程'),
-      value: `${Number(tokens).toLocaleString()} × ${symbol}${(Number(unitPrice) * ratePerCny).toFixed(4)} / 1M Tokens × ${formatRatioValue(ratio, 4)} = ${symbol}${roundToDisplay(amount * ratePerCny, 8).toFixed(8)}`,
+      value: `${Number(tokens).toLocaleString()} × ${symbol}${(Number(unitPrice) * ratePerCny).toFixed(4)} / 1M Tokens × ${formatRatioValue(ratio, 4)} = ${symbol}${roundToDisplay(amount * ratePerCny, 9).toFixed(9)}`,
     });
   } else if (!isTokenMode && !isPerSecond) {
     const amount = Number(unitPrice) * ratio;
     rows.push({
       key: i18next.t('计费过程'),
-      value: `${symbol}${(Number(unitPrice) * ratePerCny).toFixed(4)} / ${i18next.t('次')} × ${formatRatioValue(ratio, 4)} = ${symbol}${roundToDisplay(amount * ratePerCny, 8).toFixed(8)}`,
+      value: `${symbol}${(Number(unitPrice) * ratePerCny).toFixed(4)} / ${i18next.t('次')} × ${formatRatioValue(ratio, 4)} = ${symbol}${roundToDisplay(amount * ratePerCny, 9).toFixed(9)}`,
     });
   }
 

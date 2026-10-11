@@ -56,8 +56,8 @@ type User struct {
 	Group            string         `json:"group" gorm:"type:varchar(64);default:'default'"`
 	AffCode          string         `json:"aff_code" gorm:"type:varchar(32);column:aff_code;uniqueIndex"`
 	AffCount         int            `json:"aff_count" gorm:"type:int;default:0;column:aff_count"`
-	AffQuota         int            `json:"aff_quota" gorm:"type:int;default:0;column:aff_quota"`                    // 邀请剩余额度
-	AffHistoryQuota  int            `json:"aff_history_quota" gorm:"type:int;default:0;column:aff_history"`          // 邀请历史额度
+	AffQuota         int            `json:"aff_quota" gorm:"type:bigint;default:0;column:aff_quota"`                  // 邀请剩余额度
+	AffHistoryQuota  int            `json:"aff_history_quota" gorm:"type:bigint;default:0;column:aff_history"`        // 邀请历史额度
 	AffPointsEarned  int            `json:"aff_points_earned" gorm:"type:bigint;default:0;column:aff_points_earned"` // 累计通过邀请获得的积分(quota unit)，被邀请人实名后累加
 	InviterId        int            `json:"inviter_id" gorm:"type:int;column:inviter_id;index"`
 	DeletedAt        gorm.DeletedAt `gorm:"index"`

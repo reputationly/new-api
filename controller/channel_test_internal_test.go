@@ -37,8 +37,8 @@ func TestSettleTestQuotaUsesTieredBilling(t *testing.T) {
 		PromptTokens: 1000,
 	})
 
-	// v2 系数是 ¥/百万 tokens：p × 3 = 3000 → 3000 / 10⁶ × 10⁸ = 300,000 quota（¥0.003）
-	require.Equal(t, 300_000, quota)
+	// v2 系数是 ¥/百万 tokens：p × 3 = 3000 → 3000 / 10⁶ × 10⁹ = 3,000,000 quota（¥0.003）
+	require.Equal(t, 3_000_000, quota)
 	require.NotNil(t, result)
 	require.Equal(t, "stream", result.MatchedTier)
 }

@@ -14,11 +14,11 @@ import { renderQuota } from '../render';
  *
  * 样例（设计文档 §2.3）：
  *   E1  deepseek 输入 ¥2/百万、输出 ×4、分组 0.5，prompt 199 / completion 4096
- *       → 1,658,300 quota = ¥0.016583
- *   E5  按次生图 ¥0.2/次、分组 1 → 20,000,000 quota = ¥0.2
+ *       → 16,583,000 quota = ¥0.016583
+ *   E5  按次生图 ¥0.2/次、分组 1 → 200,000,000 quota = ¥0.2
  */
 
-const QPY = 100000000;
+const QPY = 1000000000;
 
 beforeEach(() => {
   localStorage.clear();
@@ -61,14 +61,14 @@ describe('定价页单价（E1 / E5）', () => {
     expect(d.completionPrice).toBe('¥4.00');
   });
 
-  it('E1：1,658,300 quota 就是 ¥0.016583（与后端样例同一个数）', () => {
-    // (199 + 4096 × 4) × 2 × 100 × 0.5 = 1,658,300
-    const quota = (199 + 4096 * 4) * 2 * 100 * 0.5;
-    expect(quota).toBe(1658300);
-    expect(renderQuota(quota, 8)).toBe('¥0.01658300');
+  it('E1：16,583,000 quota 就是 ¥0.016583（与后端样例同一个数）', () => {
+    // (199 + 4096 × 4) × 2 × 1000 × 0.5 = 16,583,000
+    const quota = (199 + 4096 * 4) * 2 * 1000 * 0.5;
+    expect(quota).toBe(16583000);
+    expect(renderQuota(quota, 9)).toBe('¥0.016583000');
   });
 
-  it('E5：按次生图 ¥0.2/次、分组 1 → ¥0.20（20,000,000 quota）', () => {
+  it('E5：按次生图 ¥0.2/次、分组 1 → ¥0.20（200,000,000 quota）', () => {
     const d = priceOf(
       {
         model_name: 'img-x',
@@ -81,8 +81,8 @@ describe('定价页单价（E1 / E5）', () => {
     expect(d.isPerToken).toBe(false);
     expect(d.price).toBe('¥0.20');
     expect(d.originalPrice).toBeNull();
-    expect(renderQuota(0.2 * QPY, 8)).toBe('¥0.20000000');
-    expect(0.2 * QPY).toBe(20000000);
+    expect(renderQuota(0.2 * QPY, 9)).toBe('¥0.200000000');
+    expect(0.2 * QPY).toBe(200000000);
   });
 
   it('折扣时同时给出折前价（少乘一个分组倍率）', () => {

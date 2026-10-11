@@ -2,7 +2,7 @@ package common
 
 import "github.com/shopspring/decimal"
 
-// 积分换算率：1 积分 = 1 分钱人民币 = 0.01 元，即 QuotaPerYuan / 100 = 1,000,000 quota。
+// 积分换算率：1 积分 = 1 分钱人民币 = 0.01 元，即 QuotaPerYuan / 100 = 10,000,000 quota。
 //
 // 面值是固定的（1 分钱），所以换算率不再依赖汇率或 QuotaPerUnit：汇率只影响
 // 美元支付与美元展示，改汇率不会改变积分与人民币的兑换关系。
@@ -15,7 +15,7 @@ import "github.com/shopspring/decimal"
 // import operation_setting（会循环），故用依赖倒置。
 var QuotaPerPointFunc func() float64
 
-// DefaultQuotaPerPoint 返回「自动」模式下的积分换算率：QuotaPerYuan / 100 = 1,000,000
+// DefaultQuotaPerPoint 返回「自动」模式下的积分换算率：QuotaPerYuan / 100 = 10,000,000
 // （1 积分 = 1 分钱 = 0.01 元，即 1 元 = 100 积分）。
 func DefaultQuotaPerPoint() float64 {
 	return QuotaPerYuan / 100

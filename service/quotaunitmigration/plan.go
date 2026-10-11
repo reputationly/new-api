@@ -11,7 +11,7 @@ import (
 // plan 描述一次单位迁移的全部差异：倍数、状态 key、清单与方案特有的额外步骤。
 //
 // V1（1 quota = ¥0.0000146 → ¥0.000001，QPU 500000 → 7300000）与
-// V2（¥0.000001 → ¥0.00000001，QPU 7300000 → 730000000，同时把定价配置换成人民币）
+// V2（¥0.000001 → ¥0.000000001，QPU 7300000 → 7300000000，同时把定价配置换成人民币）
 // 共用同一套状态机、分批、断点续跑与报告骨架，只有本结构里的字段不同。
 type plan struct {
 	// title 报告标题里的方案名（V1 = 额度单位迁移，V2 = 额度单位迁移 V2）。
@@ -24,7 +24,7 @@ type plan struct {
 
 	// ratio 非 0 时用 ROUND(col × ratio) 缩放（V1：14.6）。
 	ratio float64
-	// factor 非 0 时是整数倍，SQL 直接写成 col × factor（V2：100，三库精确）。
+	// factor 非 0 时是整数倍，SQL 直接写成 col × factor（V2：1000，三库精确）。
 	factor int64
 	// scaling 是 JSON 数字字面量的缩放比（整数比，保留全部有效位）。
 	scaling scaling
@@ -55,7 +55,7 @@ func (pl *plan) maxMultiplier() float64 {
 //
 // V1 用 ROUND(col × 14.6)：n × 14.6 的小数部分只可能是 0/0.2/0.4/0.6/0.8，永远不落在
 // .5 上，所以三库的 ROUND 规则差异不影响结果。
-// V2 是整数倍 col × 100，三种数据库都是精确整数运算。
+// V2 是整数倍 col × 1000，三种数据库都是精确整数运算。
 func (pl *plan) sqlScale(column string) string {
 	if pl.factor > 0 {
 		return fmt.Sprintf("%s * %d", column, pl.factor)
@@ -94,7 +94,7 @@ func (pl *plan) scaleDecimal(value decimal.Decimal) decimal.Decimal {
 
 // scaling JSON 数字字面量的缩放比。写成整数比避免浮点误差：
 //
-//	V1：×14.6 = ×146 ÷10；V2：×100 = ×100 ÷1。
+//	V1：×14.6 = ×146 ÷10；V2：×1000 = ×1000 ÷1。
 //
 // 低层改写函数只读 activeScaling 而不读 plan：plan 经 scope 引用到改写函数，
 // 改写函数再引用 plan 会构成 Go 的初始化环。
@@ -130,18 +130,18 @@ func planV1() *plan {
 	}
 }
 
-// planV2 把单位细化到 ¥0.00000001，并把定价配置从美元口径换成人民币口径。
+// planV2 把单位细化到 ¥0.000000001，并把定价配置从美元口径换成人民币口径。
 func planV2() *plan {
 	return &plan{
 		title:     "额度单位迁移 V2",
 		stateKey:  "QuotaUnitMigrationV2",
 		baseQPU:   7300000.0,
-		targetQPU: 730000000.0,
-		factor:    100,
+		targetQPU: 7300000000.0,
+		factor:    1000,
 
 		flag:          "migrate-quota-unit-v2",
 		pricing:       true,
-		scaling:       scaling{num: 100, den: 1},
+		scaling:       scaling{num: 1000, den: 1},
 		smallScopes:   smallNumericScopes,
 		smallJSON:     smallJSONScopesV2,
 		optionSpecs:   optionSpecsV2,

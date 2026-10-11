@@ -2,11 +2,12 @@ package quotaunitmigration
 
 // 单位迁移的「改什么」清单：数值列、JSON 键、options。
 //
-// 单位换算只有一条规则：旧 quota × 14.6 = 新 quota（因为 QuotaPerUnit 从 500000 变成
-// 7300000，而 1 quota 从 ¥0.0000146 变成 ¥0.000001）。名字里带 quota 的字段不一定是
-// quota（见 PreConsumedQuota 的教训），所以下面每一列都按「它在计费代码里的单位」挑选。
+// V1 单位换算：旧 quota × 14.6 = 新 quota（因为 QuotaPerUnit 从 500000 变成
+// 7300000，而 1 quota 从 ¥0.0000146 变成 ¥0.000001）。V2 再按 plan 缩放 ×1000。
+// 名字里带 quota 的字段不一定是 quota（见 PreConsumedQuota 的教训），所以下面每一列都按
+// 「它在计费代码里的单位」挑选。
 
-// numericScope 一批需要 ×14.6 的整数列。
+// numericScope 一批需要按迁移方案缩放的整数列。
 type numericScope struct {
 	table   string
 	columns []string
@@ -120,20 +121,20 @@ var optionSpecs = []optionSpec{
 	{key: "QuotaPerUnit", mode: optionFixed, fixedValue: "7300000", missingValue: "7300000"},
 }
 
-// optionSpecsV2 V2 的 options 清单：quota 类 ×100，换算率与 QuotaPerUnit 写固定值。
+// optionSpecsV2 V2 的 options 清单：quota 类 ×1000，换算率与 QuotaPerUnit 写固定值。
 var optionSpecsV2 = []optionSpec{
 	{key: "QuotaForNewUser", mode: optionScaleInt},
 	{key: "QuotaForInviter", mode: optionScaleInt},
 	{key: "QuotaForInvitee", mode: optionScaleInt},
-	{key: "QuotaRemindThreshold", mode: optionScaleInt, missingValue: "1460000"},
+	{key: "QuotaRemindThreshold", mode: optionScaleInt, missingValue: "14600000"},
 	{key: "checkin_setting.min_quota", mode: optionScaleFloat},
 	{key: "checkin_setting.max_quota", mode: optionScaleFloat},
-	{key: "points_setting.quota_per_point", mode: optionFixed, fixedValue: "1000000", missingValue: "1000000"},
-	{key: "compute_point_setting.quota_per_compute_point", mode: optionFixed, fixedValue: "1000000", missingValue: "1000000"},
-	{key: "QuotaPerUnit", mode: optionFixed, fixedValue: "730000000", missingValue: "730000000"},
+	{key: "points_setting.quota_per_point", mode: optionFixed, fixedValue: "10000000", missingValue: "10000000"},
+	{key: "compute_point_setting.quota_per_compute_point", mode: optionFixed, fixedValue: "10000000", missingValue: "10000000"},
+	{key: "QuotaPerUnit", mode: optionFixed, fixedValue: "7300000000", missingValue: "7300000000"},
 }
 
-// smallJSONScopesV2 V2 的小表 JSON 清单：tasks 既要 ×100（quota 键）、也要把冻结的
+// smallJSONScopesV2 V2 的小表 JSON 清单：tasks 既要 ×1000（quota 键）、也要把冻结的
 // 定价字段换成人民币并打 price_unit 标记（两者合并成一次改写），users.setting 同 V1。
 var smallJSONScopesV2 = []jsonScope{
 	{

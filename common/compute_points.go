@@ -24,7 +24,7 @@ import "github.com/shopspring/decimal"
 // 算力点是套餐给的，来源、有效期、适用范围三者皆不同。
 
 // 算力点换算率：默认 1 元 = 100 算力点（即 1 算力点 = 1 分钱），与积分同口径，
-// 运营心智统一，即 QuotaPerYuan / 100 = 1,000,000 quota。
+// 运营心智统一，即 QuotaPerYuan / 100 = 10,000,000 quota。
 //
 // 与积分完全同构：面值固定为 1 分钱，不依赖汇率或 QuotaPerUnit。
 
@@ -33,7 +33,7 @@ import "github.com/shopspring/decimal"
 var QuotaPerComputePointFunc func() float64
 
 // DefaultQuotaPerComputePoint 返回「自动」模式下的算力点换算率：
-// QuotaPerYuan / 100 = 1,000,000（1 算力点 = 1 分钱 = 0.01 元，即 1 元 = 100 点）。
+// QuotaPerYuan / 100 = 10,000,000（1 算力点 = 1 分钱 = 0.01 元，即 1 元 = 100 点）。
 func DefaultQuotaPerComputePoint() float64 {
 	return QuotaPerYuan / 100
 }

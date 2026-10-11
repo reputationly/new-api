@@ -70,20 +70,20 @@ func TestBuildPlanFulfillmentReport(t *testing.T) {
 			EntitlementPlanTitle: plan.Title, SubscriptionId: sub.Id,
 		}
 	}
-	// 1 quota = ¥1e-8：¥7.3 = 7.3×10⁸ quota = 730 分
-	recordConsume(t, 96001, fulfillmentChannelCosted, 730_000_000, ent())   // 等值 730，成本 365
-	recordConsume(t, 96001, fulfillmentChannelUncosted, 730_000_000, ent()) // 等值 730，成本未知
+	// 1 quota = ¥1e-9：¥7.3 = 7.3×10⁹ quota = 730 分
+	recordConsume(t, 96001, fulfillmentChannelCosted, 7_300_000_000, ent())   // 等值 7.3，成本 3.65
+	recordConsume(t, 96001, fulfillmentChannelUncosted, 7_300_000_000, ent()) // 等值 7.3，成本未知
 	// 异步任务失败退款：只带订阅 id，报表要按它反查套餐并冲销等值与成本
 	model.RecordTaskBillingLog(model.RecordTaskBillingLogParams{
 		UserId: 96001, LogType: model.LogTypeRefund, ChannelId: fulfillmentChannelCosted,
-		ModelName: "gpt-test", Quota: 146_000_000,
+		ModelName: "gpt-test", Quota: 1_460_000_000,
 		Other: taskBillingOther(&model.Task{PrivateData: model.TaskPrivateData{
 			BillingSource: BillingSourceEntitlement, SubscriptionId: sub.Id,
 			BillingContext: &model.TaskBillingContext{GroupRatio: 1},
 		}}),
 	}) // 等值 -146，成本 -73
 	// 超额：被套餐覆盖却按余额扣
-	recordConsume(t, 96001, fulfillmentChannelCosted, 730_000_000, &relaycommon.RelayInfo{
+	recordConsume(t, 96001, fulfillmentChannelCosted, 7_300_000_000, &relaycommon.RelayInfo{
 		BillingSource: BillingSourceWallet,
 		EntitlementFallback: &relaycommon.EntitlementFallback{
 			Reason: EntitlementFallbackCountExhausted, PlanId: plan.Id,
@@ -138,7 +138,7 @@ func TestBuildPlanFulfillmentReport_NoRevenueHasNilRate(t *testing.T) {
 	}))
 	t.Cleanup(model.InitChannelModelCostCache)
 
-	recordConsume(t, 96002, fulfillmentChannelCosted, 730_000_000, &relaycommon.RelayInfo{
+	recordConsume(t, 96002, fulfillmentChannelCosted, 7_300_000_000, &relaycommon.RelayInfo{
 		BillingSource: BillingSourceEntitlement, EntitlementPlanId: 4242,
 	})
 	now := common.GetTimestamp()
@@ -159,8 +159,8 @@ func TestPlanFulfillmentReport_MatchesFrontendGolden(t *testing.T) {
 	row := toFulfillmentRow(&planAccum{
 		orderCount: 3, revenueFen: 29900,
 		callCount: 120, uncostedCalls: 7,
-		valueQuota: 730_000_000, costQuota: 365_000_000, uncostedQuota: 73_000_000,
-		overageCount: 2, overageQuota: 146_000_000,
+		valueQuota: 7_300_000_000, costQuota: 3_650_000_000, uncostedQuota: 730_000_000,
+		overageCount: 2, overageQuota: 1_460_000_000,
 		expiredGranted: 10000, expiredUnused: 6000,
 	})
 	row.PlanId = 1
@@ -195,13 +195,13 @@ func TestBuildPlanFulfillmentReport_CountsLegacySubscriptionUsage(t *testing.T) 
 		StartTime: common.GetTimestamp() - 60, EndTime: common.GetTimestamp() + 86400}
 	require.NoError(t, model.DB.Create(&sub).Error)
 
-	recordConsume(t, 96003, fulfillmentChannelCosted, 730_000_000, &relaycommon.RelayInfo{
+	recordConsume(t, 96003, fulfillmentChannelCosted, 7_300_000_000, &relaycommon.RelayInfo{
 		BillingSource: BillingSourceSubscription, SubscriptionId: sub.Id, SubscriptionPlanId: 4343,
 	}) // 等值 730，成本 365
 	// 老式订阅的异步任务失败退款：只有订阅 id
 	model.RecordTaskBillingLog(model.RecordTaskBillingLogParams{
 		UserId: 96003, LogType: model.LogTypeRefund, ChannelId: fulfillmentChannelCosted,
-		ModelName: "gpt-test", Quota: 146_000_000,
+		ModelName: "gpt-test", Quota: 1_460_000_000,
 		Other: taskBillingOther(&model.Task{PrivateData: model.TaskPrivateData{
 			BillingSource: BillingSourceSubscription, SubscriptionId: sub.Id,
 			BillingContext: &model.TaskBillingContext{GroupRatio: 1},

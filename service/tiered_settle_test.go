@@ -54,7 +54,7 @@ func makeRelayInfo(expr string, groupRatio float64, estPrompt, estCompletion int
 	}
 }
 
-// v1（美元口径）快照：结算侧不做换算（会少收 100 倍），改为按预扣额结账。
+// v1（美元口径）快照：结算侧不做换算（会少收 1000 倍），改为按预扣额结账。
 // 新请求在预扣阶段已被拒绝，所以这条路径只服务于升级前提交的在途任务。
 func TestTryTieredSettleFallsBackToPreConsumedForV1Snapshot(t *testing.T) {
 	const v1Expr = `v1:tier("default", p * 2 + c * 10)`
@@ -113,9 +113,9 @@ func TestTryTieredSettleUsesFrozenRequestInput(t *testing.T) {
 	if !ok {
 		t.Fatal("expected tiered settle to apply")
 	}
-	// fast: p*2 = 200；quota = 200 / 1M × QuotaPerYuan = 20000
-	if quota != 20000 {
-		t.Fatalf("quota = %d, want 20000", quota)
+	// fast: p*2 = 200；quota = 200 / 1M × QuotaPerYuan = 200000
+	if quota != 200000 {
+		t.Fatalf("quota = %d, want 200000", quota)
 	}
 	if result == nil || result.MatchedTier != "fast" {
 		t.Fatalf("matched tier = %v, want fast", result)
@@ -158,9 +158,9 @@ func TestTryTieredSettle_PreConsumeMatchesPostConsume(t *testing.T) {
 	if !ok {
 		t.Fatal("expected tiered settle")
 	}
-	// p*2 + c*10 = 7000；quota = 7000 / 1M × QuotaPerYuan = 700000
-	if quota != 700000 {
-		t.Fatalf("quota = %d, want 3500", quota)
+	// p*2 + c*10 = 7000；quota = 7000 / 1M × QuotaPerYuan = 7000000
+	if quota != 7000000 {
+		t.Fatalf("quota = %d, want 7000000", quota)
 	}
 	if quota != info.FinalPreConsumedQuota {
 		t.Fatalf("pre-consume %d != post-consume %d", info.FinalPreConsumedQuota, quota)
@@ -169,7 +169,7 @@ func TestTryTieredSettle_PreConsumeMatchesPostConsume(t *testing.T) {
 
 func TestTryTieredSettle_PostConsumeOverPreConsume(t *testing.T) {
 	info := makeRelayInfo(flatExpr, 1.0, 1000, 500)
-	preConsumed := info.FinalPreConsumedQuota // 700000
+	preConsumed := info.FinalPreConsumedQuota // 7000000
 
 	// Actual usage is higher than estimated
 	params := billingexpr.TokenParams{P: 2000, C: 1000}
@@ -177,9 +177,9 @@ func TestTryTieredSettle_PostConsumeOverPreConsume(t *testing.T) {
 	if !ok {
 		t.Fatal("expected tiered settle")
 	}
-	// p*2 + c*10 = 14000；quota = 14000 / 1M × QuotaPerYuan = 1400000
-	if quota != 1400000 {
-		t.Fatalf("quota = %d, want 7000", quota)
+	// p*2 + c*10 = 14000；quota = 14000 / 1M × QuotaPerYuan = 14000000
+	if quota != 14000000 {
+		t.Fatalf("quota = %d, want 14000000", quota)
 	}
 	if quota <= preConsumed {
 		t.Fatalf("expected supplement: actual %d should > pre-consumed %d", quota, preConsumed)
@@ -196,9 +196,9 @@ func TestTryTieredSettle_PostConsumeUnderPreConsume(t *testing.T) {
 	if !ok {
 		t.Fatal("expected tiered settle")
 	}
-	// p*2 + c*10 = 700；quota = 700 / 1M × QuotaPerYuan = 70000
-	if quota != 70000 {
-		t.Fatalf("quota = %d, want 350", quota)
+	// p*2 + c*10 = 700；quota = 700 / 1M × QuotaPerYuan = 700000
+	if quota != 700000 {
+		t.Fatalf("quota = %d, want 700000", quota)
 	}
 	if quota >= preConsumed {
 		t.Fatalf("expected refund: actual %d should < pre-consumed %d", quota, preConsumed)
@@ -217,9 +217,9 @@ func TestTryTieredSettle_ExactBoundary(t *testing.T) {
 	if !ok {
 		t.Fatal("expected tiered settle")
 	}
-	// standard: p*1.5 + c*7.5 = 307500；quota = 307500 / 1M × QuotaPerYuan = 30750000
-	if quota != 30750000 {
-		t.Fatalf("quota = %d, want 30750000", quota)
+	// standard: p*1.5 + c*7.5 = 307500；quota = 307500 / 1M × QuotaPerYuan = 307500000
+	if quota != 307500000 {
+		t.Fatalf("quota = %d, want 307500000", quota)
 	}
 	if result.MatchedTier != "standard" {
 		t.Fatalf("tier = %s, want standard", result.MatchedTier)
@@ -234,9 +234,9 @@ func TestTryTieredSettle_BoundaryPlusOne(t *testing.T) {
 	if !ok {
 		t.Fatal("expected tiered settle")
 	}
-	// long_context: p*3 + c*11.25 = 611253；quota = 611253 / 1M × QuotaPerYuan = 61125300
-	if quota != 61125300 {
-		t.Fatalf("quota = %d, want 61125300", quota)
+	// long_context: p*3 + c*11.25 = 611253；quota = 611253 / 1M × QuotaPerYuan = 611253000
+	if quota != 611253000 {
+		t.Fatalf("quota = %d, want 611253000", quota)
 	}
 	if result.MatchedTier != "long_context" {
 		t.Fatalf("tier = %s, want long_context", result.MatchedTier)
@@ -268,9 +268,9 @@ func TestTryTieredSettle_HugeTokens(t *testing.T) {
 	if !ok {
 		t.Fatal("expected tiered settle")
 	}
-	// p*2 + c*10 = 70000000；quota = 70000000 / 1M × QuotaPerYuan = 7000000000
-	if quota != 7000000000 {
-		t.Fatalf("quota = %d, want 7000000000", quota)
+	// p*2 + c*10 = 70000000；quota = 70000000 / 1M × QuotaPerYuan = 70000000000
+	if quota != 70000000000 {
+		t.Fatalf("quota = %d, want 70000000000", quota)
 	}
 }
 
@@ -282,23 +282,23 @@ func TestTryTieredSettle_CacheTokensAffectSettlement(t *testing.T) {
 	if !ok1 {
 		t.Fatal("expected tiered settle")
 	}
-	// p*2 + c*10 = 7000；quota = 7000 / 1M × QuotaPerYuan = 700000
+	// p*2 + c*10 = 7000；quota = 7000 / 1M × QuotaPerYuan = 7000000
 
 	// With cache tokens
 	ok2, quota2, _ := TryTieredSettle(info, billingexpr.TokenParams{P: 1000, C: 500, CR: 10000, CC: 5000, CC1h: 2000})
 	if !ok2 {
 		t.Fatal("expected tiered settle")
 	}
-	// 2000 + 5000 + 2000 + 12500 + 8000 = 29500；quota = 29500 / 1M × QuotaPerYuan = 2950000
+	// 2000 + 5000 + 2000 + 12500 + 8000 = 29500；quota = 29500 / 1M × QuotaPerYuan = 29500000
 
 	if quota2 <= quota1 {
 		t.Fatalf("cache tokens should increase quota: without=%d, with=%d", quota1, quota2)
 	}
-	if quota1 != 700000 {
-		t.Fatalf("no-cache quota = %d, want 700000", quota1)
+	if quota1 != 7000000 {
+		t.Fatalf("no-cache quota = %d, want 7000000", quota1)
 	}
-	if quota2 != 2950000 {
-		t.Fatalf("cache quota = %d, want 2950000", quota2)
+	if quota2 != 29500000 {
+		t.Fatalf("cache quota = %d, want 29500000", quota2)
 	}
 }
 
@@ -316,9 +316,9 @@ func TestTryTieredSettle_RequestProbeInfluencesBilling(t *testing.T) {
 	if !ok {
 		t.Fatal("expected tiered settle")
 	}
-	// fast: p*4 + c*20 = 14000；quota = 14000 / 1M × QuotaPerYuan = 1400000
-	if quota != 1400000 {
-		t.Fatalf("quota = %d, want 7000", quota)
+	// fast: p*4 + c*20 = 14000；quota = 14000 / 1M × QuotaPerYuan = 14000000
+	if quota != 14000000 {
+		t.Fatalf("quota = %d, want 14000000", quota)
 	}
 	if result.MatchedTier != "fast" {
 		t.Fatalf("tier = %s, want fast", result.MatchedTier)
@@ -333,9 +333,9 @@ func TestTryTieredSettle_NoRequestInput_FallsBackToDefault(t *testing.T) {
 	if !ok {
 		t.Fatal("expected tiered settle")
 	}
-	// normal: p*2 + c*10 = 7000；quota = 7000 / 1M × QuotaPerYuan = 700000
-	if quota != 700000 {
-		t.Fatalf("quota = %d, want 3500", quota)
+	// normal: p*2 + c*10 = 7000；quota = 7000 / 1M × QuotaPerYuan = 7000000
+	if quota != 7000000 {
+		t.Fatalf("quota = %d, want 7000000", quota)
 	}
 	if result.MatchedTier != "normal" {
 		t.Fatalf("tier = %s, want normal", result.MatchedTier)
@@ -353,9 +353,9 @@ func TestTryTieredSettle_GroupRatioScaling(t *testing.T) {
 	if !ok {
 		t.Fatal("expected tiered settle")
 	}
-	// exprCost = 7000, quotaBeforeGroup = 700000, afterGroup = round(700000 * 1.5) = 1050000
-	if quota != 1050000 {
-		t.Fatalf("quota = %d, want 1050000", quota)
+	// exprCost = 7000, quotaBeforeGroup = 7000000, afterGroup = round(7000000 * 1.5) = 10500000
+	if quota != 10500000 {
+		t.Fatalf("quota = %d, want 10500000", quota)
 	}
 }
 
@@ -483,7 +483,7 @@ func ratioQuota(usage *dto.Usage, isClaudeSemantic bool, modelRatio, completionR
 	completionQuota := dCompletionTokens.Mul(dCompletionRatio)
 	ratio := dModelRatio.Mul(dGroupRatio)
 
-	// 倍率路径：人民币/百万 tokens × QuotaPerMillionTokens（100）。
+	// 倍率路径：人民币/百万 tokens × QuotaPerMillionTokens（1000）。
 	result := promptQuota.Add(completionQuota).Mul(ratio).Mul(decimal.NewFromInt(common.QuotaPerMillionTokens))
 	f, _ := result.Float64()
 	return f
@@ -500,8 +500,8 @@ func TestBuildTieredTokenParams_GPT_WithCache(t *testing.T) {
 	}
 	expr := `v2:tier("base", p * 2.5 + c * 15 + cr * 0.25)`
 	got := tieredQuota(expr, usage, false, 1.0)
-	// P=800, C=500, CR=200 → (800*2.5 + 500*15 + 200*0.25) × 100 = 955000
-	want := 955000.0
+	// P=800, C=500, CR=200 → (800*2.5 + 500*15 + 200*0.25) × 1000 = 9550000
+	want := 9550000.0
 	if math.Abs(got-want) > 0.01 {
 		t.Fatalf("quota = %f, want %f", got, want)
 	}
@@ -518,8 +518,8 @@ func TestBuildTieredTokenParams_GPT_NoCacheVar(t *testing.T) {
 	}
 	expr := `v2:tier("base", p * 2.5 + c * 15)`
 	got := tieredQuota(expr, usage, false, 1.0)
-	// No cr → P=1000 (cache stays in P), C=500 → (1000*2.5 + 500*15) × 100 = 1000000
-	want := 1000000.0
+	// No cr → P=1000 (cache stays in P), C=500 → (1000*2.5 + 500*15) × 1000 = 10000000
+	want := 10000000.0
 	if math.Abs(got-want) > 0.01 {
 		t.Fatalf("quota = %f, want %f", got, want)
 	}
@@ -536,8 +536,8 @@ func TestBuildTieredTokenParams_GPT_WithImage(t *testing.T) {
 	}
 	expr := `v2:tier("base", p * 2 + c * 8 + img * 2.5)`
 	got := tieredQuota(expr, usage, false, 1.0)
-	// P=800, C=500, Img=200 → (800*2 + 500*8 + 200*2.5) × 100 = 610000
-	want := 610000.0
+	// P=800, C=500, Img=200 → (800*2 + 500*8 + 200*2.5) × 1000 = 6100000
+	want := 6100000.0
 	if math.Abs(got-want) > 0.01 {
 		t.Fatalf("quota = %f, want %f", got, want)
 	}
@@ -554,8 +554,8 @@ func TestBuildTieredTokenParams_Claude_WithCache(t *testing.T) {
 	}
 	expr := `v2:tier("base", p * 3 + c * 15 + cr * 0.3)`
 	got := tieredQuota(expr, usage, true, 1.0)
-	// Claude: P=800 (no subtraction), C=500, CR=200 → (800*3 + 500*15 + 200*0.3) × 100 = 996000
-	want := 996000.0
+	// Claude: P=800 (no subtraction), C=500, CR=200 → (800*3 + 500*15 + 200*0.3) × 1000 = 9960000
+	want := 9960000.0
 	if math.Abs(got-want) > 0.01 {
 		t.Fatalf("quota = %f, want %f", got, want)
 	}
@@ -572,8 +572,8 @@ func TestBuildTieredTokenParams_GPT_AudioOutput(t *testing.T) {
 	}
 	expr := `v2:tier("base", p * 2 + c * 10 + ao * 50)`
 	got := tieredQuota(expr, usage, false, 1.0)
-	// C=600-100=500, AO=100 → (1000*2 + 500*10 + 100*50) × 100 = 1200000
-	want := 1200000.0
+	// C=600-100=500, AO=100 → (1000*2 + 500*10 + 100*50) × 1000 = 12000000
+	want := 12000000.0
 	if math.Abs(got-want) > 0.01 {
 		t.Fatalf("quota = %f, want %f", got, want)
 	}
@@ -590,8 +590,8 @@ func TestBuildTieredTokenParams_GPT_AudioOutputNoVar(t *testing.T) {
 	}
 	expr := `v2:tier("base", p * 2 + c * 10)`
 	got := tieredQuota(expr, usage, false, 1.0)
-	// No ao → C=600 (audio stays in C) → (1000*2 + 600*10) × 100 = 800000
-	want := 800000.0
+	// No ao → C=600 (audio stays in C) → (1000*2 + 600*10) × 1000 = 8000000
+	want := 8000000.0
 	if math.Abs(got-want) > 0.01 {
 		t.Fatalf("quota = %f, want %f", got, want)
 	}
