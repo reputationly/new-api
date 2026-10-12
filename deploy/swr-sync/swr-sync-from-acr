@@ -1,0 +1,152 @@
+#!/usr/bin/env python3
+"""Copy new-api from ACR to SWR on the management node.
+
+GitHub-hosted runners sit outside China. A copy that runs there downloads
+every layer from ACR and uploads it to SWR, which is the slow path. This
+script runs where both registries are local: compare digests, and when
+`ovaijisuan` moves, copy that tag, `latest`, and the matching version tag.
+
+Credentials are the machine's /root/.docker/config.json. Nothing here is a secret.
+"""
+
+import fcntl
+import json
+import re
+import subprocess
+import sys
+
+AUTH = "/root/.docker/config.json"
+SRC = "crpi-xzr81d0490mc3794.cn-shanghai.personal.cr.aliyuncs.com/reputationly/new-api"
+DST = "swr.cn-central-221.ovaijisuan.com/reputationly/new-api"
+LOCK = "/var/lock/swr-sync-from-acr.lock"
+STATE = "/var/lib/swr-sync/version-tag"
+VERSION_TAG = re.compile(r"^v\d+\.\d+\.\d+-ovaijisuan-(\d{8})-([0-9a-f]+)$")
+
+
+def run(args, stream=False):
+    if stream:
+        return subprocess.run(args).returncode
+    proc = subprocess.run(args, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    return proc.returncode, proc.stdout, proc.stderr
+
+
+def image_id(ref):
+    """Identity of an image that survives SWR rewriting an OCI index into a Docker manifest list.
+
+    The list digest changes in that rewrite. The per-architecture manifest digests do not.
+    """
+    code, out, err = run(["skopeo", "inspect", "--raw", "--authfile", AUTH, "docker://" + ref])
+    if code != 0:
+        return None
+    try:
+        manifest = json.loads(out)
+    except json.JSONDecodeError:
+        sys.stderr.write(err)
+        return None
+    children = manifest.get("manifests")
+    if children:
+        digests = tuple(sorted(item["digest"] for item in children if item.get("digest")))
+        return digests or None
+    config = (manifest.get("config") or {}).get("digest")
+    if config:
+        return (config,)
+    return None
+
+
+def version_tags():
+    code, out, err = run(["skopeo", "list-tags", "--authfile", AUTH, "docker://" + SRC])
+    if code != 0:
+        sys.stderr.write(err)
+        raise SystemExit(code)
+    matched = []
+    for tag in json.loads(out).get("Tags") or []:
+        found = VERSION_TAG.match(tag)
+        if found:
+            matched.append((found.group(1), found.group(2), tag))
+    matched.sort(reverse=True)
+    return [tag for _, _, tag in matched]
+
+
+def version_for(target_id):
+    for tag in version_tags():
+        if image_id(SRC + ":" + tag) == target_id:
+            return tag
+    return None
+
+
+def copy_tag(tag):
+    print("copy " + tag, flush=True)
+    code = run(
+        [
+            "skopeo", "copy", "--all",
+            "--src-authfile", AUTH,
+            "--dest-authfile", AUTH,
+            "docker://%s:%s" % (SRC, tag),
+            "docker://%s:%s" % (DST, tag),
+        ],
+        stream=True,
+    )
+    if code != 0:
+        raise SystemExit(code)
+
+
+def read_state():
+    try:
+        with open(STATE) as fh:
+            return fh.read().strip()
+    except FileNotFoundError:
+        return ""
+
+
+def write_state(tag):
+    with open(STATE, "w") as fh:
+        fh.write(tag + "\n")
+
+
+def main():
+    lockf = open(LOCK, "w")
+    try:
+        fcntl.flock(lockf, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        print("already running")
+        return
+
+    acr_ovi = image_id(SRC + ":ovaijisuan")
+    if not acr_ovi:
+        sys.stderr.write("ACR tag ovaijisuan is missing\n")
+        raise SystemExit(1)
+    swr_ovi = image_id(DST + ":ovaijisuan")
+    acr_latest = image_id(SRC + ":latest")
+    swr_latest = image_id(DST + ":latest")
+
+    saved = read_state()
+    saved_id = image_id(DST + ":" + saved) if saved else None
+    floating_match = acr_ovi == swr_ovi and acr_latest == swr_latest
+    version_match = bool(saved) and saved_id == acr_ovi
+    if floating_match and version_match:
+        print("up to date " + saved)
+        return
+
+    version = saved if version_match else version_for(acr_ovi)
+    if not version:
+        sys.stderr.write("no version tag matches the ovaijisuan image\n")
+        raise SystemExit(1)
+
+    pending = []
+    if image_id(DST + ":" + version) != acr_ovi:
+        pending.append(version)
+    if swr_ovi != acr_ovi:
+        pending.append("ovaijisuan")
+    if swr_latest != acr_latest:
+        pending.append("latest")
+    for tag in pending:
+        copy_tag(tag)
+    write_state(version)
+    if pending:
+        print("synced " + " ".join(pending))
+    else:
+        print("up to date " + version)
+
+
+if __name__ == "__main__":
+    main()

@@ -10,12 +10,10 @@ on:
       name:
         description: "reason"
         required: false
-      swr_tags:
-        description: "只把 ACR 上这些已有 tag 复制到 SWR（逗号分隔）。填写后跳过构建，例如 v0.13.2-ovaijisuan-20261011-e9cb5c61,ovaijisuan,latest"
-        required: false
-        type: string
 
-# SWR 与 Docker Hub、ACR 推的是同一份镜像。地址和组织不是密钥。
+# SWR 不在这套流水线里推。GitHub runner 在海外，从这里把层传到 SWR 会绕路。
+# 管理节点上的 swr-sync-from-acr.timer 每 2 分钟比对 ACR 的 ovaijisuan，
+# 有新包就在国内直接复制到 SWR。见 deploy/swr-sync/。
 env:
   SWR_REGISTRY: swr.cn-central-221.ovaijisuan.com
   SWR_NAMESPACE: reputationly
@@ -23,8 +21,6 @@ env:
 jobs:
   prepare:
     name: Compute version
-    # 填了 swr_tags 时只做仓库复制，不重新构建、不改 Docker Hub / ACR。
-    if: github.event_name != 'workflow_dispatch' || inputs.swr_tags == ''
     runs-on: ubuntu-latest
     outputs:
       version: ${{ steps.version.outputs.value }}
@@ -239,8 +235,8 @@ jobs:
           docker pull arronlee/new-api:${VERSION}
           \`\`\`
 
-          > 同一份镜像同时在 Docker Hub、阿里云 ACR、SWR。现网继续用 ACR。
-          > SWR（组织设为公开后，同区域计算节点不用登录）：
+          > Docker Hub 与阿里云 ACR 由本工作流推送。现网继续用 ACR。
+          > SWR 由管理节点在 ACR 更新后自动同步，公开镜像，同区域计算节点不用登录：
           \`\`\`
           docker pull ${SWR_REGISTRY}/${SWR_NAMESPACE}/new-api:${VERSION}
           \`\`\`
@@ -257,87 +253,3 @@ jobs:
             --repo "${{ github.repository }}" \
             --title "${VERSION}" \
             --notes-file notes.md
-
-  # 不重新构建。ACR 的多架构 manifest 已经是计算节点要的那一份，原样复制过去，
-  # digest 与 ACR 一致。SWR 手册把 docker 客户端卡在 24.0.9，GitHub runner 更
-  # 新，所以用 skopeo 走仓库 API，而不是 docker push。
-  #
-  # 失败不挡住 Release：create_release 不依赖这个 job。SWR 红了可以单独重试。
-  # 镜像进仓库后默认私有，公开要在控制台改一次，之后同一仓库的新 tag 保持公开。
-  sync_swr:
-    name: Copy ACR image to SWR
-    needs: [prepare, create_manifests]
-    if: >-
-      always() &&
-      (needs.create_manifests.result == 'success' ||
-       (github.event_name == 'workflow_dispatch' && inputs.swr_tags != ''))
-    runs-on: ubuntu-latest
-    steps:
-      - name: Install skopeo
-        run: sudo apt-get update && sudo apt-get install -y skopeo
-
-      - name: Copy tags from ACR to SWR
-        env:
-          ACR_REGISTRY: ${{ secrets.ACR_REGISTRY }}
-          ACR_USERNAME: ${{ secrets.ACR_USERNAME }}
-          ACR_PASSWORD: ${{ secrets.ACR_PASSWORD }}
-          SWR_USERNAME: ${{ secrets.SWR_USERNAME }}
-          SWR_PASSWORD: ${{ secrets.SWR_PASSWORD }}
-          VERSION: ${{ needs.prepare.outputs.version }}
-          SWR_TAGS_INPUT: ${{ inputs.swr_tags }}
-        run: |
-          set -euo pipefail
-          if [ -n "${SWR_TAGS_INPUT}" ]; then
-            TAGS="${SWR_TAGS_INPUT}"
-          elif [ -z "${VERSION}" ]; then
-            echo "VERSION is empty"
-            exit 1
-          else
-            TAGS="${VERSION},ovaijisuan,latest"
-          fi
-
-          copied=0
-          fallback=0
-          IFS=',' read -ra tags <<< "${TAGS}"
-          for raw in "${tags[@]}"; do
-            tag="${raw//[[:space:]]/}"
-            [ -z "${tag}" ] && continue
-            src="docker://${ACR_REGISTRY}/reputationly/new-api:${tag}"
-            dst="docker://${SWR_REGISTRY}/${SWR_NAMESPACE}/new-api:${tag}"
-            echo "::group::Copy ${tag}"
-            if skopeo copy --all \
-                --src-creds "${ACR_USERNAME}:${ACR_PASSWORD}" \
-                --dest-creds "${SWR_USERNAME}:${SWR_PASSWORD}" \
-                "${src}" "${dst}"; then
-              echo "multi-arch ${tag}"
-            else
-              echo "::warning::SWR rejected the multi-arch manifest for ${tag}; pushing linux/amd64 only"
-              skopeo copy \
-                --override-os linux \
-                --override-arch amd64 \
-                --src-creds "${ACR_USERNAME}:${ACR_PASSWORD}" \
-                --dest-creds "${SWR_USERNAME}:${SWR_PASSWORD}" \
-                "${src}" "${dst}"
-              fallback=$((fallback + 1))
-            fi
-            echo "::endgroup::"
-            copied=$((copied + 1))
-          done
-
-          if [ "${copied}" -eq 0 ]; then
-            echo "no tags copied"
-            exit 1
-          fi
-
-          {
-            echo "### SWR"
-            echo '```'
-            echo "${SWR_REGISTRY}/${SWR_NAMESPACE}/new-api"
-            echo "tags: ${TAGS}"
-            if [ "${fallback}" -gt 0 ]; then
-              echo "fallback: linux/amd64 only (${fallback} tag)"
-            else
-              echo "manifest: multi-arch"
-            fi
-            echo '```'
-          } >> "${GITHUB_STEP_SUMMARY}"
