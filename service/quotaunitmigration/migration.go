@@ -85,7 +85,7 @@ func run(pl *plan, mode string, out io.Writer) error {
 	rep := newReport(out, dryRun, rate)
 	rep.line("=== %s（%s）===", pl.title, mode)
 	rep.line("时间: %s", time.Now().Format("2006-01-02 15:04:05"))
-	rep.line("QuotaPerUnit: %.0f → %.0f（于是 1 quota = ¥%.6f）",
+	rep.line("QuotaPerUnit: %.0f → %.0f（于是 1 quota = ¥%.9f）",
 		pl.baseQPU, pl.targetQPU, rate/pl.targetQPU)
 	rep.line("缩放倍数: ×%s", pl.scaleLabel())
 	rep.line("汇率（只用于报告里的人民币对照）: %v", rate)

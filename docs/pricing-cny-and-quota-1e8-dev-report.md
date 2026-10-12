@@ -269,32 +269,61 @@ v1/v2 的口径判定被抽成**单一实现**：`helpers/exprVersion.js`（前�
 
 ## 7. 生产窗口清单（copy-paste）
 
+2026-10-12 现网实际执行的就是这一版。生产库是外部 RDS PostgreSQL，所以备份和核对用一次性的 postgres 容器，直接读 `.env.prod` 里的 `SQL_DSN`。
+
 ```bash
 # 0) 窗口前：不要点「在线升级」，不要 docker compose pull
 cd /opt/new-api
+export SQL_DSN="$(grep -E '^SQL_DSN=' .env.prod | head -1 | cut -d= -f2- | tr -d "\"'")"
+PG=crpi-xzr81d0490mc3794.cn-shanghai.personal.cr.aliyuncs.com/reputationly/postgres:15
+TS=$(date +%Y%m%d-%H%M)
+mkdir -p backup
 
-# 1) 停服并确认
+# 1) 停服；给当前镜像打本地 tag，回滚时用
 docker compose --env-file .env.prod stop new-api
-docker compose --env-file .env.prod ps new-api      # 状态必须是 Exited
+docker compose --env-file .env.prod ps -a new-api   # 状态必须是 Exited
+docker tag "$(docker inspect new-api --format '{{.Image}}')" new-api:rollback-pre-v2
 
-# 2) 备份（记下行数与余额合计，dry-run/report 要用它们对数）
-docker exec <pg-container> pg_dump -U <user> <db> > /opt/new-api/backup-$(date +%F-%H%M).sql
+# 2) 前置状态与对数基准（V1 必须是 done）
+docker run --rm --network host $PG psql "$SQL_DSN" -At \
+  -c 'show server_version' \
+  -c 'select "key", value from options where "key" like $$QuotaUnitMigration%$$' \
+  -c 'select count(*), sum(quota), sum(used_quota) from users'
 
-# 3) 预演（不写库），保存输出
+# 3) 备份（pg_dump 大版本不能低于库的版本）
+docker run --rm --network host -v "$PWD/backup:/out" $PG \
+  pg_dump "$SQL_DSN" -Fc --no-owner --no-acl -f /out/pre-v2-$TS.dump && ls -lh backup/
+
+# 4) 拉新镜像并确认版本（不拉的话，下面跑的还是旧二进制）
+docker compose --env-file .env.prod pull new-api
+docker compose --env-file .env.prod run --rm --no-deps new-api --version
+
+# 5) 预演（不写库），保存输出
 docker compose --env-file .env.prod run --rm --no-deps new-api \
-  --log-dir /app/logs --migrate-quota-unit-v2=dry-run | tee /opt/new-api/v2-dry-run.txt
+  --log-dir /app/logs --migrate-quota-unit-v2=dry-run 2>&1 | tee backup/v2-dry-run-$TS.txt
 
-# 4) 落地（写库），保存输出
+# 6) 落地（写库），保存输出
 docker compose --env-file .env.prod run --rm --no-deps new-api \
-  --log-dir /app/logs --migrate-quota-unit-v2=apply | tee /opt/new-api/v2-apply.txt
+  --log-dir /app/logs --migrate-quota-unit-v2=apply 2>&1 | tee backup/v2-apply-$TS.txt
 
-# 5) 启动（B9 看到 state=done 才放行）
+# 7) 核对：QuotaUnitMigrationV2 为 done，users 合计正好是第 2 步的 1000 倍
+docker run --rm --network host $PG psql "$SQL_DSN" -At \
+  -c 'select "key", value from options where "key" like $$QuotaUnitMigration%$$' \
+  -c 'select count(*), sum(quota), sum(used_quota) from users'
+
+# 8) 启动（B9 看到 state=done 才放行），等 healthy
 docker compose --env-file .env.prod up -d new-api
+sleep 20
+docker compose --env-file .env.prod ps -a new-api
+docker compose --env-file .env.prod logs --tail 20 new-api
 
-# 6) 启动后核对：quota_per_unit=7300000000、quota_per_yuan=1000000000、
-#    quota_per_point=quota_per_compute_point=10000000，并做一次小额充值 + 一次真实调用
-curl -s https://<host>/api/status | jq '{version,quota_per_unit,quota_per_yuan,quota_per_point,quota_per_compute_point,usd_exchange_rate}'
+# 9) 核对单位：quota_per_unit=7300000000、quota_per_yuan=1000000000、
+#    quota_per_point=quota_per_compute_point=10000000；再做一次小额充值 + 一次真实调用
+docker exec new-api wget -qO- http://localhost:3000/api/status | \
+  grep -oE '"(version|quota_per_unit|quota_per_yuan|quota_per_point|quota_per_compute_point)":[^,}]*'
 ```
+
+回滚：用 `backup/pre-v2-*.dump` 恢复数据库，同时把镜像换回 `new-api:rollback-pre-v2`，两件事必须一起做。
 
 dry-run 报告要重点核对：`logs` 分批计划的行数、`[数值列]` 前后 CNY 两列是否相等、`[定价配置]` 是否有
 差值行、是否点名了 v1 表达式。
