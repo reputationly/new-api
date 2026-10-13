@@ -22,7 +22,7 @@ func AllowSlidingWindow(ctx context.Context, rdb *redis.Client, key string, limi
 	if limit <= 0 {
 		return true, nil
 	}
-	res, err := slidingWindowScript.Run(ctx, rdb, []string{key}, limit, windowSeconds).Int()
+	res, err := slidingWindowScript.Run(ctx, rdb, []string{key}, limit, windowSeconds, Now().UnixMicro()).Int()
 	if err != nil {
 		return false, fmt.Errorf("sliding window rate limit failed: %w", err)
 	}
