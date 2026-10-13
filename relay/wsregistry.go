@@ -72,20 +72,26 @@ func WaitWebSockets(ctx context.Context) bool {
 	}
 }
 
-// CloseAllWebSockets 强制关闭所有存活连接，返回关闭的条数。
+// CloseAllWebSockets 强制关闭所有存活连接，返回发起关闭的条数。
 //
 // 只在宽限期用完时调用：不能让滚动升级为了几个长期存活的 realtime 会话无限等下去，
 // 否则 Pod 会被 SIGKILL，连刷库都做不完。先发一帧 CloseGoingAway 让对端知道这是
 // 服务端正常关闭（客户端可以据此重连），再关底层连接。
+//
+// ⚠️ **刻意不清空注册表**。连接被关掉不等于会话结束：handler 在 DoResponse 返回之后
+// 还要走 PostWssConsumeQuota 结算（relay/websocket.go），而注销是那个 handler 自己的
+// defer、要等它整个返回才跑。清空名单会让 ActiveWebSocketCount 立刻归零，收尾就会以为
+// WS 全处理完了、直接去刷库——而结算要么晚于刷库进了再也没人刷的 store，要么在直写
+// 数据库时被进程退出打断。被强关的恰好是撑过整段宽限期的长会话，单笔金额最大。
+//
+// 所以这里只负责"把连接踹掉"，注销交给各 handler；调用方关闭之后必须**再等一次
+// WaitWebSockets**（用独立的、非零的预算）才算等到结算做完。
 func CloseAllWebSockets() int {
 	wsRegistryMu.Lock()
 	conns := make([]*websocket.Conn, 0, len(wsRegistry))
 	for conn := range wsRegistry {
 		conns = append(conns, conn)
 	}
-	// 先清空注册表再关连接：关闭过程会触发各请求的 defer 注销，重复 delete 无害，
-	// 但清空能保证 ActiveWebSocketCount 立刻归零，不会被"关了一半"的中间态骗到。
-	wsRegistry = make(map[*websocket.Conn]struct{})
 	wsRegistryMu.Unlock()
 
 	for _, conn := range conns {

@@ -401,7 +401,7 @@ func configureTrustedProxies(server *gin.Engine) {
 	}
 }
 
-// 这两个时长用 var 而不是 const，纯粹是为了可测：关闭流程的测试要把它压到 0，
+// 这些时长用 var 而不是 const，纯粹是为了可测：关闭流程的测试要把它压到 0，
 // 否则每个用例都得先白等 2 秒。生产代码里没人改它们。
 var (
 	// shutdownDrainDelay 置位 readiness 之后、真正 Shutdown 之前等的一小会儿，
@@ -413,6 +413,15 @@ var (
 	// 即使前面的等待全部超时，也要保证这段时间可用——否则「优雅退出」退成了「退出，
 	// 但把要保的东西丢了」。
 	shutdownFinalReserve = 10 * time.Second
+
+	// shutdownSettleReserve 留给"强关 WebSocket 之后的结算"和"等在途的关键后台任务"。
+	//
+	// 为什么必须独立留一段，而不是复用 finalizing：撑到宽限期的正是那些不会自己结束的
+	// 长 realtime 会话，等它们自然结束的那一步会把预算一路用到 finalizing。此时再用
+	// finalizing 去等结算，截止时间已经过去了，等待立刻返回 0——**这处丢失恰好发生在
+	// 它唯一会发生的场景里**。所以阶段 2/3 的"自然等待"只能用前一段预算（preFinalizing），
+	// 强关之后的等待改用这一段（settling）。
+	shutdownSettleReserve = 15 * time.Second
 )
 
 func shutdownTimeout() time.Duration {
@@ -434,8 +443,10 @@ func shutdownTimeout() time.Duration {
 // （service.PostWssConsumeQuota），早刷会漏掉它们。
 func shutdownGracefully(httpServer, pprofServer *http.Server, total time.Duration) {
 	deadline := time.Now().Add(total)
-	// 收尾动作的截止时间：总预算里先把「落盘」那段扣出来。
-	finalizing := deadline.Add(-shutdownFinalReserve)
+	// 三段预算，从后往前预留（见 shutdownFinalReserve / shutdownSettleReserve 的注释）：
+	//   [阶段 2/3 的自然等待] ...preFinalizing | [强关后结算 + 关键任务] ...settling | [刷库] ...deadline
+	settling := deadline.Add(-shutdownFinalReserve)
+	preFinalizing := settling.Add(-shutdownSettleReserve)
 
 	// 1) 摘流量
 	common.MarkShuttingDown()
@@ -444,7 +455,7 @@ func shutdownGracefully(httpServer, pprofServer *http.Server, total time.Duratio
 
 	// 2) 等在途的普通请求。deadline 若已过，WithDeadline 返回的 context 立即就绪，
 	//    Shutdown 会马上返回错误，走下面的 Close 分支——不需要额外判空。
-	shutdownCtx, cancelShutdown := context.WithDeadline(context.Background(), finalizing)
+	shutdownCtx, cancelShutdown := context.WithDeadline(context.Background(), preFinalizing)
 	shutdownErr := httpServer.Shutdown(shutdownCtx)
 	cancelShutdown()
 	if shutdownErr != nil {
@@ -458,12 +469,30 @@ func shutdownGracefully(httpServer, pprofServer *http.Server, total time.Duratio
 	// 3) WebSocket
 	if n := relay.ActiveWebSocketCount(); n > 0 {
 		common.SysLog(fmt.Sprintf("graceful shutdown: waiting for %d websocket connection(s)", n))
-		wsCtx, cancelWS := context.WithDeadline(context.Background(), finalizing)
+		wsCtx, cancelWS := context.WithDeadline(context.Background(), preFinalizing)
 		drained := relay.WaitWebSockets(wsCtx)
 		cancelWS()
 		if !drained {
-			// 宽限期用完：不能让几个长期存活的会话把升级无限拖住。
+			// 自然等待的预算用完了：不能让几个长期存活的会话把升级无限拖住，强制关掉。
 			relay.CloseAllWebSockets()
+
+			// 关掉连接**不等于会话结束**：各 handler 还要走 PostWssConsumeQuota 结算，
+			// 注销是它们自己的 defer、要等 handler 整个返回才跑。不再等一次的话，结算会
+			// 和下面的刷库并发——要么晚于刷库进了再也没人刷的 store，要么写到一半被进程
+			// 退出打断。被强关的恰好是撑过整段宽限期的长会话，单笔金额最大。
+			// 这里必须用 settling（独占的一段预算）：自然等待已经把 preFinalizing 用光了，
+			// 再用同一个截止时间等于不等。
+			if n := relay.ActiveWebSocketCount(); n > 0 {
+				common.SysLog(fmt.Sprintf("graceful shutdown: waiting for %d websocket session(s) to settle", n))
+				settleCtx, cancelSettle := context.WithDeadline(context.Background(), settling)
+				settled := relay.WaitWebSockets(settleCtx)
+				cancelSettle()
+				if !settled {
+					common.SysLog(fmt.Sprintf(
+						"graceful shutdown: %d websocket session(s) still not settled; "+
+							"their billing may be lost", relay.ActiveWebSocketCount()))
+				}
+			}
 		}
 	}
 
@@ -475,7 +504,7 @@ func shutdownGracefully(httpServer, pprofServer *http.Server, total time.Duratio
 	// 等完之后每一笔退款要么已经落库、要么已经进了随后会被刷下去的 store。
 	if n := common.CriticalTaskCount(); n > 0 {
 		common.SysLog(fmt.Sprintf("graceful shutdown: waiting for %d critical background task(s)", n))
-		critCtx, cancelCrit := context.WithDeadline(context.Background(), finalizing)
+		critCtx, cancelCrit := context.WithDeadline(context.Background(), settling)
 		waited := common.WaitCriticalTasks(critCtx)
 		cancelCrit()
 		if !waited {

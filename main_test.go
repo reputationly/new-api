@@ -184,6 +184,25 @@ func TestShutdownGracefullyReturnsOnExhaustedBudget(t *testing.T) {
 	}
 }
 
+// waitCriticalIdle 等到关键任务计数归零，作为用例的基线。
+//
+// 为什么需要：前一个用例的 GoCritical 任务是在 t.Cleanup 里被放行的，它的还账是异步的，
+// 可能在本用例取基线之后才发生——于是 "期望回到基线" 这类断言会一直等不到而超时
+// （TestGoCriticalReleasesCountOnPanic 就这么失败过一次，单独跑却通过）。
+// 先对齐到 0 再取基线，用例之间就没有隐含顺序依赖。
+func waitCriticalIdle(t *testing.T) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if common.CriticalTaskCount() == 0 {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("关键任务计数没有归零（当前 %d）：同包其它用例可能没放行它登记的任务",
+		common.CriticalTaskCount())
+}
+
 // newIdleServer 起一个没有任何请求的监听端口，供收尾用例使用（收尾会关它的监听器）。
 func newIdleServer(t *testing.T) *http.Server {
 	t.Helper()
@@ -203,6 +222,8 @@ func newIdleServer(t *testing.T) *http.Server {
 //
 // 这里用一个真实登记进去、被卡住不放的任务来验证"确实会等"，而不是只测等函数本身。
 func TestShutdownWaitsForCriticalBackgroundTasks(t *testing.T) {
+	waitCriticalIdle(t)
+
 	origDelay, origReserve := shutdownDrainDelay, shutdownFinalReserve
 	shutdownDrainDelay, shutdownFinalReserve = 0, 0
 	t.Cleanup(func() {
@@ -248,6 +269,8 @@ func TestShutdownWaitsForCriticalBackgroundTasks(t *testing.T) {
 
 // 预算被前面的等待耗尽时，等关键任务这一步也不能把进程挂住：如实记下来然后继续。
 func TestShutdownReturnsEvenIfCriticalTasksHang(t *testing.T) {
+	waitCriticalIdle(t)
+
 	origDelay, origReserve := shutdownDrainDelay, shutdownFinalReserve
 	shutdownDrainDelay, shutdownFinalReserve = 0, 0
 	t.Cleanup(func() {
@@ -280,6 +303,8 @@ func TestShutdownReturnsEvenIfCriticalTasksHang(t *testing.T) {
 // GoCritical 的任务 panic 时也必须把计数还回去（gopool 会接住 panic），
 // 否则收尾会一直白等到预算用尽。
 func TestGoCriticalReleasesCountOnPanic(t *testing.T) {
+	waitCriticalIdle(t)
+
 	before := common.CriticalTaskCount()
 	common.GoCritical(func() { panic("boom") })
 

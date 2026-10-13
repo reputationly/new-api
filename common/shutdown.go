@@ -2,6 +2,7 @@ package common
 
 import (
 	"context"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -63,6 +64,31 @@ func GoCritical(fn func()) {
 // CriticalTaskCount 当前尚未结束的关键后台任务数。
 func CriticalTaskCount() int {
 	return int(criticalTasks.Load())
+}
+
+// BeginCritical 手工登记一段「退出前必须做完」的工作，返回结束函数（调用方应当 defer 它）。
+//
+// 供**定时循环里的一轮**使用——它不像请求处理函数那样是"起一个 goroutine 就结束"，
+// 而是长驻循环里的一轮，所以不能包成 GoCritical。与 GoCritical 共用同一个计数，
+// 因此收尾那一步的等待天然覆盖它。
+//
+// 若进程已进入关闭流程，返回 ok=false 且不登记——调用方**应当放弃这一轮**，不要再开新的
+// 工作（新开的工作可能晚于收尾的刷库，甚至晚于进程退出）。
+//
+// ⚠️ 内部顺序是「**先加计数、再读关闭标志**」，这不是随手写的：
+// 调用方一旦看到 ok=true（也就是读到了"还没开始关闭"），它的登记就必须已经能被收尾
+// 那一步的计数读取看到。反过来先读标志再加计数的话，两者之间存在窗口——收尾可能在计数
+// 还是 0 时越过等待，随后这一轮才开始退款并晚于刷库落地。
+// Go 的 sync/atomic 是顺序一致的，所以「Add(1) → Load(标志)=false」蕴含
+// 「Add(1) 先于 Store(true) 先于收尾的 Load(计数)」，收尾必定看得到这个 1。
+func BeginCritical() (done func(), ok bool) {
+	criticalTasks.Add(1)
+	if IsShuttingDown() {
+		criticalTasks.Add(-1)
+		return func() {}, false
+	}
+	var once sync.Once
+	return func() { once.Do(func() { criticalTasks.Add(-1) }) }, true
 }
 
 // WaitCriticalTasks 等待已登记的关键后台任务全部结束，直到 ctx 到期；返回是否已全部结束。

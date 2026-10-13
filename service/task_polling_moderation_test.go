@@ -35,12 +35,21 @@ func TestOutputModerationBudgetResetsEachCycle(t *testing.T) {
 
 // 轮询循环里必须真的调用重置。上面那条测试只证明函数本身对，
 // 证明不了它被接进了循环——而漏接正是实际发生过的那次事故。
+//
+// 2026-10-13：目标函数从 TaskPollingLoop 改成了 taskPollingRound。循环体被抽成
+// 「一轮一个函数」是为了让每轮能登记成"退出前必须做完的关键工作"（收尾要等它，
+// 否则这轮里的失败退款可能晚于刷库），重置调用随之搬到了 taskPollingRound 里。
+// 断言本身没变：仍然是"跑一轮的那个函数里必须出现这一行"。
 func TestPollingLoopResetsOutputModerationBudget(t *testing.T) {
 	src := readSourceFile(t, "task_polling.go")
-	loop := src[strings.Index(src, "func TaskPollingLoop() {"):]
+	loop := src[strings.Index(src, "func taskPollingRound(done func()) {"):]
 	body := loop[:strings.Index(loop, "\n}\n")]
 	if !strings.Contains(body, "resetOutputModerationBudget()") {
-		t.Fatal("TaskPollingLoop 里没有调用 resetOutputModerationBudget()——" +
+		t.Fatal("跑一轮的函数里没有调用 resetOutputModerationBudget()——" +
 			"预算会变成进程级累计量，产物审核在第一次超时后永久关闭")
+	}
+	// 循环必须真的调用那个函数，否则上面那条断言形同虚设
+	if !strings.Contains(src, "taskPollingRound(done)") {
+		t.Fatal("TaskPollingLoop 没有调用 taskPollingRound()——每一轮都不会执行")
 	}
 }

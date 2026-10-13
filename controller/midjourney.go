@@ -20,180 +20,210 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
+// midjourneyTaskInterval 两轮之间的间隔。用 var 而不是字面量，纯粹是为了可测：
+// 「进入关闭流程后循环会退出」这条得有测试兜住，而真跑一轮要 15 秒且依赖数据库。
+// 生产代码里没人改它。
+var midjourneyTaskInterval = 15 * time.Second
+
+// beginMidjourneyRound 抽成变量是为了可测，理由同 service 的 beginPollingRound：
+// 用例注入"拒绝登记"来验证循环退出，不必置位那个不可撤销的关闭标志、污染整个包。
+var beginMidjourneyRound = common.BeginCritical
+
 func UpdateMidjourneyTaskBulk() {
+	for {
+		time.Sleep(midjourneyTaskInterval)
+
+		// 先登记、再判关闭标志 —— 顺序不能反（理由见 common.BeginCritical 的注释）：
+		// 先读标志再加计数的话，收尾可能在计数还是 0 时越过等待，随后这一轮才开始
+		// 退款并晚于刷库落地。
+		// 进入关闭流程后不再开新的一轮：这一轮会退款，而收尾只等「已登记的工作」。
+		done, ok := beginMidjourneyRound()
+		if !ok {
+			common.SysLog("Midjourney 任务轮询：进程正在退出，停止后续轮次")
+			return
+		}
+		updateMidjourneyTaskRound(done)
+	}
+}
+
+// updateMidjourneyTaskRound 执行一轮。done 由调用方登记，这里用 defer 保证还账（panic 也不漏）。
+func updateMidjourneyTaskRound(done func()) {
+	defer done()
+
 	//imageModel := "midjourney"
 	ctx := context.TODO()
-	for {
-		time.Sleep(time.Duration(15) * time.Second)
 
-		tasks := model.GetAllUnFinishTasks()
-		if len(tasks) == 0 {
+	tasks := model.GetAllUnFinishTasks()
+	if len(tasks) == 0 {
+		return // 本轮没事可做（原来是 continue，抽成函数后等价于 return）
+	}
+
+	logger.LogInfo(ctx, fmt.Sprintf("检测到未完成的任务数有: %v", len(tasks)))
+	taskChannelM := make(map[int][]string)
+	taskM := make(map[string]*model.Midjourney)
+	nullTaskIds := make([]int, 0)
+	for _, task := range tasks {
+		if task.MjId == "" {
+			// 统计失败的未完成任务
+			nullTaskIds = append(nullTaskIds, task.Id)
 			continue
 		}
-
-		logger.LogInfo(ctx, fmt.Sprintf("检测到未完成的任务数有: %v", len(tasks)))
-		taskChannelM := make(map[int][]string)
-		taskM := make(map[string]*model.Midjourney)
-		nullTaskIds := make([]int, 0)
-		for _, task := range tasks {
-			if task.MjId == "" {
-				// 统计失败的未完成任务
-				nullTaskIds = append(nullTaskIds, task.Id)
-				continue
-			}
-			taskM[task.MjId] = task
-			taskChannelM[task.ChannelId] = append(taskChannelM[task.ChannelId], task.MjId)
+		taskM[task.MjId] = task
+		taskChannelM[task.ChannelId] = append(taskChannelM[task.ChannelId], task.MjId)
+	}
+	if len(nullTaskIds) > 0 {
+		err := model.MjBulkUpdateByTaskIds(nullTaskIds, map[string]any{
+			"status":   "FAILURE",
+			"progress": "100%",
+		})
+		if err != nil {
+			logger.LogError(ctx, fmt.Sprintf("Fix null mj_id task error: %v", err))
+		} else {
+			logger.LogInfo(ctx, fmt.Sprintf("Fix null mj_id task success: %v", nullTaskIds))
 		}
-		if len(nullTaskIds) > 0 {
-			err := model.MjBulkUpdateByTaskIds(nullTaskIds, map[string]any{
-				"status":   "FAILURE",
-				"progress": "100%",
+	}
+	if len(taskChannelM) == 0 {
+		return // 本轮没有可轮询的任务（原来是 continue，抽成函数后等价于 return）
+	}
+
+	for channelId, taskIds := range taskChannelM {
+		logger.LogInfo(ctx, fmt.Sprintf("渠道 #%d 未完成的任务有: %d", channelId, len(taskIds)))
+		if len(taskIds) == 0 {
+			continue
+		}
+		midjourneyChannel, err := model.CacheGetChannel(channelId)
+		if err != nil {
+			logger.LogError(ctx, fmt.Sprintf("CacheGetChannel: %v", err))
+			err := model.MjBulkUpdate(taskIds, map[string]any{
+				"fail_reason": fmt.Sprintf("获取渠道信息失败，请联系管理员，渠道ID：%d", channelId),
+				"status":      "FAILURE",
+				"progress":    "100%",
 			})
 			if err != nil {
-				logger.LogError(ctx, fmt.Sprintf("Fix null mj_id task error: %v", err))
-			} else {
-				logger.LogInfo(ctx, fmt.Sprintf("Fix null mj_id task success: %v", nullTaskIds))
+				logger.LogInfo(ctx, fmt.Sprintf("UpdateMidjourneyTask error: %v", err))
 			}
-		}
-		if len(taskChannelM) == 0 {
 			continue
 		}
+		requestUrl := fmt.Sprintf("%s/mj/task/list-by-condition", *midjourneyChannel.BaseURL)
 
-		for channelId, taskIds := range taskChannelM {
-			logger.LogInfo(ctx, fmt.Sprintf("渠道 #%d 未完成的任务有: %d", channelId, len(taskIds)))
-			if len(taskIds) == 0 {
+		body, _ := json.Marshal(map[string]any{
+			"ids": taskIds,
+		})
+		req, err := http.NewRequest("POST", requestUrl, bytes.NewBuffer(body))
+		if err != nil {
+			logger.LogError(ctx, fmt.Sprintf("Get Task error: %v", err))
+			continue
+		}
+		// 设置超时时间
+		timeout := time.Second * 15
+		ctx, cancel := context.WithTimeout(context.Background(), timeout)
+		// defer 兜底：下面几个 continue/return 会跳过末尾那个显式 cancel()，
+		// 那样这个带超时的 ctx 只能等 15s 超时自己释放（既存问题；把循环体抽成
+		// 「一轮一个函数」之后才被 go vet 的 lostcancel 看出来）。
+		defer cancel()
+		// 使用带有超时的 context 创建新的请求
+		req = req.WithContext(ctx)
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("mj-api-secret", midjourneyChannel.Key)
+		resp, err := service.GetHttpClient().Do(req)
+		if err != nil {
+			logger.LogError(ctx, fmt.Sprintf("Get Task Do req error: %v", err))
+			continue
+		}
+		if resp.StatusCode != http.StatusOK {
+			logger.LogError(ctx, fmt.Sprintf("Get Task status code: %d", resp.StatusCode))
+			continue
+		}
+		responseBody, err := io.ReadAll(resp.Body)
+		if err != nil {
+			logger.LogError(ctx, fmt.Sprintf("Get Mjp Task parse body error: %v", err))
+			continue
+		}
+		var responseItems []dto.MidjourneyDto
+		err = json.Unmarshal(responseBody, &responseItems)
+		if err != nil {
+			logger.LogError(ctx, fmt.Sprintf("Get Mjp Task parse body error2: %v, body: %s", err, string(responseBody)))
+			continue
+		}
+		resp.Body.Close()
+		req.Body.Close()
+		cancel()
+
+		for _, responseItem := range responseItems {
+			task := taskM[responseItem.MjId]
+
+			useTime := (time.Now().UnixNano() / int64(time.Millisecond)) - task.SubmitTime
+			// 如果时间超过一小时，且进度不是100%，则认为任务失败
+			if useTime > 3600000 && task.Progress != "100%" {
+				responseItem.FailReason = "上游任务超时（超过1小时）"
+				responseItem.Status = "FAILURE"
+			}
+			if !checkMjTaskNeedUpdate(task, responseItem) {
 				continue
 			}
-			midjourneyChannel, err := model.CacheGetChannel(channelId)
-			if err != nil {
-				logger.LogError(ctx, fmt.Sprintf("CacheGetChannel: %v", err))
-				err := model.MjBulkUpdate(taskIds, map[string]any{
-					"fail_reason": fmt.Sprintf("获取渠道信息失败，请联系管理员，渠道ID：%d", channelId),
-					"status":      "FAILURE",
-					"progress":    "100%",
-				})
+			preStatus := task.Status
+			task.Code = 1
+			task.Progress = responseItem.Progress
+			task.PromptEn = responseItem.PromptEn
+			task.State = responseItem.State
+			task.SubmitTime = responseItem.SubmitTime
+			task.StartTime = responseItem.StartTime
+			task.FinishTime = responseItem.FinishTime
+			task.ImageUrl = responseItem.ImageUrl
+			task.Status = responseItem.Status
+			task.FailReason = responseItem.FailReason
+			if responseItem.Properties != nil {
+				propertiesStr, _ := json.Marshal(responseItem.Properties)
+				task.Properties = string(propertiesStr)
+			}
+			if responseItem.Buttons != nil {
+				buttonStr, _ := json.Marshal(responseItem.Buttons)
+				task.Buttons = string(buttonStr)
+			}
+			// 映射 VideoUrl
+			task.VideoUrl = responseItem.VideoUrl
+
+			// 映射 VideoUrls - 将数组序列化为 JSON 字符串
+			if responseItem.VideoUrls != nil && len(responseItem.VideoUrls) > 0 {
+				videoUrlsStr, err := json.Marshal(responseItem.VideoUrls)
 				if err != nil {
-					logger.LogInfo(ctx, fmt.Sprintf("UpdateMidjourneyTask error: %v", err))
-				}
-				continue
-			}
-			requestUrl := fmt.Sprintf("%s/mj/task/list-by-condition", *midjourneyChannel.BaseURL)
-
-			body, _ := json.Marshal(map[string]any{
-				"ids": taskIds,
-			})
-			req, err := http.NewRequest("POST", requestUrl, bytes.NewBuffer(body))
-			if err != nil {
-				logger.LogError(ctx, fmt.Sprintf("Get Task error: %v", err))
-				continue
-			}
-			// 设置超时时间
-			timeout := time.Second * 15
-			ctx, cancel := context.WithTimeout(context.Background(), timeout)
-			// 使用带有超时的 context 创建新的请求
-			req = req.WithContext(ctx)
-			req.Header.Set("Content-Type", "application/json")
-			req.Header.Set("mj-api-secret", midjourneyChannel.Key)
-			resp, err := service.GetHttpClient().Do(req)
-			if err != nil {
-				logger.LogError(ctx, fmt.Sprintf("Get Task Do req error: %v", err))
-				continue
-			}
-			if resp.StatusCode != http.StatusOK {
-				logger.LogError(ctx, fmt.Sprintf("Get Task status code: %d", resp.StatusCode))
-				continue
-			}
-			responseBody, err := io.ReadAll(resp.Body)
-			if err != nil {
-				logger.LogError(ctx, fmt.Sprintf("Get Mjp Task parse body error: %v", err))
-				continue
-			}
-			var responseItems []dto.MidjourneyDto
-			err = json.Unmarshal(responseBody, &responseItems)
-			if err != nil {
-				logger.LogError(ctx, fmt.Sprintf("Get Mjp Task parse body error2: %v, body: %s", err, string(responseBody)))
-				continue
-			}
-			resp.Body.Close()
-			req.Body.Close()
-			cancel()
-
-			for _, responseItem := range responseItems {
-				task := taskM[responseItem.MjId]
-
-				useTime := (time.Now().UnixNano() / int64(time.Millisecond)) - task.SubmitTime
-				// 如果时间超过一小时，且进度不是100%，则认为任务失败
-				if useTime > 3600000 && task.Progress != "100%" {
-					responseItem.FailReason = "上游任务超时（超过1小时）"
-					responseItem.Status = "FAILURE"
-				}
-				if !checkMjTaskNeedUpdate(task, responseItem) {
-					continue
-				}
-				preStatus := task.Status
-				task.Code = 1
-				task.Progress = responseItem.Progress
-				task.PromptEn = responseItem.PromptEn
-				task.State = responseItem.State
-				task.SubmitTime = responseItem.SubmitTime
-				task.StartTime = responseItem.StartTime
-				task.FinishTime = responseItem.FinishTime
-				task.ImageUrl = responseItem.ImageUrl
-				task.Status = responseItem.Status
-				task.FailReason = responseItem.FailReason
-				if responseItem.Properties != nil {
-					propertiesStr, _ := json.Marshal(responseItem.Properties)
-					task.Properties = string(propertiesStr)
-				}
-				if responseItem.Buttons != nil {
-					buttonStr, _ := json.Marshal(responseItem.Buttons)
-					task.Buttons = string(buttonStr)
-				}
-				// 映射 VideoUrl
-				task.VideoUrl = responseItem.VideoUrl
-
-				// 映射 VideoUrls - 将数组序列化为 JSON 字符串
-				if responseItem.VideoUrls != nil && len(responseItem.VideoUrls) > 0 {
-					videoUrlsStr, err := json.Marshal(responseItem.VideoUrls)
-					if err != nil {
-						logger.LogError(ctx, fmt.Sprintf("序列化 VideoUrls 失败: %v", err))
-						task.VideoUrls = "[]" // 失败时设置为空数组
-					} else {
-						task.VideoUrls = string(videoUrlsStr)
-					}
+					logger.LogError(ctx, fmt.Sprintf("序列化 VideoUrls 失败: %v", err))
+					task.VideoUrls = "[]" // 失败时设置为空数组
 				} else {
-					task.VideoUrls = "" // 空值时清空字段
+					task.VideoUrls = string(videoUrlsStr)
 				}
+			} else {
+				task.VideoUrls = "" // 空值时清空字段
+			}
 
-				shouldReturnQuota := false
-				if (task.Progress != "100%" && responseItem.FailReason != "") || (task.Progress == "100%" && task.Status == "FAILURE") {
-					logger.LogInfo(ctx, task.MjId+" 构建失败，"+task.FailReason)
-					task.Progress = "100%"
-					if task.Quota != 0 {
-						shouldReturnQuota = true
-					}
+			shouldReturnQuota := false
+			if (task.Progress != "100%" && responseItem.FailReason != "") || (task.Progress == "100%" && task.Status == "FAILURE") {
+				logger.LogInfo(ctx, task.MjId+" 构建失败，"+task.FailReason)
+				task.Progress = "100%"
+				if task.Quota != 0 {
+					shouldReturnQuota = true
 				}
-				won, err := task.UpdateWithStatus(preStatus)
+			}
+			won, err := task.UpdateWithStatus(preStatus)
+			if err != nil {
+				logger.LogError(ctx, "UpdateMidjourneyTask task error: "+err.Error())
+			} else if won && shouldReturnQuota {
+				err = model.IncreaseUserQuota(task.UserId, task.Quota, false)
 				if err != nil {
-					logger.LogError(ctx, "UpdateMidjourneyTask task error: "+err.Error())
-				} else if won && shouldReturnQuota {
-					err = model.IncreaseUserQuota(task.UserId, task.Quota, false)
-					if err != nil {
-						logger.LogError(ctx, "fail to increase user quota: "+err.Error())
-					}
-					model.RecordTaskBillingLog(model.RecordTaskBillingLogParams{
-						UserId:    task.UserId,
-						LogType:   model.LogTypeRefund,
-						Content:   "",
-						ChannelId: task.ChannelId,
-						ModelName: service.CovertMjpActionToModelName(task.Action),
-						Quota:     task.Quota,
-						Other: map[string]interface{}{
-							"task_id": task.MjId,
-							"reason":  "构图失败",
-						},
-					})
+					logger.LogError(ctx, "fail to increase user quota: "+err.Error())
 				}
+				model.RecordTaskBillingLog(model.RecordTaskBillingLogParams{
+					UserId:    task.UserId,
+					LogType:   model.LogTypeRefund,
+					Content:   "",
+					ChannelId: task.ChannelId,
+					ModelName: service.CovertMjpActionToModelName(task.Action),
+					Quota:     task.Quota,
+					Other: map[string]interface{}{
+						"task_id": task.MjId,
+						"reason":  "构图失败",
+					},
+				})
 			}
 		}
 	}

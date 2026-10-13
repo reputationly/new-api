@@ -118,55 +118,83 @@ func partitionTasksForPolling(tasks []*model.Task) (map[constant.TaskPlatform][]
 	return byPlatform, aggregateParents
 }
 
+// taskPollingInterval 两轮之间的间隔。用 var 而不是字面量，纯粹是为了可测：
+// 「进入关闭流程后循环会退出」这条得有测试兜住，而真跑一轮要 15 秒且依赖数据库。
+// 生产代码里没人改它。
+var taskPollingInterval = 15 * time.Second
+
+// beginPollingRound 抽成变量是为了可测：用例注入一个"拒绝登记"的实现来验证循环会退出，
+// 而不必去置位 common 那个**不可撤销**的关闭标志——那会污染整个 service 测试二进制，
+// 以后任何需要真跑一轮的用例都会莫名其妙地失败，而失败原因离它十万八千里。
+// 真实的关闭判定在 common.BeginCritical 里（那里有"先加计数、再读标志"的顺序保证）。
+var beginPollingRound = common.BeginCritical
+
 // TaskPollingLoop 主轮询循环，每 15 秒检查一次未完成的任务
 func TaskPollingLoop() {
 	for {
-		time.Sleep(time.Duration(15) * time.Second)
-		common.SysLog("任务进度轮询开始")
-		ctx := context.TODO()
-		resetOutputModerationBudget()
-		sweepTimedOutTasks(ctx)
-		allTasks := model.GetAllUnFinishSyncTasks(constant.TaskQueryLimit)
-		platformTask, aggregateParents := partitionTasksForPolling(allTasks)
-		if len(aggregateParents) > 0 {
-			SyncAggregatePipelineParents(ctx, aggregateParents)
-		}
-		for platform, tasks := range platformTask {
-			if len(tasks) == 0 {
-				continue
-			}
-			taskChannelM := make(map[int][]string)
-			taskM := make(map[string]*model.Task)
-			nullTaskIds := make([]int64, 0)
-			for _, task := range tasks {
-				upstreamID := task.GetUpstreamTaskID()
-				if upstreamID == "" {
-					// 统计失败的未完成任务
-					nullTaskIds = append(nullTaskIds, task.ID)
-					continue
-				}
-				taskM[upstreamID] = task
-				taskChannelM[task.ChannelId] = append(taskChannelM[task.ChannelId], upstreamID)
-			}
-			if len(nullTaskIds) > 0 {
-				err := model.TaskBulkUpdateByID(nullTaskIds, map[string]any{
-					"status":   "FAILURE",
-					"progress": "100%",
-				})
-				if err != nil {
-					logger.LogError(ctx, fmt.Sprintf("Fix null task_id task error: %v", err))
-				} else {
-					logger.LogInfo(ctx, fmt.Sprintf("Fix null task_id task success: %v", nullTaskIds))
-				}
-			}
-			if len(taskChannelM) == 0 {
-				continue
-			}
+		time.Sleep(taskPollingInterval)
 
-			DispatchPlatformUpdate(platform, taskChannelM, taskM)
+		// 先登记、再判关闭标志 —— 顺序不能反（理由见 common.BeginCritical 的注释）：
+		// 先读标志再加计数的话，收尾可能在计数还是 0 时越过等待，随后这一轮才开始
+		// 退款并晚于刷库落地。
+		// 进入关闭流程后不再开新的一轮：这一轮会退款，而收尾只等「已登记的工作」。
+		done, ok := beginPollingRound()
+		if !ok {
+			common.SysLog("任务进度轮询：进程正在退出，停止后续轮次")
+			return
 		}
-		common.SysLog("任务进度轮询完成")
+		taskPollingRound(done)
 	}
+}
+
+// taskPollingRound 执行一轮。done 由调用方登记，这里用 defer 保证还账（panic 也不漏）。
+func taskPollingRound(done func()) {
+	defer done()
+
+	common.SysLog("任务进度轮询开始")
+	ctx := context.TODO()
+	resetOutputModerationBudget()
+	sweepTimedOutTasks(ctx)
+	allTasks := model.GetAllUnFinishSyncTasks(constant.TaskQueryLimit)
+	platformTask, aggregateParents := partitionTasksForPolling(allTasks)
+	if len(aggregateParents) > 0 {
+		SyncAggregatePipelineParents(ctx, aggregateParents)
+	}
+	for platform, tasks := range platformTask {
+		if len(tasks) == 0 {
+			continue
+		}
+		taskChannelM := make(map[int][]string)
+		taskM := make(map[string]*model.Task)
+		nullTaskIds := make([]int64, 0)
+		for _, task := range tasks {
+			upstreamID := task.GetUpstreamTaskID()
+			if upstreamID == "" {
+				// 统计失败的未完成任务
+				nullTaskIds = append(nullTaskIds, task.ID)
+				continue
+			}
+			taskM[upstreamID] = task
+			taskChannelM[task.ChannelId] = append(taskChannelM[task.ChannelId], upstreamID)
+		}
+		if len(nullTaskIds) > 0 {
+			err := model.TaskBulkUpdateByID(nullTaskIds, map[string]any{
+				"status":   "FAILURE",
+				"progress": "100%",
+			})
+			if err != nil {
+				logger.LogError(ctx, fmt.Sprintf("Fix null task_id task error: %v", err))
+			} else {
+				logger.LogInfo(ctx, fmt.Sprintf("Fix null task_id task success: %v", nullTaskIds))
+			}
+		}
+		if len(taskChannelM) == 0 {
+			continue
+		}
+
+		DispatchPlatformUpdate(platform, taskChannelM, taskM)
+	}
+	common.SysLog("任务进度轮询完成")
 }
 
 // DispatchPlatformUpdate 按平台分发轮询更新
