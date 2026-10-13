@@ -130,9 +130,14 @@ var (
 	moderationDropped   int64
 	moderationDropMu    sync.Mutex
 
-	// moderationInFlight 正在写库的记录数。优雅退出判断"是否排空"时，光看队列长度不够：
-	// worker 可能已经把最后一条从队列取走、正在写 DB，此时 len(queue) 已经是 0 但还没落库。
-	moderationInFlight atomic.Int64
+	// moderationPending 已提交但尚未落库的记录数（含正在写库的那一条）。
+	//
+	// 必须在**入队前**自增，不能等 worker 取出来再自增：`for entry := range moderationQueue`
+	// 是"先取出、再执行循环体"，取出与自增之间有一个窗口，此时 len(queue)==0 且计数为 0，
+	// DrainModerationLogQueue 会误判已排空并返回 true —— 丢掉最后一条，而且只在退出路径上
+	// 发生、平时完全看不出来。
+	// 入队侧记账就没有这个窗口：只要记录还在路上，计数就非 0。
+	moderationPending atomic.Int64
 
 	// moderationKeyWarnOnce 密钥缺失导致原文留不下时告警一次。
 	// 不在启动时告警：审核默认关着，多数部署根本用不到这个密钥，
@@ -151,9 +156,9 @@ func InitModerationLogWorker() {
 		moderationQueue = make(chan *ModerationLog, size)
 		go func() {
 			for entry := range moderationQueue {
-				moderationInFlight.Add(1)
 				writeModerationLog(entry)
-				moderationInFlight.Add(-1)
+				// 计数由入队侧加，这里只负责减；写库带 recover，不会跳过这一行。
+				moderationPending.Add(-1)
 			}
 		}()
 	})
@@ -162,24 +167,26 @@ func InitModerationLogWorker() {
 // DrainModerationLogQueue 等待异步落库队列排空，最多等 timeout；返回是否已排空。
 // 供优雅退出调用——队列里没落库的记录在进程被杀时会整批丢失。
 //
+// 只看 moderationPending 一个计数，不看 len(queue)：队列长度既有"取出未记账"的空窗，
+// 也区分不出"取走了正在写库"的状态，而那个计数从入队那一刻起就是准的。
+//
 // 刻意**不 close(moderationQueue)**：RecordModerationLog 会向它发送，而向已关闭的 channel
 // 发送会直接 panic（send on closed channel）。关闭流程期间仍可能有在途请求写审核日志，
 // 为了一条日志把整个进程打崩、连带丢掉尚未刷库的额度变动，得不偿失。
-// 改为轮询「队列长度 + 在途写库数」——不关闭 channel 就没有 panic 窗口。
+// 不关闭 channel 就没有这个 panic 窗口。
 func DrainModerationLogQueue(timeout time.Duration) bool {
 	if moderationQueue == nil {
 		return true
 	}
 	deadline := time.Now().Add(timeout)
 	for {
-		if len(moderationQueue) == 0 && moderationInFlight.Load() == 0 {
+		if moderationPending.Load() == 0 {
 			return true
 		}
 		if !time.Now().Before(deadline) {
 			common.SysError(fmt.Sprintf(
-				"graceful shutdown: moderation log queue not drained in %s (queued=%d, writing=%d), %d record(s) will be lost",
-				timeout, len(moderationQueue), moderationInFlight.Load(),
-				len(moderationQueue)+int(moderationInFlight.Load()),
+				"graceful shutdown: moderation log queue not drained in %s (%d record(s) will be lost)",
+				timeout, moderationPending.Load(),
 			))
 			return false
 		}
@@ -218,9 +225,15 @@ func RecordModerationLog(entry *ModerationLog) {
 	entry.Preview = TruncatePreview(entry.Preview)
 
 	InitModerationLogWorker()
+	// 先记账再入队：从这一刻起这条记录就算"在路上"，排空判定不会漏掉它。
+	// 减账在 worker 写完库之后——若入队失败（队列满被丢弃），没有 worker 会替它减，
+	// 必须在这里立刻还回去，否则排空会永远等下去。
+	moderationPending.Add(1)
 	select {
 	case moderationQueue <- entry:
+		// 由 worker 落库后 -1
 	default:
+		moderationPending.Add(-1)
 		moderationDropMu.Lock()
 		moderationDropped++
 		n := moderationDropped

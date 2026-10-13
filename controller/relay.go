@@ -88,10 +88,12 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 		}
 		// 登记到优雅退出的等待名单里：连接一旦被 hijack，http.Server.Shutdown 就不再管它，
 		// 不记账的话滚动升级会把这些会话直接切断（见 relay/wsregistry.go）。
-		// 注意 defer 求值顺序：TrackWebSocket 立即执行并返回注销函数，注销先于 ws.Close 跑，
-		// 所以连接真正关闭前就已在名单里消失，不会让关闭流程多等一个正在关闭的连接。
-		defer relay.TrackWebSocket(ws)()
+		// defer 是后进先出，所以这两行的书写顺序要**反着来**才是"先注销、再关闭"：
+		// TrackWebSocket 在 defer 求值时立即执行并返回注销函数，因此注销函数在栈顶先跑，
+		// ws.Close 后跑。这样连接真正关闭前就已在名单里消失，关闭流程不会多等一个
+		// 正在关闭的连接。
 		defer ws.Close()
+		defer relay.TrackWebSocket(ws)()
 	}
 
 	defer func() {

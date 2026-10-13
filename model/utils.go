@@ -24,6 +24,18 @@ const (
 var batchUpdateStores []map[int]int
 var batchUpdateLocks []sync.Mutex
 
+// batchUpdateMu 串行化**整个**刷库过程，包括逐条写库那一段，不只是"把 store 换成新 map"那一下。
+//
+// 为什么需要它：batchUpdate 先在锁内把 store 换成空 map，再逐条写库。如果不串行化整轮，
+// 退出时的 FlushBatchUpdate 会看到 store 已经空了而立即返回，调用方（优雅退出）据此
+// 认为"额度已刷完"，随后进程退出、数据库关闭——而上一轮还没写完的那些增量就丢了。
+// 这正是优雅退出要防的场景，却恰好发生在退出路径上。
+//
+// 加锁不会死锁：batchUpdate 内部只调 increaseUserQuota / increaseTokenQuota /
+// updateUserUsedQuota / updateUserRequestCount / updateChannelUsedQuota / increaseUserPoints，
+// 这 6 个都只做数据库写，不会回过来调 addNewRecord 或 batchUpdate。
+var batchUpdateMu sync.Mutex
+
 func init() {
 	for i := 0; i < BatchUpdateTypeCount; i++ {
 		batchUpdateStores = append(batchUpdateStores, make(map[int]int))
@@ -41,9 +53,10 @@ func InitBatchUpdater() {
 }
 
 // FlushBatchUpdate 立即把内存里累积的额度变动刷库，供优雅退出调用。
+// 返回时保证：调用之前已入队的所有增量都已落库。
 //
-// 与后台定时刷库并发调用是安全的：batchUpdate 在锁内把 store 换成新 map，随后只遍历
-// 自己拿到的那个快照，两个调用者各刷各的，不会读到对方正在写的数据。
+// 这个保证靠 batchUpdateMu：如果后台那轮正在逐条写库，这里会等它写完再刷自己那一批。
+// 只靠 batchUpdateLocks（每个类型一把、只护住"换 map"）是不够的——那会漏掉正在写的那一批。
 //
 // 未开启批量更新时是空操作——那种情况下每笔变动本来就直接写库，没有东西要刷。
 func FlushBatchUpdate() {
@@ -64,6 +77,11 @@ func addNewRecord(type_ int, id int, value int) {
 }
 
 func batchUpdate() {
+	// 整轮串行：从"判断有没有数据"到"逐条写库结束"。
+	// 只在换 map 那一下加锁是不够的——见 batchUpdateMu 的注释。
+	batchUpdateMu.Lock()
+	defer batchUpdateMu.Unlock()
+
 	// check if there's any data to update
 	hasData := false
 	for i := 0; i < BatchUpdateTypeCount; i++ {
