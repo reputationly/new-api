@@ -13,6 +13,9 @@ import (
 )
 
 func SetRouter(router *gin.Engine, assets ThemeAssets) {
+	// 健康探针最先挂载，理由同 WellKnownRouter：gin 注册路由时会把当前的全局中间件链
+	// 快照进去，早于限流 / gzip 注册，/healthz 才不会被限流拒掉而让 K8s 误判实例不健康。
+	SetHealthRouter(router)
 	// 站点根目录验证文件必须最先挂载：早于全局限流 / gzip / 移动端重定向中间件注册，
 	// 这些路由的中间件链才是干净的。理由详见 wellknown-router.go 的注释。
 	SetWellKnownRouter(router)

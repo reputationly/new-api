@@ -6,6 +6,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"gorm.io/gorm"
@@ -129,6 +130,10 @@ var (
 	moderationDropped   int64
 	moderationDropMu    sync.Mutex
 
+	// moderationInFlight 正在写库的记录数。优雅退出判断"是否排空"时，光看队列长度不够：
+	// worker 可能已经把最后一条从队列取走、正在写 DB，此时 len(queue) 已经是 0 但还没落库。
+	moderationInFlight atomic.Int64
+
 	// moderationKeyWarnOnce 密钥缺失导致原文留不下时告警一次。
 	// 不在启动时告警：审核默认关着，多数部署根本用不到这个密钥，
 	// 每次启动喷一行 WARNING 的唯一效果是让人学会忽略它。
@@ -146,10 +151,40 @@ func InitModerationLogWorker() {
 		moderationQueue = make(chan *ModerationLog, size)
 		go func() {
 			for entry := range moderationQueue {
+				moderationInFlight.Add(1)
 				writeModerationLog(entry)
+				moderationInFlight.Add(-1)
 			}
 		}()
 	})
+}
+
+// DrainModerationLogQueue 等待异步落库队列排空，最多等 timeout；返回是否已排空。
+// 供优雅退出调用——队列里没落库的记录在进程被杀时会整批丢失。
+//
+// 刻意**不 close(moderationQueue)**：RecordModerationLog 会向它发送，而向已关闭的 channel
+// 发送会直接 panic（send on closed channel）。关闭流程期间仍可能有在途请求写审核日志，
+// 为了一条日志把整个进程打崩、连带丢掉尚未刷库的额度变动，得不偿失。
+// 改为轮询「队列长度 + 在途写库数」——不关闭 channel 就没有 panic 窗口。
+func DrainModerationLogQueue(timeout time.Duration) bool {
+	if moderationQueue == nil {
+		return true
+	}
+	deadline := time.Now().Add(timeout)
+	for {
+		if len(moderationQueue) == 0 && moderationInFlight.Load() == 0 {
+			return true
+		}
+		if !time.Now().Before(deadline) {
+			common.SysError(fmt.Sprintf(
+				"graceful shutdown: moderation log queue not drained in %s (queued=%d, writing=%d), %d record(s) will be lost",
+				timeout, len(moderationQueue), moderationInFlight.Load(),
+				len(moderationQueue)+int(moderationInFlight.Load()),
+			))
+			return false
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
 }
 
 // writeModerationLog 单条落库。带 recover：这是个独立后台 goroutine，

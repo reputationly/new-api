@@ -44,6 +44,12 @@ docs/
 .air.toml
 tmp/
 
+# CCE 部署清单（Deployment/Service/配置/存储/SFS PV）。
+# 与环境强绑定：镜像仓库地址、SFS 地址、反代网段、副本与节点数都是本环境的事实，
+# 且要和 docs/ 下的迁移文档成套看——那份文档已经在 ignore 里。
+# 与 docs/ 的分工一致：仓库不放运维侧的真实部署参数。
+deploy/cce/
+
 # air 热重载构建日志
 build-errors.log
 

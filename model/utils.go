@@ -40,6 +40,19 @@ func InitBatchUpdater() {
 	})
 }
 
+// FlushBatchUpdate 立即把内存里累积的额度变动刷库，供优雅退出调用。
+//
+// 与后台定时刷库并发调用是安全的：batchUpdate 在锁内把 store 换成新 map，随后只遍历
+// 自己拿到的那个快照，两个调用者各刷各的，不会读到对方正在写的数据。
+//
+// 未开启批量更新时是空操作——那种情况下每笔变动本来就直接写库，没有东西要刷。
+func FlushBatchUpdate() {
+	if !common.BatchUpdateEnabled {
+		return
+	}
+	batchUpdate()
+}
+
 func addNewRecord(type_ int, id int, value int) {
 	batchUpdateLocks[type_].Lock()
 	defer batchUpdateLocks[type_].Unlock()

@@ -21,7 +21,14 @@ const tebibyte = int64(1024) * 1024 * 1024 * 1024
 // StartMediaStorageStatsTask 启动桶用量快照 cron（设计 §5.7）。
 // 每 StatsSnapshotIntervalMinutes 分钟调一次 StorageInfo 写快照 + 阈值告警。
 // 总开关关闭时空转（不建快照），避免对未配置的部署产生任何调用。
+//
+// 只在主节点上跑：多副本下每个 Pod 都会写一行 media_storage_stats 快照，
+// 并各自调一次 OBS StorageInfo——数据本身不会写坏（去重靠告警等级 + 时间窗），
+// 但快照表会出现 N 倍冗余行，桶用量趋势图会失真。
 func StartMediaStorageStatsTask() {
+	if !common.IsMasterNode {
+		return
+	}
 	gopool.Go(func() {
 		for {
 			interval := snapshotInterval()

@@ -4,13 +4,16 @@ import (
 	"bytes"
 	"context"
 	"embed"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
 	"os"
+	"os/signal"
 	"runtime/debug"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
@@ -169,7 +172,10 @@ func main() {
 	// 数据看板
 	go model.UpdateQuotaData()
 
-	if os.Getenv("CHANNEL_UPDATE_FREQUENCY") != "" {
+	if os.Getenv("CHANNEL_UPDATE_FREQUENCY") != "" && common.IsMasterNode {
+		// 只在主节点上跑：这个任务会遍历**全部**渠道去上游拉余额并写回库，多副本下每个
+		// 副本各跑一遍，等于把上游账单接口的调用量乘以副本数（结果本身是"最后写入者生效"，
+		// 不会写坏数据）。现网没有设这个变量，但设了就会触发，所以在这里一并收口。
 		frequency, err := strconv.Atoi(os.Getenv("CHANNEL_UPDATE_FREQUENCY"))
 		if err != nil {
 			common.FatalLog("failed to parse CHANNEL_UPDATE_FREQUENCY: " + err.Error())
@@ -244,9 +250,15 @@ func main() {
 		model.InitBatchUpdater()
 	}
 
+	var pprofServer *http.Server
 	if os.Getenv("ENABLE_PPROF") == "true" {
+		// Handler 留 nil 走 DefaultServeMux —— net/http/pprof 在 init 里注册的就是它。
+		// 之所以要拿住这个 *http.Server，是为了优雅退出时能把它一并关掉。
+		pprofServer = &http.Server{Addr: "0.0.0.0:8005"}
 		gopool.Go(func() {
-			log.Println(http.ListenAndServe("0.0.0.0:8005", nil))
+			if err := pprofServer.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+				log.Println("pprof server exited:", err)
+			}
 		})
 		go common.Monitor()
 		common.SysLog("pprof enabled")
@@ -260,7 +272,16 @@ func main() {
 	// Initialize HTTP server
 	server := gin.New()
 	if cidr := os.Getenv("TRUSTED_PROXY_CIDR"); cidr != "" {
-		server.SetTrustedProxies(strings.Split(cidr, ","))
+		// 解析失败必须吵出来。gin 在这时会返回一个 span（已经解析成功的部分），失败时通常
+		// 是空列表，也就是"谁都不信"——于是客户端 IP 退化成直接对端地址（ELB / WAF / 节点
+		// 的地址），所有用户共用一个 IP。表现是"某些用户莫名被限流"，不报任何错，
+		// 所以配置错一个字就会静默地把按 IP 的限流打废。
+		// 迁 CCE 时这个值必然要重新定（Pod 的直接对端从 WAF 实例变成源站 ELB / 节点网段），
+		// 因此这条日志同时也是迁移后的第一个检查点。
+		if err := server.SetTrustedProxies(strings.Split(cidr, ",")); err != nil {
+			common.SysError("TRUSTED_PROXY_CIDR 解析失败（" + cidr + "），将不信任任何代理，" +
+				"客户端 IP 会退化为直接对端地址、按 IP 的限流会误伤所有用户: " + err.Error())
+		}
 	}
 	server.Use(gin.CustomRecovery(func(c *gin.Context, err any) {
 		common.SysLog(fmt.Sprintf("panic detected: %v", err))
@@ -307,9 +328,143 @@ func main() {
 	// Log startup success message
 	common.LogStartupSuccess(startTime, port)
 
-	err = server.Run(":" + port)
-	if err != nil {
+	// ---------- 优雅退出 ----------
+	//
+	// 这里原来是 server.Run(":"+port)，等价于 http.ListenAndServe，完全不处理信号：K8s 删 Pod
+	// 时先发 SIGTERM，Go 进程按默认行为立即终止，于是
+	//   1) 在途请求（SSE / streaming / 长耗时同步请求）被当场切断；
+	//   2) 内存里批量累积的额度变动（BATCH_UPDATE_ENABLED=true 时 5s 一刷）丢最近一个周期，
+	//      额度账就对不上了；
+	//   3) 审核日志异步队列里尚未落库的记录一起丢。
+	// 单容器时这三件事只在人工升级时发生一次；上了 CCE 之后滚动升级、节点排水、缩容、
+	// Pod 漂移都会触发，频率高得多，所以必须补上。
+	httpServer := &http.Server{
+		Addr:    ":" + port,
+		Handler: server,
+		// 刻意不设 ReadTimeout / WriteTimeout / IdleTimeout：本服务是 AI 网关，单个
+		// streaming 请求可能持续几分钟，任何写超时都会把正常的长请求打断。
+		// 原先的 server.Run 也没设，这里保持一致。
+	}
+
+	// ListenAndServe 在 Shutdown 开始关监听器的那一刻就返回，早于等待在途请求 / 刷库 / 排空队列。
+	// 所以必须用这个 channel 把 main 挂住，否则进程会在收尾做完之前就退出，前面全白做。
+	shutdownDone := make(chan struct{})
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, syscall.SIGTERM, syscall.SIGINT)
+	go func() {
+		defer close(shutdownDone)
+		defer func() {
+			// 收尾里任何一处 panic 都不能让 main 永远卡在等待上：那会一直挂到 SIGKILL，
+			// 反倒连刷库的机会都没有。
+			if r := recover(); r != nil {
+				common.SysLog(fmt.Sprintf("graceful shutdown panic: %v", r))
+			}
+		}()
+		sig := <-sigCh
+		// 收到信号后不再接管：如果运维发现收尾卡住，第二次 SIGTERM/SIGINT 会走默认动作
+		// 立即结束进程。这比干等到 SIGKILL 可控。
+		signal.Stop(sigCh)
+		common.SysLog("received " + sig.String() + ", starting graceful shutdown")
+		shutdownGracefully(httpServer, pprofServer, shutdownTimeout())
+	}()
+
+	err = httpServer.ListenAndServe()
+	if err != nil && !errors.Is(err, http.ErrServerClosed) {
 		common.FatalLog("failed to start HTTP server: " + err.Error())
+	}
+
+	// 等收尾真正做完（正常关闭时 Shutdown 会关掉监听器，让上面那行返回 ErrServerClosed）。
+	<-shutdownDone
+	common.SysLog("graceful shutdown: completed, exiting")
+}
+
+const (
+	// shutdownDefaultTimeoutSeconds 收尾总预算的默认值（秒）。应当小于 Pod 的
+	// terminationGracePeriodSeconds，给最后那几秒留出余量。可用 SHUTDOWN_TIMEOUT 覆盖。
+	shutdownDefaultTimeoutSeconds = 300
+)
+
+// 这两个时长用 var 而不是 const，纯粹是为了可测：关闭流程的测试要把它压到 0，
+// 否则每个用例都得先白等 2 秒。生产代码里没人改它们。
+var (
+	// shutdownDrainDelay 置位 readiness 之后、真正 Shutdown 之前等的一小会儿，
+	// 让 ELB/Service 把本实例从后端摘掉。K8s 侧还有 preStop sleep 作为主要手段，
+	// 这里是兜底（也覆盖 docker stop 这类没有 preStop 的场景）。
+	shutdownDrainDelay = 2 * time.Second
+
+	// shutdownFinalReserve 必须留给「落盘」这类不能省的动作：刷批量额度 + 排空审核日志。
+	// 即使前面的等待全部超时，也要保证这段时间可用——否则「优雅退出」退成了「退出，
+	// 但把要保的东西丢了」。
+	shutdownFinalReserve = 10 * time.Second
+)
+
+func shutdownTimeout() time.Duration {
+	return time.Duration(common.GetEnvOrDefault("SHUTDOWN_TIMEOUT", shutdownDefaultTimeoutSeconds)) * time.Second
+}
+
+// shutdownGracefully 按顺序收尾，返回时进程已无在途工作，main 的 defer 随后关数据库。
+//
+// 顺序不能随意调换，每一步都对应一类会丢东西的状态：
+//  1. 置位 readiness 失败 —— 先让负载均衡别再往这里送新请求；
+//  2. Shutdown —— 等在途的普通 HTTP 请求（含 SSE / streaming）结束；
+//  3. 等 / 关 WebSocket —— hijacked 连接 Shutdown 不管，必须自己等（见 relay/wsregistry.go）；
+//  4. 刷批量额度 —— 到这里已无新生产者，刷下去的就是全部；
+//  5. 排空审核日志队列；
+//  6. 关 pprof。
+//
+// 刷库刻意放在 WebSocket 之后而不是之前：realtime 会话结束时也会结算额度
+// （service.PostWssConsumeQuota），早刷会漏掉它们。
+func shutdownGracefully(httpServer, pprofServer *http.Server, total time.Duration) {
+	deadline := time.Now().Add(total)
+	// 收尾动作的截止时间：总预算里先把「落盘」那段扣出来。
+	finalizing := deadline.Add(-shutdownFinalReserve)
+
+	// 1) 摘流量
+	common.MarkShuttingDown()
+	common.SysLog("graceful shutdown: readiness flipped to failing (drain delay " + shutdownDrainDelay.String() + ")")
+	time.Sleep(shutdownDrainDelay)
+
+	// 2) 等在途的普通请求。deadline 若已过，WithDeadline 返回的 context 立即就绪，
+	//    Shutdown 会马上返回错误，走下面的 Close 分支——不需要额外判空。
+	shutdownCtx, cancelShutdown := context.WithDeadline(context.Background(), finalizing)
+	shutdownErr := httpServer.Shutdown(shutdownCtx)
+	cancelShutdown()
+	if shutdownErr != nil {
+		common.SysLog("graceful shutdown: in-flight requests did not finish before the deadline, force closing: " + shutdownErr.Error())
+		// 掐掉剩余连接，否则进程退不出去（main 还等在 shutdownDone 上）。
+		_ = httpServer.Close()
+	} else {
+		common.SysLog("graceful shutdown: in-flight requests drained")
+	}
+
+	// 3) WebSocket
+	if n := relay.ActiveWebSocketCount(); n > 0 {
+		common.SysLog(fmt.Sprintf("graceful shutdown: waiting for %d websocket connection(s)", n))
+		wsCtx, cancelWS := context.WithDeadline(context.Background(), finalizing)
+		drained := relay.WaitWebSockets(wsCtx)
+		cancelWS()
+		if !drained {
+			// 宽限期用完：不能让几个长期存活的会话把升级无限拖住。
+			relay.CloseAllWebSockets()
+		}
+	}
+
+	// 4) 刷批量额度（此时已无新生产者）
+	model.FlushBatchUpdate()
+
+	// 5) 排空审核日志队列
+	drainBudget := time.Until(deadline)
+	if drainBudget < time.Second {
+		// 前面用光了预算也要给它一点时间：这是唯一一次落库机会。
+		drainBudget = time.Second
+	}
+	if model.DrainModerationLogQueue(drainBudget) {
+		common.SysLog("graceful shutdown: moderation log queue drained")
+	}
+
+	// 6) pprof（debug 端点，与流量无关，一并关掉更干净）
+	if pprofServer != nil {
+		_ = pprofServer.Close()
 	}
 }
 

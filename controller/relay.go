@@ -86,6 +86,11 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 			helper.WssError(c, ws, types.NewError(err, types.ErrorCodeGetChannelFailed, types.ErrOptionWithSkipRetry()).ToOpenAIError())
 			return
 		}
+		// 登记到优雅退出的等待名单里：连接一旦被 hijack，http.Server.Shutdown 就不再管它，
+		// 不记账的话滚动升级会把这些会话直接切断（见 relay/wsregistry.go）。
+		// 注意 defer 求值顺序：TrackWebSocket 立即执行并返回注销函数，注销先于 ws.Close 跑，
+		// 所以连接真正关闭前就已在名单里消失，不会让关闭流程多等一个正在关闭的连接。
+		defer relay.TrackWebSocket(ws)()
 		defer ws.Close()
 	}
 
