@@ -271,18 +271,7 @@ func main() {
 
 	// Initialize HTTP server
 	server := gin.New()
-	if cidr := os.Getenv("TRUSTED_PROXY_CIDR"); cidr != "" {
-		// 解析失败必须吵出来。gin 在这时会返回一个 span（已经解析成功的部分），失败时通常
-		// 是空列表，也就是"谁都不信"——于是客户端 IP 退化成直接对端地址（ELB / WAF / 节点
-		// 的地址），所有用户共用一个 IP。表现是"某些用户莫名被限流"，不报任何错，
-		// 所以配置错一个字就会静默地把按 IP 的限流打废。
-		// 迁 CCE 时这个值必然要重新定（Pod 的直接对端从 WAF 实例变成源站 ELB / 节点网段），
-		// 因此这条日志同时也是迁移后的第一个检查点。
-		if err := server.SetTrustedProxies(strings.Split(cidr, ",")); err != nil {
-			common.SysError("TRUSTED_PROXY_CIDR 解析失败（" + cidr + "），将不信任任何代理，" +
-				"客户端 IP 会退化为直接对端地址、按 IP 的限流会误伤所有用户: " + err.Error())
-		}
-	}
+	configureTrustedProxies(server)
 	server.Use(gin.CustomRecovery(func(c *gin.Context, err any) {
 		common.SysLog(fmt.Sprintf("panic detected: %v", err))
 		common.SysLog(fmt.Sprintf("stacktrace from panic: %s", string(debug.Stack())))
@@ -383,6 +372,34 @@ const (
 	// terminationGracePeriodSeconds，给最后那几秒留出余量。可用 SHUTDOWN_TIMEOUT 覆盖。
 	shutdownDefaultTimeoutSeconds = 300
 )
+
+// configureTrustedProxies 按 TRUSTED_PROXY_CIDR 配置 gin 的代理信任，**两个分支都必须显式设置**。
+//
+// 不能写成"不配置就不调 SetTrustedProxies"：gin.New() 的默认是
+// trustedProxies = {"0.0.0.0/0", "::/0"}、trustedCIDRs = 对应网段（谁都信），而 ClientIP()
+// 判断"要不要采信 X-Forwarded-For"时只看 trustedCIDRs，**没有"这份列表是否被配置过"的守卫**。
+// 所以不调用 ≠ 不信任代理，而是**信任所有代理**：ClientIP() 会直接采信 XFF 最左边那个值，
+// 客户端自己伪造这个头就能绕过按 IP 的限流，并把伪造的 IP 写进日志。
+// 未配置时必须显式设 nil，把可信列表清空（SetTrustedProxies 会把 trustedProxies 置 nil，
+// 而 isTrustedProxy 对 nil 返回 false）。
+//
+// 抽成独立函数是为了可测：这个默认值一旦回退成"谁都信"，运行时没有任何症状，
+// 只有第三方伪造 XFF 时才看得出来。见 main_test.go 的 TestTrustedProxyDefaultsToNobody。
+func configureTrustedProxies(server *gin.Engine) {
+	cidr := os.Getenv("TRUSTED_PROXY_CIDR")
+	if cidr == "" {
+		// 直连部署（前面没有反向代理）走这里。显式清空 = 不采信任何 XFF。
+		_ = server.SetTrustedProxies(nil)
+		common.SysLog("TRUSTED_PROXY_CIDR 未配置，已关闭代理信任：客户端 IP 取直接对端地址")
+		return
+	}
+	if err := server.SetTrustedProxies(strings.Split(cidr, ",")); err != nil {
+		// 注意失败时的状态不是"没配"：gin 保留的是**出错前已解析成功的那部分**，
+		// 所以"只有后面某一项写错"时前面几项仍然生效。排查时别假设它整份失效了。
+		common.SysError("TRUSTED_PROXY_CIDR 解析失败（" + cidr + "），已解析成功的部分仍会生效，" +
+			"客户端 IP 可能被错误解析（影响按 IP 的限流）: " + err.Error())
+	}
+}
 
 // 这两个时长用 var 而不是 const，纯粹是为了可测：关闭流程的测试要把它压到 0，
 // 否则每个用例都得先白等 2 秒。生产代码里没人改它们。

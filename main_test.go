@@ -3,11 +3,67 @@ package main
 import (
 	"net"
 	"net/http"
+	"net/http/httptest"
 	"testing"
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
+
+	"github.com/gin-gonic/gin"
+	"github.com/stretchr/testify/require"
 )
+
+// 未配置 TRUSTED_PROXY_CIDR 时，**绝不能采信 X-Forwarded-For**。
+//
+// 这条防的是一个没有运行时症状的回归：gin.New() 的默认可信网段是 0.0.0.0/0（谁都信），
+// 一旦有人把"未配置就显式设 nil"改回"未配置就不调用 SetTrustedProxies"，客户端自己
+// 加一个 X-Forwarded-For 头就能伪装成任意 IP——按 IP 的限流被绕过、日志里的来源 IP 失真，
+// 而且测试之外不会有任何报错。
+func TestTrustedProxyDefaultsToNobody(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	t.Run("未配置时忽略 X-Forwarded-For", func(t *testing.T) {
+		probe := newClientIPProbe(t, "")
+
+		require.Equal(t, "203.0.113.9", probe("203.0.113.9:1234", "1.2.3.4"),
+			"未配置代理时，客户端伪造的 X-Forwarded-For 不得被采信")
+	})
+
+	t.Run("配置了代理时按其网段采信", func(t *testing.T) {
+		probe := newClientIPProbe(t, "192.0.2.0/24")
+
+		// 对端在可信网段内 → 采信 XFF 最左边那个（即真实客户端）
+		require.Equal(t, "1.2.3.4", probe("192.0.2.10:1234", "1.2.3.4"),
+			"对端是可信代理时，应取 XFF 里的真实客户端 IP")
+		// 对端不在可信网段内 → 仍然不采信
+		require.Equal(t, "203.0.113.9", probe("203.0.113.9:1234", "1.2.3.4"),
+			"对端不在可信网段时，不得采信它带来的 X-Forwarded-For")
+	})
+}
+
+// newClientIPProbe 按给定配置建一个只暴露 /probe 的引擎，返回"发一个请求、取回它看到的
+// ClientIP"的函数。每个用例建自己的引擎：gin 对同一路径重复注册会直接 panic。
+func newClientIPProbe(t *testing.T, cidr string) func(remoteAddr, forwardedFor string) string {
+	t.Helper()
+	t.Setenv("TRUSTED_PROXY_CIDR", cidr)
+
+	engine := gin.New()
+	configureTrustedProxies(engine)
+
+	var seen string
+	engine.GET("/probe", func(c *gin.Context) { seen = c.ClientIP() })
+
+	return func(remoteAddr, forwardedFor string) string {
+		seen = ""
+		req := httptest.NewRequest(http.MethodGet, "/probe", nil)
+		req.RemoteAddr = remoteAddr
+		if forwardedFor != "" {
+			req.Header.Set("X-Forwarded-For", forwardedFor)
+		}
+		engine.ServeHTTP(httptest.NewRecorder(), req)
+		return seen
+	}
+}
 
 // 优雅退出的核心承诺：滚动升级时在途请求不被切断。这里用真实监听端口 + 真实 HTTP 请求
 // 验证，而不是只测各部件——各部件都测过但拼起来顺序错了，是这类改动最常见的翻车方式。
