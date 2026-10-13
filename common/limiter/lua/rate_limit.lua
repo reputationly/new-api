@@ -3,15 +3,13 @@
 -- ARGV[1]: 请求令牌数 (通常为1)
 -- ARGV[2]: 令牌生成速率 (每秒)
 -- ARGV[3]: 桶容量
+-- ARGV[4]: 当前时间（秒），由调用方传入；多实例依赖各机 NTP 校时
 
 local key = KEYS[1]
 local requested = tonumber(ARGV[1])
 local rate = tonumber(ARGV[2])
 local capacity = tonumber(ARGV[3])
-
--- 获取当前时间（Redis服务器时间）
-local now = redis.call('TIME')
-local nowInSeconds = tonumber(now[1])
+local nowInSeconds = tonumber(ARGV[4])
 
 -- 获取桶状态
 local bucket = redis.call('HMGET', key, 'tokens', 'last_time')

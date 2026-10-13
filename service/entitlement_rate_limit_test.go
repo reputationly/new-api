@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/common/limiter"
 	"github.com/alicebob/miniredis/v2"
 	"github.com/go-redis/redis/v8"
 
@@ -53,15 +54,18 @@ func TestAllowEntitlementRequest_MemoryAndRedisAgree(t *testing.T) {
 
 // Redis 路径的硬上限：半个窗口后仍在窗口内，必须拒绝（令牌桶会在这里放行）
 func TestAllowEntitlementRequest_RedisHardCap(t *testing.T) {
-	mr := withRedis(t)
+	withRedis(t)
 	t0 := time.Unix(1_800_000_000, 0)
-	mr.SetTime(t0)
+	now := t0
+	originalNow := limiter.Now
+	limiter.Now = func() time.Time { return now }
+	t.Cleanup(func() { limiter.Now = originalNow })
 	for i := 0; i < 3; i++ {
 		require.True(t, allowEntitlementRequest(95301, 1, 3))
 	}
-	mr.SetTime(t0.Add(30 * time.Second))
+	now = t0.Add(30 * time.Second)
 	require.False(t, allowEntitlementRequest(95301, 1, 3))
-	mr.SetTime(t0.Add(60 * time.Second))
+	now = t0.Add(60 * time.Second)
 	require.True(t, allowEntitlementRequest(95301, 1, 3))
 }
 

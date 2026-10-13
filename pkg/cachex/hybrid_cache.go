@@ -253,8 +253,8 @@ func (c *HybridCache[V]) DeleteMany(keys []string) (map[string]bool, error) {
 		pipe := c.redis.Pipeline()
 		cmds := make([]*redis.IntCmd, 0, len(fullKeys))
 		for _, k := range fullKeys {
-			// UNLINK is non-blocking vs DEL for large key batches.
-			cmds = append(cmds, pipe.Unlink(ctx, k))
+			// UNLINK requires Redis 4.0+; Huawei DCS uses Redis 3.0.
+			cmds = append(cmds, pipe.Del(ctx, k))
 		}
 		_, err := pipe.Exec(ctx)
 		if err != nil && !errors.Is(err, redis.Nil) {
