@@ -43,7 +43,7 @@ services:
       - dev-network
 
   redis:
-    image: redis:7-alpine
+    image: redis:3.0.7  # 与生产华为云 DCS Redis 3.0 对齐，本地即可发现 4.0+ 命令不兼容（见 AGENTS.md Rule 8）
     container_name: new-api-dev-redis
     restart: unless-stopped
     networks:
