@@ -50,8 +50,7 @@ services:
 #      - UMAMI_WEBSITE_ID=xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx  # Umami 网站 ID (Umami Website ID a8f20661-db79-43d8-876c-f4743e8b4c5a)
 #      - UMAMI_SCRIPT_URL=https://analytics.umami.is/script.js  # Umami 脚本 URL，默认为官方地址 (Umami Script URL, defaults to official URL)
 
-    depends_on:
-      - redis
+#    depends_on:
 #      - mysql  # Uncomment if using MySQL
     networks:
       - new-api-network
@@ -62,6 +61,7 @@ services:
       retries: 3
 
   redis:
+    profiles: [local]  # 生产环境用华为云 DCS（见 .env.prod.example），不启动；本地测试用 --profile local 激活
     image: crpi-xzr81d0490mc3794.cn-shanghai.personal.cr.aliyuncs.com/reputationly/redis:latest
     container_name: redis
     restart: always

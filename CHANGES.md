@@ -6,6 +6,7 @@ Base: [Calcium-Ion/new-api](https://github.com/Calcium-Ion/new-api) v1.0.0-rc.1
 
 - **docker-compose.yml**: all hardcoded secrets replaced with `${ENV_VAR:-default}` env-var form; postgres service gated behind `profiles: [local]` so it does not start in production
 - **Redis password**: added `REDIS_PASSWORD` env var; Redis connection string updated to carry auth credentials
+- **Redis on Huawei Cloud DCS**: production Redis moved from the local container to Huawei Cloud DCS Redis 3.0 primary/standby; the `redis` compose service is now gated behind `profiles: [local]` like postgres and `new-api` no longer `depends_on` it. Code made Redis 3.0 compatible in [#92](https://github.com/reputationly/new-api/pull/92) (see AGENTS.md Rule 8)
 - **.env.local.example** / **.env.prod.example**: aligned with the env-var changes above
 - **Watchtower**: added Watchtower service for zero-downtime online upgrades via HTTP API
 - **Docker images**: switched to Alibaba Cloud Container Registry (ACR) mirrors for `redis` and `postgres`; application image published to ACR under `reputationly/new-api`
