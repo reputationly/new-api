@@ -21,6 +21,21 @@ type QuotaData struct {
 	Quota     int    `json:"quota" gorm:"default:0"`
 }
 
+// UpdateQuotaData 周期性把本进程累积的看板增量落库。
+//
+// ⚠️ **刻意不做 IsMasterNode 门控**（多副本部署下这是必需的，不是漏了）。
+//
+// 原因：CacheQuotaData 是**进程内** map（没有任何 Redis 或跨进程共享），每个副本只在
+// 自己服务过的请求上累积，也只有自己能刷自己那份——SaveQuotaDataCache 遍历的是调用者
+// 本进程的 map。如果只在主节点跑这个循环：
+//   - 从节点累积的增量永远没人写库，看板只剩主节点那一份（≈ 1/N）；
+//   - 而且 SaveQuotaDataCache 正是清空 map 的那一步，不跑它，从节点的 map 永不释放，
+//     内存无界增长。
+//
+// 代价是 N 个副本会并发写 quota_data，于是 SaveQuotaDataCache 的「First 未命中 → Create」
+// 在并发下可能产生重复行（见 docs/cce-migration-analysis.md ⑧.1）。那个竞态的修法是给
+// quota_data 加唯一索引 + upsert，**不能靠把写入者收敛成一个**——写入者数量是由上面这条
+// 进程内约束决定的，收不了。该清理项优先级见 ⑧.1。
 func UpdateQuotaData() {
 	for {
 		if common.DataExportEnabled {
@@ -29,6 +44,24 @@ func UpdateQuotaData() {
 		}
 		time.Sleep(time.Duration(common.DataExportInterval) * time.Minute)
 	}
+}
+
+// FlushQuotaDataCache 立即把本进程累积的看板增量落库，供优雅退出调用。
+//
+// 与 UpdateQuotaData 的定时刷库是同一套内存态：不刷的话，退出时最多
+// DataExportInterval（默认 5 分钟）内累积的看板增量会随进程一起消失。
+// 单容器时 docker stop 也一样丢，但上了 CCE 之后滚动升级、节点排水、缩容都会触发，
+// 会持续累积成看板偏少——而且方向与 ⑧.1 的「偏多」相反，两个叠在一起，看板既不能
+// 当对账依据，也很难解释差在哪。
+//
+// 注意不要在这里先取 CacheQuotaDataLock 再调 SaveQuotaDataCache：sync.Mutex 不可重入，
+// 那样会自锁。空集合由 SaveQuotaDataCache 自己处理（遍历 0 次）。
+func FlushQuotaDataCache() {
+	// 关掉数据导出时没有任何东西被累积（LogQuotaData 的调用点也判这个开关），直接放行。
+	if !common.DataExportEnabled {
+		return
+	}
+	SaveQuotaDataCache()
 }
 
 var CacheQuotaData = make(map[string]*QuotaData)

@@ -409,7 +409,7 @@ var (
 	// 这里是兜底（也覆盖 docker stop 这类没有 preStop 的场景）。
 	shutdownDrainDelay = 2 * time.Second
 
-	// shutdownFinalReserve 必须留给「落盘」这类不能省的动作：刷批量额度 + 排空审核日志。
+	// shutdownFinalReserve 必须留给「落盘」这类不能省的动作：刷额度/看板增量 + 排空审核日志。
 	// 即使前面的等待全部超时，也要保证这段时间可用——否则「优雅退出」退成了「退出，
 	// 但把要保的东西丢了」。
 	shutdownFinalReserve = 10 * time.Second
@@ -425,7 +425,7 @@ func shutdownTimeout() time.Duration {
 //  1. 置位 readiness 失败 —— 先让负载均衡别再往这里送新请求；
 //  2. Shutdown —— 等在途的普通 HTTP 请求（含 SSE / streaming）结束；
 //  3. 等 / 关 WebSocket —— hijacked 连接 Shutdown 不管，必须自己等（见 relay/wsregistry.go）；
-//  4. 刷批量额度 —— 到这里已无新生产者，刷下去的就是全部；
+//  4. 刷内存里累积的两处状态 —— 额度变动 + 数据看板增量。到这里已无新生产者，刷下去的就是全部；
 //  5. 排空审核日志队列；
 //  6. 关 pprof。
 //
@@ -466,8 +466,9 @@ func shutdownGracefully(httpServer, pprofServer *http.Server, total time.Duratio
 		}
 	}
 
-	// 4) 刷批量额度（此时已无新生产者）
+	// 4) 刷内存里累积的两处状态：额度变动 + 数据看板增量（此时已无新生产者）
 	model.FlushBatchUpdate()
+	model.FlushQuotaDataCache()
 
 	// 5) 排空审核日志队列
 	drainBudget := time.Until(deadline)
