@@ -35,11 +35,14 @@ func IsShuttingDown() bool {
 //
 // 为什么需要它：请求处理函数里用 gopool.Go 起的那几个 goroutine，在函数返回后就被
 // http.Server.Shutdown 当成「请求已结束」了——Shutdown 只等在正常 HTTP 生命周期里的请求，
-// **不会等处理函数自己起的 goroutine**。而其中三处干的是退钱或记账：
+// **不会等处理函数自己起的 goroutine**。干退钱或记账的是这几处：
 //
-//   - service.ReturnPreConsumedQuota：请求失败时退还预扣额度；
-//   - service.BillingSession 的退款：资金来源回补 + 订阅额度回补 + 令牌额度回补；
-//   - model.LogQuotaData：数据看板的增量累积。
+//   - service.BillingSession.Refund（由 controller/relay.go 的失败路径调用）：
+//     资金来源回补 + 订阅额度回补 + 令牌额度回补——**这是线上唯一会被触发的退款路径**；
+//   - model.LogQuotaData：数据看板的增量累积；
+//   - service.ReturnPreConsumedQuota：请求失败时退还预扣额度。**注意它目前全仓库没有调用方**
+//     （含测试，是死代码），所以这一处改与不改都不影响线上；一并转成 GoCritical 只是为了让
+//     它将来被接上时天然是对的。别把它当成一条活路径来推理。
 //
 // 它们要么直写数据库，要么把增量放进进程内的累积态（批量更新的 store、看板 map）。
 // 两者都必须在收尾刷库**之前**发生：晚于刷库就进了再也没人刷的 store，晚于进程退出

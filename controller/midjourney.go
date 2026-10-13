@@ -120,6 +120,11 @@ func updateMidjourneyTaskRound(done func()) {
 		// defer 兜底：下面几个 continue/return 会跳过末尾那个显式 cancel()，
 		// 那样这个带超时的 ctx 只能等 15s 超时自己释放（既存问题；把循环体抽成
 		// 「一轮一个函数」之后才被 go vet 的 lostcancel 看出来）。
+		//
+		// 注意 defer 是**整个函数**返回时才执行，不是每轮迭代：这里在 for 里，
+		// 每个渠道会攒一个 ctx，到本轮结束才一起释放。不会有问题（都有 15s 超时、
+		// 渠道数有限），而且成功路径本来就已经显式 cancel() 了——代码读起来别误会成
+		// "每次迭代都释放了"。
 		defer cancel()
 		// 使用带有超时的 context 创建新的请求
 		req = req.WithContext(ctx)
@@ -130,6 +135,10 @@ func updateMidjourneyTaskRound(done func()) {
 			logger.LogError(ctx, fmt.Sprintf("Get Task Do req error: %v", err))
 			continue
 		}
+		// 响应体必须关：下面还有几处 continue（非 200、ReadAll 失败、反序列化失败）
+		// 会在到达末尾那句 resp.Body.Close() 之前跳走，不关就漏连接。
+		// 同样，defer 是整轮结束才跑，不是每次迭代——和上面的 cancel 一个道理。
+		defer resp.Body.Close()
 		if resp.StatusCode != http.StatusOK {
 			logger.LogError(ctx, fmt.Sprintf("Get Task status code: %d", resp.StatusCode))
 			continue
