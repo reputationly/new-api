@@ -704,6 +704,15 @@ func recordMediaLog(
 	}
 	model.RecordModerationLog(entry)
 	if upload != nil {
+		// 刻意**不**登记成 common.GoCritical，理由不是"它不是钱"，而是登了也白登：
+		// 这个上传自己的超时是 persistMediaTimeout = 30s（见文件末尾），比收尾留给
+		// "强关后结算 + 关键任务"的预算（shutdownSettleReserve，15s）还长——收尾会白等满
+		// 15s 却仍然保证不了它跑完，代价确定、收益不确定。要真等它，那段预算得加到 30s 以上，
+		// 那是从"等在途用户请求（SSE / streaming）"里抠出来的，不值得。
+		//
+		// 而且上面那段注释本来就写明：这条上传是尽力而为（key 先算、记录先落、上传后做），
+		// 唯一被保证的是**记录本身**——记录走审核日志队列，收尾会排空它，这个保证不受影响。
+		// 进程被 kill 时这张证据图丢失是既有且已知的取舍，不是这次要改的东西。
 		gopool.Go(upload)
 	}
 }
