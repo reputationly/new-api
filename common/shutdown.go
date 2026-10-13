@@ -1,6 +1,12 @@
 package common
 
-import "sync/atomic"
+import (
+	"context"
+	"sync/atomic"
+	"time"
+
+	"github.com/bytedance/gopkg/util/gopool"
+)
 
 // shuttingDown 标记进程已进入优雅退出流程。
 //
@@ -22,4 +28,63 @@ func MarkShuttingDown() {
 // IsShuttingDown 报告进程是否已进入关闭流程，供 /healthz 之类的探针端点读取。
 func IsShuttingDown() bool {
 	return shuttingDown.Load()
+}
+
+// ---------- 退出前必须等完的后台任务 ----------
+//
+// 为什么需要它：请求处理函数里用 gopool.Go 起的那几个 goroutine，在函数返回后就被
+// http.Server.Shutdown 当成「请求已结束」了——Shutdown 只等在正常 HTTP 生命周期里的请求，
+// **不会等处理函数自己起的 goroutine**。而其中三处干的是退钱或记账：
+//
+//   - service.ReturnPreConsumedQuota：请求失败时退还预扣额度；
+//   - service.BillingSession 的退款：资金来源回补 + 订阅额度回补 + 令牌额度回补；
+//   - model.LogQuotaData：数据看板的增量累积。
+//
+// 它们要么直写数据库，要么把增量放进进程内的累积态（批量更新的 store、看板 map）。
+// 两者都必须在收尾刷库**之前**发生：晚于刷库就进了再也没人刷的 store，晚于进程退出
+// 就会写到一半被 SIGKILL——用户被白扣，且不会报任何错。
+//
+// 收敛到这里之后，收尾只要「等这个计数归零 → 再刷库」，就保证每一笔退款要么已经落库、
+// 要么已经进了随后会被刷下去的 store。
+var criticalTasks atomic.Int64
+
+// GoCritical 起一个「退出前必须等它做完」的后台任务。适用范围见上。
+//
+// 用 defer 还账而不是在闭包末尾还：任务 panic 时也必须把计数还回去，否则退出会一直
+// 白等到预算用尽（gopool 会接住 panic，不会因此打崩进程，所以这行一定会执行）。
+func GoCritical(fn func()) {
+	criticalTasks.Add(1)
+	gopool.Go(func() {
+		defer criticalTasks.Add(-1)
+		fn()
+	})
+}
+
+// CriticalTaskCount 当前尚未结束的关键后台任务数。
+func CriticalTaskCount() int {
+	return int(criticalTasks.Load())
+}
+
+// WaitCriticalTasks 等待已登记的关键后台任务全部结束，直到 ctx 到期；返回是否已全部结束。
+//
+// 用「atomic 计数 + 轮询」而不是 sync.WaitGroup：WaitGroup 要求「计数归零后新增的 Add
+// 必须发生在 Wait 之前」，而这里恰好相反——收尾开始等待时仍可能有任务被登记
+// （主节点的定时任务在收尾期间也能触发退款）。轮询不受这个约束，代价只是 20ms 粒度；
+// 而且与 WaitWebSockets / DrainModerationLogQueue 的写法一致。
+func WaitCriticalTasks(ctx context.Context) bool {
+	if CriticalTaskCount() == 0 {
+		return true
+	}
+	ticker := time.NewTicker(20 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return CriticalTaskCount() == 0
+		case <-ticker.C:
+			if CriticalTaskCount() == 0 {
+				return true
+			}
+		}
+	}
 }

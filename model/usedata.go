@@ -33,9 +33,10 @@ type QuotaData struct {
 //     内存无界增长。
 //
 // 代价是 N 个副本会并发写 quota_data，于是 SaveQuotaDataCache 的「First 未命中 → Create」
-// 在并发下可能产生重复行（见 docs/cce-migration-analysis.md ⑧.1）。那个竞态的修法是给
-// quota_data 加唯一索引 + upsert，**不能靠把写入者收敛成一个**——写入者数量是由上面这条
-// 进程内约束决定的，收不了。该清理项优先级见 ⑧.1。
+// 在并发下可能产生重复行（两张 Fact 行），而 increaseQuotaData 是按 4 个字段匹配的批量
+// UPDATE（无主键、无 LIMIT），之后每笔增量都会同时加到两行上——看板求和偏大。
+// 那个竞态的修法是给 quota_data 加唯一索引 + upsert，**不能靠把写入者收敛成一个**：
+// 写入者数量是由上面这条进程内约束决定的，收不了。
 func UpdateQuotaData() {
 	for {
 		if common.DataExportEnabled {

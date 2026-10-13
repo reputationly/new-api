@@ -10,14 +10,17 @@ import (
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/types"
 
-	"github.com/bytedance/gopkg/util/gopool"
 	"github.com/gin-gonic/gin"
 )
 
 func ReturnPreConsumedQuota(c *gin.Context, relayInfo *relaycommon.RelayInfo) {
 	if relayInfo.FinalPreConsumedQuota != 0 {
 		logger.LogInfo(c, fmt.Sprintf("用户 %d 请求失败, 返还预扣费额度 %s", relayInfo.UserId, logger.FormatQuota(relayInfo.FinalPreConsumedQuota)))
-		gopool.Go(func() {
+		// 用 GoCritical 而不是 gopool.Go：这是「退钱」，必须在收尾刷库之前做完。
+		// 处理函数返回后 Shutdown 就认为请求结束了，不会等这里起的 goroutine，
+		// 于是这笔退款可能晚于 FlushBatchUpdate 进了一个再也没人刷的 store，
+		// 或者在直写数据库时被进程退出打断——用户被白扣。
+		common.GoCritical(func() {
 			relayInfoCopy := *relayInfo
 
 			err := PostConsumeQuota(&relayInfoCopy, -relayInfoCopy.FinalPreConsumedQuota, 0, false)

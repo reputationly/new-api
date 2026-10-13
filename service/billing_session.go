@@ -15,7 +15,6 @@ import (
 	"github.com/QuantumNous/new-api/setting/operation_setting"
 	"github.com/QuantumNous/new-api/types"
 
-	"github.com/bytedance/gopkg/util/gopool"
 	"github.com/gin-gonic/gin"
 )
 
@@ -121,7 +120,10 @@ func (s *BillingSession) Refund(c *gin.Context) {
 	subscriptionId := s.relayInfo.SubscriptionId
 	funding := s.funding
 
-	gopool.Go(func() {
+	// 用 GoCritical 而不是 gopool.Go：这里整段都是「退钱」（资金回补 + 订阅额度 + 令牌额度），
+	// 必须在收尾刷库之前做完。Shutdown 不会等处理函数自己起的 goroutine，晚于刷库就进了
+	// 再也没人刷的 store，晚于进程退出就会写到一半被杀。
+	common.GoCritical(func() {
 		// 1) 退还资金来源
 		if err := funding.Refund(); err != nil {
 			common.SysLog("error refunding billing source: " + err.Error())

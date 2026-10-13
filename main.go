@@ -425,6 +425,7 @@ func shutdownTimeout() time.Duration {
 //  1. 置位 readiness 失败 —— 先让负载均衡别再往这里送新请求；
 //  2. Shutdown —— 等在途的普通 HTTP 请求（含 SSE / streaming）结束；
 //  3. 等 / 关 WebSocket —— hijacked 连接 Shutdown 不管，必须自己等（见 relay/wsregistry.go）；
+//     3.5 等关键后台任务 —— 失败请求的退款跑在 gopool 里，Shutdown 同样不等；不等就会丢钱；
 //  4. 刷内存里累积的两处状态 —— 额度变动 + 数据看板增量。到这里已无新生产者，刷下去的就是全部；
 //  5. 排空审核日志队列；
 //  6. 关 pprof。
@@ -463,6 +464,25 @@ func shutdownGracefully(httpServer, pprofServer *http.Server, total time.Duratio
 		if !drained {
 			// 宽限期用完：不能让几个长期存活的会话把升级无限拖住。
 			relay.CloseAllWebSockets()
+		}
+	}
+
+	// 3.5) 等「退出前必须做完」的后台任务——主要是失败请求的退款。
+	//
+	// 这些任务跑在 gopool 里，**Shutdown 不会等它们**（处理函数一返回，Shutdown 就认为
+	// 那个请求结束了）。不等的话有两种丢法：开了批量更新时退款进了 store 却晚于下一步的
+	// 刷库（再也没人刷）；直写数据库时写到一半被进程退出打断。两者都等于用户被白扣。
+	// 等完之后每一笔退款要么已经落库、要么已经进了随后会被刷下去的 store。
+	if n := common.CriticalTaskCount(); n > 0 {
+		common.SysLog(fmt.Sprintf("graceful shutdown: waiting for %d critical background task(s)", n))
+		critCtx, cancelCrit := context.WithDeadline(context.Background(), finalizing)
+		waited := common.WaitCriticalTasks(critCtx)
+		cancelCrit()
+		if !waited {
+			// 只能如实记下来：这些退款可能已经落在 store 外，或写到一半被进程退出打断。
+			common.SysLog(fmt.Sprintf(
+				"graceful shutdown: %d critical background task(s) did not finish in time; "+
+					"some refunds / dashboard deltas may be lost", common.CriticalTaskCount()))
 		}
 	}
 
