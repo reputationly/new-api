@@ -359,6 +359,12 @@ const OtherSetting = () => {
     return statusState.status ? timestamp2string(timestamp) : '';
   };
 
+  // 本实例是否真的能通过 Watchtower 自升级（后端 /api/status 下发）。
+  // 判据不是"变量有没有值"——docker-compose 里那个变量的默认值是个非空占位串，
+  // 后端会把占位值也当成未配置（见 controller/system.go 的 watchtowerConfigured）。
+  const watchtowerConfigured =
+    statusState?.status?.watchtower_configured === true;
+
   return (
     <Row>
       <Col
@@ -568,17 +574,34 @@ const OtherSetting = () => {
           >
             {t('详情')}
           </Button>,
-          <Button
-            key='update'
-            type='primary'
-            loading={isUpdating}
-            disabled={isUpdating}
-            onClick={handleUpdate}
-          >
-            {t('立即安装')}
-          </Button>,
+          // 「立即安装」只在真的能自升级时才出现。这条路径依赖 watchtower 容器和
+          // 宿主机的 docker.sock，在 Kubernetes / CCE 部署下这两样都不该有；
+          // 留着按钮点了只会报错（而且报的还是"无法连接升级服务"，指错方向），
+          // 所以按后端下发的 watchtower_configured 隐藏。
+          watchtowerConfigured ? (
+            <Button
+              key='update'
+              type='primary'
+              loading={isUpdating}
+              disabled={isUpdating}
+              onClick={handleUpdate}
+            >
+              {t('立即安装')}
+            </Button>
+          ) : null,
         ]}
       >
+        {!watchtowerConfigured && (
+          <Banner
+            type='info'
+            fullMode={false}
+            description={t(
+              '当前部署不支持页面内升级（未配置 Watchtower）。请在容器平台执行滚动升级，例如云容器引擎控制台的「升级」，或 kubectl set image。',
+            )}
+            closeIcon={null}
+            style={{ marginBottom: 12 }}
+          />
+        )}
         <div dangerouslySetInnerHTML={{ __html: updateData.content }}></div>
       </Modal>
     </Row>
