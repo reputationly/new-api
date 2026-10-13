@@ -140,6 +140,17 @@ For request structs that are parsed from client JSON and then re-marshaled to up
 
 When working on tiered/dynamic billing (expression-based pricing), you MUST read `pkg/billingexpr/expr.md` first. It documents the design philosophy, expression language (variables, functions, examples), full system architecture (editor → storage → pre-consume → settlement → log display), token normalization rules (`p`/`c` auto-exclusion), quota conversion, and expression versioning. All code changes to the billing expression system must follow the patterns described in that document.
 
+### Rule 8: Redis Compatibility — Redis 3.0 (Huawei Cloud DCS)
+
+Production Redis is Huawei Cloud DCS Redis 3.0 primary/standby (based on open-source Redis 3.0.7). Local/test containers run newer Redis, so incompatible commands pass tests and only fail in production. All Redis code MUST work on Redis 3.0:
+
+- Multi-field hash writes: use `HMSet`, not `HSet(ctx, key, map/pairs...)` (multi-field `HSET` needs Redis 4.0). Single-field `HSet(ctx, key, field, value)` is fine.
+- Deleting keys: use `Del`, not `Unlink` (4.0).
+- Lua scripts: do NOT call `TIME` (or other non-deterministic commands) before write commands — Redis 3.0 rejects it with `Write commands not allowed after non deterministic commands`. Pass the current time from Go via `ARGV` (see `common/limiter/`).
+- Scripts: use `redis.NewScript(src).Run(...)` (falls back to `EVAL` on `NOSCRIPT`); do not `ScriptLoad` once and keep calling `EvalSha` with a fixed SHA — the script cache is lost on DCS failover/restart.
+- Also unavailable on 3.0 (non-exhaustive): Streams (`XADD` etc., 5.0), `ZPOPMIN`/`ZPOPMAX`/`BZPOPMIN` (5.0), `GEO*` and `BITFIELD` (3.2), `SPOP key count` (3.2), `MEMORY USAGE` and `SWAPDB` (4.0), `SET ... KEEPTTL` (6.0), `LPOS` (6.0.6), `SET ... GET` / `GETDEL` / `GETEX` / `COPY` (6.2), RESP3 / client-side caching (6.0).
+- When adding a new Redis command, check its "Available since" version on redis.io; if it is newer than 3.0, use a 3.0-compatible alternative. Verify against a `redis:3.0.7` container.
+
 # CLAUDE.md
 
 Behavioral guidelines to reduce common LLM coding mistakes. Merge with project-specific instructions as needed.
