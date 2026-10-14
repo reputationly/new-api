@@ -34,6 +34,16 @@ services:
       - BATCH_UPDATE_ENABLED=true  # 是否启用批量更新 (Whether to enable batch update)
       - NODE_NAME=${NODE_NAME:-new-api-node-1}  # 节点名称，用于审计日志中标识节点身份；多节点/容器部署时建议设置 (Node name used in audit logs; recommended when running multiple instances or in containers)
       - STREAMING_TIMEOUT=${STREAMING_TIMEOUT:-120}  # 流模式无响应超时时间，单位秒，默认120秒 (Streaming no-response timeout in seconds, default 120s)
+      # 优雅退出的收尾总预算（秒）。这里默认 8，而**不是**代码里的 300：
+      # 停掉本容器的那一方（compose / docker stop / watchtower 走的都是 ContainerStop）
+      # 默认在 SIGTERM 之后 10s 就 SIGKILL；而收尾里「刷批量额度 + 刷看板增量 + 排空审核日志」
+      # 排在「等在途请求」之后，预算一旦大于这个窗口，那几步就永远执行不到——既和以前一样
+      # 丢数据，还白等一整段。8 让预算落在窗口内到期：强关在途连接（它们本来也会被 SIGKILL
+      # 掐掉）→ 立刻刷库排空。实测（真实二进制 + 一个卡住的在途请求）：SIGTERM→退出 2.0s，
+      # 刷库与排空都执行；不设这个值则在 10s 处被 SIGKILL，那几步一次都没跑。
+      # 要给它更宽的预算，必须**同时**把容器侧的 SIGKILL 窗口一起放大（compose 是
+      # stop_grace_period，K8s 是 terminationGracePeriodSeconds），且新窗口 ≥ 本值 + 5s。
+      - SHUTDOWN_TIMEOUT=${SHUTDOWN_TIMEOUT:-8}
       - TRUSTED_PROXY_CIDR=${TRUSTED_PROXY_CIDR}  # 反向代理子网，用于从X-Forwarded-For取真实IP (Trusted proxy CIDR for real IP extraction)
       - SESSION_SECRET=${SESSION_SECRET}  # 多机部署时设置，必须修改这个随机字符串！！ （multi-node deployment, set this to a random string!!!!!!!）
       # 在线升级（Watchtower）：下面两个值必须跟 watchtower 服务里的 WATCHTOWER_HTTP_API_TOKEN 一致
