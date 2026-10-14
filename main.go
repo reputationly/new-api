@@ -368,9 +368,29 @@ func main() {
 }
 
 const (
-	// shutdownDefaultTimeoutSeconds 收尾总预算的默认值（秒）。应当小于 Pod 的
-	// terminationGracePeriodSeconds，给最后那几秒留出余量。可用 SHUTDOWN_TIMEOUT 覆盖。
-	shutdownDefaultTimeoutSeconds = 300
+	// shutdownDefaultTimeoutSeconds 收尾总预算的默认值（秒）。
+	//
+	// 为什么默认是 8，而不是"一个宽裕的值"：进程能被等多久**不由这里决定**。停容器的那
+	// 一方发出 SIGTERM 之后，到点就 SIGKILL；而收尾里「刷批量额度 + 刷看板增量 + 排空审核
+	// 日志」排在「等在途请求」之后，它们的截止时间是「预算 − 25s」（见下面两段预留）。
+	// 预算一旦大于外部窗口，这几步就永远执行不到——和没有优雅退出一样丢数据，还额外把
+	// 停机时间拉长（监听器已经关了，进程却还挂着占位）。
+	//
+	// 8 落在最常见的 10s 窗口之内：docker stop / docker compose 默认 10s；页面「立即安装」
+	// 走 watchtower，窗口是它自己的 --stop-timeout（环境变量 WATCHTOWER_TIMEOUT），默认也是
+	// 10s，而且它**不读**容器上的 StopTimeout。8 秒的走法是：2s 摘流量 → 立刻强关在途连接
+	// → 立刻刷库 → 剩下的约 6s 排空审核队列。
+	//
+	// 已知取舍（不要写成"该保的都保住了"）：8 < 两段预留之和 25s，所以「等 WebSocket 强关
+	// 后的结算」与「等退款这类关键任务」这两步实际是**等 0 秒**——SIGTERM 那一刻正在跑的
+	// 退款仍可能丢。这与改造前（收到信号立即退出，什么都不刷）持平，不是退步；但要真正等到
+	// 它们，预算至少要 25s，而且必须**同时**把停容器那一侧的窗口放大到其 +5s 以上：
+	// compose 是 stop_grace_period，watchtower 是 WATCHTOWER_TIMEOUT。
+	//
+	// 默认取小值而不是取大值，是为了不依赖"部署方记得设对"：默认值必须安全。
+	// K8s/CCE 那侧给了更长的宽限期，因此**显式**设值（terminationGracePeriodSeconds 340
+	// 配 SHUTDOWN_TIMEOUT 320），不受这里影响。可用 SHUTDOWN_TIMEOUT 覆盖。
+	shutdownDefaultTimeoutSeconds = 8
 )
 
 // configureTrustedProxies 按 TRUSTED_PROXY_CIDR 配置 gin 的代理信任，**两个分支都必须显式设置**。
