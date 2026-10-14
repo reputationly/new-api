@@ -473,6 +473,17 @@ func shutdownGracefully(httpServer, pprofServer *http.Server, total time.Duratio
 	common.SysLog("graceful shutdown: readiness flipped to failing (drain delay " + shutdownDrainDelay.String() + ")")
 	time.Sleep(shutdownDrainDelay)
 
+	// 预算不大于两段预留之和时，下面第 2/3/3.5 步拿到的是**已经过期**的截止时间，实际等 0 秒。
+	// 这是预算偏小时的预期走法（见 shutdownDefaultTimeoutSeconds），不是异常——但紧跟着那句
+	// "in-flight requests did not finish before the deadline" 会被读成"请求没跑完"的故障，
+	// 于是每次升级都要有人去排查一遍并不存在的问题。先明确说一句，把这次收尾的取舍讲清楚。
+	if total <= shutdownFinalReserve+shutdownSettleReserve {
+		common.SysLog(fmt.Sprintf(
+			"graceful shutdown: budget %s <= reserves %s, so this run does NOT wait for in-flight requests / "+
+				"websocket settlement / critical tasks; it force-closes, flushes, then drains (expected, not an error)",
+			total, shutdownFinalReserve+shutdownSettleReserve))
+	}
+
 	// 2) 等在途的普通请求。deadline 若已过，WithDeadline 返回的 context 立即就绪，
 	//    Shutdown 会马上返回错误，走下面的 Close 分支——不需要额外判空。
 	shutdownCtx, cancelShutdown := context.WithDeadline(context.Background(), preFinalizing)
