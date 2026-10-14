@@ -359,9 +359,10 @@ const OtherSetting = () => {
     return statusState.status ? timestamp2string(timestamp) : '';
   };
 
-  // 本实例是否真的能通过 Watchtower 自升级（后端 /api/status 下发）。
-  // 判据不是"变量有没有值"——docker-compose 里那个变量的默认值是个非空占位串，
-  // 后端会把占位值也当成未配置（见 controller/system.go 的 watchtowerConfigured）。
+  // 本实例是否接了 Watchtower 自升级（后端 /api/status 下发）。
+  // 后端判的是 WATCHTOWER_API_TOKEN / WATCHTOWER_API_URL 两个变量在不在：
+  // compose 部署下两个都在 → 按钮显示；迁到 CCE/K8s 后这两行被整行删掉 → 按钮隐藏。
+  // 判据细节见 controller/system.go 的 watchtowerConfigured。
   const watchtowerConfigured =
     statusState?.status?.watchtower_configured === true;
 

@@ -94,9 +94,9 @@ func GetStatus(c *gin.Context) {
 		"self_use_mode_enabled":         operation_setting.SelfUseModeEnabled,
 		"default_use_auto_group":        setting.DefaultUseAutoGroup,
 
-		// 是否真的能通过 Watchtower 自升级。前端据此决定「立即安装」按钮显不显示——
-		// 在 CCE/K8s 部署下这个能力不存在，按钮留着点了只会报错。
-		// 注意它判的是「非空且不是 compose 的占位值」，不是简单的非空（见 controller/system.go）。
+		// 是否接了 Watchtower 自升级。前端据此决定「立即安装」按钮显不显示——
+		// 在 CCE/K8s 部署下这个能力不存在（那两个环境变量会被整行删掉），按钮留着点了只会报错。
+		// 判据是「两个变量都非空」，不是「token 不等于 compose 的默认值」（见 controller/system.go）。
 		"watchtower_configured": watchtowerConfigured(),
 
 		"usd_exchange_rate": operation_setting.USDExchangeRate,
