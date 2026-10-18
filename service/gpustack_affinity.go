@@ -5,12 +5,17 @@ import (
 	"hash/fnv"
 	"io"
 	"net/http"
+	"sort"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
+	appconstant "github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/dto"
+
+	"github.com/gin-gonic/gin"
+	"github.com/tidwall/gjson"
 )
 
 // GPUStack 实例亲和：把同一段对话的后续轮次钉回同一个模型实例。
@@ -21,9 +26,15 @@ import (
 // 4 副本上受控回放（8 会话 × 5 轮）实测命中率 34.1%，逐轮命中占比
 // 0/0/38/62/75%——随机分流的特征曲线。
 //
-// 键取「对话前缀」而不是某个会话 id：多轮累积时首条消息恒定不变，正好等价于前缀
-// 缓存的命中条件，而且不需要客户端配合送任何 header。不同会话共享同一份文档时也会
-// 落到同一实例，比按会话 id 更贴合缓存的实际形状。
+// 键的取法分两层：优先客户端送来的显式会话标识（渠道配的 gjson 路径、
+// prompt_cache_key、metadata 里的 conversation/session 等字段），取不到再对消息
+// 内容做头/中/尾分段采样。刻意不用 user 字段——它是用户级不是会话级，同一用户
+// 开多个窗口就会重新塌回「全量钉一台」。
+//
+// 2026-10-18 事故的教训：内容采样只看头部会在「共享模板开头」的负载下坍缩——
+// 线上首条消息是 ~370KB 的公共系统提示，旧实现 2048B 预算在 messages[0] 里耗尽，
+// 全系统请求哈希逐字节相同，全部流量被钉死在一个实例上直到 KV 打满。分段采样
+// 保证区分位永远参与；同键流量合法地并发超限时，再由在飞计数做有界负载溢出。
 //
 // 做法是**直连实例**（改写目标 URL 为 worker_ip:port），而不是给网关下发路由头。
 //
@@ -44,15 +55,18 @@ import (
 // 退回渠道原本的 Base URL（网关），可用性不低于不做亲和。
 
 const (
-	// gpustackAffinityPrefixChars 参与哈希的前缀字符数上限。取 2048 是因为只需要
-	// 一个稳定的标识，不需要读完文档——线上首条消息可达 80 万字符，整段哈希既慢
-	// 又没有额外收益。
-	gpustackAffinityPrefixChars = 2048
-	// gpustackAffinityPrefixMessages 参与哈希的消息条数。第一轮是 [user]，第二轮是
-	// [user, assistant, user]，取前 2 条即可在各轮之间保持不变。
-	gpustackAffinityPrefixMessages = 2
-	gpustackInstanceCacheTTL       = 30 * time.Second
-	gpustackInstanceFetchTimeout   = 5 * time.Second
+	// gpustackAffinityKeyMessages 参与内容采样的非空消息条数。取前 2 条：
+	// 首轮 [system, user] 与后续各轮的采样面一致，第一轮就能粘到同一实例。
+	gpustackAffinityKeyMessages = 2
+	// gpustackAffinityKeySampleLen 每条消息头/中/尾各采样的字节数。
+	// 只需要稳定区分度，不需要读完全文。
+	gpustackAffinityKeySampleLen = 512
+	// 溢出阈值默认值：见 ChannelSettings 注释。KV cache 被「在飞上下文总量」
+	// 打满——线上实测 2~3 个几十万 token 的大会话就把单实例顶到 100%。
+	gpustackAffinityDefaultMaxInflight      = 6
+	gpustackAffinityDefaultMaxInflightBytes = 3 * 1024 * 1024
+	gpustackInstanceCacheTTL                = 30 * time.Second
+	gpustackInstanceFetchTimeout            = 5 * time.Second
 	// gpustackInstanceFailureBackoff 拉取失败后的最短重试间隔。
 	//
 	// 没有它的话：失败不写时间戳 → 每个后续请求都判定「该刷新了」→ 单飞标记一清
@@ -155,11 +169,12 @@ func GPUStackAffinityLogAllowed(key string) bool {
 // （拉到 0 条实例是 HTTP 200 + total=0，不是报错），2026-09-15 那次定位花了
 // 两小时，全靠读 gpustack 源码倒推。日志的措辞要直接把原因写出来。
 func GPUStackAffinityBaseURL(
+	c *gin.Context,
 	setting dto.ChannelSettings,
 	channelID int,
 	baseURL string,
 	upstreamModelName string,
-	messages []dto.Message,
+	request *dto.GeneralOpenAIRequest,
 ) string {
 	if !setting.GPUStackAffinity {
 		return ""
@@ -175,8 +190,11 @@ func GPUStackAffinityBaseURL(
 		}
 		return ""
 	}
-	prefix := gpustackAffinityPrefix(messages)
-	if prefix == "" {
+	if request == nil {
+		return ""
+	}
+	affKey := gpustackAffinityKey(c, setting, request)
+	if affKey == "" {
 		return ""
 	}
 	// 缓存按「渠道」而不是「渠道+模型」：管理 API 只能按 model_id 过滤而我们只有
@@ -215,14 +233,87 @@ func GPUStackAffinityBaseURL(
 		}
 		return ""
 	}
-	picked := gpustackPickInstance(instances, prefix)
+	maxInflight, maxBytes := gpustackAffinityCaps(setting)
+	picked, spilled, hint := gpustackPickWithLoad(instances, affKey, maxInflight, maxBytes)
+	// 只有需要溢出判断时才记账：两维都关就是纯亲和，省掉每次请求的读写。
+	// 没有 context 就没有收尾钩子的落点（内部测试路径），不记账。
+	if c != nil && (maxInflight >= 0 || maxBytes >= 0) {
+		member := gpustackLoadMember(gpustackAffinityRequestID(c), gpustackPromptBytes(c, request))
+		gpustackLoadAcquire(picked.hashKey(), member)
+		var once sync.Once
+		done := func() { once.Do(func() { gpustackLoadRelease(picked.hashKey(), member) }) }
+		common.SetContextKey(c, appconstant.ContextKeyGPUStackAffinityDone, done)
+	}
 	target := picked.DirectBaseURL()
+	if spilled && GPUStackAffinityLogAllowed(fmt.Sprintf("spill|%d", channelID)) {
+		common.SysError(fmt.Sprintf(
+			"gpustack affinity: 渠道 %d 溢出——首选实例已饱和（%s），本次改投实例 %d（%s）",
+			channelID, hint, picked.ID, target))
+	}
 	if common.DebugEnabled {
 		common.SysLog(fmt.Sprintf(
-			"gpustack affinity: 渠道 %d 模型 %s → 实例 %d（%s），候选 %d 个",
-			channelID, modelName, picked.ID, target, len(instances)))
+			"gpustack affinity: 渠道 %d 模型 %s → 实例 %d（%s），候选 %d 个%s",
+			channelID, modelName, picked.ID, target, len(instances),
+			map[bool]string{true: "，溢出", false: ""}[spilled]))
 	}
 	return target
+}
+
+// GPUStackAffinityDone 释放在飞计数。在 TextHelper 返回处（含流式结束与提前失败）
+// 和 DoApiRequest 放弃直连改走网关时调用；重复调用安全。
+func GPUStackAffinityDone(c *gin.Context) {
+	if c == nil {
+		return
+	}
+	v, ok := common.GetContextKey(c, appconstant.ContextKeyGPUStackAffinityDone)
+	if !ok {
+		return
+	}
+	common.SetContextKey(c, appconstant.ContextKeyGPUStackAffinityDone, nil)
+	if done, ok := v.(func()); ok && done != nil {
+		done()
+	}
+}
+
+// gpustackAffinityCaps 解析两个溢出阈值：0 取默认，负数关闭该维度。
+func gpustackAffinityCaps(setting dto.ChannelSettings) (maxInflight int64, maxBytes int64) {
+	maxInflight = int64(setting.GPUStackAffinityMaxInflight)
+	if maxInflight == 0 {
+		maxInflight = gpustackAffinityDefaultMaxInflight
+	}
+	maxBytes = setting.GPUStackAffinityMaxInflightBytes
+	if maxBytes == 0 {
+		maxBytes = gpustackAffinityDefaultMaxInflightBytes
+	}
+	return maxInflight, maxBytes
+}
+
+// gpustackAffinityRequestID 取 new-api 自己的请求 id 做在飞成员名；
+// 中间件没塞（例如内部测试路径）时退化成随机串。
+func gpustackAffinityRequestID(c *gin.Context) string {
+	if c != nil {
+		if id := strings.TrimSpace(c.GetString(common.RequestIdKey)); id != "" {
+			return id
+		}
+	}
+	return "auto-" + common.GetRandomString(12)
+}
+
+// gpustackPromptBytes 用原始请求体长度估计在飞上下文体量。比逐字段相加准
+// （messages/tools/system 全覆盖），且 BodyStorage 本来就有缓存，几乎免费。
+func gpustackPromptBytes(c *gin.Context, req *dto.GeneralOpenAIRequest) int64 {
+	if c != nil {
+		if storage, err := common.GetBodyStorage(c); err == nil {
+			if body, err := storage.Bytes(); err == nil && len(body) > 0 {
+				return int64(len(body))
+			}
+		}
+	}
+	var n int64
+	for _, m := range req.Messages {
+		n += int64(len(m.Role) + len(m.StringContent()) + len(m.ToolCalls))
+	}
+	return n
 }
 
 // dedupeStrings 去重并保序，仅用于日志里列出实际见到的模型名。
@@ -256,64 +347,166 @@ func gpustackInstancesForModel(
 	return out
 }
 
-// gpustackAffinityPrefix 取对话的稳定前缀。角色一起参与，避免「同样的文本但角色
-// 不同」被当成同一段对话。
+// gpustackAffinityMetadataPaths metadata 里按惯例可能存在的会话标识字段，
+// 依次尝试。user_id 不在列——它是用户级标识，不是会话级。
+var gpustackAffinityMetadataPaths = []string{
+	"conversation_id", "session_id", "chat_id", "thread_id",
+}
+
+// gpustackAffinityKey 决定「这是不是同一段对话」。
 //
+// 显式标识优先（渠道配的 gjson 路径、prompt_cache_key、metadata 会话字段），
+// 都取不到时对消息内容做分段采样。刻意不取 user 字段：它标识的是用户而不是
+// 会话，同一用户多窗口会重新塌回单实例——正是要修掉的问题。
+func gpustackAffinityKey(c *gin.Context, setting dto.ChannelSettings, req *dto.GeneralOpenAIRequest) string {
+	if path := strings.TrimSpace(setting.GPUStackAffinityKeyGJSON); path != "" {
+		if v := gpustackAffinityGJSONValue(c, path); v != "" {
+			return "g:" + v
+		}
+	}
+	if k := strings.TrimSpace(req.PromptCacheKey); k != "" {
+		return "p:" + k
+	}
+	if len(req.Metadata) > 0 {
+		for _, p := range gpustackAffinityMetadataPaths {
+			if v := strings.TrimSpace(gjson.GetBytes(req.Metadata, p).String()); v != "" {
+				return "m:" + v
+			}
+		}
+	}
+	if k := gpustackAffinityContentKey(req.Messages); k != "" {
+		return "c:" + k
+	}
+	return ""
+}
+
+// gpustackAffinityGJSONValue 从原始请求体里按 gjson 路径取自定义亲和键。
+// 拿不到（路径不存在、值非标量）都算「这条来源没有」，退回下一层。
+func gpustackAffinityGJSONValue(c *gin.Context, path string) string {
+	if c == nil {
+		return ""
+	}
+	storage, err := common.GetBodyStorage(c)
+	if err != nil {
+		return ""
+	}
+	body, err := storage.Bytes()
+	if err != nil || len(body) == 0 {
+		return ""
+	}
+	res := gjson.GetBytes(body, path)
+	if !res.Exists() {
+		return ""
+	}
+	return strings.TrimSpace(res.String())
+}
+
+// gpustackAffinityContentKey 对前若干条非空消息做分段采样式成键。
+// 角色一起参与，避免「同样的文本但角色不同」被当成同一段对话。
 // 必须有真正的内容才返回非空：只有角色没有内容时若照样成键，所有空内容请求会哈希
 // 到同一个实例——那比不做亲和更糟。
-func gpustackAffinityPrefix(messages []dto.Message) string {
+func gpustackAffinityContentKey(messages []dto.Message) string {
 	var b strings.Builder
-	hasContent := false
-	for idx, msg := range messages {
-		if idx >= gpustackAffinityPrefixMessages || b.Len() >= gpustackAffinityPrefixChars {
+	wrote := 0
+	for _, msg := range messages {
+		if wrote >= gpustackAffinityKeyMessages {
 			break
 		}
 		content := strings.TrimSpace(msg.StringContent())
 		if content == "" {
 			continue
 		}
-		// 预算必须在写入角色**之前**算：先写角色再算的话，第二条消息上
-		// gpustackAffinityPrefixChars - b.Len() 会变成负数（首条内容
-		// 2033~2040 字节时可复现），content[:负数] 直接 panic。
-		// 这正好落在本功能的目标流量里（模板化的 2 KB 首条消息）。
-		remain := gpustackAffinityPrefixChars - b.Len() - len(msg.Role) - 2
-		if remain <= 0 {
-			break
-		}
-		hasContent = true
+		wrote++
 		b.WriteString(msg.Role)
 		b.WriteByte('\x1f')
-		if len(content) > remain {
-			// 按字节截断即可：这是哈希输入，不需要是合法的 UTF-8，只要稳定。
-			content = content[:remain]
-		}
-		b.WriteString(content)
+		gpustackWriteSample(&b, content)
 		b.WriteByte('\x1e')
 	}
-	if !hasContent {
+	if wrote == 0 {
 		return ""
 	}
 	return b.String()
 }
 
-// gpustackPickInstance 用 HRW(最高随机权重)选实例。
+// gpustackWriteSample 头/中/尾各采一段（按字节截取，是哈希输入，不需要是合法 UTF-8）。
+//
+// 只取头部会在「共享模板开头、内容在后」的负载下失去区分度：线上首条消息是
+// ~370KB 的公共系统提示，头 2KB 对所有请求逐字节相同——10-18 事故全量钉单机
+// 就是这么来的。中/尾段保证文档正文与任务差异一定落在键里；消息短时三段重叠
+// 也没关系，直接整段写入。
+func gpustackWriteSample(b *strings.Builder, s string) {
+	const seg = gpustackAffinityKeySampleLen
+	if len(s) <= 3*seg {
+		b.WriteString(s)
+		return
+	}
+	b.WriteString(s[:seg])
+	b.WriteByte('\x1f')
+	mid := (len(s) - seg) / 2
+	b.WriteString(s[mid : mid+seg])
+	b.WriteByte('\x1f')
+	b.WriteString(s[len(s)-seg:])
+}
+
+// gpustackRankInstances 按 HRW(最高随机权重)分数给实例降序排名。
 //
 // 不用取模：实例数一变，取模会把所有会话重新打乱、全部缓存作废；HRW 在实例增减时
-// 只重映射 1/N 的会话。
-func gpustackPickInstance(instances []GPUStackInstance, prefix string) GPUStackInstance {
-	best := instances[0]
-	var bestScore uint64
-	for idx, inst := range instances {
+// 只重映射 1/N 的会话。返回完整名次是为了溢出——首选饱和时同键一致地退到次选，
+// 而不是随机另挑一个。
+func gpustackRankInstances(instances []GPUStackInstance, key string) []GPUStackInstance {
+	type scored struct {
+		inst  GPUStackInstance
+		score uint64
+	}
+	list := make([]scored, len(instances))
+	for i, inst := range instances {
 		h := fnv.New64a()
-		_, _ = h.Write([]byte(prefix))
+		_, _ = h.Write([]byte(key))
 		_, _ = h.Write([]byte{0})
 		_, _ = h.Write([]byte(inst.hashKey()))
-		score := mix64(h.Sum64())
-		if idx == 0 || score > bestScore {
-			best, bestScore = inst, score
+		list[i] = scored{inst, mix64(h.Sum64())}
+	}
+	sort.SliceStable(list, func(a, b int) bool { return list[a].score > list[b].score })
+	ranked := make([]GPUStackInstance, len(list))
+	for i, s := range list {
+		ranked[i] = s.inst
+	}
+	return ranked
+}
+
+// gpustackPickInstance 是纯亲和版本的选择（排名第一名），保留给测试与
+// 「阈值全关」的路径。
+func gpustackPickInstance(instances []GPUStackInstance, key string) GPUStackInstance {
+	return gpustackRankInstances(instances, key)[0]
+}
+
+// gpustackPickWithLoad 有界负载的一致性哈希：按 HRW 名次取第一个未超在飞阈值
+// 的实例；全部超限时取在飞字节最少的那个（退化成 least-loaded，不为亲和牺牲
+// 可用性）。hint 是首选实例的负载描述，供溢出日志用。
+func gpustackPickWithLoad(
+	instances []GPUStackInstance, key string, maxInflight, maxBytes int64,
+) (picked GPUStackInstance, spilled bool, hint string) {
+	ranked := gpustackRankInstances(instances, key)
+	if maxInflight < 0 && maxBytes < 0 {
+		return ranked[0], false, ""
+	}
+	leastIdx, leastBytes := 0, int64(-1)
+	firstLoad := ""
+	for i, inst := range ranked {
+		count, bytes := gpustackLoadSnapshot(inst.hashKey())
+		if i == 0 {
+			firstLoad = fmt.Sprintf("在飞 %d 请求 / %.1fMB", count, float64(bytes)/1048576)
+		}
+		if leastBytes < 0 || bytes < leastBytes {
+			leastIdx, leastBytes = i, bytes
+		}
+		underCount := maxInflight < 0 || count < maxInflight
+		underBytes := maxBytes < 0 || bytes < maxBytes
+		if underCount && underBytes {
+			return inst, i > 0, firstLoad
 		}
 	}
-	return best
+	return ranked[leastIdx], true, firstLoad
 }
 
 // mix64 是 splitmix64 的终末混淆。

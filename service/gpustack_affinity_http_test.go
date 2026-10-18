@@ -273,8 +273,8 @@ func TestAffinityHeaderEndToEndIsStableAcrossTurns(t *testing.T) {
 	turn2 := []dto.Message{msg("user", doc), msg("assistant", "答一"), msg("user", "再问")}
 	turn3 := append(append([]dto.Message{}, turn2...), msg("assistant", "答二"), msg("user", "三问"))
 
-	h2 := GPUStackAffinityBaseURL(setting, 15, srv.URL, "m", turn2)
-	h3 := GPUStackAffinityBaseURL(setting, 15, srv.URL, "m", turn3)
+	h2 := GPUStackAffinityBaseURL(nil, setting, 15, srv.URL, "m", &dto.GeneralOpenAIRequest{Messages: turn2})
+	h3 := GPUStackAffinityBaseURL(nil, setting, 15, srv.URL, "m", &dto.GeneralOpenAIRequest{Messages: turn3})
 	if h2 == "" {
 		t.Fatal("应算出实例头")
 	}
@@ -286,7 +286,7 @@ func TestAffinityHeaderEndToEndIsStableAcrossTurns(t *testing.T) {
 	seen := map[string]bool{}
 	for i := 0; i < 60; i++ {
 		other := []dto.Message{msg("user", fmt.Sprintf("另一份文档 %d", i))}
-		seen[GPUStackAffinityBaseURL(setting, 15, srv.URL, "m", other)] = true
+		seen[GPUStackAffinityBaseURL(nil, setting, 15, srv.URL, "m", &dto.GeneralOpenAIRequest{Messages: other})] = true
 	}
 	if len(seen) < 3 {
 		t.Errorf("60 段不同对话只落到 %d 个实例，分布过于集中", len(seen))
@@ -297,10 +297,10 @@ func TestAffinityHeaderEndToEndIsStableAcrossTurns(t *testing.T) {
 func TestAffinityHeaderDeclinesOnMissingTarget(t *testing.T) {
 	setting := dto.ChannelSettings{GPUStackAffinity: true, GPUStackAffinityKey: "k"}
 	messages := []dto.Message{msg("user", "你好")}
-	if got := GPUStackAffinityBaseURL(setting, 16, "", "m", messages); got != "" {
+	if got := GPUStackAffinityBaseURL(nil, setting, 16, "", "m", &dto.GeneralOpenAIRequest{Messages: messages}); got != "" {
 		t.Errorf("BaseURL 为空时应返回空串，实际 %q", got)
 	}
-	if got := GPUStackAffinityBaseURL(setting, 17, "http://127.0.0.1:1", "", messages); got != "" {
+	if got := GPUStackAffinityBaseURL(nil, setting, 17, "http://127.0.0.1:1", "", &dto.GeneralOpenAIRequest{Messages: messages}); got != "" {
 		t.Errorf("模型名为空时应返回空串，实际 %q", got)
 	}
 }

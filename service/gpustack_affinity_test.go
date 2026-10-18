@@ -23,6 +23,13 @@ func instances(n int) []GPUStackInstance {
 	return out
 }
 
+// 在飞记账是全局状态，测试之间要清干净，不然计数会互相串味。
+func resetGPUMemLoad() {
+	gpustackMem.mu.Lock()
+	defer gpustackMem.mu.Unlock()
+	gpustackMem.entries = map[string]map[string]gpustackMemLoadEntry{}
+}
+
 // 亲和键必须在多轮之间不变，否则第二轮就会换实例、前缀缓存全废。
 func TestAffinityPrefixIsStableAcrossTurns(t *testing.T) {
 	doc := strings.Repeat("一份很长的文档。", 500)
@@ -35,15 +42,15 @@ func TestAffinityPrefixIsStableAcrossTurns(t *testing.T) {
 	turn3 := append(append([]dto.Message{}, turn2...),
 		msg("assistant", "第二轮的回答"), msg("user", "再问"))
 
-	p1 := gpustackAffinityPrefix(turn1)
-	p2 := gpustackAffinityPrefix(turn2)
-	p3 := gpustackAffinityPrefix(turn3)
+	p1 := gpustackAffinityContentKey(turn1)
+	p2 := gpustackAffinityContentKey(turn2)
+	p3 := gpustackAffinityContentKey(turn3)
 
 	if p1 == "" {
-		t.Fatal("首轮的前缀不该为空")
+		t.Fatal("首轮的键不该为空")
 	}
 	if p2 != p3 {
-		t.Errorf("第二、三轮的前缀应当一致\n第二轮: %.60q\n第三轮: %.60q", p2, p3)
+		t.Errorf("第二、三轮的键应当一致\n第二轮: %.60q\n第三轮: %.60q", p2, p3)
 	}
 	// 第一轮只有一条消息，第二轮起多了 assistant——取前 2 条时会把它带进来，
 	// 所以首轮与后续可以不同；关键是「后续各轮之间」稳定，那才是缓存生效的区间。
@@ -53,35 +60,69 @@ func TestAffinityPrefixIsStableAcrossTurns(t *testing.T) {
 }
 
 // 前缀要截断：线上首条消息可达 80 万字符，整段拿去哈希既慢又无额外收益。
-func TestAffinityPrefixIsBounded(t *testing.T) {
+func TestAffinityKeyIsBounded(t *testing.T) {
 	huge := strings.Repeat("x", 500_000)
-	p := gpustackAffinityPrefix([]dto.Message{msg("user", huge)})
-	if len(p) > gpustackAffinityPrefixChars+64 {
-		t.Errorf("前缀应被截断到约 %d 字节，实际 %d", gpustackAffinityPrefixChars, len(p))
+	k := gpustackAffinityContentKey([]dto.Message{msg("user", huge)})
+	// 单消息至多 头+中+尾 3×512 + 角色/分隔符开销。
+	if len(k) > 3*gpustackAffinityKeySampleLen+64 {
+		t.Errorf("键应被采样到约 %d 字节，实际 %d", 3*gpustackAffinityKeySampleLen, len(k))
 	}
-	if p == "" {
-		t.Fatal("截断后不该为空")
+	if k == "" {
+		t.Fatal("采样后不该为空")
+	}
+}
+
+// 回归：10-18 事故的根因。两条消息共享同一巨大模板头（>2KB）但尾部内容不同
+// 时，旧实现只哈希头部 2048B，逐字节相同 → 全量流量钉到同一实例。头/中/尾采样
+// 必须让不同内容产生不同键。
+func TestAffinityKeyDifferentiatesSharedTemplateTail(t *testing.T) {
+	sharedHead := strings.Repeat("共享模板头部。", 300)
+	docA := sharedHead + "文档A的正文" + strings.Repeat("a", 5000) + "A的结尾"
+	docB := sharedHead + "文档B的正文" + strings.Repeat("b", 5000) + "B的结尾"
+	ka := gpustackAffinityContentKey([]dto.Message{msg("user", docA)})
+	kb := gpustackAffinityContentKey([]dto.Message{msg("user", docB)})
+	if ka == kb {
+		t.Error("共享模板头但正文不同的消息必须产生不同的键")
+	}
+}
+
+// 同上但区分位在第二条消息：系统提示全共享（线上 ~370KB），首轮 user 不同。
+func TestAffinityKeyDifferentiatesSameSystemPrompt(t *testing.T) {
+	sys := strings.Repeat("You are an AI agent powered by DeepSeek Harness. ", 8000)
+	ka := gpustackAffinityContentKey([]dto.Message{msg("system", sys), msg("user", "任务A")})
+	kb := gpustackAffinityContentKey([]dto.Message{msg("system", sys), msg("user", "任务B")})
+	if ka == kb {
+		t.Error("共享系统提示下不同的首轮提问必须产生不同的键")
+	}
+}
+
+// 同一份文档发起的不同会话仍然收拢——共享前缀缓存是收益，不能散掉。
+func TestAffinityKeyConvergesIdenticalPrefix(t *testing.T) {
+	doc := strings.Repeat("同一份大文档。", 3000)
+	m := []dto.Message{msg("system", "提示"), msg("user", doc)}
+	if gpustackAffinityContentKey(m) != gpustackAffinityContentKey(m) {
+		t.Error("完全相同的请求必须产生相同的键")
 	}
 }
 
 // 角色参与哈希：同样的文本但角色不同，不该被当成同一段对话。
-func TestAffinityPrefixDistinguishesRole(t *testing.T) {
-	a := gpustackAffinityPrefix([]dto.Message{msg("user", "同样的话")})
-	b := gpustackAffinityPrefix([]dto.Message{msg("system", "同样的话")})
+func TestAffinityKeyDistinguishesRole(t *testing.T) {
+	a := gpustackAffinityContentKey([]dto.Message{msg("user", "同样的话")})
+	b := gpustackAffinityContentKey([]dto.Message{msg("system", "同样的话")})
 	if a == b {
-		t.Error("角色不同的消息应产生不同的前缀")
+		t.Error("角色不同的消息应产生不同的键")
 	}
 }
 
 // 空消息、空内容都要降级成「不做亲和」，而不是钉到一个任意实例上。
-func TestAffinityPrefixEmptyInputs(t *testing.T) {
+func TestAffinityKeyEmptyInputs(t *testing.T) {
 	for name, in := range map[string][]dto.Message{
 		"没有消息": {},
 		"内容为空": {msg("user", "")},
 		"只有空白": {msg("user", "   ")},
 	} {
-		if p := gpustackAffinityPrefix(in); p != "" {
-			t.Errorf("%s 应得到空前缀，实际 %q", name, p)
+		if k := gpustackAffinityContentKey(in); k != "" {
+			t.Errorf("%s 应得到空键，实际 %q", name, k)
 		}
 	}
 }
@@ -169,22 +210,21 @@ func TestAffinityHeaderDeclinesWithoutConfig(t *testing.T) {
 	}
 	for name, tc := range cases {
 		// BaseURL 指向一个必然连不通的地址：真去打了就会超时，测试会明显变慢。
-		got := GPUStackAffinityBaseURL(tc.setting, 1, "http://127.0.0.1:1", "m", tc.messages)
+		got := GPUStackAffinityBaseURL(nil, tc.setting, 1, "http://127.0.0.1:1", "m",
+			&dto.GeneralOpenAIRequest{Messages: tc.messages})
 		if got != "" {
 			t.Errorf("%s 应返回空串，实际 %q", name, got)
 		}
 	}
 }
 
-// 回归：首条内容落在 2033~2040 字节时，第二条消息上的剩余预算会变成负数，
-// 旧实现 content[:负数] 直接 panic。这正是本功能的目标流量形状（模板化的
-// 2 KB 首条消息），而原有测试只覆盖了极小和 500 KB 两端，刚好跳过这个窗口。
-func TestAffinityPrefixNoPanicAroundBudgetBoundary(t *testing.T) {
-	for n := 2000; n <= 2100; n++ {
+// 分段采样的边界（整段/头中尾切换点 3×512=1536 字节附近）都不能 panic，
+// 也不能写出超出预算的键。
+func TestAffinityKeyNoPanicAroundSampleBoundary(t *testing.T) {
+	for n := 1500; n <= 2100; n++ {
 		msgs := []dto.Message{
 			msg("user", strings.Repeat("x", n)),
-			msg("assistant", "第一轮的回答"),
-			msg("user", "接着问"),
+			msg("assistant", strings.Repeat("y", 700)),
 		}
 		func() {
 			defer func() {
@@ -192,24 +232,83 @@ func TestAffinityPrefixNoPanicAroundBudgetBoundary(t *testing.T) {
 					t.Fatalf("首条 %d 字节时 panic: %v", n, r)
 				}
 			}()
-			if p := gpustackAffinityPrefix(msgs); len(p) > gpustackAffinityPrefixChars {
-				t.Fatalf("首条 %d 字节时前缀超预算: %d", n, len(p))
+			k := gpustackAffinityContentKey(msgs)
+			if len(k) > 2*(3*gpustackAffinityKeySampleLen)+128 {
+				t.Fatalf("首条 %d 字节时键超预算: %d", n, len(k))
 			}
 		}()
 	}
 }
 
-// 预算耗尽后不再写入，但已写入的内容要保留（否则整条键变空、退回随机分流）。
-func TestAffinityPrefixStaysWithinBudget(t *testing.T) {
-	msgs := []dto.Message{
-		msg("user", strings.Repeat("a", 5000)),
-		msg("assistant", strings.Repeat("b", 5000)),
+// 在飞数顶到上限后，同键请求溢出到 HRW 次选；释放一个位置后回到首选。
+func TestPickSpillsOnInflightCount(t *testing.T) {
+	resetGPUMemLoad()
+	insts := instances(4)
+	ranked := gpustackRankInstances(insts, "会话")
+	for i := 0; i < 6; i++ {
+		gpustackLoadAcquire(ranked[0].hashKey(), gpustackLoadMember(fmt.Sprintf("r%d", i), 1))
 	}
-	p := gpustackAffinityPrefix(msgs)
-	if p == "" {
-		t.Fatal("首条内容足够，不该得到空前缀")
+	picked, spilled, _ := gpustackPickWithLoad(insts, "会话", 6, 3*1024*1024)
+	if !spilled || picked != ranked[1] {
+		t.Fatalf("首选在飞满时应溢出到次选 %+v，实际 %+v spilled=%v", ranked[1], picked, spilled)
 	}
-	if len(p) > gpustackAffinityPrefixChars {
-		t.Errorf("前缀 %d 字节，超出预算 %d", len(p), gpustackAffinityPrefixChars)
+	gpustackLoadRelease(ranked[0].hashKey(), gpustackLoadMember("r0", 1))
+	picked, spilled, _ = gpustackPickWithLoad(insts, "会话", 6, 3*1024*1024)
+	if spilled || picked != ranked[0] {
+		t.Fatalf("释放后应回到首选 %+v，实际 %+v spilled=%v", ranked[0], picked, spilled)
+	}
+}
+
+// 字节维度才是 KV 饱和的主信号：一个大请求就该让后续同键请求溢出。
+func TestPickSpillsOnInflightBytes(t *testing.T) {
+	resetGPUMemLoad()
+	insts := instances(4)
+	ranked := gpustackRankInstances(insts, "会话")
+	gpustackLoadAcquire(ranked[0].hashKey(), gpustackLoadMember("big", 4*1024*1024))
+	picked, spilled, _ := gpustackPickWithLoad(insts, "会话", 6, 3*1024*1024)
+	if !spilled || picked != ranked[1] {
+		t.Fatalf("首选在飞字节超限时应溢出到次选 %+v，实际 %+v spilled=%v", ranked[1], picked, spilled)
+	}
+}
+
+// 所有候选都超限时退化成 least-loaded：不为亲和牺牲可用性。
+func TestPickLeastLoadedWhenAllSaturated(t *testing.T) {
+	resetGPUMemLoad()
+	insts := instances(4)
+	ranked := gpustackRankInstances(insts, "会话")
+	for i, inst := range ranked {
+		// 大家都超字节上限，但 ranked[2] 最轻。
+		bytes := int64(5*1024*1024 + i*1024*1024)
+		if i == 2 {
+			bytes = 4*1024*1024 - 1 // 刚压线以下不行，要超上限但最少
+		}
+		gpustackLoadAcquire(inst.hashKey(), gpustackLoadMember(fmt.Sprintf("r%d", i), bytes))
+	}
+	picked, spilled, _ := gpustackPickWithLoad(insts, "会话", 6, 3*1024*1024)
+	if !spilled || picked != ranked[2] {
+		t.Fatalf("全饱和时应选最轻的 %+v，实际 %+v spilled=%v", ranked[2], picked, spilled)
+	}
+}
+
+// 两个阈值都关时是纯亲和：满载也永远钉第一名，不做任何溢出。
+func TestPickPureAffinityWhenCapsDisabled(t *testing.T) {
+	resetGPUMemLoad()
+	insts := instances(4)
+	ranked := gpustackRankInstances(insts, "会话")
+	gpustackLoadAcquire(ranked[0].hashKey(), gpustackLoadMember("big", 1<<62))
+	picked, spilled, _ := gpustackPickWithLoad(insts, "会话", -1, -1)
+	if spilled || picked != ranked[0] {
+		t.Fatalf("阈值全关时应无条件选首选 %+v，实际 %+v spilled=%v", ranked[0], picked, spilled)
+	}
+}
+
+// member 编码要往返一致：字节数嵌在尾段，reqID 里允许出现冒号。
+func TestLoadMemberRoundTrip(t *testing.T) {
+	m := gpustackLoadMember("req:a:b", 12345)
+	if got := gpustackLoadMemberBytes(m); got != 12345 {
+		t.Errorf("member %q 解析字节数 = %d，期望 12345", m, got)
+	}
+	if gpustackLoadMemberBytes("nobytes") != 0 || gpustackLoadMemberBytes("x:") != 0 {
+		t.Error("缺字节段的 member 应解析为 0")
 	}
 }

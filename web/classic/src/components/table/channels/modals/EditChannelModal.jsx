@@ -201,6 +201,9 @@ const EditChannelModal = (props) => {
     system_prompt_override: false,
     gpustack_affinity: false,
     gpustack_affinity_key: '',
+    gpustack_affinity_key_gjson: '',
+    gpustack_affinity_max_inflight: '',
+    gpustack_affinity_max_inflight_bytes: '',
     settings: '',
     // 仅 Vertex: 密钥格式（存入 settings.vertex_key_type）
     vertex_key_type: 'json',
@@ -899,6 +902,12 @@ const EditChannelModal = (props) => {
           data.gpustack_affinity = parsedSettings.gpustack_affinity || false;
           data.gpustack_affinity_key =
             parsedSettings.gpustack_affinity_key || '';
+          data.gpustack_affinity_key_gjson =
+            parsedSettings.gpustack_affinity_key_gjson || '';
+          data.gpustack_affinity_max_inflight =
+            parsedSettings.gpustack_affinity_max_inflight ?? '';
+          data.gpustack_affinity_max_inflight_bytes =
+            parsedSettings.gpustack_affinity_max_inflight_bytes ?? '';
         } catch (error) {
           console.error('解析渠道设置失败:', error);
           data.force_format = false;
@@ -910,6 +919,9 @@ const EditChannelModal = (props) => {
           data.system_prompt_override = false;
           data.gpustack_affinity = false;
           data.gpustack_affinity_key = '';
+          data.gpustack_affinity_key_gjson = '';
+          data.gpustack_affinity_max_inflight = '';
+          data.gpustack_affinity_max_inflight_bytes = '';
         }
       } else {
         data.force_format = false;
@@ -921,6 +933,9 @@ const EditChannelModal = (props) => {
         data.system_prompt_override = false;
         data.gpustack_affinity = false;
         data.gpustack_affinity_key = '';
+        data.gpustack_affinity_key_gjson = '';
+        data.gpustack_affinity_max_inflight = '';
+        data.gpustack_affinity_max_inflight_bytes = '';
       }
 
       if (data.settings) {
@@ -1042,6 +1057,11 @@ const EditChannelModal = (props) => {
         system_prompt_override: data.system_prompt_override || false,
         gpustack_affinity: data.gpustack_affinity || false,
         gpustack_affinity_key: data.gpustack_affinity_key || '',
+        gpustack_affinity_key_gjson: data.gpustack_affinity_key_gjson || '',
+        gpustack_affinity_max_inflight:
+          data.gpustack_affinity_max_inflight ?? '',
+        gpustack_affinity_max_inflight_bytes:
+          data.gpustack_affinity_max_inflight_bytes ?? '',
       });
       initialModelsRef.current = (data.models || [])
         .map((model) => (model || '').trim())
@@ -1440,6 +1460,9 @@ const EditChannelModal = (props) => {
       system_prompt_override: false,
       gpustack_affinity: false,
       gpustack_affinity_key: '',
+      gpustack_affinity_key_gjson: '',
+      gpustack_affinity_max_inflight: '',
+      gpustack_affinity_max_inflight_bytes: '',
     });
     // 重置密钥模式状态
     setKeyMode('append');
@@ -1813,6 +1836,12 @@ const EditChannelModal = (props) => {
       system_prompt_override: localInputs.system_prompt_override || false,
       gpustack_affinity: localInputs.gpustack_affinity || false,
       gpustack_affinity_key: localInputs.gpustack_affinity_key || '',
+      gpustack_affinity_key_gjson:
+        localInputs.gpustack_affinity_key_gjson || '',
+      gpustack_affinity_max_inflight:
+        Number(localInputs.gpustack_affinity_max_inflight) || 0,
+      gpustack_affinity_max_inflight_bytes:
+        Number(localInputs.gpustack_affinity_max_inflight_bytes) || 0,
     };
     localInputs.setting = JSON.stringify(channelExtraSettings);
 
@@ -1896,6 +1925,9 @@ const EditChannelModal = (props) => {
     delete localInputs.system_prompt_override;
     delete localInputs.gpustack_affinity;
     delete localInputs.gpustack_affinity_key;
+    delete localInputs.gpustack_affinity_key_gjson;
+    delete localInputs.gpustack_affinity_max_inflight;
+    delete localInputs.gpustack_affinity_max_inflight_bytes;
     delete localInputs.is_enterprise_account;
     // 方舟素材库的值已经由 handleChannelOtherSettingsChange 写进 settings
     delete localInputs.ark_asset_enabled;
@@ -2942,22 +2974,69 @@ const EditChannelModal = (props) => {
                     )}
                   />
                   {channelSettings.gpustack_affinity && (
-                    <Form.Input
-                      field='gpustack_affinity_key'
-                      label={t('GPUStack 管理 Key')}
-                      placeholder={t('用于读取实例列表，需要管理权限')}
-                      type='password'
-                      onChange={(value) =>
-                        handleChannelSettingsChange(
-                          'gpustack_affinity_key',
-                          value,
-                        )
-                      }
-                      showClear
-                      extraText={t(
-                        '渠道自身的推理 Key 权限不够。管理接口打到本渠道的「API地址」上，与上面的「代理地址」无关。留空则不启用亲和',
-                      )}
-                    />
+                    <>
+                      <Form.Input
+                        field='gpustack_affinity_key'
+                        label={t('GPUStack 管理 Key')}
+                        placeholder={t('用于读取实例列表，需要管理权限')}
+                        type='password'
+                        onChange={(value) =>
+                          handleChannelSettingsChange(
+                            'gpustack_affinity_key',
+                            value,
+                          )
+                        }
+                        showClear
+                        extraText={t(
+                          '渠道自身的推理 Key 权限不够。管理接口打到本渠道的「API地址」上，与上面的「代理地址」无关。留空则不启用亲和',
+                        )}
+                      />
+                      <Form.Input
+                        field='gpustack_affinity_key_gjson'
+                        label={t('亲和键 gjson 路径（可选）')}
+                        placeholder='metadata.conversation_id'
+                        onChange={(value) =>
+                          handleChannelSettingsChange(
+                            'gpustack_affinity_key_gjson',
+                            value,
+                          )
+                        }
+                        showClear
+                        extraText={t(
+                          '客户端若会送会话标识（如 metadata.conversation_id），填它的请求体 gjson 路径做粘连键，优先级高于 prompt_cache_key 和消息内容采样。留空自动兜底',
+                        )}
+                      />
+                      <Form.Input
+                        field='gpustack_affinity_max_inflight'
+                        label={t('单实例在飞请求上限（可选）')}
+                        placeholder='6'
+                        type='number'
+                        onChange={(value) =>
+                          handleChannelSettingsChange(
+                            'gpustack_affinity_max_inflight',
+                            value,
+                          )
+                        }
+                        extraText={t(
+                          '超过后同会话的后续请求溢出到次选实例。0/留空 = 默认 6；填 -1 关闭该维度',
+                        )}
+                      />
+                      <Form.Input
+                        field='gpustack_affinity_max_inflight_bytes'
+                        label={t('单实例在飞 Prompt 字节上限（可选）')}
+                        placeholder='3145728'
+                        type='number'
+                        onChange={(value) =>
+                          handleChannelSettingsChange(
+                            'gpustack_affinity_max_inflight_bytes',
+                            value,
+                          )
+                        }
+                        extraText={t(
+                          '按请求体总长度估算在飞上下文，防大上下文并发把单实例 KV 打满。0/留空 = 默认 3145728（3MB）；填 -1 关闭',
+                        )}
+                      />
+                    </>
                   )}
                 </div>
               </div>

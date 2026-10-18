@@ -69,11 +69,15 @@ func TextHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *types
 	// **必须无条件写入**（不做亲和时写空串）：重试循环复用同一个 gin.Context，
 	// 若只在非空时写，第一次尝试算出的地址会残留下来，被用去改写重试选中的另一个
 	// 渠道的 URL——那等于把请求打到一个根本不属于该渠道的地址上。
+	//
+	// defer 的 Done 释放这次亲和记在实例上的在飞计数：本函数同步阻塞到响应
+	// 写完（流式也在 DoResponse 里发完才返回），所以函数返回即请求结束。
 	common.SetContextKey(c, constant.ContextKeyGPUStackInstanceBaseURL,
 		service.GPUStackAffinityBaseURL(
-			info.ChannelSetting, info.ChannelId, info.ChannelBaseUrl,
-			info.UpstreamModelName, request.Messages,
+			c, info.ChannelSetting, info.ChannelId, info.ChannelBaseUrl,
+			info.UpstreamModelName, request,
 		))
+	defer service.GPUStackAffinityDone(c)
 
 	includeUsage := true
 	// 判断用户是否需要返回使用情况

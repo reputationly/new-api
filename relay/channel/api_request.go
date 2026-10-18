@@ -447,8 +447,9 @@ func DoApiRequest(a Adaptor, c *gin.Context, info *common.RelayInfo, requestBody
 	directURL := gpustackAffinityRewriteURL(fullRequestURL, info.ChannelBaseUrl, c)
 	if directURL != "" && !gpustackAffinityDialable(directURL) {
 		// 连不上就别发了：直接走网关，省掉一次注定失败的尝试。同时失效实例列表，
-		// 否则这台在 TTL 窗口内会被反复选中。
+		// 否则这台在 TTL 窗口内会被反复选中。请求根本没打到该实例，在飞账也提前销掉。
 		gpustackAffinityOnDirectFailure(info, directURL, "拨号失败")
+		service.GPUStackAffinityDone(c)
 		directURL = ""
 	}
 	if directURL == "" {
@@ -502,6 +503,8 @@ func DoApiRequest(a Adaptor, c *gin.Context, info *common.RelayInfo, requestBody
 		}
 	}
 	gpustackAffinityOnDirectFailure(info, directURL, reason)
+	// 直连那次没跑成推理（拨号败/上游拒），不该给实例记在飞账——提前销。
+	service.GPUStackAffinityDone(c)
 
 	req, buildErr := build(fullRequestURL, newBody())
 	if buildErr != nil {

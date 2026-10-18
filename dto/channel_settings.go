@@ -56,6 +56,18 @@ type ChannelSettings struct {
 	// 管理员在「无组织上下文」下创建的密钥（owner_principal_id 为空），或至少
 	// 属于模型所在的组织；GPUStack 密钥列表页的「作用域」列可以直接看出来。
 	GPUStackAffinityKey string `json:"gpustack_affinity_key,omitempty"`
+	// GPUStackAffinityKeyGJSON 自定义亲和键的请求体 gjson 路径（如
+	// "metadata.conversation_id"）。命中时优先级高于 prompt_cache_key 与
+	// 消息内容采样——客户端本来就会送会话标识的渠道用它最准。
+	GPUStackAffinityKeyGJSON string `json:"gpustack_affinity_key_gjson,omitempty"`
+	// GPUStackAffinityMaxInflight 单个实例在飞请求的软上限，超过时后续请求
+	// 溢出到 HRW 次选实例。KV cache 是被「在飞上下文总量」打满的，这层与
+	// 字节上限一起做有界负载的一致性哈希。0 = 默认 6；负数 = 关闭该维度。
+	GPUStackAffinityMaxInflight int `json:"gpustack_affinity_max_inflight,omitempty"`
+	// GPUStackAffinityMaxInflightBytes 单实例在飞 prompt 字节软上限，用请求体
+	// 总长做上下文代理。0 = 默认 3MB（约「在飞 ≤2 个大会话」，按线上实测
+	// KV 饱和点反推）；负数 = 关闭该维度。两维都关才退化成纯亲和。
+	GPUStackAffinityMaxInflightBytes int64 `json:"gpustack_affinity_max_inflight_bytes,omitempty"`
 }
 
 type VertexKeyType string

@@ -101,4 +101,9 @@ const (
 	// 在 DoApiRequest 里用它改写目标 URL（那里才拿得到上游请求）——两处之间靠它传递。
 	// 空值表示本次不做亲和，照常走渠道的 Base URL（网关）。
 	ContextKeyGPUStackInstanceBaseURL ContextKey = "gpustack_instance_base_url"
+
+	// ContextKeyGPUStackAffinityDone 亲和选中实例后挂在 context 上的收尾函数
+	// （释放在飞计数）。TextHelper 请求结束时调一次；DoApiRequest 放弃直连改走
+	// 网关时提前调一次——那次失败不该给实例记在飞账。
+	ContextKeyGPUStackAffinityDone ContextKey = "gpustack_affinity_done"
 )
