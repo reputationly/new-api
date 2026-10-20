@@ -21,6 +21,35 @@ import React from 'react';
 import { Modal, Button, Checkbox, RadioGroup, Radio } from '@douyinfe/semi-ui';
 import { getLogsColumns } from '../UsageLogsColumnDefs';
 
+// 管理员专属列：普通用户既看不到、也点不到。
+const isAdminOnlyColumn = (key, COLUMN_KEYS) =>
+  key === COLUMN_KEYS.CHANNEL ||
+  key === COLUMN_KEYS.USERNAME ||
+  key === COLUMN_KEYS.RETRY ||
+  key === COLUMN_KEYS.IP;
+
+// 全选框的聚合状态只统计当前用户真正能勾选的列。直接对 visibleColumns 做
+// every/some，会把上面这些对普通用户恒为 false 的列一起算进来，全选框就永远
+// 停在半选，而且点它只会把可见列全开、永远走不到「全关」。
+export const getSelectAllState = (
+  columns,
+  visibleColumns,
+  isAdminUser,
+  COLUMN_KEYS,
+) => {
+  const keys = columns
+    .filter(
+      (column) => isAdminUser || !isAdminOnlyColumn(column.key, COLUMN_KEYS),
+    )
+    .map((column) => column.key);
+  const checked = keys.filter((key) => visibleColumns[key] === true).length;
+
+  return {
+    checked: keys.length > 0 && checked === keys.length,
+    indeterminate: checked > 0 && checked < keys.length,
+  };
+};
+
 const ColumnSelectorModal = ({
   showColumnSelector,
   setShowColumnSelector,
@@ -53,6 +82,13 @@ const ColumnSelectorModal = ({
     isAdminUser,
     billingDisplayMode,
   });
+
+  const selectAllState = getSelectAllState(
+    allColumns,
+    visibleColumns,
+    isAdminUser,
+    COLUMN_KEYS,
+  );
 
   return (
     <Modal
@@ -88,11 +124,8 @@ const ColumnSelectorModal = ({
           </RadioGroup>
         </div>
         <Checkbox
-          checked={Object.values(visibleColumns).every((v) => v === true)}
-          indeterminate={
-            Object.values(visibleColumns).some((v) => v === true) &&
-            !Object.values(visibleColumns).every((v) => v === true)
-          }
+          checked={selectAllState.checked}
+          indeterminate={selectAllState.indeterminate}
           onChange={(e) => handleSelectAll(e.target.checked)}
         >
           {t('全选')}
@@ -104,13 +137,7 @@ const ColumnSelectorModal = ({
       >
         {allColumns.map((column) => {
           // Skip admin-only columns for non-admin users
-          if (
-            !isAdminUser &&
-            (column.key === COLUMN_KEYS.CHANNEL ||
-              column.key === COLUMN_KEYS.USERNAME ||
-              column.key === COLUMN_KEYS.RETRY ||
-              column.key === COLUMN_KEYS.IP)
-          ) {
+          if (!isAdminUser && isAdminOnlyColumn(column.key, COLUMN_KEYS)) {
             return null;
           }
 
