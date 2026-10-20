@@ -128,6 +128,20 @@ func (user *User) SetSetting(setting dto.UserSetting) {
 	user.Setting = string(settingBytes)
 }
 
+// MutateSetting 以存量设置为底，交给 mutate 改完后整体写回。
+//
+// users.setting 是同一个 JSON 列，却有好几个互不相干的写入方（通知配置、
+// 边栏 / 语言、扣费偏好）。任何一方都不能从零值构造 dto.UserSetting 再覆盖：
+// 本入口不认识的字段会连同 omitempty 一起从 JSON 里消失，用户保存一次通知配置
+// 就把边栏定制、语言和扣费偏好清掉过一次。所有写入方统一走这里，
+// 保证「只改自己那几个字段」。
+func (user *User) MutateSetting(mutate func(*dto.UserSetting)) error {
+	setting := user.GetSetting()
+	mutate(&setting)
+	user.SetSetting(setting)
+	return user.Update(false)
+}
+
 // 根据用户角色生成默认的边栏配置
 func generateDefaultSidebarConfigForRole(userRole int) string {
 	defaultConfig := map[string]interface{}{}

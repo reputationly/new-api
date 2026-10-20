@@ -717,17 +717,12 @@ func UpdateSelf(c *gin.Context) {
 			return
 		}
 
-		// 获取当前用户设置
-		currentSetting := user.GetSetting()
-
-		// 更新sidebar_modules字段
-		if sidebarModulesStr, ok := sidebarModules.(string); ok {
-			currentSetting.SidebarModules = sidebarModulesStr
-		}
-
-		// 保存更新后的设置
-		user.SetSetting(currentSetting)
-		if err := user.Update(false); err != nil {
+		// 只改 sidebar_modules，其余字段（通知配置等）原样保留
+		if err := user.MutateSetting(func(currentSetting *dto.UserSetting) {
+			if sidebarModulesStr, ok := sidebarModules.(string); ok {
+				currentSetting.SidebarModules = sidebarModulesStr
+			}
+		}); err != nil {
 			common.ApiErrorI18n(c, i18n.MsgUpdateFailed)
 			return
 		}
@@ -745,17 +740,12 @@ func UpdateSelf(c *gin.Context) {
 			return
 		}
 
-		// 获取当前用户设置
-		currentSetting := user.GetSetting()
-
-		// 更新language字段
-		if langStr, ok := language.(string); ok {
-			currentSetting.Language = langStr
-		}
-
-		// 保存更新后的设置
-		user.SetSetting(currentSetting)
-		if err := user.Update(false); err != nil {
+		// 只改 language，其余字段（通知配置等）原样保留
+		if err := user.MutateSetting(func(currentSetting *dto.UserSetting) {
+			if langStr, ok := language.(string); ok {
+				currentSetting.Language = langStr
+			}
+		}); err != nil {
 			common.ApiErrorI18n(c, i18n.MsgUpdateFailed)
 			return
 		}
@@ -1285,7 +1275,7 @@ type UpdateUserSettingRequest struct {
 	QuotaWarningType                 string  `json:"notify_type"`
 	QuotaWarningThreshold            float64 `json:"quota_warning_threshold"`
 	WebhookUrl                       string  `json:"webhook_url,omitempty"`
-	WebhookSecret                    string  `json:"webhook_secret,omitempty"`
+	WebhookSecret                    *string `json:"webhook_secret,omitempty"`
 	NotificationEmail                string  `json:"notification_email,omitempty"`
 	BarkUrl                          string  `json:"bark_url,omitempty"`
 	GotifyUrl                        string  `json:"gotify_url,omitempty"`
@@ -1387,49 +1377,47 @@ func UpdateUserSetting(c *gin.Context) {
 		upstreamModelUpdateNotifyEnabled = *req.UpstreamModelUpdateNotifyEnabled
 	}
 
-	// 以存量设置为底再覆盖本次提交的字段。整块替换会把本接口不认识的
-	// sidebar_modules / billing_preference / language 一并清掉——用户保存一次
-	// 通知配置，边栏定制、扣费偏好和语言偏好就全没了。
-	settings := existingSettings
-	settings.NotifyType = req.QuotaWarningType
-	settings.QuotaWarningThreshold = req.QuotaWarningThreshold
-	settings.UpstreamModelUpdateNotifyEnabled = upstreamModelUpdateNotifyEnabled
+	// 只覆盖本次提交的通知字段。走 MutateSetting 是为了保住本接口不认识的
+	// sidebar_modules / billing_preference / language——历史上这里从零值整体
+	// 覆盖，用户保存一次通知配置就把那三项清掉了。
+	if err := user.MutateSetting(func(settings *dto.UserSetting) {
+		settings.NotifyType = req.QuotaWarningType
+		settings.QuotaWarningThreshold = req.QuotaWarningThreshold
+		settings.UpstreamModelUpdateNotifyEnabled = upstreamModelUpdateNotifyEnabled
 
-	// 如果是webhook类型,添加webhook相关设置
-	if req.QuotaWarningType == dto.NotifyTypeWebhook {
-		settings.WebhookUrl = req.WebhookUrl
-		// 前端不回显密钥，留空表示「沿用原值」，不能当成清空。
-		if req.WebhookSecret != "" {
-			settings.WebhookSecret = req.WebhookSecret
+		// 如果是webhook类型,添加webhook相关设置
+		if req.QuotaWarningType == dto.NotifyTypeWebhook {
+			settings.WebhookUrl = req.WebhookUrl
+			// 指针为 nil = 调用方没传（不回显密钥的客户端），沿用原值；
+			// 显式传空串 = 用户清空。不能用 `!= ""` 判断，那会让密钥永远清不掉。
+			if req.WebhookSecret != nil {
+				settings.WebhookSecret = *req.WebhookSecret
+			}
 		}
-	}
 
-	// 邮件类型的邮箱字段以本次提交为准：留空表示改用账号绑定的邮箱，
-	// 所以不能再加 `!= ""` 的守卫，否则空值永远清不掉。
-	if req.QuotaWarningType == dto.NotifyTypeEmail {
-		settings.NotificationEmail = req.NotificationEmail
-	}
-
-	// 如果是Bark类型，添加Bark URL到设置中
-	if req.QuotaWarningType == dto.NotifyTypeBark {
-		settings.BarkUrl = req.BarkUrl
-	}
-
-	// 如果是Gotify类型，添加Gotify配置到设置中
-	if req.QuotaWarningType == dto.NotifyTypeGotify {
-		settings.GotifyUrl = req.GotifyUrl
-		settings.GotifyToken = req.GotifyToken
-		// Gotify优先级范围0-10，超出范围则使用默认值5
-		if req.GotifyPriority < 0 || req.GotifyPriority > 10 {
-			settings.GotifyPriority = 5
-		} else {
-			settings.GotifyPriority = req.GotifyPriority
+		// 邮件类型的邮箱字段以本次提交为准：留空表示改用账号绑定的邮箱，
+		// 所以不能再加 `!= ""` 的守卫，否则空值永远清不掉。
+		if req.QuotaWarningType == dto.NotifyTypeEmail {
+			settings.NotificationEmail = req.NotificationEmail
 		}
-	}
 
-	// 更新用户设置
-	user.SetSetting(settings)
-	if err := user.Update(false); err != nil {
+		// 如果是Bark类型，添加Bark URL到设置中
+		if req.QuotaWarningType == dto.NotifyTypeBark {
+			settings.BarkUrl = req.BarkUrl
+		}
+
+		// 如果是Gotify类型，添加Gotify配置到设置中
+		if req.QuotaWarningType == dto.NotifyTypeGotify {
+			settings.GotifyUrl = req.GotifyUrl
+			settings.GotifyToken = req.GotifyToken
+			// Gotify优先级范围0-10，超出范围则使用默认值5
+			if req.GotifyPriority < 0 || req.GotifyPriority > 10 {
+				settings.GotifyPriority = 5
+			} else {
+				settings.GotifyPriority = req.GotifyPriority
+			}
+		}
+	}); err != nil {
 		common.ApiErrorI18n(c, i18n.MsgUpdateFailed)
 		return
 	}

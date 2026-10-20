@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
@@ -112,10 +113,10 @@ func UpdateSubscriptionPreference(c *gin.Context) {
 		common.ApiError(c, err)
 		return
 	}
-	current := user.GetSetting()
-	current.BillingPreference = pref
-	user.SetSetting(current)
-	if err := user.Update(false); err != nil {
+	// 只改 billing_preference，通知配置 / 边栏 / 语言原样保留
+	if err := user.MutateSetting(func(current *dto.UserSetting) {
+		current.BillingPreference = pref
+	}); err != nil {
 		common.ApiError(c, err)
 		return
 	}
