@@ -735,6 +735,8 @@ func RelayTask(c *gin.Context) {
 		}
 		task.PrivateData.TokenId = relayInfo.TokenId
 		task.PrivateData.TokenName = c.GetString("token_name")
+		// 轮询阶段没有请求上下文，结算/退款日志的 IP 只能靠这里冻结。
+		task.PrivateData.ClientIp = c.ClientIP()
 		task.PrivateData.BillingContext = &model.TaskBillingContext{
 			ModelPrice:      relayInfo.PriceData.ModelPrice,
 			GroupRatio:      relayInfo.PriceData.GroupRatioInfo.GroupRatio,

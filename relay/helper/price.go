@@ -105,13 +105,7 @@ func ModelPriceHelper(c *gin.Context, info *relaycommon.RelayInfo, promptTokens 
 		var matchName string
 		modelRatio, success, matchName = ratio_setting.GetModelRatio(info.OriginModelName)
 		if !success {
-			acceptUnsetRatio := false
-			if info.UserSetting.AcceptUnsetRatioModel {
-				acceptUnsetRatio = true
-			}
-			if !acceptUnsetRatio {
-				return types.PriceData{}, modelPriceNotConfiguredError(matchName, info.UserId)
-			}
+			return types.PriceData{}, modelPriceNotConfiguredError(matchName, info.UserId)
 		}
 		completionRatio = ratio_setting.GetCompletionRatio(info.OriginModelName)
 		cacheRatio, _ = ratio_setting.GetCacheRatio(info.OriginModelName)
@@ -194,11 +188,7 @@ func ModelPriceHelperPerCall(c *gin.Context, info *relaycommon.RelayInfo) (types
 			var ratioSuccess bool
 			var matchName string
 			modelRatio, ratioSuccess, matchName = ratio_setting.GetModelRatio(info.OriginModelName)
-			acceptUnsetRatio := false
-			if info.UserSetting.AcceptUnsetRatioModel {
-				acceptUnsetRatio = true
-			}
-			if !ratioSuccess && !acceptUnsetRatio {
+			if !ratioSuccess {
 				return types.PriceData{}, modelPriceNotConfiguredError(matchName, info.UserId)
 			}
 		}

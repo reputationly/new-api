@@ -98,8 +98,6 @@ const PersonalSetting = () => {
     gotifyToken: '',
     gotifyPriority: 5,
     upstreamModelUpdateNotifyEnabled: false,
-    acceptUnsetModelRatioModel: false,
-    recordIpLog: false,
   });
 
   const {
@@ -217,9 +215,6 @@ const PersonalSetting = () => {
           settings.gotify_priority !== undefined ? settings.gotify_priority : 5,
         upstreamModelUpdateNotifyEnabled:
           settings.upstream_model_update_notify_enabled === true,
-        acceptUnsetModelRatioModel:
-          settings.accept_unset_model_ratio_model || false,
-        recordIpLog: settings.record_ip_log || false,
       });
     }
   }, [userState?.user?.setting]);
@@ -554,9 +549,6 @@ const PersonalSetting = () => {
         })(),
         upstream_model_update_notify_enabled:
           notificationSettings.upstreamModelUpdateNotifyEnabled === true,
-        accept_unset_model_ratio_model:
-          notificationSettings.acceptUnsetModelRatioModel,
-        record_ip_log: notificationSettings.recordIpLog,
       });
 
       if (res.data.success) {

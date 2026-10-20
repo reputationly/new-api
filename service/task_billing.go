@@ -452,6 +452,7 @@ func RefundTaskQuota(ctx context.Context, task *model.Task, reason string) {
 		// 退还的积分与冲销的授信。与 Quota 同为正数，由对账侧按负消费净额化。
 		PointsConsumed: pointsRefunded,
 		CreditConsumed: creditRefunded,
+		Ip:             task.PrivateData.ClientIp,
 	})
 }
 
@@ -609,6 +610,7 @@ func recalculateTaskQuota(ctx context.Context, task *model.Task, actualQuota, co
 		PointsConsumed:   logPoints,
 		CreditConsumed:   logCredit,
 		Other:            other,
+		Ip:               task.PrivateData.ClientIp,
 	})
 
 	// 调用方在结算前已把终态落盘，这里不写回的话 tasks.quota 永远停在预扣值，

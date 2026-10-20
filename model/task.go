@@ -264,7 +264,10 @@ type TaskPrivateData struct {
 	// TokenName 提交时的令牌名，供异步结算写日志用。**不能靠 TokenId 回查 tokens 表**：
 	// 体验区（/pg）用的是 playgroundSetupContext 造的内存临时令牌，从未入库、Id 恒为 0，
 	// 回查必然落空，日志「令牌」列就空着。真实令牌也可能在任务完成前被删掉。
-	TokenName      string              `json:"token_name,omitempty"`
+	TokenName string `json:"token_name,omitempty"`
+	// ClientIp 提交任务时的客户端 IP，供异步结算 / 退款日志使用（轮询阶段没有请求上下文）。
+	// PrivateData 是 json:"-"，不会出现在任何对外响应里。
+	ClientIp       string              `json:"client_ip,omitempty"`
 	BillingContext *TaskBillingContext `json:"billing_context,omitempty"` // 计费参数快照（用于轮询阶段重新计算）
 	// PersistRetryCount 上游已完成但成品落 OBS 失败的重试次数（轮询阶段递增，
 	// 超限才判失败退款，避免瞬时 OBS 抖动丢弃已渲染成品）。见 task_polling.go。

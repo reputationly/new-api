@@ -113,15 +113,6 @@ func ListModels(c *gin.Context, modelType int) {
 	userOpenAiModels := make([]dto.OpenAIModels, 0)
 
 	acceptUnsetRatioModel := operation_setting.SelfUseModeEnabled
-	if !acceptUnsetRatioModel {
-		userId := c.GetInt("id")
-		if userId > 0 {
-			userSettings, _ := model.GetUserSetting(userId, false)
-			if userSettings.AcceptUnsetRatioModel {
-				acceptUnsetRatioModel = true
-			}
-		}
-	}
 
 	modelLimitEnable := common.GetContextKeyBool(c, constant.ContextKeyTokenModelLimitEnabled)
 	if modelLimitEnable {

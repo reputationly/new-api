@@ -155,7 +155,7 @@ export const useLogsData = () => {
       [COLUMN_KEYS.COMPLETION]: true,
       [COLUMN_KEYS.COST]: true,
       [COLUMN_KEYS.RETRY]: isAdminUser,
-      [COLUMN_KEYS.IP]: true,
+      [COLUMN_KEYS.IP]: isAdminUser,
       [COLUMN_KEYS.DETAILS]: true,
     };
   };
@@ -176,6 +176,8 @@ export const useLogsData = () => {
         merged[COLUMN_KEYS.CHANNEL] = false;
         merged[COLUMN_KEYS.USERNAME] = false;
         merged[COLUMN_KEYS.RETRY] = false;
+        // 管理员专属列：老用户的 localStorage 里可能存着 ip:true，这里强制覆盖。
+        merged[COLUMN_KEYS.IP] = false;
       }
 
       return merged;
@@ -243,7 +245,8 @@ export const useLogsData = () => {
       if (
         (key === COLUMN_KEYS.CHANNEL ||
           key === COLUMN_KEYS.USERNAME ||
-          key === COLUMN_KEYS.RETRY) &&
+          key === COLUMN_KEYS.RETRY ||
+          key === COLUMN_KEYS.IP) &&
         !isAdminUser
       ) {
         updatedColumns[key] = false;

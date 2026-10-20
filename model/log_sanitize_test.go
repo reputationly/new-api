@@ -49,3 +49,18 @@ func TestFormatUserLogsHandlesEmptyOther(t *testing.T) {
 	logs := []*Log{{Other: ""}, {Other: "not json"}}
 	require.NotPanics(t, func() { formatUserLogs(logs, 0) })
 }
+
+// IP 只给管理员:普通用户拿到的日志副本必须清空 IP,序列化后连 ip 这个键都不该有。
+// 库里照常保留(管理员接口和对账直接读库,不走本函数)。
+func TestFormatUserLogsClearsIP(t *testing.T) {
+	logs := []*Log{{Ip: "192.0.2.1", Other: "{}"}}
+
+	formatUserLogs(logs, 0)
+
+	require.Empty(t, logs[0].Ip)
+
+	payload, err := common.Marshal(logs[0])
+	require.NoError(t, err)
+	require.NotContains(t, string(payload), `"ip":`,
+		"omitempty 生效后普通用户的响应里不该出现 ip 键")
+}

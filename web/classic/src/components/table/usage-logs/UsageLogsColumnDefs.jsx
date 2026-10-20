@@ -995,46 +995,47 @@ export const getLogsColumns = ({
         );
       },
     },
-    {
-      key: COLUMN_KEYS.IP,
-      title: (
-        <div className='flex items-center gap-1'>
-          {t('IP')}
-          <Tooltip
-            content={t(
-              '只有当用户设置开启IP记录时，才会进行请求和错误类型日志的IP记录',
-            )}
-          >
-            <IconHelpCircle className='text-gray-400 cursor-help' />
-          </Tooltip>
-        </div>
-      ),
-      dataIndex: 'ip',
-      render: (text, record, index) => {
-        const showIp =
-          (record.type === 2 ||
-            record.type === 5 ||
-            (isAdminUser && record.type === 1)) &&
-          text;
-        return showIp ? (
-          <Tooltip content={text}>
-            <span>
-              <Tag
-                color='orange'
-                shape='circle'
-                onClick={(event) => {
-                  copyText(event, text);
-                }}
-              >
-                {text}
-              </Tag>
-            </span>
-          </Tooltip>
-        ) : (
-          <></>
-        );
-      },
-    },
+    // IP 列只给管理员。用条件展开而不是事后 filter：其他列的 key 在测试里可能是
+    // undefined，filter 会把它们一并删掉。
+    ...(isAdminUser
+      ? [
+          {
+            key: COLUMN_KEYS.IP,
+            title: (
+              <div className='flex items-center gap-1'>
+                {t('IP')}
+                <Tooltip
+                  content={t(
+                    '发起请求的客户端 IP（消费、错误、异步任务结算/退款日志）；充值日志为支付回调来源 IP',
+                  )}
+                >
+                  <IconHelpCircle className='text-gray-400 cursor-help' />
+                </Tooltip>
+              </div>
+            ),
+            dataIndex: 'ip',
+            render: (text) => {
+              return text ? (
+                <Tooltip content={text}>
+                  <span>
+                    <Tag
+                      color='orange'
+                      shape='circle'
+                      onClick={(event) => {
+                        copyText(event, text);
+                      }}
+                    >
+                      {text}
+                    </Tag>
+                  </span>
+                </Tooltip>
+              ) : (
+                <></>
+              );
+            },
+          },
+        ]
+      : []),
     {
       key: COLUMN_KEYS.RETRY,
       title: t('重试'),
