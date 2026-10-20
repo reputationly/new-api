@@ -1387,23 +1387,26 @@ func UpdateUserSetting(c *gin.Context) {
 		upstreamModelUpdateNotifyEnabled = *req.UpstreamModelUpdateNotifyEnabled
 	}
 
-	// 构建设置
-	settings := dto.UserSetting{
-		NotifyType:                       req.QuotaWarningType,
-		QuotaWarningThreshold:            req.QuotaWarningThreshold,
-		UpstreamModelUpdateNotifyEnabled: upstreamModelUpdateNotifyEnabled,
-	}
+	// 以存量设置为底再覆盖本次提交的字段。整块替换会把本接口不认识的
+	// sidebar_modules / billing_preference / language 一并清掉——用户保存一次
+	// 通知配置，边栏定制、扣费偏好和语言偏好就全没了。
+	settings := existingSettings
+	settings.NotifyType = req.QuotaWarningType
+	settings.QuotaWarningThreshold = req.QuotaWarningThreshold
+	settings.UpstreamModelUpdateNotifyEnabled = upstreamModelUpdateNotifyEnabled
 
 	// 如果是webhook类型,添加webhook相关设置
 	if req.QuotaWarningType == dto.NotifyTypeWebhook {
 		settings.WebhookUrl = req.WebhookUrl
+		// 前端不回显密钥，留空表示「沿用原值」，不能当成清空。
 		if req.WebhookSecret != "" {
 			settings.WebhookSecret = req.WebhookSecret
 		}
 	}
 
-	// 如果提供了通知邮箱，添加到设置中
-	if req.QuotaWarningType == dto.NotifyTypeEmail && req.NotificationEmail != "" {
+	// 邮件类型的邮箱字段以本次提交为准：留空表示改用账号绑定的邮箱，
+	// 所以不能再加 `!= ""` 的守卫，否则空值永远清不掉。
+	if req.QuotaWarningType == dto.NotifyTypeEmail {
 		settings.NotificationEmail = req.NotificationEmail
 	}
 
