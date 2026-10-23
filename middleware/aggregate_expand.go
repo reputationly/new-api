@@ -2,8 +2,9 @@ package middleware
 
 import (
 	"fmt"
-	"github.com/QuantumNous/new-api/relay/hilo"
 	"strings"
+
+	"github.com/QuantumNous/new-api/relay/hilo"
 
 	"github.com/gin-gonic/gin"
 
@@ -347,7 +348,7 @@ func expansionMetadata(body map[string]any) (map[string]any, bool) {
 //
 // # 拿不到依据时一律照旧跑超分
 //
-// 客户没传 size(老集成方、以及出厂目录只报 2K 那种「一个模型名只承诺一个档」的用法)、
+// 客户没传 size(老集成方、以及「一个模型名只承诺一个档」的用法)、
 // 或者两边任一档解析不出短边 —— 都不跳过。跳过是一次**少干活**的决定,必须有明确
 // 依据;没有依据就维持既有行为,宁可多跑一段也不能让承诺的 2K 静默变成 768P。
 func upscaleSkipReason(requestedSize, generateSize string) string {

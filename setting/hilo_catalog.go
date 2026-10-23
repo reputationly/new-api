@@ -273,9 +273,8 @@ func hiloSelect(label string, options []string, def string) dto.HiloModelParam {
 
 // defaultHiloCatalog 出厂默认目录。
 //
-// **结构抄官方，取值用我们平台实测的。** 两者的差别是真实存在的：
-// 官方 H3 的时长档位是 4–15 秒，而我们这套部署单段最长 10 秒 ——
-// 照抄的话用户选 12 秒，请求发出去被平台拒掉，而界面上那个档位一直在。
+// **结构抄官方，取值用引擎实际收下的范围。** H3 时长上限是 15 秒
+// （引擎报错原文 `must be in [4, 15]`）。目录若停在 10 秒，界面会少一截。
 //
 // 官方的真实响应存在 `ovaijisuandesign/reference/hilo/` 下，用来对照升级。
 func defaultHiloCatalog() HiloCatalog {
@@ -348,24 +347,12 @@ func defaultHiloCatalog() HiloCatalog {
 					Params: map[string]dto.HiloModelParam{
 						"image_mode": hiloSelect("生成方式",
 							[]string{"reference", "first-last-frame"}, "reference"),
-						// **官方是 4–15，我们只到 10** —— 本机单段最长 10 秒。
-						"duration": hiloSelect("时长", []string{"4", "5", "6", "7", "8", "9", "10"}, "5"),
+						"duration": hiloSelect("时长", []string{"4", "5", "6", "7", "8", "9", "10", "11", "12", "13", "14", "15"}, "5"),
 						"ratio":    hiloSelect("宽高比", videoRatios, "adaptive"),
-						// **只给 2K，因为这条聚合流水线只产出 2K。**
-						//
-						// 超分段是无条件跑的（buildTaskAggregateInfo 只看
-						// `Upscale.IsEnabled()`，不看客户要的档位），所以摆出
-						// 768P 也兑现不了：选了照样被超到 2K，而且付 2K 的钱。
-						//
-						// 而 2K 能成立，靠的是出厂聚合配置里的
-						// `generate.overrides: {size: 768P}` —— 没有它的话
-						// 客户传的 2K 会原样到达生成段，被 resolveResolution
-						// 直接 400（2K 依赖闭源的 H3-Regenerate-2K）。
-						// 两者是一对，改一个必须看另一个。
-						//
-						// 要同时给 768P 和 2K（官方就是这样），得让编排层按档位
-						// 决定"跑不跑超分"。那是生成转发那一层的事，还没做。
-						"resolution": hiloSelect("分辨率", []string{"2K"}, "2K"),
+						// 768P 停在生成段，2K 才跑超分。依据是 upscaleSkipReason：
+						// 客户要的短边不高于生成段（overrides.size=768P）时跳过超分。
+						// 1080P / 480P 不在这条流水线的档位里，给了会对不上。
+						"resolution": hiloSelect("分辨率", []string{"768P", "2K"}, "2K"),
 						// **默认开。** 官方也是 true。我们之前完全没有这个参数,
 						// 于是 H3 的原生音轨一直没生成 —— 表现是「视频没有声音」。
 						"generate_audio": hiloSelect("有声视频", []string{"true", "false"}, "true"),

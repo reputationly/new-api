@@ -207,24 +207,18 @@ func TestVideoCatalogPointsAtTheAggregatePipeline(t *testing.T) {
 	if !ok {
 		t.Fatal("H3 没有 resolution 参数")
 	}
-	if !slices.Contains(res.Options, "2K") {
-		t.Errorf("分辨率档位 %v 里没有 2K —— 接了聚合流水线就该给得出", res.Options)
+	if !slices.Contains(res.Options, "2K") || !slices.Contains(res.Options, "768P") {
+		t.Errorf("分辨率档位 %v 应同时有 768P 和 2K", res.Options)
 	}
-	// 1080P 不在 relay 认的档位里，给了就是 400。
-	if slices.Contains(res.Options, "1080P") {
-		t.Error("1080P 会被 relay/minimaxv2 直接 400，不该出现在档位里")
-	}
-	// **只承诺做得到的档位。**
-	//
-	// 这条聚合流水线的超分段是无条件跑的（buildTaskAggregateInfo 只看
-	// Upscale.IsEnabled()，不看客户要的档位），所以给出 768P/480P 等于
-	// 承诺一个兑现不了的档位 —— 客户选了还是拿到 2K，而且付 2K 的钱。
-	//
-	// 等编排层能按档位决定「生成段发什么 + 跑不跑超分」之后，这条要放开。
-	for _, tier := range []string{"768P", "480P"} {
+	// 1080P / 480P 对不上这条流水线：生成段是 768P，超分目标是 2K。
+	for _, tier := range []string{"1080P", "480P"} {
 		if slices.Contains(res.Options, tier) {
-			t.Errorf("%s 兑现不了：超分段无条件跑，选它也会被超到 2K", tier)
+			t.Errorf("%s 不在生成段或超分目标里，不该出现在档位里", tier)
 		}
+	}
+	dur := h3.Model.Params["duration"]
+	if !slices.Contains(dur.Options, "4") || !slices.Contains(dur.Options, "15") {
+		t.Errorf("时长档位 %v 应覆盖引擎的 [4, 15]", dur.Options)
 	}
 }
 

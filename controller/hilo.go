@@ -155,7 +155,7 @@ func logSkipOnce(modelID, reason string) {
 // 出厂目录（`defaultHiloCatalog`）是**代码**，跟着二进制升级；而出厂的聚合
 // 配置（`DefaultAggregateModelConfig`）只是**种子**，`loadOptionsFromDatabase`
 // 会用库里存过的值盖掉它。于是有一类部署：升级前保存过 AggregateModelConfig、
-// 又从没保存过 HiloCatalog —— 目录按新代码只报 2K，而库里那条流水线还是
+// 又从没保存过 HiloCatalog —— 目录按新代码报出 2K，而库里那条流水线还是
 // 没有 `generate.overrides` 的旧版。
 //
 // 那种组合下客户端选 2K 会打到生成段，被 H3 直接拒（自建部署上限 768P）。
