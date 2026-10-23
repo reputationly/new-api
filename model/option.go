@@ -239,18 +239,66 @@ func SyncOptions(frequency int) {
 	}
 }
 
+// OptionValuesFromDatabase 返回一份「以数据库为准」的配置快照。
+//
+// # 为什么设置页不能读本副本内存里的那份
+//
+// 多副本部署下（现网是 1 master + 3 slave 挂在同一个 Service 后面），保存只更新了
+// 处理这次 PUT 的**那一个**副本的内存；其余副本要等 SyncOptions 的下一拍
+// （`SYNC_FREQUENCY`，默认 60 秒）才会从库里刷到新值。而 `GET /api/option/`
+// 返回的正是内存里的值，于是：保存成功 → 刷新设置页 → 请求落到别的副本 →
+// 显示旧值。表现就是「保存完过一会儿刷新又还原了」，而库里的值其实一直是对的。
+//
+// 这个接口是 root 专用、低频（打开设置页才读一次），代价只是多一条
+// `SELECT key, value FROM options`。
+//
+// **只覆盖内存里已经有的键，不引入库里的孤儿行。** `common.OptionMap` 的键集
+// 是这一版代码认的配置面；库里可能还留着旧版本写过、这个版本已经不认的键，
+// 把它们塞进响应只会让设置页多出几个没人认识的字段。
+func OptionValuesFromDatabase() map[string]string {
+	values := make(map[string]string)
+	common.OptionMapRWMutex.RLock()
+	for k, v := range common.OptionMap {
+		values[k] = common.Interface2String(v)
+	}
+	common.OptionMapRWMutex.RUnlock()
+
+	options, err := AllOption()
+	if err != nil {
+		// 读不到库就退回内存那份，至少设置页还能打开；下一次刷新会重试。
+		common.SysLog("failed to load option values from database: " + err.Error())
+		return values
+	}
+	for _, option := range options {
+		if _, known := values[option.Key]; known {
+			values[option.Key] = option.Value
+		}
+	}
+	return values
+}
+
 func UpdateOption(key string, value string) error {
 	// Save to database first
 	option := Option{
 		Key: key,
 	}
 	// https://gorm.io/docs/update.html#Save-All-Fields
-	DB.FirstOrCreate(&option, Option{Key: key})
+	if err := DB.FirstOrCreate(&option, Option{Key: key}).Error; err != nil {
+		return err
+	}
 	option.Value = value
 	// Save is a combination function.
 	// If save value does not contain primary key, it will execute Create,
 	// otherwise it will execute Update (with all fields).
-	DB.Save(&option)
+	//
+	// **写库失败必须报出去，不能只是更新内存。** 以前这里两次写库的错误都丢了：
+	// 库里没写进去，内存却换成了新值，接口照样回 success。管理员看到「保存成功」，
+	// 而 60 秒后 SyncOptions 从库里重新加载，那份旧值又把内存盖回去 ——
+	// 表现就是「保存完过一会儿刷新又还原了」，且日志里一个字都没有。
+	// 报错之后最后一道防线还在：updateOptionMap 不会被调用，内存和库保持一致。
+	if err := DB.Save(&option).Error; err != nil {
+		return err
+	}
 	// Update OptionMap
 	return updateOptionMap(key, value)
 }

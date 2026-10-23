@@ -75,10 +75,15 @@ func buildCompletionRatioMetaValue(optionValues map[string]string) string {
 
 func GetOptions(c *gin.Context) {
 	var options []*model.Option
-	optionValues := make(map[string]string)
-	common.OptionMapRWMutex.Lock()
-	for k, v := range common.OptionMap {
-		value := common.Interface2String(v)
+	// **值以数据库为准，不读本副本的内存。**
+	//
+	// 多副本部署下（1 master + 3 slave 同一个 Service），保存只更新了处理那次
+	// PUT 的副本的内存，其余副本最多滞后 `SYNC_FREQUENCY`（默认 60 秒）才从库里
+	// 刷到新值。设置页读的是内存里的那份，于是「保存成功 → 刷新 → 请求落到
+	// 别的副本 → 显示旧值」，看起来就是保存被还原了，而库里一直是对的。
+	// 来龙去脉见 model.OptionValuesFromDatabase 的注释。
+	values := model.OptionValuesFromDatabase()
+	for k, value := range values {
 		isSensitiveKey := strings.HasSuffix(k, "Token") ||
 			strings.HasSuffix(k, "Secret") ||
 			strings.HasSuffix(k, "Key") ||
@@ -101,17 +106,10 @@ func GetOptions(c *gin.Context) {
 			Key:   k,
 			Value: value,
 		})
-		for _, optionKey := range completionRatioMetaOptionKeys {
-			if optionKey == k {
-				optionValues[k] = value
-				break
-			}
-		}
 	}
-	common.OptionMapRWMutex.Unlock()
 	options = append(options, &model.Option{
 		Key:   "CompletionRatioMeta",
-		Value: buildCompletionRatioMetaValue(optionValues),
+		Value: buildCompletionRatioMetaValue(values),
 	})
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
