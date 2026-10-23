@@ -38,8 +38,16 @@ func TestDefaultCatalogHasTextModels(t *testing.T) {
 	for _, e := range c.Text {
 		ids = append(ids, e.Model.ID)
 	}
-	if !contains(ids, "qwen3.8-27b") {
-		t.Errorf("出厂目录里应当有 qwen3.8-27b（实测三项全过的那个），实得 %v", ids)
+	if !contains(ids, "deepseek-v4-1-flash") {
+		t.Errorf("出厂目录里应当有 deepseek-v4-1-flash，实得 %v", ids)
+	}
+	// **这两个是运营明确要求下架的。** 留一条在出厂目录里，新装实例
+	// 或点过「恢复出厂目录」的实例就会把它们重新报给客户端 ——
+	// 而界面上明明已经删掉了。
+	for _, gone := range []string{"qwen3.8-27b", "qwen3.8-flash-fp8"} {
+		if contains(ids, gone) {
+			t.Errorf("%s 已下架，不该再出现在出厂目录里，实得 %v", gone, ids)
+		}
 	}
 }
 

@@ -67,13 +67,18 @@ type HiloTextEntry struct {
 //
 // 实测结果（2026-09-14，本平台）：
 //
-//	qwen3.8-27b              视觉 ✓  工具 ✓  视频 ✓
-//	qwen3.8-flash-fp8        视觉 ✓  工具 ✓  视频 ✓
 //	GPT-5.4                  视觉 ✓  工具 ✓  视频 未验
 //	Gemini-3.1-Pro-Preview   视觉 ✓  工具 ✓  视频 未验
 //	deepseek-v4-flash-0731   视觉 ✗          —— 不收
 //	sensenova-u1.5           平台返回「模型不是…」，实际调不通 —— 不收
 //	GPT-5.5                  两项都超时（120s），**结论未知** —— 暂不收
+//
+// 2026-10-23 的调整：qwen3.8-27b / qwen3.8-flash-fp8 按运营要求下架，
+// 换成 deepseek-v4-1-flash。**这一条没有复测上面那两项硬门槛** ——
+// 手里只有运营指定，没有本平台的视觉/工具调用实测数据。所以
+// `supportsVideo` / `supportsAudio` 一律留 false（没验过就报 true，
+// 客户端会把视频/音频喂过去，而模型只会编一段听起来合理的描述）。
+// 要把它当"已验证"看待之前，先补测那两项。
 func defaultHiloTextCatalog() []HiloTextEntry {
 	entry := func(platform, id, name string, video bool) HiloTextEntry {
 		return HiloTextEntry{
@@ -89,8 +94,8 @@ func defaultHiloTextCatalog() []HiloTextEntry {
 		}
 	}
 	return []HiloTextEntry{
-		entry("qwen3.8-27b", "qwen3.8-27b", "Qwen3.8 27B", true),
-		entry("qwen3.8-flash-fp8", "qwen3.8-flash-fp8", "Qwen3.8 Flash", true),
+		// 排第一 = 客户端的默认对话模型（controller/hilo.go 取第一个真的报出去的）。
+		entry("deepseek-v4-1-flash", "deepseek-v4-1-flash", "DeepSeek V4.1 Flash", false),
 		entry("GPT-5.4", "GPT-5.4", "GPT-5.4", false),
 		entry("Gemini-3.1-Pro-Preview", "Gemini-3.1-Pro-Preview", "Gemini 3.1 Pro", false),
 	}
