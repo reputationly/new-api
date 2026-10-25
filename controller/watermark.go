@@ -63,11 +63,18 @@ func SaveWatermarkConfig(c *gin.Context) {
 		common.ApiError(c, err)
 		return
 	}
+	enabledUpdate := struct{ key, value string }{"watermark.enabled", strconv.FormatBool(req.Enabled)}
 	updates := []struct{ key, value string }{
-		{"watermark.enabled", strconv.FormatBool(req.Enabled)},
 		{"watermark.templates", string(templates)},
 		{"watermark.default_binding", string(defaultBinding)},
 		{"watermark.group_bindings", string(groupBindings)},
+	}
+	// 关闭时先关开关；开启时等模板和绑定就绪后再开启。
+	// 配置整体已校验，逐项落库的中间态若引用不到模板，ResolveTemplate 会返回 nil（不加水印），不会崩。
+	if req.Enabled {
+		updates = append(updates, enabledUpdate)
+	} else {
+		updates = append([]struct{ key, value string }{enabledUpdate}, updates...)
 	}
 	for _, update := range updates {
 		if err := model.UpdateOption(update.key, update.value); err != nil {

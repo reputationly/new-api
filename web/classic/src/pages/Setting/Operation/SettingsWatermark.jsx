@@ -133,16 +133,16 @@ export default function SettingsWatermark(props) {
     ]);
   }
 
-  function updateBinding(target, mediaKind, value) {
-    if (target === 'default') {
-      setDefaultBinding((previous) => ({ ...previous, [mediaKind]: value }));
-      return;
-    }
+  function updateDefaultBinding(mediaKind, value) {
+    setDefaultBinding((previous) => ({ ...previous, [mediaKind]: value }));
+  }
+
+  function updateGroupBinding(group, mediaKind, value) {
     setGroupBindings((previous) => {
       const next = { ...previous };
-      const binding = { ...(next[target] || {}), [mediaKind]: value };
-      if (!binding.image && !binding.video) delete next[target];
-      else next[target] = binding;
+      const binding = { ...(next[group] || {}), [mediaKind]: value };
+      if (!binding.image && !binding.video) delete next[group];
+      else next[group] = binding;
       return next;
     });
   }
@@ -331,7 +331,7 @@ export default function SettingsWatermark(props) {
           value={groupBindings[row.name]?.[kind] || ''}
           optionList={inheritedOptions}
           style={{ width: '100%' }}
-          onChange={(value) => updateBinding(row.name, kind, value)}
+          onChange={(value) => updateGroupBinding(row.name, kind, value)}
         />
       ),
     })),
@@ -424,7 +424,7 @@ export default function SettingsWatermark(props) {
               value={defaultBinding[kind] || ''}
               optionList={bindingOptions}
               style={{ width: '100%' }}
-              onChange={(value) => updateBinding('default', kind, value)}
+              onChange={(value) => updateDefaultBinding(kind, value)}
             />
           </label>
         ))}

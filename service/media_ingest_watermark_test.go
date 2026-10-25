@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	"strings"
 	"testing"
 
 	"github.com/QuantumNous/new-api/common"
@@ -150,6 +151,33 @@ func TestPersistMediaApplyFailureFallsBackToOriginal(t *testing.T) {
 	}
 	if len(failures) != 1 || failures[0].Error() != "render failed" {
 		t.Fatalf("recorded failures = %v, want render failure", failures)
+	}
+}
+
+func TestPersistMediaOversizedWatermarkFallsBackToOriginal(t *testing.T) {
+	useWatermarkSettings(t, true, "test")
+	mediaSettings := system_setting.GetMediaStorageSettings()
+	previousMaxSize := mediaSettings.MaxObjectSizeMB
+	mediaSettings.MaxObjectSizeMB = 1
+	t.Cleanup(func() { mediaSettings.MaxObjectSizeMB = previousMaxSize })
+	var persisted []capturedPersist
+	var failures []error
+	stubWatermarkIngest(t, &persisted, &failures, nil)
+	applyWatermark = func(_ context.Context, _, outPath string, _ system_setting.MediaKind, _ string, _ system_setting.WatermarkTemplate) error {
+		return os.WriteFile(outPath, make([]byte, 1024*1024+1), 0o600)
+	}
+	raw := []byte("original bytes")
+	if err := persistMedia(context.Background(), "result.png", mediastore.PersistSource{Data: raw}, nil, watermarkTarget{
+		Group: "default", Source: "task", UserId: 42, TaskId: "task-1",
+		KindHint: system_setting.MediaKindImage,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if len(persisted) != 1 || persisted[0].key != "result.png" || string(persisted[0].data) != string(raw) {
+		t.Fatalf("fallback upload = %+v, want only original at requested key", persisted)
+	}
+	if len(failures) != 1 || !strings.Contains(failures[0].Error(), "1048577") || !strings.Contains(failures[0].Error(), "1048576") {
+		t.Fatalf("recorded failures = %v, want oversized output details", failures)
 	}
 }
 

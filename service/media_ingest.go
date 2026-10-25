@@ -175,6 +175,18 @@ func persistMedia(ctx context.Context, key string, src mediastore.PersistSource,
 		recordWatermarkFailure(target.Source, string(kind), target.Group, target.UserId, target.TaskId, key, err)
 		return persistObject(ctx, key, mediastore.PersistSource{LocalPath: inPath, ContentType: src.ContentType}, meta)
 	}
+	outInfo, err := os.Stat(outPath)
+	if err != nil {
+		err = fmt.Errorf("stat watermark output: %w", err)
+		recordWatermarkFailure(target.Source, string(kind), target.Group, target.UserId, target.TaskId, key, err)
+		return persistObject(ctx, key, mediastore.PersistSource{LocalPath: inPath, ContentType: src.ContentType}, meta)
+	}
+	limit := int64(system_setting.GetMediaStorageSettings().MaxObjectSizeMB) * 1024 * 1024
+	if limit > 0 && outInfo.Size() > limit {
+		err = fmt.Errorf("水印产物 %d 字节超过单文件上限 %d 字节", outInfo.Size(), limit)
+		recordWatermarkFailure(target.Source, string(kind), target.Group, target.UserId, target.TaskId, key, err)
+		return persistObject(ctx, key, mediastore.PersistSource{LocalPath: inPath, ContentType: src.ContentType}, meta)
+	}
 	originalMeta := meta
 	if err := persistObject(ctx, mediastore.OriginalKey(key), mediastore.PersistSource{LocalPath: inPath, ContentType: src.ContentType}, originalMeta); err != nil {
 		return err
