@@ -46,7 +46,7 @@ FROM debian:bookworm-slim@sha256:f06537653ac770703bc45b4b113475bd402f451e85223f0
 # 解析确实做到了纯 Go，但视频抽帧没有可用的纯 Go 路径（Go 生态没有靠谱的 H.264/HEVC 解码器）。
 # 缺它时视频审核会整体跳过并在启动日志告警，见 moderation.FFmpegAvailable。
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends ca-certificates tzdata libasan8 wget ffmpeg \
+    && apt-get install -y --no-install-recommends ca-certificates tzdata libasan8 wget ffmpeg fonts-wqy-microhei \
     && rm -rf /var/lib/apt/lists/* \
     && update-ca-certificates
 

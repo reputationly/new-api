@@ -581,7 +581,7 @@ func OpenaiHandlerWithUsage(c *gin.Context, info *relaycommon.RelayInfo, resp *h
 			responseFormat = imgReq.ResponseFormat
 		}
 		var obsKeys []string
-		responseBody, obsKeys = service.RewriteImageResponseToOBS(c.Request.Context(), info.UserId, info.ChannelId, info.OriginModelName, responseFormat, responseBody)
+		responseBody, obsKeys = service.RewriteImageResponseToOBS(c.Request.Context(), info.UserId, info.ChannelId, info.UsingGroup, info.OriginModelName, responseFormat, responseBody)
 		// 落盘的 key 留给同步任务记录当结果引用。没落盘（透传 / b64 直通 / OBS 不可用）
 		// 就没有 key，那条任务记录只有元信息、没有图。
 		relaycommon.AppendSyncImageOBSKeys(c, obsKeys...)

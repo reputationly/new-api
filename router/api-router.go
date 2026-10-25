@@ -479,6 +479,14 @@ func SetApiRouter(router *gin.Engine) {
 			moderationRoute.POST("/test-endpoint", controller.TestModerationEndpoint)
 		}
 
+		watermarkRoute := apiRouter.Group("/watermark")
+		watermarkRoute.Use(middleware.AdminAuth())
+		{
+			watermarkRoute.PUT("/config", middleware.RootAuth(), controller.SaveWatermarkConfig)
+			watermarkRoute.GET("/status", controller.GetWatermarkStatus)
+			watermarkRoute.POST("/preview", controller.PreviewWatermark)
+		}
+
 		dataRoute := apiRouter.Group("/data")
 		dataRoute.GET("/", middleware.AdminAuth(), controller.GetAllQuotaDates)
 		dataRoute.GET("/users", middleware.AdminAuth(), controller.GetQuotaDatesByUser)

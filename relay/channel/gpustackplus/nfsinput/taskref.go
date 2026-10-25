@@ -85,7 +85,12 @@ func ResolveTaskRefBytes(ctx context.Context, userID int, raw string, maxBytes i
 		// NFS 读不到(已清理/未挂载/越权拒绝)→ OBS 签名 URL 退化。
 		// 超限错误同样走退化没有意义(OBS 是同一份字节),但 downloadURL 会以
 		// LimitReader 快速再拒,无需在此区分错误类别。
-		signed, sErr := mediastore.Sign(ctx, key)
+		downloadKey := key
+		originalKey := mediastore.OriginalKey(key)
+		if originalExists, existsErr := mediastore.Exists(ctx, originalKey); existsErr == nil && originalExists {
+			downloadKey = originalKey
+		}
+		signed, sErr := mediastore.Sign(ctx, downloadKey)
 		if sErr != nil {
 			return nil, "", fmt.Errorf("被引用任务 %s 产物本地不可读(%v)且 OBS 签名失败: %v", taskID, nfsErr, sErr)
 		}

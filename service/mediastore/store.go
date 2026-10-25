@@ -25,6 +25,7 @@ type PersistSource struct {
 	UpstreamURL string // 非空：从上游 URL 下载（第三方渠道），host 须命中白名单（防 SSRF）
 	Data        []byte // 非空：内存字节直传（如第三方返回的 b64_json 解码后）
 	ContentType string // 由扩展名 / 上游 Content-Type 推断，写入 OBS 对象；空则由 key 扩展名推断
+	LocalPath   string // 仅限服务端内部生成的临时文件，绝不接受外部输入
 }
 
 // SignOptions 控制签名 URL 的可选行为（如强制下载文件名）。

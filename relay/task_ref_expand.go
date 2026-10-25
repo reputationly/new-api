@@ -90,7 +90,12 @@ func (r *taskRefResolver) signFromOBS(ctx context.Context, value string) (string
 	if err != nil || !exists {
 		return "", false
 	}
-	signed, err := mediastore.Sign(ctx, key)
+	signKey := key
+	originalKey := mediastore.OriginalKey(key)
+	if exists, err := mediastore.Exists(ctx, originalKey); err == nil && exists {
+		signKey = originalKey
+	}
+	signed, err := mediastore.Sign(ctx, signKey)
 	if err != nil {
 		return "", false
 	}

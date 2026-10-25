@@ -1,6 +1,8 @@
 package mediastore
 
 import (
+	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -42,6 +44,31 @@ func TestBuildKey(t *testing.T) {
 	want = "t2i-a_b/2026/07/03/1/c_d.png"
 	if got != want {
 		t.Errorf("BuildKey sanitize=%q want %q", got, want)
+	}
+}
+
+func TestOriginalKey(t *testing.T) {
+	cases := map[string]string{
+		"a/b/c.mp4": "a/b/c.orig.mp4",
+		"image.png": "image.orig.png",
+		"noext":     "noext.orig",
+	}
+	for key, want := range cases {
+		if got := OriginalKey(key); got != want {
+			t.Errorf("OriginalKey(%q) = %q, want %q", key, got, want)
+		}
+	}
+}
+
+func TestPersistLocalPathEnforcesObjectLimit(t *testing.T) {
+	localPath := filepath.Join(t.TempDir(), "image.png")
+	if err := os.WriteFile(localPath, []byte("too large"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	store := &obsStore{cfg: obsConfig{MaxObjectBytes: 1}}
+	err := store.Persist(context.Background(), "image.png", PersistSource{LocalPath: localPath}, nil)
+	if !errors.Is(err, ErrObjectTooLarge) {
+		t.Fatalf("Persist(LocalPath) error = %v, want ErrObjectTooLarge", err)
 	}
 }
 

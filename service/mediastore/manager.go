@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -96,6 +97,24 @@ func Persist(ctx context.Context, key string, src PersistSource, meta map[string
 		return err
 	}
 	return store.Persist(ctx, key, src, meta)
+}
+
+// DownloadToTemp 通过当前 OBS store 的上游下载校验流程下载到本地临时文件。
+func DownloadToTemp(ctx context.Context, rawURL string) (*os.File, error) {
+	if !Enabled() {
+		return nil, ErrNotEnabled
+	}
+	store, err := Get()
+	if err != nil {
+		return nil, err
+	}
+	downloader, ok := store.(interface {
+		downloadToTemp(context.Context, string) (*os.File, error)
+	})
+	if !ok {
+		return nil, fmt.Errorf("mediastore: current store does not support validated downloads")
+	}
+	return downloader.downloadToTemp(ctx, rawURL)
 }
 
 // Sign 用配置的统一 TTL 为 key 实时签名。

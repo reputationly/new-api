@@ -5,15 +5,34 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"os"
 	"path"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/service/mediastore"
+	"github.com/QuantumNous/new-api/service/watermark"
 	"github.com/QuantumNous/new-api/setting/system_setting"
+)
+
+type watermarkTarget struct {
+	Group    string
+	Source   string
+	UserId   int
+	TaskId   string
+	KindHint system_setting.MediaKind
+}
+
+var (
+	persistObject          = mediastore.Persist
+	applyWatermark         = watermark.Apply
+	watermarkAvailable     = watermark.Available
+	recordWatermarkFailure = model.RecordWatermarkFailure
 )
 
 // PersistTaskResultToOBS 把一个任务成功产物搬到 OBS，成功返回落库占位符 obs://<key> 与 true；
@@ -90,11 +109,122 @@ func persistToOBS(ctx context.Context, task *model.Task, key string, src mediast
 		"model":    task.Properties.OriginModelName,
 		"platform": string(task.Platform),
 	}
-	if err := mediastore.Persist(ctx, key, src, meta); err != nil {
+	var kindHint system_setting.MediaKind
+	if constant.IsImageTaskAction(task.Action) {
+		kindHint = system_setting.MediaKindImage
+	} else if constant.IsVideoTaskAction(task.Action) {
+		kindHint = system_setting.MediaKindVideo
+	}
+	if err := persistMedia(ctx, key, src, meta, watermarkTarget{
+		Group: task.Group, Source: "task", UserId: task.UserId, TaskId: task.TaskID, KindHint: kindHint,
+	}); err != nil {
 		common.SysError("mediastore: persist task result failed, fallback to raw url: " + err.Error())
 		return false
 	}
 	return true
+}
+
+func persistMedia(ctx context.Context, key string, src mediastore.PersistSource, meta map[string]string, target watermarkTarget) error {
+	settings := system_setting.GetWatermarkSettings()
+	ext := strings.TrimPrefix(strings.ToLower(path.Ext(key)), ".")
+	kind, recognized := watermark.KindFromExt(ext)
+	if !recognized {
+		kind = target.KindHint
+	}
+	if !settings.Enabled || kind == "" {
+		return persistObject(ctx, key, src, meta)
+	}
+	tpl := settings.ResolveTemplate(target.Group, kind)
+	if tpl == nil {
+		return persistObject(ctx, key, src, meta)
+	}
+	if ready, reason := watermarkAvailable(); !ready {
+		err := fmt.Errorf("watermark unavailable: %s", reason)
+		recordWatermarkFailure(target.Source, string(kind), target.Group, target.UserId, target.TaskId, key, err)
+		return persistObject(ctx, key, src, meta)
+	}
+
+	tempDir, err := os.MkdirTemp("", "watermark-ingest-*")
+	if err != nil {
+		recordWatermarkFailure(target.Source, string(kind), target.Group, target.UserId, target.TaskId, key, err)
+		return persistObject(ctx, key, src, meta)
+	}
+	defer os.RemoveAll(tempDir)
+	inPath, cleanup, err := localizePersistSource(ctx, src, tempDir)
+	if cleanup != nil {
+		defer cleanup()
+	}
+	if err != nil {
+		recordWatermarkFailure(target.Source, string(kind), target.Group, target.UserId, target.TaskId, key, err)
+		return persistObject(ctx, key, src, meta)
+	}
+	format := ext
+	if format == "" {
+		if kind == system_setting.MediaKindImage {
+			format = "png"
+		} else {
+			format = "mp4"
+		}
+	}
+	outPath := filepath.Join(tempDir, "watermarked."+format)
+	if err := applyWatermark(ctx, inPath, outPath, kind, format, *tpl); err != nil {
+		recordWatermarkFailure(target.Source, string(kind), target.Group, target.UserId, target.TaskId, key, err)
+		return persistObject(ctx, key, mediastore.PersistSource{LocalPath: inPath, ContentType: src.ContentType}, meta)
+	}
+	originalMeta := meta
+	if err := persistObject(ctx, mediastore.OriginalKey(key), mediastore.PersistSource{LocalPath: inPath, ContentType: src.ContentType}, originalMeta); err != nil {
+		return err
+	}
+	watermarkedMeta := make(map[string]string, len(meta)+1)
+	for k, v := range meta {
+		watermarkedMeta[k] = v
+	}
+	watermarkedMeta["watermark"] = "1"
+	contentType := mediastore.InferContentType(key)
+	if ext == "" {
+		if kind == system_setting.MediaKindImage {
+			contentType = "image/png"
+		} else {
+			contentType = "video/mp4"
+		}
+	}
+	return persistObject(ctx, key, mediastore.PersistSource{LocalPath: outPath, ContentType: contentType}, watermarkedMeta)
+}
+
+func localizePersistSource(ctx context.Context, src mediastore.PersistSource, tempDir string) (string, func(), error) {
+	switch {
+	case src.NFSPath != "":
+		path, err := mediastore.ValidateNFSPath(mediastore.NFSRoot(), src.NFSPath)
+		return path, nil, err
+	case src.UpstreamURL != "":
+		file, err := mediastore.DownloadToTemp(ctx, src.UpstreamURL)
+		if err != nil {
+			return "", nil, err
+		}
+		return file.Name(), func() {
+			name := file.Name()
+			_ = file.Close()
+			_ = os.Remove(name)
+		}, nil
+	case len(src.Data) > 0:
+		file, err := os.CreateTemp(tempDir, "source-*")
+		if err != nil {
+			return "", nil, err
+		}
+		_, writeErr := file.Write(src.Data)
+		closeErr := file.Close()
+		if writeErr != nil {
+			return "", nil, writeErr
+		}
+		if closeErr != nil {
+			return "", nil, closeErr
+		}
+		return file.Name(), nil, nil
+	case src.LocalPath != "":
+		return src.LocalPath, nil, nil
+	default:
+		return "", nil, mediastore.ErrInvalidSource
+	}
 }
 
 // ResolveResultURL 序列化层统一 hook（§5.4）：obs:// 占位符 → 实时签名 URL；
@@ -109,7 +239,7 @@ func ResolveResultURL(ctx context.Context, raw string) string {
 //
 // key 一并回吐是给同步任务留档用的：签名 URL 有效期有限、不能存库，任务表存的是
 // obs://<key> 占位符，查询时实时签发（与异步链路同一套，见 relay/image_task_response.go）。
-func PersistImageNFSToOBS(ctx context.Context, userID int, nfsPath string) (signedURL string, objectKey string, err error) {
+func PersistImageNFSToOBS(ctx context.Context, userID int, group, nfsPath string) (signedURL string, objectKey string, err error) {
 	if !mediastore.Enabled() {
 		return "", "", fmt.Errorf("media storage 未启用，无法对外提供生图结果 URL")
 	}
@@ -125,7 +255,9 @@ func PersistImageNFSToOBS(ctx context.Context, userID int, nfsPath string) (sign
 	meta := map[string]string{
 		"user-id": strconv.Itoa(userID),
 	}
-	if err := mediastore.Persist(ctx, key, mediastore.PersistSource{NFSPath: nfsPath}, meta); err != nil {
+	if err := persistMedia(ctx, key, mediastore.PersistSource{NFSPath: nfsPath}, meta, watermarkTarget{
+		Group: group, Source: "sync_image", UserId: userID, KindHint: system_setting.MediaKindImage,
+	}); err != nil {
 		return "", "", fmt.Errorf("落盘 OBS 失败: %w", err)
 	}
 	signed, err := mediastore.Sign(ctx, key)
@@ -140,8 +272,8 @@ func PersistImageNFSToOBS(ctx context.Context, userID int, nfsPath string) (sign
 // 「只有 OBS 不可用时才降级透传」——单项落盘失败则保留该项原始 url（或原 b64），不整体失败。
 // 已经是我方 OBS 的 url（如自建 gpustackplus 渠道产出）跳过，不重复搬运。
 //
-// responseFormat 为客户端请求的 response_format：显式要 b64_json 时不动 b64 项
-// （客户端可能无法访问外网 URL，换掉 b64 会直接破坏其解析），仅归档语义放弃。
+// responseFormat 为客户端请求的 response_format：显式要 b64_json 时只在内存中尝试加水印，
+// 不上传 OBS，保持客户端期望的响应形态。
 //
 // 改写走 map[string]json.RawMessage 外科手术式替换，只动 data[i].url / data[i].b64_json
 // 两个字段——顶层 usage、逐项 revised_prompt 等未建模字段原样保留，不因重编码丢失。
@@ -150,7 +282,7 @@ func PersistImageNFSToOBS(ctx context.Context, userID int, nfsPath string) (sign
 // 第二个返回值是本次落盘的对象 key（按 data[] 顺序），供同步链路把结果留档进任务表；
 // 未落盘的项（透传 / 已是我方 OBS / b64 直通 / 落盘失败）不在其中，所以它可能比 data[] 短，
 // 甚至为空 —— 调用方必须容忍「有响应但没有 key」。
-func RewriteImageResponseToOBS(ctx context.Context, userID, channelID int, modelName, responseFormat string, body []byte) ([]byte, []string) {
+func RewriteImageResponseToOBS(ctx context.Context, userID, channelID int, group, modelName, responseFormat string, body []byte) ([]byte, []string) {
 	if !mediastore.Enabled() || len(body) == 0 {
 		return body, nil
 	}
@@ -181,7 +313,7 @@ func RewriteImageResponseToOBS(ctx context.Context, userID, channelID int, model
 			if mediastore.IsOwnOBSURL(urlStr) {
 				continue // 已是我方 OBS，跳过
 			}
-			signed, key, err := persistImageToOBS(ctx, userID, modelName, mediastore.PersistSource{UpstreamURL: urlStr}, extFromURL(urlStr))
+			signed, key, err := persistImageToOBS(ctx, userID, group, modelName, mediastore.PersistSource{UpstreamURL: urlStr}, extFromURL(urlStr))
 			if err != nil {
 				common.SysError("mediastore: rewrite image url failed, keep upstream url: " + err.Error())
 				continue // OBS 不可用 → 降级保留上游 url
@@ -192,13 +324,17 @@ func RewriteImageResponseToOBS(ctx context.Context, userID, channelID int, model
 			changed = true
 		case b64Str != "":
 			if wantB64 {
-				continue // 客户端点名要 b64_json，保留原样
+				if updated, changedB64 := watermarkB64Image(ctx, b64Str, userID, group); changedB64 {
+					setJSONRawString(item, "b64_json", updated)
+					changed = true
+				}
+				continue
 			}
 			raw, decErr := base64.StdEncoding.DecodeString(b64Str)
 			if decErr != nil {
 				continue
 			}
-			signed, key, err := persistImageToOBS(ctx, userID, modelName, mediastore.PersistSource{Data: raw}, "png")
+			signed, key, err := persistImageToOBS(ctx, userID, group, modelName, mediastore.PersistSource{Data: raw}, "png")
 			if err != nil {
 				common.SysError("mediastore: rewrite image b64 failed, keep b64: " + err.Error())
 				continue
@@ -249,7 +385,7 @@ func setJSONRawString(m map[string]json.RawMessage, key, val string) {
 var persistImageToOBS = persistThirdPartyImage
 
 // 返回签名 URL 与对象 key；key 供同步任务留档（理由见 PersistImageNFSToOBS）。
-func persistThirdPartyImage(ctx context.Context, userID int, modelName string, src mediastore.PersistSource, ext string) (string, string, error) {
+func persistThirdPartyImage(ctx context.Context, userID int, group, modelName string, src mediastore.PersistSource, ext string) (string, string, error) {
 	s := system_setting.GetMediaStorageSettings()
 	if src.UpstreamURL != "" && !s.IngestUpstreamURL {
 		return "", "", fmt.Errorf("上游 URL 落盘已关闭")
@@ -260,7 +396,9 @@ func persistThirdPartyImage(ctx context.Context, userID int, modelName string, s
 	taskID := "img_" + common.GetRandomString(16)
 	key := mediastore.BuildKey("t2i", modelName, userID, taskID, ext, time.Now())
 	meta := map[string]string{"user-id": strconv.Itoa(userID)}
-	if err := mediastore.Persist(ctx, key, src, meta); err != nil {
+	if err := persistMedia(ctx, key, src, meta, watermarkTarget{
+		Group: group, Source: "third_party_image", UserId: userID, KindHint: system_setting.MediaKindImage,
+	}); err != nil {
 		return "", "", err
 	}
 	signed, err := mediastore.Sign(ctx, key)
@@ -268,6 +406,42 @@ func persistThirdPartyImage(ctx context.Context, userID int, modelName string, s
 		return "", "", err
 	}
 	return signed, key, nil
+}
+
+func watermarkB64Image(ctx context.Context, value string, userID int, group string) (string, bool) {
+	tpl := system_setting.GetWatermarkSettings().ResolveTemplate(group, system_setting.MediaKindImage)
+	if tpl == nil {
+		return value, false
+	}
+	fail := func(err error) (string, bool) {
+		recordWatermarkFailure("b64_image", string(system_setting.MediaKindImage), group, userID, "", "", err)
+		return value, false
+	}
+	if ready, reason := watermarkAvailable(); !ready {
+		return fail(fmt.Errorf("watermark unavailable: %s", reason))
+	}
+	raw, err := base64.StdEncoding.DecodeString(value)
+	if err != nil {
+		return fail(fmt.Errorf("decode b64 image: %w", err))
+	}
+	dir, err := os.MkdirTemp("", "watermark-b64-*")
+	if err != nil {
+		return fail(err)
+	}
+	defer os.RemoveAll(dir)
+	input := filepath.Join(dir, "source.png")
+	output := filepath.Join(dir, "watermarked.png")
+	if err := os.WriteFile(input, raw, 0o600); err != nil {
+		return fail(err)
+	}
+	if err := applyWatermark(ctx, input, output, system_setting.MediaKindImage, "png", *tpl); err != nil {
+		return fail(err)
+	}
+	watermarked, err := os.ReadFile(output)
+	if err != nil {
+		return fail(err)
+	}
+	return base64.StdEncoding.EncodeToString(watermarked), true
 }
 
 func extFromURL(rawURL string) string {

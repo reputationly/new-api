@@ -100,6 +100,20 @@ func (s *obsStore) Persist(ctx context.Context, key string, src PersistSource, m
 			return ErrObjectTooLarge
 		}
 		body = f
+	case src.LocalPath != "":
+		f, err := os.Open(src.LocalPath)
+		if err != nil {
+			return fmt.Errorf("mediastore: open local path: %w", err)
+		}
+		defer f.Close()
+		fi, err := f.Stat()
+		if err != nil {
+			return fmt.Errorf("mediastore: stat local path: %w", err)
+		}
+		if s.cfg.MaxObjectBytes > 0 && fi.Size() > s.cfg.MaxObjectBytes {
+			return ErrObjectTooLarge
+		}
+		body = f
 	case src.UpstreamURL != "":
 		tmp, err := s.downloadToTemp(ctx, src.UpstreamURL)
 		if err != nil {

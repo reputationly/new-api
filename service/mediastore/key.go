@@ -67,6 +67,15 @@ func BuildKey(feature, model string, userID int, taskID, ext string, at time.Tim
 		seg, at.Year(), int(at.Month()), at.Day(), userID, name)
 }
 
+// OriginalKey 为仅供 task: 引用使用的原片构造 OBS key。
+func OriginalKey(key string) string {
+	ext := path.Ext(key)
+	if ext == "" {
+		return key + ".orig"
+	}
+	return strings.TrimSuffix(key, ext) + ".orig" + ext
+}
+
 // sanitizeSeg 清理路径段：去斜杠与首尾空白，防止段内注入分隔符改变层级。
 func sanitizeSeg(s string) string {
 	s = strings.TrimSpace(s)
