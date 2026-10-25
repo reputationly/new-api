@@ -155,6 +155,10 @@ func persistMedia(ctx context.Context, key string, src mediastore.PersistSource,
 		defer cleanup()
 	}
 	if err != nil {
+		if src.UpstreamURL != "" {
+			// 上游下载失败不是水印故障，按普通落盘失败处理，不计入水印告警。
+			return err
+		}
 		recordWatermarkFailure(target.Source, string(kind), target.Group, target.UserId, target.TaskId, key, err)
 		return persistObject(ctx, key, src, meta)
 	}
