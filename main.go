@@ -215,6 +215,14 @@ func main() {
 				time.Sleep(6 * time.Hour)
 			}
 		})
+		gopool.Go(func() {
+			for {
+				if err := model.CleanupWatermarkFailures(); err != nil {
+					common.SysError("watermark failure cleanup failed: " + err.Error())
+				}
+				time.Sleep(24 * time.Hour)
+			}
+		})
 	}
 
 	// 产物审核钩子（§12.4 挂载点 D-1）。用注入而不是直接调用：

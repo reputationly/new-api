@@ -24,6 +24,7 @@ import SettingsHeaderNavModules from '../../pages/Setting/Operation/SettingsHead
 import SettingsSensitiveWords from '../../pages/Setting/Operation/SettingsSensitiveWords';
 import SettingsModeration from '../../pages/Setting/Operation/SettingsModeration';
 import SettingsModerationPolicy from '../../pages/Setting/Operation/SettingsModerationPolicy';
+import SettingsWatermark from '../../pages/Setting/Operation/SettingsWatermark';
 import SettingsLog from '../../pages/Setting/Operation/SettingsLog';
 import SettingsMonitoring from '../../pages/Setting/Operation/SettingsMonitoring';
 import SettingsCreditLimit from '../../pages/Setting/Operation/SettingsCreditLimit';
@@ -96,6 +97,12 @@ const OperationSetting = () => {
     'moderation.log_queue_size': 2048,
     'moderation.retention_block_days': 180,
     'moderation.retention_pass_days': 3,
+
+    /* 水印配置由原子接口整体保存，JSON 项需作为字符串传递 */
+    'watermark.enabled': false,
+    'watermark.templates': '',
+    'watermark.default_binding': '',
+    'watermark.group_bindings': '',
 
     /* 日志设置 */
     LogConsumeEnabled: false,
@@ -202,6 +209,7 @@ const OperationSetting = () => {
         {/* 审核策略：与上面那张分开——那张管「审不审、用什么审」，这张管「怎么判」。
             自带 Card，不要再包一层。 */}
         <SettingsModerationPolicy options={inputs} refresh={onRefresh} />
+        <SettingsWatermark options={inputs} refresh={onRefresh} />
         {/* 日志设置 */}
         <Card style={{ marginTop: '10px' }}>
           <SettingsLog options={inputs} refresh={onRefresh} />

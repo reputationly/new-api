@@ -420,6 +420,21 @@ func UpdateOption(c *gin.Context) {
 			common.ApiError(c, err)
 			return
 		}
+	case "watermark.templates":
+		if err := system_setting.ValidateWatermarkTemplatesJSON(option.Value.(string)); err != nil {
+			common.ApiError(c, err)
+			return
+		}
+	case "watermark.default_binding":
+		if err := system_setting.ValidateWatermarkDefaultBindingJSON(option.Value.(string)); err != nil {
+			common.ApiError(c, err)
+			return
+		}
+	case "watermark.group_bindings":
+		if err := system_setting.ValidateWatermarkGroupBindingsJSON(option.Value.(string)); err != nil {
+			common.ApiError(c, err)
+			return
+		}
 	case system_setting.ModerationEndpointsOptionKey:
 		// 审核节点凭证加密入库（GET 已抹掉不回显）。空 api_key 表示「保持不变」，
 		// 由 EncryptModerationEndpoints 按 name 从已存配置里取回原密文。

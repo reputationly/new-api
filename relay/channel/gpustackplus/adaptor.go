@@ -562,7 +562,7 @@ func (a *Adaptor) DoResponse(c *gin.Context, resp *http.Response, info *relaycom
 	}
 
 	// 4) 落 OBS,拿签名 URL。obsKey 留给同步任务记录当结果引用(签名 URL 有有效期、不能存库)。
-	signed, obsKey, sErr := service.PersistImageNFSToOBS(c.Request.Context(), info.UserId, st.NFSPath)
+	signed, obsKey, sErr := service.PersistImageNFSToOBS(c.Request.Context(), info.UserId, info.UsingGroup, st.NFSPath)
 	if sErr != nil {
 		return nil, types.NewError(sErr, types.ErrorCodeBadResponse)
 	}
