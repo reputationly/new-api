@@ -4,7 +4,6 @@ import (
 	"testing"
 
 	"github.com/QuantumNous/new-api/common"
-	"github.com/QuantumNous/new-api/setting"
 )
 
 // 每个用例都要能自己决定聚合配置 —— 它是 OptionMap 里的一个键，默认值只在首启时写入。
@@ -215,36 +214,4 @@ func modelOf(capabilities []Capability, name string) bool {
 		}
 	}
 	return false
-}
-
-// 转写能力由 transport 决定操作：同一个 audio 分组里，`audio_transcriptions` 那条
-// 必须报成 transcribe，而不是被工具名带到"语音合成/音乐"上。
-//
-// 平台现在**没有部署转写模型**（`/v1/models` 里没有），所以这条用例断言的是"配上就
-// 能报出来" —— 部署侧补齐模型后不需要再改代码。
-func TestBuildReportsTranscriptionFromTransport(t *testing.T) {
-	previous := setting.HiloCatalog2JsonString()
-	t.Cleanup(func() {
-		if err := setting.UpdateHiloCatalogByJsonString(previous); err != nil {
-			t.Fatalf("恢复目录失败: %v", err)
-		}
-	})
-	catalog := `{"audio":[{"platform_model":"asr-model","transport":"audio_transcriptions",
-		"model":{"id":"asr","name":"ASR","backend":"minimax_tts","model_name":"asr-model",
-		"type":"audio","max_refs":0,"params":{},"display_name":"语音识别",
-		"description":"","visibility":"","icon_url":"","tool_names":["hub_generate_speech"],"hot":false}}]}`
-	if err := setting.UpdateHiloCatalogByJsonString(catalog); err != nil {
-		t.Fatalf("写入目录失败: %v", err)
-	}
-	withAggregateConfig(t, "[]")
-	capabilities := Build(Scope{Enabled: map[string]bool{"asr-model": true}})
-	if len(capabilities) != 1 {
-		t.Fatalf("期望 1 条，实际 %+v", capabilities)
-	}
-	if capabilities[0].Operation != OperationTranscribe {
-		t.Errorf("operation = %s，期望 %s", capabilities[0].Operation, OperationTranscribe)
-	}
-	if capabilities[0].Transport.Kind != setting.TransportTranscribe {
-		t.Errorf("transport = %s", capabilities[0].Transport.Kind)
-	}
 }

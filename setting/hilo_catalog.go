@@ -75,17 +75,16 @@ type HiloCatalogEntry struct {
 
 // 能力目录里 transport.kind 的取值。
 var (
-	TransportImages      = "images"               // POST /v1/images/generations | /v1/images/edits
-	TransportVideosTask  = "videos_task"          // POST /v1/videos + metadata.task_type
-	TransportChat        = "chat"                 // POST /v1/chat/completions
-	TransportAudioSpeech = "audio_speech"         // POST /v1/audio/speech
-	TransportTranscribe  = "audio_transcriptions" // POST /v1/audio/transcriptions
+	TransportImages      = "images"       // POST /v1/images/generations | /v1/images/edits
+	TransportVideosTask  = "videos_task"  // POST /v1/videos + metadata.task_type
+	TransportChat        = "chat"         // POST /v1/chat/completions
+	TransportAudioSpeech = "audio_speech" // POST /v1/audio/speech
 )
 
 // ValidTransports 能力目录认识的协议。
 var ValidTransports = map[string]bool{
 	TransportImages: true, TransportVideosTask: true, TransportChat: true,
-	TransportAudioSpeech: true, TransportTranscribe: true,
+	TransportAudioSpeech: true,
 }
 
 // TransportFor 这一条目录项走哪条协议；没显式配就按分组取默认值。
@@ -248,7 +247,7 @@ func normalizeHiloCatalog(c *HiloCatalog) error {
 			// transport 写错不会让客户端拒，但会让能力目录报一条调不通的协议 ——
 			// 客户端只会显示"生成失败"。保存时就拦下。
 			if t := strings.TrimSpace(e.Transport); t != "" && !ValidTransports[t] {
-				return fmt.Errorf("%s 的 transport %q 不是认识的协议（可用：images / videos_task / chat / audio_speech / audio_transcriptions）", id, t)
+				return fmt.Errorf("%s 的 transport %q 不是认识的协议（可用：images / videos_task / chat / audio_speech）", id, t)
 			}
 			// backend 写错一个字母，客户端那头拒的是**整份目录**。
 			if !dto.HiloBackends[e.Model.Backend] {

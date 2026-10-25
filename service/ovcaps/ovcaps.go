@@ -48,7 +48,6 @@ const (
 	OperationGenerateMusic  = "generate_music"
 	OperationUpscale        = "upscale"
 	OperationEditMedia      = "edit_media"
-	OperationTranscribe     = "transcribe"
 	OperationChat           = "chat"
 )
 
@@ -272,13 +271,6 @@ func fromCatalogEntry(entry setting.HiloCatalogEntry, platformModel, group strin
 	transport := entry.TransportFor(group)
 	if !setting.ValidTransports[transport] {
 		return Capability{}, false
-	}
-	// 转写是唯一一个**由协议决定操作**的：目录项的 type 是 audio，工具名又和语音合成
-	// 共用（`hub_generate_speech` 那一族），只有 transport 说得清它是"文字转语音"还是
-	// "语音转文字"。判据放在这里，管理员把 transport 改成 audio_transcriptions 就能
-	// 把这个模型标成转写能力 —— 不用等一次代码发布。
-	if transport == setting.TransportTranscribe {
-		operation = OperationTranscribe
 	}
 	display := entry.Model.DisplayName
 	if strings.TrimSpace(display) == "" {
