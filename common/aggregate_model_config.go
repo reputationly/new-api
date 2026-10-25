@@ -244,6 +244,29 @@ func (m *AggregateModel) IsHidden() bool {
 	return m.Hidden == nil || *m.Hidden
 }
 
+// AllowsGroups candidates 里有任意一个分组在 m.Groups 里就放行;m.Groups 为空表示不限分组。
+//
+// 判定放在这里而不是各调用点各写一遍:调用侧准入(middleware/aggregate_expand.go 的
+// 展开前校验)和能力目录(service/ovcaps)必须同口径,两边判出不同结果就会出现
+// 「目录里有、调不通」——那正是集成方最难自查的一种失败。
+//
+// candidates 由调用方给:「令牌分组」和「auto 展开出来的实际分组」哪个算数属于上下文,
+// 这里只回答"这些分组里有没有一个被允许"。
+func (m *AggregateModel) AllowsGroups(candidates []string) bool {
+	if m == nil {
+		return false
+	}
+	if len(m.Groups) == 0 {
+		return true
+	}
+	for _, g := range candidates {
+		if StringsContains(m.Groups, g) {
+			return true
+		}
+	}
+	return false
+}
+
 var (
 	aggregateConfigLock sync.RWMutex
 	aggregateConfigRaw  string

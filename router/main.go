@@ -26,6 +26,10 @@ func SetRouter(router *gin.Engine, assets ThemeAssets) {
 	// MiniMax Design 客户端的云侧接口。必须在 FRONTEND_BASE_URL 判断之前:
 	// 它服务的是本地 gateway,不能被重定向到外置前端。
 	SetHiloRouter(router)
+	// `/v1/ov/*`：我们自己的能力目录与平台服务（非模型调用）。
+	// 与 SetHiloRouter 同一处位置的理由：必须在 web 兜底之前，否则会落进
+	// NoRoute 返回 `Invalid URL`。
+	SetOvRouter(router)
 	// 移动端 H5 同理：/m/* 永远由 Go 单二进制内置伺服
 	SetMobileRouter(router, assets)
 	// 免登录分享落地页同理：/s/* 由 Go 直出，且必须早于 SetWebRouter 的 SPA fallback

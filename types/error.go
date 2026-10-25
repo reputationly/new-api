@@ -98,6 +98,18 @@ const (
 
 	// kyc error
 	ErrorCodeKYCRequired ErrorCode = "kyc_required"
+
+	// rate limit error
+	//
+	// 客户端要按错误码给出"能看懂的提示"（ovaijisuandesign 的 L-4），而限流此前只回一个
+	// 空体的 429 —— 客户端分不出"被限流"和"服务出错"，只能显示笼统的失败。
+	ErrorCodeRateLimited ErrorCode = "rate_limited"
+
+	// capability error
+	//
+	// 这个部署上没有这项能力（对象存储没配、ASR 模型没部署…）。与 model_not_found 分开：
+	// 那个是"模型名不对"，这个是"功能在这儿没有"，客户端该做的是隐藏入口而不是报错。
+	ErrorCodeCapabilityUnavailable ErrorCode = "capability_unavailable"
 )
 
 type NewAPIError struct {

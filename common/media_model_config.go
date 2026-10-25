@@ -1064,3 +1064,55 @@ func NearestH3AspectRatio(w, h int) string {
 	}
 	return best
 }
+
+// ---- 模态归属 ----
+
+// mediaKindKeys 体验区四份配置各自对应的模态。
+var mediaKindKeys = []struct {
+	key  string
+	kind string
+}{
+	{"ImageModelSizeConfig", "image"},
+	{"VideoModelConfig", "video"},
+	{"AudioModelConfig", "audio"},
+	{"MusicModelConfig", "music"},
+}
+
+// MediaModelKinds 返回该模型在体验区配置里出现过的模态(image / video / audio / music),
+// 顺序固定;哪儿都没配时返回 nil。
+//
+// # 为什么需要它
+//
+// 能力目录要把一个模型归到 generate_image / generate_video / generate_speech /
+// generate_music 里的一个。`supported_endpoint_types` 给不出这个信息 —— 语音、音乐、
+// 视频这三类在这套部署上**走的是同一条 /v1/videos 任务接口**,端点类型全是同一个,
+// 按端点归类会把 tts 模型报成视频模型。运营配置的这四份表才是"这个模型被配来干什么"
+// 的事实来源(它们同时决定体验区给哪些模型开哪些 tab)。
+//
+// 一个模型可以同时出现在多份表里(同一个 checkpoint 既配文生图又配图生图),所以返回集合
+// 而不是单个值;调用方按自己的优先级挑。
+func MediaModelKinds(modelName string) []string {
+	name := strings.TrimSpace(modelName)
+	if name == "" {
+		return nil
+	}
+	OptionMapRWMutex.RLock()
+	raws := make([]string, len(mediaKindKeys))
+	for i, item := range mediaKindKeys {
+		raws[i] = OptionMap[item.key]
+	}
+	OptionMapRWMutex.RUnlock()
+
+	var kinds []string
+	for i, item := range mediaKindKeys {
+		models := modelsMap(raws[i])
+		if models == nil {
+			continue
+		}
+		if _, ok := models[name]; !ok {
+			continue
+		}
+		kinds = append(kinds, item.kind)
+	}
+	return kinds
+}

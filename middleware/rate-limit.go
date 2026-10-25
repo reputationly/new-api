@@ -7,6 +7,8 @@ import (
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/types"
+
 	"github.com/gin-gonic/gin"
 )
 
@@ -115,6 +117,36 @@ func HiloRateLimit() func(c *gin.Context) {
 		return rateLimitFactory(common.GlobalApiRateLimitNum, common.GlobalApiRateLimitDuration, "HL")
 	}
 	return defNext
+}
+
+// OvRateLimit 给 `/v1/ov/*` 单独一个桶，并在拒绝时给出**带错误码的 JSON 体**。
+//
+// 单独一个桶（mark "OV"）的理由同 HiloRateLimit：桶的 key 是 `mark + ClientIP`，
+// 与 dashboard/user API 共用 "GA" 的话，能力目录的轮询会把同一出口 IP 下浏览器的
+// 正常请求挤成 429。
+//
+// 与 Hilo/Global 那两条的差别只有拒绝时的响应体：那两条 `c.Status(429)` 是**空体**，
+// 客户端分不出"被限流"和"服务出错"（见 ovaijisuandesign 的 L-4）。这里补一个
+// `rate_limited` 码，仍然只用 3.0 兼容的 list 原语（复用同一个 limiter）。
+func OvRateLimit() func(c *gin.Context) {
+	limit := rateLimitFactory(common.GlobalApiRateLimitNum, common.GlobalApiRateLimitDuration, "OV")
+	return func(c *gin.Context) {
+		limit(c)
+		if !c.IsAborted() {
+			return
+		}
+		// 限流器只写过状态码（gin 的 WriteHeader 在真正 Write 之前不会落盘），
+		// 所以这里还能补一个 JSON 体。500（Redis 故障）不补 —— 那不是限流。
+		if c.Writer.Status() == http.StatusTooManyRequests {
+			c.JSON(http.StatusTooManyRequests, gin.H{
+				"error": gin.H{
+					"message": common.MessageWithRequestId("请求过于频繁，请稍后重试", c.GetString(common.RequestIdKey)),
+					"type":    "new_api_error",
+					"code":    string(types.ErrorCodeRateLimited),
+				},
+			})
+		}
+	}
 }
 
 func CriticalRateLimit() func(c *gin.Context) {

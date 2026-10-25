@@ -93,22 +93,9 @@ var expandAutoGroups = service.GetUserAutoGroup
 // 聚合模型名存进白名单,每次调用却 404。那正是这套判定要消除的分裂,只是换了个形式。
 // 同一函数下方几十行处的渠道选择也是这么展开 auto 的(见 usingGroup == "auto" 分支)。
 func groupAllowedForAggregate(agg *common.AggregateModel, usingGroup, userGroup string) bool {
-	if agg == nil {
-		return false
-	}
-	if len(agg.Groups) == 0 {
-		return true
-	}
-	candidates := []string{usingGroup}
-	if usingGroup == "auto" {
-		candidates = expandAutoGroups(userGroup)
-	}
-	for _, g := range candidates {
-		if common.StringsContains(agg.Groups, g) {
-			return true
-		}
-	}
-	return false
+	// 候选分组与「是否被允许」拆开：能力目录(service/ovcaps)用的是同一对函数，
+	// 判出不同结果就会出现「目录里有、调不通」。见 service/aggregate_group.go。
+	return agg.AllowsGroups(service.AggregateUsingGroups(usingGroup, userGroup, expandAutoGroups))
 }
 
 // applyAggregateExpansion 就地改写请求:model 字段换成生成段模型,并把展开结果挂到 context。

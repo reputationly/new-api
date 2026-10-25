@@ -44,6 +44,18 @@ type HiloCatalogEntry struct {
 	// 客户端看到的定义。字段含义见 dto/hilo.go。
 	Model dto.HiloMediaModel `json:"model"`
 
+	// Transport 调用这个模型时走哪条协议。留空按分组取默认值
+	// （image → images，video/audio → videos_task）。
+	//
+	// # 为什么它必须可配
+	//
+	// 同一个"语音合成"能力可以有两种形态：以**任务**提交（POST /v1/videos +
+	// metadata.task_type=tts，我们这套部署的 indextts / breeze-tts 就是这种），
+	// 或者 OpenAI 那种**同步**的 POST /v1/audio/speech。能力目录要把这个差别报给
+	// 客户端 —— 报错的话客户端会拿同步接口去打一个只认任务的模型，表现是 404，
+	// 而看上去像"模型没部署"。
+	Transport string `json:"transport,omitempty"`
+
 	// ModeModels 按玩法分派到不同的平台模型。
 	//
 	// # 为什么需要它
@@ -59,6 +71,38 @@ type HiloCatalogEntry struct {
 	//
 	// 键是 `params.image_mode` 的取值；这里没配的玩法回落到 PlatformModel。
 	ModeModels map[string]string `json:"mode_models,omitempty"`
+}
+
+// 能力目录里 transport.kind 的取值。
+var (
+	TransportImages      = "images"               // POST /v1/images/generations | /v1/images/edits
+	TransportVideosTask  = "videos_task"          // POST /v1/videos + metadata.task_type
+	TransportChat        = "chat"                 // POST /v1/chat/completions
+	TransportAudioSpeech = "audio_speech"         // POST /v1/audio/speech
+	TransportTranscribe  = "audio_transcriptions" // POST /v1/audio/transcriptions
+)
+
+// ValidTransports 能力目录认识的协议。
+var ValidTransports = map[string]bool{
+	TransportImages: true, TransportVideosTask: true, TransportChat: true,
+	TransportAudioSpeech: true, TransportTranscribe: true,
+}
+
+// TransportFor 这一条目录项走哪条协议；没显式配就按分组取默认值。
+//
+// 默认值不按 `type` 取：`type` 是客户端的媒体类型（image/video/audio），而语音合成
+// 和音乐生成在这套部署上都落在 audio，却都走任务接口 —— 按 type 只能猜到
+// "audio 走 audio_speech"，那正好是错的。
+func (e HiloCatalogEntry) TransportFor(group string) string {
+	if t := strings.TrimSpace(e.Transport); t != "" {
+		return t
+	}
+	switch group {
+	case "image":
+		return TransportImages
+	default:
+		return TransportVideosTask
+	}
 }
 
 // PlatformModelFor 这次请求该发给哪个平台模型。
@@ -200,6 +244,11 @@ func normalizeHiloCatalog(c *HiloCatalog) error {
 			}
 			if strings.TrimSpace(e.PlatformModel) == "" {
 				return fmt.Errorf("%s 的 platform_model 是空的，无法判断平台上有没有这个模型", id)
+			}
+			// transport 写错不会让客户端拒，但会让能力目录报一条调不通的协议 ——
+			// 客户端只会显示"生成失败"。保存时就拦下。
+			if t := strings.TrimSpace(e.Transport); t != "" && !ValidTransports[t] {
+				return fmt.Errorf("%s 的 transport %q 不是认识的协议（可用：images / videos_task / chat / audio_speech / audio_transcriptions）", id, t)
 			}
 			// backend 写错一个字母，客户端那头拒的是**整份目录**。
 			if !dto.HiloBackends[e.Model.Backend] {

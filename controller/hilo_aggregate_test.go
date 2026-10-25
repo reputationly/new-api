@@ -5,6 +5,7 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/dto"
+	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/setting"
 )
 
@@ -72,7 +73,7 @@ func TestHiloSkipsPipelineThatCannotDeliver(t *testing.T) {
        "upscale":{"model":"swiftvr","target_size":"2k"}}
     ]`)
 
-	if why := pipelineCannotDeliver("minimax-h3-2k"); why == "" {
+	if why := service.PipelineCannotDeliver("minimax-h3-2k"); why == "" {
 		t.Error("缺 generate.overrides.size 的流水线应当被判为兑现不了")
 	}
 }
@@ -87,7 +88,7 @@ func TestHiloAcceptsPipelineWithSizeOverride(t *testing.T) {
        "upscale":{"model":"swiftvr","target_size":"2k"}}
     ]`)
 
-	if why := pipelineCannotDeliver("minimax-h3-2k"); why != "" {
+	if why := service.PipelineCannotDeliver("minimax-h3-2k"); why != "" {
 		t.Errorf("补上 overrides 之后不该再被拦：%s", why)
 	}
 }
@@ -96,7 +97,7 @@ func TestHiloAcceptsPipelineWithSizeOverride(t *testing.T) {
 func TestHiloGuardIgnoresPlainModels(t *testing.T) {
 	setupModelListControllerTestDB(t)
 	withAggregateModelConfig(t, `[]`)
-	if why := pipelineCannotDeliver("qwen-image"); why != "" {
+	if why := service.PipelineCannotDeliver("qwen-image"); why != "" {
 		t.Errorf("裸模型不该被这条守卫拦：%s", why)
 	}
 }
@@ -149,7 +150,7 @@ func TestHiloRejectsPinnedGenerateWithoutUpscale(t *testing.T) {
 	withAggregateModelConfig(t, `[{"name":"x","type":"video","enabled":true,
       "generate":{"model":"g","overrides":{"size":"768P"}},
       "upscale":{"enabled":false,"model":"swiftvr","target_size":"2k"}}]`)
-	if why := pipelineCannotDeliver("x"); why == "" {
+	if why := service.PipelineCannotDeliver("x"); why == "" {
 		t.Error("超分段被停用、生成段还钉着中间尺寸 —— 应当被拦下")
 	}
 }
@@ -173,7 +174,7 @@ func TestHiloAllowsPinnedSizeWithoutAnyUpscaleSection(t *testing.T) {
           "generate":{"model":"g","overrides":{"size":"768P"}}}]`},
 	} {
 		withAggregateModelConfig(t, cfg.json)
-		if why := pipelineCannotDeliver("x"); why != "" {
+		if why := service.PipelineCannotDeliver("x"); why != "" {
 			t.Errorf("%s：不该被拦：%s", cfg.name, why)
 		}
 	}
@@ -184,7 +185,7 @@ func TestHiloAllowsPipelineWithNeitherPinNorUpscale(t *testing.T) {
 	setupModelListControllerTestDB(t)
 	withAggregateModelConfig(t, `[{"name":"x","type":"image","enabled":true,
       "generate":{"model":"g"}}]`)
-	if why := pipelineCannotDeliver("x"); why != "" {
+	if why := service.PipelineCannotDeliver("x"); why != "" {
 		t.Errorf("单段流水线不该被拦：%s", why)
 	}
 }
@@ -212,10 +213,10 @@ func TestHiloDisablesOnlyTheUnavailableMode(t *testing.T) {
 		}},
 	}
 
-	if why := unavailable(enabled, e.PlatformModel); why != "" {
+	if why := service.HiloUnavailable(enabled, e.PlatformModel); why != "" {
 		t.Fatalf("主模型应当可用：%s", why)
 	}
-	if why := unavailable(enabled, "h3-ref-2k"); why == "" {
+	if why := service.HiloUnavailable(enabled, "h3-ref-2k"); why == "" {
 		t.Fatal("参考族应当被判为不可用，否则这个用例没在测想测的东西")
 	}
 }

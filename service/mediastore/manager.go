@@ -178,3 +178,12 @@ func Healthcheck(ctx context.Context) error {
 	}
 	return store.Healthcheck(ctx)
 }
+
+// MaxUploadBytes 单次上传的大小上限（字节；0 = 不限）。
+//
+// 与对象存储的 MaxObjectBytes 同一个来源（系统设置 §10.2 的 MaxObjectSizeMB），
+// 但语义是"客户端可以直接传上来"的上限。上传入口要在**读完整个请求体之前**就能拒，
+// 所以这里单独暴露一个取值口。
+func MaxUploadBytes() int64 {
+	return currentConfig().MaxObjectBytes
+}
