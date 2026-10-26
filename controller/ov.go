@@ -131,6 +131,10 @@ func capabilityScope(c *gin.Context) ovcaps.Scope {
 //
 // 对象键里带用户 id 段（`mediastore.BuildKey`），签名 URL 只对这一个对象有效，
 // 有效期由系统设置的 `SignedURLTTLHours` 决定，返回值里明确告诉客户端。
+// ovUploadOverheadBytes multipart 报文本身的开销（边界串 + 其它表单字段）。
+// 1 MB 足够宽松：它只用来避免"刚好卡在上限的合法文件"被误拒，不是安全边界。
+const ovUploadOverheadBytes int64 = 1 * 1024 * 1024
+
 func PostOvFiles(c *gin.Context) {
 	if !mediastore.Enabled() {
 		// 没配对象存储不是"服务器坏了"：客户端该退回内联（base64），而不是报错给用户。
@@ -138,12 +142,34 @@ func PostOvFiles(c *gin.Context) {
 			"这个部署没有配置文件存储，请改用内联（base64）上传")
 		return
 	}
+	limit := mediastore.MaxUploadBytes()
+	// **必须在 FormFile 之前限流。** `c.FormFile` 会把整个请求体收进内存/临时文件，
+	// 之后再检查大小已经晚了 —— 一个已鉴权的请求就能把磁盘写满。
+	//
+	// 两层：Content-Length 便宜的看一眼；再套 MaxBytesReader 防止长度头撒谎。
+	// 上限要加上 multipart 的报文开销（边界串、其它表单字段），否则刚好卡在线上的
+	// 合法文件会被误判。
+	if limit > 0 {
+		maxBody := limit + ovUploadOverheadBytes
+		if c.Request.ContentLength > maxBody {
+			abortOv(c, http.StatusRequestEntityTooLarge, types.ErrorCodeInvalidRequest,
+				"文件超过大小上限 "+strconv.FormatInt(limit/1024/1024, 10)+"MB")
+			return
+		}
+		c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, maxBody)
+	}
+
 	fileHeader, err := c.FormFile("file")
 	if err != nil {
+		// MaxBytesReader 触发时这里报的是 "http: request body too large"。
+		if limit > 0 && strings.Contains(err.Error(), "request body too large") {
+			abortOv(c, http.StatusRequestEntityTooLarge, types.ErrorCodeInvalidRequest,
+				"文件超过大小上限 "+strconv.FormatInt(limit/1024/1024, 10)+"MB")
+			return
+		}
 		abortOv(c, http.StatusBadRequest, types.ErrorCodeInvalidRequest, "缺少 file 字段（multipart/form-data）")
 		return
 	}
-	limit := mediastore.MaxUploadBytes()
 	if limit > 0 && fileHeader.Size > limit {
 		abortOv(c, http.StatusRequestEntityTooLarge, types.ErrorCodeInvalidRequest,
 			"文件超过大小上限 "+strconv.FormatInt(limit/1024/1024, 10)+"MB")
@@ -155,13 +181,12 @@ func PostOvFiles(c *gin.Context) {
 		return
 	}
 	defer opened.Close()
-	// 多读 1 字节用来识别"声明的大小在撒谎"（客户端可以不报真实 Size）。
-	body, err := io.ReadAll(io.LimitReader(opened, limit+1))
+	body, tooLarge, err := readOvUpload(opened, limit)
 	if err != nil {
 		abortOv(c, http.StatusBadRequest, types.ErrorCodeInvalidRequest, "读取上传内容失败")
 		return
 	}
-	if limit > 0 && int64(len(body)) > limit {
+	if tooLarge {
 		abortOv(c, http.StatusRequestEntityTooLarge, types.ErrorCodeInvalidRequest,
 			"文件超过大小上限 "+strconv.FormatInt(limit/1024/1024, 10)+"MB")
 		return
@@ -193,6 +218,24 @@ func PostOvFiles(c *gin.Context) {
 		"content_type": contentType,
 		"expires_at":   time.Now().Add(mediastore.SignedURLTTL()).UTC().Format(time.RFC3339),
 	})
+}
+
+// readOvUpload 读上传内容。
+//
+// `limit == 0` 表示**不限**：完整读取。早先的实现无条件套 `io.LimitReader(limit+1)`，
+// limit 为 0 时只读 1 个字节，于是"不限大小"实际上变成了"只存 1 字节"。
+//
+// `limit > 0` 时多读 1 字节用来识别"声明的大小在撒谎"（客户端可以不报真实 Size）。
+func readOvUpload(reader io.Reader, limit int64) (body []byte, tooLarge bool, err error) {
+	if limit <= 0 {
+		body, err = io.ReadAll(reader)
+		return body, false, err
+	}
+	body, err = io.ReadAll(io.LimitReader(reader, limit+1))
+	if err != nil {
+		return nil, false, err
+	}
+	return body, int64(len(body)) > limit, nil
 }
 
 // abortOv 统一的错误信封。形状与 relay 的 OpenAI 错误一致，客户端一套解析就够。

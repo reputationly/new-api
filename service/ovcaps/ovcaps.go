@@ -171,6 +171,17 @@ func (s Scope) aggregateAllows(agg *common.AggregateModel) bool {
 func Build(scope Scope) []Capability {
 	emitted := map[string]bool{}
 	out := make([]Capability, 0, 32)
+	// 默认项：**按出现顺序**每个操作的第一条。
+	// 顺序是：HiloCatalog（管理员排过序）→ 按名字排序的聚合模型 → 按名字排序的对话模型。
+	// 它必须在 `sortCapabilities` **之前**定下来 —— 排序只是为了让输出稳定、让
+	// `Version` 的哈希可复现，不应该顺带决定"默认用哪个模型"。
+	defaults := map[string]string{}
+	emit := func(capability Capability) {
+		if _, ok := defaults[capability.Operation]; !ok {
+			defaults[capability.Operation] = capability.Model
+		}
+		out = append(out, capability)
+	}
 
 	catalog := setting.GetHiloCatalog()
 	for _, group := range []struct {
@@ -184,25 +195,44 @@ func Build(scope Scope) []Capability {
 			// checkpoint）。**逐个报**：我们自己的客户端按能力 id 选，不需要
 			// "一个模型名 + 玩法参数"那层间接。
 			for _, platformModel := range entry.PlatformModelsOf() {
-				if emitted[platformModel] || !scope.available(platformModel) {
+				if emitted[platformModel] {
 					continue
 				}
-				if scope.TokenAllowed != nil && !scope.TokenAllowed[platformModel] {
-					continue
+				// 目录里的条目也可能指向**聚合模型**（出厂目录的 `minimax-h3-2k` 就是）：
+				// 这类名字在 abilities 表里没有行，`available()` 只看分段、**不看分组白名单**。
+				// 管理员一旦给聚合模型限了分组，别的分组的 key 会在这里看到它、调用时才被拒。
+				if agg := common.GetAggregateModel(platformModel); agg != nil {
+					if !scope.aggregateAllows(agg) {
+						continue
+					}
+				} else {
+					if !scope.available(platformModel) {
+						continue
+					}
+					if scope.TokenAllowed != nil && !scope.TokenAllowed[platformModel] {
+						continue
+					}
 				}
 				capability, ok := fromCatalogEntry(entry, platformModel, group.name)
 				if !ok {
 					continue
 				}
 				emitted[platformModel] = true
-				out = append(out, capability)
+				emit(capability)
 			}
 		}
 	}
 
 	// 聚合模型。目录里没配到的那些（例如管理员只配了官方 schema 的几条）照样要报 ——
 	// 客户端的预设用的就是 `qwen-image-pro-enhanced` 这类聚合名。
-	for name, agg := range common.GetAggregateModels() {
+	// 按名字排序：`GetAggregateModels()` 是 map，直接遍历的话"谁是默认"每次都可能变。
+	aggregateNames := make([]string, 0, len(common.GetAggregateModels()))
+	for name := range common.GetAggregateModels() {
+		aggregateNames = append(aggregateNames, name)
+	}
+	sort.Strings(aggregateNames)
+	for _, name := range aggregateNames {
+		agg := common.GetAggregateModels()[name]
 		if emitted[name] || !scope.aggregateAllows(agg) {
 			continue
 		}
@@ -211,7 +241,7 @@ func Build(scope Scope) []Capability {
 			continue
 		}
 		emitted[name] = true
-		out = append(out, Capability{
+		emit(Capability{
 			ID:          capabilityID(operation, name),
 			Operation:   operation,
 			Model:       name,
@@ -233,7 +263,7 @@ func Build(scope Scope) []Capability {
 			continue
 		}
 		emitted[name] = true
-		out = append(out, Capability{
+		emit(Capability{
 			ID:          capabilityID(OperationChat, name),
 			Operation:   OperationChat,
 			Model:       name,
@@ -244,7 +274,11 @@ func Build(scope Scope) []Capability {
 	}
 
 	sortCapabilities(out)
-	markDefaults(out)
+	for index := range out {
+		if defaults[out[index].Operation] == out[index].Model {
+			out[index].Default = true
+		}
+	}
 	return out
 }
 
@@ -276,6 +310,13 @@ func fromCatalogEntry(entry setting.HiloCatalogEntry, platformModel, group strin
 	if strings.TrimSpace(display) == "" {
 		display = entry.Model.ID
 	}
+	// `taskTypes` / `limits` 按**真正调用的那个模型**取：聚合模型的名字在体验区配置里
+	// 通常没有登记，登记的是它的生成段（`agg.Generate.Model`）。按聚合名查，多半什么都
+	// 查不到 —— 后果是 `minimax-h3-ref-2k` 拿不到 `r2va`，客户端补不上"参考生视频"。
+	probe := platformModel
+	if agg := common.GetAggregateModel(platformModel); agg != nil && agg.Generate.Model != "" {
+		probe = agg.Generate.Model
+	}
 	return Capability{
 		ID:          capabilityID(operation, platformModel),
 		Operation:   operation,
@@ -283,9 +324,9 @@ func fromCatalogEntry(entry setting.HiloCatalogEntry, platformModel, group strin
 		DisplayName: Localized{Zh: display, En: display},
 		Description: Localized{Zh: entry.Model.Description, En: entry.Model.Description},
 		Transport:   Transport{Kind: transport},
-		TaskTypes:   taskTypesOf(platformModel),
+		TaskTypes:   taskTypesOf(probe),
 		ParamSchema: paramSchema(entry.Model.Params),
-		Limits:      limitsOf(&entry.Model, platformModel, transport),
+		Limits:      limitsOf(&entry.Model, probe, transport),
 	}, true
 }
 
@@ -464,27 +505,6 @@ func sortCapabilities(capabilities []Capability) {
 		}
 		return capabilities[i].Model < capabilities[j].Model
 	})
-}
-
-// markDefaults 每个操作挑一条默认：优先目录里第一条（管理员排过序），
-// 否则名字最短的（`qwen-image-pro-enhanced` 比 `qwen-image-pro-enhanced-2` 更像默认）。
-func markDefaults(capabilities []Capability) {
-	chosen := map[string]int{}
-	for index := range capabilities {
-		operation := capabilities[index].Operation
-		if _, ok := chosen[operation]; !ok {
-			chosen[operation] = index
-			continue
-		}
-		current := chosen[operation]
-		if len(capabilities[index].Model) < len(capabilities[current].Model) {
-			chosen[operation] = index
-		}
-	}
-	for operation, index := range chosen {
-		_ = operation
-		capabilities[index].Default = true
-	}
 }
 
 func sortedKeys(set map[string]bool) []string {

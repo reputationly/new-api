@@ -110,3 +110,37 @@ func TestOvRateLimitAnswersWithErrorCode(t *testing.T) {
 		t.Fatalf("429 体里没有 %s：%s", types.ErrorCodeRateLimited, body)
 	}
 }
+
+// 总开关关掉时 `/v1/ov/*` 不该还限流 —— 与 `HiloRateLimit` 同口径。
+// 少这一条，管理员关了 API 限流之后，客户端会莫名其妙在这个新命名空间上吃 429。
+func TestOvRateLimitFollowsGlobalSwitch(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	previousEnable, previousNum, previousDuration := common.GlobalApiRateLimitEnable, common.GlobalApiRateLimitNum, common.GlobalApiRateLimitDuration
+	previousRedis := common.RedisEnabled
+	common.RedisEnabled = false
+	common.GlobalApiRateLimitEnable = false
+	common.GlobalApiRateLimitNum = 1
+	common.GlobalApiRateLimitDuration = 60
+	t.Cleanup(func() {
+		common.GlobalApiRateLimitEnable = previousEnable
+		common.GlobalApiRateLimitNum = previousNum
+		common.GlobalApiRateLimitDuration = previousDuration
+		common.RedisEnabled = previousRedis
+	})
+
+	engine := gin.New()
+	engine.GET("/ov-switch", middleware.OvRateLimit(), func(c *gin.Context) {
+		c.JSON(http.StatusOK, gin.H{"ok": true})
+	})
+
+	const clientAddr = "203.0.113.9:45678"
+	for attempt := 0; attempt < 3; attempt++ {
+		request := httptest.NewRequest(http.MethodGet, "/ov-switch", nil)
+		request.RemoteAddr = clientAddr
+		recorder := httptest.NewRecorder()
+		engine.ServeHTTP(recorder, request)
+		if recorder.Code != http.StatusOK {
+			t.Fatalf("第 %d 次请求 %d，关掉总开关后应当一律 200：%s", attempt+1, recorder.Code, recorder.Body.String())
+		}
+	}
+}

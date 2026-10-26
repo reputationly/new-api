@@ -134,10 +134,10 @@ const DefaultAggregateModelConfig = `[
     "name": "minimax-h3-2k",
     "type": "video",
     "enabled": true,
-    "note": "H3 帧族(文生/图生/首尾帧/尾帧)2K:生成 → SwiftVR 超分。等价于体验区的两段编排,集成方只看到一个模型名和一个任务。提示词请自行扩写后再传。",
+    "note": "H3 帧族(文生/图生/首尾帧/尾帧)2K:生成 → SeedVR2 超分。等价于体验区的两段编排,集成方只看到一个模型名和一个任务。提示词请自行扩写后再传。",
     "prompt_enhance": { "model": "qwen3.8-flash-fp8", "mode": "singlecall" },
     "generate": { "model": "minimax-h3-fl2va", "overrides": { "size": "768P" } },
-    "upscale": { "model": "swiftvr", "target_size": "2k" }
+    "upscale": { "model": "seedvr2", "target_size": "2k", "delivered_size": "1080P" }
   },
   {
     "name": "minimax-h3-ref-2k",
@@ -146,7 +146,7 @@ const DefaultAggregateModelConfig = `[
     "note": "H3 参考族(参考图/参考视频生视频)2K。参考族是另一个 checkpoint,不能和帧族共用一条流水线。",
     "prompt_enhance": { "model": "qwen3.8-flash-fp8", "mode": "singlecall" },
     "generate": { "model": "minimax-h3-ref2va", "overrides": { "size": "768P" } },
-    "upscale": { "model": "swiftvr", "target_size": "2k" }
+    "upscale": { "model": "seedvr2", "target_size": "2k", "delivered_size": "1080P" }
   },
   {
     "name": "qwen-image-pro-enhanced",

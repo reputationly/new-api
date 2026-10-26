@@ -184,6 +184,10 @@ func Healthcheck(ctx context.Context) error {
 // 与对象存储的 MaxObjectBytes 同一个来源（系统设置 §10.2 的 MaxObjectSizeMB），
 // 但语义是"客户端可以直接传上来"的上限。上传入口要在**读完整个请求体之前**就能拒，
 // 所以这里单独暴露一个取值口。
+// MaxUploadBytes 单次上传的字节上限；**0 表示不限**。
+//
+// 调用方必须在读请求体**之前**用它限流（`http.MaxBytesReader`）—— 读完再检查
+// 等于没检查：`c.FormFile` 已经把整个请求体落到了内存或临时文件。
 func MaxUploadBytes() int64 {
 	return currentConfig().MaxObjectBytes
 }

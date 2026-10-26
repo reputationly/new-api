@@ -38,7 +38,7 @@ func TestOvCapabilitiesEndToEnd(t *testing.T) {
 	// 只给"裸模型"建 ability —— 聚合模型本来就不在 abilities 表里。
 	for _, name := range []string{
 		"qwen-image-pro", "qwen-image", "qwen-image-edit",
-		"minimax-h3-fl2va", "minimax-h3-ref2va", "swiftvr",
+		"minimax-h3-fl2va", "minimax-h3-ref2va", "seedvr2",
 		"minimax-music3", "indextts-2.5",
 	} {
 		require.NoError(t, db.Create(&model.Ability{Group: "default", Model: name, ChannelId: 1, Enabled: true}).Error)
@@ -214,5 +214,48 @@ func withAggregateConfig(t *testing.T, raw string) {
 			return
 		}
 		delete(common.OptionMap, "AggregateModelConfig")
+	})
+}
+
+// 聚合模型的 `taskTypes` 要按**生成段**查，不能按聚合名查 —— 体验区配置里登记的是
+// 生成段。按聚合名查的话参考族拿不到 `r2va`，客户端就补不上"参考生视频"。
+func TestOvCapabilitiesReadsTaskTypesThroughGenerateSegment(t *testing.T) {
+	db := setupOvCapabilitiesDB(t)
+	withAggregateConfig(t, common.DefaultAggregateModelConfig)
+	// 体验区配置：按**生成段模型名**登记玩法（生产里由管理员在后台配，出厂不随代码发）。
+	withPlaygroundConfig(t, "VideoModelConfig", `{"models": {
+		"minimax-h3-fl2va": {"tabs": {"t2v": {}, "i2v": {}}},
+		"minimax-h3-ref2va": {"tabs": {"r2va": {}}}
+	}}`)
+	for _, name := range []string{"minimax-h3-fl2va", "minimax-h3-ref2va", "seedvr2"} {
+		require.NoError(t, db.Create(&model.Ability{Group: "default", Model: name, ChannelId: 1, Enabled: true}).Error)
+	}
+
+	body := getOvCapabilities(t, ovCapabilitiesEngine(), createOvToken(t, db, "ovtasks", false, ""))
+	taskTypes := map[string][]string{}
+	for _, capability := range body.Capabilities {
+		taskTypes[capability.Model] = capability.TaskTypes
+	}
+	require.Contains(t, taskTypes["minimax-h3-ref-2k"], "r2va", "参考族必须带 r2va")
+	require.NotContains(t, taskTypes["minimax-h3-2k"], "r2va", "帧族不该带 r2va")
+}
+
+func withPlaygroundConfig(t *testing.T, key, raw string) {
+	t.Helper()
+	common.OptionMapRWMutex.Lock()
+	if common.OptionMap == nil {
+		common.OptionMap = map[string]string{}
+	}
+	previous, existed := common.OptionMap[key]
+	common.OptionMap[key] = raw
+	common.OptionMapRWMutex.Unlock()
+	t.Cleanup(func() {
+		common.OptionMapRWMutex.Lock()
+		defer common.OptionMapRWMutex.Unlock()
+		if existed {
+			common.OptionMap[key] = previous
+			return
+		}
+		delete(common.OptionMap, key)
 	})
 }

@@ -128,7 +128,12 @@ func HiloRateLimit() func(c *gin.Context) {
 // 与 Hilo/Global 那两条的差别只有拒绝时的响应体：那两条 `c.Status(429)` 是**空体**，
 // 客户端分不出"被限流"和"服务出错"（见 ovaijisuandesign 的 L-4）。这里补一个
 // `rate_limited` 码，仍然只用 3.0 兼容的 list 原语（复用同一个 limiter）。
+// OvRateLimit `/v1/ov/*` 的限流。**跟随总开关**（与 HiloRateLimit 同口径）：
+// 管理员关掉 API 限流后，这个新命名空间不该还偷偷限。
 func OvRateLimit() func(c *gin.Context) {
+	if !common.GlobalApiRateLimitEnable {
+		return defNext
+	}
 	limit := rateLimitFactory(common.GlobalApiRateLimitNum, common.GlobalApiRateLimitDuration, "OV")
 	return func(c *gin.Context) {
 		limit(c)
