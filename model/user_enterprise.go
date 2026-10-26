@@ -43,7 +43,9 @@ const (
 // UserEnterprise holds an enterprise certification record. Sensitive fields
 // (USCC, legal-rep ID number) are encrypted; the company name and legal-rep
 // name are stored plaintext since admins need to read them directly during
-// review. Dedup is keyed on uscc_hash (one社会信用代码 == one legal entity).
+// review. The same USCC may be certified independently by N accounts (no
+// cross-account dedup by design); uscc_hash is still written for future
+// risk-control / admin statistics use.
 type UserEnterprise struct {
 	Id            int            `json:"id"                       gorm:"primaryKey;autoIncrement"`
 	UserId        int            `json:"user_id"                  gorm:"index;not null"`
@@ -65,7 +67,6 @@ type UserEnterprise struct {
 	DeletedAt     gorm.DeletedAt `json:"-"                        gorm:"index"`
 }
 
-var ErrEnterpriseDuplicateUscc = errors.New("该企业已被其他账号认证")
 var ErrEnterpriseSubmitLimitExceeded = errors.New("提交次数已达上限")
 
 func GetEnterpriseByUserId(userId int) (*UserEnterprise, error) {
@@ -102,15 +103,6 @@ type EnterpriseFields struct {
 // UpsertEnterprise and UpsertEnterpriseWithImages. Cache invalidation is the
 // caller's responsibility after the transaction commits.
 func upsertEnterpriseCore(db *gorm.DB, userId int, f EnterpriseFields) (*UserEnterprise, error) {
-	// B. Cross-account dedup on USCC hash.
-	var dupCount int64
-	db.Model(&UserEnterprise{}).
-		Where("uscc_hash = ? AND status = ? AND user_id != ? AND deleted_at IS NULL", f.UsccHash, EnterpriseStatusApproved, userId).
-		Count(&dupCount)
-	if dupCount > 0 {
-		return nil, ErrEnterpriseDuplicateUscc
-	}
-
 	now := time.Now()
 
 	// A. Find latest record for this user (including soft-deleted).
@@ -257,23 +249,8 @@ func ApproveEnterprise(id int, reviewerId int) error {
 	}
 	now := time.Now()
 	err = DB.Transaction(func(tx *gorm.DB) error {
-		// Re-check cross-account dedup inside the tx before approving: two
-		// accounts can both submit the same USCC while both are pending
-		// (submit-time dedup only looks at already-approved rows). If another
-		// account's record for the same USCC got approved while this one waited,
-		// refuse — one 统一社会信用代码 maps to one approved enterprise.
-		//
-		// This shrinks but doesn't fully close a TOCTOU window if two admins
-		// approve two same-USCC records at the exact same instant; a DB unique
-		// constraint is intentionally avoided (soft-deleted rows would block
-		// re-submits), and manual admin approval isn't concurrent at scale.
-		var dupCount int64
-		tx.Model(&UserEnterprise{}).
-			Where("uscc_hash = ? AND status = ? AND user_id != ? AND deleted_at IS NULL", ent.UsccHash, EnterpriseStatusApproved, ent.UserId).
-			Count(&dupCount)
-		if dupCount > 0 {
-			return ErrEnterpriseDuplicateUscc
-		}
+		// 事务仅用于把 user_enterprises 与 users.enterprise_status 两次写入保持原子；
+		// 同一 USCC 允许多个账号分别认证（有意设计，无跨账号去重）。
 		if err := tx.Model(ent).Updates(map[string]interface{}{
 			"status":      EnterpriseStatusApproved,
 			"reviewed_by": reviewerId,

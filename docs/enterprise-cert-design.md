@@ -42,16 +42,16 @@ KYC 解决的是「个人用户实名」。面向企业客户时，平台需要�
 | 档位 | 字段 | 是否必填 | 加密 | 去重哈希 | 说明 |
 |------|------|---------|------|---------|------|
 | **核心主体** | 企业名称 `company_name` | ✅ 必填 | 否（明文存，列表直显） | — | 营业执照上的全称 |
-| | 统一社会信用代码 `uscc` | ✅ 必填 | ✅ `uscc_enc` | ✅ `uscc_hash` | 18 位，企业唯一标识，用于跨账号去重 |
+| | 统一社会信用代码 `uscc` | ✅ 必填 | ✅ `uscc_enc` | ✅ `uscc_hash` | 18 位，企业唯一标识；hash 仍写入供风控/统计，不做跨账号去重 |
 | | 营业执照照片 | ✅ 必填 | ✅ `license_enc` | — | 人工核验企业真实性 |
 | **法人信息** | 法人代表姓名 `legal_rep_name` | ✅ 必填 | 否（明文，审核需直显） | — | |
-| | 法人身份证号 `legal_rep_id` | ✅ 必填 | ✅ `legal_rep_id_enc` | — | 仅加密，不单独去重（去重以 USCC 为准） |
+| | 法人身份证号 `legal_rep_id` | ✅ 必填 | ✅ `legal_rep_id_enc` | — | 仅加密，不去重 |
 | | 法人身份证正面照片 | ✅ 必填 | ✅ `legal_front_enc` | — | |
 | | 法人身份证背面照片 | ✅ 必填 | ✅ `legal_back_enc` | — | |
 | **联系（可选）** | 联系人 `contact_name` | ⬜ 可选 | 否 | — | 企业对接人 |
 | | 联系电话 `contact_phone` | ⬜ 可选 | 否（列表脱敏中间 4 位） | — | 方便客服回访 |
 
-> **为什么 USCC 作为去重键而非法人身份证**：一个法人可以是多家公司的法定代表人（合法场景），但同一个统一社会信用代码只对应一个企业法律主体。以 USCC 去重，既能防「一照多号」，又不会误伤「一人多公司」。
+> **USCC 不做跨账号去重（2026-10-26 起）**：同一企业可在多个账号分别认证（如多个运营账号同属一个主体）。`uscc_hash` 仍随记录写入，仅留作未来风控/统计用途；法人与企业证件号也均不设去重。
 >
 > **对公账户字段——本期不采集**（已评审决策）：「公对公转账服务」是认证后的权益，但对公账户信息（开户行/对公账号）**延后到用户实际发起公对公转账时再单独收集**，企业认证表不存这两个字段。这样认证表更聚焦于「企业主体核验」，对公账户作为后续转账流程的输入即可。
 
@@ -77,7 +77,7 @@ KYC 解决的是「个人用户实名」。面向企业客户时，平台需要�
 | 用户管理列表展示企业认证状态 + 筛选 | — | ✅ 用户管理页新增列 |
 | KYC 强制要求豁免（企业已认证用户） | 自动（中间件） | — |
 
-> 各接口的状态机、状态分支、submit_count 上限、跨账号去重、软删除恢复（C1/C2/C3 三分支）、reset 硬删语义、reveal/images 状态感知权限与审计日志格式，**全部与 KYC 同构**，实现时按 `kyc-design.md` §五/§六/§十三 同样处理，把「证件号」替换为「USCC/法人证件号」，把「身份证正反面」替换为「营业执照 + 法人身份证正反面」即可。
+> 各接口的状态机、状态分支、submit_count 上限、软删除恢复（C1/C2/C3 三分支）、reset 硬删语义、reveal/images 状态感知权限与审计日志格式，**全部与 KYC 同构**（企业认证无跨账号去重，此点不同），实现时按 `kyc-design.md` §五/§六/§十三 同样处理，把「证件号」替换为「USCC/法人证件号」，把「身份证正反面」替换为「营业执照 + 法人身份证正反面」即可。
 
 ---
 
@@ -117,7 +117,7 @@ type UserEnterprise struct {
     UserId          int            `json:"user_id"                  gorm:"index;not null"`
     CompanyName     string         `json:"company_name"             gorm:"type:varchar(128);not null"`
     UsccEnc         string         `json:"-"                        gorm:"type:text;column:uscc_enc;not null"`        // 统一社会信用代码（AES-256-GCM）
-    UsccHash        string         `json:"-"                        gorm:"type:varchar(64);column:uscc_hash;not null"` // HMAC-SHA256，跨账号去重
+    UsccHash        string         `json:"-"                        gorm:"type:varchar(64);column:uscc_hash;not null"` // HMAC-SHA256，保留供风控/统计（不做跨账号去重）
     LegalRepName    string         `json:"legal_rep_name"           gorm:"type:varchar(64);not null"`
     LegalRepIdEnc   string         `json:"-"                        gorm:"type:text;column:legal_rep_id_enc;not null"` // 法人身份证号（加密）
     ContactName     string         `json:"contact_name,omitempty"   gorm:"type:varchar(64)"`
@@ -134,7 +134,7 @@ type UserEnterprise struct {
 }
 ```
 
-去重 / 软删除唯一性约束策略与 KYC 完全一致：`uscc_hash` 与 `user_id` **均不设数据库唯一约束**，唯一性在应用层用 `WHERE user_id=? AND deleted_at IS NULL` 保证；跨账号去重查询同 `uscc_hash` 且 `status=approved` 且 `deleted_at IS NULL` 的记录。
+软删除唯一性约束策略与 KYC 一致：`uscc_hash` 与 `user_id` **均不设数据库唯一约束**，唯一性在应用层用 `WHERE user_id=? AND deleted_at IS NULL` 保证。同一 USCC 允许在多个账号分别通过认证，**无跨账号去重**；`uscc_hash` 仅存储备查。
 
 ### 4.3 新增表：`user_enterprise_images`
 
@@ -260,19 +260,18 @@ type EnterpriseImagesResponse struct {
 ```go
 GetEnterpriseByUserId(userId int) (*UserEnterprise, error)
 GetEnterpriseById(id int) (*UserEnterprise, error)
-UpsertEnterpriseWithImages(...) (*UserEnterprise, error)    // 事务包裹主表 + 图片（C1/C2/C3 三分支 + submit_count 上限 + USCC 跨账号去重，逻辑同 UpsertKYC）
+UpsertEnterpriseWithImages(...) (*UserEnterprise, error)    // 事务包裹主表 + 图片（C1/C2/C3 三分支 + submit_count 上限，逻辑同 UpsertKYC；无跨账号去重）
 UpsertEnterpriseImages(enterpriseId, userId, licenseEnc, legalFrontEnc, legalBackEnc string) error
 GetEnterpriseImages(enterpriseId int) (*UserEnterpriseImage, error)
 DeleteEnterpriseImagesByEnterpriseId(enterpriseId int) error      // 硬删（Unscoped）
 SoftDeleteEnterpriseImagesByEnterpriseId(enterpriseId int) error  // 软删（跟随账号软删）
 HasEnterpriseImages(enterpriseId int) bool
-ApproveEnterprise(id, reviewerId int) error                // 审批前在事务内**重新校验 uscc_hash 跨账号去重**（差异点，见下）
+ApproveEnterprise(id, reviewerId int) error                // 事务包裹两次状态写入；无跨账号去重复检（同一 USCC 允许多账号认证）
 RejectEnterprise(id, reviewerId int, reason string) error
 ResetEnterprise(id, reviewerId int) error                  // 硬删行 + users.enterprise_status=0
 DeleteEnterpriseByUserId(userId int) error                 // 用户撤回（软删）
 GetEnterpriseList(status int, keyword string, page, pageSize int) ([]*EnterpriseAdminRow, int64, error)
 
-var ErrEnterpriseDuplicateUscc = errors.New("该企业已被其他账号认证")
 var ErrEnterpriseSubmitLimitExceeded = errors.New("提交次数已达上限")
 
 type EnterpriseAdminRow struct {
@@ -284,13 +283,13 @@ type EnterpriseAdminRow struct {
 
 `GetEnterpriseList` 的 Count/Scan 分两条 SQL、LEFT JOIN users 取 username + reviewer_name，跨库标识符全小写非保留字，与 `GetKYCList` 同构。
 
-> **审批去重（与 KYC 的有意差异）**：提交时的跨账号去重只查 `status=approved` 的记录，因此两个账号可在「都 pending」时各自提交同一 USCC（互不命中）。若直接审批两条 → 同一企业被认证两次。`ApproveEnterprise` 在**审批事务内重新校验** `uscc_hash` 是否已有其他账号 approved，命中则返回 `ErrEnterpriseDuplicateUscc` 拒绝。KYC 现有实现没有这层审批期复检（已上线、本期不动），故这是企业认证比 KYC **更严格**的一处。事务复检把 TOCTOU 窗口收窄到「两个管理员同一瞬间审批两条同 USCC」的极小概率；因软删行会阻塞重提交，故**不**对 `uscc_hash` 加数据库唯一约束。
+> **多账号同企业**：同一统一社会信用代码允许在多个账号分别认证通过，提交时与审批时均不做跨账号去重。`uscc_hash` 仍随记录写入（HMAC-SHA256），留作未来风控/统计备查。
 
 ### 6.2 Controller（`controller/enterprise.go`）
 
 用户侧（`GetEnterpriseStatus` / `SubmitEnterprise` / `UpdateEnterprise` / `DeleteEnterprise`）与管理员侧（`AdminGetEnterpriseList` / `AdminGetEnterpriseByUser` / `AdminApproveEnterprise` / `AdminRejectEnterprise` / `AdminResetEnterprise` / `AdminRevealEnterprise` / `AdminGetEnterpriseImages`）的状态分支、事务、图片处理、reset 顺序（先 `GetEnterpriseById` 取原状态 → 删图 → 硬删主表 → 写 `LogTypeManage` 日志）、reveal/images 共用的 `checkEnterpriseSensitiveAccessPermission`（状态感知）与审计日志格式，全部按 `controller/kyc.go` 同构实现。
 
-图片校验复用 `controller/kyc.go` 已有的常量与思路（`maxImageDecodedBytes` / `maxImageBase64Len` / 哨兵错误），但需要校验 **3 张图**（营业执照、法人正面、法人背面）。与 KYC 不同：KYC 图片是后加的、为兼容老 API 调用方而允许「不传图」；企业认证是**全新功能、无历史调用方**，因此 **3 张图一律必传**——缺任意一张返回 `errEntImagesIncomplete`，这同时杜绝了「直连 API 不传图 → 管理员审批通过 → 无营业执照/法人证件的认证」的漏洞。USCC 在加密+哈希前统一 `ToUpper+TrimSpace` 归一化（社会信用代码大小写不敏感），避免大小写不同导致跨账号去重漏判。
+图片校验复用 `controller/kyc.go` 已有的常量与思路（`maxImageDecodedBytes` / `maxImageBase64Len` / 哨兵错误），但需要校验 **3 张图**（营业执照、法人正面、法人背面）。与 KYC 不同：KYC 图片是后加的、为兼容老 API 调用方而允许「不传图」；企业认证是**全新功能、无历史调用方**，因此 **3 张图一律必传**——缺任意一张返回 `errEntImagesIncomplete`，这同时杜绝了「直连 API 不传图 → 管理员审批通过 → 无营业执照/法人证件的认证」的漏洞。USCC 在加密+哈希前统一 `ToUpper+TrimSpace` 归一化（社会信用代码大小写不敏感），保证 `uscc_hash` 口径一致。
 
 > 这些图片校验常量目前定义在 `controller/kyc.go`，企业认证 controller 同包（`package controller`）可直接复用，无需重复定义。
 
@@ -489,7 +488,7 @@ KYCEnabled = true 时，relay / 充值 / 操练场请求放行条件：
 - `查看企业认证图片` / `企业认证原件图片（仅本次可见）`
 - 校验/错误文案若可与 KYC 复用则复用（如「图片大小超出限制」「图片处理失败」）
 
-后端 i18n（`i18n/keys.go` + `i18n/locales/{en,zh-CN,zh-TW}.yaml`）：本期豁免逻辑复用 `kyc.required`，**无需新增后端 message key**。仅当业务错误（如 `enterprise.images_incomplete`、`enterprise.duplicate_uscc`）需要走 `common.ApiErrorI18n` 时才新增对应 key——也可直接复用 Model 层返回的中文 error（`ErrEnterpriseDuplicateUscc` 等）经 `common.ApiError` 返回，与 KYC 现状对齐。
+后端 i18n（`i18n/keys.go` + `i18n/locales/{en,zh-CN,zh-TW}.yaml`）：本期豁免逻辑复用 `kyc.required`，**无需新增后端 message key**。仅当业务错误（如 `enterprise.images_incomplete`）需要走 `common.ApiErrorI18n` 时才新增对应 key——也可直接复用 Model 层返回的中文 error（`ErrEnterpriseSubmitLimitExceeded` 等）经 `common.ApiError` 返回，与 KYC 现状对齐。
 
 ---
 
@@ -545,7 +544,7 @@ KYCEnabled = true 时，relay / 充值 / 操练场请求放行条件：
 ### E1 用户提交/撤回/重提
 - 提交合法企业资料（含 3 图）→ 201，`user_enterprises` + `user_enterprise_images` 同步写入，`uscc_enc` 非明文，`enterprise_status=1`
 - 仅传 1-2 张图 → 业务错误（图片不完整）
-- USCC 已被其他 approved 账号占用 → 400「该企业已被其他账号认证」
+- 同一 USCC 已被其他账号认证 → 仍允许提交并可双双通过（无跨账号去重）
 - submit_count 超限、DELETE 撤回（软删恢复 C3 计数重置）、reject 后 PUT 重提（C2 累加）等同 KYC
 
 ### E2 管理员审核
@@ -606,7 +605,7 @@ KYCEnabled = true 时，relay / 充值 / 操练场请求放行条件：
 | 维度 | KYC（实名认证） | Enterprise（企业认证） |
 |------|----------------|----------------------|
 | 主体 | 个人 | 企业法律主体 |
-| 去重键 | 证件号 hash | 统一社会信用代码 hash（提交时 + **审批事务内**复检） |
+| 去重键 | 证件号 hash（提交时 + 审批事务内复检） | uscc_hash 仅存备查，**无跨账号去重**（同企业可多账号认证） |
 | 图片数 | 2（身份证正反面） | 3（营业执照 + 法人身份证正反面） |
 | 图片列类型 | `type:text`（老表保持不动） | 省略 type → MySQL `longtext`/PG·SQLite `text`（跨库安全，修正 MySQL 64K 截断） |
 | 强制拦截 | 有（KYCEnabled） | 无（认证后反向豁免 KYC 拦截） |

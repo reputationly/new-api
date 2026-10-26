@@ -411,8 +411,8 @@ func bindAndUpsertEnterprise(c *gin.Context, userId int) (*model.UserEnterprise,
 	}
 
 	// USCCs are case-insensitive (uppercase letters only by spec). Normalize
-	// before encrypt+hash so a lowercase direct-API submission dedups against
-	// the uppercase value the frontend sends for the same enterprise.
+	// before encrypt+hash so the stored uscc_hash is consistent regardless of
+	// the letter case a direct-API submission uses.
 	uscc := strings.ToUpper(strings.TrimSpace(req.Uscc))
 
 	usccEnc, err := common.EncryptIDNumber(uscc)
@@ -447,7 +447,7 @@ func bindAndUpsertEnterprise(c *gin.Context, userId int) (*model.UserEnterprise,
 			common.ApiErrorI18n(c, key)
 			return nil, err
 		}
-		if errors.Is(err, model.ErrEnterpriseDuplicateUscc) || errors.Is(err, model.ErrEnterpriseSubmitLimitExceeded) {
+		if errors.Is(err, model.ErrEnterpriseSubmitLimitExceeded) {
 			common.ApiErrorMsg(c, err.Error())
 			return nil, err
 		}

@@ -424,6 +424,9 @@ export default function EnterpriseSetting() {
         width={520}
       >
         <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+          <Text type='secondary' size='small'>
+            {t('同一企业可在多个账号分别认证')}
+          </Text>
           <FormField
             label={t('企业名称')}
             required
