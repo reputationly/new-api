@@ -502,6 +502,23 @@ export default function SettingsModeration(props) {
                 />
               )}
 
+            {/*
+              语音合成与音乐生成的产物是音频，本期不送视觉判定（送进去只会抽帧失败）。
+              这不是降级而是一期范围，所以用 info；但它仍然是**没有审**——
+              不写出来的话，「产物都审过了」和「音频一个都没审」在这页上长得一样。
+            */}
+            {status?.audio_skipped_count > 0 && (
+              <Banner
+                type='info'
+                description={
+                  t('音频产物（语音合成 / 音乐生成）不送产物审核，已跳过：') +
+                  status.audio_skipped_count +
+                  t(' 个。这类内容的审核由输入侧的提示词与歌词承担。')
+                }
+                style={{ marginBottom: 16 }}
+              />
+            )}
+
             <Row gutter={16}>
               <Col xs={24} sm={12} md={8} lg={8} xl={8}>
                 <Form.Select

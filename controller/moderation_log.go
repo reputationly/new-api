@@ -77,6 +77,10 @@ func GetModerationStatus(c *gin.Context) {
 		// 「视频一个都没审」在管理端长得一模一样。
 		"ffmpeg_ready":        ffmpegReady(),
 		"video_skipped_count": moderation.VideoSkippedCount(),
+		// 产物是音频（语音合成 / 音乐生成）而整体未审的任务数。
+		// 音频本期不审（§2.3），但它跟视频共用同一条任务门面，不写出来就会被
+		// 当成「产物审核已覆盖」——这类记录以前还会以「审核异常」的形态出现。
+		"audio_skipped_count": moderation.AudioProductSkippedCount(),
 	})
 }
 

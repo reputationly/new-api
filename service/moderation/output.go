@@ -2,7 +2,9 @@ package moderation
 
 import (
 	"context"
+	"fmt"
 	"strings"
+	"sync/atomic"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
@@ -58,6 +60,23 @@ func ModerateTaskOutput(ctx context.Context, task *model.Task, resultURL, upstre
 	mediaType, ok := outputMediaType(task)
 	if !ok {
 		// Suno 音乐/歌词等音频产物：本期不审（§2.3），拿视觉模型判只会误判。
+		return pass
+	}
+	if isAudioProduct(task, url) {
+		// 语音合成与音乐生成跟视频共用同一条任务门面（/pg/videos + task_type=tts/t2m），
+		// gpustackplus 把它们的 action 也写成 generate，于是走到这里时已经是「视频」了。
+		// 纯音频文件一个视频帧都抽不出来（ffmpeg: Output file does not contain any
+		// stream），首/中/尾三帧全失败，最后以「审核异常」的形态落进记录页——那是在
+		// 把「音频不审」这条既定取舍伪装成一次故障。
+		//
+		// 音频本期不审（§2.3），输入侧的提示词照常由 L0/L1 审（relay/task_moderation.go）。
+		// 但「不审」不是「审过了」：计数 + 首次出声，与 ffmpeg 缺失那条同一套口径。
+		n := audioProductSkipped.Add(1)
+		if shouldLogSkip(n-1, n) {
+			common.SysLog(fmt.Sprintf(
+				"moderation: 任务 %s 的产物是音频（模型 %s），音频本期不审，跳过（累计 %d）",
+				task.TaskID, modelName, n))
+		}
 		return pass
 	}
 	item := MediaItem{
@@ -195,6 +214,9 @@ func isOwnProxyURL(task *model.Task, url string) bool {
 //
 // 第二个返回值为 false 表示不送审：tasks 表里混装着 Suno 音乐/歌词
 // （action = MUSIC / LYRICS），音频本期明确不审（§2.3），不能拿视觉模型去判。
+//
+// ⚠️ 它挡不住「action 也叫 generate 的音频」：gpustackplus 对 TTS/音乐一律写
+// generate（adaptor.go:taskActionOf），所以这一类必须靠 isAudioProduct 再筛一道。
 func outputMediaType(task *model.Task) (types.FileType, bool) {
 	if constant.IsImageTaskAction(task.Action) {
 		return types.FileTypeImage, true
@@ -206,6 +228,60 @@ func outputMediaType(task *model.Task) (types.FileType, bool) {
 		return types.FileTypeVideo, true
 	}
 	return "", false
+}
+
+// audioProductSkipped 因产物是音频而整体跳过产物审核的任务数。
+//
+// 与 videoSkippedCount 并列：音频不审是本期既定取舍（§2.3），不是故障，
+// 但「没审」和「审过了」在管理端必须分得开。
+var audioProductSkipped atomic.Int64
+
+// AudioProductSkippedCount 读累计值，供运行态展示。
+func AudioProductSkippedCount() int64 { return audioProductSkipped.Load() }
+
+// isAudioProduct 判断这次任务的产物是不是音频（语音合成 / 音乐生成）。
+//
+// 任一判据命中即视为音频，模型登记优先、产物扩展名兜底：
+//   - 模型在体验区配置里登记的模态，是「这个模型被配来干什么」的事实来源。
+//     端点类型给不出来（语音/音乐/视频全在同一条 /v1/videos 任务接口上），
+//     见 common.MediaModelKinds 的注释；
+//   - 模型没登记在体验区、或者名字换了写法时，产物地址的扩展名仍然说实话。
+//
+// 但**明确是视频的产物一律照常审**：真正的音频模型不会产出 .mp4，反过来把一段
+// 视频当音频跳过就是静默漏审 —— 运营把视频模型误登记进音频配置时，这条是最后一道闸。
+// 代价为零：音频模型永远不会命中这一步。
+func isAudioProduct(task *model.Task, url string) bool {
+	isDataURL := strings.HasPrefix(url, "data:")
+	if isDataURL {
+		if strings.HasPrefix(dataURLMIME(url), "video/") {
+			return false
+		}
+	} else if videoExts[urlExt(url)] {
+		return false
+	}
+
+	audio, visual := false, false
+	for _, kind := range common.MediaModelKinds(task.Properties.OriginModelName) {
+		switch kind {
+		case "audio", "music":
+			audio = true
+		case "image", "video":
+			visual = true
+		}
+	}
+	// 既配了视频又配了音频的模型不在这里判死：下面按产物是什么落地
+	// （.mp4 已在上面返回，.wav 这类仍按音频跳过）。
+	if audio && !visual {
+		return true
+	}
+	if isDataURL {
+		return strings.HasPrefix(dataURLMIME(url), "audio/")
+	}
+	switch urlExt(url) {
+	case "wav", "mp3", "m4a", "aac", "flac", "opus":
+		return true
+	}
+	return false
 }
 
 // ModerateImageOutput 审一张同步生成的图片（挂载点 D-2，§12.4.3）。

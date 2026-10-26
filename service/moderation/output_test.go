@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/relay/channel/task/taskcommon"
@@ -167,5 +168,118 @@ func TestMediaStageDefaultsToInput(t *testing.T) {
 	}
 	if got := mediaStage(StageOutput); got != StageOutput {
 		t.Fatalf("产物阶段应保留，得到 %q", got)
+	}
+}
+
+// stubOptionMap 临时替换 common.OptionMap 里的若干键，测试结束还原。
+//
+// 直接改全局 map 而不是走 OptionMapRWMutex 也一样安全（这里没有并发读者），
+// 但 configuration 的读取方全是 RWMutex 保护的，照它的姿势写省得下次有人
+// 把 -race 打开时这里变成数据竞争。
+func stubOptionMap(t *testing.T, kv map[string]string) {
+	t.Helper()
+	common.OptionMapRWMutex.Lock()
+	orig := common.OptionMap
+	next := make(map[string]string, len(orig)+len(kv))
+	for k, v := range orig {
+		next[k] = v
+	}
+	for k, v := range kv {
+		next[k] = v
+	}
+	common.OptionMap = next
+	common.OptionMapRWMutex.Unlock()
+
+	t.Cleanup(func() {
+		common.OptionMapRWMutex.Lock()
+		common.OptionMap = orig
+		common.OptionMapRWMutex.Unlock()
+	})
+}
+
+func TestIsAudioProduct(t *testing.T) {
+	// 语音合成与音乐生成跟视频共用同一条任务门面（/pg/videos + task_type=tts/t2m），
+	// gpustackplus 把它们的 action 也写成 generate，于是 outputMediaType 会把它们
+	// 判成视频、真去抽帧。纯音频文件一个视频帧都抽不出来（ffmpeg: Output file does
+	// not contain any stream），三帧全空，最后每个音频任务都落一条「审核异常」——
+	// 把「音频本期不审」这条既定取舍伪装成了故障。
+	stubOptionMap(t, map[string]string{
+		"AudioModelConfig": `{"models":{"indextts-2.5":{"engine":"indextts2.5"},"hybrid-model":{}}}`,
+		"MusicModelConfig": `{"models":{"minimax-music3":{"engine":"minimax-music3"},"hybrid-model":{}}}`,
+		"VideoModelConfig": `{"models":{"minimax-h3-fl2va":{},"hybrid-model":{}}}`,
+	})
+
+	cases := []struct {
+		name  string
+		model string
+		url   string
+		want  bool
+	}{
+		// 模型登记的模态是主判据，但**明确是视频的产物一律照常审**：
+		// 真正的音频模型不会产出 .mp4，而把视频当音频跳过是静默漏审。
+		{"语音合成模型 + .mp3 产物", "indextts-2.5", "https://cdn.example.com/out/a.mp3", true},
+		{"语音合成模型 + .mp4 产物仍按视频审", "indextts-2.5", "https://cdn.example.com/out/a.mp4", false},
+		{"音乐模型", "minimax-music3", "https://cdn.example.com/out/a.mp3", true},
+		// 没登记在体验区的模型（API 直连的 tts）按产物扩展名兜底。
+		{"未登记模型 + .wav 产物", "breeze-tts-2", "https://cdn.example.com/out/a.wav", true},
+		{"签名 URL 要先剥掉 query 再取扩展名", "breeze-tts-2", "https://cdn.example.com/a.wav?X-Amz-Signature=deadbeef", true},
+		// 线上真实形态：obs://tts-indextts-2.5/…/x.wav 签出来是
+		// https://<bucket>.<endpoint>/<key>.wav?AccessKeyId=…&Expires=…&Signature=…
+		// 扩展名在 query 之前（见 mediastore/native_sign.go），剥 query 后仍取得 wav。
+		{
+			"OBS 签名 URL（线上原始形态）", "breeze-tts-2",
+			"https://bucket.obs.cn-south-1.myhuaweicloud.com/tts-indextts-2.5/2026/10/25/1/a21ec3cc.wav?AccessKeyId=AK&Expires=1792971253&Signature=abc%2Fdef",
+			true,
+		},
+		{"data-url 按 MIME 判", "breeze-tts-2", "data:audio/wav;base64,AAAA", true},
+		// 反例：视频不能被这条误伤。
+		{"未登记模型 + .mp4 产物仍按视频审", "breeze-tts-2", "https://cdn.example.com/out/a.mp4", false},
+		{"视频模型", "minimax-h3-fl2va", "https://cdn.example.com/out/a.mp4", false},
+		// 同一模型既配视频又配音频：.mp4 按视频审，.wav 仍按音频跳过。
+		{"双模态模型 + .mp4 按视频审", "hybrid-model", "https://cdn.example.com/out/a.mp4", false},
+		{"双模态模型 + .wav 按音频跳过", "hybrid-model", "https://cdn.example.com/out/a.wav", true},
+		{"data-url 但不是音频", "breeze-tts-2", "data:video/mp4;base64,AAAA", false},
+		{"语音合成模型 + data:video 仍按视频审", "indextts-2.5", "data:video/mp4;base64,AAAA", false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			task := &model.Task{}
+			task.Properties.OriginModelName = c.model
+			if got := isAudioProduct(task, c.url); got != c.want {
+				t.Fatalf("model=%q url=%q → %v, want %v", c.model, c.url, got, c.want)
+			}
+		})
+	}
+}
+
+func TestModerateTaskOutputSkipsAudioProduct(t *testing.T) {
+	// 落库口径的回归：音频产物**不能**走到 ModerateMedia。
+	//
+	// 走到那里的后果不是「审不出来」，而是先抽帧、三帧全失败、再写一条
+	// action=error 的记录——记录页上看起来像判定服务故障，运营会去查节点。
+	stubOptionMap(t, map[string]string{
+		"AudioModelConfig": `{"models":{"indextts-2.5":{}}}`,
+	})
+
+	s := system_setting.GetModerationSettings()
+	origOut, origEndpoints := s.OutputMode, s.Endpoints
+	t.Cleanup(func() { s.OutputMode, s.Endpoints = origOut, origEndpoints })
+	// observe 就够了：这条路径与 mode 无关，只要有图片节点、产物审核不是 off。
+	s.OutputMode = system_setting.ModerationModeObserve
+	s.Endpoints = []system_setting.ModerationEndpoint{{
+		Name: "img", BaseURL: "http://127.0.0.1:1", Model: "m",
+		Modality: ModalityImage, Enabled: true,
+	}}
+
+	task := &model.Task{TaskID: "task_tts_1", Action: constant.TaskActionGenerate}
+	task.Properties.OriginModelName = "indextts-2.5"
+
+	before := AudioProductSkippedCount()
+	res := ModerateTaskOutput(context.Background(), task, "https://audio.invalid/x.wav", "")
+	if res.Blocked {
+		t.Fatal("音频产物不该被拦截")
+	}
+	if got := AudioProductSkippedCount(); got != before+1 {
+		t.Fatalf("应记一次音频跳过，计数 %d → %d", before, got)
 	}
 }
