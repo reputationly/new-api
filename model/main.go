@@ -330,6 +330,9 @@ func migrateDB() error {
 	if err := migrateAffCountBackfill(); err != nil {
 		return err
 	}
+	if err := migrateKYCIdNumberNormalize(); err != nil {
+		return err
+	}
 	if err := migratePlaygroundTabConfig(); err != nil {
 		return err
 	}
@@ -377,6 +380,74 @@ func migrateAffCountBackfill() error {
 		// 落一次性标记（无论有无数据都标，保证只在首次运行回填）。
 		return tx.Create(&Option{Key: markerKey, Value: "true"}).Error
 	})
+}
+
+// migrateKYCIdNumberNormalize 一次性回填：证件号归一化（TrimSpace + 大写）上线前的历史行
+// 可能存着「小写 x / 带空格」的 id_number_enc / id_number_hash，与归一化后的新提交哈希
+// 对不上、绕过跨账号去重。逐行解密，仅当归一化值与原文不同才重写 enc+hash——已归一化的行
+// 绝不重写（若 KYC_HASH_KEY 配错，不能把好哈希改坏）。
+// 出现解密失败（通常是 KYC_ENCRYPT_KEY 未配置/轮换）不落一次性标记，下次启动重试。
+// 三库通用：全部走 GORM 抽象。含软删行（Unscoped），保证恢复提交时哈希口径一致。
+func migrateKYCIdNumberNormalize() error {
+	const markerKey = "kyc_id_number_normalized"
+	var marker Option
+	if err := DB.Where(Option{Key: markerKey}).First(&marker).Error; err == nil {
+		return nil // 已迁移
+	}
+	var normalized, failures int
+	var rows []UserKYC
+	err := DB.Unscoped().Model(&UserKYC{}).Select("id", "id_number_enc").
+		FindInBatches(&rows, 200, func(tx *gorm.DB, batch int) error {
+			for i := range rows {
+				plain, err := common.DecryptIDNumber(rows[i].IdNumberEnc)
+				if err != nil {
+					failures++
+					continue
+				}
+				norm := common.NormalizeIDNumber(plain)
+				if norm == plain {
+					continue
+				}
+				enc, err := common.EncryptIDNumber(norm)
+				if err != nil {
+					return err
+				}
+				hash, err := common.HMACIDNumber(norm)
+				if err != nil {
+					return err
+				}
+				if err := DB.Unscoped().Model(&UserKYC{}).Where("id = ?", rows[i].Id).
+					UpdateColumns(map[string]interface{}{
+						"id_number_enc":  enc,
+						"id_number_hash": hash,
+					}).Error; err != nil {
+					return err
+				}
+				normalized++
+			}
+			return nil
+		}).Error
+	if err != nil {
+		return err
+	}
+	common.SysLog(fmt.Sprintf("KYC id_number normalize backfill: %d rows normalized, %d decrypt failures", normalized, failures))
+	// 归一化可能让原本大小写/空格变体的重复哈希现形：提醒人工复核，由管理员 reset 多余行。
+	var dupHashes []string
+	if err := DB.Unscoped().Model(&UserKYC{}).
+		Where("status = ?", KYCStatusApproved).
+		Group("id_number_hash").
+		Having("COUNT(*) > 1").
+		Pluck("id_number_hash", &dupHashes).Error; err != nil {
+		return err
+	}
+	if len(dupHashes) > 0 {
+		common.SysLog(fmt.Sprintf("WARNING: %d id_number_hash groups have more than one approved KYC row; manual review required", len(dupHashes)))
+	}
+	if failures > 0 {
+		// 不落标记：解密失败的行（KYC_ENCRYPT_KEY 缺失/轮换）待 key 修复后下次启动重试。
+		return nil
+	}
+	return DB.Create(&Option{Key: markerKey, Value: "true"}).Error
 }
 
 // migrateAudioModelConfigLegacyCapability 语音大类拆细的兼容迁移。拆细前音频能力标签只有

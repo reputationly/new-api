@@ -11,6 +11,7 @@ import (
 	"errors"
 	"io"
 	"os"
+	"strings"
 	"sync"
 )
 
@@ -112,6 +113,12 @@ func HMACIDNumber(plain string) (string, error) {
 	mac := hmac.New(sha256.New, kycHashKey)
 	mac.Write([]byte(plain))
 	return hex.EncodeToString(mac.Sum(nil)), nil
+}
+
+// NormalizeIDNumber canonicalizes an id number before encrypt/hash so that
+// case/whitespace variants (e.g. trailing x vs X) dedup to the same hash.
+func NormalizeIDNumber(s string) string {
+	return strings.ToUpper(strings.TrimSpace(s))
 }
 
 // MaskIDNumber masks the id number: keep first 3 and last 4 chars if len >= 8,

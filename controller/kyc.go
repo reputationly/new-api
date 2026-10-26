@@ -87,6 +87,7 @@ func SubmitKYC(c *gin.Context) {
 		common.ApiErrorMsg(c, "参数错误："+err.Error())
 		return
 	}
+	req.IdNumber = common.NormalizeIDNumber(req.IdNumber)
 
 	enc, err := common.EncryptIDNumber(req.IdNumber)
 	if err != nil {
@@ -161,6 +162,7 @@ func UpdateKYC(c *gin.Context) {
 		common.ApiErrorMsg(c, "参数错误："+err.Error())
 		return
 	}
+	req.IdNumber = common.NormalizeIDNumber(req.IdNumber)
 
 	enc, err := common.EncryptIDNumber(req.IdNumber)
 	if err != nil {
@@ -287,6 +289,60 @@ func AdminGetKYCByUser(c *gin.Context) {
 
 	item := kycToAdminItem(kyc)
 	common.ApiSuccess(c, item)
+}
+
+// AdminGetKYCReleaseList GET /api/user/kyc/admin/occupying?keyword=&page=&page_size=
+//
+// 列出「已注销账号仍占用证件号」的记录：这些 user_kycs 行已被软删（随账号注销），
+// 但 Unscoped 去重仍把它们算作占用者，常规列表按默认 scope 查不到，需要单独入口。
+func AdminGetKYCReleaseList(c *gin.Context) {
+	keyword := c.Query("keyword")
+	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
+	pageSize, _ := strconv.Atoi(c.DefaultQuery("page_size", "20"))
+	if page < 1 {
+		page = 1
+	}
+	if pageSize < 1 || pageSize > 100 {
+		pageSize = 20
+	}
+
+	rows, total, err := model.GetKYCReleaseList(keyword, page, pageSize)
+	if err != nil {
+		common.ApiErrorMsg(c, "查询失败")
+		return
+	}
+
+	items := make([]dto.KYCAdminItem, 0, len(rows))
+	for _, row := range rows {
+		items = append(items, kycRowToAdminItem(row))
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"success": true,
+		"message": "",
+		"data":    items,
+		"total":   total,
+	})
+}
+
+// AdminReleaseOccupiedKYC PUT /api/user/kyc/admin/:id/release — Root only.
+//
+// 释放一条已注销账号的认证记录（硬删），使其占用的证件号可被新账号重新实名。
+// 与 reset 一样是不可撤销的硬删，故同样叠加 RootAuth 并写 LogTypeManage 审计日志。
+func AdminReleaseOccupiedKYC(c *gin.Context) {
+	id, err := parseKYCId(c)
+	if err != nil {
+		common.ApiErrorMsg(c, err.Error())
+		return
+	}
+	occupyingUserId, err := model.ReleaseOccupiedKYC(id)
+	if err != nil {
+		common.ApiErrorMsg(c, err.Error())
+		return
+	}
+	model.RecordLog(c.GetInt("id"), model.LogTypeManage,
+		fmt.Sprintf("释放已注销账号占用的实名证件 [release] (kyc_id=%d, user_id=%d)", id, occupyingUserId))
+	common.ApiSuccess(c, nil)
 }
 
 // AdminApproveKYC PUT /api/user/kyc/admin/:id/approve

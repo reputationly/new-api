@@ -431,6 +431,9 @@ export default function KYCSetting() {
         width={480}
       >
         <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+          <Text type='secondary' size='small'>
+            {t('同一身份证件仅可认证一个账号')}
+          </Text>
           {/* 真实姓名 */}
           <div>
             <label

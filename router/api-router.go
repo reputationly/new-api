@@ -206,10 +206,14 @@ func SetApiRouter(router *gin.Engine) {
 				// KYC admin routes — /kyc/admin/by-user/:user_id must be registered before /:id routes
 				adminRoute.GET("/kyc/admin", controller.AdminGetKYCList)
 				adminRoute.GET("/kyc/admin/by-user/:user_id", controller.AdminGetKYCByUser)
+				// 已注销账号占用证件号：列表 AdminAuth 可见（诊断「该证件已被其他账号使用」），
+				// 释放是硬删、仅超管可操作（同 reset）。
+				adminRoute.GET("/kyc/admin/occupying", controller.AdminGetKYCReleaseList)
 				adminRoute.PUT("/kyc/admin/:id/approve", controller.AdminApproveKYC)
 				adminRoute.PUT("/kyc/admin/:id/reject", controller.AdminRejectKYC)
 				// 重置仅超管：清空认证状态影响较大，叠加 RootAuth 强制（前端按钮也仅 root 可见）
 				adminRoute.PUT("/kyc/admin/:id/reset", middleware.RootAuth(), controller.AdminResetKYC)
+				adminRoute.PUT("/kyc/admin/:id/release", middleware.RootAuth(), controller.AdminReleaseOccupiedKYC)
 				adminRoute.GET("/kyc/admin/:id/reveal", controller.AdminRevealKYC)
 				adminRoute.GET("/kyc/admin/:id/images", controller.AdminGetKYCImages)
 

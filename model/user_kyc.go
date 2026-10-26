@@ -2,6 +2,7 @@ package model
 
 import (
 	"errors"
+	"fmt"
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
@@ -59,6 +60,18 @@ type UserKYC struct {
 var ErrKYCDuplicateID = errors.New("该证件已被其他账号使用")
 var ErrKYCSubmitLimitExceeded = errors.New("提交次数已达上限")
 
+// countOtherApprovedKYC counts approved KYC rows on OTHER accounts holding this id hash.
+// Unscoped on purpose: an approved row soft-deleted by account deletion (User.Delete)
+// keeps occupying the ID, so delete-and-re-register can't re-bind the same person to a
+// new account (and re-farm KYC points). Only hard deletes (admin ResetKYC / HardDelete) release it.
+func countOtherApprovedKYC(db *gorm.DB, idNumberHash string, userId int) (int64, error) {
+	var n int64
+	err := db.Unscoped().Model(&UserKYC{}).
+		Where("id_number_hash = ? AND status = ? AND user_id != ?", idNumberHash, KYCStatusApproved, userId).
+		Count(&n).Error
+	return n, err
+}
+
 func GetKYCByUserId(userId int) (*UserKYC, error) {
 	var kyc UserKYC
 	err := DB.Where("user_id = ?", userId).First(&kyc).Error
@@ -82,10 +95,10 @@ func GetKYCById(id int) (*UserKYC, error) {
 // the transaction commits.
 func upsertKYCCore(db *gorm.DB, userId int, realName, idType, idNumberEnc, idNumberHash string) (*UserKYC, error) {
 	// B. Cross-account dedup
-	var dupCount int64
-	db.Model(&UserKYC{}).
-		Where("id_number_hash = ? AND status = ? AND user_id != ? AND deleted_at IS NULL", idNumberHash, KYCStatusApproved, userId).
-		Count(&dupCount)
+	dupCount, err := countOtherApprovedKYC(db, idNumberHash, userId)
+	if err != nil {
+		return nil, err
+	}
 	if dupCount > 0 {
 		return nil, ErrKYCDuplicateID
 	}
@@ -94,7 +107,7 @@ func upsertKYCCore(db *gorm.DB, userId int, realName, idType, idNumberEnc, idNum
 
 	// A. Find latest record for this user (including soft-deleted)
 	var existing UserKYC
-	err := db.Unscoped().Where("user_id = ?", userId).Order("id DESC").First(&existing).Error
+	err = db.Unscoped().Where("user_id = ?", userId).Order("id DESC").First(&existing).Error
 	if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
 		return nil, err
 	}
@@ -258,15 +271,40 @@ func ApproveKYC(id int, reviewerId int) error {
 		return errors.New("当前记录状态不是待审核")
 	}
 	now := time.Now()
-	updates := map[string]interface{}{
-		"status":      KYCStatusApproved,
-		"reviewed_by": reviewerId,
-		"verified_at": now,
-	}
-	if err := DB.Model(kyc).Updates(updates).Error; err != nil {
-		return err
-	}
-	if err := DB.Model(&User{}).Where("id = ?", kyc.UserId).Update("kyc_status", KYCStatusApproved).Error; err != nil {
+	err = DB.Transaction(func(tx *gorm.DB) error {
+		// 审批事务内复检跨账号去重：两个账号可以在都 pending 时提交同一证件号
+		// （提交时去重只看 approved 记录），直接审批两条会让同一证件通过两个账号。
+		// 命中时带上占用者用户名便于管理员定位（errors.Is 仍匹配 ErrKYCDuplicateID）。
+		// 残余 TOCTOU：两个管理员同一瞬间审批两条同证件记录仍可能双双通过——与企业认证
+		// 此前的取舍一致，不加数据库唯一约束（软删行会阻塞重提交），人工审核同刻并发概率极小，接受。
+		var other UserKYC
+		findErr := tx.Unscoped().Model(&UserKYC{}).
+			Where("id_number_hash = ? AND status = ? AND user_id != ?", kyc.IdNumberHash, KYCStatusApproved, kyc.UserId).
+			First(&other).Error
+		if findErr == nil {
+			var usernames []string
+			if err := tx.Unscoped().Model(&User{}).Where("id = ?", other.UserId).Pluck("username", &usernames).Error; err != nil {
+				return err
+			}
+			username := ""
+			if len(usernames) > 0 {
+				username = usernames[0]
+			}
+			return fmt.Errorf("%w（已在账号 %s 通过认证）", ErrKYCDuplicateID, username)
+		}
+		if !errors.Is(findErr, gorm.ErrRecordNotFound) {
+			return findErr
+		}
+		if err := tx.Model(kyc).Updates(map[string]interface{}{
+			"status":      KYCStatusApproved,
+			"reviewed_by": reviewerId,
+			"verified_at": now,
+		}).Error; err != nil {
+			return err
+		}
+		return tx.Model(&User{}).Where("id = ?", kyc.UserId).Update("kyc_status", KYCStatusApproved).Error
+	})
+	if err != nil {
 		return err
 	}
 	_ = InvalidateUserCache(kyc.UserId)
@@ -394,4 +432,74 @@ func CountPendingKYC() (int64, error) {
 	err := DB.Model(&UserKYC{}).
 		Where("status = ?", KYCStatusPending).Count(&n).Error
 	return n, err
+}
+
+// ─── 已注销账号占用（软删行仍占证件号） ────────────────────────────────────────
+//
+// KYC 跨账号去重对软删行同样生效（见 countOtherApprovedKYC）：用户自助注销后，
+// 其 approved 记录仍占用证件号，换号重新实名会被「该证件已被其他账号使用」挡住。
+// 常规列表按默认 scope 查不到这些行，所以单独提供一个只列软删 approved 记录的入口，
+// 由超管确认后释放（硬删该行），否则这张证件会变成永久死账。
+
+// GetKYCReleaseList 列出仍占用证件号的软删 approved 记录（已注销账号），供管理员释放。
+// keyword 匹配用户名或真实姓名；u1 不套软删 scope，因为占用记录的 user 行本身也已软删。
+func GetKYCReleaseList(keyword string, page, pageSize int) ([]*KYCAdminRow, int64, error) {
+	var rows []*KYCAdminRow
+	var total int64
+
+	baseQuery := DB.Unscoped().Model(&UserKYC{}).
+		Where("user_kycs.deleted_at IS NOT NULL AND user_kycs.status = ?", KYCStatusApproved).
+		Joins("LEFT JOIN users u1 ON u1.id = user_kycs.user_id")
+	if keyword != "" {
+		like := "%" + keyword + "%"
+		baseQuery = baseQuery.Where("u1.username LIKE ? OR user_kycs.real_name LIKE ?", like, like)
+	}
+	if err := baseQuery.Count(&total).Error; err != nil {
+		return nil, 0, err
+	}
+
+	query := DB.Unscoped().Model(&UserKYC{}).
+		Select("user_kycs.*, u1.username AS username").
+		Where("user_kycs.deleted_at IS NOT NULL AND user_kycs.status = ?", KYCStatusApproved).
+		Joins("LEFT JOIN users u1 ON u1.id = user_kycs.user_id")
+	if keyword != "" {
+		like := "%" + keyword + "%"
+		query = query.Where("u1.username LIKE ? OR user_kycs.real_name LIKE ?", like, like)
+	}
+
+	offset := (page - 1) * pageSize
+	if err := query.Order("user_kycs.id DESC").Offset(offset).Limit(pageSize).
+		Scan(&rows).Error; err != nil {
+		return nil, 0, err
+	}
+	return rows, total, nil
+}
+
+// ReleaseOccupiedKYC 硬删一条已注销账号的 approved 记录，释放其占用的证件号。
+// 返回占用者的 user_id 供调用方写审计日志。
+//
+// 只接受软删行：活跃记录必须走 ResetKYC（那里还要把 users.kyc_status 归零并留 reset
+// 日志），否则会出现「认证记录被硬删、用户状态还停在已认证」的不一致。
+func ReleaseOccupiedKYC(id int) (int, error) {
+	var kyc UserKYC
+	if err := DB.Unscoped().First(&kyc, id).Error; err != nil {
+		return 0, err
+	}
+	if !kyc.DeletedAt.Valid {
+		return 0, errors.New("该记录所属账号未注销，请使用重置")
+	}
+	if kyc.Status != KYCStatusApproved {
+		return 0, errors.New("只有已通过的记录才占用证件号")
+	}
+	if err := DeleteKYCImagesByKYCId(kyc.Id); err != nil {
+		return 0, err
+	}
+	if err := DB.Unscoped().Delete(&kyc).Error; err != nil {
+		return 0, err
+	}
+	// 防御：当前没有账号恢复流程；若将来有，避免出现「kyc_status=2 但无记录」。
+	// 用户行已软删时该更新被 GORM 默认 scope 过滤为 no-op。
+	_ = DB.Model(&User{}).Where("id = ?", kyc.UserId).Update("kyc_status", 0).Error
+	_ = InvalidateUserCache(kyc.UserId)
+	return kyc.UserId, nil
 }

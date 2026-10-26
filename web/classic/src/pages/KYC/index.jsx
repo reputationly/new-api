@@ -34,6 +34,10 @@ const ID_TYPE_LABELS = {
   other: '其他',
 };
 
+// 列表筛选里的「已注销占用」伪状态：命中时改查 /kyc/admin/occupying，
+// 列出的是随账号注销被软删、但仍占用证件号的 approved 记录。
+const OCCUPYING_FILTER = -1;
+
 // canViewSensitive mirrors checkSensitiveAccessPermission on the backend:
 // pending/rejected → Admin+Root; approved → Root only.
 function canViewSensitive(row) {
@@ -67,9 +71,11 @@ export default function KYCPage() {
   const loadList = async (p = page, s = statusFilter, ps = pageSize) => {
     setLoading(true);
     try {
-      const res = await API.get(
-        `/api/user/kyc/admin?status=${s}&page=${p}&page_size=${ps}`,
-      );
+      const url =
+        s === OCCUPYING_FILTER
+          ? `/api/user/kyc/admin/occupying?page=${p}&page_size=${ps}`
+          : `/api/user/kyc/admin?status=${s}&page=${p}&page_size=${ps}`;
+      const res = await API.get(url);
       const { success, data, total: t2 } = res.data;
       if (success) {
         setList(data || []);
@@ -138,6 +144,30 @@ export default function KYCPage() {
       const { success, message } = res.data;
       if (success) {
         showSuccess(t('已重置，用户需重新提交认证'));
+        loadList();
+      } else {
+        showError(message);
+      }
+    } catch {
+      showError(t('操作失败'));
+    }
+  };
+
+  const handleRelease = async (id) => {
+    if (
+      !window.confirm(
+        t(
+          '确认释放该证件占用？释放后该证件可被其他账号重新实名，此操作不可撤销。',
+        ),
+      )
+    ) {
+      return;
+    }
+    try {
+      const res = await API.put(`/api/user/kyc/admin/${id}/release`);
+      const { success, message } = res.data;
+      if (success) {
+        showSuccess(t('已释放占用'));
         loadList();
       } else {
         showError(message);
@@ -296,17 +326,79 @@ export default function KYCPage() {
     },
   ];
 
+  // 「已注销占用」视图：不显示状态/拒绝原因/审核人，改为认证时间 + 释放操作。
+  const occupyingColumns = [
+    {
+      title: t('ID'),
+      dataIndex: 'id',
+      width: 70,
+    },
+    {
+      title: t('用户'),
+      width: 160,
+      render: (_, row) => (
+        <span>
+          {row.username} <Text type='secondary'>(#{row.user_id})</Text>
+        </span>
+      ),
+    },
+    {
+      title: t('姓名'),
+      dataIndex: 'real_name',
+      width: 110,
+    },
+    {
+      title: t('证件类型'),
+      dataIndex: 'id_type',
+      width: 100,
+      render: (v) => t(ID_TYPE_LABELS[v] || v),
+    },
+    {
+      title: t('证件号'),
+      dataIndex: 'id_number_masked',
+      width: 150,
+    },
+    {
+      title: t('认证时间'),
+      dataIndex: 'verified_at',
+      width: 170,
+      render: (v) => (v ? new Date(v).toLocaleString() : '-'),
+    },
+    {
+      title: t('操作'),
+      dataIndex: 'operate',
+      width: 160,
+      fixed: 'right',
+      render: (_, row) =>
+        isRoot() ? (
+          <Button
+            size='small'
+            type='danger'
+            onClick={() => handleRelease(row.id)}
+          >
+            {t('释放')}
+          </Button>
+        ) : (
+          <Text type='tertiary' size='small'>
+            {t('仅超级管理员可释放')}
+          </Text>
+        ),
+    },
+  ];
+
   const columns = useMemo(() => {
+    const source =
+      statusFilter === OCCUPYING_FILTER ? occupyingColumns : baseColumns;
     return compactMode
-      ? baseColumns.map((col) => {
+      ? source.map((col) => {
           if (col.dataIndex === 'operate') {
             const { fixed, ...rest } = col;
             return rest;
           }
           return col;
         })
-      : baseColumns;
-  }, [compactMode, baseColumns]);
+      : source;
+  }, [compactMode, baseColumns, occupyingColumns, statusFilter]);
 
   return (
     <div className='mt-[60px] px-2'>
@@ -339,6 +431,9 @@ export default function KYCPage() {
               <Select.Option value={1}>{t('待审核')}</Select.Option>
               <Select.Option value={2}>{t('已通过')}</Select.Option>
               <Select.Option value={3}>{t('已拒绝')}</Select.Option>
+              <Select.Option value={OCCUPYING_FILTER}>
+                {t('已注销占用')}
+              </Select.Option>
             </Select>
             <Button onClick={() => loadList()}>{t('刷新')}</Button>
           </div>
