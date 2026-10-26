@@ -203,7 +203,8 @@ func extractTaskMedia(c *gin.Context) []moderation.MediaItem {
 // （relay/channel/task/suno/adaptor.go:62）。按 platform 分派要枚举十来个渠道类型字符串，
 // 且新增渠道时容易漏掉而静默漏审。
 //
-// 未覆盖：TaskSubmitReq.Metadata 里的自定义字段（如部分平台的 negative_prompt）。
+// 音乐/语音这条路 prompt 不够：真正会被唱出来、念出来的字有一部分在 metadata 里，
+// 见 taskSubmitTexts。其余自定义字段（如部分平台的 negative_prompt）仍未覆盖。
 // 那是个 map[string]interface{}，里面同时混着 data-url 之类的二进制串，
 // 无差别送审会把几 MB 的 base64 当文本审。要覆盖需要按平台列白名单键，见 §15。
 func extractTaskTexts(c *gin.Context, info *relaycommon.RelayInfo) []string {
@@ -215,9 +216,9 @@ func extractTaskTexts(c *gin.Context, info *relaycommon.RelayInfo) []string {
 	var texts []string
 	switch req := v.(type) {
 	case relaycommon.TaskSubmitReq:
-		texts = []string{req.Prompt}
+		texts = taskSubmitTexts(&req)
 	case *relaycommon.TaskSubmitReq:
-		texts = []string{req.Prompt}
+		texts = taskSubmitTexts(req)
 	case *dto.SunoSubmitReq:
 		texts = []string{req.Prompt, req.GptDescriptionPrompt, req.Title, req.Tags}
 	case dto.SunoSubmitReq:
@@ -237,4 +238,49 @@ func extractTaskTexts(c *gin.Context, info *relaycommon.RelayInfo) []string {
 		}
 	}
 	return out
+}
+
+// taskSubmitTexts 任务请求里**所有会被生成成内容**的文本。
+//
+// 只取 prompt 会在音乐这条路上整段漏掉：真正唱出来的字按模型分叉在两个键里，
+//   - ACE-Step 系：prompt 是风格描述，歌词在 metadata.lyrics；
+//   - Music3：反过来——歌词在顶层 prompt，caption 在 metadata.instructions
+//     （字段含义的权威说明见 common.ValidateMusic3JointPrompt 与 gpustackplus/adaptor.go:447）。
+//
+// 只审 prompt 的后果不是「少审一点」，而是**记录页看起来 prompt 一条不漏，唱出来的
+// 却是另一段文字**：语音/音乐在这套部署上全都走同一条任务门面，漏审在这里长得和
+// 审过一模一样。
+//
+// 另外两个键：
+//   - instructions：Music3 的 caption、Breeze 音色设计的声线描述；
+//   - sample_query：ACE-Step 的 sample 模式（没填歌词时）让模型按它在服务端写出
+//     歌词与 caption。前端两种情况下和 prompt 同值，所以只影响 API 直连——
+//     但那正是可以「prompt 写 pop、sample_query 写违规内容」绕过审核的口子。
+//     适配器的长度校验早把它当文本字段处理（gpustackplus/adaptor.go:472），
+//     审核没有理由漏掉它。
+//
+// 用固定白名单而不是遍历 Metadata —— 那个 map 里混着 data-url 之类的二进制串，
+// 无差别送审会把几 MB 的 base64 当文本审。
+func taskSubmitTexts(req *relaycommon.TaskSubmitReq) []string {
+	if req == nil {
+		return nil
+	}
+	return []string{
+		req.Prompt,
+		metadataText(req.Metadata, "lyrics"),
+		metadataText(req.Metadata, "instructions"),
+		metadataText(req.Metadata, "sample_query"),
+	}
+}
+
+// metadataText 从请求 metadata 里安全取一个字符串值（容忍 nil / 非字符串）。
+//
+// 不 trim：与 prompt 原样送审保持一致，空白串由 extractTaskTexts 末尾那轮
+// TrimSpace 过滤掉。
+func metadataText(metadata map[string]interface{}, key string) string {
+	if metadata == nil {
+		return ""
+	}
+	s, _ := metadata[key].(string)
+	return s
 }
