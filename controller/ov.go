@@ -58,9 +58,19 @@ func GetOvCapabilities(c *gin.Context) {
 // 只看 abilities 会报出"这个 key 用不了"的模型；只看令牌白名单会把聚合模型漏掉
 // （它们没有渠道 ability，见 controller/model.go 的说明）。
 func capabilityScope(c *gin.Context) ovcaps.Scope {
-	userGroup := common.GetContextKeyString(c, constant.ContextKeyUsingGroup)
+	// **用户分组 ≠ 令牌生效分组，别混用。**
+	//
+	// `ContextKeyUsingGroup` 是"这次请求实际落到哪个分组"（令牌指定了 group 就是它，
+	// 否则等于用户分组）；而可见性裁剪与 auto 展开在 relay 侧一律按**用户分组**
+	// （middleware/distributor.go 的 IsModelVisibleForGroup / GetUserAutoGroup）。
+	// 这里原先拿 UsingGroup 冒充用户分组：令牌 group=auto、或令牌分组 ≠ 用户分组时，
+	// 目录会报出调用时 404 的模型、或隐藏实际能调的模型 —— 正是注释里说要消除的
+	// "目录里有、调不通"。
+	userGroup := common.GetContextKeyString(c, constant.ContextKeyUserGroup)
 	userID := c.GetInt("id")
 	if userGroup == "" && userID != 0 {
+		// relay 路径上由 auth/distributor 写入用户分组；这条路由只走 TokenAuth，
+		// 一般是空的，退回查库（与模型列表接口同一口径）。
 		if group, err := model.GetUserGroup(userID, false); err == nil {
 			userGroup = group
 		}
@@ -135,6 +145,22 @@ func capabilityScope(c *gin.Context) ovcaps.Scope {
 // 1 MB 足够宽松：它只用来避免"刚好卡在上限的合法文件"被误拒，不是安全边界。
 const ovUploadOverheadBytes int64 = 1 * 1024 * 1024
 
+// ovUploadMaxBytesCap 这个接口的单文件**硬顶**。
+//
+// 它传的是"任务参考素材"，不是产物；而整包会被 readOvUpload 读进内存（multipart
+// 之前还先落一份临时文件）。沿用全局对象上限（系统设置默认 200MB）时，几个并发就能
+// 把一个 4Gi 的 Pod 打 OOM —— 而这个接口对**所有已 KYC 的账号**开放，不需要任何
+// 特殊权限。所以取系统设置里的值，但封顶 32MB；产物上传走别的路径，不受影响。
+const ovUploadMaxBytesCap int64 = 32 * 1024 * 1024
+
+// ovUploadMaxBytes 本接口的实际上限：系统设置更小时听系统设置，否则取硬顶。
+func ovUploadMaxBytes() int64 {
+	if configured := mediastore.MaxUploadBytes(); configured > 0 && configured < ovUploadMaxBytesCap {
+		return configured
+	}
+	return ovUploadMaxBytesCap
+}
+
 func PostOvFiles(c *gin.Context) {
 	if !mediastore.Enabled() {
 		// 没配对象存储不是"服务器坏了"：客户端该退回内联（base64），而不是报错给用户。
@@ -142,7 +168,7 @@ func PostOvFiles(c *gin.Context) {
 			"这个部署没有配置文件存储，请改用内联（base64）上传")
 		return
 	}
-	limit := mediastore.MaxUploadBytes()
+	limit := ovUploadMaxBytes()
 	// **必须在 FormFile 之前限流。** `c.FormFile` 会把整个请求体收进内存/临时文件，
 	// 之后再检查大小已经晚了 —— 一个已鉴权的请求就能把磁盘写满。
 	//

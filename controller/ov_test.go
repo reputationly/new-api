@@ -113,3 +113,20 @@ func TestPostOvFilesRejectsOversizeBeforeReadingBody(t *testing.T) {
 		t.Fatalf("测试环境没有可用的对象存储，不该返回 200")
 	}
 }
+
+// 参考素材上传必须有**本接口自己的**硬顶：全局对象上限默认 200MB，而这个接口
+// 会把整包读进内存，对所有已 KYC 账号开放 —— 沿用全局值等于给每个账号一个
+// 200MB 的内存放大器。系统设置更小时听系统设置。
+func TestOvUploadMaxBytesIsCapped(t *testing.T) {
+	restore := withMediaStorageForTest(t, 200) // 系统设置默认 200MB
+	defer restore()
+	if got := ovUploadMaxBytes(); got != ovUploadMaxBytesCap {
+		t.Fatalf("上限 = %d，期望封顶 %d", got, ovUploadMaxBytesCap)
+	}
+
+	restoreSmall := withMediaStorageForTest(t, 1) // 运营把全局上限调到 1MB
+	defer restoreSmall()
+	if got := ovUploadMaxBytes(); got != 1<<20 {
+		t.Fatalf("系统设置更小时应听系统设置，实得 %d", got)
+	}
+}

@@ -41,6 +41,11 @@ func SetOvRouter(router *gin.Engine) {
 		ov.GET("/capabilities", controller.GetOvCapabilities)
 
 		// 参考素材上传。返回签名 URL，任务的 metadata 直接吃这个 URL。
-		ov.POST("/files", controller.PostOvFiles)
+		//
+		// **额外挂一条上传专用限流**（`UP` 桶，与系统里其它上传入口共用一个额度）：
+		// 组上的 OvRateLimit 是"每 IP 180 次/180 秒"，对一个会往对象存储写文件的接口
+		// 太松 —— 已 KYC 账号可以靠它把存储刷爆（对象还没有 TTL），并发上传还会把
+		// 内存打满（见 controller.PostOvFiles 的 32MB 硬顶说明）。
+		ov.POST("/files", middleware.UploadRateLimit(), controller.PostOvFiles)
 	}
 }
