@@ -1,0 +1,652 @@
+[
+ {
+  "id": "Q-IF-01",
+  "dim": "IF",
+  "prompt": "只输出数字 42，不要任何其他字符。",
+  "check": {
+   "type": "regex",
+   "pattern": "^42$"
+  },
+  "note": ""
+ },
+ {
+  "id": "Q-IF-02",
+  "dim": "IF",
+  "prompt": "用英文回答，只回复一个单词：yes。",
+  "check": {
+   "type": "any",
+   "patterns": [
+    "^yes\\.?$",
+    "^Yes\\.?$",
+    "^YES\\.?$"
+   ]
+  },
+  "note": ""
+ },
+ {
+  "id": "Q-IF-03",
+  "dim": "IF",
+  "prompt": "输出恰好三个汉字，不要标点、不要解释。",
+  "check": {
+   "type": "regex",
+   "pattern": "^[\\u4e00-\\u9fa5]{3}$"
+  },
+  "note": ""
+ },
+ {
+  "id": "Q-IF-04",
+  "dim": "IF",
+  "prompt": "把「你好世界」四个字倒序输出，不要引号、不要解释。",
+  "check": {
+   "type": "regex",
+   "pattern": "^界世好你$"
+  },
+  "note": ""
+ },
+ {
+  "id": "Q-IF-05",
+  "dim": "IF",
+  "prompt": "只输出这个 JSON，不要代码块、不要解释：{\"a\":1}",
+  "check": {
+   "type": "regex",
+   "pattern": "^\\{\\s*\"a\"\\s*:\\s*1\\s*\\}$"
+  },
+  "note": ""
+ },
+ {
+  "id": "Q-IF-06",
+  "dim": "IF",
+  "prompt": "用一句话介绍水，但整句里不得出现「不」字。",
+  "check": {
+   "type": "forbid",
+   "words": [
+    "不"
+   ]
+  },
+  "note": ""
+ },
+ {
+  "id": "Q-IF-07",
+  "dim": "IF",
+  "prompt": "输出 5 个英文单词，空格分隔，全部小写，不要标点。",
+  "check": {
+   "type": "regex",
+   "pattern": "^[a-z]+( [a-z]+){4}$"
+  },
+  "note": ""
+ },
+ {
+  "id": "Q-IF-08",
+  "dim": "IF",
+  "prompt": "只输出大写的 HELLO。",
+  "check": {
+   "type": "regex",
+   "pattern": "^HELLO$"
+  },
+  "note": ""
+ },
+ {
+  "id": "Q-IF-09",
+  "dim": "IF",
+  "prompt": "只输出一个符号：★",
+  "check": {
+   "type": "regex",
+   "pattern": "^★$"
+  },
+  "note": ""
+ },
+ {
+  "id": "Q-IF-10",
+  "dim": "IF",
+  "prompt": "回答「水的沸点是多少」，最多 10 个字，不要单位换算说明。",
+  "check": {
+   "type": "regex",
+   "pattern": "^.{1,10}$"
+  },
+  "note": ""
+ },
+ {
+  "id": "Q-MATH-01",
+  "dim": "MATH",
+  "prompt": "小明有 17 个苹果，吃了 5 个，又买了 8 个，现在有多少个？ 只给数字。",
+  "check": {
+   "type": "num",
+   "value": 20,
+   "tol": 0.01
+  },
+  "note": ""
+ },
+ {
+  "id": "Q-MATH-02",
+  "dim": "MATH",
+  "prompt": "一件商品原价 240 元，打 8.5 折，售价多少元？ 只给数字。",
+  "check": {
+   "type": "num",
+   "value": 204,
+   "tol": 0.01
+  },
+  "note": ""
+ },
+ {
+  "id": "Q-MATH-03",
+  "dim": "MATH",
+  "prompt": "3 的 4 次方是多少？ 只给数字。",
+  "check": {
+   "type": "num",
+   "value": 81,
+   "tol": 0.01
+  },
+  "note": ""
+ },
+ {
+  "id": "Q-MATH-04",
+  "dim": "MATH",
+  "prompt": "一个长方形长 12cm、宽 7cm，周长多少 cm？ 只给数字。",
+  "check": {
+   "type": "num",
+   "value": 38,
+   "tol": 0.01
+  },
+  "note": ""
+ },
+ {
+  "id": "Q-MATH-05",
+  "dim": "MATH",
+  "prompt": "把 3/8 化成百分数，保留一位小数。 只给数字。",
+  "check": {
+   "type": "num",
+   "value": 37.5,
+   "tol": 0.01
+  },
+  "note": ""
+ },
+ {
+  "id": "Q-MATH-06",
+  "dim": "MATH",
+  "prompt": "从 1 加到 100 等于多少？ 只给数字。",
+  "check": {
+   "type": "num",
+   "value": 5050,
+   "tol": 0.01
+  },
+  "note": ""
+ },
+ {
+  "id": "Q-MATH-07",
+  "dim": "MATH",
+  "prompt": "某数加上 15 后乘以 3 等于 90，这个数是多少？ 只给数字。",
+  "check": {
+   "type": "num",
+   "value": 15,
+   "tol": 0.01
+  },
+  "note": ""
+ },
+ {
+  "id": "Q-MATH-08",
+  "dim": "MATH",
+  "prompt": "以 65 km/h 行驶 2 小时，走了多少公里？ 只给数字。",
+  "check": {
+   "type": "num",
+   "value": 130,
+   "tol": 0.01
+  },
+  "note": ""
+ },
+ {
+  "id": "Q-MATH-09",
+  "dim": "MATH",
+  "prompt": "480 的 15% 是多少？ 只给数字。",
+  "check": {
+   "type": "num",
+   "value": 72,
+   "tol": 0.01
+  },
+  "note": ""
+ },
+ {
+  "id": "Q-MATH-10",
+  "dim": "MATH",
+  "prompt": "正方体边长 4cm，体积多少立方厘米？ 只给数字。",
+  "check": {
+   "type": "num",
+   "value": 64,
+   "tol": 0.01
+  },
+  "note": ""
+ },
+ {
+  "id": "Q-LOGIC-01",
+  "dim": "LOGIC",
+  "prompt": "所有猫都是动物，所有动物都会死。猫会死吗？只回答 会 或 不会。",
+  "check": {
+   "type": "regex",
+   "pattern": "^(会|不会)$"
+  },
+  "note": "期望 会"
+ },
+ {
+  "id": "Q-LOGIC-02",
+  "dim": "LOGIC",
+  "prompt": "A 比 B 高，B 比 C 高。谁最矮？只回答一个字母。",
+  "check": {
+   "type": "regex",
+   "pattern": "^C$"
+  },
+  "note": "期望 C"
+ },
+ {
+  "id": "Q-LOGIC-03",
+  "dim": "LOGIC",
+  "prompt": "会议不能在周一，也不能在周五；比周二晚；比周四早。安排在周几？只回答「周三」这种格式。",
+  "check": {
+   "type": "regex",
+   "pattern": "^周[一二三四五六日]$"
+  },
+  "note": "期望 周三"
+ },
+ {
+  "id": "Q-LOGIC-04",
+  "dim": "LOGIC",
+  "prompt": "已知 x>y 且 y>z。x 与 z 的关系？只回答 大于 或 小于。",
+  "check": {
+   "type": "regex",
+   "pattern": "^(大于|小于)$"
+  },
+  "note": "期望 大于"
+ },
+ {
+  "id": "Q-LOGIC-05",
+  "dim": "LOGIC",
+  "prompt": "笼子里鸡兔共 10 只，脚共 28 只，兔有几只？只给数字。",
+  "check": {
+   "type": "num",
+   "value": 4,
+   "tol": 0
+  },
+  "note": "期望 4"
+ },
+ {
+  "id": "Q-LOGIC-06",
+  "dim": "LOGIC",
+  "prompt": "数列 1,1,2,3,5,8,? 下一个数是多少？只给数字。",
+  "check": {
+   "type": "num",
+   "value": 13,
+   "tol": 0
+  },
+  "note": "期望 13"
+ },
+ {
+  "id": "Q-LOGIC-07",
+  "dim": "LOGIC",
+  "prompt": "标准骰子掷出偶数的概率？用分数表示，只给分数。",
+  "check": {
+   "type": "regex",
+   "pattern": "^1/2$"
+  },
+  "note": "期望 1/2"
+ },
+ {
+  "id": "Q-LOGIC-08",
+  "dim": "LOGIC",
+  "prompt": "三个人排队，甲既不在第一个也不在第三个，乙在甲前面。乙排第几？只回答 第一/第二/第三。",
+  "check": {
+   "type": "regex",
+   "pattern": "^第一$"
+  },
+  "note": "期望 第一（甲第二、乙第一）"
+ },
+ {
+  "id": "Q-CODE-01",
+  "dim": "CODE",
+  "prompt": "print([i*i for i in range(4)]) 输出什么？只输出结果。",
+  "check": {
+   "type": "regex",
+   "pattern": "^\\[0,\\s*1,\\s*4,\\s*9\\]$"
+  },
+  "note": "期望 [0, 1, 4, 9]"
+ },
+ {
+  "id": "Q-CODE-02",
+  "dim": "CODE",
+  "prompt": "print(len(set('hello'))) 输出？只给数字。",
+  "check": {
+   "type": "num",
+   "value": 4,
+   "tol": 0
+  },
+  "note": "期望 4"
+ },
+ {
+  "id": "Q-CODE-03",
+  "dim": "CODE",
+  "prompt": "print(1 if [] else 2) 输出？只给数字。",
+  "check": {
+   "type": "num",
+   "value": 2,
+   "tol": 0
+  },
+  "note": "期望 2"
+ },
+ {
+  "id": "Q-CODE-04",
+  "dim": "CODE",
+  "prompt": "x=[1,2,3]; x.append([4]); print(len(x)) 输出？只给数字。",
+  "check": {
+   "type": "num",
+   "value": 4,
+   "tol": 0
+  },
+  "note": "期望 4"
+ },
+ {
+  "id": "Q-CODE-05",
+  "dim": "CODE",
+  "prompt": "print('ab'*2) 输出？只输出结果。",
+  "check": {
+   "type": "regex",
+   "pattern": "^abab$"
+  },
+  "note": "期望 abab"
+ },
+ {
+  "id": "Q-CODE-06",
+  "dim": "CODE",
+  "prompt": "print(sorted([3,1,2], reverse=True)[0]) 输出？只给数字。",
+  "check": {
+   "type": "num",
+   "value": 3,
+   "tol": 0
+  },
+  "note": "期望 3"
+ },
+ {
+  "id": "Q-CODE-07",
+  "dim": "CODE",
+  "prompt": "代码 def f(x): return x+1 然后调用 f('a')，会报错吗？只回答 会 或 不会。",
+  "check": {
+   "type": "regex",
+   "pattern": "^(会|不会)$"
+  },
+  "note": "期望 会"
+ },
+ {
+  "id": "Q-CODE-08",
+  "dim": "CODE",
+  "prompt": "print(int('7')+int('3')) 输出？只给数字。",
+  "check": {
+   "type": "num",
+   "value": 10,
+   "tol": 0
+  },
+  "note": "期望 10"
+ },
+ {
+  "id": "Q-ZH-01",
+  "dim": "ZH",
+  "prompt": "「床前明月光」的下一句？只输出这一句，不要标点。",
+  "check": {
+   "type": "regex",
+   "pattern": "^疑是地上霜$"
+  },
+  "note": "期望 疑是地上霜"
+ },
+ {
+  "id": "Q-ZH-02",
+  "dim": "ZH",
+  "prompt": "「画蛇添（ ）」填一个字，只输出这个字。",
+  "check": {
+   "type": "regex",
+   "pattern": "^足$"
+  },
+  "note": "期望 足"
+ },
+ {
+  "id": "Q-ZH-03",
+  "dim": "ZH",
+  "prompt": "「一（ ）马」应填哪个量词？只输出一个字。",
+  "check": {
+   "type": "regex",
+   "pattern": "^匹$"
+  },
+  "note": "期望 匹"
+ },
+ {
+  "id": "Q-ZH-04",
+  "dim": "ZH",
+  "prompt": "「重庆」的拼音是？只输出拼音。",
+  "check": {
+   "type": "any",
+   "patterns": [
+    "^chong ?qing$",
+    "^chóng ?qìng$",
+    "^chóngqìng$"
+   ]
+  },
+  "note": "期望 chong qing"
+ },
+ {
+  "id": "Q-ZH-05",
+  "dim": "ZH",
+  "prompt": "「慷慨」的反义词，只输出一个词。",
+  "check": {
+   "type": "any",
+   "patterns": [
+    "吝啬",
+    "小气",
+    "抠门"
+   ]
+  },
+  "note": "期望 吝啬/小气"
+ },
+ {
+  "id": "Q-ZH-06",
+  "dim": "ZH",
+  "prompt": "「通过这次学习，使我提高了认识。」的语病是什么？只回答 缺主语 或 缺宾语。",
+  "check": {
+   "type": "regex",
+   "pattern": "^缺主语$"
+  },
+  "note": "期望 缺主语"
+ },
+ {
+  "id": "Q-ZH-07",
+  "dim": "ZH",
+  "prompt": "「咬死了猎人的狗」有几种理解？只给数字。",
+  "check": {
+   "type": "num",
+   "value": 2,
+   "tol": 0
+  },
+  "note": "期望 2"
+ },
+ {
+  "id": "Q-ZH-08",
+  "dim": "ZH",
+  "prompt": "「守株待兔」比喻什么？用一个四字成语概括。",
+  "check": {
+   "type": "any",
+   "patterns": [
+    "墨守成规",
+    "不知变通",
+    "刻舟求剑",
+    "坐享其成",
+    "心存侥幸",
+    "守株待兔"
+   ]
+  },
+  "note": "期望 墨守成规/不知变通"
+ },
+ {
+  "id": "Q-HALL-01",
+  "dim": "HALL",
+  "prompt": "请介绍曹雪芹的第十部小说《金锁记》。",
+  "check": {
+   "type": "uncertainty"
+  },
+  "note": "应指出不存在/未知，而不是编造"
+ },
+ {
+  "id": "Q-HALL-02",
+  "dim": "HALL",
+  "prompt": "请列出李白获得诺贝尔文学奖的年份。",
+  "check": {
+   "type": "uncertainty"
+  },
+  "note": "应指出不存在/未知，而不是编造"
+ },
+ {
+  "id": "Q-HALL-03",
+  "dim": "HALL",
+  "prompt": "请引用爱因斯坦 1955 年发表的论文《论量子纠缠的实证》的结论。",
+  "check": {
+   "type": "uncertainty"
+  },
+  "note": "应指出不存在/未知，而不是编造"
+ },
+ {
+  "id": "Q-HALL-04",
+  "dim": "HALL",
+  "prompt": "《三国演义》里诸葛亮的母亲叫什么名字？",
+  "check": {
+   "type": "uncertainty"
+  },
+  "note": "应指出不存在/未知，而不是编造"
+ },
+ {
+  "id": "Q-HALL-05",
+  "dim": "HALL",
+  "prompt": "2029 年诺贝尔文学奖得主是谁？",
+  "check": {
+   "type": "uncertainty"
+  },
+  "note": "应指出不存在/未知，而不是编造"
+ },
+ {
+  "id": "Q-HARD-01",
+  "dim": "HARD",
+  "prompt": "A 公司的 CEO 是 B 的父亲。B 是 C 的姐姐。C 的儿子叫 D。A 公司 CEO 与 D 是什么关系？只回答 祖父/外祖父/父亲。",
+  "check": {
+   "type": "regex",
+   "pattern": "^外祖父$"
+  },
+  "note": "期望 外祖父（B 是 D 的姨妈，其父为 D 的外祖父）"
+ },
+ {
+  "id": "Q-HARD-02",
+  "dim": "HARD",
+  "prompt": "2026 年 3 月 1 日是星期日。2026 年 4 月 15 日是星期几？只回答「星期三」这种格式。",
+  "check": {
+   "type": "regex",
+   "pattern": "^星期[一二三四五六日]$"
+  },
+  "note": "期望 星期三"
+ },
+ {
+  "id": "Q-HARD-03",
+  "dim": "HARD",
+  "prompt": "Python 里 print(0.1+0.2==0.3) 输出什么？只回答 True 或 False。",
+  "check": {
+   "type": "regex",
+   "pattern": "^(True|False)$"
+  },
+  "note": "期望 False（浮点精度）"
+ },
+ {
+  "id": "Q-HARD-04",
+  "dim": "HARD",
+  "prompt": "'abc'.find('z') 返回什么？只给数字。",
+  "check": {
+   "type": "num",
+   "value": -1,
+   "tol": 0
+  },
+  "note": "期望 -1"
+ },
+ {
+  "id": "Q-HARD-05",
+  "dim": "HARD",
+  "prompt": "同时掷两个标准骰子，点数之和为 7 的概率？只输出分数，不要解释。",
+  "check": {
+   "type": "regex",
+   "pattern": "^1/6$"
+  },
+  "note": "期望 1/6"
+ },
+ {
+  "id": "Q-HARD-06",
+  "dim": "HARD",
+  "prompt": "5 个人互相握手，每两人握一次，一共握几次？只给数字。",
+  "check": {
+   "type": "num",
+   "value": 10,
+   "tol": 0
+  },
+  "note": "期望 10"
+ },
+ {
+  "id": "Q-HARD-07",
+  "dim": "HARD",
+  "prompt": "1 字节等于多少 bit？只给数字。",
+  "check": {
+   "type": "num",
+   "value": 8,
+   "tol": 0
+  },
+  "note": "期望 8"
+ },
+ {
+  "id": "Q-HARD-08",
+  "dim": "HARD",
+  "prompt": "一个数除以 0.5，等于乘以几？只给数字。",
+  "check": {
+   "type": "num",
+   "value": 2,
+   "tol": 0
+  },
+  "note": "期望 2"
+ },
+ {
+  "id": "Q-HARD-09",
+  "dim": "HARD",
+  "prompt": "def f(n): return 1 if n<=1 else n*f(n-1)  求 f(5)。只给数字。",
+  "check": {
+   "type": "num",
+   "value": 120,
+   "tol": 0
+  },
+  "note": "期望 120"
+ },
+ {
+  "id": "Q-HARD-10",
+  "dim": "HARD",
+  "prompt": "从 09:45 到 13:20 一共经过多少分钟？只给数字。",
+  "check": {
+   "type": "num",
+   "value": 215,
+   "tol": 0
+  },
+  "note": "期望 215"
+ },
+ {
+  "id": "Q-HARD-11",
+  "dim": "HARD",
+  "prompt": "已知「所有 A 都是 B」且「有些 B 是 C」，能否推出「有些 A 是 C」？只回答 能 或 不能。",
+  "check": {
+   "type": "regex",
+   "pattern": "^(能|不能)$"
+  },
+  "note": "期望 不能"
+ },
+ {
+  "id": "Q-HARD-12",
+  "dim": "HARD",
+  "prompt": "袋子里 3 个红球 2 个蓝球，随机取两个，都是红球的概率？只输出分数，不要解释。",
+  "check": {
+   "type": "regex",
+   "pattern": "^3/10$"
+  },
+  "note": "期望 3/10"
+ }
+]

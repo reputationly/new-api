@@ -60,3 +60,12 @@ web/mobile/node_modules
 # Codex 检视的运行日志（工具产物，不是仓库内容）。
 # 它落在仓库根目录，一次 `git add -A` 就会被带进历史。
 .codex-review-*.txt
+
+# 上游探针的测试产物（供应商地址、模型名、账单口径数据）。
+scripts/upstream-probe/results/
+
+# 探针脚本跑一次就会留下 __pycache__，一次 `git add -A` 就会把 .pyc 带进历史。
+scripts/upstream-probe/__pycache__/
+
+# 构建产物（`new-api-linux-amd64` 那类单文件二进制，动辄 130 MB）。
+/dist/
