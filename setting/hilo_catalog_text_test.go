@@ -129,3 +129,33 @@ func contains(v []string, want string) bool {
 	}
 	return false
 }
+
+// **text 段为空必须回落出厂，不能就这么下发。**
+//
+// 两种来源：① `text` 字段出现之前保存过的老配置（解出来是空数组）；
+// ② 管理员在"编辑原文 JSON"里把 text 删了。空 textModels 不会让客户端显示空
+// 选择器，而是回落它自己记着的模型（多半是官方模型）→ 发消息 500，且报错来自上游。
+func TestEmptyTextSectionFallsBackToFactory(t *testing.T) {
+	before := GetHiloCatalog()
+	defer func() {
+		hiloCatalogMu.Lock()
+		hiloCatalog = before
+		hiloCatalogMu.Unlock()
+	}()
+
+	// ① 没有 text 键的老配置
+	if err := UpdateHiloCatalogByJsonString(`{"image":[],"video":[],"audio":[]}`); err != nil {
+		t.Fatalf("保存失败: %v", err)
+	}
+	if len(GetHiloCatalog().Text) == 0 {
+		t.Fatal("缺 text 键时没有回落出厂 —— 客户端的对话入口会整体坏掉")
+	}
+
+	// ② 显式空数组
+	if err := UpdateHiloCatalogByJsonString(`{"image":[],"video":[],"audio":[],"text":[]}`); err != nil {
+		t.Fatalf("保存失败: %v", err)
+	}
+	if len(GetHiloCatalog().Text) == 0 {
+		t.Fatal("显式空 text 数组也没有回落出厂")
+	}
+}

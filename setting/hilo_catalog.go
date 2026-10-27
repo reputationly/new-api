@@ -172,6 +172,9 @@ type HiloCatalog struct {
 var (
 	hiloCatalogMu sync.RWMutex
 	hiloCatalog   = defaultHiloCatalog()
+	// textFallbackLogged 让"text 段为空已回落出厂"只提示一次：
+	// normalizeHiloCatalog 在 SyncOptions 里每 60 秒被调一次，每次都打会刷满日志。
+	textFallbackLogged sync.Once
 )
 
 // GetHiloCatalog 取当前目录。返回的是副本引用，调用方只读。
@@ -232,6 +235,22 @@ func normalizeHiloCatalog(c *HiloCatalog) error {
 	// 对话模型单独校验：字段面和媒体不同（见 hilo_catalog_text.go）。
 	if err := validateTextEntries(c.Text); err != nil {
 		return err
+	}
+	// **text 段为空不是"少一个模型"，对话入口会整体坏掉。**
+	//
+	// 两种来源都会走到这里：① `text` 字段出现之前保存过的老配置（解出来是空数组）；
+	// ② 管理员在"编辑原文 JSON"里把 text 删了。下发时 textModels 为空，客户端不会
+	// 显示空选择器 —— 它会回落到自己记着的上一次选择（多半是官方模型），发消息直接
+	// 500，而报错来自上游、看不出是"模型选错了"。
+	//
+	// 所以这里回落出厂：宁可让管理员看到"删不掉的默认对话模型"，也不要客户端整个
+	// 对话入口坏掉。真要一个都不给，得先有别的兜底（下发侧另有告警，见 controller/hilo.go）。
+	if len(c.Text) == 0 {
+		c.Text = defaultHiloTextCatalog()
+		textFallbackLogged.Do(func() {
+			common.SysLog("HiloCatalog 的 text 段为空（老配置或显式清空）→ 已回落出厂对话模型；" +
+				"否则客户端会回落到它自己记着的模型，发消息 500")
+		})
 	}
 
 	for _, g := range groups {

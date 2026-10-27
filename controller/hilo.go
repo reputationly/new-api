@@ -114,6 +114,14 @@ func GetHiloModelsConfig(c *gin.Context) {
 	// 的 id，客户端只能回落到它自己记着的上一次选择（多半是官方模型）。
 	if len(out.TextModels) > 0 {
 		out.DefaultTextModelID = out.TextModels[0].ID
+	} else {
+		// 一个都没报出去 = 客户端拿到空列表 → 回落它记着的模型 → 发消息 500，
+		// 而报错来自上游，看不出是模型问题。这条日志是管理员唯一能搜到的线索。
+		// 只打一次：这个接口是客户端在轮询的。
+		emptyTextCatalogLogged.Do(func() {
+			common.SysError("[hilo] 下发的对话模型为空：HiloCatalog 的 text 条目都没有可用渠道，" +
+				"客户端会回落到它自己记着的模型 → 发消息 500。请检查 text 段的 platform_model 与渠道")
+		})
 	}
 
 	c.JSON(http.StatusOK, out)
@@ -134,6 +142,9 @@ func unavailable(enabled map[string]bool, platformModel string) string {
 // 上万行，反而把它淹没。按 (模型, 原因) 去重：原因变了会重新报一次，
 // 配置修好之后也不会再有。
 var skipLogged sync.Map
+
+// emptyTextCatalogLogged 让"下发的对话模型为空"只告警一次（这个接口是客户端在轮询的）。
+var emptyTextCatalogLogged sync.Once
 
 func logSkipOnce(modelID, reason string) {
 	key := modelID + "\x00" + reason
