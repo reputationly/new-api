@@ -401,6 +401,28 @@ func gpustackAffinityGJSONValue(c *gin.Context, path string) string {
 	return strings.TrimSpace(res.String())
 }
 
+// gpustackMessageText 取消息的纯文本用于成键。
+//
+// 不能直接用 Message.StringContent()：它只认 string 与 []any，遇到
+// []dto.MediaContent 会返回空串。而 Claude 转换（SetMediaContent）与 Responses
+// 的图文混合内容都会产出 []dto.MediaContent，结果是这些消息被整条跳过——
+// 同 system 的不同会话因此拿到同一个键，塌到一台实例上；同一会话又会因为
+// 首条 user 被跳过而换键（2026-10-18 事故的复现路径）。
+//
+// 不改全局的 StringContent：计费等多处依赖它的现有语义。
+func gpustackMessageText(msg dto.Message) string {
+	if parts, ok := msg.Content.([]dto.MediaContent); ok {
+		var b strings.Builder
+		for _, p := range parts {
+			if p.Type == dto.ContentTypeText {
+				b.WriteString(p.Text)
+			}
+		}
+		return b.String()
+	}
+	return msg.StringContent()
+}
+
 // gpustackAffinityContentKey 对前若干条非空消息做分段采样式成键。
 // 角色一起参与，避免「同样的文本但角色不同」被当成同一段对话。
 // 必须有真正的内容才返回非空：只有角色没有内容时若照样成键，所有空内容请求会哈希
@@ -412,7 +434,7 @@ func gpustackAffinityContentKey(messages []dto.Message) string {
 		if wrote >= gpustackAffinityKeyMessages {
 			break
 		}
-		content := strings.TrimSpace(msg.StringContent())
+		content := strings.TrimSpace(gpustackMessageText(msg))
 		if content == "" {
 			continue
 		}

@@ -5,7 +5,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/dto"
+	relaycommon "github.com/QuantumNous/new-api/relay/common"
 )
 
 func msg(role, content string) dto.Message {
@@ -312,3 +314,126 @@ func TestLoadMemberRoundTrip(t *testing.T) {
 		t.Error("缺字节段的 member 应解析为 0")
 	}
 }
+
+// 构造 Claude Code 形状的请求：system 是数组、user content 也是数组，两者都带
+// cache_control。经过 ClaudeToOpenAIRequest 后，这些消息的 Content 会是
+// []dto.MediaContent——StringContent() 读不出来，正是 B1 的复现条件。
+func claudeRequestForTest(system string, userTexts ...string) dto.ClaudeRequest {
+	req := dto.ClaudeRequest{Model: "claude-sonnet-4-20250514"}
+	sysText := system
+	req.System = []dto.ClaudeMediaMessage{{
+		Type:         "text",
+		Text:         &sysText,
+		CacheControl: []byte(`{"type":"ephemeral"}`),
+	}}
+	for _, text := range userTexts {
+		t := text
+		req.Messages = append(req.Messages, dto.ClaudeMessage{
+			Role: "user",
+			Content: []dto.ClaudeMediaMessage{{
+				Type:         "text",
+				Text:         &t,
+				CacheControl: []byte(`{"type":"ephemeral"}`),
+			}},
+		})
+	}
+	return req
+}
+
+func claudeKeyForTest(t *testing.T, req dto.ClaudeRequest) string {
+	t.Helper()
+	info := &relaycommon.RelayInfo{ChannelMeta: &relaycommon.ChannelMeta{
+		ChannelType: constant.ChannelTypeOpenAI,
+	}}
+	converted, err := ClaudeToOpenAIRequest(req, info)
+	if err != nil {
+		t.Fatalf("Claude 转换失败: %v", err)
+	}
+	return gpustackAffinityContentKey(converted.Messages)
+}
+
+// B1 回归：同一个共享 system（Claude Code 的常态），不同会话的首条 user 必须
+// 产生不同的键。修复前数组 content 被 StringContent 读成空串，所有会话只剩
+// system 参与哈希，会全部塌到一台实例——10-18 事故的复现路径。
+func TestClaudeMediaContentKeyDoesNotCollapse(t *testing.T) {
+	sharedSystem := strings.Repeat("You are Claude Code, a shared system prompt. ", 2000)
+	ka := claudeKeyForTest(t, claudeRequestForTest(sharedSystem, "任务A：修复登录 bug"))
+	kb := claudeKeyForTest(t, claudeRequestForTest(sharedSystem, "任务B：重构支付模块"))
+	if ka == "" {
+		t.Fatal("Claude 数组 content 的键不该为空（system 与 user 都必须参与）")
+	}
+	if ka == kb {
+		t.Fatal("共享 system 下不同首条 user 必须产生不同键，否则会话会塌到同一实例")
+	}
+}
+
+// 同一会话多轮之间键必须不变。Claude 每轮重发完整历史，前两条非空消息
+// （system + 首条 user）始终不变；后续追加的 assistant/tool_result 不能影响键。
+func TestClaudeMediaContentKeyStableAcrossTurns(t *testing.T) {
+	system := "共享系统提示"
+	req1 := claudeRequestForTest(system, "第一轮的问题")
+	k1 := claudeKeyForTest(t, req1)
+
+	req2 := claudeRequestForTest(system, "第一轮的问题")
+	req2.Messages = append(req2.Messages,
+		dto.ClaudeMessage{Role: "assistant", Content: []dto.ClaudeMediaMessage{{Type: "text", Text: strPtr("第一轮回答")}}},
+		dto.ClaudeMessage{Role: "user", Content: []dto.ClaudeMediaMessage{{Type: "text", Text: strPtr("第二轮追问")}}},
+	)
+	k2 := claudeKeyForTest(t, req2)
+
+	req3 := claudeRequestForTest(system, "第一轮的问题")
+	req3.Messages = append(req3.Messages,
+		dto.ClaudeMessage{Role: "assistant", Content: []dto.ClaudeMediaMessage{{Type: "text", Text: strPtr("第一轮回答")}}},
+		dto.ClaudeMessage{Role: "user", Content: []dto.ClaudeMediaMessage{{Type: "text", Text: strPtr("第二轮追问")}}},
+		dto.ClaudeMessage{Role: "assistant", Content: []dto.ClaudeMediaMessage{{Type: "tool_use", Id: "t1", Name: "bash", Input: map[string]any{"cmd": "ls"}}}},
+		dto.ClaudeMessage{Role: "user", Content: []dto.ClaudeMediaMessage{{Type: "tool_result", ToolUseId: "t1", Content: "file.txt"}}},
+	)
+	k3 := claudeKeyForTest(t, req3)
+
+	if k1 == "" || k2 == "" || k3 == "" {
+		t.Fatalf("多轮键不该为空: %q %q %q", k1, k2, k3)
+	}
+	if k1 != k2 || k2 != k3 {
+		t.Fatalf("同一会话各轮键必须一致\n第1轮: %.80q\n第2轮: %.80q\n第3轮: %.80q", k1, k2, k3)
+	}
+}
+
+// chat 入口的回归：string、[]any、[]dto.MediaContent 三种同文本形态必须给出
+// 同一个键。前两种是现有 chat 请求的形态（键保持不变），第三种是新修复的。
+func TestContentKeySameTextAcrossContentShapes(t *testing.T) {
+	const text = "同一段文本"
+
+	stringMsg := msg("user", text)
+
+	arrayMsg := dto.Message{Role: "user", Content: []any{
+		map[string]any{"type": "text", "text": text},
+	}}
+
+	mediaMsg := dto.Message{Role: "user"}
+	mediaMsg.SetMediaContent([]dto.MediaContent{{Type: dto.ContentTypeText, Text: text}})
+
+	ks := gpustackAffinityContentKey([]dto.Message{stringMsg})
+	ka := gpustackAffinityContentKey([]dto.Message{arrayMsg})
+	km := gpustackAffinityContentKey([]dto.Message{mediaMsg})
+
+	if ks == "" {
+		t.Fatal("string content 的键不该为空")
+	}
+	if ks != ka || ks != km {
+		t.Fatalf("同文本不同 content 形态应得到同一键: string=%.40q []any=%.40q media=%.40q", ks, ka, km)
+	}
+}
+
+// 纯图片消息仍要跳过：没有文本可区分，拿它成键会把所有纯图片请求钉到一台。
+func TestContentKeySkipsMediaOnlyContent(t *testing.T) {
+	m := dto.Message{Role: "user"}
+	m.SetMediaContent([]dto.MediaContent{{
+		Type:     dto.ContentTypeImageURL,
+		ImageUrl: &dto.MessageImageUrl{Url: "data:image/png;base64,AAAA"},
+	}})
+	if k := gpustackAffinityContentKey([]dto.Message{m}); k != "" {
+		t.Fatalf("纯图片消息不该产生键，实际 %q", k)
+	}
+}
+
+func strPtr(s string) *string { return &s }
