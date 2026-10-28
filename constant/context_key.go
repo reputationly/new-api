@@ -97,13 +97,14 @@ const (
 	ContextKeySyncConsumedQuota ContextKey = "sync_consumed_quota"
 
 	// ContextKeyGPUStackInstanceBaseURL GPUStack 实例亲和算出的直连 base URL，
-	// 形如 ``http://10.0.0.7:40006``。在 TextHelper 里算（那里才拿得到 messages），
-	// 在 DoApiRequest 里用它改写目标 URL（那里才拿得到上游请求）——两处之间靠它传递。
+	// 形如 ``http://10.0.0.7:40006``。在三条文本入口里算（TextHelper /
+	// ClaudeHelper / ResponsesHelper 的 chat 转换分支），在 DoApiRequest 里用它
+	// 改写目标 URL（那里才拿得到上游请求）——两处之间靠它传递。
 	// 空值表示本次不做亲和，照常走渠道的 Base URL（网关）。
 	ContextKeyGPUStackInstanceBaseURL ContextKey = "gpustack_instance_base_url"
 
 	// ContextKeyGPUStackAffinityDone 亲和选中实例后挂在 context 上的收尾函数
-	// （释放在飞计数）。TextHelper 请求结束时调一次；DoApiRequest 放弃直连改走
-	// 网关时提前调一次——那次失败不该给实例记在飞账。
+	// （释放在飞计数）。三条文本入口请求结束时各调一次；DoApiRequest 放弃直连
+	// 改走网关时提前调一次——那次失败不该给实例记在飞账。
 	ContextKeyGPUStackAffinityDone ContextKey = "gpustack_affinity_done"
 )

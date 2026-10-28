@@ -149,6 +149,7 @@ func convertResponsesToChatAndSend(c *gin.Context, info *relaycommon.RelayInfo, 
 
 	resp, err := adaptor.DoRequest(c, info, requestBody)
 	if err != nil {
+		invalidateGPUStackAffinityOnFailure(c, info, 0)
 		return nil, types.NewOpenAIError(err, types.ErrorCodeDoRequestFailed, http.StatusInternalServerError)
 	}
 	if resp == nil {
@@ -158,6 +159,7 @@ func convertResponsesToChatAndSend(c *gin.Context, info *relaycommon.RelayInfo, 
 	httpResp := resp.(*http.Response)
 	info.IsStream = info.IsStream || strings.HasPrefix(httpResp.Header.Get("Content-Type"), "text/event-stream")
 	if httpResp.StatusCode != http.StatusOK {
+		invalidateGPUStackAffinityOnFailure(c, info, httpResp.StatusCode)
 		newApiErr := service.RelayErrorHandler(c.Request.Context(), httpResp, false)
 		service.ResetStatusCode(newApiErr, c.GetString("status_code_mapping"))
 		return nil, newApiErr
@@ -187,6 +189,19 @@ func responsesViaChatCompletions(c *gin.Context, info *relaycommon.RelayInfo, ad
 		}
 		chatReq.StreamOptions.IncludeUsage = true
 	}
+
+	// GPUStack 实例亲和：与 TextHelper 同构，但复用这里已经转换好的 chatReq，
+	// 不再做第二次转换。chat-only 上游正是 GPUStack 的形态，所以这条路径是
+	// /v1/responses 的默认路由。
+	//
+	// **必须无条件写入**（不做亲和时写空串）：重试循环复用同一个 gin.Context，
+	// 残留的地址会把重试打到不属于该渠道的实例上。
+	common.SetContextKey(c, appconstant.ContextKeyGPUStackInstanceBaseURL,
+		service.GPUStackAffinityBaseURL(c, info.ChannelSetting, info.ChannelId,
+			info.ChannelBaseUrl, info.UpstreamModelName, chatReq))
+	// 本函数同步阻塞到流式响应写完（OaiChatToResponsesStreamHandler 返回即写完），
+	// defer 覆盖完整生命周期。
+	defer service.GPUStackAffinityDone(c)
 
 	savedRelayMode := info.RelayMode
 	savedRequestURLPath := info.RequestURLPath

@@ -41,11 +41,14 @@ type ChannelSettings struct {
 	//
 	// 默认关：只对以 GPUStack 为上游的渠道有意义。
 	//
-	// 作用范围仅限 **OpenAI 格式的 chat completions**：直连地址在 TextHelper 里计算，
-	// 而 /v1/messages（ClaudeHelper）与 /v1/responses（ResponsesHelper）是另外两条
-	// 独立链路，不经过那里。这两种格式上开这个开关不会报错，只是没有效果——
-	// UI 的说明文字里写明了这一点。要扩到那两条链路，在对应 helper 的
-	// ModelMappedHelper 之后照抄 TextHelper 里那一段即可。
+	// 作用范围：三条文本入口 `/v1/chat/completions`、`/v1/messages`、
+	// `/v1/responses`（后者在上游只支持 chat 时会被转换成 chat 发出）。
+	// 不覆盖：pass-through body、`/v1/responses/compact`、原生 Responses 路由
+	// （ForceNative）、Gemini 入口。这些路径上开这个开关不会报错，只是没有效果。
+	//
+	// 亲和键的 gjson 路径是对**客户端原始请求体**求值的；三种入口的 body 结构
+	// 不同，同一条路径未必都能取到值。取不到会依次退回 prompt_cache_key、
+	// metadata 里的会话字段、消息内容采样。
 	GPUStackAffinity bool `json:"gpustack_affinity,omitempty"`
 	// GPUStackAffinityKey 调 GPUStack 管理 API 用的 key。地址复用渠道的 Base URL。
 	//

@@ -162,6 +162,19 @@ func ClaudeHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *typ
 			return types.NewError(err, types.ErrorCodeConvertRequestFailed, types.ErrOptionWithSkipRetry())
 		}
 		relaycommon.AppendRequestConversionFromRequest(info, convertedRequest)
+
+		// GPUStack 实例亲和：与 TextHelper 同构，复用 adaptor 已经转换好的
+		// OpenAI 请求成键，不额外做一次转换。非 OpenAI-wire 的 adaptor 返回的
+		// 不是 GeneralOpenAIRequest，类型断言为 nil，函数会直接返回空串。
+		//
+		// **必须无条件写入**（不做亲和时写空串）：重试循环复用同一个 gin.Context。
+		chatReq, _ := convertedRequest.(*dto.GeneralOpenAIRequest)
+		common.SetContextKey(c, constant.ContextKeyGPUStackInstanceBaseURL,
+			service.GPUStackAffinityBaseURL(c, info.ChannelSetting, info.ChannelId,
+				info.ChannelBaseUrl, info.UpstreamModelName, chatReq))
+		// 本函数同步阻塞到流式响应写完，defer 覆盖完整生命周期。
+		defer service.GPUStackAffinityDone(c)
+
 		jsonData, err := common.Marshal(convertedRequest)
 		if err != nil {
 			return types.NewError(err, types.ErrorCodeConvertRequestFailed, types.ErrOptionWithSkipRetry())
@@ -191,6 +204,7 @@ func ClaudeHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *typ
 	var httpResp *http.Response
 	resp, err := adaptor.DoRequest(c, info, requestBody)
 	if err != nil {
+		invalidateGPUStackAffinityOnFailure(c, info, 0)
 		return types.NewOpenAIError(err, types.ErrorCodeDoRequestFailed, http.StatusInternalServerError)
 	}
 
@@ -198,6 +212,7 @@ func ClaudeHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *typ
 		httpResp = resp.(*http.Response)
 		info.IsStream = info.IsStream || strings.HasPrefix(httpResp.Header.Get("Content-Type"), "text/event-stream")
 		if httpResp.StatusCode != http.StatusOK {
+			invalidateGPUStackAffinityOnFailure(c, info, httpResp.StatusCode)
 			newAPIError = service.RelayErrorHandler(c.Request.Context(), httpResp, false)
 			// reset status code 重置状态码
 			service.ResetStatusCode(newAPIError, statusCodeMappingStr)

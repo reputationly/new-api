@@ -62,9 +62,11 @@ func TextHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *types
 		return types.NewError(err, types.ErrorCodeChannelModelMappedError, types.ErrOptionWithSkipRetry())
 	}
 
-	// GPUStack 实例亲和：在这里算，因为这是唯一既拿得到 messages（亲和键的来源）
-	// 又还没把请求体序列化出去的地方。算出的直连 base URL 由 DoApiRequest 用来
-	// 改写目标地址。
+	// GPUStack 实例亲和：/v1/chat/completions 入口在这里算——既拿得到 messages
+	// （亲和键的来源），又还没把请求体序列化出去。算出的直连 base URL 由
+	// DoApiRequest 用来改写目标地址。
+	// /v1/messages 与 /v1/responses 两条入口在各自 helper 里、用各自转换后的
+	// OpenAI 请求做同样的事（ClaudeHelper / responsesViaChatCompletions）。
 	//
 	// **必须无条件写入**（不做亲和时写空串）：重试循环复用同一个 gin.Context，
 	// 若只在非空时写，第一次尝试算出的地址会残留下来，被用去改写重试选中的另一个

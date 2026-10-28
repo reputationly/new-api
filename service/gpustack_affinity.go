@@ -245,22 +245,37 @@ func GPUStackAffinityBaseURL(
 		common.SetContextKey(c, appconstant.ContextKeyGPUStackAffinityDone, done)
 	}
 	target := picked.DirectBaseURL()
+	entrySuffix := ""
+	if entry := gpustackAffinityEntryPath(c); entry != "" {
+		entrySuffix = "，入口 " + entry
+	}
 	if spilled && GPUStackAffinityLogAllowed(fmt.Sprintf("spill|%d", channelID)) {
 		common.SysError(fmt.Sprintf(
-			"gpustack affinity: 渠道 %d 溢出——首选实例已饱和（%s），本次改投实例 %d（%s）",
-			channelID, hint, picked.ID, target))
+			"gpustack affinity: 渠道 %d 溢出——首选实例已饱和（%s），本次改投实例 %d（%s）%s",
+			channelID, hint, picked.ID, target, entrySuffix))
 	}
 	if common.DebugEnabled {
 		common.SysLog(fmt.Sprintf(
-			"gpustack affinity: 渠道 %d 模型 %s → 实例 %d（%s），候选 %d 个%s",
-			channelID, modelName, picked.ID, target, len(instances),
+			"gpustack affinity: 渠道 %d 模型 %s → 实例 %d（%s），候选 %d 个%s%s",
+			channelID, modelName, picked.ID, target, len(instances), entrySuffix,
 			map[bool]string{true: "，溢出", false: ""}[spilled]))
 	}
 	return target
 }
 
-// GPUStackAffinityDone 释放在飞计数。在 TextHelper 返回处（含流式结束与提前失败）
-// 和 DoApiRequest 放弃直连改走网关时调用；重复调用安全。
+// gpustackAffinityEntryPath 返回客户端入口路径，只用于日志区分三条接入链路
+// （/v1/chat/completions、/v1/messages、/v1/responses）。
+// 内部测试路径可能没有 gin.Context，取不到就返回空串。
+func gpustackAffinityEntryPath(c *gin.Context) string {
+	if c == nil || c.Request == nil || c.Request.URL == nil {
+		return ""
+	}
+	return c.Request.URL.Path
+}
+
+// GPUStackAffinityDone 释放在飞计数。三条文本入口（TextHelper / ClaudeHelper /
+// ResponsesHelper 的 chat 转换分支）都在函数返回处 defer 调用；DoApiRequest
+// 放弃直连改走网关时也会提前调用。重复调用安全。
 func GPUStackAffinityDone(c *gin.Context) {
 	if c == nil {
 		return

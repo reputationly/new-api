@@ -2970,7 +2970,7 @@ const EditChannelModal = (props) => {
                       handleChannelSettingsChange('gpustack_affinity', value)
                     }
                     extraText={t(
-                      '把同一段对话的后续轮次路由回同一个 GPUStack 实例，避免前缀缓存被随机分流摊薄。仅对以 GPUStack 为上游的渠道有意义，且只作用于 OpenAI 格式的对话接口（/v1/messages 与 /v1/responses 不受影响）',
+                      '把同一段对话的后续轮次路由回同一个 GPUStack 实例，避免前缀缓存被随机分流摊薄。仅对以 GPUStack 为上游的渠道有意义，作用于 /v1/chat/completions、/v1/messages、/v1/responses（后两者仅在上游为 OpenAI 兼容 chat 时生效）；透传请求体、/v1/responses/compact 不生效',
                     )}
                   />
                   {channelSettings.gpustack_affinity && (
@@ -3003,7 +3003,7 @@ const EditChannelModal = (props) => {
                         }
                         showClear
                         extraText={t(
-                          '客户端若会送会话标识（如 metadata.conversation_id），填它的请求体 gjson 路径做粘连键，优先级高于 prompt_cache_key 和消息内容采样。留空自动兜底',
+                          '客户端若会送会话标识（如 metadata.conversation_id），填它的请求体 gjson 路径做粘连键，优先级高于 prompt_cache_key 和消息内容采样。路径对客户端原始请求体求值，三种入口的 body 结构不同，同一条路径未必都能取到值；留空自动兜底',
                         )}
                       />
                       <Form.Input

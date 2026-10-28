@@ -64,6 +64,13 @@ func GetHttpClient() *http.Client {
 	return httpClient
 }
 
+// SetHttpClientForTest 仅供跨包测试恢复 HTTP client 状态：relay 的集成测试需要
+// 初始化 client，但同一测试二进制里的其它用例依赖“未初始化”的兜底行为
+// （见 relay/video_input_duration.go 的 fetchRangeChunk）。生产代码不要调用。
+func SetHttpClientForTest(client *http.Client) {
+	httpClient = client
+}
+
 // GetHttpClientWithProxy returns the default client or a proxy-enabled one when proxyURL is provided.
 func GetHttpClientWithProxy(proxyURL string) (*http.Client, error) {
 	if proxyURL == "" {
