@@ -5,6 +5,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"github.com/QuantumNous/new-api/common"
 	appconstant "github.com/QuantumNous/new-api/constant"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/gin-gonic/gin"
@@ -270,4 +271,179 @@ func TestGPUStackAffinityShouldFallbackClassification(t *testing.T) {
 	}
 	require.True(t, gpustackAffinityShouldFallback(nil, http.ErrHandlerTimeout), "连接层失败应回退")
 	require.True(t, gpustackAffinityShouldFallback(nil, nil), "无响应应回退")
+}
+
+// --- {request_id} 占位符 ---
+
+func requestIdContext(t *testing.T) *gin.Context {
+	t.Helper()
+	gin.SetMode(gin.TestMode)
+	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+	ctx.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+	return ctx
+}
+
+func TestProcessHeaderOverride_RequestIdPlaceholder(t *testing.T) {
+	t.Parallel()
+
+	info := &relaycommon.RelayInfo{
+		RequestId: "rid-1",
+		ChannelMeta: &relaycommon.ChannelMeta{
+			HeadersOverride: map[string]any{
+				"X-Oneapi-Request-Id": "{request_id}",
+			},
+		},
+	}
+
+	headers, err := processHeaderOverride(info, requestIdContext(t))
+	require.NoError(t, err)
+	require.Equal(t, "rid-1", headers["x-oneapi-request-id"])
+}
+
+func TestProcessHeaderOverride_RequestIdPlaceholderEmbedded(t *testing.T) {
+	t.Parallel()
+
+	info := &relaycommon.RelayInfo{
+		RequestId: "rid-1",
+		ChannelMeta: &relaycommon.ChannelMeta{
+			HeadersOverride: map[string]any{
+				"X-Trace": "newapi-{request_id}",
+			},
+		},
+	}
+
+	headers, err := processHeaderOverride(info, requestIdContext(t))
+	require.NoError(t, err)
+	require.Equal(t, "newapi-rid-1", headers["x-trace"])
+}
+
+func TestProcessHeaderOverride_RequestIdFallsBackToContext(t *testing.T) {
+	t.Parallel()
+
+	ctx := requestIdContext(t)
+	ctx.Set(common.RequestIdKey, "rid-ctx")
+	info := &relaycommon.RelayInfo{
+		ChannelMeta: &relaycommon.ChannelMeta{
+			HeadersOverride: map[string]any{
+				"X-Oneapi-Request-Id": "{request_id}",
+			},
+		},
+	}
+
+	headers, err := processHeaderOverride(info, ctx)
+	require.NoError(t, err)
+	require.Equal(t, "rid-ctx", headers["x-oneapi-request-id"])
+}
+
+func TestProcessHeaderOverride_RequestIdEmptySkipsHeader(t *testing.T) {
+	t.Parallel()
+
+	info := &relaycommon.RelayInfo{
+		ChannelMeta: &relaycommon.ChannelMeta{
+			HeadersOverride: map[string]any{
+				"X-Oneapi-Request-Id": "{request_id}",
+			},
+		},
+	}
+
+	headers, err := processHeaderOverride(info, requestIdContext(t))
+	require.NoError(t, err)
+	_, ok := headers["x-oneapi-request-id"]
+	require.False(t, ok, "ID 为空时整个头不发，不是空串也不是字面量")
+}
+
+func TestProcessHeaderOverride_RequestIdNotInterpolatedInClientHeader(t *testing.T) {
+	t.Parallel()
+
+	ctx := requestIdContext(t)
+	ctx.Request.Header.Set("X-Foo", "{request_id}")
+	info := &relaycommon.RelayInfo{
+		RequestId: "rid-1",
+		ChannelMeta: &relaycommon.ChannelMeta{
+			HeadersOverride: map[string]any{
+				"X-Up": "{client_header:X-Foo}",
+			},
+		},
+	}
+
+	headers, err := processHeaderOverride(info, ctx)
+	require.NoError(t, err)
+	require.Equal(t, "{request_id}", headers["x-up"], "客户端内容里不得插值 {request_id}")
+}
+
+func TestProcessHeaderOverride_RequestIdKeptInChannelTest(t *testing.T) {
+	t.Parallel()
+
+	info := &relaycommon.RelayInfo{
+		IsChannelTest: true,
+		RequestId:     "rid-1",
+		ChannelMeta: &relaycommon.ChannelMeta{
+			HeadersOverride: map[string]any{
+				"X-Oneapi-Request-Id": "{request_id}",
+			},
+		},
+	}
+
+	headers, err := processHeaderOverride(info, requestIdContext(t))
+	require.NoError(t, err)
+	require.Equal(t, "rid-1", headers["x-oneapi-request-id"], "渠道测试不跳过 {request_id}")
+}
+
+func TestProcessHeaderOverride_RequestIdOverridesPassthrough(t *testing.T) {
+	t.Parallel()
+
+	ctx := requestIdContext(t)
+	ctx.Request.Header.Set("X-Oneapi-Request-Id", "evil")
+	info := &relaycommon.RelayInfo{
+		RequestId: "rid-1",
+		ChannelMeta: &relaycommon.ChannelMeta{
+			HeadersOverride: map[string]any{
+				"*":                   true,
+				"X-Oneapi-Request-Id": "{request_id}",
+			},
+		},
+	}
+
+	headers, err := processHeaderOverride(info, ctx)
+	require.NoError(t, err)
+	require.Equal(t, "rid-1", headers["x-oneapi-request-id"], "显式覆盖必须盖掉透传值")
+}
+
+func TestProcessHeaderOverride_NoOverrideNoRequestIdHeader(t *testing.T) {
+	t.Parallel()
+
+	info := &relaycommon.RelayInfo{
+		RequestId: "rid-1",
+		ChannelMeta: &relaycommon.ChannelMeta{
+			HeadersOverride: map[string]any{},
+		},
+	}
+
+	headers, err := processHeaderOverride(info, requestIdContext(t))
+	require.NoError(t, err)
+	_, ok := headers["x-oneapi-request-id"]
+	require.False(t, ok, "没配覆盖项就不能自动加头")
+}
+
+// ID 为空时若只 continue，透传循环已写入的同名 key 会被发出去。
+func TestProcessHeaderOverride_RequestIdEmptyDropsPassthroughValue(t *testing.T) {
+	t.Parallel()
+
+	ctx := requestIdContext(t)
+	ctx.Request.Header.Set("X-Oneapi-Request-Id", "evil")
+	ctx.Request.Header.Set("X-Trace-Id", "trace-123")
+	info := &relaycommon.RelayInfo{
+		ChannelMeta: &relaycommon.ChannelMeta{
+			HeadersOverride: map[string]any{
+				"*":                   true,
+				"X-Oneapi-Request-Id": "{request_id}",
+			},
+		},
+	}
+
+	headers, err := processHeaderOverride(info, ctx)
+	require.NoError(t, err)
+	_, ok := headers["x-oneapi-request-id"]
+	require.False(t, ok, "客户端的 evil 不得漏出")
+	require.Equal(t, "trace-123", headers["x-trace-id"], "其它透传头照常发")
 }

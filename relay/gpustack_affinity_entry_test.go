@@ -50,15 +50,16 @@ func gpaNextChannelID() int {
 // --- 假上游夹具 ---
 
 type gpaWorker struct {
-	srv     *httptest.Server
-	port    int
-	mu      sync.Mutex
-	hits    int
-	paths   []string
-	reject  int
-	release chan struct{}
-	started chan struct{}
-	once    sync.Once
+	srv        *httptest.Server
+	port       int
+	mu         sync.Mutex
+	hits       int
+	paths      []string
+	requestIds []string
+	reject     int
+	release    chan struct{}
+	started    chan struct{}
+	once       sync.Once
 }
 
 func gpaNewWorker(t *testing.T) *gpaWorker {
@@ -69,6 +70,7 @@ func gpaNewWorker(t *testing.T) *gpaWorker {
 		w.mu.Lock()
 		w.hits++
 		w.paths = append(w.paths, r.URL.Path)
+		w.requestIds = append(w.requestIds, r.Header.Get("X-Oneapi-Request-Id"))
 		w.mu.Unlock()
 		w.once.Do(func() { close(w.started) })
 
@@ -130,11 +132,18 @@ func (w *gpaWorker) directURL() string {
 	return fmt.Sprintf("http://127.0.0.1:%d", w.port)
 }
 
+func (w *gpaWorker) requestIdsCopy() []string {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return append([]string(nil), w.requestIds...)
+}
+
 type gpaGateway struct {
-	srv  *httptest.Server
-	mu   sync.Mutex
-	hits int
-	body string
+	srv        *httptest.Server
+	mu         sync.Mutex
+	hits       int
+	requestIds []string
+	body       string
 }
 
 // gpaNewGateway 扮演 GPUStack 网关：同一个 Base URL 上既提供管理接口
@@ -158,6 +167,7 @@ func gpaNewGateway(t *testing.T, workers []*gpaWorker, modelID int) *gpaGateway 
 		}
 		g.mu.Lock()
 		g.hits++
+		g.requestIds = append(g.requestIds, r.Header.Get("X-Oneapi-Request-Id"))
 		body := g.body
 		g.mu.Unlock()
 		rw.Header().Set("Content-Type", "application/json")
@@ -171,6 +181,12 @@ func (g *gpaGateway) hitCount() int {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	return g.hits
+}
+
+func (g *gpaGateway) requestIdsCopy() []string {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return append([]string(nil), g.requestIds...)
 }
 
 // --- 通用 ---
@@ -876,6 +892,83 @@ func TestGPUStackAffinitySwitchOffGoesToGateway(t *testing.T) {
 		}
 		if got := gateway.hitCount(); got != 1 {
 			t.Fatalf("开关关闭时应走网关 1 次，实际 %d 次", got)
+		}
+	})
+}
+
+// 亲和直连与回退网关两条路径，都必须把 new-api 的 Request ID 带给上游。
+func TestGPUStackAffinityForwardsRequestIdOnDirectAndFallback(t *testing.T) {
+	t.Run("直连", func(t *testing.T) {
+		gpaWithHTTPClient(t)
+		workers := []*gpaWorker{gpaNewWorker(t), gpaNewWorker(t)}
+		gateway := gpaNewGateway(t, workers, 720)
+		channelID := gpaNextChannelID()
+		setting := gpaSetting(-1)
+		gpaWarm(t, channelID, gateway.srv.URL, setting)
+
+		c, _ := gpaContext(t, "/v1/responses", "{}")
+		info := gpaResponsesInfo(channelID, gateway.srv.URL, setting, false)
+		info.RequestId = "rid-direct"
+		info.ChannelMeta.HeadersOverride = map[string]any{
+			"X-Oneapi-Request-Id": "{request_id}",
+		}
+		req := &dto.OpenAIResponsesRequest{
+			Model:          "m",
+			Input:          json.RawMessage(`"hi"`),
+			PromptCacheKey: json.RawMessage(`"sess-rid-direct"`),
+		}
+		if _, apiErr := gpaCallResponses(t, c, info, req); apiErr != nil {
+			t.Fatalf("直连请求失败: %v", apiErr)
+		}
+
+		hit := gpaAssertSingleWorker(t, workers, 1)
+		if got := hit.requestIdsCopy(); len(got) != 1 || got[0] != "rid-direct" {
+			t.Fatalf("直连实例收到的 Request ID = %v，期望 [rid-direct]", got)
+		}
+		if got := gateway.hitCount(); got != 0 {
+			t.Fatalf("直连不该走网关，网关实际命中 %d 次", got)
+		}
+		if got := gateway.requestIdsCopy(); len(got) != 0 {
+			t.Fatalf("网关不该收到推理请求，实际 %v", got)
+		}
+	})
+
+	t.Run("回退", func(t *testing.T) {
+		gpaWithHTTPClient(t)
+		workers := []*gpaWorker{gpaNewWorker(t), gpaNewWorker(t)}
+		for _, w := range workers {
+			w.reject = http.StatusServiceUnavailable
+		}
+		gateway := gpaNewGateway(t, workers, 721)
+		channelID := gpaNextChannelID()
+		setting := gpaSetting(1)
+		gpaWarm(t, channelID, gateway.srv.URL, setting)
+
+		c, _ := gpaContext(t, "/v1/responses", "{}")
+		info := gpaResponsesInfo(channelID, gateway.srv.URL, setting, false)
+		info.RequestId = "rid-fallback"
+		info.ChannelMeta.HeadersOverride = map[string]any{
+			"X-Oneapi-Request-Id": "{request_id}",
+		}
+		req := &dto.OpenAIResponsesRequest{
+			Model:          "m",
+			Input:          json.RawMessage(`"hi"`),
+			PromptCacheKey: json.RawMessage(`"sess-rid-fallback"`),
+		}
+		if _, apiErr := gpaCallResponses(t, c, info, req); apiErr != nil {
+			t.Fatalf("回退请求失败: %v", apiErr)
+		}
+
+		// 直连那次被实例 503 拒掉，回退那次打到网关，两处都该带上同一个 ID。
+		if got := gpaTotalHits(workers); got != 1 {
+			t.Fatalf("应有一次失败的直连尝试，实际 %d 次", got)
+		}
+		direct := gpaBusyWorker(t, workers)
+		if got := direct.requestIdsCopy(); len(got) != 1 || got[0] != "rid-fallback" {
+			t.Fatalf("直连尝试收到的 Request ID = %v，期望 [rid-fallback]", got)
+		}
+		if got := gateway.requestIdsCopy(); len(got) != 1 || got[0] != "rid-fallback" {
+			t.Fatalf("网关收到的 Request ID = %v，期望 [rid-fallback]", got)
 		}
 	})
 }

@@ -45,6 +45,8 @@ func SetupApiRequestHeader(info *common.RelayInfo, c *gin.Context, req *http.Hea
 
 const clientHeaderPlaceholderPrefix = "{client_header:"
 
+const requestIdPlaceholder = "{request_id}"
+
 const (
 	headerPassthroughAllKey        = "*"
 	headerPassthroughRegexPrefix   = "re:"
@@ -143,7 +145,7 @@ func shouldSkipPassthroughHeader(name string) bool {
 	return false
 }
 
-func applyHeaderOverridePlaceholders(template string, c *gin.Context, apiKey string) (string, bool, error) {
+func applyHeaderOverridePlaceholders(template string, c *gin.Context, apiKey string, requestId string) (string, bool, error) {
 	trimmed := strings.TrimSpace(template)
 	if strings.HasPrefix(trimmed, clientHeaderPlaceholderPrefix) {
 		afterPrefix := trimmed[len(clientHeaderPlaceholderPrefix):]
@@ -167,6 +169,12 @@ func applyHeaderOverridePlaceholders(template string, c *gin.Context, apiKey str
 		return clientHeaderValue, true, nil
 	}
 
+	if strings.Contains(template, requestIdPlaceholder) {
+		if requestId == "" {
+			return "", false, nil
+		}
+		template = strings.ReplaceAll(template, requestIdPlaceholder, requestId)
+	}
 	if strings.Contains(template, "{api_key}") {
 		template = strings.ReplaceAll(template, "{api_key}", apiKey)
 	}
@@ -179,6 +187,7 @@ func applyHeaderOverridePlaceholders(template string, c *gin.Context, apiKey str
 // processHeaderOverride applies channel header overrides, with placeholder substitution.
 // Supported placeholders:
 //   - {api_key}: resolved to the channel API key
+//   - {request_id}: resolved to the request id of this relayed request (omitted when empty)
 //   - {client_header:<name>}: resolved to the incoming request header value
 //
 // Header passthrough rules (keys only; values are ignored):
@@ -193,6 +202,11 @@ func processHeaderOverride(info *common.RelayInfo, c *gin.Context) (map[string]s
 	}
 
 	headerOverrideSource := common.GetEffectiveHeaderOverride(info)
+
+	requestId := info.RequestId
+	if requestId == "" && c != nil {
+		requestId = c.GetString(common2.RequestIdKey)
+	}
 
 	passAll := false
 	var passthroughRegex []*regexp.Regexp
@@ -273,11 +287,15 @@ func processHeaderOverride(info *common.RelayInfo, c *gin.Context) (map[string]s
 			continue
 		}
 
-		value, include, err := applyHeaderOverridePlaceholders(str, c, info.ApiKey)
+		value, include, err := applyHeaderOverridePlaceholders(str, c, info.ApiKey, requestId)
 		if err != nil {
 			return nil, types.NewError(err, types.ErrorCodeChannelHeaderOverrideInvalid)
 		}
 		if !include {
+			// {request_id} 为空时整个头不发；透传可能已写入同名 key，必须删掉。
+			if strings.Contains(str, requestIdPlaceholder) {
+				delete(headerOverride, key)
+			}
 			continue
 		}
 
