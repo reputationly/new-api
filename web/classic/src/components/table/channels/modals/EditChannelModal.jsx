@@ -163,6 +163,29 @@ function type2secretPrompt(type) {
   }
 }
 
+// 素材库协议判定，与后端 relay/channel/task/doubao/asset.go 的 resolveAssetBackend 保持一致：
+// 显式指定 > 显式素材库地址（那是方舟兼容网关）> 按 API 地址的 host 识别 > 兜底方舟 Action。
+// 只用来渲染「当前识别为」和决定显示哪些字段，真正的判定始终在后端。
+const resolveArkAssetProtocol = (inputs = {}) => {
+  if (inputs.ark_asset_protocol) {
+    return inputs.ark_asset_protocol;
+  }
+  if ((inputs.ark_asset_endpoint || '').trim()) {
+    return 'ark-action';
+  }
+  const baseUrl = (inputs.base_url || '').trim();
+  if (baseUrl) {
+    try {
+      if (new URL(baseUrl).hostname.endsWith('.cmecloud.cn')) {
+        return 'ecloud-rest';
+      }
+    } catch {
+      // 地址还没填完整时按兜底处理，与后端 parse 失败的行为一致
+    }
+  }
+  return 'ark-action';
+};
+
 const EditChannelModal = (props) => {
   const { t } = useTranslation();
   const channelId = props.editingChannel.id;
@@ -211,13 +234,14 @@ const EditChannelModal = (props) => {
     aws_key_type: 'ak_sk',
     // 企业账户设置
     is_enterprise_account: false,
-    // 仅 DoubaoVideo / VolcEngine：方舟素材库（存入 settings.ark_asset_*）
+    // 仅 DoubaoVideo / VolcEngine：参考素材库（存入 settings.ark_asset_*）
     ark_asset_enabled: false,
     ark_asset_access_key: '',
     ark_asset_secret_key: '',
     ark_asset_secret_key_set: false,
     ark_asset_endpoint: '',
     ark_asset_project_name: '',
+    ark_asset_protocol: '',
     // 字段透传控制默认值
     allow_service_tier: false,
     disable_store: false, // false = 允许透传（默认开启）
@@ -959,6 +983,7 @@ const EditChannelModal = (props) => {
           data.ark_asset_endpoint = parsedSettings.ark_asset_endpoint || '';
           data.ark_asset_project_name =
             parsedSettings.ark_asset_project_name || '';
+          data.ark_asset_protocol = parsedSettings.ark_asset_protocol || '';
           // 读取字段透传控制设置
           data.allow_service_tier = parsedSettings.allow_service_tier || false;
           data.disable_store = parsedSettings.disable_store || false;
@@ -1936,6 +1961,7 @@ const EditChannelModal = (props) => {
     delete localInputs.ark_asset_secret_key_set;
     delete localInputs.ark_asset_endpoint;
     delete localInputs.ark_asset_project_name;
+    delete localInputs.ark_asset_protocol;
     // 顶层的 vertex_key_type 不应发送给后端
     delete localInputs.vertex_key_type;
     // 顶层的 aws_key_type 不应发送给后端
@@ -2637,7 +2663,7 @@ const EditChannelModal = (props) => {
                   {(inputs.type === 54 || inputs.type === 45) && (
                     <>
                       <div className='mt-4 mb-2 text-sm font-medium text-gray-700'>
-                        {t('方舟素材库')}
+                        {t('参考素材库')}
                       </div>
                       <Form.Switch
                         field='ark_asset_enabled'
@@ -2651,15 +2677,54 @@ const EditChannelModal = (props) => {
                           )
                         }
                         extraText={t(
-                          '开启后，请求里的图片与视频链接会并发上传到方舟素材库，等处理完成后以 asset:// 调用生成，避免 Seedance 对直传人脸素材的拦截。提交会多等几秒（图片约 5 秒）',
+                          '开启后，请求里的图片与视频链接会并发上传到素材库，等处理完成后以 asset:// 调用生成，避免 Seedance 对直传人脸素材的拦截。提交会多等几秒（图片约 5 秒）',
                         )}
                       />
                       {inputs.ark_asset_enabled && (
                         <>
+                          <Form.Select
+                            field='ark_asset_protocol'
+                            label={t('素材库协议')}
+                            optionList={[
+                              {
+                                label: t('自动识别（按 API 地址）'),
+                                value: '',
+                              },
+                              {
+                                label: t('方舟 Action 协议'),
+                                value: 'ark-action',
+                              },
+                              {
+                                label: t('移动云 MoMA REST 协议'),
+                                value: 'ecloud-rest',
+                              },
+                            ]}
+                            value={inputs.ark_asset_protocol || ''}
+                            style={{ width: '100%' }}
+                            onChange={(value) =>
+                              handleChannelOtherSettingsChange(
+                                'ark_asset_protocol',
+                                value,
+                              )
+                            }
+                            extraText={
+                              t('当前协议：') +
+                              (resolveArkAssetProtocol(inputs) === 'ecloud-rest'
+                                ? t('移动云 MoMA REST 协议')
+                                : t('方舟 Action 协议')) +
+                              t(
+                                '。选「自动识别」时按 API 地址判断；火山官方与界云等兼容网关都选方舟 Action 协议',
+                              )
+                            }
+                          />
                           <Form.Input
                             field='ark_asset_access_key'
                             label={t('Access Key (AK)')}
-                            placeholder={t('火山引擎访问密钥 AK')}
+                            placeholder={
+                              resolveArkAssetProtocol(inputs) === 'ecloud-rest'
+                                ? t('移动云 AccessKey')
+                                : t('火山引擎访问密钥 AK')
+                            }
                             onChange={(value) =>
                               handleChannelOtherSettingsChange(
                                 'ark_asset_access_key',
@@ -2667,9 +2732,15 @@ const EditChannelModal = (props) => {
                               )
                             }
                             showClear
-                            extraText={t(
-                              '火山官方素材接口只支持 AK/SK 签名。AK/SK 都留空时，改用本渠道的 API Key 走 Bearer 鉴权（仅界云等兼容网关支持）',
-                            )}
+                            extraText={
+                              resolveArkAssetProtocol(inputs) === 'ecloud-rest'
+                                ? t(
+                                    '移动云统一签名必须给 AK/SK，没有回落到渠道 API Key 的退路。AK/SK 与上面的渠道 API Key 必须属于同一个移动云账号，否则生成时会报素材不存在（asset not found）',
+                                  )
+                                : t(
+                                    '火山官方素材接口只支持 AK/SK 签名。AK/SK 都留空时，改用本渠道的 API Key 走 Bearer 鉴权（仅界云等兼容网关支持）',
+                                  )
+                            }
                           />
                           <Form.Input
                             field='ark_asset_secret_key'
@@ -2677,7 +2748,10 @@ const EditChannelModal = (props) => {
                             placeholder={
                               inputs.ark_asset_secret_key_set
                                 ? t('已配置，留空则不修改')
-                                : t('火山引擎访问密钥 SK')
+                                : resolveArkAssetProtocol(inputs) ===
+                                    'ecloud-rest'
+                                  ? t('移动云 SecretKey')
+                                  : t('火山引擎访问密钥 SK')
                             }
                             type='password'
                             onChange={(value) =>
@@ -2691,32 +2765,37 @@ const EditChannelModal = (props) => {
                               'SK 保存后不再回显；清空 AK 会同时清除已保存的 SK',
                             )}
                           />
-                          <Form.Input
-                            field='ark_asset_endpoint'
-                            label={t('素材库地址')}
-                            placeholder={t(
-                              '留空自动推断：火山官方为 https://ark.cn-beijing.volcengineapi.com，其余与 API 地址相同',
-                            )}
-                            onChange={(value) =>
-                              handleChannelOtherSettingsChange(
-                                'ark_asset_endpoint',
-                                value,
-                              )
-                            }
-                            showClear
-                          />
-                          <Form.Input
-                            field='ark_asset_project_name'
-                            label={t('素材库项目')}
-                            placeholder='default'
-                            onChange={(value) =>
-                              handleChannelOtherSettingsChange(
-                                'ark_asset_project_name',
-                                value,
-                              )
-                            }
-                            showClear
-                          />
+                          {resolveArkAssetProtocol(inputs) !==
+                            'ecloud-rest' && (
+                            <>
+                              <Form.Input
+                                field='ark_asset_endpoint'
+                                label={t('素材库地址')}
+                                placeholder={t(
+                                  '留空自动推断：火山官方为 https://ark.cn-beijing.volcengineapi.com，其余与 API 地址相同',
+                                )}
+                                onChange={(value) =>
+                                  handleChannelOtherSettingsChange(
+                                    'ark_asset_endpoint',
+                                    value,
+                                  )
+                                }
+                                showClear
+                              />
+                              <Form.Input
+                                field='ark_asset_project_name'
+                                label={t('素材库项目')}
+                                placeholder='default'
+                                onChange={(value) =>
+                                  handleChannelOtherSettingsChange(
+                                    'ark_asset_project_name',
+                                    value,
+                                  )
+                                }
+                                showClear
+                              />
+                            </>
+                          )}
                         </>
                       )}
                     </>

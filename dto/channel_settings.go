@@ -107,12 +107,15 @@ type ChannelOtherSettings struct {
 	UpstreamModelUpdateIgnoredModels      []string      `json:"upstream_model_update_ignored_models,omitempty"`       // 手动忽略的模型
 
 	// 方舟素材库（仅 DoubaoVideo / VolcEngine）：开启后参考图与参考视频先入素材库，再以 asset:// 调生成，
-	// 避开 Seedance 对直传人脸素材的输入审核。AK/SK 为空时用渠道 API Key 走 Bearer（仅兼容网关支持）。
+	// 避开 Seedance 对直传人脸素材的输入审核。AK/SK 为空时用渠道 API Key 走 Bearer（仅方舟兼容网关支持）。
 	ArkAssetEnabled     bool   `json:"ark_asset_enabled,omitempty"`
 	ArkAssetAccessKey   string `json:"ark_asset_access_key,omitempty"`
 	ArkAssetSecretKey   string `json:"ark_asset_secret_key,omitempty"`
 	ArkAssetEndpoint    string `json:"ark_asset_endpoint,omitempty"`     // 空 = 按 Base URL 推断
 	ArkAssetProjectName string `json:"ark_asset_project_name,omitempty"` // 空 = default
+	// 素材库协议：空 = 按 Base URL 自动识别（ark-action / ecloud-rest）。目前有方舟 Action 协议
+	// （火山官方与界云等兼容网关）与移动云 MoMA REST 协议两套，靠这个字段覆盖自动识别的结果。
+	ArkAssetProtocol string `json:"ark_asset_protocol,omitempty"`
 }
 
 func (s *ChannelOtherSettings) IsOpenRouterEnterprise() bool {

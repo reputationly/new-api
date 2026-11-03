@@ -78,7 +78,7 @@ func (c *mapCache) SetWithTTL(k, v string, _ time.Duration) error {
 	return nil
 }
 
-func testUploader(t *testing.T, api assetAPI) *Uploader {
+func testUploader(t *testing.T, api AssetAPI) *Uploader {
 	// 每个用例独立 scope，互不共享进程级的素材组缓存。
 	u := &Uploader{api: api, cache: &mapCache{m: map[string]string{}}, scope: t.Name(), groupName: "g", pollInterval: time.Millisecond}
 	return u

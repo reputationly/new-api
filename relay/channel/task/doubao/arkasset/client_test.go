@@ -76,3 +76,16 @@ func TestFindGroupRequiresExactName(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "g-2", id, "名称过滤是模糊匹配，必须取精确同名的组")
 }
+
+// 与移动云侧同样的规则：5xx 的错误页来自网关或代理，不是协议问题，不能报成「协议选错」。
+func TestArkGatewayErrorPageIsNotProtocolMismatch(t *testing.T) {
+	srv, _ := assetServer(t, `<html><body>504 Gateway Timeout</body></html>`, http.StatusGatewayTimeout)
+	c := NewClient(Config{Endpoint: srv.URL, AccessKey: "AK", SecretKey: "SK"}, srv.Client())
+
+	_, err := c.FindGroup(context.Background(), "g")
+	var mismatch *ProtocolMismatchError
+	require.False(t, errors.As(err, &mismatch), "5xx 不该被说成协议选错")
+	var apiErr *APIError
+	require.True(t, errors.As(err, &apiErr))
+	require.Equal(t, http.StatusGatewayTimeout, apiErr.HTTPStatus)
+}

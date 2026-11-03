@@ -40,7 +40,9 @@ func (e *FailedError) Error() string {
 	return fmt.Sprintf("ark asset processing failed: %s %s", e.Code, e.Message)
 }
 
-type assetAPI interface {
+// AssetAPI 是素材库后端的最小接口。方舟（*Client）与移动云（*EcloudClient）各实现一份，
+// 上层的并发、去重、轮询与缓存对协议无感。
+type AssetAPI interface {
 	FindGroup(ctx context.Context, name string) (string, error)
 	CreateGroup(ctx context.Context, name, description string) (string, error)
 	CreateAsset(ctx context.Context, groupID, url, assetType, name string) (string, error)
@@ -53,15 +55,15 @@ type idCache interface {
 }
 
 type Uploader struct {
-	api          assetAPI
+	api          AssetAPI
 	cache        idCache
 	scope        string // 缓存隔离：同一账号 + 项目下的素材 ID 才能互相复用
 	groupName    string
 	pollInterval time.Duration
 }
 
-// NewUploader scope 标识素材归属的账号与项目；groupName 是自动查找/创建的素材组名。
-func NewUploader(api assetAPI, scope, groupName string) *Uploader {
+// NewUploader scope 标识素材归属的账号与协议（见 Scope / EcloudScope）；groupName 是自动查找/创建的素材组名。
+func NewUploader(api AssetAPI, scope, groupName string) *Uploader {
 	return &Uploader{api: api, cache: assetIDCache(), scope: scope, groupName: groupName, pollInterval: defaultPollInterval}
 }
 

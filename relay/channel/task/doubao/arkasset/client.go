@@ -110,7 +110,16 @@ func (c *Client) call(ctx context.Context, action string, in, out any) error {
 	}
 
 	var env envelope
-	if err := common.Unmarshal(raw, &env); err != nil {
+	decodeErr := common.Unmarshal(raw, &env)
+	// 非 2xx 且连方舟信封的骨架都没有：这个地址多半不是方舟素材接口（例如填了移动云的 REST 网关）。
+	// 5xx 除外——那是网关/代理的错误页，跟协议无关，判成「协议选错」只会把排查带偏。
+	noEnvelope := decodeErr != nil ||
+		(resp.StatusCode >= 300 && env.ResponseMetadata.Error == nil &&
+			env.ResponseMetadata.RequestID == "" && len(env.Result) == 0)
+	if noEnvelope && resp.StatusCode < 500 {
+		return &ProtocolMismatchError{Protocol: ProtocolArkLabel, Endpoint: endpoint, Sample: truncate(string(raw), 300)}
+	}
+	if decodeErr != nil {
 		return &APIError{Action: action, HTTPStatus: resp.StatusCode, Message: truncate(string(raw), 300)}
 	}
 	// 业务错误可能伴随 HTTP 200，必须看 ResponseMetadata.Error。
