@@ -901,3 +901,47 @@ func TestUpscalePayloadCarriesTargetShortEdge(t *testing.T) {
 		})
 	}
 }
+
+// 配了 upscale.sr_ratio 就必须按它下发。
+//
+// RelayVSR_X2 只接受 sr_ratio=2,发缺省的 4.0 会让超分子任务直接失败 —— 而失败的表现
+// **不是报错**:SyncAggregatePipelineParents 把父任务降级成交付 768P 的生成段成品,
+// 客户按 2K 付钱、拿到 768P。所以这条断言锁的不是"多一个字段",是交付本身。
+//
+// target_short_edge 与顶层 size 必须一并照发:前者是 SeedVR2/SwiftVR 那条按短边放大的
+// 路要用的(新引擎忽略,无害),后者是超分段计费行名的来源(引擎也不读)。
+func TestUpscalePayloadUsesConfiguredSRRatio(t *testing.T) {
+	calls, lastBody := withFakeVideosEndpoint(t, http.StatusOK, `{"task_id":"pub-2"}`)
+	task := pipelineTask()
+	task.PrivateData.Aggregate.UpscaleTarget = "2k"
+	task.PrivateData.Aggregate.UpscaleSRRatio = srRatioPtr(2)
+
+	require.True(t, TryAdvanceAggregatePipeline(context.Background(), nil,
+		task, stage1Result(), "/nfs/x.mp4"))
+	require.EqualValues(t, 1, *calls)
+
+	var sent map[string]any
+	require.NoError(t, common.Unmarshal(*lastBody, &sent))
+	meta, ok := sent["metadata"].(map[string]any)
+	require.True(t, ok, "sr 的入参在 metadata 里,不是顶层")
+	require.Equal(t, 2.0, meta["sr_ratio"], "配置的倍率必须原样下发,不能被缺省值顶掉")
+	require.EqualValues(t, 1440, meta["target_short_edge"], "配了倍率不影响目标短边照发")
+	require.Equal(t, "2k", sent["size"], "size 是计费行名的来源,不能跟着删")
+}
+
+// 提交失败时的日志必须能看出下发的是哪个倍率。
+//
+// 这条错误信息是排查超分失败的唯一线索:倍率来自聚合配置,请求日志里没有它。
+// 只写 model/size 的话,"RelayVSR 报 400"就只能回来读代码猜是不是发了 4.0。
+func TestUpscaleSubmitErrorReportsSRRatio(t *testing.T) {
+	withFakeVideosEndpoint(t, http.StatusBadRequest, `{"error":"relayvsr_x2 supports only sr_ratio=2"}`)
+	task := pipelineTask()
+	task.PrivateData.Aggregate.UpscaleSRRatio = srRatioPtr(4)
+
+	_, err := submitUpscaleTask(context.Background(), task.PrivateData.Aggregate, "/nfs/x.mp4", task.TaskID)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "sr_ratio=4", "错误信息里要能看出实际下发的倍率")
+}
+
+// srRatioPtr 造一个配了倍率的超分段配置值(指针语义:显式配置)。
+func srRatioPtr(v float64) *float64 { return &v }

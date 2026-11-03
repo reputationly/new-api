@@ -215,6 +215,12 @@ type AggregateUpscale struct {
 	// 留空 = 与 target_size 相同(SwiftVR 按请求出片时两者本就一致)。
 	// 填错了就是错账:它必须与引擎实际出片的档位对齐,由配置方负责。
 	DeliveredSize string `json:"delivered_size,omitempty"`
+	// SRRatio 下发给超分引擎的倍率(metadata.sr_ratio)。nil = 沿用 4.0(见
+	// service.aggregateUpscaleSRRatio,SeedVR2 靠它"够不着"上限、按部署 config 出片)。
+	//
+	// 配了即视为**固定倍率引擎**:交付短边 = 生成段短边 × SRRatio。RelayVSR_X2 必须配 2 ——
+	// 它只接受 sr_ratio=2,发 4.0 会让子任务失败、整单静默降级成 768P 的生成段成品。
+	SRRatio *float64 `json:"sr_ratio,omitempty"`
 }
 
 // BilledSize 超分段计费与日志采用的档位:交付档位优先,留空回落到 target_size。

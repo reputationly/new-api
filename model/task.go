@@ -304,6 +304,9 @@ type TaskAggregateInfo struct {
 	// UpscaleDelivered 超分段计费与日志采用的档位(见 common.AggregateUpscale.DeliveredSize)。
 	// 空 = 回落到 UpscaleTarget。
 	UpscaleDelivered string `json:"upscale_delivered,omitempty"`
+	// UpscaleSRRatio 超分段下发的倍率(见 common.AggregateUpscale.SRRatio)。nil = 4.0。
+	// 超分段是轮询时才提交的,那时手上只有任务里存的这份,所以必须随任务落库。
+	UpscaleSRRatio *float64 `json:"upscale_sr_ratio,omitempty"`
 
 	// Stage2TaskID 超分子任务的**本站**任务 id。父任务靠它去查第二段的进度。
 	//

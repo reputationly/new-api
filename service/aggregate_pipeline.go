@@ -250,7 +250,7 @@ func persistStage1Product(ctx context.Context, task *model.Task, nfsPath string)
 	return ref
 }
 
-// aggregateUpscaleSRRatio 超分段固定下发的倍率。
+// aggregateUpscaleSRRatio **未配置 `upscale.sr_ratio` 时**超分段下发的缺省倍率。
 //
 // **别把 sr 理解成「放大 N 倍」**:引擎算的是
 // `min(源面积开方 × sr_ratio, config target 面积开方)`(seedvr_runner.py:151),
@@ -259,9 +259,20 @@ func persistStage1Product(ctx context.Context, task *model.Task, nfsPath string)
 // 不发的后果不是"少放大一点",而是**输出尺寸由引擎的缺省倍率决定** —— 一个我们既没
 // 请求、也没记账的尺寸,账单档位与成片对不上,而且不报错。
 //
+// 固定倍率引擎(RelayVSR_X2 只接受 sr_ratio=2)必须显式配置
+// `common.AggregateUpscale.SRRatio`,由任务里的 UpscaleSRRatio 顶掉这个缺省值。
+//
 // 与体验区那份 VIDEO_SR_RATIO_UNCAPPED(web/classic/src/constants/
 // videoPlayground.constants.js)是同一个定值,两处要一起改。
 const aggregateUpscaleSRRatio = 4.0
+
+// upscaleSRRatioOf 本次超分段实际下发的倍率:配置优先,未配置沿用 4.0。
+func upscaleSRRatioOf(agg *model.TaskAggregateInfo) float64 {
+	if agg != nil && agg.UpscaleSRRatio != nil {
+		return *agg.UpscaleSRRatio
+	}
+	return aggregateUpscaleSRRatio
+}
 
 // submitUpscaleTask 以客户身份提交一次超分任务,返回**那条子任务**本身。
 //
@@ -307,10 +318,13 @@ func submitUpscaleTask(ctx context.Context, agg *model.TaskAggregateInfo, nfsPat
 	if endpoint == "" {
 		return nil, fmt.Errorf("站点未配置服务器地址(ServerAddress)")
 	}
+	// 倍率来自配置(随任务落库),未配置时才是那个"够不着"的缺省 4.0 —— SeedVR2 靠它
+	// 让 min 恒取部署 config 那项;RelayVSR_X2 只接受 2,配错会让整条超分失败。
+	srRatio := upscaleSRRatioOf(agg)
 	meta := map[string]any{
 		"task_type": "sr",
 		"video":     nfsPath,
-		"sr_ratio":  aggregateUpscaleSRRatio,
+		"sr_ratio":  srRatio,
 	}
 	// target_size 可能是档位词(1080P)、短边档(2k/4k)或精确像素串(2560x1440),
 	// 三种写法都按短边下发。解析不出(空、乱填)就**不发**,退回引擎按部署 config 封顶
@@ -362,8 +376,10 @@ func submitUpscaleTask(ctx context.Context, agg *model.TaskAggregateInfo, nfsPat
 		//
 		// 同时带上请求参数：这是**自调用**，出问题往往是我们自己拼的
 		// model/size 与站点配置对不上，而那两个值日志里同样看不到。
-		return nil, fmt.Errorf("超分提交返回 %d（model=%s size=%s）: %s",
-			resp.StatusCode, agg.UpscaleModel, agg.UpscaleTarget, readErrorBody(resp.Body))
+		// sr_ratio 也一并带上:固定倍率引擎(RelayVSR_X2 只接受 2)报错时,唯一能解释
+		// 原因的就是我们实际发出去的倍率 —— 它来自聚合配置,不在请求日志里。
+		return nil, fmt.Errorf("超分提交返回 %d（model=%s size=%s sr_ratio=%g）: %s",
+			resp.StatusCode, agg.UpscaleModel, agg.UpscaleTarget, srRatio, readErrorBody(resp.Body))
 	}
 
 	var parsed struct {

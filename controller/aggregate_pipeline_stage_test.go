@@ -87,3 +87,67 @@ func TestBuildTaskAggregateInfoRespectsUpscaleSkip(t *testing.T) {
 		require.Equal(t, "一只猫", info.OriginalPrompt)
 	})
 }
+
+// 超分倍率必须随任务落库。
+//
+// 超分段是**轮询时**才提交的:那一刻手上只有 TaskAggregateInfo,聚合配置早已离开作用域。
+// 不把倍率存下来,提交侧只能退回 4.0 —— 而 RelayVSR_X2 只接受 2,超分失败、父任务
+// 静默降级成交付 768P 的生成段成品,客户按 2K 付钱拿 768P。
+//
+// 与 UpscaleModel 同口径:超分段被跳过时不填 —— 那时根本不会提交第二段,
+// 存一个用不上的倍率只会让人以为它生效过。
+func TestBuildTaskAggregateInfoCarriesSRRatio(t *testing.T) {
+	ratio := 2.0
+	cfg := &common.AggregateModel{
+		Name:     "h3-2k",
+		Type:     "video",
+		Generate: common.AggregateGenerate{Model: "minimax-h3"},
+		Upscale: &common.AggregateUpscale{
+			Model: "relayvsr", Target: "2k", DeliveredSize: "2K", SRRatio: &ratio,
+		},
+	}
+	noRatio := &common.AggregateModel{
+		Name:     "h3-2k-seedvr",
+		Type:     "video",
+		Generate: common.AggregateGenerate{Model: "minimax-h3"},
+		Upscale:  &common.AggregateUpscale{Model: "seedvr2", Target: "2k", DeliveredSize: "1080P"},
+	}
+	newCtx := func() *gin.Context {
+		c, _ := gin.CreateTestContext(httptest.NewRecorder())
+		req := httptest.NewRequest(http.MethodPost, "/v1/video/generations", nil)
+		req.Header.Set("Authorization", "Bearer sk-caller-key")
+		c.Request = req
+		return c
+	}
+
+	t.Run("配了 sr_ratio:随任务存下来", func(t *testing.T) {
+		info := buildTaskAggregateInfo(newCtx(), &middleware.AggregateExpansion{
+			PublicName: "h3-2k", Config: cfg,
+			RequestedSize: "2k", GenerateSize: "768P",
+		})
+		require.True(t, info.HasUpscale())
+		require.NotNil(t, info.UpscaleSRRatio)
+		require.Equal(t, 2.0, *info.UpscaleSRRatio)
+		require.Equal(t, "relayvsr", info.UpscaleModel)
+	})
+
+	t.Run("没配 sr_ratio:留 nil,提交侧沿用 4.0", func(t *testing.T) {
+		info := buildTaskAggregateInfo(newCtx(), &middleware.AggregateExpansion{
+			PublicName: "h3-2k-seedvr", Config: noRatio,
+			RequestedSize: "2k", GenerateSize: "768P",
+		})
+		require.True(t, info.HasUpscale())
+		require.Nil(t, info.UpscaleSRRatio,
+			"nil 才是 SeedVR2 的语义(4.0);写成 0 或某个真值都会改掉它的行为")
+	})
+
+	t.Run("超分段被跳过:不存倍率", func(t *testing.T) {
+		info := buildTaskAggregateInfo(newCtx(), &middleware.AggregateExpansion{
+			PublicName: "h3-2k", Config: cfg,
+			RequestedSize: "768P", GenerateSize: "768P",
+			UpscaleSkipped: true, UpscaleSkipReason: "客户要 768P 不高于生成段",
+		})
+		require.False(t, info.HasUpscale())
+		require.Nil(t, info.UpscaleSRRatio)
+	})
+}

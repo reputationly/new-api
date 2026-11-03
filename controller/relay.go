@@ -866,6 +866,9 @@ func buildTaskAggregateInfo(c *gin.Context, exp *middleware.AggregateExpansion) 
 		info.UpscaleTarget = exp.Config.Upscale.Target
 		// 超分段计费按交付档位记(配置里没写交付档位则回落到目标档位)。
 		info.UpscaleDelivered = exp.Config.Upscale.BilledSize()
+		// 下发给超分引擎的倍率。nil = 沿用 4.0(见 service.aggregateUpscaleSRRatio)。
+		// 必须随任务落库:超分段是轮询时才提交的,那时手上只剩任务里这份。
+		info.UpscaleSRRatio = exp.Config.Upscale.SRRatio
 		// 只有真要跑第二段时才留客户令牌 —— 没有超分段就没人会用它,
 		// 存了只是白白多一处明文凭证。
 		info.CallerKey = strings.TrimPrefix(c.Request.Header.Get("Authorization"), "Bearer ")
