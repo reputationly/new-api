@@ -563,3 +563,105 @@ func TestDryRunWarnsOnTooSmallSingleCallTimeout(t *testing.T) {
 	requireLevel(t, DryRunAggregateModel(m, map[string]int{"v-agg": 1}),
 		"enhance_timeout", AggregateCheckWarn)
 }
+
+// 没配 sr_ratio 不是错误(SeedVR2 就靠它"够不着"上限出片),但**必须说出来**:
+// 固定倍率引擎(RelayVSR_X2 只接受 2)漏配的表现是超分段失败、整单降级成生成段成品,
+// 而不是任何一条错误日志。干跑是唯一能在改配置时看见这件事的地方。
+func TestDryRunHintsMissingSRRatio(t *testing.T) {
+	withFakeModels(t, map[string]fakeModel{
+		"gen-model": {groups: []string{"default"}},
+		"seedvr2":   {groups: []string{"default"}, caps: []string{"视频超分"}},
+	})
+	res := DryRunAggregateModel(&common.AggregateModel{
+		Name: "v-agg", Type: "video",
+		Generate: common.AggregateGenerate{Model: "gen-model",
+			Overrides: map[string]any{"size": "768P"}},
+		Upscale: &common.AggregateUpscale{Model: "seedvr2", Target: "2k"},
+	}, map[string]int{"v-agg": 1})
+
+	requireLevel(t, res, "upscale_sr_ratio", AggregateCheckOK)
+	msg := checkByKey(res, "upscale_sr_ratio").Message
+	for _, want := range []string{"4.0", "未配置 sr_ratio", "RelayVSR_X2", "降级"} {
+		if !strings.Contains(msg, want) {
+			t.Errorf("提示里应包含 %q,实得 %q", want, msg)
+		}
+	}
+	// 只是提示,不能把一份能正常工作的 SeedVR2 配置判成不通过 ——
+	// 否则运营最可能的动作是把倍率随手填一个值。
+	if !res.Passed {
+		t.Errorf("未配 sr_ratio 不应判为不通过,实得 %+v", res.Checks)
+	}
+}
+
+// 填了 0 / 负数就是错的:下发的倍率直接进引擎,RelayVSR_X2 只接受 2,
+// 而任何一个引擎都不会把 0 当成"默认"。
+func TestDryRunRejectsNonPositiveSRRatio(t *testing.T) {
+	withFakeModels(t, map[string]fakeModel{
+		"gen-model": {groups: []string{"default"}},
+		"relayvsr":  {groups: []string{"default"}, caps: []string{"视频超分"}},
+	})
+	for _, bad := range []float64{0, -2} {
+		res := DryRunAggregateModel(&common.AggregateModel{
+			Name: "v-agg", Type: "video",
+			Generate: common.AggregateGenerate{Model: "gen-model",
+				Overrides: map[string]any{"size": "768P"}},
+			Upscale: &common.AggregateUpscale{
+				Model: "relayvsr", Target: "2k", SRRatio: srRatioPtr(bad),
+			},
+		}, map[string]int{"v-agg": 1})
+		requireLevel(t, res, "upscale_sr_ratio", AggregateCheckError)
+		if !strings.Contains(checkByKey(res, "upscale_sr_ratio").Message, "正数") {
+			t.Errorf("应说明必须为正数,实得 %q", checkByKey(res, "upscale_sr_ratio").Message)
+		}
+		if res.Passed {
+			t.Errorf("sr_ratio=%g 必须让整份配置不通过", bad)
+		}
+	}
+}
+
+// target_size 写得比引擎交付得了的还高 = 承诺兑现不了。
+// 这类配置本身能跑通,只是客户永远拿不到他买的那一档 —— 必须警告。
+func TestDryRunWarnsWhenTargetExceedsFixedRatioDelivery(t *testing.T) {
+	withFakeModels(t, map[string]fakeModel{
+		"gen-model": {groups: []string{"default"}},
+		"relayvsr":  {groups: []string{"default"}, caps: []string{"视频超分"}},
+	})
+	res := DryRunAggregateModel(&common.AggregateModel{
+		Name: "v-agg", Type: "video",
+		Generate: common.AggregateGenerate{Model: "gen-model",
+			Overrides: map[string]any{"size": "768P"}},
+		Upscale: &common.AggregateUpscale{
+			Model: "relayvsr", Target: "4k", SRRatio: srRatioPtr(2),
+		},
+	}, map[string]int{"v-agg": 1})
+
+	requireLevel(t, res, "upscale_sr_ratio", AggregateCheckWarn)
+	msg := checkByKey(res, "upscale_sr_ratio").Message
+	if !strings.Contains(msg, "最高交付短边 1536") {
+		t.Errorf("警告里应算出交付上限 1536,实得 %q", msg)
+	}
+}
+
+// 能兑现时把算式写出来:运营要能一眼核对 768×2=1536,而不是相信结论。
+func TestDryRunReportsFixedRatioDeliveredEdge(t *testing.T) {
+	withFakeModels(t, map[string]fakeModel{
+		"gen-model": {groups: []string{"default"}},
+		"relayvsr":  {groups: []string{"default"}, caps: []string{"视频超分"}},
+	})
+	res := DryRunAggregateModel(&common.AggregateModel{
+		Name: "v-agg", Type: "video",
+		Generate: common.AggregateGenerate{Model: "gen-model",
+			Overrides: map[string]any{"size": "768P"}},
+		Upscale: &common.AggregateUpscale{
+			Model: "relayvsr", Target: "2k", DeliveredSize: "2K", SRRatio: srRatioPtr(2),
+		},
+	}, map[string]int{"v-agg": 1})
+
+	requireLevel(t, res, "upscale_sr_ratio", AggregateCheckOK)
+	if msg := checkByKey(res, "upscale_sr_ratio").Message; !strings.Contains(msg, "768 × 2 = 1536") {
+		t.Errorf("应写出计算过程 768 × 2 = 1536,实得 %q", msg)
+	}
+	if !res.Passed {
+		t.Errorf("合法的固定倍率配置应通过,实得 %+v", res.Checks)
+	}
+}

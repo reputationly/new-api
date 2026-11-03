@@ -348,6 +348,44 @@ func DryRunAggregateModel(m *common.AggregateModel, peers map[string]int) *Aggre
 				}
 			}
 		}
+
+		// 倍率:配了就是「固定倍率引擎」,交付短边算得出来,也就校验得出来。
+		//
+		// 不按模型名分叉 —— 名字推断只在没有配置的地方兜底(见 gpustackplus 的
+		// inferTaskType),配置层只认字段。这几条要防的都是同一类失败:**配错了不报错**。
+		// 倍率漏配或配错时,超分段提交失败,父任务降级成交付生成段成品,客户按 2K
+		// 付钱拿 768P,接口一路正常。
+		switch {
+		case m.Upscale.SRRatio == nil:
+			add("upscale_sr_ratio", AggregateCheckOK,
+				"超分倍率按 4.0 下发(未配置 sr_ratio)。固定倍率引擎(如 RelayVSR_X2 只接受 2)"+
+					"必须显式配置,否则超分段会失败、整单降级为生成段成品")
+		case *m.Upscale.SRRatio <= 0:
+			add("upscale_sr_ratio", AggregateCheckError,
+				"sr_ratio 必须为正数,当前为 %g", *m.Upscale.SRRatio)
+		default:
+			// 生成段的尺寸来自 overrides(中间产物档位)。没配就说明它由客户请求决定,
+			// 交付短边在这层算不出来 —— 不猜,直接不判。
+			generateEdge := 0
+			if s, ok := m.Generate.Overrides["size"].(string); ok {
+				generateEdge = common.SizeShortEdge(s)
+			}
+			if generateEdge <= 0 {
+				break
+			}
+			deliverable := int(float64(generateEdge) * *m.Upscale.SRRatio)
+			if targetEdge := common.SizeShortEdge(m.Upscale.Target); targetEdge > deliverable {
+				add("upscale_sr_ratio", AggregateCheckWarn,
+					"target_size=%s(短边 %d)兑现不了:按 sr_ratio=%g、生成段短边 %d 计算,"+
+						"最高交付短边 %d,客户拿到的会低于这里写的档位",
+					strings.TrimSpace(m.Upscale.Target), targetEdge, *m.Upscale.SRRatio,
+					generateEdge, deliverable)
+			} else {
+				add("upscale_sr_ratio", AggregateCheckOK,
+					"固定倍率:交付短边 = 生成段短边 × sr_ratio = %d × %g = %d",
+					generateEdge, *m.Upscale.SRRatio, deliverable)
+			}
+		}
 	}
 
 	// && 短路:Upscale 为 nil 时 IsEnabled() 已返回 false,不会解引用 Target。
