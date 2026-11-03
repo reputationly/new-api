@@ -172,6 +172,20 @@ func applyAggregateExpansion(c *gin.Context, publicName, realModel string, agg *
 	exp.UpscaleSkipReason = upscaleSkipReason(requestedSize, generateSize)
 	exp.UpscaleSkipped = exp.UpscaleSkipReason != ""
 
+	// **交付不了就在花钱之前拒掉。**
+	//
+	// 固定倍率引擎(配了 upscale.sr_ratio)的成片短边是算得出来的:生成段短边 × 倍率。
+	// 客户要的档位超过它时,这条流水线无论如何都交不出他要的东西 —— 继续跑只会烧掉
+	// 增强与生成段两次 GPU 的钱,最后给他一张比承诺低一档的片子,而且**不报错**。
+	//
+	// 必须放在提示词增强之前:增强是一次真实的 LLM 调用,拒掉的请求不该先花这一笔。
+	if agg.Upscale.IsEnabled() && !exp.UpscaleSkipped {
+		if reason := upscaleUndeliverableReason(requestedSize, generateSize, agg.Upscale.SRRatio); reason != "" {
+			// 带上聚合模型名:客户拿到的报错要能指回他自己调的那个名字。
+			return fmt.Errorf("聚合模型 %s %s", publicName, reason)
+		}
+	}
+
 	// 使用日志标签:客户调的是聚合名,两段的日志要能对回这个名字。有超分段真的要跑时,
 	// 生成段那一条标成「生成段」;没有超分段的单段聚合只带聚合名,不标段。仅展示用。
 	labels := map[string]string{"aggregate_model": publicName}
@@ -352,6 +366,40 @@ func upscaleSkipReason(requestedSize, generateSize string) string {
 	}
 	return fmt.Sprintf("客户要 %s(短边 %d)不高于生成段的 %s(短边 %d),超分段跳过",
 		requestedSize, requested, generateSize, generate)
+}
+
+// upscaleUndeliverableReason 固定倍率超分引擎交付不了客户要的档位时返回原因,否则返回空串。
+//
+// 只在超分段要跑、且配了 sr_ratio(固定倍率)时判定;任一尺寸解析不出就不拦
+// (与 upscaleSkipReason"拿不到依据就维持既有行为"同口径)。
+//
+// # 为什么这是拦截而不是降级
+//
+// 配了 sr_ratio 等于声明了引擎的契约:成片短边恒为 生成段短边 × 倍率(RelayVSR_X2 严格
+// 按输入 × 2 出片,连 target_short_edge 都不读)。客户要 4K(2160)而流水线的天花板是
+// 1536 时,两个选择:
+//
+//   - 跑完、交付 1536,不报错 —— 客户付 4K 的钱拿 1536,而且**永远查不出为什么**;
+//   - 现在拒掉 —— 一次 400,零成本,客户立刻知道该换 2K。
+//
+// 取后者。拦在聚合展开阶段,提示词增强与生成段都还没发生,所以这次拒绝**一分钱都不花**。
+func upscaleUndeliverableReason(requestedSize, generateSize string, ratio *float64) string {
+	if ratio == nil {
+		// 没配倍率 = 引擎按自己的部署 config 出片,交付短边不是我们能算出来的,
+		// 此时拦截就是拿猜测去否掉请求。
+		return ""
+	}
+	requested := common.SizeShortEdge(requestedSize)
+	generate := common.SizeShortEdge(generateSize)
+	if requested <= 0 || generate <= 0 {
+		return ""
+	}
+	deliverable := int(float64(generate) * *ratio)
+	if requested <= deliverable {
+		return ""
+	}
+	return fmt.Sprintf("最高交付短边 %d(生成段 %s 短边 %d × 倍率 %g),无法满足 size=%s(短边 %d)",
+		deliverable, generateSize, generate, *ratio, requestedSize, requested)
 }
 
 // collectInputVideos 本次要给增强模型看的参考视频。

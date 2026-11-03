@@ -1318,3 +1318,81 @@ func TestUpscaleSkippedWhenNoOverridesSize(t *testing.T) {
 	require.True(t, exp.UpscaleSkipped,
 		"客户要的就是生成段出的那一档,超分上去只会给他一个他没选的档位")
 }
+
+// 配了 sr_ratio(固定倍率引擎)时,成片短边是算得出来的:生成段短边 × 倍率。
+// 客户要的档位超过它,必须当场拒 —— 否则跑完交付一张低一档的片子,不报错、钱照收。
+func TestUpscaleUndeliverableReason(t *testing.T) {
+	two := 2.0
+	four := 4.0
+	cases := []struct {
+		name        string
+		requested   string
+		generate    string
+		ratio       *float64
+		wantBlocked bool
+	}{
+		// 现网形态:生成段 768P(短边 768),RelayVSR_X2 倍率 2 → 天花板 1536。
+		{"4K 超过天花板", "4K", "768P", &two, true},
+		{"4K 的精确像素串同样超过", "3840x2160", "768P", &two, true},
+		{"2K 在 1536 以内照常超分", "2K", "768P", &two, false},
+		{"1080P 更低,放行", "1080P", "768P", &two, false},
+		{"2560x1440 短边 1440,放行", "2560x1440", "768P", &two, false},
+		{"1536P 正好等于天花板,放行", "1536P", "768P", &two, false},
+		{"1537P 高过天花板一档,拦", "1537P", "768P", &two, true},
+		// 没配倍率的引擎(SeedVR2)交付短边由部署 config 决定,算不出来就不能拦。
+		{"没配倍率一律放行", "4K", "768P", nil, false},
+		// 与 upscaleSkipReason 同口径:拿不到依据就维持既有行为。
+		{"客户 size 解析不出", "hd", "768P", &two, false},
+		{"客户没传 size", "", "768P", &two, false},
+		{"生成段 size 解析不出", "4K", "", &two, false},
+		// 倍率配大了同样按乘积算,不按"4K 一定拦"这类名字判断。
+		{"倍率 4 时天花板 3072,4K 反而放行", "4K", "768P", &four, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := upscaleUndeliverableReason(tc.requested, tc.generate, tc.ratio)
+			if !tc.wantBlocked {
+				require.Empty(t, got, "不该拦的请求被拦了:客户会以为自己参数写错了")
+				return
+			}
+			require.NotEmpty(t, got)
+			require.Contains(t, got, "最高交付短边 1536",
+				"报错必须说出天花板是多少,否则客户不知道 2K 能不能跑")
+		})
+	}
+}
+
+// 拦截必须发生在**提示词增强之前**。
+//
+// 只测 upscaleUndeliverableReason 证明不了它的调用位置:把它挪到增强之后,
+// 纯函数用例照样全绿,而被拒的请求每次都先烧一次 LLM 调用 —— 一次真实计费。
+func TestApplyExpansionRejectsUndeliverableBeforeEnhance(t *testing.T) {
+	orig := enhancePrompt
+	t.Cleanup(func() { enhancePrompt = orig })
+	called := 0
+	enhancePrompt = func(_ context.Context, _ *common.AggregateModel, _ string,
+		in service.EnhanceInput) *service.EnhanceResult {
+		called++
+		return &service.EnhanceResult{OriginalPrompt: in.Prompt, EnhancedPrompt: in.Prompt}
+	}
+
+	withAggregateConfig(t, `[{
+		"name":"h3-2k","type":"video","enabled":true,
+		"generate":{"model":"minimax-h3-fl2va","overrides":{"size":"768P"}},
+		"upscale":{"model":"relayvsr","target_size":"2k","sr_ratio":2,"delivered_size":"2K"},
+		"prompt_enhance":{"model":"enh","system_prompt":"改写"}
+	}]`)
+	agg := common.GetAggregateModel("h3-2k")
+	require.NotNil(t, agg)
+
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/videos",
+		strings.NewReader(`{"model":"h3-2k","prompt":"一只猫","size":"4K"}`))
+	err := applyAggregateExpansion(c, "h3-2k", "minimax-h3-fl2va", agg)
+
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "最高交付短边 1536")
+	require.Contains(t, err.Error(), "h3-2k", "报错要指回客户调的那个模型名")
+	require.Zero(t, called, "被拒的请求不能先花一次提示词增强")
+}
