@@ -707,6 +707,12 @@ func TestH3NameInferenceFallback(t *testing.T) {
 		"swiftvr-segp4":    "sr",
 		"SwiftVR_lightx2v": "sr",
 		"seedvr2":          "sr",
+		// RelayVSR:同样是结尾不给判据的名字(relayvsr_x2 结尾是 "x2")。
+		// 漏了它直连 /v1/videos 会落 t2v 兜底 —— 源视频不物化、超分请求直接走不通。
+		"relayvsr":            "sr",
+		"relayvsr_x2":         "sr",
+		"RelayVSR_X2":         "sr",
+		"relayvsr-x2-chunkp4": "sr",
 	}
 	for name, want := range cases {
 		if got := inferTaskType(name); got != want {

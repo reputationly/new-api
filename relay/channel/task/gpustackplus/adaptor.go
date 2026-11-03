@@ -54,8 +54,8 @@ import (
 //
 // s2v(数字人,InfiniteTalk):人物图走 image/input_reference,驱动音频 metadata.audio,
 // 一并物化到 input_refs(image + audio)。见 materializeS2VInputs。
-// sr(超分,SeedVR2):源视频 metadata.video 物化到 input_refs.video,倍率 metadata.sr_ratio
-// 随 metadata 透传(门面按 config 目标尺寸封顶)。见 materializeSRInputs。
+// sr(超分,SeedVR2 / RelayVSR 等):源视频 metadata.video 物化到 input_refs.video,倍率
+// metadata.sr_ratio 随 metadata 透传(门面按 config 目标尺寸封顶)。见 materializeSRInputs。
 // v2v/rv2v/r2v/mv2v/ads2v(视频编辑/图生视频,Bernini,顶替下线的 wan2.2-VACE):按输入
 // 组合区分——v2v 单源视频 metadata.src_video、rv2v 源视频+参考图 metadata.src_ref_images、
 // r2v 仅参考图(体验区「图生视频」)、mv2v 双源视频多源编辑、ads2v 双源视频广告植入
@@ -914,13 +914,19 @@ func inferTaskType(modelName string) string {
 	case strings.Contains(m, "ref2va"):
 		return "r2va"
 	// 数字人 / 超分 / 编辑放在通用 i2v/i2i 之前:InfiniteTalk 名里常含 "talk",
-	// SeedVR2 含 "seedvr"/"sr",Bernini 视频编辑含 "bernini" —— 显式匹配免落到 t2v 兜底。
+	// SeedVR2 / RelayVSR 等含 "seedvr"/"relayvsr"/"sr",Bernini 视频编辑含 "bernini" ——
+	// 显式匹配免落到 t2v 兜底。
 	case strings.Contains(m, "infinitetalk") || strings.Contains(m, "s2v"):
 		return "s2v"
 	// SwiftVR 要单独一个 token:"swiftvr" 三条老判据一条都不中 —— 没有 "seedvr" 子串、
 	// 没有 "-sr"、结尾是 "vr" 不是 "sr"。漏了它不会报错,而是静默落到 t2v 兜底,
 	// materializeSRInputs 不被调用、源视频压根不物化,超分请求直接走不通。
+	//
+	// RelayVSR 同理:`relayvsr_x2` / `RelayVSR_X2` 这类名字结尾不是 `sr`,不加 token 会落
+	// t2v 兜底、源视频不物化。聚合超分段显式带 `task_type: "sr"`,不受影响;受影响的是
+	// 直连 API 与体验区 —— 那两处只能靠名字判。
 	case strings.Contains(m, "swiftvr") || strings.Contains(m, "seedvr") ||
+		strings.Contains(m, "relayvsr") ||
 		strings.Contains(m, "-sr") || strings.HasSuffix(m, "sr"):
 		return "sr"
 	// Bernini 一个模型出 v2v/rv2v/r2v 三种玩法,模型名只能给兜底默认(v2v);
@@ -1145,9 +1151,10 @@ func materializeS2VInputs(c *gin.Context, info *relaycommon.RelayInfo, taskType,
 	return m.Refs(), nil
 }
 
-// materializeSRInputs 物化视频超分(SeedVR2)的源视频(metadata.video)。倍率 sr_ratio 不
-// 物化——它随 metadata 透传进 body,门面转交引擎(引擎按 config 目标尺寸封顶)。
-// 门面把 video→video_path 映射给 SeedVR2 引擎。
+// materializeSRInputs 物化视频超分(SeedVR2 / RelayVSR 等)的源视频(metadata.video)。
+// 倍率 sr_ratio 不物化——它随 metadata 透传进 body,门面转交引擎(SeedVR2 按 config 目标
+// 尺寸封顶,RelayVSR 按 sr_ratio 严格 × 2)。
+// 门面把 video→video_path 映射给超分引擎。
 func materializeSRInputs(c *gin.Context, info *relaycommon.RelayInfo, taskType, modelName string, req relaycommon.TaskSubmitReq) (map[string][]string, error) {
 	video := metadataString(req.Metadata, "video")
 	if video == "" {
