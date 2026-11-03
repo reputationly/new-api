@@ -12,6 +12,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/constant"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relay/hilo"
 	"github.com/QuantumNous/new-api/service"
@@ -1395,4 +1396,53 @@ func TestApplyExpansionRejectsUndeliverableBeforeEnhance(t *testing.T) {
 	require.Contains(t, err.Error(), "最高交付短边 1536")
 	require.Contains(t, err.Error(), "h3-2k", "报错要指回客户调的那个模型名")
 	require.Zero(t, called, "被拒的请求不能先花一次提示词增强")
+}
+
+// **HTTP 层验一次拒付**:400 是在 Distribute 里产生的,后续处理链一整段都没跑。
+//
+// 只测 applyAggregateExpansion 证明不了这件事:它的返回值被谁处理、在哪一步处理,
+// 决定了客户是"收到 400"还是"任务建好了才失败"。这条用例把网关真实的
+// 中间件顺序(TokenAuth 之后、选渠道之前)复现出来并钉住它 —— 另外两条断言
+// 「不产生任务、不扣费」在这里体现为:**下游 handler 一次都没被调用**,
+// 而建任务、预扣、调增强全在它之后。
+func TestDistributeRejectsUndeliverableBeforeAnyWork(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	orig := enhancePrompt
+	t.Cleanup(func() { enhancePrompt = orig })
+	enhanced := 0
+	enhancePrompt = func(_ context.Context, _ *common.AggregateModel, _ string,
+		in service.EnhanceInput) *service.EnhanceResult {
+		enhanced++
+		return &service.EnhanceResult{OriginalPrompt: in.Prompt, EnhancedPrompt: in.Prompt}
+	}
+	withAggregateConfig(t, `[{
+		"name":"h3-2k","type":"video","enabled":true,
+		"generate":{"model":"minimax-h3-fl2va","overrides":{"size":"768P"}},
+		"upscale":{"model":"relayvsr","target_size":"2k","sr_ratio":2,"delivered_size":"2K"},
+		"prompt_enhance":{"model":"enh","mode":"text","system_prompt":"改写"}
+	}]`)
+
+	reached := false
+	engine := gin.New()
+	engine.Use(func(c *gin.Context) {
+		// TokenAuth 会放进来的那几个键;本用例只关心展开这一段,由它自己塞。
+		common.SetContextKey(c, constant.ContextKeyTokenModelLimitEnabled, false)
+		common.SetContextKey(c, constant.ContextKeyUsingGroup, "default")
+		common.SetContextKey(c, constant.ContextKeyUserGroup, "default")
+	})
+	engine.POST("/v1/videos", Distribute(), func(c *gin.Context) {
+		reached = true // 建任务、预扣、增强都在这个 handler 之后
+		c.JSON(http.StatusOK, gin.H{"task_id": "should-not-happen"})
+	})
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/v1/videos",
+		strings.NewReader(`{"model":"h3-2k","prompt":"一只猫","size":"4K","duration":5}`))
+	req.Header.Set("Content-Type", "application/json")
+	engine.ServeHTTP(rec, req)
+
+	require.Equal(t, http.StatusBadRequest, rec.Code, "交付不了的档位必须是 400,不能静默降级: %s", rec.Body.String())
+	require.Contains(t, rec.Body.String(), "最高交付短边 1536")
+	require.False(t, reached, "被拒的请求不该再往下走一步(建任务、预扣、增强都在这之后)")
+	require.Zero(t, enhanced, "被拒的请求不能先花一次提示词增强")
 }

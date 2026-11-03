@@ -945,3 +945,16 @@ func TestUpscaleSubmitErrorReportsSRRatio(t *testing.T) {
 
 // srRatioPtr 造一个配了倍率的超分段配置值(指针语义:显式配置)。
 func srRatioPtr(v float64) *float64 { return &v }
+
+// **SeedVR2 的行为必须逐位不变**:没配 sr_ratio 的配置下发 4.0,而不是新值或 0。
+//
+// 这条看似多余(别处已断言 ">= 4.0"),但 >= 是给"够不够得着上限"留的余地:
+// 真正锁住回归的是**恰好 4.0** —— 改成 6.0 也能让 SeedVR2 出一样的片,却会让
+// 一个本来能跑的 SeedVR2 部署在换引擎后出现新的边界差异。写死值才钉得住。
+func TestUpscaleSRRatioDefaultsToFourWithoutConfig(t *testing.T) {
+	require.Equal(t, 4.0, upscaleSRRatioOf(&model.TaskAggregateInfo{}),
+		"没配倍率时必须是 4.0(SeedVR2 靠它够不着上限)")
+	require.Equal(t, 4.0, upscaleSRRatioOf(nil))
+	require.Equal(t, 2.0, upscaleSRRatioOf(&model.TaskAggregateInfo{UpscaleSRRatio: srRatioPtr(2)}),
+		"配了就必须用配置的值")
+}
