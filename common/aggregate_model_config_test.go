@@ -204,3 +204,42 @@ func TestFilterHiddenNoopWhenNoneConfigured(t *testing.T) {
 		t.Error("未配置时不应报告存在隐藏聚合模型")
 	}
 }
+
+// 超分倍率是**指针语义**:nil = 未配置(沿用 4.0),非 nil = 固定倍率引擎,连 0 都要
+// 原样解析出来 —— 显式填 0 是配错了,干跑校验要能看见它并报错,不能被 omitempty
+// 顺手当成"没配"而静默放过。
+func TestAggregateUpscaleSRRatioTriState(t *testing.T) {
+	cases := []struct {
+		name      string
+		upscale   string
+		wantNil   bool
+		wantRatio float64
+	}{
+		{"配了 2", `{"model":"relayvsr","target_size":"2k","sr_ratio":2}`, false, 2},
+		{"配了小数", `{"model":"relayvsr","target_size":"2k","sr_ratio":1.5}`, false, 1.5},
+		{"没配 → nil(沿用 4.0)", `{"model":"seedvr2","target_size":"2k"}`, true, 0},
+		{"显式 0 → 非 nil(配错了,干跑要报)", `{"model":"relayvsr","target_size":"2k","sr_ratio":0}`, false, 0},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			withAggregateConfig(t, `[{"name":"agg-sr","type":"video","enabled":true,`+
+				`"generate":{"model":"minimax-h3-fl2va"},"upscale":`+tc.upscale+`}]`)
+			m := GetAggregateModel("agg-sr")
+			if m == nil || m.Upscale == nil {
+				t.Fatal("应解析出超分段配置")
+			}
+			if tc.wantNil {
+				if m.Upscale.SRRatio != nil {
+					t.Fatalf("未配置时必须是 nil,实得 %v", *m.Upscale.SRRatio)
+				}
+				return
+			}
+			if m.Upscale.SRRatio == nil {
+				t.Fatal("显式配置的倍率不能被解析成 nil")
+			}
+			if *m.Upscale.SRRatio != tc.wantRatio {
+				t.Errorf("sr_ratio 应为 %v,实得 %v", tc.wantRatio, *m.Upscale.SRRatio)
+			}
+		})
+	}
+}

@@ -195,13 +195,18 @@ func TestDefaultAggregateConfigUsesLiveUpscaler(t *testing.T) {
 		if item.Upscale == nil {
 			continue // 没有超分段的条目不在本条用例范围内
 		}
-		if item.Upscale.Model != "seedvr2" {
-			t.Errorf("%s 的超分模型是 %q，期望 seedvr2", item.Name, item.Upscale.Model)
+		if item.Upscale.Model != "relayvsr" {
+			t.Errorf("%s 的超分模型是 %q，期望 relayvsr", item.Name, item.Upscale.Model)
 		}
-		// SeedVR2 忽略请求尺寸、按部署配置出片，所以交付档位必须显式写出来，
-		// 否则计费会按客户要的 2k 记，与实际交付不符。
-		if item.Upscale.DeliveredSize != "1080P" {
-			t.Errorf("%s 的 delivered_size 是 %q，期望 1080P", item.Name, item.Upscale.DeliveredSize)
+		// RelayVSR_X2 只接受 sr_ratio=2，漏配就按 4.0 下发：子任务失败、整单降级成
+		// 768P 的生成段成品，而接口不报错。出厂值必须把它配上。
+		if item.Upscale.SRRatio == nil || *item.Upscale.SRRatio != 2 {
+			t.Errorf("%s 的 sr_ratio 是 %v，期望 2", item.Name, item.Upscale.SRRatio)
+		}
+		// H3 生成段 768P（短边 768）× 2 = 1536，≥ 2K 的短边 1440，所以计费档位写 2K。
+		// 写错了就是错账：它必须与引擎实际出片的档位对齐。
+		if item.Upscale.DeliveredSize != "2K" {
+			t.Errorf("%s 的 delivered_size 是 %q，期望 2K", item.Name, item.Upscale.DeliveredSize)
 		}
 	}
 }

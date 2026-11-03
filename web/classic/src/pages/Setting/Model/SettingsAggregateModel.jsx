@@ -134,7 +134,7 @@ const SettingsAggregateModel = ({ options, refresh }) => {
     "type": "video",
     "enabled": true,
     "generate": { "model": "minimax-h3", "overrides": { "size": "1280x720" } },
-    "upscale":  { "model": "seedvr2-3b", "target_size": "2k" },
+    "upscale":  { "model": "relayvsr", "target_size": "2k", "sr_ratio": 2 },
     "prompt_enhance": {
       "model": "qwen3.8-flash-fp8",
       "mode": "singlecall"
@@ -148,6 +148,12 @@ const SettingsAggregateModel = ({ options, refresh }) => {
             <Text type='secondary' size='small'>
               {t(
                 'generate.overrides 是客户参数的覆盖值：客户传的尺寸是他要的「最终」尺寸，生成段收到的应是「中间」尺寸，最终分辨率由超分段产出。',
+              )}
+            </Text>
+            <br />
+            <Text type='secondary' size='small'>
+              {t(
+                'upscale.sr_ratio 是下发给超分引擎的倍率。RelayVSR 这类固定倍率引擎必须填（RelayVSR_X2 填 2），不填按 4.0 下发会导致超分失败、交付生成段原始分辨率。',
               )}
             </Text>
             <br />

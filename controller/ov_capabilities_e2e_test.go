@@ -38,7 +38,9 @@ func TestOvCapabilitiesEndToEnd(t *testing.T) {
 	// 只给"裸模型"建 ability —— 聚合模型本来就不在 abilities 表里。
 	for _, name := range []string{
 		"qwen-image-pro", "qwen-image", "qwen-image-edit",
-		"minimax-h3-fl2va", "minimax-h3-ref2va", "seedvr2",
+		// 超分段是 relayvsr(出厂聚合配置就是这么写的):能力目录按「每一段都有渠道」
+		// 判定聚合模型是否可用,这里少一条,整条流水线就会在目录里消失。
+		"minimax-h3-fl2va", "minimax-h3-ref2va", "relayvsr",
 		"minimax-music3", "indextts-2.5",
 	} {
 		require.NoError(t, db.Create(&model.Ability{Group: "default", Model: name, ChannelId: 1, Enabled: true}).Error)
@@ -227,7 +229,7 @@ func TestOvCapabilitiesReadsTaskTypesThroughGenerateSegment(t *testing.T) {
 		"minimax-h3-fl2va": {"tabs": {"t2v": {}, "i2v": {}}},
 		"minimax-h3-ref2va": {"tabs": {"r2va": {}}}
 	}}`)
-	for _, name := range []string{"minimax-h3-fl2va", "minimax-h3-ref2va", "seedvr2"} {
+	for _, name := range []string{"minimax-h3-fl2va", "minimax-h3-ref2va", "relayvsr"} {
 		require.NoError(t, db.Create(&model.Ability{Group: "default", Model: name, ChannelId: 1, Enabled: true}).Error)
 	}
 

@@ -392,13 +392,13 @@ func defaultHiloCatalog() HiloCatalog {
 				// 我们没有。官方客户端能出 2K 是因为他们云端有那个模型。
 				//
 				// `minimax-h3-2k` 是 AggregateModelConfig 里的编排流水线:
-				// 生成(minimax-h3-fl2va) → SeedVR2 超分。对客户端来说它**只是一个
+				// 生成(minimax-h3-fl2va) → RelayVSR 超分。对客户端来说它**只是一个
 				// 模型名、一个任务**。
 				//
-				// ⚠️ 名字里的 2K 目前兑现不了：SeedVR2 忽略请求尺寸、按部署配置出
-				// 约 1920×1104（见 service/aggregate_pipeline.go 的那段注释），要 2K
-				// 得换一台 SwiftVR —— 而 SwiftVR 已下线。聚合配置里的 `delivered_size`
-				// 因此写 1080P，计费按交付档位走。
+				// 名字里的 2K 是兑现的：RelayVSR_X2 严格按输入 × 2 出片，H3 生成段
+				// 768P 的短边 768 放大到 **1536**，≥ 2K 的短边 1440（见
+				// service/aggregate_pipeline.go 的 upscaleSRRatioOf）。聚合配置里的
+				// `delivered_size` 因此写 2K，计费按交付档位走。
 				//
 				// 这条要求 AggregateModelConfig 里 minimax-h3-2k 是启用的
 				// （出厂默认启用）。停掉的话这一条会从目录里消失 ——

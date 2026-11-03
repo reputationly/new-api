@@ -56,7 +56,7 @@ func TestBuildReportsEveryModality(t *testing.T) {
 	// （`qwen-image-pro-enhanced` 这类名字靠分段可用性判定，见 Scope.callable）。
 	enabled := map[string]bool{
 		"qwen-image": true, "qwen-image-edit": true, "qwen-image-pro": true,
-		"minimax-h3-fl2va": true, "minimax-h3-ref2va": true, "seedvr2": true,
+		"minimax-h3-fl2va": true, "minimax-h3-ref2va": true, "relayvsr": true,
 		"minimax-music3": true, "indextts-2.5": true,
 	}
 	capabilities := Build(Scope{Enabled: enabled})
@@ -91,7 +91,7 @@ func TestBuildReportsEveryModality(t *testing.T) {
 func TestBuildMarksOneDefaultPerOperation(t *testing.T) {
 	withAggregateConfig(t, common.DefaultAggregateModelConfig)
 	capabilities := Build(Scope{Enabled: map[string]bool{
-		"qwen-image": true, "qwen-image-pro": true, "minimax-h3-fl2va": true, "seedvr2": true,
+		"qwen-image": true, "qwen-image-pro": true, "minimax-h3-fl2va": true, "relayvsr": true,
 	}})
 	defaults := map[string]int{}
 	for _, capability := range capabilities {
@@ -110,7 +110,7 @@ func TestBuildMarksOneDefaultPerOperation(t *testing.T) {
 func TestBuildHonoursTokenAllowList(t *testing.T) {
 	withAggregateConfig(t, common.DefaultAggregateModelConfig)
 	capabilities := Build(Scope{
-		Enabled:      map[string]bool{"qwen-image": true, "qwen-image-pro": true, "minimax-h3-fl2va": true, "seedvr2": true},
+		Enabled:      map[string]bool{"qwen-image": true, "qwen-image-pro": true, "minimax-h3-fl2va": true, "relayvsr": true},
 		TokenAllowed: map[string]bool{"qwen-image-pro-enhanced": true},
 	})
 	if len(capabilities) != 1 {
@@ -183,7 +183,7 @@ func TestParamSchemaCarriesEnumsAndDefaults(t *testing.T) {
 	withAggregateConfig(t, common.DefaultAggregateModelConfig)
 	// 目录里视频那条的 platform_model 是聚合名 `minimax-h3-2k`，它要靠"两段都有渠道"
 	// 才可调：所以这里给的是两个裸模型。
-	capabilities := Build(Scope{Enabled: map[string]bool{"minimax-h3-fl2va": true, "seedvr2": true}})
+	capabilities := Build(Scope{Enabled: map[string]bool{"minimax-h3-fl2va": true, "relayvsr": true}})
 	var video *Capability
 	for index := range capabilities {
 		if capabilities[index].Operation == OperationGenerateVideo {
@@ -285,7 +285,7 @@ func TestBuildReadsTaskTypesThroughGenerateSegment(t *testing.T) {
 		"minimax-h3-ref2va": {"tabs": {"r2va": {}}}
 	}}`)
 	enabled := map[string]bool{
-		"minimax-h3-fl2va": true, "minimax-h3-ref2va": true, "seedvr2": true,
+		"minimax-h3-fl2va": true, "minimax-h3-ref2va": true, "relayvsr": true,
 	}
 	capabilities := Build(Scope{Enabled: enabled, UsingGroups: []string{"default"}})
 	var frames, reference *Capability
