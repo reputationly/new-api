@@ -353,3 +353,54 @@ func TestConvertAcceptsExtension480PForNonFrameTasks(t *testing.T) {
 		t.Fatalf("size = %v, snapshot = %#v", body["size"], snap)
 	}
 }
+
+// 放开到 11 个比例后,/v2 兼容层要接受官方枚举之外的 5 个(Pika H3 引擎支持,与 480P
+// 扩展档同一口径),并且**如实回显**:绝不映射成官方枚举里的邻居,否则回显与实际产物不符。
+//
+// 画布不在这一层算 —— 统一契约里只写带档位词 size 与具名 aspect_ratio,H3 适配器再按
+// 官方 buckets 表推画布(gpustackplus 包的 TestH3CanvasMatchesOfficialP768Buckets 守着)。
+func TestConvertAcceptsExtendedRatios(t *testing.T) {
+	cases := []struct{ ratio, wantSize string }{
+		{"3:2", "768P"},
+		{"5:4", "768P"},
+		{"4:5", "768P"},
+		{"2:3", "768P"},
+		{"9:21", "768P"},
+		// 原有 6 个照常(回归)。
+		{"21:9", "768P"},
+		{"16:9", "768P"},
+	}
+	for _, c := range cases {
+		t.Run(c.ratio, func(t *testing.T) {
+			body, snap := convert(t, `{"model":"MiniMax-H3","content":[{"type":"text","text":"go"}],`+
+				`"resolution":"768P","duration":5,"ratio":"`+c.ratio+`"}`)
+			if body["size"] != c.wantSize {
+				t.Fatalf("size = %v, want %s", body["size"], c.wantSize)
+			}
+			if md := metadataOf(t, body); md["aspect_ratio"] != c.ratio {
+				t.Fatalf("aspect_ratio = %v, want %s", md["aspect_ratio"], c.ratio)
+			}
+			if snap.Ratio != c.ratio {
+				t.Fatalf("snapshot.Ratio = %q, want %q", snap.Ratio, c.ratio)
+			}
+		})
+	}
+}
+
+// 11 个之外的值仍然要拒,而且错误信息要把可用值列全 —— 客户端对着报错改参数,
+// 列表少一个就等于让它以为那个比例不可用。
+func TestConvertRejectsRatioOutsideEleven(t *testing.T) {
+	err := convertErr(t, `{"model":"MiniMax-H3","content":[{"type":"text","text":"go"}],
+		"resolution":"768P","duration":5,"ratio":"5:3"}`)
+	if err.StatusCode != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400", err.StatusCode)
+	}
+	for _, want := range []string{"3:2", "5:4", "4:5", "2:3", "9:21"} {
+		if !strings.Contains(err.Message, want) {
+			t.Errorf("错误信息里没有列出 %q:%s", want, err.Message)
+		}
+	}
+	if strings.Contains(err.Message, "5:3") == false {
+		t.Errorf("错误信息应点名请求值:%s", err.Message)
+	}
+}

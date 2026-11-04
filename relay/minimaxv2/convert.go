@@ -24,10 +24,15 @@ const (
 	contentTypeAudio = "audio_url"
 )
 
-// 官方 ratio 枚举中的具名值(adaptive 单列)。与引擎的六个具名比例一一对应
-// (vllm-omni pipeline_minimax_h3.MINIMAX_H3_SUPPORTED_ASPECT_RATIOS)。
+// 官方 ratio 枚举中的具名值(adaptive 单列)。
+//
+// ⚠️ 官方 MiniMax H3 文档只列了 6 个(21:9 / 16:9 / 4:3 / 1:1 / 3:4 / 9:16),另外 5 个
+// (3:2 / 5:4 / 4:5 / 2:3 / 9:21)是**我们引擎(Pika H3)支持的扩展**,与 480P 扩展档同一
+// 口径:输入接受、回显如实返回,绝不映射成官方枚举里的邻居去迎合 schema —— 那会让回显
+// 与实际产物不符。11 个值与引擎侧 preprocessing.py:73-85 逐项一致。
 var officialNamedRatios = map[string]bool{
-	"21:9": true, "16:9": true, "4:3": true, "1:1": true, "3:4": true, "9:16": true,
+	"21:9": true, "16:9": true, "3:2": true, "4:3": true, "5:4": true, "1:1": true,
+	"4:5": true, "3:4": true, "2:3": true, "9:16": true, "9:21": true,
 }
 
 const ratioAdaptive = "adaptive"
@@ -360,7 +365,7 @@ func resolveRatio(raw, taskType string) (aspectRatio, echoRatio string, apiErr *
 	ratio := strings.ToLower(strings.TrimSpace(raw))
 	if ratio != "" && ratio != ratioAdaptive && !officialNamedRatios[ratio] {
 		return "", "", badRequest(fmt.Sprintf(
-			"invalid params: ratio=%q is not supported (expected adaptive / 21:9 / 16:9 / 4:3 / 1:1 / 3:4 / 9:16)", raw))
+			"invalid params: ratio=%q is not supported (expected adaptive / 21:9 / 16:9 / 3:2 / 4:3 / 5:4 / 1:1 / 4:5 / 3:4 / 2:3 / 9:16 / 9:21)", raw))
 	}
 
 	switch taskType {
