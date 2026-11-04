@@ -264,3 +264,27 @@ func TestBadJSONKeepsPreviousCatalog(t *testing.T) {
 		t.Fatalf("解析失败后目录被改了：%d → %d", before, got)
 	}
 }
+
+// H3 的比例下拉必须是引擎支持的 11 个(含 adaptive 共 12 项)。
+//
+// 少一个的表现是静默的:下拉里没有它,客户端就选不到,用户永远看不到引擎其实支持的
+// 3:2 / 5:4 / 4:5 / 2:3 / 9:21。多一个更糟 —— 选中后引擎 400,而界面上它是个正常选项。
+// 顺序也钉住:与官方 buckets.yaml 一致(超宽 → 横版 → 方形 → 竖版 → 超窄)。
+func TestVideoRatiosCoverEngineBuckets(t *testing.T) {
+	c := defaultHiloCatalog()
+	if len(c.Video) == 0 {
+		t.Fatal("视频目录是空的")
+	}
+	p, ok := c.Video[0].Model.Params["ratio"]
+	if !ok {
+		t.Fatal("H3 没有 ratio 参数")
+	}
+	want := []string{"adaptive", "21:9", "16:9", "3:2", "4:3", "5:4", "1:1",
+		"4:5", "3:4", "2:3", "9:16", "9:21"}
+	if !slices.Equal(p.Options, want) {
+		t.Fatalf("比例选项 = %v,期望 %v", p.Options, want)
+	}
+	if p.Default != "adaptive" {
+		t.Errorf("默认值 = %q,期望 adaptive(跟随素材/引擎缺省画幅)", p.Default)
+	}
+}

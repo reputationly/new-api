@@ -346,8 +346,10 @@ func hiloSelect(label string, options []string, def string) dto.HiloModelParam {
 // 官方的真实响应存在 `ovaijisuandesign/reference/hilo/` 下，用来对照升级。
 func defaultHiloCatalog() HiloCatalog {
 	imageRatios := []string{"adaptive", "1:1", "16:9", "9:16", "4:3", "3:4", "3:2", "2:3"}
-	// 平台对 H3 的比例白名单，取自它拒绝请求时原样列出来的那一串。
-	videoRatios := []string{"adaptive", "16:9", "9:16", "1:1", "4:3", "3:4", "21:9"}
+	// 引擎(Pika H3)支持的 11 个比例，取自它在 preprocessing.py:73-85 里的白名单，
+	// 与官方 Pika-H3-Flex 的 buckets.yaml 逐项一致。原来的 6 个之外还有 3:2 / 5:4 / 4:5 /
+	// 2:3 / 9:21 —— 少一个的话客户端下拉里就没有它，用户选不到、也发现不了我们其实支持。
+	videoRatios := []string{"adaptive", "21:9", "16:9", "3:2", "4:3", "5:4", "1:1", "4:5", "3:4", "2:3", "9:16", "9:21"}
 
 	return HiloCatalog{
 		Image: []HiloCatalogEntry{
@@ -399,6 +401,10 @@ func defaultHiloCatalog() HiloCatalog {
 				// 768P 的短边 768 放大到 **1536**，≥ 2K 的短边 1440（见
 				// service/aggregate_pipeline.go 的 upscaleSRRatioOf）。聚合配置里的
 				// `delivered_size` 因此写 2K，计费按交付档位走。
+				//
+				// ⚠ 超宽/超窄两档(21:9、9:21)的成片是 3072×1344 / 1344×3072，短边 1344
+				// **不到** 2K 的 1440，但总像素 4.13M 高于 2560×1440 的 3.69M，所以仍按 2K
+				// 计费、也不被 4K 拦截单独挡（拦截按生成段档位词 768P 算）。
 				//
 				// 这条要求 AggregateModelConfig 里 minimax-h3-2k 是启用的
 				// （出厂默认启用）。停掉的话这一条会从目录里消失 ——
