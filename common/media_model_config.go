@@ -1023,16 +1023,22 @@ func IsAspectRatio(s string) bool {
 	return m[1] != "0" && m[2] != "0"
 }
 
-// h3NamedAspectRatioValues 是 H3 认的六个具名宽高比(t2va 只收这六个,其余引擎直接 400)。
+// h3NamedAspectRatioValues 是 H3 认的十一个具名宽高比(t2va 只收这十一个,其余引擎直接 400)。
 // 与 relay/channel/task/gpustackplus 的 h3NamedAspectRatios 逐项一致 —— 改一处要改两处,
 // 那边的测试会比对两份列表,漂移了测试会红。
+// 来源:`vllm-omni-pika` 的 `minimax_h3/preprocessing.py:73-85`(与官方 `buckets.yaml` 一致)。
 var h3NamedAspectRatioValues = map[string]float64{
 	"21:9": 21.0 / 9.0,
 	"16:9": 16.0 / 9.0,
+	"3:2":  3.0 / 2.0,
 	"4:3":  4.0 / 3.0,
+	"5:4":  5.0 / 4.0,
 	"1:1":  1.0,
+	"4:5":  4.0 / 5.0,
 	"3:4":  3.0 / 4.0,
+	"2:3":  2.0 / 3.0,
 	"9:16": 9.0 / 16.0,
+	"9:21": 9.0 / 21.0,
 }
 
 // H3NamedAspectRatioNames 返回 H3 认的具名宽高比(已排序),供比对引擎侧列表是否漂移。

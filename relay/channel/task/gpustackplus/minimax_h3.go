@@ -78,20 +78,27 @@ func h3MaxOutputPixelsFor(shortEdge int) int {
 	return int(float64(h3MaxOutputPixels768) * ratio * ratio)
 }
 
-// h3NamedAspectRatios 是 H3 认的六个具名比例(pipeline:109-116
-// MINIMAX_H3_SUPPORTED_ASPECT_RATIOS)。
+// h3NamedAspectRatios 是 H3 认的十一个具名比例。
 //
-// ⚠️ t2va **只**接受这六个具名值:不在表内的字符串引擎会退到 float() 解析,失败即 400。
+// 来源:`vllm-omni-pika` 的 `minimax_h3/preprocessing.py:73-85`,与官方 `Pika-H3-Flex`
+// 的 `buckets.yaml` 逐项一致。顺序同官方:超宽 → 横版 → 方形 → 竖版 → 超窄。
+//
+// ⚠️ t2va **只**接受这十一个具名值:不在表内的字符串引擎会退到 float() 解析,失败即 400。
 // 所以**绝不能用像素尺寸反推比例**下发 —— common.AspectRatioFromSize("832x480") 走 gcd
 // 约分得到的是 "26:15",不是 "16:9"(832×480 真实比例 1.733,而 16:9 = 1.778;对齐到 32
 // 的过程本身就改变了比例),下发过去必被拒。
 var h3NamedAspectRatios = map[string]float64{
 	"21:9": 21.0 / 9.0,
 	"16:9": 16.0 / 9.0,
+	"3:2":  3.0 / 2.0,
 	"4:3":  4.0 / 3.0,
+	"5:4":  5.0 / 4.0,
 	"1:1":  1.0,
+	"4:5":  4.0 / 5.0,
 	"3:4":  3.0 / 4.0,
+	"2:3":  2.0 / 3.0,
 	"9:16": 9.0 / 16.0,
+	"9:21": 9.0 / 21.0,
 }
 
 // h3IsNamedAspectRatio 判断是否为 H3 认的具名比例。
@@ -102,10 +109,12 @@ func h3IsNamedAspectRatio(s string) bool {
 
 // h3ShapeRatioTolerance 是 target_shape 反推具名比例时允许的相对误差。
 //
-// 3% 这个数不是拍的:体验区的 target_shape 表只对 5 个比例给了手调固定值,21:9 走的是
-// 「按 ~720p 面积等比算再对齐到 16 的倍数」那条路(aspectRatioToShape),对齐后得
-// [624,1472],1472/624=2.359 对真值 21/9=2.333 偏 1.1% —— 容差小于它就把 21:9 漏掉了。
-// 上限则由具名表里最挨近的两档决定:1:1(1.0) 与 3:4(0.75) 相距 25%,3% 离误判还远。
+// 3% 这个数不是拍的:体验区的 target_shape 表只对 5 个比例给了手调固定值,其余(21:9、
+// 3:2、5:4、4:5、2:3、9:21)走的是「按 ~720p 面积等比算再对齐到 16 的倍数」那条路
+// (aspectRatioToShape)。偏差最大的是 21:9:对齐后得 [624,1472],1472/624=2.359 对真值
+// 21/9=2.333 偏 1.1%,9:21 同量级(1.09%)—— 容差小于它就把这两档漏掉了。
+// 上限则由具名表里最挨近的两档决定:放开到 11 个之后是 4:3(1.333) 与 5:4(1.25),相距
+// 6.7%,其一半 3.35% > 3%,所以 3% 不会把相邻档判混。
 const h3ShapeRatioTolerance = 0.03
 
 // h3AspectRatioFromTargetShape 从 wan 的 target_shape:[height,width] 反推 H3 的具名比例,
