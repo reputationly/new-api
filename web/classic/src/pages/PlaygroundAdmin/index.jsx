@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Button, Card, Spin, Tag, Typography } from '@douyinfe/semi-ui';
 import { AlertTriangle } from 'lucide-react';
@@ -10,6 +10,7 @@ import {
 } from '../../constants/playgroundAdmin.constants';
 import SettingsSidebarModulesAdmin from '../Setting/Operation/SettingsSidebarModulesAdmin';
 import { usePlaygroundAdminDraft } from './usePlaygroundAdminDraft';
+import { navToSearch, parseNavFromSearch, resolveNav } from './navState';
 import GlobalPanel from './GlobalPanel';
 import CategoryPanel from './CategoryPanel';
 import TabPanel from './TabPanel';
@@ -28,12 +29,28 @@ const { Text, Title } = Typography;
 const PlaygroundAdmin = () => {
   const { t } = useTranslation();
   const draft = usePlaygroundAdminDraft();
-  const [nav, setNav] = useState({ type: 'global' });
 
   const categories = useMemo(
     () => PLAYGROUND_CATEGORIES.filter((c) => c.tabs.length > 0),
     [],
   );
+
+  // 导航位置从 URL 读回来：刷新、分享、从别处带链接进来都能回到原处。
+  // 校验放在读取这一侧 —— 外部链接可能指向已经下线的方法/玩法，那种情况回「通用设置」，
+  // 而不是把右侧渲染成空白。
+  const [nav, setNav] = useState(() =>
+    resolveNav(parseNavFromSearch(window.location.search), categories),
+  );
+
+  // 写回用 replaceState（不是 pushState）：导航切换不该把后退栈塞满，否则用户点一次
+  // 标签页再按后退，会以为自己在网页里"往回走"。
+  useEffect(() => {
+    const search = navToSearch(window.location.search, nav);
+    const next = `${window.location.pathname}${search}${window.location.hash}`;
+    if (next !== `${window.location.pathname}${window.location.search}${window.location.hash}`) {
+      window.history.replaceState(null, '', next);
+    }
+  }, [nav]);
 
   // 每个 tab 挂了几个模型：侧栏直接标出来，开着却是 0 的一眼可见。
   const modelCount = (category, tabKey) => {
