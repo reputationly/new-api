@@ -32,7 +32,11 @@ const SUGGESTIONS = { aspectRatios: VIDEO_ASPECT_RATIOS };
 // 以为改生效了。体验区读同一份 lock.value，见 getTabFieldLock 的注释。
 const FieldInput = ({ field, value, onChange, compact = false, lock }) => {
   const { t } = useTranslation();
-  const meta = PLAYGROUND_FIELD_META[field];
+  // field 有两种形态：**tab 字段名**(去 PLAYGROUND_FIELD_META 查)与**模型级字段的整个
+  // 描述对象**(PLAYGROUND_MODEL_LEVEL_FIELDS 里的那一项，不在 tab 字段表里)。
+  // 后者是给「没挂玩法的模型」用的(超分倍率就在那儿)：只认字符串会让它静默返回 null
+  // —— 分类页那个块会渲染出标题、字段却一个都不显示，而且不报错。
+  const meta = typeof field === 'string' ? PLAYGROUND_FIELD_META[field] : field;
   if (!meta) return null;
 
   if (lock) {
@@ -131,8 +135,9 @@ const FieldInput = ({ field, value, onChange, compact = false, lock }) => {
               onChange(v === '' || v == null ? undefined : Number(v))
             }
             // 字段自带 placeholder 时用它：不是每个 int 都是「0=不限」（超分倍率是同
-            // 一个量表的另一个语义，写「不限」会把人引到 0 上去）。
-            placeholder={field.placeholder ? t(field.placeholder) : t('留空 / 0 = 不限')}
+            // 一个量表的另一个语义，写「不限」会把人引到 0 上去）。取 meta 而不是 field：
+            // field 可能是字段名字符串，那上面没有 placeholder。
+            placeholder={meta.placeholder ? t(meta.placeholder) : t('留空 / 0 = 不限')}
             style={{ width: '100%' }}
           />
         );
