@@ -36,6 +36,7 @@ export default function SettingsMonitoring(props) {
   const [inputs, setInputs] = useState({
     ChannelDisableThreshold: '',
     QuotaRemindThreshold: '',
+    QuotaRemindEnabled: true,
     AutomaticDisableChannelEnabled: false,
     AutomaticEnableChannelEnabled: false,
     AutomaticDisableKeywords: '',
@@ -198,6 +199,24 @@ export default function SettingsMonitoring(props) {
                     setInputs({
                       ...inputs,
                       QuotaRemindThreshold: String(value),
+                    })
+                  }
+                />
+              </Col>
+              <Col xs={24} sm={12} md={8} lg={8} xl={8}>
+                <Form.Switch
+                  field={'QuotaRemindEnabled'}
+                  label={t('额度提醒')}
+                  extraText={t(
+                    '关闭后不再发送「额度即将用尽」通知（钱包与订阅共用）；开启时仅当本次消费真的从钱包出账才提醒，纯积分支付不提醒',
+                  )}
+                  size='default'
+                  checkedText='｜'
+                  uncheckedText='〇'
+                  onChange={(value) =>
+                    setInputs({
+                      ...inputs,
+                      QuotaRemindEnabled: value,
                     })
                   }
                 />

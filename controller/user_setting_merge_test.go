@@ -171,3 +171,38 @@ func TestUpdateBillingPreferencePreservesOtherSettings(t *testing.T) {
 	require.Equal(t, "u@example.com", got.NotificationEmail)
 	require.Equal(t, `{"chat":{"enabled":false}}`, got.SidebarModules)
 }
+
+// 额度提醒的个人退订开关：默认接收，显式关闭后能存住，也能再打开。
+func TestUpdateUserSettingQuotaRemindDisabled(t *testing.T) {
+	db := setupExportLimitDB(t)
+	seedExportLimitUser(t, db, 9714, "setting_quota_remind")
+
+	resp := callUpdateUserSetting(t, 9714,
+		`{"notify_type":"email","quota_warning_threshold":100,"quota_remind_disabled":true}`)
+	require.Equal(t, true, resp["success"])
+	require.True(t, loadUserSetting(t, 9714).QuotaRemindDisabled)
+
+	resp = callUpdateUserSetting(t, 9714,
+		`{"notify_type":"email","quota_warning_threshold":100,"quota_remind_disabled":false}`)
+	require.Equal(t, true, resp["success"])
+	require.False(t, loadUserSetting(t, 9714).QuotaRemindDisabled)
+}
+
+// 企业子账户不参与计费，额度提醒沿用主账户设置：提交该开关直接拒绝；
+// 不提交时其余通知字段照常可存（子账户页面本就不渲染这个开关）。
+func TestUpdateUserSettingRejectsSubAccountQuotaRemind(t *testing.T) {
+	db := setupExportLimitDB(t)
+	seedExportLimitUser(t, db, 9715, "setting_sub_account")
+	require.NoError(t, db.Model(&model.User{}).Where("id = ?", 9715).
+		Update("parent_user_id", 1).Error)
+
+	resp := callUpdateUserSetting(t, 9715,
+		`{"notify_type":"email","quota_warning_threshold":100,"quota_remind_disabled":true}`)
+	require.Equal(t, false, resp["success"])
+	require.Contains(t, resp["message"], "子账户")
+
+	resp = callUpdateUserSetting(t, 9715,
+		`{"notify_type":"email","quota_warning_threshold":100}`)
+	require.Equal(t, true, resp["success"])
+	require.Equal(t, float64(100), loadUserSetting(t, 9715).QuotaWarningThreshold)
+}

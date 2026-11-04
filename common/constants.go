@@ -166,6 +166,11 @@ var ChannelDisableThreshold = 5.0
 var AutomaticDisableChannelEnabled = false
 var AutomaticEnableChannelEnabled = false
 var QuotaRemindThreshold = 1000
+
+// QuotaRemindEnabled 额度提醒总开关（运营可关）。关掉后钱包与订阅两条
+// 「额度即将用尽」通知都不再发送；单用户阈值保留，开关打开时才参与判断。
+var QuotaRemindEnabled = true
+
 var PreConsumedQuota = 500
 
 var RetryTimes = 0

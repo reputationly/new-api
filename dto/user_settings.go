@@ -1,8 +1,11 @@
 package dto
 
+// QuotaRemindDisabled 用「关闭」语义而不是「启用」：存量用户的 setting JSON 里没有这个键，
+// 反序列化得到 false 正好等于「照常接收」；若用 opt-in 字段，老用户升级后会被静默退订。
 type UserSetting struct {
 	NotifyType                       string  `json:"notify_type,omitempty"`                          // QuotaWarningType 额度预警类型
 	QuotaWarningThreshold            float64 `json:"quota_warning_threshold,omitempty"`              // QuotaWarningThreshold 额度预警阈值
+	QuotaRemindDisabled              bool    `json:"quota_remind_disabled,omitempty"`                // QuotaRemindDisabled 是否已退订额度提醒
 	WebhookUrl                       string  `json:"webhook_url,omitempty"`                          // WebhookUrl webhook地址
 	WebhookSecret                    string  `json:"webhook_secret,omitempty"`                       // WebhookSecret webhook密钥
 	NotificationEmail                string  `json:"notification_email,omitempty"`                   // NotificationEmail 通知邮箱地址

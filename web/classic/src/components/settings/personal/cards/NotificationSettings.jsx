@@ -76,6 +76,8 @@ const NotificationSettings = ({
   const [statusState] = useContext(StatusContext);
   const [userState] = useContext(UserContext);
   const isAdminOrRoot = (userState?.user?.role || 0) >= 10;
+  // 企业子账户不是计费主体：额度提醒按主账户设置走，这条开关对它没有意义。
+  const isSubAccount = (userState?.user?.parent_user_id || 0) > 0;
 
   // 左侧边栏设置相关状态
   const [sidebarLoading, setSidebarLoading] = useState(false);
@@ -480,6 +482,28 @@ const NotificationSettings = ({
                     },
                   ]}
                 />
+
+                {!isSubAccount && (
+                  <div className='flex items-center justify-between py-3'>
+                    <div className='mr-4'>
+                      <Typography.Text strong>
+                        {t('接收额度提醒')}
+                      </Typography.Text>
+                      <div className='text-xs text-gray-600 mt-1'>
+                        {t(
+                          '关闭后不再接收「额度即将用尽」提醒（邮件/Webhook/Bark/Gotify 一并不发）；余额不足时接口照常拒绝，不会因为关了提醒而继续可用',
+                        )}
+                      </div>
+                    </div>
+                    <Switch
+                      checked={!notificationSettings.quotaRemindDisabled}
+                      onChange={(checked) =>
+                        handleFormChange('quotaRemindDisabled', !checked)
+                      }
+                      size='default'
+                    />
+                  </div>
+                )}
 
                 {isAdminOrRoot && (
                   <Form.Switch

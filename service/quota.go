@@ -461,7 +461,30 @@ func PostConsumeQuota(relayInfo *relaycommon.RelayInfo, quota int, preConsumedQu
 	return nil
 }
 
+// shouldSendWalletQuotaWarn 判断这次结算是否要发「额度即将用尽」。
+//
+// consumeQuota 里可能含由营销积分抵扣的部分，那部分钱包一分没动。拿整笔去减
+// 钱包余额，会让「0 元 + 有积分」的用户在每一笔成功请求后都收到余额不足提醒——
+// 与 entitlement 分支跳过告警是同一个理由（误报比不报更糟）。
+// 结算把积分向上取整到整积分时 pointsConsumed 可能略大于总额，此时钱包支出为 0。
+func shouldSendWalletQuotaWarn(userQuota int, consumeQuota int, pointsConsumed int, threshold int) bool {
+	walletConsume := consumeQuota - pointsConsumed
+	if walletConsume <= 0 {
+		return false
+	}
+	return userQuota-walletConsume < threshold
+}
+
+// quotaRemindMuted 判断额度提醒是否整体静音：运营关掉全局开关，或用户自己在个人
+// 设置里退订。两种途径都只影响「发不发」，不影响阈值本身。
+func quotaRemindMuted(userSetting dto.UserSetting) bool {
+	return !common.QuotaRemindEnabled || userSetting.QuotaRemindDisabled
+}
+
 func checkAndSendQuotaNotify(relayInfo *relaycommon.RelayInfo, quota int, preConsumedQuota int) {
+	if quotaRemindMuted(relayInfo.UserSetting) {
+		return
+	}
 	gopool.Go(func() {
 		userSetting := relayInfo.UserSetting
 		threshold := common.QuotaRemindThreshold
@@ -469,12 +492,7 @@ func checkAndSendQuotaNotify(relayInfo *relaycommon.RelayInfo, quota int, preCon
 			threshold = int(userSetting.QuotaWarningThreshold)
 		}
 
-		//noMoreQuota := userCache.Quota-(quota+preConsumedQuota) <= 0
-		quotaTooLow := false
-		consumeQuota := quota + preConsumedQuota
-		if relayInfo.UserQuota-consumeQuota < threshold {
-			quotaTooLow = true
-		}
+		quotaTooLow := shouldSendWalletQuotaWarn(relayInfo.UserQuota, quota+preConsumedQuota, relayInfo.PointsConsumed, threshold)
 		if quotaTooLow {
 			prompt := "您的额度即将用尽"
 			topUpLink := fmt.Sprintf("%s/console/topup", system_setting.ServerAddress)
@@ -510,10 +528,10 @@ func checkAndSendQuotaNotify(relayInfo *relaycommon.RelayInfo, quota int, preCon
 }
 
 func checkAndSendSubscriptionQuotaNotify(relayInfo *relaycommon.RelayInfo) {
+	if relayInfo == nil || quotaRemindMuted(relayInfo.UserSetting) {
+		return
+	}
 	gopool.Go(func() {
-		if relayInfo == nil {
-			return
-		}
 		if relayInfo.SubscriptionId == 0 || relayInfo.SubscriptionAmountTotal <= 0 {
 			return
 		}
