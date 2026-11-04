@@ -158,6 +158,11 @@ func clampUpscaleProgress(current, want string) string {
 // nfsPath 为生成段产物在共享 NFS 上的路径,作为超分段的输入。
 func TryAdvanceAggregatePipeline(ctx context.Context, adaptor TaskPollingAdaptor, task *model.Task, taskResult *relaycommon.TaskInfo, nfsPath string) bool {
 	agg := task.PrivateData.Aggregate
+	if agg.IsPlaygroundPipeline() {
+		// 体验区：后置段是**声明的链**（sr → v2a），由服务端用内部令牌提交。
+		// 与聚合那套的区别只在"用谁的凭证提交"，状态机与收尾完全共用。
+		return advancePlaygroundStage(ctx, adaptor, task, taskResult, nfsPath)
+	}
 	if !agg.HasUpscale() || agg.Stage != 1 {
 		return false
 	}
@@ -415,7 +420,11 @@ func submitUpscaleTask(ctx context.Context, agg *model.TaskAggregateInfo, nfsPat
 // 再去问渠道只会一遍遍拿到同一个 completed。
 func IsAggregatePipelineParent(task *model.Task) bool {
 	agg := task.PrivateData.Aggregate
-	return agg != nil && agg.Stage == 2 && agg.Stage2TaskID != ""
+	// **Stage >= 2** 而不是 == 2：体验区的链是 sr → v2a，配音那一段时 Stage=3，
+	// 父任务同样"在等子任务"（不进上游轮询，由 Sync 收尾）。判死 ==2 会让父任务
+	// 在第三段期间被当成普通任务去轮询自己的旧上游 id，永远查到"已完成"，
+	// 于是反复结算 / 反复推进。
+	return agg != nil && agg.Stage >= 2 && agg.Stage2TaskID != ""
 }
 
 // AggregateParentStillWaiting 该父任务是否仍在等一条**存在的**子任务。
@@ -458,6 +467,31 @@ func SyncAggregatePipelineParents(ctx context.Context, parents []*model.Task) {
 		}
 		switch sub.Status {
 		case model.TaskStatusSuccess:
+			// 体验区：链上还有下一段（sr → v2a）时继续推进，不在这里收尾。
+			// 上一段已经成功，`task:<它的 id>` 此时能解析到产物，正好做下一段的输入。
+			if agg.IsPlaygroundPipeline() && agg.HasMorePostStages() {
+				// **推进成功必须自己落库。**
+				//
+				// task_polling 的平台分支靠 switch 之后统一 UpdateWithStatus 收尾，
+				// 而聚合父任务被 partitionTasksForPolling 挡在平台轮询之外，走的是本函数
+				// —— 这里没有那个"尾巴"。只改内存态就 continue 的话，下一轮从库里读回来
+				// 仍是 Stage=2/旧的 Stage2TaskID：于是再次推进、被 claim 的 CAS 拦住
+				// （返回 false），接着按"提交失败"降级交付 —— 而刚提交的那一段照常在跑、
+				// 照常计费，产物却被丢掉。
+				oldStatus := task.Status
+				if advancePlaygroundStage(ctx, nil, task, nil, "") {
+					if _, werr := task.UpdateWithStatus(oldStatus); werr != nil {
+						// 落库失败：claim 已经是下一段的号，下一轮不会再提交（不会重复计费），
+						// 但父任务会停在旧状态直到超时兜底 —— 必须留一条 ERROR 方便定位。
+						common.SysError(fmt.Sprintf(
+							"playground pipeline: 推进后写回父任务 %s 失败: %v", task.TaskID, werr))
+					}
+					continue
+				}
+				// 推进失败：按现有成品交付（已生成的成品是用户付过费的，不能丢）。
+				common.SysLog(fmt.Sprintf(
+					"playground pipeline: task %s 的下一段提交失败,按已生成成品交付", task.TaskID))
+			}
 			finishAggregateParent(ctx, task, sub.PrivateData.ResultURL, "")
 		case model.TaskStatusFailure:
 			common.SysLog(fmt.Sprintf(

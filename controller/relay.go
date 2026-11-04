@@ -760,6 +760,19 @@ func RelayTask(c *gin.Context) {
 					exp.PublicName, task.TaskID, exp.UpscaleSkipReason))
 			}
 		}
+		// 体验区的声明式后置段：把"这段跑完还要做什么"随任务落库。
+		//
+		// 这一行是整套改动的支点：声明一落库，推进权就从浏览器转到巡检
+		// （service.TryAdvanceAggregatePipeline），用户关掉页面也能跑完。
+		// 与聚合那条互斥（聚合声明的是 Upscale*，体验区声明的是 PostStages），
+		// 走不到同一条任务上。
+		if stages := middleware.PostStagesFromContext(c); len(stages) > 0 {
+			task.PrivateData.Aggregate = &model.TaskAggregateInfo{
+				Source:     model.TaskPipelineSourcePlayground,
+				Stage:      1,
+				PostStages: stages,
+			}
+		}
 		// 使用日志的段标签:结算与退款日志在任务落库之后才写,标签要存进私有数据随任务走。
 		// 与提交日志取的是同一个函数、同一份输入,两边不会分叉。
 		if relayInfo.TaskRelayInfo != nil {

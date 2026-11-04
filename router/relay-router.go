@@ -72,7 +72,7 @@ func SetRelayRouter(router *gin.Engine) {
 		// 跑在 Distribute 之前，而本组的 Distribute 是分组级中间件，插不进去。
 		playgroundRouter.POST("/responses", controller.PlaygroundResponses)
 		playgroundRouter.POST("/audio/speech", controller.PlaygroundAudioSpeech)
-		playgroundRouter.POST("/videos", controller.PlaygroundVideo)
+		playgroundRouter.POST("/videos", middleware.TaskPostStages(), controller.PlaygroundVideo)
 		playgroundRouter.GET("/videos/:task_id", controller.PlaygroundVideoFetch)
 	}
 	// 体验区图片：与 playgroundRouter 同一套鉴权，但把 Distribute 留到路由级，

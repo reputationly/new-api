@@ -183,6 +183,34 @@ func VideoDurationsAllowedForModel(taskType string, candidates ...string) (durat
 	return nil, false
 }
 
+// IsPipelineVideoModel 该模型是否声明为「自建引擎（可编排超分/配音/插帧）」。
+//
+// 两段式的第二段拿的是生成段落在共享 NFS 上的产物，只有自建 gpustackplus 渠道有这条
+// 物化链路；第三方渠道（豆包/Sora 等）回的是自家 URL。所以"能不能编排"等价于
+// "生成段是不是自建引擎"。
+//
+// 判据与体验区同源（VideoModelConfig.models[name].pipeline），只是从服务端再读一次：
+// 直连调用方没有前端，前端那道闸对它们不存在。
+func IsPipelineVideoModel(name string) bool {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return false
+	}
+	OptionMapRWMutex.RLock()
+	raw := OptionMap["VideoModelConfig"]
+	OptionMapRWMutex.RUnlock()
+	entry, ok := modelsMap(raw)[name]
+	if !ok {
+		return false
+	}
+	obj, ok := entry.(map[string]any)
+	if !ok {
+		return false
+	}
+	flag, _ := obj["pipeline"].(bool)
+	return flag
+}
+
 // ValidateVideoDurationForModel 校验视频时长:模型未配置 durations 则放行;配置了
 // 则要求请求值落在允许集内。seconds 无值时跳过(无值可校验)。
 // 尺寸不在此校验——运营配的档位词/宽高比与客户端发的精确像素无法字符串比较,

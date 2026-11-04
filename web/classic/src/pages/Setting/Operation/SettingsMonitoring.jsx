@@ -37,6 +37,7 @@ export default function SettingsMonitoring(props) {
     ChannelDisableThreshold: '',
     QuotaRemindThreshold: '',
     QuotaRemindEnabled: true,
+    PlaygroundPipelineServerSide: false,
     AutomaticDisableChannelEnabled: false,
     AutomaticEnableChannelEnabled: false,
     AutomaticDisableKeywords: '',
@@ -217,6 +218,24 @@ export default function SettingsMonitoring(props) {
                     setInputs({
                       ...inputs,
                       QuotaRemindEnabled: value,
+                    })
+                  }
+                />
+              </Col>
+              <Col xs={24} sm={12} md={8} lg={8} xl={8}>
+                <Form.Switch
+                  field={'PlaygroundPipelineServerSide'}
+                  label={t('体验区流水线由服务端推进')}
+                  extraText={t(
+                    '开启后，体验区两段式流水线（先生成、再超分/配音）由服务端推进：关掉页面、切走标签也会跑完；关闭时仍由浏览器提交第二段（关页面即停，旧行为）',
+                  )}
+                  size='default'
+                  checkedText='｜'
+                  uncheckedText='〇'
+                  onChange={(value) =>
+                    setInputs({
+                      ...inputs,
+                      PlaygroundPipelineServerSide: value,
                     })
                   }
                 />

@@ -307,6 +307,16 @@ export const useVideoGeneration = ({
   const { t } = useTranslation();
   const [statusState] = useContext(StatusContext);
   const [userState] = useContext(UserContext);
+  // 两段式流水线是否由**服务端**推进（/api/status 下发，灰度开关）。
+  //
+  // 客户端必须知道这件事：
+  //   - 开着 → 在生成段请求里**声明** post_stages，第二段由服务端提交，本地不再提交；
+  //   - 关着 → 老行为（本地提交第二段），声明也不发（发了也只是被服务端剥掉）。
+  // 让它"只要带了声明就不本地提交"是不行的：开关关掉时服务端不接管，流水线会停死。
+  const serverPipeline =
+    statusState?.status?.playground_pipeline_server_side === true;
+  const serverPipelineRef = useRef(serverPipeline);
+  serverPipelineRef.current = serverPipeline;
 
   const isI2V = mode === 'image2video';
   const isFLF2V = mode === 'flf2v';
@@ -1110,6 +1120,20 @@ export const useVideoGeneration = ({
 
   // 流水线阶段顺序：生成 → [超分] → [配音]。返回当前 stage 之后应跑的下一段，
   // 无则 null（结束落终态）。
+  // 服务端下发的段号（1=生成段, 2=sr, 3=v2a）→ 界面上那两段的名字。
+  // 后置段改由服务端推进之后，客户端不再自己知道"切到第二段了" —— 只能由服务端带出来。
+  // 用进度区间反推是不行的：那边一调 clamp，这边就跟着错。
+  const stageNameFromServer = (pipeline, n) => {
+    if (!(n >= 2)) return 'generating';
+    // 只有配音段的流水线，第 2 段就是配音；其余（含 pipeline 拿不到的历史会话）
+    // 第 2 段按超分算 —— 现在只有超分是默认开启的，宁可显示"画质增强"也不要让
+    // 用户在一个正在放大的任务上看到"配音中"。
+    if (n === 2) {
+      return pipeline?.upscale || !pipeline?.dub ? 'upscaling' : 'dubbing';
+    }
+    return 'dubbing';
+  };
+
   const nextPipelineStage = (stage, pipeline) => {
     if (!pipeline) return null;
     if (stage === 'generating') {
@@ -1244,7 +1268,12 @@ export const useVideoGeneration = ({
           // 流水线：当前段完成 → 若还有后置段（超分/配音）则不落终态、自动提交下一段。
           // 页面中途关闭再回来时，恢复轮询到这里同样会按 stage 续走剩余段。
           const msg = findConvMessage(convId, msgId);
-          const next = nextPipelineStage(msg?.stage, msg?.pipeline);
+          // 服务端接管时**本地绝不提交第二段**：两边都提交就是同一段跑两遍、
+          // 计费两笔。服务端推进期间这条任务会一直 IN_PROGRESS（进度 60–95%），
+          // 本地只要继续轮询即可。
+          const next = serverPipelineRef.current
+            ? null
+            : nextPipelineStage(msg?.stage, msg?.pipeline);
           if (next) {
             const switched = await submitPipelineStage(
               convId,
@@ -1283,9 +1312,21 @@ export const useVideoGeneration = ({
         // 排队回显来自门面（它知道任务落在哪个实例的队列上）：只有自建 GPUStack
         // 会给，其余渠道恒为 undefined，此时组件退回原来那句「任务排队中…」。
         const meta = data.metadata || inner.metadata || {};
+        // 服务端推进时，前端靠这个段号把进度条切到「画质增强/配音」那一段。
+        const serverStage = data.pipeline_stage ?? inner.pipeline_stage;
+        const progressMsg =
+          serverStage >= 2 ? findConvMessage(convId, msgId) : null;
         patchConvMessage(convId, msgId, {
           status: status || VIDEO_STATUS.IN_PROGRESS,
           ...(progress !== undefined ? { progress } : {}),
+          ...(serverStage >= 2
+            ? {
+                stage: stageNameFromServer(
+                  progressMsg?.pipeline,
+                  serverStage,
+                ),
+              }
+            : {}),
           queueAhead: meta.queue_ahead,
           queueEtaSeconds: meta.estimated_start_seconds,
         });
@@ -1918,6 +1959,32 @@ export const useVideoGeneration = ({
           // 无超分段（仅配音）→ stage1 按选中尺寸正常生成。
           if (wantUpscale) {
             body.size = normalizeVideoSize(upscaleChoice.fromSize);
+          }
+        }
+        // 服务端推进：把"这段跑完还要做什么"**声明**给服务端，而不是等它跑完再由
+        // 浏览器发第二个请求。声明一落库，推进权就归巡检 —— 用户关掉页面/切走标签，
+        // 第二段照样会被提交。字段与本地提交那版逐字段对齐（服务端只是换个提交者）。
+        if (serverPipelineRef.current && pipeline) {
+          const stages = [];
+          if (pipeline.upscale) {
+            stages.push({
+              kind: 'sr',
+              model: pipeline.upscale.srModel,
+              // 倍率按超分模型那一行取（固定倍率引擎必须显式给，见 getSrRatioForModel）。
+              sr_ratio: getSrRatioForModel(videoConfig, pipeline.upscale.srModel),
+              ...(pipeline.upscale.targetShortEdge > 0
+                ? { target_short_edge: pipeline.upscale.targetShortEdge }
+                : {}),
+            });
+          }
+          if (pipeline.dub) {
+            stages.push({ kind: 'v2a', model: pipeline.dub.dubModel });
+          }
+          if (stages.length) {
+            body.metadata = {
+              ...(body.metadata || {}),
+              post_stages: stages,
+            };
           }
         }
         // 一段式交付:生成仍然按起步档（= 该模型的原生档）下发，只是把交付短边一并

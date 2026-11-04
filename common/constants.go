@@ -171,6 +171,14 @@ var QuotaRemindThreshold = 1000
 // 「额度即将用尽」通知都不再发送；单用户阈值保留，开关打开时才参与判断。
 var QuotaRemindEnabled = true
 
+// PlaygroundPipelineServerSide 体验区两段式流水线由**服务端**推进（默认关）。
+//
+// 关着的时候：浏览器自己提交第二段（超分/配音），关掉页面就停 —— 这是既有行为，
+// 一个字节都不变，留作回退开关。
+// 开着的时候：客户端在生成段请求里声明 metadata.post_stages，服务端落进任务、由
+// 巡检推进，关页面也能跑完。上线顺序是先在内测分组开、观察两天再全量。
+var PlaygroundPipelineServerSide = false
+
 var PreConsumedQuota = 500
 
 var RetryTimes = 0

@@ -78,10 +78,42 @@ func (token *Token) GetIpLimits() []string {
 	return ipLimits
 }
 
+// PipelineTokenNamePrefix 服务端内部令牌的名字前缀（唯一来源）。
+//
+// 这类令牌只用于**服务端推进后置段**（超分/配音）：见 service.GetPipelineToken。
+// 用户既不该看见它，也不该改它的白名单 —— 改了会让超分段整段失败，而报错离原因很远。
+// 所以所有"列出用户的令牌"的查询都必须把它排除掉。
+const PipelineTokenNamePrefix = "__pipeline__"
+
+// tokenInternalNameLike 内部令牌前缀的 LIKE 模式，配 `ESCAPE '!'` 使用。
+//
+// **下划线在 LIKE 里是单字符通配符**，直接把前缀拼进模式会连
+// `12pipeline34xyz` 这种普通用户令牌名一起过滤掉 —— 用户会发现自己的令牌"消失"了，
+// 而且没有任何报错。所以每个 `_` 都转义成 `!_`，与本文件 SearchUserTokens 里
+// sanitizeLikePattern 的转义字符保持一致。
+const tokenInternalNameLike = "!_!_pipeline!_!_%"
+
+// IsPipelineTokenNameLike 判断这个名字是不是内部流水线令牌（Go 侧的字符串判断，
+// 与 SQL 里 excludePipelineTokens 的 LIKE 同口径）。
+func IsPipelineTokenNameLike(name string) bool {
+	return strings.HasPrefix(name, PipelineTokenNamePrefix)
+}
+
+// excludePipelineTokens 统一的"排除内部令牌"条件。列表 / 计数 / 搜索三处共用，
+// 漏一处就是列表与总数对不上（或者搜得出来但列表里没有）。
+func excludePipelineTokens(q *gorm.DB) *gorm.DB {
+	if q == nil {
+		return q
+	}
+	return q.Where("name NOT LIKE ? ESCAPE '!'", tokenInternalNameLike)
+}
+
+// GetAllUserTokens 列出用户的令牌（不含内部流水线令牌）。
 func GetAllUserTokens(userId int, startIdx int, num int) ([]*Token, error) {
 	var tokens []*Token
 	var err error
-	err = DB.Where("user_id = ?", userId).Order("id desc").Limit(num).Offset(startIdx).Find(&tokens).Error
+	err = excludePipelineTokens(DB.Where("user_id = ?", userId)).
+		Order("id desc").Limit(num).Offset(startIdx).Find(&tokens).Error
 	return tokens, err
 }
 
@@ -164,7 +196,7 @@ func SearchUserTokens(userId int, keyword string, token string, offset int, limi
 		}
 	}
 
-	baseQuery := DB.Model(&Token{}).Where("user_id = ?", userId)
+	baseQuery := excludePipelineTokens(DB.Model(&Token{}).Where("user_id = ?", userId))
 	if len(tokenIds) > 0 {
 		baseQuery = baseQuery.Where("id IN ?", tokenIds)
 	}
@@ -451,7 +483,9 @@ func decreaseTokenQuota(id int, quota int) (err error) {
 // CountUserTokens returns total number of tokens for the given user, used for pagination
 func CountUserTokens(userId int) (int64, error) {
 	var total int64
-	err := DB.Model(&Token{}).Where("user_id = ?", userId).Count(&total).Error
+	// 与 GetAllUserTokens 同口径排除内部令牌：否则分页总数会比列表里能翻到的东西多，
+	// 用户永远翻到最后一页也翻不满。
+	err := excludePipelineTokens(DB.Model(&Token{}).Where("user_id = ?", userId)).Count(&total).Error
 	return total, err
 }
 

@@ -17,6 +17,7 @@ const (
 
 	LogStageGenerate = "generate"
 	LogStageUpscale  = "upscale"
+	LogStageDub      = "dub"
 )
 
 // 超分段走的是自调用(父任务以客户身份提交),父任务把归属放进请求头带过去。
@@ -51,13 +52,13 @@ func PipelineLogLabels(c *gin.Context, ownTaskID string) map[string]string {
 			return out
 		}
 	}
-	if c.GetHeader(AggregateStageHeader) == LogStageUpscale {
+	if stage := c.GetHeader(AggregateStageHeader); stage == LogStageUpscale || stage == LogStageDub {
 		parent := strings.TrimSpace(c.GetHeader(AggregateParentTaskHeader))
 		if parent == "" {
 			return nil
 		}
 		out := map[string]string{
-			LogKeyPipelineStage:   LogStageUpscale,
+			LogKeyPipelineStage:   stage,
 			LogKeyAggregateTaskID: parent,
 		}
 		if m := strings.TrimSpace(c.GetHeader(AggregatePublicModelHeader)); m != "" {

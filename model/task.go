@@ -78,6 +78,35 @@ type Task struct {
 	// 禁止返回给用户，内部可能包含key等隐私信息
 	PrivateData TaskPrivateData `json:"-" gorm:"column:private_data;type:json"`
 	Data        json.RawMessage `json:"data" gorm:"type:json"`
+
+	// PipelineClaimStage 已经**抢下**的后置段序号（0 = 未抢）。
+	//
+	// 流水线推进的互斥必须落在库上：读 Stage → 提交子任务 → 回写 Stage2TaskID 这三步
+	// 之间有一个窗口，两个推进者（同进程的两条路径、或换主瞬间的两个 master）同时进来
+	// 就会**重复提交、重复计费**。JSON 列没法跨库做比较，所以单开一个整型列，用
+	// `WHERE pipeline_claim_stage < ?` 这种条件更新做比较并交换（见 ClaimPipelineStage）。
+	PipelineClaimStage int `json:"-" gorm:"column:pipeline_claim_stage;not null;default:0"`
+}
+
+// ClaimPipelineStage 抢下"提交第 stage 段"的权利。返回 true 表示这一轮由调用方提交。
+//
+// 单条 SQL 的比较并交换（CAS），跨进程同样成立：`pipeline_claim_stage < stage`
+// 只会让一个更新匹配到行。抢不到就说明别人已经在提交了 —— 调用方必须**直接返回**，
+// 不能"再试一次"，重试正是重复计费本身。
+//
+// 抢到之后即使提交失败也不回滚：那一段的商业结论是"按已有成品交付"（见
+// service.advancePlaygroundStage），下一轮本来就不该再试。
+func ClaimPipelineStage(taskID int64, stage int) (bool, error) {
+	if taskID <= 0 || stage <= 0 {
+		return false, nil
+	}
+	res := DB.Model(&Task{}).
+		Where("id = ? AND pipeline_claim_stage < ?", taskID, stage).
+		Update("pipeline_claim_stage", stage)
+	if res.Error != nil {
+		return false, res.Error
+	}
+	return res.RowsAffected == 1, nil
 }
 
 // BeforeSave 把 PrivateData.TokenId 镜像到真列 token_id，覆盖 Insert/Update/UpdateWithStatus 三条写路径。
@@ -321,6 +350,18 @@ type TaskAggregateInfo struct {
 	// 生成段已经真实烧掉 GPU 并计费,不能因为第二段失败就把成品也丢了。
 	Stage1NFSPath string `json:"stage1_nfs_path,omitempty"`
 
+	// Source 这条流水线是谁的：
+	//   "aggregate" —— 聚合模型（客户调的是聚合名，两段都以客户令牌自调用、各自计费）；
+	//   "playground" —— 体验区（后置段由服务端用内部令牌提交，见 service/pipeline_token.go）。
+	//
+	// 必须区分：两者的**结算口径不同**（聚合父任务只结生成段，体验区同样只结生成段，
+	// 但子段的身份来源不同），而且排障时"这条是哪条链路"是第一手信息。
+	Source string `json:"source,omitempty"`
+
+	// PostStages 体验区那条链路声明的后置段（sr → v2a）。聚合链路用 Upscale* 那组
+	// 字段描述唯一的一段超分，这里为空。
+	PostStages []common.PostStage `json:"post_stages,omitempty"`
+
 	// Stage1ResultURL 生成段成品落盘到 OBS 之后的占位符(obs://…),推进到超分段成功时写入。
 	//
 	// 只服务于日志里「生成段」那一行:它的进度视为完成,下载取这里。对外 API 的整体任务
@@ -381,13 +422,52 @@ func (a *TaskAggregateInfo) HasUpscale() bool {
 	return a != nil && a.UpscaleModel != ""
 }
 
-// AdvancedPastStage1 聚合父任务是否已推进到超分段(之后的任何终态都算)。
+// AdvancedPastStage1 这条流水线是否已推进到后置段(之后的任何终态都算)。
 //
 // 推进之后日志里的这一行代表生成段:进度视为完成,下载取 Stage1ResultURL。
 // 对外 API 的整体视图不看这个判断,见 controller 侧的日志投影。
+//
+// 判据从「Stage == 2」放宽成「Stage >= 2」：体验区的链最多有 sr、v2a 两段，
+// 第三段（Stage=3）时这一行同样代表生成段，卡死在 ==2 会让日志与下载在配音期间
+// 突然"回到"生成段还没完成的样子。
 func (a *TaskAggregateInfo) AdvancedPastStage1() bool {
-	return a != nil && a.Stage == 2 && a.Stage2TaskID != ""
+	return a != nil && a.Stage >= 2 && a.Stage2TaskID != ""
 }
+
+// IsPlaygroundPipeline 这条流水线来自体验区（后置段由服务端用内部令牌提交）。
+func (a *TaskAggregateInfo) IsPlaygroundPipeline() bool {
+	return a != nil && a.Source == TaskPipelineSourcePlayground
+}
+
+// NextPostStage 取**当前该跑的**那一后置段：Stage=1 时取第 1 段，Stage=2 时取第 2 段。
+// 返回 false 表示已经跑完（或这条流水线没有声明后置段）。
+func (a *TaskAggregateInfo) NextPostStage() (common.PostStage, bool) {
+	if a == nil || len(a.PostStages) == 0 {
+		return common.PostStage{}, false
+	}
+	idx := a.Stage - 1
+	if idx < 0 || idx >= len(a.PostStages) {
+		return common.PostStage{}, false
+	}
+	return a.PostStages[idx], true
+}
+
+// HasMorePostStages 当前这一段之后还有没有要跑的段（决定子段成功后是收尾还是继续推进）。
+//
+// **必须与 NextPostStage 同源**，不能各写一份索引算术。曾经写成 `len > Stage`，
+// 而 NextPostStage 用的是 `Stage-1`，两者差一：sr→v2a 两段链在 sr 成功时
+// Stage=2、len=2，`2 > 2` 判成"没有下一段"，于是配音段永远不被提交（而且不报错，
+// 只是静默交付 sr 版成片）。现在直接问 NextPostStage，这类错位不可能再发生。
+func (a *TaskAggregateInfo) HasMorePostStages() bool {
+	_, ok := a.NextPostStage()
+	return ok
+}
+
+// 流水线来源（TaskAggregateInfo.Source）。
+const (
+	TaskPipelineSourceAggregate  = "aggregate"
+	TaskPipelineSourcePlayground = "playground"
+)
 
 // TaskBillingContext 记录任务提交时的计费参数，以便轮询阶段可以重新计算额度。
 type TaskBillingContext struct {

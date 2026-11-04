@@ -757,7 +757,10 @@ func settleTaskBillingOnComplete(ctx context.Context, adaptor TaskPollingAdaptor
 	// **必须排在按次计费之后**:per_call / per_second 的模型价在提交时就定死了,
 	// 那条分支会直接返回并保住冻结价。排在它前面的话,下面的 token 重算会把一个
 	// 按次计费的父任务改成按 token 收费 —— 只要该模型恰好也配了 ratio,价钱就被悄悄换掉。
-	if agg := task.PrivateData.Aggregate; agg != nil && agg.Stage == 2 {
+	// **Stage >= 2** 而不是 == 2：体验区的链是 sr → v2a，到配音段时 Stage=3，卡死
+	// ==2 会让父任务改用**子段（配音）的回执**结算，生成段被按配音段的用量重算一遍。
+	// 聚合链路 Stage 恒为 2，行为不变。
+	if agg := task.PrivateData.Aggregate; agg != nil && agg.Stage >= 2 {
 		// 用**推进时留下的生成段回执**结算,而不是手上这份超分段的 taskResult。
 		//
 		// 两种偷懒都不行:拿超分回执算 → 生成段被按超分后的分辨率计费(2K 档付两遍);

@@ -75,6 +75,10 @@ func GetStatus(c *gin.Context) {
 		"quota_per_yuan":              common.QuotaPerYuan,
 		"points_enabled":              operation_setting.GetPointsSetting().Enabled,
 		"quota_per_point":             common.GetQuotaPerPoint(),
+		// 体验区两段式流水线由服务端推进（灰度开关，见 common.PlaygroundPipelineServerSide）。
+		// 必须下发：前端据此决定"要不要在 metadata 里声明 post_stages"以及"第二段由谁提交"。
+		// 让前端猜（比如"只要带了声明就不自己提交"）会在开关关掉时把流水线停死。
+		"playground_pipeline_server_side": common.PlaygroundPipelineServerSide,
 		// 算力点换算率。套餐编辑页要把 quota 换算成展示点数，与积分同一套下发路径。
 		"quota_per_compute_point": common.GetQuotaPerComputePoint(),
 		// 兼容旧前端：保留 display_in_currency，同时提供新的 quota_display_type

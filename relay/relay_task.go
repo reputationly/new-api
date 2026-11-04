@@ -654,27 +654,50 @@ func mapTaskStatusToSimple(status model.TaskStatus) string {
 	}
 }
 
+// pipelineStageOf 这条任务当前在第几段（0 = 没有后置段）。
+//
+// 只对**体验区**下发的链（Source=playground，带 PostStages）有意义：聚合链路只用
+// Upscale* 字段描述唯一一段超分，没有 PostStages，这里恒返回 0（它的对外契约没要求
+// 这个字段；要给它也下发的话，判据补一个 agg.HasUpscale() 即可）。
+//
+// 只在**还在进行中**时下发：终态后 workflow 已结束，客户端拿 1 或 2 去画进度条只会
+// 让人以为"卡在第二段"。
+func pipelineStageOf(task *model.Task) int {
+	agg := task.PrivateData.Aggregate
+	if agg == nil || len(agg.PostStages) == 0 {
+		return 0
+	}
+	if task.Status != model.TaskStatusInProgress && task.Status != model.TaskStatusQueued && task.Status != model.TaskStatusSubmitted {
+		return 0
+	}
+	if agg.Stage <= 0 {
+		return 1
+	}
+	return agg.Stage
+}
+
 func TaskModel2Dto(task *model.Task) *dto.TaskDto {
 	return &dto.TaskDto{
-		ID:         task.ID,
-		CreatedAt:  task.CreatedAt,
-		UpdatedAt:  task.UpdatedAt,
-		TaskID:     task.TaskID,
-		Platform:   string(task.Platform),
-		UserId:     task.UserId,
-		Group:      task.Group,
-		ChannelId:  task.ChannelId,
-		Quota:      task.Quota,
-		Action:     task.Action,
-		Status:     string(task.Status),
-		FailReason: task.FailReason,
-		ResultURL:  service.ResolveResultURL(context.Background(), task.GetResultURL()),
-		SubmitTime: task.SubmitTime,
-		StartTime:  task.StartTime,
-		FinishTime: task.FinishTime,
-		Progress:   task.Progress,
-		Properties: task.Properties,
-		Username:   task.Username,
-		Data:       task.Data,
+		ID:            task.ID,
+		CreatedAt:     task.CreatedAt,
+		UpdatedAt:     task.UpdatedAt,
+		TaskID:        task.TaskID,
+		Platform:      string(task.Platform),
+		UserId:        task.UserId,
+		Group:         task.Group,
+		ChannelId:     task.ChannelId,
+		Quota:         task.Quota,
+		Action:        task.Action,
+		Status:        string(task.Status),
+		FailReason:    task.FailReason,
+		ResultURL:     service.ResolveResultURL(context.Background(), task.GetResultURL()),
+		SubmitTime:    task.SubmitTime,
+		StartTime:     task.StartTime,
+		FinishTime:    task.FinishTime,
+		Progress:      task.Progress,
+		PipelineStage: pipelineStageOf(task),
+		Properties:    task.Properties,
+		Username:      task.Username,
+		Data:          task.Data,
 	}
 }
