@@ -200,8 +200,25 @@ func applyAggregateExpansion(c *gin.Context, publicName, realModel string, agg *
 	// (体验区那条路是用户点按钮等,这里换成我们替他等)。EnhancePrompt 永远不返回错误,
 	// 任何失败都体现为"用原始提示词继续",所以这里没有失败分支可漏。
 	if agg.PromptEnhance.IsEnabled() {
-		prompt, _ := body["prompt"].(string)
-		if strings.TrimSpace(prompt) != "" {
+		// 音乐与视频/图片**改写的字段不同**,不能共用下面那段。
+		//
+		// MiniMax-Music3 的统一契约是反的:顶层 prompt 放**歌词**(门面把它映射到引擎
+		// input),要改写的描述在 metadata.instructions。照视频那段改 body["prompt"],
+		// 结果是把用户的歌词交出去"优化"、而描述一个字没动 —— 全程不报错。
+		if isMusicAggregate(agg) {
+			if isMusic3Aggregate(agg) {
+				exp.Enhance = enhanceMusic3Aggregate(c, agg, body)
+			} else {
+				// 声明成音乐聚合,但生成段的引擎族没写成 minimax-music3(或没声明)。
+				// **这时宁可一个字都不改**:落到下面视频那条路会把顶层 prompt ——
+				// 也就是歌词 —— 当成提示词改写,那是"静默毁数据",比不增强糟得多。
+				// 配置校验(DryRunAggregateModel)已经对这种情况报了 error,这里只是
+				// 让"配置没改就跑"不产生副作用。
+				common.SysLog(fmt.Sprintf(
+					"aggregate enhance: 聚合模型 %s 声明为音乐但没有声明 Music3 引擎族(生成段=%q),已跳过提示词增强",
+					agg.Name, strings.TrimSpace(agg.Generate.Model)))
+			}
+		} else if prompt, _ := body["prompt"].(string); strings.TrimSpace(prompt) != "" {
 			// 带客户的 Authorization 原样发起 —— 增强以客户身份走一遍 relay,
 			// 于是计费/限流/日志与他自己调一次 chat 完全一致(分段计费)。
 			// 事实一律从**归一化后**的请求读,不从原始 map 读。
@@ -263,6 +280,91 @@ func applyAggregateExpansion(c *gin.Context, publicName, realModel string, agg *
 	}
 	common.SetContextKey(c, constant.ContextKeyAggregateExpansion, exp)
 	return nil
+}
+
+// isMusicAggregate 这个聚合模型声称自己是音乐(不看引擎族)。
+//
+// 与 isMusic3Aggregate 分开是因为"声明为音乐"和"引擎族确实是 Music3"是两件事:
+// 前者决定**绝不能**走视频那条改写路径(那会改歌词),后者决定按哪套字段语义改写。
+func isMusicAggregate(agg *common.AggregateModel) bool {
+	return agg != nil && strings.EqualFold(strings.TrimSpace(agg.Type), "music")
+}
+
+// isMusic3Aggregate 生成段是不是 MiniMax-Music3。
+//
+// 判据见 service.IsMusic3GeneratingModel:优先运营声明的引擎族,**未声明时按模型名兜底**
+// (出厂配置里的 minimax-music3 在刚部署的站点上通常还没在「音乐模型配置」里声明过)。
+// 声明了别的引擎族就一定不是 Music3 —— 同一个「文生音乐」标签下还挂着 ACE-Step,而两者
+// 字段语义相反(Music3:prompt=歌词、metadata.instructions=描述;ACE-Step:prompt=描述、
+// metadata.lyrics=歌词),认错等于改写错字段。
+func isMusic3Aggregate(agg *common.AggregateModel) bool {
+	if agg == nil {
+		return false
+	}
+	return service.IsMusic3GeneratingModel(agg.Generate.Model)
+}
+
+// enhanceMusic3Aggregate 改写音乐聚合的**描述**(metadata.instructions),歌词原样不动。
+//
+// 与视频/图片那条路的三处不同,每一处都是"弄错了不报错"的坑:
+//
+//  1. 改写对象是 metadata.instructions,不是 body["prompt"] —— 后者是**歌词**
+//     (门面把它映射到引擎的 input)。照视频那段改 prompt,就是把用户的词拿去"优化"。
+//  2. 歌词作为**只读上下文**传下去(EnhanceInput.Lyrics → user 消息里的 LYRICS 块),
+//     并在写回后守一道"歌词字节不变"。
+//  3. 回填前用引擎的联合预算再核一次:caption + 歌词超过 5000 字符时,适配器会整条拒
+//     (ValidateMusic3JointPrompt),而那时这次 LLM 调用已经计费 —— 客户拿到的是一个
+//     400,账上还多了一笔。
+//
+// metadata 可能是对象也可能是 JSON 编码的字符串(见 expansionMetadata),写回走同一个
+// helper,与 alignVideoAspectRatio 同一手法。
+func enhanceMusic3Aggregate(c *gin.Context, agg *common.AggregateModel, body map[string]any) *service.EnhanceResult {
+	md, ok := expansionMetadata(body)
+	if !ok {
+		// metadata 解析不了:交给下游的校验去报错,不在这里猜着改。
+		return nil
+	}
+	caption, _ := md["instructions"].(string)
+	lyrics, _ := body["prompt"].(string)
+	if strings.TrimSpace(caption) == "" {
+		// 没有描述就没有可改写的东西。**绝不用歌词顶上**:prompt 位是歌词,
+		// 把它当 caption 改写等于毁掉用户的词,而引擎会把它当描述去生成编曲。
+		return nil
+	}
+	res := enhancePrompt(c.Request.Context(), agg,
+		c.Request.Header.Get("Authorization"), service.EnhanceInput{
+			Prompt:      caption,
+			Lyrics:      lyrics,
+			TaskContext: service.BuildMusic3EnhanceContext(caption, lyrics),
+		})
+	if res == nil || res.Degraded {
+		// 降级时 res.EnhancedPrompt 就是原 caption(EnhancePrompt 的契约),
+		// 这里直接返回,下面的写回不需要再判一次。
+		return res
+	}
+	if err := common.ValidateMusic3JointPrompt(res.EnhancedPrompt, lyrics, agg.Generate.Model); err != nil {
+		// 降级而不是截断:截断一份已成型的三节 caption 会连标题一起砍掉,
+		// 引擎拿到的是一段残缺描述;用原始描述至少是用户自己写的那句完整的话。
+		common.SysLog(fmt.Sprintf(
+			"aggregate enhance: 聚合模型 %s 增强后的描述超出 Music3 的联合预算,已回退为原始描述: %v",
+			agg.Name, err))
+		res.Degraded = true
+		res.DegradeReason = err.Error()
+		res.EnhancedPrompt = caption
+		return res
+	}
+	md["instructions"] = res.EnhancedPrompt
+	body["metadata"] = md
+	// 歌词一字不动。这条在当前代码里恒真(上面只写 instructions)—— 留着是因为它守的是
+	// **静默毁数据**类错误:哪天有人在这条路上补一句 body["prompt"]=...，或者运营在
+	// overrides 里塞了 prompt，用户拿到的是被改过的词,而且没有任何报错。
+	if cur, _ := body["prompt"].(string); cur != lyrics {
+		body["prompt"] = lyrics
+		common.SysLog(fmt.Sprintf(
+			"aggregate enhance: 聚合模型 %s 的歌词在增强过程中被改动,已还原(%d 字 → %d 字)",
+			agg.Name, len([]rune(cur)), len([]rune(lyrics))))
+	}
+	return res
 }
 
 // alignVideoAspectRatio 给视频聚合的生成段补齐宽高比(写进 metadata.aspect_ratio)。

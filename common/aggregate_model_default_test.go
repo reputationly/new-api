@@ -23,7 +23,7 @@ func TestDefaultAggregateModelConfigParses(t *testing.T) {
 		if it.Generate.Model == "" {
 			t.Errorf("%s 缺生成段模型", it.Name)
 		}
-		if it.Type != "image" && it.Type != "video" {
+		if it.Type != "image" && it.Type != "video" && it.Type != "music" {
 			t.Errorf("%s 的 type 非法: %q", it.Name, it.Type)
 		}
 	}
@@ -40,9 +40,15 @@ func TestDefaultAggregateModelConfigParses(t *testing.T) {
 // （service 已经 import common）。这里只复制"哪些模型有内置模板"这一个
 // 事实，而不是复制模板本身；service 那边加了新模型要记得同步这里，
 // 不同步的症状是这个测试放过一个会静默降级的配置。
+//
+// 音乐(MiniMax-Music3)那条在 service 侧还多认一个判据:运营声明的引擎族。这里只能
+// 镜像名字这一半 —— common 不能 import service(反向依赖)。副作用是"声明了别的引擎族
+// 但名字里带 music3"的模型会被这里放过,而 service 那边判成不是音乐;这种配置在
+// service.DryRunAggregateModel 里另有一条 error 兜着(ACE-Step 那条)。
 func hasBuiltinEnhanceTemplate(generateModel string) bool {
 	m := strings.ToLower(strings.TrimSpace(generateModel))
-	return strings.Contains(m, "h3") || strings.Contains(m, "hailuo")
+	return strings.Contains(m, "h3") || strings.Contains(m, "hailuo") ||
+		strings.Contains(m, "music3")
 }
 
 func TestDefaultAggregateShipsNoEnhanceStageUntilTemplatesInherit(t *testing.T) {
@@ -170,8 +176,13 @@ func TestDefaultConfigUsesSingleCallMode(t *testing.T) {
 			continue
 		}
 		want := EnhanceModeSingleCall
-		if m.Type == "image" {
+		switch m.Type {
+		case "image":
+			// 官方 PE 协议:JSON + 画幅,产物直接决定 size
 			want = EnhanceModeQwenPE
+		case "music":
+			// 三节纯文本 caption,没有画幅、也没有 H3 的编译事实 —— text 就是它的正确模式
+			want = EnhanceModeText
 		}
 		if got := m.PromptEnhance.EnhanceMode(); got != want {
 			t.Errorf("%s 的增强模式是 %q，期望 %q —— 少了它线上会静默跑回 text",

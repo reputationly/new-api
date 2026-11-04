@@ -198,6 +198,12 @@ const SettingsAggregateModel = ({ options, refresh }) => {
                 'prompt_enhance.timeout_seconds 调整预算（singlecall 默认 120 秒）；配小了不会报错，只会每次超时并静默回落 text。',
               )}
             </Text>
+            <br />
+            <Text type='secondary' size='small'>
+              {t(
+                'type 目前有 image / video / music 三种。music 只支持 MiniMax-Music3，且它的字段语义与视频相反：顶层 prompt 是**歌词**、metadata.instructions 才是曲风描述——所以增强改写的是 instructions，歌词一个字都不动。音乐聚合的 prompt_enhance.mode 用 text（三节结构化 caption 是纯文本，没有画幅也没有 H3 的编译事实），默认预算 30 秒。请把它 generate 的那个模型在「音乐模型配置」里声明 engine=minimax-music3，否则运行时只能按模型名猜。',
+              )}
+            </Text>
           </div>
 
           <Space style={{ marginTop: 12 }}>

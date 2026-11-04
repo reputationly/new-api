@@ -134,9 +134,46 @@ func DryRunAggregateModel(m *common.AggregateModel, peers map[string]int) *Aggre
 	}
 
 	switch m.Type {
-	case "image", "video":
+	case "image", "video", "music":
 	default:
-		add("type", AggregateCheckError, "type 必须是 image 或 video,当前为 %q", m.Type)
+		add("type", AggregateCheckError, "type 必须是 image / video / music,当前为 %q", m.Type)
+	}
+	// 音乐聚合目前只支持 MiniMax-Music3。
+	//
+	// 同一个「文生音乐」能力标签下挂着两种引擎,它们在统一任务契约里的字段语义正好相反:
+	//   MiniMax-Music3 : 顶层 prompt = 歌词,metadata.instructions = 曲风描述
+	//   ACE-Step       : 顶层 prompt = 曲风描述,metadata.lyrics = 歌词
+	// 增强按引擎族决定改写哪个字段、用哪份模板。指错引擎时增强会写进对方不读的字段,
+	// 花掉一次 LLM 调用、描述一个字没动,全程不报错 —— 所以这里必须拦住。
+	if m.Type == "music" {
+		family := common.MusicEngineFamilyForModel(m.Generate.Model)
+		switch {
+		case family == "":
+			// 未声明不等于错:运行时按模型名兜底(service.IsMusic3GeneratingModel),
+			// 而出厂配置里的 minimax-music3 在刚部署的站点上通常还没声明过 ——
+			// 把它报成 error 会让每条出厂配置在面板上是红的。
+			add("generate", AggregateCheckWarn,
+				"音乐聚合的生成段模型 %q 未在「音乐模型配置」里声明引擎族:运行时按模型名"+
+					"判定是否为 MiniMax-Music3;建议声明上,避免换了对外名之后判错(判错的"+
+					"表现是增强写进引擎不读的字段,且不报错)",
+				strings.TrimSpace(m.Generate.Model))
+		case family != common.MusicEngineMinimaxMusic3:
+			add("generate", AggregateCheckError,
+				"音乐聚合目前只支持 MiniMax-Music3,生成段模型 %q 声明的引擎族是 %q:"+
+					"ACE-Step 的描述在 prompt 位、歌词在 metadata.lyrics,与 Music3 相反,"+
+					"接上去增强会写到引擎不读的字段(且不报错)",
+				strings.TrimSpace(m.Generate.Model), family)
+		}
+		if m.Upscale != nil {
+			add("upscale", AggregateCheckError, "音乐类型不支持超分段,请删除该段")
+		}
+		for _, key := range []string{"prompt", "instructions", "metadata"} {
+			if _, has := m.Generate.Overrides[key]; has {
+				add("generate", AggregateCheckError,
+					"音乐聚合的 generate.overrides 不允许覆盖 %q:它是增强要读写的字段,"+
+						"覆盖之后增强与生成段看到的不是同一份内容", key)
+			}
+		}
 	}
 
 	// —— 2. 生成段 ——
@@ -242,6 +279,22 @@ func DryRunAggregateModel(m *common.AggregateModel, peers map[string]int) *Aggre
 					sec, int(singleCallTimeout.Seconds()))
 			}
 		}
+		if m.Type == "music" {
+			// 音乐只有一个改写产物(三节 caption),没有画幅、也没有 H3 的编译事实,
+			// 所以它只需要 text。选别的模式不会更糟(会回退),但也不会有任何收益,
+			// 而运营会以为"我开了更强的模式"。
+			if mode := m.PromptEnhance.EnhanceMode(); mode != common.EnhanceModeText {
+				add("enhance_mode", AggregateCheckWarn,
+					"音乐聚合只用 text 改写,%q 是为 H3 视频编译 / qwen 画幅协议设计的:"+
+						"运行时它会回退到 text,不会报错,但也不会带来任何提升", mode)
+			}
+			if sec := m.PromptEnhance.TimeoutSeconds; sec > 0 && sec < 20 {
+				// 音乐的预算上限是 30s(music3EnhanceTimeout),而 caption 的输出长度
+				// 比图文改写大一个量级;配到 20s 以下很容易每次超时并静默降级。
+				add("enhance_timeout", AggregateCheckWarn,
+					"timeout_seconds=%d 对音乐 caption 改写偏小(250~450 词的输出),很可能每次超时并静默降级为原始描述;建议留空(默认 30 秒)", sec)
+			}
+		}
 		// 模板：配置里写了就用配置的，没写则回落到**按生成段模型挑的内置默认**
 		// (service/aggregate_enhance_template.go)。运行时的继承链就是这样,
 		// 这里必须用同一个判据 —— 否则出厂配置(刻意不写 system_prompt、
@@ -286,25 +339,29 @@ func DryRunAggregateModel(m *common.AggregateModel, peers map[string]int) *Aggre
 				"增强以客户身份调用 %q:若集成方的令牌开启了模型白名单,需把该模型一并加入,否则增强会被拒并降级",
 				enhModel)
 		}
-		if !m.PromptEnhance.IsSendInputImages() {
-			// 不是错误,但后果隐蔽到必须警告一次。
-			add("send_input_images", AggregateCheckWarn,
-				"已关闭「把输入图发给增强模型」:图生图场景下增强模型看不到底图,"+
-					"会凭文字臆造描述并与底图打架(产出对着干,不是效果打折)")
-		} else if enhModel != "" {
-			// 开着传图就必须配一个**支持视觉**的模型。
-			//
-			// 这里只能提示、不能校验:全站没有任何一处声明过"某个 LLM 支不支持视觉"
-			// —— CapabilityTags 是媒体玩法能力(图生视频那类),Tags 是运营手写的自由
-			// 文本,都不表达多模态。硬猜模型名(带 vision/4o 就算)只会在改名换代时误判。
-			//
-			// 配错的表现极不显眼:多数纯文本模型收到 image_url 要么报错、要么直接忽略
-			// 图片照常回一段文字 —— 后者会让增强"看起来在工作",实际退化成没有底图的
-			// 纯文字臆造,正是上面那条警告描述的坏结果。
-			add("enhance_vision", AggregateCheckWarn,
-				"增强模型 %q 会收到输入图,请确认它**支持视觉输入**;"+
-					"纯文本模型可能直接忽略图片并照常返回文字,增强会静默退化成凭空臆造",
-				enhModel)
+		// 传图两问只对图像/视频有意义:音乐没有图片输入,对音乐聚合报出来的是噪音
+		// (运营会去找"怎么关掉传图",而这件事在音乐上根本不发生)。
+		if m.Type != "music" {
+			if !m.PromptEnhance.IsSendInputImages() {
+				// 不是错误,但后果隐蔽到必须警告一次。
+				add("send_input_images", AggregateCheckWarn,
+					"已关闭「把输入图发给增强模型」:图生图场景下增强模型看不到底图,"+
+						"会凭文字臆造描述并与底图打架(产出对着干,不是效果打折)")
+			} else if enhModel != "" {
+				// 开着传图就必须配一个**支持视觉**的模型。
+				//
+				// 这里只能提示、不能校验:全站没有任何一处声明过"某个 LLM 支不支持视觉"
+				// —— CapabilityTags 是媒体玩法能力(图生视频那类),Tags 是运营手写的自由
+				// 文本,都不表达多模态。硬猜模型名(带 vision/4o 就算)只会在改名换代时误判。
+				//
+				// 配错的表现极不显眼:多数纯文本模型收到 image_url 要么报错、要么直接忽略
+				// 图片照常回一段文字 —— 后者会让增强"看起来在工作",实际退化成没有底图的
+				// 纯文字臆造,正是上面那条警告描述的坏结果。
+				add("enhance_vision", AggregateCheckWarn,
+					"增强模型 %q 会收到输入图,请确认它**支持视觉输入**;"+
+						"纯文本模型可能直接忽略图片并照常返回文字,增强会静默退化成凭空臆造",
+					enhModel)
+			}
 		}
 	}
 

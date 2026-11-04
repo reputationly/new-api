@@ -851,6 +851,17 @@ func ValidateMusic3JointPrompt(caption, lyricsFromPrompt, modelName string) erro
 		modelName, n, music3JointPromptMaxChars)
 }
 
+// Music3CaptionBudget 返回在给定歌词下,描述(caption)还能用多少字符。
+//
+// 聚合增强要用它做两件事:把"还剩多少字"作为事实告诉改写模型,以及写完回填前再
+// 核一次。两者缺一都会浪费一次 LLM 调用 —— 超预算的请求在**适配器**才被拒
+// (ValidateMusic3JointPrompt),而那时增强的钱已经花了,客户拿到的是一个 400。
+//
+// 返回值可能为负(歌词本身就超预算),调用方按"没有余量"处理。
+func Music3CaptionBudget(lyrics string) int {
+	return music3JointPromptMaxChars - len([]rune(lyrics))
+}
+
 // MusicRefAudioMaxBytesForModel 返回该音乐模型参考音/源音大小上限(字节;0=不限制)及是否已配置。
 // 优先 tab 级,其次模型级,再次全局 default。用于 cover/repaint/svs 服务端物化时兜底
 // (前端上传限制可被直连绕过)。

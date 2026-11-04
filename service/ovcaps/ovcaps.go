@@ -363,12 +363,18 @@ func catalogOperation(entry setting.HiloCatalogEntry) (string, bool) {
 }
 
 // aggregateOperation 聚合模型属于哪一类操作；不认识的类型返回空。
+//
+// 音乐走的是**和视频同一条**传输(videos_task):Music3 在统一任务契约里就是
+// POST /v1/videos + metadata.task_type(适配器再把它改写成 tts 发给引擎)。
+// 报错成空操作会让音乐聚合在客户端能力目录里整个消失 —— 而它恰恰是客户端预设要用的名字。
 func aggregateOperation(agg *common.AggregateModel) (string, string) {
 	switch strings.TrimSpace(agg.Type) {
 	case "image":
 		return OperationGenerateImage, setting.TransportImages
 	case "video":
 		return OperationGenerateVideo, setting.TransportVideosTask
+	case "music":
+		return OperationGenerateMusic, setting.TransportVideosTask
 	}
 	return "", ""
 }

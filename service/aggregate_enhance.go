@@ -44,7 +44,7 @@ import (
 // 不能让一个抽风的 LLM 把整个请求拖死 —— 超时即降级,用原 prompt 照常生成。
 const enhanceTimeout = 20 * time.Second
 
-// textBudget text 改写的时间预算:配置优先,没配用内置默认。
+// textBudget text 改写的时间预算:配置优先,没配用 base。
 //
 // **IR 那边的配置值不适用于这里。** 运营为 IR 配的是几分钟级的数字
 // (一整份结构化 IR 要跑几十秒),而 text 改写只吐一段提示词,拿几分钟的
@@ -52,14 +52,18 @@ const enhanceTimeout = 20 * time.Second
 //
 // 所以配了 timeout_seconds 时这里取**两者的较小值**:既尊重运营显式调小
 // 的意图,又不让为 IR 放宽的预算顺带把 text 也放宽。
-func textBudget(cfg *common.AggregatePromptEnhance) time.Duration {
+//
+// base 由调用方按产物长度给:音乐的 caption 是 250~450 词,输出比图片/视频那种
+// 一两句话的改写长一个量级,故用 music3EnhanceTimeout;其余沿用 enhanceTimeout。
+// **上限仍然只能调小**,与原来一致 —— 想放宽必须改 base,不是一个配置项。
+func textBudget(cfg *common.AggregatePromptEnhance, base time.Duration) time.Duration {
 	if cfg == nil || cfg.TimeoutSeconds <= 0 {
-		return enhanceTimeout
+		return base
 	}
-	if d := time.Duration(cfg.TimeoutSeconds) * time.Second; d < enhanceTimeout {
+	if d := time.Duration(cfg.TimeoutSeconds) * time.Second; d < base {
 		return d
 	}
-	return enhanceTimeout
+	return base
 }
 
 // EnhanceInput 一次增强要用到的全部输入。
@@ -70,6 +74,15 @@ func textBudget(cfg *common.AggregatePromptEnhance) time.Duration {
 type EnhanceInput struct {
 	// Prompt 客户的原始提示词,逐字。
 	Prompt string
+	// Lyrics 客户的歌词,逐字(**只有音乐类型才有**)。
+	//
+	// **只作上下文,永不改写**:MiniMax-Music3 的顶层 prompt 位放的是歌词(门面把它
+	// 映射到引擎 input),真正该改写的描述在 metadata.instructions 里。两者搞反的后果
+	// 是把用户的词交出去"优化"——不报错,只是词变了。
+	//
+	// 拼进 **user 消息**里一个带分隔标记的块(不是系统提示词的"请求事实"):它是待理解
+	// 的内容,而 TaskContext 描述的是这一次请求本身。
+	Lyrics string
 	// ImageURLs / VideoURLs 本次要给模型看的素材。
 	ImageURLs []string
 	VideoURLs []string
@@ -270,7 +283,8 @@ func EnhancePrompt(ctx context.Context, agg *common.AggregateModel, authHeader s
 	}
 	// 事实无条件拼在模板之后:运营改写过模板也不例外 —— 模板可以换,
 	// "这一次传了几张图、多少秒"不能被换掉。
-	body := buildEnhanceRequest(res.Model, appendTaskContext(systemPrompt, in.TaskContext), prompt, in.ImageURLs, in.VideoURLs, in.SendMedia, cfg.IsThinking())
+	// 歌词(音乐才有)拼在 user 消息里,见 userPromptWithLyrics 的注释。
+	body := buildEnhanceRequest(res.Model, appendTaskContext(systemPrompt, in.TaskContext), userPromptWithLyrics(prompt, in.Lyrics), in.ImageURLs, in.VideoURLs, in.SendMedia, cfg.IsThinking())
 	payload, err := common.Marshal(body)
 	if err != nil {
 		return degrade("构造增强请求失败: %v", err)
@@ -279,7 +293,15 @@ func EnhancePrompt(ctx context.Context, agg *common.AggregateModel, authHeader s
 	// text 改写用自己的预算。**不能和 IR 共用一个 ctx** —— 共用的话
 	// IR 那 150 秒一旦用满,回落进来的 text 改写会立刻拿着一个已经取消的
 	// ctx 失败,三级降级里的中间那级就永远走不到,等于白设计。
-	reqCtx, cancel := context.WithTimeout(ctx, textBudget(cfg))
+	//
+	// 预算按产物长度取:音乐 caption 是 250~450 词,比一两句话的改写长一个量级,
+	// 用全局的 20s 会没有余量(超时是**静默降级**,客户以为增强生效了)。
+	isMusic := strings.EqualFold(strings.TrimSpace(agg.Type), "music")
+	base := enhanceTimeout
+	if isMusic {
+		base = music3EnhanceTimeout
+	}
+	reqCtx, cancel := context.WithTimeout(ctx, textBudget(cfg, base))
 	defer cancel()
 	enhanced, usage, err := callEnhance(reqCtx, authHeader, payload)
 	if err != nil {
@@ -292,6 +314,14 @@ func EnhancePrompt(ctx context.Context, agg *common.AggregateModel, authHeader s
 	res.EnhancedPrompt = enhanced
 	res.Usage = usage
 	res.ElapsedMs = time.Since(started).Milliseconds()
+	// 音乐的预算是按外推定的一次性决定,而"够不够"只能从线上看:这条日志就是当初
+	// 「先按 30s 跑、实测 P90 再收尾」里那个实测数据来源。只在音乐上打 ——
+	// 视频/图片那条链路早已稳定,给每条请求加一行日志只会淹掉真正的告警。
+	if isMusic {
+		common.SysLog(fmt.Sprintf(
+			"aggregate enhance: 音乐 caption 完成 (model=%s, %dms, 输出 %d 字符)",
+			res.Model, res.ElapsedMs, len([]rune(enhanced))))
+	}
 	return res
 }
 
@@ -373,6 +403,24 @@ func applyThinking(body map[string]any, thinking bool) {
 // aggregate_enhance_singlecall.go),
 // 素材该怎么编进 content 这件事只能有一份 —— 两处各写一遍,漂移的症状是
 // 「某条路径上视频又没发出去」,而那恰恰是不报错的那类错。
+// userPromptWithLyrics 把歌词作为**待理解的内容**放进 user 消息。
+//
+// 分隔标记不是装饰:模板里写着「LYRICS 块里的词一个都不许出现在 caption 里」,模型要能
+// 一眼分清哪段是用户想表达的音乐、哪段是他写的词。直接接在描述后面时,最常见的失败是
+// 它把歌词当成"更多描述"继续扩写 —— 于是 caption 里出现一句被"描述化"的歌词,而
+// 歌手会把这句唱第二遍(caption 与歌词会被引擎拼成同一条 prompt)。
+//
+// 空歌词(纯器乐)时原样返回,不加空块 —— 空的分隔块反而会让模型以为歌词丢了。
+func userPromptWithLyrics(prompt, lyrics string) string {
+	if strings.TrimSpace(lyrics) == "" {
+		return prompt
+	}
+	return prompt +
+		"\n\n=== LYRICS (reference only — never quote, paraphrase, summarise, or translate) ===\n" +
+		lyrics +
+		"\n=== END LYRICS ==="
+}
+
 func buildUserContent(prompt string, imageURLs, videoURLs []string, sendImages bool) any {
 	if !sendImages || (len(imageURLs) == 0 && len(videoURLs) == 0) {
 		return prompt

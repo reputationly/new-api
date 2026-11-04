@@ -129,6 +129,17 @@ package common
 // 但那条路的 MiniMaxV2CreateConvert 跑在 TokenAuth/Distribute **之前**
 // (router/video-router.go),它自己就会把 resolution 转成 size 并调
 // resolveResolution —— 2K 在那里直接 400,聚合展开根本轮不到。
+//
+// ── 为什么音乐那一条是 text、且 only Music3 ─────────────────────────
+//
+// 音乐的改写产物是三节纯文本 caption,既没有画幅(qwen_pe 存在的理由),也没有 H3 那套
+// 编译事实(singlecall 存在的理由),所以 text + 内置模板就够。模板由
+// DefaultEnhanceTemplate 按**引擎族声明**挑(见 service/aggregate_enhance_music.go)。
+//
+// 只配 Music3:同一个「文生音乐」能力标签下还有 ACE-Step,而两者在统一任务契约里的
+// 字段语义相反 —— Music3 的顶层 prompt 是**歌词**、描述在 metadata.instructions,
+// ACE-Step 的 prompt 是**描述**、歌词在 metadata.lyrics。增强按引擎族决定改写哪个字段,
+// 配错引擎会写到对方不读的字段上,钱花了、描述没动、不报错。
 const DefaultAggregateModelConfig = `[
   {
     "name": "minimax-h3-2k",
@@ -155,5 +166,13 @@ const DefaultAggregateModelConfig = `[
     "note": "Qwen-Image-2.1(qwen-image-pro)+官方 PE 提示词增强(qwen3.8 关思考),自动定画幅",
     "prompt_enhance": { "model": "qwen3.8-flash-fp8", "mode": "qwen_pe" },
     "generate": { "model": "qwen-image-pro" }
+  },
+  {
+    "name": "minimax-music3-enhanced",
+    "type": "music",
+    "enabled": true,
+    "note": "MiniMax-Music3 + 官方 music-caption-rewriter 口径的提示词增强:把一句话音乐描述扩成三节结构化 caption(Global Metadata / Vocal Details / Arrangement)。改写的是 metadata.instructions,**歌词(顶层 prompt 位)原样不动**。",
+    "prompt_enhance": { "model": "qwen3.8-flash-fp8", "mode": "text" },
+    "generate": { "model": "minimax-music3" }
   }
 ]`

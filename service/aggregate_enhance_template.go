@@ -123,7 +123,15 @@ const defaultH3EnhanceTemplate = `你是 MiniMax H3 视频生成的提示词编�
 // **模板是模型相关的** —— H3 要分镜结构、别家要别的写法。给不认识的模型
 // 套 H3 的模板，会让改写结果带着一堆它不认的约定。认不出就返回空串，
 // 调用方按"没有模板"降级（用原始提示词）：效果打折，但不会产出错的东西。
+//
+// 音乐排在 h3 之前判：MiniMax-Music3 与 H3 是两个完全不同的产物（三节音乐 caption
+// vs 分镜视频提示词），套错了不是"效果打折"，是让改写模型去写分镜。
+// 判据用**运营声明的引擎族**（MusicModelConfig.models[].engine），不是模型名 substring
+// —— 同一个引擎可以挂好几个对外名，改了名 substring 就失效且不报错。
 func DefaultEnhanceTemplate(generateModel string) string {
+	if IsMusic3GeneratingModel(generateModel) {
+		return defaultMusic3EnhanceTemplate
+	}
 	m := strings.ToLower(strings.TrimSpace(generateModel))
 	switch {
 	case strings.Contains(m, "h3"), strings.Contains(m, "hailuo"):
