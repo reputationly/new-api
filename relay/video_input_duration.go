@@ -18,6 +18,7 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
+	"github.com/QuantumNous/new-api/relay/channel/gpustackplus/nfsinput"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/service/mediastore"
@@ -166,10 +167,45 @@ func probeVideoDurationFromInput(c *gin.Context, raw string) float64 {
 		}
 		// 第三方 URL:只拉文件头尾各 1 MB 找 mvhd,不整包下载。
 		return probeVideoDurationFromRemote(c, raw)
+	case nfsinput.IsTaskRef(raw):
+		// `task:<id>`：**体验区那条路**。它把上一段的产物用任务 id 引用着交过来
+		// （前端一直是这么发的，服务端推进后也一样），而这条引用在计费探测里原本
+		// 完全没处理 —— 于是 seconds=0、按秒矩阵查不到价、整单回退固定价。
+		//
+		// 症状是"明明配了按秒的视频矩阵，账单却是按次 ¥3"，而日志里只有一条
+		// warnVideoMatrixMiss。聚合路径发的是 NFS 绝对路径，所以同一模型两条路
+		// 两种账单口径 —— 这个分支就是为了把两条路对齐。
+		return probeVideoDurationFromTaskRef(c, raw)
 	case strings.HasPrefix(raw, "data:"), looksLikeBase64Video(raw):
 		return probeVideoDurationFromBase64(raw)
 	}
 	return 0
+}
+
+// probeVideoDurationFromTaskRef 解析 `task:<id>` 引用的产物并探测时长。
+//
+// 只走 OBS 快路径：产物已落 OBS 时，key 与 NFS 相对路径 1:1，能就地读盘，不必下载。
+// 未落 OBS（产物还是上游 URL / 代理入口）时返回 0 —— 这里**刻意不去下载**：这段跑在
+// 同步提交路径上，为一个计费维度去拉整个视频不可接受，而拿不到时长时回退固定价是
+// 既有设计（宁可按老口径收钱，也不拦请求）。
+//
+// 归属由 nfsinput.TaskRefOBSKey 负责（按 user_id 查任务、要求已成功），下游
+// probeVideoDurationFromNFS 还会再核一次路径里的 user_id 段 —— 两道闸都不能省：
+// 少了任何一道，猜一个 task id 就能用别人的视频时长决定自己的账单。
+func probeVideoDurationFromTaskRef(c *gin.Context, raw string) float64 {
+	if c == nil {
+		return 0
+	}
+	userID := common.GetContextKeyInt(c, constant.ContextKeyUserId)
+	if userID <= 0 {
+		return 0
+	}
+	key, err := nfsinput.TaskRefOBSKey(userID, raw)
+	if err != nil || key == "" {
+		return 0
+	}
+	return probeVideoDurationFromNFS(c,
+		mediastore.NFSPathFromKey(system_setting.GetMediaStorageSettings().NFSRoot(), key))
 }
 
 // probeVideoDurationFromNFS 读共享 NFS 上的文件解析时长。
