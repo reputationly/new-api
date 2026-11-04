@@ -38,6 +38,7 @@ import { useModelNotes } from '../../hooks/common/useModelNotes';
 import PromptGuideTip from '../playground/PromptGuideTip';
 import { tabHasField } from '../../constants/playgroundAdmin.constants';
 import {
+  displayVideoSize,
   imageConstraintsForMode,
   INTERPOLATION_ENABLED,
   VIDEO_ASPECT_RATIO_AUTO,
@@ -197,19 +198,22 @@ const VideoConfigPanel = ({
   const choices =
     sizeChoices && sizeChoices.length
       ? sizeChoices
-      : (availableSizes || []).map((s) => ({ value: s, label: s }));
+      : (availableSizes || []).map((s) => ({
+          value: s,
+          label: displayVideoSize(s),
+        }));
   const sizeOptions = ensureOption(
     choices.map((c) => ({
       value: c.value,
       label: c.isUpscale ? (
         <span className='flex items-center gap-1.5'>
-          {c.value}
+          {displayVideoSize(c.value)}
           <Tag size='small' color='violet' shape='circle'>
             {t('画质增强')}
           </Tag>
         </span>
       ) : (
-        c.value
+        displayVideoSize(c.value)
       ),
     })),
     inputs.size,

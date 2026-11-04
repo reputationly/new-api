@@ -718,6 +718,19 @@ export const videoSizeShortEdge = (s) => {
   return 0;
 };
 
+// 档位词的**展示形式**：2k→2K、4k→4K、1080p→1080P，像素串原样。
+//
+// 存储侧一直是大小写不敏感的（normalizeVideoSize 会统一成小写 2k、大写 768P；
+// 后端 common.SizeShortEdge 同样 lower 后比对），问题只出在**显示**上：同一批配置里
+// 有人写 2K、有人写 2k，界面上就一半大一半小，运营也分不清哪个才是"正版"档位名。
+// 所以只改渲染，不动存值 —— 改存值会让历史会话/规则里的旧写法对不上。
+export const displayVideoSize = (size) => {
+  const v = normalizeVideoSize(size);
+  if (v === '2k') return '2K';
+  if (v === '4k') return '4K';
+  return v;
+};
+
 // 通用列表规范化（时长/能力）：去空格、去空、去重（解析与设置页保存共用，避免两条路径分叉）
 export const normalizeList = (list) =>
   Array.isArray(list)

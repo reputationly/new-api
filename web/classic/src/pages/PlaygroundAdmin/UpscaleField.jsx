@@ -3,6 +3,7 @@ import { useTranslation } from 'react-i18next';
 import { Button, Select, Typography } from '@douyinfe/semi-ui';
 import { Plus, Trash2 } from 'lucide-react';
 import {
+  displayVideoSize,
   getSizesForVideoModel,
   videoSizeShortEdge,
   VIDEO_DELIVERY_TIERS,
@@ -121,7 +122,10 @@ const UpscaleField = ({
                     : t('先选超分模型')
               }
               value={r.to || ''}
-              optionList={toChoices.map((s) => ({ label: s, value: s }))}
+              optionList={toChoices.map((s) => ({
+                label: displayVideoSize(s),
+                value: s,
+              }))}
               onChange={(v) => patch(i, 'to', v || '')}
             />
             <Text type='tertiary' size='small'>
@@ -138,7 +142,10 @@ const UpscaleField = ({
                     : t('无更低的可用档位')
               }
               value={r.from || ''}
-              optionList={fromChoices.map((s) => ({ label: s, value: s }))}
+              optionList={fromChoices.map((s) => ({
+                label: displayVideoSize(s),
+                value: s,
+              }))}
               onChange={(v) => patch(i, 'from', v || '')}
             />
             <Button
