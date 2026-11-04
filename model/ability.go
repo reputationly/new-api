@@ -110,6 +110,24 @@ func GetEnabledModels() []string {
 	return models
 }
 
+// GetEnabledModelNames 同 GetEnabledModels，但把错误带出来。
+//
+// 体验区管理页拿它折叠「渠道已禁用 / 模型已删除」之后遗留的配置，**必须能区分
+// 「确实一个模型都没有」和「查询失败」**：前者可以折叠，后者折叠就等于把运营的配置
+// 从页面上藏起来（还看不出来是查询挂了）。GetEnabledModels 把错误吞了，两者返回值
+// 一模一样，所以另开一个。
+func GetEnabledModelNames() ([]string, error) {
+	var models []string
+	err := DB.Table("abilities").
+		Where("enabled = ?", true).
+		Distinct("model").
+		Pluck("model", &models).Error
+	if err != nil {
+		return nil, err
+	}
+	return models, nil
+}
+
 func GetAllEnableAbilities() []Ability {
 	var abilities []Ability
 	DB.Find(&abilities, "enabled = ?", true)

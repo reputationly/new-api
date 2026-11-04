@@ -1,7 +1,11 @@
 import React from 'react';
-import { describe, it, expect, vi } from 'vitest';
-import { fireEvent, render, screen } from '@testing-library/react';
+import { beforeEach, describe, it, expect, vi } from 'vitest';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 
+// 分类页会问一次「哪些模型当前有可用渠道」。默认全部可用，需要折叠的用例自己改。
+vi.mock('../../../helpers', () => ({ API: { get: vi.fn() } }));
+
+import { API } from '../../../helpers';
 import CategoryPanel from '../CategoryPanel';
 import { getPlaygroundCategory } from '../../../constants/playgroundAdmin.constants';
 
@@ -26,6 +30,14 @@ const makeDraft = (models) => ({
 
 const renderPanel = (models) =>
   render(<CategoryPanel category={VIDEO} draft={makeDraft(models)} />);
+
+const mockAvailability = (names) =>
+  API.get.mockResolvedValue({ data: { data: { models: names } } });
+
+beforeEach(() => {
+  vi.clearAllMocks();
+  mockAvailability(['relayvsr', 'minimax-h3-fl2va']);
+});
 
 describe('没挂玩法的模型：模型级字段要真的渲染出来', () => {
   it('超分模型那一行有「超分倍率」输入框', () => {
@@ -61,5 +73,33 @@ describe('没挂玩法的模型：模型级字段要真的渲染出来', () => {
       'minimax-h3-fl2va': { tabs: { text2video: {} }, sizes: ['768P'] },
     });
     expect(screen.queryByText('超分倍率')).toBeNull();
+  });
+});
+
+describe('没有可用渠道的模型折叠起来', () => {
+  // 可用性是异步取的：断言前必须等它落地，否则测的是"还没拿到"的那一帧。
+  it('默认收起，只留一行汇总；展开后才显示', async () => {
+    mockAvailability([]); // 一个都没有可用渠道
+    renderPanel({
+      relayvsr: { tabs: {}, capabilities: ['视频超分'], sizes: ['2K'] },
+      seedvr2: { tabs: {}, capabilities: ['视频超分'], sizes: ['1080P'] },
+    });
+    const summary = await screen.findByText(/个模型当前没有可用渠道/);
+    expect(screen.queryByText('超分倍率')).toBeNull();
+
+    fireEvent.click(summary);
+    // 展开后两个超分模型都会渲染出这一格
+    expect((await screen.findAllByText('超分倍率')).length).toBe(2);
+  });
+
+  // 折叠是"把东西藏起来"的动作，只能建立在确定的信息上：接口失败时一律不折叠。
+  it('可用性接口失败时不折叠（fail-open）', async () => {
+    API.get.mockRejectedValue(new Error('boom'));
+    renderPanel({
+      relayvsr: { tabs: {}, capabilities: ['视频超分'], sizes: ['2K'] },
+    });
+    await waitFor(() => expect(API.get).toHaveBeenCalled());
+    expect(screen.queryByText(/个模型当前没有可用渠道/)).toBeNull();
+    expect(screen.getByText('超分倍率')).toBeTruthy();
   });
 });

@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Button, Card, Empty, Input, Tag, Typography } from '@douyinfe/semi-ui';
 import {
@@ -7,6 +7,7 @@ import {
   listTabsByStoreKey,
   orphanFields,
 } from '../../constants/playgroundAdmin.constants';
+import { API } from '../../helpers';
 import { STORE_META } from './usePlaygroundAdminDraft';
 import FieldInput from './FieldInput';
 
@@ -43,6 +44,24 @@ const CategoryPanel = ({ category, draft }) => {
   const [newCap, setNewCap] = useState('');
   const exists = !!store?.models?.[newName.trim()];
 
+  // 当前**有可用渠道**的模型名。null = 还不知道（请求失败/未返回时一律当"都知道"，
+  // 也就是不折叠）—— 折叠是"把东西藏起来"的动作，只能建立在确定的信息上：
+  // 一次 DB 抖动或接口 500 就把运营的配置从页面上藏掉，比翻得久糟得多。
+  const [availableModels, setAvailableModels] = useState(null);
+  const [showInactive, setShowInactive] = useState(false);
+  useEffect(() => {
+    let cancelled = false;
+    API.get('/api/playground_admin/model_availability')
+      .then((res) => {
+        const list = res?.data?.data?.models;
+        if (!cancelled && Array.isArray(list)) setAvailableModels(new Set(list));
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   const rows = useMemo(
     () =>
       Object.entries(store?.models || {})
@@ -55,6 +74,90 @@ const CategoryPanel = ({ category, draft }) => {
         }))
         .sort((a, b) => a.name.localeCompare(b.name)),
     [store, storeKey],
+  );
+  // 渠道停用/删除之后，配置还会留在这份 JSON 里：对新请求毫无作用，却让页面越堆越长。
+  // 把它们折进一个默认收起的区块（仍然可编辑、可清理），是按"这条配置还有没有意义"分的，
+  // 与"这个 key 能不能调"无关。
+  const activeRows = useMemo(
+    () =>
+      availableModels ? rows.filter((r) => availableModels.has(r.name)) : rows,
+    [rows, availableModels],
+  );
+  const inactiveRows = useMemo(
+    () =>
+      availableModels ? rows.filter((r) => !availableModels.has(r.name)) : [],
+    [rows, availableModels],
+  );
+
+  // 一行 = 一个模型：名字 + 标签 + 「无玩法认领的字段」 + 「模型级字段」。
+  // 抽成函数是为了让"有渠道/无渠道"两组共用同一份渲染（两边要有完全一样的能力：
+  // 无渠道的条目同样可以改、可以清）。
+  const renderRow = (r) => (
+    <div key={r.name} className='py-2 border-b border-gray-100 last:border-0'>
+      <div className='flex flex-wrap items-center gap-2'>
+        <Text strong style={{ minWidth: 220 }}>
+          {r.name}
+        </Text>
+        {r.tabs.length === 0 && (
+          <Tag color='grey' size='small'>
+            {t('未挂任何玩法')}
+          </Tag>
+        )}
+        {r.tabs.map((k) => (
+          <Tag key={k} color='blue' size='small'>
+            {t(labelByTabKey.get(k) || k)}
+          </Tag>
+        ))}
+        {r.orphanCaps.map((c) => (
+          <Tag key={c} color='amber' size='small'>
+            {t(c)}
+            {t('（无体验区玩法，仅模型广场展示）')}
+          </Tag>
+        ))}
+      </div>
+      {r.orphanFields.length > 0 && (
+        <div className='mt-2 ml-1 pl-3 border-l-2 border-amber-200'>
+          <Text type='tertiary' size='small' className='block mb-2'>
+            {t(
+              '以下参数没有对应玩法认领，体验区不展示，但直连请求仍受它约束——在这里改。',
+            )}
+          </Text>
+          <div className='grid grid-cols-1 md:grid-cols-2 gap-4'>
+            {r.orphanFields.map((f) => (
+              <FieldInput
+                key={f}
+                field={f}
+                value={r.model[f]}
+                onChange={(v) => draft.setModelField(storeKey, r.name, f, v)}
+              />
+            ))}
+          </div>
+        </div>
+      )}
+      {/* 模型级字段的编辑入口。挂了玩法的模型在各自的 tab 页里编辑这些字段
+          （那是主路径，这里不重复渲染，避免两份 UI 改同一份数据）；没挂任何玩法的
+          模型（超分 seedvr2 / relayvsr）此前根本没有入口 —— 它们的模型级字段只能靠
+          手改 JSON，而那正是「超分倍率」必须填的地方。 */}
+      {r.tabs.length === 0 && orphanModelFields.length > 0 && (
+        <div className='mt-2 ml-1 pl-3 border-l-2 border-semi-color-primary'>
+          <Text type='tertiary' size='small' className='block mb-2'>
+            {t('该模型没有挂任何玩法，下面这些模型级参数在这里改：')}
+          </Text>
+          <div className='grid grid-cols-1 md:grid-cols-2 gap-4'>
+            {orphanModelFields.map((f) => (
+              <FieldInput
+                key={f.key}
+                field={f}
+                value={r.model[f.key]}
+                onChange={(v) =>
+                  draft.setModelField(storeKey, r.name, f.key, v)
+                }
+              />
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
   );
 
   return (
@@ -135,81 +238,28 @@ const CategoryPanel = ({ category, draft }) => {
             style={{ padding: '16px 0' }}
           />
         ) : (
-          rows.map((r) => (
-            <div
-              key={r.name}
-              className='py-2 border-b border-gray-100 last:border-0'
-            >
-              <div className='flex flex-wrap items-center gap-2'>
-                <Text strong style={{ minWidth: 220 }}>
-                  {r.name}
-                </Text>
-                {r.tabs.length === 0 && (
-                  <Tag color='grey' size='small'>
-                    {t('未挂任何玩法')}
-                  </Tag>
-                )}
-                {r.tabs.map((k) => (
-                  <Tag key={k} color='blue' size='small'>
-                    {t(labelByTabKey.get(k) || k)}
-                  </Tag>
-                ))}
-                {r.orphanCaps.map((c) => (
-                  <Tag key={c} color='amber' size='small'>
-                    {t(c)}
-                    {t('（无体验区玩法，仅模型广场展示）')}
-                  </Tag>
-                ))}
+          <>
+            {activeRows.map((r) => renderRow(r))}
+            {inactiveRows.length > 0 && (
+              <div className='mt-3 pt-3 border-t border-gray-200'>
+                <div
+                  className='flex items-center gap-2 cursor-pointer select-none'
+                  onClick={() => setShowInactive((v) => !v)}
+                >
+                  <Text type='tertiary' size='small'>
+                    {t(
+                      '{{count}} 个模型当前没有可用渠道（渠道已停用或模型已从渠道删除；配置仍在这里，展开可编辑或清理）',
+                      { count: inactiveRows.length },
+                    )}
+                  </Text>
+                  <Text type='tertiary' size='small'>
+                    {showInactive ? t('收起') : t('展开')}
+                  </Text>
+                </div>
+                {showInactive && inactiveRows.map((r) => renderRow(r))}
               </div>
-              {r.orphanFields.length > 0 && (
-                <div className='mt-2 ml-1 pl-3 border-l-2 border-amber-200'>
-                  <Text type='tertiary' size='small' className='block mb-2'>
-                    {t(
-                      '以下参数没有对应玩法认领，体验区不展示，但直连请求仍受它约束——在这里改。',
-                    )}
-                  </Text>
-                  <div className='grid grid-cols-1 md:grid-cols-2 gap-4'>
-                    {r.orphanFields.map((f) => (
-                      <FieldInput
-                        key={f}
-                        field={f}
-                        value={r.model[f]}
-                        onChange={(v) =>
-                          draft.setModelField(storeKey, r.name, f, v)
-                        }
-                      />
-                    ))}
-                  </div>
-                </div>
-              )}
-              {/* 模型级字段的编辑入口。挂了玩法的模型在各自的 tab 页里编辑这些字段
-                  （那是主路径，这里不重复渲染，避免两份 UI 改同一份数据）；**没挂任何
-                  玩法的模型（超分 seedvr2 / relayvsr）此前根本没有入口** —— 它们的
-                  模型级字段只能靠手改 JSON，而这恰恰是「超分倍率」必须填的地方：
-                  填不上时固定倍率引擎收到 4.0、超分段每次静默失败。 */}
-              {r.tabs.length === 0 && orphanModelFields.length > 0 && (
-                <div className='mt-2 ml-1 pl-3 border-l-2 border-semi-color-primary'>
-                  <Text type='tertiary' size='small' className='block mb-2'>
-                    {t(
-                      '该模型没有挂任何玩法，下面这些模型级参数在这里改：',
-                    )}
-                  </Text>
-                  <div className='grid grid-cols-1 md:grid-cols-2 gap-4'>
-                    {orphanModelFields.map((f) => (
-                      <FieldInput
-                        key={f.key}
-                        field={f}
-                        value={r.model[f.key]}
-                        onChange={(v) =>
-                          draft.setModelField(storeKey, r.name, f.key, v)
-                        }
-                      />
-                    ))}
-                  </div>
-                </div>
-              )}
-            </div>
-          ))
+            )}
+          </>
         )}
       </Card>
     </div>

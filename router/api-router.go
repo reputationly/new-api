@@ -583,6 +583,8 @@ func SetApiRouter(router *gin.Engine) {
 		{
 			playgroundAdminRoute.GET("/options", controller.GetPlaygroundAdminOptions)
 			playgroundAdminRoute.PUT("/option", controller.UpdatePlaygroundAdminOption)
+			// 只读：哪些模型当前有可用渠道。分类页据此把失效配置折叠起来。
+			playgroundAdminRoute.GET("/model_availability", controller.GetPlaygroundAdminModelAvailability)
 		}
 
 		// Deployments (model deployment management)

@@ -2,6 +2,7 @@ package controller
 
 import (
 	"net/http"
+	"sort"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/model"
@@ -94,5 +95,30 @@ func UpdatePlaygroundAdminOption(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
 		"message": "",
+	})
+}
+
+// GetPlaygroundAdminModelAvailability 返回**当前有可用渠道**的模型名集合。
+//
+// 只服务体验区管理页的一件事：把「渠道已禁用 / 模型已从渠道里删掉」之后遗留的配置
+// 折叠起来。那些条目对新请求毫无作用，却让分类页越堆越长 —— 运营要翻半天才找到要改
+// 的那一条，而它们本来就只该在需要清理时出现。
+//
+// 判据只有一条：abilities 里是否存在该模型**至少一个 enabled 的记录**。刻意不判分组
+// 可用性（那是「这个 key 能不能调」，见 service/ovcaps）也不判广场可见性 —— 这里回答
+// 的是"这条配置还有没有意义"。
+//
+// 查询失败返回 500 而不是空列表：前端对空列表会折叠，对失败则一律不折叠（fail-open）。
+// 把两者混成同一个空数组，等于让一次 DB 抖动把运营的配置从页面上藏起来。
+func GetPlaygroundAdminModelAvailability(c *gin.Context) {
+	models, err := model.GetEnabledModelNames()
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	sort.Strings(models)
+	c.JSON(http.StatusOK, gin.H{
+		"success": true,
+		"data":    gin.H{"models": models},
 	})
 }

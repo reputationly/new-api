@@ -42,6 +42,7 @@ func TestSetApiRouterRegistersSplitGroups(t *testing.T) {
 		"GET /api/user/kyc/admin",
 		"GET /api/playground_admin/options",
 		"PUT /api/playground_admin/option",
+		"GET /api/playground_admin/model_availability",
 		"GET /api/subscription/admin/plans",
 	} {
 		if !registered[route] {
