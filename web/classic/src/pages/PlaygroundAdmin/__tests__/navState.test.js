@@ -1,9 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import {
-  navToSearch,
-  parseNavFromSearch,
-  resolveNav,
-} from '../navState';
+import { navToSearch, parseNavFromSearch, resolveNav } from '../navState';
 
 // 「体验区管理」刷新后回「通用设置」是长期抱怨：改一次配置要来回切好几个位置，
 // 刷新一次就得从头找。导航位置现在跟着 URL 走，这一组守的就是编码/解码与校验。
@@ -14,7 +10,10 @@ describe('导航位置 ⇄ URL', () => {
       [{ type: 'global' }, ''],
       [{ type: 'sidebar' }, '?panel=sidebar'],
       [{ type: 'category', category: 'video' }, '?cat=video'],
-      [{ type: 'tab', category: 'video', tabKey: 'flf2v' }, '?cat=video&tab=flf2v'],
+      [
+        { type: 'tab', category: 'video', tabKey: 'flf2v' },
+        '?cat=video&tab=flf2v',
+      ],
     ];
     for (const [nav, search] of cases) {
       expect(navToSearch('', nav)).toBe(search);
@@ -53,7 +52,9 @@ describe('外部链接可能指向已下线的方法/玩法', () => {
   });
 
   it('不存在的分类 / 方法回「通用设置」，不渲染空白', () => {
-    expect(resolveNav({ type: 'category', category: 'gone' }, categories)).toEqual({
+    expect(
+      resolveNav({ type: 'category', category: 'gone' }, categories),
+    ).toEqual({
       type: 'global',
     });
     expect(

@@ -47,7 +47,10 @@ const PlaygroundAdmin = () => {
   useEffect(() => {
     const search = navToSearch(window.location.search, nav);
     const next = `${window.location.pathname}${search}${window.location.hash}`;
-    if (next !== `${window.location.pathname}${window.location.search}${window.location.hash}`) {
+    if (
+      next !==
+      `${window.location.pathname}${window.location.search}${window.location.hash}`
+    ) {
       window.history.replaceState(null, '', next);
     }
   }, [nav]);

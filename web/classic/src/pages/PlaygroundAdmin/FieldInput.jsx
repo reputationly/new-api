@@ -137,7 +137,9 @@ const FieldInput = ({ field, value, onChange, compact = false, lock }) => {
             // 字段自带 placeholder 时用它：不是每个 int 都是「0=不限」（超分倍率是同
             // 一个量表的另一个语义，写「不限」会把人引到 0 上去）。取 meta 而不是 field：
             // field 可能是字段名字符串，那上面没有 placeholder。
-            placeholder={meta.placeholder ? t(meta.placeholder) : t('留空 / 0 = 不限')}
+            placeholder={
+              meta.placeholder ? t(meta.placeholder) : t('留空 / 0 = 不限')
+            }
             style={{ width: '100%' }}
           />
         );

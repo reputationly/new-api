@@ -1162,7 +1162,10 @@ export const useVideoGeneration = ({
               // 写死 4.0 只能对 SeedVR2「倍率只是上限」那套成立:RelayVSR_X2 的 runner
               // 里有一句 `if sr_ratio != 2: raise`,多发一个 4.0 就是整段超分失败 ——
               // 而失败的表现是静默降级为生成段成品,用户付了 2K 拿到 768P,不报错。
-              sr_ratio: getSrRatioForModel(videoConfig, pipeline.upscale?.srModel),
+              sr_ratio: getSrRatioForModel(
+                videoConfig,
+                pipeline.upscale?.srModel,
+              ),
               resize_mode: VIDEO_SR_RESIZE_MODE,
               // 目标档位(档位词或精确像素串)都算得出短边(见 upscaleTargetShortEdge)。
               // 有它引擎按源的真实画幅等比放大到该短边,没有就退回原来的「按部署 config
@@ -1321,10 +1324,7 @@ export const useVideoGeneration = ({
           ...(progress !== undefined ? { progress } : {}),
           ...(serverStage >= 2
             ? {
-                stage: stageNameFromServer(
-                  progressMsg?.pipeline,
-                  serverStage,
-                ),
+                stage: stageNameFromServer(progressMsg?.pipeline, serverStage),
               }
             : {}),
           queueAhead: meta.queue_ahead,
@@ -1971,7 +1971,10 @@ export const useVideoGeneration = ({
               kind: 'sr',
               model: pipeline.upscale.srModel,
               // 倍率按超分模型那一行取（固定倍率引擎必须显式给，见 getSrRatioForModel）。
-              sr_ratio: getSrRatioForModel(videoConfig, pipeline.upscale.srModel),
+              sr_ratio: getSrRatioForModel(
+                videoConfig,
+                pipeline.upscale.srModel,
+              ),
               ...(pipeline.upscale.targetShortEdge > 0
                 ? { target_short_edge: pipeline.upscale.targetShortEdge }
                 : {}),
