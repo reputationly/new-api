@@ -14,12 +14,17 @@
 // 与下面这条契约形状相反,故按引擎族整份换掉模板 —— 不靠模型名 substring,读的是运营
 // 在「视频模型配置」里声明的 engine(与后端 common.VideoEngineFamilyForModel 同一个键)。
 import {
+  IMAGE_ENGINE_QWEN_IMAGE_21,
   IMAGE_ENGINE_SENSENOVA_U15,
   VIDEO_ENGINE_LTX25,
   VIDEO_ENGINE_MINIMAX_H3,
   MUSIC_ENGINE_MINIMAX_MUSIC3,
 } from './playgroundAdmin.constants';
 import { h3OptimizeSystemPrompt } from './h3Prompt.constants';
+import {
+  QWEN_EDIT_CLOSING_MARKER,
+  qwenImageOptimizeSystemPrompt,
+} from './qwenImagePrompt.constants';
 import { IMAGE_SIZE_AUTO, isRatioWord } from './imagePlayground.constants';
 
 const OUTPUT_CONTRACT = `\n\nOutput ONLY the rewritten prompt itself. No explanation, no preface, no quotes, no markdown fence. Keep the user's original language unless the target model requires English.`;
@@ -353,6 +358,12 @@ const LTX25_OPTIMIZE_PROMPTS = {
 export const defaultOptimizeSystemPrompt = (tabKey, engine) => {
   if (engine === IMAGE_ENGINE_SENSENOVA_U15 && U15_OPTIMIZE_PROMPTS[tabKey])
     return U15_OPTIMIZE_PROMPTS[tabKey];
+  // Qwen-Image-2.1 的两份官方 PE。只覆盖图像那两个 tab,其余玩法返回空串 ——
+  // 这里不写 && 判断,由模板自己决定有没有对应知识(见 qwenImageOptimizeSystemPrompt)。
+  if (engine === IMAGE_ENGINE_QWEN_IMAGE_21) {
+    const qwen = qwenImageOptimizeSystemPrompt(tabKey);
+    if (qwen) return qwen;
+  }
   if (engine === VIDEO_ENGINE_MINIMAX_H3) return h3OptimizeSystemPrompt(tabKey);
   if (engine === VIDEO_ENGINE_LTX25 && LTX25_OPTIMIZE_PROMPTS[tabKey])
     return LTX25_OPTIMIZE_PROMPTS[tabKey];
@@ -363,14 +374,25 @@ export const defaultOptimizeSystemPrompt = (tabKey, engine) => {
   );
 };
 
-// 这份模板的产物是不是 JSON。**只有 SenseNova-U1.5 的文生图是** —— 官方 Image PE 输出
-// 的是 Render JSON,并且那坨 JSON **原样就是提示词**(不是中间格式,不用再翻译回散文)。
-// 调用方据此决定要不要走 JSON 提取(见 helpers/playground.js 的 extractRenderJson):
-// 模型偶尔会在 JSON 前后多说两句,官方脚本也是靠"取首个 { 到末个 }"兜的。
+// 产物怎么取。**模板与"它产出什么形状"本来就是一件事**,判据只能有一处 ——
+// 拆到调用点去判断迟早分叉,而分叉的症状是"输入框里灌进一坨 JSON"这种不报错的错。
 //
-// 判据放在这里而不是调用点:模板与"它产出什么形状"本来就是一件事,拆开两处迟早分叉。
-export const optimizeOutputsJson = (tabKey, engine) =>
-  engine === IMAGE_ENGINE_SENSENOVA_U15 && tabKey === 'text2image';
+//   text        通用清洗:剥围栏、剥首尾引号
+//   render-json 整段 JSON **原样就是提示词**(SenseNova-U1.5 文生图)。那段 JSON 不是
+//               中间格式,不用再翻译回散文;模型偶尔在前后多说两句,靠
+//               helpers/playground.js 的 extractRenderJson「取首个 { 到末个 }」兜。
+//   qwen-json   产物是 JSON,但**只取 rewritten_prompt 字段**(Qwen-Image-2.1 两个 tab)。
+//               另外两个字段是画幅,体验区由左侧面板决定、不走它;整段塞回输入框会把
+//               analysis 与比例字段当成提示词发下去。取法与兜底见
+//               qwenImagePrompt.constants.js 的 extractQwenRewrittenPrompt。
+export const optimizeOutputKind = (tabKey, engine) => {
+  if (engine === IMAGE_ENGINE_SENSENOVA_U15 && tabKey === 'text2image')
+    return 'render-json';
+  if (engine === IMAGE_ENGINE_QWEN_IMAGE_21) {
+    if (tabKey === 'text2image' || tabKey === 'image2image') return 'qwen-json';
+  }
+  return 'text';
+};
 
 // 拼在**用户消息**末尾的后缀(不是系统提示词的一部分)。官方 edit_pe.py 用它把"改写"
 // 这件事钉死 —— 用户原文本身常常是一句指令("把左边那个人的外套改成亮黄色"),不加这个
@@ -438,10 +460,17 @@ export const buildImageOptimizeContext = ({ size, imageCount = 0 } = {}) => {
 // 分支;没有这句的模板(通用版、H3、LTX、Music3)照旧追加在末尾。
 export const U15_EDIT_CLOSING_MARKER = '\nBelow is the Prompt to be rewritten.';
 
+// 有「下面紧接着就是原文」这句收尾的模板。Qwen-Image-2.1 的编辑模板是第二个 ——
+// U1.5 的教训不用再踩一遍:事实拼在收尾句之后,模型会把这段英文当成要改写的指令。
+const CLOSING_MARKERS = [U15_EDIT_CLOSING_MARKER, QWEN_EDIT_CLOSING_MARKER];
+
 export const appendOptimizeContext = (systemPrompt, context) => {
   const base = systemPrompt || '';
   if (!context) return base;
-  const at = base.lastIndexOf(U15_EDIT_CLOSING_MARKER);
+  // 取最后出现的那个收尾句(模板里理论上只有一处,取最后与 U1.5 原来的行为一致)。
+  const at = Math.max(
+    ...CLOSING_MARKERS.map((marker) => base.lastIndexOf(marker)),
+  );
   if (at === -1) return base + context;
   return base.slice(0, at) + context + '\n' + base.slice(at);
 };

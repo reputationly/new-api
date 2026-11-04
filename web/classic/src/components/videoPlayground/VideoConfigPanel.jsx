@@ -28,6 +28,7 @@ import {
   selectFilter,
 } from '../../helpers';
 import ImageUrlInput from '../playground/ImageUrlInput';
+import RatioPicker from '../playground/RatioPicker';
 import MediaFileInput from './MediaFileInput';
 import {
   PLAYGROUND_BATCH_COUNTS,
@@ -222,14 +223,14 @@ const VideoConfigPanel = ({
     (availableDurations || []).map((s) => ({ label: `${s}s`, value: s })),
     inputs.seconds,
   );
-  // 「跟随上传素材」档的值是个标记而非比例,显示时换成人话。
-  const aspectRatioOptions = ensureOption(
-    (availableAspectRatios || []).map((r) => ({
-      label: r === VIDEO_ASPECT_RATIO_AUTO ? t('跟随上传素材') : r,
-      value: r,
-    })),
-    inputs.aspectRatio,
-  );
+  // 候选集。当前值可能已不在里面（运营随时会改配置，会话里存的是改之前选的档），
+  // 补进去才显示得出来 —— 与图片侧 ratioChoices 同一处理，否则会出现「一个都没高亮」
+  // 而提交时仍然带着那个旧值。
+  const aspectRatioChoices =
+    inputs.aspectRatio &&
+    !(availableAspectRatios || []).includes(inputs.aspectRatio)
+      ? [...(availableAspectRatios || []), inputs.aspectRatio]
+      : availableAspectRatios || [];
   // 画幅跟随素材的玩法里选了具名比例 → 图会被改成那个比例再提交,得让用户选怎么改、
   // 并说清代价。其余玩法(文生视频等)不出现这个选择器:它们没有"原图"可言。
   const composesImage =
@@ -583,7 +584,15 @@ const VideoConfigPanel = ({
             </div>
           )}
 
-        {/* 宽高比(仅文生视频,且该模型在后台配了宽高比才展示;wan 下由此决定输出分辨率) */}
+        {/* 宽高比。两个闸:本 tab 的 fields 里声明了 aspectRatios(文生视频/关键帧/
+            参考生视频都声明了,图生视频没有),且所选模型在后台配了候选集 —— 纯 opt-in,
+            不配就整个不出现。
+
+            同一个控件在这三个 tab 里语义完全不同,别按其中一处去推另一处:
+              · 文生视频:比例是**请求字段**(wan 下它决定 target_shape,即输出分辨率)
+              · 关键帧:画幅永远由引擎按 images[0] 推,发比例会被静默忽略;选具名比例
+                是提交前把图改成那个比例,所以多一个「跟随上传素材」档(默认)
+              · 参考生视频:原生 aspect_ratio 直发,参考图不绑定输出画布 */}
         {tabHasField(category, mode, 'aspectRatios') &&
           (availableAspectRatios || []).length > 0 && (
             <div>
@@ -593,17 +602,21 @@ const VideoConfigPanel = ({
                   {t('宽高比')}
                 </Typography.Text>
               </div>
-              <Select
-                placeholder={t('请选择宽高比')}
-                name='aspectRatio'
-                selection
-                onChange={(value) => onInputChange('aspectRatio', value)}
+              {/* 图形按钮组，与图片体验区共用同一份（6 列折行、宽→方→竖排序）。
+                  画幅跟随素材的玩法里，「跟随上传素材」会多出第一格：它是模式不是比例，
+                  图标与标签都另做一套。 */}
+              <RatioPicker
+                choices={aspectRatioChoices}
                 value={inputs.aspectRatio}
-                optionList={aspectRatioOptions}
+                onChange={(value) => onInputChange('aspectRatio', value)}
                 disabled={disabled}
-                style={{ width: '100%' }}
-                dropdownStyle={{ width: '100%', maxWidth: '100%' }}
-                className='!rounded-lg'
+                followValue={
+                  (availableAspectRatios || []).includes(VIDEO_ASPECT_RATIO_AUTO)
+                    ? VIDEO_ASPECT_RATIO_AUTO
+                    : undefined
+                }
+                followLabel={t('跟随')}
+                followHint={t('画幅跟随你上传的首帧/尾帧素材，不裁图、不加边')}
               />
               {composesImage && (
                 <>

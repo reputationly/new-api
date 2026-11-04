@@ -19,9 +19,10 @@ import {
 import {
   appendOptimizeContext,
   defaultOptimizeSystemPrompt,
-  optimizeOutputsJson,
+  optimizeOutputKind,
   optimizeUserSuffix,
 } from '../../constants/promptOptimize.constants';
+import { extractQwenRewrittenPrompt } from '../../constants/qwenImagePrompt.constants';
 
 // 「AI 优化提示词」共用 hook(图像/视频/音效体验区共用一份)。
 //
@@ -174,19 +175,33 @@ export const usePromptOptimize = (
         const body = stripModelThinking(
           res?.data?.choices?.[0]?.message?.content,
         );
-        // 产物是 JSON 的模板(SenseNova-U1.5 文生图)走官方那套提取,**不能走下面的通用
-        // 清洗**:那条剥首尾引号的正则对 JSON 无害但也无用,而"取首个 { 到末个 }"才是
-        // 官方兜模型多说两句的办法。两条路互斥,别叠加。
-        const out = optimizeOutputsJson(tabKey, engine)
-          ? extractRenderJson(body)
-          : body
-              .trim()
-              .replace(/^```(?:\w+)?\s*/i, '')
-              .replace(/\s*```$/, '')
-              .replace(/^["'“”]+|["'“”]+$/g, '')
-              .trim();
+        // 产物形状按模板分三种(判据见 optimizeOutputKind),**互斥、不能叠加**:
+        //   render-json 整段 JSON 就是提示词,走"取首个 { 到末个 }";
+        //   qwen-json   只取 rewritten_prompt 字段(其余两个字段是画幅,体验区不用);
+        //   text        通用清洗,剥围栏与首尾引号。
+        const kind = optimizeOutputKind(tabKey, engine);
+        let out = '';
+        if (kind === 'render-json') {
+          out = extractRenderJson(body);
+        } else if (kind === 'qwen-json') {
+          out = extractQwenRewrittenPrompt(body);
+        } else {
+          out = body
+            .trim()
+            .replace(/^```(?:\w+)?\s*/i, '')
+            .replace(/\s*```$/, '')
+            .replace(/^["'“”]+|["'“”]+$/g, '')
+            .trim();
+        }
         if (!out) {
-          showError(t('提示词优化失败:模型未返回内容'));
+          // qwen 这条单独给提示:失败几乎总是 JSON 格式不对(裸引号、缺字段),而体验区
+          // **没有后端那套重修**,唯一出路是再点一次 —— 不说清楚,用户会以为"这个模型
+          // 不会优化提示词"。
+          showError(
+            kind === 'qwen-json'
+              ? t('提示词优化失败:返回内容不是约定的 JSON 格式，请再点一次')
+              : t('提示词优化失败:模型未返回内容'),
+          );
           return null;
         }
         return out;

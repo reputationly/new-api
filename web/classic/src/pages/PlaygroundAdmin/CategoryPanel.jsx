@@ -2,6 +2,7 @@ import React, { useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Button, Card, Empty, Input, Tag, Typography } from '@douyinfe/semi-ui';
 import {
+  PLAYGROUND_MODEL_LEVEL_FIELDS,
   capabilitiesWithoutTab,
   listTabsByStoreKey,
   orphanFields,
@@ -26,6 +27,13 @@ const CategoryPanel = ({ category, draft }) => {
   const store = draft.stores[storeKey];
   const meta = STORE_META[storeKey];
   const owned = useMemo(() => listTabsByStoreKey(storeKey), [storeKey]);
+  // 没有玩法的模型（超分 seedvr2 / relayvsr）要在这里才能编辑模型级字段。
+  // 只取标了 bare 的那几个：engine / defaultSteps 只对生成段模型有意义，摆在超分
+  // 模型上只会让人以为它要配引擎族。
+  const orphanModelFields = useMemo(
+    () => (PLAYGROUND_MODEL_LEVEL_FIELDS[storeKey] || []).filter((f) => f.bare),
+    [storeKey],
+  );
   const labelByTabKey = useMemo(
     () => new Map(owned.map((x) => [x.tab.key, x.tab.label])),
     [owned],
@@ -168,6 +176,32 @@ const CategoryPanel = ({ category, draft }) => {
                         value={r.model[f]}
                         onChange={(v) =>
                           draft.setModelField(storeKey, r.name, f, v)
+                        }
+                      />
+                    ))}
+                  </div>
+                </div>
+              )}
+              {/* 模型级字段的编辑入口。挂了玩法的模型在各自的 tab 页里编辑这些字段
+                  （那是主路径，这里不重复渲染，避免两份 UI 改同一份数据）；**没挂任何
+                  玩法的模型（超分 seedvr2 / relayvsr）此前根本没有入口** —— 它们的
+                  模型级字段只能靠手改 JSON，而这恰恰是「超分倍率」必须填的地方：
+                  填不上时固定倍率引擎收到 4.0、超分段每次静默失败。 */}
+              {r.tabs.length === 0 && orphanModelFields.length > 0 && (
+                <div className='mt-2 ml-1 pl-3 border-l-2 border-semi-color-primary'>
+                  <Text type='tertiary' size='small' className='block mb-2'>
+                    {t(
+                      '该模型没有挂任何玩法，下面这些模型级参数在这里改：',
+                    )}
+                  </Text>
+                  <div className='grid grid-cols-1 md:grid-cols-2 gap-4'>
+                    {orphanModelFields.map((f) => (
+                      <FieldInput
+                        key={f.key}
+                        field={f}
+                        value={r.model[f.key]}
+                        onChange={(v) =>
+                          draft.setModelField(storeKey, r.name, f.key, v)
                         }
                       />
                     ))}

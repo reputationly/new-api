@@ -829,6 +829,13 @@ const toSteps = (v) => {
   return Number.isFinite(n) && n > 0 ? n : null;
 };
 
+// 超分倍率：正整数（RelayVSR=2、SeedVR2=4）。0/负数/非数字一律当"没配"——
+// 当没配比当 0 安全：0 会被当成"不放大"发下去，而没配至少还能落回缺省 4.0。
+const toSrRatio = (v) => {
+  const n = parseInt(v, 10);
+  return Number.isFinite(n) && n > 0 ? n : null;
+};
+
 // tab 子层规范化：只保留声明过的字段，值的清洗规则与模型级一致。
 // 未配的字段一律不落键（undefined），这样 tabScopedValue 才能正确地"落空即降级"。
 const normalizeVideoTabEntry = (cfg) => {
@@ -926,6 +933,9 @@ export const parseVideoModelConfig = (raw) => {
           engine: normalizeEngine(cfg?.engine),
           // 同上,白名单式重建:漏了它每次保存都会把步数抹掉,蒸馏模型悄悄退回基座档。
           defaultSteps: toSteps(cfg?.defaultSteps),
+          // 同上,白名单式重建:漏了它每次保存都会把超分倍率抹掉,RelayVSR 那类固定倍率
+          // 引擎随即收到 4.0 → 超分段每次失败、静默降级。只有超分模型那一行需要填。
+          srRatio: toSrRatio(cfg?.srRatio),
           tabs: normalizeTabsMap(cfg?.tabs, normalizeVideoTabEntry),
         };
       });
@@ -1052,6 +1062,20 @@ export const VIDEO_STEPS_MODES = ['text2video', 'flf2v', 'r2va'];
 export const getDefaultStepsForVideoModel = (config, model) => {
   const v = config?.models?.[model]?.defaultSteps;
   return typeof v === 'number' && v > 0 ? v : null;
+};
+
+// 超分倍率:配在**超分模型自己那一行**的模型级字段里(见 playgroundAdmin 的
+// PLAYGROUND_MODEL_LEVEL_FIELDS.srRatio),未配回落到 VIDEO_SR_RATIO_UNCAPPED。
+//
+// 为什么按模型而不是按规则:这是引擎契约,不是每条规则的策略 —— 同一台超分引擎被几条
+// 规则引用时值都一样。按模型配一次,所有指向它的规则自动对;按规则配则要逐条填,
+// 漏填一条的症状是"那一档的超分静默失败、用户拿到未放大的成品"。
+//
+// 为什么缺省是 4.0 而不是 2:4.0 对 SeedVR2 是"够不着"的哨兵(让它按部署 config 封顶),
+// 对新建模型是安全的一侧 —— 固定倍率引擎必须显式声明自己的倍率,这是配置的责任。
+export const getSrRatioForModel = (config, srModel) => {
+  const v = config?.models?.[srModel]?.srRatio;
+  return typeof v === 'number' && v > 0 ? v : VIDEO_SR_RATIO_UNCAPPED;
 };
 
 // ── 参考素材的三模态上限(纯 tab 级,不做模型级/全局降级)────────────────

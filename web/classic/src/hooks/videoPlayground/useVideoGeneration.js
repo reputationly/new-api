@@ -45,8 +45,8 @@ import {
   VIDEO_MAX_CONCURRENT_TASKS,
   VIDEO_INTERPOLATION_TARGET_FPS,
   INTERPOLATION_ENABLED,
-  VIDEO_SR_RATIO_UNCAPPED,
   VIDEO_SR_RESIZE_MODE,
+  getSrRatioForModel,
   upscaleTargetShortEdge,
   buildVideoSizeChoices,
   isPipelineModel,
@@ -1134,12 +1134,17 @@ export const useVideoGeneration = ({
           ? {
               task_type: 'sr',
               video: `task:${prevTaskId}`,
-              sr_ratio: VIDEO_SR_RATIO_UNCAPPED,
+              // 倍率由**超分模型自己那一行**声明(见 getSrRatioForModel),缺省 4.0。
+              // 写死 4.0 只能对 SeedVR2「倍率只是上限」那套成立:RelayVSR_X2 的 runner
+              // 里有一句 `if sr_ratio != 2: raise`,多发一个 4.0 就是整段超分失败 ——
+              // 而失败的表现是静默降级为生成段成品,用户付了 2K 拿到 768P,不报错。
+              sr_ratio: getSrRatioForModel(videoConfig, pipeline.upscale?.srModel),
               resize_mode: VIDEO_SR_RESIZE_MODE,
-              // 目标档位写成精确像素串时才有值(见 upscaleTargetShortEdge)。有它引擎
-              // 按源的真实画幅等比放大到该短边,没有就退回原来的「按部署 config 档位
-              // 封顶」——所以既有的 1080P 档位词规则行为不变,老会话(pipeline 里没这个
-              // 字段)也不受影响。
+              // 目标档位(档位词或精确像素串)都算得出短边(见 upscaleTargetShortEdge)。
+              // 有它引擎按源的真实画幅等比放大到该短边,没有就退回原来的「按部署 config
+              // 档位封顶」;老会话(pipeline 里没这个字段)也不受影响。
+              // 它同时是**计费取行名**的依据:超分请求不带 size,后端靠它把
+              // 2K 归到 "2k" 行(relay/common/video_dims.go 的第三级)。
               ...(pipeline.upscale?.targetShortEdge > 0
                 ? { target_short_edge: pipeline.upscale.targetShortEdge }
                 : {}),
@@ -1207,7 +1212,9 @@ export const useVideoGeneration = ({
         return false;
       }
     },
-    [patchConvMessage, t],
+    // videoConfig 是新增依赖:超分倍率按「超分模型那一行」的声明取,漏进依赖数组的话
+    // 换了配置仍会沿用上一份闭包里的值 —— 与 optimizeImages 那类漏依赖同一个隐蔽度。
+    [patchConvMessage, t, videoConfig],
   );
 
   const pollOnce = useCallback(

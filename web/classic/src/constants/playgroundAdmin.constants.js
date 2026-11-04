@@ -204,11 +204,22 @@ export const MUSIC_ENGINE_OPTIONS_INLINE = [
 // 是把官方要求的那一步补上。模板见 promptOptimize.constants.js。
 export const IMAGE_ENGINE_SENSENOVA_U15 = 'sensenova-u1.5';
 
+// Qwen-Image-2.1:官方给它配了两份改写提示词(文生图 / 编辑),产物是 JSON ——
+// `rewritten_prompt` 是提示词,`wh_ratio` / `ratio_follow` 是画幅。现网那些叫
+// qwen-image-pro 的模型实际跑的就是这个权重,**必须在这里声明**,否则优化按钮用的是
+// 通用模板(一段自然语言,不逐字保留可见文案、不列排除项),与官方 PE 差一大截。
+// 模板与取字段的解析见 constants/qwenImagePrompt.constants.js。
+export const IMAGE_ENGINE_QWEN_IMAGE_21 = 'qwen-image-2.1';
+
 export const IMAGE_ENGINE_OPTIONS_INLINE = [
   { value: '', label: '默认（通用扩散模型）' },
   {
     value: IMAGE_ENGINE_SENSENOVA_U15,
     label: 'SenseNova-U1.5（统一多模态，强文字渲染）',
+  },
+  {
+    value: IMAGE_ENGINE_QWEN_IMAGE_21,
+    label: 'Qwen-Image-2.1（官方 PE，如 qwen-image-pro）',
   },
 ];
 
@@ -243,7 +254,7 @@ export const PLAYGROUND_MODEL_LEVEL_FIELDS = {
       label: '引擎族',
       type: 'select',
       options: IMAGE_ENGINE_OPTIONS_INLINE,
-      help: '只影响「AI 优化提示词」用哪份内置模板，不改变发给上游的请求（图像这边后端没有按引擎族分支）。选 SenseNova-U1.5 后用的是**官方原文模板**：文生图走官方 Image PE，**产物是一段 Render JSON**（那段 JSON 原样就是提示词，直接提交即可，不必再翻译成句子）——点完优化看到输入框里是 JSON 属正常；图生图走官方 Edit Instruction Rewriter，产物仍是自然语言指令。两者都会把可见文案逐字保留、数量与版面写死、并显式列出排除项，与通用模板差别很大。⚠️ 官方 Image PE 只认五档 2K 画布（2048x2048 / 2496x1664 / 1664x2496 / 2720x1536 / 1536x2720），请在上方「尺寸 / 分辨率」里配齐，否则会按默认档出图、分辨率远低于官方示例。选错引擎族不会报错，只是优化效果退回通用版。属模型能力，与 tab 无关。',
+      help: '只影响「AI 优化提示词」用哪份内置模板，不改变发给上游的请求（图像这边后端没有按引擎族分支）。选 SenseNova-U1.5 后用的是**官方原文模板**：文生图走官方 Image PE，**产物是一段 Render JSON**（那段 JSON 原样就是提示词，直接提交即可，不必再翻译成句子）——点完优化看到输入框里是 JSON 属正常；图生图走官方 Edit Instruction Rewriter，产物仍是自然语言指令。两者都会把可见文案逐字保留、数量与版面写死、并显式列出排除项，与通用模板差别很大。⚠️ 官方 Image PE 只认五档 2K 画布（2048x2048 / 2496x1664 / 1664x2496 / 2720x1536 / 1536x2720），请在上方「尺寸 / 分辨率」里配齐，否则会按默认档出图、分辨率远低于官方示例。选 Qwen-Image-2.1 后同样用**官方原文模板**（文生图 / 编辑各一份），产物是 JSON，但**只有 rewritten_prompt 会被取出来填回输入框**，另外两个字段（wh_ratio / ratio_follow）是画幅、由左侧面板决定，会被忽略——所以点完优化看到的是正常提示词，不是 JSON。⚠️ 与直连 API 那条路相比少一道「传输检查 + 重修」：格式不对时它会提示你重试，而不是自动再来一轮。选错引擎族不会报错，只是优化效果退回通用版。属模型能力，与 tab 无关。',
     },
   ],
   VideoModelConfig: [
@@ -280,6 +291,25 @@ export const PLAYGROUND_MODEL_LEVEL_FIELDS = {
       // 与引擎族正交的理由见后端 common.VideoInferenceStepsForModel：蒸馏版必须照样
       // 声明 engine 才能拿到请求整形，若步数只能按引擎族给，它就会被强塞基座档。
       help: '蒸馏版（如 Turbo8 标定 8 步）与基座共用引擎族但步数不同，须按模型单独配。留空则按引擎族默认。属模型能力，与 tab 无关。',
+    },
+    {
+      // 超分倍率。**配在超分模型自己那一行上**，不是配在生成模型的规则里：倍率是
+      // 引擎契约（RelayVSR 恒为 2、SeedVR2 恒为 4「够不着」以让部署 config 封顶），
+      // 同一台超分引擎被几条规则引用时它都一样的值。配一次，所有指向它的规则自动对。
+      //
+      // 不配 = 4.0。这个缺省**只对 SeedVR2 这类「倍率只是上限」的引擎安全**；
+      // 固定倍率引擎（RelayVSR_X2）必须显式配 2，否则超分段每次都失败、用户静默拿到
+      // 生成段的成品（见 VIDEO_SR_RATIO_UNCAPPED 与 relayvsr_runner.py 的硬校验）。
+      //
+      // 属模型能力，与 tab 无关；只有超分模型这一行需要填。
+      key: 'srRatio',
+      label: '超分倍率',
+      type: 'int',
+      // 没有玩法的模型也要能编辑这一项 —— 超分模型正是"有配置、无体验区入口"的那类，
+      // 它在分类页的模型行里编辑（见 CategoryPanel 的 orphanModelFields）。
+      bare: true,
+      placeholder: '留空=4.0（仅 SeedVR2 这类引擎适用）',
+      help: '下发给超分引擎的 sr_ratio。**固定倍率引擎必须填**：RelayVSR_X2 只接受 2，填错或不填（按 4.0 下发）会让超分段每次失败并静默降级为未超分的成品。SeedVR2 这类「倍率只是上限」的引擎留空即可（4.0 让它够不着，按部署 config 封顶）。',
     },
   ],
   AudioModelConfig: [
@@ -362,31 +392,33 @@ export const PLAYGROUND_CATEGORIES = [
         // 产品策略。锁里列什么，取决于该引擎族的关键帧能不能选分辨率。
         //
         // H3 关键帧（i2va/l2va/fl2va）的画布**永远由引擎按 images[0] 推**：网关刻意不
-        // 下发 width/height（minimax_h3.go 的 h3ApplyCanvas 只对 t2v/r2va 生效）。但
-        // **短边**是可以选的 —— 引擎的读取链是
-        // `target.short_edge → extra.short_edge → 常量 768`，env
-        // `VLLM_OMNI_H3_EXPERIMENTAL_SHORT_EDGE` 只决定这个值**合法不合法**（白名单），
-        // 不改变缺省。2026-09-29 实测（fl2va，env=1080）：
-        //   不传 short_edge               → 200，出片 1344×768
-        //   传 extra_params.short_edge=1080 → 200，出片 1888×1088（画幅仍跟随首图）
-        // 所以网关补了 h3ApplyKeyframeShortEdge：档位词在 h3DropResolutionToken 清掉它
-        // **之前**把短边挑出来发进 extra_params。选 768P 时不发（与引擎缺省等价），
-        // 选其它档位才发。
+        // 下发 width/height（minimax_h3.go 的 h3ApplyCanvas 只对 t2v/r2va 生效）。短边
+        // 名义上可调（引擎读取链 `target.short_edge → extra.short_edge → 常量 768`），
+        // 但**当前部署的原生上限就是 768**：1080 那一档要求引擎侧开
+        // `VLLM_OMNI_H3_EXPERIMENTAL_SHORT_EDGE=1080` 把 1080 加进短边白名单，没开时
+        // 网关一传 short_edge=1080 就是 400（实测 `short_edge must be one of (768,)`）。
+        // 所以锁定值只留 768P 一档，1080P 及以上全部走超分。
+        //
+        // 曾经在 90daec63a 里放开成 768P / 1080P（当时按「env 已开」写的）。现网没开
+        // 时那一档不是「可选的档位」，而是**点了必 400 的假档位**，故收回单档。要把
+        // 1080P 加回锁定值，前置条件是引擎部署真的开了那个 env、并在 fl2va 上实测出
+        // 1888×1088（画幅仍跟随首图）；届时只需在这里补一个 '1080P' —— 网关的
+        // h3ApplyKeyframeShortEdge 已经能把档位词翻成 short_edge 发下去，后端无需改动。
         //
         // 锁死而不是「填个默认值 + 写行提醒」，是因为光有提醒挡不住真正的漏法：
         // getSizesForVideoModel 的取值是 tab 级 → 模型级 → 分类默认值三级回落，运营
         // 为文生视频配的 480P 会顺着回落链漏到这个 tab 上 —— 关键帧一个字没填却冒出
         // 失效档位，那种情况下提醒根本不会被看到。**480P 至今仍然发不了**：引擎的短边
         // 白名单只有 768 与（开了 env 之后的）1080，480 会被 400。这正是锁定值只留
-        // 768P / 1080P 两档、而把 480P 挡在外面的原因。
+        // 768P 一档、把 480P / 1080P 都挡在外面的原因。
         //
         // 那为什么还要保留 sizes 这个字段？因为超分档的闸门是 sendsSize（见
         // useVideoGeneration 的 sizeChoices）：字段不在 fields 里，连 1080P 超分档都出
-        // 不来，关键帧永远用不上「先出 768P 再走 sr 模型」那条流水线。**现在它还有第二个
-        // 作用**：1080P 本身就是锁里的一个原生档，不再必须靠超分规则提供。
+        // 不来，关键帧永远用不上「先出 768P 再走 sr 模型」那条流水线 —— 而这条流水线
+        // 现在是关键帧拿到 1080P 的**唯一**途径。
         //
-        // 选 768P → 网关不发短边 ＝ 引擎默认；选 1080P → 发 short_edge=1080，画幅仍跟随
-        // 首图，首图不会被拉伸。鸭子（超分档）仍可按需在模型级「超分档位」里配。
+        // 选 768P → 网关不发短边 ＝ 引擎默认（与显式下发 768 等价）。
+        // 1080P 及以上（超分档）仍按需在模型级「超分档位」里配。
         //
         // aspectRatios 给，但它在这个 tab 里的语义与文生视频**完全不同**：引擎对关键帧
         // 静默忽略传来的比例，所以体验区不发比例字段，而是在提交前把图本身改成该比例
@@ -395,9 +427,9 @@ export const PLAYGROUND_CATEGORIES = [
         fields: ['sizes', 'durations', 'maxInputMB', 'aspectRatios'],
         fieldLocks: {
           sizes: {
-            value: ['768P', '1080P'],
+            value: ['768P'],
             reason:
-              '关键帧的画幅永远由引擎按上传的首图（只有尾帧时是那张尾帧）决定，网关不发宽高比、也不发 width/height，所以这里选的是**生成短边**，不是画幅。可选 768P（引擎缺省）与 1080P 两档：选 1080P 时网关把 short_edge=1080 发进 extra_params，画幅继续跟随首图、首图不会被拉伸。480P 等其它档位引擎侧会拒（短边白名单只有 768 与 1080），故不在锁定值里。如需 1080P 交超分模型再放大一次，可在下方模型级「超分档位」加一条 768P → 1080P 的规则；那一档的起步仍是 768P、出片分辨率由超分模型的部署配置决定（现网 1920×1080），并自动跟随首图朝向：横图出 1920×1080、竖图出 1080×1920、方图出 1080×1080。',
+              '关键帧的画幅永远由引擎按上传的首图（只有尾帧时是那张尾帧）决定，网关不发宽高比、也不发 width/height，所以这里选的是**生成短边**，不是画幅。当前部署 H3 的原生上限就是 768P（1080 要引擎侧开 VLLM_OMNI_H3_EXPERIMENTAL_SHORT_EDGE 把 1080 加进短边白名单，没开时网关一传就 400），480P 等其它档位同样会被拒，故锁定为单档 768P。1080P 及以上请走超分：在下方模型级「超分档位」加一条 768P → 1080P 的规则；那一档的起步仍是 768P、出片分辨率由超分模型的部署配置决定（现网 1920×1080），并自动跟随首图朝向：横图出 1920×1080、竖图出 1080×1920、方图出 1080×1080。',
             // 这把锁描述的是**某些引擎**的硬约束，不是关键帧这个玩法本身的性质。
             // exemptEngines 列出「自己认 width/height、不需要被锁」的引擎族。
             //

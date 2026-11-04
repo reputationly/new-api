@@ -130,7 +130,9 @@ const FieldInput = ({ field, value, onChange, compact = false, lock }) => {
             onChange={(v) =>
               onChange(v === '' || v == null ? undefined : Number(v))
             }
-            placeholder={t('留空 / 0 = 不限')}
+            // 字段自带 placeholder 时用它：不是每个 int 都是「0=不限」（超分倍率是同
+            // 一个量表的另一个语义，写「不限」会把人引到 0 上去）。
+            placeholder={field.placeholder ? t(field.placeholder) : t('留空 / 0 = 不限')}
             style={{ width: '100%' }}
           />
         );

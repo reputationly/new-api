@@ -22,36 +22,18 @@ import {
   selectFilter,
 } from '../../helpers';
 import ImageUrlInput from '../playground/ImageUrlInput';
+import RatioPicker from '../playground/RatioPicker';
 import { useModelNotes } from '../../hooks/common/useModelNotes';
 import PromptGuideTip from '../playground/PromptGuideTip';
 import {
   IMAGE_MAX_EDIT_IMAGES,
   imageTierLabel,
-  sizeToRatio,
 } from '../../constants/imagePlayground.constants';
 
 import {
   PLAYGROUND_BATCH_COUNTS,
   SEED_MAX,
 } from '../../constants/playgroundBatch.constants';
-
-// 比例按钮里那个小方块的长边像素。按比例缩短边，横/竖/方一眼可辨——比一串
-// "16:9 / 9:16" 文字快得多，尤其横竖两版名字只差一个冒号位置。
-// 20px 是「五个比例挤进一排」倒推出来的:面板 300 宽、卡片内边距 24×2,剩 252,
-// 五格 + 四道 6px 缝每格只有 45px 出头,24px 的方块加上边框就顶到格子边了。
-const RATIO_BOX_MAX = 20;
-const ratioBox = (r) => {
-  const v = sizeToRatio(r) || 1;
-  return v >= 1
-    ? {
-        width: RATIO_BOX_MAX,
-        height: Math.max(5, Math.round(RATIO_BOX_MAX / v)),
-      }
-    : {
-        width: Math.max(5, Math.round(RATIO_BOX_MAX * v)),
-        height: RATIO_BOX_MAX,
-      };
-};
 
 const ImageConfigPanel = ({
   isI2I = false,
@@ -321,49 +303,14 @@ const ImageConfigPanel = ({
                 {inputs.size || t('由模型决定')}
               </Typography.Text>
             ) : (
-              <div
-                // 一排等分:运营通常配五个比例,固定宽度 + flex-wrap 在 252px 的面板里
-                // 必然折成两行(5×56 + 4×8 = 312)。按个数等分列宽后无论几个都是一行,
-                // 每格宽度随个数收缩;选中态用实心蓝底,浅蓝描边在白卡片上几乎看不出来。
-                className='grid gap-1.5'
-                style={{
-                  gridTemplateColumns: `repeat(${Math.max(ratioChoices.length, 1)}, minmax(0, 1fr))`,
-                }}
-              >
-                {ratioChoices.map((r) => {
-                  const active = r === inputs.aspectRatio;
-                  return (
-                    <button
-                      key={r}
-                      type='button'
-                      disabled={disabled}
-                      aria-pressed={active}
-                      onClick={() => onInputChange('aspectRatio', r)}
-                      // 颜色只能用 semi-color-* 这套:classic 的 tailwind.config.js 把
-                      // theme.colors 整份替换成了 semi 变量,blue/gray/white 这些默认色板
-                      // 在构建产物里根本不存在 —— 之前的 bg-blue-50 / border-blue-500 从来
-                      // 没生效过,所以「点了没有选中效果」。
-                      className={`flex min-w-0 flex-col items-center justify-center gap-1 rounded-md border px-0 py-1.5 transition-colors ${
-                        active
-                          ? 'border-semi-color-primary bg-semi-color-primary text-semi-color-white shadow-sm'
-                          : 'border-semi-color-border text-semi-color-text-2 hover:border-semi-color-primary hover:bg-semi-color-primary-light-default'
-                      } ${disabled ? 'cursor-not-allowed opacity-50' : 'cursor-pointer'}`}
-                    >
-                      <span
-                        className={`block rounded-[2px] border ${
-                          active
-                            ? 'border-semi-color-white'
-                            : 'border-semi-color-text-3'
-                        }`}
-                        style={ratioBox(r)}
-                      />
-                      <span className='text-[10px] font-medium leading-none tracking-tight'>
-                        {r}
-                      </span>
-                    </button>
-                  );
-                })}
-              </div>
+              // 图形按钮组（6 列折行、显示层按宽→方→竖排序）与视频体验区共用同一份，
+              // 见 RatioPicker 顶部的注释。
+              <RatioPicker
+                choices={ratioChoices}
+                value={inputs.aspectRatio}
+                onChange={(r) => onInputChange('aspectRatio', r)}
+                disabled={disabled}
+              />
             )}
             {showTierSelect && (
               <div className='mt-3'>

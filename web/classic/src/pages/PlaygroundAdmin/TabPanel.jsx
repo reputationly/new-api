@@ -108,7 +108,12 @@ const TabPanel = ({ category, tab, draft }) => {
   const optimize = getTabPromptOptimize(draft.tabConfig, category, tab.key);
   const promptGuide = getTabPromptGuide(draft.tabConfig, category, tab.key);
   const globalOptimize = getPromptOptimizeGlobal(draft.tabConfig);
-  const modelLevelFields = PLAYGROUND_MODEL_LEVEL_FIELDS[storeKey] || [];
+  // bare 字段（超分倍率那类）只属于"没有玩法"的模型，在分类页的模型行里编辑
+  // （见 CategoryPanel 的 orphanModelFields）。这里滤掉，否则每个生成模型卡上都会
+  // 多出一个与本模型无关的「超分倍率」格子。
+  const modelLevelFields = (PLAYGROUND_MODEL_LEVEL_FIELDS[storeKey] || []).filter(
+    (f) => !f.bare,
+  );
   // 引擎族的展示名直接取「引擎族」下拉的 label —— 提示文案与运营刚刚选中的那一项
   // 用同一份来源,不另写一张映射表(那种表迟早和下拉分叉)。
   const engineLabel = (v) =>
@@ -714,11 +719,28 @@ const TabPanel = ({ category, tab, draft }) => {
                           // 分类默认值），所以直接用体验区那支取值函数。手写
                           // entry.sizes || model.sizes 会漏掉分类默认值那一层：
                           // 管理端显示「无可用起步档」而体验区照样推得出来。
-                          nativeSizes={getSizesForVideoModel(
-                            { models: store?.models, default: store?.defaults },
-                            name,
-                            tab.key,
-                          )}
+                          //
+                          // 被 fieldLocks 锁死的字段（关键帧 sizes）要先取锁定值：
+                          // 体验区那边是「锁定值优先、不读运营配置」，这里若只读回落链
+                          // 就反过来了 —— 运营压根没配 sizes 时下拉是空的、配不出
+                          // 768P → 1080P 这条唯一能出 1080P 的规则；配了个 480P 又是个
+                          // 点了不生效的死档位（resolveUpscaleFrom 只认锁定值里的档）。
+                          nativeSizes={
+                            getTabFieldLock(
+                              category,
+                              tab.key,
+                              'sizes',
+                              model?.engine,
+                            )?.value ||
+                            getSizesForVideoModel(
+                              {
+                                models: store?.models,
+                                default: store?.defaults,
+                              },
+                              name,
+                              tab.key,
+                            )
+                          }
                         />
                         {f.help && (
                           <Text

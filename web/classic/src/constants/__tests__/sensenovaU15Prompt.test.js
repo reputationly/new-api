@@ -9,7 +9,7 @@ import {
 } from '../imagePlayground.constants';
 import {
   defaultOptimizeSystemPrompt,
-  optimizeOutputsJson,
+  optimizeOutputKind,
   optimizeUserSuffix,
   GENERIC_OPTIMIZE_SYSTEM_PROMPT,
 } from '../promptOptimize.constants';
@@ -121,11 +121,11 @@ describe('图生图用的是官方 Edit Instruction Rewriter 原文', () => {
 
   it('产物是自然语言，不是 JSON——两个玩法不能共用一套后处理', () => {
     expect(i2i).not.toMatch(/Return raw JSON only/);
-    expect(optimizeOutputsJson('text2image', IMAGE_ENGINE_SENSENOVA_U15)).toBe(
-      true,
+    expect(optimizeOutputKind('text2image', IMAGE_ENGINE_SENSENOVA_U15)).toBe(
+      'render-json',
     );
-    expect(optimizeOutputsJson('image2image', IMAGE_ENGINE_SENSENOVA_U15)).toBe(
-      false,
+    expect(optimizeOutputKind('image2image', IMAGE_ENGINE_SENSENOVA_U15)).toBe(
+      'text',
     );
   });
 });
@@ -151,8 +151,8 @@ describe('回落', () => {
     expect(
       defaultOptimizeSystemPrompt('text2video', IMAGE_ENGINE_SENSENOVA_U15),
     ).not.toBe(t2i);
-    expect(optimizeOutputsJson('text2video', IMAGE_ENGINE_SENSENOVA_U15)).toBe(
-      false,
+    expect(optimizeOutputKind('text2video', IMAGE_ENGINE_SENSENOVA_U15)).toBe(
+      'text',
     );
   });
 });
