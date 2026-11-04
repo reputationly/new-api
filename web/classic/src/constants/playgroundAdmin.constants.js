@@ -47,7 +47,12 @@ export const PLAYGROUND_FIELD_META = {
     label: '时长（秒）',
     type: 'list',
     placeholder: '如 5、10',
-    help: '留空=不限制。服务端会按 task_type 对应的 tab 校验，直连请求同样受限。',
+    // 校验范围要写清：这条**只在自建 gpustackplus 渠道**上拦
+    // （relay/channel/task/gpustackplus/adaptor.go 的 ValidateVideoDurationForModel）。
+    // 第三方渠道（豆包/Sora 等）不读这里，直连传任意时长都放行 —— 那是刻意的：
+    // 这份配置对第三方而言只是"体验区给用户看几个候选"，不是接口契约。运营如果以为
+    // 它全站生效，会拿它当配额闸用，结果第三方渠道一秒钟就绕过去了。
+    help: '留空=不限制。⚠️ **只有自建 gpustackplus 渠道**会按 task_type 对应的 tab 校验（超了本地 400）；第三方渠道（豆包/Sora 等）不校验，直连传任意时长都会放行 —— 对第三方来说这里只是体验区的候选值。',
   },
   aspectRatios: {
     label: '宽高比',
@@ -77,7 +82,7 @@ export const PLAYGROUND_FIELD_META = {
   maxEditImages: {
     label: '底图张数上限',
     type: 'int',
-    help: '留空=用内置默认 3 张。**填得比 9 大无效**（只能收窄）：9 是自建 GPUStack 门面 routes/videos.py 里 i2i 的准入闸，取的是各引擎里声明得最高的那个，配大了只会开出一批发出去必被门面拒的槽位。**每个模型该填多少，看引擎给它声明的张数**（vllm-omni 的 diffusion/model_metadata.py）：SenseNova-U1.5 = 9（上游 harness 的 --image 是 nargs="+"、从不校验数量，9 是服务端准入值）、Qwen-Image-Edit-Plus = 4、HunyuanImage-3.0 = 3（上游多图融合上限）、Boogu-Image = 1。门面不按模型卡，**填超过引擎声明的张数不会被这一层拦下**，只会让请求打到引擎才出问题——所以这一格就是那道按模型的闸。填 0 无意义（底图是图生图的唯一输入，会被当作 1）；要停用这个玩法请在上方关掉 tab。**这一项服务端也认**：直连 /v1/images/edits 超过张数会被拒，不只是前端少给槽位。',
+    help: '留空=用内置默认 3 张。**填得比 9 大无效**（只能收窄）：9 是自建 GPUStack 门面 routes/videos.py 里 i2i 的准入闸，取的是各引擎里声明得最高的那个，配大了只会开出一批发出去必被门面拒的槽位。**每个模型该填多少，看引擎给它声明的张数**（vllm-omni 的 diffusion/model_metadata.py）：SenseNova-U1.5 = 9（上游 harness 的 --image 是 nargs="+"、从不校验数量，9 是服务端准入值）、Qwen-Image-Edit-Plus = 4、HunyuanImage-3.0 = 3（上游多图融合上限）、Boogu-Image = 1。门面不按模型卡，**填超过引擎声明的张数不会被这一层拦下**，只会让请求打到引擎才出问题——所以这一格就是那道按模型的闸。填 0 无意义（底图是图生图的唯一输入，会被当作 1）；要停用这个玩法请在上方关掉 tab。**这一项服务端也认，而且第三方渠道同样受限**：图生图的同步链路（/v1/images/edits）对所有渠道都走同一道校验，超过张数直接被拒，不只是前端少给槽位。',
   },
   maxAudioSec: {
     label: '驱动音频时长上限（秒）',
