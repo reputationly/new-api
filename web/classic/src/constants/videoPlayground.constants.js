@@ -317,16 +317,23 @@ export const videoExamplesForMode = (mode, keyframeMode, engine) => {
 };
 
 // 视频宽高比(文生视频):可在运营后台按模型配置允许集,未配置默认全集。
-// 21:9 是 MiniMax H3 与 Seedance 2.0 都支持的具名比例(H3:
-// MINIMAX_H3_SUPPORTED_ASPECT_RATIOS;Seedance: ratio 枚举含 21:9),原表缺它。
-// 这只是全集,各模型实际可选由运营配的 aspectRatios 收窄。
+// 与引擎(Pika H3)的 11 个具名比例一致 —— preprocessing.py:73-85,与官方
+// Pika-H3-Flex 的 buckets.yaml 逐项一致。顺序同官方:超宽 → 横版 → 方形 → 竖版 → 超窄。
+// 少一个的表现是静默的:后端拿不到具名比例就不推画布、档位词被丢掉,用户选什么都可能是
+// 16:9(见 minimax_h3.go 的 h3ApplyCanvas)。这只是全集,各模型实际可选由运营配的
+// aspectRatios 收窄;不放开运营配置的话下拉里仍然只有旧的那几个。
 export const VIDEO_ASPECT_RATIOS = [
   '21:9',
   '16:9',
-  '9:16',
-  '1:1',
+  '3:2',
   '4:3',
+  '5:4',
+  '1:1',
+  '4:5',
   '3:4',
+  '2:3',
+  '9:16',
+  '9:21',
 ];
 // 默认选中的宽高比(minimax 无宽高比可参考;取 16:9 = wan 引擎默认 1280×720)。
 export const VIDEO_DEFAULT_ASPECT_RATIO = '16:9';
