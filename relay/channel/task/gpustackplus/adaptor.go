@@ -310,9 +310,19 @@ func (a *TaskAdaptor) BuildRequestBody(c *gin.Context, info *relaycommon.RelayIn
 	}
 	// 转发顶层 size:同时给 size 与由它换算的 aspect_ratio,兼容不同引擎读法。
 	// 顶层 size 优先级高于 metadata 同名键(在上面的透传之后赋值,覆盖之)。
+	//
+	// **H3 要吸附到具名比例**,其余引擎保持精确约分:
+	// H3 的 aspect_ratio 只收 11 个具名值(其余 400),而官方 768P 尺寸表按 32 对齐取整,
+	// 21:9 的 1536×672 约分出来是 16:7 —— 不在白名单、偏差 2.04% 又超出引擎吸附容差,
+	// 于是这两档「画布算得出、请求发不出」。见 common.H3AspectRatioForSize。
+	// 画布不受影响:aspect_ratio 只参与校验/吸附,出片尺寸仍由 size 决定。
 	if s := strings.TrimSpace(req.Size); s != "" {
 		body["size"] = s
-		if ar := common.AspectRatioFromSize(s); ar != "" {
+		if common.VideoEngineFamilyForModel(req.Model, info.OriginModelName, modelName) == common.VideoEngineMinimaxH3 {
+			if ar := common.H3AspectRatioForSize(s); ar != "" {
+				body["aspect_ratio"] = ar
+			}
+		} else if ar := common.AspectRatioFromSize(s); ar != "" {
 			body["aspect_ratio"] = ar
 		}
 	}
@@ -360,6 +370,17 @@ func (a *TaskAdaptor) BuildRequestBody(c *gin.Context, info *relaycommon.RelayIn
 	// 语义,不兜底)。
 	if taskType == "svs" && strings.TrimSpace(req.Prompt) == "" {
 		req.Prompt = "soulx-singer"
+		body["prompt"] = req.Prompt
+	}
+	// sr(视频超分)同理:文本对超分毫无意义(输出由源视频决定),而 `ValidateBasicTaskRequest`
+	// 已经豁免了 sr 的空 prompt —— 但**引擎不认这个豁免**,input 必须有非空 prompt,
+	// 直连发空串会拿到 `prompt is required`。线上实测就是这么踩的:调用方为了过校验,
+	// 只能自己编一个没意义的 prompt 传进来。
+	//
+	// 兜底一个 label,与 svs 同一手法。**不给 v2a/v2m 兜底**:那两类是纯视频输入、
+	// 空 prompt 是正确的语义(见下面 v2a 那段 Foley 抑制句的说明)。
+	if taskType == "sr" && strings.TrimSpace(req.Prompt) == "" {
+		req.Prompt = "video-upscale"
 		body["prompt"] = req.Prompt
 	}
 	// v2a(视频配音)的提示词整形。LTX-2.3 挂的是 Foley LoRA,它的训练字幕里带「无人声/

@@ -115,7 +115,9 @@ func h3IsNamedAspectRatio(s string) bool {
 // 21/9=2.333 偏 1.1%,9:21 同量级(1.09%)—— 容差小于它就把这两档漏掉了。
 // 上限则由具名表里最挨近的两档决定:放开到 11 个之后是 4:3(1.333) 与 5:4(1.25),相距
 // 6.7%,其一半 3.35% > 3%,所以 3% 不会把相邻档判混。
-const h3ShapeRatioTolerance = 0.03
+// 与 common.H3AspectRatioTolerance 同源：两处都要按同一个容差吸附，各写一个数就会漂移
+// （一处放宽一处没放，症状是"这条路上能通的画幅换条路就 400"）。
+const h3ShapeRatioTolerance = common.H3AspectRatioTolerance
 
 // h3AspectRatioFromTargetShape 从 wan 的 target_shape:[height,width] 反推 H3 的具名比例,
 // 推不出(解析失败 / 偏离所有具名值超过容差)返回空串。
