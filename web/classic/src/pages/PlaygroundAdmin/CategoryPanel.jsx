@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Button, Card, Empty, Input, Tag, Typography } from '@douyinfe/semi-ui';
 import {
@@ -7,8 +7,11 @@ import {
   listTabsByStoreKey,
   orphanFields,
 } from '../../constants/playgroundAdmin.constants';
-import { API } from '../../helpers';
 import { STORE_META } from './usePlaygroundAdminDraft';
+import {
+  splitByAvailability,
+  useModelAvailability,
+} from './useModelAvailability';
 import FieldInput from './FieldInput';
 
 const { Text, Title } = Typography;
@@ -44,23 +47,10 @@ const CategoryPanel = ({ category, draft }) => {
   const [newCap, setNewCap] = useState('');
   const exists = !!store?.models?.[newName.trim()];
 
-  // 当前**有可用渠道**的模型名。null = 还不知道（请求失败/未返回时一律当"都知道"，
-  // 也就是不折叠）—— 折叠是"把东西藏起来"的动作，只能建立在确定的信息上：
-  // 一次 DB 抖动或接口 500 就把运营的配置从页面上藏掉，比翻得久糟得多。
-  const [availableModels, setAvailableModels] = useState(null);
+  // 当前**有可用渠道**的模型名（null = 还不知道 → 不折叠）。请求与缓存见
+  // useModelAvailability —— 玩法页用的是同一份，两个页面的判据不会分叉。
+  const availableModels = useModelAvailability();
   const [showInactive, setShowInactive] = useState(false);
-  useEffect(() => {
-    let cancelled = false;
-    API.get('/api/playground_admin/model_availability')
-      .then((res) => {
-        const list = res?.data?.data?.models;
-        if (!cancelled && Array.isArray(list)) setAvailableModels(new Set(list));
-      })
-      .catch(() => {});
-    return () => {
-      cancelled = true;
-    };
-  }, []);
 
   const rows = useMemo(
     () =>
@@ -78,14 +68,8 @@ const CategoryPanel = ({ category, draft }) => {
   // 渠道停用/删除之后，配置还会留在这份 JSON 里：对新请求毫无作用，却让页面越堆越长。
   // 把它们折进一个默认收起的区块（仍然可编辑、可清理），是按"这条配置还有没有意义"分的，
   // 与"这个 key 能不能调"无关。
-  const activeRows = useMemo(
-    () =>
-      availableModels ? rows.filter((r) => availableModels.has(r.name)) : rows,
-    [rows, availableModels],
-  );
-  const inactiveRows = useMemo(
-    () =>
-      availableModels ? rows.filter((r) => !availableModels.has(r.name)) : [],
+  const { activeRows, inactiveRows } = useMemo(
+    () => splitByAvailability(rows, availableModels),
     [rows, availableModels],
   );
 

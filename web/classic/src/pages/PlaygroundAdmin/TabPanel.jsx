@@ -15,6 +15,10 @@ import {
   Typography,
 } from '@douyinfe/semi-ui';
 import CreatableSelect from '../../components/common/CreatableSelect';
+import {
+  splitByAvailability,
+  useModelAvailability,
+} from './useModelAvailability';
 import { Trash2 } from 'lucide-react';
 import {
   MUSIC_ENGINE_MINIMAX_MUSIC3,
@@ -111,9 +115,14 @@ const TabPanel = ({ category, tab, draft }) => {
   // bare 字段（超分倍率那类）只属于"没有玩法"的模型，在分类页的模型行里编辑
   // （见 CategoryPanel 的 orphanModelFields）。这里滤掉，否则每个生成模型卡上都会
   // 多出一个与本模型无关的「超分倍率」格子。
-  const modelLevelFields = (PLAYGROUND_MODEL_LEVEL_FIELDS[storeKey] || []).filter(
-    (f) => !f.bare,
-  );
+  const modelLevelFields = (
+    PLAYGROUND_MODEL_LEVEL_FIELDS[storeKey] || []
+  ).filter((f) => !f.bare);
+
+  // 无可用渠道的模型默认收起：渠道停用/删除后配置还留在这里，对新请求毫无作用，
+  // 却让每个玩法页越堆越长。判据与分类页同源（useModelAvailability）。
+  const availableModels = useModelAvailability();
+  const [showInactive, setShowInactive] = useState(false);
   // 引擎族的展示名直接取「引擎族」下拉的 label —— 提示文案与运营刚刚选中的那一项
   // 用同一份来源,不另写一张映射表(那种表迟早和下拉分叉)。
   const engineLabel = (v) =>
@@ -129,6 +138,13 @@ const TabPanel = ({ category, tab, draft }) => {
         .map(([name, m]) => ({ name, model: m, entry: m.tabs[tab.key] || {} }))
         .sort((a, b) => a.name.localeCompare(b.name)),
     [store, tab.key],
+  );
+
+  // 按「有没有可用渠道」分成两组：无渠道的默认收起（判据与分类页同源，
+  // 见 useModelAvailability —— 两边各写一份就会出现"分类页说没渠道、玩法页说有"）。
+  const { activeRows, inactiveRows } = useMemo(
+    () => splitByAvailability(rows, availableModels),
+    [rows, availableModels],
   );
 
   // 默认系统提示词与提示词建议都要按引擎族取:H3 要的是带字段名的分段结构、LTX-2.5 要
@@ -203,6 +219,315 @@ const TabPanel = ({ category, tab, draft }) => {
       .filter((n) => n && !taken.has(n))
       .sort();
   }, [draft.allModels, rows]);
+
+  // 一张模型卡：本 tab 的字段 + 模型级参数（超分档位等）。
+  // 抽成函数是为了让「有渠道 / 无渠道」两组共用同一份渲染 —— 无渠道的条目同样要能改、
+  // 能清，只是默认收起来（见 useModelAvailability）。
+  const renderModelCard = ({ name, model, entry }) => (
+    <div key={name} className='border border-gray-200 rounded-lg p-3 mb-3'>
+      <div className='flex items-center justify-between mb-3'>
+        <Text strong>{name}</Text>
+        <Button
+          type='danger'
+          theme='borderless'
+          icon={<Trash2 size={16} />}
+          onClick={() => draft.removeModelFromTab(storeKey, tab.key, name)}
+        >
+          {t('从本 tab 移除')}
+        </Button>
+      </div>
+      {/* 模型备注:这个模型在**本 tab 下**适合什么场景,直接显示在体验区的模型
+                  下拉里。tab 级而非模型级 —— 同一模型在文生视频与图生视频下的适用场景
+                  本就不同,合成一条只会写成放之四海皆准的废话。 */}
+      <div className='mb-3'>
+        <Text size='small'>{t('模型备注')}</Text>
+        <Input
+          value={entry.note || ''}
+          onChange={(v) =>
+            draft.setTabField(storeKey, tab.key, name, 'note', v)
+          }
+          placeholder={t('如：写实人像效果好，出图快，适合批量试稿')}
+          className='mt-1'
+        />
+        <Text type='tertiary' size='small' className='block mt-1'>
+          {t(
+            '留空=不展示。填了以后展示在体验区的模型下拉选项与选中项下方，帮用户判断该用哪个模型。',
+          )}
+        </Text>
+      </div>
+      {/* 模型级的优化系统提示词:不定制就跟随上面那份 tab 通用方案。
+                  折叠起来是因为它是长文本、且多数模型不需要定制 —— 展开与否用
+                  「已定制 / 跟随本 tab」的标签一眼可辨,不必逐个点开确认。
+                  占位符按**这个模型自己的引擎族**取默认,与 tab 那份按全 tab 猜一个
+                  引擎不同:模型卡片这一层本来就没有歧义。 */}
+      {tab.promptOptimize && (
+        <div className='mb-3'>
+          {draftPlanOnly(model) && (
+            <Text type='warning' size='small' className='block mb-1'>
+              {t(
+                '⚠️ 本模型走「一键生成方案」分支（ACE-Step：一次产出描述、歌词、BPM、调式与时长并回填左侧控件），体验区不会给它「AI 优化提示词」按钮——这里配的模板不会被用到。要用模型级模板，请把模型的引擎族声明为 MiniMax-Music3。',
+              )}
+            </Text>
+          )}
+          <Collapse>
+            <Collapse.Panel
+              itemKey='optimizePrompt'
+              header={
+                <span className='flex items-center gap-2'>
+                  <Text size='small'>{t('AI 优化提示词')}</Text>
+                  <Tag
+                    size='small'
+                    color={customizedPrompt(entry) ? 'blue' : 'grey'}
+                  >
+                    {customizedPrompt(entry) ? t('已定制') : t('跟随本 tab')}
+                  </Tag>
+                </span>
+              }
+            >
+              <TextArea
+                rows={10}
+                value={entry.optimizePrompt || ''}
+                onChange={(v) =>
+                  draft.setTabField(
+                    storeKey,
+                    tab.key,
+                    name,
+                    'optimizePrompt',
+                    v,
+                  )
+                }
+                placeholder={effectivePrompt(model)}
+              />
+              <div className='flex items-center gap-3 mt-2'>
+                <Button
+                  size='small'
+                  theme='borderless'
+                  disabled={!customizedPrompt(entry)}
+                  onClick={() =>
+                    draft.setTabField(
+                      storeKey,
+                      tab.key,
+                      name,
+                      'optimizePrompt',
+                      '',
+                    )
+                  }
+                >
+                  {t('跟随本 tab')}
+                </Button>
+                <Button
+                  size='small'
+                  theme='borderless'
+                  onClick={() =>
+                    draft.setTabField(
+                      storeKey,
+                      tab.key,
+                      name,
+                      'optimizePrompt',
+                      effectivePrompt(model),
+                    )
+                  }
+                >
+                  {t('填入当前生效的内容以便修改')}
+                </Button>
+              </div>
+              <Text type='tertiary' size='small' className='block mt-2'>
+                {t(
+                  '留空=用上面那份 tab 通用方案（占位符里就是当前对本模型实际生效的内容）。只在这个模型需要跟别人不一样时才填——典型是同一玩法下挂了不同引擎族的模型，各家要的模板形状本就相反。',
+                )}
+              </Text>
+            </Collapse.Panel>
+          </Collapse>
+        </div>
+      )}
+      {/* 玩法声明:本 tab 覆盖多个门面 task_type 时,由运营指明这个模型是哪一个。
+                  不走 fields —— 它不是参数,不该被 recomputeModelLevel 反推到模型级。 */}
+      {tab.taskTypeChoices && (
+        <div className='mb-3'>
+          <Text size='small'>{t('玩法')}</Text>
+          <Select
+            value={entry.taskType || ''}
+            optionList={[
+              { label: t('自动（按模型名判断）'), value: '' },
+              ...tab.taskTypeChoices.map((c) => ({
+                label: t(c.label),
+                value: c.value,
+              })),
+            ]}
+            onChange={(v) =>
+              draft.setTabField(storeKey, tab.key, name, 'taskType', v)
+            }
+            style={{ width: 260, display: 'block' }}
+            className='mt-1'
+          />
+        </div>
+      )}
+      {tab.fields.length === 0 ? (
+        <Text type='tertiary' size='small'>
+          {t('本玩法没有可调参数，加进来即可用。')}
+        </Text>
+      ) : (
+        <div className='grid grid-cols-1 md:grid-cols-2 gap-4'>
+          {tab.fields.map((f) => (
+            <FieldInput
+              key={f}
+              field={f}
+              value={entry[f]}
+              lock={getTabFieldLock(category, tab.key, f, model?.engine)}
+              onChange={(v) => draft.setTabField(storeKey, tab.key, name, f, v)}
+            />
+          ))}
+        </div>
+      )}
+      {/* 画幅：一键填入实测过的推荐档 + 同时配了两套时的告警。
+                  只对图像分类有意义（视频那边画幅走另一套字段）。 */}
+      {category === 'image' && (
+        <ImageShapeHints
+          modelName={name}
+          model={model}
+          tabKey={tab.key}
+          entry={entry}
+          onApply={(preset) => {
+            // 两套互斥：填 area 就清掉 sizes，反之亦然 —— 否则一键填完
+            // 立刻触发下面那条"配了两套"的告警，等于自己造矛盾。
+            draft.setTabField(
+              storeKey,
+              tab.key,
+              name,
+              'aspectRatios',
+              preset.aspectRatios,
+            );
+            draft.setTabField(
+              storeKey,
+              tab.key,
+              name,
+              'sizeTiers',
+              preset.sizeTiers,
+            );
+            draft.setTabField(storeKey, tab.key, name, 'sizes', preset.sizes);
+            draft.setModelField(
+              storeKey,
+              name,
+              'sizeAlign',
+              preset.sizeAlign ?? null,
+            );
+            // 长边护栏也要一起写:它和档位是配套的。只填档位不填护栏,
+            // 高清档在 16:9 下就会显示 2048x1152 而实际出 1664x928。
+            // 没有护栏的模型显式写 null —— 一键填入要能把上一个模型
+            // 留下的值清掉,否则换模型后会带着别人的护栏。
+            draft.setModelField(
+              storeKey,
+              name,
+              'maxLongEdge',
+              preset.maxLongEdge ?? null,
+            );
+          }}
+        />
+      )}
+      {modelLevelFields.length > 0 && (
+        <div className='mt-3 pt-3 border-t border-gray-100 flex flex-wrap items-center gap-6'>
+          {modelLevelFields.map((f) =>
+            // 超分档位是复合结构（多行、每行三个联动下拉），塞不进这排
+            // 单控件的 flex 行，独占一行渲染。
+            f.type === 'upscale' ? (
+              <div key={f.key} className='w-full'>
+                <div className='flex items-center gap-2 mb-1'>
+                  <Text size='small'>{t(f.label)}</Text>
+                  <Text type='tertiary' size='small'>
+                    {t('（模型级，对该模型的所有玩法生效）')}
+                  </Text>
+                </div>
+                <UpscaleField
+                  value={model[f.key]}
+                  onChange={(v) =>
+                    draft.setModelField(storeKey, name, f.key, v)
+                  }
+                  models={store?.models}
+                  defaults={store?.defaults}
+                  // 勾了「高分辨率档用纯放大」时，超分模型那一格不再被调用
+                  // （放大由引擎在出片前做）。置灰并标注，但**不能清空**：
+                  // 档位本身是由这些规则定义的，清了 1080P / 2K 会一起消失。
+                  srModelUnused={!!model.nativeDelivery}
+                  // 起步档候选必须与体验区完全同口径（tab 级 → 模型级 →
+                  // 分类默认值），所以直接用体验区那支取值函数。手写
+                  // entry.sizes || model.sizes 会漏掉分类默认值那一层：
+                  // 管理端显示「无可用起步档」而体验区照样推得出来。
+                  //
+                  // 被 fieldLocks 锁死的字段（关键帧 sizes）要先取锁定值：
+                  // 体验区那边是「锁定值优先、不读运营配置」，这里若只读回落链
+                  // 就反过来了 —— 运营压根没配 sizes 时下拉是空的、配不出
+                  // 768P → 1080P 这条唯一能出 1080P 的规则；配了个 480P 又是个
+                  // 点了不生效的死档位（resolveUpscaleFrom 只认锁定值里的档）。
+                  nativeSizes={
+                    getTabFieldLock(category, tab.key, 'sizes', model?.engine)
+                      ?.value ||
+                    getSizesForVideoModel(
+                      {
+                        models: store?.models,
+                        default: store?.defaults,
+                      },
+                      name,
+                      tab.key,
+                    )
+                  }
+                />
+                {f.help && (
+                  <Text type='tertiary' size='small' className='block mt-1'>
+                    {t(f.help)}
+                  </Text>
+                )}
+              </div>
+            ) : (
+              <div key={f.key} className='flex items-center gap-2'>
+                {/* 按 f.type 渲染。原来这里硬编码 Switch、完全忽略 type，
+                          加一个非布尔字段（如引擎族 select）会渲染成一个永远
+                          不勾选的开关，且写回 true/false 把配置写坏。 */}
+                {f.type === 'select' ? (
+                  <Select
+                    size='small'
+                    style={{ minWidth: 260 }}
+                    value={model[f.key] || ''}
+                    optionList={f.options || []}
+                    onChange={(v) =>
+                      draft.setModelField(storeKey, name, f.key, v || '')
+                    }
+                  />
+                ) : f.type === 'int' ? (
+                  <InputNumber
+                    size='small'
+                    min={1}
+                    style={{ width: 150 }}
+                    value={model[f.key] == null ? undefined : model[f.key]}
+                    placeholder={t(f.placeholder || '留空=默认')}
+                    onChange={(v) =>
+                      draft.setModelField(
+                        storeKey,
+                        name,
+                        f.key,
+                        v === '' || v == null ? null : Number(v),
+                      )
+                    }
+                  />
+                ) : (
+                  <Switch
+                    size='small'
+                    checked={model[f.key] === true}
+                    onChange={(v) =>
+                      draft.setModelField(storeKey, name, f.key, v)
+                    }
+                  />
+                )}
+                <Text size='small'>{t(f.label)}</Text>
+                <Text type='tertiary' size='small'>
+                  {t('（模型级，对该模型的所有玩法生效）')}
+                </Text>
+              </div>
+            ),
+          )}
+        </div>
+      )}
+    </div>
+  );
 
   return (
     <div className='flex flex-col gap-3'>
@@ -470,346 +795,29 @@ const TabPanel = ({ category, tab, draft }) => {
             style={{ padding: '16px 0' }}
           />
         ) : (
-          rows.map(({ name, model, entry }) => (
-            <div
-              key={name}
-              className='border border-gray-200 rounded-lg p-3 mb-3'
-            >
-              <div className='flex items-center justify-between mb-3'>
-                <Text strong>{name}</Text>
-                <Button
-                  type='danger'
-                  theme='borderless'
-                  icon={<Trash2 size={16} />}
-                  onClick={() =>
-                    draft.removeModelFromTab(storeKey, tab.key, name)
-                  }
+          <>
+            {activeRows.map((row) => renderModelCard(row))}
+            {inactiveRows.length > 0 && (
+              <div className='mt-2 pt-3 border-t border-gray-200'>
+                <div
+                  className='flex items-center gap-2 cursor-pointer select-none mb-2'
+                  onClick={() => setShowInactive((v) => !v)}
                 >
-                  {t('从本 tab 移除')}
-                </Button>
+                  <Text type='tertiary' size='small'>
+                    {t(
+                      '{{count}} 个模型当前没有可用渠道（渠道已停用或模型已从渠道删除；配置仍在这里，展开可编辑或清理）',
+                      { count: inactiveRows.length },
+                    )}
+                  </Text>
+                  <Text type='tertiary' size='small'>
+                    {showInactive ? t('收起') : t('展开')}
+                  </Text>
+                </div>
+                {showInactive &&
+                  inactiveRows.map((row) => renderModelCard(row))}
               </div>
-              {/* 模型备注:这个模型在**本 tab 下**适合什么场景,直接显示在体验区的模型
-                  下拉里。tab 级而非模型级 —— 同一模型在文生视频与图生视频下的适用场景
-                  本就不同,合成一条只会写成放之四海皆准的废话。 */}
-              <div className='mb-3'>
-                <Text size='small'>{t('模型备注')}</Text>
-                <Input
-                  value={entry.note || ''}
-                  onChange={(v) =>
-                    draft.setTabField(storeKey, tab.key, name, 'note', v)
-                  }
-                  placeholder={t('如：写实人像效果好，出图快，适合批量试稿')}
-                  className='mt-1'
-                />
-                <Text type='tertiary' size='small' className='block mt-1'>
-                  {t(
-                    '留空=不展示。填了以后展示在体验区的模型下拉选项与选中项下方，帮用户判断该用哪个模型。',
-                  )}
-                </Text>
-              </div>
-              {/* 模型级的优化系统提示词:不定制就跟随上面那份 tab 通用方案。
-                  折叠起来是因为它是长文本、且多数模型不需要定制 —— 展开与否用
-                  「已定制 / 跟随本 tab」的标签一眼可辨,不必逐个点开确认。
-                  占位符按**这个模型自己的引擎族**取默认,与 tab 那份按全 tab 猜一个
-                  引擎不同:模型卡片这一层本来就没有歧义。 */}
-              {tab.promptOptimize && (
-                <div className='mb-3'>
-                  {draftPlanOnly(model) && (
-                    <Text type='warning' size='small' className='block mb-1'>
-                      {t(
-                        '⚠️ 本模型走「一键生成方案」分支（ACE-Step：一次产出描述、歌词、BPM、调式与时长并回填左侧控件），体验区不会给它「AI 优化提示词」按钮——这里配的模板不会被用到。要用模型级模板，请把模型的引擎族声明为 MiniMax-Music3。',
-                      )}
-                    </Text>
-                  )}
-                  <Collapse>
-                    <Collapse.Panel
-                      itemKey='optimizePrompt'
-                      header={
-                        <span className='flex items-center gap-2'>
-                          <Text size='small'>{t('AI 优化提示词')}</Text>
-                          <Tag
-                            size='small'
-                            color={customizedPrompt(entry) ? 'blue' : 'grey'}
-                          >
-                            {customizedPrompt(entry)
-                              ? t('已定制')
-                              : t('跟随本 tab')}
-                          </Tag>
-                        </span>
-                      }
-                    >
-                      <TextArea
-                        rows={10}
-                        value={entry.optimizePrompt || ''}
-                        onChange={(v) =>
-                          draft.setTabField(
-                            storeKey,
-                            tab.key,
-                            name,
-                            'optimizePrompt',
-                            v,
-                          )
-                        }
-                        placeholder={effectivePrompt(model)}
-                      />
-                      <div className='flex items-center gap-3 mt-2'>
-                        <Button
-                          size='small'
-                          theme='borderless'
-                          disabled={!customizedPrompt(entry)}
-                          onClick={() =>
-                            draft.setTabField(
-                              storeKey,
-                              tab.key,
-                              name,
-                              'optimizePrompt',
-                              '',
-                            )
-                          }
-                        >
-                          {t('跟随本 tab')}
-                        </Button>
-                        <Button
-                          size='small'
-                          theme='borderless'
-                          onClick={() =>
-                            draft.setTabField(
-                              storeKey,
-                              tab.key,
-                              name,
-                              'optimizePrompt',
-                              effectivePrompt(model),
-                            )
-                          }
-                        >
-                          {t('填入当前生效的内容以便修改')}
-                        </Button>
-                      </div>
-                      <Text type='tertiary' size='small' className='block mt-2'>
-                        {t(
-                          '留空=用上面那份 tab 通用方案（占位符里就是当前对本模型实际生效的内容）。只在这个模型需要跟别人不一样时才填——典型是同一玩法下挂了不同引擎族的模型，各家要的模板形状本就相反。',
-                        )}
-                      </Text>
-                    </Collapse.Panel>
-                  </Collapse>
-                </div>
-              )}
-              {/* 玩法声明:本 tab 覆盖多个门面 task_type 时,由运营指明这个模型是哪一个。
-                  不走 fields —— 它不是参数,不该被 recomputeModelLevel 反推到模型级。 */}
-              {tab.taskTypeChoices && (
-                <div className='mb-3'>
-                  <Text size='small'>{t('玩法')}</Text>
-                  <Select
-                    value={entry.taskType || ''}
-                    optionList={[
-                      { label: t('自动（按模型名判断）'), value: '' },
-                      ...tab.taskTypeChoices.map((c) => ({
-                        label: t(c.label),
-                        value: c.value,
-                      })),
-                    ]}
-                    onChange={(v) =>
-                      draft.setTabField(storeKey, tab.key, name, 'taskType', v)
-                    }
-                    style={{ width: 260, display: 'block' }}
-                    className='mt-1'
-                  />
-                </div>
-              )}
-              {tab.fields.length === 0 ? (
-                <Text type='tertiary' size='small'>
-                  {t('本玩法没有可调参数，加进来即可用。')}
-                </Text>
-              ) : (
-                <div className='grid grid-cols-1 md:grid-cols-2 gap-4'>
-                  {tab.fields.map((f) => (
-                    <FieldInput
-                      key={f}
-                      field={f}
-                      value={entry[f]}
-                      lock={getTabFieldLock(
-                        category,
-                        tab.key,
-                        f,
-                        model?.engine,
-                      )}
-                      onChange={(v) =>
-                        draft.setTabField(storeKey, tab.key, name, f, v)
-                      }
-                    />
-                  ))}
-                </div>
-              )}
-              {/* 画幅：一键填入实测过的推荐档 + 同时配了两套时的告警。
-                  只对图像分类有意义（视频那边画幅走另一套字段）。 */}
-              {category === 'image' && (
-                <ImageShapeHints
-                  modelName={name}
-                  model={model}
-                  tabKey={tab.key}
-                  entry={entry}
-                  onApply={(preset) => {
-                    // 两套互斥：填 area 就清掉 sizes，反之亦然 —— 否则一键填完
-                    // 立刻触发下面那条"配了两套"的告警，等于自己造矛盾。
-                    draft.setTabField(
-                      storeKey,
-                      tab.key,
-                      name,
-                      'aspectRatios',
-                      preset.aspectRatios,
-                    );
-                    draft.setTabField(
-                      storeKey,
-                      tab.key,
-                      name,
-                      'sizeTiers',
-                      preset.sizeTiers,
-                    );
-                    draft.setTabField(
-                      storeKey,
-                      tab.key,
-                      name,
-                      'sizes',
-                      preset.sizes,
-                    );
-                    draft.setModelField(
-                      storeKey,
-                      name,
-                      'sizeAlign',
-                      preset.sizeAlign ?? null,
-                    );
-                    // 长边护栏也要一起写:它和档位是配套的。只填档位不填护栏,
-                    // 高清档在 16:9 下就会显示 2048x1152 而实际出 1664x928。
-                    // 没有护栏的模型显式写 null —— 一键填入要能把上一个模型
-                    // 留下的值清掉,否则换模型后会带着别人的护栏。
-                    draft.setModelField(
-                      storeKey,
-                      name,
-                      'maxLongEdge',
-                      preset.maxLongEdge ?? null,
-                    );
-                  }}
-                />
-              )}
-              {modelLevelFields.length > 0 && (
-                <div className='mt-3 pt-3 border-t border-gray-100 flex flex-wrap items-center gap-6'>
-                  {modelLevelFields.map((f) =>
-                    // 超分档位是复合结构（多行、每行三个联动下拉），塞不进这排
-                    // 单控件的 flex 行，独占一行渲染。
-                    f.type === 'upscale' ? (
-                      <div key={f.key} className='w-full'>
-                        <div className='flex items-center gap-2 mb-1'>
-                          <Text size='small'>{t(f.label)}</Text>
-                          <Text type='tertiary' size='small'>
-                            {t('（模型级，对该模型的所有玩法生效）')}
-                          </Text>
-                        </div>
-                        <UpscaleField
-                          value={model[f.key]}
-                          onChange={(v) =>
-                            draft.setModelField(storeKey, name, f.key, v)
-                          }
-                          models={store?.models}
-                          defaults={store?.defaults}
-                          // 勾了「高分辨率档用纯放大」时，超分模型那一格不再被调用
-                          // （放大由引擎在出片前做）。置灰并标注，但**不能清空**：
-                          // 档位本身是由这些规则定义的，清了 1080P / 2K 会一起消失。
-                          srModelUnused={!!model.nativeDelivery}
-                          // 起步档候选必须与体验区完全同口径（tab 级 → 模型级 →
-                          // 分类默认值），所以直接用体验区那支取值函数。手写
-                          // entry.sizes || model.sizes 会漏掉分类默认值那一层：
-                          // 管理端显示「无可用起步档」而体验区照样推得出来。
-                          //
-                          // 被 fieldLocks 锁死的字段（关键帧 sizes）要先取锁定值：
-                          // 体验区那边是「锁定值优先、不读运营配置」，这里若只读回落链
-                          // 就反过来了 —— 运营压根没配 sizes 时下拉是空的、配不出
-                          // 768P → 1080P 这条唯一能出 1080P 的规则；配了个 480P 又是个
-                          // 点了不生效的死档位（resolveUpscaleFrom 只认锁定值里的档）。
-                          nativeSizes={
-                            getTabFieldLock(
-                              category,
-                              tab.key,
-                              'sizes',
-                              model?.engine,
-                            )?.value ||
-                            getSizesForVideoModel(
-                              {
-                                models: store?.models,
-                                default: store?.defaults,
-                              },
-                              name,
-                              tab.key,
-                            )
-                          }
-                        />
-                        {f.help && (
-                          <Text
-                            type='tertiary'
-                            size='small'
-                            className='block mt-1'
-                          >
-                            {t(f.help)}
-                          </Text>
-                        )}
-                      </div>
-                    ) : (
-                      <div key={f.key} className='flex items-center gap-2'>
-                        {/* 按 f.type 渲染。原来这里硬编码 Switch、完全忽略 type，
-                          加一个非布尔字段（如引擎族 select）会渲染成一个永远
-                          不勾选的开关，且写回 true/false 把配置写坏。 */}
-                        {f.type === 'select' ? (
-                          <Select
-                            size='small'
-                            style={{ minWidth: 260 }}
-                            value={model[f.key] || ''}
-                            optionList={f.options || []}
-                            onChange={(v) =>
-                              draft.setModelField(
-                                storeKey,
-                                name,
-                                f.key,
-                                v || '',
-                              )
-                            }
-                          />
-                        ) : f.type === 'int' ? (
-                          <InputNumber
-                            size='small'
-                            min={1}
-                            style={{ width: 150 }}
-                            value={
-                              model[f.key] == null ? undefined : model[f.key]
-                            }
-                            placeholder={t(f.placeholder || '留空=默认')}
-                            onChange={(v) =>
-                              draft.setModelField(
-                                storeKey,
-                                name,
-                                f.key,
-                                v === '' || v == null ? null : Number(v),
-                              )
-                            }
-                          />
-                        ) : (
-                          <Switch
-                            size='small'
-                            checked={model[f.key] === true}
-                            onChange={(v) =>
-                              draft.setModelField(storeKey, name, f.key, v)
-                            }
-                          />
-                        )}
-                        <Text size='small'>{t(f.label)}</Text>
-                        <Text type='tertiary' size='small'>
-                          {t('（模型级，对该模型的所有玩法生效）')}
-                        </Text>
-                      </div>
-                    ),
-                  )}
-                </div>
-              )}
-            </div>
-          ))
+            )}
+          </>
         )}
       </Card>
     </div>

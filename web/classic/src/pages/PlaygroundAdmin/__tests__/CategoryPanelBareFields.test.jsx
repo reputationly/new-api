@@ -7,6 +7,7 @@ vi.mock('../../../helpers', () => ({ API: { get: vi.fn() } }));
 
 import { API } from '../../../helpers';
 import CategoryPanel from '../CategoryPanel';
+import { resetModelAvailabilityCache } from '../useModelAvailability';
 import { getPlaygroundCategory } from '../../../constants/playgroundAdmin.constants';
 
 // 体验区管理 → 视频模型（分类页）里「没挂玩法的模型」的模型级字段编辑区。
@@ -36,6 +37,9 @@ const mockAvailability = (names) =>
 
 beforeEach(() => {
   vi.clearAllMocks();
+  // 可用性结果在模块级缓存（同一页面两个面板共用一次请求），用例之间必须清掉，
+  // 否则第二个用例拿到的是第一个用例的集合。
+  resetModelAvailabilityCache();
   mockAvailability(['relayvsr', 'minimax-h3-fl2va']);
 });
 
@@ -56,7 +60,10 @@ describe('没挂玩法的模型：模型级字段要真的渲染出来', () => {
     });
     render(<CategoryPanel category={VIDEO} draft={draft} />);
     // 这一块里还有别的数字输入（驱动音频时长上限那类），按标签定位到那一格
-    const input = screen.getByText('超分倍率').closest('div').querySelector('input');
+    const input = screen
+      .getByText('超分倍率')
+      .closest('div')
+      .querySelector('input');
     fireEvent.change(input, { target: { value: '2' } });
     expect(draft.setModelField).toHaveBeenCalledWith(
       'VideoModelConfig',
