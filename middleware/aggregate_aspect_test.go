@@ -44,6 +44,15 @@ func TestVideoAspectRatioAlignment(t *testing.T) {
 		require.Equal(t, "768P", b["size"], "档位词覆盖照常生效")
 	})
 
+	// 4:5 是本次放开的中间档之一。这里守两件事:像素串能推导到它(而不是就近退回 1:1
+	// 或 3:4),以及 overrides 的 768P 照常顶掉客户传的像素串 —— 中间产物永远是生成段的
+	// 起步档,最终分辨率交给第二段。
+	t.Run("像素串推导 4:5,生成段 size 仍是 768P", func(t *testing.T) {
+		b := expand(t, `{"model":"h3-2k","prompt":"a cat","size":"1080x1350"}`)
+		require.Equal(t, "4:5", aspectOf(b))
+		require.Equal(t, "768P", b["size"], "档位词覆盖照常生效")
+	})
+
 	t.Run("像素串推导到最近的具名比例,不下发 26:15 这种非具名值", func(t *testing.T) {
 		b := expand(t, `{"model":"h3-2k","prompt":"a cat","size":"832x480"}`)
 		require.Equal(t, "16:9", aspectOf(b))
