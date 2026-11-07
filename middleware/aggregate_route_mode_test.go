@@ -32,6 +32,11 @@ func TestRouteByMode(t *testing.T) {
 	} else {
 		t.Logf("entry ok: platform=%s mode_models=%v", e.PlatformModel, e.ModeModels)
 	}
+	// 真实配置里 model_name 是给客户端看的名字（MiniMax-H3），平台模型名才是 minimax-h3-2k ——
+	// 按平台名必须也能找到，否则 mode_models 路由静默失效。
+	if e, ok := setting.FindHiloEntryByPlatformModel("h3-fl2va"); !ok || len(e.ModeModels) == 0 {
+		t.Fatalf("按平台模型名没找到目录项")
+	}
 	for _, tc := range cases {
 		if got := routeByMode("minimax-h3-2k", "h3-fl2va", tc.body); got != tc.want {
 			t.Fatalf("%s: got %q want %q", tc.name, got, tc.want)

@@ -121,6 +121,27 @@ func (e HiloCatalogEntry) PlatformModelFor(mode string) string {
 //
 // 客户端发回来的是 `model`，对应目录里的 `model_name`（没配则是 `id`）——
 // **不是 platform_model**。那个是我们内部的平台模型名，客户端不知道它的存在。
+// FindHiloEntryByPlatformModel 按**平台模型名**找目录项。
+//
+// 聚合展开时传进来的名字是平台模型名（例如 `minimax-h3-2k`），而目录里的
+// `model_name` 常常是给客户端看的名字（`MiniMax-H3`）—— 两者不同，
+// 只按 model_name/id 找会找不到，于是 `mode_models` 路由静默失效。
+func FindHiloEntryByPlatformModel(platformModel string) (HiloCatalogEntry, bool) {
+	name := strings.TrimSpace(platformModel)
+	if name == "" {
+		return HiloCatalogEntry{}, false
+	}
+	c := GetHiloCatalog()
+	for _, group := range [][]HiloCatalogEntry{c.Image, c.Video, c.Audio} {
+		for _, e := range group {
+			if strings.TrimSpace(e.PlatformModel) == name {
+				return e, true
+			}
+		}
+	}
+	return HiloCatalogEntry{}, false
+}
+
 func FindHiloEntry(modelName string) (HiloCatalogEntry, bool) {
 	c := GetHiloCatalog()
 	for _, group := range [][]HiloCatalogEntry{c.Image, c.Video, c.Audio} {

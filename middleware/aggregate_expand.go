@@ -114,6 +114,11 @@ func routeByMode(publicName, realModel string, body map[string]any) string {
 		return ""
 	}
 	entry, ok := setting.FindHiloEntry(publicName)
+	if !ok {
+		// 聚合展开传进来的是**平台模型名**（`minimax-h3-2k`），而目录里的
+		// `model_name` 常是给客户端看的名字（`MiniMax-H3`）——再按平台名找一次。
+		entry, ok = setting.FindHiloEntryByPlatformModel(publicName)
+	}
 	if !ok || len(entry.ModeModels) == 0 {
 		return ""
 	}
