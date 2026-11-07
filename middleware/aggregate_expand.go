@@ -104,30 +104,31 @@ func groupAllowedForAggregate(agg *common.AggregateModel, usingGroup, userGroup 
 // **body 也必须改写**,不能只改 modelRequest:适配器构造上游请求时读的是 body 里的 model
 // (图片生成尤其明显),只改内存里那份会让上游收到一个它不认识的聚合模型名。
 
-// routeByMode 用目录里的 `mode_models` 把聚合模型按玩法分派到对应 checkpoint。
+// routeByMode 用目录里的 `mode_models` 把聚合按玩法分派到对应 checkpoint。
 //
-// 只认三种来源（优先级从高到低）：body 的 `image_mode`、metadata 里的 `image_mode`、
-// metadata 里的 `task_type`（r2va/r2v/rv2v → reference，fl2va/t2va/s2v → first-last-frame）。
-// 任何一步取不到就原样返回，绝不猜。
-func routeByMode(publicName, realModel string, body map[string]any) string {
+// 取值优先级：body.image_mode → metadata.image_mode（对象或 JSON 字符串）→
+// metadata.task_type（r2va/r2v/rv2v → reference；fl2va/t2va/s2v → first-last-frame）。
+// 取不到就原样返回（绝不猜）。
+//
+// **目标若是另一个聚合模型**（本仓库里 `minimax-h3-ref-2k` 就是），不能把聚合名当上游模型
+// 发出去 —— 它没有渠道 ability。这种情况直接返回可照做的错，让客户端改调另一个聚合名，
+// 由它自己走完整的生成 + 超分流水线。
+func routeByMode(publicName string, body map[string]any) (string, error) {
 	if strings.TrimSpace(publicName) == "" || len(body) == 0 {
-		return ""
+		return "", nil
 	}
 	entry, ok := setting.FindHiloEntry(publicName)
 	if !ok {
-		// 聚合展开传进来的是**平台模型名**（`minimax-h3-2k`），而目录里的
-		// `model_name` 常是给客户端看的名字（`MiniMax-H3`）——再按平台名找一次。
 		entry, ok = setting.FindHiloEntryByPlatformModel(publicName)
 	}
 	if !ok || len(entry.ModeModels) == 0 {
-		return ""
+		return "", nil
 	}
 	mode := ""
 	if v, ok := body["image_mode"].(string); ok {
 		mode = strings.TrimSpace(v)
 	}
 	if mode == "" {
-		// metadata 可能是对象，也可能是 JSON 编码的字符串（两种都是合法提交形态）。
 		meta := map[string]any{}
 		switch raw := body["metadata"].(type) {
 		case map[string]any:
@@ -137,7 +138,6 @@ func routeByMode(publicName, realModel string, body map[string]any) string {
 				_ = common.Unmarshal([]byte(raw), &meta)
 			}
 		}
-		mode = ""
 		if v, ok := meta["image_mode"].(string); ok {
 			mode = strings.TrimSpace(v)
 		}
@@ -151,19 +151,23 @@ func routeByMode(publicName, realModel string, body map[string]any) string {
 				mode = "reference"
 			case "fl2va", "t2va", "s2v":
 				mode = "first-last-frame"
-			default:
-				mode = ""
 			}
 		}
 	}
-	if mode == "" || mode == "<nil>" {
-		return ""
+	if mode == "" {
+		return "", nil
 	}
 	target := strings.TrimSpace(entry.ModeModels[mode])
-	if target == "" || target == realModel {
-		return ""
+	if target == "" || target == publicName {
+		return "", nil
 	}
-	return target
+	if agg := common.GetAggregateModel(target); agg != nil {
+		return "", fmt.Errorf(
+			"聚合模型 %s 不提供 image_mode=%s 这条流水线（它用的是 %s checkpoint）。请改调 %s：那是专为 %s 配置的聚合模型，生成与超分参数都已配好。",
+			publicName, mode, strings.TrimSpace(entry.PlatformModel), target, mode,
+		)
+	}
+	return target, nil
 }
 
 func applyAggregateExpansion(c *gin.Context, publicName, realModel string, agg *common.AggregateModel) error {
@@ -232,7 +236,9 @@ func applyAggregateExpansion(c *gin.Context, publicName, realModel string, agg *
 	// 而客户端（以及运营）只能看到一个看不出关联的 400。
 	//
 	// 目录里的 `mode_models` 本来就描述了"玩法 → 平台模型"，这里让它真正参与路由。
-	if routed := routeByMode(publicName, realModel, body); routed != "" {
+	if routed, err := routeByMode(publicName, body); err != nil {
+		return err
+	} else if routed != "" && routed != publicName {
 		realModel = routed
 	}
 	body["model"] = realModel

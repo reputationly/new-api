@@ -23,7 +23,7 @@ func TestRouteByMode(t *testing.T) {
 		want string
 	}{
 		{"image_mode=reference", map[string]any{"image_mode": "reference"}, "h3-ref2va"},
-		{"image_mode=first-last-frame（与 generate.model 相同 → 不改写）", map[string]any{"image_mode": "first-last-frame"}, ""},
+		{"image_mode=first-last-frame → 帧族 checkpoint", map[string]any{"image_mode": "first-last-frame"}, "h3-fl2va"},
 		{"metadata.task_type=r2va", map[string]any{"metadata": map[string]any{"task_type": "r2va"}}, "h3-ref2va"},
 		{"无信息不猜", map[string]any{}, ""},
 	}
@@ -38,7 +38,11 @@ func TestRouteByMode(t *testing.T) {
 		t.Fatalf("按平台模型名没找到目录项")
 	}
 	for _, tc := range cases {
-		if got := routeByMode("minimax-h3-2k", "h3-fl2va", tc.body); got != tc.want {
+		got, err := routeByMode("minimax-h3-2k", tc.body)
+		if err != nil {
+			t.Fatalf("%s: unexpected err %v", tc.name, err)
+		}
+		if got != tc.want {
 			t.Fatalf("%s: got %q want %q", tc.name, got, tc.want)
 		}
 	}
