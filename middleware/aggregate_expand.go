@@ -12,6 +12,7 @@ import (
 	"github.com/QuantumNous/new-api/constant"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/service"
+	"github.com/QuantumNous/new-api/setting"
 )
 
 // 聚合(编排)模型的入口展开。
@@ -102,6 +103,64 @@ func groupAllowedForAggregate(agg *common.AggregateModel, usingGroup, userGroup 
 //
 // **body 也必须改写**,不能只改 modelRequest:适配器构造上游请求时读的是 body 里的 model
 // (图片生成尤其明显),只改内存里那份会让上游收到一个它不认识的聚合模型名。
+
+// routeByMode 用目录里的 `mode_models` 把聚合模型按玩法分派到对应 checkpoint。
+//
+// 只认三种来源（优先级从高到低）：body 的 `image_mode`、metadata 里的 `image_mode`、
+// metadata 里的 `task_type`（r2va/r2v/rv2v → reference，fl2va/t2va/s2v → first-last-frame）。
+// 任何一步取不到就原样返回，绝不猜。
+func routeByMode(publicName, realModel string, body map[string]any) string {
+	if strings.TrimSpace(publicName) == "" || len(body) == 0 {
+		return ""
+	}
+	entry, ok := setting.FindHiloEntry(publicName)
+	if !ok || len(entry.ModeModels) == 0 {
+		return ""
+	}
+	mode := ""
+	if v, ok := body["image_mode"].(string); ok {
+		mode = strings.TrimSpace(v)
+	}
+	if mode == "" {
+		// metadata 可能是对象，也可能是 JSON 编码的字符串（两种都是合法提交形态）。
+		meta := map[string]any{}
+		switch raw := body["metadata"].(type) {
+		case map[string]any:
+			meta = raw
+		case string:
+			if strings.TrimSpace(raw) != "" {
+				_ = common.Unmarshal([]byte(raw), &meta)
+			}
+		}
+		mode = ""
+		if v, ok := meta["image_mode"].(string); ok {
+			mode = strings.TrimSpace(v)
+		}
+		if mode == "" {
+			taskType := ""
+			if v, ok := meta["task_type"].(string); ok {
+				taskType = strings.TrimSpace(v)
+			}
+			switch taskType {
+			case "r2va", "r2v", "rv2v":
+				mode = "reference"
+			case "fl2va", "t2va", "s2v":
+				mode = "first-last-frame"
+			default:
+				mode = ""
+			}
+		}
+	}
+	if mode == "" || mode == "<nil>" {
+		return ""
+	}
+	target := strings.TrimSpace(entry.ModeModels[mode])
+	if target == "" || target == realModel {
+		return ""
+	}
+	return target
+}
+
 func applyAggregateExpansion(c *gin.Context, publicName, realModel string, agg *common.AggregateModel) error {
 	// **刻意不用 UnmarshalBodyReusable**:那个函数按 Content-Type 分派,遇到非
 	// json/form/multipart 的类型会走 `else { skip }` 分支——**返回 nil 却什么都不填**。
@@ -158,6 +217,19 @@ func applyAggregateExpansion(c *gin.Context, publicName, realModel string, agg *
 	}
 	// model 由展开结果决定,不允许被 Overrides 顶掉:运营在 overrides 里手滑写一个 model
 	// 会让请求发去一个既非聚合模型、也非配置的生成段模型的地方,且不报错。
+	// **按玩法路由到正确的 checkpoint**。
+	//
+	// H3 的帧族（t2va/fl2va）与参考族（r2va）是两个部署：聚合模型只有一个
+	// `generate.model`，客户带 `image_mode=reference` 时请求会被打上 task_type=r2va，
+	// 却仍然发给帧族的 checkpoint，上游报
+	//   "task_type 'r2va' needs the Ref2VA checkpoint, but model 'minimax-h3-fl2va'
+	//    is deployed from the FL2VA partition (serves t2va/fl2va only)"
+	// 而客户端（以及运营）只能看到一个看不出关联的 400。
+	//
+	// 目录里的 `mode_models` 本来就描述了"玩法 → 平台模型"，这里让它真正参与路由。
+	if routed := routeByMode(publicName, realModel, body); routed != "" {
+		realModel = routed
+	}
 	body["model"] = realModel
 
 	generateSize, _ := body["size"].(string)
