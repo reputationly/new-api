@@ -504,7 +504,11 @@ func OpenaiRealtimeHandler(c *gin.Context, info *relaycommon.RelayInfo) (*types.
 					localUsage.OutputTokenDetails.AudioTokens += audioToken
 				}
 
-				err = helper.WssString(c, clientConn, string(message))
+				// 上游 → 客户端方向的帧要回显对外名。Realtime 走 WebSocket，不经过
+				// HTTP 的写出口，所以这里必须单独改写：session.created /
+				// conversation.item.* / response.done 等事件都带 model 字段。
+				// 二进制音频帧以非 '{' 开头，改写函数会原样放过。
+				err = helper.WssString(c, clientConn, string(relaycommon.RewriteResponseModelJSON(c, message)))
 				if err != nil {
 					errChan <- fmt.Errorf("error writing to client: %v", err)
 					return

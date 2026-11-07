@@ -235,6 +235,29 @@ func (e *NewAPIError) SetMessage(message string) {
 	e.Err = errors.New(message)
 }
 
+// RewriteMessage 改写错误对外展示的消息（例如把上游真实模型名换回对外名）。
+//
+// 为什么不能用 SetMessage：ToOpenAIError / ToClaudeError 对「上游原样透传」的错误
+// （ErrorTypeOpenAIError / ErrorTypeClaudeError）直接返回 RelayError 结构体，而
+// SetMessage 只改 e.Err —— 改写对响应体不生效，只有网关自造的消息才走 e.Err。
+// 实测：上游 404 的 message 里写着内部模型名，用它改写后客户端仍然原样收到。
+//
+// 刻意只给"需要改写对外文案"的少数出口使用，不动 SetMessage 的既有语义。
+func (e *NewAPIError) RewriteMessage(message string) {
+	if e == nil {
+		return
+	}
+	e.Err = errors.New(message)
+	switch relayErr := e.RelayError.(type) {
+	case OpenAIError:
+		relayErr.Message = message
+		e.RelayError = relayErr
+	case ClaudeError:
+		relayErr.Message = message
+		e.RelayError = relayErr
+	}
+}
+
 func (e *NewAPIError) ToOpenAIError() OpenAIError {
 	var result OpenAIError
 	switch e.errorType {

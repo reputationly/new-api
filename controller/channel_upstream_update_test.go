@@ -109,6 +109,7 @@ func TestCollectPendingUpstreamModelChangesFromModels_WithModelMapping(t *testin
 		map[string]string{
 			"alias-model": "mapped-target",
 		},
+		nil,
 	)
 
 	require.Equal(t, []string{}, pendingAddModels)
@@ -120,6 +121,7 @@ func TestCollectPendingUpstreamModelChangesFromModels_WithIgnoredRegexPatterns(t
 		[]string{"gpt-4o"},
 		[]string{"gpt-4o", "claude-3-5-sonnet", "sora-video", "gpt-4.1"},
 		[]string{"regex:^sora-.*$", "gpt-4.1"},
+		nil,
 		nil,
 	)
 

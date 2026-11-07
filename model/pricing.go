@@ -403,6 +403,11 @@ func updatePricing(imgRaw, vidRaw, audRaw, musRaw string) {
 
 	pricingMap = make([]Pricing, 0)
 	for model, groups := range modelGroupsMap {
+		// 内部名（模型别名的右侧）不进模型广场：它是渠道的私有实现细节
+		// （见 model/model_alias.go），漏出来等于把上游真实模型名贴在价目表上。
+		if IsHiddenModelName(model) {
+			continue
+		}
 		pricing := Pricing{
 			ModelName:              model,
 			EnableGroup:            groups.Items(),

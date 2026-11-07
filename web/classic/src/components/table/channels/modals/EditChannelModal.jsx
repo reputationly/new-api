@@ -95,6 +95,12 @@ const MODEL_MAPPING_EXAMPLE = {
   'gpt-3.5-turbo': 'gpt-3.5-turbo-0125',
 };
 
+// 模型别名示例：左=客户看到的模型名（对外、可计费、可展示），
+// 右=上游真实模型名（永不对外出现）。方向与 model_mapping 一致，但多了「隐藏」语义。
+const MODEL_ALIAS_EXAMPLE = {
+  'my-gpt-4o': 'gpt-4o',
+};
+
 const STATUS_CODE_MAPPING_EXAMPLE = {
   400: '500',
 };
@@ -204,6 +210,7 @@ const EditChannelModal = (props) => {
     base_url: '',
     other: '',
     model_mapping: '',
+    model_alias: '',
     param_override: '',
     status_code_mapping: '',
     models: [],
@@ -250,6 +257,7 @@ const EditChannelModal = (props) => {
     allow_inference_geo: false,
     allow_speed: false,
     claude_beta_query: false,
+    model_alias_keep_internal: false,
     upstream_model_update_check_enabled: false,
     upstream_model_update_auto_sync_enabled: false,
     upstream_model_update_last_check_time: 0,
@@ -995,6 +1003,8 @@ const EditChannelModal = (props) => {
             parsedSettings.allow_inference_geo || false;
           data.allow_speed = parsedSettings.allow_speed || false;
           data.claude_beta_query = parsedSettings.claude_beta_query || false;
+          data.model_alias_keep_internal =
+            parsedSettings.model_alias_keep_internal === true;
           data.upstream_model_update_check_enabled =
             parsedSettings.upstream_model_update_check_enabled === true;
           data.upstream_model_update_auto_sync_enabled =
@@ -1025,6 +1035,7 @@ const EditChannelModal = (props) => {
           data.allow_inference_geo = false;
           data.allow_speed = false;
           data.claude_beta_query = false;
+          data.model_alias_keep_internal = false;
           data.upstream_model_update_check_enabled = false;
           data.upstream_model_update_auto_sync_enabled = false;
           data.upstream_model_update_last_check_time = 0;
@@ -1043,6 +1054,7 @@ const EditChannelModal = (props) => {
         data.allow_inference_geo = false;
         data.allow_speed = false;
         data.claude_beta_query = false;
+        data.model_alias_keep_internal = false;
         data.upstream_model_update_check_enabled = false;
         data.upstream_model_update_auto_sync_enabled = false;
         data.upstream_model_update_last_check_time = 0;
@@ -1563,7 +1575,7 @@ const EditChannelModal = (props) => {
           <div className='text-sm leading-6'>
             <div>
               {t(
-                '模型重定向里的下列模型尚未添加到“模型”列表，调用时会因为缺少可用模型而失败：',
+                '模型重定向（含隐藏内部名的别名）里的下列对外模型名尚未添加到“模型”列表，调用时会因为缺少可用模型而失败：',
               )}
             </div>
             <div className='font-mono text-xs break-all text-red-600 mt-1'>
@@ -1774,6 +1786,7 @@ const EditChannelModal = (props) => {
       typeof localInputs.model_mapping === 'string' &&
       localInputs.model_mapping.trim() !== '';
     let parsedModelMapping = null;
+    let parsedModelAlias = null;
     if (hasModelMapping) {
       if (!verifyJSON(localInputs.model_mapping)) {
         showInfo(t('模型映射必须是合法的 JSON 格式！'));
@@ -1816,6 +1829,115 @@ const EditChannelModal = (props) => {
           localInputs.models = updatedModels;
           handleInputChange('models', updatedModels);
         }
+      }
+    }
+
+    // 模型重定向（隐藏内部名）：对外名才是「模型」列表里该出现的名字，内部名一律不许出现。
+    //
+    // 这里做的是**保存侧的最后一道闸**。后端还会在构建 ability 时再剔除一次内部名
+    // （纵深防御），但两处同时做才有完整体验：后端保证不会有残留 ability 让内部名
+    // 重新可路由，前端保证运营能看到"我配的名字到底被怎么处理了"，而不是静默生效。
+    if (
+      typeof localInputs.model_alias === 'string' &&
+      localInputs.model_alias.trim() !== ''
+    ) {
+      if (!verifyJSON(localInputs.model_alias)) {
+        showInfo(t('模型别名必须是合法的 JSON 格式！'));
+        return;
+      }
+      let parsedAlias = {};
+      try {
+        parsedAlias = JSON.parse(localInputs.model_alias);
+      } catch (error) {
+        showInfo(t('模型别名必须是合法的 JSON 格式！'));
+        return;
+      }
+      if (
+        parsedAlias &&
+        typeof parsedAlias === 'object' &&
+        !Array.isArray(parsedAlias)
+      ) {
+        parsedModelAlias = parsedAlias;
+        const aliasEntries = Object.entries(parsedAlias)
+          .map(([publicName, internalName]) => [
+            String(publicName ?? '').trim(),
+            String(internalName ?? '').trim(),
+          ])
+          .filter(
+            ([publicName, internalName]) =>
+              publicName && internalName && publicName !== internalName,
+          );
+        if (aliasEntries.length > 0) {
+          // 内部名留在「模型」列表里就会重新变成可搜、可调、可计费的对外模型 ——
+          // 那正是本功能要消灭的「同一模型两个名字」。直接剔除并说清楚。
+          const internalNames = new Set(
+            aliasEntries.map(([, internalName]) => internalName),
+          );
+          const strippedModels = localInputs.models.filter((model) =>
+            internalNames.has(model),
+          );
+          if (strippedModels.length > 0) {
+            localInputs.models = localInputs.models.filter(
+              (model) => !internalNames.has(model),
+            );
+            handleInputChange('models', localInputs.models);
+            showInfo(
+              t('已从「模型」列表移除内部名：{{list}}', {
+                list: strippedModels.join(', '),
+              }),
+            );
+            if (localInputs.models.length === 0) {
+              showInfo(
+                t('至少保留一个对外模型名：内部名不能作为对外模型出现在列表里'),
+              );
+              return;
+            }
+          }
+          // 对外名必须在列表里，否则它没有 ability，请求根本路由不到。
+          const missingPublicNames = aliasEntries
+            .map(([publicName]) => publicName)
+            .filter((publicName) => !localInputs.models.includes(publicName));
+          if (missingPublicNames.length > 0) {
+            const confirmAction =
+              await confirmMissingModelMappings(missingPublicNames);
+            if (confirmAction === 'cancel') {
+              return;
+            }
+            if (confirmAction === 'add') {
+              const updatedModels = Array.from(
+                new Set([...localInputs.models, ...missingPublicNames]),
+              );
+              localInputs.models = updatedModels;
+              handleInputChange('models', updatedModels);
+            }
+          }
+        }
+      }
+    }
+
+    // 同一个名字同时出现在两个框里时，改写链**别名优先**，老框那条永远不会生效。
+    // 这是纯静默失效，运营只会看到"我明明配了却没生效"，所以在保存时直接拦下。
+    if (
+      parsedModelAlias &&
+      typeof parsedModelAlias === 'object' &&
+      parsedModelMapping &&
+      typeof parsedModelMapping === 'object' &&
+      !Array.isArray(parsedModelMapping)
+    ) {
+      const aliasKeys = new Set(
+        Object.keys(parsedModelAlias).map((key) => String(key ?? '').trim()),
+      );
+      const conflictedKeys = Object.keys(parsedModelMapping)
+        .map((key) => String(key ?? '').trim())
+        .filter((key) => key && aliasKeys.has(key));
+      if (conflictedKeys.length > 0) {
+        showError(
+          t(
+            '以下模型名同时出现在「模型重定向（隐藏内部名）」和「模型重定向」里：{{list}}。同一个名字以「隐藏内部名」那条为准，另一条不会生效，请删掉其中一个。',
+            { list: conflictedKeys.join(', ') },
+          ),
+        );
+        return;
       }
     }
 
@@ -1916,6 +2038,11 @@ const EditChannelModal = (props) => {
       }
     }
 
+    // 别名兼容开关必须显式写布尔值：关掉后旧值留在 JSON 里，会出现
+    // 「页面显示关、实际仍允许内部名调用」这种最难查的分裂。
+    settings.model_alias_keep_internal =
+      localInputs.model_alias_keep_internal === true;
+
     settings.upstream_model_update_check_enabled =
       localInputs.upstream_model_update_check_enabled === true;
     settings.upstream_model_update_auto_sync_enabled =
@@ -1955,6 +2082,7 @@ const EditChannelModal = (props) => {
     delete localInputs.gpustack_affinity_max_inflight_bytes;
     delete localInputs.is_enterprise_account;
     // 方舟素材库的值已经由 handleChannelOtherSettingsChange 写进 settings
+    delete localInputs.model_alias_keep_internal;
     delete localInputs.ark_asset_enabled;
     delete localInputs.ark_asset_access_key;
     delete localInputs.ark_asset_secret_key;
@@ -4319,6 +4447,44 @@ const EditChannelModal = (props) => {
                         }}
                         extraText={t(
                           '键为请求中的模型名称，值为要替换的模型名称',
+                        )}
+                      />
+
+                      {/* 模型别名：对外名 -> 内部名。这就是「隐藏内部名」的入口。 */}
+                      <JSONEditor
+                        key={`model_alias-${isEdit ? channelId : 'new'}`}
+                        field='model_alias'
+                        label={t('模型重定向（隐藏内部名）')}
+                        placeholder={
+                          t(
+                            '左边填客户看到的模型名，右边填上游真实模型名。右边的名字不会出现在模型广场、模型列表、体验区与令牌的模型选择里，接口响应也只回显左边的名字。例如：',
+                          ) +
+                          `\n${JSON.stringify(MODEL_ALIAS_EXAMPLE, null, 2)}`
+                        }
+                        value={inputs.model_alias || ''}
+                        onChange={(value) =>
+                          handleInputChange('model_alias', value)
+                        }
+                        template={MODEL_ALIAS_EXAMPLE}
+                        templateLabel={t('填入模板')}
+                        editorType='keyValue'
+                        formApi={formApiRef.current}
+                        extraText={t(
+                          '左=对外名（必须加入上面的「模型」列表，按它的价格计费），右=内部名（只用于请求上游，不会对外出现）',
+                        )}
+                      />
+
+                      <Form.Switch
+                        field='model_alias_keep_internal'
+                        label={t('允许用内部名调用（兼容过渡）')}
+                        checkedText={t('开')}
+                        uncheckedText={t('关')}
+                        initValue={inputs.model_alias_keep_internal === true}
+                        onChange={(value) =>
+                          handleInputChange('model_alias_keep_internal', value)
+                        }
+                        extraText={t(
+                          '开启后客户端用内部名调用也能成功，但计费与响应仍按对外名。仅在上游要求「路由前后两个名称都可用」时开启；开启会让内部名可被探测到。',
                         )}
                       />
 

@@ -356,7 +356,12 @@ func (a *TaskAdaptor) ConvertToOpenAIVideo(task *model.Task) ([]byte, error) {
 	if err != nil {
 		upstreamName = ""
 	}
-	modelName := extractModelFromOperationName(upstreamName)
+	// 回显给客户端的模型名优先用**下单时的对外名**：从上游 operation 名里反解出来的
+	// 是真实上游模型（内部名），直接回显等于把内部名发给客户端。
+	modelName := strings.TrimSpace(task.Properties.OriginModelName)
+	if modelName == "" {
+		modelName = extractModelFromOperationName(upstreamName)
+	}
 	if strings.TrimSpace(modelName) == "" {
 		modelName = "veo-3.0-generate-001"
 	}

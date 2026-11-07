@@ -151,6 +151,9 @@ func ListModels(c *gin.Context, modelType int) {
 		// 两者都按**令牌的目标分组**判定。
 		// 见 TestListModelsHidesAggregateModel。
 		allowModels = common.FilterHiddenAggregateModels(allowModels)
+		// 内部名（模型别名的右侧）同样不得出现在对外列表里。白名单是保存时的快照，
+		// 把内部名留在里面的存量令牌很正常，所以这里必须再滤一次。
+		allowModels = model.FilterHiddenModelNames(allowModels)
 
 		for _, allowModel := range allowModels {
 			if !acceptUnsetRatioModel {
@@ -336,6 +339,12 @@ func RetrieveModel(c *gin.Context, modelType int) {
 	// 只补可见性这一维：本函数对分组隔离同样不生效（openAIModelsMap 是编译期的内置
 	// 模型清单，与站点挂载了什么无关），那是既有缺陷，不在本次范围内。
 	if exists && !isModelVisibleToCaller(c, modelId) {
+		exists = false
+	}
+	// 内部名要按"模型不存在"处理。openAIModelsMap 是编译期的内置模型清单，与站点
+	// 挂载了什么无关 —— 不在这里拦，一个被隐藏的 gpt-4o 依然能 GET /v1/models/gpt-4o
+	// 拿到 200，隐藏就形同虚设。
+	if exists && model.IsHiddenModelName(modelId) {
 		exists = false
 	}
 	if exists {

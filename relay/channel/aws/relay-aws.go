@@ -330,7 +330,10 @@ func handleNovaRequest(c *gin.Context, info *relaycommon.RelayInfo, a *Adaptor) 
 		Id:      helper.GetResponseID(c),
 		Object:  "chat.completion",
 		Created: common.GetTimestamp(),
-		Model:   info.UpstreamModelName,
+		// 回显**对外名**：这是唯一一条用 c.JSON 直接写成功响应的路径（其余都走
+		// IOCopyBytesGracefully / StringData 的统一改写），漏了它这里就会把上游
+		// 模型名发给客户端。
+		Model: info.OriginModelName,
 		Choices: []dto.OpenAITextResponseChoice{{
 			Index: 0,
 			Message: dto.Message{

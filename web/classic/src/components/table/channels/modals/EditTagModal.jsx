@@ -56,6 +56,11 @@ const MODEL_MAPPING_EXAMPLE = {
   'gpt-3.5-turbo': 'gpt-3.5-turbo-0125',
 };
 
+// 模型别名：左=对外名，右=内部名（真实上游名，永不对外展示）。
+const MODEL_ALIAS_EXAMPLE = {
+  'my-gpt-4o': 'gpt-4o',
+};
+
 const EditTagModal = (props) => {
   const { t } = useTranslation();
   const { visible, tag, handleClose, refresh } = props;
@@ -69,6 +74,7 @@ const EditTagModal = (props) => {
     tag: '',
     new_tag: null,
     model_mapping: null,
+    model_alias: null,
     groups: [],
     models: [],
     param_override: null,
@@ -207,6 +213,14 @@ const EditTagModal = (props) => {
       }
       data.model_mapping = formVals.model_mapping;
     }
+    if (formVals.model_alias) {
+      if (!verifyJSON(formVals.model_alias)) {
+        showInfo('模型别名必须是合法的 JSON 格式！');
+        setLoading(false);
+        return;
+      }
+      data.model_alias = formVals.model_alias;
+    }
     if (formVals.groups && formVals.groups.length > 0) {
       data.groups = formVals.groups.join(',');
     }
@@ -250,6 +264,7 @@ const EditTagModal = (props) => {
     data.new_tag = formVals.new_tag;
     if (
       data.model_mapping === undefined &&
+      data.model_alias === undefined &&
       data.groups === undefined &&
       data.models === undefined &&
       data.new_tag === undefined &&
@@ -551,6 +566,50 @@ const EditTagModal = (props) => {
                         <Text
                           className='!text-semi-color-primary cursor-pointer'
                           onClick={() => handleInputChange('model_mapping', '')}
+                        >
+                          {t('不更改')}
+                        </Text>
+                      </Space>
+                    }
+                  />
+
+                  <Form.TextArea
+                    field='model_alias'
+                    label={t('模型重定向（隐藏内部名）')}
+                    placeholder={t(
+                      '此项可选。左=客户看到的模型名（需已加入上面的模型列表，按它的价格计费），右=上游真实模型名（只用于请求上游，不会出现在模型广场、模型列表、体验区与令牌的模型选择里，响应也只回显左边的名字）。留空则不更改',
+                    )}
+                    autosize
+                    onChange={(value) =>
+                      handleInputChange('model_alias', value)
+                    }
+                    extraText={
+                      <Space>
+                        <Text
+                          className='!text-semi-color-primary cursor-pointer'
+                          onClick={() =>
+                            handleInputChange(
+                              'model_alias',
+                              JSON.stringify(MODEL_ALIAS_EXAMPLE, null, 2),
+                            )
+                          }
+                        >
+                          {t('填入模板')}
+                        </Text>
+                        <Text
+                          className='!text-semi-color-primary cursor-pointer'
+                          onClick={() =>
+                            handleInputChange(
+                              'model_alias',
+                              JSON.stringify({}, null, 2),
+                            )
+                          }
+                        >
+                          {t('清空别名')}
+                        </Text>
+                        <Text
+                          className='!text-semi-color-primary cursor-pointer'
+                          onClick={() => handleInputChange('model_alias', '')}
                         >
                           {t('不更改')}
                         </Text>

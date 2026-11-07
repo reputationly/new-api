@@ -61,7 +61,7 @@ func cfStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Res
 			responseText += choice.Delta.GetContentString()
 		}
 		response.Id = id
-		response.Model = info.UpstreamModelName
+		response.Model = info.OriginModelName
 		err = helper.ObjectData(c, response)
 		if isFirst {
 			isFirst = false
@@ -101,7 +101,7 @@ func cfHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Response)
 	if err != nil {
 		return types.NewError(err, types.ErrorCodeBadResponseBody), nil
 	}
-	response.Model = info.UpstreamModelName
+	response.Model = info.OriginModelName
 	var responseText string
 	for _, choice := range response.Choices {
 		responseText += choice.Message.StringContent()

@@ -52,7 +52,7 @@ func OaiChatToResponsesHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 		return nil, types.NewOpenAIError(err, types.ErrorCodeBadResponseBody, http.StatusInternalServerError)
 	}
 	if responsesResp.Model == "" {
-		responsesResp.Model = info.UpstreamModelName
+		responsesResp.Model = info.OriginModelName
 	}
 
 	usage := &chatResp.Usage

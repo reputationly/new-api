@@ -43,7 +43,9 @@ func GetGroupEnabledModels(group string) []string {
 	var models []string
 	// Find distinct models
 	DB.Table("abilities").Where(commonGroupCol+" = ? and enabled = ?", group, true).Distinct("model").Pluck("model", &models)
-	return models
+	// abilities 在建表时已经排除了内部名，这里再滤一次是纵深防御：渠道保存异常或
+	// 直接改库之后，残留的 ability 不能让本该隐藏的名字重新出现在 /v1/models。
+	return FilterHiddenModelNames(models)
 }
 
 // LessByDisplayOrder 模型展示顺序的**唯一判据**:优先级降序 → 名字小写后升序。
@@ -96,6 +98,7 @@ func GetGroupsEnabledModelsOrdered(groups []string) []string {
 		Where(commonGroupCol+" in (?) and enabled = ?", groups, true).
 		Distinct("model").
 		Pluck("model", &models)
+	models = FilterHiddenModelNames(models)
 	priorities := GetModelMaxPriorities()
 	sort.SliceStable(models, func(i, j int) bool {
 		return LessByDisplayOrder(priorities[models[i]], models[i], priorities[models[j]], models[j])
@@ -107,7 +110,7 @@ func GetEnabledModels() []string {
 	var models []string
 	// Find distinct models
 	DB.Table("abilities").Where("enabled = ?", true).Distinct("model").Pluck("model", &models)
-	return models
+	return FilterHiddenModelNames(models)
 }
 
 // GetEnabledModelNames 同 GetEnabledModels，但把错误带出来。
@@ -125,7 +128,7 @@ func GetEnabledModelNames() ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	return models, nil
+	return FilterHiddenModelNames(models), nil
 }
 
 func GetAllEnableAbilities() []Ability {
@@ -225,6 +228,13 @@ func (channel *Channel) AddAbilities(tx *gorm.DB) error {
 	abilitySet := make(map[string]struct{})
 	abilities := make([]Ability, 0, len(models_))
 	for _, model := range models_ {
+		// 内部名（模型别名的右侧）不是可路由的模型名。即使运营还把它留在「模型」
+		// 列表里（历史配置），也不能为它生成 ability —— 否则这个本该隐藏的名字
+		// 会重新出现在模型广场、/v1/models、体验区与令牌的模型选择里，并且能按名
+		// 调用。见 model/model_alias.go 顶部的说明。
+		if IsHiddenModelName(strings.TrimSpace(model)) {
+			continue
+		}
 		for _, group := range groups_ {
 			key := group + "|" + model
 			if _, exists := abilitySet[key]; exists {
@@ -297,6 +307,13 @@ func (channel *Channel) UpdateAbilities(tx *gorm.DB) error {
 	abilitySet := make(map[string]struct{})
 	abilities := make([]Ability, 0, len(models_))
 	for _, model := range models_ {
+		// 内部名（模型别名的右侧）不是可路由的模型名。即使运营还把它留在「模型」
+		// 列表里（历史配置），也不能为它生成 ability —— 否则这个本该隐藏的名字
+		// 会重新出现在模型广场、/v1/models、体验区与令牌的模型选择里，并且能按名
+		// 调用。见 model/model_alias.go 顶部的说明。
+		if IsHiddenModelName(strings.TrimSpace(model)) {
+			continue
+		}
 		for _, group := range groups_ {
 			key := group + "|" + model
 			if _, exists := abilitySet[key]; exists {

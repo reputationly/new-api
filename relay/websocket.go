@@ -41,6 +41,8 @@ func WssHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *types.
 		service.ResetStatusCode(newAPIError, statusCodeMappingStr)
 		return newAPIError
 	}
-	service.PostWssConsumeQuota(c, info, info.UpstreamModelName, usage.(*dto.RealtimeUsage), "")
+	// 结算/日志的模型名必须是**对外名**：上游名只用于发请求，它在倍率表里查不到，
+	// 拿它结算会算出一个错误的价格（或直接报"价格未配置"），用户日志里也会出现内部名。
+	service.PostWssConsumeQuota(c, info, info.OriginModelName, usage.(*dto.RealtimeUsage), "")
 	return nil
 }

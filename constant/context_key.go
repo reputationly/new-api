@@ -27,18 +27,29 @@ const (
 	ContextKeyTokenCrossGroupRetry   ContextKey = "token_cross_group_retry"
 
 	/* channel related keys */
-	ContextKeyChannelId                ContextKey = "channel_id"
-	ContextKeyChannelName              ContextKey = "channel_name"
-	ContextKeyChannelCreateTime        ContextKey = "channel_create_time"
-	ContextKeyChannelBaseUrl           ContextKey = "base_url"
-	ContextKeyChannelType              ContextKey = "channel_type"
-	ContextKeyChannelSetting           ContextKey = "channel_setting"
-	ContextKeyChannelOtherSetting      ContextKey = "channel_other_setting"
-	ContextKeyChannelParamOverride     ContextKey = "param_override"
-	ContextKeyChannelHeaderOverride    ContextKey = "header_override"
-	ContextKeyChannelOrganization      ContextKey = "channel_organization"
-	ContextKeyChannelAutoBan           ContextKey = "auto_ban"
-	ContextKeyChannelModelMapping      ContextKey = "model_mapping"
+	ContextKeyChannelId             ContextKey = "channel_id"
+	ContextKeyChannelName           ContextKey = "channel_name"
+	ContextKeyChannelCreateTime     ContextKey = "channel_create_time"
+	ContextKeyChannelBaseUrl        ContextKey = "base_url"
+	ContextKeyChannelType           ContextKey = "channel_type"
+	ContextKeyChannelSetting        ContextKey = "channel_setting"
+	ContextKeyChannelOtherSetting   ContextKey = "channel_other_setting"
+	ContextKeyChannelParamOverride  ContextKey = "param_override"
+	ContextKeyChannelHeaderOverride ContextKey = "header_override"
+	ContextKeyChannelOrganization   ContextKey = "channel_organization"
+	ContextKeyChannelAutoBan        ContextKey = "auto_ban"
+	ContextKeyChannelModelMapping   ContextKey = "model_mapping"
+	ContextKeyChannelModelAlias     ContextKey = "model_alias"
+	// ContextKeyPublicModelName 是本次请求"对外"的模型名（模型别名左侧）。
+	// 只有发生了模型改写（mapping 或 alias）时才会被设置：响应体、错误文本、响应头
+	// 的改写全部以它是否存在为开关，没配改写的渠道走零成本的原始路径。
+	ContextKeyPublicModelName ContextKey = "public_model_name"
+	// ContextKeyUpstreamModelName 是本次请求最终发往上游的模型名（改名时才有值），
+	// 用于把响应头/错误文本里回显的上游名换回对外名。
+	ContextKeyUpstreamModelName ContextKey = "upstream_model_name"
+	// ContextKeyAliasSourceModel 记录"客户端实际发来的是内部名"，仅落管理员日志的
+	// admin_info，用于统计还有多少存量调用在用内部名（决定何时下线）。
+	ContextKeyAliasSourceModel         ContextKey = "alias_source_model"
 	ContextKeyChannelStatusCodeMapping ContextKey = "status_code_mapping"
 	ContextKeyChannelIsMultiKey        ContextKey = "channel_is_multi_key"
 	ContextKeyChannelMultiKeyIndex     ContextKey = "channel_multi_key_index"

@@ -39,6 +39,10 @@ type Channel struct {
 	Group              string  `json:"group" gorm:"type:varchar(64);default:'default'"`
 	UsedQuota          int64   `json:"used_quota" gorm:"bigint;default:0"`
 	ModelMapping       *string `json:"model_mapping" gorm:"type:text"`
+	// ModelAlias 对外名 -> 内部名（真实上游名），语义见 model/model_alias.go。
+	// 与 ModelMapping 方向一致（左→右就是发生的事），但多两件事：隐藏内部名、
+	// 把计费/日志/响应统一钉在对外名上。
+	ModelAlias *string `json:"model_alias" gorm:"type:text"`
 	//MaxInputTokens     *int    `json:"max_input_tokens" gorm:"default:0"`
 	StatusCodeMapping *string `json:"status_code_mapping" gorm:"type:varchar(1024);default:''"`
 	Priority          *int64  `json:"priority" gorm:"bigint;default:0"`
@@ -430,7 +434,11 @@ func BatchInsertChannels(channels []Channel) error {
 			}
 		}
 	}
-	return tx.Commit().Error
+	if err := tx.Commit().Error; err != nil {
+		return err
+	}
+	refreshModelAliasCache()
+	return nil
 }
 
 func BatchDeleteChannels(ids []int) error {
@@ -460,6 +468,7 @@ func BatchDeleteChannels(ids []int) error {
 		return err
 	}
 	InitChannelModelCostCache()
+	refreshModelAliasCache()
 	return nil
 }
 
@@ -495,6 +504,13 @@ func (channel *Channel) GetModelMapping() string {
 	return *channel.ModelMapping
 }
 
+func (channel *Channel) GetModelAlias() string {
+	if channel.ModelAlias == nil {
+		return ""
+	}
+	return *channel.ModelAlias
+}
+
 func (channel *Channel) GetStatusCodeMapping() string {
 	if channel.StatusCodeMapping == nil {
 		return ""
@@ -509,6 +525,8 @@ func (channel *Channel) Insert() error {
 		return err
 	}
 	err = channel.AddAbilities(nil)
+	// 新渠道可能引入内部名，需要让缓存与受影响渠道的 abilities 跟上（见 model_alias.go）。
+	refreshModelAliasCache()
 	return err
 }
 
@@ -558,6 +576,9 @@ func (channel *Channel) Update() error {
 	}
 	DB.Model(channel).First(channel, "id = ?", channel.Id)
 	err = channel.UpdateAbilities(nil)
+	// 别名的增删改可能让内部名集合变化，受影响渠道的 abilities 必须重建，
+	// 否则旧名字仍然可路由、仍然出现在模型列表里。
+	refreshModelAliasCache()
 	return err
 }
 
@@ -593,7 +614,13 @@ func (channel *Channel) Delete() error {
 	// 成本配置随渠道一起清，否则表会累积指向已不存在渠道的孤儿行。
 	// 放在 model 层而非各个 controller：删除有三条路径（单个 / 批量 / 清理禁用），
 	// 在调用侧逐个补必然漏一条。
-	return DeleteChannelModelCosts(channel.Id)
+	err = DeleteChannelModelCosts(channel.Id)
+	if err != nil {
+		return err
+	}
+	// 渠道带着别名一起消失时，内部名集合可能变小 —— 原本被隐藏的名字要放出来。
+	refreshModelAliasCache()
+	return nil
 }
 
 var channelStatusLock sync.Mutex
@@ -759,7 +786,7 @@ func DisableChannelByTag(tag string) error {
 	return err
 }
 
-func EditChannelByTag(tag string, newTag *string, modelMapping *string, models *string, group *string, priority *int64, weight *uint, paramOverride *string, headerOverride *string) error {
+func EditChannelByTag(tag string, newTag *string, modelMapping *string, modelAlias *string, models *string, group *string, priority *int64, weight *uint, paramOverride *string, headerOverride *string) error {
 	updateData := Channel{}
 	shouldReCreateAbilities := false
 	updatedTag := tag
@@ -770,6 +797,9 @@ func EditChannelByTag(tag string, newTag *string, modelMapping *string, models *
 	}
 	if modelMapping != nil {
 		updateData.ModelMapping = modelMapping
+	}
+	if modelAlias != nil {
+		updateData.ModelAlias = modelAlias
 	}
 	if models != nil && *models != "" {
 		shouldReCreateAbilities = true
@@ -812,6 +842,7 @@ func EditChannelByTag(tag string, newTag *string, modelMapping *string, models *
 			return err
 		}
 	}
+	refreshModelAliasCache()
 	return nil
 }
 
@@ -832,6 +863,9 @@ func updateChannelUsedQuota(id int, quota int) {
 
 func DeleteChannelByStatus(status int64) (int64, error) {
 	result := DB.Where("status = ?", status).Delete(&Channel{})
+	if result.Error == nil && result.RowsAffected > 0 {
+		refreshModelAliasCache()
+	}
 	return result.RowsAffected, result.Error
 }
 
@@ -852,6 +886,9 @@ func DeleteDisabledChannel() (int64, error) {
 			return result.RowsAffected, err
 		}
 		InitChannelModelCostCache()
+	}
+	if result.Error == nil && result.RowsAffected > 0 {
+		refreshModelAliasCache()
 	}
 	return result.RowsAffected, nil
 }

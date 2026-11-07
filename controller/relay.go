@@ -102,7 +102,12 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 			// 不是上游内部模型路径,替换只会把整段指引吃成模型名(见 IsSelfAuthoredGuidance)。
 			if relayInfo != nil && relayInfo.OriginModelName != "" &&
 				!newAPIError.IsSelfAuthoredGuidance() {
-				newAPIError.SetMessage(service.ReplaceUpstreamModelPath(newAPIError.Error(), relayInfo.OriginModelName))
+				// 上游的 400/404 往往直接把真实模型名写在 message 里（"The model `x`
+				// does not exist"），而错误恰好是探测模型关系最省事的手段。先把它换回
+				// 对外名，再做既有的路径改写 —— 两步都跑在同一个 message 上，
+				// 响应体与错误日志（logging 下面那句）用的是同一份，所以只需改一次。
+				message := relaycommon.RewriteUpstreamText(c, newAPIError.Error())
+				newAPIError.RewriteMessage(service.ReplaceUpstreamModelPath(message, relayInfo.OriginModelName))
 			}
 			logger.LogError(c, fmt.Sprintf("relay error: %s", newAPIError.Error()))
 			newAPIError.SetMessage(common.MessageWithRequestId(newAPIError.Error(), requestId))
@@ -517,7 +522,11 @@ func processChannelError(c *gin.Context, channelError types.ChannelError, err *t
 			startTime = time.Now()
 		}
 		useTimeSeconds := int(time.Since(startTime).Seconds())
-		model.RecordErrorLog(c, userId, channelId, modelName, tokenName, err.MaskSensitiveErrorWithStatusCode(), tokenId, useTimeSeconds, common.GetContextKeyBool(c, constant.ContextKeyIsStream), userGroup, other)
+		// 错误日志的 content 会原样展示给用户（用户能在自己的日志里看到），而上游的
+		// 报错文本经常直接写着真实模型名。这里的 err 是**本次尝试**的错误，不一定等于
+		// 最终那个（见 Relay 里 defer 的改写），所以必须在这里单独改写一次。
+		errorContent := relaycommon.RewriteUpstreamText(c, err.MaskSensitiveErrorWithStatusCode())
+		model.RecordErrorLog(c, userId, channelId, modelName, tokenName, errorContent, tokenId, useTimeSeconds, common.GetContextKeyBool(c, constant.ContextKeyIsStream), userGroup, other)
 	}
 
 }

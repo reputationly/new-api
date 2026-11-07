@@ -178,6 +178,7 @@ func collectPendingUpstreamModelChangesFromModels(
 	upstreamModels []string,
 	ignoredModels []string,
 	modelMapping map[string]string,
+	modelAlias map[string]string,
 ) (pendingAddModels []string, pendingRemoveModels []string) {
 	localSet := make(map[string]struct{})
 	localModels = normalizeModelNames(localModels)
@@ -199,12 +200,20 @@ func collectPendingUpstreamModelChangesFromModels(
 		redirectTargetSet[target] = struct{}{}
 	}
 
-	coveredUpstreamSet := make(map[string]struct{}, len(localSet)+len(redirectTargetSet))
+	coveredUpstreamSet := make(map[string]struct{}, len(localSet)+len(redirectTargetSet)+len(modelAlias))
 	for modelName := range localSet {
 		coveredUpstreamSet[modelName] = struct{}{}
 	}
 	for modelName := range redirectTargetSet {
 		coveredUpstreamSet[modelName] = struct{}{}
+	}
+	// 模型别名的右侧（内部名）同样算"已覆盖"：它天然就在上游模型列表里，
+	// 但它不是一个该被加进「模型」列表的对外模型。不排除的话，巡检会永远提示
+	// "可加入 gpt-4o"，运营照着点了就又把内部名摆回价目表上。
+	for _, internalName := range modelAlias {
+		if internalName != "" {
+			coveredUpstreamSet[internalName] = struct{}{}
+		}
 	}
 
 	pendingAdd := lo.Filter(upstreamModels, func(modelName string, _ int) bool {
@@ -244,6 +253,7 @@ func collectPendingUpstreamModelChanges(channel *model.Channel, settings dto.Cha
 		upstreamModels,
 		settings.UpstreamModelUpdateIgnoredModels,
 		normalizeChannelModelMapping(channel),
+		channel.GetModelAliasMap(),
 	)
 	return pendingAddModels, pendingRemoveModels, nil
 }

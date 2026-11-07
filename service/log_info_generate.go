@@ -111,6 +111,14 @@ func GenerateTextOtherInfo(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, m
 		adminInfo["local_count_tokens"] = isLocalCountTokens
 	}
 
+	// 客户端用的是内部名（模型别名的右侧）时记一笔，**只进管理员可见的 admin_info**。
+	// 用途就是运营在过渡期统计"还有多少调用在用老名"，据此决定何时关掉
+	// "内部名仍可调用"的兼容开关。用户视角的日志会被 formatUserLogs 剥掉整块
+	// admin_info，所以这里不需要额外考虑泄露。
+	if aliasSource := common.GetContextKeyString(ctx, constant.ContextKeyAliasSourceModel); aliasSource != "" {
+		adminInfo["alias_source_model"] = aliasSource
+	}
+
 	AppendChannelAffinityAdminInfo(ctx, adminInfo)
 
 	other["admin_info"] = adminInfo

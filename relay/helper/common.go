@@ -8,6 +8,7 @@ import (
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/logger"
+	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/types"
 
 	"github.com/gin-gonic/gin"
@@ -59,6 +60,8 @@ func ClaudeData(c *gin.Context, resp dto.ClaudeResponse) error {
 	if err != nil {
 		common.SysError("error marshalling stream response: " + err.Error())
 	} else {
+		// 转换出来的响应也要回显对外名，否则流式客户端一样能看见上游模型名。
+		jsonData = relaycommon.RewriteResponseModelJSON(c, jsonData)
 		c.Render(-1, common.CustomEvent{Data: fmt.Sprintf("event: %s\n", resp.Type)})
 		c.Render(-1, common.CustomEvent{Data: "data: " + string(jsonData)})
 	}
@@ -68,13 +71,13 @@ func ClaudeData(c *gin.Context, resp dto.ClaudeResponse) error {
 
 func ClaudeChunkData(c *gin.Context, resp dto.ClaudeResponse, data string) {
 	c.Render(-1, common.CustomEvent{Data: fmt.Sprintf("event: %s\n", resp.Type)})
-	c.Render(-1, common.CustomEvent{Data: fmt.Sprintf("data: %s\n", data)})
+	c.Render(-1, common.CustomEvent{Data: "data: " + relaycommon.RewriteResponseModelString(c, data) + "\n"})
 	_ = FlushWriter(c)
 }
 
 func ResponseChunkData(c *gin.Context, resp dto.ResponsesStreamResponse, data string) {
 	c.Render(-1, common.CustomEvent{Data: fmt.Sprintf("event: %s\n", resp.Type)})
-	c.Render(-1, common.CustomEvent{Data: fmt.Sprintf("data: %s", data)})
+	c.Render(-1, common.CustomEvent{Data: "data: " + relaycommon.RewriteResponseModelString(c, data)})
 	_ = FlushWriter(c)
 }
 
@@ -87,7 +90,9 @@ func StringData(c *gin.Context, str string) error {
 		return fmt.Errorf("request context done: %w", c.Request.Context().Err())
 	}
 
-	c.Render(-1, common.CustomEvent{Data: "data: " + str})
+	// 流式 chunk 的唯一出口。改名时把顶层的 model 换成对外名（没改名时是零成本的
+	// 一次子串检查），否则每一条 chunk 都会把上游模型名送出去。
+	c.Render(-1, common.CustomEvent{Data: "data: " + relaycommon.RewriteResponseModelString(c, str)})
 	return FlushWriter(c)
 }
 

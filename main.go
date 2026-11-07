@@ -166,6 +166,11 @@ func main() {
 	model.InitModelVisibilityCache()
 	go model.SyncModelVisibilityCache(common.SyncFrequency)
 
+	// 模型别名（内部名隐藏）：决定「哪些模型名不该对用户出现」，列表与响应改写都读它，
+	// 因此与内存缓存开关无关，无条件初始化 + 轮询。
+	model.InitModelAliasCache()
+	go model.SyncModelAliasCache(common.SyncFrequency)
+
 	// 热更新配置
 	go model.SyncOptions(common.SyncFrequency)
 

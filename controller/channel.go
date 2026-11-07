@@ -448,6 +448,15 @@ func validateChannel(channel *model.Channel, isAdd bool) error {
 		return fmt.Errorf("渠道额外设置[channel setting] 格式错误：%s", err.Error())
 	}
 
+	// 模型别名必须是合法的 JSON 对象。坏配置的两个后果都不好看：缓存侧静默降级成
+	// "没有别名"（内部名不再隐藏、响应不再改写），请求侧则每次调用都报
+	// unmarshal_model_alias_failed。两者都很难从页面上看出来，所以在保存时拦掉。
+	if channel.ModelAlias != nil && strings.TrimSpace(*channel.ModelAlias) != "" {
+		if _, err := model.ParseModelAlias(*channel.ModelAlias); err != nil {
+			return fmt.Errorf("模型重定向（隐藏内部名）必须是合法的 JSON 对象：%s", err.Error())
+		}
+	}
+
 	// 如果是添加操作，检查 key 是否为空（channel 本身的 nil 已在函数开头拦掉）
 	if isAdd {
 		if channel.Key == "" {
@@ -709,6 +718,7 @@ type ChannelTag struct {
 	Priority       *int64  `json:"priority"`
 	Weight         *uint   `json:"weight"`
 	ModelMapping   *string `json:"model_mapping"`
+	ModelAlias     *string `json:"model_alias"`
 	Models         *string `json:"models"`
 	Groups         *string `json:"groups"`
 	ParamOverride  *string `json:"param_override"`
@@ -789,6 +799,17 @@ func EditTagChannels(c *gin.Context) {
 		}
 		channelTag.ParamOverride = common.GetPointer[string](trimmed)
 	}
+	if channelTag.ModelAlias != nil {
+		trimmed := strings.TrimSpace(*channelTag.ModelAlias)
+		if trimmed != "" && !json.Valid([]byte(trimmed)) {
+			c.JSON(http.StatusOK, gin.H{
+				"success": false,
+				"message": "模型别名必须是合法的 JSON 格式",
+			})
+			return
+		}
+		channelTag.ModelAlias = common.GetPointer[string](trimmed)
+	}
 	if channelTag.HeaderOverride != nil {
 		trimmed := strings.TrimSpace(*channelTag.HeaderOverride)
 		if trimmed != "" && !json.Valid([]byte(trimmed)) {
@@ -800,7 +821,7 @@ func EditTagChannels(c *gin.Context) {
 		}
 		channelTag.HeaderOverride = common.GetPointer[string](trimmed)
 	}
-	err = model.EditChannelByTag(channelTag.Tag, channelTag.NewTag, channelTag.ModelMapping, channelTag.Models, channelTag.Groups, channelTag.Priority, channelTag.Weight, channelTag.ParamOverride, channelTag.HeaderOverride)
+	err = model.EditChannelByTag(channelTag.Tag, channelTag.NewTag, channelTag.ModelMapping, channelTag.ModelAlias, channelTag.Models, channelTag.Groups, channelTag.Priority, channelTag.Weight, channelTag.ParamOverride, channelTag.HeaderOverride)
 	if err != nil {
 		common.ApiError(c, err)
 		return

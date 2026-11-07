@@ -36,6 +36,22 @@ func Distribute() func(c *gin.Context) {
 			abortWithOpenAiMessage(c, http.StatusBadRequest, i18n.T(c, i18n.MsgDistributorInvalidRequest, map[string]any{"Error": err.Error()}))
 			return
 		}
+		// 模型别名的入口归一：客户端如果用的是**内部名**（别名的右侧），且该内部名
+		// 所属渠道显式打开了"内部名仍可调用"，就在这里改写成对外名。
+		//
+		// 位置必须在令牌白名单与选渠道**之前**：改写之后 OriginModelName、计费、日志、
+		// 权益匹配、响应体全部自动落在对外名上，不需要任何一条计费链路开分支。
+		//
+		// 没有打开该开关的内部名不在这里处理 —— 它不在任何渠道的「模型」列表里，
+		// 自然也查不到 ability，最终与"模型不存在"完全同一条失败路径，不额外暴露
+		// "这个名字存在但被隐藏了"。
+		if modelRequest.Model != "" {
+			if publicName, resolved := model.ResolveHiddenModelName(modelRequest.Model); resolved {
+				common.SetContextKey(c, constant.ContextKeyAliasSourceModel, modelRequest.Model)
+				modelRequest.Model = publicName
+			}
+		}
+
 		if ok {
 			id, err := strconv.Atoi(channelId.(string))
 			if err != nil {
@@ -68,7 +84,17 @@ func Distribute() func(c *gin.Context) {
 					tokenModelLimit = map[string]bool{}
 				}
 				matchName := ratio_setting.FormatMatchingModelName(modelRequest.Model) // match gpts & thinking-*
-				if _, ok := tokenModelLimit[matchName]; !ok {
+				_, allowed := tokenModelLimit[matchName]
+				if !allowed {
+					// 白名单是保存时的快照。用内部名调用的请求在上一步刚被改写成对外名，
+					// 而白名单里存的可能是客户端一直在用的内部名 —— 只比对对外名会把
+					// 本来有权限的令牌判成无权访问。
+					aliasSource := common.GetContextKeyString(c, constant.ContextKeyAliasSourceModel)
+					if aliasSource != "" {
+						_, allowed = tokenModelLimit[ratio_setting.FormatMatchingModelName(aliasSource)]
+					}
+				}
+				if !allowed {
 					abortWithOpenAiMessage(c, http.StatusForbidden, i18n.T(c, i18n.MsgDistributorTokenModelForbidden, map[string]any{"Model": modelRequest.Model}))
 					return
 				}
@@ -444,6 +470,7 @@ func SetupContextForSelectedChannel(c *gin.Context, channel *model.Channel, mode
 	}
 	common.SetContextKey(c, constant.ContextKeyChannelAutoBan, channel.GetAutoBan())
 	common.SetContextKey(c, constant.ContextKeyChannelModelMapping, channel.GetModelMapping())
+	common.SetContextKey(c, constant.ContextKeyChannelModelAlias, channel.GetModelAlias())
 	common.SetContextKey(c, constant.ContextKeyChannelStatusCodeMapping, channel.GetStatusCodeMapping())
 
 	key, index, newAPIError := channel.GetNextEnabledKey()
