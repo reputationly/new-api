@@ -172,20 +172,32 @@ func TestUpdateBillingPreferencePreservesOtherSettings(t *testing.T) {
 	require.Equal(t, `{"chat":{"enabled":false}}`, got.SidebarModules)
 }
 
-// 额度提醒的个人退订开关：默认接收，显式关闭后能存住，也能再打开。
-func TestUpdateUserSettingQuotaRemindDisabled(t *testing.T) {
+// 额度提醒的个人开关是 opt-in：默认不订阅，显式打开后能存住，也能再关掉。
+func TestUpdateUserSettingQuotaRemindEnabled(t *testing.T) {
 	db := setupExportLimitDB(t)
 	seedExportLimitUser(t, db, 9714, "setting_quota_remind")
+	require.False(t, loadUserSetting(t, 9714).QuotaRemindEnabled, "默认不订阅")
 
 	resp := callUpdateUserSetting(t, 9714,
-		`{"notify_type":"email","quota_warning_threshold":100,"quota_remind_disabled":true}`)
+		`{"notify_type":"email","quota_warning_threshold":100,"quota_remind_enabled":true}`)
 	require.Equal(t, true, resp["success"])
-	require.True(t, loadUserSetting(t, 9714).QuotaRemindDisabled)
+	require.True(t, loadUserSetting(t, 9714).QuotaRemindEnabled)
 
 	resp = callUpdateUserSetting(t, 9714,
-		`{"notify_type":"email","quota_warning_threshold":100,"quota_remind_disabled":false}`)
+		`{"notify_type":"email","quota_warning_threshold":100,"quota_remind_enabled":false}`)
 	require.Equal(t, true, resp["success"])
-	require.False(t, loadUserSetting(t, 9714).QuotaRemindDisabled)
+	require.False(t, loadUserSetting(t, 9714).QuotaRemindEnabled)
+}
+
+// 现网「统一关闭」靠换键名实现：存量 JSON 里的 quota_remind_disabled 无论 true 还是
+// false 都不再被解释，用户在新开关上必须仍是未订阅——这条守住的是那次重置本身。
+func TestLegacyQuotaRemindDisabledIsIgnored(t *testing.T) {
+	db := setupExportLimitDB(t)
+	seedExportLimitUser(t, db, 9716, "setting_legacy_quota_remind")
+	seedRawUserSetting(t, 9716,
+		`{"notify_type":"email","quota_warning_threshold":100,"quota_remind_disabled":false}`)
+
+	require.False(t, loadUserSetting(t, 9716).QuotaRemindEnabled)
 }
 
 // 企业子账户不参与计费，额度提醒沿用主账户设置：提交该开关直接拒绝；
@@ -197,7 +209,7 @@ func TestUpdateUserSettingRejectsSubAccountQuotaRemind(t *testing.T) {
 		Update("parent_user_id", 1).Error)
 
 	resp := callUpdateUserSetting(t, 9715,
-		`{"notify_type":"email","quota_warning_threshold":100,"quota_remind_disabled":true}`)
+		`{"notify_type":"email","quota_warning_threshold":100,"quota_remind_enabled":true}`)
 	require.Equal(t, false, resp["success"])
 	require.Contains(t, resp["message"], "子账户")
 

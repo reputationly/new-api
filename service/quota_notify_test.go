@@ -37,15 +37,16 @@ func TestShouldSendWalletQuotaWarn(t *testing.T) {
 	}
 }
 
-// 两条静音途径：运营关全局开关、用户自己退订。任一命中都不发。
+// 两层静音条件：运营关全局开关、用户自己没订阅。全局关一律不发；
+// 全局开时也只有主动打开了「接收额度提醒」的用户才发。
 func TestQuotaRemindMuted(t *testing.T) {
 	original := common.QuotaRemindEnabled
 	t.Cleanup(func() { common.QuotaRemindEnabled = original })
 
 	common.QuotaRemindEnabled = true
-	require.False(t, quotaRemindMuted(dto.UserSetting{}), "默认应照常提醒")
-	require.True(t, quotaRemindMuted(dto.UserSetting{QuotaRemindDisabled: true}), "用户退订后不再提醒")
+	require.True(t, quotaRemindMuted(dto.UserSetting{}), "默认未订阅：不发")
+	require.False(t, quotaRemindMuted(dto.UserSetting{QuotaRemindEnabled: true}), "用户开启后才发")
 
 	common.QuotaRemindEnabled = false
-	require.True(t, quotaRemindMuted(dto.UserSetting{}), "全局开关关闭后一律不提醒")
+	require.True(t, quotaRemindMuted(dto.UserSetting{QuotaRemindEnabled: true}), "全局开关关闭后一律不提醒")
 }

@@ -209,7 +209,7 @@ export default function SettingsMonitoring(props) {
                   field={'QuotaRemindEnabled'}
                   label={t('额度提醒')}
                   extraText={t(
-                    '关闭后不再发送「额度即将用尽」通知（钱包与订阅共用）；开启时仅当本次消费真的从钱包出账才提醒，纯积分支付不提醒',
+                    '关闭后一律不发送「额度即将用尽」通知；开启后也只发给在个人设置里主动打开了「接收额度提醒」的用户（钱包与订阅共用）。仅当本次消费真的从钱包出账才提醒，纯积分支付不提醒',
                   )}
                   size='default'
                   checkedText='｜'

@@ -98,7 +98,7 @@ const PersonalSetting = () => {
     gotifyToken: '',
     gotifyPriority: 5,
     upstreamModelUpdateNotifyEnabled: false,
-    quotaRemindDisabled: false,
+    quotaRemindEnabled: false,
   });
 
   // 企业子账户：消费走主账户令牌，不是计费主体（额度提醒也按主账户算）。
@@ -219,7 +219,7 @@ const PersonalSetting = () => {
           settings.gotify_priority !== undefined ? settings.gotify_priority : 5,
         upstreamModelUpdateNotifyEnabled:
           settings.upstream_model_update_notify_enabled === true,
-        quotaRemindDisabled: settings.quota_remind_disabled === true,
+        quotaRemindEnabled: settings.quota_remind_enabled === true,
       });
     }
   }, [userState?.user?.setting]);
@@ -558,8 +558,8 @@ const PersonalSetting = () => {
       // 子账户不参与计费（消费走主账户令牌），额度提醒沿用主账户设置：这个字段
       // 一律不提交，否则后端会按「子账户不支持单独设置」拒绝整次保存。
       if (!isSubAccount) {
-        payload.quota_remind_disabled =
-          notificationSettings.quotaRemindDisabled === true;
+        payload.quota_remind_enabled =
+          notificationSettings.quotaRemindEnabled === true;
       }
       const res = await API.put('/api/user/setting', payload);
 

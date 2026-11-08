@@ -475,10 +475,11 @@ func shouldSendWalletQuotaWarn(userQuota int, consumeQuota int, pointsConsumed i
 	return userQuota-walletConsume < threshold
 }
 
-// quotaRemindMuted 判断额度提醒是否整体静音：运营关掉全局开关，或用户自己在个人
-// 设置里退订。两种途径都只影响「发不发」，不影响阈值本身。
+// quotaRemindMuted 判断额度提醒是否整体静音：运营关掉全局开关，或用户自己没有订阅。
+// 两层开关是 AND 关系：全局关 = 一律不发；全局开 = 只发给主动打开了「接收额度提醒」
+// 的用户。两种途径都只影响「发不发」，不影响阈值本身。
 func quotaRemindMuted(userSetting dto.UserSetting) bool {
-	return !common.QuotaRemindEnabled || userSetting.QuotaRemindDisabled
+	return !common.QuotaRemindEnabled || !userSetting.QuotaRemindEnabled
 }
 
 func checkAndSendQuotaNotify(relayInfo *relaycommon.RelayInfo, quota int, preConsumedQuota int) {

@@ -1274,7 +1274,7 @@ func TopUp(c *gin.Context) {
 type UpdateUserSettingRequest struct {
 	QuotaWarningType                 string  `json:"notify_type"`
 	QuotaWarningThreshold            float64 `json:"quota_warning_threshold"`
-	QuotaRemindDisabled              *bool   `json:"quota_remind_disabled,omitempty"`
+	QuotaRemindEnabled               *bool   `json:"quota_remind_enabled,omitempty"`
 	WebhookUrl                       string  `json:"webhook_url,omitempty"`
 	WebhookSecret                    *string `json:"webhook_secret,omitempty"`
 	NotificationEmail                string  `json:"notification_email,omitempty"`
@@ -1381,7 +1381,7 @@ func UpdateUserSetting(c *gin.Context) {
 	// 企业子账户不是计费主体：它用主账户的令牌消费，额度提醒（以及整条额度判定）
 	// 都按主账户的设置走，子账户自己这条开关没有意义，不支持设置。只在调用方
 	// 真的提交了这个字段时拒绝——前端对子账户不渲染该开关，其余字段照常可存。
-	if req.QuotaRemindDisabled != nil && user.ParentUserId > 0 {
+	if req.QuotaRemindEnabled != nil && user.ParentUserId > 0 {
 		common.ApiErrorMsg(c, "企业子账户不参与计费，额度提醒沿用主账户设置，不支持单独设置")
 		return
 	}
@@ -1393,8 +1393,8 @@ func UpdateUserSetting(c *gin.Context) {
 		settings.NotifyType = req.QuotaWarningType
 		settings.QuotaWarningThreshold = req.QuotaWarningThreshold
 		settings.UpstreamModelUpdateNotifyEnabled = upstreamModelUpdateNotifyEnabled
-		if req.QuotaRemindDisabled != nil {
-			settings.QuotaRemindDisabled = *req.QuotaRemindDisabled
+		if req.QuotaRemindEnabled != nil {
+			settings.QuotaRemindEnabled = *req.QuotaRemindEnabled
 		}
 
 		// 如果是webhook类型,添加webhook相关设置
