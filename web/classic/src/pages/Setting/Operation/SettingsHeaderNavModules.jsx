@@ -47,6 +47,7 @@ export default function SettingsHeaderNavModules(props) {
       requireAuth: false, // 默认不需要登录鉴权
     },
     docs: true,
+    assistant: true,
     about: true,
   });
 
@@ -87,6 +88,7 @@ export default function SettingsHeaderNavModules(props) {
         requireAuth: false,
       },
       docs: true,
+      assistant: true,
       about: true,
     };
     setHeaderNavModules(defaultModules);
@@ -145,6 +147,12 @@ export default function SettingsHeaderNavModules(props) {
         // 画布已改为按角色（管理员及以上）可见，不再有顶栏开关，丢弃历史 canvas 键
         delete modules.canvas;
 
+        // 蒜狸小助手是后加模块：旧配置里没有这个键时默认开启，
+        // 与 useNavigation 的「未显式关闭即展示」保持一致。
+        if (modules.assistant === undefined) {
+          modules.assistant = true;
+        }
+
         setHeaderNavModules(modules);
       } catch (error) {
         // 使用默认配置
@@ -156,6 +164,7 @@ export default function SettingsHeaderNavModules(props) {
             requireAuth: false,
           },
           docs: true,
+          assistant: true,
           about: true,
         };
         setHeaderNavModules(defaultModules);
@@ -185,6 +194,11 @@ export default function SettingsHeaderNavModules(props) {
       key: 'docs',
       title: t('文档'),
       description: t('系统文档和帮助信息'),
+    },
+    {
+      key: 'assistant',
+      title: t('蒜狸小助手'),
+      description: t('站内下载页，地址在通用设置中配置'),
     },
     {
       key: 'about',

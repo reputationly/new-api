@@ -71,6 +71,7 @@ func GetStatus(c *gin.Context) {
 		"turnstile_check":             common.TurnstileCheckEnabled,
 		"turnstile_site_key":          common.TurnstileSiteKey,
 		"docs_link":                   operation_setting.GetGeneralSetting().DocsLink,
+		"assistant_link":              operation_setting.GetGeneralSetting().AssistantLink,
 		"quota_per_unit":              common.QuotaPerUnit,
 		"quota_per_yuan":              common.QuotaPerYuan,
 		"points_enabled":              operation_setting.GetPointsSetting().Enabled,

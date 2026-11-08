@@ -17,7 +17,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 
-import React, { useEffect, useState, useRef, useMemo } from 'react';
+import React, { useContext, useEffect, useState, useRef, useMemo } from 'react';
 import {
   Banner,
   Button,
@@ -36,17 +36,20 @@ import {
   showSuccess,
   showWarning,
 } from '../../../helpers';
+import { StatusContext } from '../../../context/Status';
 import { useTranslation } from 'react-i18next';
 
 const { Text } = Typography;
 
 export default function GeneralSettings(props) {
   const { t } = useTranslation();
+  const [statusState, statusDispatch] = useContext(StatusContext);
   const [loading, setLoading] = useState(false);
   const [showQuotaWarning, setShowQuotaWarning] = useState(false);
   const [inputs, setInputs] = useState({
     TopUpLink: '',
     'general_setting.docs_link': '',
+    'general_setting.assistant_link': '',
     'general_setting.quota_display_type': 'USD',
     'general_setting.custom_currency_symbol': '¤',
     'general_setting.custom_currency_exchange_rate': '',
@@ -94,6 +97,17 @@ export default function GeneralSettings(props) {
             return showError(t('部分保存失败，请重试'));
         }
         showSuccess(t('保存成功'));
+        // 顶栏和站内「蒜狸小助手」页都读 StatusContext 里的 assistant_link，
+        // 保存后立即同步，否则管理员要刷新页面才能看到新入口。
+        if (statusState?.status) {
+          statusDispatch({
+            type: 'set',
+            payload: {
+              ...statusState.status,
+              assistant_link: inputs['general_setting.assistant_link'] || '',
+            },
+          });
+        }
         props.refresh();
       })
       .catch(() => {
@@ -229,6 +243,19 @@ export default function GeneralSettings(props) {
                   initValue={''}
                   placeholder={t('例如 https://docs.newapi.pro')}
                   onChange={handleFieldChange('general_setting.docs_link')}
+                  showClear
+                />
+              </Col>
+              <Col xs={24} sm={12} md={8} lg={8} xl={8}>
+                <Form.Input
+                  field={'general_setting.assistant_link'}
+                  label={t('蒜狸小助手页面地址')}
+                  initValue={''}
+                  placeholder={t('例如 https://example.com/assistant')}
+                  extraText={t(
+                    '配置后作为站内「蒜狸小助手」页面嵌入显示（目标页需允许 iframe），下载链接由该页面决定；入口在「顶栏管理」控制',
+                  )}
+                  onChange={handleFieldChange('general_setting.assistant_link')}
                   showClear
                 />
               </Col>
