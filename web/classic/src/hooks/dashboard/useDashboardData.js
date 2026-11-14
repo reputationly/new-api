@@ -45,6 +45,7 @@ export const useDashboardData = (userState, userDispatch, statusState) => {
   const navigate = useNavigate();
   const isMobile = useIsMobile();
   const initialized = useRef(false);
+  const groupQuotaRequestId = useRef(0);
 
   // ========== 基础状态 ==========
   const [loading, setLoading] = useState(false);
@@ -178,7 +179,6 @@ export const useDashboardData = (userState, userDispatch, statusState) => {
   }, []);
 
   // 应用快捷范围：同时填起止时间并按跨度切粒度。
-  // 应用快捷范围：同时填起止时间并按跨度切粒度。
   //
   // 返回算好的 range 供弹窗同步表单显示值。调用方**不要**再调一次 getPresetRange：
   // 「今天 / 近24小时」的结束时间取的是「现在」，两次各取一次，跨过一秒就会出现
@@ -307,13 +307,16 @@ export const useDashboardData = (userState, userDispatch, statusState) => {
   // 而不会因为用户在弹窗里拖动时间就每改一次发一个请求。
   const loadGroupQuotaData = useCallback(
     async (startTimestamp, endTimestamp, username) => {
+      const requestId = ++groupQuotaRequestId.current;
       if (!isAdminUser) {
         setGroupQuotaData([]);
+        setGroupQuotaLoading(false);
         return [];
       }
       const error = validateDashboardRange(startTimestamp, endTimestamp);
       if (error) {
         setGroupQuotaData([]);
+        setGroupQuotaLoading(false);
         return [];
       }
       const start = parseDashboardTimestamp(startTimestamp);
@@ -323,6 +326,7 @@ export const useDashboardData = (userState, userDispatch, statusState) => {
         const res = await API.get(
           `/api/data/groups?start_timestamp=${start}&end_timestamp=${end}&username=${encodeURIComponent(username || '')}`,
         );
+        if (requestId !== groupQuotaRequestId.current) return [];
         const { success, message, data } = res.data;
         if (success) {
           setGroupQuotaData(data || []);
@@ -332,11 +336,14 @@ export const useDashboardData = (userState, userDispatch, statusState) => {
         showError(message);
         return [];
       } catch (err) {
+        if (requestId !== groupQuotaRequestId.current) return [];
         console.error(err);
         setGroupQuotaData([]);
         return [];
       } finally {
-        setGroupQuotaLoading(false);
+        if (requestId === groupQuotaRequestId.current) {
+          setGroupQuotaLoading(false);
+        }
       }
     },
     [isAdminUser],
