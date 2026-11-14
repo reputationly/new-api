@@ -19,7 +19,7 @@ For commercial licensing, please contact support@quantumnous.com
 
 import React, { useRef } from 'react';
 import { Modal, Form, Button } from '@douyinfe/semi-ui';
-import { TIME_PRESETS } from '../../../helpers/dashboard';
+import { TIME_PRESETS, getPresetRange } from '../../../helpers/dashboard';
 
 const SearchModal = ({
   searchModalVisible,
@@ -36,6 +36,10 @@ const SearchModal = ({
   t,
 }) => {
   const formRef = useRef();
+  // 快捷范围要同时改「表单显示值」和 hook 里的 inputs。只改后者的话，Semi 的表单字段
+  // 仍然显示自己内部的值（withField 把 [valueKey]: value 放在 ...rest 之后，传进来的
+  // value 会被内部值覆盖），用户看到的和实际查的就不是同一个区间。
+  const formApiRef = useRef();
 
   const FORM_FIELD_PROPS = {
     className: 'w-full mb-2 !rounded-lg',
@@ -47,6 +51,22 @@ const SearchModal = ({
 
   const { start_timestamp, end_timestamp, username } = inputs;
 
+  const handlePresetClick = (key) => {
+    applyPreset(key);
+    if (key === 'custom') {
+      return;
+    }
+    const range = getPresetRange(key);
+    if (!range) {
+      return;
+    }
+    formApiRef.current?.setValues({
+      start_timestamp: range.start_timestamp,
+      end_timestamp: range.end_timestamp,
+      data_export_default_time: range.granularity,
+    });
+  };
+
   return (
     <Modal
       title={t('搜索条件')}
@@ -57,7 +77,12 @@ const SearchModal = ({
       size={isMobile ? 'full-width' : 'small'}
       centered
     >
-      <Form ref={formRef} layout='vertical' className='w-full'>
+      <Form
+        ref={formRef}
+        getFormApi={(api) => (formApiRef.current = api)}
+        layout='vertical'
+        className='w-full'
+      >
         {/* 快捷范围：点一下同时填起止时间并按跨度切粒度。
             没有这一行时，用户会以为下面的「图表粒度」就是时间范围（选「周」
             然后被 7 天窗口按周聚合，图里只剩一两个点）。 */}
@@ -68,7 +93,7 @@ const SearchModal = ({
               size='small'
               theme={activePreset === preset.key ? 'solid' : 'borderless'}
               type={activePreset === preset.key ? 'primary' : 'tertiary'}
-              onClick={() => applyPreset(preset.key)}
+              onClick={() => handlePresetClick(preset.key)}
             >
               {t(preset.label)}
             </Button>
@@ -78,7 +103,7 @@ const SearchModal = ({
             size='small'
             theme={activePreset ? 'borderless' : 'solid'}
             type={activePreset ? 'tertiary' : 'primary'}
-            onClick={() => applyPreset('custom')}
+            onClick={() => handlePresetClick('custom')}
           >
             {t('自定义')}
           </Button>
@@ -88,7 +113,6 @@ const SearchModal = ({
           field: 'start_timestamp',
           label: t('起始时间'),
           initValue: start_timestamp,
-          value: start_timestamp,
           type: 'dateTime',
           name: 'start_timestamp',
           onChange: (value) => handleInputChange(value, 'start_timestamp'),
@@ -98,7 +122,6 @@ const SearchModal = ({
           field: 'end_timestamp',
           label: t('结束时间'),
           initValue: end_timestamp,
-          value: end_timestamp,
           type: 'dateTime',
           name: 'end_timestamp',
           onChange: (value) => handleInputChange(value, 'end_timestamp'),

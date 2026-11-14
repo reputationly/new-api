@@ -133,7 +133,7 @@ func TestGetGroupQuotaStats_MergesRollupAndHeadTail(t *testing.T) {
 	// 前两小时已物化
 	_, err := rollGroupStatsRange(hour, hour+7200)
 	require.NoError(t, err)
-	require.NoError(t, saveGroupStatsMeta(hour+3600))
+	require.NoError(t, saveGroupStatsMeta(hour, hour+3600))
 
 	start := hour + 1800
 	end := hour + 7200 + 1200
@@ -187,4 +187,69 @@ func TestGetGroupQuotaStats_UsernameFilter(t *testing.T) {
 	require.NotNil(t, item)
 	require.Equal(t, int64(100), item.TotalQuota)
 	require.Equal(t, int64(1), item.Count)
+}
+
+// 只汇总了第一小时、第二小时还没汇总时，第二小时必须退回 logs 现算。
+//
+// 这是 rolledEnd 计算错误的回归用例：meta 存的是整点时间戳，曾经被当成「小时序号」
+// 又乘了一次 3600，导致 tableEnd 永远等于窗口末尾，未汇总的整小时被静默漏掉。
+func TestGetGroupQuotaStats_UnrolledHourFallsBackToLogs(t *testing.T) {
+	resetGroupStats(t)
+	hour := baseHour()
+
+	insertGroupLog(t, &Log{UserId: 50, Username: "partial", CreatedAt: hour + 10, Type: LogTypeConsume, Group: "default", Quota: 100})
+	insertGroupLog(t, &Log{UserId: 50, Username: "partial", CreatedAt: hour + 3600 + 10, Type: LogTypeConsume, Group: "default", Quota: 7})
+
+	// 只物化第一小时
+	_, err := rollGroupStatsRange(hour, hour+3600)
+	require.NoError(t, err)
+	require.NoError(t, saveGroupStatsMeta(hour, hour))
+
+	got, err := GetGroupQuotaStats(hour, hour+7200, "")
+	require.NoError(t, err)
+	item := findGroupStat(t, got, "default")
+	require.NotNil(t, item)
+	require.Equal(t, int64(107), item.TotalQuota, "未汇总的第二小时必须从 logs 补上")
+	require.Equal(t, int64(2), item.Count)
+}
+
+// 回填起点之前的区间：表里没有行，必须退回 logs，而不是显示 0。
+//
+// 「跨度 ≤ 90 天」只限跨度不限多早，所以查半年/一年前的整月也能通过校验。
+func TestGetGroupQuotaStats_RangeBeforeBackfillStart(t *testing.T) {
+	resetGroupStats(t)
+	hour := baseHour()
+
+	// 早于回填起点的历史数据
+	insertGroupLog(t, &Log{UserId: 51, Username: "history", CreatedAt: hour + 10, Type: LogTypeConsume, Group: "default", Quota: 42})
+	// 回填覆盖范围内的一小时
+	insertGroupLog(t, &Log{UserId: 51, Username: "history", CreatedAt: hour + 3600 + 10, Type: LogTypeConsume, Group: "default", Quota: 8})
+	_, err := rollGroupStatsRange(hour+3600, hour+7200)
+	require.NoError(t, err)
+	require.NoError(t, saveGroupStatsMeta(hour+3600, hour+3600))
+
+	got, err := GetGroupQuotaStats(hour, hour+7200, "")
+	require.NoError(t, err)
+	item := findGroupStat(t, got, "default")
+	require.NotNil(t, item)
+	require.Equal(t, int64(50), item.TotalQuota, "回填起点之前的小时要从 logs 补")
+}
+
+// group IS NULL 与 group = '' 必须并成同一行：拆成两行都叫 '' 时，PG 的 upsert 会
+// 直接报「cannot affect row a second time」，MySQL/SQLite 则后一行覆盖前一行少报。
+func TestAggregateLogsByGroupHour_MergesNullAndEmptyGroup(t *testing.T) {
+	resetGroupStats(t)
+	hour := baseHour()
+
+	insertGroupLog(t, &Log{UserId: 52, Username: "nullg", CreatedAt: hour + 10, Type: LogTypeConsume, Group: "", Quota: 100})
+	require.NoError(t, LOG_DB.Exec(
+		"INSERT INTO logs (user_id, created_at, type, username, model_name, quota, token_id, `group`, other) VALUES (52, ?, 2, 'nullg', 'm', 7, 0, NULL, '{}')",
+		hour+20,
+	).Error)
+
+	rows, err := aggregateLogsByGroupHour(hour, hour+3600, "")
+	require.NoError(t, err)
+	require.Len(t, rows, 1, "NULL 和 '' 不能拆成两行")
+	require.Equal(t, "", rows[0].GroupName)
+	require.Equal(t, int64(107), rows[0].TotalQuota)
 }

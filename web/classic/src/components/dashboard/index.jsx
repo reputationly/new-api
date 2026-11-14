@@ -157,10 +157,12 @@ const Dashboard = () => {
     if (dashboardData.activeChartTab !== '7' || !dashboardData.isAdminUser) {
       return;
     }
+    // 用「已确认」的区间（与卡片上的数据同源），不是弹窗里的草稿。
+    const range = dashboardData.lastLoadedRange || dashboardData.inputs;
     dashboardData.loadGroupQuotaData(
-      dashboardData.inputs.start_timestamp,
-      dashboardData.inputs.end_timestamp,
-      dashboardData.inputs.username,
+      range.start_timestamp,
+      range.end_timestamp,
+      range.username,
     );
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [dashboardData.activeChartTab, dashboardData.dataQueryVersion]);

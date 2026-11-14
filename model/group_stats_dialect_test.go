@@ -71,7 +71,9 @@ func TestGroupStatsLogQuery_DialectQuoting(t *testing.T) {
 			})
 			require.Contains(t, sql, c.wantSQL)
 			require.NotContains(t, sql, c.notWantSQL)
-			require.Contains(t, sql, "GROUP BY")
+			// GROUP BY 必须与 SELECT 用同一个 COALESCE：裸 group 会把 NULL 和 '' 拆成两行，
+			// PG 上 upsert 直接报「cannot affect row a second time」。
+			require.Contains(t, sql, "GROUP BY COALESCE(")
 			// 分桶表达式必须以原样输出（GORM 对多字段 Group 参数不额外加引号）
 			require.Contains(t, sql, "logs.created_at - logs.created_at % 3600")
 			// 两个 LIKE 条件必须带上，否则套餐/订阅会被算成现金。

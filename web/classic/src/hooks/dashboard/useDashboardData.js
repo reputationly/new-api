@@ -75,6 +75,9 @@ export const useDashboardData = (userState, userDispatch, statusState) => {
   // 已确认的查询版本号：搜索确认/刷新时自增。分组消耗表监听它而不是监听 inputs，
   // 否则用户在弹窗里改时间（还没点确定）就会触发请求。
   const [dataQueryVersion, setDataQueryVersion] = useState(0);
+  // 最近一次「真的查了」的区间。顶部范围摘要与分组消耗 tab 都读它，而不是读 inputs：
+  // inputs 是弹窗里的草稿，改了再点取消时，草稿和卡片上的数据会对不上。
+  const [lastLoadedRange, setLastLoadedRange] = useState(null);
   const [consumeQuota, setConsumeQuota] = useState(0);
   const [consumeTokens, setConsumeTokens] = useState(0);
   const [times, setTimes] = useState(0);
@@ -224,6 +227,12 @@ export const useDashboardData = (userState, userDispatch, statusState) => {
       const res = await API.get(url);
       const { success, message, data } = res.data;
       if (success) {
+        setLastLoadedRange({
+          start_timestamp,
+          end_timestamp,
+          username,
+          granularity: dataExportDefaultTime,
+        });
         setQuotaData(data);
         if (data.length === 0) {
           data.push({
@@ -365,15 +374,14 @@ export const useDashboardData = (userState, userDispatch, statusState) => {
     [refresh, inputs.start_timestamp, inputs.end_timestamp],
   );
 
-  const rangeSummary = useMemo(
-    () =>
-      formatRangeSummary(
-        inputs.start_timestamp,
-        inputs.end_timestamp,
-        dataExportDefaultTime,
-      ),
-    [inputs.start_timestamp, inputs.end_timestamp, dataExportDefaultTime],
-  );
+  const rangeSummary = useMemo(() => {
+    if (!lastLoadedRange) return '';
+    return formatRangeSummary(
+      lastLoadedRange.start_timestamp,
+      lastLoadedRange.end_timestamp,
+      lastLoadedRange.granularity,
+    );
+  }, [lastLoadedRange]);
 
   // ========== Effects ==========
   useEffect(() => {
@@ -403,6 +411,7 @@ export const useDashboardData = (userState, userDispatch, statusState) => {
     applyPreset,
     rangeSummary,
     dataQueryVersion,
+    lastLoadedRange,
 
     // 数据状态
     quotaData,

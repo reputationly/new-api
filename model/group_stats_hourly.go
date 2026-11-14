@@ -50,14 +50,21 @@ type GroupStatsHourly struct {
 
 func (GroupStatsHourly) TableName() string { return "group_stats_hourly" }
 
-// GroupStatsMeta 汇总进度：LastRolledHour 及以前的小时都已物化。
+// GroupStatsMeta 汇总进度：只有 [FirstRolledHour, LastRolledHour] 这个闭区间内的小时是
+// 已物化的。两端都要记：
 //
-// 用独立一行记录进度而不是取 MAX(hour_ts)：某段时间没有请求就不会有行写入，MAX 会停在
-// 旧值，读路径会一直把整段区间退回 logs 现算（等于白建表）。
+//   - 记终点（而不是取 MAX(hour_ts)）：某段时间没有请求就不会有行写入，MAX 会停在旧值，
+//     读路径会一直把整段区间退回 logs 现算（等于白建表）。
+//   - 记起点：回填只覆盖「部署时刻往前 groupStatsBackfillDays 天」。更早的区间虽然能通过
+//     「跨度 ≤ 90 天」的校验（那只限跨度、不限多早），但表里没有行——不把起点当成未汇总，
+//     查历史月份会显示「无消耗记录」而 logs 里其实有数据，属于静默少报。
+//
+// 任一字段为 -1 表示「未知/不可信」，读路径退回 logs。
 type GroupStatsMeta struct {
-	Id             int   `json:"id" gorm:"primaryKey"`
-	LastRolledHour int64 `json:"last_rolled_hour" gorm:"column:last_rolled_hour;not null;default:-1"`
-	UpdatedAt      int64 `json:"updated_at" gorm:"column:updated_at;not null;default:0"`
+	Id              int   `json:"id" gorm:"primaryKey"`
+	FirstRolledHour int64 `json:"first_rolled_hour" gorm:"column:first_rolled_hour;not null;default:-1"`
+	LastRolledHour  int64 `json:"last_rolled_hour" gorm:"column:last_rolled_hour;not null;default:-1"`
+	UpdatedAt       int64 `json:"updated_at" gorm:"column:updated_at;not null;default:0"`
 }
 
 func (GroupStatsMeta) TableName() string { return "group_stats_meta" }
@@ -124,8 +131,11 @@ func groupStatsLogQuery(db *gorm.DB, start, endExclusive int64, username string)
 			logOtherEntitlementPattern).
 		Where("logs.type IN ?", []int{LogTypeConsume, LogTypeRefund}).
 		Where("logs.created_at >= ? AND logs.created_at < ?", start, endExclusive).
+		// GROUP BY 必须与 SELECT 用同一个 COALESCE 表达式：裸的 group 会把 NULL 和 ''
+		// 拆成两行、都叫 ''，PG 的 upsert 会直接报「cannot affect row a second time」，
+		// MySQL/SQLite 则是后一行覆盖前一行（少报）。
 		// group 是保留字：logGroupCol 已按方言预引用；带逗号的 Group 参数 GORM 会原样输出。
-		Group(logGroupCol + ", " + logHourBucketExpr)
+		Group("COALESCE(" + logGroupCol + ", ''), " + logHourBucketExpr)
 	if username != "" {
 		tx = tx.Where("logs.username = ?", username)
 	}
@@ -172,15 +182,15 @@ func groupStatsRollupOnce() {
 		return
 	}
 
-	lastRolled, err := getGroupStatsMeta()
+	firstRolled, lastRolled, err := getGroupStatsMeta()
 	if err != nil {
 		common.SysError("读取分组消耗汇总进度失败: " + err.Error())
 		return
 	}
 
 	from := lastRolled + 3600
-	if lastRolled < 0 {
-		// 首次部署：回填最近 groupStatsBackfillDays 天。
+	if lastRolled < 0 || firstRolled < 0 {
+		// 首次部署（或进度只写了一端、不可信时）：回填最近 groupStatsBackfillDays 天。
 		from = currentHour - int64(groupStatsBackfillDays)*86400
 	}
 	// 顺带重算最近几个已完结小时，吸收多副本时钟偏差导致的迟到写入。
@@ -205,13 +215,21 @@ func groupStatsRollupOnce() {
 			return
 		}
 		total += n
-		// 进度只前进不后退（重算历史小时不应该把 meta 拉回去）。
-		if hour := end - 3600; hour > lastRolled {
-			if err := saveGroupStatsMeta(hour); err != nil {
+		// 两端都只往「更覆盖」的方向扩展：终点前进、起点后退；重算历史小时不会把终点拉回去。
+		chunkFirst, chunkLast := start, end-3600
+		newFirst, newLast := firstRolled, lastRolled
+		if newFirst < 0 || chunkFirst < newFirst {
+			newFirst = chunkFirst
+		}
+		if chunkLast > newLast {
+			newLast = chunkLast
+		}
+		if newFirst != firstRolled || newLast != lastRolled {
+			if err := saveGroupStatsMeta(newFirst, newLast); err != nil {
 				common.SysError("保存分组消耗汇总进度失败: " + err.Error())
 				return
 			}
-			lastRolled = hour
+			firstRolled, lastRolled = newFirst, newLast
 		}
 	}
 	if isCatchUp {
@@ -243,26 +261,33 @@ func rollGroupStatsRange(startHour, endHourExclusive int64) (int, error) {
 	return len(rows), nil
 }
 
-// getGroupStatsMeta 读汇总进度；没有记录时返回 -1（表示「一小时都还没物化」）。
+// getGroupStatsMeta 读汇总进度（起点、终点）；没有记录时两端都返回 -1。
 //
 // 用 Find 而不是 First：首次部署的头十几分钟里这条记录不存在，First 会把
 // ErrRecordNotFound 当错误打进日志，读接口每来一次就刷一条噪音。
-func getGroupStatsMeta() (int64, error) {
+func getGroupStatsMeta() (int64, int64, error) {
 	var meta GroupStatsMeta
 	if err := DB.Where("id = ?", 1).Limit(1).Find(&meta).Error; err != nil {
-		return -1, err
+		return -1, -1, err
 	}
 	if meta.Id == 0 {
-		return -1, nil
+		return -1, -1, nil
 	}
-	return meta.LastRolledHour, nil
+	return meta.FirstRolledHour, meta.LastRolledHour, nil
 }
 
-func saveGroupStatsMeta(hour int64) error {
-	meta := &GroupStatsMeta{Id: 1, LastRolledHour: hour, UpdatedAt: common.GetTimestamp()}
+func saveGroupStatsMeta(firstHour, lastHour int64) error {
+	meta := &GroupStatsMeta{
+		Id:              1,
+		FirstRolledHour: firstHour,
+		LastRolledHour:  lastHour,
+		UpdatedAt:       common.GetTimestamp(),
+	}
 	return DB.Clauses(clause.OnConflict{
-		Columns:   []clause.Column{{Name: "id"}},
-		DoUpdates: clause.AssignmentColumns([]string{"last_rolled_hour", "updated_at"}),
+		Columns: []clause.Column{{Name: "id"}},
+		DoUpdates: clause.AssignmentColumns([]string{
+			"first_rolled_hour", "last_rolled_hour", "updated_at",
+		}),
 	}).Create(meta).Error
 }
 
@@ -296,19 +321,29 @@ func GetGroupQuotaStats(start, end int64, username string) ([]*GroupQuotaStat, e
 		return sortedGroupStats(stats), nil
 	}
 
-	lastRolled, err := getGroupStatsMeta()
+	firstRolled, lastRolled, err := getGroupStatsMeta()
 	if err != nil {
 		return nil, err
 	}
-	rolledEnd := int64(0)
-	if lastRolled >= 0 {
-		rolledEnd = (lastRolled + 1) * 3600
+	// 已物化的是 [firstRolled, lastRolled] 这个**闭区间**（两端都是整点时间戳），
+	// 换算成半开区间 [coveredStart, coveredEnd)。任一为 -1 表示进度不可信，整段退回 logs。
+	//
+	// 这里曾经把整点时间戳又乘了一次 3600（rolledEnd = (lastRolled+1)*3600），
+	// 算出个天文数字，于是 tableEnd 永远等于 floor(endExclusive)、所有整小时都去查汇总表，
+	// 未汇总的小时被静默漏掉——「宁可慢、不少报」在这条路径上其实没成立。
+	coveredStart, coveredEnd := int64(0), int64(0)
+	if firstRolled >= 0 && lastRolled >= firstRolled {
+		coveredStart = firstRolled
+		coveredEnd = lastRolled + 3600
 	}
 
 	tableStart := ceilToHour(start)
+	if tableStart < coveredStart {
+		tableStart = coveredStart
+	}
 	tableEnd := floorToHour(endExclusive)
-	if tableEnd > rolledEnd {
-		tableEnd = rolledEnd
+	if tableEnd > coveredEnd {
+		tableEnd = coveredEnd
 	}
 
 	if tableStart < tableEnd {
