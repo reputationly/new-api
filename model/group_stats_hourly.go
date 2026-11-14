@@ -385,9 +385,9 @@ func mergeLogsRange(stats map[string]*GroupQuotaStat, start, endExclusive int64,
 func queryGroupStatsHours(startHour, endHourExclusive int64) ([]*GroupStatsHourly, error) {
 	var rows []*GroupStatsHourly
 	err := DB.Table(GroupStatsHourly{}.TableName()).
-		Select("group_name, COALESCE(SUM(req_count), 0) as req_count, " +
-			"COALESCE(SUM(tokens), 0) as tokens, " +
-			"COALESCE(SUM(total_quota), 0) as total_quota, " +
+		Select("group_name, COALESCE(SUM(req_count), 0) as req_count, "+
+			"COALESCE(SUM(tokens), 0) as tokens, "+
+			"COALESCE(SUM(total_quota), 0) as total_quota, "+
 			"COALESCE(SUM(cash_quota), 0) as cash_quota").
 		Where("hour_ts >= ? AND hour_ts < ?", startHour, endHourExclusive).
 		Group("group_name").

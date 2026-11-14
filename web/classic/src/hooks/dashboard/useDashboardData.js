@@ -178,14 +178,19 @@ export const useDashboardData = (userState, userDispatch, statusState) => {
   }, []);
 
   // 应用快捷范围：同时填起止时间并按跨度切粒度。
+  // 应用快捷范围：同时填起止时间并按跨度切粒度。
+  //
+  // 返回算好的 range 供弹窗同步表单显示值。调用方**不要**再调一次 getPresetRange：
+  // 「今天 / 近24小时」的结束时间取的是「现在」，两次各取一次，跨过一秒就会出现
+  // 弹窗上显示的结束时间和实际查询的区间差 1 秒。
   const applyPreset = useCallback((key) => {
     // 「自定义」不清空时间，只取消预设高亮——用户接着手改时间框。
     if (key === 'custom') {
       setActivePreset('');
-      return;
+      return null;
     }
     const range = getPresetRange(key);
-    if (!range) return;
+    if (!range) return null;
     setActivePreset(key);
     setInputs((inputs) => ({
       ...inputs,
@@ -199,6 +204,7 @@ export const useDashboardData = (userState, userDispatch, statusState) => {
         parseDashboardTimestamp(range.end_timestamp),
       );
     setDataExportDefaultTime(granularity);
+    return range;
   }, []);
 
   const showSearchModal = useCallback(() => {

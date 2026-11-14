@@ -19,7 +19,7 @@ For commercial licensing, please contact support@quantumnous.com
 
 import React, { useRef } from 'react';
 import { Modal, Form, Button } from '@douyinfe/semi-ui';
-import { TIME_PRESETS, getPresetRange } from '../../../helpers/dashboard';
+import { TIME_PRESETS } from '../../../helpers/dashboard';
 
 const SearchModal = ({
   searchModalVisible,
@@ -52,11 +52,9 @@ const SearchModal = ({
   const { start_timestamp, end_timestamp, username } = inputs;
 
   const handlePresetClick = (key) => {
-    applyPreset(key);
-    if (key === 'custom') {
-      return;
-    }
-    const range = getPresetRange(key);
+    // 直接用 applyPreset 算好的那份区间，不再自己取一次——「今天 / 近24小时」的
+    // 结束时间来自「现在」，两次取现在跨秒就会让显示值和查询值差 1 秒。
+    const range = applyPreset(key);
     if (!range) {
       return;
     }
