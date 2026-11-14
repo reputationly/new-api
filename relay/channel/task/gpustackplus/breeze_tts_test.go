@@ -3,9 +3,11 @@ package gpustackplus
 import (
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"testing"
 
@@ -584,6 +586,35 @@ func TestBuildRequestBodyBreeze(t *testing.T) {
 			}
 			if !strings.Contains(apiErr.Error(), tc.want) {
 				t.Fatalf("文案应含 %q,实际: %v", tc.want, apiErr)
+			}
+		})
+	}
+}
+
+func TestBuildRequestBodyBreezeRejectsBeforeMaterialization(t *testing.T) {
+	for _, invalid := range []map[string]any{
+		{"speed": 1.2},
+		{"voice": "alloy"},
+		{"emo_vector": []any{0.1}},
+	} {
+		t.Run(fmt.Sprint(invalid), func(t *testing.T) {
+			useTempNFSRoot(t)
+			metadata := map[string]any{"task_type": "tts", "ref_audio": breezeWavDataURL(), "ref_text": "逐字稿"}
+			for key, value := range invalid {
+				metadata[key] = value
+			}
+			c := breezeTestCtx()
+			c.Set("task_request", relaycommon.TaskSubmitReq{Model: "tts2", Prompt: "你好", Metadata: metadata})
+			info := breezeTestInfo("tts2")
+			info.ChannelMeta = &relaycommon.ChannelMeta{UpstreamModelName: "tts2"}
+			_, err := (&TaskAdaptor{}).BuildRequestBody(c, info)
+			apiErr, ok := err.(*types.NewAPIError)
+			if !ok || apiErr.StatusCode != http.StatusBadRequest {
+				t.Fatalf("expected 400, got %v", err)
+			}
+			entries, err := os.ReadDir(system_setting.GetMediaStorageSettings().NFSOutputRoot)
+			if err != nil || len(entries) != 0 {
+				t.Fatalf("NFS root must remain empty: entries=%v err=%v", entries, err)
 			}
 		})
 	}

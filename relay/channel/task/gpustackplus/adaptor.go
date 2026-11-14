@@ -511,18 +511,28 @@ func (a *TaskAdaptor) BuildRequestBody(c *gin.Context, info *relaycommon.RelayIn
 	// Breeze 引擎族判定只算一次:物化分支与下面的参数折叠都要用,而
 	// AudioEngineFamilyForModel 每次都要解一遍整份 AudioModelConfig。
 	isBreeze := taskType == "tts" && IsBreezeTTSRequest(modelName, req.Model, info.OriginModelName)
+	if isBreeze {
+		if err := validateBreezeInputs(req.Metadata, modelName); err != nil {
+			return nil, localBadRequest(err)
+		}
+		if err := applyBreezeSpeakerTag(body, req.Metadata, modelName); err != nil {
+			return nil, localBadRequest(err)
+		}
+		foldParamsIntoExtra(body, indexTTS2EmotionKeys)
+		foldParamsIntoExtra(body, breezeExtraParamKeys)
+		if err := ValidateBreezeParams(body, modelName); err != nil {
+			return nil, localBadRequest(err)
+		}
+	}
 	var refs map[string][]string
 	switch taskType {
 	case "tts":
 		if isBreeze {
 			// Breeze:有参考音=克隆(Base),没有参考音=音色设计(VoiceDesign)。
 			// 参考音优先取 metadata.ref_audio,voice 兜底(OpenAI 客户端只有 voice 一个位置
-			// 放音色);voice 也可能是说话人标签,那一步在物化成功之后单独处理。
+			// 放音色);voice 也可能是说话人标签,已在物化前处理。
 			// 物化函数返回**裸 error**,由 switch 之后统一包 localBadRequest。
 			refs, err = materializeBreezeTTSInputs(c, info, taskType, modelName, req)
-			if err == nil {
-				err = applyBreezeSpeakerTag(body, req.Metadata, modelName)
-			}
 		} else if isMusic3 {
 			// Music3 没有任何音频输入:人声是它按歌词自己唱出来的,不需要参考音色。
 			// 走下面 IndexTTS 那支会撞上"必填 voice"的硬校验 —— 那道校验是给语音克隆
@@ -653,7 +663,7 @@ func (a *TaskAdaptor) BuildRequestBody(c *gin.Context, info *relaycommon.RelayIn
 	// emo_vector/emo_alpha/…,顶层同名键会被引擎 AudioTaskRequest(继承
 	// OpenAICreateSpeechRequest,extra=ignore)静默丢弃。前端经 metadata 平铺发来,
 	// 这里把它们从 body 顶层收进 body["extra_params"](门面非控制键,原样透传)。
-	if taskType == "tts" {
+	if taskType == "tts" && !isBreeze {
 		keys := indexTTS2EmotionKeys
 		// 2.5 独有的两个键按**引擎族声明**加档,理由见 indexTTS25ExtraKeys 的注释:
 		// 本折叠对所有 tts 请求都跑,而 lang 是个通用键名。
@@ -661,15 +671,6 @@ func (a *TaskAdaptor) BuildRequestBody(c *gin.Context, info *relaycommon.RelayIn
 			keys = append(append([]string{}, keys...), indexTTS25ExtraKeys...)
 		}
 		foldParamsIntoExtra(body, keys)
-		// Breeze 的高级参数(CFG/采样)同样只从 extra_params 读,且引擎会拒未知键。
-		// **先折再验**:上面那一步对所有 tts 无条件折 emo_* / use_emo_text,只有折完再验
-		// 才能把它们从 extra_params 里抓出来 —— 否则要到引擎才报一条英文 400。
-		if isBreeze {
-			foldParamsIntoExtra(body, breezeExtraParamKeys)
-			if berr := ValidateBreezeParams(body, modelName); berr != nil {
-				return nil, localBadRequest(berr)
-			}
-		}
 	}
 
 	data, err := common.Marshal(body)
@@ -1629,20 +1630,10 @@ func breezeRefAudio(md map[string]any) string {
 //
 // 返回**裸 error**,由调用方(switch 之后)统一包 localBadRequest。
 func materializeBreezeTTSInputs(c *gin.Context, info *relaycommon.RelayInfo, taskType, modelName string, req relaycommon.TaskSubmitReq) (map[string][]string, error) {
-	// file:// 在这里显式拒绝:物化器不支持,放行只会一路错到别的报错上。
-	for _, key := range []string{"ref_audio", "voice"} {
-		if v := metadataString(req.Metadata, key); strings.HasPrefix(strings.ToLower(v), "file://") {
-			return nil, fmt.Errorf("模型 %s 不支持 file:// 本地路径:请改用 http(s) URL、data URI 或 task: 引用", modelName)
-		}
-	}
-	if metadataString(req.Metadata, "ref_audio_2") != "" {
-		return nil, fmt.Errorf("模型 %s 只接受一条参考音频(ref_audio_2 不被支持)", modelName)
-	}
-	ref := breezeRefAudio(req.Metadata)
-	text := metadataString(req.Metadata, "ref_text")
-	if err := ValidateBreezeRefPair(ref, text, modelName); err != nil {
+	if err := validateBreezeInputs(req.Metadata, modelName); err != nil {
 		return nil, err
 	}
+	ref := breezeRefAudio(req.Metadata)
 	if ref == "" {
 		return nil, nil // 音色设计:纯 instructions,无参考音输入
 	}
@@ -1655,6 +1646,19 @@ func materializeBreezeTTSInputs(c *gin.Context, info *relaycommon.RelayInfo, tas
 		return nil, err
 	}
 	return m.Refs(), nil
+}
+
+func validateBreezeInputs(metadata map[string]any, modelName string) error {
+	// file:// 在这里显式拒绝:物化器不支持,放行只会一路错到别的报错上。
+	for _, key := range []string{"ref_audio", "voice"} {
+		if v := metadataString(metadata, key); strings.HasPrefix(strings.ToLower(v), "file://") {
+			return fmt.Errorf("模型 %s 不支持 file:// 本地路径:请改用 http(s) URL、data URI 或 task: 引用", modelName)
+		}
+	}
+	if metadataString(metadata, "ref_audio_2") != "" {
+		return fmt.Errorf("模型 %s 只接受一条参考音频(ref_audio_2 不被支持)", modelName)
+	}
+	return ValidateBreezeRefPair(breezeRefAudio(metadata), metadataString(metadata, "ref_text"), modelName)
 }
 
 // applyBreezeSpeakerTag 把 voice 里的说话人标签转成引擎认的 speaker 标量。
