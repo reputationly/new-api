@@ -138,24 +138,43 @@ func TestIsOmniTTSModelDoesNotCoverMusic3(t *testing.T) {
 //
 // 这与 Music3 是同一类坑的两个实例 —— 都是"没有参考音的 tts",都得单开一支。
 func TestBreezeTTSTakesItsOwnBranch(t *testing.T) {
-	for _, m := range []string{"breeze-tts-2", "BREEZE-TTS-2", "reputationly/breeze-tts-2"} {
+	// 家族名与**部署 token** 两条都要认:现网部署名是 tts2,历史上是 ttx2,
+	// 引擎权重名是 breeze-tts-2 —— 三者指向同一个引擎,判漏一个就落回 IndexTTS
+	// 分支、撞上那条「任务类型 tts 需要参考音色」的硬校验。
+	for _, m := range []string{
+		"breeze-tts-2", "BREEZE-TTS-2", "reputationly/breeze-tts-2",
+		"tts2", "tts2-v1", "TTX2", "ttx2-v1",
+	} {
 		if !IsBreezeTTSModel(m) {
-			t.Fatalf("%s 应判为 Breeze TTS(大小写与带前缀的模型名都要认出来)", m)
+			t.Fatalf("%s 应判为 Breeze TTS(大小写、带前缀、部署 token 都要认出来)", m)
 		}
 	}
-	// 名字含 tts 但不是 Breeze 的,不能被误捕
-	for _, m := range []string{"qwen3-tts", "indextts-2.5", "moss-voicegenerator", "glm-tts"} {
+	// 名字含 tts 但不是 Breeze 的,不能被误捕;tts20/ttx20 只差一个字符,
+	// 裸子串匹配会吞进来,所以判据必须是独立 token。
+	for _, m := range []string{"qwen3-tts", "indextts-2.5", "moss-voicegenerator", "glm-tts", "tts20", "ttx20"} {
 		if IsBreezeTTSModel(m) {
 			t.Fatalf("%s 不该被 IsBreezeTTSModel 判为真", m)
 		}
 	}
 	// Breeze 不该被当成 Omni TTS —— 它不在 vLLM-Omni 引擎上,
 	// 误判会让它去物化 ref_audio 并按 Omni 的 speaker 语义处理预设音色。
-	if IsOmniTTSModel("breeze-tts-2") {
-		t.Fatal("breeze 跑在独立引擎上,不该走 vLLM-Omni 的参考音契约")
+	for _, m := range []string{"breeze-tts-2", "tts2", "ttx2"} {
+		if IsOmniTTSModel(m) {
+			t.Fatalf("%s 跑在独立引擎上,不该走 vLLM-Omni 的参考音契约", m)
+		}
 	}
 	// 任务类型仍要能从名字推断出 tts(名字含 "tts",走既有规则,无需新增分支)
-	if got := inferTaskType("breeze-tts-2"); got != "tts" {
-		t.Fatalf("breeze-tts-2 应推断为 tts,实际 %s", got)
+	for _, m := range []string{"breeze-tts-2", "tts2"} {
+		if got := inferTaskType(m); got != "tts" {
+			t.Fatalf("%s 应推断为 tts,实际 %s", m, got)
+		}
+	}
+	// **ttx2 是个例外,而且是真实存在过的坑**:它不含 "tts" 子串,inferTaskType 会落到
+	// 视频兜底 t2v,于是 tts 分支根本不会进 —— 名字兜底只有在请求显式声明
+	// metadata.task_type=tts(或配置声明了引擎族)时才起作用。现网部署名已改为 tts2,
+	// 这个 token 只作历史兜底,不要指望它单独把任务类型推对。
+	if got := inferTaskType("ttx2"); got != "t2v" {
+		t.Fatalf("ttx2 不含 tts 子串,应落到视频兜底 t2v,实际 %s —— 若哪天它真能推出 tts,"+
+			"说明 inferTaskType 被改了,请同时同步 gpustack-ui 的 task-inputs.ts 镜像", got)
 	}
 }

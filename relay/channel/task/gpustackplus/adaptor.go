@@ -22,9 +22,11 @@ package gpustackplus
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -509,9 +511,15 @@ func (a *TaskAdaptor) BuildRequestBody(c *gin.Context, info *relaycommon.RelayIn
 	var refs map[string][]string
 	switch taskType {
 	case "tts":
-		if IsBreezeTTSModel(modelName) {
-			// Breeze 音色设计:声线由 instructions 的自然语言描述生成,没有参考音频。
-			// 什么都不物化,refs 保持 nil(同 Music3)。
+		if IsBreezeTTSRequest(modelName, req.Model, info.OriginModelName) {
+			// Breeze:有参考音=克隆(Base),没有参考音=音色设计(VoiceDesign)。
+			// 参考音优先取 metadata.ref_audio,voice 兜底(OpenAI 客户端只有 voice 一个位置
+			// 放音色);voice 也可能是说话人标签,那一步在物化成功之后单独处理。
+			// 物化函数返回**裸 error**,由 switch 之后统一包 localBadRequest。
+			refs, err = materializeBreezeTTSInputs(c, info, taskType, modelName, req)
+			if err == nil {
+				err = applyBreezeSpeakerTag(body, req.Metadata, modelName)
+			}
 		} else if isMusic3 {
 			// Music3 没有任何音频输入:人声是它按歌词自己唱出来的,不需要参考音色。
 			// 走下面 IndexTTS 那支会撞上"必填 voice"的硬校验 —— 那道校验是给语音克隆
@@ -650,6 +658,15 @@ func (a *TaskAdaptor) BuildRequestBody(c *gin.Context, info *relaycommon.RelayIn
 			keys = append(append([]string{}, keys...), indexTTS25ExtraKeys...)
 		}
 		foldParamsIntoExtra(body, keys)
+		// Breeze 的高级参数(CFG/采样)同样只从 extra_params 读,且引擎会拒未知键。
+		// **先折再验**:上面那一步对所有 tts 无条件折 emo_* / use_emo_text,只有折完再验
+		// 才能把它们从 extra_params 里抓出来 —— 否则要到引擎才报一条英文 400。
+		if IsBreezeTTSRequest(modelName, req.Model, info.OriginModelName) {
+			foldParamsIntoExtra(body, breezeExtraParamKeys)
+			if berr := ValidateBreezeParams(body, modelName); berr != nil {
+				return nil, localBadRequest(berr)
+			}
+		}
 	}
 
 	data, err := common.Marshal(body)
@@ -717,6 +734,79 @@ func foldParamsIntoExtra(body map[string]any, keys []string) {
 	if len(extra) > 0 {
 		body["extra_params"] = extra
 	}
+}
+
+// breezeExtraParamKeys 是 Breeze TTS 2 从 extra_params 读取的高级参数
+// (见 vllm-omni tts_adapters/breeze_tts_2.py 的 supported 集合)。与情感标量同理:
+// 放顶层会被引擎 AudioTaskRequest(继承 OpenAICreateSpeechRequest,extra=ignore)丢弃。
+var breezeExtraParamKeys = []string{
+	"guidance_scale", "cfg_scale", "temperature", "top_k", "top_p", "repetition_penalty",
+}
+
+// breezeAllowedExtraKeys 与 breezeExtraParamKeys 同集合,用查表加速校验。
+var breezeAllowedExtraKeys = map[string]bool{
+	"guidance_scale": true, "cfg_scale": true, "temperature": true,
+	"top_k": true, "top_p": true, "repetition_penalty": true,
+}
+
+// ValidateBreezeParams 校验**最终提交体**(异步口的 body 与同步口组好的 body 共用一份)。
+//
+// 覆盖引擎必然会拒的输入:response_format / speed / language / x_vector_only_mode /
+// speaker_embedding / speaker 标签格式 / extra_params 未知键。放到引擎那边只是把 400
+// 换一条英文文案,排查成本更高;而 speaker 与 extra_params 两类更糟 —— 拼错会静默
+// 劣化音色(见 IsBreezeSpeakerTag),未知键则要等下一条英文报错。
+func ValidateBreezeParams(body map[string]any, modelName string) error {
+	// 门面把产物名固定成 .wav(见 gpustack routes/videos.py 的 _output_ext),而引擎按
+	// response_format 编码,放行 mp3 会得到"mp3 字节 + audio/wav 头",客户端解码失败且
+	// 极难排查。本轮只放 wav;不传则由引擎默认(wav)兜住。
+	if v, ok := body["response_format"].(string); ok {
+		if f := strings.ToLower(strings.TrimSpace(v)); f != "" && f != "wav" {
+			return fmt.Errorf("模型 %s 当前只支持 response_format=wav(产物固定 .wav,其它容器会与文件扩展名不一致)", modelName)
+		}
+	}
+	if v, ok := body["speed"]; ok && v != nil {
+		if f, isNum := toFloat(v); isNum && f != 1 {
+			return fmt.Errorf("模型 %s 不支持 speed 调速(Breeze 固定语速);请去掉 speed 或传 1.0", modelName)
+		}
+	}
+	if v, ok := body["language"]; ok && v != nil {
+		if s, isStr := v.(string); isStr && strings.TrimSpace(s) != "" {
+			return fmt.Errorf("模型 %s 由输入文本自动判定语言,不接受 language", modelName)
+		}
+	}
+	if b, isBool := body["x_vector_only_mode"].(bool); isBool && b {
+		return fmt.Errorf("模型 %s 不支持 x_vector_only_mode", modelName)
+	}
+	if _, ok := body["speaker_embedding"]; ok {
+		return fmt.Errorf("模型 %s 不支持 speaker_embedding,请改用参考音频", modelName)
+	}
+	if s, ok := body["speaker"].(string); ok && strings.TrimSpace(s) != "" && !IsBreezeSpeakerTag(s) {
+		return fmt.Errorf("模型 %s 的 speaker 只接受说话人标签(S0..Sn / [S0..Sn]),收到 %q", modelName, s)
+	}
+	if extras, ok := body["extra_params"].(map[string]any); ok {
+		for k := range extras {
+			if !breezeAllowedExtraKeys[k] {
+				return fmt.Errorf("模型 %s 不支持 extra_params 键 %q;允许:%s", modelName, k, strings.Join(breezeExtraParamKeys, "/"))
+			}
+		}
+	}
+	return nil
+}
+
+// toFloat 容忍 JSON 数字在 map[string]any 里的多种落地类型(float64 / int / json.Number)。
+func toFloat(v any) (float64, bool) {
+	switch n := v.(type) {
+	case float64:
+		return n, true
+	case int:
+		return float64(n), true
+	case int64:
+		return float64(n), true
+	case json.Number:
+		f, err := n.Float64()
+		return f, err == nil
+	}
+	return 0, false
 }
 
 // ── task_type 解析 ────────────────────────────────────────────────────────
@@ -1404,17 +1494,153 @@ func materializeTTSInputs(c *gin.Context, info *relaycommon.RelayInfo, taskType,
 	return m.Refs(), nil
 }
 
-// IsBreezeTTSModel 判断 tts 任务是否由独立的 Breeze TTS 2 引擎服务。
+// IsBreezeTTSModel 判断 tts 任务的模型名是否指向 Breeze TTS 2(名字兜底)。
 //
-// 首发只开「音色设计」:纯文字描述造声线,没有任何音频输入。它与 Music3 同形——
-// 走 IndexTTS 那支会撞上「voice 必填」的硬校验(那道校验是给语音克隆定的),
-// 而 IsOmniTTSModel 是 vLLM-Omni 的模型名白名单,Breeze 跑在自己的引擎上,
-// 两支都不该进,故单开一支什么都不物化。
+// Breeze 跑在自己的独立引擎上:参考音契约是「一条 ref_audio + 逐字 ref_text,必须成对」,
+// 与 IndexTTS(必填 voice→spk_audio_path)、vLLM-Omni(可选 ref_audio + 标量 speaker)
+// 都不同,所以必须单开一支。走 IndexTTS 那支会撞上「voice 必填」的硬校验,走 Omni 那支
+// 会按 Omni 的语义处理预设音色。
 //
-// 二期开语音克隆时这里要改:Breeze 克隆要参考音频 **加准确文稿**(ref_text),
-// 与 IndexTTS 的零样本克隆不同,音色库需要为每个音色补一份 transcript。
+// 现网部署名是 tts2,历史上出现过 ttx2;两者都认。只认独立 token(等于 / 前缀 /
+// 路径尾段),裸子串会把 tts20 之类无关名字一起吞进来。
+//
+// 能读到配置时优先用 AudioModelConfig.models[name].engine=breeze(见 IsBreezeTTSRequest)。
 func IsBreezeTTSModel(modelName string) bool {
-	return strings.Contains(strings.ToLower(modelName), "breeze")
+	m := strings.ToLower(strings.TrimSpace(modelName))
+	if strings.Contains(m, "breeze") {
+		return true
+	}
+	for _, tok := range []string{"tts2", "ttx2"} {
+		if m == tok || strings.HasPrefix(m, tok+"-") || strings.HasSuffix(m, "/"+tok) {
+			return true
+		}
+	}
+	return false
+}
+
+// IsBreezeTTSRequest 是链路真实使用的判据:**配置声明优先,名字兜底**。
+//
+// configNames 传公开名与渠道重定向后的上游名(任一命中即可),与
+// AudioEngineFamilyForModel 的多候选口径一致 —— 前端拿对外名、后端拿上游名,
+// 只靠名字判断两边必然分叉,声明才是唯一不会漂的判据。
+func IsBreezeTTSRequest(modelName string, configNames ...string) bool {
+	if common.AudioEngineFamilyForModel(configNames...) == common.AudioEngineBreeze {
+		return true
+	}
+	return IsBreezeTTSModel(modelName)
+}
+
+// breezeSpeakerTagRe 是 Breeze 认的说话人标签形态。引擎侧 speaker 会被直接拼进
+// prompt(见 vllm-omni breeze_tts_2/prompt.py 的 f"[{speaker}]"),没有任何校验。
+//
+// 方括号要么都带要么都不带:S0 / [S0];半截的 "[S0" 会被引擎拼成 "[[S0]",按标签拒。
+var breezeSpeakerTagRe = regexp.MustCompile(`^(\[[Ss]\d+\]|[Ss]\d+)$`)
+
+// IsBreezeSpeakerTag 判断是否为 Breeze 的说话人标签(S0 / [S0] / s12 ...)。
+//
+// 为什么要在网关收紧:prompt.py 把 speaker 直接拼成 `[speaker]`,传 "alloy"(大量
+// OpenAI SDK 的默认音色名)会得到 "[alloy]" 这类垃圾前缀 —— 不报错,但音色静默劣化。
+// 所以非标签值一律 400,而不是静默忽略(静默忽略同样会让用户以为设置生效)。
+func IsBreezeSpeakerTag(s string) bool {
+	return breezeSpeakerTagRe.MatchString(strings.TrimSpace(s))
+}
+
+// ValidateBreezeRefPair 是两条链路共用的「参考音 ↔ 逐字文稿」成对校验。
+// 引擎侧 breeze_tts_2.py 的 validate() 两个方向都会拒,这里前移成可读中文 400。
+func ValidateBreezeRefPair(refAudio, refText, modelName string) error {
+	hasRef := strings.TrimSpace(refAudio) != ""
+	hasText := strings.TrimSpace(refText) != ""
+	switch {
+	case hasRef && !hasText:
+		return fmt.Errorf("模型 %s 的 Breeze 语音克隆需要参考音频的逐字文稿:请提供 ref_text(参考音频里逐字说的话)", modelName)
+	case !hasRef && hasText:
+		return fmt.Errorf("模型 %s 收到了 ref_text 但没有参考音频:请同时提供参考音频(字段 ref_audio,或把音频引用放进 voice)", modelName)
+	}
+	return nil
+}
+
+// looksLikeAudioRef 判断字符串是否是可取用的音频引用。
+//
+// 与 speech.go 的 isMediaRef 保持同一口径:**不含 file://** —— 物化器(nfsinput.AddString)
+// 只认 data: / http(s): / task:,把 file:// 判成参考音只会在后续物化时报一条指错方向的错。
+// voice 里的 S0/[S0] 是说话人标签,不是音频引用。
+func looksLikeAudioRef(s string) bool {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return false
+	}
+	if nfsinput.IsTaskRef(s) || strings.HasPrefix(s, "http://") || strings.HasPrefix(s, "https://") ||
+		strings.HasPrefix(s, "data:") {
+		return true
+	}
+	// 裸 base64:说话人标签不可能这么长。
+	return len(s) > 256
+}
+
+// breezeRefAudio 取 Breeze 的参考音来源:ref_audio 优先,voice 仅当像音频引用时兜底。
+func breezeRefAudio(md map[string]any) string {
+	if ref := metadataString(md, "ref_audio"); ref != "" {
+		return ref
+	}
+	if v := metadataString(md, "voice"); v != "" && looksLikeAudioRef(v) {
+		return v
+	}
+	return ""
+}
+
+// materializeBreezeTTSInputs 物化 Breeze 克隆的参考音,并强制它与 ref_text 成对。
+//
+// 物化字段必须是 ref_audio:门面把 ref_audio 映射到引擎的 ref_audio_path(引擎读的那个),
+// 而 voice 会被映射到 spk_audio_path(IndexTTS 语义),Breeze 引擎不认 —— 写错等于静默
+// 没有参考音。ref_text 不需要在这里写 body:metadata 整体透传,且它不在 legacyInputKeys 里。
+//
+// 返回**裸 error**,由调用方(switch 之后)统一包 localBadRequest。
+func materializeBreezeTTSInputs(c *gin.Context, info *relaycommon.RelayInfo, taskType, modelName string, req relaycommon.TaskSubmitReq) (map[string][]string, error) {
+	// file:// 在这里显式拒绝:物化器不支持,放行只会一路错到别的报错上。
+	for _, key := range []string{"ref_audio", "voice"} {
+		if v := metadataString(req.Metadata, key); strings.HasPrefix(strings.ToLower(v), "file://") {
+			return nil, fmt.Errorf("模型 %s 不支持 file:// 本地路径:请改用 http(s) URL、data URI 或 task: 引用", modelName)
+		}
+	}
+	if metadataString(req.Metadata, "ref_audio_2") != "" {
+		return nil, fmt.Errorf("模型 %s 只接受一条参考音频(ref_audio_2 不被支持)", modelName)
+	}
+	ref := breezeRefAudio(req.Metadata)
+	text := metadataString(req.Metadata, "ref_text")
+	if err := ValidateBreezeRefPair(ref, text, modelName); err != nil {
+		return nil, err
+	}
+	if ref == "" {
+		return nil, nil // 音色设计:纯 instructions,无参考音输入
+	}
+	m := nfsinput.NewMaterializer(taskType, modelName, fmt.Sprintf("%d", info.UserId), inputGroupID(info))
+	if maxBytes, ok := common.AudioRefAudioMaxBytesForModel(taskType, req.Model, info.OriginModelName, modelName); ok {
+		m.SetMaxBytes(maxBytes)
+	}
+	if err := m.AddString(c.Request.Context(), nfsinput.FieldRefAudio, 0, false, ref); err != nil {
+		m.Cleanup()
+		return nil, err
+	}
+	return m.Refs(), nil
+}
+
+// applyBreezeSpeakerTag 把 voice 里的说话人标签转成引擎认的 speaker 标量。
+//
+// voice 在 legacyInputKeys 里会被剥掉,不补这一步标签就丢了;但非标签值必须报错而不是
+// 原样下发(引擎会把它拼进 prompt,静默劣化音色)。
+func applyBreezeSpeakerTag(body map[string]any, md map[string]any, modelName string) error {
+	if _, exists := body["speaker"]; exists {
+		return nil // 调用方显式给了 metadata.speaker,交给 ValidateBreezeParams 校验格式
+	}
+	voice := metadataString(md, "voice")
+	if voice == "" || looksLikeAudioRef(voice) {
+		return nil
+	}
+	if !IsBreezeSpeakerTag(voice) {
+		return fmt.Errorf("模型 %s 的 voice 只接受说话人标签(S0..Sn / [S0..Sn])或音频引用,收到 %q", modelName, voice)
+	}
+	body["speaker"] = voice
+	return nil
 }
 
 // IsOmniTTSModel 判断 tts 任务的模型是否由 vLLM-Omni 引擎服务(区别于旧 IndexTTS)。

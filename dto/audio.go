@@ -26,6 +26,11 @@ type AudioRequest struct {
 	XVectorOnlyMode         json.RawMessage `json:"x_vector_only_mode,omitempty"`
 	MaxNewTokens            json.RawMessage `json:"max_new_tokens,omitempty"`
 	InitialCodecChunkFrames json.RawMessage `json:"initial_codec_chunk_frames,omitempty"`
+	// seed / extra_params:Breeze TTS 2 的顶层可复现种子与高级采样参数容器
+	// (引擎只从 extra_params 读 guidance_scale 等,见 relay/channel/task/gpustackplus
+	// 的 breezeExtraParamKeys)。用 RawMessage 保住调用方显式给的 0/false。
+	Seed        json.RawMessage `json:"seed,omitempty"`
+	ExtraParams json.RawMessage `json:"extra_params,omitempty"`
 	// TODO：ensure that the logic remains correct after the stream is started.
 	//Stream                  json.RawMessage `json:"stream,omitempty"`
 }

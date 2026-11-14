@@ -410,6 +410,13 @@ func firstNonEmptyStr(vals ...string) string {
 // (见 web 侧 AUDIO_TTS25_LANGUAGES)。引擎仍接受任意合法值,API 直连不受限制。
 const AudioEngineIndexTTS25 = "indextts2.5"
 
+// AudioEngineBreeze 是 Breeze TTS 2 的引擎族标识。与 IndexTTS-2.5 同一套理由:
+// 它跑在自己的独立引擎上,参考音契约(必须 ref_audio + ref_text 成对)和
+// vLLM-Omni / IndexTTS 都不同,故必须能按配置声明区分。
+//
+// 名字兜底见 task/gpustackplus.IsBreezeTTSModel;这里是**声明优先**的那条路。
+const AudioEngineBreeze = "breeze"
+
 // AudioEngineFamilyForModel 返回该语音模型声明的引擎族
 // (AudioModelConfig.models[name].engine),未声明返回空串。
 //

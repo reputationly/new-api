@@ -102,13 +102,15 @@ func speechContentType(resolvedPath, requestedFormat string) string {
 // speechPassthroughFields 原样透传给门面的 vLLM-Omni 语音参数(dto.AudioRequest 已建模为
 // json.RawMessage)。门面对这些键是通用透传,引擎 AudioTaskRequest 自行消费。
 func speechPassthroughFields(request dto.AudioRequest) map[string]any {
-	out := make(map[string]any, 6)
+	out := make(map[string]any, 8)
 	for key, raw := range map[string][]byte{
 		"language":                   request.Language,
 		"ref_text":                   request.RefText,
 		"x_vector_only_mode":         request.XVectorOnlyMode,
 		"max_new_tokens":             request.MaxNewTokens,
 		"initial_codec_chunk_frames": request.InitialCodecChunkFrames,
+		"seed":                       request.Seed,
+		"extra_params":               request.ExtraParams,
 	} {
 		if len(raw) == 0 || string(raw) == "null" {
 			continue
@@ -196,6 +198,16 @@ func (a *Adaptor) convertSpeechRequest(c *gin.Context, info *relaycommon.RelayIn
 		body["speed"] = *request.Speed
 	}
 
+	// Breeze:物化器(nfsinput.AddString)只认 data: / http(s): / task:,file:// 放过去
+	// 只会错成一条 base64 解析失败。必须在物化**之前**拒,文案与任务链路同一套。
+	if taskgpustackplus.IsBreezeTTSRequest(modelName, request.Model, info.OriginModelName) {
+		for _, candidate := range []string{rawJSONString(request.RefAudio), strings.TrimSpace(request.Voice)} {
+			if strings.HasPrefix(strings.ToLower(candidate), "file://") {
+				return nil, fmt.Errorf("模型 %s 不支持 file:// 本地路径:请改用 http(s) URL、data URI 或 task: 引用", modelName)
+			}
+		}
+	}
+
 	refs, err := a.materializeSpeechInputs(c, info, modelName, request)
 	if err != nil {
 		return nil, err
@@ -203,12 +215,39 @@ func (a *Adaptor) convertSpeechRequest(c *gin.Context, info *relaycommon.RelayIn
 	if len(refs) > 0 {
 		body["input_refs"] = refs
 	}
-	// 预设音色:仅 vLLM-Omni 系有,且 voice 不是一段参考音时才作为 speaker 标量下发。
+	// 预设音色 / 说话人标签:voice 不是一段参考音时才作为 speaker 标量下发。
+	// 两个家族对 voice 的语义不同,必须分开:
+	//   - vLLM-Omni:预设音色名(qwen3-tts 的 vivian/ryan…)原样透传;
+	//   - Breeze:voice 是说话人标签(S0/[S0]),引擎会把它直接拼进 prompt,非标签值
+	//     必须报错 —— 拼错不报错但音色静默劣化(见 taskgpustackplus.IsBreezeSpeakerTag);
+	//   - IndexTTS:音色本身就是参考音,给名字只能明确拒绝并指引改用任务 API。
 	if voice := strings.TrimSpace(request.Voice); voice != "" && !isMediaRef(voice) {
-		if !taskgpustackplus.IsOmniTTSModel(modelName) {
+		switch {
+		case taskgpustackplus.IsBreezeTTSRequest(modelName, request.Model, info.OriginModelName):
+			if !taskgpustackplus.IsBreezeSpeakerTag(voice) {
+				return nil, fmt.Errorf("模型 %s 的 voice 只接受说话人标签(S0..Sn / [S0..Sn])或音频引用,收到 %q", modelName, voice)
+			}
+			body["speaker"] = voice
+		case taskgpustackplus.IsOmniTTSModel(modelName):
+			body["speaker"] = voice
+		default:
 			return nil, fmt.Errorf("模型 %s 的音色是一段参考音频而非预设名:voice 请传音频 URL / data-uri / task: 引用,或改用任务 API(POST /v1/videos, task_type=tts)", modelName)
 		}
-		body["speaker"] = voice
+	}
+
+	// Breeze 的两道闸都在组装完成后统一跑(参考音取自与物化相同的来源),
+	// 与异步口共用同一份校验器 —— 否则同步口会漏掉 language / speed / 格式这些引擎必拒项。
+	if taskgpustackplus.IsBreezeTTSRequest(modelName, request.Model, info.OriginModelName) {
+		refAudio := rawJSONString(request.RefAudio)
+		if refAudio == "" && isMediaRef(request.Voice) {
+			refAudio = strings.TrimSpace(request.Voice)
+		}
+		if err := taskgpustackplus.ValidateBreezeRefPair(refAudio, rawJSONString(request.RefText), modelName); err != nil {
+			return nil, err
+		}
+		if err := taskgpustackplus.ValidateBreezeParams(body, modelName); err != nil {
+			return nil, err
+		}
 	}
 
 	data, err := common.Marshal(body)
