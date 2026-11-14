@@ -160,6 +160,9 @@ func (a *Adaptor) convertSpeechRequest(c *gin.Context, info *relaycommon.RelayIn
 	if modelName == "" {
 		return nil, errors.New("model is required(渠道模型映射与请求 model 均为空)")
 	}
+	// Breeze 判定只算一次:AudioEngineFamilyForModel 每次都要解一遍整份
+	// AudioModelConfig,而这条路径上有三处要用它(file:// 闸、voice 闸、成对+参数校验)。
+	isBreeze := taskgpustackplus.IsBreezeTTSRequest(modelName, request.Model, info.OriginModelName)
 	// 字数上限(AudioModelConfig,按模型/全局默认;0=不限制):与任务链路同一把闸,
 	// 防止绕开 /v1/videos 走 /v1/audio/speech 提交超长文本。
 	if err := common.ValidateAudioTextForModel("tts", text, request.Model, info.OriginModelName, modelName); err != nil {
@@ -200,7 +203,7 @@ func (a *Adaptor) convertSpeechRequest(c *gin.Context, info *relaycommon.RelayIn
 
 	// Breeze:物化器(nfsinput.AddString)只认 data: / http(s): / task:,file:// 放过去
 	// 只会错成一条 base64 解析失败。必须在物化**之前**拒,文案与任务链路同一套。
-	if taskgpustackplus.IsBreezeTTSRequest(modelName, request.Model, info.OriginModelName) {
+	if isBreeze {
 		for _, candidate := range []string{rawJSONString(request.RefAudio), strings.TrimSpace(request.Voice)} {
 			if strings.HasPrefix(strings.ToLower(candidate), "file://") {
 				return nil, fmt.Errorf("模型 %s 不支持 file:// 本地路径:请改用 http(s) URL、data URI 或 task: 引用", modelName)
@@ -223,11 +226,12 @@ func (a *Adaptor) convertSpeechRequest(c *gin.Context, info *relaycommon.RelayIn
 	//   - IndexTTS:音色本身就是参考音,给名字只能明确拒绝并指引改用任务 API。
 	if voice := strings.TrimSpace(request.Voice); voice != "" && !isMediaRef(voice) {
 		switch {
-		case taskgpustackplus.IsBreezeTTSRequest(modelName, request.Model, info.OriginModelName):
-			if !taskgpustackplus.IsBreezeSpeakerTag(voice) {
-				return nil, fmt.Errorf("模型 %s 的 voice 只接受说话人标签(S0..Sn / [S0..Sn])或音频引用,收到 %q", modelName, voice)
+		case isBreeze:
+			tag, ok := taskgpustackplus.NormalizeBreezeSpeaker(voice)
+			if !ok {
+				return nil, fmt.Errorf("模型 %s 的 voice 只接受说话人标签(S0..Sn / [S0..Sn])、default 或音频引用,收到 %q", modelName, voice)
 			}
-			body["speaker"] = voice
+			body["speaker"] = tag
 		case taskgpustackplus.IsOmniTTSModel(modelName):
 			body["speaker"] = voice
 		default:
@@ -237,7 +241,7 @@ func (a *Adaptor) convertSpeechRequest(c *gin.Context, info *relaycommon.RelayIn
 
 	// Breeze 的两道闸都在组装完成后统一跑(参考音取自与物化相同的来源),
 	// 与异步口共用同一份校验器 —— 否则同步口会漏掉 language / speed / 格式这些引擎必拒项。
-	if taskgpustackplus.IsBreezeTTSRequest(modelName, request.Model, info.OriginModelName) {
+	if isBreeze {
 		refAudio := rawJSONString(request.RefAudio)
 		if refAudio == "" && isMediaRef(request.Voice) {
 			refAudio = strings.TrimSpace(request.Voice)

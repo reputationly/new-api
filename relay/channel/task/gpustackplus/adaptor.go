@@ -508,10 +508,13 @@ func (a *TaskAdaptor) BuildRequestBody(c *gin.Context, info *relaycommon.RelayIn
 	// 发 base64/URL 给门面,方案见 gpustack 仓 docs/lightx2v-nfs-input-design.md)。物化顺序
 	// 一律"先写全部输入 → 再提交",任一路失败回滚已写文件(见各 materialize 函数),避免孤儿。
 	// URL 下不到 / SSRF 拒 / 写盘失败:本地 400 skip-retry,不触发跨渠道重试(§N3)。
+	// Breeze 引擎族判定只算一次:物化分支与下面的参数折叠都要用,而
+	// AudioEngineFamilyForModel 每次都要解一遍整份 AudioModelConfig。
+	isBreeze := taskType == "tts" && IsBreezeTTSRequest(modelName, req.Model, info.OriginModelName)
 	var refs map[string][]string
 	switch taskType {
 	case "tts":
-		if IsBreezeTTSRequest(modelName, req.Model, info.OriginModelName) {
+		if isBreeze {
 			// Breeze:有参考音=克隆(Base),没有参考音=音色设计(VoiceDesign)。
 			// 参考音优先取 metadata.ref_audio,voice 兜底(OpenAI 客户端只有 voice 一个位置
 			// 放音色);voice 也可能是说话人标签,那一步在物化成功之后单独处理。
@@ -661,7 +664,7 @@ func (a *TaskAdaptor) BuildRequestBody(c *gin.Context, info *relaycommon.RelayIn
 		// Breeze 的高级参数(CFG/采样)同样只从 extra_params 读,且引擎会拒未知键。
 		// **先折再验**:上面那一步对所有 tts 无条件折 emo_* / use_emo_text,只有折完再验
 		// 才能把它们从 extra_params 里抓出来 —— 否则要到引擎才报一条英文 400。
-		if IsBreezeTTSRequest(modelName, req.Model, info.OriginModelName) {
+		if isBreeze {
 			foldParamsIntoExtra(body, breezeExtraParamKeys)
 			if berr := ValidateBreezeParams(body, modelName); berr != nil {
 				return nil, localBadRequest(berr)
@@ -780,8 +783,14 @@ func ValidateBreezeParams(body map[string]any, modelName string) error {
 	if _, ok := body["speaker_embedding"]; ok {
 		return fmt.Errorf("模型 %s 不支持 speaker_embedding,请改用参考音频", modelName)
 	}
-	if s, ok := body["speaker"].(string); ok && strings.TrimSpace(s) != "" && !IsBreezeSpeakerTag(s) {
-		return fmt.Errorf("模型 %s 的 speaker 只接受说话人标签(S0..Sn / [S0..Sn]),收到 %q", modelName, s)
+	// speaker 位就地归一:default 的折叠不能指望引擎(它对大小写敏感,见
+	// NormalizeBreezeSpeaker)。调用方给的是 metadata.speaker 时也走这里。
+	if s, ok := body["speaker"].(string); ok && strings.TrimSpace(s) != "" {
+		tag, valid := NormalizeBreezeSpeaker(s)
+		if !valid {
+			return fmt.Errorf("模型 %s 的 speaker 只接受说话人标签(S0..Sn / [S0..Sn])或 default,收到 %q", modelName, s)
+		}
+		body["speaker"] = tag
 	}
 	if extras, ok := body["extra_params"].(map[string]any); ok {
 		for k := range extras {
@@ -1523,9 +1532,13 @@ func IsBreezeTTSModel(modelName string) bool {
 // configNames 传公开名与渠道重定向后的上游名(任一命中即可),与
 // AudioEngineFamilyForModel 的多候选口径一致 —— 前端拿对外名、后端拿上游名,
 // 只靠名字判断两边必然分叉,声明才是唯一不会漂的判据。
+//
+// **声明非空就以声明为准**,不再回退到名字:否则运维把某个叫 tts2 的部署改到别的
+// 引擎上时,声明会被名字盖过去,请求静默走错引擎分支。只有完全没声明(空串)时才
+// 用名字兜底 —— 这也是现网 tts2 的实际状态(配了 capabilities,没声明 engine)。
 func IsBreezeTTSRequest(modelName string, configNames ...string) bool {
-	if common.AudioEngineFamilyForModel(configNames...) == common.AudioEngineBreeze {
-		return true
+	if fam := common.AudioEngineFamilyForModel(configNames...); fam != "" {
+		return fam == common.AudioEngineBreeze
 	}
 	return IsBreezeTTSModel(modelName)
 }
@@ -1543,6 +1556,26 @@ var breezeSpeakerTagRe = regexp.MustCompile(`^(\[[Ss]\d+\]|[Ss]\d+)$`)
 // 所以非标签值一律 400,而不是静默忽略(静默忽略同样会让用户以为设置生效)。
 func IsBreezeSpeakerTag(s string) bool {
 	return breezeSpeakerTagRe.MatchString(strings.TrimSpace(s))
+}
+
+// NormalizeBreezeSpeaker 把一个 speaker/voice 值归一成引擎能安全拼接的标签。
+//
+// 除标签外只多认一个写法:"default"(大小写不敏感)—— 很多 OpenAI 客户端会把默认值
+// 显式发出来,而引擎确实认这个值。**但不能原样下发**:引擎那一行是
+// `voice if voice and voice != "default" else "S0"`,比较是**大小写敏感**的,
+// "Default"/" DEFAULT " 会变成 "[Default]" 这类垃圾前缀(不报错,音色静默劣化)。
+// 所以这里统一折成 "S0",让引擎那条特例只作兜底、不承担正确性。
+//
+// 第二个返回值表示该值是否合法:标签(S0/[S0]/s12)与 default 合法,其余非法。
+func NormalizeBreezeSpeaker(s string) (string, bool) {
+	v := strings.TrimSpace(s)
+	if strings.EqualFold(v, "default") {
+		return "S0", true
+	}
+	if IsBreezeSpeakerTag(v) {
+		return v, true
+	}
+	return "", false
 }
 
 // ValidateBreezeRefPair 是两条链路共用的「参考音 ↔ 逐字文稿」成对校验。
@@ -1636,10 +1669,11 @@ func applyBreezeSpeakerTag(body map[string]any, md map[string]any, modelName str
 	if voice == "" || looksLikeAudioRef(voice) {
 		return nil
 	}
-	if !IsBreezeSpeakerTag(voice) {
-		return fmt.Errorf("模型 %s 的 voice 只接受说话人标签(S0..Sn / [S0..Sn])或音频引用,收到 %q", modelName, voice)
+	tag, ok := NormalizeBreezeSpeaker(voice)
+	if !ok {
+		return fmt.Errorf("模型 %s 的 voice 只接受说话人标签(S0..Sn / [S0..Sn])、default 或音频引用,收到 %q", modelName, voice)
 	}
-	body["speaker"] = voice
+	body["speaker"] = tag
 	return nil
 }
 

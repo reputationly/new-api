@@ -107,6 +107,12 @@ func TestConvertSpeechRequestBreezeSpeakerTag(t *testing.T) {
 	require.Equal(t, "S0", body["speaker"])
 	require.NotContains(t, body, "input_refs", "标签不是参考音,不该物化")
 
+	// default:引擎自己会折成 S0,同步口必须放行(客户端显式发默认值很常见)
+	defaultBody := convertSpeechBody(t, "tts2", dto.AudioRequest{
+		Model: "tts2", Input: "你好。", Voice: " Default ", ResponseFormat: "wav",
+	})
+	require.Equal(t, "S0", defaultBody["speaker"], "default 必须归一成 S0 再下发")
+
 	_, err := (&Adaptor{}).convertSpeechRequest(speechTestCtx(t), speechInfo("tts2"), dto.AudioRequest{
 		Model: "tts2",
 		Input: "你好。",

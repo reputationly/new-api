@@ -121,6 +121,32 @@ func TestIsBreezeSpeakerTag(t *testing.T) {
 	}
 }
 
+// TestNormalizeBreezeSpeaker 比标签判定多认一个 "default",并且**必须归一成 S0**:
+// 引擎那行 `voice != "default"` 是大小写敏感的,"Default" 原样下发会变成
+// "[Default]" 这种垃圾前缀 —— 不报错但音色静默劣化,所以归一不能交给引擎。
+func TestNormalizeBreezeSpeaker(t *testing.T) {
+	for _, v := range []string{"default", "DEFAULT", " Default "} {
+		tag, ok := NormalizeBreezeSpeaker(v)
+		if !ok || tag != "S0" {
+			t.Fatalf("%q 应归一成 S0,实际 (%q, %v)", v, tag, ok)
+		}
+	}
+	for _, v := range []string{"S0", "[S0]", "s12", " [S1] "} {
+		tag, ok := NormalizeBreezeSpeaker(v)
+		if !ok {
+			t.Fatalf("%q 应被接受", v)
+		}
+		if tag != strings.TrimSpace(v) {
+			t.Fatalf("%q 应原样返回,实际 %q", v, tag)
+		}
+	}
+	for _, v := range []string{"", "alloy", "vivian", "default0", "defaul", "[default]", "S"} {
+		if tag, ok := NormalizeBreezeSpeaker(v); ok {
+			t.Fatalf("%q 不该被接受,实际归一成 %q", v, tag)
+		}
+	}
+}
+
 // TestValidateBreezeRefPair 锁住成对校验的两个方向与**唯一一套文案**。
 // 引擎 breeze_tts_2.py 的 validate() 两个方向都拒,这里前移成中文 400。
 func TestValidateBreezeRefPair(t *testing.T) {
@@ -207,6 +233,8 @@ func TestValidateBreezeParams(t *testing.T) {
 		{name: "response_format=wav", body: map[string]any{"response_format": "WAV"}},
 		{name: "response_format 未传", body: map[string]any{}},
 		{name: "标签 speaker", body: map[string]any{"speaker": "[S0]"}},
+		{name: "speaker=default", body: map[string]any{"speaker": "default"}},
+		{name: "speaker=DEFAULT", body: map[string]any{"speaker": " DEFAULT "}},
 		{name: "合法 extra_params", body: map[string]any{"extra_params": map[string]any{"guidance_scale": 4.0, "top_k": 40.0}}},
 		{name: "language 空串", body: map[string]any{"language": "  "}},
 		{name: "x_vector_only_mode=false", body: map[string]any{"x_vector_only_mode": false}},
@@ -276,10 +304,14 @@ func TestIsBreezeTTSRequest(t *testing.T) {
 	if !IsBreezeTTSRequest("some-opaque-upstream-name", "tts2", "some-opaque-upstream-name") {
 		t.Fatal("声明 engine=breeze 时应按配置判真(公开名命中)")
 	}
-	// 声明成别的引擎 → 不判真
+	// 声明成别的引擎 → 不判真,**即使名字就是 tts2**:声明非空就以声明为准,
+	// 否则运维把部署迁到别的引擎后,名字会把声明盖过去、静默走错分支。
 	setAudioModelConfig(t, `{"models":{"tts2":{"engine":"indextts2.5"}}}`)
 	if IsBreezeTTSRequest("some-opaque-upstream-name", "tts2", "some-opaque-upstream-name") {
 		t.Fatal("声明成 indextts2.5 时不该判为 Breeze")
+	}
+	if IsBreezeTTSRequest("tts2", "tts2", "tts2") {
+		t.Fatal("声明成 indextts2.5 时,就算模型名是 tts2 也不该判为 Breeze(声明优先)")
 	}
 }
 
@@ -395,6 +427,16 @@ func TestApplyBreezeSpeakerTag(t *testing.T) {
 		}
 	})
 
+	t.Run("voice=default 归一成 S0", func(t *testing.T) {
+		body := map[string]any{}
+		if err := applyBreezeSpeakerTag(body, map[string]any{"voice": " Default "}, model); err != nil {
+			t.Fatalf("default 不该报错: %v", err)
+		}
+		if body["speaker"] != "S0" {
+			t.Fatalf("default 应归一成 S0(引擎的识别是大小写敏感的): %v", body)
+		}
+	})
+
 	t.Run("非标签值报错", func(t *testing.T) {
 		err := applyBreezeSpeakerTag(map[string]any{}, map[string]any{"voice": "alloy"}, model)
 		if err == nil || !strings.Contains(err.Error(), "只接受说话人标签") {
@@ -491,6 +533,28 @@ func TestBuildRequestBodyBreeze(t *testing.T) {
 		}
 		if _, hasVoice := body["voice"]; hasVoice {
 			t.Fatal("voice 必须被剥掉")
+		}
+	})
+
+	// voice="Default"(大小写混写)必须归一成 S0 再下发:引擎的 default 识别是
+	// 大小写敏感的,原样发过去会拼出 "[Default]" 这种垃圾前缀且不报错。
+	t.Run("voice=Default 归一", func(t *testing.T) {
+		body, err := build(t, map[string]any{"task_type": "tts", "voice": "Default"})
+		if err != nil {
+			t.Fatalf("不应报错: %v", err)
+		}
+		if body["speaker"] != "S0" {
+			t.Fatalf("voice=Default 应归一成 speaker=S0: %v", body)
+		}
+	})
+
+	t.Run("metadata.speaker=default 归一", func(t *testing.T) {
+		body, err := build(t, map[string]any{"task_type": "tts", "speaker": " DEFAULT "})
+		if err != nil {
+			t.Fatalf("不应报错: %v", err)
+		}
+		if body["speaker"] != "S0" {
+			t.Fatalf("metadata.speaker=default 应归一成 S0: %v", body)
 		}
 	})
 
