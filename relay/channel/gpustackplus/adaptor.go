@@ -645,7 +645,9 @@ func (a *Adaptor) pollUntilDone(c *gin.Context, taskID string, budget imagePollB
 		case "done", "completed", "succeed", "success":
 			return st, nil
 		case "failed", "cancelled", "canceled", "error":
-			return nil, fmt.Errorf("生图失败: %s", firstNonEmpty(st.Error, st.ErrorType, "task failed"))
+			// 本函数同时服务图片与语音/音乐任务,用中性措辞;写成"生图失败"会让
+			// TTS 客户端看到一条莫名其妙的报错(实测:语音请求回"生图失败: Breeze ...")。
+			return nil, fmt.Errorf("任务失败: %s", firstNonEmpty(st.Error, st.ErrorType, "task failed"))
 		case "assigned", "running", "processing", "in_progress":
 			// 已派发实例(assigned)或已在算(running):越过队列,QUEUED 超时不再约束。
 			enteredRunning = true
@@ -745,7 +747,13 @@ func (a *Adaptor) ConvertAudioRequest(c *gin.Context, info *relaycommon.RelayInf
 	if info.RelayMode != relayconstant.RelayModeAudioSpeech {
 		return nil, errors.New("gpustackplus 音频链路仅支持 /v1/audio/speech")
 	}
-	return a.convertSpeechRequest(c, info, request)
+	reader, err := a.convertSpeechRequest(c, info, request)
+	if err != nil {
+		// 组包阶段的失败都是请求本身的问题(参数非法、参考音下不到、写盘失败),
+		// 不是网关故障:包成 400 skip-retry,别让客户端看到 500。
+		return nil, speechBadRequest(err)
+	}
+	return reader, nil
 }
 
 // ————— 以下模式不适用于本渠道 —————

@@ -2,11 +2,13 @@ package gpustackplus
 
 import (
 	"encoding/base64"
+	"net/http"
 	"strings"
 	"testing"
 
 	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/setting/system_setting"
+	"github.com/QuantumNous/new-api/types"
 
 	"github.com/stretchr/testify/require"
 )
@@ -222,4 +224,36 @@ func TestConvertSpeechRequestBreezeRejectsFileURI(t *testing.T) {
 	})
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "不支持 file://")
+}
+
+// TestConvertAudioRequestReturns400ThroughHandlerWrapping 锁住同步口的**状态码**:
+// 组包阶段的错误(参数非法、参考音下不到)是客户端问题,必须是 400 ——
+// 实测现网旧代码把 voice=S0 报成 500,客户端只会以为网关挂了。
+//
+// 这里连"handler 再包一层会不会变回 500"一起测:relay/audio_handler.go 用
+// types.NewError(..., ErrorCodeConvertRequestFailed, skipRetry) 包,靠 errors.As
+// 命中这里准备好的 *types.NewAPIError 才能保住 400。
+func TestConvertAudioRequestReturns400ThroughHandlerWrapping(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		req     dto.AudioRequest
+		wantMsg string
+	}{
+		{"空文本", dto.AudioRequest{Model: "tts2", Input: "   "}, "input is required"},
+		{"voice 非标签", dto.AudioRequest{Model: "tts2", Input: "你好。", Voice: "alloy"}, "只接受说话人标签"},
+		{"缺逐字文稿", dto.AudioRequest{Model: "tts2", Input: "你好。", RefAudio: []byte(`"https://example.com/a.wav"`)}, "需要参考音频的逐字文稿"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := (&Adaptor{}).ConvertAudioRequest(speechTestCtx(t), speechInfo("tts2"), tc.req)
+			require.Error(t, err)
+			apiErr, ok := err.(*types.NewAPIError)
+			require.True(t, ok, "应是 *types.NewAPIError,实际 %T: %v", err, err)
+			require.Equal(t, http.StatusBadRequest, apiErr.StatusCode)
+
+			wrapped := types.NewError(err, types.ErrorCodeConvertRequestFailed, types.ErrOptionWithSkipRetry())
+			require.Equal(t, http.StatusBadRequest, wrapped.StatusCode,
+				"handler 的再包装不能把 400 变回 500")
+			require.Contains(t, wrapped.Error(), tc.wantMsg, "文案不能被包装吃掉")
+		})
+	}
 }

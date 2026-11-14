@@ -150,7 +150,20 @@ func isMediaRef(s string) bool {
 	return len(s) > 256
 }
 
-// convertSpeechRequest 组门面 tts 提交体。返回的 error 由 AudioHelper 包成 400 skip-retry。
+// speechBadRequest 把同步语音链路的客户端输入错误包成 400 skip-retry。
+//
+// relay/audio_handler.go 收到 ConvertAudioRequest 的错误后会再用
+// types.NewError(..., ErrorCodeConvertRequestFailed, skipRetry) 包一层,而 types.NewError
+// 会靠 errors.As 命中这里已经备好的 *types.NewAPIError、**保留 StatusCode**。
+// 所以 400 必须在这一层给出:否则客户端拿到的是 500 —— 语义上把"参数写错"报成"网关故障",
+// 而且 500 还会被当成可重试。与 unsupportedEndpointError 是同一套约定(见其单测)。
+func speechBadRequest(err error) error {
+	return types.NewError(err, types.ErrorCodeInvalidRequest,
+		types.ErrOptionWithSkipRetry(), types.ErrOptionWithStatusCode(http.StatusBadRequest))
+}
+
+// convertSpeechRequest 组门面 tts 提交体。返回的 error 由 ConvertAudioRequest 统一包成
+// 400 skip-retry。
 func (a *Adaptor) convertSpeechRequest(c *gin.Context, info *relaycommon.RelayInfo, request dto.AudioRequest) (io.Reader, error) {
 	text := strings.TrimSpace(request.Input)
 	if text == "" {
@@ -201,13 +214,24 @@ func (a *Adaptor) convertSpeechRequest(c *gin.Context, info *relaycommon.RelayIn
 		body["speed"] = *request.Speed
 	}
 
-	// Breeze:物化器(nfsinput.AddString)只认 data: / http(s): / task:,file:// 放过去
-	// 只会错成一条 base64 解析失败。必须在物化**之前**拒,文案与任务链路同一套。
+	// Breeze 的前两道闸放在物化**之前**,两个原因:
+	//  1) 物化器(nfsinput.AddString)只认 data: / http(s): / task:,file:// 放过去只会
+	//     错成一条 base64 解析失败;
+	//  2) 成对校验不需要碰文件,先做能省掉一次下载/落盘 —— 而且"参考音 URL 打不通"
+	//     会盖掉更可操作的"缺逐字文稿"。
+	// 参数校验(response_format/speed/extra_params)留到 body 组装完之后,见下。
 	if isBreeze {
-		for _, candidate := range []string{rawJSONString(request.RefAudio), strings.TrimSpace(request.Voice)} {
+		refAudio := rawJSONString(request.RefAudio)
+		if refAudio == "" && isMediaRef(request.Voice) {
+			refAudio = strings.TrimSpace(request.Voice)
+		}
+		for _, candidate := range []string{refAudio, strings.TrimSpace(request.Voice)} {
 			if strings.HasPrefix(strings.ToLower(candidate), "file://") {
 				return nil, fmt.Errorf("模型 %s 不支持 file:// 本地路径:请改用 http(s) URL、data URI 或 task: 引用", modelName)
 			}
+		}
+		if err := taskgpustackplus.ValidateBreezeRefPair(refAudio, rawJSONString(request.RefText), modelName); err != nil {
+			return nil, err
 		}
 	}
 
@@ -239,16 +263,9 @@ func (a *Adaptor) convertSpeechRequest(c *gin.Context, info *relaycommon.RelayIn
 		}
 	}
 
-	// Breeze 的两道闸都在组装完成后统一跑(参考音取自与物化相同的来源),
-	// 与异步口共用同一份校验器 —— 否则同步口会漏掉 language / speed / 格式这些引擎必拒项。
+	// 参数校验与异步口共用同一份校验器 —— 否则同步口会漏掉 language / speed / 格式
+	// 这些引擎必拒项(实测旧代码把它们原样送到引擎,客户端拿到英文 500)。
 	if isBreeze {
-		refAudio := rawJSONString(request.RefAudio)
-		if refAudio == "" && isMediaRef(request.Voice) {
-			refAudio = strings.TrimSpace(request.Voice)
-		}
-		if err := taskgpustackplus.ValidateBreezeRefPair(refAudio, rawJSONString(request.RefText), modelName); err != nil {
-			return nil, err
-		}
 		if err := taskgpustackplus.ValidateBreezeParams(body, modelName); err != nil {
 			return nil, err
 		}
