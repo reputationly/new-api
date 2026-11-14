@@ -64,6 +64,7 @@ const routerMap = {
   enterprise: '/console/enterprise',
   bankTransfer: '/console/bank-transfer',
   feedback: '/console/feedback',
+  userFeedback: '/console/user-feedback',
   myfeedback: '/console/myfeedback',
   subAccounts: '/console/sub-accounts',
 };
@@ -296,6 +297,12 @@ const SiderBar = ({ onNavigate = () => {} }) => {
         text: withUnreadBadge(t('工单管理'), adminUnread),
         itemKey: 'feedback',
         to: '/console/feedback',
+        className: isAdmin() ? '' : 'tableHiddle',
+      },
+      {
+        text: t('用户反馈'),
+        itemKey: 'userFeedback',
+        to: '/console/user-feedback',
         className: isAdmin() ? '' : 'tableHiddle',
       },
       {

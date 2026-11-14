@@ -63,6 +63,12 @@ func SetApiRouter(router *gin.Engine) {
 		// Universal secure verification routes
 		apiRouter.POST("/verify", middleware.UserAuth(), middleware.CriticalRateLimit(), controller.UniversalVerify)
 
+		// 小助手（DSH 客户端）反馈：匿名不可提交，必须带会话或有效 new-api 令牌。
+		// 该接口可能由外置 iframe 跨域调用，/api 组默认没有 CORS；这里显式挂上并补
+		// OPTIONS 预检路由（gin 只对已注册方法的路径执行路由中间件）。
+		apiRouter.OPTIONS("/assistant/feedback", middleware.CORSForTokenAPI())
+		apiRouter.POST("/assistant/feedback", middleware.CORSForTokenAPI(), middleware.AssistantFeedbackRateLimit(), middleware.TokenOrUserAuth(), controller.SubmitAssistantFeedback)
+
 		userRoute := apiRouter.Group("/user")
 		{
 			userRoute.POST("/register", middleware.CriticalRateLimit(), middleware.TurnstileCheck(), controller.Register)
@@ -239,6 +245,8 @@ func SetApiRouter(router *gin.Engine) {
 				adminRoute.GET("/review/pending_counts", controller.GetReviewPendingCounts)
 
 				// Feedback admin routes — static segments before /:id
+				adminRoute.GET("/feedback/admin/assistant", controller.AdminGetAssistantFeedback)
+				adminRoute.GET("/feedback/admin/assistant/:id", controller.AdminGetAssistantFeedbackDetail)
 				adminRoute.GET("/feedback/admin/topics", controller.AdminGetFeedbackTopics)
 				adminRoute.GET("/feedback/admin/unread", controller.AdminGetFeedbackUnread)
 				adminRoute.GET("/feedback/admin/images/:imageId", controller.AdminGetFeedbackImage)

@@ -161,6 +161,17 @@ func CriticalRateLimit() func(c *gin.Context) {
 	return defNext
 }
 
+// AssistantFeedbackRateLimit 给小助手反馈单独一个桶，配额沿用 CriticalRateLimit。
+// 理由同 HiloRateLimit：桶 key 是 mark + ClientIP，共用 "CT" 的话反馈流量和
+// 工单/充值等关键写操作会互相挤占——公网反馈被刷时，同一出口 IP 下的其他写操作
+// 会一起 429。
+func AssistantFeedbackRateLimit() func(c *gin.Context) {
+	if common.CriticalRateLimitEnable {
+		return rateLimitFactory(common.CriticalRateLimitNum, common.CriticalRateLimitDuration, "AF")
+	}
+	return defNext
+}
+
 func DownloadRateLimit() func(c *gin.Context) {
 	return rateLimitFactory(common.DownloadRateLimitNum, common.DownloadRateLimitDuration, "DW")
 }

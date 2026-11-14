@@ -61,6 +61,7 @@ import EnterprisePage from './pages/Enterprise';
 import BankTransferPage from './pages/BankTransfer';
 import FeedbackPage from './pages/Feedback';
 import MyFeedbackPage from './pages/Feedback/MyFeedback';
+import UserFeedbackPage from './pages/UserFeedback';
 import SubAccountPage from './pages/SubAccount';
 import Setup from './pages/Setup';
 import SetupCheck from './components/layout/SetupCheck';
@@ -288,6 +289,14 @@ function App() {
           element={
             <AdminRoute>
               <FeedbackPage />
+            </AdminRoute>
+          }
+        />
+        <Route
+          path='/console/user-feedback'
+          element={
+            <AdminRoute>
+              <UserFeedbackPage />
             </AdminRoute>
           }
         />

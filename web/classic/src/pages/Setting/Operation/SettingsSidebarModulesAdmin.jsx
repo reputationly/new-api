@@ -246,6 +246,11 @@ export default function SettingsSidebarModulesAdmin(props) {
           description: t('查看与回复所有用户的工单'),
         },
         {
+          key: 'userFeedback',
+          title: t('用户反馈'),
+          description: t('查看小助手的对话评价与意见反馈'),
+        },
+        {
           key: 'moderationLogs',
           title: t('拦截记录'),
           description: t('内容审核判定记录与被拦原文'),
