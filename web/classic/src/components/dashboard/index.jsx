@@ -151,6 +151,20 @@ const Dashboard = () => {
     initChart();
   }, []);
 
+  // 分组消耗是懒加载的：只有真正切到这个 tab 才查。它背后是整段窗口的日志聚合，
+  // 跟着页面初始化一起拉，等于让每个打开看板的管理员都白等一次。
+  useEffect(() => {
+    if (dashboardData.activeChartTab !== '7' || !dashboardData.isAdminUser) {
+      return;
+    }
+    dashboardData.loadGroupQuotaData(
+      dashboardData.inputs.start_timestamp,
+      dashboardData.inputs.end_timestamp,
+      dashboardData.inputs.username,
+    );
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [dashboardData.activeChartTab, dashboardData.dataQueryVersion]);
+
   return (
     <div className='h-full'>
       <DashboardHeader
@@ -159,6 +173,7 @@ const Dashboard = () => {
         showSearchModal={dashboardData.showSearchModal}
         refresh={handleRefresh}
         loading={dashboardData.loading}
+        rangeSummary={dashboardData.rangeSummary}
         t={dashboardData.t}
       />
 
@@ -172,6 +187,8 @@ const Dashboard = () => {
         dataExportDefaultTime={dashboardData.dataExportDefaultTime}
         timeOptions={dashboardData.timeOptions}
         handleInputChange={dashboardData.handleInputChange}
+        applyPreset={dashboardData.applyPreset}
+        activePreset={dashboardData.activePreset}
         t={dashboardData.t}
       />
 
@@ -202,6 +219,8 @@ const Dashboard = () => {
             spec_rank_bar={dashboardCharts.spec_rank_bar}
             spec_user_rank={dashboardCharts.spec_user_rank}
             spec_user_trend={dashboardCharts.spec_user_trend}
+            groupQuotaData={dashboardData.groupQuotaData}
+            groupQuotaLoading={dashboardData.groupQuotaLoading}
             isAdminUser={dashboardData.isAdminUser}
             CARD_PROPS={CARD_PROPS}
             CHART_CONFIG={CHART_CONFIG}

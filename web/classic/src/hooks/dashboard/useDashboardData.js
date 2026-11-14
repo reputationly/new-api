@@ -20,8 +20,22 @@ For commercial licensing, please contact support@quantumnous.com
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
-import { API, isAdmin, showError, timestamp2string } from '../../helpers';
-import { getDefaultTime, getInitialTimestamp } from '../../helpers/dashboard';
+import {
+  API,
+  isAdmin,
+  showError,
+  showWarning,
+  timestamp2string,
+} from '../../helpers';
+import {
+  getDefaultTime,
+  getInitialTimestamp,
+  parseDashboardTimestamp,
+  validateDashboardRange,
+  getPresetRange,
+  getGranularityForRange,
+  formatRangeSummary,
+} from '../../helpers/dashboard';
 import { TIME_OPTIONS } from '../../constants/dashboard.constants';
 import { useIsMobile } from '../common/useIsMobile';
 import { useMinimumLoadingTime } from '../common/useMinimumLoadingTime';
@@ -54,6 +68,13 @@ export const useDashboardData = (userState, userDispatch, statusState) => {
 
   // ========== 数据状态 ==========
   const [quotaData, setQuotaData] = useState([]);
+  // 分组消耗（线路维度）单独存：它走汇总表接口，且只在切到对应 tab 时才拉。
+  const [groupQuotaData, setGroupQuotaData] = useState([]);
+  const [groupQuotaLoading, setGroupQuotaLoading] = useState(false);
+  const [activePreset, setActivePreset] = useState('');
+  // 已确认的查询版本号：搜索确认/刷新时自增。分组消耗表监听它而不是监听 inputs，
+  // 否则用户在弹窗里改时间（还没点确定）就会触发请求。
+  const [dataQueryVersion, setDataQueryVersion] = useState(0);
   const [consumeQuota, setConsumeQuota] = useState(0);
   const [consumeTokens, setConsumeTokens] = useState(0);
   const [times, setTimes] = useState(0);
@@ -140,11 +161,41 @@ export const useDashboardData = (userState, userDispatch, statusState) => {
   // ========== 回调函数 ==========
   const handleInputChange = useCallback((value, name) => {
     if (name === 'data_export_default_time') {
+      // 刻意不再写 localStorage：这个键同时被 /api/status 和站点设置写入，
+      // 看板再写一次会让「用户选择」被下一次状态刷新覆盖，表现为时灵时不灵。
+      // 粒度初值统一由站点设置「数据看板默认时间粒度」决定。
       setDataExportDefaultTime(value);
-      localStorage.setItem('data_export_default_time', value);
       return;
     }
+    if (name === 'start_timestamp' || name === 'end_timestamp') {
+      // 手改时间就不再是任何预设，清掉高亮。
+      setActivePreset('');
+    }
     setInputs((inputs) => ({ ...inputs, [name]: value }));
+  }, []);
+
+  // 应用快捷范围：同时填起止时间并按跨度切粒度。
+  const applyPreset = useCallback((key) => {
+    // 「自定义」不清空时间，只取消预设高亮——用户接着手改时间框。
+    if (key === 'custom') {
+      setActivePreset('');
+      return;
+    }
+    const range = getPresetRange(key);
+    if (!range) return;
+    setActivePreset(key);
+    setInputs((inputs) => ({
+      ...inputs,
+      start_timestamp: range.start_timestamp,
+      end_timestamp: range.end_timestamp,
+    }));
+    const granularity =
+      range.granularity ||
+      getGranularityForRange(
+        parseDashboardTimestamp(range.start_timestamp),
+        parseDashboardTimestamp(range.end_timestamp),
+      );
+    setDataExportDefaultTime(granularity);
   }, []);
 
   const showSearchModal = useCallback(() => {
@@ -161,8 +212,8 @@ export const useDashboardData = (userState, userDispatch, statusState) => {
     try {
       let url = '';
       const { start_timestamp, end_timestamp, username } = inputs;
-      let localStartTimestamp = Date.parse(start_timestamp) / 1000;
-      let localEndTimestamp = Date.parse(end_timestamp) / 1000;
+      let localStartTimestamp = parseDashboardTimestamp(start_timestamp);
+      let localEndTimestamp = parseDashboardTimestamp(end_timestamp);
 
       if (isAdminUser) {
         url = `/api/data/?username=${username}&start_timestamp=${localStartTimestamp}&end_timestamp=${localEndTimestamp}&default_time=${dataExportDefaultTime}`;
@@ -217,8 +268,8 @@ export const useDashboardData = (userState, userDispatch, statusState) => {
     if (!isAdminUser) return [];
     try {
       const { start_timestamp, end_timestamp } = inputs;
-      const localStartTimestamp = Date.parse(start_timestamp) / 1000;
-      const localEndTimestamp = Date.parse(end_timestamp) / 1000;
+      const localStartTimestamp = parseDashboardTimestamp(start_timestamp);
+      const localEndTimestamp = parseDashboardTimestamp(end_timestamp);
       const url = `/api/data/users?start_timestamp=${localStartTimestamp}&end_timestamp=${localEndTimestamp}`;
       const res = await API.get(url);
       const { success, message, data } = res.data;
@@ -234,6 +285,48 @@ export const useDashboardData = (userState, userDispatch, statusState) => {
     }
   }, [inputs, isAdminUser]);
 
+  // 分组消耗：数据源是 logs 的小时汇总表，成本与窗口长度无关，但仍是本页最重的一次查询。
+  // 刻意不在页面初始化时拉，由调用方在「切到分组 tab / 确认搜索 / 刷新」时才触发。
+  //
+  // 起止时间显式传参而不是读 inputs：这样函数身份稳定，调用方可以把它放进 effect 依赖，
+  // 而不会因为用户在弹窗里拖动时间就每改一次发一个请求。
+  const loadGroupQuotaData = useCallback(
+    async (startTimestamp, endTimestamp, username) => {
+      if (!isAdminUser) {
+        setGroupQuotaData([]);
+        return [];
+      }
+      const error = validateDashboardRange(startTimestamp, endTimestamp);
+      if (error) {
+        setGroupQuotaData([]);
+        return [];
+      }
+      const start = parseDashboardTimestamp(startTimestamp);
+      const end = parseDashboardTimestamp(endTimestamp);
+      setGroupQuotaLoading(true);
+      try {
+        const res = await API.get(
+          `/api/data/groups?start_timestamp=${start}&end_timestamp=${end}&username=${encodeURIComponent(username || '')}`,
+        );
+        const { success, message, data } = res.data;
+        if (success) {
+          setGroupQuotaData(data || []);
+          return data || [];
+        }
+        setGroupQuotaData([]);
+        showError(message);
+        return [];
+      } catch (err) {
+        console.error(err);
+        setGroupQuotaData([]);
+        return [];
+      } finally {
+        setGroupQuotaLoading(false);
+      }
+    },
+    [isAdminUser],
+  );
+
   const getUserData = useCallback(async () => {
     let res = await API.get(`/api/user/self`);
     const { success, message, data } = res.data;
@@ -247,18 +340,39 @@ export const useDashboardData = (userState, userDispatch, statusState) => {
   const refresh = useCallback(async () => {
     const data = await loadQuotaData();
     await loadUptimeData();
+    setDataQueryVersion((version) => version + 1);
     return data;
   }, [loadQuotaData, loadUptimeData]);
 
   const handleSearchConfirm = useCallback(
     async (updateChartDataCallback) => {
+      // 时间条件不合法时不发请求、不关弹窗：发出去只会得到空结果或（起始为空时）
+      // 一次全表聚合，用户看到的是「没数据」而不是「条件错了」。
+      const error = validateDashboardRange(
+        inputs.start_timestamp,
+        inputs.end_timestamp,
+      );
+      if (error) {
+        showWarning(error);
+        return;
+      }
       const data = await refresh();
       if (data && data.length > 0 && updateChartDataCallback) {
         updateChartDataCallback(data);
       }
       setSearchModalVisible(false);
     },
-    [refresh],
+    [refresh, inputs.start_timestamp, inputs.end_timestamp],
+  );
+
+  const rangeSummary = useMemo(
+    () =>
+      formatRangeSummary(
+        inputs.start_timestamp,
+        inputs.end_timestamp,
+        dataExportDefaultTime,
+      ),
+    [inputs.start_timestamp, inputs.end_timestamp, dataExportDefaultTime],
   );
 
   // ========== Effects ==========
@@ -285,9 +399,16 @@ export const useDashboardData = (userState, userDispatch, statusState) => {
     // 输入状态
     inputs,
     dataExportDefaultTime,
+    activePreset,
+    applyPreset,
+    rangeSummary,
+    dataQueryVersion,
 
     // 数据状态
     quotaData,
+    groupQuotaData,
+    groupQuotaLoading,
+    loadGroupQuotaData,
     consumeQuota,
     setConsumeQuota,
     consumeTokens,

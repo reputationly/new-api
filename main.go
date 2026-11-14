@@ -177,6 +177,11 @@ func main() {
 	// 数据看板
 	go model.UpdateQuotaData()
 
+	// 数据看板「分组消耗」的小时汇总（仅主节点）：把 logs 的按小时聚合物化，
+	// 让这张表的查询成本与日志量解耦。不依赖 DataExportEnabled——它和 quota_data
+	// 是两条独立的数据源，关掉数据导出不该让分组消耗表变成空的。
+	model.StartGroupStatsRollupTask()
+
 	if os.Getenv("CHANNEL_UPDATE_FREQUENCY") != "" && common.IsMasterNode {
 		// 只在主节点上跑：这个任务会遍历**全部**渠道去上游拉余额并写回库，多副本下每个
 		// 副本各跑一遍，等于把上游账单接口的调用量乘以副本数（结果本身是"最后写入者生效"，

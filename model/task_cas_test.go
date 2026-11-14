@@ -64,6 +64,8 @@ func TestMain(m *testing.M) {
 		&UserKYCImage{},
 		&UserEnterprise{},
 		&UserEnterpriseImage{},
+		&GroupStatsHourly{},
+		&GroupStatsMeta{},
 	); err != nil {
 		panic("failed to migrate: " + err.Error())
 	}
@@ -78,6 +80,8 @@ func truncateTables(t *testing.T) {
 		DB.Exec("DELETE FROM users")
 		DB.Exec("DELETE FROM tokens")
 		DB.Exec("DELETE FROM logs")
+		DB.Exec("DELETE FROM group_stats_hourly")
+		DB.Exec("DELETE FROM group_stats_meta")
 		DB.Exec("DELETE FROM channels")
 		DB.Exec("DELETE FROM top_ups")
 		DB.Exec("DELETE FROM subscription_orders")

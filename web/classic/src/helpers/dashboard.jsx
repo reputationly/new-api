@@ -62,6 +62,146 @@ export const getInitialTimestamp = () => {
   }
 };
 
+// ========== 数据看板的时间范围 ==========
+
+// 与后端 dataDashboardMaxRangeSeconds 一致（controller/usedata.go）。
+// 弹窗与接口必须同一个上限，否则会出现「能选、提交后报错」。
+export const DATA_DASHBOARD_MAX_RANGE_SECONDS = 90 * 86400;
+
+// Date.parse 对 'YYYY-MM-DD HH:mm:ss' 的解析在部分浏览器（Safari）上会返回 NaN，
+// 一旦 NaN 传到后端就被解析成 0：起始为 0 是全表扫描，结束为 0 是恒空结果。
+// 统一走这个函数兜底，别在调用点各写一份。
+export const parseDashboardTimestamp = (value) => {
+  if (!value) return NaN;
+  const parsed = Date.parse(value);
+  if (Number.isFinite(parsed)) return parsed / 1000;
+  return Date.parse(String(value).replace(/-/g, '/')) / 1000;
+};
+
+// 快捷范围：决定「查哪一段」；粒度只决定「横轴怎么分桶」，两者互不替代。
+export const TIME_PRESETS = [
+  { key: 'today', label: '今天', granularity: 'hour' },
+  { key: 'yesterday', label: '昨天', granularity: 'hour' },
+  { key: 'last24h', label: '近24小时', granularity: 'hour' },
+  { key: 'last7d', label: '近7天', granularity: 'day' },
+  { key: 'last30d', label: '近30天', granularity: 'day' },
+  { key: 'lastMonth', label: '上个月', granularity: 'day' },
+];
+
+const startOfDay = (date) =>
+  new Date(date.getFullYear(), date.getMonth(), date.getDate(), 0, 0, 0);
+const endOfDay = (date) =>
+  new Date(date.getFullYear(), date.getMonth(), date.getDate(), 23, 59, 59);
+
+// getPresetRange 返回该预设对应的起止时间（与 DatePicker 相同的字符串格式）与建议粒度。
+//
+// 「上个月」按日历月计算（1 月要跨年、2 月 28 天、10 月 31 天），不是「最近 30 天」——
+// 后者在月初会把本月头几天算进去，运营对不上账。
+export const getPresetRange = (key) => {
+  const now = new Date();
+  const toStr = (date) => timestamp2string(date.getTime() / 1000);
+  switch (key) {
+    case 'today':
+      return {
+        start_timestamp: toStr(startOfDay(now)),
+        end_timestamp: toStr(now),
+        granularity: 'hour',
+      };
+    case 'yesterday': {
+      const yesterday = new Date(now.getTime() - 86400 * 1000);
+      return {
+        start_timestamp: toStr(startOfDay(yesterday)),
+        end_timestamp: toStr(endOfDay(yesterday)),
+        granularity: 'hour',
+      };
+    }
+    case 'last24h':
+      return {
+        start_timestamp: toStr(new Date(now.getTime() - 86400 * 1000)),
+        end_timestamp: toStr(now),
+        granularity: 'hour',
+      };
+    case 'last7d':
+      return {
+        start_timestamp: toStr(new Date(now.getTime() - 7 * 86400 * 1000)),
+        end_timestamp: toStr(now),
+        granularity: 'day',
+      };
+    case 'last30d':
+      return {
+        start_timestamp: toStr(new Date(now.getTime() - 30 * 86400 * 1000)),
+        end_timestamp: toStr(now),
+        granularity: 'day',
+      };
+    case 'lastMonth': {
+      const firstOfThisMonth = new Date(now.getFullYear(), now.getMonth(), 1);
+      // 1 月时 getMonth()-1 = -1，Date 会正确回退到上一年 12 月。
+      const lastMonthStart = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+      const lastMonthEnd = new Date(firstOfThisMonth.getTime() - 1000);
+      return {
+        start_timestamp: toStr(startOfDay(lastMonthStart)),
+        end_timestamp: toStr(endOfDay(lastMonthEnd)),
+        granularity: 'day',
+      };
+    }
+    default:
+      return null;
+  }
+};
+
+// 按跨度给出合适粒度：48 小时以内按小时、31 天以内按天、更长按周。
+export const getGranularityForRange = (startSeconds, endSeconds) => {
+  const span = endSeconds - startSeconds;
+  if (!Number.isFinite(span) || span <= 0) return 'hour';
+  if (span <= 48 * 3600) return 'hour';
+  if (span <= 31 * 86400) return 'day';
+  return 'week';
+};
+
+// 校验搜索弹窗的时间条件，返回错误文案（空串表示通过）。
+export const validateDashboardRange = (startTimestamp, endTimestamp) => {
+  const start = parseDashboardTimestamp(startTimestamp);
+  const end = parseDashboardTimestamp(endTimestamp);
+  if (!Number.isFinite(start) || !Number.isFinite(end)) {
+    return '请选择起始时间和结束时间';
+  }
+  if (end <= start) {
+    return '结束时间必须晚于起始时间';
+  }
+  if (end - start > DATA_DASHBOARD_MAX_RANGE_SECONDS) {
+    return '时间跨度不能超过 90 天';
+  }
+  return '';
+};
+
+// 页面顶部展示的当前范围摘要，如「近7天 · 11-07 18:36 → 11-14 19:36 · 按天」。
+export const formatRangeSummary = (
+  startTimestamp,
+  endTimestamp,
+  granularity,
+) => {
+  const start = parseDashboardTimestamp(startTimestamp);
+  const end = parseDashboardTimestamp(endTimestamp);
+  if (!Number.isFinite(start) || !Number.isFinite(end)) return '';
+  const fmt = (seconds) => timestamp2string(seconds).slice(5, 16);
+  const span = end - start;
+  let spanText = '';
+  if (span < 3600) {
+    spanText = `${Math.max(1, Math.round(span / 60))} 分钟`;
+  } else if (span < 86400) {
+    spanText = `${Math.round(span / 3600)} 小时`;
+  } else {
+    spanText = `${Math.round(span / 86400)} 天`;
+  }
+  const granularityText =
+    {
+      hour: '按小时',
+      day: '按天',
+      week: '按周',
+    }[granularity] || '按天';
+  return `${spanText} · ${fmt(start)} → ${fmt(end)} · ${granularityText}`;
+};
+
 // ========== 数据处理工具函数 ==========
 export const updateMapValue = (map, key, value) => {
   if (!map.has(key)) {

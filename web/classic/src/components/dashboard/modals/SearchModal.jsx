@@ -18,7 +18,8 @@ For commercial licensing, please contact support@quantumnous.com
 */
 
 import React, { useRef } from 'react';
-import { Modal, Form } from '@douyinfe/semi-ui';
+import { Modal, Form, Button } from '@douyinfe/semi-ui';
+import { TIME_PRESETS } from '../../../helpers/dashboard';
 
 const SearchModal = ({
   searchModalVisible,
@@ -30,6 +31,8 @@ const SearchModal = ({
   dataExportDefaultTime,
   timeOptions,
   handleInputChange,
+  applyPreset,
+  activePreset,
   t,
 }) => {
   const formRef = useRef();
@@ -55,6 +58,32 @@ const SearchModal = ({
       centered
     >
       <Form ref={formRef} layout='vertical' className='w-full'>
+        {/* 快捷范围：点一下同时填起止时间并按跨度切粒度。
+            没有这一行时，用户会以为下面的「图表粒度」就是时间范围（选「周」
+            然后被 7 天窗口按周聚合，图里只剩一两个点）。 */}
+        <div className='flex flex-wrap gap-2 mb-4'>
+          {TIME_PRESETS.map((preset) => (
+            <Button
+              key={preset.key}
+              size='small'
+              theme={activePreset === preset.key ? 'solid' : 'borderless'}
+              type={activePreset === preset.key ? 'primary' : 'tertiary'}
+              onClick={() => applyPreset(preset.key)}
+            >
+              {t(preset.label)}
+            </Button>
+          ))}
+          <Button
+            key='custom'
+            size='small'
+            theme={activePreset ? 'borderless' : 'solid'}
+            type={activePreset ? 'tertiary' : 'primary'}
+            onClick={() => applyPreset('custom')}
+          >
+            {t('自定义')}
+          </Button>
+        </div>
+
         {createFormField(Form.DatePicker, {
           field: 'start_timestamp',
           label: t('起始时间'),
@@ -75,11 +104,14 @@ const SearchModal = ({
           onChange: (value) => handleInputChange(value, 'end_timestamp'),
         })}
 
+        {/* 「粒度」只影响图表横轴分桶，不改变统计范围。原名「时间粒度」正是
+            「7 天范围 + 周粒度」这种误解的来源。 */}
         {createFormField(Form.Select, {
           field: 'data_export_default_time',
-          label: t('时间粒度'),
+          label: t('图表粒度'),
+          extraText: t('仅影响图表横轴聚合，不影响统计范围'),
           initValue: dataExportDefaultTime,
-          placeholder: t('时间粒度'),
+          placeholder: t('图表粒度'),
           name: 'data_export_default_time',
           optionList: timeOptions,
           onChange: (value) =>

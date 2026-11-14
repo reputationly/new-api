@@ -21,6 +21,7 @@ import React from 'react';
 import { Card, Tabs, TabPane } from '@douyinfe/semi-ui';
 import { PieChart } from 'lucide-react';
 import { VChart } from '@visactor/react-vchart';
+import GroupQuotaTable from './GroupQuotaTable';
 
 const ChartsPanel = ({
   activeChartTab,
@@ -31,6 +32,8 @@ const ChartsPanel = ({
   spec_rank_bar,
   spec_user_rank,
   spec_user_trend,
+  groupQuotaData,
+  groupQuotaLoading,
   isAdminUser,
   CARD_PROPS,
   CHART_CONFIG,
@@ -63,6 +66,9 @@ const ChartsPanel = ({
             {isAdminUser && (
               <TabPane tab={<span>{t('用户消耗趋势')}</span>} itemKey='6' />
             )}
+            {isAdminUser && (
+              <TabPane tab={<span>{t('分组消耗')}</span>} itemKey='7' />
+            )}
           </Tabs>
         </div>
       }
@@ -86,6 +92,13 @@ const ChartsPanel = ({
         )}
         {activeChartTab === '6' && isAdminUser && (
           <VChart spec={spec_user_trend} option={CHART_CONFIG} />
+        )}
+        {activeChartTab === '7' && isAdminUser && (
+          <GroupQuotaTable
+            data={groupQuotaData}
+            loading={groupQuotaLoading}
+            t={t}
+          />
         )}
       </div>
     </Card>

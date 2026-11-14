@@ -27,6 +27,7 @@ const DashboardHeader = ({
   showSearchModal,
   refresh,
   loading,
+  rangeSummary,
   t,
 }) => {
   const ICON_BUTTON_CLASS = 'text-white hover:bg-opacity-80 !rounded-full';
@@ -39,7 +40,18 @@ const DashboardHeader = ({
       >
         {getGreeting}
       </h2>
-      <div className='flex gap-3'>
+      <div className='flex items-center gap-3'>
+        {/* 当前生效的统计范围。关掉弹窗后也能确认自己在看哪一段，
+            顺带让「分组消耗」表和其它卡片的区间可核对。点一下打开弹窗。 */}
+        {rangeSummary && (
+          <button
+            type='button'
+            onClick={showSearchModal}
+            className='hidden sm:block text-xs text-gray-500 hover:text-gray-700 whitespace-nowrap'
+          >
+            {rangeSummary}
+          </button>
+        )}
         <Button
           type='tertiary'
           icon={<Search size={16} />}
