@@ -39,7 +39,7 @@ const (
 // GroupStatsHourly 一条「线路分组 × 小时」的消耗汇总。
 type GroupStatsHourly struct {
 	Id         int    `json:"id" gorm:"primaryKey"`
-	GroupName  string `json:"group_name" gorm:"column:group_name;uniqueIndex:uk_group_stats_hour,priority:1;size:64;not null;default:''"`
+	GroupName  string `json:"group_name" gorm:"column:group_name;uniqueIndex:uk_group_stats_hour,priority:1;size:191;not null;default:''"`
 	HourTs     int64  `json:"hour_ts" gorm:"column:hour_ts;uniqueIndex:uk_group_stats_hour,priority:2;not null"`
 	ReqCount   int64  `json:"req_count" gorm:"column:req_count;not null;default:0"`
 	Tokens     int64  `json:"tokens" gorm:"column:tokens;not null;default:0"`

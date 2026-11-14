@@ -21,7 +21,10 @@ func TestDataDashboardRangeError(t *testing.T) {
 		{"正好 90 天放行", start, start + 90*day, ""},
 		{"89 天放行", start, start + 89*day, ""},
 		{"超过 90 天 1 秒拒绝", start, start + 90*day + 1, "时间跨度不能超过 90 天"},
-		{"缺少起始时间不在这里判定", 0, start, ""},
+		{"起始为零仍拒绝超过90天", 0, start, "时间跨度不能超过 90 天"},
+		{"起始为零恰好90天", 0, dataDashboardMaxRangeSeconds, ""},
+		{"起始为零超过90天一秒", 0, dataDashboardMaxRangeSeconds + 1, "时间跨度不能超过 90 天"},
+		{"结束时间为负不在这里判定", 0, -1, ""},
 		{"结束时间为 0 不在这里判定", start, 0, ""},
 	}
 	for _, c := range cases {
