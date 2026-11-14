@@ -219,7 +219,6 @@ func (a *Adaptor) convertSpeechRequest(c *gin.Context, info *relaycommon.RelayIn
 	//     错成一条 base64 解析失败;
 	//  2) 成对校验不需要碰文件,先做能省掉一次下载/落盘 —— 而且"参考音 URL 打不通"
 	//     会盖掉更可操作的"缺逐字文稿"。
-	// 参数校验(response_format/speed/extra_params)留到 body 组装完之后,见下。
 	if isBreeze {
 		refAudio := rawJSONString(request.RefAudio)
 		if refAudio == "" && isMediaRef(request.Voice) {
@@ -235,13 +234,6 @@ func (a *Adaptor) convertSpeechRequest(c *gin.Context, info *relaycommon.RelayIn
 		}
 	}
 
-	refs, err := a.materializeSpeechInputs(c, info, modelName, request)
-	if err != nil {
-		return nil, err
-	}
-	if len(refs) > 0 {
-		body["input_refs"] = refs
-	}
 	// 预设音色 / 说话人标签:voice 不是一段参考音时才作为 speaker 标量下发。
 	// 两个家族对 voice 的语义不同,必须分开:
 	//   - vLLM-Omni:预设音色名(qwen3-tts 的 vivian/ryan…)原样透传;
@@ -269,6 +261,14 @@ func (a *Adaptor) convertSpeechRequest(c *gin.Context, info *relaycommon.RelayIn
 		if err := taskgpustackplus.ValidateBreezeParams(body, modelName); err != nil {
 			return nil, err
 		}
+	}
+
+	refs, err := a.materializeSpeechInputs(c, info, modelName, request)
+	if err != nil {
+		return nil, err
+	}
+	if len(refs) > 0 {
+		body["input_refs"] = refs
 	}
 
 	data, err := common.Marshal(body)

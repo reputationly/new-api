@@ -21,7 +21,7 @@ const dataDashboardMaxRangeSeconds int64 = 90 * 86400
 
 // dataDashboardRangeError 返回超限提示，未超限返回空串。
 func dataDashboardRangeError(start, end int64) string {
-	if start > 0 && end > 0 && end-start > dataDashboardMaxRangeSeconds {
+	if end > 0 && end-start > dataDashboardMaxRangeSeconds {
 		return "时间跨度不能超过 90 天"
 	}
 	return ""

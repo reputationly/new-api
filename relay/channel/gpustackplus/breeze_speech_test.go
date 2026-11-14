@@ -3,6 +3,7 @@ package gpustackplus
 import (
 	"encoding/base64"
 	"net/http"
+	"os"
 	"strings"
 	"testing"
 
@@ -254,6 +255,32 @@ func TestConvertAudioRequestReturns400ThroughHandlerWrapping(t *testing.T) {
 			require.Equal(t, http.StatusBadRequest, wrapped.StatusCode,
 				"handler 的再包装不能把 400 变回 500")
 			require.Contains(t, wrapped.Error(), tc.wantMsg, "文案不能被包装吃掉")
+		})
+	}
+}
+
+func TestConvertAudioRequestBreezeRejectsBeforeMaterialization(t *testing.T) {
+	for _, name := range []string{"speed", "voice"} {
+		t.Run(name, func(t *testing.T) {
+			useTempNFSRootForSpeech(t)
+			request := dto.AudioRequest{
+				Model: "tts2", Input: "你好",
+				RefAudio: []byte(`"` + breezeSpeechWav() + `"`), RefText: []byte(`"逐字稿"`),
+			}
+			if name == "speed" {
+				speed := 1.2
+				request.Speed = &speed
+			} else {
+				request.Voice = "alloy"
+			}
+			_, err := (&Adaptor{}).ConvertAudioRequest(speechTestCtx(t), speechInfo("tts2"), request)
+			require.Error(t, err)
+			apiErr, ok := err.(*types.NewAPIError)
+			require.True(t, ok)
+			require.Equal(t, http.StatusBadRequest, apiErr.StatusCode)
+			entries, err := os.ReadDir(system_setting.GetMediaStorageSettings().NFSOutputRoot)
+			require.NoError(t, err)
+			require.Empty(t, entries)
 		})
 	}
 }
