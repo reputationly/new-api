@@ -24,6 +24,7 @@ package gpustackplus
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -152,6 +153,67 @@ type statusResponse struct {
 	NFSPath   string `json:"nfs_path"`
 	Error     string `json:"error"`
 	ErrorType string `json:"error_type"`
+	// Billable usage reported by the engine and forwarded verbatim by the facade
+	// (vllm-omni usage contract). Kept raw: the shape is the vendor's
+	// {input_tokens_details{text,image}, output_tokens_details{image}, ...} object, and
+	// parsing it here would tie the gateway to one model's field layout.
+	Usage json.RawMessage `json:"usage"`
+}
+
+// engineUsageToDTO maps the engine's usage record onto the gateway's dto.Usage.
+//
+// The engine is the single source of truth for token counts: it tokenizes the prompt
+// and owns the diffusion canvas, so re-deriving counts from request parameters here
+// would disagree with it exactly where billing matters (canvas floors, reference image
+// downsampling). Unknown/absent fields are left zero; UsageSource marks the record as
+// measured so the image settle path does not substitute its 1-token placeholder.
+func engineUsageToDTO(raw json.RawMessage) (*dto.Usage, bool) {
+	if len(raw) == 0 {
+		return nil, false
+	}
+	var payload struct {
+		GeneratedImages int `json:"generated_images"`
+		TotalTokens     int `json:"total_tokens"`
+		InputTokens     int `json:"input_tokens"`
+		OutputTokens    int `json:"output_tokens"`
+		InputDetails    struct {
+			TextTokens  int `json:"text_tokens"`
+			ImageTokens int `json:"image_tokens"`
+		} `json:"input_tokens_details"`
+		OutputDetails struct {
+			ImageTokens int `json:"image_tokens"`
+		} `json:"output_tokens_details"`
+		UsageSource  string `json:"usage_source"`
+		UsageVersion string `json:"usage_version"`
+	}
+	if err := common.Unmarshal(raw, &payload); err != nil {
+		return nil, false
+	}
+	if payload.InputTokens == 0 && payload.OutputTokens == 0 {
+		// A zeroed record is indistinguishable from "engine reported nothing"; treating
+		// it as measured would under-bill to zero instead of falling back loudly.
+		return nil, false
+	}
+	source := payload.UsageSource
+	if source == "" {
+		source = "engine"
+	}
+	usage := &dto.Usage{
+		PromptTokens:     payload.InputTokens,
+		CompletionTokens: payload.OutputTokens,
+		TotalTokens:      payload.TotalTokens,
+		InputTokens:      payload.InputTokens,
+		OutputTokens:     payload.OutputTokens,
+		UsageSemantic:    "openai",
+		UsageSource:      source,
+	}
+	usage.PromptTokensDetails.TextTokens = payload.InputDetails.TextTokens
+	usage.PromptTokensDetails.ImageTokens = payload.InputDetails.ImageTokens
+	usage.CompletionTokenDetails.ImageTokens = payload.OutputDetails.ImageTokens
+	if usage.TotalTokens == 0 {
+		usage.TotalTokens = usage.PromptTokens + usage.CompletionTokens
+	}
+	return usage, true
 }
 
 type Adaptor struct {
@@ -173,6 +235,11 @@ func (a *Adaptor) SetupRequestHeader(c *gin.Context, req *http.Header, info *rel
 	req.Set("Content-Type", "application/json")
 	if info.ApiKey != "" {
 		req.Set("Authorization", "Bearer "+info.ApiKey)
+	}
+	// Carry the gateway request id so the engine can echo it back and both sides can be
+	// reconciled later; without it a bill line cannot be traced to an engine log line.
+	if info.RequestId != "" {
+		req.Set(common.RequestIdKey, info.RequestId)
 	}
 	return nil
 }
@@ -587,6 +654,15 @@ func (a *Adaptor) DoResponse(c *gin.Context, resp *http.Response, info *relaycom
 		// 照常计费,不退款(与异步任务同口径)。标记留给 ImageHelper——计费发生在
 		// 那一层,而这里只能返回错误;不打标记的话标准错误路径会把预扣退掉。
 		relaycommon.MarkOutputModerationBlocked(c)
+		// 照常计费:产物被拦,但算力已经花掉。用量仍以引擎实测为准,缺省才退回占位值。
+		if usage, ok := engineUsageToDTO(st.Usage); ok {
+			return usage, types.NewErrorWithStatusCode(
+				errors.New(mr.Reason),
+				"output_content_filtered",
+				http.StatusBadRequest,
+				types.ErrOptionWithSkipRetry(),
+			)
+		}
 		return &dto.Usage{PromptTokens: 1, TotalTokens: 1}, types.NewErrorWithStatusCode(
 			errors.New(mr.Reason),
 			"output_content_filtered",
@@ -606,7 +682,11 @@ func (a *Adaptor) DoResponse(c *gin.Context, resp *http.Response, info *relaycom
 	}
 	service.IOCopyBytesGracefully(c, resp, jsonBytes)
 
-	// 按次计费:占位 usage(真实扣费由模型价 × n 决定)。
+	// Billing: prefer the engine's measured usage. The placeholder below only exists
+	// for engines that report nothing (it keeps the ratio path from multiplying by 0).
+	if usage, ok := engineUsageToDTO(st.Usage); ok {
+		return usage, nil
+	}
 	return &dto.Usage{PromptTokens: 1, TotalTokens: 1}, nil
 }
 

@@ -155,11 +155,16 @@ func ImageHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *type
 
 	imageN := applyImageNRatio(info, request)
 
-	if usage.(*dto.Usage).TotalTokens == 0 {
-		usage.(*dto.Usage).TotalTokens = 1
-	}
-	if usage.(*dto.Usage).PromptTokens == 0 {
-		usage.(*dto.Usage).PromptTokens = 1
+	// Engines that report measured usage (usage_source=engine) must not be padded: a
+	// zero prompt side is legitimate (image-only request) and the old 0->1 fallback
+	// would silently change a measured bill by one token per request.
+	if measured := usage.(*dto.Usage); measured.UsageSource != "engine" {
+		if measured.TotalTokens == 0 {
+			measured.TotalTokens = 1
+		}
+		if measured.PromptTokens == 0 {
+			measured.PromptTokens = 1
+		}
 	}
 
 	quality := request.Quality
