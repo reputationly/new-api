@@ -64,6 +64,20 @@ func ImageHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *type
 		return types.NewError(err, types.ErrorCodeChannelModelMappedError, types.ErrOptionWithSkipRetry())
 	}
 
+	// Admission: models that bill by token only accept the engine's billed size tiers.
+	// Rejecting here (before the request reaches a GPU replica) keeps a client mistake a
+	// clean 400 with the allowed size list instead of a downstream engine error.
+	policyModel := info.UpstreamModelName
+	if strings.TrimSpace(policyModel) == "" {
+		policyModel = info.OriginModelName
+	}
+	if isSizePolicyModel(policyModel) {
+		if sizeErr := validateBilledImageSize(request.Size); sizeErr != nil {
+			return types.NewErrorWithStatusCode(sizeErr, types.ErrorCodeInvalidRequest,
+				http.StatusBadRequest, types.ErrOptionWithSkipRetry())
+		}
+	}
+
 	adaptor := GetAdaptor(info.ApiType)
 	if adaptor == nil {
 		return types.NewError(fmt.Errorf("invalid api type: %d", info.ApiType), types.ErrorCodeInvalidApiType, types.ErrOptionWithSkipRetry())
