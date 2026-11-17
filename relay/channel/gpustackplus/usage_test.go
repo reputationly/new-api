@@ -69,3 +69,63 @@ func TestEngineUsageToDTO_RejectsPlaceholderAndGarbage(t *testing.T) {
 		}
 	}
 }
+
+// 客户端响应必须是官方 image 接口的形状：字段名、嵌套、generated_images 都要对得上，
+// 且不能混入计费侧 dto.Usage 的噪声字段（usage_semantic / claude_* / cache_*）。
+func TestEngineImageUsage_MatchesVendorShape(t *testing.T) {
+	raw := json.RawMessage(`{
+		"generated_images": 1,
+		"total_tokens": 16399,
+		"input_tokens": 15,
+		"output_tokens": 16384,
+		"input_tokens_details": {"text_tokens": 15, "image_tokens": 0},
+		"output_tokens_details": {"image_tokens": 16384},
+		"usage_source": "engine",
+		"usage_version": "h3-image-v1",
+		"canvas_tokens": 16384,
+		"reference_latent_tokens": 0,
+		"text_token_factor": 1
+	}`)
+	usage, ok := engineImageUsage(raw)
+	if !ok {
+		t.Fatal("measured payload should decode")
+	}
+	if usage.GeneratedImages != 1 || usage.InputTokens != 15 || usage.OutputTokens != 16384 || usage.TotalTokens != 16399 {
+		t.Fatalf("unexpected usage: %+v", usage)
+	}
+	if usage.InputTokensDetails.TextTokens != 15 || usage.InputTokensDetails.ImageTokens != 0 {
+		t.Fatalf("input details: %+v", usage.InputTokensDetails)
+	}
+	if usage.OutputTokensDetails.ImageTokens != 16384 {
+		t.Fatalf("output details: %+v", usage.OutputTokensDetails)
+	}
+
+	encoded, err := json.Marshal(usage)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(encoded, &fields); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	for _, want := range []string{"generated_images", "total_tokens", "input_tokens", "output_tokens",
+		"input_tokens_details", "output_tokens_details"} {
+		if _, ok := fields[want]; !ok {
+			t.Fatalf("response usage missing %q: %s", want, encoded)
+		}
+	}
+	for _, unwanted := range []string{"usage_semantic", "usage_source", "canvas_tokens",
+		"reference_latent_tokens", "text_token_factor", "claude_cache_creation_5_m_tokens"} {
+		if _, ok := fields[unwanted]; ok {
+			t.Fatalf("response usage leaked %q: %s", unwanted, encoded)
+		}
+	}
+}
+
+func TestEngineImageUsage_RejectsEmpty(t *testing.T) {
+	for _, raw := range []json.RawMessage{nil, json.RawMessage(`{"total_tokens":0}`), json.RawMessage(`{`)} {
+		if _, ok := engineImageUsage(raw); ok {
+			t.Fatalf("must not decode: %s", raw)
+		}
+	}
+}

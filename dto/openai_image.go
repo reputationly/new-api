@@ -176,9 +176,32 @@ type ImageResponse struct {
 	Data     []ImageData     `json:"data"`
 	Created  int64           `json:"created"`
 	Metadata json.RawMessage `json:"metadata,omitempty"`
-	// Usage 是引擎实测的计费用量（token 拆分），与 MiniMax 官方 image 接口同形。
-	// 客户端据此可以算价；缺失时省略字段（老引擎/第三方渠道不报）。
-	Usage *Usage `json:"usage,omitempty"`
+	// Usage 是引擎实测的计费用量，**逐字段对齐 MiniMax 官方 image 接口**：
+	// generated_images / input_tokens / output_tokens / *_tokens_details。
+	// 这里刻意用独立类型而不是共享的 dto.Usage —— 后者被 chat/completions、用量日志
+	// 共用，改它的 JSON 名会把文本模型也改成官方图片接口的形状（文本侧本来就该是
+	// prompt_tokens/completion_tokens）。计费仍读 dto.Usage，两条路互不影响。
+	// 缺失时省略字段（老引擎/第三方渠道不报 usage）。
+	Usage *ImageUsage `json:"usage,omitempty"`
+}
+
+// ImageUsage 是官方 image 接口的 usage 形状，只用于图片响应。
+type ImageUsage struct {
+	GeneratedImages     int                     `json:"generated_images"`
+	TotalTokens         int                     `json:"total_tokens"`
+	InputTokens         int                     `json:"input_tokens"`
+	OutputTokens        int                     `json:"output_tokens"`
+	InputTokensDetails  ImageInputTokenDetails  `json:"input_tokens_details"`
+	OutputTokensDetails ImageOutputTokenDetails `json:"output_tokens_details"`
+}
+
+type ImageInputTokenDetails struct {
+	TextTokens  int `json:"text_tokens"`
+	ImageTokens int `json:"image_tokens"`
+}
+
+type ImageOutputTokenDetails struct {
+	ImageTokens int `json:"image_tokens"`
 }
 type ImageData struct {
 	Url           string `json:"url"`

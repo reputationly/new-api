@@ -160,6 +160,31 @@ type statusResponse struct {
 	Usage json.RawMessage `json:"usage"`
 }
 
+// engineImageUsage parses the engine's usage record into the official MiniMax image
+// shape for the client-facing response. The engine payload already IS that shape, so
+// this is a straight decode rather than a field-by-field translation.
+//
+// Kept separate from engineUsageToDTO on purpose: billing needs the gateway's dto.Usage
+// (prompt/completion + detail splits the quota formula understands), while the response
+// must look like the vendor's contract. Deriving both from the same raw bytes means the
+// number a customer sees and the number we charge can never diverge.
+func engineImageUsage(raw json.RawMessage) (*dto.ImageUsage, bool) {
+	if len(raw) == 0 {
+		return nil, false
+	}
+	var usage dto.ImageUsage
+	if err := common.Unmarshal(raw, &usage); err != nil {
+		return nil, false
+	}
+	if usage.InputTokens == 0 && usage.OutputTokens == 0 {
+		return nil, false
+	}
+	if usage.TotalTokens == 0 {
+		usage.TotalTokens = usage.InputTokens + usage.OutputTokens
+	}
+	return &usage, true
+}
+
 // engineUsageToDTO maps the engine's usage record onto the gateway's dto.Usage.
 //
 // The engine is the single source of truth for token counts: it tokenizes the prompt
@@ -679,8 +704,8 @@ func (a *Adaptor) DoResponse(c *gin.Context, resp *http.Response, info *relaycom
 		Created: info.StartTime.Unix(),
 		Data:    []dto.ImageData{{Url: signed}},
 	}
-	if hasEngineUsage {
-		imgResp.Usage = engineUsage
+	if imageUsage, ok := engineImageUsage(st.Usage); ok {
+		imgResp.Usage = imageUsage
 	}
 	jsonBytes, mErr := common.Marshal(imgResp)
 	if mErr != nil {
