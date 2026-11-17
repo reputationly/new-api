@@ -672,9 +672,15 @@ func (a *Adaptor) DoResponse(c *gin.Context, resp *http.Response, info *relaycom
 	}
 
 	// 5) 组 OpenAI 图片响应写回客户端。
+	// 引擎实测用量：先算出来，再连同图片一起写进响应 —— 官方 API 同样回 usage，
+	// 客户端要能据此预估费用；拿不到（老引擎/无 usage）时省略字段。
+	engineUsage, hasEngineUsage := engineUsageToDTO(st.Usage)
 	imgResp := dto.ImageResponse{
 		Created: info.StartTime.Unix(),
 		Data:    []dto.ImageData{{Url: signed}},
+	}
+	if hasEngineUsage {
+		imgResp.Usage = engineUsage
 	}
 	jsonBytes, mErr := common.Marshal(imgResp)
 	if mErr != nil {
@@ -684,8 +690,8 @@ func (a *Adaptor) DoResponse(c *gin.Context, resp *http.Response, info *relaycom
 
 	// Billing: prefer the engine's measured usage. The placeholder below only exists
 	// for engines that report nothing (it keeps the ratio path from multiplying by 0).
-	if usage, ok := engineUsageToDTO(st.Usage); ok {
-		return usage, nil
+	if hasEngineUsage {
+		return engineUsage, nil
 	}
 	return &dto.Usage{PromptTokens: 1, TotalTokens: 1}, nil
 }

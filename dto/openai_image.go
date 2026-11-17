@@ -176,6 +176,9 @@ type ImageResponse struct {
 	Data     []ImageData     `json:"data"`
 	Created  int64           `json:"created"`
 	Metadata json.RawMessage `json:"metadata,omitempty"`
+	// Usage 是引擎实测的计费用量（token 拆分），与 MiniMax 官方 image 接口同形。
+	// 客户端据此可以算价；缺失时省略字段（老引擎/第三方渠道不报）。
+	Usage *Usage `json:"usage,omitempty"`
 }
 type ImageData struct {
 	Url           string `json:"url"`
