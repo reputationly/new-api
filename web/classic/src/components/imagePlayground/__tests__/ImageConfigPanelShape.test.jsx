@@ -107,13 +107,13 @@ describe('area 模式：比例按钮组 + 分辨率下拉', () => {
       availableTiers: [1024, 2048],
     });
     expect(screen.queryByText('画质')).not.toBeNull();
-    expect(screen.getByText('超清')).not.toBeNull();
+    expect(screen.getByText('2K')).not.toBeNull();
     // 面积基准绝不能露给用户。
     expect(screen.queryByText(/2048（/)).toBeNull();
   });
 
   // 用户选的是比例和档位，真正下发的是算出来的 size——不写出来的话
-  // 「我选了超清到底出多大」没有任何地方能看到。
+  // 「我选了2K到底出多大」没有任何地方能看到。
   // 带上百万像素是给一个**跨比例可比**的量：同一档在 1:1 与 16:9 下长宽差很多、
   // 面积却基本一致，只看长宽会以为"换了比例就变小了"。
   it('把最终像素与百万像素写在下面', () => {
