@@ -2,6 +2,7 @@ package model
 
 import (
 	"strconv"
+	"strings"
 
 	"github.com/QuantumNous/new-api/common"
 
@@ -85,6 +86,32 @@ func IsModelNameDuplicated(id int, name string) (bool, error) {
 	var cnt int64
 	err := DB.Model(&Model{}).Where("model_name = ? AND id <> ?", name, id).Count(&cnt).Error
 	return cnt > 0, err
+}
+
+// GetResolvedModelMeta 取某个**实际模型名**对应的元数据行。
+//
+// 必须走 BuildModelMetaMap 那套展开规则，而不是 `WHERE model_name = ?`：一条前缀/后缀/
+// 包含规则同样能给实际模型名配上 status 与 visible_groups。诊断页若自己写精确匹配，
+// 就会在"配置了前缀规则"的站点上给出与线上行为相反的结论——那比没有诊断页更糟。
+//
+// 代价是一次全表加载（元数据 + 启用中的 abilities），因此只给管理端手工诊断用，
+// 不在任何热路径上调用。
+func GetResolvedModelMeta(modelName string) *Model {
+	name := strings.TrimSpace(modelName)
+	if name == "" {
+		return nil
+	}
+	var allMeta []Model
+	if err := DB.Find(&allMeta).Error; err != nil {
+		common.SysLog("failed to load model meta for diagnose: " + err.Error())
+		return nil
+	}
+	enableAbilities, err := GetAllEnableAbilityWithChannels()
+	if err != nil {
+		common.SysLog("failed to load abilities for diagnose: " + err.Error())
+		return nil
+	}
+	return BuildModelMetaMap(allMeta, enableAbilities)[name]
 }
 
 // modelUpdateSelectFields 是 Update() 强制更新的字段白名单（含零值）。

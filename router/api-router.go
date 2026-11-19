@@ -382,7 +382,16 @@ func SetApiRouter(router *gin.Engine) {
 			channelRoute.GET("/search", controller.SearchChannels)
 			channelRoute.GET("/models", controller.ChannelListModels)
 			channelRoute.GET("/missing_cost", controller.GetChannelsMissingCost)
+			// 汇总「哪些模型因渠道停用而对用户不可见」：渠道页据此把"一个红点"翻译成
+			// "N 个模型不可用"，并给出全站口径的计数。
+			channelRoute.GET("/invisible_models", controller.GetChannelInvisibleModels)
+			// 「为什么这个模型看不到」的逐闸诊断（渠道/别名/端点类型/媒体配置/缓存）。
+			// 响应含渠道 id 与名称，只挂 RootAuth。
+			channelRoute.GET("/diagnose", controller.DiagnoseChannelModel)
 			channelRoute.GET("/models_enabled", controller.EnabledListModels)
+			// 渠道编辑页的保存前预警：这批模型挂在这类渠道上会被判成什么端点
+			// （视频/图像/语音端点不会出现在文本体验区）。判据在服务端，避免前端复刻。
+			channelRoute.GET("/endpoint_types", controller.GetChannelModelEndpointTypes)
 			channelRoute.GET("/:id", controller.GetChannel)
 			channelRoute.GET("/:id/cost", controller.GetChannelCosts)
 			channelRoute.PUT("/:id/cost", controller.SaveChannelCosts)
@@ -576,6 +585,9 @@ func SetApiRouter(router *gin.Engine) {
 			modelsRoute.GET("/sync_upstream/preview", controller.SyncUpstreamPreview)
 			modelsRoute.POST("/sync_upstream", controller.SyncUpstreamModels)
 			modelsRoute.GET("/missing", controller.GetMissingModels)
+			// 「命名体检」：列出仅大小写不同的模型名分组（各自独立计价，只配一边会静默
+			// 落到默认倍率）。只读，不自动合并。
+			modelsRoute.GET("/case_variants", controller.GetModelCaseVariants)
 			modelsRoute.GET("/pricing", controller.GetAllPricing)
 			modelsRoute.GET("/", controller.GetAllModelsMeta)
 			modelsRoute.GET("/search", controller.SearchModelsMeta)
