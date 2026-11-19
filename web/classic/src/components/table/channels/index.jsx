@@ -44,7 +44,7 @@ const ChannelsPage = () => {
   // 「哪些模型因渠道停用而不可见」的汇总：渠道页上"禁用"只是一个红点，
   // 看不出它带走了多少模型（真实盘点：二十多条渠道长期禁用，几十个模型悄悄不可用）。
   const visibility = useChannelVisibilitySummary({
-    channelCount: channelsData.channelCount,
+    watch: channelsData.channels,
   });
 
   return (

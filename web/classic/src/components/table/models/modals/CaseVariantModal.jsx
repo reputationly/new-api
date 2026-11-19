@@ -88,7 +88,7 @@ const CaseVariantModal = ({ visible, onClose, t }) => {
             type='warning'
             closeIcon={null}
             description={t(
-              '以下名字仅大小写不同，但在系统里是彼此独立的模型：各自计价、各占一个模型下拉项。只配了一边的大小写时，另一边会按默认倍率计费。建议收敛成一个名字。',
+              '以下名字仅大小写不同，但在系统里是彼此独立的模型：各自计价、各占一个模型下拉项。只配了一边时，另一边在非自用模式下会被直接拒绝（价格未配置），自用模式下按默认倍率计费。建议收敛成一个名字。',
             )}
           />
           <div className='mt-3 flex flex-col gap-3'>
@@ -109,17 +109,32 @@ const CaseVariantModal = ({ visible, onClose, t }) => {
                         {v.enabled ? t('有启用渠道') : t('全部禁用')}
                       </Tag>
                       <Tag size='small'>#{v.channel_ids?.join(', #')}</Tag>
+                      {/* 计价有三种形态：倍率、固定价、分段计费表达式。只看倍率会把
+                          配了固定价/表达式的模型误标成"没配价"。 */}
                       <Tag
                         size='small'
-                        color={v.ratio_configured ? 'blue' : 'orange'}
+                        color={
+                          v.ratio_configured ||
+                          v.price_configured ||
+                          v.tiered_expr_configured
+                            ? 'blue'
+                            : 'orange'
+                        }
                       >
-                        {v.ratio_configured
-                          ? t('已配倍率')
-                          : t('未配倍率（按默认值计费）')}
+                        {v.ratio_configured ||
+                        v.price_configured ||
+                        v.tiered_expr_configured
+                          ? t('已配置价格')
+                          : t('未配置价格：非自用模式下请求会被拒绝')}
                       </Tag>
                       {v.price_configured && (
                         <Tag size='small' color='blue'>
-                          {t('已配固定价')}
+                          {t('固定价')}
+                        </Tag>
+                      )}
+                      {v.tiered_expr_configured && (
+                        <Tag size='small' color='blue'>
+                          {t('分段计费')}
                         </Tag>
                       )}
                     </div>

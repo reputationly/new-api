@@ -1,4 +1,4 @@
-import { API } from './api';
+import { API, addResponseSuccessHook } from './api';
 import { getUserIdFromLocalStorage } from './utils';
 
 // 前端只读接口的共享缓存：按完整 URL 缓存返回信封（res.data），供图片/视频/对话三个页面共用。
@@ -57,8 +57,11 @@ export function clearApiCache() {
 // 或手动刷新整页才看得到效果 —— "改完没生效"是本项目最常见的误判来源（真实案例：
 // 新加渠道后体验区选不到模型，DB 里一切正常，只是缓存没到点）。
 //
-// 放在拦截器里而不是各个调用点：渠道的写入口有十来处（单个/批量/按标签/删除禁用/
+// 放在统一钩子里而不是各个调用点：渠道的写入口有十来处（单个/批量/按标签/删除禁用/
 // 复制/修 ability…），逐个补必然漏一处，而漏掉的那处又会变成同一个 bug。
+//
+// 用 addResponseSuccessHook 而不是自己 axios.interceptors：拦截器挂在实例上，而登录后
+// updateAPI() 会新建实例，挂上去的回调随之失效（"登录后改配置不生效"就是这么来的）。
 const CHANNEL_WRITE_RE = /\/api\/channel(\/|\?|$)/;
 
 // 判断一次请求是否属于「会改变模型可见性的渠道写操作」。
@@ -71,7 +74,7 @@ export function isChannelCacheInvalidatingRequest(config) {
   return CHANNEL_WRITE_RE.test(String(config?.url || ''));
 }
 
-API.interceptors.response.use((response) => {
+addResponseSuccessHook((response) => {
   // 失败的写操作不该清缓存：它什么都没改，清了只是让用户多等一次请求。
   if (
     isChannelCacheInvalidatingRequest(response?.config) &&
@@ -79,5 +82,4 @@ API.interceptors.response.use((response) => {
   ) {
     clearApiCache();
   }
-  return response;
 });

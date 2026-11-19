@@ -391,14 +391,24 @@ const EditChannelModal = (props) => {
     let cancelled = false;
     const timer = setTimeout(async () => {
       try {
-        const res = await API.get('/api/channel/endpoint_types', {
-          params: { type: inputs.type, models: selected.join(',') },
-          skipErrorHandler: true,
-        });
+        // 分片提交：模型列表可能上百个，塞进 GET 的 query 会被网关截断，而截断的表现是
+        // 预警静默消失 —— 恰恰是这类提示最不该有的失败方式。
+        const chunks = [];
+        for (let i = 0; i < selected.length; i += 50) {
+          chunks.push(selected.slice(i, i + 50));
+        }
+        const merged = {};
+        for (const models of chunks) {
+          const res = await API.post(
+            '/api/channel/endpoint_types',
+            { type: inputs.type, models },
+            { skipErrorHandler: true },
+          );
+          if (cancelled) return;
+          Object.assign(merged, res?.data?.data?.models || {});
+        }
         if (cancelled) return;
-        setPlaygroundBlockedModels(
-          collectPlaygroundBlockedModels(res?.data?.data?.models),
-        );
+        setPlaygroundBlockedModels(collectPlaygroundBlockedModels(merged));
       } catch (_) {
         if (!cancelled) setPlaygroundBlockedModels([]);
       }

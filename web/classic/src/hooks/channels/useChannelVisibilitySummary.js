@@ -11,7 +11,7 @@ import { API } from '../../helpers';
 // 失败一律静默（返回 null）：这只是提示信息，不该因为它让整页报错或挡住操作。
 const ENDPOINT = '/api/channel/invisible_models';
 
-export const useChannelVisibilitySummary = ({ channelCount } = {}) => {
+export const useChannelVisibilitySummary = ({ watch } = {}) => {
   const [byChannel, setByChannel] = useState({});
   const [summary, setSummary] = useState(null);
   const [loading, setLoading] = useState(false);
@@ -35,11 +35,12 @@ export const useChannelVisibilitySummary = ({ channelCount } = {}) => {
     }
   }, []);
 
-  // 渠道数量变化（新建/删除）后重新统计；启用/禁用不改变数量，靠横幅上的「重新统计」。
-  // 刻意不去挂每一处渠道写操作：那有十来处，逐个补必然漏，而这里只是一个提示。
+  // watch 传的是渠道列表数组本身：新建/删除/启用/禁用之后 useChannelsData 都会 setChannels，
+  // 数组引用变化即重算。挂在"渠道数组"而不是"渠道数量"上，是因为启停不改变数量——
+  // 那正是最常见的场景（禁用一条渠道，模型立刻不可见）。
   useEffect(() => {
     reload();
-  }, [reload, channelCount]);
+  }, [reload, watch]);
 
   return { byChannel, summary, loading, reload };
 };

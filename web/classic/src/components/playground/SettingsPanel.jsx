@@ -39,7 +39,7 @@ import {
   Shuffle,
 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
-import { isAdmin, renderGroupOption, selectFilter } from '../../helpers';
+import { isRoot, renderGroupOption, selectFilter } from '../../helpers';
 import ParameterControl from './ParameterControl';
 import ImageUrlInput from './ImageUrlInput';
 import ConfigManager from './ConfigManager';
@@ -67,10 +67,10 @@ const SettingsPanel = ({
 }) => {
   const { t } = useTranslation();
   // 模型可见性诊断弹窗：入口挂在模型下拉的底部，回答「为什么这个模型选不到」。
-  // 接口是 RootAuth（响应里带渠道 id/名称/分组），所以入口只对管理员显示 ——
-  // 给普通用户看一个点开就 403 的链接比不给更糟。
+  // 接口是 /api/channel/*，走的是 RootAuth（仅超管）；响应里还带渠道 id/名称/分组。
+  // 入口必须与鉴权一致：普通管理员点开只会拿到 403，比不显示更糟。
   const [diagnoseVisible, setDiagnoseVisible] = useState(false);
-  const canDiagnose = isAdmin();
+  const canDiagnose = isRoot();
 
   const currentConfig = {
     inputs,

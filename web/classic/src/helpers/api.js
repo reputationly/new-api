@@ -49,6 +49,21 @@ function redirectToOAuthUrl(url, options = {}) {
   window.location.assign(targetUrl);
 }
 
+// 响应成功后要跑的回调集合。由 apiCache 注册（渠道写操作要清共享缓存）。
+//
+// 用注册表而不是让调用方自己挂 axios 拦截器：拦截器挂在**实例**上，而登录后
+// updateAPI() 会换掉实例 —— 挂在上面的东西全部失效。历史 bug 正是这么来的
+// （401 处理一度只在首次创建的实例上生效）。所以拦截器本身放在 patchAPIInstance 里，
+// 每个实例都重挂，业务方只往这张表里登记钩子。
+const responseSuccessHooks = new Set();
+
+export function addResponseSuccessHook(hook) {
+  if (typeof hook === 'function') {
+    responseSuccessHooks.add(hook);
+  }
+  return () => responseSuccessHooks.delete(hook);
+}
+
 function patchAPIInstance(instance) {
   const originalGet = instance.get.bind(instance);
   const inFlightGetRequests = new Map();
@@ -75,6 +90,38 @@ function patchAPIInstance(instance) {
     inFlightGetRequests.set(key, reqPromise);
     return reqPromise;
   };
+
+  instance.interceptors.response.use(
+    (response) => {
+      // 钩子异常不能影响主流程：它们只做缓存失效这类副作用
+      responseSuccessHooks.forEach((hook) => {
+        try {
+          hook(response);
+        } catch (_) {
+          // 忽略
+        }
+      });
+      return response;
+    },
+    (error) => {
+      // 401 = 会话过期，无条件先处理，**放在 skipErrorHandler 之前**。
+      //
+      // skipErrorHandler 的语义是「这次错误我自己渲染，别弹全局 toast」，不是「登录失效
+      // 也别管」。原先 401 只在 showError 里处理，而体验区所有请求都带 skipErrorHandler
+      // 并把 message 渲染成对话气泡——正好绕开了它。表现就是会话过期后页面看着还登着，
+      // 生成时冒一句「无权进行此操作，未登录且未提供 access token」，用户不知道该干嘛。
+      if (error.response?.status === 401) {
+        handleUnauthorized();
+        return Promise.reject(error);
+      }
+      // 如果请求配置中显式要求跳过全局错误处理，则不弹出默认错误提示
+      if (error.config && error.config.skipErrorHandler) {
+        return Promise.reject(error);
+      }
+      showError(error);
+      return Promise.reject(error);
+    },
+  );
 }
 
 patchAPIInstance(API);
@@ -92,28 +139,6 @@ export function updateAPI() {
 
   patchAPIInstance(API);
 }
-
-API.interceptors.response.use(
-  (response) => response,
-  (error) => {
-    // 401 = 会话过期，无条件先处理，**放在 skipErrorHandler 之前**。
-    //
-    // skipErrorHandler 的语义是「这次错误我自己渲染，别弹全局 toast」，不是「登录失效
-    // 也别管」。原先 401 只在 showError 里处理，而体验区所有请求都带 skipErrorHandler
-    // 并把 message 渲染成对话气泡——正好绕开了它。表现就是会话过期后页面看着还登着，
-    // 生成时冒一句「无权进行此操作，未登录且未提供 access token」，用户不知道该干嘛。
-    if (error.response?.status === 401) {
-      handleUnauthorized();
-      return Promise.reject(error);
-    }
-    // 如果请求配置中显式要求跳过全局错误处理，则不弹出默认错误提示
-    if (error.config && error.config.skipErrorHandler) {
-      return Promise.reject(error);
-    }
-    showError(error);
-    return Promise.reject(error);
-  },
-);
 
 // playground
 
