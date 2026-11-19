@@ -67,6 +67,16 @@ describe('isChannelCacheInvalidatingRequest', () => {
     ).toBe(false);
   });
 
+  it('渠道命名空间下的只读 POST 不清缓存', () => {
+    // 渠道编辑弹窗每选一个模型都会打一次；清了会让模型下拉反复重拉
+    expect(
+      isChannelCacheInvalidatingRequest({
+        method: 'post',
+        url: '/api/channel/endpoint_types',
+      }),
+    ).toBe(false);
+  });
+
   it('无关接口与缺字段的请求不清缓存', () => {
     expect(
       isChannelCacheInvalidatingRequest({

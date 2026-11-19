@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 
 import { API } from '../../helpers';
 
@@ -35,12 +35,19 @@ export const useChannelVisibilitySummary = ({ watch } = {}) => {
     }
   }, []);
 
-  // watch 传的是渠道列表数组本身：新建/删除/启用/禁用之后 useChannelsData 都会 setChannels，
-  // 数组引用变化即重算。挂在"渠道数组"而不是"渠道数量"上，是因为启停不改变数量——
-  // 那正是最常见的场景（禁用一条渠道，模型立刻不可见）。
+  // watch 传渠道列表：新建/删除/启用/禁用之后 useChannelsData 都会 setChannels。
+  // 但只看数组引用太敏感了 —— 单渠道测速、查余额同样会替换数组，每次都重算就是白跑
+  // 两条 abilities 全表查询。这里压成 "id:status" 签名，只有真正影响可见性的字段变化才重算。
+  const signature = useMemo(() => {
+    if (!Array.isArray(watch)) return '';
+    return watch
+      .map((channel) => `${channel?.id}:${channel?.status}`)
+      .join(',');
+  }, [watch]);
+
   useEffect(() => {
     reload();
-  }, [reload, watch]);
+  }, [reload, signature]);
 
   return { byChannel, summary, loading, reload };
 };

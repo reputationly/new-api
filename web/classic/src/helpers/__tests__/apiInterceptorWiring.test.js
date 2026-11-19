@@ -37,7 +37,10 @@ describe('响应拦截器挂在实例上', () => {
     const remove = addResponseSuccessHook((response) => seen.push(response));
     updateAPI(); // 换实例后钩子依然生效，这正是本次修复的核心
 
-    const response = { data: { success: true }, config: { method: 'get', url: '/api/foo' } };
+    const response = {
+      data: { success: true },
+      config: { method: 'get', url: '/api/foo' },
+    };
     await runResponseChain(response);
 
     expect(seen).toHaveLength(1);

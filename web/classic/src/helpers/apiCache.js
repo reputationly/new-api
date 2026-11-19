@@ -64,6 +64,11 @@ export function clearApiCache() {
 // updateAPI() 会新建实例，挂上去的回调随之失效（"登录后改配置不生效"就是这么来的）。
 const CHANNEL_WRITE_RE = /\/api\/channel(\/|\?|$)/;
 
+// 渠道命名空间下的**只读** POST：/api/channel/endpoint_types 是查询接口（用 POST 只是为了
+// 不被 URL 长度限制），渠道编辑弹窗每选一个模型就会打一次。它命中了上面的路径判据，
+// 不排除的话每次选模型都要清一遍共享缓存，下拉会反复重拉。
+const READ_ONLY_CHANNEL_ENDPOINTS = ['/api/channel/endpoint_types'];
+
 // 判断一次请求是否属于「会改变模型可见性的渠道写操作」。
 // 导出仅为可测：拦截器里直接用，不对外当作公共 API。
 export function isChannelCacheInvalidatingRequest(config) {
@@ -71,7 +76,11 @@ export function isChannelCacheInvalidatingRequest(config) {
   if (method === 'get' || method === 'head' || method === 'options') {
     return false;
   }
-  return CHANNEL_WRITE_RE.test(String(config?.url || ''));
+  const url = String(config?.url || '');
+  if (READ_ONLY_CHANNEL_ENDPOINTS.some((path) => url.startsWith(path))) {
+    return false;
+  }
+  return CHANNEL_WRITE_RE.test(url);
 }
 
 addResponseSuccessHook((response) => {
