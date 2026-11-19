@@ -19,6 +19,7 @@ For commercial licensing, please contact support@quantumnous.com
 
 import React, { useState } from 'react';
 import MissingModelsModal from './modals/MissingModelsModal';
+import CaseVariantModal from './modals/CaseVariantModal';
 import PrefillGroupManagement from './modals/PrefillGroupManagement';
 import EditPrefillGroupModal from './modals/EditPrefillGroupModal';
 import { Button, Modal, Popover, RadioGroup, Radio } from '@douyinfe/semi-ui';
@@ -46,6 +47,7 @@ const ModelsActions = ({
   // Modal states
   const [showDeleteModal, setShowDeleteModal] = useState(false);
   const [showMissingModal, setShowMissingModal] = useState(false);
+  const [showCaseVariantModal, setShowCaseVariantModal] = useState(false);
   const [showGroupManagement, setShowGroupManagement] = useState(false);
   const [showAddPrefill, setShowAddPrefill] = useState(false);
   const [prefillInit, setPrefillInit] = useState({ id: undefined });
@@ -126,6 +128,15 @@ const ModelsActions = ({
           onClick={() => setShowMissingModal(true)}
         >
           {t('未配置模型')}
+        </Button>
+
+        <Button
+          type='secondary'
+          className='flex-1 md:flex-initial'
+          size='small'
+          onClick={() => setShowCaseVariantModal(true)}
+        >
+          {t('命名体检')}
         </Button>
 
         <Popover
@@ -214,6 +225,12 @@ const ModelsActions = ({
           }
           setShowSyncModal(false);
         }}
+      />
+
+      <CaseVariantModal
+        visible={showCaseVariantModal}
+        onClose={() => setShowCaseVariantModal(false)}
+        t={t}
       />
 
       <MissingModelsModal

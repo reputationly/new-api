@@ -65,6 +65,8 @@ const ChannelsTable = (channelsData) => {
     setCurrentMultiKeyChannel,
     openUpstreamUpdateModal,
     detectChannelUpstreamUpdates,
+    // 渠道 -> 当前不可见模型数（由页面的可见性汇总提供，见 useChannelVisibilitySummary）
+    invisibleByChannel,
   } = channelsData;
 
   // Get all columns
@@ -94,6 +96,7 @@ const ChannelsTable = (channelsData) => {
       setCurrentMultiKeyChannel,
       openUpstreamUpdateModal,
       detectChannelUpstreamUpdates,
+      invisibleByChannel,
     });
   }, [
     t,
@@ -120,6 +123,7 @@ const ChannelsTable = (channelsData) => {
     setCurrentMultiKeyChannel,
     openUpstreamUpdateModal,
     detectChannelUpstreamUpdates,
+    invisibleByChannel,
   ]);
 
   // Filter columns based on visibility settings

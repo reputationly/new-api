@@ -71,6 +71,7 @@ import StatusCodeRiskGuardModal from './StatusCodeRiskGuardModal';
 import ChannelKeyDisplay from '../../../common/ui/ChannelKeyDisplay';
 import { useSecureVerification } from '../../../../hooks/common/useSecureVerification';
 import { parseChannelConnectionString } from '../../../../helpers/token';
+import { collectPlaygroundBlockedModels } from '../../../../helpers/channelEndpointWarnings';
 import { createApiCalls } from '../../../../services/secureVerification';
 import {
   collectInvalidStatusCodeEntries,
@@ -277,6 +278,9 @@ const EditChannelModal = (props) => {
   const [modelGroups, setModelGroups] = useState([]);
   const [customModel, setCustomModel] = useState('');
   const [modelSearchValue, setModelSearchValue] = useState('');
+  // 保存前预警：这些模型挂在本渠道类型下会被判成非文本端点（视频/图像/语音…），
+  // 保存后不会出现在文本体验区 —— 端点类型由渠道类型与模型名共同决定，只有后端算得准。
+  const [playgroundBlockedModels, setPlaygroundBlockedModels] = useState([]);
   const [modalImageUrl, setModalImageUrl] = useState('');
   const [isModalOpenurl, setIsModalOpenurl] = useState(false);
   const [modelModalVisible, setModelModalVisible] = useState(false);
@@ -372,6 +376,39 @@ const EditChannelModal = (props) => {
       name: keyword,
     });
   }, [modelSearchMatchedCount, modelSearchValue, t]);
+
+  // 端点类型预警：渠道类型或模型列表变化后（防抖 400ms，选模型时是连续触发）问一次后端。
+  // 端点类型由「渠道类型 + 模型名」共同决定（GPUStackPlus 按名字分图片/视频、dall-e/
+  // gpt-image/flux 判图像、tts/speech- 判语音），前端复刻必漂移，所以只渲染结论。
+  useEffect(() => {
+    const selected = (Array.isArray(inputs.models) ? inputs.models : []).filter(
+      Boolean,
+    );
+    if (selected.length === 0) {
+      setPlaygroundBlockedModels([]);
+      return undefined;
+    }
+    let cancelled = false;
+    const timer = setTimeout(async () => {
+      try {
+        const res = await API.get('/api/channel/endpoint_types', {
+          params: { type: inputs.type, models: selected.join(',') },
+          skipErrorHandler: true,
+        });
+        if (cancelled) return;
+        setPlaygroundBlockedModels(
+          collectPlaygroundBlockedModels(res?.data?.data?.models),
+        );
+      } catch (_) {
+        if (!cancelled) setPlaygroundBlockedModels([]);
+      }
+    }, 400);
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+  }, [inputs.type, inputs.models]);
+
   const paramOverrideMeta = useMemo(() => {
     const raw =
       typeof inputs.param_override === 'string'
@@ -4216,6 +4253,40 @@ const EditChannelModal = (props) => {
                             <Text className='px-3 py-2 block text-xs !text-semi-color-text-2'>
                               {modelSearchHintText}
                             </Text>
+                          ) : null
+                        }
+                        extraText={
+                          // 「模型广场有、文本体验区没有」最常见的成因就在这里：
+                          // 端点类型由渠道类型与模型名共同决定，选模型时没有任何提示。
+                          playgroundBlockedModels.length > 0 ? (
+                            <div className='flex flex-col gap-1'>
+                              <Text size='small' type='warning'>
+                                {t(
+                                  '以下模型会被判成非文本端点，保存后不会出现在文本体验区（仍可用于对应接口）：',
+                                )}
+                              </Text>
+                              {playgroundBlockedModels.map((item) => (
+                                <Text
+                                  key={item.model}
+                                  size='small'
+                                  type='warning'
+                                >
+                                  {item.model} →{' '}
+                                  {item.endpoints
+                                    .map((e) =>
+                                      e.path
+                                        ? `${e.label}(${e.path})`
+                                        : e.label,
+                                    )
+                                    .join('、')}
+                                </Text>
+                              ))}
+                              <Text size='small' type='tertiary'>
+                                {t(
+                                  '若这些模型确实要在文本体验区使用，请改用 OpenAI 类型渠道，或在该模型元数据里自定义 endpoints。',
+                                )}
+                              </Text>
+                            </div>
                           ) : null
                         }
                         style={{ width: '100%' }}

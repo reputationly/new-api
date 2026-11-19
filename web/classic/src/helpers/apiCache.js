@@ -51,3 +51,33 @@ export function clearApiCache() {
   cache.clear();
   inflight.clear();
 }
+
+// 渠道写操作（保存/删除/启停/批量改标签/按标签改模型）会改变 /api/user/models、
+// /api/pricing、/api/user/group 的结果。改完不失效的话，运营得等 TTL（最长 5 分钟）
+// 或手动刷新整页才看得到效果 —— "改完没生效"是本项目最常见的误判来源（真实案例：
+// 新加渠道后体验区选不到模型，DB 里一切正常，只是缓存没到点）。
+//
+// 放在拦截器里而不是各个调用点：渠道的写入口有十来处（单个/批量/按标签/删除禁用/
+// 复制/修 ability…），逐个补必然漏一处，而漏掉的那处又会变成同一个 bug。
+const CHANNEL_WRITE_RE = /\/api\/channel(\/|\?|$)/;
+
+// 判断一次请求是否属于「会改变模型可见性的渠道写操作」。
+// 导出仅为可测：拦截器里直接用，不对外当作公共 API。
+export function isChannelCacheInvalidatingRequest(config) {
+  const method = String(config?.method || 'get').toLowerCase();
+  if (method === 'get' || method === 'head' || method === 'options') {
+    return false;
+  }
+  return CHANNEL_WRITE_RE.test(String(config?.url || ''));
+}
+
+API.interceptors.response.use((response) => {
+  // 失败的写操作不该清缓存：它什么都没改，清了只是让用户多等一次请求。
+  if (
+    isChannelCacheInvalidatingRequest(response?.config) &&
+    response?.data?.success !== false
+  ) {
+    clearApiCache();
+  }
+  return response;
+});

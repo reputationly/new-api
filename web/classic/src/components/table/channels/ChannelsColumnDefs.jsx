@@ -329,6 +329,7 @@ export const getChannelsColumns = ({
   setCurrentMultiKeyChannel,
   openUpstreamUpdateModal,
   detectChannelUpstreamUpdates,
+  invisibleByChannel = {},
 }) => {
   return [
     {
@@ -495,6 +496,23 @@ export const getChannelsColumns = ({
       title: t('状态'),
       dataIndex: 'status',
       render: (text, record, index) => {
+        // 「禁用」本身只是个红点，看不出后果：这条渠道带走的模型会从模型广场、体验区、
+        // 令牌白名单里一起消失。这里把后果直接标在状态旁边。
+        const invisibleCount = invisibleByChannel?.[record.id] || 0;
+        const invisibleTag =
+          invisibleCount > 0 ? (
+            <Tooltip
+              content={t(
+                '该渠道有 {{count}} 个模型当前对用户不可见：能力行随渠道状态被置为停用，模型广场、体验区与令牌白名单都不会返回它们。',
+                { count: invisibleCount },
+              )}
+            >
+              <Tag color='grey' shape='circle' type='light' className='ml-1'>
+                {t('{{count}} 个模型不可见', { count: invisibleCount })}
+              </Tag>
+            </Tooltip>
+          ) : null;
+        let statusNode;
         if (text === 3) {
           if (record.other_info === '') {
             record.other_info = '{}';
@@ -502,20 +520,24 @@ export const getChannelsColumns = ({
           let otherInfo = JSON.parse(record.other_info);
           let reason = otherInfo['status_reason'];
           let time = otherInfo['status_time'];
-          return (
-            <div>
-              <Tooltip
-                content={
-                  t('原因：') + reason + t('，时间：') + timestamp2string(time)
-                }
-              >
-                {renderStatus(text, record.channel_info, t)}
-              </Tooltip>
-            </div>
+          statusNode = (
+            <Tooltip
+              content={
+                t('原因：') + reason + t('，时间：') + timestamp2string(time)
+              }
+            >
+              {renderStatus(text, record.channel_info, t)}
+            </Tooltip>
           );
         } else {
-          return renderStatus(text, record.channel_info, t);
+          statusNode = renderStatus(text, record.channel_info, t);
         }
+        return (
+          <div className='flex items-center gap-1 flex-wrap'>
+            {statusNode}
+            {invisibleTag}
+          </div>
+        );
       },
     },
     {

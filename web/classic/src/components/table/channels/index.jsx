@@ -18,7 +18,7 @@ For commercial licensing, please contact support@quantumnous.com
 */
 
 import React from 'react';
-import { Banner } from '@douyinfe/semi-ui';
+import { Banner, Tooltip } from '@douyinfe/semi-ui';
 import { IconAlertTriangle } from '@douyinfe/semi-icons';
 import CardPro from '../../common/ui/CardPro';
 import ChannelsTable from './ChannelsTable';
@@ -26,6 +26,7 @@ import ChannelsActions from './ChannelsActions';
 import ChannelsFilters from './ChannelsFilters';
 import ChannelsTabs from './ChannelsTabs';
 import { useChannelsData } from '../../../hooks/channels/useChannelsData';
+import { useChannelVisibilitySummary } from '../../../hooks/channels/useChannelVisibilitySummary';
 import { useIsMobile } from '../../../hooks/common/useIsMobile';
 import BatchTagModal from './modals/BatchTagModal';
 import ModelTestModal from './modals/ModelTestModal';
@@ -40,6 +41,11 @@ import { createCardProPagination } from '../../../helpers/utils';
 const ChannelsPage = () => {
   const channelsData = useChannelsData();
   const isMobile = useIsMobile();
+  // 「哪些模型因渠道停用而不可见」的汇总：渠道页上"禁用"只是一个红点，
+  // 看不出它带走了多少模型（真实盘点：二十多条渠道长期禁用，几十个模型悄悄不可用）。
+  const visibility = useChannelVisibilitySummary({
+    channelCount: channelsData.channelCount,
+  });
 
   return (
     <>
@@ -84,6 +90,44 @@ const ChannelsPage = () => {
       />
 
       {/* Main Content */}
+      {visibility.summary && visibility.summary.total > 0 ? (
+        <Banner
+          type='warning'
+          closeIcon={null}
+          icon={
+            <IconAlertTriangle
+              size='large'
+              style={{ color: 'var(--semi-color-warning)' }}
+            />
+          }
+          description={
+            <span>
+              {channelsData.t(
+                '当前有 {{count}} 个模型因渠道停用而对用户不可见：模型广场、体验区与令牌白名单都不会返回它们。',
+                { count: visibility.summary.total },
+              )}{' '}
+              <Tooltip
+                content={visibility.summary.names.slice(0, 40).join('、')}
+              >
+                <span className='cursor-pointer underline'>
+                  {channelsData.t('查看清单')}
+                </span>
+              </Tooltip>{' '}
+              <span
+                role='button'
+                tabIndex={0}
+                className='cursor-pointer underline text-blue-600'
+                onClick={visibility.reload}
+              >
+                {visibility.loading
+                  ? channelsData.t('统计中…')
+                  : channelsData.t('重新统计')}
+              </span>
+            </span>
+          }
+          style={{ marginBottom: 12 }}
+        />
+      ) : null}
       {channelsData.globalPassThroughEnabled ? (
         <Banner
           type='warning'
@@ -116,7 +160,10 @@ const ChannelsPage = () => {
         })}
         t={channelsData.t}
       >
-        <ChannelsTable {...channelsData} />
+        <ChannelsTable
+          {...channelsData}
+          invisibleByChannel={visibility.byChannel}
+        />
       </CardPro>
     </>
   );

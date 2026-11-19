@@ -17,7 +17,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 
-import React from 'react';
+import React, { useState } from 'react';
 import {
   Card,
   Select,
@@ -39,11 +39,12 @@ import {
   Shuffle,
 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
-import { renderGroupOption, selectFilter } from '../../helpers';
+import { isAdmin, renderGroupOption, selectFilter } from '../../helpers';
 import ParameterControl from './ParameterControl';
 import ImageUrlInput from './ImageUrlInput';
 import ConfigManager from './ConfigManager';
 import CustomRequestEditor from './CustomRequestEditor';
+import ModelDiagnoseModal from './ModelDiagnoseModal';
 
 const SettingsPanel = ({
   inputs,
@@ -65,6 +66,11 @@ const SettingsPanel = ({
   messages,
 }) => {
   const { t } = useTranslation();
+  // 模型可见性诊断弹窗：入口挂在模型下拉的底部，回答「为什么这个模型选不到」。
+  // 接口是 RootAuth（响应里带渠道 id/名称/分组），所以入口只对管理员显示 ——
+  // 给普通用户看一个点开就 403 的链接比不给更糟。
+  const [diagnoseVisible, setDiagnoseVisible] = useState(false);
+  const canDiagnose = isAdmin();
 
   const currentConfig = {
     inputs,
@@ -195,6 +201,22 @@ const SettingsPanel = ({
             value={inputs.model}
             autoComplete='new-password'
             optionList={models}
+            innerBottomSlot={
+              // 模型不可见有五六种互相独立、且都静默失败的原因（别名把它当内部名、
+              // 渠道被禁用、端点类型被判成视频/图片…）。与其让用户去猜，不如给一个
+              // 直达诊断的入口 —— 它调的就是后端那套判据，不会与页面结论分叉。
+              canDiagnose ? (
+                <div className='px-3 py-2'>
+                  <Typography.Text
+                    size='small'
+                    link
+                    onClick={() => setDiagnoseVisible(true)}
+                  >
+                    {t('找不到模型？诊断一下')}
+                  </Typography.Text>
+                </div>
+              ) : null
+            }
             style={{ width: '100%' }}
             dropdownStyle={{ width: '100%', maxWidth: '100%' }}
             className='!rounded-lg'
@@ -312,6 +334,12 @@ const SettingsPanel = ({
           />
         </div>
       )}
+
+      <ModelDiagnoseModal
+        visible={diagnoseVisible}
+        onClose={() => setDiagnoseVisible(false)}
+        defaultModel={inputs.model}
+      />
     </Card>
   );
 };
