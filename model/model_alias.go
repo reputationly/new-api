@@ -193,6 +193,63 @@ func IsHiddenModelName(name string) bool {
 	return ok
 }
 
+// ModelAliasDeclarer 描述「哪条渠道把某个名字声明成了内部名」。
+//
+// 存在的理由只有一处：保存渠道时要拒绝「把内部名写进模型列表」这种配置，而错误信息
+// 必须说清是谁声明的 —— 只报「这是内部名」等于让运营自己去翻全部渠道的别名。
+type ModelAliasDeclarer struct {
+	ChannelId   int    `json:"channel_id"`
+	ChannelName string `json:"channel_name"`
+	PublicName  string `json:"public_name"`
+}
+
+// FindModelAliasDeclarers 反查站点内把 internalName 当内部名的别名声明。
+//
+// 与 IsHiddenModelName 的分工：那个读**缓存**、只回答「是否隐藏」；这个直查**库**、
+// 多回答一个「谁」。保存路径上必须用后者 —— 缓存可能落后一个同步周期，而错误提示里
+// 没有渠道名就没有可操作性。
+//
+// fail-open：查询失败返回空切片，不阻断渠道保存。拦截是为了给出可行动的提示，
+// 不该因为一次 DB 抖动把保存本身挡死（真正建不出 ability 时会由 AddAbilities 兜住）。
+func FindModelAliasDeclarers(internalName string) []ModelAliasDeclarer {
+	name := strings.TrimSpace(internalName)
+	if name == "" {
+		return nil
+	}
+	var channels []*Channel
+	// 不做 LIKE 预筛：别名的值可能是 `\/`、\uXXXX 等转义形式，字符串匹配会漏；
+	// 渠道数量级只有数十到数百，扫一遍是保存路径上可以接受的代价。
+	err := DB.Select("id", "name", "model_alias").
+		Where("model_alias IS NOT NULL AND model_alias <> ''").
+		Find(&channels).Error
+	if err != nil {
+		common.SysLog("failed to load model_alias for declarer lookup: " + err.Error())
+		return nil
+	}
+	declarers := make([]ModelAliasDeclarer, 0)
+	for _, channel := range channels {
+		if channel == nil {
+			continue
+		}
+		aliasMap, err := ParseModelAlias(channel.GetModelAlias())
+		if err != nil {
+			continue
+		}
+		for publicName, internal := range aliasMap {
+			if internal == name {
+				declarers = append(declarers, ModelAliasDeclarer{
+					ChannelId:   channel.Id,
+					ChannelName: channel.Name,
+					PublicName:  publicName,
+				})
+			}
+		}
+	}
+	// map 的遍历顺序是随机的，排序只为让错误文案稳定（否则同一次错误每次拼出的顺序不同）。
+	sort.Slice(declarers, func(i, j int) bool { return declarers[i].ChannelId < declarers[j].ChannelId })
+	return declarers
+}
+
 // HasHiddenModelNames 供各过滤点短路：绝大多数站点一条别名都没配。
 func HasHiddenModelNames() bool {
 	modelAliasLock.RLock()

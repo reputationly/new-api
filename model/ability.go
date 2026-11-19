@@ -137,6 +137,37 @@ func GetAllEnableAbilities() []Ability {
 	return abilities
 }
 
+// FindChannelsWithAbilityFor 返回 abilities 表里存在该模型名的渠道。
+//
+// 用于保存「模型别名」时的一致性检查：把某个名字声明成内部名，会让正在售卖它的渠道
+// 在 abilities 重建时丢掉那一行（见 ReconcileHiddenModelAbilities），也就是那个模型
+// 从模型广场、/v1/models、体验区和令牌白名单里一起消失 —— 而别名是配在**另一条**渠道
+// 上的，出事的渠道页面上没有任何痕迹。真实事故就是这么发生的：A 配了
+// `Qwen3.8-Max -> qwen3.8-max`，B 正在卖 `qwen3.8-max`，B 的模型静默消失。
+//
+// 不看 enabled：禁用的渠道同样会在重建后失去这一行，重新启用也不会回来。
+func FindChannelsWithAbilityFor(modelName string) []*Channel {
+	name := strings.TrimSpace(modelName)
+	if name == "" {
+		return nil
+	}
+	ids := make([]int, 0)
+	err := DB.Model(&Ability{}).Where("model = ?", name).Distinct("channel_id").Pluck("channel_id", &ids).Error
+	if err != nil {
+		common.SysLog("failed to load channels for ability lookup: " + err.Error())
+		return nil
+	}
+	if len(ids) == 0 {
+		return nil
+	}
+	channels, err := GetChannelsByIds(ids)
+	if err != nil {
+		common.SysLog("failed to load channels for ability lookup: " + err.Error())
+		return nil
+	}
+	return channels
+}
+
 func getPriority(group string, model string, retry int) (int, error) {
 
 	var priorities []int
