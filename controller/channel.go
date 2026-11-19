@@ -461,15 +461,30 @@ func validateChannel(channel *model.Channel, isAdd bool) error {
 	}
 
 	// 模型列表 ↔ 别名的一致性检查（详见 validateModelAliasConsistency）。
-	// 上下文取自库里的**旧值**：本次保存即将覆盖它们，不能算作冲突方，也不能把
-	// 历史遗留的名字当成"这次新加的"。
-	policyCtx := modelAliasPolicyContext{}
+	// 判据建立在**保存生效后**的状态上：没提交的字段库里旧值仍然生效，所以这里先取旧行，
+	// 再让 buildPolicyTargetsFromChannels 按"提交了用新值、没提交用旧值"算出生效状态。
+	storedChannels := make([]*model.Channel, 0, 1)
 	if channel.Id > 0 {
 		if stored, err := model.GetChannelById(channel.Id, false); err == nil && stored != nil {
-			policyCtx = buildModelAliasPolicyContext([]*model.Channel{stored})
+			storedChannels = append(storedChannels, stored)
 		}
 	}
-	if err := validateModelAliasConsistency(channel.GetModels(), aliasMap, policyCtx); err != nil {
+	modelsSubmitted := strings.TrimSpace(channel.Models) != ""
+	aliasSubmitted := channel.ModelAlias != nil
+	targets := buildPolicyTargetsFromChannels(storedChannels, channel.GetModels(), modelsSubmitted, aliasMap, aliasSubmitted)
+	if len(targets) == 0 {
+		// 新增渠道：没有"库里的旧值"，生效状态就是提交值
+		targets = []modelAliasPolicyTarget{{
+			StoredModels:    nil,
+			EffectiveModels: normalizeModelNames(channel.GetModels()),
+			StoredAlias:     nil,
+			EffectiveAlias:  aliasMap,
+		}}
+	} else if modelsSubmitted {
+		// 生效模型列表以本次提交为准（上面按 parsedalias 建 target 时已处理别名侧）
+		targets[0].EffectiveModels = normalizeModelNames(channel.GetModels())
+	}
+	if err := validateModelAliasConsistency(targets); err != nil {
 		return err
 	}
 
@@ -852,13 +867,16 @@ func EditTagChannels(c *gin.Context) {
 			}
 		}
 	}
-	if len(tagModels) > 0 || len(tagAliasMap) > 0 {
+	if channelTag.Models != nil || channelTag.ModelAlias != nil {
 		tagChannels, err := model.GetChannelsByTag(channelTag.Tag, false, false)
 		if err != nil {
 			common.ApiError(c, err)
 			return
 		}
-		if err := validateModelAliasConsistency(tagModels, tagAliasMap, buildModelAliasPolicyContext(tagChannels)); err != nil {
+		// 标签编辑是"同一份新值覆盖标签下所有渠道"：逐条算出各自生效后的状态再校验，
+		// 没提交的字段沿用那条渠道自己的旧值。
+		targets := buildPolicyTargetsFromChannels(tagChannels, tagModels, channelTag.Models != nil, tagAliasMap, channelTag.ModelAlias != nil)
+		if err := validateModelAliasConsistency(targets); err != nil {
 			c.JSON(http.StatusOK, gin.H{
 				"success": false,
 				"message": err.Error(),

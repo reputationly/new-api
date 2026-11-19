@@ -170,8 +170,11 @@ func TestValidateChannelDoesNotConflictWithItself(t *testing.T) {
 	}).Error)
 	model.InitModelAliasCache()
 	t.Cleanup(func() { model.InitModelAliasCache() })
+	// 注意必须是**显式清空**（空串指针），而不是"不提交"：不提交时库里的旧别名仍然生效，
+	// 那时把 zz-int 写进模型列表依旧是错配置（见下一条用例）。
+	emptyAlias := ""
 	require.NoError(t, validateChannel(&model.Channel{
-		Id: 9702, Key: "k", Models: "zz-int", Group: "default",
+		Id: 9702, Key: "k", Models: "zz-int", Group: "default", ModelAlias: &emptyAlias,
 	}, false), "撤掉别名后自己不再声明这个内部名，应该放行")
 }
 
@@ -215,5 +218,105 @@ func TestValidateChannelRejectsSelfReferentialAlias(t *testing.T) {
 		Key: "k", Models: "zz-sr-x,zz-sr-y", Group: "default", ModelAlias: &alias,
 	}, true)
 	require.Error(t, err)
-	require.Contains(t, err.Error(), "本次保存")
+	require.Contains(t, err.Error(), "保存生效")
 }
+
+// 只加别名、不动模型列表：渠道卖 y 又声明 X -> y，保存后 y 不再生成 ability。
+// 上一版把「自家渠道」整体排除后漏掉了这条 —— 自引用的错配置永远要拦。
+func TestValidateChannelRejectsAliasHidingOwnListedModel(t *testing.T) {
+	db := setupModelListControllerTestDB(t)
+
+	require.NoError(t, db.Create(&model.Channel{
+		Id: 9711, Name: "alias-only", Key: "k", Models: "zz-own-y",
+		Group: "default", Status: common.ChannelStatusEnabled,
+	}).Error)
+	aliasAdded := `{"zz-own-x":"zz-own-y"}`
+	err := validateChannel(&model.Channel{
+		Id: 9711, Key: "k", Models: "zz-own-y", Group: "default",
+		ModelAlias: &aliasAdded,
+	}, false)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "zz-own-y")
+}
+
+// 请求没带别名字段时，库里的旧别名仍然生效（GORM Updates 只写非零字段）。
+// 这时往模型列表里加一个「自己旧别名的内部名」，保存后同样不生成 ability。
+func TestValidateChannelUsesStoredAliasWhenFieldAbsent(t *testing.T) {
+	db := setupModelListControllerTestDB(t)
+
+	alias := `{"zz-old-x":"zz-old-y"}`
+	require.NoError(t, db.Create(&model.Channel{
+		Id: 9712, Name: "stored-alias", Key: "k", Models: "zz-old-x",
+		Group: "default", Status: common.ChannelStatusEnabled, ModelAlias: &alias,
+	}).Error)
+	model.InitModelAliasCache()
+	t.Cleanup(func() { model.InitModelAliasCache() })
+
+	// ModelAlias 为 nil = 本次不改别名 -> 生效的仍是 X -> y
+	err := validateChannel(&model.Channel{
+		Id: 9712, Key: "k", Models: "zz-old-x,zz-old-y", Group: "default",
+	}, false)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "zz-old-y")
+
+	// 只改 key、模型列表原样 -> 放行
+	require.NoError(t, validateChannel(&model.Channel{
+		Id: 9712, Key: "k2", Models: "zz-old-x", Group: "default",
+	}, false))
+}
+
+// 按标签只改别名：标签下卖 y 的成员，保存后 ability 会变空，必须拦住。
+func TestValidateModelAliasConsistencyForTagAliasOnly(t *testing.T) {
+	db := setupModelListControllerTestDB(t)
+
+	require.NoError(t, db.Create(&model.Channel{
+		Id: 9721, Name: "tag-a", Key: "k", Models: "zz-tag-y", Tag: ptrString("tag1"),
+		Group: "default", Status: common.ChannelStatusEnabled,
+	}).Error)
+	require.NoError(t, db.Create(&model.Channel{
+		Id: 9722, Name: "tag-b", Key: "k", Models: "zz-tag-z", Tag: ptrString("tag1"),
+		Group: "default", Status: common.ChannelStatusEnabled,
+	}).Error)
+	model.InitModelAliasCache()
+	t.Cleanup(func() { model.InitModelAliasCache() })
+
+	tagChannels, err := model.GetChannelsByTag("tag1", false, false)
+	require.NoError(t, err)
+	require.NotEmpty(t, tagChannels)
+
+	// 只提交别名（模型列表不提交 -> 各成员沿用自己库里的值）
+	aliasMap, err := model.ParseModelAlias(`{"zz-tag-x":"zz-tag-y"}`)
+	require.NoError(t, err)
+	targets := buildPolicyTargetsFromChannels(tagChannels, nil, false, aliasMap, true)
+	require.Error(t, validateModelAliasConsistency(targets), "tag-a 卖 zz-tag-y，别名又把 y 声明为内部名")
+
+	// 同一套别名但对 tag-b 这种不卖 y 的成员是合法配置（用单成员验证）
+	singleTargets := buildPolicyTargetsFromChannels(tagChannels[1:], nil, false, aliasMap, true)
+	require.NoError(t, validateModelAliasConsistency(singleTargets))
+}
+
+// 自动同步遇到坏名字时要剔除并继续，而不是整条渠道失败。
+func TestDropUnsafeUpstreamModels(t *testing.T) {
+	db := setupModelListControllerTestDB(t)
+
+	alias := `{"zz-up-pub":"zz-up-internal"}`
+	require.NoError(t, db.Create(&model.Channel{
+		Id: 9731, Name: "alias-owner-up", Key: "k", Models: "zz-up-pub",
+		Group: "default", Status: common.ChannelStatusEnabled, ModelAlias: &alias,
+	}).Error)
+	require.NoError(t, db.Create(&model.Channel{
+		Id: 9732, Name: "sync-target", Key: "k", Models: "zz-keep",
+		Group: "default", Status: common.ChannelStatusEnabled,
+	}).Error)
+	model.InitModelAliasCache()
+	t.Cleanup(func() { model.InitModelAliasCache() })
+
+	channel, err := model.GetChannelById(9732, false)
+	require.NoError(t, err)
+
+	safe, dropped := dropUnsafeUpstreamModels(channel, []string{"zz-keep", "zz-up-internal", "zz-new"})
+	require.Equal(t, []string{"zz-keep", "zz-new"}, safe)
+	require.Equal(t, []string{"zz-up-internal"}, dropped)
+}
+
+func ptrString(v string) *string { return &v }

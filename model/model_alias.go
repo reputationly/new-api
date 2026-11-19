@@ -216,6 +216,15 @@ func FindModelAliasDeclarers(internalName string) []ModelAliasDeclarer {
 	if name == "" {
 		return nil
 	}
+	return AllModelAliasDeclarers()[name]
+}
+
+// AllModelAliasDeclarers 一次性返回「内部名 -> 声明方」的全站映射。
+//
+// 逐名调用 FindModelAliasDeclarers 会为每个名字扫一遍渠道表（保存渠道时模型列表可能上百个，
+// 上游同步更是每轮都跑），所以批量校验一律先取这份映射再查。
+func AllModelAliasDeclarers() map[string][]ModelAliasDeclarer {
+	result := make(map[string][]ModelAliasDeclarer)
 	var channels []*Channel
 	// 不做 LIKE 预筛：别名的值可能是 `\/`、\uXXXX 等转义形式，字符串匹配会漏；
 	// 渠道数量级只有数十到数百，扫一遍是保存路径上可以接受的代价。
@@ -224,9 +233,8 @@ func FindModelAliasDeclarers(internalName string) []ModelAliasDeclarer {
 		Find(&channels).Error
 	if err != nil {
 		common.SysLog("failed to load model_alias for declarer lookup: " + err.Error())
-		return nil
+		return result
 	}
-	declarers := make([]ModelAliasDeclarer, 0)
 	for _, channel := range channels {
 		if channel == nil {
 			continue
@@ -236,18 +244,17 @@ func FindModelAliasDeclarers(internalName string) []ModelAliasDeclarer {
 			continue
 		}
 		for publicName, internal := range aliasMap {
-			if internal == name {
-				declarers = append(declarers, ModelAliasDeclarer{
-					ChannelId:   channel.Id,
-					ChannelName: channel.Name,
-					PublicName:  publicName,
-				})
-			}
+			result[internal] = append(result[internal], ModelAliasDeclarer{
+				ChannelId:   channel.Id,
+				ChannelName: channel.Name,
+				PublicName:  publicName,
+			})
 		}
 	}
-	// map 的遍历顺序是随机的，排序只为让错误文案稳定（否则同一次错误每次拼出的顺序不同）。
-	sort.Slice(declarers, func(i, j int) bool { return declarers[i].ChannelId < declarers[j].ChannelId })
-	return declarers
+	for name := range result {
+		sort.Slice(result[name], func(i, j int) bool { return result[name][i].ChannelId < result[name][j].ChannelId })
+	}
+	return result
 }
 
 // HasHiddenModelNames 供各过滤点短路：绝大多数站点一条别名都没配。

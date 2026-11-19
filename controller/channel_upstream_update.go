@@ -394,17 +394,22 @@ func checkAndPersistChannelUpstreamModelUpdates(
 	if allowAutoApply && settings.UpstreamModelUpdateAutoSyncEnabled && len(pendingAddModels) > 0 {
 		originModels := normalizeModelNames(channel.GetModels())
 		mergedModels := mergeModelNames(originModels, pendingAddModels)
-		if len(mergedModels) > len(originModels) {
-			// 上游同步能往「模型」列表里塞新名字，而内部名一旦进来就不会生成 ability
-			// （见 validateModelAliasConsistency）。放在赋值之前：上下文要读旧的模型列表。
-			if err = validateModelAliasConsistency(mergedModels, nil, buildModelAliasPolicyContext([]*model.Channel{channel})); err != nil {
-				return false, 0, err
-			}
-			channel.Models = strings.Join(mergedModels, ",")
-			autoAdded = len(mergedModels) - len(originModels)
+		// 上游能往「模型」列表里塞新名字，而内部名一旦进来就不会生成 ability
+		// （见 collectUnsafeModelNames）。但**自动**路径不能因为一个坏名字整条渠道失败：
+		// 那样其它新模型永远加不进来，而且检查时间不会落库 —— 每轮重拉上游、待处理
+		// 清单也不更新，等于把渠道卡死在"同步中"。所以这里剔掉不安全的名字、记日志，
+		// 并把它们留在待处理清单里让运营看得到（手动应用路径仍会报错）。
+		safeModels, droppedModels := dropUnsafeUpstreamModels(channel, mergedModels)
+		if len(droppedModels) > 0 {
+			settings.UpstreamModelUpdateLastDetectedModels = droppedModels
+		} else {
+			settings.UpstreamModelUpdateLastDetectedModels = []string{}
+		}
+		if len(safeModels) > len(originModels) {
+			channel.Models = strings.Join(safeModels, ",")
+			autoAdded = len(safeModels) - len(originModels)
 			modelsChanged = true
 		}
-		settings.UpstreamModelUpdateLastDetectedModels = []string{}
 	} else {
 		settings.UpstreamModelUpdateLastDetectedModels = pendingAddModels
 	}
@@ -419,6 +424,36 @@ func checkAndPersistChannelUpstreamModelUpdates(
 		}
 	}
 	return modelsChanged, autoAdded, nil
+}
+
+// dropUnsafeUpstreamModels 从待合并的模型列表里剔除"会因内部名而拿不到 ability"的名字。
+//
+// 只做模型列表侧的检查：自动同步不会改动别名。返回 (可用的模型列表, 被剔除的名字)。
+func dropUnsafeUpstreamModels(channel *model.Channel, models []string) (safe []string, dropped []string) {
+	targets := buildPolicyTargetsFromChannels([]*model.Channel{channel}, models, true, nil, false)
+	if len(targets) == 0 {
+		return models, nil
+	}
+	violations := collectUnsafeModelNames(targets[0], policyExcludeSet(targets))
+	if len(violations) == 0 {
+		return models, nil
+	}
+	reasons := make(map[string]string, len(violations))
+	for _, v := range violations {
+		reasons[v.Model] = v.Reason
+	}
+	safe = make([]string, 0, len(models))
+	for _, name := range models {
+		reason, bad := reasons[name]
+		if !bad {
+			safe = append(safe, name)
+			continue
+		}
+		dropped = append(dropped, name)
+		common.SysLog(fmt.Sprintf(
+			"上游自动同步：渠道 #%d「%s」跳过模型 %s —— %s", channel.Id, channel.Name, name, reason))
+	}
+	return safe, dropped
 }
 
 func refreshChannelRuntimeCache() {
@@ -817,8 +852,9 @@ func applyChannelUpstreamModelUpdates(
 	nextModels := applySelectedModelChanges(originModels, addModels, removeModels)
 	modelsChanged = !slices.Equal(originModels, nextModels)
 	if modelsChanged {
-		// 同上一处：新增的模型名要过一致性检查，避免上游同步把内部名塞进模型列表。
-		if err := validateModelAliasConsistency(nextModels, nil, buildModelAliasPolicyContext([]*model.Channel{channel})); err != nil {
+		// 手动应用走硬校验：这是运营显式点的一次写操作，直接报错并说明原因最省事。
+		targets := buildPolicyTargetsFromChannels([]*model.Channel{channel}, nextModels, true, nil, false)
+		if err := validateModelAliasConsistency(targets); err != nil {
 			return nil, nil, nil, nil, false, err
 		}
 		channel.Models = strings.Join(nextModels, ",")
