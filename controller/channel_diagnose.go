@@ -57,7 +57,11 @@ func DiagnoseChannelModel(c *gin.Context) {
 		return
 	}
 
-	result := diagnoseChannelModel(name)
+	result, err := diagnoseChannelModel(name)
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
 		"message": "",
@@ -84,7 +88,10 @@ type channelModelDiagnosis struct {
 }
 
 // diagnoseChannelModel 把上面那个接口的判定逻辑独立出来，便于单测直接调用。
-func diagnoseChannelModel(name string) channelModelDiagnosis {
+//
+// 数据库错误必须**返回**而不是吞掉：吞掉的表现是"查询挂了"和"这个名字没有任何渠道"
+// 给出同一句结论，排查方向会被带到完全错误的路上。
+func diagnoseChannelModel(name string) (channelModelDiagnosis, error) {
 	result := channelModelDiagnosis{
 		Model:         name,
 		Blockers:      make([]string, 0),
@@ -99,7 +106,12 @@ func diagnoseChannelModel(name string) channelModelDiagnosis {
 
 	// ① abilities：这个模型名到底有没有落成可路由的记录
 	var abilityRows []model.Ability
-	_ = model.DB.Where("model = ?", name).Find(&abilityRows).Error
+	if err := model.DB.Where("model = ?", name).Find(&abilityRows).Error; err != nil {
+		return result, err
+	}
+	// MySQL 默认排序规则不区分大小写，`model = ?` 会把 Qwen3.8-Max 也带进来；
+	// 两者在本站是两个独立模型，这里再按精确大小写过滤。
+	abilityRows = filterAbilitiesByExactName(abilityRows, name)
 	channelIds := make([]int, 0, len(abilityRows))
 	seenChannel := make(map[int]bool, len(abilityRows))
 	for _, a := range abilityRows {
@@ -222,7 +234,9 @@ func diagnoseChannelModel(name string) channelModelDiagnosis {
 
 	// ⑥ 仅大小写不同的变体：最常见的是"两个看着一样的模型"，各自有独立的 ability 与倍率
 	var sameNameRows []model.Ability
-	_ = model.DB.Where("LOWER(model) = ?", strings.ToLower(name)).Find(&sameNameRows).Error
+	if err := model.DB.Where("LOWER(model) = ?", strings.ToLower(name)).Find(&sameNameRows).Error; err != nil {
+		return result, err
+	}
 	variantIndex := make(map[string]*diagnoseVariant)
 	variantOrder := make([]string, 0)
 	for _, a := range sameNameRows {
@@ -266,7 +280,21 @@ func diagnoseChannelModel(name string) channelModelDiagnosis {
 			fmt.Sprintf("有 %d 条 ability，但对应渠道全部禁用（%s）：abilities.enabled 跟着渠道状态走", len(abilityRows), strings.Join(disabledNames, "、")))
 	}
 	result.Visible = len(result.Blockers) == 0
-	return result
+	return result, nil
+}
+
+// filterAbilitiesByExactName 在内存里按精确大小写再筛一遍（见上面 MySQL 排序规则的说明）。
+func filterAbilitiesByExactName(rows []model.Ability, name string) []model.Ability {
+	if len(rows) == 0 {
+		return rows
+	}
+	out := rows[:0]
+	for _, row := range rows {
+		if row.Model == name {
+			out = append(out, row)
+		}
+	}
+	return out
 }
 
 // mediaConfigsDeclaringModel 返回把该模型配进 models{} 的体验区配置键。

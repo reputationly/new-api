@@ -28,7 +28,8 @@ func TestDiagnoseChannelModelBlocksDisabledChannel(t *testing.T) {
 		Group: "default", Model: "zz-diag-disabled", ChannelId: 9401, Enabled: false,
 	}).Error)
 
-	result := diagnoseChannelModel("zz-diag-disabled")
+	result, err := diagnoseChannelModel("zz-diag-disabled")
+	require.NoError(t, err)
 	require.False(t, result.Visible)
 	require.Len(t, result.Abilities, 1)
 	require.Equal(t, "disabled-owner", result.Abilities[0].ChannelName)
@@ -40,7 +41,8 @@ func TestDiagnoseChannelModelReportsMissingAbility(t *testing.T) {
 	setupModelListControllerTestDB(t)
 
 	// 渠道「模型」字段里有、abilities 里没有：这正是内部名被跳过、或渠道没保存成功的形态
-	result := diagnoseChannelModel("zz-diag-ghost")
+	result, err := diagnoseChannelModel("zz-diag-ghost")
+	require.NoError(t, err)
 	require.False(t, result.Visible)
 	require.Empty(t, result.Abilities)
 	require.Contains(t, joinStrings(result.Blockers), "没有任何渠道")
@@ -62,7 +64,8 @@ func TestDiagnoseChannelModelNamesTheAliasOwner(t *testing.T) {
 	model.InitModelAliasCache()
 	t.Cleanup(func() { model.InitModelAliasCache() })
 
-	result := diagnoseChannelModel("zz-diag-internal")
+	result, err := diagnoseChannelModel("zz-diag-internal")
+	require.NoError(t, err)
 	require.False(t, result.Visible)
 	require.Len(t, result.HiddenBy, 1)
 	require.Equal(t, 9402, result.HiddenBy[0].ChannelId)
@@ -98,7 +101,8 @@ func TestDiagnoseChannelModelReportsCaseVariants(t *testing.T) {
 		{Group: "default", Model: "ZZ-Diag-Case", ChannelId: 9404, Enabled: true},
 	}).Error)
 
-	result := diagnoseChannelModel("zz-diag-case")
+	result, err := diagnoseChannelModel("zz-diag-case")
+	require.NoError(t, err)
 	require.True(t, result.Visible)
 	require.Len(t, result.CaseVariants, 2)
 	require.Contains(t, joinStrings(result.Warnings), "仅大小写不同")

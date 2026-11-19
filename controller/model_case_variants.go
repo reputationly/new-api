@@ -7,6 +7,7 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/model"
+	"github.com/QuantumNous/new-api/setting/billing_setting"
 	"github.com/QuantumNous/new-api/setting/ratio_setting"
 	"github.com/gin-gonic/gin"
 )
@@ -16,10 +17,15 @@ type caseVariantEntry struct {
 	ChannelIds  []int  `json:"channel_ids"`
 	Enabled     bool   `json:"enabled"`
 	AbilityRows int    `json:"ability_rows"`
-	// 倍率/固定价是**按名字精确匹配**的：两个仅大小写不同的名字各占一个键，
-	// 只配了一边时，另一边会静默落到默认倍率。
-	RatioConfigured bool `json:"ratio_configured"`
-	PriceConfigured bool `json:"price_configured"`
+	// 计价配置是**按名字精确匹配**的：两个仅大小写不同的名字各占一个键。只配了一边时，
+	// 另一边在非自用模式下会直接报「价格未配置」拒绝请求，自用模式下回退到默认倍率
+	// （37.5）—— 两种都不是运营想要的。
+	//
+	// 三条都要看：倍率、固定价、分段计费表达式。只看倍率会把配了固定价或表达式的模型
+	// 误标成"没配价"。
+	RatioConfigured      bool `json:"ratio_configured"`
+	PriceConfigured      bool `json:"price_configured"`
+	TieredExprConfigured bool `json:"tiered_expr_configured"`
 }
 
 type caseVariantGroup struct {
@@ -30,9 +36,10 @@ type caseVariantGroup struct {
 // GetModelCaseVariants 列出「仅大小写不同」的模型名分组。
 //
 // 这类名字在系统里是**两个独立模型**：各自有 ability、各自占模型广场与体验区下拉里的
-// 一项、各自按精确名匹配倍率。运营侧的观感是"下拉里有两个一模一样的模型"，而计价侧
-// 的后果更实际 —— 只配了一个的大小写，另一个的请求就按默认倍率（ratio=1）计费，
-// 不报错、只是算错钱。
+// 一项、各自按精确名匹配计价键。运营侧的观感是"下拉里有两个一模一样的模型"，而计价侧
+// 的后果更实际 —— 只配了一个的大小写，另一个在非自用模式下会直接报「价格未配置」拒绝
+// 请求（见 relay/helper/price.go 的 modelPriceNotConfiguredError），自用模式下则回退到
+// 默认倍率 37.5，两种都不是运营预期的行为。
 //
 // 真实案例：站点里同时存在 kimi-k3 / Kimi-K3、qwen3.8-flash / Qwen3.8-Flash，
 // 而前者被某条渠道的别名间接隐藏过，排查时极易误判成"同一个模型的两种写法"。
@@ -83,6 +90,7 @@ func GetModelCaseVariants(c *gin.Context) {
 		sort.Ints(entry.ChannelIds)
 		_, entry.RatioConfigured = ratioCopy[name]
 		_, entry.PriceConfigured = priceCopy[name]
+		entry.TieredExprConfigured = billing_setting.GetBillingMode(name) == "tiered_expr"
 		key := strings.ToLower(name)
 		groups[key] = append(groups[key], *entry)
 	}

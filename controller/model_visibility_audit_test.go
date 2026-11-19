@@ -25,6 +25,8 @@ func TestGetChannelInvisibleModels(t *testing.T) {
 		{Group: "default", Model: "zz-gone-b", ChannelId: 9502, Enabled: false},
 		// 同一个模型被两条渠道供奉、其中一条停用：仍然可见，不该计入
 		{Group: "default", Model: "zz-visible-b", ChannelId: 9502, Enabled: false},
+		// 同一个停用模型挂在两个分组上：按模型去重，数字不能翻倍
+		{Group: "vip", Model: "zz-gone-a", ChannelId: 9502, Enabled: false},
 	}).Error)
 
 	recorder := httptest.NewRecorder()
@@ -44,9 +46,11 @@ func TestGetChannelInvisibleModels(t *testing.T) {
 	require.NoError(t, common.Unmarshal(recorder.Body.Bytes(), &payload))
 	require.True(t, payload.Success)
 
-	// 9501 没有停用的行，不该出现在 map 里；9502 有三条 enabled=false
+	// 9501 没有停用的行，不该出现在 map 里。
+	// 9502 有 3 条 enabled=false，但其中 zz-visible-b 还被 9501 卖着 —— 它对用户可见，
+	// 所以这里数的是"不可见模型数"（2），不是能力行数（3）。
 	require.NotContains(t, payload.Data.ByChannel, "9501")
-	require.Equal(t, 3, payload.Data.ByChannel["9502"])
+	require.Equal(t, 2, payload.Data.ByChannel["9502"])
 
 	// 真正不可见的只有那两个（zz-visible-b 还有一条启用的）
 	require.Equal(t, 2, payload.Data.InvisibleModels)

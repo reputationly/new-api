@@ -391,7 +391,7 @@ func SetApiRouter(router *gin.Engine) {
 			channelRoute.GET("/models_enabled", controller.EnabledListModels)
 			// 渠道编辑页的保存前预警：这批模型挂在这类渠道上会被判成什么端点
 			// （视频/图像/语音端点不会出现在文本体验区）。判据在服务端，避免前端复刻。
-			channelRoute.GET("/endpoint_types", controller.GetChannelModelEndpointTypes)
+			channelRoute.POST("/endpoint_types", controller.GetChannelModelEndpointTypes)
 			channelRoute.GET("/:id", controller.GetChannel)
 			channelRoute.GET("/:id/cost", controller.GetChannelCosts)
 			channelRoute.PUT("/:id/cost", controller.SaveChannelCosts)

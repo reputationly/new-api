@@ -39,6 +39,20 @@ func GetAllEnableAbilityWithChannels() ([]AbilityWithChannel, error) {
 	return abilities, err
 }
 
+// GetAllAbilityWithChannels 同 GetAllEnableAbilityWithChannels，但不按 enabled 过滤。
+//
+// 只用于「把模型名展开到元数据」这类**解释性**查询（见 GetResolvedModelMeta）：一个模型
+// 可能因为渠道停用而不在任何启用集合里，那时按启用集合展开会漏掉它的名称规则匹配，
+// 让诊断页误报"没有元数据行"。路由/定价这些真正参与分发的路径仍用启用集合。
+func GetAllAbilityWithChannels() ([]AbilityWithChannel, error) {
+	var abilities []AbilityWithChannel
+	err := DB.Table("abilities").
+		Select("abilities.*, channels.type as channel_type").
+		Joins("left join channels on abilities.channel_id = channels.id").
+		Scan(&abilities).Error
+	return abilities, err
+}
+
 func GetGroupEnabledModels(group string) []string {
 	var models []string
 	// Find distinct models
@@ -151,11 +165,21 @@ func FindChannelsWithAbilityFor(modelName string) []*Channel {
 	if name == "" {
 		return nil
 	}
-	ids := make([]int, 0)
-	err := DB.Model(&Ability{}).Where("model = ?", name).Distinct("channel_id").Pluck("channel_id", &ids).Error
-	if err != nil {
+	var rows []Ability
+	if err := DB.Select("channel_id", "model").Where("model = ?", name).Find(&rows).Error; err != nil {
 		common.SysLog("failed to load channels for ability lookup: " + err.Error())
 		return nil
+	}
+	// MySQL 的默认排序规则**不区分大小写**，`model = ?` 会把仅大小写不同的另一个模型
+	// 也算进来（它们在本站是两个独立模型）。这里再按精确大小写过滤一遍，三种库行为一致。
+	ids := make([]int, 0, len(rows))
+	seen := make(map[int]bool, len(rows))
+	for _, row := range rows {
+		if row.Model != name || seen[row.ChannelId] {
+			continue
+		}
+		seen[row.ChannelId] = true
+		ids = append(ids, row.ChannelId)
 	}
 	if len(ids) == 0 {
 		return nil
