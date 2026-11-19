@@ -395,6 +395,11 @@ func checkAndPersistChannelUpstreamModelUpdates(
 		originModels := normalizeModelNames(channel.GetModels())
 		mergedModels := mergeModelNames(originModels, pendingAddModels)
 		if len(mergedModels) > len(originModels) {
+			// 上游同步能往「模型」列表里塞新名字，而内部名一旦进来就不会生成 ability
+			// （见 validateModelAliasConsistency）。放在赋值之前：上下文要读旧的模型列表。
+			if err = validateModelAliasConsistency(mergedModels, nil, buildModelAliasPolicyContext([]*model.Channel{channel})); err != nil {
+				return false, 0, err
+			}
 			channel.Models = strings.Join(mergedModels, ",")
 			autoAdded = len(mergedModels) - len(originModels)
 			modelsChanged = true
@@ -812,6 +817,10 @@ func applyChannelUpstreamModelUpdates(
 	nextModels := applySelectedModelChanges(originModels, addModels, removeModels)
 	modelsChanged = !slices.Equal(originModels, nextModels)
 	if modelsChanged {
+		// 同上一处：新增的模型名要过一致性检查，避免上游同步把内部名塞进模型列表。
+		if err := validateModelAliasConsistency(nextModels, nil, buildModelAliasPolicyContext([]*model.Channel{channel})); err != nil {
+			return nil, nil, nil, nil, false, err
+		}
 		channel.Models = strings.Join(nextModels, ",")
 	}
 

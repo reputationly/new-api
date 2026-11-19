@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -452,59 +451,26 @@ func validateChannel(channel *model.Channel, isAdd bool) error {
 	// 模型别名必须是合法的 JSON 对象。坏配置的两个后果都不好看：缓存侧静默降级成
 	// "没有别名"（内部名不再隐藏、响应不再改写），请求侧则每次调用都报
 	// unmarshal_model_alias_failed。两者都很难从页面上看出来，所以在保存时拦掉。
+	aliasMap := map[string]string(nil)
 	if channel.ModelAlias != nil && strings.TrimSpace(*channel.ModelAlias) != "" {
-		aliasMap, err := model.ParseModelAlias(*channel.ModelAlias)
+		parsed, err := model.ParseModelAlias(*channel.ModelAlias)
 		if err != nil {
 			return fmt.Errorf("模型重定向（隐藏内部名）必须是合法的 JSON 对象：%s", err.Error())
 		}
-		// 反方向的同一个坑：别名的**值**（内部名）一旦与某条渠道正在售卖的名字撞车，
-		// 那条渠道的 ability 会在重建时被删除（ReconcileHiddenModelAbilities），
-		// 模型从广场、/v1/models、体验区一起消失 —— 而别名配在这里，出事的渠道页面上
-		// 毫无痕迹。这是线上真实事故的镜像情形，所以保存时同样拦掉。
-		//
-		// 只拦**新增**的冲突：这个名字早就在别处被声明成内部名时，伤害已经发生，
-		// 不该让一次无关的编辑（改 key、改优先级）被历史配置挡死。
-		conflicts := make([]string, 0)
-		for publicName, internalName := range aliasMap {
-			if len(model.FindModelAliasDeclarers(internalName)) > 0 {
-				continue
-			}
-			for _, owner := range model.FindChannelsWithAbilityFor(internalName) {
-				conflicts = append(conflicts, fmt.Sprintf("渠道 #%d「%s」（对外名 %s）", owner.Id, owner.Name, publicName))
-			}
-		}
-		if len(conflicts) > 0 {
-			sort.Strings(conflicts)
-			return fmt.Errorf("别名把名字声明为内部名，但 %s 正在售卖它：保存后那些模型会从所有列表里消失（ability 会被重建删掉）。请改用「模型重定向」（只改写发往上游的名字、不隐藏），或先把它改成对外名", strings.Join(conflicts, "、"))
-		}
+		aliasMap = parsed
 	}
 
-	// 内部名（模型别名的右侧）不能写进「模型」列表：AddAbilities / UpdateAbilities 会
-	// 跳过这种名字，于是这个模型**不会生成 ability、也不会出现在任何模型列表里**，
-	// 而保存本身仍然成功。运营看到的只是"我加了这个模型，体验区却选不到"，
-	// 从页面上完全看不出原因（真实案例：一个渠道配了 Qwen3.8-Max -> qwen3.8-max，
-	// 另一个渠道卖 qwen3.8-max，后者静默消失）。这是确定性错误、没有合法用法，
-	// 所以保存时直接拦掉，并把声明方告诉调用方 —— 只说"这是内部名"没有可操作性。
-	//
-	// 放在 isAdd 之外：改渠道时的模型列表更新同样会重建 abilities，同样要拦。
-	for _, m := range channel.GetModels() {
-		name := strings.TrimSpace(m)
-		if name == "" {
-			continue
+	// 模型列表 ↔ 别名的一致性检查（详见 validateModelAliasConsistency）。
+	// 上下文取自库里的**旧值**：本次保存即将覆盖它们，不能算作冲突方，也不能把
+	// 历史遗留的名字当成"这次新加的"。
+	policyCtx := modelAliasPolicyContext{}
+	if channel.Id > 0 {
+		if stored, err := model.GetChannelById(channel.Id, false); err == nil && stored != nil {
+			policyCtx = buildModelAliasPolicyContext([]*model.Channel{stored})
 		}
-		if declarers := model.FindModelAliasDeclarers(name); len(declarers) > 0 {
-			parts := make([]string, 0, len(declarers))
-			for _, d := range declarers {
-				parts = append(parts, fmt.Sprintf("渠道 #%d「%s」（对外名 %s）", d.ChannelId, d.ChannelName, d.PublicName))
-			}
-			return fmt.Errorf("模型 %s 被 %s 的「模型别名」声明为内部名，保存后不会生成 ability，也不会出现在任何模型列表；请改用对外名，或把上游真名配进该渠道的「模型重定向」", name, strings.Join(parts, "、"))
-		}
-		// 兜底：库里的别名声明已被删掉、而缓存还没同步到（InitModelAliasCache 按周期重建）
-		// 时，AddAbilities 仍会按旧缓存跳过这个名字。提示与上面区分开，免得运营去查一个
-		// 已经查不到的声明。
-		if model.IsHiddenModelName(name) {
-			return fmt.Errorf("模型 %s 当前被模型别名的内部名缓存视为内部名（声明已从库里消失，缓存待同步），保存后不会生成 ability；请稍后重试，或检查是否还有渠道把它配成别名的值", name)
-		}
+	}
+	if err := validateModelAliasConsistency(channel.GetModels(), aliasMap, policyCtx); err != nil {
+		return err
 	}
 
 	// 如果是添加操作，检查 key 是否为空（channel 本身的 nil 已在函数开头拦掉）
@@ -871,6 +837,36 @@ func EditTagChannels(c *gin.Context) {
 		}
 		channelTag.HeaderOverride = common.GetPointer[string](trimmed)
 	}
+	// 按标签编辑同样能改「模型列表」和「模型别名」，两个会让模型静默消失的坑在这里
+	// 一样成立（见 validateModelAliasConsistency）。排除该标签下的全部渠道：它们都会被
+	// 新值覆盖，库里的旧配置不算冲突方。
+	tagAliasMap := map[string]string(nil)
+	if channelTag.ModelAlias != nil && strings.TrimSpace(*channelTag.ModelAlias) != "" {
+		tagAliasMap, _ = model.ParseModelAlias(*channelTag.ModelAlias) // JSON 合法性上面已校验
+	}
+	var tagModels []string
+	if channelTag.Models != nil {
+		for _, m := range strings.Split(*channelTag.Models, ",") {
+			if m = strings.TrimSpace(m); m != "" {
+				tagModels = append(tagModels, m)
+			}
+		}
+	}
+	if len(tagModels) > 0 || len(tagAliasMap) > 0 {
+		tagChannels, err := model.GetChannelsByTag(channelTag.Tag, false, false)
+		if err != nil {
+			common.ApiError(c, err)
+			return
+		}
+		if err := validateModelAliasConsistency(tagModels, tagAliasMap, buildModelAliasPolicyContext(tagChannels)); err != nil {
+			c.JSON(http.StatusOK, gin.H{
+				"success": false,
+				"message": err.Error(),
+			})
+			return
+		}
+	}
+
 	err = model.EditChannelByTag(channelTag.Tag, channelTag.NewTag, channelTag.ModelMapping, channelTag.ModelAlias, channelTag.Models, channelTag.Groups, channelTag.Priority, channelTag.Weight, channelTag.ParamOverride, channelTag.HeaderOverride)
 	if err != nil {
 		common.ApiError(c, err)

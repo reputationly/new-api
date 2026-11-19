@@ -142,3 +142,78 @@ func TestValidateChannelRejectsAliasThatHidesLiveModel(t *testing.T) {
 		ModelAlias: &alias,
 	}, true))
 }
+
+// 校验不能把「正在编辑的渠道自己」当成冲突方：这些操作在改动前一次保存就能完成，
+// 若被自己拦住，运营只能拆成两次保存，中间那段时间模型处于不可用状态。
+func TestValidateChannelDoesNotConflictWithItself(t *testing.T) {
+	db := setupModelListControllerTestDB(t)
+
+	// 场景 1：渠道原本直接卖 zz-self-y，一次保存改成卖 zz-self-x 且配别名 x -> y
+	require.NoError(t, db.Create(&model.Channel{
+		Id: 9701, Name: "self-rewrite", Key: "k", Models: "zz-self-y",
+		Group: "default", Status: common.ChannelStatusEnabled,
+	}).Error)
+	require.NoError(t, db.Create(&model.Ability{
+		Group: "default", Model: "zz-self-y", ChannelId: 9701, Enabled: true,
+	}).Error)
+	aliasAfter := `{"zz-self-x":"zz-self-y"}`
+	require.NoError(t, validateChannel(&model.Channel{
+		Id: 9701, Key: "k", Models: "zz-self-x", Group: "default",
+		ModelAlias: &aliasAfter,
+	}, false), "库里的旧模型名与旧能力行都属于自己，不该被当成冲突")
+
+	// 场景 2：渠道原有别名 zz-pub -> zz-int，一次保存撤掉别名改卖 zz-int
+	aliasBefore := `{"zz-pub":"zz-int"}`
+	require.NoError(t, db.Create(&model.Channel{
+		Id: 9702, Name: "self-unhide", Key: "k", Models: "zz-pub",
+		Group: "default", Status: common.ChannelStatusEnabled, ModelAlias: &aliasBefore,
+	}).Error)
+	model.InitModelAliasCache()
+	t.Cleanup(func() { model.InitModelAliasCache() })
+	require.NoError(t, validateChannel(&model.Channel{
+		Id: 9702, Key: "k", Models: "zz-int", Group: "default",
+	}, false), "撤掉别名后自己不再声明这个内部名，应该放行")
+}
+
+// 历史配置不该挡住无关编辑（改 key、改优先级），但新加一个内部名必须拦。
+func TestValidateChannelAllowsHistoricalInternalNameButRejectsNew(t *testing.T) {
+	db := setupModelListControllerTestDB(t)
+
+	aliasOwner := `{"zz-hist-pub":"zz-hist-int","zz-hist-pub-2":"zz-hist-int-2"}`
+	require.NoError(t, db.Create(&model.Channel{
+		Id: 9703, Name: "historical-owner", Key: "k", Models: "zz-hist-pub,zz-hist-pub-2",
+		Group: "default", Status: common.ChannelStatusEnabled, ModelAlias: &aliasOwner,
+	}).Error)
+	// 出事渠道：models 里留着别人声明的内部名
+	require.NoError(t, db.Create(&model.Channel{
+		Id: 9704, Name: "victim", Key: "k", Models: "zz-hist-int,zz-ok-model",
+		Group: "default", Status: common.ChannelStatusEnabled,
+	}).Error)
+	model.InitModelAliasCache()
+	t.Cleanup(func() { model.InitModelAliasCache() })
+
+	// 只改 key：模型列表原样提交，历史遗留的内部名应被放行
+	require.NoError(t, validateChannel(&model.Channel{
+		Id: 9704, Key: "k2", Models: "zz-hist-int,zz-ok-model", Group: "default",
+	}, false))
+
+	// 但新加一个内部名必须拦
+	err := validateChannel(&model.Channel{
+		Id: 9704, Key: "k2", Models: "zz-hist-int,zz-ok-model,zz-hist-int-2", Group: "default",
+	}, false)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "zz-hist-int-2")
+}
+
+// 本次保存的别名把「自己正在卖的模型」声明成内部名：这是自相矛盾的自引用配置，
+// 无论是新建还是更新都要拦。
+func TestValidateChannelRejectsSelfReferentialAlias(t *testing.T) {
+	setupModelListControllerTestDB(t)
+
+	alias := `{"zz-sr-x":"zz-sr-y"}`
+	err := validateChannel(&model.Channel{
+		Key: "k", Models: "zz-sr-x,zz-sr-y", Group: "default", ModelAlias: &alias,
+	}, true)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "本次保存")
+}
