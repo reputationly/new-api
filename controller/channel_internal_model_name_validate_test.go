@@ -1,10 +1,14 @@
 package controller
 
 import (
+	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/model"
+	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
 )
 
@@ -314,9 +318,63 @@ func TestDropUnsafeUpstreamModels(t *testing.T) {
 	channel, err := model.GetChannelById(9732, false)
 	require.NoError(t, err)
 
-	safe, dropped := dropUnsafeUpstreamModels(channel, []string{"zz-keep", "zz-up-internal", "zz-new"})
+	safe, dropped, reasons := dropUnsafeUpstreamModels(channel, []string{"zz-keep", "zz-up-internal", "zz-new"})
 	require.Equal(t, []string{"zz-keep", "zz-new"}, safe)
 	require.Equal(t, []string{"zz-up-internal"}, dropped)
+	require.Contains(t, reasons["zz-up-internal"], "内部名")
 }
 
 func ptrString(v string) *string { return &v }
+
+// 缓存落后于库时的窗口（多节点部署或直接改库才有）：别名已从库里删掉，本节点缓存还认为
+// 某名字是内部名。这时**渠道原有的模型**绝不能被剔除 —— 上游自动同步会拿这个列表覆盖
+// 渠道，少一项就等于丢模型；同一窗口里的无关编辑也不该被拒。
+func TestStaleCacheDoesNotDropExistingModels(t *testing.T) {
+	db := setupModelListControllerTestDB(t)
+
+	alias := `{"zz-stale-pub":"zz-stale-int","zz-stale-pub-2":"zz-stale-int-2"}`
+	require.NoError(t, db.Create(&model.Channel{
+		Id: 9741, Name: "stale-owner", Key: "k", Models: "zz-stale-pub,zz-stale-pub-2",
+		Group: "default", Status: common.ChannelStatusEnabled, ModelAlias: &alias,
+	}).Error)
+	model.InitModelAliasCache()
+	t.Cleanup(func() { model.InitModelAliasCache() })
+	// 别名从库里消失，但本节点缓存仍是旧的
+	require.NoError(t, db.Model(&model.Channel{}).Where("id = ?", 9741).Update("model_alias", "").Error)
+
+	channel := &model.Channel{Id: 9742, Name: "stale-target", Models: "zz-stale-int", Group: "default"}
+
+	// 只提交原有模型：无违规
+	targets := buildPolicyTargetsFromChannels([]*model.Channel{channel}, []string{"zz-stale-int"}, true, nil, false)
+	require.Empty(t, collectUnsafeModelNames(targets[0], policyExcludeSet(targets)))
+
+	// 自动同步合并后：原有模型保留，只剔除新加的隐藏名
+	safe, dropped, _ := dropUnsafeUpstreamModels(channel, []string{"zz-stale-int", "zz-stale-int-2"})
+	require.Equal(t, []string{"zz-stale-int"}, safe, "原有模型必须保留在渠道列表里")
+	require.Equal(t, []string{"zz-stale-int-2"}, dropped)
+}
+
+// 按标签编辑时 `models: ""` 按"不改模型列表"处理（EditChannelByTag 就是这么做的）。
+// 若校验把它当成"清空"，传空串 + 新别名就能绕过检查，该标签下渠道的模型照样静默消失。
+func TestEditTagChannelsTreatsEmptyModelsAsUnchanged(t *testing.T) {
+	db := setupModelListControllerTestDB(t)
+
+	require.NoError(t, db.Create(&model.Channel{
+		Id: 9751, Name: "tag-empty-owner", Key: "k", Models: "zz-tag-empty-y",
+		Tag: ptrString("tag-empty"), Group: "default", Status: common.ChannelStatusEnabled,
+	}).Error)
+	model.InitModelAliasCache()
+	t.Cleanup(func() { model.InitModelAliasCache() })
+
+	body := `{"tag":"tag-empty","models":"","model_alias":"{\"zz-tag-empty-x\":\"zz-tag-empty-y\"}"}`
+	recorder := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(recorder)
+	ctx.Request = httptest.NewRequest(http.MethodPut, "/api/channel/tag", strings.NewReader(body))
+	ctx.Request.Header.Set("Content-Type", "application/json")
+
+	EditTagChannels(ctx)
+
+	require.Contains(t, recorder.Body.String(), "zz-tag-empty-y",
+		"空串不该被当成清空模型列表：别名会把 zz-tag-empty-y 变成内部名")
+	require.Contains(t, recorder.Body.String(), `"success":false`)
+}

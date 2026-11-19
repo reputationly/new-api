@@ -399,7 +399,20 @@ func checkAndPersistChannelUpstreamModelUpdates(
 		// 那样其它新模型永远加不进来，而且检查时间不会落库 —— 每轮重拉上游、待处理
 		// 清单也不更新，等于把渠道卡死在"同步中"。所以这里剔掉不安全的名字、记日志，
 		// 并把它们留在待处理清单里让运营看得到（手动应用路径仍会报错）。
-		safeModels, droppedModels := dropUnsafeUpstreamModels(channel, mergedModels)
+		safeModels, droppedModels, unsafeReasons := dropUnsafeUpstreamModels(channel, mergedModels)
+		// 被剔除的名字会留在待处理清单里；只在**新出现**的名字上记日志，否则运营不处理
+		// 就一直每轮记一条，把真正的报错淹掉。
+		previousPending := make(map[string]bool, len(settings.UpstreamModelUpdateLastDetectedModels))
+		for _, name := range settings.UpstreamModelUpdateLastDetectedModels {
+			previousPending[name] = true
+		}
+		for _, name := range droppedModels {
+			if previousPending[name] {
+				continue
+			}
+			common.SysLog(fmt.Sprintf("上游自动同步：渠道 #%d「%s」跳过模型 %s —— %s",
+				channel.Id, channel.Name, name, unsafeReasons[name]))
+		}
 		if len(droppedModels) > 0 {
 			settings.UpstreamModelUpdateLastDetectedModels = droppedModels
 		} else {
@@ -428,32 +441,31 @@ func checkAndPersistChannelUpstreamModelUpdates(
 
 // dropUnsafeUpstreamModels 从待合并的模型列表里剔除"会因内部名而拿不到 ability"的名字。
 //
-// 只做模型列表侧的检查：自动同步不会改动别名。返回 (可用的模型列表, 被剔除的名字)。
-func dropUnsafeUpstreamModels(channel *model.Channel, models []string) (safe []string, dropped []string) {
+// 只做模型列表侧的检查：自动同步不会改动别名。
+// 返回 (可用的模型列表, 被剔除的名字, 名字->原因)。日志由调用方按"新出现的名字"决定是否打，
+// 这里不做 I/O：同一批名字每轮都会被重新剔除，逐轮记录会刷屏。
+func dropUnsafeUpstreamModels(channel *model.Channel, models []string) (safe []string, dropped []string, reasons map[string]string) {
 	targets := buildPolicyTargetsFromChannels([]*model.Channel{channel}, models, true, nil, false)
 	if len(targets) == 0 {
-		return models, nil
+		return models, nil, nil
 	}
 	violations := collectUnsafeModelNames(targets[0], policyExcludeSet(targets))
 	if len(violations) == 0 {
-		return models, nil
+		return models, nil, nil
 	}
-	reasons := make(map[string]string, len(violations))
+	reasons = make(map[string]string, len(violations))
 	for _, v := range violations {
 		reasons[v.Model] = v.Reason
 	}
 	safe = make([]string, 0, len(models))
 	for _, name := range models {
-		reason, bad := reasons[name]
-		if !bad {
-			safe = append(safe, name)
+		if _, bad := reasons[name]; bad {
+			dropped = append(dropped, name)
 			continue
 		}
-		dropped = append(dropped, name)
-		common.SysLog(fmt.Sprintf(
-			"上游自动同步：渠道 #%d「%s」跳过模型 %s —— %s", channel.Id, channel.Name, name, reason))
+		safe = append(safe, name)
 	}
-	return safe, dropped
+	return safe, dropped, reasons
 }
 
 func refreshChannelRuntimeCache() {

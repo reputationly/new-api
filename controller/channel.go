@@ -875,7 +875,12 @@ func EditTagChannels(c *gin.Context) {
 		}
 		// 标签编辑是"同一份新值覆盖标签下所有渠道"：逐条算出各自生效后的状态再校验，
 		// 没提交的字段沿用那条渠道自己的旧值。
-		targets := buildPolicyTargetsFromChannels(tagChannels, tagModels, channelTag.Models != nil, tagAliasMap, channelTag.ModelAlias != nil)
+		//
+		// 空串必须按"没提交"算：EditChannelByTag 只在 `models != nil && *models != ""` 时
+		// 才改模型列表。若这里只看 `!= nil`，传 `models: ""` + 新别名就能绕过校验 ——
+		// 保存时模型列表没变，别名却生效了，该标签下渠道的模型照样静默消失。
+		tagModelsSubmitted := channelTag.Models != nil && strings.TrimSpace(*channelTag.Models) != ""
+		targets := buildPolicyTargetsFromChannels(tagChannels, tagModels, tagModelsSubmitted, tagAliasMap, channelTag.ModelAlias != nil)
 		if err := validateModelAliasConsistency(targets); err != nil {
 			c.JSON(http.StatusOK, gin.H{
 				"success": false,

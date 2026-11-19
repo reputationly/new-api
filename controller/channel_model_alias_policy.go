@@ -144,6 +144,14 @@ func collectUnsafeModelNames(target modelAliasPolicyTarget, excludeSet map[int]b
 		if declaredNow[name] || len(filterForeignDeclarers(declarersByInternal[name], excludeSet)) > 0 {
 			continue
 		}
+		// 库里已有的名字不在这里拦。这条兜底只该拦「本次新加进来、且当前建不出 ability」
+		// 的名字：在「别名已删、缓存未同步」的窗口里（多节点部署或直接改库才会出现），
+		// 若把原有模型也报出来，上游自动同步会剔除它们并用少了几项的列表覆盖渠道 —— 比不动
+		// 更糟；同一窗口里的无关编辑也会被无谓地拒掉（提示「稍后重试」）。
+		if storedModels[name] {
+			continue
+		}
+
 		if model.IsHiddenModelName(name) && len(declarersByInternal[name]) == 0 && !containsViolation(violations, name) {
 			violations = append(violations, modelNameViolation{
 				Model:  name,
