@@ -11,6 +11,26 @@ import { API } from '../../helpers';
 // 失败一律静默（返回 null）：这只是提示信息，不该因为它让整页报错或挡住操作。
 const ENDPOINT = '/api/channel/invisible_models';
 
+// 渠道列表 -> 可见性签名。只有签名变化才重算：
+//  - 带上子行：标签聚合视图里顶层行是「标签行」，真正的渠道在 children 里，启停单个
+//    子渠道只改子行状态、标签行状态不变 —— 不带子行就会漏掉这种变化，角标与横幅停在旧数字上；
+//  - 不用数组引用：单渠道测速、查余额同样会替换数组，每次都重算就是白跑两条全表查询。
+export const buildVisibilitySignature = (watch) => {
+  if (!Array.isArray(watch)) return '';
+  return watch
+    .map((channel) => {
+      const self = `${channel?.id}:${channel?.status}`;
+      if (!Array.isArray(channel?.children) || channel.children.length === 0) {
+        return self;
+      }
+      const children = channel.children
+        .map((child) => `${child?.id}:${child?.status}`)
+        .join('|');
+      return `${self}[${children}]`;
+    })
+    .join(',');
+};
+
 export const useChannelVisibilitySummary = ({ watch } = {}) => {
   const [byChannel, setByChannel] = useState({});
   const [summary, setSummary] = useState(null);
@@ -36,14 +56,7 @@ export const useChannelVisibilitySummary = ({ watch } = {}) => {
   }, []);
 
   // watch 传渠道列表：新建/删除/启用/禁用之后 useChannelsData 都会 setChannels。
-  // 但只看数组引用太敏感了 —— 单渠道测速、查余额同样会替换数组，每次都重算就是白跑
-  // 两条 abilities 全表查询。这里压成 "id:status" 签名，只有真正影响可见性的字段变化才重算。
-  const signature = useMemo(() => {
-    if (!Array.isArray(watch)) return '';
-    return watch
-      .map((channel) => `${channel?.id}:${channel?.status}`)
-      .join(',');
-  }, [watch]);
+  const signature = useMemo(() => buildVisibilitySignature(watch), [watch]);
 
   useEffect(() => {
     reload();
