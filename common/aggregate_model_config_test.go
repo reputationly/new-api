@@ -2,6 +2,19 @@ package common
 
 import "testing"
 
+func TestAggregatePromptEnhanceH3ImagePESettings(t *testing.T) {
+	var cfg AggregatePromptEnhance
+	if err := UnmarshalJsonStr(`{"mode":"H3_IMAGE_PE","reasoning_effort":"low"}`, &cfg); err != nil {
+		t.Fatal(err)
+	}
+	if got := cfg.EnhanceMode(); got != EnhanceModeH3ImagePE {
+		t.Fatalf("EnhanceMode() = %q, want %q", got, EnhanceModeH3ImagePE)
+	}
+	if cfg.ReasoningEffort != "low" {
+		t.Fatalf("ReasoningEffort = %q, want low", cfg.ReasoningEffort)
+	}
+}
+
 // withAggregateConfig 装配一份聚合模型配置,测试结束还原。
 func withAggregateConfig(t *testing.T, raw string) {
 	t.Helper()

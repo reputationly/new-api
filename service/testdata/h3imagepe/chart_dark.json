@@ -1,0 +1,11 @@
+{
+ "dt": 4.943377494812012,
+ "created": 1795145548,
+ "revised_prompt": "The grouped bar chart in <Picture 1> is <Subject 1>, featuring the top title '2025 Quarterly Revenue by Region', the subtitle 'Unit: USD million', the vertical axis tick labels '0', '20', '40', '60', '80', and '100' from bottom to top, the horizontal axis category labels 'Q1', 'Q2', 'Q3', and 'Q4' from left to right, the legend entries 'North America' with a blue square and 'Asia Pacific' with an orange square, the data bars with value labels ('42' for North America in Q1, '31' for Asia Pacific in Q1, '57' for North America in Q2, '38' for Asia Pacific in Q2, '73' for North America in Q3, '64' for Asia Pacific in Q3, '88' for North America in Q4, and '52' for Asia Pacific in Q4), and the bottom footer 'Source: Finance Dept. internal report'. The target image presents <Subject 1> converted into a sleek dark-mode theme. <Subject 1> is partially preserved; its layout, typography, chart structure, legend colors, and all text and numeric values remain intact, while the background and text/axis color scheme change from light to dark. The canvas background changes from white to a deep charcoal gray, and the horizontal gridlines shift to a subtle dark slate tone. All previously dark or gray text elements—including the main title, subtitle, axis tick labels, category labels, legend labels, bar value labels, and bottom source note—change to crisp white and light silver-gray for high contrast against the dark backdrop, while the solid black axis lines become clean light gray.",
+ "aspect_ratio": "16:9",
+ "usage": {
+  "total_tokens": 2621,
+  "input_tokens": 2621
+ },
+ "request_id": "074ef2497cb34b0ded2e9c13387a8f55"
+}

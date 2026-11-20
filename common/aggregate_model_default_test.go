@@ -72,6 +72,7 @@ func TestDefaultAggregateShipsNoEnhanceStageUntilTemplatesInherit(t *testing.T) 
 		// 所以判据从"有没有写模板"改成"拿不拿得到模板"。
 		// qwen_pe 自带官方提示词（service/qwenpe/），不读模板，也不回落 text。
 		if it.PromptEnhance.EnhanceMode() != EnhanceModeQwenPE &&
+			it.PromptEnhance.EnhanceMode() != EnhanceModeH3ImagePE &&
 			it.PromptEnhance.SystemPrompt == "" && !hasBuiltinEnhanceTemplate(it.Generate.Model) {
 			t.Errorf("%s 启用了增强段，既没写 system_prompt，%s 也没有内置默认模板 —— 会静默降级成不增强",
 				it.Name, it.Generate.Model)
@@ -180,6 +181,9 @@ func TestDefaultConfigUsesSingleCallMode(t *testing.T) {
 		case "image":
 			// 官方 PE 协议:JSON + 画幅,产物直接决定 size
 			want = EnhanceModeQwenPE
+			if m.Name == "minimax-h3-image-enhanced" {
+				want = EnhanceModeH3ImagePE
+			}
 		case "music":
 			// 三节纯文本 caption,没有画幅、也没有 H3 的编译事实 —— text 就是它的正确模式
 			want = EnhanceModeText
@@ -189,6 +193,28 @@ func TestDefaultConfigUsesSingleCallMode(t *testing.T) {
 				m.Name, got, want)
 		}
 	}
+}
+
+func TestDefaultH3ImagePEAggregate(t *testing.T) {
+	items, err := ParseAggregateModelList(DefaultAggregateModelConfig)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, item := range items {
+		if item.Name != "minimax-h3-image-enhanced" {
+			continue
+		}
+		if item.Type != "image" || item.Generate.Model != "minimax-h3-image" {
+			t.Fatalf("H3-Image PE 聚合配置不匹配: %+v", item)
+		}
+		if item.PromptEnhance.EnhanceMode() != EnhanceModeH3ImagePE ||
+			item.PromptEnhance.Model != "qwen3.8-flash-fp8" ||
+			item.PromptEnhance.ReasoningEffort != "low" {
+			t.Fatalf("H3-Image PE 增强配置不匹配: %+v", item.PromptEnhance)
+		}
+		return
+	}
+	t.Fatal("缺少 minimax-h3-image-enhanced 出厂配置")
 }
 
 // 出厂的聚合配置必须用**线上真正在跑的**超分模型。

@@ -1,0 +1,11 @@
+{
+ "dt": 5.032687425613403,
+ "created": 1795145557,
+ "revised_prompt": "The top title text '员工绩效考核表（2025年第三季度）' in <Picture 1> is <Subject 1>. The bottom-right footer text '制表人：人力资源部' in <Picture 1> is <Subject 2>. The performance evaluation table in <Picture 1>, structured in 5 rows and 5 columns with Row 1 headers '姓名', '部门', '出勤率', '绩效得分', and '评级', Row 2 cells '张伟', '研发部', '98.5%', '92', and 'A', Row 3 cells '李娜', '市场部', '96.0%', '87', and 'B+', Row 4 cells '王强', '销售部', '91.2%', '78', and 'B', and Row 5 cells '陈静', '财务部', '99.1%', '95', and 'A+', is <Subject 3>. The white background canvas in <Picture 1> is <Subject 4>. The target image shows <Subject 3> expanded by one appended data row at the bottom while keeping <Subject 1>, <Subject 2>, and <Subject 4> intact. <Subject 1> is fully preserved. <Subject 2> is fully preserved. <Subject 3> is partially preserved; its column widths, header row, first four data rows, typography, cell backgrounds, and grid borders remain, while its vertical layout adjusts slightly to accommodate a new sixth row at the bottom, changing the overall table structure from 5 rows and 5 columns to 6 rows and 5 columns. <Subject 4> is fully preserved. In the newly added Row 6 of <Subject 3>, the five cells from Column 1 to Column 5 contain centered black sans-serif text reading '赵敏' in Row 6 Column 1, '法务部' in Row 6 Column 2, '97.3%' in Row 6 Column 3, '90' in Row 6 Column 4, and 'A' in Row 6 Column 5. This new bottom row matches the alternating light gray-white fill, thin dark gray grid borders, font size, and horizontal alignment of the existing data rows in <Subject 3>, positioned cleanly above <Subject 2>.",
+ "aspect_ratio": "7:4",
+ "usage": {
+  "total_tokens": 3606,
+  "input_tokens": 3606
+ },
+ "request_id": "074ef252999462ce08b2e1a27eb4b3f8"
+}

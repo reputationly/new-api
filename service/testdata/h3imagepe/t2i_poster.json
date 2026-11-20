@@ -1,0 +1,11 @@
+{
+ "dt": 4.74532675743103,
+ "created": 1795145611,
+ "revised_prompt": "A warm and elegant coffee shop grand opening poster in a vertical layout. At the top center, a large stylized title reads \"晨光咖啡\" in bold golden Chinese characters with a subtle metallic texture, flanked by delicate gold leaf ornaments on both sides. Directly below it, the subtitle reads \"Grand Opening 12.01\" in smaller dark brown serif type. Below the subtitle, a centered line of text states \"Morning Light, Real Coffee\" in a thin sans-serif font. In the upper-right corner, a small badge reads \"EST. 2024\" above a minimalist gold sun icon. The main visual is a photorealistic cozy coffee shop scene occupying the center and lower half of the poster: a steaming white ceramic latte cup on a wooden tray sits on the left, with the words \"晨光咖啡\" printed on the cup. Beside it sits a golden croissant and a plate of small cookies. On the right side, a rustic wooden window frame opens to a softly blurred street scene with a warm morning sun glowing through sheer white curtains. A small hanging sign near the top right of the window reads \"OPEN\" in gold. At the bottom left, a beige rounded rectangle information box contains three rows of details: \"Location\" with a map pin icon and the text \"123 Morning Street, Sunshine City\", \"Opening Hours\" with a clock icon and the text \"Mon-Fri 8:00 AM - 8:00 PM | Sat-Sun 9:00 AM - 6:00 PM\", and \"Follow Us\" with social icons for WeChat, Instagram, and Facebook labeled \"@ChenguangCoffee\". At the bottom right, a deep brown rectangular card with gold foil trim contains a celebratory offer: a ribbon reads \"GRAND OPENING OFFER\", and the main offer states \"Welcome Drink\" above \"50% OFF\" in large gold text. A small gold line drawing of a coffee cup and a pastry accompanies the offer. The background features warm brown, cream, and golden tones, with a textured paper look, soft morning light, and clean professional typography.",
+ "aspect_ratio": "2:3",
+ "usage": {
+  "total_tokens": 2657,
+  "input_tokens": 2657
+ },
+ "request_id": "074ef28802e31fc867b33dd085185e9e"
+}

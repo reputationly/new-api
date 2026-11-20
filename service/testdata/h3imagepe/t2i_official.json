@@ -1,0 +1,11 @@
+{
+ "dt": 5.247107744216919,
+ "created": 1795145612,
+ "revised_prompt": "The image is a high-resolution overhead food photograph of a rustic farm-to-table feast arranged on a weathered, dark brown wooden table with visible grain, knots, and scratches. In the center of the table sits a large woven wicker basket holding a freshly baked rustic loaf of bread, its crust golden brown and scored with crosshatch patterns, alongside several smaller artisanal rolls. On the upper left, a slate serving tray holds an assortment of artisanal cheeses: a wedge of bloomy brie with a white rind, a block of orange cheddar, a round goat cheese with dried herb speckles, and a small bowl of dark honey with a wooden dipper. Beside the cheeses sit a few fresh figs and clusters of grapes. On the upper right, a copper pan contains roasted root vegetables including sweet potatoes, parsnips, and Brussels sprouts with visible browned edges. In the lower left corner, a large cluster of colorful seasonal vegetables fills the space: red and yellow heirloom tomatoes, a green zucchini, glossy bell peppers, whole carrots with feathery tops, and loose leafy greens. In the lower right, a woven burlap sack holds dark green olives and sun-dried tomatoes, next to a glass cruet filled with golden olive oil and a ceramic bowl of roasted nuts. Small accents like scattered bay leaves, cracked peppercorns, and a linen napkin with frayed edges add to the rustic aesthetic. Warm natural sunlight enters from the upper left, casting soft shadows toward the lower right and emphasizing the rough textures of the bread, vegetables, and table surface.",
+ "aspect_ratio": "4:3",
+ "usage": {
+  "total_tokens": 2421,
+  "input_tokens": 2421
+ },
+ "request_id": "074ef288313b46fd3f2b4c9e40a25545"
+}

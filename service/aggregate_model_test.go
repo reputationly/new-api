@@ -478,7 +478,7 @@ func TestDryRunAcceptsKnownEnhanceModes(t *testing.T) {
 		"gen-model": {groups: []string{"default"}},
 		"enh-model": {groups: []string{"default"}},
 	})
-	for _, mode := range []string{"", "text", "TEXT", "singlecall", "SingleCall"} {
+	for _, mode := range []string{"", "text", "TEXT", "singlecall", "SingleCall", "qwen_pe", "h3_image_pe"} {
 		res := DryRunAggregateModel(irEnhanceModel(mode, "模板"), map[string]int{"v-agg": 1})
 		if ch := checkByKey(res, "enhance_mode"); ch != nil && strings.Contains(ch.Message, "不认识") {
 			t.Errorf("mode=%q 是合法值,不该报不认识", mode)
@@ -498,6 +498,78 @@ func TestDryRunAcceptsKnownEnhanceModes(t *testing.T) {
 		if ch != nil && !strings.Contains(ch.Message, "已删除") {
 			t.Errorf("mode=%q 的提示应说明它是被删掉的,而不只是拼错,实得 %q", mode, ch.Message)
 		}
+	}
+}
+
+func h3ImagePEAggregate(mode, systemPrompt string) *common.AggregateModel {
+	return &common.AggregateModel{
+		Name: "image-agg", Type: "image",
+		Generate: common.AggregateGenerate{Model: "ordinary-image"},
+		PromptEnhance: &common.AggregatePromptEnhance{
+			Model: "enh-model", Mode: mode, SystemPrompt: systemPrompt,
+		},
+	}
+}
+
+func TestDryRunH3ImagePEValidation(t *testing.T) {
+	withFakeModels(t, map[string]fakeModel{
+		"ordinary-image": {},
+		"enh-model":      {},
+	})
+
+	cfg := h3ImagePEAggregate("h3_image_pe", "")
+	res := DryRunAggregateModel(cfg, map[string]int{"image-agg": 1})
+	if ch := checkByKey(res, "enhance_mode"); ch != nil && strings.Contains(ch.Message, "不认识") {
+		t.Fatalf("合法模式不应报未知: %s", ch.Message)
+	}
+	if ch := checkByKey(res, "enhance_template"); ch != nil {
+		t.Fatalf("h3_image_pe 自带提示词,不应要求模板: %+v", ch)
+	}
+	if !res.Passed {
+		t.Fatalf("合法 h3_image_pe 配置不应失败: %+v", res.Checks)
+	}
+
+	cfg.PromptEnhance.SystemPrompt = "unused"
+	res = DryRunAggregateModel(cfg, map[string]int{"image-agg": 1})
+	requireLevel(t, res, "enhance_mode", AggregateCheckWarn)
+
+	cfg = h3ImagePEAggregate("h3_image_pe", "")
+	cfg.PromptEnhance.TimeoutSeconds = 30
+	requireLevel(t, DryRunAggregateModel(cfg, map[string]int{"image-agg": 1}),
+		"enhance_timeout", AggregateCheckWarn)
+}
+
+func TestDryRunH3ImagePERequiresImageType(t *testing.T) {
+	withFakeModels(t, map[string]fakeModel{
+		"ordinary-image": {},
+		"enh-model":      {},
+	})
+	cfg := h3ImagePEAggregate("h3_image_pe", "")
+	cfg.Type = "video"
+	requireLevel(t, DryRunAggregateModel(cfg, map[string]int{"image-agg": 1}),
+		"enhance_mode", AggregateCheckError)
+}
+
+func TestDryRunReasoningEffortOnlyAppliesToH3ImagePE(t *testing.T) {
+	withFakeModels(t, map[string]fakeModel{
+		"ordinary-image": {},
+		"enh-model":      {},
+	})
+
+	cfg := h3ImagePEAggregate("singlecall", "")
+	cfg.PromptEnhance.ReasoningEffort = "low"
+	res := DryRunAggregateModel(cfg, map[string]int{"image-agg": 1})
+	ch := checkByKey(res, "reasoning_effort")
+	if ch == nil || ch.Level != AggregateCheckWarn ||
+		ch.Message != "只有 h3_image_pe 使用 reasoning_effort，当前模式会忽略" {
+		t.Fatalf("非 h3_image_pe 模式应警告忽略 reasoning_effort: %+v", ch)
+	}
+
+	cfg = h3ImagePEAggregate("h3_image_pe", "")
+	cfg.PromptEnhance.ReasoningEffort = "low"
+	res = DryRunAggregateModel(cfg, map[string]int{"image-agg": 1})
+	if ch := checkByKey(res, "reasoning_effort"); ch != nil {
+		t.Fatalf("h3_image_pe 模式不应警告 reasoning_effort: %+v", ch)
 	}
 }
 

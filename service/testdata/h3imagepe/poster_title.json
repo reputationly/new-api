@@ -1,0 +1,11 @@
+{
+ "dt": 4.688289642333984,
+ "created": 1795145541,
+ "revised_prompt": "The red promotional poster background with a thin yellow rectangular inner border and a central solid yellow circle in <Picture 1> is <Subject 1>. The top-left white text 'SALE' in <Picture 1> is <Subject 2>. The top-right white text 'No.2026' in <Picture 1> is <Subject 3>. The large yellow main title text '双十一狂欢节' near the upper center of <Picture 1> is <Subject 4>. The remaining white text lines below the main title in <Picture 1>, reading from top to bottom as '全场低至 3 折', '11月1日 — 11月11日', '扫码领取优惠券', and '活动最终解释权归本店所有', are <Subject 5>. The two dark-red text lines inside the central yellow circle in <Picture 1>, reading from top to bottom as '满300减50' and '限时抢购', are <Subject 6>. The target image shows the promotional poster with <Subject 4> updated to read '秋季上新' while all other layout, graphic elements, and text remain unchanged. <Subject 1> is fully preserved. <Subject 2> is fully preserved. <Subject 3> is fully preserved. <Subject 4> is partially preserved; its position, font style, size, and yellow color remain, while its literal wording changes from '双十一狂欢节' to '秋季上新'. <Subject 5> is fully preserved. <Subject 6> is fully preserved. In place of the original five-character title, <Subject 4> now displays the four characters '秋季上新' centered horizontally in the upper portion of <Subject 1>, rendered in the same clean sans-serif typeface and bright yellow fill against the red background.",
+ "aspect_ratio": "3:4",
+ "usage": {
+  "total_tokens": 3593,
+  "input_tokens": 3593
+ },
+ "request_id": "074ef2428ee6c4bc5b816041e6afde4d"
+}

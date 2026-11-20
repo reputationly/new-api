@@ -1,0 +1,11 @@
+{
+ "dt": 15.685167789459229,
+ "created": 1795145579,
+ "revised_prompt": "The young woman in a white t-shirt and blue jeans in <Picture 1> is <Subject 1>. The plain light gray studio background in <Picture 1> is <Subject 2>. The mustard-yellow corduroy work jacket with two chest flap pockets, dark brown buttons, and a small dark rectangular patch on the left chest pocket bearing tiny illegible lettering in <Picture 2> is <Subject 3>. The target image shows <Subject 1> standing against <Subject 2> while wearing <Subject 3> over her outfit. <Subject 1> is partially preserved; her identity, facial features, hairstyle, pose, white t-shirt, and blue jeans remain, while her upper body gains an outer layer of clothing that covers her shoulders, arms, and torso. <Subject 2> is fully preserved. <Subject 3> is partially preserved; its color, ribbed corduroy texture, collar, chest pockets, buttons, cuffs, and chest patch are retained, while it changes from a flat-lay product display to being worn naturally on <Subject 1>'s body. <Subject 3> fits comfortably over <Subject 1>'s frame, with the pointed collar resting neatly around her neck over the crew neckline of her white t-shirt. The long sleeves of <Subject 3> follow the downward angle of <Subject 1>'s arms, ending at buttoned cuffs near her wrists, while the front placket and hem hang naturally over her waist, casting soft contact shadows onto her underlying shirt and jeans under the even studio lighting.",
+ "aspect_ratio": "1189:1600",
+ "usage": {
+  "total_tokens": 5159,
+  "input_tokens": 5159
+ },
+ "request_id": "074ef2687280e1cfbde058b9460def4d"
+}
