@@ -27,6 +27,8 @@ MODEL = "qwen3.8-flash-fp8"
 MAXTOK = int(os.environ.get("MAXTOK", "0") or 0)
 EFF = os.environ.get("EFF", "") not in ("", "0")
 TAG = os.environ.get("TAG", "")
+# NORF=1 不发 response_format —— 生产已经不发（qwen3.8 + json_object 会被 xgrammar 拒成 500）
+NORF = os.environ.get("NORF", "") not in ("", "0")
 
 def eff_seconds(sec):
     n = max(1, round(sec * 24))
@@ -62,7 +64,9 @@ def user(c):
     return parts if len(parts) > 1 else c["prompt"]
 
 def kw():
-    k = {"response_format": {"type": "json_object"}}
+    k = {}
+    if not NORF:
+        k["response_format"] = {"type": "json_object"}
     if MAXTOK:
         k["max_tokens"] = MAXTOK
     if cfg == "none":

@@ -229,14 +229,22 @@ func compileViaSingleCall(
 	var lastRaw string
 
 	for round := 0; round <= singleCallMaxRepairRounds; round++ {
+		// **不发 response_format。** qwen3.8(MTP 投机解码)+ json_object 会被引擎
+		// 的语法约束放过不去:线上日志(qwen3.8-flash-fp8 副本,2026-11-20)
+		//
+		//	EngineCore ERROR [backend_xgrammar.py:168] Failed to advance FSM for request … for tokens 0
+		//	EngineCore ERROR [scheduler.py:2131] Unexpected: grammar rejected tokens [0] … Terminating request
+		//	APIServer  ERROR [serving.py:207] Request … failed with an internal error during generation  → 500
+		//
+		// 关思考那一档尤其容易撞上(实测一段窗口内三次)。qwen_pe 早前也是同一个
+		// 症状,那里的结论是"约一半请求 500",于是同样不发这个字段 —— 取 JSON 靠
+		// extractSingleCall 的容错解析(围栏、前后缀、游离花括号都扛)。
+		// 少一个字段换来的是"不再有一整类 500",不亏。
 		body := map[string]any{
-			"model":    model,
-			"messages": msgs,
-			"stream":   false,
-			// 要 JSON 对象。上游不认这个字段时会忽略它(不是报错)，所以
-			// extractSingleCall 仍然得自己扛住围栏和前后缀。
-			"response_format": map[string]any{"type": "json_object"},
-			"max_tokens":      singleCallMaxTokens(in.MaxOutputTokens),
+			"model":      model,
+			"messages":   msgs,
+			"stream":     false,
+			"max_tokens": singleCallMaxTokens(in.MaxOutputTokens),
 		}
 		// 思考档位:配了 reasoning_effort 就照发,否则退回布尔开关。
 		// 两者不能同时发 —— 实测同时发时上游按档位走,布尔那个被忽略,

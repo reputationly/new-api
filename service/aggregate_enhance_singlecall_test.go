@@ -991,3 +991,34 @@ non_diegetic_music: z
 	require.Equal(t, prompt, fixed)
 }
 
+
+// **不发 response_format 是刻意的。**
+//
+// qwen3.8(MTP 投机解码)+ json_object 会被引擎的语法约束放过不去,线上日志:
+//
+//	Failed to advance FSM ... for tokens 0 → grammar rejected tokens [0] → 500
+//
+// qwen_pe 早前同一个症状(约一半请求 500),那里也没有发。取 JSON 靠
+// extractSingleCall 的容错解析。这条测试是为了防止"顺手把 response_format 加回来"。
+func TestSingleCallRequestOmitsResponseFormat(t *testing.T) {
+	got := fakeSequence(t, chatResponse(scReply("integrated_multimodal_description: [Shot 1] x")))
+	res := EnhancePrompt(context.Background(), scCfg(), "Bearer sk-x", scInput("一只猫"))
+	require.False(t, res.Degraded, res.DegradeReason)
+
+	var body map[string]any
+	require.NoError(t, common.Unmarshal((*got)[0], &body))
+	require.NotContains(t, body, "response_format",
+		"json_object 语法约束在 qwen3.8 上会被 xgrammar 拒成 500,不能发")
+	require.Contains(t, body, "max_tokens")
+}
+
+// 没有 response_format 时模型爱包围栏/写寒暄,必须仍然解析得出来。
+func TestSingleCallParsesWithoutResponseFormat(t *testing.T) {
+	raw := "好的，结果如下：\n" + strings.Repeat("\x60", 3) + "json\n" + scReply("integrated_multimodal_description: [Shot 1] x") + "\n" + strings.Repeat("\x60", 3) + "\n以上。"
+	got := fakeSequence(t, chatResponse(raw))
+	res := EnhancePrompt(context.Background(), scCfg(), "Bearer sk-x", scInput("一只猫"))
+	require.False(t, res.Degraded, res.DegradeReason)
+	require.Contains(t, res.EnhancedPrompt, "[Shot 1]")
+	require.NotEmpty(t, (*got)[0])
+}
+
