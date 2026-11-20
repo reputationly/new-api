@@ -246,3 +246,14 @@ python3 scripts/h3vid-pe/check.py runs/official runs/sc_none runs/prod
 - 官方写作规范 `ref-en.txt:112`：普通参考视频不会仅因为文件带声音就产生 `<Audio N>`。
 
 本 PR 按**引擎实现**来做（编号以引擎为准才不会指错素材），但因为网关不知道视频有没有音轨，最终采取「用户音频不写数字」的折中。等上游明确口径后，可以在素材物化时用 ffprobe / moov 解析查一次音轨，把编号补精确 —— 那会多一次网络读取，且落在客户的关键路径上，所以没在本 PR 做。
+
+### 8.2 第三轮检视的处置
+
+| 项 | 处理 |
+| --- | --- |
+| P1 在 text 回落路径上没改到 | **已改**：`buildTaskContext` 的 r2va 分支在有参考视频时只说 the user-supplied audio reference（并明确不要写 `<Audio N>`），没有视频时仍是 `<Audio 1>`。singlecall 超时/重修失败后回落到 text 用的就是这段 |
+| 未编号音频没人检查有没有被提到 | **已改**：`missingAssetMentions` 对 `label_unknown` 的音频检查提示词里是否出现 `user-supplied audio reference`（大小写不敏感，措辞由 appendix 第 11 条定死） |
+| 干跑 `max_output_tokens` 没区分模式 | **已改**：与 `reasoning_effort` 同一套写法 —— 非 singlecall 提示「当前模式会忽略」，singlecall 才看数值（负数 / 小于 2048） |
+| `knownReasoningEffort` 插在文档注释与函数之间 | **已挪**到注释之前，避免 godoc 挂错 |
+| `labelIssues` 注释引用了不存在的 `hasVideoUncertainAudio` | **已改**为 `hasVideo` |
+| appendix 第 10 条与第 11 条字面冲突、第 11 条前多空行 | **已改**：第 10 条补指向第 11 条，空行删掉 |
