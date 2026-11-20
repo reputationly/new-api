@@ -718,10 +718,12 @@ export default function ModelRatioEditor({
         render: (_, record) => {
           const pattern = (record.pattern || '').trim();
           const { list, scope } = resolveTimeRules(pattern);
+          // 没配时段价就留空（一个短横）。"全天一个价"是默认事实，不需要标出来——
+          // 每个模型都写一遍只是噪音，反而让人以为那是一个特殊状态。
           if (list.length === 0) {
             return (
               <Text type='tertiary' size='small'>
-                {t('全天一个价')}
+                —
               </Text>
             );
           }
