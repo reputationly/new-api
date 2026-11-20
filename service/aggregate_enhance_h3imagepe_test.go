@@ -223,6 +223,28 @@ func TestH3ImagePEFullReplacementWithoutSubjects(t *testing.T) {
 	}
 }
 
+func TestH3ImagePEPossessiveApostrophes(t *testing.T) {
+	for _, caption := range []string{
+		"The woman's sign reads '你好'. The target image shows the sign.",
+		"It's '欢迎光临' and 'OPEN'. The target image shows the entrance.",
+	} {
+		if issues := checkH3ImagePEEditCaption(caption, "16:9", 1, "adaptive"); len(issues) != 0 {
+			t.Errorf("quoted text after a contraction should pass: %q: %v", caption, issues)
+		}
+	}
+
+	withSentencePunctuation := "The woman's sign reading 'Hello. Welcome' in <Picture 1> is <Subject 1>. " +
+		"The target image shows the sign. <Subject 1> is fully preserved."
+	if issues := checkH3ImagePEEditCaption(withSentencePunctuation, "16:9", 1, "adaptive"); len(issues) != 0 {
+		t.Fatalf("sentence punctuation inside quoted text should not split: %v", issues)
+	}
+
+	unquotedChinese := "The target image shows 你好 on the sign."
+	if issues := checkH3ImagePEEditCaption(unquotedChinese, "16:9", 1, "adaptive"); !hasH3ImagePEIssue(issues, "non_english_prose") {
+		t.Fatalf("unquoted Chinese prose should fail: %v", issues)
+	}
+}
+
 func TestH3ImagePET2IRejectsEmptyCaptionAndRepairs(t *testing.T) {
 	for _, raw := range []string{
 		`{"expanded_caption":null,"aspect_ratio":"1:1"}`,

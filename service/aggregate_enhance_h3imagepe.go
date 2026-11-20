@@ -42,7 +42,6 @@ var (
 	h3ImagePEPicture   = regexp.MustCompile(`<Picture ([0-9]+)>`)
 	h3ImagePECJK       = regexp.MustCompile(`[\x{3400}-\x{9fff}\x{3040}-\x{30ff}\x{ac00}-\x{d7af}]`)
 	h3ImagePEFence     = regexp.MustCompile("```|\\*\\*|(?m)^#+ |(?m)^\\s*[-*] ")
-	h3ImagePEQuote     = regexp.MustCompile(`'[^']*'`)
 	h3ImagePESentence  = regexp.MustCompile(`([.!?])([\t\n\f\r\x{000b}\p{Z}]+)([A-Z<'"(])`)
 	h3ImagePEGrid      = regexp.MustCompile(`\b[0-9]+\s*[x×]\s*[0-9]+\b`)
 	h3ImagePEGridLabel = regexp.MustCompile(
@@ -522,22 +521,16 @@ func checkH3ImagePET2I(parsed map[string]any, allowedRatios []string) []string {
 }
 
 func h3ImagePEUnquoted(text string) string {
-	matches := h3ImagePEQuote.FindAllStringIndex(text, -1)
-	if len(matches) == 0 {
+	ranges := h3ImagePESingleQuotedRanges(text)
+	if len(ranges) == 0 {
 		return text
 	}
 	var result strings.Builder
 	start := 0
-	for _, match := range matches {
-		if match[0] > 0 && h3ImagePEASCIIAlphaNum(text[match[0]-1]) {
-			continue
-		}
-		if match[1] < len(text) && h3ImagePEASCIIAlpha(text[match[1]]) {
-			continue
-		}
-		result.WriteString(text[start:match[0]])
+	for _, quoted := range ranges {
+		result.WriteString(text[start:quoted[0]])
 		result.WriteString("''")
-		start = match[1]
+		start = quoted[1]
 	}
 	result.WriteString(text[start:])
 	return result.String()
@@ -545,14 +538,8 @@ func h3ImagePEUnquoted(text string) string {
 
 func h3ImagePESplitSentences(text string) []string {
 	masked := []byte(text)
-	for _, match := range h3ImagePEQuote.FindAllStringIndex(text, -1) {
-		if match[0] > 0 && h3ImagePEASCIIAlphaNum(text[match[0]-1]) {
-			continue
-		}
-		if match[1] < len(text) && h3ImagePEASCIIAlpha(text[match[1]]) {
-			continue
-		}
-		for i := match[0]; i < match[1]; i++ {
+	for _, quoted := range h3ImagePESingleQuotedRanges(text) {
+		for i := quoted[0]; i < quoted[1]; i++ {
 			if masked[i] == '.' || masked[i] == '!' || masked[i] == '?' {
 				masked[i] = '_'
 			}
@@ -573,6 +560,39 @@ func h3ImagePESplitSentences(text string) []string {
 		}
 	}
 	return out
+}
+
+func h3ImagePESingleQuotedRanges(text string) [][2]int {
+	var ranges [][2]int
+	for cursor := 0; cursor < len(text); {
+		relative := strings.IndexByte(text[cursor:], '\'')
+		if relative < 0 {
+			break
+		}
+		open := cursor + relative
+		if open > 0 && h3ImagePEASCIIAlphaNum(text[open-1]) {
+			cursor = open + 1
+			continue
+		}
+		close := -1
+		for i := open + 1; i < len(text); i++ {
+			if text[i] != '\'' {
+				continue
+			}
+			if i+1 < len(text) && h3ImagePEASCIIAlpha(text[i+1]) {
+				continue
+			}
+			close = i
+			break
+		}
+		if close < 0 {
+			cursor = open + 1
+			continue
+		}
+		ranges = append(ranges, [2]int{open, close + 1})
+		cursor = close + 1
+	}
+	return ranges
 }
 
 func h3ImagePEHasUnlabeledGrid(text string) bool {
