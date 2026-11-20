@@ -206,14 +206,28 @@ override 组合还有个更硬的 bug，见 §4.2。
 本次不合并这两套（合并等于重做表达式系统），但**必须硬互斥**（拒绝保存，不是警告）——
 它们不是「两个功能」，是同一件事的两种写法，同时存在等于同一笔单乘两次时间系数。
 
-互斥判定放在**模型级**，因为表达式是全局按模型名存的（`ModelBillingMode` / `ModelBillingExpr`），
-按线路判解决不了「premium 走时段价、default 走表达式」这种想象出来的组合：
+互斥判定放在**模型级**，因为表达式是全局按模型名存的
+（`billing_setting.billing_mode` / `billing_setting.billing_expr`），
+按线路判解决不了「premium 走时段价、default 走表达式」这种想象出来的组合。
 
-- 保存 `GroupTimeRatio`：命中的模型若 `tiered_expr` 且表达式引用时间函数 →
-  `模型 X 的分时价已在计费表达式里定义（hour/weekday），不能再配时段价`
-- 保存 `ModelBillingExpr`：该模型若已有任一时段价规则 →
-  `模型 X 已配置时段价（线路 premium · 闲时），表达式里不能再引用时间函数`
-- 启动/体检扫描存量违规并报出来，**不静默改价**（与分组健康状态列同一形态）。
+三道检查口径一致：**都不看当前计费模式**，只看"表达式里有没有时间函数"。
+
+| 触发点 | 检查 | 行为 |
+|---|---|---|
+| 保存 `GroupTimeRatio` | `checkTimePriceVsExpr` | 命中模型的**表达式**里带时间函数 → 拒（不论模式是否为 `tiered_expr`） |
+| 保存 `billing_setting.billing_expr` | `checkExprVsTimePrice` | 该模型已有时段价 → 表达式里不许出现时间函数 |
+| 保存 `billing_setting.billing_mode` | `checkBillingModeVsTimePrice` | 切成 `tiered_expr` 时，若表达式带时间函数且已有时段价 → 拒 |
+
+为什么第一条不看模式：表达式里存着 `hour()` 说明这颗雷已经埋下。它现在可能因为模式不是
+`tiered_expr` 而没有生效，但切模式的那一刻就生效，而那一天不会有人回头检查"这个模型配没配
+时段价"。运营要配时段价，先删掉那条旧表达式即可 —— 错误提示里就是这么写的。
+
+代价：若现网已经同时存在「带时间函数的表达式 + 时段价」，此后保存计费模式会被拒。这种状态
+本身就该清理，按提示删掉其中一处即可。后两条是补洞用的——没有它们，「先配时段价、再把模式
+切成 `tiered_expr`」或「先配时段价、再给表达式加 `hour()`」都能绕过第一条。
+
+> 2026-11-20 现网核算：`billing_setting.billing_mode` 与 `billing_setting.billing_expr`
+> 都是 `{}`，**没有任何 `tiered_expr` 模型**——三道检查当前都不触发，属于为将来准备。
 
 **检测是可行的，但要按 `|||` 切开再判，整体编译会静默漏判**（已实测）：
 

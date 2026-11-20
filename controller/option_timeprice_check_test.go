@@ -50,16 +50,19 @@ func TestCheckTimePriceVsExpr(t *testing.T) {
 	}
 
 	// 命中该模型 → 拒绝
-	require.ErrorContains(t, checkTimePriceVsExpr(rules("m1")), "已经写在计费表达式里")
+	require.ErrorContains(t, checkTimePriceVsExpr(rules("m1")), "留有一条带时间函数的计费表达式")
 	// 通配命中 → 也拒绝
-	require.ErrorContains(t, checkTimePriceVsExpr(rules("m*")), "已经写在计费表达式里")
+	require.ErrorContains(t, checkTimePriceVsExpr(rules("m*")), "留有一条带时间函数的计费表达式")
 	// 不覆盖它 → 放行
 	require.NoError(t, checkTimePriceVsExpr(rules("other")))
 
-	// 表达式里有 hour() 但模式还不是 tiered_expr：同样禁止配时段价
-	// （否则「先配时段价、后切模式」就能绕过互斥）
+	// 表达式里有 hour()、但模式还不是 tiered_expr：同样拒绝配置时段价。
+	// 口径是「雷已经埋下就拦」，不看当前模式——切模式那一刻它就会生效。
 	seedExprOnly(t, "m3", `v2:tier("base", hour("Asia/Shanghai") >= 9 ? p * 5 : p * 2)`)
-	require.ErrorContains(t, checkTimePriceVsExpr(rules("m3")), "已经写在计费表达式里")
+	require.ErrorContains(t, checkTimePriceVsExpr(rules("m3")), "留有一条带时间函数的计费表达式")
+	// 绕过保存直接写库造出「时段价 + 带时间函数的表达式」之后，切模式也要被拦住
+	require.NoError(t, ratio_setting.UpdateGroupTimeRatioByJSONString(rules("m3")))
+	require.ErrorContains(t, checkBillingModeVsTimePrice(`{"m3":"tiered_expr"}`), "请先清掉其中一处")
 
 	// 反方向：表达式引用时间函数，而该模型已有段价 → 拒绝
 	require.NoError(t, ratio_setting.UpdateGroupTimeRatioByJSONString(rules("m2")))

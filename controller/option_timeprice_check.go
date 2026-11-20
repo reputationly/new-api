@@ -24,10 +24,12 @@ func checkTimePriceVsExpr(timeRatioJSON string) error {
 		// 语法错由 CheckGroupTimeRatio 报；空规则不可能冲突
 		return nil
 	}
-	// 只看「表达式里有没有时间函数」，**不看当前模式**：
-	// 模式随时可以被切到 tiered_expr，而切模式那一步如果是事后发生的，
-	// 双重时间轴就会在那时候才出现——所以过滤当前模式等于给未来留了个洞。
-	// 表达式存着时间函数 = 这颗雷已经埋下，禁止再配时段价。
+	// **不看当前模式**（2026-11-20 复核后定的口径）：表达式里存着 hour() 就说明
+	// "这颗雷已经埋下"——它现在可能因为模式不是 tiered_expr 而没有生效，但把模式切回来
+	// 的那一刻它立刻生效，而那一天不会有人回头检查「这个模型配没配时段价」。
+	// 运营要配时段价，先删掉那条旧表达式即可，错误提示里就是这么说的。
+	//
+	// 三个保存入口（时段价 / 表达式 / 计费模式）口径一致：都不看当前模式。
 	exprs := billing_setting.GetBillingExprCopy()
 	models := make([]string, 0, len(exprs))
 	for model := range exprs {
@@ -40,7 +42,7 @@ func checkTimePriceVsExpr(timeRatioJSON string) error {
 		}
 		for _, pattern := range patterns {
 			if ratio_setting.MatchModelPattern(pattern, model) {
-				return fmt.Errorf("模型 %s 的分时价已经写在计费表达式里（hour/weekday 等时间函数），不能再配时段价：请把分时价留在其中一处", model)
+				return fmt.Errorf("模型 %s 留有一条带时间函数的计费表达式（hour/weekday 等），不能再配时段价：请先删掉那条表达式，或把分时价改在表达式里写", model)
 			}
 		}
 	}

@@ -108,11 +108,6 @@ function rulesToRows(rules) {
   });
 }
 
-// 稳定的空引用：每处 `|| {}` 都会产出新对象，用在 memo 依赖上等于没 memo。
-const EMPTY_TIME_RULES = {};
-
-/**
-
 /**
  * 表格行 → 单个分组的规则对象。
  *
