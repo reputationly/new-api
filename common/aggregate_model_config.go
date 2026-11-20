@@ -141,7 +141,7 @@ type AggregatePromptEnhance struct {
 	// 但那要靠实测数字说话,不是默认。
 	Thinking *bool `json:"thinking"`
 
-	// ReasoningEffort 非空时直接发送给增强模型,优先于 thinking 开关。
+	// ReasoningEffort 仅 mode=h3_image_pe 使用;非空时直接发送给增强模型,优先于 thinking 开关。
 	ReasoningEffort string `json:"reasoning_effort"`
 }
 

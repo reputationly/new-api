@@ -248,6 +248,11 @@ func DryRunAggregateModel(m *common.AggregateModel, peers map[string]int) *Aggre
 				common.EnhanceModeSingleCall, common.EnhanceModeQwenPE,
 				common.EnhanceModeH3ImagePE, common.EnhanceModeText)
 		}
+		if m.PromptEnhance.ReasoningEffort != "" &&
+			m.PromptEnhance.EnhanceMode() != common.EnhanceModeH3ImagePE {
+			add("reasoning_effort", AggregateCheckWarn,
+				"只有 h3_image_pe 使用 reasoning_effort，当前模式会忽略")
+		}
 		if m.PromptEnhance.EnhanceMode() == common.EnhanceModeQwenPE ||
 			m.PromptEnhance.EnhanceMode() == common.EnhanceModeH3ImagePE {
 			mode := m.PromptEnhance.EnhanceMode()

@@ -91,7 +91,7 @@ type EnhanceInput struct {
 	// Thinking 让模型开启"思考"。默认关 —— 思考型模型会重新推导任务、
 	// 绕开 schema(见 common.AggregatePromptEnhance.Thinking)。
 	Thinking bool
-	// ReasoningEffort 非空时直接传给增强模型。
+	// ReasoningEffort 仅 mode=h3_image_pe 使用,非空时直接传给增强模型。
 	ReasoningEffort string
 	// TaskContext 请求事实的文本描述,拼进 text 模式的系统提示词。
 	TaskContext string

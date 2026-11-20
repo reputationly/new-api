@@ -550,6 +550,29 @@ func TestDryRunH3ImagePERequiresImageType(t *testing.T) {
 		"enhance_mode", AggregateCheckError)
 }
 
+func TestDryRunReasoningEffortOnlyAppliesToH3ImagePE(t *testing.T) {
+	withFakeModels(t, map[string]fakeModel{
+		"ordinary-image": {},
+		"enh-model":      {},
+	})
+
+	cfg := h3ImagePEAggregate("singlecall", "")
+	cfg.PromptEnhance.ReasoningEffort = "low"
+	res := DryRunAggregateModel(cfg, map[string]int{"image-agg": 1})
+	ch := checkByKey(res, "reasoning_effort")
+	if ch == nil || ch.Level != AggregateCheckWarn ||
+		ch.Message != "只有 h3_image_pe 使用 reasoning_effort，当前模式会忽略" {
+		t.Fatalf("非 h3_image_pe 模式应警告忽略 reasoning_effort: %+v", ch)
+	}
+
+	cfg = h3ImagePEAggregate("h3_image_pe", "")
+	cfg.PromptEnhance.ReasoningEffort = "low"
+	res = DryRunAggregateModel(cfg, map[string]int{"image-agg": 1})
+	if ch := checkByKey(res, "reasoning_effort"); ch != nil {
+		t.Fatalf("h3_image_pe 模式不应警告 reasoning_effort: %+v", ch)
+	}
+}
+
 // text 模式缺模板是**真错误**:那时确实等于增强没生效。
 //
 // 对照 TestDryRunSingleCallWithoutTemplateIsWarnNotError —— singlecall
