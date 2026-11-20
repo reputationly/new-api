@@ -441,3 +441,61 @@ func TestEnhanceVideoAllowedRejectsBlank(t *testing.T) {
 	require.False(t, enhanceVideoAllowed(""))
 	require.False(t, enhanceVideoAllowed("   "))
 }
+
+// **text 模式与 qwen_pe 也要发档位与输出上限。**
+//
+// 实测(2026-11-21,三模式 × 三档位):ACE-Step 在 none 档把 caption 写成散文段落,
+// low 档才是单行 tag 列表;qwen_pe 在 high 档出现 2/7 空正文 + 1 条 300 秒 504 ——
+// 因为这两条路原先都不发 max_tokens,思考与正文共用上游默认预算。
+func TestTextModeSendsReasoningEffortAndMaxTokens(t *testing.T) {
+	cfg := &common.AggregateModel{
+		Name: "agg", Type: "music",
+		PromptEnhance: &common.AggregatePromptEnhance{
+			Model: "enh", Mode: common.EnhanceModeText, SystemPrompt: "rewrite it",
+			ReasoningEffort: "low",
+		},
+	}
+	got := fakeSequence(t, chatResponse("a rewritten caption"))
+	EnhancePrompt(context.Background(), cfg, "Bearer sk-x", EnhanceInput{Prompt: "a song"})
+
+	var body map[string]any
+	require.NoError(t, common.Unmarshal((*got)[0], &body))
+	require.Equal(t, "low", body["reasoning_effort"])
+	require.NotContains(t, body, "chat_template_kwargs", "发了档位就不该再发布尔开关")
+	require.EqualValues(t, singleCallMaxOutputTokens, body["max_tokens"])
+}
+
+func TestQwenPESendsReasoningEffortAndMaxTokens(t *testing.T) {
+	cfg := &common.AggregateModel{
+		Name: "agg", Type: "image",
+		PromptEnhance: &common.AggregatePromptEnhance{
+			Model: "enh", Mode: common.EnhanceModeQwenPE, ReasoningEffort: "low",
+		},
+	}
+	got := fakeSequence(t, chatResponse("not json"))
+	EnhancePrompt(context.Background(), cfg, "Bearer sk-x", EnhanceInput{Prompt: "a cat"})
+
+	var body map[string]any
+	require.NoError(t, common.Unmarshal((*got)[0], &body))
+	require.Equal(t, "low", body["reasoning_effort"])
+	require.NotContains(t, body, "chat_template_kwargs")
+	require.EqualValues(t, singleCallMaxOutputTokens, body["max_tokens"])
+}
+
+// 不配档位时行为不变:发布尔开关,不发档位。
+func TestTextModeKeepsThinkingSwitchWhenNoEffort(t *testing.T) {
+	cfg := &common.AggregateModel{
+		Name: "agg", Type: "music",
+		PromptEnhance: &common.AggregatePromptEnhance{
+			Model: "enh", Mode: common.EnhanceModeText, SystemPrompt: "rewrite it",
+		},
+	}
+	got := fakeSequence(t, chatResponse("a rewritten caption"))
+	EnhancePrompt(context.Background(), cfg, "Bearer sk-x", EnhanceInput{Prompt: "a song"})
+
+	var body map[string]any
+	require.NoError(t, common.Unmarshal((*got)[0], &body))
+	require.NotContains(t, body, "reasoning_effort")
+	require.Contains(t, body, "chat_template_kwargs")
+	require.Contains(t, body, "max_tokens")
+}

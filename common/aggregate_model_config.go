@@ -142,7 +142,10 @@ type AggregatePromptEnhance struct {
 	Thinking *bool `json:"thinking"`
 
 	// ReasoningEffort 思考档位(none/low/medium/high)。非空时直接发送给增强模型,
-	// 优先于 thinking 开关。**h3_image_pe 与 singlecall 两个模式使用。**
+	// 优先于 thinking 开关。**四个增强模式都使用**(h3_image_pe / singlecall /
+	// qwen_pe / text)。text 走音乐 caption、qwen_pe 走图片编辑 PE,这两条 2026-11-21
+	// 才扩上档位 —— 实测 ACE-Step 在 none 档会把 caption 写成散文段落,low 档才是
+	// 正确的单行 tag 列表;qwen_pe 在 high 档会出现空正文与 300 秒超时。
 	//
 	// 与 thinking 并存而不是替换它:thinking 是一个布尔语义的"要不要思考",而这个
 	// 字段是上游的**分档**参数,两者在不同模型上生效的形态本来就不一样。
@@ -155,8 +158,8 @@ type AggregatePromptEnhance struct {
 	// 慢的那一档才是能和官方对齐的那一档,所以它得是可配的,不能写死。
 	ReasoningEffort string `json:"reasoning_effort"`
 
-	// MaxOutputTokens 增强调用的输出 token 上限。0 = 按模式取内置默认。目前只有
-	// singlecall 读它。
+	// MaxOutputTokens 增强调用的输出 token 上限。0 = 按模式取内置默认。
+	// singlecall / qwen_pe / text 读它(h3_image_pe 不读:产物是短 JSON)。
 	//
 	// **必须有,不能靠上游默认。** 实测 singlecall 一次完整产物(content_plan +
 	// 整段 h3_prompt)在 8192 以内,而上游默认上限会把它截断在半句台词上:

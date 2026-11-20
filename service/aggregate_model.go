@@ -111,6 +111,17 @@ func unknownSuffix() string {
 	return "(注意:当前定价缓存为空,无法确认模型是否真的不可用,请稍后重试)"
 }
 
+// modeUsesMaxOutputTokens 这些模式读 max_output_tokens(显式发输出上限)。
+//
+// h3_image_pe 不读:它的产物是一份短 JSON,官方 PE 提示词里也没给输出预算的余地。
+func modeUsesMaxOutputTokens(mode string) bool {
+	switch mode {
+	case common.EnhanceModeSingleCall, common.EnhanceModeQwenPE, common.EnhanceModeText:
+		return true
+	}
+	return false
+}
+
 // knownReasoningEffort 上游认得的思考档位。只用来提示拼错，不作为拒绝依据 ——
 // 值本身原样透传,上游将来加了新档位不该被我们的白名单挡住。
 var knownReasoningEffort = map[string]bool{"none": true, "low": true, "medium": true, "high": true}
@@ -256,12 +267,11 @@ func DryRunAggregateModel(m *common.AggregateModel, peers map[string]int) *Aggre
 		// 视频那条同样是「档位决定效果」的模式 —— 关思考时首帧只写
 		// "as shown in <Picture 1>"，开思考才会逐个元素清点。出厂默认就给它配了 low，
 		// 这里若还按「只有 h3_image_pe 能用」报警，运营每配一次就看到一条假的忽略提示。
+		// reasoning_effort 四个模式都认(2026-11-21 扩到 text / qwen_pe):text 走音乐
+		// caption、qwen_pe 走图片编辑 PE,两条都改成"档位优先于布尔 thinking"。所以这里
+		// 不再有"当前模式会忽略"这一支 —— 只剩"拼错了"要提示。
 		if effort := strings.TrimSpace(m.PromptEnhance.ReasoningEffort); effort != "" {
-			mode := m.PromptEnhance.EnhanceMode()
-			if mode != common.EnhanceModeH3ImagePE && mode != common.EnhanceModeSingleCall {
-				add("reasoning_effort", AggregateCheckWarn,
-					"只有 h3_image_pe / singlecall 使用 reasoning_effort，当前模式会忽略")
-			} else if !knownReasoningEffort[strings.ToLower(effort)] {
+			if !knownReasoningEffort[strings.ToLower(effort)] {
 				// 档位是**原样透传**给上游的，拼错不会被我们拦下 —— 上游要么报错、
 				// 要么当默认处理，两种都看不出是配置写错了。
 				add("reasoning_effort", AggregateCheckWarn,
@@ -273,9 +283,9 @@ func DryRunAggregateModel(m *common.AggregateModel, peers map[string]int) *Aggre
 		// 否则运营会为一个根本不生效的字段调半天（h3_image_pe 填 1024 会收到
 		// "建议至少 8192"，可那个值压根不会发出去）。
 		if n := m.PromptEnhance.MaxOutputTokens; n != 0 {
-			if m.PromptEnhance.EnhanceMode() != common.EnhanceModeSingleCall {
+			if !modeUsesMaxOutputTokens(m.PromptEnhance.EnhanceMode()) {
 				add("max_output_tokens", AggregateCheckWarn,
-					"只有 singlecall 使用 max_output_tokens，当前模式会忽略")
+					"只有 singlecall / qwen_pe / text 使用 max_output_tokens，当前模式会忽略")
 			} else if n < 0 {
 				// 负数会被当成"未配置"（用内置默认 8192），这个静默行为要说出来。
 				add("max_output_tokens", AggregateCheckWarn,

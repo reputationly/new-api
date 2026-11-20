@@ -222,7 +222,12 @@ func compileQwenPE(ctx context.Context, authHeader, model string, in EnhanceInpu
 		// **不带 response_format。** qwen3.8（MTP 投机解码）+ 关思考 + json_object
 		// 实测约一半请求被引擎以 grammar rejected 终止、返回 500；取 JSON 靠下面的容错解析。
 		body := map[string]any{"model": model, "messages": msgs, "stream": false}
-		applyThinking(body, in.Thinking)
+		// 档位优先于布尔开关(与 singlecall 一致),并显式发 max_tokens —— 实测 high 档
+		// 不发 max_tokens 时正文会被思考挤空(2/7 空输出、另有 300 秒 504)。
+		applyEnhanceTuning(body, in.ReasoningEffort, in.MaxOutputTokens)
+		if strings.TrimSpace(in.ReasoningEffort) == "" {
+			applyThinking(body, in.Thinking)
+		}
 		payload, err := common.Marshal(body)
 		if err != nil {
 			return nil, fmt.Errorf("构造改写请求失败: %w", err)
