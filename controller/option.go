@@ -279,6 +279,16 @@ func UpdateOption(c *gin.Context) {
 			})
 			return
 		}
+	case "billing_setting.billing_mode":
+		// 第三条防线：把模式切成 tiered_expr 时，表达式里的时间函数会开始生效。
+		// 只拦 expr 而不拦 mode，等于给"先配时段价、后切模式"留了一个洞。
+		if err = checkBillingModeVsTimePrice(option.Value.(string)); err != nil {
+			c.JSON(http.StatusOK, gin.H{
+				"success": false,
+				"message": err.Error(),
+			})
+			return
+		}
 	case "billing_setting.billing_expr":
 		// 反方向互斥：表达式里引用时间函数时，该模型不能再有时段价。
 		if err = checkExprVsTimePrice(option.Value.(string)); err != nil {

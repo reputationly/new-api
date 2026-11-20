@@ -223,8 +223,9 @@ export default function ModelRatioEditor({
   // 「同步到其他分组」的候选。不传就不显示那个按钮——调用方没给候选时，
   // 与其渲染一个空下拉，不如整个藏掉。
   syncTargets = [],
-  // 时段折扣（Layer 4）。存在**另一个 option key**（GroupTimeRatio）里，所以单独
-  // 收发，不混进 value/onChange。不传 onTimeChange 就整列不渲染——档位折扣那个
+  // 时段价（Layer 4）。存在**另一个 option key**（GroupTimeRatio）里，所以单独
+  // 收发，不混进 value/onChange。这里只读展示生效结果——编辑入口在模型定价页的
+  // 「分时价」面板，那是全站唯一写入点。档位折扣那个
   // Tab 复用本组件，而 Layer 4 是按使用分组配的，在用户档语境下没有意义。
   timeValue,
 }) {
@@ -237,10 +238,8 @@ export default function ModelRatioEditor({
   const [groupModels, setGroupModels] = useState([]);
   const [batchMode, setBatchMode] = useState(MODE_MULTIPLY);
   const [batchValue, setBatchValue] = useState(0.8);
-  const [batchWindow, setBatchWindow] = useState(null);
-  const [batchWindowValue, setBatchWindowValue] = useState(0.7);
 
-  // ---- 时段折扣（Layer 4）----
+  // ---- 时段价（Layer 4，只读）----
   // 与上面的 rows 刻意不合并成一个状态：两者存在不同的 option key 里，保存时也是
   // 两次独立的 PUT。合并后任何一处改动都会把另一个 key 也标脏，本来只改了折扣
   // 却连带覆盖时段配置。
@@ -255,22 +254,43 @@ export default function ModelRatioEditor({
   // 必须 memo：`|| {}` 每次渲染都产出新对象引用，而它是 columns 那个 useMemo 的依赖。
   // 不 memo 的话 columns 每次渲染都重建，模型名输入框跟着重建，光标被弹到末尾——
   // 正是 cursorStability.test.jsx 锁死的那个回归。
-  // 生效的时段价：全网 "*" 打底，按线路存的存量规则覆盖（与后端「线路 > 全网」一致）。
-  const groupTimeRules = useMemo(() => {
-    const globalRules =
-      timeConfig.rules?.[GLOBAL_TIME_SCOPE] || EMPTY_TIME_RULES;
-    const lineRules = timeConfig.rules?.[group];
-    if (!lineRules || Object.keys(lineRules).length === 0) return globalRules;
-    return { ...globalRules, ...lineRules };
-  }, [timeConfig.rules, group]);
+  // 生效的时段价：与后端 matchedTimeRulesLocked 逐字对齐——**先线路、后全网，整组取代**
+  // 而不是逐条合并。按模式串合并会让「线路配了 deepseek-*、全网配了精确的 deepseek-v4」
+  // 这种组合显示成全网那条，而实际计费取的是线路通配的那组。
+  const resolveTimeRules = useCallback(
+    (modelName) => {
+      const pick = (rules) => {
+        if (!rules || !modelName) return null;
+        let best = null;
+        Object.entries(rules).forEach(([pattern, list]) => {
+          let weight = 0;
+          if (pattern === modelName) weight = 2;
+          else if (
+            pattern.endsWith('*') &&
+            modelName.startsWith(pattern.slice(0, -1))
+          )
+            weight = 1;
+          if (weight === 0) return;
+          if (
+            !best ||
+            weight > best.weight ||
+            (weight === best.weight && pattern.length > best.pattern.length)
+          ) {
+            best = { pattern, list, weight };
+          }
+        });
+        return best;
+      };
 
-  // 哪些模式串是按线路单独配的（用于标「线路」角标）；其余来自全网。
-  const lineOwnPatterns = useMemo(
-    () => new Set(Object.keys(timeConfig.rules?.[group] || {})),
+      const line = pick(timeConfig.rules?.[group]);
+      if (line) return { list: line.list || [], scope: 'line' };
+      const global = pick(timeConfig.rules?.[GLOBAL_TIME_SCOPE]);
+      if (global) return { list: global.list || [], scope: 'global' };
+      return { list: [], scope: null };
+    },
     [timeConfig.rules, group],
   );
 
-  // 把某个模型模式串的时段规则写回整份 GroupTimeRatio，其他分组/模型原样保留。
   // 精确规则表的分页必须受控。Semi Table 的内置分页是非受控的，dataSource 换引用
   // 就回到第一页——而 rows 每敲一个键都会重建（emitAndSet），结果是在第二页改折扣
   // 值，刚输入就被弹回第一页，改到一半的那行看不见了。
@@ -670,11 +690,11 @@ export default function ModelRatioEditor({
           const base = groupRatioRef.current ?? 1;
           const effective =
             record.mode === MODE_OVERRIDE ? record.value : base * record.value;
-          // 时段终值与常规终值并排显示。时段折扣**取代**模型折扣，所以两个数是
+          // 时段终值与常规终值并排显示。时段系数**乘在常规价上**，所以两个数是
           // 可以直接比较的；时段值反而更高说明配反了——这在只看配置系数时看不出来，
           // 而后端无从硬拒绝（常规终值还受用户档影响，逐用户不同）。
           const pattern = (record.pattern || '').trim();
-          const timeList = groupTimeRules[pattern] || [];
+          const timeList = resolveTimeRules(pattern).list;
           return (
             <div className='flex flex-col'>
               <Text
@@ -702,7 +722,7 @@ export default function ModelRatioEditor({
         width: 200,
         render: (_, record) => {
           const pattern = (record.pattern || '').trim();
-          const list = groupTimeRules[pattern] || [];
+          const { list, scope } = resolveTimeRules(pattern);
           if (list.length === 0) {
             return (
               <Text type='tertiary' size='small'>
@@ -710,7 +730,7 @@ export default function ModelRatioEditor({
               </Text>
             );
           }
-          const own = lineOwnPatterns.has(pattern);
+
           return (
             <div className='flex flex-wrap items-center gap-1'>
               {list.map((r, i) => (
@@ -723,9 +743,15 @@ export default function ModelRatioEditor({
                   {timeConfig.windows[r.window]?.label || r.window} ×{r.value}
                 </Tag>
               ))}
-              <Tag size='small' shape='circle' color={own ? 'amber' : 'white'}>
-                {own ? t('线路') : t('全网')}
-              </Tag>
+              {scope && (
+                <Tag
+                  size='small'
+                  shape='circle'
+                  color={scope === 'line' ? 'amber' : 'white'}
+                >
+                  {scope === 'line' ? t('线路') : t('全网')}
+                </Tag>
+              )}
             </div>
           );
         },
@@ -763,7 +789,7 @@ export default function ModelRatioEditor({
         ),
       },
     ],
-    [t, updateRow, removeRow, selected, groupTimeRules, timeConfig.windows],
+    [t, updateRow, removeRow, selected, resolveTimeRules, timeConfig.windows],
   );
 
   if (!group) {

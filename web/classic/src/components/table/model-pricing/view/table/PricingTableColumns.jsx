@@ -199,11 +199,17 @@ export const getPricingTableColumns = ({
       displayPrice,
       currency,
       quotaDisplayType: siteDisplayType,
-      pointsEnabled: false,
-      pointsEnabledGroups: [],
-      pointsEnabledModels: null,
-      entitlementCoverage: null,
-      quotaPerComputePoint: 0,
+      // 积分/套餐口径必须与主计算保持一致：否则「积分计价」的模型上，
+      // 删除线画的是金额、当前价显示的是积分，两个单位对不上。
+      pointsEnabled: pointsConfig?.enabled,
+      quotaPerPoint: pointsConfig?.quotaPerPoint,
+      pointsEnabledGroups: pointsConfig?.enabledGroups,
+      pointsEnabledModels: pointsConfig?.enabledModels,
+      entitlementCoverage: getModelCoverage(
+        entitlementConfig?.coverage,
+        record.model_name,
+      ),
+      quotaPerComputePoint: entitlementConfig?.quotaPerComputePoint,
     });
     normalPriceCache.set(cacheKey, data);
     return data;

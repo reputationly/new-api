@@ -15,8 +15,8 @@ WHERE "key" IN (
     'UserGroupModelRatio', -- 用户档折扣（仅用于展示终值，不影响相对关系）
     'GroupTimeRatio',      -- 时段规则（本次改造对象）
     'GroupEnabled',        -- 停用线路（判断规则是否休眠）
-    'ModelBillingMode',    -- 是否 tiered_expr
-    'ModelBillingExpr'     -- 表达式内容（检查有没有 hour()/weekday()）
+    'billing_setting.billing_mode',  -- 是否 tiered_expr（注意带前缀：这两项走 config 扁平化，不是顶层 key）
+    'billing_setting.billing_expr'   -- 表达式内容（检查有没有 hour()/weekday()）
 );
 
 -- 2) 先确认 key 名没写错、值有多大（防导出被截断）

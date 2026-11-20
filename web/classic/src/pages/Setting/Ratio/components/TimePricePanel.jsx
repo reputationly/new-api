@@ -428,9 +428,16 @@ export default function TimePricePanel({ options, refresh }) {
                 {legacyScopes.join('、')}
                 {t('）。它们优先于全网规则，建议合并到全网。')}
               </Text>
-              <Button size='small' onClick={migrateLegacy}>
-                {t('合并到全网')}
-              </Button>
+              <Popconfirm
+                title={t('把按线路配的时段价变成全网规则？')}
+                content={t(
+                  '合并后这条规则对所有线路生效，原来只在那条线路上生效。值按原样搬过去，不做语义换算——若这些规则还是旧口径（取代模型折扣），请先按更新说明重配，不要直接合并。',
+                )}
+                okText={t('确认合并')}
+                onConfirm={migrateLegacy}
+              >
+                <Button size='small'>{t('合并到全网')}</Button>
+              </Popconfirm>
             </Space>
           }
         />

@@ -24,7 +24,43 @@ func checkTimePriceVsExpr(timeRatioJSON string) error {
 		// 语法错由 CheckGroupTimeRatio 报；空规则不可能冲突
 		return nil
 	}
-	modes := billing_setting.GetBillingModeCopy()
+	// 只看「表达式里有没有时间函数」，**不看当前模式**：
+	// 模式随时可以被切到 tiered_expr，而切模式那一步如果是事后发生的，
+	// 双重时间轴就会在那时候才出现——所以过滤当前模式等于给未来留了个洞。
+	// 表达式存着时间函数 = 这颗雷已经埋下，禁止再配时段价。
+	exprs := billing_setting.GetBillingExprCopy()
+	models := make([]string, 0, len(exprs))
+	for model := range exprs {
+		models = append(models, model)
+	}
+	sort.Strings(models)
+	for _, model := range models {
+		if !billingexpr.UsesTimeFunctions(exprs[model]) {
+			continue
+		}
+		for _, pattern := range patterns {
+			if ratio_setting.MatchModelPattern(pattern, model) {
+				return fmt.Errorf("模型 %s 的分时价已经写在计费表达式里（hour/weekday 等时间函数），不能再配时段价：请把分时价留在其中一处", model)
+			}
+		}
+	}
+	return nil
+}
+
+// checkBillingModeVsTimePrice 是第三条防线：把模型的计费模式切成 tiered_expr 时，
+// 若它的表达式里带时间函数、而该模型已经配了时段价，同样拒绝。
+//
+// 没有这道检查时存在一个真实的时序缺口：先给「模式还不是 tiered 但表达式已含 hour()」
+// 的模型配时段价（那时 checkTimePriceVsExpr 因为模式判断会放行），随后再把模式切到
+// tiered_expr —— 双重时间轴就在切模式那一刻悄悄生效了。
+func checkBillingModeVsTimePrice(modeJSON string) error {
+	if modeJSON == "" {
+		return nil
+	}
+	var modes map[string]string
+	if err := common.UnmarshalJsonStr(modeJSON, &modes); err != nil {
+		return nil
+	}
 	exprs := billing_setting.GetBillingExprCopy()
 	models := make([]string, 0, len(modes))
 	for model := range modes {
@@ -38,10 +74,8 @@ func checkTimePriceVsExpr(timeRatioJSON string) error {
 		if !billingexpr.UsesTimeFunctions(exprs[model]) {
 			continue
 		}
-		for _, pattern := range patterns {
-			if ratio_setting.MatchModelPattern(pattern, model) {
-				return fmt.Errorf("模型 %s 的分时价已经写在计费表达式里（hour/weekday 等时间函数），不能再配时段价：请把分时价留在其中一处", model)
-			}
+		if ratio_setting.HasTimeRulesForModel(model) {
+			return fmt.Errorf("模型 %s 已配时段价，而它的计费表达式里引用了时间函数（hour/weekday 等）：请先清掉其中一处再切换计费模式", model)
 		}
 	}
 	return nil

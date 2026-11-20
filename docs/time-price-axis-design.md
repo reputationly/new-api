@@ -734,12 +734,21 @@ P4 可选：新增 `other.price_normal_ratio`（常规价终值），让「折�
 UPDATE options SET "value" = jsonb_set("value"::jsonb, '{rules}', '{}'::jsonb)::text WHERE "key" = 'GroupTimeRatio';
 ```
 
-Step 3 重新配置（UI 或 SQL），2 个模型 × 2 个窗口，系数 1.1111：
+Step 3 重新配置 —— **首选走 UI**（设置 → 模型定价 → 分时价 → 添加时段价），
+因为写库会绕过保存校验，形状错了不会报错、只会静默不生效。
+
+确实要走 SQL 时，**注意 `rules` 下面还有一层作用域键**：时段价挂在保留键 `"*"`（全网）下，
+写成 `{"模型": [...]}` 会让 `GroupTimeRatio` 反序列化失败，各副本加载失败后一直停在
+Step 1 留下的 `rules = {}`，而计费照旧按常规价跑 —— 全程没有任何报错。
 
 ```sql
 UPDATE options SET "value" = jsonb_set("value"::jsonb, '{rules}',
-  '{"deepseek-v4-1-flash":[{"window":"window_1","value":1.1111},{"window":"window_2","value":1.1111}],
-   "deepseek-v4-1-flash-1017":[{"window":"window_1","value":1.1111},{"window":"window_2","value":1.1111}]}'::jsonb)::text WHERE "key" = 'GroupTimeRatio';
+  '{"*": {"deepseek-v4-1-flash":[{"window":"window_1","value":1.1111},{"window":"window_2","value":1.1111}],
+          "deepseek-v4-1-flash-1017":[{"window":"window_1","value":1.1111},{"window":"window_2","value":1.1111}]}}'::jsonb)::text
+WHERE "key" = 'GroupTimeRatio';
+
+-- 落库后必须确认形状：结果里应当能看到 "*" 这一层
+SELECT jsonb_pretty("value"::jsonb -> 'rules') FROM options WHERE "key" = 'GroupTimeRatio';
 ```
 
 ## 9. 不做 / 已知限制

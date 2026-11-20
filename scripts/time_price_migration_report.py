@@ -83,8 +83,8 @@ def main():
     group_group = jload(opts, "GroupGroupRatio", {})
     group_model = jload(opts, "GroupModelRatio", {})
     time_cfg = jload(opts, "GroupTimeRatio", {})
-    billing_mode = jload(opts, "ModelBillingMode", {})
-    billing_expr = jload(opts, "ModelBillingExpr", {})
+    billing_mode = jload(opts, "billing_setting.billing_mode", {})
+    billing_expr = jload(opts, "billing_setting.billing_expr", {})
     disabled = set(jload(opts, "GroupEnabled", []) or [])
 
     windows = (time_cfg or {}).get("windows") or {}
