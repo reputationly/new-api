@@ -91,6 +91,8 @@ type EnhanceInput struct {
 	// Thinking 让模型开启"思考"。默认关 —— 思考型模型会重新推导任务、
 	// 绕开 schema(见 common.AggregatePromptEnhance.Thinking)。
 	Thinking bool
+	// ReasoningEffort 非空时直接传给增强模型。
+	ReasoningEffort string
 	// TaskContext 请求事实的文本描述,拼进 text 模式的系统提示词。
 	TaskContext string
 	// Compiler singlecall 编译器所需的结构化请求事实。
@@ -100,7 +102,7 @@ type EnhanceInput struct {
 	// 见 middleware 的 buildCompilerInput：缺时长、玩法判不出来、
 	// metadata 读不出来，三种。
 	Compiler *hilo.CompilerInput
-	// ClientSize 发给生成段的 size(客户传的,或 overrides 定的)。qwen_pe 用它:
+	// ClientSize 发给生成段的 size(客户传的,或 overrides 定的)。PE 模式用它:
 	// 非空时以接口为准,改写按这个画幅构图、不再另定尺寸。
 	ClientSize string
 }
@@ -119,7 +121,7 @@ type EnhanceResult struct {
 	DegradeReason string
 	Usage         *dto.Usage
 
-	// Mode 实际走的模式("text" / "singlecall")。配的是 singlecall 而这里
+	// Mode 实际走的模式。配的是 singlecall 而这里
 	// 是 text,说明编译失败、回落了 —— 见 FallbackReason。
 	Mode string
 	// ContentPlan singlecall 产出的生产记录(content_plan)原文。
@@ -213,6 +215,7 @@ func EnhancePrompt(ctx context.Context, agg *common.AggregateModel, authHeader s
 	// (见 SendInputImages 字段注释),不该散在每个调用点各判一次。
 	in.SendMedia = cfg.IsSendInputImages()
 	in.Thinking = cfg.IsThinking()
+	in.ReasoningEffort = cfg.ReasoningEffort
 
 	// ── qwen_pe 模式(Qwen-Image-2.1 官方 PE 协议)──────────────
 	//
@@ -233,6 +236,25 @@ func EnhancePrompt(ctx context.Context, agg *common.AggregateModel, authHeader s
 			common.SysLog(fmt.Sprintf("aggregate enhance: qwen_pe 警告 (model=%s): %s", res.Model, w))
 		}
 		common.SysLog(fmt.Sprintf("aggregate enhance: qwen_pe 完成 (model=%s, %dms, size=%q, repaired=%v)",
+			res.Model, res.ElapsedMs, res.Size, res.Repaired))
+		return res
+	}
+
+	if cfg.EnhanceMode() == common.EnhanceModeH3ImagePE {
+		res.Mode = common.EnhanceModeH3ImagePE
+		out, err := compileH3ImagePEWithTimeout(ctx, authHeader, res.Model, in, h3ImagePEBudget(cfg))
+		if err != nil {
+			return degrade("h3_image_pe 改写失败: %v", err)
+		}
+		res.EnhancedPrompt = out.Prompt
+		res.Size = out.Size
+		res.Repaired = out.Repaired
+		res.Usage = out.Usage
+		res.ElapsedMs = time.Since(started).Milliseconds()
+		for _, warning := range out.Warnings {
+			common.SysLog(fmt.Sprintf("aggregate enhance: h3_image_pe 警告 (model=%s): %s", res.Model, warning))
+		}
+		common.SysLog(fmt.Sprintf("aggregate enhance: h3_image_pe 完成 (model=%s, %dms, size=%q, repaired=%v)",
 			res.Model, res.ElapsedMs, res.Size, res.Repaired))
 		return res
 	}

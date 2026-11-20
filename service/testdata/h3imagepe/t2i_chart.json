@@ -1,0 +1,11 @@
+{
+ "dt": 4.935475587844849,
+ "created": 1795145612,
+ "revised_prompt": "The image is a clean and professional corporate data visualization chart on a bright off-white presentation slide background with a subtle light-grey shadow. In the upper left corner, a dark navy-blue bold sans-serif headline reads \"季度营收柱状图\", with a smaller grey subtitle below it reading \"2023年度业绩表现\". Beneath the subtitle, a small navy-blue rounded rectangle acts as an accent, accompanied by the text \"单位：万元\" in dark grey. In the center of the slide is a prominent vertical bar chart. The Y-axis is labeled \"营收（万元）\" in dark navy text, and its tick marks show \"0\", \"500\", \"1000\", \"1500\", \"2000\", and \"2500\" in black. Thin horizontal dashed grid lines span across the chart area to match each tick. The X-axis displays four dark navy labels centered under each bar: \"第一季度\", \"第二季度\", \"第三季度\", and \"第四季度\". The four bars are a solid navy-blue gradient that darkens toward the bottom. Above the first bar, a dark grey label reads \"1200\"; above the second bar, it reads \"1500\"; above the third bar, it reads \"900\"; and above the fourth bar, it reads \"1800\". On the right side of the chart is a neat summary card with rounded corners and a thin grey border. The top section of the card has a navy heading \"年度总营收\" and a large navy number \"5400\" followed by \"万元\" in smaller text. Below a dashed divider line, another section shows \"同比增长\" and \"22.5%\" with a small green upward-pointing triangle. A third section shows \"最高季度\" and \"第四季度\". At the bottom left of the slide, a small text annotation says \"数据来源：财务统计\", followed by a tiny blue dot as a decorative marker. The entire design relies on a minimal navy, grey, and white color scheme, with generous margins and a clear grid layout suitable for a business slide.",
+ "aspect_ratio": "16:9",
+ "usage": {
+  "total_tokens": 3520,
+  "input_tokens": 3520
+ },
+ "request_id": "074ef28838fd83be0da66d61ceeddc13"
+}

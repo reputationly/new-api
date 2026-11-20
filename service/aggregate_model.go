@@ -239,23 +239,32 @@ func DryRunAggregateModel(m *common.AggregateModel, peers map[string]int) *Aggre
 		if rawMode := strings.TrimSpace(m.PromptEnhance.Mode); rawMode != "" &&
 			!strings.EqualFold(rawMode, common.EnhanceModeText) &&
 			!strings.EqualFold(rawMode, common.EnhanceModeSingleCall) &&
-			!strings.EqualFold(rawMode, common.EnhanceModeQwenPE) {
+			!strings.EqualFold(rawMode, common.EnhanceModeQwenPE) &&
+			!strings.EqualFold(rawMode, common.EnhanceModeH3ImagePE) {
 			add("enhance_mode", AggregateCheckWarn,
-				"增强模式 %q 不认识(只支持 %q / %q / %q),运行时会按 %q 处理"+
+				"增强模式 %q 不认识(只支持 %q / %q / %q / %q),运行时会按 %q 处理"+
 					"(\"ir\" 模式已删除:上游废弃了那套架构,见 service/h3v20/README.md)",
 				rawMode, common.EnhanceModeText,
-				common.EnhanceModeSingleCall, common.EnhanceModeQwenPE, common.EnhanceModeText)
+				common.EnhanceModeSingleCall, common.EnhanceModeQwenPE,
+				common.EnhanceModeH3ImagePE, common.EnhanceModeText)
 		}
-		if m.PromptEnhance.EnhanceMode() == common.EnhanceModeQwenPE {
-			// qwen_pe 用内置的官方 PE 提示词(service/qwenpe/),不读 system_prompt;
-			// 它的产物(改写 + 画幅)也只对图片有意义。
+		if m.PromptEnhance.EnhanceMode() == common.EnhanceModeQwenPE ||
+			m.PromptEnhance.EnhanceMode() == common.EnhanceModeH3ImagePE {
+			mode := m.PromptEnhance.EnhanceMode()
+			// PE 模式使用内置提示词,不读 system_prompt;产物(改写 + 画幅)只对图片有意义。
 			if strings.TrimSpace(m.PromptEnhance.SystemPrompt) != "" {
 				add("enhance_mode", AggregateCheckWarn,
-					"mode=qwen_pe 时不使用 system_prompt(用内置的 Qwen-Image-2.1 官方 PE 提示词)")
+					"mode=%s 时不使用 system_prompt(使用内置 PE 提示词)", mode)
 			}
 			if m.Type != "image" {
 				add("enhance_mode", AggregateCheckError,
-					"mode=qwen_pe 只适用于图片聚合(type=image),当前 type=%q", m.Type)
+					"mode=%s 只适用于图片聚合(type=image),当前 type=%q", mode, m.Type)
+			}
+			if mode == common.EnhanceModeH3ImagePE &&
+				m.PromptEnhance.TimeoutSeconds > 0 && m.PromptEnhance.TimeoutSeconds < 60 {
+				add("enhance_timeout", AggregateCheckWarn,
+					"timeout_seconds=%d 偏小,h3_image_pe 很可能重修前超时;建议至少 60 秒,默认 120 秒",
+					m.PromptEnhance.TimeoutSeconds)
 			}
 		}
 		if m.PromptEnhance.EnhanceMode() == common.EnhanceModeSingleCall &&
@@ -304,6 +313,7 @@ func DryRunAggregateModel(m *common.AggregateModel, peers map[string]int) *Aggre
 		// 是事实,现在不是了。
 		// qwen_pe 自带提示词、失败也不回落 text,模板与它无关。
 		if m.PromptEnhance.EnhanceMode() != common.EnhanceModeQwenPE &&
+			m.PromptEnhance.EnhanceMode() != common.EnhanceModeH3ImagePE &&
 			strings.TrimSpace(m.PromptEnhance.SystemPrompt) == "" &&
 			DefaultEnhanceTemplate(m.Generate.Model) == "" {
 			// singlecall **自带**编译器提示词(service/h3v20/),不读

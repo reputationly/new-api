@@ -1,0 +1,11 @@
+{
+ "dt": 5.019738674163818,
+ "created": 1795145616,
+ "revised_prompt": "The image is a realistic landscape photograph of a young woman riding a bicycle toward the left along a scenic coastal road at sunset. The woman is positioned slightly to the right of center, viewed in a clear left-facing side profile as she moves leftward. She has shoulder-length brown hair tied in a loose ponytail that flutters slightly in the breeze, and she wears a mustard-yellow oversized sweater, light blue jeans, and white sneakers. She sits on a vintage-style bicycle with a black leather saddle and a woven wicker basket mounted on the front handlebars. Her body leans forward naturally, with her hands firmly gripping the handlebars; her left foot rests on the lower pedal while her right foot is raised on the upper pedal in a dynamic pedaling motion. The bicycle's wheels face left along the paved road. On the left side of the composition, a calm sea stretches toward the horizon where the sun is setting, casting a brilliant golden reflection across the water's surface. The coastal road runs horizontally across the lower half of the frame and is bordered by a low stone wall separating it from the ocean on the left. Tall eucalyptus trees and rolling green hills occupy the right background. The warm, low-angle sunlight from the left illuminates the side of the woman and the road, casting long dark shadows from the bicycle, rider, and trees toward the right side of the image. The color palette is rich in golden yellows, soft oranges, and deep greens, with a soft, cinematic photographic aesthetic and sharp focus on the subject and immediate environment.",
+ "aspect_ratio": "3:2",
+ "usage": {
+  "total_tokens": 3507,
+  "input_tokens": 3507
+ },
+ "request_id": "074ef28c51adc19f9b0ff982743abaae"
+}

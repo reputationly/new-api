@@ -140,6 +140,9 @@ package common
 // 字段语义相反 —— Music3 的顶层 prompt 是**歌词**、描述在 metadata.instructions,
 // ACE-Step 的 prompt 是**描述**、歌词在 metadata.lyrics。增强按引擎族决定改写哪个字段,
 // 配错引擎会写到对方不读的字段上,钱花了、描述没动、不报错。
+//
+// H3-Image 用 h3_image_pe:四个 MaaS 模型中 qwen3.8-flash-fp8 的 low 档在 16 个编辑样例
+// 上召回率 1.00、p50 约 45 秒,连续三轮稳定;none 档不稳定。
 const DefaultAggregateModelConfig = `[
   {
     "name": "minimax-h3-2k",
@@ -166,6 +169,14 @@ const DefaultAggregateModelConfig = `[
     "note": "Qwen-Image-2.1(qwen-image-pro)+官方 PE 提示词增强(qwen3.8 关思考),自动定画幅",
     "prompt_enhance": { "model": "qwen3.8-flash-fp8", "mode": "qwen_pe" },
     "generate": { "model": "qwen-image-pro" }
+  },
+  {
+    "name": "minimax-h3-image-enhanced",
+    "type": "image",
+    "enabled": true,
+    "note": "MiniMax H3-Image + 官方 PE 提示词增强,自动定画幅",
+    "prompt_enhance": { "model": "qwen3.8-flash-fp8", "mode": "h3_image_pe", "reasoning_effort": "low" },
+    "generate": { "model": "minimax-h3-image" }
   },
   {
     "name": "minimax-music3-enhanced",

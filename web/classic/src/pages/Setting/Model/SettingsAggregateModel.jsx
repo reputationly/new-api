@@ -171,13 +171,19 @@ const SettingsAggregateModel = ({ options, refresh }) => {
             <br />
             <Text type='secondary' size='small'>
               {t(
-                'prompt_enhance.mode 二选一，出厂默认 singlecall。',
+                'prompt_enhance.mode 可选 singlecall、qwen_pe、h3_image_pe 或 text；留空等同 text。',
               )}
             </Text>
             <br />
             <Text type='secondary' size='small'>
               {t(
                 '· singlecall：一次调用同时产出生产记录与最终提示词，输出 H3 官方格式（英文，integrated_multimodal_description / overall_soundscape / non_diegetic_music 三节）。程序只做轻量传输检查：镜头时长加起来必须等于请求时长、不能引用没传的素材、用户写明的台词必须原样保留——这些在 text 模式下不报错，只是出来的视频不对。编译失败会回落 text 改写，不会直接用原始提示词。',
+              )}
+            </Text>
+            <br />
+            <Text type='secondary' size='small'>
+              {t(
+                '· h3_image_pe：MiniMax H3-Image 的内置 PE 提示词；有输入图走 EDIT，无图走 T2I，校验 JSON 与画幅，失败时使用原始提示词。',
               )}
             </Text>
             <br />

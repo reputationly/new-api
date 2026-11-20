@@ -103,6 +103,7 @@ type AggregatePromptEnhance struct {
 	// TimeoutSeconds 增强段的时间预算(秒)。0 = **按模式**取内置默认:
 	//
 	//	singlecall  120 秒(service.singleCallTimeout)
+	//	h3_image_pe 120 秒(service.h3ImagePETimeout)
 	//	text        走 enhanceTimeout,不看这个字段
 	//
 	// **这段时间直接加在客户提交请求之前**,所以它是个需要按实际模型调的
@@ -110,7 +111,8 @@ type AggregatePromptEnhance struct {
 	// 长度强相关,换个模型就是另一条分布。
 	//
 	// 配小了的症状是**静默的**:每次超时、每次回落 text 改写,看起来像
-	// "增强没什么效果",实际是一次都没跑成。干跑校验会对配得过小的 singlecall 预算提醒。
+	// "增强没什么效果",实际是一次都没跑成。干跑校验会对配得过小的 singlecall /
+	// h3_image_pe 预算提醒。
 	TimeoutSeconds int `json:"timeout_seconds"`
 
 	// Thinking 让增强模型开启"思考"。**漏写 = 关闭。**
@@ -138,6 +140,9 @@ type AggregatePromptEnhance struct {
 	// 留这个开关是因为将来可能换上一个确实需要思考才写得好 IR 的模型;
 	// 但那要靠实测数字说话,不是默认。
 	Thinking *bool `json:"thinking"`
+
+	// ReasoningEffort 非空时直接发送给增强模型,优先于 thinking 开关。
+	ReasoningEffort string `json:"reasoning_effort"`
 }
 
 // IsThinking 增强模型是否开启思考(漏写 = 关闭,见字段注释)。
@@ -155,6 +160,8 @@ const (
 	// (rewritten_prompt / wh_ratio / ratio_follow) → 传输检查 → 定画幅。
 	// 见 service/aggregate_enhance_qwenpe.go。
 	EnhanceModeQwenPE = "qwen_pe"
+	// EnhanceModeH3ImagePE MiniMax H3-Image 的官方 PE 协议。
+	EnhanceModeH3ImagePE = "h3_image_pe"
 )
 
 // EnhanceMode 归一化后的增强模式(空/未知 = text)。
@@ -170,6 +177,8 @@ func (p *AggregatePromptEnhance) EnhanceMode() string {
 		return EnhanceModeSingleCall
 	case EnhanceModeQwenPE:
 		return EnhanceModeQwenPE
+	case EnhanceModeH3ImagePE:
+		return EnhanceModeH3ImagePE
 	}
 	return EnhanceModeText
 }
