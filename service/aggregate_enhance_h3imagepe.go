@@ -488,13 +488,13 @@ func checkH3ImagePEEditCaption(caption, ratio any, imageCount int, userRatio str
 	if h3ImagePEMergedFull.MatchString(rest) {
 		issues = append(issues, "merged_fully_preserved")
 	}
-	if h3ImagePECJK.MatchString(h3ImagePEUnquoted(text)) {
+	unquoted := h3ImagePEUnquoted(text)
+	if h3ImagePECJK.MatchString(unquoted) {
 		issues = append(issues, "non_english_prose")
 	}
-	if strings.ContainsAny(text, "\"“”") {
+	if strings.ContainsAny(unquoted, "\"“”") {
 		issues = append(issues, "double_quoted_literal")
 	}
-	unquoted := h3ImagePEUnquoted(text)
 	if h3ImagePEHasUnlabeledGrid(unquoted) && !h3ImagePEGridLabel.MatchString(unquoted) {
 		issues = append(issues, "unlabeled_grid")
 	}

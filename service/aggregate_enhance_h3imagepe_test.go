@@ -245,6 +245,19 @@ func TestH3ImagePEPossessiveApostrophes(t *testing.T) {
 	}
 }
 
+func TestH3ImagePEDoubleQuotesInsideSingleQuotedLiteral(t *testing.T) {
+	quoted := `The target image shows a sign reading 'Say "你好"'.`
+	if issues := checkH3ImagePEEditCaption(quoted, "16:9", 1, "adaptive"); len(issues) != 0 {
+		t.Fatalf("double quotes inside a single-quoted literal should pass: %v", issues)
+	}
+
+	unquoted := `The target image shows a sign reading "SALE".`
+	issues := checkH3ImagePEEditCaption(unquoted, "16:9", 1, "adaptive")
+	if !hasH3ImagePEIssue(issues, "double_quoted_literal") {
+		t.Fatalf("double quotes outside a single-quoted literal should fail: %v", issues)
+	}
+}
+
 func TestH3ImagePET2IRejectsEmptyCaptionAndRepairs(t *testing.T) {
 	for _, raw := range []string{
 		`{"expanded_caption":null,"aspect_ratio":"1:1"}`,
