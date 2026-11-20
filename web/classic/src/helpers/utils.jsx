@@ -52,6 +52,9 @@ import {
 // vite 配置整模块 shim 掉，放这里手机端拿不到）
 import {
   getGroupDiscountInfo,
+  getNormalRatio,
+  getTimeRatioView,
+  getTimePriceDelta,
   formatWindowDays,
   formatWindowRange,
   buildTimeWindowRows,
@@ -59,6 +62,9 @@ import {
 
 export {
   getGroupDiscountInfo,
+  getNormalRatio,
+  getTimeRatioView,
+  getTimePriceDelta,
   formatWindowDays,
   formatWindowRange,
   buildTimeWindowRows,

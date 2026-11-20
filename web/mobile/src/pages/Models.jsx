@@ -21,6 +21,8 @@ import {
 import { formatPriceWithCeiling } from '@classic/helpers/priceFormat';
 import {
   getGroupDiscountInfo,
+  getNormalRatio,
+  getTimePriceDelta,
   buildTimeWindowRows,
   DISCOUNT_HEX,
 } from '@classic/helpers/discount';
@@ -218,8 +220,11 @@ const Models = () => {
 
   // 折扣标签。口径与 PC 端共用 getGroupDiscountInfo，两端各写一份必然漂移，
   // 而漂移的表现是同一个模型在手机和电脑上显示不同的折扣。
-  const discountTag = (ratio) => {
-    const d = getGroupDiscountInfo(ratio);
+  // normalRatio 传「常规价终值」时角标就是固定折扣；不传则退回此刻价（旧口径）。
+  const discountTag = (ratio, normalRatio) => {
+    const d = getGroupDiscountInfo(
+      Number.isFinite(Number(normalRatio)) ? Number(normalRatio) : ratio,
+    );
     if (!d) return null;
     const c = DISCOUNT_HEX[d.color] || DISCOUNT_HEX.amber;
     return (
@@ -235,6 +240,34 @@ const Models = () => {
         }}
       >
         {d.text}
+      </span>
+    );
+  };
+
+  // 时段价标签：此刻价目与常规价不同才出现。与折扣角标并列而不合并——
+  // 角标是合同折扣（永不随时段变），这里回答的是「现在贵一点还是便宜一点」。
+  const timePriceTag = (m) => {
+    const delta = getTimePriceDelta(
+      groupTimeRatioMap,
+      resolveGroupRatio(m).group,
+      m.model_name,
+      resolveGroupRatio(m).ratio,
+    );
+    if (!delta) return null;
+    const c = DISCOUNT_HEX[delta.cheaper ? 'cyan' : 'orange'];
+    return (
+      <span
+        style={{
+          flexShrink: 0,
+          fontSize: 11,
+          lineHeight: '16px',
+          padding: '0 6px',
+          borderRadius: 8,
+          background: c.bg,
+          color: c.fg,
+        }}
+      >
+        {delta.label || (delta.cheaper ? '闲时' : '高峰')}
       </span>
     );
   };
@@ -412,7 +445,16 @@ const Models = () => {
                   >
                     {m.model_name}
                   </div>
-                  {discountTag(resolveGroupRatio(m).ratio)}
+                  {discountTag(
+                    resolveGroupRatio(m).ratio,
+                    getNormalRatio(
+                      groupTimeRatioMap,
+                      resolveGroupRatio(m).group,
+                      m.model_name,
+                      undefined,
+                    ),
+                  )}
+                  {timePriceTag(m)}
                   {entitlementTag(m)}
                 </div>
                 {vendorName(m.vendor_id) && (

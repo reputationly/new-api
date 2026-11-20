@@ -218,7 +218,7 @@ const ModelPricingTable = ({
     );
   };
 
-  // 分时定价表。只在该模型确有时段折扣时渲染——没配的模型多一张空表只是噪音。
+  // 分时价目表。只在该模型确有时段价时渲染——没配的模型多一张空表只是噪音。
   //
   // 逐分组列出是必要的：时段规则按使用分组配，同一个模型在 default 有夜间折扣、
   // 在 premium 没有，是完全正常的配置。只列当前最优分组会让另一个分组的用户
@@ -243,7 +243,9 @@ const ModelPricingTable = ({
           <div>
             <Text className='text-lg font-medium'>{t('分时定价')}</Text>
             <div className='text-xs text-gray-600'>
-              {t('命中时段时按该时段的折扣计价，取代上表的分组折扣')}
+              {t(
+                '时段价乘在常规价上：小于 1 是空闲时段更便宜，大于 1 是紧缺时段更贵',
+              )}
             </div>
           </div>
         </div>
@@ -286,13 +288,31 @@ const ModelPricingTable = ({
               ),
             },
             {
-              title: t('该时段折扣'),
+              title: t('时段价格'),
               dataIndex: 'discount',
-              render: (d, record) => (
-                <Tag color='cyan' size='small' shape='circle'>
-                  {d ? d.text : `${Number(record.ratio.toFixed(4))}x`}
-                </Tag>
-              ),
+              render: (d, record) => {
+                // 两件事并排但不混：d.text 是**绝对折扣**（相对目录价），
+                // relative 是「相对常规价」。只显示折数看不出这个时段贵还是便宜。
+                const rel = Number(record.relative);
+                const relTag =
+                  Number.isFinite(rel) && rel !== 1 ? (
+                    <Tag
+                      color={rel > 1 ? 'orange' : 'cyan'}
+                      size='small'
+                      shape='circle'
+                    >
+                      {'×' + rel}
+                    </Tag>
+                  ) : null;
+                return (
+                  <span className='flex items-center gap-1 flex-wrap'>
+                    <Tag color='white' size='small' shape='circle'>
+                      {d ? d.text : `${Number(record.ratio.toFixed(4))}x`}
+                    </Tag>
+                    {relTag}
+                  </span>
+                );
+              },
             },
           ]}
         />

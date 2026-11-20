@@ -159,9 +159,9 @@ func TestResolveGroupModelRatio_TimeRuleEntersSparseTable(t *testing.T) {
 	})
 }
 
-// TestResolveGroupModelRatio_TimeRuleReplacesModelRule 时段规则取代模型折扣，
-// 下发的是取代后的终值——前端只查表，不做任何二次计算。
-func TestResolveGroupModelRatio_TimeRuleReplacesModelRule(t *testing.T) {
+// TestResolveGroupModelRatio_TimeRuleStacksOnModelRule 时段系数叠乘在模型折扣上，
+// 下发的是叠乘后的终值——前端只查表，不做任何二次计算。
+func TestResolveGroupModelRatio_TimeRuleStacksOnModelRule(t *testing.T) {
 	seedPricingRatios(t, `{"default":1,"premium":1.5}`, `{}`,
 		`{"premium":{"wan2.2-*":{"mode":"multiply","value":0.8}}}`)
 	seedTimeRules(t, `{
@@ -172,5 +172,5 @@ func TestResolveGroupModelRatio_TimeRuleReplacesModelRule(t *testing.T) {
 	got, _ := resolveGroupModelRatio("default",
 		map[string]float64{"default": 1, "premium": 1.5},
 		pricingOf("wan2.2-t2v"), atShanghai(2))
-	require.InDelta(t, 0.75, got["premium"]["wan2.2-t2v"], 1e-9, "1.5 × 0.5，模型折扣被取代")
+	require.InDelta(t, 0.6, got["premium"]["wan2.2-t2v"], 1e-9, "1.5 × 0.8 × 0.5，时段系数叠乘")
 }

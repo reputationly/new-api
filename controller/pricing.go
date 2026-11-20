@@ -94,11 +94,7 @@ func resolveGroupModelRatio(userGroup string, groupRatio map[string]float64, pri
 			// res.Final 同口径，否则广场上「空闲时段 5.6 折」这个数和实扣算的不是一回事。
 			hitTimeRule := false
 			if hasTimeRules {
-				if view, ok := ratio_setting.ResolveTimeRatioView(
-					g, item.ModelName, at,
-					res.Base, res.UserMultiplier(),
-					res.NormalRatio*res.UserMultiplier(),
-				); ok {
+				if view, ok := ratio_setting.ResolveTimeRatioView(g, item.ModelName, at, res); ok {
 					if timeResult[g] == nil {
 						timeResult[g] = make(map[string]ratio_setting.TimeRatioView)
 					}

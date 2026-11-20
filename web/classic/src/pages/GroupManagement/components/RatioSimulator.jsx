@@ -186,6 +186,14 @@ export default function RatioSimulator({ groupNames = [], tierNames = [] }) {
               {t('该用户档当前用不到这条线路')}
             </Tag>
           )}
+          {/*
+            两段式：价格轴（目录价侧，随时段变）与折扣轴（用户档，恒定）分开列。
+            这个人机分工是整套设计的心智模型——「折扣永不随时段变」，
+            只有把两层摊开才看得见时段系数乘在哪一层。
+          */}
+          <Text type='tertiary' size='small' className='mb-1 block'>
+            {t('价格轴（随线路与时刻变）')}
+          </Text>
           {renderLayer(
             t('线路基础倍率'),
             true,
@@ -216,6 +224,39 @@ export default function RatioSimulator({ groupNames = [], tierNames = [] }) {
               : '—',
           )}
           {renderLayer(
+            t('常规价（未命中时段）'),
+            true,
+            t('基础倍率 × 模型定价'),
+            `${Number(Number(result.normal_ratio ?? result.base).toFixed(6))}x`,
+          )}
+          {renderLayer(
+            t('时段价'),
+            !!result.time_window,
+            result.time_window
+              ? `${result.time_label || result.time_window} · ${t('系数 ×')} ${
+                  result.time_value
+                }`
+              : t('此刻不在任何时段内，按常规价计'),
+            result.time_window ? `×${result.time_value}` : '—',
+          )}
+          <div className='mt-1 mb-2 flex items-center justify-between'>
+            <Text type='tertiary' size='small'>
+              {t('此刻价')}
+            </Text>
+            <Text type='tertiary' size='small'>
+              {Number(
+                Number(
+                  (result.normal_ratio ?? result.base) *
+                    (result.time_window ? result.time_value : 1),
+                ).toFixed(6),
+              )}
+              x
+            </Text>
+          </div>
+          <Text type='tertiary' size='small' className='mb-1 block'>
+            {t('折扣轴（固定，与时刻无关）')}
+          </Text>
+          {renderLayer(
             t('用户档折扣'),
             !!result.user_rule_match,
             result.user_rule_match
@@ -225,18 +266,8 @@ export default function RatioSimulator({ groupNames = [], tierNames = [] }) {
               : '',
             result.user_rule_match ? `×${result.user_rule_value}` : '—',
           )}
-          {renderLayer(
-            t('时段价'),
-            !!result.time_window,
-            result.time_window
-              ? `${result.time_label || result.time_window} · ${t('折扣 ×')} ${
-                  result.time_value
-                }`
-              : '',
-            result.time_window ? `×${result.time_value}` : '—',
-          )}
           <div className='mt-2 flex items-center justify-between border-t pt-2'>
-            <Text strong>{t('最终倍率')}</Text>
+            <Text strong>{t('实付 = 此刻价 × 用户档折扣')}</Text>
             <Text strong style={{ fontSize: 18 }}>
               {Number(result.final.toFixed(6))}x
             </Text>

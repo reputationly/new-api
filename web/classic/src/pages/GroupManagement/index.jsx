@@ -36,7 +36,6 @@ import AutoGroupList from './components/AutoGroupList';
 import GroupGroupRatioRules from './components/GroupGroupRatioRules';
 import GroupSpecialUsableRules from './components/GroupSpecialUsableRules';
 import ModelRatioEditor from './components/ModelRatioEditor';
-import TimeWindowEditor from './components/TimeWindowEditor';
 import RatioSimulator from './components/RatioSimulator';
 import GroupExtraSettings from './components/GroupExtraSettings';
 import TierUsableMatrix from './components/TierUsableMatrix';
@@ -109,27 +108,6 @@ export default function GroupManagementPage() {
   const [inputs, setInputs] = useState({});
   const [originInputs, setOriginInputs] = useState({});
   const [overview, setOverview] = useState(EMPTY_OVERVIEW);
-  // 每个时段模板被多少条规则引用（跨全部线路）。删模板前要看得见影响面——
-  // 直接删掉一个还被引用的模板，那些规则会变成悬空引用，保存时后端整份拒绝，
-  // 而错误信息指向的是规则不是模板。
-  const timeWindowUsage = useMemo(() => {
-    const usage = {};
-    try {
-      const rules = JSON.parse(inputs.GroupTimeRatio || '{}')?.rules || {};
-      Object.values(rules).forEach((groupRules) => {
-        Object.values(groupRules || {}).forEach((list) => {
-          (list || []).forEach((r) => {
-            if (!r?.window) return;
-            usage[r.window] = (usage[r.window] || 0) + 1;
-          });
-        });
-      });
-    } catch (e) {
-      // 手改坏的 JSON：引用数显示 0，保存时后端会给出确切错误
-    }
-    return usage;
-  }, [inputs.GroupTimeRatio]);
-
   const [activeGroup, setActiveGroup] = useState('');
   const [activeTier, setActiveTier] = useState('');
   const [activeTab, setActiveTab] = useState('lines');
@@ -444,10 +422,13 @@ export default function GroupManagementPage() {
                       时段模板放在规则表上方而不是另开一个 Tab：规则要引用模板，
                       分成两个 Tab 会让人配规则时找不到模板、或者建完模板忘了回来配规则。
                     */}
-                    <TimeWindowEditor
-                      value={inputs.GroupTimeRatio}
-                      onChange={(v) => setField('GroupTimeRatio', v)}
-                      usage={timeWindowUsage}
+                    <Banner
+                      type='info'
+                      closeIcon={null}
+                      className='mb-3'
+                      description={t(
+                        '时段价已统一到「设置 → 模型定价 → 分时价」维护（对全网所有线路生效）。这里只显示每个模型的生效结果。',
+                      )}
                     />
                     <ModelRatioEditor
                       key={`mre_${dv}_${activeGroup}`}
@@ -458,7 +439,6 @@ export default function GroupManagementPage() {
                       onChange={(v) => setField('GroupModelRatio', v)}
                       syncTargets={groupNames}
                       timeValue={inputs.GroupTimeRatio}
-                      onTimeChange={(v) => setField('GroupTimeRatio', v)}
                     />
                   </div>
                 </Tabs.TabPane>

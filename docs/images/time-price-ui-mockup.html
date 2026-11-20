@@ -1,0 +1,186 @@
+<!DOCTYPE html>
+<html lang="zh-CN"><head><meta charset="utf-8">
+<style>
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{font-family:-apple-system,"PingFang SC","Helvetica Neue",Arial,sans-serif;background:#F7F8FA;color:#1C1F23;font-size:13px;line-height:1.5;padding:24px 28px 36px}
+  .sec{margin-bottom:26px}
+  .sec-h{display:flex;align-items:baseline;gap:10px;margin-bottom:10px}
+  .sec-t{font-size:15px;font-weight:600}
+  .sec-d{font-size:12px;color:#8F959E}
+  .card{background:#fff;border:1px solid #E6E8EB;border-radius:12px}
+  .mono{font-variant-numeric:tabular-nums}
+  .tag{display:inline-flex;align-items:center;height:20px;padding:0 7px;border-radius:10px;font-size:11px;line-height:1;white-space:nowrap}
+  .t-gray{background:#F2F3F5;color:#646A73}
+  .t-blue{background:#E8F1FF;color:#0064FA}
+  .t-cyan{background:#E6FFFB;color:#08979C}
+  .t-orange{background:#FFF7E6;color:#D46B08}
+  .t-amber{background:#FFFBE6;color:#AD8B00}
+  .t-violet{background:#F5F0FF;color:#7B61FF}
+  .muted{color:#8F959E}
+  .sub{color:#646A73}
+  .strike{color:#B4B9C0;text-decoration:line-through}
+  /* layout A */
+  .editor{display:flex;gap:14px}
+  .list{width:318px;flex:none;border-right:1px solid #E6E8EB;padding:12px}
+  .pane{flex:1;padding:14px 16px}
+  .search{height:30px;border:1px solid #DDE0E5;border-radius:8px;padding:0 10px;color:#8F959E;display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;font-size:12px}
+  .lrow{display:flex;align-items:center;gap:8px;padding:7px 8px;border-radius:8px;font-size:12.5px}
+  .lrow.on{background:#E8F1FF}
+  .lname{flex:1;font-weight:500}
+  .lsum{color:#8F959E;font-size:11px}
+  .h1{font-size:15px;font-weight:600;display:flex;align-items:center;gap:8px;margin-bottom:12px}
+  .field{margin-bottom:12px}
+  .flabel{font-size:12px;color:#646A73;margin-bottom:5px}
+  .inp{height:30px;border:1px solid #DDE0E5;border-radius:8px;padding:0 10px;display:flex;align-items:center;gap:6px;background:#fff;font-size:13px}
+  .inp .sfx{color:#8F959E;font-size:12px}
+  .row3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px}
+  .box{border:1px solid #E6E8EB;border-radius:10px;padding:12px 14px;margin-top:4px}
+  .box-h{display:flex;align-items:center;gap:8px;font-weight:600;font-size:13px;margin-bottom:2px}
+  .box-d{font-size:11.5px;color:#8F959E;margin-bottom:10px}
+  table{width:100%;border-collapse:collapse}
+  th{text-align:left;font-weight:500;color:#646A73;font-size:11.5px;padding:6px 8px;background:#FAFBFC;border-bottom:1px solid #EEF0F3}
+  td{padding:7px 8px;border-bottom:1px solid #F2F3F5;font-size:12.5px}
+  .small-inp{height:26px;border:1px solid #DDE0E5;border-radius:6px;padding:0 8px;display:inline-flex;align-items:center;min-width:56px}
+  .sel{height:26px;border:1px solid #DDE0E5;border-radius:6px;padding:0 8px;display:inline-flex;align-items:center;gap:6px;color:#1C1F23;font-size:12px}
+  .btn{height:28px;padding:0 12px;border-radius:8px;border:1px solid #DDE0E5;background:#fff;display:inline-flex;align-items:center;font-size:12px;color:#1C1F23}
+  .btn-p{background:#0064FA;border-color:#0064FA;color:#fff}
+  .foot{display:flex;align-items:center;gap:8px;margin-top:10px}
+  .now{margin-left:auto;font-size:11.5px;color:#646A73}
+  .now b{color:#D46B08}
+  .hint{margin-top:8px;font-size:11.5px;color:#8F959E}
+  /* cards */
+  .grid{display:grid;grid-template-columns:repeat(4,1fr);gap:12px}
+  .mcard{background:#fff;border:1px solid #E6E8EB;border-radius:12px;padding:12px 13px}
+  .mname{font-weight:600;font-size:12.5px;display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-bottom:8px}
+  .prow{display:flex;align-items:baseline;gap:5px;font-size:13px;margin-top:5px;flex-wrap:wrap}
+  .pnum{font-weight:600;font-size:15px}
+  .unit{font-size:11px;color:#8F959E}
+  .cap{font-size:11px;color:#8F959E;margin-top:9px;padding-top:8px;border-top:1px dashed #EEF0F3}
+  .legend{display:flex;gap:16px;font-size:11.5px;color:#646A73;margin-top:10px}
+  .dot{width:6px;height:6px;border-radius:3px;display:inline-block;margin-right:5px}
+</style></head><body>
+
+<div class="sec">
+  <div class="sec-h"><span class="sec-t">① 管理端 ·「设置 → 模型定价」给单个模型配动态目录价</span>
+  <span class="sec-d">新增：右侧编辑器里多一块「分时价」；入口不再放线路页</span></div>
+
+  <div class="card editor">
+    <div class="list">
+      <div class="search"><span>搜索模型名称</span><span>⌕</span></div>
+      <div class="lrow on"><span class="lname">deepseek-chat</span><span class="tag t-violet">按量</span></div>
+      <div class="lsum" style="padding:0 8px 8px 8px">输入 2.00 · 高峰 4.00</div>
+      <div class="lrow"><span class="lname">glm-5</span><span class="tag t-violet">按量</span></div>
+      <div class="lsum" style="padding:0 8px 8px 8px">输入 1.20</div>
+      <div class="lrow"><span class="lname">wan2.2-t2v</span><span class="tag t-gray">按次</span></div>
+      <div class="lsum" style="padding:0 8px 8px 8px">¥0.80 / 次</div>
+      <div class="lrow"><span class="lname">gpt-4o-mini</span><span class="tag t-gray">按量</span></div>
+      <div class="lsum" style="padding:0 8px 8px 8px">输入 0.15</div>
+      <div style="margin-top:10px"><span class="btn btn-p">＋ 添加模型</span></div>
+    </div>
+
+    <div class="pane">
+      <div class="h1">deepseek-chat <span class="tag t-violet">按量计费</span></div>
+
+      <div class="row3">
+        <div class="field"><div class="flabel">输入价格</div>
+          <div class="inp"><span class="mono">2.00</span><span class="sfx">¥/1M tokens</span></div></div>
+        <div class="field"><div class="flabel">输出价格</div>
+          <div class="inp"><span class="mono">8.00</span><span class="sfx">¥/1M tokens</span></div></div>
+        <div class="field"><div class="flabel">缓存命中价格</div>
+          <div class="inp"><span class="mono">0.50</span><span class="sfx">¥/1M tokens</span></div></div>
+      </div>
+
+      <div class="box">
+        <div class="box-h">分时价 <span class="tag t-blue">新</span>
+          <span class="tag t-gray" style="margin-left:auto;font-weight:400">影响面：全部 4 条线路 · deepseek-chat</span></div>
+        <div class="box-d">按时间段调整这条价目。<b>全网生效</b>（所有线路、所有用户），与客户折扣无关 —— 折扣永远按「用户档」算，不随时段变。</div>
+        <table>
+          <tr><th style="width:38%">时段</th><th style="width:10%">系数</th><th style="width:22%">折算（输入）</th><th>备注</th><th style="width:34px"></th></tr>
+          <tr>
+            <td><span class="sub">工作日高峰·上午</span> <span class="muted" style="font-size:11px">工作日 09:00-12:00</span></td>
+            <td><span class="small-inp mono">2</span></td>
+            <td class="mono">4.00 <span class="unit">¥/1M</span> <span class="tag t-orange">＋100%</span></td>
+            <td class="muted">上游峰谷</td>
+            <td class="muted" style="text-align:center">✕</td>
+          </tr>
+          <tr>
+            <td><span class="sub">工作日高峰·下午</span> <span class="muted" style="font-size:11px">工作日 14:00-18:00</span></td>
+            <td><span class="small-inp mono">2</span></td>
+            <td class="mono">4.00 <span class="unit">¥/1M</span> <span class="tag t-orange">＋100%</span></td>
+            <td class="muted">—</td>
+            <td class="muted" style="text-align:center">✕</td>
+          </tr>
+        </table>
+        <div class="foot">
+          <span class="btn">＋ 添加分时价</span>
+          <span class="btn">管理时段模板</span>
+          <span class="now">此刻 10:30 · 命中「工作日高峰·上午」→ 输入 <b>4.00 ¥/1M</b></span>
+        </div>
+        <div class="hint">未命中任何时段时按上面的基础价格计费（常规价 2.00 ¥/1M）。改基础价格时，分时价按系数自动跟随。</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="sec">
+  <div class="sec-h"><span class="sec-t">② 用户端 · 模型广场价格列（同一个模型，四个状态）</span>
+  <span class="sec-d">折扣角标恒定；只有「时段价」标签和划线价随时间变</span></div>
+  <div class="grid">
+    <div class="mcard">
+      <div class="mname">glm-5 <span class="tag t-gray">无分时</span></div>
+      <div class="prow"><span class="muted">输入</span><span class="pnum mono">¥1.20</span><span class="unit">/1M</span></div>
+      <div class="prow"><span class="muted">输出</span><span class="pnum mono">¥4.80</span><span class="unit">/1M</span></div>
+      <div class="cap">没有分时价：价格全天一个数，不显示任何时段标签。</div>
+    </div>
+    <div class="mcard">
+      <div class="mname">deepseek-chat <span class="tag t-amber">9 折</span></div>
+      <div class="prow"><span class="muted">输入</span><span class="pnum mono">¥3.60</span><span class="unit">/1M</span><span class="tag t-orange">高峰</span><span class="muted" style="font-size:10.5px">常规 ¥1.80</span></div>
+      <div class="prow"><span class="muted">输出</span><span class="pnum mono">¥14.40</span><span class="unit">/1M</span><span class="muted" style="font-size:10.5px">常规 ¥7.20</span></div>
+      <div class="cap">此刻更贵：橙色「高峰」标签 + 常规价对照，<b>不划线</b>（划线会读成折扣）。</div>
+    </div>
+    <div class="mcard">
+      <div class="mname">qwen-max <span class="tag t-amber">8 折</span></div>
+      <div class="prow"><span class="muted">输入</span><span class="pnum mono">¥0.48</span><span class="unit">/1M</span><span class="tag t-cyan">闲时</span><span class="strike mono">¥0.96</span></div>
+      <div class="prow"><span class="muted">输出</span><span class="pnum mono">¥1.92</span><span class="unit">/1M</span><span class="strike mono">¥3.84</span></div>
+      <div class="cap">此刻更便宜：青色「闲时」+ 划线常规价。8 折角标不动，变的只是价目。</div>
+    </div>
+    <div class="mcard">
+      <div class="mname">deepseek-chat <span class="tag t-amber">9 折</span></div>
+      <div class="prow"><span class="muted">输入</span><span class="pnum mono">¥1.80</span><span class="unit">/1M</span></div>
+      <div class="prow"><span class="muted">输出</span><span class="pnum mono">¥7.20</span><span class="unit">/1M</span></div>
+      <div class="cap">此刻是常规档（周末）：不显示标签。悬停模型名可见完整分时表。</div>
+    </div>
+  </div>
+  <div class="legend">
+    <span><i class="dot" style="background:#D46B08"></i>高峰＝此刻价高于常规价</span>
+    <span><i class="dot" style="background:#08979C"></i>闲时＝此刻价低于常规价</span>
+    <span><i class="dot" style="background:#AD8B00"></i>折扣角标＝固定折扣（合同/档位），永不随时段变</span>
+  </div>
+</div>
+
+<div class="sec">
+  <div class="sec-h"><span class="sec-t">③ 用户端 · 详情弹窗「分时价目」</span>
+  <span class="sec-d">只在你当前使用的这条线路上成立；常规价提到表头，不再占一列</span></div>
+  <div class="card" style="padding:14px 16px">
+    <div style="display:flex;align-items:baseline;gap:10px;margin-bottom:4px;flex-wrap:wrap">
+      <span style="font-weight:600">分时价目</span>
+      <span class="muted" style="font-size:11.5px">已含 9 折 · <b>常规 ¥3.60 / 1M</b>（未命中时段按此计）</span>
+      <span class="tag t-gray" style="margin-left:auto">令牌分组 default</span>
+    </div>
+    <div style="font-size:11.5px;color:#646A73;margin-bottom:10px">
+      此刻 10:30 · 处于「工作日高峰·上午」，按 <b style="color:#D46B08">¥7.20 / 1M</b> 计
+    </div>
+    <table>
+      <tr><th>生效时段</th><th style="width:22%">时段价格</th></tr>
+      <tr>
+        <td><span class="sub">工作日高峰·上午</span> <span class="muted">工作日 09:00-12:00</span> <span class="tag t-orange">×2 高峰</span> <span class="tag t-gray">进行中</span></td>
+        <td class="mono"><b>¥7.20</b></td></tr>
+      <tr>
+        <td><span class="sub">工作日高峰·下午</span> <span class="muted">工作日 14:00-18:00</span> <span class="tag t-orange">×2 高峰</span></td>
+        <td class="mono">¥7.20</td></tr>
+    </table>
+    <div class="hint">表里只列「与常规不同」的时段；其余时间按表头的常规价计 —— 那句必须在表头上，不能只藏在 tooltip 里。</div>
+  </div>
+</div>
+
+</body></html>

@@ -201,7 +201,7 @@ type RatioResolution struct {
 
 	TimeWindow string  // Layer 4 命中的时段模板键，"" = 未命中
 	TimeLabel  string  // 时段模板显示名，如「深夜档」
-	TimeValue  float64 // Layer 4 配置值（恒为 multiply）
+	TimeValue  float64 // Layer 4 系数（乘在 NormalRatio 上；<1 空闲、>1 紧缺）
 }
 
 // UserMultiplier 返回 Layer 3 的乘数，未命中时为 1。
@@ -220,7 +220,7 @@ func (r RatioResolution) UserMultiplier() float64 {
 //	Layer 0  base  = GroupRatio[usingGroup]                   场景倍率
 //	Layer 1  base ← GroupGroupRatio[userGroup][usingGroup]    命中即覆盖
 //	Layer 2  final ← GroupModelRatio[usingGroup][modelName]   override 覆盖 / multiply 叠乘
-//	Layer 4  final ← base × GroupTimeRatio[usingGroup][modelName] 命中时段则取代 Layer 2
+//	Layer 4  final ← 常规价 × GroupTimeRatio[usingGroup][modelName] 命中时段则乘在常规价上（叠加）
 //	Layer 3  final × UserGroupModelRatio[userGroup][modelName]  恒为叠乘（永远最后）
 //
 // 为什么分层、而不是把各类规则拍平成一个规则集「取最具体的一条」：
@@ -235,13 +235,13 @@ func (r RatioResolution) UserMultiplier() float64 {
 // 包括 Layer 2 命中 override 时——override 说的是「这条链这个模型的成本就是这个
 // 价」，用户的身份折扣是另一回事，不该被它吃掉。
 //
-// Layer 4（时段折扣）按「使用分组」索引，与 Layer 0/1/2 同轴——它描述的是成本的
-// 时间维度（自建 GPU 夜里空闲，边际成本本就更低）。它**取代** Layer 2 而不是叠乘：
-// 「常规 8 折、空闲时段 5.6 折」是两个能直接比较的绝对价，叠乘则要求人先算
-// 0.8 × 0.7 才知道自己付多少。
+// Layer 4（时段价）描述的是价目的时间维度：算力紧缺时段贵一点、空闲时段便宜一点。
+// 它**乘在常规价上**（叠乘），不取代 Layer 2 —— 取代会把模型折扣与 override 锁价
+// 一起吃掉，还会逼管理员把「折扣 × 时段」自己心算成一个系数（见
+// docs/time-price-axis-design.md §4.1/§4.8）。叠乘之后 <1 恒便宜、>1 恒更贵。
 //
-// 但它排在 Layer 3 **之前**：Layer 3 是售价侧（这批用户打几折），与走常规价还是
-// 空闲时段价正交，不该被 Layer 4 的取代吃掉。
+// 它排在 Layer 3 **之前**：Layer 3 是售价侧（这批用户打几折），与此刻价目正交，
+// 不该被时段系数吃掉。
 //
 // modelName 传空（无模型上下文的调用点）时 Layer 2/3/4 恒不命中，
 // 结果与改造前逐位相同。
@@ -282,27 +282,23 @@ func ResolveGroupRatioAt(userGroup, usingGroup, modelName string, at time.Time) 
 	// 记在 Layer 4 之前：它是「没有时段规则时会走的那个倍率」。
 	res.NormalRatio = res.Final
 
-	// Layer 4：命中生效时段则**取代**上面那条模型折扣，而不是叠乘在它上面。
+	// Layer 4：命中生效时段则**乘在常规价上**（叠乘），不再取代模型折扣。
 	//
-	// 取代而非叠乘，是因为「常规 8 折、空闲时段 5.6 折」是两个可以直接比较的价；叠乘
-	// 要求人把 0.8 × 0.7 心算成 0.56 才知道自己付多少，而页面上那两个数看起来
-	// 像是能相加的。代价是改了模型折扣之后时段值不会自动跟着走——编辑器把两个数
-	// 并排显示、时段值高于常规值时告警，就是为这件事留的。
+	// 语义是「这一段时间的价目 = 常规价 × 时段系数」。不取代的理由见
+	// docs/time-price-axis-design.md §4.1/§4.8：
+	//   · 取代会把 Layer 2 的折扣连同 override 锁价一起吃掉（override 2.2 会被算成
+	//     Base × 时段值），运营配的数与实扣完全脱钩，而且页面上看不出来；
+	//   · 取代还要求管理员把「模型折扣 × 时段折扣」自己心算成一个系数（0.56），
+	//     一旦模型折扣变了时段值不会跟随——现网就踩过：0.45 被算出 0.5（§10.1）。
+	// 叠乘之后 <1 一定更便宜、>1 一定更贵，成为可测的不变量。
 	//
-	// 恒相对 Base（分组基础倍率 / 身份覆盖之后的基准），不区分 multiply/override：
-	// 时段规则整条取代 Layer 2，包括它的模式。
+	// Layer 2 的命中痕迹**保留**：它确实生效了，日志里 group_base_ratio × 规则值 ×
+	// 时段系数 必须能反算出 group_ratio（service/log_info_generate.go 的不变式）。
 	if key, win, rule, ok := pickTimeRule(usingGroup, modelName, at); ok {
 		res.TimeWindow = key
 		res.TimeLabel = win.Label
 		res.TimeValue = rule.Value
-		res.Final = res.Base * rule.Value
-		// 清掉 Layer 2 的命中痕迹：那条规则**没有生效**，被整条取代了。
-		// 留着的话日志里会写出一个 group_model_rule，运营拿
-		// group_base_ratio × 规则值 反算得到的数与 group_ratio 对不上——
-		// 而日志的分层必须永远自洽（service/log_info_generate.go 的不变式）。
-		res.RuleMatch = ""
-		res.RuleMode = ""
-		res.RuleValue = 0
+		res.Final = res.NormalRatio * rule.Value
 	}
 
 	res.AfterModelRule = res.Final

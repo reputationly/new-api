@@ -409,11 +409,14 @@ func ResolveGroupRatioPreview(c *gin.Context) {
 			"after_model_rule": res.AfterModelRule,
 			"user_rule_match":  res.UserRuleMatch,
 			"user_rule_value":  res.UserRuleValue,
-			// Layer 4 时段折扣。同理必须返回，否则页面上「after_model_rule ×
-			// user_rule_value ≠ final」又会差出一个说不清的系数
+			// Layer 4 时段价。同理必须返回，否则页面上「after_model_rule ×
+			// time_value × user_rule_value ≠ final」又会差出一个说不清的系数。
 			"time_window": res.TimeWindow,
 			"time_label":  res.TimeLabel,
 			"time_value":  res.TimeValue,
+			// normal_ratio 是「常规价」（未命中任何时段时的倍率，不含用户档折扣）。
+			// 试算器要把价格轴摊开到这一步：常规价 × 时段系数 = 此刻价，再乘用户档才是实付。
+			"normal_ratio": res.NormalRatio,
 			"resolved_at": at.Format(time.RFC3339),
 			// 该组合下用户实际能否用到这个分组，试算结果才有意义
 			"usable": service.GroupInUserUsableGroups(req.UserGroup, req.UsingGroup),

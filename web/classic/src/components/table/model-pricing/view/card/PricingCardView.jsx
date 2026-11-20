@@ -41,6 +41,8 @@ import {
   formatVideoMatrixSummary,
   getLobeHubIcon,
   getGroupDiscountInfo,
+  getNormalRatio,
+  getTimePriceDelta,
 } from '../../../../../helpers';
 import TimeRulesTooltip from '../../TimeRulesTooltip';
 import PricingCardSkeleton from './PricingCardSkeleton';
@@ -371,12 +373,52 @@ const PricingCardView = ({
                   </div>
 
                   <div className='flex items-center space-x-2 ml-3'>
+                    {(() => {
+                      // 时段价标签：与折扣角标并列但不合并——角标是合同折扣（永不随时段变），
+                      // 这个是「此刻价目 ≠ 常规价」。合并回一个数就退回「折扣随时钟漂移」的老问题。
+                      const delta = getTimePriceDelta(
+                        groupTimeRatio,
+                        priceData?.usedGroup,
+                        model.model_name,
+                        priceData?.usedGroupRatio,
+                      );
+                      if (!delta) return null;
+                      return (
+                        <Tooltip
+                          style={{ maxWidth: 'none' }}
+                          content={
+                            <div style={{ whiteSpace: 'nowrap' }}>
+                              {t('常规价')} {Number(delta.normal.toFixed(4))}x
+                              {' · '}
+                              {t('此刻价')} {Number(delta.current.toFixed(4))}x
+                            </div>
+                          }
+                        >
+                          <Tag
+                            color={delta.cheaper ? 'cyan' : 'orange'}
+                            shape='circle'
+                            size='small'
+                          >
+                            {delta.label ||
+                              (delta.cheaper ? t('闲时') : t('高峰'))}
+                          </Tag>
+                        </Tooltip>
+                      );
+                    })()}
                     {/*
                       折扣标签放操作区而不是跟在模型名后面：模型名那行是 truncate 的，
                       长名字会把标签挤没，而这里的位置固定、每张卡片对齐。
                     */}
                     {(() => {
-                      const d = getGroupDiscountInfo(priceData?.usedGroupRatio);
+                      // 角标用**常规价**（不含时段系数），理由同表格视图
+                      const d = getGroupDiscountInfo(
+                        getNormalRatio(
+                          groupTimeRatio,
+                          priceData?.usedGroup,
+                          model.model_name,
+                          priceData?.usedGroupRatio,
+                        ),
+                      );
                       // 已知限制（有意接受）：分时规则挂在这个折扣角标的 tooltip 上，
                       // 而角标只在**此刻**有折扣时出现。于是「平时原价、只在夜里打折」
                       // 的模型，白天在列表上没有任何分时标识——没有角标就没有挂载点。

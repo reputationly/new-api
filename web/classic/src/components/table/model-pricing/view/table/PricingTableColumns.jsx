@@ -27,6 +27,8 @@ import {
   formatVideoMatrixSummary,
   getLobeHubIcon,
   getGroupDiscountInfo,
+  getNormalRatio,
+  getTimePriceDelta,
 } from '../../../../../helpers';
 import {
   renderLimitedItems,
@@ -180,6 +182,33 @@ export const getPricingTableColumns = ({
     return cache;
   };
 
+  // 常规价（不含时段系数）的价格数据：优惠时段给价格列画删除线用。
+  //
+  // 复用 calculateModelPrice 而不是自己按倍率折算字符串——它已经处理了按次/按量、
+  // 币种、积分价、套餐价、向上取整等一堆口径，抄一遍必然与之分叉。
+  // 把 normal_ratio 当成该分组的倍率、模型折扣清空，得到的正好是「没有时段价时的价」。
+  const normalPriceCache = new Map();
+  const getNormalPriceData = (record, group, normalRatio) => {
+    const cacheKey = group + '|' + normalRatio;
+    if (normalPriceCache.has(cacheKey)) return normalPriceCache.get(cacheKey);
+    const data = calculateModelPrice({
+      record,
+      selectedGroup: group,
+      groupRatio: { [group]: normalRatio },
+      groupModelRatio: {},
+      displayPrice,
+      currency,
+      quotaDisplayType: siteDisplayType,
+      pointsEnabled: false,
+      pointsEnabledGroups: [],
+      pointsEnabledModels: null,
+      entitlementCoverage: null,
+      quotaPerComputePoint: 0,
+    });
+    normalPriceCache.set(cacheKey, data);
+    return data;
+  };
+
   const endpointColumn = {
     title: t('可用端点类型'),
     dataIndex: 'supported_endpoint_types',
@@ -222,7 +251,16 @@ export const getPricingTableColumns = ({
     render: (text, record, index) => {
       // 折扣标签跟在模型名后面。这里没有 truncate，长名字会自然换行，
       // 不会像卡片视图那样把标签挤掉。
-      const d = getGroupDiscountInfo(getPriceData(record)?.usedGroupRatio);
+      // 角标用**常规价**（不含时段系数）：折扣率必须与时钟无关，这是本次改造对外的承诺。
+      const priceData = getPriceData(record);
+      const d = getGroupDiscountInfo(
+        getNormalRatio(
+          groupTimeRatio,
+          priceData?.usedGroup,
+          record.model_name,
+          priceData?.usedGroupRatio,
+        ),
+      );
       return (
         <div className='flex items-center gap-1 flex-wrap'>
           {renderModelTag(text, {
@@ -262,6 +300,36 @@ export const getPricingTableColumns = ({
               </Tag>
             </Tooltip>
           )}
+          {(() => {
+            // 时段价标签：与折扣角标并列但不合并——角标是合同折扣（永随时段不变），
+            // 这个是「此刻价目 ≠ 常规价」。合并回一个数就退回「折扣随时钟漂移」的老问题。
+            const delta = getTimePriceDelta(
+              groupTimeRatio,
+              priceData?.usedGroup,
+              record.model_name,
+              priceData?.usedGroupRatio,
+            );
+            if (!delta) return null;
+            return (
+              <Tooltip
+                style={{ maxWidth: 'none' }}
+                content={
+                  <div style={{ whiteSpace: 'nowrap' }}>
+                    {t('常规价')} {Number(delta.normal.toFixed(4))}x{' · '}
+                    {t('此刻价')} {Number(delta.current.toFixed(4))}x
+                  </div>
+                }
+              >
+                <Tag
+                  color={delta.cheaper ? 'cyan' : 'orange'}
+                  shape='circle'
+                  size='small'
+                >
+                  {delta.label || (delta.cheaper ? t('闲时') : t('高峰'))}
+                </Tag>
+              </Tooltip>
+            );
+          })()}
           {renderEntitlementBadges(record)}
         </div>
       );
@@ -321,20 +389,43 @@ export const getPricingTableColumns = ({
       }
       const priceItems = getModelPriceItems(priceData, t, siteDisplayType);
 
+      // 此刻比常规价便宜时，价格列画的是**常规价**的删除线；没配分时的模型保持
+      // 原来的「折前价」删除线（那是折扣的故事，两者不同时出现，避免一行两个删除线）。
+      const delta = getTimePriceDelta(
+        groupTimeRatio,
+        priceData?.usedGroup,
+        record.model_name,
+        priceData?.usedGroupRatio,
+      );
+      const normalMap =
+        delta && delta.cheaper
+          ? Object.fromEntries(
+              getModelPriceItems(
+                getNormalPriceData(record, priceData?.usedGroup, delta.normal),
+                t,
+                siteDisplayType,
+              ).map((it) => [it.key, it.value]),
+            )
+          : null;
+
       return (
         <div className='space-y-1'>
-          {priceItems.map((item) => (
-            <div key={item.key} className='text-gray-700'>
-              {item.label}{' '}
-              {item.originalValue && (
-                <span className='mr-1 text-gray-400 line-through'>
-                  {item.originalValue}
-                </span>
-              )}
-              {item.value}
-              {item.suffix}
-            </div>
-          ))}
+          {priceItems.map((item) => {
+            const strike =
+              (normalMap && normalMap[item.key]) || item.originalValue;
+            return (
+              <div key={item.key} className='text-gray-700'>
+                {item.label}{' '}
+                {strike && (
+                  <span className='mr-1 text-gray-400 line-through'>
+                    {strike}
+                  </span>
+                )}
+                {item.value}
+                {item.suffix}
+              </div>
+            );
+          })}
         </div>
       );
     },

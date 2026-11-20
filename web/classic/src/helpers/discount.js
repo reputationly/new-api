@@ -157,6 +157,11 @@ export const buildTimeWindowRows = ({
         // 「这个时段几折」，配置值是管理端的事
         discount: getGroupDiscountInfo(w.ratio),
         ratio: Number(w.ratio),
+        // 相对常规价：>1 是紧缺时段加价、<1 是空闲优惠。折扣角标讲的是合同折扣，
+        // 这一列讲的是「这个时段比常规贵/便宜多少」，两者不要混在一个数字里。
+        relative: Number(
+          (Number(w.ratio) / Number(entry.normal_ratio)).toFixed(4),
+        ),
         active,
       });
     });
@@ -172,9 +177,56 @@ export const buildTimeWindowRows = ({
         range: normalLabel,
         discount: getGroupDiscountInfo(entry.normal_ratio),
         ratio: Number(entry.normal_ratio),
+        relative: 1,
         active: !anyActive,
       });
     }
   });
   return rows;
+};
+
+/**
+ * 取某个 (线路, 模型) 的**常规价终值**（未命中任何时段时的倍率）。
+ *
+ * 折扣角标必须用它而不是 usedGroupRatio：后者是「此刻价」，含时段系数，会让同一个客户
+ * 同一个模型白天 9 折、紧缺时段 11 折——折扣率随时钟变，合同与报表都没法解释。
+ * 常规价来自后端下发的 group_time_ratio[线路][模型].normal_ratio（终值口径，已含用户档
+ * 乘数）；没有分时规则时回退到 usedGroupRatio。
+ */
+export const getNormalRatio = (groupTimeRatio, group, modelName, fallback) => {
+  const v = groupTimeRatio?.[group]?.[modelName]?.normal_ratio;
+  return Number.isFinite(Number(v)) ? Number(v) : fallback;
+};
+
+/**
+ * 取某个 (线路, 模型) 的时段视图（后端算好的档位、此刻生效项与常规价）。
+ * 前端不做任何时间判断：客户端时钟/时区都不可信，算出来只会与实扣打架。
+ */
+export const getTimeRatioView = (groupTimeRatio, group, modelName) =>
+  groupTimeRatio?.[group]?.[modelName] || null;
+
+/**
+ * 价格列相对「常规价」的方向：更便宜（划线）、更贵（挂标签）、持平（什么都不做）。
+ * 返回 null 表示没有分时规则、或此刻就是常规价。
+ */
+export const getTimePriceDelta = (
+  groupTimeRatio,
+  group,
+  modelName,
+  currentRatio,
+) => {
+  const view = getTimeRatioView(groupTimeRatio, group, modelName);
+  if (!view) return null;
+  const normal = Number(view.normal_ratio);
+  const current = Number(currentRatio);
+  if (!Number.isFinite(normal) || !Number.isFinite(current) || normal <= 0)
+    return null;
+  if (Math.abs(normal - current) < 1e-9) return null;
+  return {
+    normal,
+    current,
+    cheaper: current < normal,
+    label: view.label || '',
+    active: Boolean(view.active),
+  };
 };

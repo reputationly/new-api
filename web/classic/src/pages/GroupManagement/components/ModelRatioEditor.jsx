@@ -33,6 +33,10 @@ const uid = () => `gmr_${++_idCounter}`;
 const MODE_MULTIPLY = 'multiply';
 const MODE_OVERRIDE = 'override';
 
+// 全网作用域键：时段价挂在它下面 = 对所有线路生效（与后端 GroupTimeRatio 的保留键一致）。
+// 编辑入口在「设置 → 模型定价 → 分时价」，这里只读展示生效结果。
+const GLOBAL_TIME_SCOPE = '*';
+
 // 与 Semi Table 的默认每页条数一致：分页改受控后这个值要自己给，写错会让页码
 // 与实际切片对不上（翻到第 2 页显示的还是第 1 页的行）。
 const PAGE_SIZE = 10;
@@ -108,117 +112,6 @@ function rulesToRows(rules) {
 const EMPTY_TIME_RULES = {};
 
 /**
- * 单行的时段规则编辑面板（Popover 内容）。
- *
- * 一个模型可以配多档（如深夜 ×0.7、凌晨 ×0.5），所以是列表而不是单值。
- * 档位之间不能重叠——后端保存时会拒绝，这里只在提交前给不了确定性反馈，
- * 不复刻那份重叠判定：两份实现一旦分叉，页面会把合法配置报成非法（或反过来）。
- */
-function TimeRuleCell({ t, pattern, list, windowOptions, onChange }) {
-  const [win, setWin] = React.useState(null);
-  const [val, setVal] = React.useState(0.7);
-
-  if (!pattern) {
-    return (
-      <div className='p-2 text-xs'>{t('请先填写模型名，再配置时段折扣')}</div>
-    );
-  }
-  if (windowOptions.length === 0) {
-    return (
-      <div className='p-2 text-xs'>
-        {t('还没有时段模板，请先在上方「时段模板」里新建一个')}
-      </div>
-    );
-  }
-
-  const used = new Set(list.map((r) => r.window));
-  const available = windowOptions.filter((o) => !used.has(o.value));
-
-  return (
-    <div className='flex w-72 flex-col gap-2 p-2'>
-      {list.map((r, i) => (
-        <div key={i} className='flex items-center gap-1'>
-          <Tag size='small' shape='circle' color='cyan' className='flex-1'>
-            {windowOptions.find((o) => o.value === r.window)?.label || r.window}
-          </Tag>
-          <InputNumber
-            size='small'
-            min={0.01}
-            max={1}
-            step={0.05}
-            style={{ width: 80 }}
-            value={r.value}
-            onChange={(v) => {
-              const next = [...list];
-              next[i] = { ...next[i], value: v ?? 1 };
-              onChange(next);
-            }}
-          />
-          <Button
-            size='small'
-            theme='borderless'
-            type='danger'
-            icon={<IconDelete />}
-            onClick={() => onChange(list.filter((_, idx) => idx !== i))}
-          />
-        </div>
-      ))}
-
-      {/*
-        模板全部绑完时，添加行会整个消失，而页面上没有任何解释——用户看到的是
-        「只能绑一条」。这里显式说明还差什么，并指向新建模板的入口。
-      */}
-      {available.length === 0 && (
-        <div className='border-t border-[var(--semi-color-border)] pt-2'>
-          <Text type='tertiary' size='small'>
-            {t(
-              '已绑定全部时段模板。还要再加一条（如上午、下午工作时段分开配），请先到上方「时段模板」新建。',
-            )}
-          </Text>
-        </div>
-      )}
-
-      {available.length > 0 && (
-        <div className='flex items-center gap-1 border-t border-[var(--semi-color-border)] pt-2'>
-          <Select
-            size='small'
-            style={{ width: 130 }}
-            placeholder={t('选择时段')}
-            value={win}
-            optionList={available}
-            onChange={setWin}
-          />
-          <InputNumber
-            size='small'
-            min={0.01}
-            max={1}
-            step={0.05}
-            style={{ width: 80 }}
-            value={val}
-            onChange={(v) => setVal(typeof v === 'number' ? v : 0.7)}
-          />
-          <Button
-            size='small'
-            theme='solid'
-            disabled={!win}
-            onClick={() => {
-              onChange([...list, { window: win, value: val }]);
-              setWin(null);
-            }}
-          >
-            {t('添加')}
-          </Button>
-        </div>
-      )}
-      {/* 倍率只允许 0~1：与后端 CheckGroupTimeRatio 同一约定 */}
-      <Text type='tertiary' size='small'>
-        {t(
-          '可添加多条（如上午、下午工作时段各一条）。命中时段时取代左侧的模型倍率，不是在它之上再乘一次；未命中任何时段时按左侧倍率计价。',
-        )}
-      </Text>
-    </div>
-  );
-}
 
 /**
  * 表格行 → 单个分组的规则对象。
@@ -334,7 +227,6 @@ export default function ModelRatioEditor({
   // 收发，不混进 value/onChange。不传 onTimeChange 就整列不渲染——档位折扣那个
   // Tab 复用本组件，而 Layer 4 是按使用分组配的，在用户档语境下没有意义。
   timeValue,
-  onTimeChange,
 }) {
   const { t } = useTranslation();
 
@@ -360,49 +252,25 @@ export default function ModelRatioEditor({
     };
   }, [timeValue]);
 
-  const timeWindowOptions = useMemo(
-    () =>
-      Object.entries(timeConfig.windows).map(([key, win]) => ({
-        label: win?.label ? `${win.label}（${win.start}-${win.end}）` : key,
-        value: key,
-      })),
-    [timeConfig.windows],
-  );
-
   // 必须 memo：`|| {}` 每次渲染都产出新对象引用，而它是 columns 那个 useMemo 的依赖。
   // 不 memo 的话 columns 每次渲染都重建，模型名输入框跟着重建，光标被弹到末尾——
   // 正是 cursorStability.test.jsx 锁死的那个回归。
-  const groupTimeRules = useMemo(
-    () => timeConfig.rules?.[group] || EMPTY_TIME_RULES,
+  // 生效的时段价：全网 "*" 打底，按线路存的存量规则覆盖（与后端「线路 > 全网」一致）。
+  const groupTimeRules = useMemo(() => {
+    const globalRules =
+      timeConfig.rules?.[GLOBAL_TIME_SCOPE] || EMPTY_TIME_RULES;
+    const lineRules = timeConfig.rules?.[group];
+    if (!lineRules || Object.keys(lineRules).length === 0) return globalRules;
+    return { ...globalRules, ...lineRules };
+  }, [timeConfig.rules, group]);
+
+  // 哪些模式串是按线路单独配的（用于标「线路」角标）；其余来自全网。
+  const lineOwnPatterns = useMemo(
+    () => new Set(Object.keys(timeConfig.rules?.[group] || {})),
     [timeConfig.rules, group],
   );
 
   // 把某个模型模式串的时段规则写回整份 GroupTimeRatio，其他分组/模型原样保留。
-  const setTimeRules = useCallback(
-    (pattern, list) => {
-      if (!onTimeChange || !pattern) return;
-      const nextRules = { ...(timeConfig.rules || {}) };
-      const groupRules = { ...(nextRules[group] || {}) };
-      if (!list || list.length === 0) {
-        delete groupRules[pattern];
-      } else {
-        groupRules[pattern] = list;
-      }
-      if (Object.keys(groupRules).length === 0) {
-        delete nextRules[group];
-      } else {
-        nextRules[group] = groupRules;
-      }
-      onTimeChange(
-        JSON.stringify(
-          { windows: timeConfig.windows, rules: nextRules },
-          null,
-          2,
-        ),
-      );
-    },
-    [onTimeChange, timeConfig.rules, timeConfig.windows, group],
-  );
   // 精确规则表的分页必须受控。Semi Table 的内置分页是非受控的，dataSource 换引用
   // 就回到第一页——而 rows 每敲一个键都会重建（emitAndSet），结果是在第二页改折扣
   // 值，刚输入就被弹回第一页，改到一半的那行看不见了。
@@ -516,52 +384,6 @@ export default function ModelRatioEditor({
     },
     [emitAndSet],
   );
-
-  // 批量套用时段折扣：把同一档写进所有勾选行。
-  //
-  // 与 applyBatch 分开而不是合成一个「批量应用」：两者写的是不同的 option key，
-  // 合在一起意味着只想批量改折扣的人会连带覆盖时段配置（反之亦然）。
-  const applyBatchTime = useCallback(() => {
-    if (!onTimeChange || !batchWindow || !selected.length) return;
-    const nextRules = { ...(timeConfig.rules || {}) };
-    const groupRules = { ...(nextRules[group] || {}) };
-    rows.forEach((row) => {
-      if (!selected.includes(row._id)) return;
-      const pattern = (row.pattern || '').trim();
-      if (!pattern) return;
-      const list = groupRules[pattern] || [];
-      // 同一模板已配过就改值，不追加——追加会造出两条同模板规则，
-      // 后端的重叠校验会直接拒绝保存，而人看不出是这次批量造成的
-      const idx = list.findIndex((r) => r.window === batchWindow);
-      groupRules[pattern] =
-        idx >= 0
-          ? list.map((r, i) =>
-              i === idx ? { ...r, value: batchWindowValue } : r,
-            )
-          : [...list, { window: batchWindow, value: batchWindowValue }];
-    });
-    if (Object.keys(groupRules).length === 0) {
-      delete nextRules[group];
-    } else {
-      nextRules[group] = groupRules;
-    }
-    onTimeChange(
-      JSON.stringify(
-        { windows: timeConfig.windows, rules: nextRules },
-        null,
-        2,
-      ),
-    );
-  }, [
-    onTimeChange,
-    batchWindow,
-    batchWindowValue,
-    selected,
-    rows,
-    timeConfig.rules,
-    timeConfig.windows,
-    group,
-  ]);
 
   const applyBatch = useCallback(() => {
     if (!selected.length) return;
@@ -852,7 +674,7 @@ export default function ModelRatioEditor({
           // 可以直接比较的；时段值反而更高说明配反了——这在只看配置系数时看不出来，
           // 而后端无从硬拒绝（常规终值还受用户档影响，逐用户不同）。
           const pattern = (record.pattern || '').trim();
-          const timeList = onTimeChange ? groupTimeRules[pattern] || [] : [];
+          const timeList = groupTimeRules[pattern] || [];
           return (
             <div className='flex flex-col'>
               <Text
@@ -874,56 +696,40 @@ export default function ModelRatioEditor({
           );
         },
       },
-      ...(onTimeChange
-        ? [
-            {
-              title: t('时段折扣'),
-              key: 'time',
-              width: 170,
-              render: (_, record) => {
-                const pattern = (record.pattern || '').trim();
-                const list = groupTimeRules[pattern] || [];
-                return (
-                  <Popover
-                    trigger='click'
-                    position='bottomLeft'
-                    content={
-                      <TimeRuleCell
-                        t={t}
-                        pattern={pattern}
-                        list={list}
-                        windowOptions={timeWindowOptions}
-                        onChange={(next) => setTimeRules(pattern, next)}
-                      />
-                    }
-                  >
-                    <div className='cursor-pointer'>
-                      {list.length === 0 ? (
-                        <Text type='tertiary' size='small'>
-                          {t('未配置')}
-                        </Text>
-                      ) : (
-                        <div className='flex flex-wrap gap-1'>
-                          {list.map((r, i) => (
-                            <Tag
-                              key={i}
-                              size='small'
-                              shape='circle'
-                              color='cyan'
-                            >
-                              {timeConfig.windows[r.window]?.label || r.window}{' '}
-                              ×{r.value}
-                            </Tag>
-                          ))}
-                        </div>
-                      )}
-                    </div>
-                  </Popover>
-                );
-              },
-            },
-          ]
-        : []),
+      {
+        title: t('时段价'),
+        key: 'time',
+        width: 200,
+        render: (_, record) => {
+          const pattern = (record.pattern || '').trim();
+          const list = groupTimeRules[pattern] || [];
+          if (list.length === 0) {
+            return (
+              <Text type='tertiary' size='small'>
+                {t('全天一个价')}
+              </Text>
+            );
+          }
+          const own = lineOwnPatterns.has(pattern);
+          return (
+            <div className='flex flex-wrap items-center gap-1'>
+              {list.map((r, i) => (
+                <Tag
+                  key={i}
+                  size='small'
+                  shape='circle'
+                  color={Number(r.value) > 1 ? 'orange' : 'cyan'}
+                >
+                  {timeConfig.windows[r.window]?.label || r.window} ×{r.value}
+                </Tag>
+              ))}
+              <Tag size='small' shape='circle' color={own ? 'amber' : 'white'}>
+                {own ? t('线路') : t('全网')}
+              </Tag>
+            </div>
+          );
+        },
+      },
       {
         title: t('备注'),
         dataIndex: 'remark',
@@ -957,17 +763,7 @@ export default function ModelRatioEditor({
         ),
       },
     ],
-    [
-      t,
-      updateRow,
-      removeRow,
-      selected,
-      onTimeChange,
-      groupTimeRules,
-      timeWindowOptions,
-      timeConfig.windows,
-      setTimeRules,
-    ],
+    [t, updateRow, removeRow, selected, groupTimeRules, timeConfig.windows],
   );
 
   if (!group) {
@@ -1142,38 +938,6 @@ export default function ModelRatioEditor({
           <Button size='small' theme='solid' onClick={applyBatch}>
             {t('批量应用')}
           </Button>
-          {onTimeChange && timeWindowOptions.length > 0 && (
-            <>
-              <span className='mx-1 h-4 w-px bg-[var(--semi-color-border)]' />
-              <Select
-                size='small'
-                style={{ width: 150 }}
-                placeholder={t('时段模板')}
-                value={batchWindow}
-                optionList={timeWindowOptions}
-                onChange={setBatchWindow}
-              />
-              <InputNumber
-                size='small'
-                min={0.01}
-                max={1}
-                step={0.05}
-                value={batchWindowValue}
-                style={{ width: 80 }}
-                onChange={(v) =>
-                  setBatchWindowValue(typeof v === 'number' ? v : 0.7)
-                }
-              />
-              <Button
-                size='small'
-                theme='solid'
-                disabled={!batchWindow}
-                onClick={applyBatchTime}
-              >
-                {t('批量设时段折扣')}
-              </Button>
-            </>
-          )}
           <Button
             size='small'
             theme='borderless'

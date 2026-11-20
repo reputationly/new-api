@@ -22,6 +22,7 @@ import { Banner, Radio, RadioGroup } from '@douyinfe/semi-ui';
 import { useTranslation } from 'react-i18next';
 import ModelPricingEditor from './components/ModelPricingEditor';
 import ModelRatioSettings from './ModelRatioSettings';
+import TimePricePanel from './components/TimePricePanel';
 
 export default function ModelPricingCombined({ options, refresh }) {
   const { t } = useTranslation();
@@ -40,6 +41,12 @@ export default function ModelPricingCombined({ options, refresh }) {
           <Radio value='manual'>{t('倍率（高级）')}</Radio>
         </RadioGroup>
       </div>
+      {/*
+        分时价独立成卡：它写的是另一个 option key（GroupTimeRatio），与上面的
+        ModelRatio/ModelPrice 那一套互不影响，单独保存才不会被「应用更改」连带覆盖。
+        全站唯一入口——分组管理页那边只读展示（docs/time-price-axis-design.md §6.2）。
+      */}
+      <TimePricePanel options={options} refresh={refresh} />
       {editMode === 'visual' ? (
         <ModelPricingEditor options={options} refresh={refresh} />
       ) : (

@@ -270,6 +270,24 @@ func UpdateOption(c *gin.Context) {
 			})
 			return
 		}
+		// 与「计费表达式里的时间函数」互斥（§4.3）：两处都按时刻改价，同一笔单会乘两次
+		// 时间系数，而表达式那一半不进日志也不进分时表。
+		if err = checkTimePriceVsExpr(option.Value.(string)); err != nil {
+			c.JSON(http.StatusOK, gin.H{
+				"success": false,
+				"message": err.Error(),
+			})
+			return
+		}
+	case "billing_setting.billing_expr":
+		// 反方向互斥：表达式里引用时间函数时，该模型不能再有时段价。
+		if err = checkExprVsTimePrice(option.Value.(string)); err != nil {
+			c.JSON(http.StatusOK, gin.H{
+				"success": false,
+				"message": err.Error(),
+			})
+			return
+		}
 	case "points_setting.channel_rewards":
 		err = operation_setting.CheckChannelPointsRewards(option.Value.(string))
 		if err != nil {

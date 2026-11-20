@@ -461,7 +461,7 @@ function appendTimeRuleSegment(summary, other, t) {
     ...summary,
     segments: [
       ...summary.segments,
-      { text: `${t('时段折扣')} ${other.time_rule}`, tone: 'secondary' },
+      { text: `${t('时段价')} ${other.time_rule}`, tone: 'secondary' },
     ],
   };
 }
@@ -793,7 +793,13 @@ export const getLogsColumns = ({
           record.type === 2 ||
           record.type === 5 ||
           record.type === 6 ? (
-          <>{renderWithAggregateTag(renderModelName(record, copyText, t), record, t)}</>
+          <>
+            {renderWithAggregateTag(
+              renderModelName(record, copyText, t),
+              record,
+              t,
+            )}
+          </>
         ) : (
           <></>
         );

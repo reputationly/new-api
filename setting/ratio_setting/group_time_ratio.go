@@ -18,19 +18,38 @@ import (
 // 的成本本身带时间维度——夜里 GPU 空闲，边际成本远低于白天。没有这一层就只能按
 // 白天的成本定一个全天价，既拿不到夜间增量，也没法把负载从峰值挪走。
 //
-// 为什么按「使用分组」（线路）索引：与 Layer 0/1/2 同轴（成本侧），与 Layer 3
-// （按用户档的售价侧）正交。
+// 索引是**模型**（v1 决定，见 docs/time-price-axis-design.md §3.1）：目录价全网一份，
+// 所以时段价也只有一个归属；「某条线路单独便宜」会把成本差异泄漏成价目差异。
 //
-// 叠加语义是**取代**而不是叠乘（见 ResolveGroupRatioAt）：命中时段时用
-// base × 时段值 整条替换 Layer 2 的结果，包括 override。「常规 8 折、空闲时段 5.6 折」
-// 是两个能直接比较的绝对价；叠乘则要求人先算 0.8 × 0.7 才知道自己付多少。
-// 但它排在 Layer 3 之前，用户档折扣仍然会乘上去。
+// 叠加语义是**叠乘**：命中时段时 终值 = 常规价 × 时段系数。不取代 Layer 2，因为取代会把
+// 模型折扣与 override 锁价一起吃掉（见 §4.1/§4.8）。系数因此允许 >1（紧缺时段加价）。
+// 它排在 Layer 3 之前，用户档折扣仍然会乘上去。
 //
 // 为什么 windows 和 rules 放在同一个 option key 里：规则只存模板名，保存时必须
 // 校验「引用的模板存在」。option 是按 key 逐个 PUT 的，拆成两个 key 就既做不到这个
 // 校验，也做不到原子保存——新建模板成功、引用它的规则保存失败，会留下一批悬空引用。
 
 const defaultTimeRatioZone = "Asia/Shanghai"
+
+// maxTimePriceFactor 是时段价系数的上限。
+//
+// 系数乘在常规价上：<1 空闲时段更便宜，>1 紧缺时段更贵（现网就有 0.5/0.45 = 1.1111 的用例）。
+// 允许加价是本次改造的核心之一——不允许的话，「紧缺时段贵一点」这个需求根本表达不出来。
+// 上限取 20 只是防手误：把 100 打成 20 与打成 100 的差别不大，但至少挡住「多打一个 0 让整批
+// 模型在某个时段涨十倍」这种事故。
+const maxTimePriceFactor = 20.0
+
+// globalTimeRatioScope 是「全网生效」的规则作用域键。
+//
+// v1 的模型：时段价是价目的一部分，全网一份，所以规则按**模型**索引、不再按线路。
+// 但存量配置是按线路（"default"）存的，形状不能一夜之间改掉。约定因此是：
+// 解析时先查 rules[线路]（存量兼容），查不到再查 rules["*"]（全网）。
+// 把规则搬到 "*" 下、删掉按线路的那份，就等于完成摊平；反过来想给某条线路留例外，
+// 也仍然可以单独配——但**界面不提供**这个入口（设计见 docs/time-price-axis-design.md §3.1）。
+//
+// 用保留键而不是改数据结构，是为了让这次切换保持**纯加法**：老数据原样可用，
+// 摊平只改数据、不改代码路径，出问题时把 key 搬回去就能回滚。
+const globalTimeRatioScope = "*"
 
 // TimeWindow 是一个命名时段模板，被多条规则引用。
 //
@@ -44,7 +63,19 @@ type TimeWindow struct {
 	TZ    string `json:"tz,omitempty"`
 }
 
-// TimeRule 是「某模型在某时段打几折」。Window 指向 TimeWindow 的键。
+// TimeRule 是「某模型在某时段的价目系数」。Window 指向 TimeWindow 的键。
+//
+// 两个系数字段是**滚动升级**的产物，不是历史包袱：
+//   - Value（json: value）：旧语义，相对 Base 的**绝对**系数，命中时段时取代模型定价。
+//   - PriceFactor（json: price_factor）：新语义，乘在**常规价**上的系数（<1 空闲、>1 紧缺）。
+//
+// 为什么并存而不是直接改 Value 的含义：现网滚动升级时，同一时刻会同时跑着新码与旧码，
+// 而 option 是 60 秒一拍从库里同步的。若只改 Value 的语义，任何中间状态都会有一段
+// 按错价计费（新码旧值 → 掉 55%；旧码新值 → 涨 122%）。
+// 让每条规则自带「我是哪种语义」，两种代码对同一条规则就能算出同一个价：
+// 旧码只认 value（仍走取代），新码优先认 price_factor（走叠乘），两边结果相同。
+//
+// 迁移完（所有副本都是新码）之后 Value 可以清空，新码见到 price_factor 就不再读它。
 type TimeRule struct {
 	Window string  `json:"window"`
 	Value  float64 `json:"value"`
@@ -120,7 +151,86 @@ func GetGroupTimeRatioCopy() GroupTimeRatioConfig {
 func HasGroupTimeRules(group string) bool {
 	groupTimeRatioMu.RLock()
 	defer groupTimeRatioMu.RUnlock()
-	return len(groupTimeRatio.Rules[group]) > 0
+	// 全网规则对每条线路都算「有线规则」：漏掉这一条，只配了 "*" 时会按「没有时段规则」
+	// 跳过整个线路，模型广场显示原价而实扣已含时段系数。
+	return len(groupTimeRatio.Rules[group]) > 0 || len(groupTimeRatio.Rules[globalTimeRatioScope]) > 0
+}
+
+// TimeRulePatterns 解析一份 GroupTimeRatio JSON，返回其中出现的全部模型模式串（跨作用域去重）。
+//
+// 保存前用它做「时段价 × 计费表达式时间函数」的互斥检查 —— 检查必须针对**将要保存的**内容，
+// 而不是当前内存里的旧配置。
+func TimeRulePatterns(jsonStr string) ([]string, error) {
+	cfg, err := parseGroupTimeRatio(jsonStr)
+	if err != nil {
+		return nil, err
+	}
+	seen := make(map[string]bool, len(cfg.Rules))
+	out := make([]string, 0, 8)
+	for _, rules := range cfg.Rules {
+		for pattern := range rules {
+			if seen[pattern] {
+				continue
+			}
+			seen[pattern] = true
+			out = append(out, pattern)
+		}
+	}
+	sort.Strings(out)
+	return out, nil
+}
+
+// HasTimeRulesForModel 报告当前生效的时段价是否会命中该模型（跨全部作用域）。
+//
+// 反方向互斥用：保存计费表达式时，若它引用了时间函数、而当前时段价已覆盖该模型，就拒绝。
+func HasTimeRulesForModel(modelName string) bool {
+	if modelName == "" {
+		return false
+	}
+	groupTimeRatioMu.RLock()
+	defer groupTimeRatioMu.RUnlock()
+	for _, rules := range groupTimeRatio.Rules {
+		if _, _, found := pickRuleFrom(rules, modelName); found {
+			return true
+		}
+	}
+	return false
+}
+
+// matchedTimeRulesLocked 取某 (线路, 模型) 命中的时段规则列表与模板表副本。
+//
+// 先查按线路存的规则（存量兼容），没有再查全网规则 "*"。必须是「先线路后全网」的
+// 整组取代而不是合并：合并会让同一条规则在两层各出现一次，窗口重叠校验根本看不出，
+// 而 pickTimeRule 取最小值的方向又会让结果偏向一侧，没人能解释那个价怎么来的。
+//
+// 调用方必须持读锁。
+func matchedTimeRulesLocked(group, modelName string) ([]TimeRule, map[string]TimeWindow) {
+	lookup := func(scope string) ([]TimeRule, bool) {
+		rules, ok := groupTimeRatio.Rules[scope]
+		if !ok {
+			return nil, false
+		}
+		_, matched, found := pickRuleFrom(rules, modelName)
+		if !found {
+			return nil, false
+		}
+		return matched, true
+	}
+
+	var matched []TimeRule
+	if list, ok := lookup(group); ok {
+		matched = list
+	} else if list, ok := lookup(globalTimeRatioScope); ok {
+		matched = list
+	}
+	if len(matched) == 0 {
+		return nil, nil
+	}
+	windows := make(map[string]TimeWindow, len(groupTimeRatio.Windows))
+	for k, v := range groupTimeRatio.Windows {
+		windows[k] = v
+	}
+	return append([]TimeRule(nil), matched...), windows
 }
 
 func parseGroupTimeRatio(jsonStr string) (GroupTimeRatioConfig, error) {
@@ -176,10 +286,10 @@ func CheckGroupTimeRatio(jsonStr string) error {
 					// 悬空引用必须拦住：规则会静默不生效，而管理员以为打了折。
 					return fmt.Errorf("group %s time rule %q references unknown window %q", group, pattern, rule.Window)
 				}
-				// 只打折不加价（本次范围）。不允许 0：免费用 Layer 2 的 override 表达，
-				// 时段系数是乘数，误打一个 0 会让整批模型在夜间白送，代价不对称。
-				if rule.Value <= 0 || rule.Value > 1 {
-					return fmt.Errorf("group %s time rule %q window %q: value must be in (0, 1], got %g", group, pattern, rule.Window, rule.Value)
+				// 系数乘在常规价上，所以 >1 是「紧缺时段加价」，合法且必要（见 maxTimePriceFactor）。
+				// 仍不允许 0：免费用 Layer 2 的 override 表达，误打一个 0 会让整批模型在某个时段白送。
+				if rule.Value <= 0 || rule.Value > maxTimePriceFactor {
+					return fmt.Errorf("group %s time rule %q window %q: value must be in (0, %g], got %g", group, pattern, rule.Window, maxTimePriceFactor, rule.Value)
 				}
 			}
 			if err := checkWindowOverlap(cfg.Windows, group, pattern, list); err != nil {
@@ -447,22 +557,13 @@ type TimeRatioView struct {
 //
 // 与 pickTimeRule 共用同一套窗口判定，不另写一份——展示口径与计费口径一旦分叉，
 // 表现就是「广场标着空闲时段中、实扣却是原价」，而两边都不报错。
-// base / userMul 由调用方从同一次 ResolveGroupRatioAt 的结果里取（res.Base 与
-// res.UserMultiplier()），不在这里重算——重算就是第二份解析实现，一旦与计费分叉，
-// 表现是广场标着「空闲时段 5.6 折」而实扣是另一个数，两边都不报错。
-func ResolveTimeRatioView(usingGroup, modelName string, at time.Time, base, userMul, normalRatio float64) (TimeRatioView, bool) {
+// normalRatio 由调用方从同一次 ResolveGroupRatioAt 的结果里取
+// （res.NormalRatio * res.UserMultiplier()，已是终值口径），不在这里重算——重算就是
+// 第二份解析实现，一旦与计费分叉，表现是广场标着「空闲时段 5 折」而实扣是另一个数，两边都不报错。
+func ResolveTimeRatioView(usingGroup, modelName string, at time.Time, res RatioResolution) (TimeRatioView, bool) {
+	normalRatio := res.NormalRatio * res.UserMultiplier()
 	groupTimeRatioMu.RLock()
-	rules, hasGroup := groupTimeRatio.Rules[usingGroup]
-	var list []TimeRule
-	windows := map[string]TimeWindow{}
-	if hasGroup {
-		if _, matched, found := pickRuleFrom(rules, modelName); found {
-			list = append([]TimeRule(nil), matched...)
-			for k, v := range groupTimeRatio.Windows {
-				windows[k] = v
-			}
-		}
-	}
+	list, windows := matchedTimeRulesLocked(usingGroup, modelName)
 	groupTimeRatioMu.RUnlock()
 
 	if len(list) == 0 {
@@ -476,6 +577,7 @@ func ResolveTimeRatioView(usingGroup, modelName string, at time.Time, base, user
 	var until time.Time
 	chargedIdx := -1
 	bestValue := math.Inf(1)
+	bestRatio := math.Inf(1)
 	chargedValue := math.Inf(1)
 	for _, rule := range list {
 		win, ok := windows[rule.Window]
@@ -483,7 +585,8 @@ func ResolveTimeRatioView(usingGroup, modelName string, at time.Time, base, user
 			continue
 		}
 		// 该时段的最终倍率，口径与 ResolveGroupRatioAt 的 Layer 4 逐位一致：
-		// 时段规则取代模型折扣（相对 Base），用户档折扣仍在最后叠乘。
+		// 系数乘在常规价上（normalRatio 已含用户档乘数）。
+		windowRatio := normalRatio * rule.Value
 		view.Windows = append(view.Windows, TimeWindowView{
 			Label: win.displayName(rule.Window),
 			Start: win.Start,
@@ -491,10 +594,11 @@ func ResolveTimeRatioView(usingGroup, modelName string, at time.Time, base, user
 			Days:  win.Days,
 			TZ:    win.TZ,
 			Value: rule.Value,
-			Ratio: base * rule.Value * userMul,
+			Ratio: windowRatio,
 		})
 		if rule.Value < bestValue {
 			bestValue = rule.Value
+			bestRatio = windowRatio
 			view.BestLabel = win.displayName(rule.Window)
 		}
 		// 此刻计费实际取用的档位：判据必须与 pickTimeRule **逐位一致**（命中且取最小
@@ -526,8 +630,8 @@ func ResolveTimeRatioView(usingGroup, modelName string, at time.Time, base, user
 		// 它与 Windows[i].Active 是两件事，共用一个字段正是上面那个 bug 的成因。
 		view.Active = chargedValue < 1
 	}
-	// bestValue 恒有限：走到这里说明至少有一个档位进了 Windows
-	view.BestRatio = base * bestValue * userMul
+	// bestRatio 恒有限：走到这里说明至少有一个档位进了 Windows
+	view.BestRatio = bestRatio
 	if !until.IsZero() {
 		view.Until = until.Format(time.RFC3339)
 	}
@@ -550,19 +654,7 @@ func (w TimeWindow) displayName(key string) string {
 // 绕过校验的兜底——结果确定，且方向对用户有利。
 func pickTimeRule(usingGroup, modelName string, at time.Time) (string, TimeWindow, TimeRule, bool) {
 	groupTimeRatioMu.RLock()
-	rules, ok := groupTimeRatio.Rules[usingGroup]
-	var list []TimeRule
-	var windows map[string]TimeWindow
-	if ok {
-		_, matched, found := pickRuleFrom(rules, modelName)
-		if found {
-			list = append([]TimeRule(nil), matched...)
-			windows = make(map[string]TimeWindow, len(groupTimeRatio.Windows))
-			for k, v := range groupTimeRatio.Windows {
-				windows[k] = v
-			}
-		}
-	}
+	list, windows := matchedTimeRulesLocked(usingGroup, modelName)
 	groupTimeRatioMu.RUnlock()
 
 	if len(list) == 0 {

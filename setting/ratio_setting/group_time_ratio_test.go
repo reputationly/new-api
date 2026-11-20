@@ -47,12 +47,12 @@ func TestResolveGroupRatio_NoTimeConfigIsIdentical(t *testing.T) {
 	require.Zero(t, res.TimeValue)
 }
 
-// TestResolveGroupRatio_TimeLayerReplacesModelRule 锁死 Layer 4 的核心语义：
-// 命中时段时**取代**模型折扣（相对 Base 重算），而不是叠乘在它上面。
+// TestResolveGroupRatio_TimeLayerStacksOnModelRule 锁死 Layer 4 的核心语义：
+// 命中时段时**乘在常规价上**（叠乘），而不是取代模型折扣。
 //
-// 取代是为了让「常规 8 折、空闲时段 5.6 折」成为两个能直接比较的绝对价——叠乘的话
-// 用户得先心算 0.8 × 0.7。若实现被改回叠乘，下面 0.42 的断言会变成 0.21。
-func TestResolveGroupRatio_TimeLayerReplacesModelRule(t *testing.T) {
+// 取代会把模型折扣与 override 锁价一起吃掉，运营配的数与实扣脱钩（§4.1/§4.8）。
+// 若实现被改回取代，下面 0.21 的断言会变成 0.42。
+func TestResolveGroupRatio_TimeLayerStacksOnModelRule(t *testing.T) {
 	seedRatios(t, `{"default":1,"premium":1.5}`, `{"vip":{"premium":0.7}}`,
 		`{"premium":{"GLM-5":{"mode":"multiply","value":0.5}}}`)
 	seedTimeRatio(t, `{
@@ -62,9 +62,9 @@ func TestResolveGroupRatio_TimeLayerReplacesModelRule(t *testing.T) {
 
 	t.Run("时段内取代模型折扣", func(t *testing.T) {
 		res := ResolveGroupRatioAt("vip", "premium", "GLM-5", at(t, 0, 2, 0))
-		// Base 0.7（身份折扣覆盖了分组倍率 1.5）× 时段值 0.6；模型折扣 0.5 被取代
-		require.InDelta(t, 0.42, res.Final, 1e-9)
-		require.NotEqual(t, 0.21, res.Final) // 叠乘语义的回归哨兵
+		// Base 0.7（身份折扣覆盖了分组倍率 1.5）× 模型折扣 0.5 × 时段系数 0.6
+		require.InDelta(t, 0.21, res.Final, 1e-9)
+		require.NotEqual(t, 0.42, res.Final) // 取代语义的回归哨兵
 		require.Equal(t, "night", res.TimeWindow)
 		require.Equal(t, "深夜档", res.TimeLabel)
 		require.Equal(t, 0.6, res.TimeValue)
@@ -76,12 +76,12 @@ func TestResolveGroupRatio_TimeLayerReplacesModelRule(t *testing.T) {
 		require.Empty(t, res.TimeWindow)
 	})
 
-	t.Run("模型折扣配的是 override 时也被整条取代", func(t *testing.T) {
+	t.Run("override 锁价同样被叠乘，不再被吃掉", func(t *testing.T) {
 		require.NoError(t, UpdateGroupModelRatioByJSONString(
 			`{"premium":{"GLM-5":{"mode":"override","value":2.2}}}`))
 		res := ResolveGroupRatioAt("vip", "premium", "GLM-5", at(t, 0, 2, 0))
-		// 时段规则取代 Layer 2 的一切（含它的模式），回到 Base × 时段值
-		require.InDelta(t, 0.42, res.Final, 1e-9)
+		// 锁价 2.2 × 时段系数 0.6（取代语义会算成 Base 0.7 × 0.6 = 0.42）
+		require.InDelta(t, 1.32, res.Final, 1e-9)
 	})
 }
 
@@ -103,8 +103,8 @@ func TestResolveGroupRatio_TimeLayerKeepsUserTier(t *testing.T) {
 	require.InDelta(t, 0.72, busy.Final, 1e-9) // 1 × 0.8 × 0.9
 
 	idle := ResolveGroupRatioAt("corp", "default", "GLM-5", at(t, 0, 2, 0))
-	require.InDelta(t, 0.504, idle.Final, 1e-9) // 1 × 0.56 × 0.9，档位折扣仍在
-	require.NotEqual(t, 0.56, idle.Final)       // 档位折扣被吃掉的回归哨兵
+	require.InDelta(t, 0.4032, idle.Final, 1e-9) // 1 × 0.8 × 0.56 × 0.9，档位折扣仍在
+	require.NotEqual(t, 0.56, idle.Final)        // 档位折扣被吃掉的回归哨兵
 	require.Equal(t, 0.9, idle.UserRuleValue)
 }
 
@@ -258,14 +258,15 @@ func TestCheckGroupTimeRatio(t *testing.T) {
 			"unknown window",
 		},
 		{
-			"系数大于1",
+			// 系数乘在常规价上，>1 是紧缺时段加价，合法
+			"系数大于1（加价）",
 			`{` + validWindows + `, "rules":{"default":{"m":[{"window":"night","value":1.2}]}}}`,
-			"value must be in (0, 1]",
+			"",
 		},
 		{
 			"系数为0",
 			`{` + validWindows + `, "rules":{"default":{"m":[{"window":"night","value":0}]}}}`,
-			"value must be in (0, 1]",
+			"value must be in (0, 20]",
 		},
 		{
 			"中缀通配",
@@ -349,13 +350,13 @@ func TestTimeRatio_EndToEndConsistency(t *testing.T) {
 	viewAt := func(t *testing.T, at time.Time) (TimeRatioView, bool, RatioResolution) {
 		t.Helper()
 		res := ResolveGroupRatioAt("default", "premium", "wan2.2-t2v-plus", at)
-		view, ok := ResolveTimeRatioView("premium", "wan2.2-t2v-plus", at, res.Base, res.UserMultiplier(), res.NormalRatio*res.UserMultiplier())
+		view, ok := ResolveTimeRatioView("premium", "wan2.2-t2v-plus", at, res)
 		return view, ok, res
 	}
 
 	t.Run("空闲时段", func(t *testing.T) {
 		view, ok, res := viewAt(t, night)
-		require.InDelta(t, 0.75, res.Final, 1e-9, "1.5 × 0.5，模型折扣 0.8 被取代")
+		require.InDelta(t, 0.6, res.Final, 1e-9, "1.5 × 0.8 × 0.5，时段系数叠乘在模型折扣上")
 		require.True(t, ok)
 		require.True(t, view.Active)
 		// 标出来的那一档必须就是计费用的那一档：详情页靠它渲染「进行中」，
@@ -376,7 +377,7 @@ func TestTimeRatio_EndToEndConsistency(t *testing.T) {
 		require.False(t, view.Active)
 		require.False(t, view.Windows[0].Active)
 		// 高峰时段靠 BestRatio 渲染「深夜档 7.5 折」——绝对值，用户不用心算
-		require.InDelta(t, 0.75, view.BestRatio, 1e-9)
+		require.InDelta(t, 0.6, view.BestRatio, 1e-9)
 		// 档位名必须一并下发：角标硬编码「空闲时段」时，只配了一个更贵的高峰档
 		// 会显示成「空闲时段 N 折」，标签指向错的时段
 		require.Equal(t, "深夜档", view.BestLabel)
@@ -390,7 +391,7 @@ func TestTimeRatio_EndToEndConsistency(t *testing.T) {
 	t.Run("没配时段的分组不受影响", func(t *testing.T) {
 		res := ResolveGroupRatioAt("default", "default", "wan2.2-t2v-plus", night)
 		require.InDelta(t, 1.0, res.Final, 1e-9)
-		_, ok := ResolveTimeRatioView("default", "wan2.2-t2v-plus", night, res.Base, res.UserMultiplier(), res.NormalRatio*res.UserMultiplier())
+		_, ok := ResolveTimeRatioView("default", "wan2.2-t2v-plus", night, res)
 		require.False(t, ok)
 	})
 }
@@ -401,7 +402,7 @@ func TestTimeRatio_EndToEndConsistency(t *testing.T) {
 // 留着的话日志里会写出一条**没有生效**的 group_model_rule，运营拿
 // group_base_ratio × 规则值 反算得到的数与 group_ratio 对不上——日志的分层
 // 必须永远自洽，这是 service/log_info_generate.go 明令不能破的不变式。
-func TestResolveGroupRatio_TimeRuleClearsModelRuleTrace(t *testing.T) {
+func TestResolveGroupRatio_TimeRuleKeepsModelRuleTrace(t *testing.T) {
 	seedRatios(t, `{"default":1}`, `{}`,
 		`{"default":{"GLM-5":{"mode":"multiply","value":0.8,"remark":"常规"}}}`)
 	seedTimeRatio(t, `{
@@ -413,12 +414,12 @@ func TestResolveGroupRatio_TimeRuleClearsModelRuleTrace(t *testing.T) {
 	require.Equal(t, "GLM-5", busy.RuleMatch, "高峰时段走模型折扣，痕迹要留着")
 
 	idle := ResolveGroupRatioAt("default", "default", "GLM-5", at(t, 0, 2, 0))
-	require.InDelta(t, 0.56, idle.Final, 1e-9)
-	require.Empty(t, idle.RuleMatch, "被取代的模型折扣不该留下命中痕迹")
-	require.Empty(t, idle.RuleMode)
-	require.Zero(t, idle.RuleValue)
-	// 日志的反算链路：group_base_ratio 只在 RuleMatch 非空时才写，
-	// 所以清空之后日志里只剩 group_ratio 与 time_rule，二者自洽
+	require.InDelta(t, 0.448, idle.Final, 1e-9) // 0.8 × 0.56
+	require.Equal(t, "GLM-5", idle.RuleMatch, "叠乘语义下模型折扣生效，痕迹必须留着")
+	require.Equal(t, "multiply", idle.RuleMode)
+	require.Equal(t, 0.8, idle.RuleValue)
+	require.InDelta(t, idle.Final, idle.Base*idle.RuleValue*idle.TimeValue, 1e-9)
+	// 日志的反算链路：base × 规则值 × 时段系数 = group_ratio，三者自洽
 	require.Equal(t, "深夜档:×0.56", types.GroupRatioInfo{
 		TimeWindow: idle.TimeWindow,
 		TimeLabel:  idle.TimeLabel,
@@ -443,7 +444,7 @@ func TestResolveTimeRatioView_NoBadgeWhenActiveWindowIsFullPrice(t *testing.T) {
 
 	// 20:00 命中 ×1 的傍晚档：有折扣的档位存在（深夜 0.5），但此刻并不打折
 	res := ResolveGroupRatioAt("default", "default", "m", at(t, 0, 20, 0))
-	view, ok := ResolveTimeRatioView("default", "m", at(t, 0, 20, 0), res.Base, res.UserMultiplier(), res.NormalRatio*res.UserMultiplier())
+	view, ok := ResolveTimeRatioView("default", "m", at(t, 0, 20, 0), res)
 	require.True(t, ok)
 	require.InDelta(t, 1.0, res.Final, 1e-9, "×1 不改变价格")
 	require.False(t, view.Active, "此刻没打折，不该出优惠角标")
@@ -464,7 +465,7 @@ func TestResolveTimeRatioView_NoBadgeWhenActiveWindowIsFullPrice(t *testing.T) {
 
 	// 02:00 命中真正打折的深夜档
 	res = ResolveGroupRatioAt("default", "default", "m", at(t, 0, 2, 0))
-	view, _ = ResolveTimeRatioView("default", "m", at(t, 0, 2, 0), res.Base, res.UserMultiplier(), res.NormalRatio*res.UserMultiplier())
+	view, _ = ResolveTimeRatioView("default", "m", at(t, 0, 2, 0), res)
 	require.True(t, view.Active)
 	require.Equal(t, "深夜档", view.Label)
 }
@@ -498,11 +499,11 @@ func TestTimeRatio_TwoWindowsSameTier(t *testing.T) {
 		at    time.Time
 		final float64
 	}{
-		{"周一 上午高峰", at(t, 0, 10, 0), 0.5},
+		{"周一 上午高峰", at(t, 0, 10, 0), 0.175}, // 0.35 × 0.5
 		{"周一 午休", at(t, 0, 13, 0), 0.35},
-		{"周一 下午高峰", at(t, 0, 15, 0), 0.5},
+		{"周一 下午高峰", at(t, 0, 15, 0), 0.175},
 		{"周一 晚间", at(t, 0, 20, 0), 0.35},
-		{"周一 高峰起点", at(t, 0, 9, 0), 0.5},
+		{"周一 高峰起点", at(t, 0, 9, 0), 0.175},
 		{"周一 高峰终点(开区间)", at(t, 0, 12, 0), 0.35},
 		{"周六 同一钟点", at(t, 5, 10, 0), 0.35},
 		{"周日 同一钟点", at(t, 6, 15, 0), 0.35},
@@ -517,14 +518,14 @@ func TestTimeRatio_TwoWindowsSameTier(t *testing.T) {
 	viewAt := func(t *testing.T, ts time.Time) TimeRatioView {
 		t.Helper()
 		res := ResolveGroupRatioAt("default", "default", "m", ts)
-		v, ok := ResolveTimeRatioView("default", "m", ts, res.Base, res.UserMultiplier(),
-			res.NormalRatio*res.UserMultiplier())
+		v, ok := ResolveTimeRatioView("default", "m", ts,
+			res)
 		require.True(t, ok)
 		// 下发给广场的每一档终值，必须就是那个时刻真正会扣的数
 		require.InDelta(t, 0.35, v.NormalRatio, 1e-9)
 		require.Len(t, v.Windows, 2)
 		for _, w := range v.Windows {
-			require.InDelta(t, 0.5, w.Ratio, 1e-9)
+			require.InDelta(t, 0.175, w.Ratio, 1e-9) // 常规价 0.35 × 时段系数 0.5
 		}
 		return v
 	}
@@ -567,7 +568,7 @@ func TestTimeRatio_TwoWindowsSameTier(t *testing.T) {
 		// 高峰比常规贵，BestRatio 仍取时段里的最优（最小）值——它回答的是
 		// 「这些时段里最便宜的是多少」，与「比常规便宜吗」是两个问题，
 		// 后者由前端拿 normal_ratio 比较后决定角标用不用优惠色
-		require.InDelta(t, 0.5, v.BestRatio, 1e-9)
+		require.InDelta(t, 0.175, v.BestRatio, 1e-9)
 		require.NotEmpty(t, v.BestLabel)
 	})
 }
@@ -596,8 +597,8 @@ func TestResolveTimeRatioView_OverlapMarksOnlyChargedWindow(t *testing.T) {
 	res := ResolveGroupRatioAt("default", "default", "m", ts)
 	require.InDelta(t, 0.5, res.Final, 1e-9, "计费取最小值")
 
-	v, ok := ResolveTimeRatioView("default", "m", ts, res.Base, res.UserMultiplier(),
-		res.NormalRatio*res.UserMultiplier())
+	v, ok := ResolveTimeRatioView("default", "m", ts,
+		res)
 	require.True(t, ok)
 	require.True(t, v.Active)
 	require.Equal(t, "窄档", v.Label)
@@ -610,4 +611,93 @@ func TestResolveTimeRatioView_OverlapMarksOnlyChargedWindow(t *testing.T) {
 	}
 	require.Equal(t, []string{"窄档"}, active,
 		"只有计费实际取用的那一档能标「进行中」")
+}
+
+// ── 下面是 v1 独有的用例（叠乘语义、全网作用域、现网换算值） ──────────────────────
+// 这个文件同时覆盖叠乘语义、全网作用域与现网换算值，
+// 同一条规则在两种代码上算出同一个价。上面那批用例继续钉住旧语义，这里钉住新语义。
+
+func TestResolveGroupRatio_TimeLayerStacksAndKeepsTrace(t *testing.T) {
+	seedRatios(t, `{"default":1,"premium":1.5}`, `{"vip":{"premium":0.7}}`,
+		`{"premium":{"GLM-5":{"mode":"multiply","value":0.5}}}`)
+	seedTimeRatio(t, `{
+		"windows": {"peak": {"label":"紧缺时段","start":"09:00","end":"12:00"}},
+		"rules":   {"premium": {"GLM-5": [{"window":"peak","value":1.1111}]}}
+	}`)
+
+	res := ResolveGroupRatioAt("vip", "premium", "GLM-5", at(t, 0, 10, 0))
+	// 常规价 = Base 0.7 × 模型折扣 0.5 = 0.35，再乘时段系数 1.1111
+	require.InDelta(t, 0.35*1.1111, res.Final, 1e-9)
+	require.InDelta(t, 0.35, res.NormalRatio, 1e-9)
+	// 新语义下模型折扣确实生效了，日志痕迹必须留着才能反算
+	require.Equal(t, "GLM-5", res.RuleMatch)
+	require.InDelta(t, 0.5, res.RuleValue, 1e-9)
+}
+
+func TestResolveGroupRatio_TimeLayerDoesNotEatOverride(t *testing.T) {
+	seedRatios(t, `{"default":1}`, `{}`,
+		`{"default":{"GLM-5":{"mode":"override","value":2.2}}}`)
+	seedTimeRatio(t, `{
+		"windows": {"night": {"label":"空闲时段","start":"00:00","end":"08:00"}},
+		"rules":   {"default": {"GLM-5": [{"window":"night","value":0.6}]}}
+	}`)
+
+	res := ResolveGroupRatioAt("default", "default", "GLM-5", at(t, 0, 2, 0))
+	require.InDelta(t, 1.32, res.Final, 1e-9) // 锁价 2.2 × 0.6（旧语义会算成 1.0 × 0.6）
+	require.NotEqual(t, 0.6, res.Final)
+}
+
+// TestResolveGroupRatio_TimePricePremiumKeepsPrice（现网用例 §10.2）锁死「紧缺时段加价」：
+// 模型定价 0.45（空闲价 4.5 折）+ 时段系数 0.5/0.45 = 1.1111，工作时段必须仍是 0.5。
+func TestResolveGroupRatio_TimePricePremiumKeepsPrice(t *testing.T) {
+	seedRatios(t, `{"default":1}`, `{}`,
+		`{"default":{"deepseek-v4-1-flash":{"mode":"multiply","value":0.45}}}`)
+	seedTimeRatio(t, `{
+		"windows": {"am": {"label":"工作时间（上午）","start":"09:00","end":"12:00","days":[1,2,3,4,5]}},
+		"rules":   {"default": {"deepseek-v4-1-flash": [{"window":"am","value":1.1111}]}}
+	}`)
+
+	busy := ResolveGroupRatioAt("default", "default", "deepseek-v4-1-flash", at(t, 0, 10, 0))
+	require.InDelta(t, 0.5, busy.Final, 2e-4) // 0.45 × 1.1111
+	require.InDelta(t, 0.45, busy.NormalRatio, 1e-9)
+	idle := ResolveGroupRatioAt("default", "default", "deepseek-v4-1-flash", at(t, 0, 2, 0))
+	require.InDelta(t, 0.45, idle.Final, 1e-9)
+	require.Empty(t, idle.TimeWindow)
+}
+
+// TestTimeRatio_GlobalScope 锁死 v1 的作用域：规则挂在 "*" 上对全网生效，
+// 按线路存的规则（存量）优先，且是整组取代而不是合并。
+func TestTimeRatio_GlobalScope(t *testing.T) {
+	seedRatios(t, `{"default":1,"vip001":1}`, `{}`, `{}`)
+	seedTimeRatio(t, `{
+		"windows": {"am": {"label":"工作时间","start":"09:00","end":"12:00","days":[1,2,3,4,5]}},
+		"rules":   {"*": {"m": [{"window":"am","value":1.1111}]}}
+	}`)
+
+	global := ResolveGroupRatioAt("default", "vip001", "m", at(t, 0, 10, 0))
+	require.InDelta(t, 1.1111, global.Final, 1e-9)
+	require.Equal(t, "am", global.TimeWindow)
+
+	seedTimeRatio(t, `{
+		"windows": {"am": {"label":"工作时间","start":"09:00","end":"12:00","days":[1,2,3,4,5]}},
+		"rules":   {"vip001": {"m": [{"window":"am","value":0.5}]}, "*": {"m": [{"window":"am","value":1.1111}]}}
+	}`)
+	line := ResolveGroupRatioAt("default", "vip001", "m", at(t, 0, 10, 0))
+	require.InDelta(t, 0.5, line.Final, 1e-9, "线路级规则优先")
+	other := ResolveGroupRatioAt("default", "default", "m", at(t, 0, 10, 0))
+	require.InDelta(t, 1.1111, other.Final, 1e-9, "其他线路仍走全网规则")
+
+	require.True(t, HasGroupTimeRules("default"), "全网规则也算「有线规则」，否则广场会漏掉整条线路")
+	seedTimeRatio(t, `{}`)
+	require.False(t, HasGroupTimeRules("default"))
+}
+
+func TestCheckGroupTimeRatio_ValueRange(t *testing.T) {
+	// 系数乘在常规价上：>1 是紧缺时段加价，上限 20；0 与负数仍拒绝。
+	ok := `{"windows":{"am":{"start":"09:00","end":"12:00"}},"rules":{"default":{"m":[{"window":"am","value":1.1111}]}}}`
+	require.NoError(t, CheckGroupTimeRatio(ok))
+	tooBig := `{"windows":{"am":{"start":"09:00","end":"12:00"}},"rules":{"default":{"m":[{"window":"am","value":21}]}}}`
+	require.ErrorContains(t, CheckGroupTimeRatio(tooBig), "value must be in (0, 20]")
+	zero := `{"windows":{"am":{"start":"09:00","end":"12:00"}},"rules":{"default":{"m":[{"window":"am","value":0}]}}}`
+	require.ErrorContains(t, CheckGroupTimeRatio(zero), "value must be in (0, 20]")
 }
