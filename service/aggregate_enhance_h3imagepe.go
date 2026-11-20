@@ -385,36 +385,39 @@ func checkH3ImagePEEditCaption(caption, ratio any, imageCount int, userRatio str
 	partOne, rest := text[:targetIndex], text[targetIndex:]
 	definitions := make([]int, 0)
 	defined := make(map[int]bool)
-	for _, sentence := range h3ImagePESplitSentences(partOne) {
-		subjectIDs := h3ImagePESubjectIDs(sentence)
-		var newSubjects []int
-		for _, subject := range subjectIDs {
-			if !defined[subject] {
-				newSubjects = append(newSubjects, subject)
+	hasSubjects := h3ImagePESubject.MatchString(text)
+	if hasSubjects {
+		for _, sentence := range h3ImagePESplitSentences(partOne) {
+			subjectIDs := h3ImagePESubjectIDs(sentence)
+			var newSubjects []int
+			for _, subject := range subjectIDs {
+				if !defined[subject] {
+					newSubjects = append(newSubjects, subject)
+				}
+			}
+			if len(newSubjects) == 0 {
+				issues = append(issues, "part1_sentence_without_new_subject")
+				continue
+			}
+			if !h3ImagePEPicture.MatchString(sentence) {
+				issues = append(issues, fmt.Sprintf("def_without_picture:%d", newSubjects[0]))
+			}
+			if !h3ImagePENatural.MatchString(sentence) {
+				issues = append(issues, fmt.Sprintf("def_not_natural:%d", newSubjects[0]))
+			}
+			for _, subject := range newSubjects {
+				definitions = append(definitions, subject)
+				defined[subject] = true
 			}
 		}
-		if len(newSubjects) == 0 {
-			issues = append(issues, "part1_sentence_without_new_subject")
-			continue
+		if len(definitions) == 0 {
+			issues = append(issues, "no_subjects")
 		}
-		if !h3ImagePEPicture.MatchString(sentence) {
-			issues = append(issues, fmt.Sprintf("def_without_picture:%d", newSubjects[0]))
-		}
-		if !h3ImagePENatural.MatchString(sentence) {
-			issues = append(issues, fmt.Sprintf("def_not_natural:%d", newSubjects[0]))
-		}
-		for _, subject := range newSubjects {
-			definitions = append(definitions, subject)
-			defined[subject] = true
-		}
-	}
-	if len(definitions) == 0 {
-		issues = append(issues, "no_subjects")
-	}
-	for i, subject := range definitions {
-		if subject != i+1 {
-			issues = append(issues, "subject_numbering")
-			break
+		for i, subject := range definitions {
+			if subject != i+1 {
+				issues = append(issues, "subject_numbering")
+				break
+			}
 		}
 	}
 	referenced := make(map[int]bool)
@@ -432,53 +435,55 @@ func checkH3ImagePEEditCaption(caption, ratio any, imageCount int, userRatio str
 		issues = append(issues, fmt.Sprintf("undefined_subject:%d", subject))
 	}
 
-	relationships := make(map[int][]string)
-	sentences := h3ImagePESplitSentences(rest)
-	for _, sentence := range sentences[1:] {
-		match := h3ImagePERelationshipStart.FindStringSubmatch(sentence)
-		if match == nil {
-			continue
-		}
-		subject, _ := strconv.Atoi(match[1])
-		kind := ""
-		switch {
-		case h3ImagePEFullClause.MatchString(sentence) && h3ImagePEFullClause.FindString(sentence) == sentence:
-			kind = "full"
-		case h3ImagePEFullDirty.MatchString(sentence):
-			kind = "full_dirty"
-		case h3ImagePEPartial.MatchString(sentence):
-			kind = "partial"
-		case h3ImagePETransfer.MatchString(sentence):
-			kind = "transfer"
-		case strings.Contains(sentence, "weak") && strings.Contains(sentence, "reference"):
-			kind = "weak"
-		case h3ImagePERemoved.MatchString(sentence):
-			kind = "removed"
-		}
-		if kind != "" {
-			relationships[subject] = append(relationships[subject], kind)
-		}
-	}
-	for _, subject := range definitions {
-		kinds := relationships[subject]
-		if len(kinds) == 0 {
-			issues = append(issues, fmt.Sprintf("no_relationship:%d", subject))
-			continue
-		}
-		preservationKinds := 0
-		for _, kind := range kinds {
-			if kind == "full" || kind == "partial" || kind == "full_dirty" {
-				preservationKinds++
+	if hasSubjects {
+		relationships := make(map[int][]string)
+		sentences := h3ImagePESplitSentences(rest)
+		for _, sentence := range sentences[1:] {
+			match := h3ImagePERelationshipStart.FindStringSubmatch(sentence)
+			if match == nil {
+				continue
+			}
+			subject, _ := strconv.Atoi(match[1])
+			kind := ""
+			switch {
+			case h3ImagePEFullClause.MatchString(sentence) && h3ImagePEFullClause.FindString(sentence) == sentence:
+				kind = "full"
+			case h3ImagePEFullDirty.MatchString(sentence):
+				kind = "full_dirty"
+			case h3ImagePEPartial.MatchString(sentence):
+				kind = "partial"
+			case h3ImagePETransfer.MatchString(sentence):
+				kind = "transfer"
+			case strings.Contains(sentence, "weak") && strings.Contains(sentence, "reference"):
+				kind = "weak"
+			case h3ImagePERemoved.MatchString(sentence):
+				kind = "removed"
+			}
+			if kind != "" {
+				relationships[subject] = append(relationships[subject], kind)
 			}
 		}
-		if len(kinds) > 1 && preservationKinds > 1 {
-			issues = append(issues, fmt.Sprintf("multiple_relationships:%d", subject))
-		}
-		if containsH3ImagePE(kinds, "full_dirty") {
-			issues = append(issues, fmt.Sprintf("fully_preserved_not_standalone:%d", subject))
-		}
-		if containsH3ImagePE(kinds, "removed") && len(kinds) == 1 {
-			issues = append(issues, fmt.Sprintf("subject_defined_only_to_remove:%d", subject))
+		for _, subject := range definitions {
+			kinds := relationships[subject]
+			if len(kinds) == 0 {
+				issues = append(issues, fmt.Sprintf("no_relationship:%d", subject))
+				continue
+			}
+			preservationKinds := 0
+			for _, kind := range kinds {
+				if kind == "full" || kind == "partial" || kind == "full_dirty" {
+					preservationKinds++
+				}
+			}
+			if len(kinds) > 1 && preservationKinds > 1 {
+				issues = append(issues, fmt.Sprintf("multiple_relationships:%d", subject))
+			}
+			if containsH3ImagePE(kinds, "full_dirty") {
+				issues = append(issues, fmt.Sprintf("fully_preserved_not_standalone:%d", subject))
+			}
+			if containsH3ImagePE(kinds, "removed") && len(kinds) == 1 {
+				issues = append(issues, fmt.Sprintf("subject_defined_only_to_remove:%d", subject))
+			}
 		}
 	}
 	if h3ImagePEMergedFull.MatchString(rest) {

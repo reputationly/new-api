@@ -210,6 +210,19 @@ func TestH3ImagePECheckerNegatives(t *testing.T) {
 	}
 }
 
+func TestH3ImagePEFullReplacementWithoutSubjects(t *testing.T) {
+	fullReplacement := "The target image shows a new red storefront with a white sign."
+	if issues := checkH3ImagePEEditCaption(fullReplacement, "16:9", 1, "adaptive"); len(issues) != 0 {
+		t.Fatalf("subject-free full replacement issues: %v", issues)
+	}
+
+	danglingReference := "The target image uses <Subject 2> as the new red sign."
+	issues := checkH3ImagePEEditCaption(danglingReference, "16:9", 1, "adaptive")
+	if !hasH3ImagePEIssue(issues, "undefined_subject") {
+		t.Fatalf("dangling Subject reference should fail: %v", issues)
+	}
+}
+
 func TestH3ImagePET2IRejectsEmptyCaptionAndRepairs(t *testing.T) {
 	for _, raw := range []string{
 		`{"expanded_caption":null,"aspect_ratio":"1:1"}`,
