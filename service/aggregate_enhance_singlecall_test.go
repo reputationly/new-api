@@ -862,3 +862,132 @@ func TestSingleCallFallsBackToThinkingSwitch(t *testing.T) {
 	require.Contains(t, body, "chat_template_kwargs")
 }
 
+
+// **同一节写两遍要被拦下。**
+//
+// 实测 r2va 三次里有一次把 summary 整段原样写了两遍:节名一个不缺,
+// missingSections 查不出来(它只问"在不在"),而模型拿到的是一份自相矛盾的提示词。
+func TestDuplicateSectionsCatchesRepeatedSummary(t *testing.T) {
+	prompt := `subject_definitions:
+<Subject 1> is the dog in <Picture 1>.
+
+summary:
+[reference generation] the dog runs.
+
+retention_analysis:
+<Subject 1> (appears in [Shot 1]): fully_preserved - coat retained.
+
+summary:
+[reference generation] the dog runs again.
+
+detailed_description:
+[Shot 1] x
+
+overall_soundscape:
+wind
+
+non_diegetic_music:
+guitar
+`
+	errs := duplicateSections(prompt, "r2va")
+	require.NotEmpty(t, errs)
+	require.Contains(t, errs[0], "summary")
+}
+
+// **正文里顺口提到的节名不算重复。** 官方输出里 "the overall soundscape of the
+// video" 这种句式很常见,按出现次数硬数会把官方自己判错 —— 误判的代价是整次
+// 编译作废、静默回落 text。
+func TestDuplicateSectionsIgnoresProseMentions(t *testing.T) {
+	prompt := `integrated_multimodal_description: [Shot 1] she listens, and the overall soundscape of the video stays low.
+
+overall_soundscape: quiet room tone.
+
+non_diegetic_music: N/A
+`
+	require.Empty(t, duplicateSections(prompt, "t2va"))
+}
+
+// 装饰字符与分隔符不影响判定:### 4.6 Overall Soundscape 也算节标题。
+func TestDuplicateSectionsToleratesDecoratedHeaders(t *testing.T) {
+	prompt := `integrated_multimodal_description: [Shot 1] x
+
+**Overall Soundscape**: quiet.
+
+### non_diegetic_music
+A slow drone.
+
+## overall_soundscape:
+Loud again.
+`
+	require.NotEmpty(t, duplicateSections(prompt, "t2va"))
+}
+
+// **合规清单必须在系统提示词里,且排在写作说明之前。**
+//
+// 位置不是随意的:writing.txt 末尾就是 "Evidence follows:",证据要紧贴它;
+// 而清单读起来像"对上面规则的复核",要放在 rules.txt 之后。
+func TestSingleCallSystemIncludesAppendixBeforeWriting(t *testing.T) {
+	sys := buildSingleCallSystem("t2va", `{"user_request":"x"}`)
+	require.Contains(t, sys, "Compliance checklist")
+	idx := strings.Index(sys, "Compliance checklist")
+	require.Greater(t, idx, strings.Index(sys, strings.TrimSpace(singleCallRules)),
+		"清单要排在 rules.txt 之后")
+	require.Less(t, idx, strings.LastIndex(sys, `{"user_request":"x"}`),
+		"清单要排在证据之前")
+}
+
+
+// **正文节名用错要被确定性修掉,而不是花一轮重修。**
+//
+// 实测 r2va 四份样本里三份把正文节写成 integrated_multimodal_description ——
+// 两者指同一件事(分镜正文与台词都住在里面),差别只是名字。改名是确定性的结构
+// 修复;让模型重修一轮既花一次真实 relay 调用,第二轮仍可能写错。
+func TestNormalizeSectionHeadersRenamesForReferenceFamily(t *testing.T) {
+	prompt := `subject_definitions:
+<Subject 1> is the dog in <Picture 1>.
+
+summary:
+[reference generation] the dog runs.
+
+retention_analysis:
+<Subject 1> (appears in [Shot 1]): fully_preserved - coat retained.
+
+integrated_multimodal_description: [Shot 1] the overall soundscape of the video is low.
+
+overall_soundscape: wind.
+
+non_diegetic_music: guitar.
+`
+	fixed, note := normalizeSectionHeaders(prompt, "r2va")
+	require.NotEmpty(t, note)
+	require.Contains(t, fixed, "detailed_description:")
+	require.Contains(t, fixed, "the overall soundscape of the video", "正文里提到同名字样不能动")
+	require.Empty(t, missingSections(fixed, "r2va"), "改名之后应当只剩正文在")
+}
+
+// 帧族反过来:写了 detailed_description 要改成 integrated_multimodal_description。
+func TestNormalizeSectionHeadersRenamesForFrameFamily(t *testing.T) {
+	prompt := `detailed_description: [Shot 1] x
+
+overall_soundscape: y
+
+non_diegetic_music: z
+`
+	fixed, note := normalizeSectionHeaders(prompt, "t2va")
+	require.NotEmpty(t, note)
+	require.Contains(t, fixed, "integrated_multimodal_description:")
+}
+
+// 名字本来就对时**一个字节都不改**。
+func TestNormalizeSectionHeadersLeavesCorrectPromptAlone(t *testing.T) {
+	prompt := `detailed_description: [Shot 1] x
+
+overall_soundscape: y
+
+non_diegetic_music: z
+`
+	fixed, note := normalizeSectionHeaders(prompt, "r2va")
+	require.Empty(t, note)
+	require.Equal(t, prompt, fixed)
+}
+

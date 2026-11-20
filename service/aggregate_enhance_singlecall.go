@@ -62,6 +62,26 @@ var singleCallRules string
 //go:embed h3v20/writing.txt
 var singleCallWriting string
 
+// singleCallAppendix 我们自己的合规清单,**唯一一处非逐字移植**。
+//
+// 上游 v20 的提示词是逐字移植的(见本文件顶部),这一份不是 —— 它是拿 8 条用例
+// 与官方 Context-IR 逐条对照之后补的差距清单,由实验阶段用 run_s2.py 的第三个
+// 参数注入验证过(实验脚本与规则原文在 scripts/h3vid-pe/):
+//
+//	首帧/参考图清点      i2v 1689 → 2270 字符(官方 3779),元素级信息补齐
+//	non_diegetic_music   从"N/A 3/7"变成逐条谱曲
+//	保留标记语义         狗穿平铺夹克从 fully_preserved 改成 attribute_transfer,
+//	                     与官方判法一致
+//
+// **位置固定在 rules.txt 之后、writing.txt 之前**:writing.txt 末尾就是
+// "Evidence follows:",证据必须紧贴它;而清单要读起来像"对上面规则的复核",
+// 放在规则之后最自然。实验里也是这个位置。
+//
+// 它和 rules.txt 的关系是"覆盖而非替换":rules.txt 讲怎么写计划,这份只写
+// 实测会写错的九条。上游改 v20 时**不需要**同步这份。
+//go:embed h3v20/appendix.txt
+var singleCallAppendix string
+
 // 官方 skill 与两份协议规范。
 //
 // **必须一起发给模型。** writing.txt 第 2 行写着 "Follow the official H3
@@ -105,7 +125,7 @@ func buildSingleCallSystem(taskType, evidenceJSON string) string {
 	if strings.Contains(strings.ToLower(taskType), "r2v") {
 		parts = append(parts, guideRefEN)
 	}
-	parts = append(parts, skillShotPlanning, singleCallRules, singleCallWriting+evidenceJSON)
+	parts = append(parts, skillShotPlanning, singleCallRules, singleCallAppendix, singleCallWriting+evidenceJSON)
 	return strings.Join(parts, "\n\n")
 }
 
@@ -241,6 +261,13 @@ func compileViaSingleCall(
 		lastRaw = raw
 
 		out, perr := extractSingleCall(raw)
+		if perr == nil {
+			// 节名用错(帧族名 ↔ 参考族名)在这里**确定性修掉**,不花一轮重修。
+			if fixed, note := normalizeSectionHeaders(out.H3Prompt, ev.Task.Type); note != "" {
+				common.SysLog(fmt.Sprintf("aggregate enhance: singlecall %s (model=%s)", note, model))
+				out.H3Prompt = fixed
+			}
+		}
 		if perr != nil {
 			// **递回模型的必须是英文。** extractSingleCall 的报错是面向
 			// 运维的中文,直接塞进重修指令等于一边要求它"English elsewhere"
@@ -561,6 +588,7 @@ func transportIssues(out *singleCallOutput, ev singleCallEvidence) (errs []strin
 	errs = append(errs, labelIssues(out.H3Prompt, ev.Assets)...)
 	errs = append(errs, dialogueIssues(ev.UserRequest, out.H3Prompt)...)
 	errs = append(errs, missingSections(out.H3Prompt, ev.Task.Type)...)
+	errs = append(errs, duplicateSections(out.H3Prompt, ev.Task.Type)...)
 	return errs, warns
 }
 
@@ -699,6 +727,100 @@ func missingSections(prompt, taskType string) []string {
 	return []string{"Required official sections are missing: " + strings.Join(missing, ", ") +
 		". " + sectionRepairHint(taskType) +
 		" Emit every section, in the order given by the H3 writing guide."}
+}
+
+// ── 重复节 ──────────────────────────────────────────────────────────
+
+// duplicateSections 同一节被写了两遍。**这是错误。**
+//
+// 实测 r2va 三次里有一次把 summary 整段原样写了两遍:节名一个不缺,missingSections
+// 查不出来(它只问"在不在"),而 H3 拿到的是一份自相矛盾的提示词 —— 两份 summary
+// 讲同一件事时看不出害处,但只要其中一份写偏了(实测另一份把参考视频当成了唯一
+// 素材),模型就只能二选一,而不报错。
+//
+// 只认**行首**的节名形态(允许 **、#、-、反引号这类装饰和任意分隔符),不认正文里
+// 顺口提到的 "the overall soundscape of the video":后者在官方输出里很常见,
+// 按出现次数硬数会把官方自己判错。
+func duplicateSections(prompt, taskType string) []string {
+	if strings.TrimSpace(prompt) == "" {
+		return nil
+	}
+	var dup []string
+	for _, s := range requiredSections(taskType) {
+		if n := sectionHeaderCount(prompt, s); n > 1 {
+			dup = append(dup, fmt.Sprintf("%s ×%d", s, n))
+		}
+	}
+	if len(dup) == 0 {
+		return nil
+	}
+	return []string{"Each required section must be emitted exactly once; these are repeated: " +
+		strings.Join(dup, ", ") + ". Merge each into a single section."}
+}
+
+// ── 节名归一 ────────────────────────────────────────────────────────
+
+// normalizeSectionHeaders 把"用错名字"的那一节改成官方名字。
+//
+// 实测 r2va 的正文节名会写成 integrated_multimodal_description(帧族那个名字),
+// 而参考族要求 detailed_description —— 两者**指的是同一件事**(分镜正文与台词都
+// 住在里面),差别只是名字。四份样本里三份犯这个错。
+//
+// 这不是"放过错误":漏了正文那一节是真错误(台词会丢),而**改个名字**是确定性
+// 的结构修复,比让模型重修一轮更快也更稳 —— 重修花掉的是一次真实的 relay 调用,
+// 而且第二轮仍可能写错(实测就会)。open-h3-ir 的结论同向:结构该由代码定,
+// 散文交给模型。
+//
+// 反方向(帧族写了 detailed_description)一并修,理由相同。
+func normalizeSectionHeaders(prompt, taskType string) (string, string) {
+	if strings.TrimSpace(prompt) == "" {
+		return prompt, ""
+	}
+	if strings.Contains(strings.ToLower(taskType), "r2v") {
+		if sectionHeaderCount(prompt, "detailed_description") == 0 &&
+			sectionHeaderCount(prompt, "integrated_multimodal_description") > 0 {
+			return renameSectionHeader(prompt, "integrated_multimodal_description", "detailed_description"),
+				"正文节名 integrated_multimodal_description → detailed_description(r2va 要求后者)"
+		}
+		return prompt, ""
+	}
+	if sectionHeaderCount(prompt, "integrated_multimodal_description") == 0 &&
+		sectionHeaderCount(prompt, "detailed_description") > 0 {
+		return renameSectionHeader(prompt, "detailed_description", "integrated_multimodal_description"),
+			"正文节名 detailed_description → integrated_multimodal_description(帧族要求后者)"
+	}
+	return prompt, ""
+}
+
+// renameSectionHeader 只改**行首那个节名**,正文里提到的同名字样不动。
+func renameSectionHeader(prompt, from, to string) string {
+	parts := strings.Split(from, "_")
+	for i, p := range parts {
+		parts[i] = regexp.QuoteMeta(p)
+	}
+	needle := "(?im)^([ \t>*#_\\-\x60]*)" + strings.Join(parts, "[\\s_\\-]*") + "([ \t*_\\-]*:)"
+	re, err := regexp.Compile(needle)
+	if err != nil {
+		return prompt
+	}
+	return re.ReplaceAllString(prompt, "${1}"+to+"${2}")
+}
+
+// sectionHeaderCount 数这一节作为**标题**出现了几次。
+//
+// 节名里的下划线在模型笔下可能是空格或连字符(与 normalizeSectionText 同一套
+// 容错),所以针里用 [\s_-]* 连接各段。
+func sectionHeaderCount(prompt, name string) int {
+	parts := strings.Split(name, "_")
+	for i, p := range parts {
+		parts[i] = regexp.QuoteMeta(p)
+	}
+	needle := "(?im)^[ \t>*#_\\-\x60]*" + strings.Join(parts, "[\\s_\\-]*") + "[ \t*_\\-]*:"
+	re, err := regexp.Compile(needle)
+	if err != nil {
+		return 0
+	}
+	return len(re.FindAllStringIndex(prompt, -1))
 }
 
 // requiredSections 这次玩法要求哪几节。

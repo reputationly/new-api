@@ -143,13 +143,26 @@ package common
 //
 // H3-Image 用 h3_image_pe:四个 MaaS 模型中 qwen3.8-flash-fp8 的 low 档在 16 个编辑样例
 // 上召回率 1.00、p50 约 45 秒,连续三轮稳定;none 档不稳定。
+//
+// ── H3 视频为什么带 reasoning_effort=low 与 180 秒 ─────────────────────
+//
+// 8 条用例(scripts/h3vid-pe/)与官方 Context-IR 逐条对照的结论:
+//
+//	none(关思考)  13-34 秒   首帧只写 "as shown in <Picture 1>",清点不到位,
+//	                         non_diegetic_music 3/7 写 N/A
+//	low            25-117 秒  逐个元素清点首帧/参考图,读得出图上的小字,
+//	                         保留标记判得对(平铺夹克→attribute_transfer)
+//
+// 慢的那一档才是能和官方对齐的那一档。超时因此从 120 秒提到 180 秒:预算是
+// **两轮共用**的,而 low 单轮实测长尾到 117 秒,120 秒会让一次重修必然超时。
+// 仍未通过就静默回落 text —— 那比拿一份截断的提示词去生成强。
 const DefaultAggregateModelConfig = `[
   {
     "name": "minimax-h3-2k",
     "type": "video",
     "enabled": true,
     "note": "H3 帧族(文生/图生/首尾帧/尾帧)2K:生成 → RelayVSR 超分。等价于体验区的两段编排,集成方只看到一个模型名和一个任务。提示词请自行扩写后再传。",
-    "prompt_enhance": { "model": "qwen3.8-flash-fp8", "mode": "singlecall" },
+    "prompt_enhance": { "model": "qwen3.8-flash-fp8", "mode": "singlecall", "reasoning_effort": "low", "timeout_seconds": 180 },
     "generate": { "model": "minimax-h3-fl2va", "overrides": { "size": "768P" } },
     "upscale": { "model": "relayvsr", "target_size": "2k", "sr_ratio": 2, "delivered_size": "2K" }
   },
@@ -158,7 +171,7 @@ const DefaultAggregateModelConfig = `[
     "type": "video",
     "enabled": true,
     "note": "H3 参考族(参考图/参考视频生视频)2K。参考族是另一个 checkpoint,不能和帧族共用一条流水线。",
-    "prompt_enhance": { "model": "qwen3.8-flash-fp8", "mode": "singlecall" },
+    "prompt_enhance": { "model": "qwen3.8-flash-fp8", "mode": "singlecall", "reasoning_effort": "low", "timeout_seconds": 180 },
     "generate": { "model": "minimax-h3-ref2va", "overrides": { "size": "768P" } },
     "upscale": { "model": "relayvsr", "target_size": "2k", "sr_ratio": 2, "delivered_size": "2K" }
   },

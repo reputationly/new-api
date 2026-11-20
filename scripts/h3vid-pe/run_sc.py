@@ -5,8 +5,9 @@ sys.path.insert(0, HERE); sys.path.insert(0, os.path.join(HERE, "..", "..", ".h3
 import vcases, lib
 D = os.path.join(HERE, "..", "..", "service", "h3v20") + os.sep
 rd = lambda p: open(D + p, encoding="utf-8").read()
-SKILL, BASE, REF, SHOT, RULES, WRITING = (rd("skills/prompt-writing.SKILL.md"), rd("skills/base-en.txt"), rd("skills/ref-en.txt"),
-    rd("skills/shot-planning.SKILL.md"), rd("rules.txt"), rd("writing.txt"))
+SKILL, BASE, REF, SHOT, RULES, APPENDIX, WRITING = (
+    rd("skills/prompt-writing.SKILL.md"), rd("skills/base-en.txt"), rd("skills/ref-en.txt"),
+    rd("skills/shot-planning.SKILL.md"), rd("rules.txt"), rd("appendix.txt"), rd("writing.txt"))
 cfg, out = sys.argv[1], sys.argv[2]; os.makedirs(out, exist_ok=True)
 EXTRA = open(sys.argv[3]).read() if len(sys.argv) > 3 and sys.argv[3] != "-" else ""
 ids = sys.argv[4:] or [c["id"] for c in vcases.CASES]
@@ -22,7 +23,7 @@ def system(c):
         assets.append({"asset_id": f"{kind}_{cnt[kind]}", "media_type": kind,
                        "role": role_map.get(role, "reference"), "official_label": f"<{names[kind]} {cnt[kind]}>"})
     ev = {"user_request": c["prompt"], "task": {"type": c["task"], "duration_seconds": float(c["dur"]), "generate_audio": True}, "assets": assets}
-    parts = [SKILL, BASE] + ([REF] if "r2v" in c["task"] else []) + [SHOT, RULES]
+    parts = [SKILL, BASE] + ([REF] if "r2v" in c["task"] else []) + [SHOT, RULES, APPENDIX]
     if EXTRA: parts.append(EXTRA)
     parts.append(WRITING + json.dumps(ev, ensure_ascii=False, separators=(",", ":")))
     return "\n\n".join(parts)

@@ -13,8 +13,12 @@ sys.path.insert(0, HERE); sys.path.insert(0, os.path.join(HERE, "..", "..", ".h3
 import vcases, lib
 D = os.path.join(HERE, "..", "..", "service", "h3v20") + os.sep
 rd = lambda p: open(D + p, encoding="utf-8").read()
-SKILL, BASE, REF, SHOT, RULES, WRITING = (rd("skills/prompt-writing.SKILL.md"), rd("skills/base-en.txt"), rd("skills/ref-en.txt"),
-    rd("skills/shot-planning.SKILL.md"), rd("rules.txt"), rd("writing.txt"))
+# 顺序与 service/aggregate_enhance_singlecall.go 的 buildSingleCallSystem 逐字一致：
+# skill → base-en → [ref-en，仅 r2v] → shot-planning → rules → appendix → writing+证据。
+# appendix.txt 是我们的合规清单（唯一非逐字移植的一段），生产里确实会发。
+SKILL, BASE, REF, SHOT, RULES, APPENDIX, WRITING = (
+    rd("skills/prompt-writing.SKILL.md"), rd("skills/base-en.txt"), rd("skills/ref-en.txt"),
+    rd("skills/shot-planning.SKILL.md"), rd("rules.txt"), rd("appendix.txt"), rd("writing.txt"))
 
 cfg, out = sys.argv[1], sys.argv[2]; os.makedirs(out, exist_ok=True)
 EXTRA = open(sys.argv[3]).read() if len(sys.argv) > 3 and sys.argv[3] != "-" else ""
@@ -44,8 +48,8 @@ def system(c):
     if EFF:
         task["effective_duration_seconds"] = eff_seconds(c["dur"])
     ev = {"user_request": c["prompt"], "task": task, "assets": assets}
-    parts = [SKILL, BASE] + ([REF] if "r2v" in c["task"] else []) + [SHOT, RULES]
-    if EXTRA:
+    parts = [SKILL, BASE] + ([REF] if "r2v" in c["task"] else []) + [SHOT, RULES, APPENDIX]
+    if EXTRA:  # 实验用附加规则，排在清单之后（生产不发这一段）
         parts.append(EXTRA)
     parts.append(WRITING + json.dumps(ev, ensure_ascii=False, separators=(",", ":")))
     return "\n\n".join(parts)
