@@ -1,0 +1,57 @@
+<!doctype html><html lang='zh-CN'><head><meta charset='utf-8'><style>
+*{box-sizing:border-box}
+body{margin:0;background:#f7f8fa;font-family:-apple-system,"PingFang SC","Helvetica Neue",Arial,sans-serif;color:#1c1f23;padding:26px}
+h1{font-size:16px;margin:0 0 3px}
+.sub{color:#8f959e;font-size:12px;margin-bottom:16px}
+.grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px;max-width:1180px}
+.card{background:#fff;border:1px solid #e6e8eb;border-radius:14px;padding:14px 16px}
+.head{display:flex;align-items:center;justify-content:space-between;gap:8px}
+h3{margin:0;font-size:15px}
+.tags{display:flex;gap:5px;flex-shrink:0}
+.tag{font-size:11px;line-height:18px;padding:0 8px;border-radius:9px;white-space:nowrap}
+.t-disc{background:#fff0e8;color:#d93a00}
+.t-night{background:#e8f7ff;color:#0077a8}
+.t-peak{background:#fff3e0;color:#b35000}
+.t-points{background:#eaf2ff;color:#1d4ed8}
+.t-idle{background:#e9fbf3;color:#0b7a4b}
+.t-plain{background:#f2f3f5;color:#5b6169}
+.price{margin-top:8px;font-size:13px;line-height:1.8;color:#333}
+.label{color:#494f57}
+.strike{color:#9aa1ad;text-decoration:line-through;margin:0 5px}
+.num{font-weight:600}
+.unit{color:#8f959e;font-size:11.5px}
+.note{margin-top:9px;padding-top:8px;border-top:1px dashed #e6e8eb;font-size:11.5px;color:#8f959e}
+</style></head><body>
+<h1>场景 1 · 模型广场卡片（同一模型在不同时刻）</h1>
+<div class="sub">目录价：忙时输入 2 / 输出 8，闲时输入 1 / 输出 7；折扣固定 5 折。划线 = 该时段目录价，角标恒为 5 折。</div>
+<div class="grid">
+  <div class="card"><div class="head"><h3>deepseek-v4-1-flash</h3><div class="tags"><span class="tag t-disc">5折</span></div></div>
+    <div class="price"><div><span class="label">输入价格</span> <span class="strike">¥2.00</span><span class="num">¥1.00</span><span class="unit"> / 1M Tokens</span></div>
+    <div><span class="label">输出价格</span> <span class="strike">¥8.00</span><span class="num">¥4.00</span><span class="unit"> / 1M Tokens</span></div></div>
+    <div class="note">① 忙时 · 工作日 09-12 / 14-18 · 目录价 2 / 8</div></div>
+
+  <div class="card"><div class="head"><h3>deepseek-v4-1-flash</h3><div class="tags"><span class="tag t-night">夜间</span><span class="tag t-disc">5折</span></div></div>
+    <div class="price"><div><span class="label">输入价格</span> <span class="strike">¥1.00</span><span class="num">¥0.50</span><span class="unit"> / 1M Tokens</span></div>
+    <div><span class="label">输出价格</span> <span class="strike">¥7.00</span><span class="num">¥3.50</span><span class="unit"> / 1M Tokens</span></div></div>
+    <div class="note">② 闲时 · 18:00→09:00 · 目录价 1 / 7（输入 5 折、输出 8.75 折）</div></div>
+
+  <div class="card"><div class="head"><h3>deepseek-v4-1-flash</h3><div class="tags"><span class="tag t-night">午休</span><span class="tag t-disc">5折</span></div></div>
+    <div class="price"><div><span class="label">输入价格</span> <span class="strike">¥1.00</span><span class="num">¥0.50</span><span class="unit"> / 1M Tokens</span></div>
+    <div><span class="label">输出价格</span> <span class="strike">¥7.00</span><span class="num">¥3.50</span><span class="unit"> / 1M Tokens</span></div></div>
+    <div class="note">③ 午休 · 工作日 12-14 · 同闲时价目</div></div>
+
+  <div class="card"><div class="head"><h3>deepseek-v4-1-flash-1017</h3><div class="tags"><span class="tag t-peak">高峰</span><span class="tag t-disc">5折</span></div></div>
+    <div class="price"><div><span class="label">输入价格</span> <span class="strike">¥2.40</span><span class="num">¥1.20</span><span class="unit"> / 1M Tokens</span></div>
+    <div><span class="label">输出价格</span> <span class="strike">¥9.60</span><span class="num">¥4.80</span><span class="unit"> / 1M Tokens</span></div></div>
+    <div class="note">④ 紧缺时段（目录价系数 1.2，即 &gt;1 加价）· 5 折照样固定</div></div>
+
+  <div class="card"><div class="head"><h3>qwen3.8-flash</h3><div class="tags"><span class="tag t-points">积分抵扣</span><span class="tag t-idle">空闲优惠</span><span class="tag t-disc">7折</span></div></div>
+    <div class="price"><div><span class="label">输入价格</span> <span class="strike">¥3.00</span><span class="num">¥2.10</span><span class="unit"> / 1M Tokens</span></div>
+    <div><span class="label">输出价格</span> <span class="strike">¥9.00</span><span class="num">¥6.30</span><span class="unit"> / 1M Tokens</span></div></div>
+    <div class="note">⑤ 支持积分抵扣：只打「积分抵扣」小标，不再列「积分价 xx 积分」</div></div>
+
+  <div class="card"><div class="head"><h3>glm-4.6</h3><div class="tags"><span class="tag t-plain">全天一个价</span><span class="tag t-disc">9折</span></div></div>
+    <div class="price"><div><span class="label">输入价格</span> <span class="strike">¥4.00</span><span class="num">¥3.60</span><span class="unit"> / 1M Tokens</span></div>
+    <div><span class="label">输出价格</span> <span class="strike">¥12.00</span><span class="num">¥10.80</span><span class="unit"> / 1M Tokens</span></div></div>
+    <div class="note">⑥ 没配分时价：行为与改造前一致（划线 = 目录价，无时段标签）</div></div>
+</div></body></html>

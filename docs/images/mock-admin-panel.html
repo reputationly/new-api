@@ -1,0 +1,85 @@
+<!doctype html><html lang='zh-CN'><head><meta charset='utf-8'><style>
+*{box-sizing:border-box}
+body{margin:0;background:#f7f8fa;font-family:-apple-system,"PingFang SC","Helvetica Neue",Arial,sans-serif;color:#1c1f23;padding:26px}
+h1{font-size:16px;margin:0 0 3px}
+.sub{color:#8f959e;font-size:12px;margin-bottom:14px}
+.panel{background:#fff;border:1px solid #e6e8eb;border-radius:12px;padding:16px 18px;max-width:1180px}
+.panel h4{margin:0 0 2px;font-size:14.5px}
+.hint{color:#8f959e;font-size:12px;margin-bottom:12px}
+.row{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:12px}
+input,select{font-size:12.5px;padding:5px 9px;border:1px solid #d9dde2;border-radius:7px;background:#fff;color:#1c1f23}
+button{font-size:12.5px;padding:5px 12px;border-radius:7px;border:none;background:#0064fa;color:#fff;cursor:default}
+button.ghost{background:#fff;border:1px solid #d9dde2;color:#1c1f23}
+table{border-collapse:collapse;width:100%;font-size:12.5px}
+th,td{text-align:left;padding:8px 10px;border-bottom:1px solid #eef0f2}
+th{background:#fafbfc;font-weight:600;color:#494f57;font-size:12px}
+.tag{font-size:11px;line-height:18px;padding:0 8px;border-radius:9px;white-space:nowrap;display:inline-block}
+.t-night{background:#e8f7ff;color:#0077a8}
+.t-active{background:#e9fbf3;color:#0b7a4b}
+.t-violet{background:#f3edff;color:#6b3fd4}
+.t-plain{background:#f2f3f5;color:#5b6169}
+.num{font-weight:600}
+.muted{color:#8f959e}
+.two{display:grid;grid-template-columns:1fr 1fr;gap:16px;max-width:1180px}
+.axis{background:#fff;border:1px solid #e6e8eb;border-radius:12px;padding:14px 16px}
+.axis h5{margin:0 0 8px;font-size:13px;color:#494f57}
+.ln{display:flex;justify-content:space-between;font-size:12.5px;padding:3px 0;color:#333}
+.ln .r{font-variant-numeric:tabular-nums;color:#1c1f23}
+.final{display:flex;justify-content:space-between;border-top:1px solid #eef0f2;margin-top:8px;padding-top:8px;font-weight:600}
+</style></head><body>
+<h1>场景 3 · 后台「分时价」面板 与 倍率试算器</h1>
+<div class="sub">面板：每档两个系数（输出留空 = 跟随输入），右侧直接显示该时段目录价；试算器：价格轴与折扣轴分开列。</div>
+<div class="panel">
+  <h4>分时价 · 对所有线路生效</h4>
+  <div class="hint">系数乘在常规价上：小于 1 是空闲时段更便宜，大于 1 是紧缺时段更贵</div>
+  <div class="row">
+    <input value="deepseek-v4-1-flash" style="width:210px">
+    <select style="width:150px"><option>夜间 18:00-09:00</option></select>
+    <input value="0.5" style="width:78px" placeholder="输入">
+    <input value="0.875" style="width:78px" placeholder="同输入">
+    <button>添加时段价</button>
+  </div>
+  <table>
+    <tr><th style="width:22%">模型</th><th style="width:24%">时段</th><th style="width:26%">系数（输入 / 输出）</th><th>该时段目录价（¥/1M）</th><th>备注</th><th></th></tr>
+    <tr><td><strong>deepseek-v4-1-flash</strong></td>
+        <td><span class="tag t-night">夜间</span> <span class="muted">18:00-09:00</span> <span class="tag t-active">此刻生效</span></td>
+        <td><input value="0.5" style="width:70px"> <input value="0.875" style="width:70px"></td>
+        <td><div><span class="num">输入 1.0000</span></div><div><span class="num">输出 7.0000</span></div><span class="tag t-violet">输入输出不同比例</span></td>
+        <td class="muted">上游夜间降价</td><td class="muted">删除</td></tr>
+    <tr><td><strong>deepseek-v4-1-flash</strong></td>
+        <td><span class="tag t-night">午休</span> <span class="muted">12:00-14:00</span></td>
+        <td><input value="0.5" style="width:70px"> <input value="0.875" style="width:70px"></td>
+        <td><div><span class="num">输入 1.0000</span></div><div><span class="num">输出 7.0000</span></div><span class="tag t-violet">输入输出不同比例</span></td>
+        <td class="muted">—</td><td class="muted">删除</td></tr>
+    <tr><td><strong>deepseek-v4-1-flash-1017</strong></td>
+        <td><span class="tag t-night">夜间</span> <span class="muted">18:00-09:00</span></td>
+        <td><input value="0.6" style="width:70px"> <input value="0.6" style="width:70px"></td>
+        <td><div><span class="num">输入 1.2000</span></div><div><span class="num">输出 4.8000</span></div></td>
+        <td class="muted">等比例</td><td class="muted">删除</td></tr>
+  </table>
+  <div class="row" style="margin-top:12px;margin-bottom:0"><button>保存分时价</button><button class="ghost">合并到全网</button></div>
+</div>
+
+<div class="two" style="margin-top:22px">
+  <div class="axis">
+    <h5>价格轴（随线路与时刻变）</h5>
+    <div class="ln"><span>线路基础倍率</span><span class="r">1.0000x</span></div>
+    <div class="ln"><span>按线路覆盖（高级）</span><span class="r">—</span></div>
+    <div class="ln"><span>模型定价</span><span class="r">×0.5</span></div>
+    <div class="ln"><span>常规价（未命中时段）</span><span class="r">0.5000x</span></div>
+    <div class="ln"><span>时段价（夜间 · 系数 ×0.5）</span><span class="r">×0.5</span></div>
+    <div class="ln" style="color:#8f959e"><span>此刻价</span><span class="r" style="color:#8f959e">0.2500x</span></div>
+    <h5 style="margin-top:14px">折扣轴（固定，与时刻无关）</h5>
+    <div class="ln"><span>用户档折扣</span><span class="r">—</span></div>
+    <div class="final"><span>实付 = 此刻价 × 用户档折扣</span><span>0.2500x</span></div>
+  </div>
+  <div class="axis">
+    <h5>对应到人民币（deepseek-v4-1-flash）</h5>
+    <div class="ln"><span>常规目录价</span><span class="r">输入 2.00 / 输出 8.00</span></div>
+    <div class="ln"><span>此刻目录价（夜间 ×0.5）</span><span class="r">输入 1.00 / 输出 7.00</span></div>
+    <div class="ln"><span>固定折扣</span><span class="r">5 折</span></div>
+    <div class="final"><span>成交</span><span>输入 0.50 / 输出 3.50</span></div>
+    <div class="hint" style="margin:12px 0 0">输出侧不是同等比例：目录价 8 → 7 只降 12.5%，所以实扣 3.50 而不是 2.00</div>
+  </div>
+</div>
+</body></html>

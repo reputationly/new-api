@@ -1,0 +1,71 @@
+<!doctype html><html lang='zh-CN'><head><meta charset='utf-8'><style>
+*{box-sizing:border-box}
+body{margin:0;background:#fff;font-family:-apple-system,"PingFang SC","Helvetica Neue",Arial,sans-serif;color:#1c1f23;padding:26px}
+h1{font-size:16px;margin:0 0 3px}
+.sub{color:#8f959e;font-size:12px;margin-bottom:14px}
+table{border-collapse:collapse;width:100%;max-width:1180px;font-size:13px}
+th,td{text-align:left;padding:9px 12px;border-bottom:1px solid #eef0f2;vertical-align:top}
+th{background:#fafbfc;font-weight:600;color:#494f57;font-size:12px}
+.tag{font-size:11px;line-height:18px;padding:0 8px;border-radius:9px;white-space:nowrap;display:inline-block}
+.t-disc{background:#fff0e8;color:#d93a00}
+.t-night{background:#e8f7ff;color:#0077a8}
+.t-peak{background:#fff3e0;color:#b35000}
+.t-points{background:#eaf2ff;color:#1d4ed8}
+.t-active{background:#e9fbf3;color:#0b7a4b}
+.t-plain{background:#f2f3f5;color:#5b6169}
+.strike{color:#9aa1ad;text-decoration:line-through;margin-right:5px}
+.num{font-weight:600}
+.unit{color:#8f959e;font-size:11.5px}
+.muted{color:#8f959e}
+.sec{margin-top:30px}
+.modal{border:1px solid #e6e8eb;border-radius:12px;padding:16px 18px;max-width:760px;background:#fff;box-shadow:0 8px 24px rgba(0,0,0,.06)}
+.modal h4{margin:0 0 4px;font-size:14.5px}
+.modal .hint{color:#8f959e;font-size:12px;margin-bottom:10px}
+</style></head><body>
+<h1>场景 2 · 表格视图与详情弹窗</h1>
+<div class="sub">表格视图：划线 = 该时段目录价、角标 = 固定折扣；详情弹窗：逐档列出输入/输出目录价与相对常规。</div>
+<table>
+<tr><th style="width:26%">模型名称</th><th style="width:22%">分组</th><th>价格</th></tr>
+<tr>
+  <td><strong>deepseek-v4-1-flash</strong><br><span class="tag t-night">夜间</span> <span class="tag t-disc">5折</span></td>
+  <td>default</td>
+  <td><div><span class="muted">输入价格</span> <span class="strike">¥1.00</span><span class="num">¥0.50</span><span class="unit"> / 1M Tokens</span></div>
+      <div><span class="muted">输出价格</span> <span class="strike">¥7.00</span><span class="num">¥3.50</span><span class="unit"> / 1M Tokens</span></div>
+      <div><span class="muted">缓存命中价格</span> <span class="num">¥0.01</span><span class="unit"> / 1M Tokens</span></div></td>
+</tr>
+<tr>
+  <td><strong>deepseek-v4-1-flash-1017</strong><br><span class="tag t-peak">高峰</span> <span class="tag t-disc">5折</span></td>
+  <td>default</td>
+  <td><div><span class="muted">输入价格</span> <span class="strike">¥2.40</span><span class="num">¥1.20</span><span class="unit"> / 1M Tokens</span></div>
+      <div><span class="muted">输出价格</span> <span class="strike">¥9.60</span><span class="num">¥4.80</span><span class="unit"> / 1M Tokens</span></div></td>
+</tr>
+<tr>
+  <td><strong>qwen3.8-flash</strong><br><span class="tag t-points">积分抵扣</span> <span class="tag t-disc">7折</span></td>
+  <td>vip001</td>
+  <td><div><span class="muted">输入价格</span> <span class="strike">¥3.00</span><span class="num">¥2.10</span><span class="unit"> / 1M Tokens</span></div>
+      <div><span class="muted">输出价格</span> <span class="strike">¥9.00</span><span class="num">¥6.30</span><span class="unit"> / 1M Tokens</span></div>
+      <div class="muted" style="font-size:12px;margin-top:4px">积分抵扣：不列具体积分价目</div></td>
+</tr>
+<tr>
+  <td><strong>glm-4.6</strong><br><span class="tag t-plain">全天一个价</span> <span class="tag t-disc">9折</span></td>
+  <td>default</td>
+  <td><div><span class="muted">输入价格</span> <span class="strike">¥4.00</span><span class="num">¥3.60</span><span class="unit"> / 1M Tokens</span></div>
+      <div><span class="muted">输出价格</span> <span class="strike">¥12.00</span><span class="num">¥10.80</span><span class="unit"> / 1M Tokens</span></div></td>
+</tr>
+</table>
+
+<div class="sec">
+<div class="modal">
+  <h4>deepseek-v4-1-flash · 分时价目</h4>
+  <div class="hint">时段价乘在目录价上：小于 1 是空闲时段更便宜，大于 1 是紧缺时段更贵</div>
+  <table>
+    <tr><th>生效时段</th><th>输入目录价</th><th>输出目录价</th><th>相对常规</th></tr>
+    <tr><td><span class="tag t-night">夜间</span> 18:00-09:00 &nbsp;<span class="tag t-active">进行中</span></td><td class="num">¥1.00</td><td class="num">¥7.00</td><td><span class="tag t-night">×0.5</span></td></tr>
+    <tr><td><span class="tag t-night">午休</span> 12:00-14:00 工作日</td><td class="num">¥1.00</td><td class="num">¥7.00</td><td><span class="tag t-night">×0.5</span></td></tr>
+    <tr><td><span class="tag t-night">周末白天</span> 09:00-18:00 周末</td><td class="num">¥1.00</td><td class="num">¥7.00</td><td><span class="tag t-night">×0.5</span></td></tr>
+    <tr><td>其余时段（工作时间）</td><td class="num">¥2.00</td><td class="num">¥8.00</td><td class="muted">×1</td></tr>
+  </table>
+  <div class="hint" style="margin:10px 0 0">折扣与时段无关：任何一档都是 5 折（划线 × 5 折 = 成交价）</div>
+</div>
+</div>
+</body></html>
