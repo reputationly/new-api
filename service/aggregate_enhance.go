@@ -83,7 +83,11 @@ type EnhanceInput struct {
 	// 拼进 **user 消息**里一个带分隔标记的块(不是系统提示词的"请求事实"):它是待理解
 	// 的内容,而 TaskContext 描述的是这一次请求本身。
 	Lyrics string
-	// ImageURLs / VideoURLs 本次要给模型看的素材。
+	// ImageURLs / VideoURLs 本次请求带的素材。
+	//
+	// **singlecall 只把图片发给模型。** 参考视频在增强阶段不发送(引擎自拉远程
+	// 视频会挂死、内联又多一万多 token 且开思考没正文，见 aggregate_enhance_singlecall.go
+	// 里的说明)，只以 <Video N> 标签进证据；text 模式仍然两个都发。
 	ImageURLs []string
 	VideoURLs []string
 	// SendMedia 是否真的把素材发出去(对应 send_input_images 开关)。

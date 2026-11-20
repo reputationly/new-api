@@ -33,6 +33,15 @@
 // 连续且等于请求时长），不核对写得好不好 —— 对齐上游 `transport_audit` 里
 // 那句 `semantic_quality_verified: False`。
 //
+// # 参考视频与参考音频不发给模型（方案 C）
+//
+// 增强阶段只发图片。视频与音频只以 <Video N> / <Audio N> 标签进证据，并带
+// observable:false 显式声明「你看不见」。理由是实测出来的三条：引擎自己拉远程
+// 视频会偶发挂死（重试链 30s→120s→480s，拖出 465 秒 504）；内联成 data URI 能
+// 绕过但每次多 12288 个视频 token；带上视频之后开思考就没正文（74–118 秒、空或
+// 截断，max_tokens 提到 16384 仍截断）。视频照常随**生成**请求发给 H3，所以
+// 标签仍按完整素材清单编号。等引擎侧修好再评估「发给模型看」（优先抽关键帧）。
+//
 // # 降级
 //
 // 失败**不掉回原始提示词，而是回落 text 改写**。理由与已删除的 ir 那条
@@ -411,9 +420,13 @@ func buildSingleCallEvidence(in hilo.CompilerInput, mediaVisible bool) singleCal
 	}
 	// 编号规则：按 media_type 分别计数、按提交顺序递增。
 	//
-	// **必须和素材实际发出去的顺序一致**（ImageURLs / VideoURLs，由
-	// middleware 的 compilerImages/compilerVideos 给出）——标号按证据发，
-	// 而模型看到的是那两个列表，错开一位就是「看着第二张图读 <Picture 1>」。
+	// **必须和 H3 实际收到的顺序一致**（middleware 的 compilerImages /
+	// compilerVideos / RefAudios 给出）——标号按证据发，而 <Picture N> 最终指的是
+	// **生成段**收到的那一批字节。错开一位就是「看着第二张图读 <Picture 1>」。
+	//
+	// 注意这跟"增强模型看到什么"是两件事：参考视频与参考音频不再发给增强模型
+	// （见 compileViaSingleCall 顶部），但它们在 H3 那边照常存在，所以标号仍按
+	// 完整素材清单编号，模型只是通过 observable:false 知道哪几段自己看不见。
 	names := map[string]string{"image": "Picture", "video": "Video", "audio": "Audio"}
 	counters := map[string]int{}
 	for _, a := range in.Assets {
