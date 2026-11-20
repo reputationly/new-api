@@ -1446,3 +1446,32 @@ func TestDistributeRejectsUndeliverableBeforeAnyWork(t *testing.T) {
 	require.False(t, reached, "被拒的请求不该再往下走一步(建任务、预扣、增强都在这之后)")
 	require.Zero(t, enhanced, "被拒的请求不能先花一次提示词增强")
 }
+
+// **参考音频也要进编译事实,排在视频之后。**
+//
+// 早先这里只有图和视频,于是用户传了音色参考、提示词里一个字都不提,H3 只能
+// 自己编一条嗓子 —— 不报错的那类错。官方 r2va 的 <Audio N> 是一条正经的
+// subject 定义(音色参考),它必须能被写出来。
+//
+// 编号口径与生成段一致:图 → 视频 → 音频。排错序会让 <Audio 1> 指向别的素材。
+func TestBuildCompilerInputReferenceAudioAfterVideo(t *testing.T) {
+	body := map[string]any{
+		"prompt":   "a cat",
+		"duration": 6,
+		"metadata": map[string]any{
+			"task_type":        "r2va",
+			"src_ref_images":   []any{"https://example.com/r1.png"},
+			"reference_videos": []any{"https://example.com/v.mp4"},
+			"reference_audios": []any{"https://example.com/a.mp3"},
+		},
+	}
+	in := compilerInputFor(body, "a cat")
+	require.NotNil(t, in)
+	require.Len(t, in.Assets, 3)
+	require.Equal(t, []string{"image", "video", "audio"},
+		[]string{in.Assets[0].MediaType, in.Assets[1].MediaType, in.Assets[2].MediaType})
+	require.Equal(t, "audio_1", in.Assets[2].AssetID)
+	require.Equal(t, "https://example.com/a.mp3", in.Assets[2].URL)
+	require.Equal(t, "reference", in.Assets[2].Role)
+}
+

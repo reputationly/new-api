@@ -728,3 +728,137 @@ func TestSingleCallAccumulatesUsageAcrossRepair(t *testing.T) {
 	require.NotNil(t, res.Usage)
 	require.Equal(t, 60, res.Usage.TotalTokens, "两轮各 30，必须累加")
 }
+
+// ── 有效时长、输出上限、思考档位、音频标签 ────────────────────────────
+
+// **证据里的时长必须是引擎交付的时长,不是客户请求的秒数。**
+//
+// 官方规范(base-en.txt:34)写着 S.SS 是"effective video duration",而 H3 的
+// 出片帧数是 17k+5:请求 5 秒实际交付 124 帧 = 5.17 秒。只给请求秒数时模型
+// 只能写 5.00 —— 尾帧就落在成片之外,而且不报错。
+func TestSingleCallEvidenceCarriesEffectiveDuration(t *testing.T) {
+	cases := []struct {
+		requested float64
+		want      float64
+	}{
+		{5, 5.17},  // 124 帧
+		{6, 6.58},  // 144 帧不够栅格,吸附到 158 帧
+		{10, 10.13}, // 243 帧
+		{15, 15.08}, // 362 帧
+	}
+	for _, c := range cases {
+		ev := evidenceOf(hilo.CompilerInput{
+			TaskType: hilo.TaskT2V, DurationSeconds: c.requested,
+		})
+		if ev.Task.EffectiveDurationSeconds != c.want {
+			t.Errorf("请求 %g 秒:证据里的有效时长是 %g,期望 %g",
+				c.requested, ev.Task.EffectiveDurationSeconds, c.want)
+		}
+	}
+}
+
+// 时长未知(<=0)时**不写这个字段**,让模型只看到请求秒数。
+//
+// 编一个栅格数出来更糟:对齐公式只该由 common.H3DeliveredDuration 持有,
+// 引擎改栅格时两边才不会各错各的。
+func TestSingleCallEvidenceOmitsEffectiveDurationWhenUnknown(t *testing.T) {
+	ev := evidenceOf(hilo.CompilerInput{TaskType: hilo.TaskT2V, DurationSeconds: 0})
+	b, err := common.Marshal(ev)
+	require.NoError(t, err)
+	require.NotContains(t, string(b), "effective_duration_seconds")
+}
+
+// **参考音频要进证据。**
+//
+// 用户传了音色参考而在提示词里一个字都不提,H3 只能自己编一条嗓子 ——
+// 这是不报错的那类错。编号按提交顺序:图 → 视频 → 音频,与生成段一致。
+func TestSingleCallEvidenceIncludesAudioAssets(t *testing.T) {
+	ev := evidenceOf(hilo.CompilerInput{
+		TaskType: hilo.TaskR2VA, DurationSeconds: 5,
+		Assets: []hilo.CompilerAsset{
+			{AssetID: "image_1", MediaType: "image", Role: "reference"},
+			{AssetID: "video_1", MediaType: "video", Role: "reference"},
+			{AssetID: "audio_1", MediaType: "audio", Role: "reference"},
+		},
+	})
+	require.Len(t, ev.Assets, 3)
+	require.Equal(t, "<Picture 1>", ev.Assets[0].OfficialLabel)
+	require.Equal(t, "<Video 1>", ev.Assets[1].OfficialLabel)
+	require.Equal(t, "<Audio 1>", ev.Assets[2].OfficialLabel)
+}
+
+// 提示词引用了不存在的音轨 → 拦。
+func TestLabelIssuesCatchesDanglingAudio(t *testing.T) {
+	assets := []singleCallEvidenceAsset{
+		{AssetID: "video_1", MediaType: "video", OfficialLabel: "<Video 1>"},
+	}
+	errs := labelIssues("<Video 1> plays; its track is <Audio 1>.", assets)
+	require.Empty(t, errs, "参考视频自带音轨算一位,<Audio 1> 合法")
+
+	errs = labelIssues("the voice comes from <Audio 2>.", assets)
+	require.NotEmpty(t, errs, "只可能有一位音轨,<Audio 3> 必须报出来")
+}
+
+// 一个音轨都没有时**不查** <Audio N>:那种情况多半是用户自己在文本里说了
+// "音色参考音频1",而不是我们漏发素材。判错会把能用的提示词送去重修。
+func TestLabelIssuesIgnoresAudioWhenNoTrackExists(t *testing.T) {
+	assets := []singleCallEvidenceAsset{
+		{AssetID: "image_1", MediaType: "image", OfficialLabel: "<Picture 1>"},
+	}
+	require.Empty(t, labelIssues("the timbre follows <Audio 1>.", assets))
+}
+
+// **必须显式发 max_tokens。**
+//
+// 不发时上游默认上限会把正文截断在半句台词上 —— 返回的 JSON 仍闭合可解析,
+// 只是 h3_prompt 为空;表现成"这条请求的增强没生效"。
+func TestSingleCallRequestSendsMaxTokens(t *testing.T) {
+	got := fakeSequence(t, chatResponse(scReply("integrated_multimodal_description: [Shot 1] x")))
+	res := EnhancePrompt(context.Background(), scCfg(), "Bearer sk-x", scInput("一只猫"))
+	require.False(t, res.Degraded, res.DegradeReason)
+
+	var body map[string]any
+	require.NoError(t, common.Unmarshal((*got)[0], &body))
+	require.EqualValues(t, singleCallMaxOutputTokens, body["max_tokens"])
+}
+
+// 上限可配:配了就用配的。
+func TestSingleCallMaxTokensConfigurable(t *testing.T) {
+	cfg := scCfg()
+	cfg.PromptEnhance.MaxOutputTokens = 2048
+	got := fakeSequence(t, chatResponse(scReply("integrated_multimodal_description: [Shot 1] x")))
+	res := EnhancePrompt(context.Background(), cfg, "Bearer sk-x", scInput("一只猫"))
+	require.False(t, res.Degraded, res.DegradeReason)
+
+	var body map[string]any
+	require.NoError(t, common.Unmarshal((*got)[0], &body))
+	require.EqualValues(t, 2048, body["max_tokens"])
+}
+
+// 配了思考档位就**只发档位**,不再发布尔开关 —— 两个同时发时,不同上游
+// 认哪一个不一样,不如只发一个。
+func TestSingleCallUsesReasoningEffortWhenConfigured(t *testing.T) {
+	cfg := scCfg()
+	cfg.PromptEnhance.ReasoningEffort = "low"
+	got := fakeSequence(t, chatResponse(scReply("integrated_multimodal_description: [Shot 1] x")))
+	res := EnhancePrompt(context.Background(), cfg, "Bearer sk-x", scInput("一只猫"))
+	require.False(t, res.Degraded, res.DegradeReason)
+
+	var body map[string]any
+	require.NoError(t, common.Unmarshal((*got)[0], &body))
+	require.Equal(t, "low", body["reasoning_effort"])
+	require.NotContains(t, body, "chat_template_kwargs")
+}
+
+// 没配档位时照旧发布尔开关(默认关思考)。
+func TestSingleCallFallsBackToThinkingSwitch(t *testing.T) {
+	got := fakeSequence(t, chatResponse(scReply("integrated_multimodal_description: [Shot 1] x")))
+	res := EnhancePrompt(context.Background(), scCfg(), "Bearer sk-x", scInput("一只猫"))
+	require.False(t, res.Degraded, res.DegradeReason)
+
+	var body map[string]any
+	require.NoError(t, common.Unmarshal((*got)[0], &body))
+	require.NotContains(t, body, "reasoning_effort")
+	require.Contains(t, body, "chat_template_kwargs")
+}
+

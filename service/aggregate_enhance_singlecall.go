@@ -131,6 +131,23 @@ const singleCallMaxRepairRounds = 1
 // 做成 var 是为了让测试能把它压到毫秒级去验超时回落那条路。
 var singleCallTimeout = 120 * time.Second
 
+// singleCallMaxOutputTokens 输出 token 上限的内置默认。
+//
+// **这个上限不能省。** 一次完整产物是 content_plan(几千 token)+ 整段
+// h3_prompt,实测 8192 够用;而不发这个字段时上游默认上限会把正文截断在
+// 半句台词上 —— 返回的 JSON 仍是闭合可解析的,只是 h3_prompt 为空。
+// 那种失败**看起来不像截断**:传输检查报的是"h3_prompt must be nonempty",
+// 重修一轮还是同一份被截断的输出,最后静默回落 text。
+const singleCallMaxOutputTokens = 8192
+
+// singleCallMaxTokens 本次请求的输出上限:配置优先,没配用内置默认。
+func singleCallMaxTokens(configured int) int {
+	if configured > 0 {
+		return configured
+	}
+	return singleCallMaxOutputTokens
+}
+
 // singleCallMinTimeoutSeconds 干跑校验的下限:低于它就该提醒。
 //
 // 取内置默认的一半:singlecall 只吐一份紧凑记录加一段提示词,比 IR 那条快
@@ -199,8 +216,16 @@ func compileViaSingleCall(
 			// 要 JSON 对象。上游不认这个字段时会忽略它(不是报错)，所以
 			// extractSingleCall 仍然得自己扛住围栏和前后缀。
 			"response_format": map[string]any{"type": "json_object"},
+			"max_tokens":      singleCallMaxTokens(in.MaxOutputTokens),
 		}
-		applyThinking(body, in.Thinking)
+		// 思考档位:配了 reasoning_effort 就照发,否则退回布尔开关。
+		// 两者不能同时发 —— 实测同时发时上游按档位走,布尔那个被忽略,
+		// 但换个上游就可能反过来,不如只发一个。
+		if effort := strings.TrimSpace(in.ReasoningEffort); effort != "" {
+			body["reasoning_effort"] = effort
+		} else {
+			applyThinking(body, in.Thinking)
+		}
 		payload, err := common.Marshal(body)
 		if err != nil {
 			return nil, fmt.Errorf("构造编译请求失败: %w", err)
@@ -269,7 +294,18 @@ type singleCallEvidence struct {
 type singleCallEvidenceTask struct {
 	Type            string  `json:"type"`
 	DurationSeconds float64 `json:"duration_seconds"`
-	GenerateAudio   bool    `json:"generate_audio"`
+	// EffectiveDurationSeconds 引擎**真正交付**的时长(帧栅格对齐后)。
+	//
+	// 官方规范(base-en.txt:34)明确写着 "S.SS is the effective video duration
+	// formatted to exactly two decimal places" —— 即尾帧对齐那句
+	// "aligns with the S.SS-second mark" 里的数**不是**客户请求的秒数。
+	// H3 的出片帧数是 17k+5,请求 5 秒实际交付 124 帧 = 5.17 秒。
+	//
+	// 只给 duration_seconds 时模型只能写 5.00,而官方写 5.17 —— 差 0.17 秒
+	// 看着微不足道,但它正是"尾帧落在成片之外"那种不报错的偏差来源:
+	// 提示词让画面在 5.00 秒定住,而最后一帧在 5.17 秒。
+	EffectiveDurationSeconds float64 `json:"effective_duration_seconds,omitempty"`
+	GenerateAudio            bool    `json:"generate_audio"`
 }
 
 type singleCallEvidenceAsset struct {
@@ -285,13 +321,31 @@ type singleCallEvidenceAsset struct {
 	OfficialLabel string `json:"official_label"`
 }
 
+// singleCallEffectiveDuration 请求秒数 → 引擎实际交付秒数,保留两位小数。
+//
+// 取不到(秒数 <= 0,即默认档由引擎定帧数)时返回 0 —— 证据里这个字段带
+// omitempty,于是**不写**,模型只会看到请求秒数。宁可让它按请求秒数写,
+// 也不要在这里编一个栅格数出来:对齐公式由 common.H3DeliveredDuration 单一
+// 持有,引擎改栅格时只有那里要改。
+func singleCallEffectiveDuration(seconds float64) float64 {
+	if seconds <= 0 {
+		return 0
+	}
+	_, delivered := common.H3DeliveredDuration(int(math.Round(seconds)))
+	if delivered <= 0 {
+		return 0
+	}
+	return math.Round(delivered*100) / 100
+}
+
 func buildSingleCallEvidence(in hilo.CompilerInput) singleCallEvidence {
 	ev := singleCallEvidence{
 		UserRequest: strings.TrimSpace(in.UserRequest),
 		Task: singleCallEvidenceTask{
-			Type:            string(in.TaskType),
-			DurationSeconds: in.DurationSeconds,
-			GenerateAudio:   in.GenerateAudio,
+			Type:                     string(in.TaskType),
+			DurationSeconds:          in.DurationSeconds,
+			EffectiveDurationSeconds: singleCallEffectiveDuration(in.DurationSeconds),
+			GenerateAudio:            in.GenerateAudio,
 		},
 		Assets: make([]singleCallEvidenceAsset, 0, len(in.Assets)),
 	}
@@ -464,7 +518,11 @@ func extractSingleCall(raw string) (*singleCallOutput, error) {
 // ── 传输检查 ────────────────────────────────────────────────────────
 
 // officialLabelPattern 提示词里引用的素材记号，如 `<Picture 2>`。
-var officialLabelPattern = regexp.MustCompile(`<(Picture|Video)\s+(\d+)>`)
+//
+// 必须含 **Audio**:参考族会把参考音频写成 <Audio 1>(音色参考),而参考视频
+// 自带的音轨官方也算一个 <Audio>。漏掉这一类,提示词里指向不存在音轨的
+// <Audio 2> —— 那正是"参考了不存在的素材"这种不报错的错 —— 就查不出来。
+var officialLabelPattern = regexp.MustCompile(`<(Picture|Video|Audio)\s+(\d+)>`)
 
 // shotTimeTolerance 时间比对容差。与上游的 0.002 一致。
 const shotTimeTolerance = 0.002
@@ -548,13 +606,28 @@ func labelIssues(prompt string, assets []singleCallEvidenceAsset) []string {
 			counts["Picture"]++
 		case "video":
 			counts["Video"]++
+			// 参考视频自带的音轨官方编号为 <Audio 1>,用户给的音频顺延。
+			// 我们拿不到"这段视频有没有音轨",但**宁可多给一位**:多一位不会
+			// 让合法提示词被判错,少一位会把照官方写法写的 <Audio 1> 判成
+			// 不存在的素材,于是一份正确的提示词被重修掉、或整次回落。
+			counts["Audio"]++
+		case "audio":
+			counts["Audio"]++
 		}
 	}
+	// 一个音轨都没有时不查 <Audio N>:那种情况下"提示词里出现 <Audio 1>"多半
+	// 是用户自己在文本里说了"音色参考音频1",而不是我们漏发了素材 ——
+	// 每一条都判错会把一份本来能用的提示词送去重修,严重的还整次回落 text。
+	// 有音轨(音频素材或参考视频)时才查,这时越界就是真越界。
+	countsAudio := counts["Audio"]
 	var out []string
 	seen := map[string]bool{}
 	for _, m := range officialLabelPattern.FindAllStringSubmatch(prompt, -1) {
 		kind := m[1]
 		n, err := strconv.Atoi(m[2])
+		if kind == "Audio" && countsAudio == 0 {
+			continue
+		}
 		if err != nil || n < 1 || n > counts[kind] {
 			if !seen[kind] {
 				out = append(out, "Prompt references nonexistent "+kind)

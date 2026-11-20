@@ -942,6 +942,29 @@ func buildCompilerInput(body map[string]any, norm *relaycommon.TaskSubmitReq, pr
 			URL:       u,
 		})
 	}
+	// **参考音频也要进证据,但只进"标签"不进内容。**
+	//
+	// 官方 r2va 的六节里,<Audio N> 是一条正经的 subject 定义(音色参考),
+	// 而且官方会把参考视频自带的音轨也算作 <Audio 1>、用户给的音频顺延。
+	// 早先这里压根没有音频,于是模型无从知道它存在 —— 用户传了音色参考,
+	// 提示词里一个字都不提,H3 只能自己编一条嗓子。这是不报错的那类错。
+	//
+	// 只发 URL 不发字节:增强模型看到的仍是"有一段参考音频、它是什么角色"。
+	// 内容(说了什么、音色如何)反过来由模型**读不到就别说** ——
+	// ref-en.txt 对 <Audio N> 的定义本来就是这个写法(描述角色,不转录内容)。
+	//
+	// 排在视频之后,与单次证据里的 <Audio N> 编号口径一致。
+	for i, u := range norm.RefAudios() {
+		if strings.TrimSpace(u) == "" {
+			continue
+		}
+		in.Assets = append(in.Assets, hilo.CompilerAsset{
+			AssetID:   fmt.Sprintf("audio_%d", i+1),
+			MediaType: "audio",
+			Role:      "reference",
+			URL:       u,
+		})
+	}
 	return in
 }
 

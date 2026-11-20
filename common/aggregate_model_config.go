@@ -141,8 +141,28 @@ type AggregatePromptEnhance struct {
 	// 但那要靠实测数字说话,不是默认。
 	Thinking *bool `json:"thinking"`
 
-	// ReasoningEffort 仅 mode=h3_image_pe 使用;非空时直接发送给增强模型,优先于 thinking 开关。
+	// ReasoningEffort 思考档位(none/low/medium/high)。非空时直接发送给增强模型,
+	// 优先于 thinking 开关。**h3_image_pe 与 singlecall 两个模式使用。**
+	//
+	// 与 thinking 并存而不是替换它:thinking 是一个布尔语义的"要不要思考",而这个
+	// 字段是上游的**分档**参数,两者在不同模型上生效的形态本来就不一样。
+	//
+	// 视频那条(singlecall,8 条用例)的实测:
+	//
+	//	none(关思考)  13-34 秒  资产清单偏薄,首帧只写"as shown in <Picture 1>"
+	//	low            38-80 秒  会逐个元素清点首帧/参考图,读得出图上的小字
+	//
+	// 慢的那一档才是能和官方对齐的那一档,所以它得是可配的,不能写死。
 	ReasoningEffort string `json:"reasoning_effort"`
+
+	// MaxOutputTokens 增强调用的输出 token 上限。0 = 按模式取内置默认。目前只有
+	// singlecall 读它。
+	//
+	// **必须有,不能靠上游默认。** 实测 singlecall 一次完整产物(content_plan +
+	// 整段 h3_prompt)在 8192 以内,而上游默认上限会把它截断在半句台词上:
+	// 返回的 JSON 仍然闭合、仍然能解析,只是 h3_prompt 是空的 —— 于是走重修、
+	// 再走回落,表现成"这条请求的增强没生效",日志里只有一行 fallback。
+	MaxOutputTokens int `json:"max_output_tokens"`
 }
 
 // IsThinking 增强模型是否开启思考(漏写 = 关闭,见字段注释)。
