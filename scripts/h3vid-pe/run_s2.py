@@ -42,13 +42,17 @@ def system(c):
     assets, cnt = [], {}
     names = {"image": "Picture", "video": "Video", "audio": "Audio"}
     role_map = {"first_frame": "first_frame", "last_frame": "last_frame"}
+    has_video = any(k == "video" for k, _, _ in c["media"])
     for kind, src, role in c["media"]:
-        if kind == "audio":      # 现网不把音频编进 CompilerInput
-            continue
         cnt[kind] = cnt.get(kind, 0) + 1
-        assets.append({"asset_id": f"{kind}_{cnt[kind]}", "media_type": kind,
-                       "role": role_map.get(role, "reference"), "official_label": f"<{names[kind]} {cnt[kind]}>",
-                       "observable": (kind == "image")})
+        a = {"asset_id": f"{kind}_{cnt[kind]}", "media_type": kind,
+             "role": role_map.get(role, "reference"), "official_label": f"<{names[kind]} {cnt[kind]}>",
+             "observable": (kind == "image")}
+        # 与 Go 侧一致:有参考视频时音频不写死编号(引擎会给视频音轨先占一个槽)
+        if kind == "audio" and has_video:
+            a["official_label"] = ""
+            a["label_unknown"] = True
+        assets.append(a)
     task = {"type": c["task"], "duration_seconds": float(c["dur"]), "generate_audio": True}
     if EFF:
         task["effective_duration_seconds"] = eff_seconds(c["dur"])

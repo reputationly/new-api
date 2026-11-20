@@ -162,6 +162,11 @@ type AggregatePromptEnhance struct {
 	// 整段 h3_prompt)在 8192 以内,而上游默认上限会把它截断在半句台词上:
 	// 返回的 JSON 仍然闭合、仍然能解析,只是 h3_prompt 是空的 —— 于是走重修、
 	// 再走回落,表现成"这条请求的增强没生效",日志里只有一行 fallback。
+	//
+	// **上限是"思考 + 正文"的总量**,不是正文的量(vLLM 的 max_tokens 就是这么算的)。
+	// 开 reasoning_effort 之后,图生视频那种"逐元素清点首帧"的长产物会和思考抢这
+	// 一份预算 —— 默认 8192 是按关思考那档标的。上线后若日志里出现截断导致的回落,
+	// 加大这个值(16384)比换档位更直接。
 	MaxOutputTokens int `json:"max_output_tokens"`
 }
 

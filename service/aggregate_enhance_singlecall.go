@@ -158,6 +158,10 @@ const singleCallMaxRepairRounds = 1
 // 就以配置为准。
 //
 // 做成 var 是为了让测试能把它压到毫秒级去验超时回落那条路。
+//
+// **这段预算是同步跑在客户提交请求里的**,所以它就是客户的最长等待:出厂默认配的是
+// 180 秒,最坏路径是「增强用满 180 秒 → 回落 text 再用 20 秒」= 200 秒才轮到生成。
+// 上线前要确认前面的负载均衡与客户端超时扛得住这个数。
 var singleCallTimeout = 120 * time.Second
 
 // singleCallMaxOutputTokens 输出 token 上限的内置默认。
@@ -167,6 +171,10 @@ var singleCallTimeout = 120 * time.Second
 // 半句台词上 —— 返回的 JSON 仍是闭合可解析的,只是 h3_prompt 为空。
 // 那种失败**看起来不像截断**:传输检查报的是"h3_prompt must be nonempty",
 // 重修一轮还是同一份被截断的输出,最后静默回落 text。
+//
+// **它是"思考 + 正文"的总量。** 关思考时 8192 全是正文,富余;开档位之后正文
+// 只剩 8192 减去思考那一截(实测 low 档 thinking 4000+),图生视频这种长清点
+// 最可能撞上。要更保险就配 max_output_tokens=16384。
 const singleCallMaxOutputTokens = 8192
 
 // singleCallMaxTokens 本次请求的输出上限:配置优先,没配用内置默认。
@@ -384,6 +392,11 @@ type singleCallEvidenceAsset struct {
 	// 常识编一段画面(实测会写成"海滩上奔跑的狗"这种完全无关的内容),而 H3 拿到
 	// 的是一份描述着不存在的视频的提示词 —— 不报错,只是成片错位。
 	Observable bool `json:"observable"`
+	// LabelUnknown 这段音频的官方编号**我们不知道**(引擎按"视频有没有音轨"决定)。
+	//
+	// 为 true 时 OfficialLabel 为空,提示词里必须按角色措辞引用它,不能写死
+	// <Audio N> —— 写错会把音色指到参考视频自己的声轨上,而且不报错。
+	LabelUnknown bool `json:"label_unknown,omitempty"`
 }
 
 // singleCallEffectiveDuration 请求秒数 → 引擎实际交付秒数,保留两位小数。
@@ -427,22 +440,48 @@ func buildSingleCallEvidence(in hilo.CompilerInput, mediaVisible bool) singleCal
 	// 注意这跟"增强模型看到什么"是两件事：参考视频与参考音频不再发给增强模型
 	// （见 compileViaSingleCall 顶部），但它们在 H3 那边照常存在，所以标号仍按
 	// 完整素材清单编号，模型只是通过 observable:false 知道哪几段自己看不见。
+	// **有参考视频时,用户音频不编号。**
+	//
+	// 引擎的编号规则(对照 vllm-omni 的 ordered_references / encoder_processing)
+	// 是「先图、再视频、再音频」,但**带音轨的参考视频会先占掉一个 <Audio> 槽位**,
+	// 再拿它的 <Video> 号。于是「1 段有声参考视频 + 1 段用户音色参考」得到的是
+	// 视频音轨 = <Audio 1>、用户音频 = <Audio 2>;而我们只看得到 URL,拿不准那段
+	// 视频有没有音轨。
+	//
+	// 编错号的后果不是报错,是**音色指到参考视频自己的声轨上**。所以宁可不说数字:
+	// 音频素材标 label_unknown,由合规清单要求模型按角色措辞引用(见 appendix 第 11 条)。
+	//
+	// 没有参考视频时是确定的:引擎按图→视频→音频排,用户音频就是 <Audio 1>。
 	names := map[string]string{"image": "Picture", "video": "Video", "audio": "Audio"}
+	hasVideo := false
+	for _, a := range in.Assets {
+		if a.MediaType == "video" {
+			hasVideo = true
+			break
+		}
+	}
 	counters := map[string]int{}
 	for _, a := range in.Assets {
 		if strings.TrimSpace(a.AssetID) == "" {
 			continue
 		}
 		label := ""
+		labelUnknown := false
 		if n, ok := names[a.MediaType]; ok {
-			counters[a.MediaType]++
-			label = fmt.Sprintf("<%s %d>", n, counters[a.MediaType])
+			if a.MediaType == "audio" && hasVideo {
+				labelUnknown = true
+			} else {
+				counters[a.MediaType]++
+				label = fmt.Sprintf("<%s %d>", n, counters[a.MediaType])
+			}
 		}
 		ev.Assets = append(ev.Assets, singleCallEvidenceAsset{
 			AssetID:       a.AssetID,
 			MediaType:     a.MediaType,
 			Role:          a.Role,
 			OfficialLabel: label,
+			// 引擎分配的音频号,我们拿不准(见上面 hasVideo 那段)。
+			LabelUnknown: labelUnknown,
 			// 只有图片会随 send_input_images 发给模型;视频与音频在增强阶段
 			// 一律不发送(见 compileViaSingleCall 顶部),所以恒为 false。
 			Observable: mediaVisible && a.MediaType == "image",
@@ -669,6 +708,16 @@ func shotTimingIssues(shots []singleCallShot, duration float64) []string {
 	return nil
 }
 
+// audioLabelUnknown 有音频素材的官方编号我们不知道(通常是"参考视频带没带音轨")。
+func audioLabelUnknown(assets []singleCallEvidenceAsset) bool {
+	for _, a := range assets {
+		if a.LabelUnknown {
+			return true
+		}
+	}
+	return false
+}
+
 // labelIssues 提示词不能引用不存在的素材。
 //
 // `<Picture 3>` 而实际只传了两张图 —— H3 拿不到第三张，表现是那一段描述
@@ -684,26 +733,29 @@ func labelIssues(prompt string, assets []singleCallEvidenceAsset) []string {
 			counts["Picture"]++
 		case "video":
 			counts["Video"]++
-			// 参考视频自带的音轨官方编号为 <Audio 1>,用户给的音频顺延。
-			// 我们拿不到"这段视频有没有音轨",但**宁可多给一位**:多一位不会
-			// 让合法提示词被判错,少一位会把照官方写法写的 <Audio 1> 判成
-			// 不存在的素材,于是一份正确的提示词被重修掉、或整次回落。
+			// 参考视频**可能**自带音轨,引擎会给它一个 <Audio> 槽位。我们拿不到
+			// "这段视频有没有音轨",所以这里多算一位 —— 多一位不会让合法提示词被判错,
+			// 少一位会把照官方写法写的 <Audio 1> 判成不存在的素材、白烧一轮重修。
 			counts["Audio"]++
 		case "audio":
-			counts["Audio"]++
+			// 编号未知时不计数:合法范围取决于视频有没有音轨(见 hasVideoUncertainAudio)。
+			if !a.LabelUnknown {
+				counts["Audio"]++
+			}
 		}
 	}
 	// 一个音轨都没有时不查 <Audio N>:那种情况下"提示词里出现 <Audio 1>"多半
 	// 是用户自己在文本里说了"音色参考音频1",而不是我们漏发了素材 ——
 	// 每一条都判错会把一份本来能用的提示词送去重修,严重的还整次回落 text。
-	// 有音轨(音频素材或参考视频)时才查,这时越界就是真越界。
 	countsAudio := counts["Audio"]
+	// 用户音频编号未知(有参考视频)时也跳过:合法编号可能是 1 也可能是 2,
+	// 判哪一边都会误伤。这类素材的编号问题由"不写数字"这条规则规避。
 	var out []string
 	seen := map[string]bool{}
 	for _, m := range officialLabelPattern.FindAllStringSubmatch(prompt, -1) {
 		kind := m[1]
 		n, err := strconv.Atoi(m[2])
-		if kind == "Audio" && countsAudio == 0 {
+		if kind == "Audio" && (countsAudio == 0 || audioLabelUnknown(assets)) {
 			continue
 		}
 		if err != nil || n < 1 || n > counts[kind] {
@@ -799,6 +851,7 @@ func missingAssetMentions(prompt string, assets []singleCallEvidenceAsset, taskT
 	}
 	var missing []string
 	for _, a := range assets {
+		// 编号未知的音频跳过:它本来就不该在提示词里写数字(见 appendix 第 11 条)。
 		if a.OfficialLabel == "" || (a.MediaType != "video" && a.MediaType != "audio") {
 			continue
 		}

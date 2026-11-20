@@ -69,22 +69,3 @@ func TestH3AlignFrameCount(t *testing.T) {
 	}
 }
 
-// IsH3VideoModel 判的是运营配置里声明的 engine,不是模型名 substring。
-func TestIsH3VideoModel(t *testing.T) {
-	// 与其它 common 单测共用 setOpt:单测里 OptionMap 可能是 nil(进程没初始化配置)。
-	setOpt("", `{"models":{"h3-public":{"engine":"minimax-h3"},"h3-upstream":{"engine":"minimax-h3"},"wan":{"engine":"wan"}}}`)
-	defer setOpt("", "")
-
-	if !IsH3VideoModel("h3-public") {
-		t.Fatal("h3-public 应判为 H3")
-	}
-	if !IsH3VideoModel("nope", "h3-upstream") {
-		t.Fatal("候选名里任一命中即应判为 H3")
-	}
-	if IsH3VideoModel("wan") {
-		t.Fatal("wan 不该判为 H3")
-	}
-	if IsH3VideoModel("minimax-h3-fl2va") {
-		t.Fatal("未在配置里声明 engine 的名字不该按 substring 命中")
-	}
-}

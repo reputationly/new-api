@@ -741,3 +741,40 @@ func TestDryRunReportsFixedRatioDeliveredEdge(t *testing.T) {
 		t.Errorf("合法的固定倍率配置应通过,实得 %+v", res.Checks)
 	}
 }
+
+// 档位拼错、输出上限填反 / 填小，都要在干跑里说出来。
+//
+// 两个字段都是**原样透传**给上游的：拼错不会被我们拦下（上游要么报错、要么当默认），
+// 负数会被当成"未配置"（用内置默认），小上限会让长篇分镜被截断 —— 三种都看不出是
+// 配置写错了。
+func TestDryRunWarnsOnSuspectEnhanceFields(t *testing.T) {
+	withFakeModels(t, map[string]fakeModel{
+		"ordinary-image": {},
+		"enh-model":      {},
+	})
+
+	cfg := h3ImagePEAggregate("h3_image_pe", "")
+	cfg.PromptEnhance.ReasoningEffort = "lo"        // 拼错
+	cfg.PromptEnhance.MaxOutputTokens = -1          // 负数 = 未配置
+	res := DryRunAggregateModel(cfg, map[string]int{"image-agg": 1})
+	if ch := checkByKey(res, "reasoning_effort"); ch == nil || ch.Level != AggregateCheckWarn {
+		t.Fatalf("拼错的档位应警告: %+v", ch)
+	}
+	if ch := checkByKey(res, "max_output_tokens"); ch == nil || ch.Level != AggregateCheckWarn {
+		t.Fatalf("负数上限应警告: %+v", ch)
+	}
+
+	cfg.PromptEnhance.ReasoningEffort = "low"
+	cfg.PromptEnhance.MaxOutputTokens = 1024
+	res = DryRunAggregateModel(cfg, map[string]int{"image-agg": 1})
+	if ch := checkByKey(res, "max_output_tokens"); ch == nil || ch.Level != AggregateCheckWarn {
+		t.Fatalf("过小的上限应警告: %+v", ch)
+	}
+
+	cfg.PromptEnhance.MaxOutputTokens = 8192
+	res = DryRunAggregateModel(cfg, map[string]int{"image-agg": 1})
+	if ch := checkByKey(res, "max_output_tokens"); ch != nil {
+		t.Fatalf("正常配置不该警告: %+v", ch)
+	}
+}
+

@@ -772,7 +772,7 @@ func TestSingleCallEvidenceOmitsEffectiveDurationWhenUnknown(t *testing.T) {
 // **参考音频要进证据。**
 //
 // 用户传了音色参考而在提示词里一个字都不提,H3 只能自己编一条嗓子 ——
-// 这是不报错的那类错。编号按提交顺序:图 → 视频 → 音频,与生成段一致。
+// 这是不报错的那类错。图与视频的编号按提交顺序,与生成段一致。
 func TestSingleCallEvidenceIncludesAudioAssets(t *testing.T) {
 	ev := evidenceOf(hilo.CompilerInput{
 		TaskType: hilo.TaskR2VA, DurationSeconds: 5,
@@ -785,7 +785,23 @@ func TestSingleCallEvidenceIncludesAudioAssets(t *testing.T) {
 	require.Len(t, ev.Assets, 3)
 	require.Equal(t, "<Picture 1>", ev.Assets[0].OfficialLabel)
 	require.Equal(t, "<Video 1>", ev.Assets[1].OfficialLabel)
-	require.Equal(t, "<Audio 1>", ev.Assets[2].OfficialLabel)
+	// **有参考视频时音频编号留空**:引擎会给"带音轨的参考视频"先占一个 <Audio> 槽,
+	// 我们再编 <Audio 1> 就会把音色指到视频自己的声轨上。
+	require.Empty(t, ev.Assets[2].OfficialLabel)
+	require.True(t, ev.Assets[2].LabelUnknown)
+}
+
+// 没有参考视频时音频编号是确定的:引擎按图→视频→音频排,用户音频就是 <Audio 1>。
+func TestSingleCallEvidenceNumbersAudioWithoutVideo(t *testing.T) {
+	ev := evidenceOf(hilo.CompilerInput{
+		TaskType: hilo.TaskR2VA, DurationSeconds: 5,
+		Assets: []hilo.CompilerAsset{
+			{AssetID: "image_1", MediaType: "image", Role: "reference"},
+			{AssetID: "audio_1", MediaType: "audio", Role: "reference"},
+		},
+	})
+	require.Equal(t, "<Audio 1>", ev.Assets[1].OfficialLabel)
+	require.False(t, ev.Assets[1].LabelUnknown)
 }
 
 // 提示词引用了不存在的音轨 → 拦。
@@ -797,7 +813,18 @@ func TestLabelIssuesCatchesDanglingAudio(t *testing.T) {
 	require.Empty(t, errs, "参考视频自带音轨算一位,<Audio 1> 合法")
 
 	errs = labelIssues("the voice comes from <Audio 2>.", assets)
-	require.NotEmpty(t, errs, "只可能有一位音轨,<Audio 3> 必须报出来")
+	require.NotEmpty(t, errs, "只可能有一位音轨,<Audio 2> 必须报出来")
+}
+
+// 用户音频编号未知(有参考视频)时**不查** <Audio N>:此时合法编号取决于视频有没有
+// 音轨 —— 可能是 1 也可能是 2,判哪一边都会误伤。
+func TestLabelIssuesSkipsAudioWhenLabelUnknown(t *testing.T) {
+	assets := []singleCallEvidenceAsset{
+		{AssetID: "video_1", MediaType: "video", OfficialLabel: "<Video 1>"},
+		{AssetID: "audio_1", MediaType: "audio", LabelUnknown: true},
+	}
+	require.Empty(t, labelIssues("<Video 1> plays; the voice follows <Audio 2>.", assets))
+	require.Empty(t, labelIssues("<Video 1> plays; the voice follows the user audio.", assets))
 }
 
 // 一个音轨都没有时**不查** <Audio N>:那种情况多半是用户自己在文本里说了
@@ -1082,6 +1109,9 @@ func TestSingleCallEvidenceMarksImagesInvisibleWhenMediaOff(t *testing.T) {
 func TestSingleCallAppendixExplainsVisibility(t *testing.T) {
 	require.Contains(t, singleCallAppendix, "observable")
 	require.Contains(t, singleCallAppendix, "cannot be seen")
+	// 编号未知的音频要按角色措辞引用,不能写死 <Audio N>(见 §8.1 的口径分歧)。
+	require.Contains(t, singleCallAppendix, "label_unknown")
+	require.Contains(t, singleCallAppendix, "the user-supplied audio reference")
 }
 
 
