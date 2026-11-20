@@ -550,26 +550,30 @@ func TestDryRunH3ImagePERequiresImageType(t *testing.T) {
 		"enhance_mode", AggregateCheckError)
 }
 
-func TestDryRunReasoningEffortOnlyAppliesToH3ImagePE(t *testing.T) {
+// reasoning_effort 只对"档位决定效果"的两个模式有意义:h3_image_pe 与 singlecall。
+// 其余模式(text / qwen_pe)配了也不会被发出去,要明确告诉运营。
+func TestDryRunReasoningEffortOnlyAppliesToPEModes(t *testing.T) {
 	withFakeModels(t, map[string]fakeModel{
 		"ordinary-image": {},
 		"enh-model":      {},
 	})
 
-	cfg := h3ImagePEAggregate("singlecall", "")
+	cfg := h3ImagePEAggregate("qwen_pe", "")
 	cfg.PromptEnhance.ReasoningEffort = "low"
 	res := DryRunAggregateModel(cfg, map[string]int{"image-agg": 1})
 	ch := checkByKey(res, "reasoning_effort")
 	if ch == nil || ch.Level != AggregateCheckWarn ||
-		ch.Message != "只有 h3_image_pe 使用 reasoning_effort，当前模式会忽略" {
-		t.Fatalf("非 h3_image_pe 模式应警告忽略 reasoning_effort: %+v", ch)
+		ch.Message != "只有 h3_image_pe / singlecall 使用 reasoning_effort，当前模式会忽略" {
+		t.Fatalf("qwen_pe 模式应警告忽略 reasoning_effort: %+v", ch)
 	}
 
-	cfg = h3ImagePEAggregate("h3_image_pe", "")
-	cfg.PromptEnhance.ReasoningEffort = "low"
-	res = DryRunAggregateModel(cfg, map[string]int{"image-agg": 1})
-	if ch := checkByKey(res, "reasoning_effort"); ch != nil {
-		t.Fatalf("h3_image_pe 模式不应警告 reasoning_effort: %+v", ch)
+	for _, mode := range []string{"h3_image_pe", "singlecall"} {
+		cfg = h3ImagePEAggregate(mode, "")
+		cfg.PromptEnhance.ReasoningEffort = "low"
+		res = DryRunAggregateModel(cfg, map[string]int{"image-agg": 1})
+		if ch := checkByKey(res, "reasoning_effort"); ch != nil {
+			t.Fatalf("%s 模式不应警告 reasoning_effort: %+v", mode, ch)
+		}
 	}
 }
 

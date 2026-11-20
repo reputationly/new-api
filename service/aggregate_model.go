@@ -248,10 +248,14 @@ func DryRunAggregateModel(m *common.AggregateModel, peers map[string]int) *Aggre
 				common.EnhanceModeSingleCall, common.EnhanceModeQwenPE,
 				common.EnhanceModeH3ImagePE, common.EnhanceModeText)
 		}
-		if m.PromptEnhance.ReasoningEffort != "" &&
-			m.PromptEnhance.EnhanceMode() != common.EnhanceModeH3ImagePE {
+		// 认这两个模式：h3_image_pe（图片官方 PE）与 singlecall（H3 视频 Context-IR）。
+		// 视频那条同样是「档位决定效果」的模式 —— 关思考时首帧只写
+		// "as shown in <Picture 1>"，开思考才会逐个元素清点。出厂默认就给它配了 low，
+		// 这里若还按「只有 h3_image_pe 能用」报警，运营每配一次就看到一条假的忽略提示。
+		if mode := m.PromptEnhance.EnhanceMode(); m.PromptEnhance.ReasoningEffort != "" &&
+			mode != common.EnhanceModeH3ImagePE && mode != common.EnhanceModeSingleCall {
 			add("reasoning_effort", AggregateCheckWarn,
-				"只有 h3_image_pe 使用 reasoning_effort，当前模式会忽略")
+				"只有 h3_image_pe / singlecall 使用 reasoning_effort，当前模式会忽略")
 		}
 		if m.PromptEnhance.EnhanceMode() == common.EnhanceModeQwenPE ||
 			m.PromptEnhance.EnhanceMode() == common.EnhanceModeH3ImagePE {
