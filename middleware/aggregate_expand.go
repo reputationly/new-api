@@ -289,16 +289,20 @@ func applyAggregateExpansion(c *gin.Context, publicName, realModel string, agg *
 		// input),要改写的描述在 metadata.instructions。照视频那段改 body["prompt"],
 		// 结果是把用户的歌词交出去"优化"、而描述一个字没动 —— 全程不报错。
 		if isMusicAggregate(agg) {
-			if isMusic3Aggregate(agg) {
+			switch {
+			case isMusic3Aggregate(agg):
 				exp.Enhance = enhanceMusic3Aggregate(c, agg, body)
-			} else {
-				// 声明成音乐聚合,但生成段的引擎族没写成 minimax-music3(或没声明)。
-				// **这时宁可一个字都不改**:落到下面视频那条路会把顶层 prompt ——
-				// 也就是歌词 —— 当成提示词改写,那是"静默毁数据",比不增强糟得多。
+			case isAceStepAggregate(agg):
+				exp.Enhance = enhanceAceStepAggregate(c, agg, body)
+			default:
+				// 声明成音乐聚合,但生成段的引擎族既不是 Music3 也不是 ACE-Step。
+				// **这时宁可一个字都不改**:落到下面视频那条路会把顶层 prompt
+				// 当成提示词改写 —— Music3 那里它是歌词、ACE-Step 那里它是描述,
+				// 两种都可能"静默毁数据",比不增强糟得多。
 				// 配置校验(DryRunAggregateModel)已经对这种情况报了 error,这里只是
 				// 让"配置没改就跑"不产生副作用。
 				common.SysLog(fmt.Sprintf(
-					"aggregate enhance: 聚合模型 %s 声明为音乐但没有声明 Music3 引擎族(生成段=%q),已跳过提示词增强",
+					"aggregate enhance: 聚合模型 %s 声明为音乐,但生成段 %q 既不是 Music3 也不是 ACE-Step,已跳过提示词增强",
 					agg.Name, strings.TrimSpace(agg.Generate.Model)))
 			}
 		} else if prompt, _ := body["prompt"].(string); strings.TrimSpace(prompt) != "" {
@@ -446,6 +450,88 @@ func enhanceMusic3Aggregate(c *gin.Context, agg *common.AggregateModel, body map
 		common.SysLog(fmt.Sprintf(
 			"aggregate enhance: 聚合模型 %s 的歌词在增强过程中被改动,已还原(%d 字 → %d 字)",
 			agg.Name, len([]rune(cur)), len([]rune(lyrics))))
+	}
+	return res
+}
+
+// isAceStepAggregate 生成段是不是 ACE-Step。判据与 isMusic3Aggregate 同源。
+func isAceStepAggregate(agg *common.AggregateModel) bool {
+	return agg != nil && service.IsAceStepGeneratingModel(agg.Generate.Model)
+}
+
+// enhanceAceStepAggregate 改写 ACE-Step 聚合的**曲风描述**,歌词原样不动。
+//
+// 与 Music3 那条正相反:
+//
+//	Music3   顶层 prompt = 歌词,   metadata.instructions = 曲风描述
+//	ACE-Step 顶层 prompt = 曲风描述, metadata.lyrics      = 歌词
+//
+// 所以这里改 prompt 位(sample 模式下没有 prompt,描述在 metadata.sample_query)。
+// 写错字段不会报错,只会把用户唱出来的词交给优化,引擎再拿它当曲风描述编曲。
+//
+// 超预算时**降级而不是截断**:截断一条 dense caption 会连用户要的维度一起砍掉,
+// 而用回用户自己的原话至少是完整的一句;而超限本身会被适配器就地 400,那时 LLM
+// 已经计费过了 —— 两头都不划算。
+func enhanceAceStepAggregate(c *gin.Context, agg *common.AggregateModel, body map[string]any) *service.EnhanceResult {
+	md, mdOK := expansionMetadata(body)
+	lyrics, sampleQuery, taskType := "", "", "t2m"
+	hasSourceAudio := false
+	if mdOK {
+		lyrics, _ = md["lyrics"].(string)
+		sampleQuery, _ = md["sample_query"].(string)
+		if v, ok := md["task_type"].(string); ok && strings.TrimSpace(v) != "" {
+			taskType = strings.TrimSpace(v)
+		}
+		for _, key := range []string{"reference_audio", "src_audio"} {
+			if v, ok := md[key].(string); ok && strings.TrimSpace(v) != "" {
+				hasSourceAudio = true
+			}
+		}
+	}
+	prompt, _ := body["prompt"].(string)
+	field, caption := service.AceStepCaptionTarget(prompt, sampleQuery)
+	if field == "" {
+		// 没有可改写的描述。**绝不用歌词顶上** —— 那是把用户的词拿去优化。
+		return nil
+	}
+	budget := service.AceStepCaptionBudget(agg.Generate.Model)
+	res := enhancePrompt(c.Request.Context(), agg,
+		c.Request.Header.Get("Authorization"), service.EnhanceInput{
+			Prompt:      caption,
+			Lyrics:      lyrics,
+			TaskContext: service.BuildAceStepEnhanceContext(caption, lyrics, taskType, hasSourceAudio, budget),
+		})
+	if res == nil || res.Degraded {
+		// 降级时 res.EnhancedPrompt 就是原文(EnhancePrompt 的契约),不需要再写回。
+		return res
+	}
+	if budget > 0 {
+		if n := len([]rune(res.EnhancedPrompt)); n > budget {
+			common.SysLog(fmt.Sprintf(
+				"aggregate enhance: 聚合模型 %s 增强后的 caption 超出字数上限(%d → 上限 %d),已回退为原始描述",
+				agg.Name, n, budget))
+			res.Degraded = true
+			res.DegradeReason = fmt.Sprintf("增强后的 caption 超出 %d 字上限", budget)
+			res.EnhancedPrompt = caption
+			return res
+		}
+	}
+	if field == "sample_query" {
+		md["sample_query"] = res.EnhancedPrompt
+		body["metadata"] = md
+	} else {
+		body["prompt"] = res.EnhancedPrompt
+	}
+	// 歌词一字不动。当前代码恒真(上面只写 prompt / sample_query),留着守的是
+	// **静默毁数据**类错误:哪天有人在这条路上补一句 body["prompt"]=…,用户的词就被换了。
+	if mdOK {
+		if cur, _ := md["lyrics"].(string); cur != lyrics {
+			md["lyrics"] = lyrics
+			body["metadata"] = md
+			common.SysLog(fmt.Sprintf(
+				"aggregate enhance: 聚合模型 %s 的歌词在增强过程中被改动,已还原(%d 字 → %d 字)",
+				agg.Name, len([]rune(cur)), len([]rune(lyrics))))
+		}
 	}
 	return res
 }
