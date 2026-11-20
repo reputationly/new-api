@@ -62,6 +62,9 @@ const Models = () => {
   // 分组 -> 模型 -> 时段折扣展示数据。只用来渲染角标和详情里的分时表：
   // 价格本身已含时段系数（后端折进了 group_model_ratio），这里再乘就是乘两遍。
   const [groupTimeRatioMap, setGroupTimeRatioMap] = useState({});
+  // 分组 -> 模型 -> 此刻生效的补全倍率（稀疏）。分时段价目可不等比例变化，
+  // 算输出价必须用它，否则「闲时输入 1/输出 7」会被显示成 1/4。
+  const [groupCompletionRatioMap, setGroupCompletionRatioMap] = useState({});
   // 分组内按模型的倍率。后端已展开通配并算完三层，这里只查表（同 PC getEffectiveGroupRatio）
   const [groupModelRatioMap, setGroupModelRatioMap] = useState({});
   const [usableGroupMap, setUsableGroupMap] = useState({});
@@ -84,6 +87,9 @@ const Models = () => {
           setVendors(res.data.vendors || []);
           setGroupRatioMap(res.data.group_ratio || {});
           setGroupTimeRatioMap(res.data.group_time_ratio || {});
+          setGroupCompletionRatioMap(
+            res.data.group_model_completion_ratio || {},
+          );
           setGroupModelRatioMap(res.data.group_model_ratio || {});
           setUsableGroupMap(res.data.usable_group || {});
           setEntitlementCoverage(res.data.entitlement_coverage || null);
@@ -296,6 +302,13 @@ const Models = () => {
   };
 
   const inputPricePerM = (m) => m.model_ratio * resolveGroupRatio(m).ratio;
+
+  // 此刻生效的补全倍率：有时段覆盖就用后端的值，否则用模型基础值。
+  const completionRatioOf = (m) => {
+    const g = resolveGroupRatio(m).group;
+    const v = Number(groupCompletionRatioMap?.[g]?.[m.model_name]);
+    return v > 0 ? v : Number(m.completion_ratio || 1);
+  };
   // 折前价：少乘一个分组倍率。仅在有折扣时给，用于详情里的划线对比。
   const originalInputPricePerM = (m) => m.model_ratio;
   const displayPrice = (cnyValue) =>
@@ -447,12 +460,19 @@ const Models = () => {
                   </div>
                   {discountTag(
                     resolveGroupRatio(m).ratio,
-                    getNormalRatio(
-                      groupTimeRatioMap,
-                      resolveGroupRatio(m).group,
-                      m.model_name,
-                      undefined,
-                    ),
+                    // 有分时规则时用后端算好的固定折扣（= 终值 ÷ 此刻目录倍率），
+                    // 否则退回常规价比值。角标任何时刻都不该随时段变。
+                    Number(
+                      groupTimeRatioMap?.[resolveGroupRatio(m).group]?.[
+                        m.model_name
+                      ]?.discount_ratio,
+                    ) ||
+                      getNormalRatio(
+                        groupTimeRatioMap,
+                        resolveGroupRatio(m).group,
+                        m.model_name,
+                        undefined,
+                      ),
                   )}
                   {timePriceTag(m)}
                   {entitlementTag(m)}
@@ -725,12 +745,12 @@ const Models = () => {
                         >
                           {displayPrice(
                             originalInputPricePerM(detail) *
-                              (detail.completion_ratio || 1),
+                              completionRatioOf(detail),
                           )}
                         </span>
                       )}
                       {displayPrice(
-                        inputPricePerM(detail) * (detail.completion_ratio || 1),
+                        inputPricePerM(detail) * completionRatioOf(detail),
                       )}{' '}
                       / 1M Tokens
                     </div>

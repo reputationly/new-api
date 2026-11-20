@@ -57,6 +57,9 @@ export const useModelPricingData = () => {
   // 价格本身已经含时段系数（后端把终值折进了 group_model_ratio），这里再参与算价
   // 就是乘两遍。active / until 也由后端算好，前端不碰客户端时钟。
   const [groupTimeRatio, setGroupTimeRatio] = useState({});
+  // 分组 -> 模型 -> 此刻生效的补全倍率（稀疏，只含与基础值不同的组合）。
+  // 分时段价目不一定等比例变化（闲时输入 1/输出 7），算输出价必须用它。
+  const [groupModelCompletionRatio, setGroupModelCompletionRatio] = useState({});
   // 权益覆盖：null = 未登录 / 无活跃套餐 / 有套餐但没覆盖任何模型。
   // 三者在展示上是同一件事，后端已经统一成 null，这里不必再分情况。
   const [entitlementConfig, setEntitlementConfig] = useState({
@@ -308,6 +311,7 @@ export const useModelPricingData = () => {
       group_ratio,
       group_model_ratio,
       group_time_ratio,
+      group_model_completion_ratio,
       usable_group,
       supported_endpoint,
       auto_groups,
@@ -322,6 +326,7 @@ export const useModelPricingData = () => {
       setGroupRatio(group_ratio);
       setGroupModelRatio(group_model_ratio || {});
       setGroupTimeRatio(group_time_ratio || {});
+      setGroupModelCompletionRatio(group_model_completion_ratio || {});
       setUsableGroup(usable_group);
       setSelectedGroup('all');
       // 构建供应商 Map 方便查找
@@ -474,6 +479,7 @@ export const useModelPricingData = () => {
     groupRatio,
     groupModelRatio,
     groupTimeRatio,
+    groupModelCompletionRatio,
     usableGroup,
     endpointMap,
     autoGroups,

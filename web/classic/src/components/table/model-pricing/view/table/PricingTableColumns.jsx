@@ -145,6 +145,7 @@ export const getPricingTableColumns = ({
   groupRatio,
   groupModelRatio,
   groupTimeRatio,
+  groupModelCompletionRatio,
   copyText,
   currency,
   siteDisplayType,
@@ -166,6 +167,8 @@ export const getPricingTableColumns = ({
         displayPrice,
         currency,
         quotaDisplayType: siteDisplayType,
+        // 此刻生效的补全倍率（分时段价目可不等比例变化），算输出价必须用
+        completionRatioMap: groupModelCompletionRatio,
         pointsEnabled: pointsConfig?.enabled,
         quotaPerPoint: pointsConfig?.quotaPerPoint,
         pointsEnabledGroups: pointsConfig?.enabledGroups,
