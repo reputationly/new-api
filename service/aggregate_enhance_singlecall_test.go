@@ -15,7 +15,8 @@ import (
 	"github.com/QuantumNous/new-api/relay/hilo"
 )
 
-func evidenceOf(in hilo.CompilerInput) singleCallEvidence { return buildSingleCallEvidence(in) }
+// evidenceOf 证据构造。mediaVisible 传 true 表示"素材按 send_input_images 默认发出"。
+func evidenceOf(in hilo.CompilerInput) singleCallEvidence { return buildSingleCallEvidence(in, true) }
 
 // **素材编号必须和素材实际发出去的顺序一致。**
 //
@@ -1020,5 +1021,104 @@ func TestSingleCallParsesWithoutResponseFormat(t *testing.T) {
 	require.False(t, res.Degraded, res.DegradeReason)
 	require.Contains(t, res.EnhancedPrompt, "[Shot 1]")
 	require.NotEmpty(t, (*got)[0])
+}
+
+
+// **参考视频不进请求体,但它的标签必须留在证据里。**
+//
+// 参考视频是 plan C:不发给增强模型(引擎拉 URL 会挂死、内联又多 12288 token
+// 且开思考就没正文)。但 H3 那边照常收到视频 —— 所以提示词里仍要能写
+// <Video 1>,只是模型看不到它的画面。
+func TestSingleCallRequestOmitsVideoButKeepsLabel(t *testing.T) {
+	got := fakeSequence(t, chatResponse(scReply("subject_definitions:\n<Subject 1> is the man in <Video 1>.\n\nsummary:\n[reference generation] x.\n\nretention_analysis:\n<Subject 1> (appears in [Shot 1]): fully_preserved - identity kept.\n\ndetailed_description:\n[Shot 1] x\n\noverall_soundscape:\nwind.\n\nnon_diegetic_music:\nN/A")))
+	in := scInput("一只猫")
+	in.Compiler.TaskType = hilo.TaskR2VA
+	in.Compiler.Assets = []hilo.CompilerAsset{
+		{AssetID: "video_1", MediaType: "video", Role: "reference"},
+	}
+	in.VideoURLs = []string{"data:video/mp4;base64,AAAA"}
+	res := EnhancePrompt(context.Background(), scCfg(), "Bearer sk-x", in)
+	require.False(t, res.Degraded, res.DegradeReason)
+
+	body := string((*got)[0])
+	require.NotContains(t, body, "video_url", "视频不该再发给增强模型")
+	require.NotContains(t, body, "data:video")
+	// 证据 JSON 里的尖括号会被转义成 \u003c,所以按标签正文断言。
+	require.Contains(t, body, "Video 1", "标签要留在证据里")
+}
+
+// **看不见的素材必须显式标出来。**
+//
+// 不标的话模型会照着常识编一段画面(实测会写出完全无关的内容),而 H3 拿到的
+// 是一份描述着不存在的视频的提示词 —— 不报错,只是成片错位。
+func TestSingleCallEvidenceMarksVideoInvisible(t *testing.T) {
+	ev := evidenceOf(hilo.CompilerInput{
+		TaskType: hilo.TaskR2VA, DurationSeconds: 5,
+		Assets: []hilo.CompilerAsset{
+			{AssetID: "image_1", MediaType: "image", Role: "reference"},
+			{AssetID: "video_1", MediaType: "video", Role: "reference"},
+			{AssetID: "audio_1", MediaType: "audio", Role: "reference"},
+		},
+	})
+	require.True(t, ev.Assets[0].Observable, "图片会发出去,看得见")
+	require.False(t, ev.Assets[1].Observable, "参考视频不发,看不见")
+	require.False(t, ev.Assets[2].Observable, "参考音频不发,看不见")
+
+	b, err := common.Marshal(ev)
+	require.NoError(t, err)
+	require.Contains(t, string(b), "\"observable\":false")
+}
+
+// 关掉 send_input_images 时图片也看不见,证据要跟着说。
+func TestSingleCallEvidenceMarksImagesInvisibleWhenMediaOff(t *testing.T) {
+	ev := buildSingleCallEvidence(hilo.CompilerInput{
+		TaskType: hilo.TaskI2V, DurationSeconds: 5,
+		Assets: []hilo.CompilerAsset{{AssetID: "image_1", MediaType: "image", Role: "first_frame"}},
+	}, false)
+	require.False(t, ev.Assets[0].Observable)
+}
+
+// 合规清单里要有一条讲 observable=false 的规矩。
+func TestSingleCallAppendixExplainsVisibility(t *testing.T) {
+	require.Contains(t, singleCallAppendix, "observable")
+	require.Contains(t, singleCallAppendix, "cannot be seen")
+}
+
+
+// **参考素材在提示词里一句都不提 → 拦。**
+//
+// 参考视频不发给增强模型之后,实测出现过整段不提 <Video 1>(subject_definitions
+// 只写了 <Audio 1>)。H3 那边仍会收到视频,但提示词没告诉它拿这段视频干什么 ——
+// 成片照样出,只是不像"用了参考"。
+func TestMissingAssetMentionsCatchesDroppedVideo(t *testing.T) {
+	assets := []singleCallEvidenceAsset{
+		{AssetID: "video_1", MediaType: "video", OfficialLabel: "<Video 1>"},
+		{AssetID: "audio_1", MediaType: "audio", OfficialLabel: "<Audio 1>"},
+	}
+	dropped := `subject_definitions:
+<Audio 1> is the voice-timbre reference.
+
+summary:
+[reference generation] x
+`
+	errs := missingAssetMentions(dropped, assets, "r2va")
+	require.NotEmpty(t, errs)
+	require.Contains(t, errs[0], "<Video 1>")
+
+	kept := `subject_definitions:
+<Video 1> is the source video.
+<Audio 1> is the voice-timbre reference.
+`
+	require.Empty(t, missingAssetMentions(kept, assets, "r2va"))
+}
+
+// 帧族不查这条:<Picture N> 本来就写在首行说明里,而且图片可能只作为构图锚点
+// 被提一次。
+func TestMissingAssetMentionsOnlyForReferenceFamily(t *testing.T) {
+	assets := []singleCallEvidenceAsset{
+		{AssetID: "image_1", MediaType: "image", OfficialLabel: "<Picture 1>"},
+		{AssetID: "video_1", MediaType: "video", OfficialLabel: "<Video 1>"},
+	}
+	require.Empty(t, missingAssetMentions("integrated_multimodal_description: [Shot 1] x", assets, "i2v"))
 }
 

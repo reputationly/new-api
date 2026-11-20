@@ -29,6 +29,8 @@ EFF = os.environ.get("EFF", "") not in ("", "0")
 TAG = os.environ.get("TAG", "")
 # NORF=1 不发 response_format —— 生产已经不发（qwen3.8 + json_object 会被 xgrammar 拒成 500）
 NORF = os.environ.get("NORF", "") not in ("", "0")
+# NOVIDEO=1 参考视频不发给模型（生产 plan C），证据里只留 <Video N> 标签 + observable:false
+NOVIDEO = os.environ.get("NOVIDEO", "") not in ("", "0")
 
 def eff_seconds(sec):
     n = max(1, round(sec * 24))
@@ -45,7 +47,8 @@ def system(c):
             continue
         cnt[kind] = cnt.get(kind, 0) + 1
         assets.append({"asset_id": f"{kind}_{cnt[kind]}", "media_type": kind,
-                       "role": role_map.get(role, "reference"), "official_label": f"<{names[kind]} {cnt[kind]}>"})
+                       "role": role_map.get(role, "reference"), "official_label": f"<{names[kind]} {cnt[kind]}>",
+                       "observable": (kind == "image")})
     task = {"type": c["task"], "duration_seconds": float(c["dur"]), "generate_audio": True}
     if EFF:
         task["effective_duration_seconds"] = eff_seconds(c["dur"])
@@ -60,7 +63,10 @@ def user(c):
     parts = [{"type": "text", "text": c["prompt"]}]
     for kind, src, role in c["media"]:
         if kind == "image": parts.append({"type": "image_url", "image_url": {"url": vcases.src_url(src)}})
-        if kind == "video": parts.append({"type": "video_url", "video_url": {"url": src}})
+        if kind == "video":
+            if NOVIDEO:
+                continue
+            parts.append({"type": "video_url", "video_url": {"url": src}})
     return parts if len(parts) > 1 else c["prompt"]
 
 def kw():

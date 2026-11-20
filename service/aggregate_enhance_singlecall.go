@@ -209,7 +209,7 @@ func compileViaSingleCall(
 	if in.Compiler == nil {
 		return nil, fmt.Errorf("缺少请求事实(CompilerInput),无法编译")
 	}
-	ev := buildSingleCallEvidence(*in.Compiler)
+	ev := buildSingleCallEvidence(*in.Compiler, in.SendMedia)
 	evJSON, err := common.Marshal(ev)
 	if err != nil {
 		return nil, fmt.Errorf("序列化证据失败: %w", err)
@@ -217,11 +217,24 @@ func compileViaSingleCall(
 	// 写作说明的最后一句就是 "Evidence follows:"，所以证据直接跟在后面。
 	instruction := buildSingleCallSystem(ev.Task.Type, string(evJSON))
 
+	// **参考视频不发给增强模型。** 发过、也修好了，但代价和稳定性都不划算：
+	//
+	//   - 引擎自己拉 CDN 视频会偶发挂死（30s→120s→480s 重试链 ⇒ 465 秒 504），
+	//     内联成 data URI 能绕过，但一次请求要多 12288 个视频 token；
+	//   - 带上视频之后**开思考就没正文**（实测 74–118 秒、正文空或截断，把
+	//     max_tokens 提到 16384 仍然截断），只能硬性关思考 —— 等于放弃了
+	//     资产清点那点收益。
+	//
+	// 所以先只把 <Video N> 标签和时长写进证据，让模型知道「有这么一段参考、
+	// 它提供的是什么」，画面内容交给生成段的 H3 自己看（视频照常随生成请求发给
+	// H3，只是不给增强模型）。等引擎侧那两件修好再回到「发给模型看」这条路。
+	//
+	// 代价：参考视频的构图/运镜只能靠用户提示词，提示词里写不准的那部分补不了。
 	msgs := []map[string]any{
 		{"role": "system", "content": instruction},
-		// 素材跟着第一轮发出去。证据 JSON 里只有 asset_id 和角色，
-		// **模型要看见素材本身**才填得对绑定里的可见特征。
-		{"role": "user", "content": buildUserContent(in.Prompt, in.ImageURLs, in.VideoURLs, in.SendMedia)},
+		// 图片照常发：证据 JSON 里只有 asset_id 和角色，**模型要看见图本身**
+		// 才填得对可见特征。
+		{"role": "user", "content": buildUserContent(in.Prompt, in.ImageURLs, nil, in.SendMedia)},
 	}
 
 	total := &dto.Usage{}
@@ -354,6 +367,14 @@ type singleCallEvidenceAsset struct {
 	// image_2 再写 image_1，<Picture 1> 就指向了第二张图 —— 提示词指着的
 	// 素材和它描述的不是同一个，而且不报错。
 	OfficialLabel string `json:"official_label"`
+	// Observable 这段素材**你看得见吗**。
+	//
+	// 参考视频与参考音频一律 false —— 增强阶段不把它们发给模型(原因见
+	// buildSingleCallSystem / 本文件顶部"不送参考视频"那段)。**必须显式写出来**,
+	// 而不是让模型从"素材清单里有 video_1"自己推断:看不见又不说的结果是它照着
+	// 常识编一段画面(实测会写成"海滩上奔跑的狗"这种完全无关的内容),而 H3 拿到
+	// 的是一份描述着不存在的视频的提示词 —— 不报错,只是成片错位。
+	Observable bool `json:"observable"`
 }
 
 // singleCallEffectiveDuration 请求秒数 → 引擎实际交付秒数,保留两位小数。
@@ -373,7 +394,11 @@ func singleCallEffectiveDuration(seconds float64) float64 {
 	return math.Round(delivered*100) / 100
 }
 
-func buildSingleCallEvidence(in hilo.CompilerInput) singleCallEvidence {
+// buildSingleCallEvidence 把请求事实翻成证据。
+//
+// mediaVisible 对应 send_input_images:素材真发给模型时为 true。只有**图片**会随它
+// 变成可见 —— 参考视频与参考音频在增强阶段一律不发送,所以 observable 恒为 false。
+func buildSingleCallEvidence(in hilo.CompilerInput, mediaVisible bool) singleCallEvidence {
 	ev := singleCallEvidence{
 		UserRequest: strings.TrimSpace(in.UserRequest),
 		Task: singleCallEvidenceTask{
@@ -405,6 +430,9 @@ func buildSingleCallEvidence(in hilo.CompilerInput) singleCallEvidence {
 			MediaType:     a.MediaType,
 			Role:          a.Role,
 			OfficialLabel: label,
+			// 只有图片会随 send_input_images 发给模型;视频与音频在增强阶段
+			// 一律不发送(见 compileViaSingleCall 顶部),所以恒为 false。
+			Observable: mediaVisible && a.MediaType == "image",
 		})
 	}
 	return ev
@@ -597,6 +625,7 @@ func transportIssues(out *singleCallOutput, ev singleCallEvidence) (errs []strin
 	errs = append(errs, dialogueIssues(ev.UserRequest, out.H3Prompt)...)
 	errs = append(errs, missingSections(out.H3Prompt, ev.Task.Type)...)
 	errs = append(errs, duplicateSections(out.H3Prompt, ev.Task.Type)...)
+	errs = append(errs, missingAssetMentions(out.H3Prompt, ev.Assets, ev.Task.Type)...)
 	return errs, warns
 }
 
@@ -735,6 +764,40 @@ func missingSections(prompt, taskType string) []string {
 	return []string{"Required official sections are missing: " + strings.Join(missing, ", ") +
 		". " + sectionRepairHint(taskType) +
 		" Emit every section, in the order given by the H3 writing guide."}
+}
+
+// ── 素材必须被点名 ──────────────────────────────────────────────────
+
+// missingAssetMentions 证据里的素材在提示词里一次都没出现。
+//
+// **这是"静默丢掉参考"的那类错。** 参考族的提示词靠标签把素材和 H3 收到的字节
+// 绑起来:一句都不提 <Video 1>,H3 就只剩"参考生成"这个模式,不知道该拿那段视频
+// 干什么 —— 成片照样出,只是看着不像"用了参考"。
+//
+// 实测:参考视频不发给增强模型(见 compileViaSingleCall 顶部)之后,模型曾整段
+// 不提 <Video 1>(subject_definitions 里只写了 <Audio 1>),提示词侧的可见性规则
+// 修的就是这个,这道检查兜住同样的问题。
+//
+// 只对**参考族**要求视频/音频必须出现。图片不在这里要求 —— 它可能只作为构图锚点
+// 被提到一次、或写在 <Subject N> 的定义里,强行要求反而误判。
+func missingAssetMentions(prompt string, assets []singleCallEvidenceAsset, taskType string) []string {
+	if strings.TrimSpace(prompt) == "" || !strings.Contains(strings.ToLower(taskType), "r2v") {
+		return nil
+	}
+	var missing []string
+	for _, a := range assets {
+		if a.OfficialLabel == "" || (a.MediaType != "video" && a.MediaType != "audio") {
+			continue
+		}
+		if !strings.Contains(prompt, a.OfficialLabel) {
+			missing = append(missing, a.OfficialLabel)
+		}
+	}
+	if len(missing) == 0 {
+		return nil
+	}
+	return []string{"Every reference asset must be named at least once (definition and retention line); missing: " +
+		strings.Join(missing, ", ")}
 }
 
 // ── 重复节 ──────────────────────────────────────────────────────────
