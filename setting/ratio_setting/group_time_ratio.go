@@ -79,8 +79,19 @@ type TimeWindow struct {
 // 留两套解析、两套校验、两套测试的代价更大。代价就是上面这条纪律必须守住。
 type TimeRule struct {
 	Window string  `json:"window"`
-	Value  float64 `json:"value"`
-	Remark string  `json:"remark,omitempty"` // 运营备注，同 ModelRatioRule.Remark
+	Value  float64 `json:"value"` // 输入侧系数
+	// OutputFactor 是输出侧系数。分时段价目不一定等比例变化：忙时输入 2/输出 8、
+	// 闲时输入 1/输出 7 是合法价目（输入 5 折、输出 8.75 折）。0 表示与输入同比例。
+	OutputFactor float64 `json:"output_factor,omitempty"`
+	Remark       string  `json:"remark,omitempty"` // 运营备注，同 ModelRatioRule.Remark
+}
+
+// EffectiveOutputFactor 返回输出侧系数：没单独配就跟随输入侧（单一系数向后兼容）。
+func (r TimeRule) EffectiveOutputFactor() float64 {
+	if r.OutputFactor > 0 {
+		return r.OutputFactor
+	}
+	return r.Value
 }
 
 // GroupTimeRatioConfig: windows 是全局共用的模板表，rules 是
@@ -291,6 +302,11 @@ func CheckGroupTimeRatio(jsonStr string) error {
 				// 仍不允许 0：免费用 Layer 2 的 override 表达，误打一个 0 会让整批模型在某个时段白送。
 				if rule.Value <= 0 || rule.Value > maxTimePriceFactor {
 					return fmt.Errorf("group %s time rule %q window %q: value must be in (0, %g], got %g", group, pattern, rule.Window, maxTimePriceFactor, rule.Value)
+				}
+				// 输出侧系数可以独立于输入侧（输入输出不同比例变化），区间同输入侧；
+				// 0 表示"跟随输入"，故下界允许 0。
+				if rule.OutputFactor < 0 || rule.OutputFactor > maxTimePriceFactor {
+					return fmt.Errorf("group %s time rule %q window %q: output_factor must be in [0, %g], got %g", group, pattern, rule.Window, maxTimePriceFactor, rule.OutputFactor)
 				}
 			}
 			if err := checkWindowOverlap(cfg.Windows, group, pattern, list); err != nil {

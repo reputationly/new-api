@@ -30,12 +30,42 @@ type GroupRatioInfo struct {
 	UserRuleMatch string  // 命中的模式串；"" = 未命中
 	UserRuleValue float64 // 恒为 multiply 的乘数
 
-	// Layer 4 时段折扣的解析痕迹。与上面几个「只落库不展示」的字段不同，
+	// Layer 4 时段价目的解析痕迹。与上面几个「只落库不展示」的字段不同，
 	// 这一组会渲染到使用日志详情里：用户要能自己验证「夜里下单确实便宜了」，
 	// 看不见的优惠等于没有优惠。
 	TimeWindow string  // 命中的时段模板键；"" = 未命中
 	TimeLabel  string  // 时段模板显示名，如「深夜档」
-	TimeValue  float64 // 恒为 multiply 的乘数
+	TimeValue  float64 // 输入侧系数（乘在常规价上）
+	// TimeOutputFactor 是**输出侧系数**。分时段价目不一定等比例变化
+	// （忙时输入 2/输出 8、闲时输入 1/输出 7 是合法且常见的价目），
+	// 而整单只乘 GroupRatio（= 输入侧），所以输出价要靠它把差额折回 completion_ratio。
+	// 未命中时段或与输入同比例时，它等于 TimeValue。
+	TimeOutputFactor float64
+}
+
+// CompletionRatioScale 返回应折进 completion_ratio 的系数。
+//
+// 计费公式是 (输入tokens + 输出tokens × completionRatio) × ModelRatio × GroupRatio，
+// 而 GroupRatio 用的是**输入侧**时段系数。要让输出走自己的系数，就把
+// outputFactor/inputFactor 乘进 completionRatio —— 这样 162 处读 CompletionRatio 的
+// 地方一处都不用改，只有「取值的那 4 个点」需要调这个函数。
+//
+// 未命中时段、或输入输出同比例时返回 1（逐位不变）。
+func (g GroupRatioInfo) CompletionRatioScale() float64 {
+	if g.TimeWindow == "" {
+		return 1
+	}
+	return ScaleCompletionRatio(g.TimeValue, g.TimeOutputFactor)
+}
+
+// ScaleCompletionRatio 是 CompletionRatioScale 的不依赖 GroupRatioInfo 版本，
+// 供只拿到两个系数的调用点使用（如 QuotaInfo 那条音频结算路径）。
+// 任一系数未设置（<=0）或两者相等时返回 1。
+func ScaleCompletionRatio(inputFactor, outputFactor float64) float64 {
+	if inputFactor <= 0 || outputFactor <= 0 || inputFactor == outputFactor {
+		return 1
+	}
+	return outputFactor / inputFactor
 }
 
 // ModelRuleLog 返回模型级折扣规则的紧凑表示，供日志 other 字段使用。

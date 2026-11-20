@@ -201,7 +201,11 @@ type RatioResolution struct {
 
 	TimeWindow string  // Layer 4 命中的时段模板键，"" = 未命中
 	TimeLabel  string  // 时段模板显示名，如「深夜档」
-	TimeValue  float64 // Layer 4 系数（乘在 NormalRatio 上；<1 空闲、>1 紧缺）
+	TimeValue  float64 // Layer 4 输入侧系数（乘在 NormalRatio 上；<1 空闲、>1 紧缺）
+	// TimeOutputFactor 是输出侧系数。分时段价目不一定等比例变化
+	// （忙时输入 2/输出 8、闲时输入 1/输出 7），而整单只乘输入侧；
+	// 输出侧的差额由 types.GroupRatioInfo.CompletionRatioScale 折回 completion_ratio。
+	TimeOutputFactor float64
 }
 
 // UserMultiplier 返回 Layer 3 的乘数，未命中时为 1。
@@ -298,6 +302,7 @@ func ResolveGroupRatioAt(userGroup, usingGroup, modelName string, at time.Time) 
 		res.TimeWindow = key
 		res.TimeLabel = win.Label
 		res.TimeValue = rule.Value
+		res.TimeOutputFactor = rule.EffectiveOutputFactor()
 		res.Final = res.NormalRatio * rule.Value
 	}
 

@@ -701,3 +701,32 @@ func TestCheckGroupTimeRatio_ValueRange(t *testing.T) {
 	zero := `{"windows":{"am":{"start":"09:00","end":"12:00"}},"rules":{"default":{"m":[{"window":"am","value":0}]}}}`
 	require.ErrorContains(t, CheckGroupTimeRatio(zero), "value must be in (0, 20]")
 }
+
+// TestResolveGroupRatio_OutputFactorIndependent 锁死「分时段价目不等比例变化」。
+//
+// 忙时输入 2/输出 8、闲时输入 1/输出 7：输入系数 0.5、输出系数 0.875。
+// GroupRatio（输入侧）只乘 0.5，输出侧的差额靠 CompletionRatioScale 折进补全倍率。
+func TestResolveGroupRatio_OutputFactorIndependent(t *testing.T) {
+	seedRatios(t, `{"default":1}`, `{}`, `{}`)
+	seedTimeRatio(t, `{
+		"windows": {"night": {"label":"闲时","start":"00:00","end":"08:00"}},
+		"rules":   {"*": {"m": [{"window":"night","value":0.5,"output_factor":0.875}]}}
+	}`)
+
+	night := ResolveGroupRatioAt("default", "default", "m", at(t, 0, 2, 0))
+	require.InDelta(t, 0.5, night.Final, 1e-9, "输入侧系数")
+	require.InDelta(t, 0.5, night.TimeValue, 1e-9)
+	require.InDelta(t, 0.875, night.TimeOutputFactor, 1e-9, "输出侧系数独立")
+	// 折算：输出价倍率 = Final × 补全倍率 × (0.875/0.5)
+	require.InDelta(t, 1.75, types.ScaleCompletionRatio(night.TimeValue, night.TimeOutputFactor), 1e-12)
+
+	// 没配 output_factor 时跟随输入侧（旧配置逐位不变）
+	seedTimeRatio(t, `{
+		"windows": {"night": {"label":"闲时","start":"00:00","end":"08:00"}},
+		"rules":   {"*": {"m": [{"window":"night","value":0.5}]}}
+	}`)
+	same := ResolveGroupRatioAt("default", "default", "m", at(t, 0, 2, 0))
+	require.InDelta(t, 0.5, same.TimeOutputFactor, 1e-9)
+	require.Equal(t, 1.0, types.ScaleCompletionRatio(same.TimeValue, same.TimeOutputFactor))
+	seedTimeRatio(t, `{}`)
+}

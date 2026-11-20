@@ -66,6 +66,7 @@ func HandleGroupRatio(ctx *gin.Context, relayInfo *relaycommon.RelayInfo) types.
 		TimeWindow:        res.TimeWindow,
 		TimeLabel:         res.TimeLabel,
 		TimeValue:         res.TimeValue,
+		TimeOutputFactor:  res.TimeOutputFactor,
 	}
 	if res.HasSpecialRatio {
 		groupRatioInfo.HasSpecialRatio = true
@@ -107,7 +108,10 @@ func ModelPriceHelper(c *gin.Context, info *relaycommon.RelayInfo, promptTokens 
 		if !success {
 			return types.PriceData{}, modelPriceNotConfiguredError(matchName, info.UserId)
 		}
-		completionRatio = ratio_setting.GetCompletionRatio(info.OriginModelName)
+		// 输出侧的时段系数与输入侧不同时（如忙时输入 2/输出 8、闲时输入 1/输出 7），
+		// 差额在这里折进 completion_ratio：整单乘的是输入侧系数。
+		completionRatio = ratio_setting.GetCompletionRatio(info.OriginModelName) *
+			groupRatioInfo.CompletionRatioScale()
 		cacheRatio, _ = ratio_setting.GetCacheRatio(info.OriginModelName)
 		cacheCreationRatio, _ = ratio_setting.GetCreateCacheRatio(info.OriginModelName)
 		cacheCreationRatio5m = cacheCreationRatio

@@ -77,6 +77,7 @@ export default function TimePricePanel({ options, refresh }) {
   const [addPattern, setAddPattern] = useState('');
   const [addWindow, setAddWindow] = useState(null);
   const [addFactor, setAddFactor] = useState(1.1111);
+  const [addOutFactor, setAddOutFactor] = useState(null); // 空 = 跟随输入系数
 
   useEffect(() => {
     const next = (options && options.GroupTimeRatio) || '{}';
@@ -92,6 +93,15 @@ export default function TimePricePanel({ options, refresh }) {
       return {};
     }
   }, [options && options.ModelRatio]);
+
+  // 输出目录价 = 输入价 × 补全倍率，算折算列要用
+  const completionRatioMap = useMemo(() => {
+    try {
+      return JSON.parse((options && options.CompletionRatio) || '{}') || {};
+    } catch (e) {
+      return {};
+    }
+  }, [options && options.CompletionRatio]);
 
   const windowOptions = useMemo(
     () =>
@@ -187,14 +197,27 @@ export default function TimePricePanel({ options, refresh }) {
     const out = [];
     Object.entries(globalRules).forEach(([pattern, list]) => {
       const dir = Number(modelRatioMap[pattern]);
+      const cr = Number(completionRatioMap[pattern]);
       (list || []).forEach((rule, idx) => {
+        const inFactor = Number(rule.value);
+        // output_factor 缺省 = 跟随输入（旧配置与「整价统一变」的场景都走这条）
+        const outFactor =
+          rule.output_factor && Number(rule.output_factor) > 0
+            ? Number(rule.output_factor)
+            : inFactor;
         out.push({
           key: pattern + '|' + rule.window + '|' + idx,
           pattern,
           window: rule.window,
-          value: Number(rule.value),
+          value: inFactor,
+          outValue: outFactor,
+          sameFactor: outFactor === inFactor,
           remark: rule.remark || '',
-          factor: Number.isFinite(dir) ? dir * Number(rule.value) : null,
+          inPrice: Number.isFinite(dir) && dir > 0 ? dir * inFactor : null,
+          outPrice:
+            Number.isFinite(dir) && dir > 0 && Number.isFinite(cr) && cr > 0
+              ? dir * cr * outFactor
+              : null,
           listIndex: idx,
         });
       });
@@ -204,12 +227,26 @@ export default function TimePricePanel({ options, refresh }) {
         ? String(a.window).localeCompare(String(b.window))
         : a.pattern.localeCompare(b.pattern),
     );
-  }, [globalRules, modelRatioMap]);
+  }, [globalRules, modelRatioMap, completionRatioMap]);
 
   const updateRowFactor = (row, value) => {
     const list = (globalRules[row.pattern] || []).map((r, i) =>
       i === row.listIndex ? Object.assign({}, r, { value }) : r,
     );
+    setGlobalList(row.pattern, list);
+  };
+
+  // 输出侧系数：null = 回到"跟随输入"（写入时删掉该字段，保持 JSON 干净）
+  const updateRowOutputFactor = (row, outValue) => {
+    const list = (globalRules[row.pattern] || []).map((r, i) => {
+      if (i !== row.listIndex) return r;
+      if (outValue === null || !(outValue > 0)) {
+        const next = Object.assign({}, r);
+        delete next.output_factor;
+        return next;
+      }
+      return Object.assign({}, r, { output_factor: outValue });
+    });
     setGlobalList(row.pattern, list);
   };
 
@@ -241,16 +278,29 @@ export default function TimePricePanel({ options, refresh }) {
       showWarning(t('系数必须在 (0, 20] 之间'));
       return;
     }
+    if (
+      addOutFactor !== null &&
+      !(addOutFactor > 0 && addOutFactor <= MAX_FACTOR)
+    ) {
+      showWarning(t('输出系数必须在 (0, 20] 之间'));
+      return;
+    }
     const list = (globalRules[pattern] || []).slice();
     const idx = list.findIndex((r) => r.window === addWindow);
+    // 输出侧留空（null）= 跟随输入，不写字段，保持 JSON 干净
+    const extra =
+      addOutFactor && addOutFactor > 0 ? { output_factor: addOutFactor } : {};
     if (idx >= 0) {
-      list[idx] = Object.assign({}, list[idx], { value: addFactor });
+      const merged = Object.assign({}, list[idx], { value: addFactor }, extra);
+      if (!extra.output_factor) delete merged.output_factor;
+      list[idx] = merged;
     } else {
-      list.push({ window: addWindow, value: addFactor });
+      list.push(Object.assign({ window: addWindow, value: addFactor }, extra));
     }
     setGlobalList(pattern, list);
     setAddPattern('');
     setAddWindow(null);
+    setAddOutFactor(null);
   };
 
   const onSubmit = async () => {
@@ -312,43 +362,65 @@ export default function TimePricePanel({ options, refresh }) {
       },
     },
     {
-      title: t('系数'),
+      title: t('系数（输入 / 输出）'),
       dataIndex: 'value',
-      width: 110,
+      width: 200,
       render: (value, record) => (
-        <InputNumber
-          size='small'
-          min={0.01}
-          max={MAX_FACTOR}
-          step={0.05}
-          value={value}
-          style={{ width: 90 }}
-          onChange={(v) =>
-            updateRowFactor(record, typeof v === 'number' ? v : 1)
-          }
-        />
+        <Space>
+          <InputNumber
+            size='small'
+            min={0.01}
+            max={MAX_FACTOR}
+            step={0.05}
+            value={value}
+            style={{ width: 80 }}
+            onChange={(v) =>
+              updateRowFactor(record, typeof v === 'number' ? v : 1)
+            }
+          />
+          {/*
+            输出侧系数：留空 = 跟随输入。分时段价目不一定等比例变化
+            （忙时输入 2/输出 8、闲时输入 1/输出 7），这里必须能分开填。
+          */}
+          <InputNumber
+            size='small'
+            min={0.01}
+            max={MAX_FACTOR}
+            step={0.05}
+            value={record.outValue}
+            placeholder={t('同输入')}
+            style={{ width: 80 }}
+            onChange={(v) =>
+              updateRowOutputFactor(record, typeof v === 'number' ? v : null)
+            }
+          />
+        </Space>
       ),
     },
     {
-      title: t('折算（相对目录价）'),
-      dataIndex: 'factor',
-      render: (factor, record) =>
-        factor === null ? (
+      title: t('该时段目录价（¥/1M）'),
+      dataIndex: 'inPrice',
+      render: (inPrice, record) =>
+        inPrice === null ? (
           <Text type='tertiary' size='small'>
             {t('该模型未配目录价')}
           </Text>
         ) : (
-          <Space>
-            <Text strong>{Number(factor.toFixed(4))}x</Text>
-            {Number(record.value) > 1 ? (
-              <Tag color='orange' shape='circle'>
-                {t('紧缺加价')}
+          <Space vertical align='start' spacing={2}>
+            <Text strong>
+              {t('输入')} {Number(inPrice.toFixed(4))}
+            </Text>
+            <Text strong>
+              {t('输出')}{' '}
+              {record.outPrice === null
+                ? '—'
+                : Number(record.outPrice.toFixed(4))}
+            </Text>
+            {record.sameFactor ? null : (
+              <Tag color='violet' shape='circle'>
+                {t('输入输出不同比例')}
               </Tag>
-            ) : Number(record.value) < 1 ? (
-              <Tag color='cyan' shape='circle'>
-                {t('空闲优惠')}
-              </Tag>
-            ) : null}
+            )}
           </Space>
         ),
     },
@@ -466,7 +538,20 @@ export default function TimePricePanel({ options, refresh }) {
           step={0.05}
           value={addFactor}
           style={{ width: 100 }}
+          prefix={t('输入')}
           onChange={(v) => setAddFactor(typeof v === 'number' ? v : 1)}
+        />
+        {/* 输出侧系数留空 = 跟随输入；输入输出不同比例时才需要填 */}
+        <InputNumber
+          size='small'
+          min={0.01}
+          max={MAX_FACTOR}
+          step={0.05}
+          value={addOutFactor}
+          style={{ width: 120 }}
+          prefix={t('输出')}
+          placeholder={t('同输入')}
+          onChange={(v) => setAddOutFactor(typeof v === 'number' ? v : null)}
         />
         <Button
           size='small'
