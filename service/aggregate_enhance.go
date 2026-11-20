@@ -225,12 +225,6 @@ func EnhancePrompt(ctx context.Context, agg *common.AggregateModel, authHeader s
 	// 用之前自己 TrimSpace(见其请求构造)。两处语义各自清楚,比在这里统一改写安全。
 	in.ReasoningEffort = cfg.ReasoningEffort
 	in.MaxOutputTokens = cfg.MaxOutputTokens
-	// 参考视频先内联成 data URI(见 aggregate_enhance_video.go):引擎自己出网拉
-	// 视频会偶发挂死到网关超时(实测 30s→120s→480s 重试链,拖出 465 秒 504)。
-	// 只在**真要发素材**时才做 —— 关掉 send_input_images 时白下一段字节没意义。
-	if in.SendMedia && len(in.VideoURLs) > 0 {
-		in.VideoURLs = inlineEnhanceVideos(ctx, in.VideoURLs)
-	}
 
 	// ── qwen_pe 模式(Qwen-Image-2.1 官方 PE 协议)──────────────
 	//
