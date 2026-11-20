@@ -550,26 +550,30 @@ func TestDryRunH3ImagePERequiresImageType(t *testing.T) {
 		"enhance_mode", AggregateCheckError)
 }
 
-func TestDryRunReasoningEffortOnlyAppliesToH3ImagePE(t *testing.T) {
+// reasoning_effort 只对"档位决定效果"的两个模式有意义:h3_image_pe 与 singlecall。
+// 其余模式(text / qwen_pe)配了也不会被发出去,要明确告诉运营。
+func TestDryRunReasoningEffortOnlyAppliesToPEModes(t *testing.T) {
 	withFakeModels(t, map[string]fakeModel{
 		"ordinary-image": {},
 		"enh-model":      {},
 	})
 
-	cfg := h3ImagePEAggregate("singlecall", "")
+	cfg := h3ImagePEAggregate("qwen_pe", "")
 	cfg.PromptEnhance.ReasoningEffort = "low"
 	res := DryRunAggregateModel(cfg, map[string]int{"image-agg": 1})
 	ch := checkByKey(res, "reasoning_effort")
 	if ch == nil || ch.Level != AggregateCheckWarn ||
-		ch.Message != "只有 h3_image_pe 使用 reasoning_effort，当前模式会忽略" {
-		t.Fatalf("非 h3_image_pe 模式应警告忽略 reasoning_effort: %+v", ch)
+		ch.Message != "只有 h3_image_pe / singlecall 使用 reasoning_effort，当前模式会忽略" {
+		t.Fatalf("qwen_pe 模式应警告忽略 reasoning_effort: %+v", ch)
 	}
 
-	cfg = h3ImagePEAggregate("h3_image_pe", "")
-	cfg.PromptEnhance.ReasoningEffort = "low"
-	res = DryRunAggregateModel(cfg, map[string]int{"image-agg": 1})
-	if ch := checkByKey(res, "reasoning_effort"); ch != nil {
-		t.Fatalf("h3_image_pe 模式不应警告 reasoning_effort: %+v", ch)
+	for _, mode := range []string{"h3_image_pe", "singlecall"} {
+		cfg = h3ImagePEAggregate(mode, "")
+		cfg.PromptEnhance.ReasoningEffort = "low"
+		res = DryRunAggregateModel(cfg, map[string]int{"image-agg": 1})
+		if ch := checkByKey(res, "reasoning_effort"); ch != nil {
+			t.Fatalf("%s 模式不应警告 reasoning_effort: %+v", mode, ch)
+		}
 	}
 }
 
@@ -737,3 +741,54 @@ func TestDryRunReportsFixedRatioDeliveredEdge(t *testing.T) {
 		t.Errorf("合法的固定倍率配置应通过,实得 %+v", res.Checks)
 	}
 }
+
+// 档位拼错、输出上限填反 / 填小，都要在干跑里说出来。
+//
+// 两个字段都是**原样透传**给上游的：拼错不会被我们拦下（上游要么报错、要么当默认），
+// 负数会被当成"未配置"（用内置默认），小上限会让长篇分镜被截断 —— 三种都看不出是
+// 配置写错了。
+func TestDryRunWarnsOnSuspectEnhanceFields(t *testing.T) {
+	withFakeModels(t, map[string]fakeModel{
+		"ordinary-image": {},
+		"enh-model":      {},
+	})
+
+	// 档位拼错：值会原样透传，上游认不认识我们不知道，所以要提示。
+	cfg := h3ImagePEAggregate("h3_image_pe", "")
+	cfg.PromptEnhance.ReasoningEffort = "lo"
+	res := DryRunAggregateModel(cfg, map[string]int{"image-agg": 1})
+	if ch := checkByKey(res, "reasoning_effort"); ch == nil || ch.Level != AggregateCheckWarn {
+		t.Fatalf("拼错的档位应警告: %+v", ch)
+	}
+
+	// 输出上限**只有 singlecall 读**：别的模式先提示"会忽略"，不谈数值 ——
+	// 否则运营会为一个不生效的字段调半天。
+	cfg.PromptEnhance.ReasoningEffort = "low"
+	cfg.PromptEnhance.MaxOutputTokens = 1024
+	res = DryRunAggregateModel(cfg, map[string]int{"image-agg": 1})
+	if ch := checkByKey(res, "max_output_tokens"); ch == nil || ch.Level != AggregateCheckWarn ||
+		!strings.Contains(ch.Message, "只有 singlecall") {
+		t.Fatalf("非 singlecall 模式应提示会忽略: %+v", ch)
+	}
+
+	// singlecall 才看数值：负数 = 未配置、过小 = 会被截断、正常 = 不提示。
+	sc := h3ImagePEAggregate("singlecall", "")
+	sc.PromptEnhance.MaxOutputTokens = -1
+	res = DryRunAggregateModel(sc, map[string]int{"image-agg": 1})
+	if ch := checkByKey(res, "max_output_tokens"); ch == nil || !strings.Contains(ch.Message, "负数") {
+		t.Fatalf("负数上限应警告: %+v", ch)
+	}
+
+	sc.PromptEnhance.MaxOutputTokens = 1024
+	res = DryRunAggregateModel(sc, map[string]int{"image-agg": 1})
+	if ch := checkByKey(res, "max_output_tokens"); ch == nil || !strings.Contains(ch.Message, "偏小") {
+		t.Fatalf("过小的上限应警告: %+v", ch)
+	}
+
+	sc.PromptEnhance.MaxOutputTokens = 8192
+	res = DryRunAggregateModel(sc, map[string]int{"image-agg": 1})
+	if ch := checkByKey(res, "max_output_tokens"); ch != nil {
+		t.Fatalf("正常配置不该警告: %+v", ch)
+	}
+}
+

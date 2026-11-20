@@ -111,6 +111,10 @@ func unknownSuffix() string {
 	return "(注意:当前定价缓存为空,无法确认模型是否真的不可用,请稍后重试)"
 }
 
+// knownReasoningEffort 上游认得的思考档位。只用来提示拼错，不作为拒绝依据 ——
+// 值本身原样透传,上游将来加了新档位不该被我们的白名单挡住。
+var knownReasoningEffort = map[string]bool{"none": true, "low": true, "medium": true, "high": true}
+
 // DryRunAggregateModel 校验单个聚合模型配置。peers 为同一份配置里的其它模型名,用于查重。
 func DryRunAggregateModel(m *common.AggregateModel, peers map[string]int) *AggregateDryRunResult {
 	res := &AggregateDryRunResult{Name: strings.TrimSpace(m.Name)}
@@ -248,10 +252,38 @@ func DryRunAggregateModel(m *common.AggregateModel, peers map[string]int) *Aggre
 				common.EnhanceModeSingleCall, common.EnhanceModeQwenPE,
 				common.EnhanceModeH3ImagePE, common.EnhanceModeText)
 		}
-		if m.PromptEnhance.ReasoningEffort != "" &&
-			m.PromptEnhance.EnhanceMode() != common.EnhanceModeH3ImagePE {
-			add("reasoning_effort", AggregateCheckWarn,
-				"只有 h3_image_pe 使用 reasoning_effort，当前模式会忽略")
+		// 认这两个模式：h3_image_pe（图片官方 PE）与 singlecall（H3 视频 Context-IR）。
+		// 视频那条同样是「档位决定效果」的模式 —— 关思考时首帧只写
+		// "as shown in <Picture 1>"，开思考才会逐个元素清点。出厂默认就给它配了 low，
+		// 这里若还按「只有 h3_image_pe 能用」报警，运营每配一次就看到一条假的忽略提示。
+		if effort := strings.TrimSpace(m.PromptEnhance.ReasoningEffort); effort != "" {
+			mode := m.PromptEnhance.EnhanceMode()
+			if mode != common.EnhanceModeH3ImagePE && mode != common.EnhanceModeSingleCall {
+				add("reasoning_effort", AggregateCheckWarn,
+					"只有 h3_image_pe / singlecall 使用 reasoning_effort，当前模式会忽略")
+			} else if !knownReasoningEffort[strings.ToLower(effort)] {
+				// 档位是**原样透传**给上游的，拼错不会被我们拦下 —— 上游要么报错、
+				// 要么当默认处理，两种都看不出是配置写错了。
+				add("reasoning_effort", AggregateCheckWarn,
+					"reasoning_effort=%q 不是已知档位（none / low / medium / high），会原样透传给上游，请确认上游认识它",
+					effort)
+			}
+		}
+		// 输出上限**只有 singlecall 读**：别的模式配了也不生效，先说出来再谈数值 ——
+		// 否则运营会为一个根本不生效的字段调半天（h3_image_pe 填 1024 会收到
+		// "建议至少 8192"，可那个值压根不会发出去）。
+		if n := m.PromptEnhance.MaxOutputTokens; n != 0 {
+			if m.PromptEnhance.EnhanceMode() != common.EnhanceModeSingleCall {
+				add("max_output_tokens", AggregateCheckWarn,
+					"只有 singlecall 使用 max_output_tokens，当前模式会忽略")
+			} else if n < 0 {
+				// 负数会被当成"未配置"（用内置默认 8192），这个静默行为要说出来。
+				add("max_output_tokens", AggregateCheckWarn,
+					"max_output_tokens=%d 为负数，按未配置处理（用内置默认 %d）", n, singleCallMaxOutputTokens)
+			} else if n < 2048 {
+				add("max_output_tokens", AggregateCheckWarn,
+					"max_output_tokens=%d 偏小：思考 token 也算在这个上限里，长篇分镜会被截断；建议至少 8192", n)
+			}
 		}
 		if m.PromptEnhance.EnhanceMode() == common.EnhanceModeQwenPE ||
 			m.PromptEnhance.EnhanceMode() == common.EnhanceModeH3ImagePE {

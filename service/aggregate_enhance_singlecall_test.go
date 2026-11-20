@@ -15,7 +15,8 @@ import (
 	"github.com/QuantumNous/new-api/relay/hilo"
 )
 
-func evidenceOf(in hilo.CompilerInput) singleCallEvidence { return buildSingleCallEvidence(in) }
+// evidenceOf 证据构造。mediaVisible 传 true 表示"素材按 send_input_images 默认发出"。
+func evidenceOf(in hilo.CompilerInput) singleCallEvidence { return buildSingleCallEvidence(in, true) }
 
 // **素材编号必须和素材实际发出去的顺序一致。**
 //
@@ -728,3 +729,449 @@ func TestSingleCallAccumulatesUsageAcrossRepair(t *testing.T) {
 	require.NotNil(t, res.Usage)
 	require.Equal(t, 60, res.Usage.TotalTokens, "两轮各 30，必须累加")
 }
+
+// ── 有效时长、输出上限、思考档位、音频标签 ────────────────────────────
+
+// **证据里的时长必须是引擎交付的时长,不是客户请求的秒数。**
+//
+// 官方规范(base-en.txt:34)写着 S.SS 是"effective video duration",而 H3 的
+// 出片帧数是 17k+5:请求 5 秒实际交付 124 帧 = 5.17 秒。只给请求秒数时模型
+// 只能写 5.00 —— 尾帧就落在成片之外,而且不报错。
+func TestSingleCallEvidenceCarriesEffectiveDuration(t *testing.T) {
+	cases := []struct {
+		requested float64
+		want      float64
+	}{
+		{5, 5.17},  // 124 帧
+		{6, 6.58},  // 144 帧不够栅格,吸附到 158 帧
+		{10, 10.13}, // 243 帧
+		{15, 15.08}, // 362 帧
+	}
+	for _, c := range cases {
+		ev := evidenceOf(hilo.CompilerInput{
+			TaskType: hilo.TaskT2V, DurationSeconds: c.requested,
+		})
+		if ev.Task.EffectiveDurationSeconds != c.want {
+			t.Errorf("请求 %g 秒:证据里的有效时长是 %g,期望 %g",
+				c.requested, ev.Task.EffectiveDurationSeconds, c.want)
+		}
+	}
+}
+
+// 时长未知(<=0)时**不写这个字段**,让模型只看到请求秒数。
+//
+// 编一个栅格数出来更糟:对齐公式只该由 common.H3DeliveredDuration 持有,
+// 引擎改栅格时两边才不会各错各的。
+func TestSingleCallEvidenceOmitsEffectiveDurationWhenUnknown(t *testing.T) {
+	ev := evidenceOf(hilo.CompilerInput{TaskType: hilo.TaskT2V, DurationSeconds: 0})
+	b, err := common.Marshal(ev)
+	require.NoError(t, err)
+	require.NotContains(t, string(b), "effective_duration_seconds")
+}
+
+// **参考音频要进证据。**
+//
+// 用户传了音色参考而在提示词里一个字都不提,H3 只能自己编一条嗓子 ——
+// 这是不报错的那类错。图与视频的编号按提交顺序,与生成段一致。
+func TestSingleCallEvidenceIncludesAudioAssets(t *testing.T) {
+	ev := evidenceOf(hilo.CompilerInput{
+		TaskType: hilo.TaskR2VA, DurationSeconds: 5,
+		Assets: []hilo.CompilerAsset{
+			{AssetID: "image_1", MediaType: "image", Role: "reference"},
+			{AssetID: "video_1", MediaType: "video", Role: "reference"},
+			{AssetID: "audio_1", MediaType: "audio", Role: "reference"},
+		},
+	})
+	require.Len(t, ev.Assets, 3)
+	require.Equal(t, "<Picture 1>", ev.Assets[0].OfficialLabel)
+	require.Equal(t, "<Video 1>", ev.Assets[1].OfficialLabel)
+	// **有参考视频时音频编号留空**:引擎会给"带音轨的参考视频"先占一个 <Audio> 槽,
+	// 我们再编 <Audio 1> 就会把音色指到视频自己的声轨上。
+	require.Empty(t, ev.Assets[2].OfficialLabel)
+	require.True(t, ev.Assets[2].LabelUnknown)
+}
+
+// 没有参考视频时音频编号是确定的:引擎按图→视频→音频排,用户音频就是 <Audio 1>。
+func TestSingleCallEvidenceNumbersAudioWithoutVideo(t *testing.T) {
+	ev := evidenceOf(hilo.CompilerInput{
+		TaskType: hilo.TaskR2VA, DurationSeconds: 5,
+		Assets: []hilo.CompilerAsset{
+			{AssetID: "image_1", MediaType: "image", Role: "reference"},
+			{AssetID: "audio_1", MediaType: "audio", Role: "reference"},
+		},
+	})
+	require.Equal(t, "<Audio 1>", ev.Assets[1].OfficialLabel)
+	require.False(t, ev.Assets[1].LabelUnknown)
+}
+
+// 提示词引用了不存在的音轨 → 拦。
+func TestLabelIssuesCatchesDanglingAudio(t *testing.T) {
+	assets := []singleCallEvidenceAsset{
+		{AssetID: "video_1", MediaType: "video", OfficialLabel: "<Video 1>"},
+	}
+	errs := labelIssues("<Video 1> plays; its track is <Audio 1>.", assets)
+	require.Empty(t, errs, "参考视频自带音轨算一位,<Audio 1> 合法")
+
+	errs = labelIssues("the voice comes from <Audio 2>.", assets)
+	require.NotEmpty(t, errs, "只可能有一位音轨,<Audio 2> 必须报出来")
+}
+
+// 用户音频编号未知(有参考视频)时**不查** <Audio N>:此时合法编号取决于视频有没有
+// 音轨 —— 可能是 1 也可能是 2,判哪一边都会误伤。
+func TestLabelIssuesSkipsAudioWhenLabelUnknown(t *testing.T) {
+	assets := []singleCallEvidenceAsset{
+		{AssetID: "video_1", MediaType: "video", OfficialLabel: "<Video 1>"},
+		{AssetID: "audio_1", MediaType: "audio", LabelUnknown: true},
+	}
+	require.Empty(t, labelIssues("<Video 1> plays; the voice follows <Audio 2>.", assets))
+	require.Empty(t, labelIssues("<Video 1> plays; the voice follows the user audio.", assets))
+}
+
+// 一个音轨都没有时**不查** <Audio N>:那种情况多半是用户自己在文本里说了
+// "音色参考音频1",而不是我们漏发素材。判错会把能用的提示词送去重修。
+func TestLabelIssuesIgnoresAudioWhenNoTrackExists(t *testing.T) {
+	assets := []singleCallEvidenceAsset{
+		{AssetID: "image_1", MediaType: "image", OfficialLabel: "<Picture 1>"},
+	}
+	require.Empty(t, labelIssues("the timbre follows <Audio 1>.", assets))
+}
+
+// **必须显式发 max_tokens。**
+//
+// 不发时上游默认上限会把正文截断在半句台词上 —— 返回的 JSON 仍闭合可解析,
+// 只是 h3_prompt 为空;表现成"这条请求的增强没生效"。
+func TestSingleCallRequestSendsMaxTokens(t *testing.T) {
+	got := fakeSequence(t, chatResponse(scReply("integrated_multimodal_description: [Shot 1] x")))
+	res := EnhancePrompt(context.Background(), scCfg(), "Bearer sk-x", scInput("一只猫"))
+	require.False(t, res.Degraded, res.DegradeReason)
+
+	var body map[string]any
+	require.NoError(t, common.Unmarshal((*got)[0], &body))
+	require.EqualValues(t, singleCallMaxOutputTokens, body["max_tokens"])
+}
+
+// 上限可配:配了就用配的。
+func TestSingleCallMaxTokensConfigurable(t *testing.T) {
+	cfg := scCfg()
+	cfg.PromptEnhance.MaxOutputTokens = 2048
+	got := fakeSequence(t, chatResponse(scReply("integrated_multimodal_description: [Shot 1] x")))
+	res := EnhancePrompt(context.Background(), cfg, "Bearer sk-x", scInput("一只猫"))
+	require.False(t, res.Degraded, res.DegradeReason)
+
+	var body map[string]any
+	require.NoError(t, common.Unmarshal((*got)[0], &body))
+	require.EqualValues(t, 2048, body["max_tokens"])
+}
+
+// 配了思考档位就**只发档位**,不再发布尔开关 —— 两个同时发时,不同上游
+// 认哪一个不一样,不如只发一个。
+func TestSingleCallUsesReasoningEffortWhenConfigured(t *testing.T) {
+	cfg := scCfg()
+	cfg.PromptEnhance.ReasoningEffort = "low"
+	got := fakeSequence(t, chatResponse(scReply("integrated_multimodal_description: [Shot 1] x")))
+	res := EnhancePrompt(context.Background(), cfg, "Bearer sk-x", scInput("一只猫"))
+	require.False(t, res.Degraded, res.DegradeReason)
+
+	var body map[string]any
+	require.NoError(t, common.Unmarshal((*got)[0], &body))
+	require.Equal(t, "low", body["reasoning_effort"])
+	require.NotContains(t, body, "chat_template_kwargs")
+}
+
+// 没配档位时照旧发布尔开关(默认关思考)。
+func TestSingleCallFallsBackToThinkingSwitch(t *testing.T) {
+	got := fakeSequence(t, chatResponse(scReply("integrated_multimodal_description: [Shot 1] x")))
+	res := EnhancePrompt(context.Background(), scCfg(), "Bearer sk-x", scInput("一只猫"))
+	require.False(t, res.Degraded, res.DegradeReason)
+
+	var body map[string]any
+	require.NoError(t, common.Unmarshal((*got)[0], &body))
+	require.NotContains(t, body, "reasoning_effort")
+	require.Contains(t, body, "chat_template_kwargs")
+}
+
+
+// **同一节写两遍要被拦下。**
+//
+// 实测 r2va 三次里有一次把 summary 整段原样写了两遍:节名一个不缺,
+// missingSections 查不出来(它只问"在不在"),而模型拿到的是一份自相矛盾的提示词。
+func TestDuplicateSectionsCatchesRepeatedSummary(t *testing.T) {
+	prompt := `subject_definitions:
+<Subject 1> is the dog in <Picture 1>.
+
+summary:
+[reference generation] the dog runs.
+
+retention_analysis:
+<Subject 1> (appears in [Shot 1]): fully_preserved - coat retained.
+
+summary:
+[reference generation] the dog runs again.
+
+detailed_description:
+[Shot 1] x
+
+overall_soundscape:
+wind
+
+non_diegetic_music:
+guitar
+`
+	errs := duplicateSections(prompt, "r2va")
+	require.NotEmpty(t, errs)
+	require.Contains(t, errs[0], "summary")
+}
+
+// **正文里顺口提到的节名不算重复。** 官方输出里 "the overall soundscape of the
+// video" 这种句式很常见,按出现次数硬数会把官方自己判错 —— 误判的代价是整次
+// 编译作废、静默回落 text。
+func TestDuplicateSectionsIgnoresProseMentions(t *testing.T) {
+	prompt := `integrated_multimodal_description: [Shot 1] she listens, and the overall soundscape of the video stays low.
+
+overall_soundscape: quiet room tone.
+
+non_diegetic_music: N/A
+`
+	require.Empty(t, duplicateSections(prompt, "t2va"))
+}
+
+// 装饰字符与分隔符不影响判定:### 4.6 Overall Soundscape 也算节标题。
+func TestDuplicateSectionsToleratesDecoratedHeaders(t *testing.T) {
+	prompt := `integrated_multimodal_description: [Shot 1] x
+
+**Overall Soundscape**: quiet.
+
+### non_diegetic_music
+A slow drone.
+
+## overall_soundscape:
+Loud again.
+`
+	require.NotEmpty(t, duplicateSections(prompt, "t2va"))
+}
+
+// **合规清单必须在系统提示词里,且排在写作说明之前。**
+//
+// 位置不是随意的:writing.txt 末尾就是 "Evidence follows:",证据要紧贴它;
+// 而清单读起来像"对上面规则的复核",要放在 rules.txt 之后。
+func TestSingleCallSystemIncludesAppendixBeforeWriting(t *testing.T) {
+	sys := buildSingleCallSystem("t2va", `{"user_request":"x"}`)
+	require.Contains(t, sys, "Compliance checklist")
+	idx := strings.Index(sys, "Compliance checklist")
+	require.Greater(t, idx, strings.Index(sys, strings.TrimSpace(singleCallRules)),
+		"清单要排在 rules.txt 之后")
+	require.Less(t, idx, strings.LastIndex(sys, `{"user_request":"x"}`),
+		"清单要排在证据之前")
+}
+
+
+// **正文节名用错要被确定性修掉,而不是花一轮重修。**
+//
+// 实测 r2va 四份样本里三份把正文节写成 integrated_multimodal_description ——
+// 两者指同一件事(分镜正文与台词都住在里面),差别只是名字。改名是确定性的结构
+// 修复;让模型重修一轮既花一次真实 relay 调用,第二轮仍可能写错。
+func TestNormalizeSectionHeadersRenamesForReferenceFamily(t *testing.T) {
+	prompt := `subject_definitions:
+<Subject 1> is the dog in <Picture 1>.
+
+summary:
+[reference generation] the dog runs.
+
+retention_analysis:
+<Subject 1> (appears in [Shot 1]): fully_preserved - coat retained.
+
+integrated_multimodal_description: [Shot 1] the overall soundscape of the video is low.
+
+overall_soundscape: wind.
+
+non_diegetic_music: guitar.
+`
+	fixed, note := normalizeSectionHeaders(prompt, "r2va")
+	require.NotEmpty(t, note)
+	require.Contains(t, fixed, "detailed_description:")
+	require.Contains(t, fixed, "the overall soundscape of the video", "正文里提到同名字样不能动")
+	require.Empty(t, missingSections(fixed, "r2va"), "改名之后应当只剩正文在")
+}
+
+// 帧族反过来:写了 detailed_description 要改成 integrated_multimodal_description。
+func TestNormalizeSectionHeadersRenamesForFrameFamily(t *testing.T) {
+	prompt := `detailed_description: [Shot 1] x
+
+overall_soundscape: y
+
+non_diegetic_music: z
+`
+	fixed, note := normalizeSectionHeaders(prompt, "t2va")
+	require.NotEmpty(t, note)
+	require.Contains(t, fixed, "integrated_multimodal_description:")
+}
+
+// 名字本来就对时**一个字节都不改**。
+func TestNormalizeSectionHeadersLeavesCorrectPromptAlone(t *testing.T) {
+	prompt := `detailed_description: [Shot 1] x
+
+overall_soundscape: y
+
+non_diegetic_music: z
+`
+	fixed, note := normalizeSectionHeaders(prompt, "r2va")
+	require.Empty(t, note)
+	require.Equal(t, prompt, fixed)
+}
+
+
+// **不发 response_format 是刻意的。**
+//
+// qwen3.8(MTP 投机解码)+ json_object 会被引擎的语法约束放过不去,线上日志:
+//
+//	Failed to advance FSM ... for tokens 0 → grammar rejected tokens [0] → 500
+//
+// qwen_pe 早前同一个症状(约一半请求 500),那里也没有发。取 JSON 靠
+// extractSingleCall 的容错解析。这条测试是为了防止"顺手把 response_format 加回来"。
+func TestSingleCallRequestOmitsResponseFormat(t *testing.T) {
+	got := fakeSequence(t, chatResponse(scReply("integrated_multimodal_description: [Shot 1] x")))
+	res := EnhancePrompt(context.Background(), scCfg(), "Bearer sk-x", scInput("一只猫"))
+	require.False(t, res.Degraded, res.DegradeReason)
+
+	var body map[string]any
+	require.NoError(t, common.Unmarshal((*got)[0], &body))
+	require.NotContains(t, body, "response_format",
+		"json_object 语法约束在 qwen3.8 上会被 xgrammar 拒成 500,不能发")
+	require.Contains(t, body, "max_tokens")
+}
+
+// 没有 response_format 时模型爱包围栏/写寒暄,必须仍然解析得出来。
+func TestSingleCallParsesWithoutResponseFormat(t *testing.T) {
+	raw := "好的，结果如下：\n" + strings.Repeat("\x60", 3) + "json\n" + scReply("integrated_multimodal_description: [Shot 1] x") + "\n" + strings.Repeat("\x60", 3) + "\n以上。"
+	got := fakeSequence(t, chatResponse(raw))
+	res := EnhancePrompt(context.Background(), scCfg(), "Bearer sk-x", scInput("一只猫"))
+	require.False(t, res.Degraded, res.DegradeReason)
+	require.Contains(t, res.EnhancedPrompt, "[Shot 1]")
+	require.NotEmpty(t, (*got)[0])
+}
+
+
+// **参考视频不进请求体,但它的标签必须留在证据里。**
+//
+// 参考视频是 plan C:不发给增强模型(引擎拉 URL 会挂死、内联又多 12288 token
+// 且开思考就没正文)。但 H3 那边照常收到视频 —— 所以提示词里仍要能写
+// <Video 1>,只是模型看不到它的画面。
+func TestSingleCallRequestOmitsVideoButKeepsLabel(t *testing.T) {
+	got := fakeSequence(t, chatResponse(scReply("subject_definitions:\n<Subject 1> is the man in <Video 1>.\n\nsummary:\n[reference generation] x.\n\nretention_analysis:\n<Subject 1> (appears in [Shot 1]): fully_preserved - identity kept.\n\ndetailed_description:\n[Shot 1] x\n\noverall_soundscape:\nwind.\n\nnon_diegetic_music:\nN/A")))
+	in := scInput("一只猫")
+	in.Compiler.TaskType = hilo.TaskR2VA
+	in.Compiler.Assets = []hilo.CompilerAsset{
+		{AssetID: "video_1", MediaType: "video", Role: "reference"},
+	}
+	in.VideoURLs = []string{"data:video/mp4;base64,AAAA"}
+	res := EnhancePrompt(context.Background(), scCfg(), "Bearer sk-x", in)
+	require.False(t, res.Degraded, res.DegradeReason)
+
+	body := string((*got)[0])
+	require.NotContains(t, body, "video_url", "视频不该再发给增强模型")
+	require.NotContains(t, body, "data:video")
+	// 证据 JSON 里的尖括号会被转义成 \u003c,所以按标签正文断言。
+	require.Contains(t, body, "Video 1", "标签要留在证据里")
+}
+
+// **看不见的素材必须显式标出来。**
+//
+// 不标的话模型会照着常识编一段画面(实测会写出完全无关的内容),而 H3 拿到的
+// 是一份描述着不存在的视频的提示词 —— 不报错,只是成片错位。
+func TestSingleCallEvidenceMarksVideoInvisible(t *testing.T) {
+	ev := evidenceOf(hilo.CompilerInput{
+		TaskType: hilo.TaskR2VA, DurationSeconds: 5,
+		Assets: []hilo.CompilerAsset{
+			{AssetID: "image_1", MediaType: "image", Role: "reference"},
+			{AssetID: "video_1", MediaType: "video", Role: "reference"},
+			{AssetID: "audio_1", MediaType: "audio", Role: "reference"},
+		},
+	})
+	require.True(t, ev.Assets[0].Observable, "图片会发出去,看得见")
+	require.False(t, ev.Assets[1].Observable, "参考视频不发,看不见")
+	require.False(t, ev.Assets[2].Observable, "参考音频不发,看不见")
+
+	b, err := common.Marshal(ev)
+	require.NoError(t, err)
+	require.Contains(t, string(b), "\"observable\":false")
+}
+
+// 关掉 send_input_images 时图片也看不见,证据要跟着说。
+func TestSingleCallEvidenceMarksImagesInvisibleWhenMediaOff(t *testing.T) {
+	ev := buildSingleCallEvidence(hilo.CompilerInput{
+		TaskType: hilo.TaskI2V, DurationSeconds: 5,
+		Assets: []hilo.CompilerAsset{{AssetID: "image_1", MediaType: "image", Role: "first_frame"}},
+	}, false)
+	require.False(t, ev.Assets[0].Observable)
+}
+
+// 合规清单里要有一条讲 observable=false 的规矩。
+func TestSingleCallAppendixExplainsVisibility(t *testing.T) {
+	require.Contains(t, singleCallAppendix, "observable")
+	require.Contains(t, singleCallAppendix, "cannot be seen")
+	// 编号未知的音频要按角色措辞引用,不能写死 <Audio N>(见 §8.1 的口径分歧)。
+	require.Contains(t, singleCallAppendix, "label_unknown")
+	require.Contains(t, singleCallAppendix, "the user-supplied audio reference")
+}
+
+
+// **参考素材在提示词里一句都不提 → 拦。**
+//
+// 参考视频不发给增强模型之后,实测出现过整段不提 <Video 1>(subject_definitions
+// 只写了 <Audio 1>)。H3 那边仍会收到视频,但提示词没告诉它拿这段视频干什么 ——
+// 成片照样出,只是不像"用了参考"。
+func TestMissingAssetMentionsCatchesDroppedVideo(t *testing.T) {
+	assets := []singleCallEvidenceAsset{
+		{AssetID: "video_1", MediaType: "video", OfficialLabel: "<Video 1>"},
+		{AssetID: "audio_1", MediaType: "audio", OfficialLabel: "<Audio 1>"},
+	}
+	dropped := `subject_definitions:
+<Audio 1> is the voice-timbre reference.
+
+summary:
+[reference generation] x
+`
+	errs := missingAssetMentions(dropped, assets, "r2va")
+	require.NotEmpty(t, errs)
+	require.Contains(t, errs[0], "<Video 1>")
+
+	kept := `subject_definitions:
+<Video 1> is the source video.
+<Audio 1> is the voice-timbre reference.
+`
+	require.Empty(t, missingAssetMentions(kept, assets, "r2va"))
+}
+
+// 帧族不查这条:<Picture N> 本来就写在首行说明里,而且图片可能只作为构图锚点
+// 被提一次。
+func TestMissingAssetMentionsOnlyForReferenceFamily(t *testing.T) {
+	assets := []singleCallEvidenceAsset{
+		{AssetID: "image_1", MediaType: "image", OfficialLabel: "<Picture 1>"},
+		{AssetID: "video_1", MediaType: "video", OfficialLabel: "<Video 1>"},
+	}
+	require.Empty(t, missingAssetMentions("integrated_multimodal_description: [Shot 1] x", assets, "i2v"))
+}
+
+
+// **编号未知的音频也要被检查到过。** 它没有数字可查,但 appendix 第 11 条把措辞
+// 定死了("user-supplied audio reference"),整段不提它,H3 就只能自己编一条嗓子 ——
+// 那正是这个函数要防的。
+func TestMissingAssetMentionsRequiresUnlabelledAudio(t *testing.T) {
+	assets := []singleCallEvidenceAsset{
+		{AssetID: "video_1", MediaType: "video", OfficialLabel: "<Video 1>"},
+		{AssetID: "audio_1", MediaType: "audio", LabelUnknown: true},
+	}
+	without := "subject_definitions:\n<Subject 1> is the character in <Video 1>.\n"
+	errs := missingAssetMentions(without, assets, "r2va")
+	require.NotEmpty(t, errs)
+	require.Contains(t, errs[0], "user-supplied audio reference")
+
+	with := "subject_definitions:\n<Subject 1> is the character in <Video 1>.\n" +
+		"The user-supplied audio reference is the voice-timbre reference for <Subject 1>.\n"
+	require.Empty(t, missingAssetMentions(with, assets, "r2va"), "大小写不敏感")
+
+	upper := "subject_definitions:\n<Subject 1> is the character in <Video 1>.\n" +
+		"The User-Supplied Audio Reference is the voice-timbre reference for <Subject 1>."
+	require.Empty(t, missingAssetMentions(upper, assets, "r2va"), "大小写不敏感")
+}
+

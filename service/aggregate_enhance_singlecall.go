@@ -33,6 +33,15 @@
 // 连续且等于请求时长），不核对写得好不好 —— 对齐上游 `transport_audit` 里
 // 那句 `semantic_quality_verified: False`。
 //
+// # 参考视频与参考音频不发给模型（方案 C）
+//
+// 增强阶段只发图片。视频与音频只以 <Video N> / <Audio N> 标签进证据，并带
+// observable:false 显式声明「你看不见」。理由是实测出来的三条：引擎自己拉远程
+// 视频会偶发挂死（重试链 30s→120s→480s，拖出 465 秒 504）；内联成 data URI 能
+// 绕过但每次多 12288 个视频 token；带上视频之后开思考就没正文（74–118 秒、空或
+// 截断，max_tokens 提到 16384 仍截断）。视频照常随**生成**请求发给 H3，所以
+// 标签仍按完整素材清单编号。等引擎侧修好再评估「发给模型看」（优先抽关键帧）。
+//
 // # 降级
 //
 // 失败**不掉回原始提示词，而是回落 text 改写**。理由与已删除的 ir 那条
@@ -61,6 +70,26 @@ var singleCallRules string
 
 //go:embed h3v20/writing.txt
 var singleCallWriting string
+
+// singleCallAppendix 我们自己的合规清单,**唯一一处非逐字移植**。
+//
+// 上游 v20 的提示词是逐字移植的(见本文件顶部),这一份不是 —— 它是拿 8 条用例
+// 与官方 Context-IR 逐条对照之后补的差距清单,由实验阶段用 run_s2.py 的第三个
+// 参数注入验证过(实验脚本与规则原文在 scripts/h3vid-pe/):
+//
+//	首帧/参考图清点      i2v 1689 → 2270 字符(官方 3779),元素级信息补齐
+//	non_diegetic_music   从"N/A 3/7"变成逐条谱曲
+//	保留标记语义         狗穿平铺夹克从 fully_preserved 改成 attribute_transfer,
+//	                     与官方判法一致
+//
+// **位置固定在 rules.txt 之后、writing.txt 之前**:writing.txt 末尾就是
+// "Evidence follows:",证据必须紧贴它;而清单要读起来像"对上面规则的复核",
+// 放在规则之后最自然。实验里也是这个位置。
+//
+// 它和 rules.txt 的关系是"覆盖而非替换":rules.txt 讲怎么写计划,这份只写
+// 实测会写错的九条。上游改 v20 时**不需要**同步这份。
+//go:embed h3v20/appendix.txt
+var singleCallAppendix string
 
 // 官方 skill 与两份协议规范。
 //
@@ -105,7 +134,7 @@ func buildSingleCallSystem(taskType, evidenceJSON string) string {
 	if strings.Contains(strings.ToLower(taskType), "r2v") {
 		parts = append(parts, guideRefEN)
 	}
-	parts = append(parts, skillShotPlanning, singleCallRules, singleCallWriting+evidenceJSON)
+	parts = append(parts, skillShotPlanning, singleCallRules, singleCallAppendix, singleCallWriting+evidenceJSON)
 	return strings.Join(parts, "\n\n")
 }
 
@@ -129,7 +158,32 @@ const singleCallMaxRepairRounds = 1
 // 就以配置为准。
 //
 // 做成 var 是为了让测试能把它压到毫秒级去验超时回落那条路。
+//
+// **这段预算是同步跑在客户提交请求里的**,所以它就是客户的最长等待:出厂默认配的是
+// 180 秒,最坏路径是「增强用满 180 秒 → 回落 text 再用 20 秒」= 200 秒才轮到生成。
+// 上线前要确认前面的负载均衡与客户端超时扛得住这个数。
 var singleCallTimeout = 120 * time.Second
+
+// singleCallMaxOutputTokens 输出 token 上限的内置默认。
+//
+// **这个上限不能省。** 一次完整产物是 content_plan(几千 token)+ 整段
+// h3_prompt,实测 8192 够用;而不发这个字段时上游默认上限会把正文截断在
+// 半句台词上 —— 返回的 JSON 仍是闭合可解析的,只是 h3_prompt 为空。
+// 那种失败**看起来不像截断**:传输检查报的是"h3_prompt must be nonempty",
+// 重修一轮还是同一份被截断的输出,最后静默回落 text。
+//
+// **它是"思考 + 正文"的总量。** 关思考时 8192 全是正文,富余;开档位之后正文
+// 只剩 8192 减去思考那一截(实测 low 档 thinking 4000+),图生视频这种长清点
+// 最可能撞上。要更保险就配 max_output_tokens=16384。
+const singleCallMaxOutputTokens = 8192
+
+// singleCallMaxTokens 本次请求的输出上限:配置优先,没配用内置默认。
+func singleCallMaxTokens(configured int) int {
+	if configured > 0 {
+		return configured
+	}
+	return singleCallMaxOutputTokens
+}
 
 // singleCallMinTimeoutSeconds 干跑校验的下限:低于它就该提醒。
 //
@@ -172,7 +226,7 @@ func compileViaSingleCall(
 	if in.Compiler == nil {
 		return nil, fmt.Errorf("缺少请求事实(CompilerInput),无法编译")
 	}
-	ev := buildSingleCallEvidence(*in.Compiler)
+	ev := buildSingleCallEvidence(*in.Compiler, in.SendMedia)
 	evJSON, err := common.Marshal(ev)
 	if err != nil {
 		return nil, fmt.Errorf("序列化证据失败: %w", err)
@@ -180,11 +234,24 @@ func compileViaSingleCall(
 	// 写作说明的最后一句就是 "Evidence follows:"，所以证据直接跟在后面。
 	instruction := buildSingleCallSystem(ev.Task.Type, string(evJSON))
 
+	// **参考视频不发给增强模型。** 发过、也修好了，但代价和稳定性都不划算：
+	//
+	//   - 引擎自己拉 CDN 视频会偶发挂死（30s→120s→480s 重试链 ⇒ 465 秒 504），
+	//     内联成 data URI 能绕过，但一次请求要多 12288 个视频 token；
+	//   - 带上视频之后**开思考就没正文**（实测 74–118 秒、正文空或截断，把
+	//     max_tokens 提到 16384 仍然截断），只能硬性关思考 —— 等于放弃了
+	//     资产清点那点收益。
+	//
+	// 所以先只把 <Video N> 标签和时长写进证据，让模型知道「有这么一段参考、
+	// 它提供的是什么」，画面内容交给生成段的 H3 自己看（视频照常随生成请求发给
+	// H3，只是不给增强模型）。等引擎侧那两件修好再回到「发给模型看」这条路。
+	//
+	// 代价：参考视频的构图/运镜只能靠用户提示词，提示词里写不准的那部分补不了。
 	msgs := []map[string]any{
 		{"role": "system", "content": instruction},
-		// 素材跟着第一轮发出去。证据 JSON 里只有 asset_id 和角色，
-		// **模型要看见素材本身**才填得对绑定里的可见特征。
-		{"role": "user", "content": buildUserContent(in.Prompt, in.ImageURLs, in.VideoURLs, in.SendMedia)},
+		// 图片照常发：证据 JSON 里只有 asset_id 和角色，**模型要看见图本身**
+		// 才填得对可见特征。
+		{"role": "user", "content": buildUserContent(in.Prompt, in.ImageURLs, nil, in.SendMedia)},
 	}
 
 	total := &dto.Usage{}
@@ -192,15 +259,31 @@ func compileViaSingleCall(
 	var lastRaw string
 
 	for round := 0; round <= singleCallMaxRepairRounds; round++ {
+		// **不发 response_format。** qwen3.8(MTP 投机解码)+ json_object 会被引擎
+		// 的语法约束放过不去:线上日志(qwen3.8-flash-fp8 副本,2026-11-20)
+		//
+		//	EngineCore ERROR [backend_xgrammar.py:168] Failed to advance FSM for request … for tokens 0
+		//	EngineCore ERROR [scheduler.py:2131] Unexpected: grammar rejected tokens [0] … Terminating request
+		//	APIServer  ERROR [serving.py:207] Request … failed with an internal error during generation  → 500
+		//
+		// 关思考那一档尤其容易撞上(实测一段窗口内三次)。qwen_pe 早前也是同一个
+		// 症状,那里的结论是"约一半请求 500",于是同样不发这个字段 —— 取 JSON 靠
+		// extractSingleCall 的容错解析(围栏、前后缀、游离花括号都扛)。
+		// 少一个字段换来的是"不再有一整类 500",不亏。
 		body := map[string]any{
-			"model":    model,
-			"messages": msgs,
-			"stream":   false,
-			// 要 JSON 对象。上游不认这个字段时会忽略它(不是报错)，所以
-			// extractSingleCall 仍然得自己扛住围栏和前后缀。
-			"response_format": map[string]any{"type": "json_object"},
+			"model":      model,
+			"messages":   msgs,
+			"stream":     false,
+			"max_tokens": singleCallMaxTokens(in.MaxOutputTokens),
 		}
-		applyThinking(body, in.Thinking)
+		// 思考档位:配了 reasoning_effort 就照发,否则退回布尔开关。
+		// 两者不能同时发 —— 实测同时发时上游按档位走,布尔那个被忽略,
+		// 但换个上游就可能反过来,不如只发一个。
+		if effort := strings.TrimSpace(in.ReasoningEffort); effort != "" {
+			body["reasoning_effort"] = effort
+		} else {
+			applyThinking(body, in.Thinking)
+		}
 		payload, err := common.Marshal(body)
 		if err != nil {
 			return nil, fmt.Errorf("构造编译请求失败: %w", err)
@@ -216,6 +299,13 @@ func compileViaSingleCall(
 		lastRaw = raw
 
 		out, perr := extractSingleCall(raw)
+		if perr == nil {
+			// 节名用错(帧族名 ↔ 参考族名)在这里**确定性修掉**,不花一轮重修。
+			if fixed, note := normalizeSectionHeaders(out.H3Prompt, ev.Task.Type); note != "" {
+				common.SysLog(fmt.Sprintf("aggregate enhance: singlecall %s (model=%s)", note, model))
+				out.H3Prompt = fixed
+			}
+		}
 		if perr != nil {
 			// **递回模型的必须是英文。** extractSingleCall 的报错是面向
 			// 运维的中文,直接塞进重修指令等于一边要求它"English elsewhere"
@@ -269,7 +359,18 @@ type singleCallEvidence struct {
 type singleCallEvidenceTask struct {
 	Type            string  `json:"type"`
 	DurationSeconds float64 `json:"duration_seconds"`
-	GenerateAudio   bool    `json:"generate_audio"`
+	// EffectiveDurationSeconds 引擎**真正交付**的时长(帧栅格对齐后)。
+	//
+	// 官方规范(base-en.txt:34)明确写着 "S.SS is the effective video duration
+	// formatted to exactly two decimal places" —— 即尾帧对齐那句
+	// "aligns with the S.SS-second mark" 里的数**不是**客户请求的秒数。
+	// H3 的出片帧数是 17k+5,请求 5 秒实际交付 124 帧 = 5.17 秒。
+	//
+	// 只给 duration_seconds 时模型只能写 5.00,而官方写 5.17 —— 差 0.17 秒
+	// 看着微不足道,但它正是"尾帧落在成片之外"那种不报错的偏差来源:
+	// 提示词让画面在 5.00 秒定住,而最后一帧在 5.17 秒。
+	EffectiveDurationSeconds float64 `json:"effective_duration_seconds,omitempty"`
+	GenerateAudio            bool    `json:"generate_audio"`
 }
 
 type singleCallEvidenceAsset struct {
@@ -283,39 +384,107 @@ type singleCallEvidenceAsset struct {
 	// image_2 再写 image_1，<Picture 1> 就指向了第二张图 —— 提示词指着的
 	// 素材和它描述的不是同一个，而且不报错。
 	OfficialLabel string `json:"official_label"`
+	// Observable 这段素材**你看得见吗**。
+	//
+	// 参考视频与参考音频一律 false —— 增强阶段不把它们发给模型(原因见
+	// buildSingleCallSystem / 本文件顶部"不送参考视频"那段)。**必须显式写出来**,
+	// 而不是让模型从"素材清单里有 video_1"自己推断:看不见又不说的结果是它照着
+	// 常识编一段画面(实测会写成"海滩上奔跑的狗"这种完全无关的内容),而 H3 拿到
+	// 的是一份描述着不存在的视频的提示词 —— 不报错,只是成片错位。
+	Observable bool `json:"observable"`
+	// LabelUnknown 这段音频的官方编号**我们不知道**(引擎按"视频有没有音轨"决定)。
+	//
+	// 为 true 时 OfficialLabel 为空,提示词里必须按角色措辞引用它,不能写死
+	// <Audio N> —— 写错会把音色指到参考视频自己的声轨上,而且不报错。
+	LabelUnknown bool `json:"label_unknown,omitempty"`
 }
 
-func buildSingleCallEvidence(in hilo.CompilerInput) singleCallEvidence {
+// singleCallEffectiveDuration 请求秒数 → 引擎实际交付秒数,保留两位小数。
+//
+// 取不到(秒数 <= 0,即默认档由引擎定帧数)时返回 0 —— 证据里这个字段带
+// omitempty,于是**不写**,模型只会看到请求秒数。宁可让它按请求秒数写,
+// 也不要在这里编一个栅格数出来:对齐公式由 common.H3DeliveredDuration 单一
+// 持有,引擎改栅格时只有那里要改。
+func singleCallEffectiveDuration(seconds float64) float64 {
+	if seconds <= 0 {
+		return 0
+	}
+	_, delivered := common.H3DeliveredDuration(int(math.Round(seconds)))
+	if delivered <= 0 {
+		return 0
+	}
+	return math.Round(delivered*100) / 100
+}
+
+// buildSingleCallEvidence 把请求事实翻成证据。
+//
+// mediaVisible 对应 send_input_images:素材真发给模型时为 true。只有**图片**会随它
+// 变成可见 —— 参考视频与参考音频在增强阶段一律不发送,所以 observable 恒为 false。
+func buildSingleCallEvidence(in hilo.CompilerInput, mediaVisible bool) singleCallEvidence {
 	ev := singleCallEvidence{
 		UserRequest: strings.TrimSpace(in.UserRequest),
 		Task: singleCallEvidenceTask{
-			Type:            string(in.TaskType),
-			DurationSeconds: in.DurationSeconds,
-			GenerateAudio:   in.GenerateAudio,
+			Type:                     string(in.TaskType),
+			DurationSeconds:          in.DurationSeconds,
+			EffectiveDurationSeconds: singleCallEffectiveDuration(in.DurationSeconds),
+			GenerateAudio:            in.GenerateAudio,
 		},
 		Assets: make([]singleCallEvidenceAsset, 0, len(in.Assets)),
 	}
 	// 编号规则：按 media_type 分别计数、按提交顺序递增。
 	//
-	// **必须和素材实际发出去的顺序一致**（ImageURLs / VideoURLs，由
-	// middleware 的 compilerImages/compilerVideos 给出）——标号按证据发，
-	// 而模型看到的是那两个列表，错开一位就是「看着第二张图读 <Picture 1>」。
+	// **必须和 H3 实际收到的顺序一致**（middleware 的 compilerImages /
+	// compilerVideos / RefAudios 给出）——标号按证据发，而 <Picture N> 最终指的是
+	// **生成段**收到的那一批字节。错开一位就是「看着第二张图读 <Picture 1>」。
+	//
+	// 注意这跟"增强模型看到什么"是两件事：参考视频与参考音频不再发给增强模型
+	// （见 compileViaSingleCall 顶部），但它们在 H3 那边照常存在，所以标号仍按
+	// 完整素材清单编号，模型只是通过 observable:false 知道哪几段自己看不见。
+	// **有参考视频时,用户音频不编号。**
+	//
+	// 引擎的编号规则(对照 vllm-omni 的 ordered_references / encoder_processing)
+	// 是「先图、再视频、再音频」,但**带音轨的参考视频会先占掉一个 <Audio> 槽位**,
+	// 再拿它的 <Video> 号。于是「1 段有声参考视频 + 1 段用户音色参考」得到的是
+	// 视频音轨 = <Audio 1>、用户音频 = <Audio 2>;而我们只看得到 URL,拿不准那段
+	// 视频有没有音轨。
+	//
+	// 编错号的后果不是报错,是**音色指到参考视频自己的声轨上**。所以宁可不说数字:
+	// 音频素材标 label_unknown,由合规清单要求模型按角色措辞引用(见 appendix 第 11 条)。
+	//
+	// 没有参考视频时是确定的:引擎按图→视频→音频排,用户音频就是 <Audio 1>。
 	names := map[string]string{"image": "Picture", "video": "Video", "audio": "Audio"}
+	hasVideo := false
+	for _, a := range in.Assets {
+		if a.MediaType == "video" {
+			hasVideo = true
+			break
+		}
+	}
 	counters := map[string]int{}
 	for _, a := range in.Assets {
 		if strings.TrimSpace(a.AssetID) == "" {
 			continue
 		}
 		label := ""
+		labelUnknown := false
 		if n, ok := names[a.MediaType]; ok {
-			counters[a.MediaType]++
-			label = fmt.Sprintf("<%s %d>", n, counters[a.MediaType])
+			if a.MediaType == "audio" && hasVideo {
+				labelUnknown = true
+			} else {
+				counters[a.MediaType]++
+				label = fmt.Sprintf("<%s %d>", n, counters[a.MediaType])
+			}
 		}
 		ev.Assets = append(ev.Assets, singleCallEvidenceAsset{
 			AssetID:       a.AssetID,
 			MediaType:     a.MediaType,
 			Role:          a.Role,
 			OfficialLabel: label,
+			// 引擎分配的音频号,我们拿不准(见上面 hasVideo 那段)。
+			LabelUnknown: labelUnknown,
+			// 只有图片会随 send_input_images 发给模型;视频与音频在增强阶段
+			// 一律不发送(见 compileViaSingleCall 顶部),所以恒为 false。
+			Observable: mediaVisible && a.MediaType == "image",
 		})
 	}
 	return ev
@@ -464,7 +633,11 @@ func extractSingleCall(raw string) (*singleCallOutput, error) {
 // ── 传输检查 ────────────────────────────────────────────────────────
 
 // officialLabelPattern 提示词里引用的素材记号，如 `<Picture 2>`。
-var officialLabelPattern = regexp.MustCompile(`<(Picture|Video)\s+(\d+)>`)
+//
+// 必须含 **Audio**:参考族会把参考音频写成 <Audio 1>(音色参考),而参考视频
+// 自带的音轨官方也算一个 <Audio>。漏掉这一类,提示词里指向不存在音轨的
+// <Audio 2> —— 那正是"参考了不存在的素材"这种不报错的错 —— 就查不出来。
+var officialLabelPattern = regexp.MustCompile(`<(Picture|Video|Audio)\s+(\d+)>`)
 
 // shotTimeTolerance 时间比对容差。与上游的 0.002 一致。
 const shotTimeTolerance = 0.002
@@ -503,6 +676,8 @@ func transportIssues(out *singleCallOutput, ev singleCallEvidence) (errs []strin
 	errs = append(errs, labelIssues(out.H3Prompt, ev.Assets)...)
 	errs = append(errs, dialogueIssues(ev.UserRequest, out.H3Prompt)...)
 	errs = append(errs, missingSections(out.H3Prompt, ev.Task.Type)...)
+	errs = append(errs, duplicateSections(out.H3Prompt, ev.Task.Type)...)
+	errs = append(errs, missingAssetMentions(out.H3Prompt, ev.Assets, ev.Task.Type)...)
 	return errs, warns
 }
 
@@ -533,6 +708,16 @@ func shotTimingIssues(shots []singleCallShot, duration float64) []string {
 	return nil
 }
 
+// audioLabelUnknown 有音频素材的官方编号我们不知道(通常是"参考视频带没带音轨")。
+func audioLabelUnknown(assets []singleCallEvidenceAsset) bool {
+	for _, a := range assets {
+		if a.LabelUnknown {
+			return true
+		}
+	}
+	return false
+}
+
 // labelIssues 提示词不能引用不存在的素材。
 //
 // `<Picture 3>` 而实际只传了两张图 —— H3 拿不到第三张，表现是那一段描述
@@ -548,13 +733,31 @@ func labelIssues(prompt string, assets []singleCallEvidenceAsset) []string {
 			counts["Picture"]++
 		case "video":
 			counts["Video"]++
+			// 参考视频**可能**自带音轨,引擎会给它一个 <Audio> 槽位。我们拿不到
+			// "这段视频有没有音轨",所以这里多算一位 —— 多一位不会让合法提示词被判错,
+			// 少一位会把照官方写法写的 <Audio 1> 判成不存在的素材、白烧一轮重修。
+			counts["Audio"]++
+		case "audio":
+			// 编号未知时不计数:合法范围取决于视频有没有音轨(见 buildSingleCallEvidence 的 hasVideo)。
+			if !a.LabelUnknown {
+				counts["Audio"]++
+			}
 		}
 	}
+	// 一个音轨都没有时不查 <Audio N>:那种情况下"提示词里出现 <Audio 1>"多半
+	// 是用户自己在文本里说了"音色参考音频1",而不是我们漏发了素材 ——
+	// 每一条都判错会把一份本来能用的提示词送去重修,严重的还整次回落 text。
+	countsAudio := counts["Audio"]
+	// 用户音频编号未知(有参考视频)时也跳过:合法编号可能是 1 也可能是 2,
+	// 判哪一边都会误伤。这类素材的编号问题由"不写数字"这条规则规避。
 	var out []string
 	seen := map[string]bool{}
 	for _, m := range officialLabelPattern.FindAllStringSubmatch(prompt, -1) {
 		kind := m[1]
 		n, err := strconv.Atoi(m[2])
+		if kind == "Audio" && (countsAudio == 0 || audioLabelUnknown(assets)) {
+			continue
+		}
 		if err != nil || n < 1 || n > counts[kind] {
 			if !seen[kind] {
 				out = append(out, "Prompt references nonexistent "+kind)
@@ -626,6 +829,149 @@ func missingSections(prompt, taskType string) []string {
 	return []string{"Required official sections are missing: " + strings.Join(missing, ", ") +
 		". " + sectionRepairHint(taskType) +
 		" Emit every section, in the order given by the H3 writing guide."}
+}
+
+// ── 素材必须被点名 ──────────────────────────────────────────────────
+
+// unlabelledAudioPhrase 编号未知的音频在提示词里的固定措辞(appendix 第 11 条)。
+// 判据用**措辞**而不是数字:数字我们不知道,措辞是规则里定死的。
+const unlabelledAudioPhrase = "user-supplied audio reference"
+
+// missingAssetMentions 证据里的素材在提示词里一次都没出现。
+//
+// **这是"静默丢掉参考"的那类错。** 参考族的提示词靠标签把素材和 H3 收到的字节
+// 绑起来:一句都不提 <Video 1>,H3 就只剩"参考生成"这个模式,不知道该拿那段视频
+// 干什么 —— 成片照样出,只是看着不像"用了参考"。
+//
+// 实测:参考视频不发给增强模型(见 compileViaSingleCall 顶部)之后,模型曾整段
+// 不提 <Video 1>(subject_definitions 里只写了 <Audio 1>),提示词侧的可见性规则
+// 修的就是这个,这道检查兜住同样的问题。
+//
+// 只对**参考族**要求视频/音频必须出现。图片不在这里要求 —— 它可能只作为构图锚点
+// 被提到一次、或写在 <Subject N> 的定义里,强行要求反而误判。
+func missingAssetMentions(prompt string, assets []singleCallEvidenceAsset, taskType string) []string {
+	if strings.TrimSpace(prompt) == "" || !strings.Contains(strings.ToLower(taskType), "r2v") {
+		return nil
+	}
+	var missing []string
+	for _, a := range assets {
+		if a.MediaType != "video" && a.MediaType != "audio" {
+			continue
+		}
+		// 编号未知的音频没有数字可查,但**必须按角色措辞出现过**(appendix 第 11 条把
+		// 措辞定死了)。整段不提它,H3 就只能自己编一条嗓子 —— 那正是这个函数要防的。
+		if a.LabelUnknown {
+			if !strings.Contains(strings.ToLower(prompt), unlabelledAudioPhrase) {
+				missing = append(missing, unlabelledAudioPhrase)
+			}
+			continue
+		}
+		if a.OfficialLabel == "" {
+			continue
+		}
+		if !strings.Contains(prompt, a.OfficialLabel) {
+			missing = append(missing, a.OfficialLabel)
+		}
+	}
+	if len(missing) == 0 {
+		return nil
+	}
+	return []string{"Every reference asset must be named at least once (definition and retention line); missing: " +
+		strings.Join(missing, ", ")}
+}
+
+// ── 重复节 ──────────────────────────────────────────────────────────
+
+// duplicateSections 同一节被写了两遍。**这是错误。**
+//
+// 实测 r2va 三次里有一次把 summary 整段原样写了两遍:节名一个不缺,missingSections
+// 查不出来(它只问"在不在"),而 H3 拿到的是一份自相矛盾的提示词 —— 两份 summary
+// 讲同一件事时看不出害处,但只要其中一份写偏了(实测另一份把参考视频当成了唯一
+// 素材),模型就只能二选一,而不报错。
+//
+// 只认**行首**的节名形态(允许 **、#、-、反引号这类装饰和任意分隔符),不认正文里
+// 顺口提到的 "the overall soundscape of the video":后者在官方输出里很常见,
+// 按出现次数硬数会把官方自己判错。
+func duplicateSections(prompt, taskType string) []string {
+	if strings.TrimSpace(prompt) == "" {
+		return nil
+	}
+	var dup []string
+	for _, s := range requiredSections(taskType) {
+		if n := sectionHeaderCount(prompt, s); n > 1 {
+			dup = append(dup, fmt.Sprintf("%s ×%d", s, n))
+		}
+	}
+	if len(dup) == 0 {
+		return nil
+	}
+	return []string{"Each required section must be emitted exactly once; these are repeated: " +
+		strings.Join(dup, ", ") + ". Merge each into a single section."}
+}
+
+// ── 节名归一 ────────────────────────────────────────────────────────
+
+// normalizeSectionHeaders 把"用错名字"的那一节改成官方名字。
+//
+// 实测 r2va 的正文节名会写成 integrated_multimodal_description(帧族那个名字),
+// 而参考族要求 detailed_description —— 两者**指的是同一件事**(分镜正文与台词都
+// 住在里面),差别只是名字。四份样本里三份犯这个错。
+//
+// 这不是"放过错误":漏了正文那一节是真错误(台词会丢),而**改个名字**是确定性
+// 的结构修复,比让模型重修一轮更快也更稳 —— 重修花掉的是一次真实的 relay 调用,
+// 而且第二轮仍可能写错(实测就会)。open-h3-ir 的结论同向:结构该由代码定,
+// 散文交给模型。
+//
+// 反方向(帧族写了 detailed_description)一并修,理由相同。
+func normalizeSectionHeaders(prompt, taskType string) (string, string) {
+	if strings.TrimSpace(prompt) == "" {
+		return prompt, ""
+	}
+	if strings.Contains(strings.ToLower(taskType), "r2v") {
+		if sectionHeaderCount(prompt, "detailed_description") == 0 &&
+			sectionHeaderCount(prompt, "integrated_multimodal_description") > 0 {
+			return renameSectionHeader(prompt, "integrated_multimodal_description", "detailed_description"),
+				"正文节名 integrated_multimodal_description → detailed_description(r2va 要求后者)"
+		}
+		return prompt, ""
+	}
+	if sectionHeaderCount(prompt, "integrated_multimodal_description") == 0 &&
+		sectionHeaderCount(prompt, "detailed_description") > 0 {
+		return renameSectionHeader(prompt, "detailed_description", "integrated_multimodal_description"),
+			"正文节名 detailed_description → integrated_multimodal_description(帧族要求后者)"
+	}
+	return prompt, ""
+}
+
+// renameSectionHeader 只改**行首那个节名**,正文里提到的同名字样不动。
+func renameSectionHeader(prompt, from, to string) string {
+	parts := strings.Split(from, "_")
+	for i, p := range parts {
+		parts[i] = regexp.QuoteMeta(p)
+	}
+	needle := "(?im)^([ \t>*#_\\-\x60]*)" + strings.Join(parts, "[\\s_\\-]*") + "([ \t*_\\-]*:)"
+	re, err := regexp.Compile(needle)
+	if err != nil {
+		return prompt
+	}
+	return re.ReplaceAllString(prompt, "${1}"+to+"${2}")
+}
+
+// sectionHeaderCount 数这一节作为**标题**出现了几次。
+//
+// 节名里的下划线在模型笔下可能是空格或连字符(与 normalizeSectionText 同一套
+// 容错),所以针里用 [\s_-]* 连接各段。
+func sectionHeaderCount(prompt, name string) int {
+	parts := strings.Split(name, "_")
+	for i, p := range parts {
+		parts[i] = regexp.QuoteMeta(p)
+	}
+	needle := "(?im)^[ \t>*#_\\-\x60]*" + strings.Join(parts, "[\\s_\\-]*") + "[ \t*_\\-]*:"
+	re, err := regexp.Compile(needle)
+	if err != nil {
+		return 0
+	}
+	return len(re.FindAllStringIndex(prompt, -1))
 }
 
 // requiredSections 这次玩法要求哪几节。

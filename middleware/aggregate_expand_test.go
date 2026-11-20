@@ -385,7 +385,24 @@ func TestBuildTaskContextListsReferenceAssets(t *testing.T) {
 	})
 	require.Contains(t, got, "2 reference image(s), labelled <Picture 1>..<Picture 2>")
 	require.Contains(t, got, "1 reference video(s), labelled <Video 1>")
+	// **有参考视频时不写音频编号。** 引擎会给带音轨的参考视频先占一个 <Audio> 槽位,
+	// 写死 <Audio 1> 会把音色指到视频自己的声轨上 —— 这条与 singlecall 的证据口径一致,
+	// 因为 singlecall 失败后会回落到 text,用的就是这段描述。
+	require.NotContains(t, got, "<Audio 1>")
+	require.Contains(t, got, "the user-supplied audio reference")
+}
+
+// 没有参考视频时音频编号是确定的:引擎按图→视频→音频排,用户音频就是 <Audio 1>。
+func TestBuildTaskContextNumbersAudioWithoutReferenceVideo(t *testing.T) {
+	got := buildTaskContextFromBody(map[string]any{
+		"metadata": map[string]any{
+			"task_type":        "r2va",
+			"src_ref_images":   []any{"a"},
+			"reference_audios": []any{"d"},
+		},
+	})
 	require.Contains(t, got, "<Audio 1>")
+	require.NotContains(t, got, "the user-supplied audio reference")
 }
 
 // 首尾帧齐全时说明两张图各自的时间角色 —— 说反了模型会朝错误的方向收敛。
@@ -566,7 +583,8 @@ func TestBuildTaskContextAcceptsSingularReferenceKeys(t *testing.T) {
 		},
 	})
 	require.Contains(t, got, "1 reference video(s)")
-	require.Contains(t, got, "1 reference audio(s)")
+	// 有参考视频 → 音频不写号(见 TestBuildTaskContextListsReferenceAssets)。
+	require.Contains(t, got, "1 user-supplied audio reference(s)")
 	require.NotContains(t, got, "none yet")
 }
 
@@ -1446,3 +1464,32 @@ func TestDistributeRejectsUndeliverableBeforeAnyWork(t *testing.T) {
 	require.False(t, reached, "被拒的请求不该再往下走一步(建任务、预扣、增强都在这之后)")
 	require.Zero(t, enhanced, "被拒的请求不能先花一次提示词增强")
 }
+
+// **参考音频也要进编译事实,排在视频之后。**
+//
+// 早先这里只有图和视频,于是用户传了音色参考、提示词里一个字都不提,H3 只能
+// 自己编一条嗓子 —— 不报错的那类错。官方 r2va 的 <Audio N> 是一条正经的
+// subject 定义(音色参考),它必须能被写出来。
+//
+// 编号口径与生成段一致:图 → 视频 → 音频。排错序会让 <Audio 1> 指向别的素材。
+func TestBuildCompilerInputReferenceAudioAfterVideo(t *testing.T) {
+	body := map[string]any{
+		"prompt":   "a cat",
+		"duration": 6,
+		"metadata": map[string]any{
+			"task_type":        "r2va",
+			"src_ref_images":   []any{"https://example.com/r1.png"},
+			"reference_videos": []any{"https://example.com/v.mp4"},
+			"reference_audios": []any{"https://example.com/a.mp3"},
+		},
+	}
+	in := compilerInputFor(body, "a cat")
+	require.NotNil(t, in)
+	require.Len(t, in.Assets, 3)
+	require.Equal(t, []string{"image", "video", "audio"},
+		[]string{in.Assets[0].MediaType, in.Assets[1].MediaType, in.Assets[2].MediaType})
+	require.Equal(t, "audio_1", in.Assets[2].AssetID)
+	require.Equal(t, "https://example.com/a.mp3", in.Assets[2].URL)
+	require.Equal(t, "reference", in.Assets[2].Role)
+}
+

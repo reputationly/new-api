@@ -66,6 +66,7 @@ scripts/upstream-probe/results/
 
 # 探针脚本跑一次就会留下 __pycache__，一次 `git add -A` 就会把 .pyc 带进历史。
 scripts/upstream-probe/__pycache__/
+scripts/h3vid-pe/__pycache__/
 
 # 构建产物（`new-api-linux-amd64` 那类单文件二进制，动辄 130 MB）。
 /dist/

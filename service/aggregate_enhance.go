@@ -83,7 +83,11 @@ type EnhanceInput struct {
 	// 拼进 **user 消息**里一个带分隔标记的块(不是系统提示词的"请求事实"):它是待理解
 	// 的内容,而 TaskContext 描述的是这一次请求本身。
 	Lyrics string
-	// ImageURLs / VideoURLs 本次要给模型看的素材。
+	// ImageURLs / VideoURLs 本次请求带的素材。
+	//
+	// **singlecall 只把图片发给模型。** 参考视频在增强阶段不发送(引擎自拉远程
+	// 视频会挂死、内联又多一万多 token 且开思考没正文，见 aggregate_enhance_singlecall.go
+	// 里的说明)，只以 <Video N> 标签进证据；text 模式仍然两个都发。
 	ImageURLs []string
 	VideoURLs []string
 	// SendMedia 是否真的把素材发出去(对应 send_input_images 开关)。
@@ -91,8 +95,11 @@ type EnhanceInput struct {
 	// Thinking 让模型开启"思考"。默认关 —— 思考型模型会重新推导任务、
 	// 绕开 schema(见 common.AggregatePromptEnhance.Thinking)。
 	Thinking bool
-	// ReasoningEffort 仅 mode=h3_image_pe 使用,非空时直接传给增强模型。
+	// ReasoningEffort 思考档位。非空时直接传给增强模型,覆盖 Thinking。
+	// h3_image_pe 与 singlecall 两个模式使用(见 common.AggregatePromptEnhance.ReasoningEffort)。
 	ReasoningEffort string
+	// MaxOutputTokens 输出 token 上限。0 = 按模式取内置默认(仅 singlecall 读)。
+	MaxOutputTokens int
 	// TaskContext 请求事实的文本描述,拼进 text 模式的系统提示词。
 	TaskContext string
 	// Compiler singlecall 编译器所需的结构化请求事实。
@@ -215,7 +222,13 @@ func EnhancePrompt(ctx context.Context, agg *common.AggregateModel, authHeader s
 	// (见 SendInputImages 字段注释),不该散在每个调用点各判一次。
 	in.SendMedia = cfg.IsSendInputImages()
 	in.Thinking = cfg.IsThinking()
+	// 思考档位与输出上限**按配置透传**,不在各模式里各读一遍 cfg:模式分支
+	// 拿到的 EnhanceInput 就是这一次请求的全部输入,少了这两个字段就只能
+	// 回头去读配置,于是两条路对"默认值是什么"各有一套说法。
+	// **不改写档位原文** —— h3_image_pe 那条按"原样透传"钉了测试,而 singlecall
+	// 用之前自己 TrimSpace(见其请求构造)。两处语义各自清楚,比在这里统一改写安全。
 	in.ReasoningEffort = cfg.ReasoningEffort
+	in.MaxOutputTokens = cfg.MaxOutputTokens
 
 	// ── qwen_pe 模式(Qwen-Image-2.1 官方 PE 协议)──────────────
 	//
