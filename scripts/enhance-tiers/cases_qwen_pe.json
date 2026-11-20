@@ -1,0 +1,76 @@
+[
+ {
+  "id": "q_poster_title",
+  "mode": "qwen_pe",
+  "images": [
+   "/Users/reputationly/Desktop/code/api/new-api/.h3exp/h3pe/assets/poster_cn.png"
+  ],
+  "prompt": "把标题改成“秋季上新”，其它不变",
+  "ratio": "adaptive",
+  "must": [
+   "秋季上新"
+  ]
+ },
+ {
+  "id": "q_chart_value",
+  "mode": "qwen_pe",
+  "images": [
+   "/Users/reputationly/Desktop/code/api/new-api/.h3exp/h3pe/assets/chart_bar.png"
+  ],
+  "prompt": "把 Q3 的 North America 数值改成 95，柱子相应变高",
+  "ratio": "adaptive",
+  "must": [
+   "95"
+  ]
+ },
+ {
+  "id": "q_ui_toggle",
+  "mode": "qwen_pe",
+  "images": [
+   "/Users/reputationly/Desktop/code/api/new-api/.h3exp/h3pe/assets/ui_settings.png"
+  ],
+  "prompt": "把深色模式打开，并删除清除缓存这一行",
+  "ratio": "adaptive"
+ },
+ {
+  "id": "q_table_addrow",
+  "mode": "qwen_pe",
+  "images": [
+   "/Users/reputationly/Desktop/code/api/new-api/.h3exp/h3pe/assets/table_cn.png"
+  ],
+  "prompt": "在表格最后加一行：赵敏，法务部，97.3%，90，A",
+  "ratio": "adaptive",
+  "must": [
+   "赵敏",
+   "法务部",
+   "97.3%"
+  ]
+ },
+ {
+  "id": "q_cat_dog",
+  "mode": "qwen_pe",
+  "images": [
+   "/Users/reputationly/Desktop/code/api/new-api/.h3exp/h3pe/assets/cat_sofa.jpg",
+   "/Users/reputationly/Desktop/code/api/new-api/.h3exp/h3pe/assets/shiba.jpg"
+  ],
+  "prompt": "把图1里的猫换成图2里的柴犬，保持背景不变",
+  "ratio": "adaptive"
+ },
+ {
+  "id": "q_logo_tee",
+  "mode": "qwen_pe",
+  "images": [
+   "/Users/reputationly/Desktop/code/api/new-api/.h3exp/h3pe/assets/woman_portrait.jpg",
+   "/Users/reputationly/Desktop/code/api/new-api/.h3exp/h3pe/assets/logo_northpeak.png"
+  ],
+  "prompt": "把图2的 logo 印在图1女生的白T恤胸口",
+  "ratio": "adaptive"
+ },
+ {
+  "id": "q_t2i_chart",
+  "mode": "qwen_pe",
+  "images": [],
+  "prompt": "季度营收柱状图，四个季度，单位万元",
+  "ratio": "adaptive"
+ }
+]
