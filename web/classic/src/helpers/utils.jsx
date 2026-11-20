@@ -793,6 +793,11 @@ export const calculateModelPrice = ({
   // 把原价弱化恰恰是在用户最需要知道「超了要花多少」的时候把它藏起来。
   entitlementCoverage = null,
   quotaPerComputePoint = 0,
+  // 此刻生效的补全倍率映射 group_model_completion_ratio[分组][模型]（后端按时段算好）。
+  // 分时段价目不一定等比例变化（忙时输入 2/输出 8、闲时输入 1/输出 7），
+  // 用基础 completion_ratio 会把输出价算错。不传 = 用 record.completion_ratio，
+  // 行为与改造前逐位一致。
+  completionRatioMap = null,
 }) => {
   // 1. 选择实际使用的分组
   let usedGroup = selectedGroup;
@@ -833,6 +838,15 @@ export const calculateModelPrice = ({
       usedGroupRatio = 1;
     }
   }
+
+  // 有效补全倍率：有时段覆盖就用后端的此刻值，否则用基础值。
+  const timeCompletionRatio = Number(
+    completionRatioMap?.[usedGroup]?.[record.model_name],
+  );
+  const effectiveCompletionRatio =
+    timeCompletionRatio > 0
+      ? timeCompletionRatio
+      : Number(record.completion_ratio);
 
   // 2. 动态计费（tiered_expr）
   if (record.billing_mode === 'tiered_expr' && record.billing_expr) {
@@ -953,7 +967,7 @@ export const calculateModelPrice = ({
     // 前三项，带图片 / 音频倍率的模型因此少了套餐内价行。
     const componentCNY = {
       input: inputRatioPriceCNY,
-      completion: inputRatioPriceCNY * Number(record.completion_ratio),
+      completion: inputRatioPriceCNY * effectiveCompletionRatio,
       cache: hasRatioValue(record.cache_ratio)
         ? inputRatioPriceCNY * Number(record.cache_ratio)
         : null,
@@ -992,14 +1006,12 @@ export const calculateModelPrice = ({
         usedGroupRatio < 1 ? formatTokenPrice(record.model_ratio) : null,
       originalCompletionPrice:
         usedGroupRatio < 1
-          ? formatTokenPrice(
-              record.model_ratio * Number(record.completion_ratio),
-            )
+          ? formatTokenPrice(record.model_ratio * effectiveCompletionRatio)
           : null,
       points: pointsMap,
       entitlement: entitlementMap,
       completionPrice: formatTokenPrice(
-        inputRatioPriceCNY * Number(record.completion_ratio),
+        inputRatioPriceCNY * effectiveCompletionRatio,
       ),
       cachePrice: hasRatioValue(record.cache_ratio)
         ? formatTokenPrice(inputRatioPriceCNY * Number(record.cache_ratio))

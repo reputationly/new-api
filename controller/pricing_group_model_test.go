@@ -24,7 +24,7 @@ func seedPricingRatios(t *testing.T, groupRatio, groupGroupRatio, groupModelRati
 // resolveRatio 是 resolveGroupModelRatio 的测试便捷版。本文件的用例都不配时段规则，
 // 只关心终值表那一半返回值；时段那一半由 TestResolveGroupModelRatio_TimeRule* 覆盖。
 func resolveRatio(userGroup string, groupRatio map[string]float64, pricing []model.Pricing) map[string]map[string]float64 {
-	out, _ := resolveGroupModelRatio(userGroup, groupRatio, pricing, time.Now())
+	out, _, _ := resolveGroupModelRatio(userGroup, groupRatio, pricing, time.Now())
 	return out
 }
 
@@ -134,7 +134,7 @@ func TestResolveGroupModelRatio_TimeRuleEntersSparseTable(t *testing.T) {
 	pricing := pricingOf("wan2.2-t2v", "GLM-5")
 
 	t.Run("空闲时段内下发打折终值", func(t *testing.T) {
-		got, view := resolveGroupModelRatio("default", groupRatio, pricing, atShanghai(2))
+		got, view, _ := resolveGroupModelRatio("default", groupRatio, pricing, atShanghai(2))
 		require.InDelta(t, 0.7, got["default"]["wan2.2-t2v"], 1e-9)
 		require.NotContains(t, got["default"], "GLM-5", "没配规则的模型不该进表")
 
@@ -148,7 +148,7 @@ func TestResolveGroupModelRatio_TimeRuleEntersSparseTable(t *testing.T) {
 	})
 
 	t.Run("高峰时段仍要进表且为原价", func(t *testing.T) {
-		got, view := resolveGroupModelRatio("default", groupRatio, pricing, atShanghai(10))
+		got, view, _ := resolveGroupModelRatio("default", groupRatio, pricing, atShanghai(10))
 		require.Contains(t, got["default"], "wan2.2-t2v",
 			"高峰时段也必须下发，否则空闲时段一到前端仍走 fallback 显示原价而实扣已打折")
 		require.InDelta(t, 1.0, got["default"]["wan2.2-t2v"], 1e-9)
@@ -169,7 +169,7 @@ func TestResolveGroupModelRatio_TimeRuleStacksOnModelRule(t *testing.T) {
 		"rules":   {"premium": {"wan2.2-*": [{"window":"night","value":0.5}]}}
 	}`)
 
-	got, _ := resolveGroupModelRatio("default",
+	got, _, _ := resolveGroupModelRatio("default",
 		map[string]float64{"default": 1, "premium": 1.5},
 		pricingOf("wan2.2-t2v"), atShanghai(2))
 	require.InDelta(t, 0.6, got["premium"]["wan2.2-t2v"], 1e-9, "1.5 × 0.8 × 0.5，时段系数叠乘")

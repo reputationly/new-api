@@ -730,3 +730,45 @@ func TestResolveGroupRatio_OutputFactorIndependent(t *testing.T) {
 	require.Equal(t, 1.0, types.ScaleCompletionRatio(same.TimeValue, same.TimeOutputFactor))
 	seedTimeRatio(t, `{}`)
 }
+
+// TestResolveTimeRatioView_DirectoryAndDiscount 锁死「展示口径 = 动态目录价 + 固定折扣」。
+//
+// 配置：目录价 输入 2 / 输出 8（completion_ratio 4），固定 5 折（模型定价 0.5），
+// 闲时输入系数 0.5、输出系数 0.875（→ 闲时目录价 1 / 7）。
+// 断言：目录倍率随时段变、折扣恒定、此刻补全倍率 = 4 × 0.875/0.5 = 7。
+func TestResolveTimeRatioView_DirectoryAndDiscount(t *testing.T) {
+	require.NoError(t, UpdateModelRatioByJSONString(`{"m": 2}`))
+	require.NoError(t, UpdateCompletionRatioByJSONString(`{"m": 4}`))
+	seedRatios(t, `{"default":1}`, `{}`, `{"default":{"m":{"mode":"multiply","value":0.5}}}`)
+	seedTimeRatio(t, `{
+		"windows": {"night": {"label":"闲时","start":"00:00","end":"08:00"}},
+		"rules":   {"*": {"m": [{"window":"night","value":0.5,"output_factor":0.875}]}}
+	}`)
+
+	night := ResolveGroupRatioAt("default", "default", "m", at(t, 0, 2, 0))
+	view, ok := ResolveTimeRatioView("default", "m", at(t, 0, 2, 0), night)
+	require.True(t, ok)
+	// 命中闲时：目录倍率 = 基准 1 × 系数
+	require.InDelta(t, 0.5, view.InputDirectoryRatio, 1e-9)
+	require.InDelta(t, 0.875, view.OutputDirectoryRatio, 1e-9)
+	// 折扣恒为 5 折（常规价终值 0.5 ÷ 基准 1）
+	require.InDelta(t, 0.5, view.DiscountRatio, 1e-9)
+	// 此刻补全倍率：4 × (0.875 / 0.5) = 7
+	require.InDelta(t, 7, view.EffectiveCompletionRatio, 1e-9)
+	// 每档行也带同样的口径
+	require.InDelta(t, 0.5, view.Windows[0].InputDirectoryRatio, 1e-9)
+	require.InDelta(t, 0.875, view.Windows[0].OutputDirectoryRatio, 1e-9)
+	require.InDelta(t, 0.5, view.Windows[0].DiscountRatio, 1e-9)
+
+	// 未命中时段（13:00）：目录倍率回到基准、折扣仍是 5 折、补全倍率回到基础值
+	mid := ResolveGroupRatioAt("default", "default", "m", at(t, 0, 13, 0))
+	view2, ok2 := ResolveTimeRatioView("default", "m", at(t, 0, 13, 0), mid)
+	require.True(t, ok2)
+	require.InDelta(t, 1.0, view2.InputDirectoryRatio, 1e-9)
+	require.InDelta(t, 1.0, view2.OutputDirectoryRatio, 1e-9)
+	require.InDelta(t, 0.5, view2.DiscountRatio, 1e-9)
+	require.InDelta(t, 4, view2.EffectiveCompletionRatio, 1e-9)
+
+	seedTimeRatio(t, `{}`)
+}
+

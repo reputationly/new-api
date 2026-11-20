@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/types"
 )
 
 // 时段折扣（解析链 Layer 4）。
@@ -535,6 +536,15 @@ type TimeWindowView struct {
 	// 比较。前端要显示「空闲时段 5.6 折」必须用它——光有 Value 拼不出来，而让前端自己
 	// 乘一遍分组基础倍率，等于把解析逻辑抄一份到前端。
 	Ratio float64 `json:"ratio"`
+	// 下面三个是「展示口径」，与计费口径分开但同源：
+	//   · InputDirectoryRatio  = 线路基准 × 输入系数   → 该时段的**目录价倍率**（不含折扣）
+	//   · OutputDirectoryRatio = 线路基准 × 输出系数
+	//   · DiscountRatio        = 终值 ÷ 输入目录倍率   → **固定折扣**，与时刻无关
+	// 广场的划线价取目录倍率、角标取 DiscountRatio，客户拿「划线 × 角标」就能算出成交价。
+	// 只下发 Ratio 的话，划线价只能取「常规价（含折扣）」，于是看着像折扣在动。
+	InputDirectoryRatio  float64 `json:"input_directory_ratio"`
+	OutputDirectoryRatio float64 `json:"output_directory_ratio"`
+	DiscountRatio        float64 `json:"discount_ratio"`
 	// Active 标出此刻生效的那一档。与 pickTimeRule 取同一条（重叠时同样取最小值），
 	// 否则展示会标出一个计费上并没有用到的档位。
 	//
@@ -568,6 +578,15 @@ type TimeRatioView struct {
 	Label   string           `json:"label,omitempty"`
 	Until   string           `json:"until,omitempty"` // 当前状态的结束时刻，RFC3339
 	Windows []TimeWindowView `json:"windows"`         // 全部档位，供详情页渲染分时价格表
+
+	// 以下是**此刻**的展示口径（与 windows[*] 同定义，取此刻生效的那一档；
+	// 未命中任何时段时取常规：目录倍率 = 线路基准，折扣 = 常规价终值 ÷ 线路基准）。
+	InputDirectoryRatio  float64 `json:"input_directory_ratio"`
+	OutputDirectoryRatio float64 `json:"output_directory_ratio"`
+	DiscountRatio        float64 `json:"discount_ratio"`
+	// EffectiveCompletionRatio 是**此刻生效的补全倍率** = 基础补全倍率 × 输出系数/输入系数。
+	// 前端算输出价必须用它，否则「闲时输入 1/输出 7」这种不等比例价目会被算成 1/4。
+	EffectiveCompletionRatio float64 `json:"completion_ratio"`
 }
 
 // ResolveTimeRatioView 构建模型广场用的时段折扣展示数据。
@@ -579,6 +598,14 @@ type TimeRatioView struct {
 // 第二份解析实现，一旦与计费分叉，表现是广场标着「空闲时段 5 折」而实扣是另一个数，两边都不报错。
 func ResolveTimeRatioView(usingGroup, modelName string, at time.Time, res RatioResolution) (TimeRatioView, bool) {
 	normalRatio := res.NormalRatio * res.UserMultiplier()
+	// 展示口径的两个基准：线路基准（含身份覆盖）与「终值 ÷ 线路基准」= 固定折扣。
+	// 折扣与时刻无关，两种语义下都是这个数，所以只算一次。
+	base := res.Base
+	discountRatio := 0.0
+	if base > 0 {
+		discountRatio = normalRatio / base
+	}
+	modelCompletionRatio := GetCompletionRatio(modelName)
 	groupTimeRatioMu.RLock()
 	list, windows := matchedTimeRulesLocked(usingGroup, modelName)
 	groupTimeRatioMu.RUnlock()
@@ -604,14 +631,18 @@ func ResolveTimeRatioView(usingGroup, modelName string, at time.Time, res RatioR
 		// 该时段的最终倍率，口径与 ResolveGroupRatioAt 的 Layer 4 逐位一致：
 		// 系数乘在常规价上（normalRatio 已含用户档乘数）。
 		windowRatio := normalRatio * rule.Value
+		outFactor := rule.EffectiveOutputFactor()
 		view.Windows = append(view.Windows, TimeWindowView{
-			Label: win.displayName(rule.Window),
-			Start: win.Start,
-			End:   win.End,
-			Days:  win.Days,
-			TZ:    win.TZ,
-			Value: rule.Value,
-			Ratio: windowRatio,
+			Label:                win.displayName(rule.Window),
+			Start:                win.Start,
+			End:                  win.End,
+			Days:                 win.Days,
+			TZ:                   win.TZ,
+			Value:                rule.Value,
+			Ratio:                windowRatio,
+			InputDirectoryRatio:  base * rule.Value,
+			OutputDirectoryRatio: base * outFactor,
+			DiscountRatio:        discountRatio,
 		})
 		if rule.Value < bestValue {
 			bestValue = rule.Value
@@ -649,6 +680,17 @@ func ResolveTimeRatioView(usingGroup, modelName string, at time.Time, res RatioR
 	}
 	// bestRatio 恒有限：走到这里说明至少有一个档位进了 Windows
 	view.BestRatio = bestRatio
+
+	// 此刻生效的展示口径：命中某档就用该档的系数，未命中则回到常规（系数 1/1）。
+	inFactor, outFactor := 1.0, 1.0
+	if chargedIdx >= 0 {
+		inFactor = list[chargedIdx].Value
+		outFactor = list[chargedIdx].EffectiveOutputFactor()
+	}
+	view.InputDirectoryRatio = base * inFactor
+	view.OutputDirectoryRatio = base * outFactor
+	view.DiscountRatio = discountRatio
+	view.EffectiveCompletionRatio = modelCompletionRatio * types.ScaleCompletionRatio(inFactor, outFactor)
 	if !until.IsZero() {
 		view.Until = until.Format(time.RFC3339)
 	}
