@@ -221,7 +221,9 @@ func EnhancePrompt(ctx context.Context, agg *common.AggregateModel, authHeader s
 	// 思考档位与输出上限**按配置透传**,不在各模式里各读一遍 cfg:模式分支
 	// 拿到的 EnhanceInput 就是这一次请求的全部输入,少了这两个字段就只能
 	// 回头去读配置,于是两条路对"默认值是什么"各有一套说法。
-	in.ReasoningEffort = strings.TrimSpace(cfg.ReasoningEffort)
+	// **不改写档位原文** —— h3_image_pe 那条按"原样透传"钉了测试,而 singlecall
+	// 用之前自己 TrimSpace(见其请求构造)。两处语义各自清楚,比在这里统一改写安全。
+	in.ReasoningEffort = cfg.ReasoningEffort
 	in.MaxOutputTokens = cfg.MaxOutputTokens
 
 	// ── qwen_pe 模式(Qwen-Image-2.1 官方 PE 协议)──────────────
