@@ -249,10 +249,23 @@ func compileViaSingleCall(
 		// 思考档位:配了 reasoning_effort 就照发,否则退回布尔开关。
 		// 两者不能同时发 —— 实测同时发时上游按档位走,布尔那个被忽略,
 		// 但换个上游就可能反过来,不如只发一个。
-		if effort := strings.TrimSpace(in.ReasoningEffort); effort != "" {
+		//
+		// **带参考视频时一律关思考。** 实测同一段 4.4MB 视频(内联后视频编码占
+		// 12288 个 token)在两档下的差别不是"慢一点",而是有没有正文:
+		//
+		//	reasoning_effort=low  74–118 秒,输出被截断在半句 JSON 上 → 解析失败
+		//	                       (completion 1760/4098,reasoning 1041/4095)
+		//	关思考                10.4 秒,1627 字符,六节完整
+		//
+		// 视频把上下文占满之后,思考预算和正文挤在一起,正文就没了。这条不是
+		// 调参能救的(把 max_tokens 提到 16384 仍然截断),所以按素材形态硬性
+		// 关掉 —— 与"帧族/参考族都用同一个模型"这件事一样,属于实测出来的、不可
+		// 配置的约束。
+		hasVideo := len(in.VideoURLs) > 0
+		if effort := strings.TrimSpace(in.ReasoningEffort); effort != "" && !hasVideo {
 			body["reasoning_effort"] = effort
 		} else {
-			applyThinking(body, in.Thinking)
+			applyThinking(body, in.Thinking && !hasVideo)
 		}
 		payload, err := common.Marshal(body)
 		if err != nil {

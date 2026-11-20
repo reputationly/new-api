@@ -29,6 +29,18 @@ EFF = os.environ.get("EFF", "") not in ("", "0")
 TAG = os.environ.get("TAG", "")
 # NORF=1 不发 response_format —— 生产已经不发（qwen3.8 + json_object 会被 xgrammar 拒成 500）
 NORF = os.environ.get("NORF", "") not in ("", "0")
+# DURI=1 把参考视频内联成 data URI —— 生产已这么做（service/aggregate_enhance_video.go）
+DURI = os.environ.get("DURI", "") not in ("", "0")
+
+
+def inline_video(u):
+    """远程视频 → data URI；与 Go 侧同样的 8MB(内联后) 上限。"""
+    import base64, urllib.request
+    if not u.startswith("http"):
+        return u
+    raw = urllib.request.urlopen(u, timeout=30).read()
+    uri = "data:video/mp4;base64," + base64.b64encode(raw).decode()
+    return uri if len(uri) <= 8 << 20 else u
 
 def eff_seconds(sec):
     n = max(1, round(sec * 24))
@@ -60,7 +72,7 @@ def user(c):
     parts = [{"type": "text", "text": c["prompt"]}]
     for kind, src, role in c["media"]:
         if kind == "image": parts.append({"type": "image_url", "image_url": {"url": vcases.src_url(src)}})
-        if kind == "video": parts.append({"type": "video_url", "video_url": {"url": src}})
+        if kind == "video": parts.append({"type": "video_url", "video_url": {"url": inline_video(src) if DURI else src}})
     return parts if len(parts) > 1 else c["prompt"]
 
 def kw():

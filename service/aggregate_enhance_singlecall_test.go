@@ -1022,3 +1022,45 @@ func TestSingleCallParsesWithoutResponseFormat(t *testing.T) {
 	require.NotEmpty(t, (*got)[0])
 }
 
+
+// **带参考视频时一律关思考。**
+//
+// 实测(同一段 4.4MB 视频,内联后视频编码 12288 token):
+//
+//	reasoning_effort=low  74–118 秒,输出截断在半句 JSON 上 → 解析失败
+//	关思考                10.4 秒,1627 字符,六节完整
+//
+// 把 max_tokens 提到 16384 仍然截断,所以不是调参能救的。
+func TestSingleCallDisablesThinkingWhenVideoPresent(t *testing.T) {
+	cfg := scCfg()
+	cfg.PromptEnhance.ReasoningEffort = "low"
+
+	got := fakeSequence(t, chatResponse(scReply("integrated_multimodal_description: [Shot 1] x")))
+	in := scInput("一只猫")
+	// 直接给 data URI:不会触发下载,但 hasVideo 成立。
+	in.VideoURLs = []string{"data:video/mp4;base64,AAAA"}
+	res := EnhancePrompt(context.Background(), cfg, "Bearer sk-x", in)
+	require.False(t, res.Degraded, res.DegradeReason)
+
+	var body map[string]any
+	require.NoError(t, common.Unmarshal((*got)[0], &body))
+	require.NotContains(t, body, "reasoning_effort", "有视频时不发档位")
+	kwargs, ok := body["chat_template_kwargs"].(map[string]any)
+	require.True(t, ok, "有视频时要显式关思考")
+	require.Equal(t, false, kwargs["enable_thinking"])
+}
+
+// 没有视频时照常按配置发档位(这条钉住"别把规则放得太宽")。
+func TestSingleCallKeepsReasoningEffortWithoutVideo(t *testing.T) {
+	cfg := scCfg()
+	cfg.PromptEnhance.ReasoningEffort = "low"
+
+	got := fakeSequence(t, chatResponse(scReply("integrated_multimodal_description: [Shot 1] x")))
+	res := EnhancePrompt(context.Background(), cfg, "Bearer sk-x", scInput("一只猫"))
+	require.False(t, res.Degraded, res.DegradeReason)
+
+	var body map[string]any
+	require.NoError(t, common.Unmarshal((*got)[0], &body))
+	require.Equal(t, "low", body["reasoning_effort"])
+}
+
