@@ -1099,32 +1099,6 @@ export const calculateModelPrice = ({
 };
 
 export const getModelPriceItems = (priceData, t, quotaDisplayType = 'USD') => {
-  // 在每个货币价格项后追加对应「积分价」行（仅当该模型分组可积分消费，§8bis）
-  const appendPoints = (items) => {
-    const pm = priceData.points;
-    if (!pm) return items;
-    const out = [];
-    items.forEach((item) => {
-      out.push(item);
-      const p = pm[item.key];
-      if (p !== null && p !== undefined) {
-        // 积分永远整数显示：(0,1) 显示「<1」防免费假象（结算每笔至少烧 1 积分），
-        // 其余 floor；真正免费(0)如实显示 0（quota 成本为 0 时结算不烧积分）
-        const n = Number(p);
-        const pointsText =
-          n > 0 && n < 1 ? '<1' : Math.floor(n).toLocaleString();
-        out.push({
-          key: `${item.key}-points`,
-          label: t('积分价'),
-          value: `${pointsText} ${t('积分')}`,
-          suffix: item.suffix,
-          isPoints: true,
-        });
-      }
-    });
-    return out;
-  };
-
   // 套餐内价：与 appendPoints 同构，追加在每个货币价格行之后。
   //
   // 刻意不把它抬成主价：算力点烧完就按原价扣，把原价降级成副信息，恰恰是在用户
@@ -1229,75 +1203,71 @@ export const getModelPriceItems = (priceData, t, quotaDisplayType = 'USD') => {
     }
 
     const unitSuffix = ` / 1${priceData.unitLabel} Tokens`;
-    return appendPoints(
-      appendEntitlement([
-        {
-          key: 'input',
-          label: t('输入价格'),
-          value: priceData.inputPrice,
-          suffix: unitSuffix,
-          // 折前价，仅输入/输出两项给。缓存、图片、音频同样是折后价，但逐行划线
-          // 会把价格区挤成一团——折扣力度由模型名旁的标签统一表达。
-          originalValue: priceData.originalInputPrice,
-        },
-        {
-          key: 'completion',
-          label: t('输出价格'),
-          value: priceData.completionPrice,
-          suffix: unitSuffix,
-          originalValue: priceData.originalCompletionPrice,
-        },
-        {
-          key: 'cache',
-          label: t('缓存命中价格'),
-          value: priceData.cachePrice,
-          suffix: unitSuffix,
-        },
-        {
-          key: 'create-cache',
-          label: t('缓存创建价格'),
-          value: priceData.createCachePrice,
-          suffix: unitSuffix,
-        },
-        {
-          key: 'image',
-          label: t('图片输入价格'),
-          value: priceData.imagePrice,
-          suffix: unitSuffix,
-        },
-        {
-          key: 'audio-input',
-          label: t('音频输入价格'),
-          value: priceData.audioInputPrice,
-          suffix: unitSuffix,
-        },
-        {
-          key: 'audio-output',
-          label: t('音频输出价格'),
-          value: priceData.audioOutputPrice,
-          suffix: unitSuffix,
-        },
-      ]),
-    ).filter(
+    return appendEntitlement([
+      {
+        key: 'input',
+        label: t('输入价格'),
+        value: priceData.inputPrice,
+        suffix: unitSuffix,
+        // 折前价，仅输入/输出两项给。缓存、图片、音频同样是折后价，但逐行划线
+        // 会把价格区挤成一团——折扣力度由模型名旁的标签统一表达。
+        originalValue: priceData.originalInputPrice,
+      },
+      {
+        key: 'completion',
+        label: t('输出价格'),
+        value: priceData.completionPrice,
+        suffix: unitSuffix,
+        originalValue: priceData.originalCompletionPrice,
+      },
+      {
+        key: 'cache',
+        label: t('缓存命中价格'),
+        value: priceData.cachePrice,
+        suffix: unitSuffix,
+      },
+      {
+        key: 'create-cache',
+        label: t('缓存创建价格'),
+        value: priceData.createCachePrice,
+        suffix: unitSuffix,
+      },
+      {
+        key: 'image',
+        label: t('图片输入价格'),
+        value: priceData.imagePrice,
+        suffix: unitSuffix,
+      },
+      {
+        key: 'audio-input',
+        label: t('音频输入价格'),
+        value: priceData.audioInputPrice,
+        suffix: unitSuffix,
+      },
+      {
+        key: 'audio-output',
+        label: t('音频输出价格'),
+        value: priceData.audioOutputPrice,
+        suffix: unitSuffix,
+      },
+    ]).filter(
       (item) =>
         item.value !== null && item.value !== undefined && item.value !== '',
     );
   }
 
-  return appendPoints(
-    appendEntitlement(
-      [
-        {
-          key: 'fixed',
-          label: t('模型价格'),
-          value: priceData.price,
-          suffix: ` / ${t('次')}`,
-          originalValue: priceData.originalPrice,
-        },
-      ].filter(
-        (item) =>
-          item.value !== null && item.value !== undefined && item.value !== '',
-      ),
+  return appendEntitlement(
+    [
+      {
+        key: 'fixed',
+        label: t('模型价格'),
+        value: priceData.price,
+        suffix: ` / ${t('次')}`,
+        originalValue: priceData.originalPrice,
+      },
+    ].filter(
+      (item) =>
+        item.value !== null && item.value !== undefined && item.value !== '',
     ),
   );
 };

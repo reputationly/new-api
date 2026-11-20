@@ -43,6 +43,7 @@ import {
   getGroupDiscountInfo,
   getNormalRatio,
   getTimePriceDelta,
+  getTimeRatioView,
 } from '../../../../../helpers';
 import TimeRulesTooltip from '../../TimeRulesTooltip';
 import PricingCardSkeleton from './PricingCardSkeleton';
@@ -376,6 +377,14 @@ const PricingCardView = ({
                   </div>
 
                   <div className='flex items-center space-x-2 ml-3'>
+                    {/* 积分抵扣只打小标，不列具体积分价目（原因见表格视图同处注释） */}
+                    {priceData?.points ? (
+                      <Tooltip content={t('可用积分抵扣，实际消耗以账单为准')}>
+                        <Tag color='light-blue' shape='circle' size='small'>
+                          {t('积分抵扣')}
+                        </Tag>
+                      </Tooltip>
+                    ) : null}
                     {(() => {
                       // 时段价标签：与折扣角标并列但不合并——角标是合同折扣（永不随时段变），
                       // 这个是「此刻价目 ≠ 常规价」。合并回一个数就退回「折扣随时钟漂移」的老问题。
@@ -413,14 +422,24 @@ const PricingCardView = ({
                       长名字会把标签挤没，而这里的位置固定、每张卡片对齐。
                     */}
                     {(() => {
-                      // 角标用**常规价**（不含时段系数），理由同表格视图
+                      // 固定折扣优先用后端算好的 discount_ratio（= 终值 ÷ 此刻目录倍率，
+                      // 与时刻无关）；没有分时规则时退回常规价比值。理由同表格视图。
+                      const viewOfModel = getTimeRatioView(
+                        groupTimeRatio,
+                        priceData?.usedGroup,
+                        model.model_name,
+                      );
+                      const fixedDiscount =
+                        Number(viewOfModel?.discount_ratio) || 0;
                       const d = getGroupDiscountInfo(
-                        getNormalRatio(
-                          groupTimeRatio,
-                          priceData?.usedGroup,
-                          model.model_name,
-                          priceData?.usedGroupRatio,
-                        ),
+                        fixedDiscount > 0
+                          ? fixedDiscount
+                          : getNormalRatio(
+                              groupTimeRatio,
+                              priceData?.usedGroup,
+                              model.model_name,
+                              priceData?.usedGroupRatio,
+                            ),
                       );
                       // 已知限制（有意接受）：分时规则挂在这个折扣角标的 tooltip 上，
                       // 而角标只在**此刻**有折扣时出现。于是「平时原价、只在夜里打折」

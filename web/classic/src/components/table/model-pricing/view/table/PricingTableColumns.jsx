@@ -29,6 +29,7 @@ import {
   getGroupDiscountInfo,
   getNormalRatio,
   getTimePriceDelta,
+  getTimeRatioView,
 } from '../../../../../helpers';
 import {
   renderLimitedItems,
@@ -202,6 +203,9 @@ export const getPricingTableColumns = ({
       displayPrice,
       currency,
       quotaDisplayType: siteDisplayType,
+      // 划线价也走**此刻**的补全倍率：闲时目录价是「输入 1 / 输出 7」，
+      // 漏了它输出划线会算成 1×4=4 而不是 7（单测 plazaTimeDisplay 钉住这条）。
+      completionRatioMap: groupModelCompletionRatio,
       // 积分/套餐口径必须与主计算保持一致：否则「积分计价」的模型上，
       // 删除线画的是金额、当前价显示的是积分，两个单位对不上。
       pointsEnabled: pointsConfig?.enabled,
@@ -262,13 +266,23 @@ export const getPricingTableColumns = ({
       // 不会像卡片视图那样把标签挤掉。
       // 角标用**常规价**（不含时段系数）：折扣率必须与时钟无关，这是本次改造对外的承诺。
       const priceData = getPriceData(record);
+      // 固定折扣优先用后端算好的 discount_ratio（= 终值 ÷ 此刻目录倍率，与时刻无关）；
+      // 没有分时规则时退回常规价比值。
+      const viewOfModel = getTimeRatioView(
+        groupTimeRatio,
+        priceData?.usedGroup,
+        record.model_name,
+      );
+      const fixedDiscount = Number(viewOfModel?.discount_ratio) || 0;
       const d = getGroupDiscountInfo(
-        getNormalRatio(
-          groupTimeRatio,
-          priceData?.usedGroup,
-          record.model_name,
-          priceData?.usedGroupRatio,
-        ),
+        fixedDiscount > 0
+          ? fixedDiscount
+          : getNormalRatio(
+              groupTimeRatio,
+              priceData?.usedGroup,
+              record.model_name,
+              priceData?.usedGroupRatio,
+            ),
       );
       return (
         <div className='flex items-center gap-1 flex-wrap'>
@@ -398,19 +412,23 @@ export const getPricingTableColumns = ({
       }
       const priceItems = getModelPriceItems(priceData, t, siteDisplayType);
 
-      // 此刻比常规价便宜时，价格列画的是**常规价**的删除线；没配分时的模型保持
-      // 原来的「折前价」删除线（那是折扣的故事，两者不同时出现，避免一行两个删除线）。
-      const delta = getTimePriceDelta(
+      // 划线价取**该时段的目录价**（不含折扣），角标取**固定折扣**：
+      // 客户拿「划线 × 角标」就能算出成交价。原先划线取的是常规价（含折扣），
+      // 于是闲时看起来像「划线上再打一次折」，折扣显得随时钟浮动。
+      //
+      // 后端已把这两个数算好下发（input_directory_ratio / discount_ratio），
+      // 这里只查表，不复算解析口径。没配分时规则的模型退回原来的「折前价」删除线。
+      const timeView = getTimeRatioView(
         groupTimeRatio,
         priceData?.usedGroup,
         record.model_name,
-        priceData?.usedGroupRatio,
       );
-      const normalMap =
-        delta && delta.cheaper
+      const dirRatio = Number(timeView?.input_directory_ratio) || 0;
+      const directoryMap =
+        dirRatio > 0 && dirRatio > Number(priceData?.usedGroupRatio) + 1e-12
           ? Object.fromEntries(
               getModelPriceItems(
-                getNormalPriceData(record, priceData?.usedGroup, delta.normal),
+                getNormalPriceData(record, priceData?.usedGroup, dirRatio),
                 t,
                 siteDisplayType,
               ).map((it) => [it.key, it.value]),
@@ -421,7 +439,7 @@ export const getPricingTableColumns = ({
         <div className='space-y-1'>
           {priceItems.map((item) => {
             const strike =
-              (normalMap && normalMap[item.key]) || item.originalValue;
+              (directoryMap && directoryMap[item.key]) || item.originalValue;
             return (
               <div key={item.key} className='text-gray-700'>
                 {item.label}{' '}
