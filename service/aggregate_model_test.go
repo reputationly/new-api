@@ -753,26 +753,40 @@ func TestDryRunWarnsOnSuspectEnhanceFields(t *testing.T) {
 		"enh-model":      {},
 	})
 
+	// 档位拼错：值会原样透传，上游认不认识我们不知道，所以要提示。
 	cfg := h3ImagePEAggregate("h3_image_pe", "")
-	cfg.PromptEnhance.ReasoningEffort = "lo"        // 拼错
-	cfg.PromptEnhance.MaxOutputTokens = -1          // 负数 = 未配置
+	cfg.PromptEnhance.ReasoningEffort = "lo"
 	res := DryRunAggregateModel(cfg, map[string]int{"image-agg": 1})
 	if ch := checkByKey(res, "reasoning_effort"); ch == nil || ch.Level != AggregateCheckWarn {
 		t.Fatalf("拼错的档位应警告: %+v", ch)
 	}
-	if ch := checkByKey(res, "max_output_tokens"); ch == nil || ch.Level != AggregateCheckWarn {
-		t.Fatalf("负数上限应警告: %+v", ch)
-	}
 
+	// 输出上限**只有 singlecall 读**：别的模式先提示"会忽略"，不谈数值 ——
+	// 否则运营会为一个不生效的字段调半天。
 	cfg.PromptEnhance.ReasoningEffort = "low"
 	cfg.PromptEnhance.MaxOutputTokens = 1024
 	res = DryRunAggregateModel(cfg, map[string]int{"image-agg": 1})
-	if ch := checkByKey(res, "max_output_tokens"); ch == nil || ch.Level != AggregateCheckWarn {
+	if ch := checkByKey(res, "max_output_tokens"); ch == nil || ch.Level != AggregateCheckWarn ||
+		!strings.Contains(ch.Message, "只有 singlecall") {
+		t.Fatalf("非 singlecall 模式应提示会忽略: %+v", ch)
+	}
+
+	// singlecall 才看数值：负数 = 未配置、过小 = 会被截断、正常 = 不提示。
+	sc := h3ImagePEAggregate("singlecall", "")
+	sc.PromptEnhance.MaxOutputTokens = -1
+	res = DryRunAggregateModel(sc, map[string]int{"image-agg": 1})
+	if ch := checkByKey(res, "max_output_tokens"); ch == nil || !strings.Contains(ch.Message, "负数") {
+		t.Fatalf("负数上限应警告: %+v", ch)
+	}
+
+	sc.PromptEnhance.MaxOutputTokens = 1024
+	res = DryRunAggregateModel(sc, map[string]int{"image-agg": 1})
+	if ch := checkByKey(res, "max_output_tokens"); ch == nil || !strings.Contains(ch.Message, "偏小") {
 		t.Fatalf("过小的上限应警告: %+v", ch)
 	}
 
-	cfg.PromptEnhance.MaxOutputTokens = 8192
-	res = DryRunAggregateModel(cfg, map[string]int{"image-agg": 1})
+	sc.PromptEnhance.MaxOutputTokens = 8192
+	res = DryRunAggregateModel(sc, map[string]int{"image-agg": 1})
 	if ch := checkByKey(res, "max_output_tokens"); ch != nil {
 		t.Fatalf("正常配置不该警告: %+v", ch)
 	}

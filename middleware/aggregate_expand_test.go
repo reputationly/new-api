@@ -385,7 +385,24 @@ func TestBuildTaskContextListsReferenceAssets(t *testing.T) {
 	})
 	require.Contains(t, got, "2 reference image(s), labelled <Picture 1>..<Picture 2>")
 	require.Contains(t, got, "1 reference video(s), labelled <Video 1>")
+	// **有参考视频时不写音频编号。** 引擎会给带音轨的参考视频先占一个 <Audio> 槽位,
+	// 写死 <Audio 1> 会把音色指到视频自己的声轨上 —— 这条与 singlecall 的证据口径一致,
+	// 因为 singlecall 失败后会回落到 text,用的就是这段描述。
+	require.NotContains(t, got, "<Audio 1>")
+	require.Contains(t, got, "the user-supplied audio reference")
+}
+
+// 没有参考视频时音频编号是确定的:引擎按图→视频→音频排,用户音频就是 <Audio 1>。
+func TestBuildTaskContextNumbersAudioWithoutReferenceVideo(t *testing.T) {
+	got := buildTaskContextFromBody(map[string]any{
+		"metadata": map[string]any{
+			"task_type":        "r2va",
+			"src_ref_images":   []any{"a"},
+			"reference_audios": []any{"d"},
+		},
+	})
 	require.Contains(t, got, "<Audio 1>")
+	require.NotContains(t, got, "the user-supplied audio reference")
 }
 
 // 首尾帧齐全时说明两张图各自的时间角色 —— 说反了模型会朝错误的方向收敛。
@@ -566,7 +583,8 @@ func TestBuildTaskContextAcceptsSingularReferenceKeys(t *testing.T) {
 		},
 	})
 	require.Contains(t, got, "1 reference video(s)")
-	require.Contains(t, got, "1 reference audio(s)")
+	// 有参考视频 → 音频不写号(见 TestBuildTaskContextListsReferenceAssets)。
+	require.Contains(t, got, "1 user-supplied audio reference(s)")
 	require.NotContains(t, got, "none yet")
 }
 

@@ -751,9 +751,21 @@ func buildTaskContext(body map[string]any, norm *relaycommon.TaskSubmitReq) stri
 		}
 		// R2VA 最多收三段参考音频(adaptor.go 的 maxR2VARefAudios),H3 的 guide 按
 		// <Audio N> 逐条指代。写死成 1 会让增强模型以为只有一段,后两段在它眼里不存在。
+		//
+		// **有参考视频时不写号。** 引擎会给带音轨的参考视频先占一个 <Audio> 槽位,
+		// 而网关判断不了那段视频有没有音轨 —— 写死 <Audio 1> 就会把音色指到视频自己的
+		// 音轨上(不报错,只是人声不对)。口径与 singlecall 的证据一致,见
+		// service/aggregate_enhance_singlecall.go 的 buildSingleCallEvidence。
 		if n := len(norm.RefAudios()); n > 0 {
-			parts = append(parts, fmt.Sprintf(
-				"%d reference audio(s), labelled %s (voice-timbre reference)", n, audioLabels(n)))
+			if len(norm.RefVideos()) > 0 {
+				parts = append(parts, fmt.Sprintf(
+					"%d user-supplied audio reference(s) (voice-timbre reference); refer to them as "+
+						"the user-supplied audio reference and do NOT write an <Audio N> index — "+
+						"the engine assigns it, and a reference video may take the first slot", n))
+			} else {
+				parts = append(parts, fmt.Sprintf(
+					"%d reference audio(s), labelled %s (voice-timbre reference)", n, audioLabels(n)))
+			}
 		}
 		assets := "none yet"
 		if len(parts) > 0 {

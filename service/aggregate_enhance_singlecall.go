@@ -738,7 +738,7 @@ func labelIssues(prompt string, assets []singleCallEvidenceAsset) []string {
 			// 少一位会把照官方写法写的 <Audio 1> 判成不存在的素材、白烧一轮重修。
 			counts["Audio"]++
 		case "audio":
-			// 编号未知时不计数:合法范围取决于视频有没有音轨(见 hasVideoUncertainAudio)。
+			// 编号未知时不计数:合法范围取决于视频有没有音轨(见 buildSingleCallEvidence 的 hasVideo)。
 			if !a.LabelUnknown {
 				counts["Audio"]++
 			}
@@ -833,6 +833,10 @@ func missingSections(prompt, taskType string) []string {
 
 // ── 素材必须被点名 ──────────────────────────────────────────────────
 
+// unlabelledAudioPhrase 编号未知的音频在提示词里的固定措辞(appendix 第 11 条)。
+// 判据用**措辞**而不是数字:数字我们不知道,措辞是规则里定死的。
+const unlabelledAudioPhrase = "user-supplied audio reference"
+
 // missingAssetMentions 证据里的素材在提示词里一次都没出现。
 //
 // **这是"静默丢掉参考"的那类错。** 参考族的提示词靠标签把素材和 H3 收到的字节
@@ -851,8 +855,18 @@ func missingAssetMentions(prompt string, assets []singleCallEvidenceAsset, taskT
 	}
 	var missing []string
 	for _, a := range assets {
-		// 编号未知的音频跳过:它本来就不该在提示词里写数字(见 appendix 第 11 条)。
-		if a.OfficialLabel == "" || (a.MediaType != "video" && a.MediaType != "audio") {
+		if a.MediaType != "video" && a.MediaType != "audio" {
+			continue
+		}
+		// 编号未知的音频没有数字可查,但**必须按角色措辞出现过**(appendix 第 11 条把
+		// 措辞定死了)。整段不提它,H3 就只能自己编一条嗓子 —— 那正是这个函数要防的。
+		if a.LabelUnknown {
+			if !strings.Contains(strings.ToLower(prompt), unlabelledAudioPhrase) {
+				missing = append(missing, unlabelledAudioPhrase)
+			}
+			continue
+		}
+		if a.OfficialLabel == "" {
 			continue
 		}
 		if !strings.Contains(prompt, a.OfficialLabel) {

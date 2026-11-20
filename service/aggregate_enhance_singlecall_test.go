@@ -1152,3 +1152,26 @@ func TestMissingAssetMentionsOnlyForReferenceFamily(t *testing.T) {
 	require.Empty(t, missingAssetMentions("integrated_multimodal_description: [Shot 1] x", assets, "i2v"))
 }
 
+
+// **编号未知的音频也要被检查到过。** 它没有数字可查,但 appendix 第 11 条把措辞
+// 定死了("user-supplied audio reference"),整段不提它,H3 就只能自己编一条嗓子 ——
+// 那正是这个函数要防的。
+func TestMissingAssetMentionsRequiresUnlabelledAudio(t *testing.T) {
+	assets := []singleCallEvidenceAsset{
+		{AssetID: "video_1", MediaType: "video", OfficialLabel: "<Video 1>"},
+		{AssetID: "audio_1", MediaType: "audio", LabelUnknown: true},
+	}
+	without := "subject_definitions:\n<Subject 1> is the character in <Video 1>.\n"
+	errs := missingAssetMentions(without, assets, "r2va")
+	require.NotEmpty(t, errs)
+	require.Contains(t, errs[0], "user-supplied audio reference")
+
+	with := "subject_definitions:\n<Subject 1> is the character in <Video 1>.\n" +
+		"The user-supplied audio reference is the voice-timbre reference for <Subject 1>.\n"
+	require.Empty(t, missingAssetMentions(with, assets, "r2va"), "大小写不敏感")
+
+	upper := "subject_definitions:\n<Subject 1> is the character in <Video 1>.\n" +
+		"The User-Supplied Audio Reference is the voice-timbre reference for <Subject 1>."
+	require.Empty(t, missingAssetMentions(upper, assets, "r2va"), "大小写不敏感")
+}
+
