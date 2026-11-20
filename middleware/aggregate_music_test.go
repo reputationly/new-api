@@ -160,17 +160,17 @@ func TestMusic3SkipsEnhancementWithoutCaption(t *testing.T) {
 	require.Equal(t, "[Verse]\n雨落在霓虹上", body["prompt"])
 }
 
-// 声明成音乐但引擎族没写成 minimax-music3:一个字都不改。
-// 落到视频那条路会把顶层 prompt(歌词)当成提示词改写 —— 比不增强糟得多。
-func TestMusicAggregateWithoutMusic3EngineLeavesBodyUntouched(t *testing.T) {
-	withMusic3Engine(t, "acestep")
+// 声明成音乐,但引擎族既不是 Music3 也不是 ACE-Step:一个字都不改。
+// 落到视频那条路会把顶层 prompt 当成提示词改写 —— 比不增强糟得多。
+func TestMusicAggregateWithUnknownEngineLeavesBodyUntouched(t *testing.T) {
+	withMusic3Engine(t, "suno-v5")
 	withAggregateConfig(t, musicAggConfig)
 
 	body, got := expandMusic(t, `{
 		"model":"music3-enhanced","prompt":"a warm acoustic pop song",
 		"metadata":{"task_type":"t2m","instructions":"ignored"}
 	}`)
-	require.Nil(t, got, "引擎族不是 Music3 时不该发起增强")
+	require.Nil(t, got, "引擎族既不是 Music3 也不是 ACE-Step 时不该发起增强")
 	require.Equal(t, "a warm acoustic pop song", body["prompt"], "歌词/描述被改动了")
 	md, _ := body["metadata"].(map[string]any)
 	require.Equal(t, "ignored", md["instructions"], "描述被改动了")
@@ -210,4 +210,65 @@ func TestMusicAggregateFallsBackToNameWhenEngineUndeclared(t *testing.T) {
 	md, _ := body["metadata"].(map[string]any)
 	require.Equal(t, "NEW CAPTION", md["instructions"])
 	require.Equal(t, "[Verse]\n雨落在霓虹上", body["prompt"])
+}
+
+// **ACE-Step 改的是描述,不是歌词。** 它的字段语义与 Music3 正相反:
+//
+//	Music3   顶层 prompt = 歌词,     metadata.instructions = 曲风描述
+//	ACE-Step 顶层 prompt = 曲风描述, metadata.lyrics      = 歌词
+//
+// 写错字段不会报错,只会把用户唱出来的词交给优化,引擎再拿它当曲风描述编曲。
+func TestAceStepEnhancesPromptNotLyrics(t *testing.T) {
+	withMusic3Engine(t, "acestep")
+	withAggregateConfig(t, musicAggConfig)
+
+	body, got := expandMusic(t, `{
+		"model":"music3-enhanced",
+		"prompt":"a warm acoustic pop song",
+		"metadata":{"task_type":"t2m","lyrics":"[Verse] rain on neon"}
+	}`)
+
+	require.NotNil(t, got, "增强没有被调用")
+	require.Equal(t, "a warm acoustic pop song", got.Prompt, "改写对象必须是描述")
+	require.Equal(t, "[Verse] rain on neon", got.Lyrics, "歌词必须以只读上下文传下去")
+	require.Contains(t, got.TaskContext, "ACE-Step", "ACE-Step 的事实块没有接上")
+	require.Contains(t, got.TaskContext, "at most", "字数预算没有接上")
+
+	require.Equal(t, "NEW CAPTION", body["prompt"], "增强结果没写回 prompt 位")
+	md, _ := body["metadata"].(map[string]any)
+	require.NotNil(t, md)
+	require.Equal(t, "[Verse] rain on neon", md["lyrics"], "歌词被改动了")
+}
+
+// sample 模式没有 prompt:描述在 metadata.sample_query,写回也得写在那儿。
+func TestAceStepSampleModeRewritesSampleQuery(t *testing.T) {
+	withMusic3Engine(t, "acestep")
+	withAggregateConfig(t, musicAggConfig)
+
+	body, got := expandMusic(t, `{
+		"model":"music3-enhanced",
+		"prompt":"",
+		"metadata":{"task_type":"t2m","sample_query":"a cheerful song about spring"}
+	}`)
+
+	require.NotNil(t, got, "增强没有被调用")
+	require.Equal(t, "a cheerful song about spring", got.Prompt)
+	md, _ := body["metadata"].(map[string]any)
+	require.Equal(t, "NEW CAPTION", md["sample_query"], "sample 模式要写回 sample_query")
+	require.Equal(t, "", body["prompt"], "sample 模式的 prompt 位不该被填上东西")
+}
+
+// 没有描述(只有歌词)时**一个字都不改**:拿歌词顶上就是把用户的词交出去优化。
+func TestAceStepSkipsEnhancementWithoutCaption(t *testing.T) {
+	withMusic3Engine(t, "acestep")
+	withAggregateConfig(t, musicAggConfig)
+
+	body, got := expandMusic(t, `{
+		"model":"music3-enhanced",
+		"prompt":"",
+		"metadata":{"task_type":"t2m","lyrics":"[Verse] rain on neon"}
+	}`)
+	require.Nil(t, got, "没有描述时不该发起增强")
+	md, _ := body["metadata"].(map[string]any)
+	require.Equal(t, "[Verse] rain on neon", md["lyrics"])
 }

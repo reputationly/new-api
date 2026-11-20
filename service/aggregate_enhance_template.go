@@ -132,6 +132,11 @@ func DefaultEnhanceTemplate(generateModel string) string {
 	if IsMusic3GeneratingModel(generateModel) {
 		return defaultMusic3EnhanceTemplate
 	}
+	// ACE-Step 是另一个引擎、另一套字段与写法(描述在 prompt 位),模板不能通用 ——
+	// 见 aggregate_enhance_music_acestep.go 顶部那两条字段语义的对照。
+	if IsAceStepGeneratingModel(generateModel) {
+		return defaultAceStepEnhanceTemplate
+	}
 	m := strings.ToLower(strings.TrimSpace(generateModel))
 	switch {
 	case strings.Contains(m, "h3"), strings.Contains(m, "hailuo"):

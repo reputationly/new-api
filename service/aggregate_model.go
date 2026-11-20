@@ -161,11 +161,11 @@ func DryRunAggregateModel(m *common.AggregateModel, peers map[string]int) *Aggre
 					"判定是否为 MiniMax-Music3;建议声明上,避免换了对外名之后判错(判错的"+
 					"表现是增强写进引擎不读的字段,且不报错)",
 				strings.TrimSpace(m.Generate.Model))
-		case family != common.MusicEngineMinimaxMusic3:
+		case family != common.MusicEngineMinimaxMusic3 && !isAceStepEngineFamily(family):
 			add("generate", AggregateCheckError,
-				"音乐聚合目前只支持 MiniMax-Music3,生成段模型 %q 声明的引擎族是 %q:"+
-					"ACE-Step 的描述在 prompt 位、歌词在 metadata.lyrics,与 Music3 相反,"+
-					"接上去增强会写到引擎不读的字段(且不报错)",
+				"音乐聚合目前只支持 MiniMax-Music3 与 ACE-Step,生成段模型 %q 声明的引擎族是 %q:"+
+					"前者的描述在 metadata.instructions、歌词在 prompt,后者的描述在 prompt、"+
+					"歌词在 metadata.lyrics,两者相反,接错增强会写到引擎不读的字段(且不报错)",
 				strings.TrimSpace(m.Generate.Model), family)
 		}
 		if m.Upscale != nil {

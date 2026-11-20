@@ -112,12 +112,12 @@ func TestDefaultEnhanceTemplatePicksMusicByEngineFamily(t *testing.T) {
 		t.Error("既没声明也不像 Music3 的模型不该拿到音乐模板")
 	}
 	// 4) **声明压过名字**:名字里带 music3 但声明的是 ACE-Step
-	if got := DefaultEnhanceTemplate("music3-sold-as-ace"); got != "" {
-		t.Error("声明为 ACE-Step 时不该按名字套 Music3 模板")
+	if got := DefaultEnhanceTemplate("music3-sold-as-ace"); got != defaultAceStepEnhanceTemplate {
+		t.Error("名字带 music3、但声明为 ACE-Step 时应拿到 ACE-Step 模板")
 	}
 	// 5) ACE-Step 本身:它的描述在 prompt 位、产物不是 Music3 的 caption 形状
-	if got := DefaultEnhanceTemplate("ace"); got != "" {
-		t.Error("ACE-Step 不该拿到 Music3 模板")
+	if got := DefaultEnhanceTemplate("ace"); got != defaultAceStepEnhanceTemplate {
+		t.Error("ACE-Step 应拿到 ACE-Step 模板")
 	}
 	// 6) H3 那条不受影响
 	if got := DefaultEnhanceTemplate("minimax-h3-fl2va"); got != defaultH3EnhanceTemplate {

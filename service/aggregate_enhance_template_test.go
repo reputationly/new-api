@@ -15,10 +15,15 @@ func TestDefaultEnhanceTemplateIsModelSpecific(t *testing.T) {
 			t.Errorf("%s 应当有内置模板", m)
 		}
 	}
-	for _, m := range []string{"qwen-image", "ace-step", "", "seedream"} {
+	for _, m := range []string{"qwen-image", "", "seedream"} {
 		if DefaultEnhanceTemplate(m) != "" {
 			t.Errorf("%s 不该拿到 H3 的模板", m)
 		}
+	}
+	// ACE-Step 有它自己那份模板(描述在 prompt 位、caption 只有一行),
+	// 但**不能**拿到 H3 的三节提示词模板。
+	if got := DefaultEnhanceTemplate("ace-step"); got != defaultAceStepEnhanceTemplate {
+		t.Error("ace-step 应拿到 ACE-Step 模板")
 	}
 }
 

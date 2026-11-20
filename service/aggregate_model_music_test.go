@@ -58,9 +58,11 @@ func TestDryRunWarnsMusicWithoutDeclaredEngine(t *testing.T) {
 	requireContains(t, checkByKey(res, "generate").Message, "引擎族")
 }
 
-// 指到 ACE-Step:字段语义相反(prompt=描述、metadata.lyrics=歌词),接上去增强会写到
-// 引擎不读的字段上,钱花了、描述没动、不报错。
-func TestDryRunRejectsMusicPointedAtACEState(t *testing.T) {
+// 指到 ACE-Step:**现在支持了**(描述在 prompt 位、歌词在 metadata.lyrics),不该报错。
+//
+// 增强按引擎族分流之后,这两个引擎各走各的字段:Music3 改 metadata.instructions,
+// ACE-Step 改顶层 prompt(sample 模式下改 metadata.sample_query)。
+func TestDryRunAllowsMusicPointedAtAceStep(t *testing.T) {
 	withFakeModels(t, map[string]fakeModel{
 		"my-music": {groups: []string{"default"}},
 		"enh":      {groups: []string{"default"}},
@@ -68,8 +70,23 @@ func TestDryRunRejectsMusicPointedAtACEState(t *testing.T) {
 	withMusicEngineConfig(t, `{"models":{"my-music":{"engine":"acestep"}}}`)
 
 	res := DryRunAggregateModel(musicAggregate(), nil)
+	if ch := checkByKey(res, "generate"); ch != nil && ch.Level == AggregateCheckError {
+		t.Fatalf("ACE-Step 已是受支持的引擎族,不该报 error: %s", ch.Message)
+	}
+}
+
+// 指到两个引擎族以外的模型(比如 Suno 那类)仍然要拦:我们不知道它的字段语义,
+// 增强写错字段是"钱花了、描述没动、不报错"。
+func TestDryRunRejectsMusicPointedAtUnknownEngine(t *testing.T) {
+	withFakeModels(t, map[string]fakeModel{
+		"my-music": {groups: []string{"default"}},
+		"enh":      {groups: []string{"default"}},
+	})
+	withMusicEngineConfig(t, `{"models":{"my-music":{"engine":"suno-v5"}}}`)
+
+	res := DryRunAggregateModel(musicAggregate(), nil)
 	requireLevel(t, res, "generate", AggregateCheckError)
-	requireContains(t, checkByKey(res, "generate").Message, "ACE-Step")
+	requireContains(t, checkByKey(res, "generate").Message, "只支持 MiniMax-Music3 与 ACE-Step")
 }
 
 func TestDryRunRejectsMusicUpscale(t *testing.T) {
