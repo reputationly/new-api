@@ -111,3 +111,28 @@ func TestOfficialTwoSlotConfig(t *testing.T) {
 
 	seedTimeRatio(t, `{}`)
 }
+
+// 回归哨兵：**补集时段（其余时间）必须能保存**。
+//
+// 曾经的 bug：校验对补集时段也调 validateSegments，而补集自己本来就没有区间
+// （区间是"除参照时段之外"算出来的），于是保存直接报
+// `time window "slot2" has no time segment`。
+func TestCheckGroupTimeRatio_ComplementWindowSaves(t *testing.T) {
+	cfg := `{
+		"windows": {
+		  "slot1": {"label":"高峰时段","segments":[
+		    {"start":"09:00","end":"12:00","days":[1,2,3,4,5]},
+		    {"start":"14:00","end":"18:00","days":[1,2,3,4,5]}]},
+		  "slot2": {"label":"空闲时段","exclude_of":"slot1"}
+		},
+		"rules": {"*": {"m": [
+		  {"window":"slot1","prices":{"input":2}},
+		  {"window":"slot2","prices":{"input":1}}
+		]}}
+	}`
+	require.NoError(t, CheckGroupTimeRatio(cfg))
+
+	// 引用不存在 / 引用补集 / 补集互相套用，都要明确拒绝
+	require.Error(t, CheckGroupTimeRatio(`{"windows":{"a":{"exclude_of":"nope"}},"rules":{}}`))
+	require.Error(t, CheckGroupTimeRatio(`{"windows":{"a":{"label":"甲","start":"09:00","end":"10:00"},"b":{"exclude_of":"a"},"c":{"exclude_of":"b"}},"rules":{}}`))
+}

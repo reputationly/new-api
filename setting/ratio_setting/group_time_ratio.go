@@ -513,7 +513,9 @@ func CheckGroupTimeRatio(jsonStr string) error {
 			if len(ref.normalizedSegments()) == 0 {
 				return fmt.Errorf("time window %q excludes %q, which has no segments", key, win.ExcludeOf)
 			}
-			if err := win.validateSegments(key); err != nil {
+			// 补集时段自己**没有**区间（区间是"除参照时段之外"算出来的），
+			// 所以这里不能走 validateSegments —— 那会报 "has no time segment"。
+			if err := win.validateTZ(key); err != nil {
 				return err
 			}
 			continue
@@ -576,7 +578,11 @@ func CheckGroupTimeRatio(jsonStr string) error {
 					return fmt.Errorf("group %s time rule %q window %q: 至少要配一个分量价目", group, pattern, rule.Window)
 				}
 			}
-			if err := checkWindowOverlap(cfg.Windows, group, pattern, list); err != nil {
+			compiled, cErr := compileWindows(cfg.Windows)
+			if cErr != nil {
+				return cErr
+			}
+			if err := checkWindowOverlap(compiled, group, pattern, list); err != nil {
 				return err
 			}
 		}
@@ -662,14 +668,19 @@ func (w TimeWindow) validateSegments(key string) error {
 			}
 		}
 	}
+	// 同一时段内部的两段不能重叠（重叠意味着同一天同一分钟被算了两次）
+	if err := detectSegmentOverlap(key, segs); err != nil {
+		return err
+	}
+	return w.validateTZ(key)
+}
+
+// validateTZ 校验时区可解析。普通时段与补集时段都要查。
+func (w TimeWindow) validateTZ(key string) error {
 	if w.TZ != "" {
 		if _, err := time.LoadLocation(w.TZ); err != nil {
 			return fmt.Errorf("time window %q: unknown timezone %q", key, w.TZ)
 		}
-	}
-	// 同一时段内部的两段不能重叠（重叠意味着同一天同一分钟被算了两次）
-	if err := detectSegmentOverlap(key, segs); err != nil {
-		return err
 	}
 	return nil
 }
