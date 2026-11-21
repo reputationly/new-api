@@ -883,12 +883,16 @@ func (w TimeWindow) NextBoundary(at time.Time) (time.Time, bool) {
 
 // TimeWindowView 是下发给前端的单个时段档位。
 type TimeWindowView struct {
-	Label string  `json:"label"`
-	Start string  `json:"start"`
-	End   string  `json:"end"`
-	Days  []int   `json:"days,omitempty"`
-	TZ    string  `json:"tz,omitempty"`
-	Value float64 `json:"value"` // 配置值（取代模型折扣的那个系数）
+	Label string `json:"label"`
+	Start string `json:"start"`
+	End   string `json:"end"`
+	Days  []int  `json:"days,omitempty"`
+	// Segments 是该档位的全部区间（多段/补集展开后的形态），前端一律优先读它。
+	// Start/End/Days 只在恰好一段时回填，给只认旧形状的消费方留兼容；
+	// 多段窗口下这三个字段为空属正常，不是数据缺失。
+	Segments []TimeSegment `json:"segments,omitempty"`
+	TZ       string        `json:"tz,omitempty"`
+	Value    float64       `json:"value"` // 配置值（取代模型折扣的那个系数）
 	// Ratio 是该时段的**最终倍率**，与 group_model_ratio 下发的终值同口径，可以直接
 	// 比较。前端要显示「空闲时段 5.6 折」必须用它——光有 Value 拼不出来，而让前端自己
 	// 乘一遍分组基础倍率，等于把解析逻辑抄一份到前端。
@@ -996,18 +1000,23 @@ func ResolveTimeRatioView(usingGroup, modelName string, at time.Time, res RatioR
 		inFactor := rule.InputFactor(modelName)
 		windowRatio := normalRatio * inFactor
 		outFactor := effectiveFactor(rule, modelName, "output")
-		view.Windows = append(view.Windows, TimeWindowView{
+		// win 是编译后的窗口：Start/End/Days 已被清空，时段信息只在 Segments 里。
+		// 单段时回填旧字段，多段只能靠 Segments 表达。
+		segs := append([]TimeSegment(nil), win.Segments...)
+		wv := TimeWindowView{
 			Label:                win.displayName(rule.Window),
-			Start:                win.Start,
-			End:                  win.End,
-			Days:                 win.Days,
+			Segments:             segs,
 			TZ:                   win.TZ,
 			Value:                inFactor,
 			Ratio:                windowRatio,
 			InputDirectoryRatio:  base * inFactor,
 			OutputDirectoryRatio: base * outFactor,
 			DiscountRatio:        discountRatio,
-		})
+		}
+		if len(segs) == 1 {
+			wv.Start, wv.End, wv.Days = segs[0].Start, segs[0].End, segs[0].Days
+		}
+		view.Windows = append(view.Windows, wv)
 		if inFactor < bestValue {
 			bestValue = inFactor
 			bestRatio = windowRatio

@@ -169,6 +169,50 @@ describe('buildTimeWindowRows', () => {
     ]);
   });
 
+  // 后端编译后的窗口是 segments 形状（多段/补集展开），start/end/days 只在
+  // 单段时回填。多段必须靠 segments 渲染，否则广场上每个时段都显示「每天 -」。
+  it('多段窗口按 segments 渲染，天数相同的段合并区间', () => {
+    const rows = build({
+      active: false,
+      best_ratio: 0.5,
+      normal_ratio: 0.35,
+      windows: [
+        {
+          label: '工作日高峰',
+          segments: [
+            { start: '09:00', end: '12:00', days: [1, 2, 3, 4, 5] },
+            { start: '14:00', end: '18:00', days: [1, 2, 3, 4, 5] },
+          ],
+          ratio: 0.5,
+          active: false,
+        },
+      ],
+    });
+    expect(rows[0].range).toBe(
+      '工作日高峰 工作日 09:00-12:00、14:00-18:00',
+    );
+  });
+
+  it('段间天数不同时逐段标注，不能把周六的时段读成工作日的', () => {
+    const rows = build({
+      active: false,
+      best_ratio: 0.5,
+      normal_ratio: 0.35,
+      windows: [
+        {
+          label: '分散档',
+          segments: [
+            { start: '09:00', end: '10:00', days: [1] },
+            { start: '15:00', end: '16:00', days: [6] },
+          ],
+          ratio: 0.5,
+          active: false,
+        },
+      ],
+    });
+    expect(rows[0].range).toBe('分散档 周一 09:00-10:00、周六 15:00-16:00');
+  });
+
   it('只列该模型可用的分组', () => {
     const rows = buildTimeWindowRows({
       usableGroup: { default: '默认', premium: '高级' },

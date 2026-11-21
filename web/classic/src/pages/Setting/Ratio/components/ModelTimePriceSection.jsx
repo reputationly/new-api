@@ -1,5 +1,6 @@
 import React, { useMemo, useState } from 'react';
 import {
+  Banner,
   Button,
   Empty,
   InputNumber,
@@ -42,6 +43,35 @@ const slotSummary = (win) => {
     .join('、');
 };
 
+// 与后端 pickRuleFrom / matchedTimeRulesLocked 同口径的匹配：
+// 权重 精确(2) > 尾部通配(1)，同权重模式串更长者优先。
+// 只用于「界面编辑的位置 ≠ 计费命中的位置」的告警，不参与任何价格计算。
+const effectivePattern = (scopeRules, modelName) => {
+  let best = null;
+  let bestWeight = -1;
+  Object.keys(scopeRules || {}).forEach((pattern) => {
+    let weight = 0;
+    if (pattern === modelName) {
+      weight = 2;
+    } else if (
+      typeof pattern === 'string' &&
+      pattern.endsWith('*') &&
+      modelName.startsWith(pattern.slice(0, -1))
+    ) {
+      weight = 1;
+    }
+    if (
+      weight > 0 &&
+      (weight > bestWeight ||
+        (weight === bestWeight && pattern.length > (best || '').length))
+    ) {
+      best = pattern;
+      bestWeight = weight;
+    }
+  });
+  return best;
+};
+
 // 某个模型的「分时价」区块。**内嵌在模型计费编辑器里**——时段是定价的一部分，
 // 不是另一张页面：左边选中模型，这里就是它每个时段的价目。
 //
@@ -52,9 +82,44 @@ const ModelTimePriceSection = ({
   rules,
   base,
   onChange,
+  allRules,
 }) => {
   const { t } = useTranslation();
   const [expanded, setExpanded] = useState({});
+
+  // 「界面编辑的位置 ≠ 计费命中的位置」告警。
+  //
+  // 计费侧 matchedTimeRulesLocked 是「先线路 scope、后全网 *」的整组取代，
+  // 且 scope 内只取最具体的一个模式串。这里只编辑 rules['*'][模型名]，
+  // 以下两种存量配置会让这里显示的内容与实际计费脱节：
+  //   1. 非 "*" scope（按线路存的旧规则）里有模式串命中本模型——
+  //      该分组用户整组走旧规则，此处编辑对他们不生效；
+  //   2. "*" 内没有精确条目、但通配模式串命中——计费生效中，界面却显示 0 档。
+  const shadowWarnings = useMemo(() => {
+    if (!modelName || !allRules) return [];
+    const warnings = [];
+    Object.keys(allRules).forEach((scope) => {
+      if (scope === '*') return;
+      const pattern = effectivePattern(allRules[scope], modelName);
+      if (pattern) {
+        warnings.push(
+          t('分组「{{scope}}」下配置了匹配「{{pattern}}」的分时规则，该分组用户不受此处编辑影响', {
+            scope,
+            pattern,
+          }),
+        );
+      }
+    });
+    const starPattern = effectivePattern(allRules['*'], modelName);
+    if (starPattern && starPattern !== modelName) {
+      warnings.push(
+        t('计费实际命中通配规则「{{pattern}}」（本模型没有精确条目），此处显示为空但计费生效中', {
+          pattern: starPattern,
+        }),
+      );
+    }
+    return warnings;
+  }, [allRules, modelName, t]);
 
   const componentList = useMemo(
     () => COMPONENTS.filter((c) => Number(base && base[c.key]) > 0),
@@ -113,10 +178,14 @@ const ModelTimePriceSection = ({
 
   const addRule = (windowKey) => {
     if (!windowKey) return;
+    // 与 resetRule 同口径：把所有有常规价的分量都落成绝对价目。
+    // 只播 input 的话——按次模型会得到空 prices（保存被后端「至少配一个分量」
+    // 拒掉），双价模型加「高峰档」则只改输入价、其余分量悄悄不变，
+    // 都不是运营要的「这个时段的完整价目」。
     const prices = {};
-    if (Number(base && base.input) > 0) {
-      prices.input = Number(Number(base.input).toFixed(4));
-    }
+    Object.entries(base || {}).forEach(([k, v]) => {
+      if (Number(v) > 0) prices[k] = Number(Number(v).toFixed(4));
+    });
     onChange([...(rules || []), { window: windowKey, prices }]);
   };
 
@@ -156,6 +225,17 @@ const ModelTimePriceSection = ({
           )}
         </Space>
       </div>
+
+      {shadowWarnings.length > 0 ? (
+        <Banner
+          type='warning'
+          bordered
+          fullMode={false}
+          closeIcon={null}
+          style={{ marginBottom: 8 }}
+          description={shadowWarnings.join('；')}
+        />
+      ) : null}
 
       {(rules || []).length === 0 ? (
         <Empty

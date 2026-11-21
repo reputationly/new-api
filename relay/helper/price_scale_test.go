@@ -1,8 +1,10 @@
 package helper
 
 import (
+	"fmt"
 	"math"
 	"testing"
+	"time"
 
 	"github.com/QuantumNous/new-api/common"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
@@ -141,4 +143,92 @@ func TestModelPriceHelperPerCallRatioFallbackDoesNotDoubleScale(t *testing.T) {
 	want := int(math.Round(250_000 * modelRatio * common.QuotaPerMillionTokens))
 	require.Equal(t, want, quota(7_300_000))
 	require.Equal(t, want, quota(7_300_000_000), "按量预扣是 token 语义，不读 QPU")
+}
+
+// seedAlwaysOnWindow 铺一条「此刻必然生效」的时段规则：窗口以当前时刻为中心
+// 前后各扩 2 小时（跨午夜由段语义自然覆盖），days 留空=每天。
+// 返回值是窗口键名，调用方负责在 cleanup 里清空 GroupTimeRatio。
+func seedAlwaysOnWindow(t *testing.T, modelName, pricesJSON string) {
+	t.Helper()
+	loc, err := time.LoadLocation("Asia/Shanghai")
+	require.NoError(t, err)
+	now := time.Now().In(loc)
+	cfg := fmt.Sprintf(`{"windows":{"peak":{"label":"peak","start":%q,"end":%q}},`+
+		`"rules":{"*":{"%s":[{"window":"peak","prices":%s}]}}}`,
+		now.Add(-2*time.Hour).Format("15:04"), now.Add(2*time.Hour).Format("15:04"),
+		modelName, pricesJSON)
+	require.NoError(t, ratio_setting.UpdateGroupTimeRatioByJSONString(cfg))
+}
+
+// per_call 是分量价目：命中时段时按次价必须吃到自己的系数。
+// 整单只乘 input 系数（GroupRatio），per_call 的差额由 ScaleComponent 折进单价——
+// 少了它，运营在面板上配的「高峰按次价」永远不会出现在账单里（预扣与结算同漏）。
+func TestModelPriceHelperPerCallAppliesTimeFactor(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	ratio_setting.InitRatioSettings()
+
+	const modelName = "percall-timefactor-test"
+	savedPrice := ratio_setting.ModelPrice2JSONString()
+	t.Cleanup(func() {
+		_ = ratio_setting.UpdateModelPriceByJSONString(savedPrice)
+		_ = ratio_setting.UpdateGroupTimeRatioByJSONString(`{}`)
+	})
+	require.NoError(t, ratio_setting.UpdateModelPriceByJSONString(
+		`{"percall-timefactor-test":0.1}`)) // ¥0.1/次
+
+	perCallQuota := func() int {
+		ctx, _ := gin.CreateTestContext(nil)
+		info := &relaycommon.RelayInfo{
+			OriginModelName: modelName,
+			UserGroup:       "default",
+			UsingGroup:      "default",
+		}
+		priceData, err := ModelPriceHelperPerCall(ctx, info)
+		require.NoError(t, err)
+		return priceData.Quota
+	}
+
+	// 无时段规则：¥0.1 × QuotaPerYuan × 1
+	require.Equal(t, 100_000_000, perCallQuota(), "前置：常规按次价")
+
+	// 时段内按次价 ¥0.2（= 常规 2 倍）：必须收到 200,000,000
+	seedAlwaysOnWindow(t, modelName, `{"per_call":0.2}`)
+	require.Equal(t, 200_000_000, perCallQuota(),
+		"per_call 时段系数 2.0 必须折进按次价")
+}
+
+// input 与 per_call 系数互相独立：input 减半不得把按次价也拖下去。
+// 期望语义 = 「该时段按次价的绝对价目 × 常规分组倍率」，即 ¥0.2 × 1。
+func TestModelPriceHelperPerCallTimeFactorIndependentOfInput(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	ratio_setting.InitRatioSettings()
+
+	const modelName = "percall-timefactor-both-test"
+	savedPrice := ratio_setting.ModelPrice2JSONString()
+	savedRatio := ratio_setting.ModelRatio2JSONString()
+	t.Cleanup(func() {
+		_ = ratio_setting.UpdateModelPriceByJSONString(savedPrice)
+		_ = ratio_setting.UpdateModelRatioByJSONString(savedRatio)
+		_ = ratio_setting.UpdateGroupTimeRatioByJSONString(`{}`)
+	})
+	require.NoError(t, ratio_setting.UpdateModelPriceByJSONString(
+		`{"percall-timefactor-both-test":0.1}`))
+	require.NoError(t, ratio_setting.UpdateModelRatioByJSONString(
+		`{"percall-timefactor-both-test":2}`)) // 输入 ¥2/1M 当 input 分量基准
+
+	ctx, _ := gin.CreateTestContext(nil)
+	info := &relaycommon.RelayInfo{
+		OriginModelName: modelName,
+		UserGroup:       "default",
+		UsingGroup:      "default",
+	}
+	// input 价目 1（系数 0.5）+ per_call 价目 0.2（系数 2.0）
+	seedAlwaysOnWindow(t, modelName, `{"input":1,"per_call":0.2}`)
+
+	priceData, err := ModelPriceHelperPerCall(ctx, info)
+	require.NoError(t, err)
+	// GroupRatio = 1 × f_input(0.5)；ScaleComponent(per_call) = 2.0/0.5 = 4
+	// → quota = 0.1 × QPY × 0.5 × 4 = ¥0.2 × QPY，与 input 减半无关
+	require.Equal(t, 200_000_000, priceData.Quota,
+		"按次价应等于时段绝对价目 × 分组倍率，input 系数不得渗透")
 }

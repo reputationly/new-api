@@ -295,7 +295,10 @@ func calculateTextQuotaSummary(ctx *gin.Context, relayInfo *relaycommon.RelayInf
 		}
 		summary.Quota = int(quotaCalculateDecimal.Round(0).IntPart())
 	} else {
-		quotaCalculateDecimal := dModelPrice.Mul(dQuotaPerYuan).Mul(dGroupRatio)
+		// 按次价分支：per_call 分量系数折进单价（ScaleComponent = f_percall / f_input，
+		// 与预扣侧 ModelPriceHelper* 同一约定，否则预扣与结算会差一个时段系数）。
+		quotaCalculateDecimal := dModelPrice.Mul(dQuotaPerYuan).Mul(dGroupRatio).
+			Mul(decimal.NewFromFloat(types.ScaleComponent("per_call", relayInfo.PriceData.GroupRatioInfo.TimeFactors)))
 		quotaCalculateDecimal = quotaCalculateDecimal.Add(summary.ToolCallSurchargeQuota)
 		quotaCalculateDecimal = quotaCalculateDecimal.Add(audioInputQuota)
 		if len(relayInfo.PriceData.OtherRatios) > 0 {

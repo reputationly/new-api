@@ -137,7 +137,10 @@ func ModelPriceHelper(c *gin.Context, info *relaycommon.RelayInfo, promptTokens 
 		if meta.ImagePriceRatio != 0 {
 			modelPrice = modelPrice * meta.ImagePriceRatio
 		}
-		preConsumedQuota = int(math.Round(modelPrice * common.QuotaPerYuan * groupRatioInfo.GroupRatio))
+		// 按次价是分量价目之一：整单只乘 input 系数，per_call 的差额由
+		// ScaleComponent（= f_percall / f_input）折进这里，与 output/cache 同一约定。
+		preConsumedQuota = int(math.Round(modelPrice * common.QuotaPerYuan * groupRatioInfo.GroupRatio *
+			types.ScaleComponent("per_call", groupRatioInfo.TimeFactors)))
 	}
 
 	// check if free model pre-consume is disabled
@@ -210,7 +213,10 @@ func ModelPriceHelperPerCall(c *gin.Context, info *relaycommon.RelayInfo) (types
 	freeModel := false
 
 	if usePrice {
-		quota = int(math.Round(modelPrice * common.QuotaPerYuan * groupRatioInfo.GroupRatio))
+		// per_call 分量系数与 ModelPriceHelper 的按次分支同一约定：
+		// 整单乘的是 input 系数，按次价的差额折进 ScaleComponent。
+		quota = int(math.Round(modelPrice * common.QuotaPerYuan * groupRatioInfo.GroupRatio *
+			types.ScaleComponent("per_call", groupRatioInfo.TimeFactors)))
 		if !operation_setting.GetQuotaSetting().EnableFreeModelPreConsume {
 			if groupRatioInfo.GroupRatio == 0 || modelPrice == 0 {
 				quota = 0

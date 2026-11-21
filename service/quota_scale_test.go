@@ -271,3 +271,45 @@ func TestCalcOpenRouterCacheCreateTokensIgnoresQuotaPerUnit(t *testing.T) {
 	require.Equal(t, 3000, atOld, "换算出的缓存创建 token 数应与构造样例一致")
 	require.Equal(t, atOld, atNew, "缓存创建 token 数是上游口径，不得随内部记账单位变化")
 }
+
+// UsePrice 结算分支的 per_call 分量系数：与预扣侧 ModelPriceHelper* 同一约定——
+// 整单乘 GroupRatio（已含 input 系数），per_call 的差额由 ScaleComponent 折进单价。
+// 少了它，预扣按原价、结算也按原价，面板上配的「高峰按次价」永远不进账单。
+func TestCalculateAudioQuotaUsePriceAppliesPerCallFactor(t *testing.T) {
+	info := QuotaInfo{
+		UsePrice:    true,
+		ModelPrice:  0.1, // ¥0.1/次
+		GroupRatio:  1,
+		TimeFactors: map[string]float64{"per_call": 2},
+	}
+	require.Equal(t, 200_000_000, calculateAudioQuota(info),
+		"per_call 系数 2 必须折进按次价")
+
+	// input 系数 0.5 已含在 GroupRatio=0.5 里；per_call 只吃自己的差额：
+	// ScaleComponent = 2.0/0.5 = 4 → 0.1 × QPY × 0.5 × 4 = ¥0.2 × QPY
+	mixed := QuotaInfo{
+		UsePrice:    true,
+		ModelPrice:  0.1,
+		GroupRatio:  0.5,
+		TimeFactors: map[string]float64{"input": 0.5, "per_call": 2},
+	}
+	require.Equal(t, 200_000_000, calculateAudioQuota(mixed),
+		"按次价应等于时段绝对价目，input 系数不得渗透")
+}
+
+// 文本路径 UsePrice 结算（text_quota.go）同一条约定：预扣与结算必须用同一个
+// 系数，否则「预扣 0.2、结算 0.1」这类对不上的账会静默产生。
+func TestCalculateTextQuotaSummaryPricePathAppliesPerCallFactor(t *testing.T) {
+	ctx := newTextQuotaCtx(t)
+	usage := &dto.Usage{PromptTokens: 1000, CompletionTokens: 100}
+	relayInfo := textRelayInfo(types.PriceData{
+		UsePrice:   true,
+		ModelPrice: 0.1,
+		GroupRatioInfo: types.GroupRatioInfo{
+			GroupRatio:  1,
+			TimeFactors: map[string]float64{"per_call": 2},
+		},
+	})
+	require.Equal(t, 200_000_000, calculateTextQuotaSummary(ctx, relayInfo, usage).Quota,
+		"per_call 系数 2 必须折进按次价结算")
+}

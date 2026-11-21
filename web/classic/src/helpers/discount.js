@@ -107,6 +107,44 @@ export const formatWindowRange = (win) => {
   return tz && tz !== DEFAULT_TIME_ZONE ? `${range}(${tz})` : range;
 };
 
+// 窗口的区间列表：优先后端下发的 segments（多段/补集展开后的形态），
+// start/end/days 旧形状兜底。段本身不带时区——tz 是窗口级字段，这里补回去，
+// 否则非默认时区窗口的 (tz) 标注会在多段渲染时丢掉。
+const windowSegments = (win) => {
+  const segs =
+    Array.isArray(win?.segments) && win.segments.length > 0
+      ? win.segments
+      : win?.start && win?.end
+        ? [{ start: win.start, end: win.end, days: win.days }]
+        : [];
+  return segs.map((s) => ({ ...s, tz: s.tz ?? win?.tz }));
+};
+
+/**
+ * 多段窗口的区间文案。天数相同的段合并成「工作日 09:00-12:00、14:00-18:00」；
+ * 天数不同的逐段标（「周六 10:00-12:00」），否则「周末+工作日」混排的段会
+ * 让用户把周六的时段读成工作日的。
+ */
+export const formatWindowSegments = (win) => {
+  const segs = windowSegments(win);
+  if (segs.length === 0) return '';
+  const dayKey = (s) =>
+    JSON.stringify([...(s.days || [])].sort((a, b) => a - b));
+  const ranges = segs.map((s) => formatWindowRange(s));
+  if (new Set(segs.map(dayKey)).size === 1) {
+    return [formatWindowDays(segs[0].days), ranges.join('、')]
+      .filter(Boolean)
+      .join(' ');
+  }
+  return segs
+    .map((s) =>
+      [formatWindowDays(s.days), formatWindowRange(s)]
+        .filter(Boolean)
+        .join(' '),
+    )
+    .join('、');
+};
+
 /**
  * 构造「分时定价」表的行。classic 与 mobile 共用同一份——两端各写一份必然漂移，
  * 而漂移的表现是同一个模型在手机和电脑上看到不同的分时价目。
@@ -150,9 +188,7 @@ export const buildTimeWindowRows = ({
         // 带上档位名：角标说的是「上午工作时间等2个时段」，详情表只列时间区间的话
         // 用户对不上号——他看到的那个名字在表里找不到。
         label: w.label || '',
-        range: [w.label, formatWindowDays(w.days), formatWindowRange(w)]
-          .filter(Boolean)
-          .join(' '),
+        range: [w.label, formatWindowSegments(w)].filter(Boolean).join(' '),
         // 展示该时段的**最终倍率**对应的折扣，而不是配置倍率：用户要知道的是
         // 「这个时段几折」，配置值是管理端的事
         discount: getGroupDiscountInfo(w.ratio),

@@ -54,10 +54,12 @@ func calculateAudioQuota(info QuotaInfo) int {
 	if info.UsePrice {
 		modelPrice := decimal.NewFromFloat(info.ModelPrice)
 		// 按次价是人民币，直接 × QuotaPerYuan 得 quota。
+		// per_call 分量系数与预扣侧同一约定（ScaleComponent = f_percall / f_input）。
 		dQuotaPerYuan := decimal.NewFromInt(common.QuotaPerYuan)
 		groupRatio := decimal.NewFromFloat(info.GroupRatio)
 
-		quota := modelPrice.Mul(dQuotaPerYuan).Mul(groupRatio)
+		quota := modelPrice.Mul(dQuotaPerYuan).Mul(groupRatio).
+			Mul(decimal.NewFromFloat(types.ScaleComponent("per_call", info.TimeFactors)))
 		return int(quota.Round(0).IntPart())
 	}
 

@@ -92,5 +92,13 @@ func TestResolveTimeRatioView_PricesFormatNonZero(t *testing.T) {
 	require.InDelta(t, 0.5, view.InputDirectoryRatio, 1e-9, "此刻目录倍率同样不能是 0")
 	require.True(t, view.Active, "0.5 < 1，确实是优惠时段")
 
+	// 时段区间必须经 segments 下发：编译后的窗口 Start/End/Days 已清空，
+	// 只回填旧字段的话广场会把「00:00-08:00」渲染成「每天 -」。
+	require.Len(t, in.Segments, 1)
+	require.Equal(t, "00:00", in.Segments[0].Start)
+	require.Equal(t, "08:00", in.Segments[0].End)
+	require.Equal(t, "00:00", in.Start, "单段窗口回填旧字段")
+	require.Equal(t, "08:00", in.End)
+
 	seedTimeRatio(t, `{}`)
 }

@@ -393,6 +393,7 @@ export default function ModelPricingEditor({
         rules={(timeCfg.rules['*'] || {})[selectedModel.name] || []}
         base={basePriceOf(selectedModel.name)}
         onChange={(rules) => setModelTimeRules(selectedModel.name, rules)}
+        allRules={timeCfg.rules}
       />
     </Card>
   );
