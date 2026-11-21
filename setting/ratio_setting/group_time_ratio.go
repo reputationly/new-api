@@ -806,7 +806,11 @@ func ResolveTimeRatioView(usingGroup, modelName string, at time.Time, res RatioR
 		}
 		// 该时段的最终倍率，口径与 ResolveGroupRatioAt 的 Layer 4 逐位一致：
 		// 系数乘在常规价上（normalRatio 已含用户档乘数）。
-		windowRatio := normalRatio * rule.Value
+		// 用**归一后的分量系数**算，不能用 rule.Value：新格式（prices）规则里
+		// Value 恒为 0，直接用会让 ratio / 目录倍率全变 0 —— 广场上那个模型
+		// 会显示「免费」、划线价 ¥0。
+		inFactor := rule.InputFactor(modelName)
+		windowRatio := normalRatio * inFactor
 		outFactor := effectiveFactor(rule, modelName, "output")
 		view.Windows = append(view.Windows, TimeWindowView{
 			Label:                win.displayName(rule.Window),
@@ -814,14 +818,14 @@ func ResolveTimeRatioView(usingGroup, modelName string, at time.Time, res RatioR
 			End:                  win.End,
 			Days:                 win.Days,
 			TZ:                   win.TZ,
-			Value:                rule.InputFactor(modelName),
+			Value:                inFactor,
 			Ratio:                windowRatio,
-			InputDirectoryRatio:  base * rule.Value,
+			InputDirectoryRatio:  base * inFactor,
 			OutputDirectoryRatio: base * outFactor,
 			DiscountRatio:        discountRatio,
 		})
-		if rule.Value < bestValue {
-			bestValue = rule.Value
+		if inFactor < bestValue {
+			bestValue = inFactor
 			bestRatio = windowRatio
 			view.BestLabel = win.displayName(rule.Window)
 		}
@@ -832,9 +836,9 @@ func ResolveTimeRatioView(usingGroup, modelName string, at time.Time, res RatioR
 		// 「当前档」是模型折扣价，实扣却是原价。
 		//
 		// 「是否打折」是另一个问题，见下面的 view.Active。
-		if win.ActiveAt(at) && rule.Value < chargedValue {
+		if win.ActiveAt(at) && inFactor < chargedValue {
 			view.Label = win.displayName(rule.Window)
-			chargedValue = rule.Value
+			chargedValue = inFactor
 			chargedIdx = len(view.Windows) - 1
 		}
 		// Until 取所有档位里最近的一次状态翻转：任一档位翻转都会改变这个模型的价，
@@ -908,7 +912,10 @@ func pickTimeRule(usingGroup, modelName string, at time.Time) (string, TimeWindo
 		if !ok || !win.ActiveAt(at) {
 			continue
 		}
-		if !found || rule.Value < bestRule.Value {
+		// 重叠时取「最便宜」的那一档：比的必须是**归一后的输入系数**。
+		// 用 rule.Value 会在新格式（prices）规则上恒为 0，多个模式串的窗口重叠时
+		// 就退化成"谁先出现谁生效"——计费跟着错，不只是展示。
+		if !found || rule.InputFactor(modelName) < bestRule.InputFactor(modelName) {
 			bestKey, bestWin, bestRule, found = rule.Window, win, rule, true
 		}
 	}
