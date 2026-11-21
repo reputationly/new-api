@@ -41,6 +41,8 @@ import {
   IconSearch,
 } from '@douyinfe/semi-icons';
 import { useTranslation } from 'react-i18next';
+import { showError } from '../../../../helpers';
+import ModelTimePriceSection from './ModelTimePriceSection';
 import {
   PAGE_SIZE,
   PRICE_SUFFIX,
@@ -118,6 +120,9 @@ export default function ModelPricingEditor({
   listDescription = '',
   emptyTitle = '',
   emptyDescription = '',
+  timeDraft = '{}',
+  onTimeDraftChange,
+  saveTimePrice,
 }) {
   const { t } = useTranslation();
   const isMobile = useIsMobile();
@@ -161,6 +166,91 @@ export default function ModelPricingEditor({
     candidateModelNames,
     filterMode,
   });
+
+  // 分时价草稿：时段模板来自顶部的折叠栏，这里只管"当前模型绑了哪些档、各档多少钱"。
+  const timeCfg = useMemo(() => {
+    try {
+      const parsed = JSON.parse(timeDraft || '{}') || {};
+      return { windows: parsed.windows || {}, rules: parsed.rules || {} };
+    } catch (e) {
+      return { windows: {}, rules: {} };
+    }
+  }, [timeDraft]);
+
+  const basePriceOf = useCallback(
+    (name) => {
+      const parse = (key) => {
+        try {
+          return JSON.parse((options && options[key]) || '{}') || {};
+        } catch (e) {
+          return {};
+        }
+      };
+      const modelRatio = Number(parse('ModelRatio')[name]) || 0;
+      const ratioOf = (key) => {
+        const v = Number(parse(key)[name]);
+        return Number.isFinite(v) && v > 0 ? v : null;
+      };
+      const completion = ratioOf('CompletionRatio');
+      const audio = ratioOf('AudioRatio');
+      const audioCompletion = ratioOf('AudioCompletionRatio');
+      const cache = ratioOf('CacheRatio');
+      const createCache = ratioOf('CreateCacheRatio');
+      const image = ratioOf('ImageRatio');
+      const perCall = Number(parse('ModelPrice')[name]) || 0;
+      return {
+        input: modelRatio > 0 ? modelRatio : null,
+        output: modelRatio > 0 && completion ? modelRatio * completion : null,
+        cache: modelRatio > 0 && cache ? modelRatio * cache : null,
+        create_cache:
+          modelRatio > 0 && createCache ? modelRatio * createCache : null,
+        image: modelRatio > 0 && image ? modelRatio * image : null,
+        audio_input: modelRatio > 0 && audio ? modelRatio * audio : null,
+        audio_output:
+          modelRatio > 0 && audio && audioCompletion
+            ? modelRatio * audio * audioCompletion
+            : null,
+        per_call: perCall > 0 ? perCall : null,
+      };
+    },
+    [options],
+  );
+
+  const setModelTimeRules = useCallback(
+    (name, rules) => {
+      if (!onTimeDraftChange) return;
+      const nextRules = { ...timeCfg.rules };
+      const global = { ...(nextRules['*'] || {}) };
+      if (!rules || rules.length === 0) {
+        delete global[name];
+      } else {
+        global[name] = rules;
+      }
+      if (Object.keys(global).length > 0) {
+        nextRules['*'] = global;
+      } else {
+        delete nextRules['*'];
+      }
+      onTimeDraftChange(
+        JSON.stringify({ windows: timeCfg.windows, rules: nextRules }, null, 2),
+      );
+    },
+    [onTimeDraftChange, timeCfg],
+  );
+
+  // 「应用更改」：先落分时价（另一个 option key），再落价格。两段分别报错，
+  // 不把"分时价保存失败"和"价格保存失败"混成一句。
+  const handleApply = useCallback(async () => {
+    if (saveTimePrice) {
+      try {
+        await saveTimePrice();
+      } catch (error) {
+        showError(error.message || t('保存分时价失败'));
+        return;
+      }
+    }
+    await handleSubmit();
+  }, [saveTimePrice, handleSubmit, t]);
 
   const getExprModeLabel = useCallback(
     (model) => {
@@ -238,6 +328,21 @@ export default function ModelPricingEditor({
         render: (_, record) => buildSummaryText(record, t),
       },
       {
+        title: t('分时价'),
+        key: 'timePrice',
+        width: 90,
+        render: (_, record) => {
+          const count = ((timeCfg.rules['*'] || {})[record.name] || []).length;
+          return count > 0 ? (
+            <Tag color='cyan' size='small'>
+              {t('{{n}} 档', { n: count })}
+            </Tag>
+          ) : (
+            <span style={{ color: 'var(--semi-color-text-2)' }}>-</span>
+          );
+        },
+      },
+      {
         title: t('操作'),
         key: 'action',
         render: (_, record) => (
@@ -262,6 +367,7 @@ export default function ModelPricingEditor({
       selectedModelNames,
       setSelectedModelName,
       t,
+      timeCfg,
     ],
   );
 
@@ -304,7 +410,7 @@ export default function ModelPricingEditor({
             type='primary'
             icon={<IconSave />}
             loading={loading}
-            onClick={handleSubmit}
+            onClick={handleApply}
             style={isMobile ? { width: '100%' } : undefined}
           >
             {t('应用更改')}
@@ -654,6 +760,23 @@ export default function ModelPricingEditor({
                           )
                             ? t('当前未启用，需要时再打开即可。')
                             : ''
+                        }
+                      />
+                    </Card>
+
+                    <Card
+                      bodyStyle={{ padding: 16 }}
+                      style={{ marginBottom: 16 }}
+                    >
+                      <ModelTimePriceSection
+                        modelName={selectedModel.name}
+                        windows={timeCfg.windows}
+                        rules={
+                          (timeCfg.rules['*'] || {})[selectedModel.name] || []
+                        }
+                        base={basePriceOf(selectedModel.name)}
+                        onChange={(rules) =>
+                          setModelTimeRules(selectedModel.name, rules)
                         }
                       />
                     </Card>
