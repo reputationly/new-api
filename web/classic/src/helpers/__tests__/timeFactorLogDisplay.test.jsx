@@ -109,6 +109,42 @@ describe('分时价日志展示', () => {
     expect(text).not.toContain('1.4');
   });
 
+  it('专属倍率 + 模型规则 + 时段同时命中：算式用 final/f_in 复合终值', () => {
+    // ResolveGroupRatio 分层：专属 0.7（L1）× 模型规则 ×0.8（L2）× 时段 ×0.5（L4）
+    // → final = 0.28 落库。展示价 = 目录价 × f_c，算式倍率必须是 final/f_in = 0.56，
+    // 否则 price×f_c×0.7 会漏掉模型规则的 0.8，合计与实扣不配平。
+    const text = renderText(
+      renderModelPrice({
+        ...idleLog,
+        group_ratio: 0.28, // 0.7 × 0.8 × 0.5
+        user_group_ratio: 0.7,
+      }),
+    );
+    // 分量价照旧按时段系数：输入 ¥1 / 输出 ¥4 / 缓存 ¥0.02
+    expect(text).toContain('输入价格：¥1');
+    expect(text).toContain('输出价格：¥4');
+    // 复合终值 0.56 = 0.7 × 0.8，标签如实标「专属倍率×规则」而非冒充专属 0.7
+    expect(text).toContain('专属倍率×规则 0.56');
+    expect(text).not.toContain('专属倍率 0.7');
+    // 合计 = (31×¥1 + 14×¥4)/1M × 0.56 = ¥0.00004872 = price × 0.7 × 0.8 × 0.5
+    expect(text).toContain('¥0.00004872');
+  });
+
+  it('无时段的专属+模型规则同样配平：复合终值而非裸专属倍率', () => {
+    // 同一分层在无时段日志上同样成立：专属 0.7 × 模型规则 0.8 → final 0.56。
+    // 旧展示给「专属倍率 0.7」会让算式漏掉 0.8；现在恒用 final 终值。
+    const { time_factors, ...noTime } = idleLog;
+    const text = renderText(
+      renderModelPrice({
+        ...noTime,
+        group_ratio: 0.56,
+        user_group_ratio: 0.7,
+      }),
+    );
+    expect(text).toContain('专属倍率×规则 0.56');
+    expect(text).not.toContain('专属倍率 0.7');
+  });
+
   it('timeFactorDisplay：缺省分量不随时段变、非分量项随 input', () => {
     const tfd = timeFactorDisplay({
       time_factors: { input: 0.5, output: 0.25 },
