@@ -690,6 +690,9 @@ type TimeRatioView struct {
 	InputDirectoryRatio  float64 `json:"input_directory_ratio"`
 	OutputDirectoryRatio float64 `json:"output_directory_ratio"`
 	DiscountRatio        float64 `json:"discount_ratio"`
+	// TimeFactors 是此刻生效的**分量系数表**（与 TimeRule.factors 同语义）。
+	// 供下发端点算出「每个分量要折多少」，前端据此展示各自的目录价与成交价。
+	TimeFactors map[string]float64 `json:"factors,omitempty"`
 	// EffectiveCompletionRatio 是**此刻生效的补全倍率** = 基础补全倍率 × 输出系数/输入系数。
 	// 前端算输出价必须用它，否则「闲时输入 1/输出 7」这种不等比例价目会被算成 1/4。
 	EffectiveCompletionRatio float64 `json:"completion_ratio"`
@@ -792,6 +795,7 @@ func ResolveTimeRatioView(usingGroup, modelName string, at time.Time, res RatioR
 	if chargedIdx >= 0 {
 		inFactor = list[chargedIdx].InputFactor()
 		outFactor = effectiveFactor(list[chargedIdx], "output")
+		view.TimeFactors = list[chargedIdx].EffectiveFactors()
 	}
 	view.InputDirectoryRatio = base * inFactor
 	view.OutputDirectoryRatio = base * outFactor

@@ -17,6 +17,7 @@ import { IconDelete, IconPlus, IconSave } from '@douyinfe/semi-icons';
 import { useTranslation } from 'react-i18next';
 import { API, showError, showSuccess, showWarning } from '../../../../helpers';
 import TimeWindowEditor from '../../../GroupManagement/components/TimeWindowEditor';
+import TimePriceRuleEditor from './TimePriceRuleEditor';
 
 const { Text } = Typography;
 
@@ -81,6 +82,8 @@ export default function TimePricePanel({ options, refresh }) {
   // 按目录价填写时的两个输入（¥/1M）；模式串是通配时没有单一目录价，退回填系数
   const [addInPrice, setAddInPrice] = useState(null);
   const [addOutPrice, setAddOutPrice] = useState(null);
+  // 正在编辑的规则（打开分量表弹窗）：{ pattern, index, factors, remark }
+  const [editing, setEditing] = useState(null);
 
   useEffect(() => {
     const next = (options && options.GroupTimeRatio) || '{}';
@@ -97,14 +100,67 @@ export default function TimePricePanel({ options, refresh }) {
     }
   }, [options && options.ModelRatio]);
 
-  // 输出目录价 = 输入价 × 补全倍率，算折算列要用
-  const completionRatioMap = useMemo(() => {
+  // 各分量的相对倍率：算「常规目录价」用（输入价 × 该倍率 = 分量常规价）。
+  // 与 calculateModelPrice 用的是同一批 option key，口径不会分叉。
+  const ratioOption = (key) => {
     try {
-      return JSON.parse((options && options.CompletionRatio) || '{}') || {};
+      return JSON.parse((options && options[key]) || '{}') || {};
     } catch (e) {
       return {};
     }
-  }, [options && options.CompletionRatio]);
+  };
+  const completionRatioMap = useMemo(
+    () => ratioOption('CompletionRatio'),
+    [options && options.CompletionRatio],
+  );
+  const cacheRatioMap = useMemo(
+    () => ratioOption('CacheRatio'),
+    [options && options.CacheRatio],
+  );
+  const createCacheRatioMap = useMemo(
+    () => ratioOption('CreateCacheRatio'),
+    [options && options.CreateCacheRatio],
+  );
+  const imageRatioMap = useMemo(
+    () => ratioOption('ImageRatio'),
+    [options && options.ImageRatio],
+  );
+  const audioRatioMap = useMemo(
+    () => ratioOption('AudioRatio'),
+    [options && options.AudioRatio],
+  );
+  const audioCompletionRatioMap = useMemo(
+    () => ratioOption('AudioCompletionRatio'),
+    [options && options.AudioCompletionRatio],
+  );
+  const modelPriceMap = useMemo(
+    () => ratioOption('ModelPrice'),
+    [options && options.ModelPrice],
+  );
+
+  // 某模型的分量常规目录价表（¥），供编辑器展示与换算。
+  const basePriceOf = (pattern) => {
+    const m = Number(modelRatioMap[pattern]) || 0;
+    const rel = (map) => {
+      const v = Number(map[pattern]);
+      return Number.isFinite(v) && v > 0 ? v : null;
+    };
+    const c = rel(completionRatioMap);
+    const a = rel(audioRatioMap);
+    const ac = rel(audioCompletionRatioMap);
+    const price = Number(modelPriceMap[pattern]) || 0;
+    return {
+      input: m > 0 ? m : null,
+      output: m > 0 && c ? m * c : null,
+      cache: m > 0 && rel(cacheRatioMap) ? m * rel(cacheRatioMap) : null,
+      create_cache:
+        m > 0 && rel(createCacheRatioMap) ? m * rel(createCacheRatioMap) : null,
+      image: m > 0 && rel(imageRatioMap) ? m * rel(imageRatioMap) : null,
+      audio_input: m > 0 && a ? m * a : null,
+      audio_output: m > 0 && a && ac ? m * a * ac : null,
+      per_call: price > 0 ? price : null,
+    };
+  };
 
   const windowOptions = useMemo(
     () =>
@@ -196,37 +252,50 @@ export default function TimePricePanel({ options, refresh }) {
     return usage;
   }, [cfg.rules]);
 
+  // 与后端 TimeRule.EffectiveFactors 同规则：旧格式 value（整价系数）展开到全部分量，
+  // output_factor 并入 output。展示与保存都用归一后的结果，避免两套读法。
+  const normalizeFactors = (rule) => {
+    const ALL = [
+      'input',
+      'output',
+      'cache',
+      'create_cache',
+      'image',
+      'audio_input',
+      'audio_output',
+      'per_call',
+    ];
+    const out = {};
+    if (rule.factors && Object.keys(rule.factors).length > 0) {
+      Object.entries(rule.factors).forEach(([k, v]) => {
+        if (Number(v) > 0) out[k] = Number(v);
+      });
+      if (Number(rule.value) > 0 && !out.input) out.input = Number(rule.value);
+      if (Number(rule.output_factor) > 0 && !out.output)
+        out.output = Number(rule.output_factor);
+      return out;
+    }
+    if (Number(rule.value) > 0) {
+      ALL.forEach((k) => {
+        out[k] = Number(rule.value);
+      });
+      if (Number(rule.output_factor) > 0)
+        out.output = Number(rule.output_factor);
+    }
+    return out;
+  };
+
   const rows = useMemo(() => {
     const out = [];
     Object.entries(globalRules).forEach(([pattern, list]) => {
-      const dir = Number(modelRatioMap[pattern]);
-      const cr = Number(completionRatioMap[pattern]);
       (list || []).forEach((rule, idx) => {
-        const inFactor = Number(rule.value);
-        // output_factor 缺省 = 跟随输入（旧配置与「整价统一变」的场景都走这条）
-        const outFactor =
-          rule.output_factor && Number(rule.output_factor) > 0
-            ? Number(rule.output_factor)
-            : inFactor;
         out.push({
           key: pattern + '|' + rule.window + '|' + idx,
           pattern,
           window: rule.window,
-          value: inFactor,
-          outValue: outFactor,
-          sameFactor: outFactor === inFactor,
+          // 归一后的分量表（与后端 EffectiveFactors 同规则）：旧格式 value 展开到全部分量
+          factors: normalizeFactors(rule),
           remark: rule.remark || '',
-          // 基准目录价（常规时段的价格）：有它才能让运营直接填 ¥，而不是填系数
-          baseIn: Number.isFinite(dir) && dir > 0 ? dir : null,
-          baseOut:
-            Number.isFinite(dir) && dir > 0 && Number.isFinite(cr) && cr > 0
-              ? dir * cr
-              : null,
-          inPrice: Number.isFinite(dir) && dir > 0 ? dir * inFactor : null,
-          outPrice:
-            Number.isFinite(dir) && dir > 0 && Number.isFinite(cr) && cr > 0
-              ? dir * cr * outFactor
-              : null,
           listIndex: idx,
         });
       });
@@ -236,46 +305,18 @@ export default function TimePricePanel({ options, refresh }) {
         ? String(a.window).localeCompare(String(b.window))
         : a.pattern.localeCompare(b.pattern),
     );
-  }, [globalRules, modelRatioMap, completionRatioMap]);
+  }, [globalRules]);
 
-  const updateRowFactor = (row, value) => {
-    const list = (globalRules[row.pattern] || []).map((r, i) =>
-      i === row.listIndex ? Object.assign({}, r, { value }) : r,
-    );
-    setGlobalList(row.pattern, list);
-  };
-
-  // 输出侧系数：null = 回到"跟随输入"（写入时删掉该字段，保持 JSON 干净）
-  const updateRowOutputFactor = (row, outValue) => {
+  // 编辑器回写：factors 为空表示该档不再有任何时段系数（调用方会拦住）
+  const updateRowFactors = (row, factors) => {
     const list = (globalRules[row.pattern] || []).map((r, i) => {
       if (i !== row.listIndex) return r;
-      if (outValue === null || !(outValue > 0)) {
-        const next = Object.assign({}, r);
-        delete next.output_factor;
-        return next;
-      }
-      return Object.assign({}, r, { output_factor: outValue });
+      const next = Object.assign({}, r, { factors });
+      delete next.value;
+      delete next.output_factor;
+      return next;
     });
     setGlobalList(row.pattern, list);
-  };
-
-  // 运营按「该时段目录价（¥/1M）」填写，这里换算成系数存储：
-  // 存系数而不是存绝对价，是为了让时段价随常规目录价一起变（改一次基础价，
-  // 所有时段自动跟随），也避免与 ModelRatio 形成两个真值来源。
-  const updateRowInPrice = (row, price) => {
-    if (!(row.baseIn > 0) || !(price > 0)) return;
-    updateRowFactor(row, price / row.baseIn);
-  };
-
-  const updateRowOutPrice = (row, price) => {
-    if (!(row.baseOut > 0)) return;
-    if (price === null || !(price > 0)) {
-      updateRowOutputFactor(row, null);
-      return;
-    }
-    const f = price / row.baseOut;
-    // 与输入系数相同就不写 output_factor，保持 JSON 干净
-    updateRowOutputFactor(row, Math.abs(f - row.value) < 1e-9 ? null : f);
   };
 
   const updateRowRemark = (row, remark) => {
@@ -412,102 +453,65 @@ export default function TimePricePanel({ options, refresh }) {
       },
     },
     {
-      // 运营填的是**目录价**（¥/1M），不是系数：系数由这里换算并存库，
-      // 界面上只把折算结果作为参考显示在下一列。
-      title: t('该时段目录价（¥/1M）'),
-      dataIndex: 'inPrice',
-      width: 230,
-      render: (inPrice, record) => {
-        if (!(record.baseIn > 0)) {
-          // 该模型没有配置按量目录价（按次/未定价）：退回填系数，避免填了个 ¥ 却算不出来
+      title: t('该时段价目'),
+      dataIndex: 'factors',
+      render: (_, record) => {
+        const base = basePriceOf(record.pattern);
+        const entries = Object.entries(record.factors || {});
+        if (entries.length === 0) {
           return (
-            <Space>
-              <InputNumber
-                size='small'
-                min={0.01}
-                max={MAX_FACTOR}
-                step={0.05}
-                prefix={t('×')}
-                value={record.value}
-                style={{ width: 92 }}
-                onChange={(v) =>
-                  updateRowFactor(record, typeof v === 'number' ? v : 1)
-                }
-              />
-              <InputNumber
-                size='small'
-                min={0.01}
-                max={MAX_FACTOR}
-                step={0.05}
-                prefix={t('×')}
-                value={record.outValue}
-                placeholder={t('同输入')}
-                style={{ width: 92 }}
-                onChange={(v) =>
-                  updateRowOutputFactor(
-                    record,
-                    typeof v === 'number' ? v : null,
-                  )
-                }
-              />
-            </Space>
+            <Text type='tertiary' size='small'>
+              {t('未配分量')}
+            </Text>
           );
         }
+        const LABEL = {
+          input: t('输入'),
+          output: t('输出'),
+          cache: t('缓存命中'),
+          create_cache: t('缓存创建'),
+          image: t('图片'),
+          audio_input: t('音频输入'),
+          audio_output: t('音频输出'),
+          per_call: t('按次'),
+        };
         return (
-          <Space>
-            <InputNumber
-              size='small'
-              min={0.0001}
-              max={Number((record.baseIn * MAX_FACTOR).toFixed(4))}
-              step={0.1}
-              precision={4}
-              prefix={t('输入')}
-              value={Number(Number(inPrice).toFixed(4))}
-              style={{ width: 108 }}
-              onChange={(v) =>
-                updateRowInPrice(record, typeof v === 'number' ? v : null)
-              }
-            />
-            <InputNumber
-              size='small'
-              min={0.0001}
-              max={Number((record.baseOut * MAX_FACTOR).toFixed(4))}
-              step={0.1}
-              precision={4}
-              prefix={t('输出')}
-              value={
-                record.outPrice === null
-                  ? null
-                  : Number(Number(record.outPrice).toFixed(4))
-              }
-              placeholder={t('同输入')}
-              style={{ width: 108 }}
-              onChange={(v) =>
-                updateRowOutPrice(record, typeof v === 'number' ? v : null)
-              }
-            />
+          <Space vertical align='start' spacing={2}>
+            {entries.map(([comp, f]) => {
+              const b = Number(base?.[comp]);
+              return (
+                <Text key={comp} size='small'>
+                  {LABEL[comp] || comp}{' '}
+                  {b > 0 ? Number((b * f).toFixed(4)) : '-'}
+                  <Text type='tertiary' size='small'>
+                    {' '}
+                    ×{Number(Number(f).toFixed(3))}
+                  </Text>
+                </Text>
+              );
+            })}
           </Space>
         );
       },
     },
     {
-      title: t('折算系数'),
-      dataIndex: 'value',
-      width: 150,
-      render: (value, record) => (
-        <Space vertical align='start' spacing={2}>
-          <Text size='small'>
-            {t('输入')} ×{Number(Number(value).toFixed(3))}
-          </Text>
-          <Text size='small'>
-            {t('输出')} ×{Number(Number(record.outValue).toFixed(3))}
-          </Text>
-          {record.sameFactor ? null : (
-            <Tag color='violet' shape='circle'>
-              {t('不等比例')}
-            </Tag>
-          )}
-        </Space>
+      title: t('操作'),
+      dataIndex: 'action2',
+      width: 110,
+      render: (_, record) => (
+        <Button
+          size='small'
+          onClick={() =>
+            setEditing({
+              pattern: record.pattern,
+              index: record.listIndex,
+              factors: record.factors,
+              remark: record.remark,
+            })
+          }
+        >
+          {t('编辑价目')}
+        </Button>
       ),
     },
     {
@@ -695,6 +699,26 @@ export default function TimePricePanel({ options, refresh }) {
           className='!rounded-lg'
         />
       )}
+      {/* 分量价目编辑器：把「分量 × 该时段目录价」摊成一张表 */}
+      <TimePriceRuleEditor
+        t={t}
+        visible={Boolean(editing)}
+        rule={editing ? { factors: editing.factors } : null}
+        base={editing ? basePriceOf(editing.pattern) : {}}
+        onCancel={() => setEditing(null)}
+        onOk={(factors, error) => {
+          if (error) {
+            showWarning(error);
+            return;
+          }
+          if (!factors || Object.keys(factors).length === 0) {
+            showWarning(t('至少要给一个分量设定时段价'));
+            return;
+          }
+          updateRowFactors(editing, factors);
+          setEditing(null);
+        }}
+      />
     </Card>
   );
 }

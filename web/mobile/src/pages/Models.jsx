@@ -65,7 +65,7 @@ const Models = () => {
   const [groupTimeRatioMap, setGroupTimeRatioMap] = useState({});
   // 分组 -> 模型 -> 此刻生效的补全倍率（稀疏）。分时段价目可不等比例变化，
   // 算输出价必须用它，否则「闲时输入 1/输出 7」会被显示成 1/4。
-  const [groupCompletionRatioMap, setGroupCompletionRatioMap] = useState({});
+  const [groupComponentScaleMap, setGroupComponentScaleMap] = useState({});
   // 分组内按模型的倍率。后端已展开通配并算完三层，这里只查表（同 PC getEffectiveGroupRatio）
   const [groupModelRatioMap, setGroupModelRatioMap] = useState({});
   const [usableGroupMap, setUsableGroupMap] = useState({});
@@ -88,9 +88,7 @@ const Models = () => {
           setVendors(res.data.vendors || []);
           setGroupRatioMap(res.data.group_ratio || {});
           setGroupTimeRatioMap(res.data.group_time_ratio || {});
-          setGroupCompletionRatioMap(
-            res.data.group_model_completion_ratio || {},
-          );
+          setGroupComponentScaleMap(res.data.group_model_component_scale || {});
           setGroupModelRatioMap(res.data.group_model_ratio || {});
           setUsableGroupMap(res.data.usable_group || {});
           setEntitlementCoverage(res.data.entitlement_coverage || null);
@@ -304,11 +302,11 @@ const Models = () => {
 
   const inputPricePerM = (m) => m.model_ratio * resolveGroupRatio(m).ratio;
 
-  // 此刻生效的补全倍率：有时段覆盖就用后端的值，否则用模型基础值。
+  // 此刻生效的补全倍率 = 基础补全倍率 × 输出分量的时段折算系数
   const completionRatioOf = (m) => {
     const g = resolveGroupRatio(m).group;
-    const v = Number(groupCompletionRatioMap?.[g]?.[m.model_name]);
-    return v > 0 ? v : Number(m.completion_ratio || 1);
+    const scale = Number(groupComponentScaleMap?.[g]?.[m.model_name]?.output);
+    return Number(m.completion_ratio || 1) * (scale > 0 ? scale : 1);
   };
   // 折前价：少乘一个分组倍率。仅在有折扣时给，用于详情里的划线对比。
   const originalInputPricePerM = (m) => m.model_ratio;

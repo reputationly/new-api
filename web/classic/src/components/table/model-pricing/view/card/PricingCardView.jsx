@@ -77,7 +77,7 @@ const PricingCardView = ({
   groupRatio,
   groupModelRatio,
   groupTimeRatio,
-  groupModelCompletionRatio,
+  groupModelComponentScale,
   copyText,
   currency,
   siteDisplayType,
@@ -334,7 +334,7 @@ const PricingCardView = ({
             currency,
             quotaDisplayType: siteDisplayType,
             // 此刻生效的补全倍率（分时段价目可不等比例变化），算输出价必须用
-            completionRatioMap: groupModelCompletionRatio,
+            componentScaleMap: groupModelComponentScale,
             pointsEnabled: pointsConfig?.enabled,
             quotaPerPoint: pointsConfig?.quotaPerPoint,
             pointsEnabledGroups: pointsConfig?.enabledGroups,

@@ -49,8 +49,8 @@ describe('广场展示口径：划线取目录价、角标取固定折扣', () =
         groupTimeRatio: view
           ? { default: { 'deepseek-v4-1-flash': view } }
           : {},
-        groupModelCompletionRatio: view
-          ? { default: { 'deepseek-v4-1-flash': view.completion_ratio } }
+        groupModelComponentScale: view
+          ? { default: { 'deepseek-v4-1-flash': { output: 1.75 } } }
           : {},
         copyText: () => {},
         currency: 'CNY',

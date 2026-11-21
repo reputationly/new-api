@@ -9,6 +9,7 @@ import (
 	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
 	"github.com/QuantumNous/new-api/setting/ratio_setting"
+	"github.com/QuantumNous/new-api/types"
 
 	"github.com/gin-gonic/gin"
 )
@@ -62,12 +63,13 @@ func filterPricingByUsableGroups(pricing []model.Pricing, usableGroup map[string
 // 前端只做 groupModelRatio[g]?.[m] ?? groupRatio[g] 这一步查表。
 //
 // 稀疏：只回命中了模型规则的组合。未配置时返回空 map，前端一路走原来的分支。
-func resolveGroupModelRatio(userGroup string, groupRatio map[string]float64, pricing []model.Pricing, at time.Time) (map[string]map[string]float64, map[string]map[string]ratio_setting.TimeRatioView, map[string]map[string]float64) {
+func resolveGroupModelRatio(userGroup string, groupRatio map[string]float64, pricing []model.Pricing, at time.Time) (map[string]map[string]float64, map[string]map[string]ratio_setting.TimeRatioView, map[string]map[string]map[string]float64) {
 	result := make(map[string]map[string]float64)
 	timeResult := make(map[string]map[string]ratio_setting.TimeRatioView)
-	// 此刻生效的补全倍率（只回与基础值不同的组合）：分时段价目不一定等比例变化
-	// （忙时 2/8、闲时 1/7），前端算输出价必须用它，否则会把 7.00 显示成 4.00。
-	completionResult := make(map[string]map[string]float64)
+	// 逐分量的折算系数（只回与 1 不同的）：时段价可以只改某一个分量，
+	// 前端每个价格行都要按自己的系数折算，否则会把缓存/图片/音频价显示错。
+	// 结构：group -> model -> component -> scale(= f_component / f_input)
+	componentScale := make(map[string]map[string]map[string]float64)
 	allRules := ratio_setting.GetGroupModelRatioCopy()
 	// Layer 3（用户档折扣）按 userGroup 索引、与使用分组无关，所以是每次调用一个
 	// 定值。它必须参与「跳不跳过」的判断：只看 GroupModelRatio 会漏掉「仅配了
@@ -82,7 +84,7 @@ func resolveGroupModelRatio(userGroup string, groupRatio map[string]float64, pri
 		}
 	}
 	if len(allRules) == 0 && !hasUserRules && !hasAnyTimeRules {
-		return result, timeResult, completionResult
+		return result, timeResult, componentScale
 	}
 	for g := range groupRatio {
 		// 三层规则都没有的分组才跳过，避免在模型数三位数时白跑一遍全表。
@@ -104,14 +106,25 @@ func resolveGroupModelRatio(userGroup string, groupRatio map[string]float64, pri
 					}
 					timeResult[g][item.ModelName] = view
 					hitTimeRule = true
-					// 输出侧系数与输入侧不同时，才需要覆盖前端用的补全倍率
-					baseC := ratio_setting.GetCompletionRatio(item.ModelName)
-					if view.EffectiveCompletionRatio > 0 &&
-						math.Abs(view.EffectiveCompletionRatio-baseC) > 1e-12 {
-						if completionResult[g] == nil {
-							completionResult[g] = make(map[string]float64)
+					// 只回「与整单缩放不一致」的分量：等于 1 的说明该分量与输入同比例，
+					// 前端按整单倍率算就对了，不必下发。
+					if len(view.TimeFactors) > 0 {
+						for _, comp := range ratio_setting.TimeFactorComponents() {
+							if comp == "input" {
+								continue
+							}
+							scale := types.ScaleComponent(comp, view.TimeFactors)
+							if math.Abs(scale-1) < 1e-12 {
+								continue
+							}
+							if componentScale[g] == nil {
+								componentScale[g] = make(map[string]map[string]float64)
+							}
+							if componentScale[g][item.ModelName] == nil {
+								componentScale[g][item.ModelName] = make(map[string]float64)
+							}
+							componentScale[g][item.ModelName][comp] = scale
 						}
-						completionResult[g][item.ModelName] = view.EffectiveCompletionRatio
 					}
 				}
 			}
@@ -133,7 +146,7 @@ func resolveGroupModelRatio(userGroup string, groupRatio map[string]float64, pri
 			result[g][item.ModelName] = res.Final
 		}
 	}
-	return result, timeResult, completionResult
+	return result, timeResult, componentScale
 }
 
 func GetPricing(c *gin.Context) {
@@ -182,7 +195,7 @@ func GetPricing(c *gin.Context) {
 	// 全程用同一个时刻：逐模型各取一次 time.Now() 会让请求正好跨过时段边界时，
 	// 表里一部分模型是空闲时段价、另一部分是高峰时段价。
 	now := time.Now()
-	groupModelRatio, groupTimeRatio, groupCompletionRatio := resolveGroupModelRatio(group, groupRatio, pricing, now)
+	groupModelRatio, groupTimeRatio, groupComponentScale := resolveGroupModelRatio(group, groupRatio, pricing, now)
 
 	// 积分展示：只回传「用户可见 ∩ 白名单」的分组，供模型广场追加积分单价（§8bis.2）
 	pointsSetting := operation_setting.GetPointsSetting()
@@ -250,8 +263,8 @@ func GetPricing(c *gin.Context) {
 		// 所以列表价天生就是「此刻下单的真实价」；这份只用来渲染角标、划线原价与
 		// 详情里的分时价格表。active / until 由后端算好，前端不做任何时间判断。
 		"group_time_ratio": groupTimeRatio,
-		// 此刻生效的补全倍率（稀疏，只回与基础值不同的组合）。前端算输出价用它。
-		"group_model_completion_ratio": groupCompletionRatio,
+		// 逐分量折算系数（稀疏）。前端每个价格行按自己的分量折算。
+		"group_model_component_scale": groupComponentScale,
 		"usable_group":                 usableGroup,
 		"supported_endpoint":           model.GetSupportedEndpointMap(),
 		"auto_groups":                  service.GetUserAutoGroup(group),

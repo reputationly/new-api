@@ -147,7 +147,7 @@ export const getPricingTableColumns = ({
   groupRatio,
   groupModelRatio,
   groupTimeRatio,
-  groupModelCompletionRatio,
+  groupModelComponentScale,
   copyText,
   currency,
   siteDisplayType,
@@ -170,7 +170,7 @@ export const getPricingTableColumns = ({
         currency,
         quotaDisplayType: siteDisplayType,
         // 此刻生效的补全倍率（分时段价目可不等比例变化），算输出价必须用
-        completionRatioMap: groupModelCompletionRatio,
+        componentScaleMap: groupModelComponentScale,
         pointsEnabled: pointsConfig?.enabled,
         quotaPerPoint: pointsConfig?.quotaPerPoint,
         pointsEnabledGroups: pointsConfig?.enabledGroups,
@@ -206,7 +206,7 @@ export const getPricingTableColumns = ({
       quotaDisplayType: siteDisplayType,
       // 划线价也走**此刻**的补全倍率：闲时目录价是「输入 1 / 输出 7」，
       // 漏了它输出划线会算成 1×4=4 而不是 7（单测 plazaTimeDisplay 钉住这条）。
-      completionRatioMap: groupModelCompletionRatio,
+      componentScaleMap: groupModelComponentScale,
       // 积分/套餐口径必须与主计算保持一致：否则「积分计价」的模型上，
       // 删除线画的是金额、当前价显示的是积分，两个单位对不上。
       pointsEnabled: pointsConfig?.enabled,

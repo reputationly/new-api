@@ -795,11 +795,10 @@ export const calculateModelPrice = ({
   // 把原价弱化恰恰是在用户最需要知道「超了要花多少」的时候把它藏起来。
   entitlementCoverage = null,
   quotaPerComputePoint = 0,
-  // 此刻生效的补全倍率映射 group_model_completion_ratio[分组][模型]（后端按时段算好）。
-  // 分时段价目不一定等比例变化（忙时输入 2/输出 8、闲时输入 1/输出 7），
-  // 用基础 completion_ratio 会把输出价算错。不传 = 用 record.completion_ratio，
-  // 行为与改造前逐位一致。
-  completionRatioMap = null,
+  // 逐分量折算系数映射 group_model_component_scale[分组][模型][分量]（后端按时段算好）。
+  // 时段价可以只改某一个分量（只改缓存、只改输出…），每个价格行都要按自己的系数折算。
+  // 不传 = 全部按 1，行为与改造前逐位一致。
+  componentScaleMap = null,
 }) => {
   // 1. 选择实际使用的分组
   let usedGroup = selectedGroup;
@@ -842,13 +841,26 @@ export const calculateModelPrice = ({
   }
 
   // 有效补全倍率：有时段覆盖就用后端的此刻值，否则用基础值。
-  const timeCompletionRatio = Number(
-    completionRatioMap?.[usedGroup]?.[record.model_name],
-  );
+  // componentScale(comp) = 该分量的时段折算系数（未配置 = 1）
+  const componentScale = (comp) => {
+    const v = Number(
+      componentScaleMap?.[usedGroup]?.[record.model_name]?.[comp],
+    );
+    return v > 0 ? v : 1;
+  };
   const effectiveCompletionRatio =
-    timeCompletionRatio > 0
-      ? timeCompletionRatio
-      : Number(record.completion_ratio);
+    Number(record.completion_ratio) * componentScale('output');
+  const effectiveCacheRatio =
+    Number(record.cache_ratio) * componentScale('cache');
+  const effectiveCreateCacheRatio =
+    Number(record.create_cache_ratio) * componentScale('create_cache');
+  const effectiveImageRatio =
+    Number(record.image_ratio) * componentScale('image');
+  const effectiveAudioRatio =
+    Number(record.audio_ratio) * componentScale('audio_input');
+  const effectiveAudioCompletionRatio =
+    Number(record.audio_completion_ratio) *
+    (componentScale('audio_output') / componentScale('audio_input'));
 
   // 2. 动态计费（tiered_expr）
   if (record.billing_mode === 'tiered_expr' && record.billing_expr) {
@@ -912,11 +924,11 @@ export const calculateModelPrice = ({
       return {
         inputRatio: formatRatio(record.model_ratio),
         completionRatio: formatRatio(record.completion_ratio),
-        cacheRatio: formatRatio(record.cache_ratio),
-        createCacheRatio: formatRatio(record.create_cache_ratio),
-        imageRatio: formatRatio(record.image_ratio),
-        audioInputRatio: formatRatio(record.audio_ratio),
-        audioOutputRatio: formatRatio(record.audio_completion_ratio),
+        cacheRatio: formatRatio(effectiveCacheRatio),
+        createCacheRatio: formatRatio(effectiveCreateCacheRatio),
+        imageRatio: formatRatio(effectiveImageRatio),
+        audioInputRatio: formatRatio(effectiveAudioRatio),
+        audioOutputRatio: formatRatio(effectiveAudioCompletionRatio),
         isPerToken: true,
         isTokensDisplay: true,
         usedGroup,
@@ -933,8 +945,8 @@ export const calculateModelPrice = ({
     };
 
     const inputPrice = formatTokenPrice(inputRatioPriceCNY);
-    const audioInputPrice = hasRatioValue(record.audio_ratio)
-      ? formatTokenPrice(inputRatioPriceCNY * Number(record.audio_ratio))
+    const audioInputPrice = hasRatioValue(effectiveAudioRatio)
+      ? formatTokenPrice(inputRatioPriceCNY * effectiveAudioRatio)
       : null;
 
     // 积分价：仅当积分启用且该模型实际使用的分组在白名单时，按 quota unit 换算积分数。
@@ -970,24 +982,24 @@ export const calculateModelPrice = ({
     const componentCNY = {
       input: inputRatioPriceCNY,
       completion: inputRatioPriceCNY * effectiveCompletionRatio,
-      cache: hasRatioValue(record.cache_ratio)
-        ? inputRatioPriceCNY * Number(record.cache_ratio)
+      cache: hasRatioValue(effectiveCacheRatio)
+        ? inputRatioPriceCNY * effectiveCacheRatio
         : null,
-      'create-cache': hasRatioValue(record.create_cache_ratio)
-        ? inputRatioPriceCNY * Number(record.create_cache_ratio)
+      'create-cache': hasRatioValue(effectiveCreateCacheRatio)
+        ? inputRatioPriceCNY * effectiveCreateCacheRatio
         : null,
-      image: hasRatioValue(record.image_ratio)
-        ? inputRatioPriceCNY * Number(record.image_ratio)
+      image: hasRatioValue(effectiveImageRatio)
+        ? inputRatioPriceCNY * effectiveImageRatio
         : null,
-      'audio-input': hasRatioValue(record.audio_ratio)
-        ? inputRatioPriceCNY * Number(record.audio_ratio)
+      'audio-input': hasRatioValue(effectiveAudioRatio)
+        ? inputRatioPriceCNY * effectiveAudioRatio
         : null,
       'audio-output':
-        hasRatioValue(record.audio_ratio) &&
-        hasRatioValue(record.audio_completion_ratio)
+        hasRatioValue(effectiveAudioRatio) &&
+        hasRatioValue(effectiveAudioCompletionRatio)
           ? inputRatioPriceCNY *
-            Number(record.audio_ratio) *
-            Number(record.audio_completion_ratio)
+            effectiveAudioRatio *
+            effectiveAudioCompletionRatio
           : null,
     };
     const mapComponents = (convert) =>
@@ -1015,24 +1027,22 @@ export const calculateModelPrice = ({
       completionPrice: formatTokenPrice(
         inputRatioPriceCNY * effectiveCompletionRatio,
       ),
-      cachePrice: hasRatioValue(record.cache_ratio)
-        ? formatTokenPrice(inputRatioPriceCNY * Number(record.cache_ratio))
+      cachePrice: hasRatioValue(effectiveCacheRatio)
+        ? formatTokenPrice(inputRatioPriceCNY * effectiveCacheRatio)
         : null,
-      createCachePrice: hasRatioValue(record.create_cache_ratio)
-        ? formatTokenPrice(
-            inputRatioPriceCNY * Number(record.create_cache_ratio),
-          )
+      createCachePrice: hasRatioValue(effectiveCreateCacheRatio)
+        ? formatTokenPrice(inputRatioPriceCNY * effectiveCreateCacheRatio)
         : null,
-      imagePrice: hasRatioValue(record.image_ratio)
-        ? formatTokenPrice(inputRatioPriceCNY * Number(record.image_ratio))
+      imagePrice: hasRatioValue(effectiveImageRatio)
+        ? formatTokenPrice(inputRatioPriceCNY * effectiveImageRatio)
         : null,
       audioInputPrice,
       audioOutputPrice:
-        audioInputPrice && hasRatioValue(record.audio_completion_ratio)
+        audioInputPrice && hasRatioValue(effectiveAudioCompletionRatio)
           ? formatTokenPrice(
               inputRatioPriceCNY *
-                Number(record.audio_ratio) *
-                Number(record.audio_completion_ratio),
+                effectiveAudioRatio *
+                effectiveAudioCompletionRatio,
             )
           : null,
       unitLabel,

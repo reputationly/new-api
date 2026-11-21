@@ -1,0 +1,44 @@
+<!doctype html><html lang='zh-CN'><head><meta charset='utf-8'><style>
+*{box-sizing:border-box}
+body{margin:0;background:rgba(0,0,0,.35);font-family:-apple-system,"PingFang SC","Helvetica Neue",Arial,sans-serif;color:#1c1f23;padding:40px}
+.modal{background:#fff;border-radius:14px;max-width:760px;margin:0 auto;box-shadow:0 24px 60px rgba(0,0,0,.25);overflow:hidden}
+.hd{padding:16px 20px;border-bottom:1px solid #eef0f2;font-size:15px;font-weight:600}
+.bd{padding:16px 20px}
+.ft{padding:12px 20px;border-top:1px solid #eef0f2;display:flex;justify-content:flex-end;gap:8px}
+.quick{display:flex;align-items:center;gap:8px;margin-bottom:12px;font-size:12.5px;color:#6b7280;flex-wrap:wrap}
+button{font-size:12.5px;padding:5px 10px;border-radius:7px;border:1px solid #d9dde2;background:#fff;color:#1c1f23}
+button.primary{background:#0064fa;border-color:#0064fa;color:#fff}
+table{border-collapse:collapse;width:100%;font-size:12.5px}
+th,td{text-align:left;padding:8px 10px;border-bottom:1px solid #eef0f2}
+th{background:#fafbfc;color:#494f57;font-size:12px;font-weight:600}
+.inp{display:inline-block;border:1px solid #d9dde2;border-radius:7px;padding:4px 10px;min-width:150px;font-variant-numeric:tabular-nums}
+.inp.empty{color:#b6bcc4}
+.tag{font-size:11px;line-height:18px;padding:0 8px;border-radius:9px;display:inline-block}
+.t-cyan{background:#e8f7ff;color:#0b6c8f}
+.t-orange{background:#fff3e0;color:#a85000}
+.muted{color:#8f959e}
+.hint{margin-top:10px;font-size:11.5px;color:#8f959e}
+</style></head><body>
+<div class="modal">
+  <div class="hd">该时段的价目</div>
+  <div class="bd">
+    <div class="quick">
+      <span>整价系数</span>
+      <button>×0.5</button><button>×0.6</button><button>×0.8</button><button>×1</button>
+      <span class="muted">一键按比例写满所有分量</span>
+    </div>
+    <table>
+      <tr><th style="width:22%">分量</th><th style="width:26%">常规目录价</th><th style="width:30%">该时段目录价</th><th>折算</th></tr>
+      <tr><td><strong>输入</strong></td><td class="muted">2.0000 ¥/1M</td><td><span class="inp">1.0000</span></td><td><span class="tag t-cyan">×0.500</span></td></tr>
+      <tr><td><strong>输出</strong></td><td class="muted">8.0000 ¥/1M</td><td><span class="inp">7.0000</span></td><td><span class="tag t-cyan">×0.875</span></td></tr>
+      <tr><td><strong>缓存命中</strong></td><td class="muted">0.0400 ¥/1M</td><td><span class="inp">0.0100</span></td><td><span class="tag t-cyan">×0.250</span></td></tr>
+      <tr><td><strong>缓存创建</strong></td><td class="muted">2.5000 ¥/1M</td><td><span class="inp empty">不随时段变</span></td><td class="muted">不变</td></tr>
+      <tr><td><strong>图片输入</strong></td><td class="muted">2.0000 ¥/1M</td><td><span class="inp empty">不随时段变</span></td><td class="muted">不变</td></tr>
+      <tr><td><strong>音频输入</strong></td><td class="muted">4.0000 ¥/1M</td><td><span class="inp empty">不随时段变</span></td><td class="muted">不变</td></tr>
+      <tr><td><strong>音频输出</strong></td><td class="muted">16.0000 ¥/1M</td><td><span class="inp empty">不随时段变</span></td><td class="muted">不变</td></tr>
+    </table>
+    <div class="hint">留空 = 该分量不随时段变。填 ¥ 存系数，改常规目录价时各时段自动跟随。</div>
+  </div>
+  <div class="ft"><button>取消</button><button class="primary">确定</button></div>
+</div>
+</body></html>

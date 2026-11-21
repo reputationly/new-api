@@ -36,7 +36,9 @@ describe('分时段价目：输出价用此刻补全倍率', () => {
   it('传了此刻补全倍率（4 × 0.875/0.5 = 7）时输出价按 7 算', () => {
     const p = calculateModelPrice({
       ...base,
-      completionRatioMap: { default: { 'deepseek-v4-1-flash': 7 } },
+      componentScaleMap: {
+        default: { 'deepseek-v4-1-flash': { output: 1.75 } },
+      },
     });
     expect(p.inputPrice).toBe('¥0.50');
     // 2 × 7 × 0.25 = 3.5 —— 正好是"闲时输出目录价 7 的 5 折"
@@ -46,7 +48,9 @@ describe('分时段价目：输出价用此刻补全倍率', () => {
   it('不属于该分组的覆盖不生效', () => {
     const p = calculateModelPrice({
       ...base,
-      completionRatioMap: { premium: { 'deepseek-v4-1-flash': 7 } },
+      componentScaleMap: {
+        premium: { 'deepseek-v4-1-flash': { output: 1.75 } },
+      },
     });
     expect(p.completionPrice).toBe('¥2.00');
   });
