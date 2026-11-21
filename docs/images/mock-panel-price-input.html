@@ -1,0 +1,71 @@
+<!doctype html><html lang='zh-CN'><head><meta charset='utf-8'><style>
+*{box-sizing:border-box}
+body{margin:0;background:#f7f8fa;font-family:-apple-system,"PingFang SC","Helvetica Neue",Arial,sans-serif;color:#1c1f23;padding:24px}
+h1{font-size:15.5px;margin:0 0 3px}
+.sub{color:#8f959e;font-size:12px;margin-bottom:14px}
+.panel{background:#fff;border:1px solid #e6e8eb;border-radius:12px;padding:16px 18px;max-width:1180px}
+.row{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:12px}
+.inp{display:inline-flex;align-items:center;gap:6px;border:1px solid #d9dde2;border-radius:7px;padding:5px 9px;font-size:12.5px;background:#fff}
+.inp .pre{color:#8f959e}
+.inp .val{font-variant-numeric:tabular-nums}
+button{font-size:12.5px;padding:5px 12px;border-radius:7px;border:none;background:#0064fa;color:#fff}
+button.ghost{background:#fff;border:1px solid #d9dde2;color:#1c1f23}
+table{border-collapse:collapse;width:100%;font-size:12.5px}
+th,td{text-align:left;padding:9px 10px;border-bottom:1px solid #eef0f2;vertical-align:middle}
+th{background:#fafbfc;font-weight:600;color:#494f57;font-size:12px}
+.tag{font-size:11px;line-height:18px;padding:0 8px;border-radius:9px;white-space:nowrap;display:inline-block}
+.t-night{background:#e8f7ff;color:#0077a8}
+.t-active{background:#e9fbf3;color:#0b7a4b}
+.t-violet{background:#f3edff;color:#6b3fd4}
+.muted{color:#8f959e}
+.num{font-variant-numeric:tabular-nums}
+.note{margin-top:10px;padding:8px 10px;background:#f4f5f7;border-radius:8px;font-size:11.5px;color:#6b7280}
+</style></head><body>
+<h1>分时价面板：直接填「该时段目录价」，系数由系统换算</h1>
+<div class="sub">常规目录价 输入 2.00 / 输出 8.00（模型定价页配置）。下面填的是闲时目录价 1 / 7。</div>
+<div class="panel">
+  <div class="row">
+    <div class="inp" style="width:230px"><span class="val">deepseek-v4-1-flash</span></div>
+    <div class="inp" style="width:150px"><span class="val">夜间 18:00–09:00</span><span class="pre">▾</span></div>
+    <div class="inp"><span class="pre">输入</span><span class="val">1.0000</span></div>
+    <div class="inp"><span class="pre">输出</span><span class="val">7.0000</span></div>
+    <button>添加时段价</button>
+  </div>
+  <table>
+    <tr><th style="width:20%">模型</th><th style="width:22%">时段</th><th style="width:26%">该时段目录价（¥/1M）</th><th style="width:18%">折算系数</th><th>备注</th></tr>
+    <tr>
+      <td><strong>deepseek-v4-1-flash</strong></td>
+      <td><span class="tag t-night">夜间</span> <span class="muted">18:00–09:00</span> <span class="tag t-active">此刻生效</span></td>
+      <td>
+        <div class="inp" style="margin-bottom:4px"><span class="pre">输入</span><span class="val">1.0000</span></div>
+        <div class="inp"><span class="pre">输出</span><span class="val">7.0000</span></div>
+      </td>
+      <td class="num">输入 ×0.500<br>输出 ×0.875<br><span class="tag t-violet">不等比例</span></td>
+      <td class="muted">上游夜间降价</td>
+    </tr>
+    <tr>
+      <td><strong>deepseek-v4-1-flash</strong></td>
+      <td><span class="tag t-night">午休</span> <span class="muted">12:00–14:00</span></td>
+      <td>
+        <div class="inp" style="margin-bottom:4px"><span class="pre">输入</span><span class="val">1.0000</span></div>
+        <div class="inp"><span class="pre">输出</span><span class="val">7.0000</span></div>
+      </td>
+      <td class="num">输入 ×0.500<br>输出 ×0.875<br><span class="tag t-violet">不等比例</span></td>
+      <td class="muted">—</td>
+    </tr>
+    <tr>
+      <td><strong>deepseek-v4-1-flash-1017</strong></td>
+      <td><span class="tag t-night">夜间</span> <span class="muted">18:00–09:00</span></td>
+      <td>
+        <div class="inp" style="margin-bottom:4px"><span class="pre">输入</span><span class="val">1.2000</span></div>
+        <div class="inp"><span class="pre">输出</span><span class="val">4.8000</span></div>
+      </td>
+      <td class="num">输入 ×0.600<br>输出 ×0.600</td>
+      <td class="muted">等比例</td>
+    </tr>
+  </table>
+  <div class="note">填 ¥ 存系数：输入系数 = 1 ÷ 2 = 0.5，输出系数 = 7 ÷ 8 = 0.875。改常规目录价后，各时段自动跟随。<br>
+  通配模式串（如 deepseek-*）没有单一目录价，输入框会自动退回「×系数」形式。</div>
+  <div class="row" style="margin:12px 0 0"><button>保存分时价</button><button class="ghost">合并到全网</button></div>
+</div>
+</body></html>

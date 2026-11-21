@@ -78,6 +78,9 @@ export default function TimePricePanel({ options, refresh }) {
   const [addWindow, setAddWindow] = useState(null);
   const [addFactor, setAddFactor] = useState(1.1111);
   const [addOutFactor, setAddOutFactor] = useState(null); // 空 = 跟随输入系数
+  // 按目录价填写时的两个输入（¥/1M）；模式串是通配时没有单一目录价，退回填系数
+  const [addInPrice, setAddInPrice] = useState(null);
+  const [addOutPrice, setAddOutPrice] = useState(null);
 
   useEffect(() => {
     const next = (options && options.GroupTimeRatio) || '{}';
@@ -213,6 +216,12 @@ export default function TimePricePanel({ options, refresh }) {
           outValue: outFactor,
           sameFactor: outFactor === inFactor,
           remark: rule.remark || '',
+          // 基准目录价（常规时段的价格）：有它才能让运营直接填 ¥，而不是填系数
+          baseIn: Number.isFinite(dir) && dir > 0 ? dir : null,
+          baseOut:
+            Number.isFinite(dir) && dir > 0 && Number.isFinite(cr) && cr > 0
+              ? dir * cr
+              : null,
           inPrice: Number.isFinite(dir) && dir > 0 ? dir * inFactor : null,
           outPrice:
             Number.isFinite(dir) && dir > 0 && Number.isFinite(cr) && cr > 0
@@ -250,6 +259,25 @@ export default function TimePricePanel({ options, refresh }) {
     setGlobalList(row.pattern, list);
   };
 
+  // 运营按「该时段目录价（¥/1M）」填写，这里换算成系数存储：
+  // 存系数而不是存绝对价，是为了让时段价随常规目录价一起变（改一次基础价，
+  // 所有时段自动跟随），也避免与 ModelRatio 形成两个真值来源。
+  const updateRowInPrice = (row, price) => {
+    if (!(row.baseIn > 0) || !(price > 0)) return;
+    updateRowFactor(row, price / row.baseIn);
+  };
+
+  const updateRowOutPrice = (row, price) => {
+    if (!(row.baseOut > 0)) return;
+    if (price === null || !(price > 0)) {
+      updateRowOutputFactor(row, null);
+      return;
+    }
+    const f = price / row.baseOut;
+    // 与输入系数相同就不写 output_factor，保持 JSON 干净
+    updateRowOutputFactor(row, Math.abs(f - row.value) < 1e-9 ? null : f);
+  };
+
   const updateRowRemark = (row, remark) => {
     const list = (globalRules[row.pattern] || []).map((r, i) =>
       i === row.listIndex ? Object.assign({}, r, { remark }) : r,
@@ -274,33 +302,55 @@ export default function TimePricePanel({ options, refresh }) {
       showWarning(t('请选择时段模板'));
       return;
     }
-    if (!(addFactor > 0 && addFactor <= MAX_FACTOR)) {
-      showWarning(t('系数必须在 (0, 20] 之间'));
+    // 该模式串若对应一个真实模型（有按量目录价），就按 ¥ 换算成系数；
+    // 通配模式串没有单一目录价，只能填系数。
+    const baseIn = Number(modelRatioMap[pattern]);
+    const baseCR = Number(completionRatioMap[pattern]);
+    const byPrice = Number.isFinite(baseIn) && baseIn > 0;
+    const baseOut =
+      byPrice && Number.isFinite(baseCR) && baseCR > 0 ? baseIn * baseCR : 0;
+
+    let inFactor = addFactor;
+    let outFactor = addOutFactor;
+    if (byPrice) {
+      if (!(addInPrice > 0)) {
+        showWarning(t('请填写该时段的输入目录价'));
+        return;
+      }
+      inFactor = addInPrice / baseIn;
+      outFactor =
+        addOutPrice && addOutPrice > 0 && baseOut > 0
+          ? addOutPrice / baseOut
+          : null;
+      if (Math.abs((outFactor ?? inFactor) - inFactor) < 1e-9) outFactor = null;
+    }
+
+    if (!(inFactor > 0 && inFactor <= MAX_FACTOR)) {
+      showWarning(t('折算后的输入系数超出 (0, 20]，请检查目录价'));
       return;
     }
-    if (
-      addOutFactor !== null &&
-      !(addOutFactor > 0 && addOutFactor <= MAX_FACTOR)
-    ) {
-      showWarning(t('输出系数必须在 (0, 20] 之间'));
+    if (outFactor !== null && !(outFactor > 0 && outFactor <= MAX_FACTOR)) {
+      showWarning(t('折算后的输出系数超出 (0, 20]，请检查目录价'));
       return;
     }
     const list = (globalRules[pattern] || []).slice();
     const idx = list.findIndex((r) => r.window === addWindow);
     // 输出侧留空（null）= 跟随输入，不写字段，保持 JSON 干净
     const extra =
-      addOutFactor && addOutFactor > 0 ? { output_factor: addOutFactor } : {};
+      outFactor && outFactor > 0 ? { output_factor: outFactor } : {};
     if (idx >= 0) {
-      const merged = Object.assign({}, list[idx], { value: addFactor }, extra);
+      const merged = Object.assign({}, list[idx], { value: inFactor }, extra);
       if (!extra.output_factor) delete merged.output_factor;
       list[idx] = merged;
     } else {
-      list.push(Object.assign({ window: addWindow, value: addFactor }, extra));
+      list.push(Object.assign({ window: addWindow, value: inFactor }, extra));
     }
     setGlobalList(pattern, list);
     setAddPattern('');
     setAddWindow(null);
     setAddOutFactor(null);
+    setAddInPrice(null);
+    setAddOutPrice(null);
   };
 
   const onSubmit = async () => {
@@ -362,67 +412,103 @@ export default function TimePricePanel({ options, refresh }) {
       },
     },
     {
-      title: t('系数（输入 / 输出）'),
-      dataIndex: 'value',
-      width: 200,
-      render: (value, record) => (
-        <Space>
-          <InputNumber
-            size='small'
-            min={0.01}
-            max={MAX_FACTOR}
-            step={0.05}
-            value={value}
-            style={{ width: 80 }}
-            onChange={(v) =>
-              updateRowFactor(record, typeof v === 'number' ? v : 1)
-            }
-          />
-          {/*
-            输出侧系数：留空 = 跟随输入。分时段价目不一定等比例变化
-            （忙时输入 2/输出 8、闲时输入 1/输出 7），这里必须能分开填。
-          */}
-          <InputNumber
-            size='small'
-            min={0.01}
-            max={MAX_FACTOR}
-            step={0.05}
-            value={record.outValue}
-            placeholder={t('同输入')}
-            style={{ width: 80 }}
-            onChange={(v) =>
-              updateRowOutputFactor(record, typeof v === 'number' ? v : null)
-            }
-          />
-        </Space>
-      ),
-    },
-    {
+      // 运营填的是**目录价**（¥/1M），不是系数：系数由这里换算并存库，
+      // 界面上只把折算结果作为参考显示在下一列。
       title: t('该时段目录价（¥/1M）'),
       dataIndex: 'inPrice',
-      render: (inPrice, record) =>
-        inPrice === null ? (
-          <Text type='tertiary' size='small'>
-            {t('该模型未配目录价')}
-          </Text>
-        ) : (
-          <Space vertical align='start' spacing={2}>
-            <Text strong>
-              {t('输入')} {Number(inPrice.toFixed(4))}
-            </Text>
-            <Text strong>
-              {t('输出')}{' '}
-              {record.outPrice === null
-                ? '—'
-                : Number(record.outPrice.toFixed(4))}
-            </Text>
-            {record.sameFactor ? null : (
-              <Tag color='violet' shape='circle'>
-                {t('输入输出不同比例')}
-              </Tag>
-            )}
+      width: 230,
+      render: (inPrice, record) => {
+        if (!(record.baseIn > 0)) {
+          // 该模型没有配置按量目录价（按次/未定价）：退回填系数，避免填了个 ¥ 却算不出来
+          return (
+            <Space>
+              <InputNumber
+                size='small'
+                min={0.01}
+                max={MAX_FACTOR}
+                step={0.05}
+                prefix={t('×')}
+                value={record.value}
+                style={{ width: 92 }}
+                onChange={(v) =>
+                  updateRowFactor(record, typeof v === 'number' ? v : 1)
+                }
+              />
+              <InputNumber
+                size='small'
+                min={0.01}
+                max={MAX_FACTOR}
+                step={0.05}
+                prefix={t('×')}
+                value={record.outValue}
+                placeholder={t('同输入')}
+                style={{ width: 92 }}
+                onChange={(v) =>
+                  updateRowOutputFactor(
+                    record,
+                    typeof v === 'number' ? v : null,
+                  )
+                }
+              />
+            </Space>
+          );
+        }
+        return (
+          <Space>
+            <InputNumber
+              size='small'
+              min={0.0001}
+              max={Number((record.baseIn * MAX_FACTOR).toFixed(4))}
+              step={0.1}
+              precision={4}
+              prefix={t('输入')}
+              value={Number(Number(inPrice).toFixed(4))}
+              style={{ width: 108 }}
+              onChange={(v) =>
+                updateRowInPrice(record, typeof v === 'number' ? v : null)
+              }
+            />
+            <InputNumber
+              size='small'
+              min={0.0001}
+              max={Number((record.baseOut * MAX_FACTOR).toFixed(4))}
+              step={0.1}
+              precision={4}
+              prefix={t('输出')}
+              value={
+                record.outPrice === null
+                  ? null
+                  : Number(Number(record.outPrice).toFixed(4))
+              }
+              placeholder={t('同输入')}
+              style={{ width: 108 }}
+              onChange={(v) =>
+                updateRowOutPrice(record, typeof v === 'number' ? v : null)
+              }
+            />
           </Space>
-        ),
+        );
+      },
+    },
+    {
+      title: t('折算系数'),
+      dataIndex: 'value',
+      width: 150,
+      render: (value, record) => (
+        <Space vertical align='start' spacing={2}>
+          <Text size='small'>
+            {t('输入')} ×{Number(Number(value).toFixed(3))}
+          </Text>
+          <Text size='small'>
+            {t('输出')} ×{Number(Number(record.outValue).toFixed(3))}
+          </Text>
+          {record.sameFactor ? null : (
+            <Tag color='violet' shape='circle'>
+              {t('不等比例')}
+            </Tag>
+          )}
+        </Space>
+      ),
     },
     {
       title: t('备注'),
@@ -531,28 +617,62 @@ export default function TimePricePanel({ options, refresh }) {
           optionList={windowOptions}
           onChange={setAddWindow}
         />
-        <InputNumber
-          size='small'
-          min={0.01}
-          max={MAX_FACTOR}
-          step={0.05}
-          value={addFactor}
-          style={{ width: 100 }}
-          prefix={t('输入')}
-          onChange={(v) => setAddFactor(typeof v === 'number' ? v : 1)}
-        />
-        {/* 输出侧系数留空 = 跟随输入；输入输出不同比例时才需要填 */}
-        <InputNumber
-          size='small'
-          min={0.01}
-          max={MAX_FACTOR}
-          step={0.05}
-          value={addOutFactor}
-          style={{ width: 120 }}
-          prefix={t('输出')}
-          placeholder={t('同输入')}
-          onChange={(v) => setAddOutFactor(typeof v === 'number' ? v : null)}
-        />
+        {/*
+          按**目录价**填写（¥/1M）。该模式串没有单一目录价时（通配符/未定价模型）
+          退回填系数——否则填了 ¥ 也无从换算。
+        */}
+        {Number(modelRatioMap[addPattern.trim()]) > 0 ? (
+          <>
+            <InputNumber
+              size='small'
+              min={0.0001}
+              step={0.1}
+              precision={4}
+              value={addInPrice}
+              style={{ width: 128 }}
+              prefix={t('输入')}
+              placeholder={t('¥/1M')}
+              onChange={(v) => setAddInPrice(typeof v === 'number' ? v : null)}
+            />
+            <InputNumber
+              size='small'
+              min={0.0001}
+              step={0.1}
+              precision={4}
+              value={addOutPrice}
+              style={{ width: 128 }}
+              prefix={t('输出')}
+              placeholder={t('同输入')}
+              onChange={(v) => setAddOutPrice(typeof v === 'number' ? v : null)}
+            />
+          </>
+        ) : (
+          <>
+            <InputNumber
+              size='small'
+              min={0.01}
+              max={MAX_FACTOR}
+              step={0.05}
+              value={addFactor}
+              style={{ width: 100 }}
+              prefix={t('×')}
+              onChange={(v) => setAddFactor(typeof v === 'number' ? v : 1)}
+            />
+            <InputNumber
+              size='small'
+              min={0.01}
+              max={MAX_FACTOR}
+              step={0.05}
+              value={addOutFactor}
+              style={{ width: 120 }}
+              prefix={t('×')}
+              placeholder={t('同输入')}
+              onChange={(v) =>
+                setAddOutFactor(typeof v === 'number' ? v : null)
+              }
+            />
+          </>
+        )}
         <Button
           size='small'
           theme='solid'
