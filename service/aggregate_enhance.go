@@ -320,6 +320,9 @@ func EnhancePrompt(ctx context.Context, agg *common.AggregateModel, authHeader s
 	// "这一次传了几张图、多少秒"不能被换掉。
 	// 歌词(音乐才有)拼在 user 消息里,见 userPromptWithLyrics 的注释。
 	body := buildEnhanceRequest(res.Model, appendTaskContext(systemPrompt, in.TaskContext), userPromptWithLyrics(prompt, in.Lyrics), in.ImageURLs, in.VideoURLs, in.SendMedia, cfg.IsThinking())
+	// text 模式从"只能开/关思考"扩到"能选档位":音乐那条实测 ACE-Step 在 none 档会把
+	// caption 写成散文段落(违反模板的单行逗号分隔),low 档才是正确的 tag 列表。
+	applyEnhanceTuning(body, in.ReasoningEffort, in.MaxOutputTokens)
 	payload, err := common.Marshal(body)
 	if err != nil {
 		return degrade("构造增强请求失败: %v", err)
@@ -425,6 +428,33 @@ func enhanceVideoAllowed(u string) bool {
 // 不思考时**只发这一个参数**,不额外声明其它:对非思考模型它是安全的空操作
 // (实测 qwen3.8-27b 照常返回、不报错),而参数发得越多,遇上不认识它们的
 // 上游就越容易整条请求被拒 —— 那会让增强直接降级,比多思考几秒糟得多。
+// enhanceMaxOutputTokens 增强调用的输出上限:配置优先,没配用内置默认。
+//
+// **text / qwen_pe 之前不发这个字段**,靠上游默认上限。开思考档位后那份默认预算
+// 是"思考 + 正文"共用的,实测档位 high 会把正文整段挤空(2/7 空输出)、或多出一条
+// 300 秒的 504 —— 所以这两条路现在也显式发。
+func enhanceMaxOutputTokens(configured int) int {
+	if configured > 0 {
+		return configured
+	}
+	return singleCallMaxOutputTokens
+}
+
+// applyEnhanceTuning 在请求体上补两件与"思考"有关的设置。
+//
+//   - 配了 reasoning_effort:发档位,并**撤掉布尔开关** —— 两个同时发时不同上游认哪个
+//     不一样,只发一个更安全(与 singlecall / h3_image_pe 同一套);
+//   - 发 max_tokens:思考与正文共用这份预算,不发就等着被挤。
+func applyEnhanceTuning(body map[string]any, effort string, maxTokens int) {
+	if e := strings.TrimSpace(effort); e != "" {
+		delete(body, "chat_template_kwargs")
+		body["reasoning_effort"] = e
+	}
+	if m := enhanceMaxOutputTokens(maxTokens); m > 0 {
+		body["max_tokens"] = m
+	}
+}
+
 func applyThinking(body map[string]any, thinking bool) {
 	if thinking {
 		return // 开启就用上游自己的默认,不额外声明

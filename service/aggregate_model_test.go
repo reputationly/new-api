@@ -550,30 +550,31 @@ func TestDryRunH3ImagePERequiresImageType(t *testing.T) {
 		"enhance_mode", AggregateCheckError)
 }
 
-// reasoning_effort 只对"档位决定效果"的两个模式有意义:h3_image_pe 与 singlecall。
-// 其余模式(text / qwen_pe)配了也不会被发出去,要明确告诉运营。
-func TestDryRunReasoningEffortOnlyAppliesToPEModes(t *testing.T) {
+// reasoning_effort 四个增强模式都认(2026-11-21 扩到 text / qwen_pe)。
+//
+// 实测依据:ACE-Step 在 none 档把 caption 写成散文段落(违反模板的单行逗号分隔),
+// low 档才是正确的 tag 列表;qwen_pe 在 high 档出现空正文与 300 秒 504。所以档位必须
+// 能选,而决定用哪一档是运营的事 —— 校验只负责"拼错了要提示"。
+func TestDryRunReasoningEffortAcceptsAllEnhanceModes(t *testing.T) {
 	withFakeModels(t, map[string]fakeModel{
 		"ordinary-image": {},
 		"enh-model":      {},
 	})
 
-	cfg := h3ImagePEAggregate("qwen_pe", "")
-	cfg.PromptEnhance.ReasoningEffort = "low"
-	res := DryRunAggregateModel(cfg, map[string]int{"image-agg": 1})
-	ch := checkByKey(res, "reasoning_effort")
-	if ch == nil || ch.Level != AggregateCheckWarn ||
-		ch.Message != "只有 h3_image_pe / singlecall 使用 reasoning_effort，当前模式会忽略" {
-		t.Fatalf("qwen_pe 模式应警告忽略 reasoning_effort: %+v", ch)
-	}
-
-	for _, mode := range []string{"h3_image_pe", "singlecall"} {
-		cfg = h3ImagePEAggregate(mode, "")
+	for _, mode := range []string{"h3_image_pe", "singlecall", "qwen_pe", "text"} {
+		cfg := h3ImagePEAggregate(mode, "")
 		cfg.PromptEnhance.ReasoningEffort = "low"
-		res = DryRunAggregateModel(cfg, map[string]int{"image-agg": 1})
+		res := DryRunAggregateModel(cfg, map[string]int{"image-agg": 1})
 		if ch := checkByKey(res, "reasoning_effort"); ch != nil {
-			t.Fatalf("%s 模式不应警告 reasoning_effort: %+v", mode, ch)
+			t.Fatalf("%s 模式不该再提示忽略 reasoning_effort: %+v", mode, ch)
 		}
+	}
+	// 拼错的档位仍然要提示(值原样透传,上游认不认识只有它知道)。
+	cfg := h3ImagePEAggregate("qwen_pe", "")
+	cfg.PromptEnhance.ReasoningEffort = "lo"
+	res := DryRunAggregateModel(cfg, map[string]int{"image-agg": 1})
+	if ch := checkByKey(res, "reasoning_effort"); ch == nil || ch.Level != AggregateCheckWarn {
+		t.Fatalf("拼错的档位应警告: %+v", ch)
 	}
 }
 
@@ -761,6 +762,17 @@ func TestDryRunWarnsOnSuspectEnhanceFields(t *testing.T) {
 		t.Fatalf("拼错的档位应警告: %+v", ch)
 	}
 
+	// 四个模式都认 reasoning_effort(2026-11-21 扩到 text / qwen_pe),不该再有
+	// "当前模式会忽略"这一支。
+	for _, mode := range []string{"h3_image_pe", "singlecall", "qwen_pe", "text"} {
+		c := h3ImagePEAggregate(mode, "")
+		c.PromptEnhance.ReasoningEffort = "low"
+		r := DryRunAggregateModel(c, map[string]int{"image-agg": 1})
+		if ch := checkByKey(r, "reasoning_effort"); ch != nil {
+			t.Fatalf("%s 模式不该再提示忽略 reasoning_effort: %+v", mode, ch)
+		}
+	}
+
 	// 输出上限**只有 singlecall 读**：别的模式先提示"会忽略"，不谈数值 ——
 	// 否则运营会为一个不生效的字段调半天。
 	cfg.PromptEnhance.ReasoningEffort = "low"
@@ -791,4 +803,3 @@ func TestDryRunWarnsOnSuspectEnhanceFields(t *testing.T) {
 		t.Fatalf("正常配置不该警告: %+v", ch)
 	}
 }
-
