@@ -1190,3 +1190,46 @@ func TestShotTimingAcceptsEffectiveDuration(t *testing.T) {
 		t.Fatal("收在 6 秒应被拒")
 	}
 }
+
+// 镜头时间检查的完整矩阵。容差是 0.002(与上游一致),所以边界只能落在
+// requested / effective 两个值上,差一点点都不行 —— 这条测试把边界钉死。
+func TestShotTimingMatrix(t *testing.T) {
+	f := func(v float64) flexSeconds { return flexSeconds{Value: v, Set: true} }
+	nan := flexSeconds{}
+	two := func(a1, b1, a2, b2 float64) []singleCallShot {
+		return []singleCallShot{{StartSeconds: f(a1), EndSeconds: f(b1)}, {StartSeconds: f(a2), EndSeconds: f(b2)}}
+	}
+	one := func(a, b float64) []singleCallShot { return []singleCallShot{{StartSeconds: f(a), EndSeconds: f(b)}} }
+
+	cases := []struct {
+		name      string
+		shots     []singleCallShot
+		req, eff  float64
+		wantError bool
+	}{
+		{"收在 requested(5.00) — 帧族常见写法", one(0, 5), 5, 5.17, false},
+		{"收在 effective(5.17) — 参考族按规范写法", one(0, 5.17), 5, 5.17, false},
+		{"两段且收在 effective", two(0, 2, 2, 5.17), 5, 5.17, false},
+		{"两段且收在 requested", two(0, 2, 2, 5), 5, 5.17, false},
+		{"effective 未知时只认 requested", one(0, 5), 5, 0, false},
+		{"effective 未知时 5.17 算错", one(0, 5.17), 5, 0, true},
+		{"10 秒档:收在 10.33", one(0, 10.33), 10, 10.33, false},
+		{"10 秒档:收在 10.00", one(0, 10), 10, 10.33, false},
+		{"收在 5.20 — 两个值都不匹配", one(0, 5.2), 5, 5.17, true},
+		{"收在 6.00 — 明显超界", one(0, 6), 5, 5.17, true},
+		{"收在 4.90 — 短了", one(0, 4.9), 5, 5.17, true},
+		{"中间有缝", two(0, 2, 3, 5.17), 5, 5.17, true},
+		{"时间倒挂", two(0, 3, 2, 5.17), 5, 5.17, true},
+		{"没写时间", []singleCallShot{{StartSeconds: nan, EndSeconds: f(5)}}, 5, 5.17, true},
+		{"空 shots", nil, 5, 5.17, true},
+	}
+	for _, c := range cases {
+		errs := shotTimingIssues(c.shots, c.req, c.eff)
+		if c.wantError && len(errs) == 0 {
+			t.Errorf("%s: 应该报错却通过了", c.name)
+		}
+		if !c.wantError && len(errs) != 0 {
+			t.Errorf("%s: 应该通过却报错 %v", c.name, errs)
+		}
+	}
+}
