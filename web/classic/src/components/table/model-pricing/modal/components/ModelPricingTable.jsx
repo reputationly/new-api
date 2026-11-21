@@ -24,6 +24,7 @@ import {
   calculateModelPrice,
   getEffectiveGroupRatio,
   getGroupDiscountInfo,
+  getTimeRatioView,
   hasPointDeduction,
   getModelPriceItems,
   formatVideoMatrixSummary,
@@ -170,7 +171,19 @@ const ModelPricingTable = ({
       title: t('折扣'),
       dataIndex: 'ratio',
       render: (ratio, record) => {
-        const d = getGroupDiscountInfo(record?.priceData?.usedGroupRatio);
+        // 折扣列同理：用固定折扣（discount_ratio），不是含时段系数的终值，
+        // 否则配了分时价的模型会显示成「2.5 折」。
+        const timeView = record?.priceData
+          ? getTimeRatioView(
+              groupTimeRatio,
+              record.priceData.usedGroup,
+              record.priceData.model_name || modelData?.model_name,
+            )
+          : null;
+        const fixedDiscount = Number(timeView?.discount_ratio) || 0;
+        const d = getGroupDiscountInfo(
+          fixedDiscount > 0 ? fixedDiscount : record?.priceData?.usedGroupRatio,
+        );
         if (!d) {
           return (
             <Text type='tertiary' size='small'>
@@ -380,8 +393,16 @@ const ModelPricingTable = ({
                     </span>
                     <span className='flex items-center gap-1 flex-wrap'>
                       {relTag}
+                      {/* 折数用**固定折扣**（与时刻无关），不能用该时段的终值算：
+                          终值里含时段系数，会把「5 折 + 空闲 0.5」显示成 2.5 折。 */}
                       <Tag color='white' size='small' shape='circle'>
-                        {d ? d.text : `${Number(record.ratio.toFixed(4))}x`}
+                        {(() => {
+                          const fixed = getGroupDiscountInfo(disc);
+                          if (fixed) return fixed.text;
+                          return d
+                            ? d.text
+                            : `${Number(record.ratio.toFixed(4))}x`;
+                        })()}
                       </Tag>
                     </span>
                   </span>
