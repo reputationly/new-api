@@ -444,7 +444,27 @@ const TimePricePanel = ({ options, refresh }) => {
                   showWarning(t('该模型已经配过了'));
                   return;
                 }
-                setModelRules(name, []);
+                const windowKeys = Object.keys(cfg.windows);
+                if (windowKeys.length === 0) {
+                  showWarning(t('请先在上面建至少一个时段'));
+                  return;
+                }
+                const base = basePriceOf(name);
+                if (!(Number(base.input) > 0) && !(Number(base.per_call) > 0)) {
+                  showWarning(
+                    t('该模型还没配常规目录价，请先在「模型定价」页配置'),
+                  );
+                  return;
+                }
+                // 直接带上第一个时段、价格预填常规价（= 该时段等于常规价，可再改）。
+                // 不能建"空模型条目"：后端校验要求每条规则至少有一个分量价目，
+                // 而空数组同样会被判为无效，保存必然失败。
+                const prices = {};
+                if (Number(base.input) > 0)
+                  prices.input = Number(Number(base.input).toFixed(4));
+                if (Number(base.output) > 0)
+                  prices.output = Number(Number(base.output).toFixed(4));
+                setModelRules(name, [{ window: windowKeys[0], prices }]);
                 setSelectedModel(name);
                 setNewModel('');
               }}
