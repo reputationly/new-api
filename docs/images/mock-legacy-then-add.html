@@ -1,0 +1,95 @@
+<!doctype html><html lang='zh-CN'><head><meta charset='utf-8'><style>
+*{box-sizing:border-box}
+body{margin:0;background:#f7f8fa;font-family:-apple-system,"PingFang SC",Arial,sans-serif;color:#1c1f23;padding:20px}
+h1{font-size:15px;margin:0 0 3px}
+.sub{color:#8f959e;font-size:12px;margin-bottom:14px}
+.step{background:#fff;border:1px solid #e6e8eb;border-radius:12px;padding:12px 14px;margin-bottom:12px;max-width:1140px}
+.stephd{display:flex;align-items:center;gap:8px;margin-bottom:10px}
+.no{width:20px;height:20px;border-radius:10px;background:#0064fa;color:#fff;font-size:12px;display:flex;align-items:center;justify-content:center;flex:0 0 auto}
+.no.bad{background:#d93026}
+.no.good{background:#1a9d5a}
+.ttl{font-size:13px;font-weight:600}
+.slots{display:flex;gap:10px;flex-wrap:wrap}
+.slot{border:1px solid #e6e8eb;border-radius:11px;padding:9px 10px;width:300px}
+.slot.old{background:#fbfbe8;border-color:#e8e0a8}
+.slot.new{background:#fbfcff;border-color:#c9d6ef}
+.sh{display:flex;justify-content:space-between;align-items:center;margin-bottom:6px}
+.key{background:#eef4ff;color:#2249b8;border-radius:8px;padding:0 6px;font-size:10.5px}
+.nm{font-size:12px;font-weight:600;margin-left:5px}
+.row{display:flex;align-items:center;gap:5px;font-size:11px;color:#6b7280;margin-bottom:4px;flex-wrap:wrap}
+.inp{border:1px solid #d9dde2;border-radius:6px;padding:2px 7px;font-size:11.5px;background:#fff}
+.sel{border:1px solid #d9dde2;border-radius:6px;padding:2px 7px;font-size:11.5px;background:#fff;color:#1c1f23}
+.caret{color:#9aa1ad;margin-left:4px}
+.tag{font-size:10.5px;line-height:17px;padding:0 7px;border-radius:8px;display:inline-block}
+.t-cyan{background:#e8f7ff;color:#0b6c8f}
+.t-blue{background:#eef4ff;color:#2249b8}
+.tagwarn{background:#fff7e6;color:#a86300;font-size:10.5px;border-radius:8px;padding:1px 7px;display:inline-block}
+.banner{border-radius:9px;padding:9px 11px;font-size:11.5px;margin-top:8px;line-height:1.55}
+.banner.err{background:#fdecea;border:1px solid #f5c2bd;color:#9c2318}
+.banner.ok{background:#eaf7ee;border:1px solid #bfe6cb;color:#14663a}
+.rule{border:1px solid #e6e8eb;border-radius:11px;padding:9px 10px;margin-bottom:8px;max-width:640px}
+.rh{display:flex;justify-content:space-between;align-items:center;margin-bottom:6px}
+.meta{font-size:10.5px;color:#8f959e;margin-left:5px}
+.grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:4px 10px}
+.f{font-size:10.5px;color:#6b7280}
+.f .v{display:flex;align-items:center;gap:4px;margin-top:2px}
+.fx{font-size:10px;color:#0b6c8f;background:#e8f7ff;border-radius:5px;padding:0 4px}
+.ml{margin-left:14px;max-width:1090px}
+</style></head><body>
+<h1>「之前已经配过」再添加时会发生什么</h1>
+<div class="sub">前提：这个模型在旧面板时期已经配了 3 条规则（夜间 / 午休 / 周末，都是单段）。下面三种情形按顺序看。</div>
+
+<div class="step">
+  <div class="stephd"><span class="no">1</span><span class="ttl">升级后第一次打开：老配置照样在，照样生效（不会丢）</span></div>
+  <div class="slots">
+    <div class="slot old"><div class="sh"><div><span class="key">night</span><span class="nm">空闲·夜间</span></div></div>
+      <div class="row">类型 <span class="sel">指定时间段<span class="caret">▾</span></span></div>
+      <div class="row"><span class="inp">18:00</span>→<span class="inp">09:00</span><span class="sel">每天<span class="caret">▾</span></span></div>
+      <div class="row"><span class="tagwarn">旧格式 start/end</span></div></div>
+    <div class="slot old"><div class="sh"><div><span class="key">noon</span><span class="nm">空闲·午休</span></div></div>
+      <div class="row">类型 <span class="sel">指定时间段<span class="caret">▾</span></span></div>
+      <div class="row"><span class="inp">12:00</span>→<span class="inp">14:00</span><span class="sel">工作日<span class="caret">▾</span></span></div></div>
+    <div class="slot old"><div class="sh"><div><span class="key">weekend</span><span class="nm">空闲·周末</span></div></div>
+      <div class="row">类型 <span class="sel">指定时间段<span class="caret">▾</span></span></div>
+      <div class="row"><span class="inp">09:00</span>→<span class="inp">18:00</span><span class="sel">周末<span class="caret">▾</span></span></div></div>
+  </div>
+  <div class="ml">
+    <div class="rule">
+      <div class="rh"><div><span class="tag t-cyan">空闲·夜间</span><span class="meta">每天 18:00-09:00</span></div></div>
+      <div class="grid"><div class="f">输入<span class="v"><span class="inp">1.0000</span><span class="fx">×0.500</span></span></div>
+      <div class="f">输出<span class="v"><span class="inp">4.0000</span><span class="fx">×0.500</span></span></div>
+      <div class="f">缓存命中<span class="v"><span class="inp">0.0200</span><span class="fx">×0.500</span></span></div></div>
+    </div>
+    <div class="row" style="color:#8f959e">另外两条（午休 / 周末）同样显示，结构不变 → 可以继续用，也可以就地改</div>
+  </div>
+</div>
+
+<div class="step">
+  <div class="stephd"><span class="no">2</span><span class="ttl">再建「其余时间」并挂到这个模型 —— 能加进列表，但保存会被拒绝</span></div>
+  <div class="slots">
+    <div class="slot old"><div class="sh"><div><span class="key">night</span><span class="nm">空闲·夜间</span></div></div><div class="row">18:00 → 09:00 每天</div></div>
+    <div class="slot old"><div class="sh"><div><span class="key">noon</span><span class="nm">空闲·午休</span></div></div><div class="row">12:00 → 14:00 工作日</div></div>
+    <div class="slot old"><div class="sh"><div><span class="key">weekend</span><span class="nm">空闲·周末</span></div></div><div class="row">09:00 → 18:00 周末</div></div>
+    <div class="slot new"><div class="sh"><div><span class="key">rest</span><span class="nm">空闲时段</span></div></div>
+      <div class="row">类型 <span class="sel">其余时间<span class="caret">▾</span></span></div>
+      <div class="row">除 <span class="sel">空闲·夜间<span class="caret">▾</span></span> 以外的全部时间</div>
+      <div class="row"><span class="tagwarn">← 与午休/周末重叠</span></div></div>
+  </div>
+  <div class="banner err"><b>保存失败：</b>group * time rule "m": window "rest" is the complement (rest-of-time) and covers "noon"; remove the other windows or narrow the complement</div>
+  <div class="row" style="margin-top:6px;color:#9c2318">原因不是"不能加"，而是< b>这两套时段描述的是同一段时间</b>：旧的三段已经覆盖了全天，再加一个"其余时间"必然重叠，同一分钟会有两个价。</div>
+</div>
+
+<div class="step">
+  <div class="stephd"><span class="no good">3</span><span class="ttl">正确做法：把旧的三个时段换成一个「其余时间」，只保留要区分的那一档</span></div>
+  <div class="slots">
+    <div class="slot new"><div class="sh"><div><span class="key">peak</span><span class="nm">高峰时段</span></div></div>
+      <div class="row">类型 <span class="sel">指定时间段<span class="caret">▾</span></span></div>
+      <div class="row"><span class="inp">09:00</span>→<span class="inp">12:00</span><span class="sel">工作日<span class="caret">▾</span></span></div>
+      <div class="row"><span class="inp">14:00</span>→<span class="inp">18:00</span><span class="sel">工作日<span class="caret">▾</span></span></div></div>
+    <div class="slot new"><div class="sh"><div><span class="key">offpeak</span><span class="nm">空闲时段</span></div></div>
+      <div class="row">类型 <span class="sel">其余时间<span class="caret">▾</span></span></div>
+      <div class="row">除 <span class="sel">高峰时段<span class="caret">▾</span></span> 以外的全部时间</div></div>
+  </div>
+  <div class="banner ok"><b>保存成功</b>　旧的 night / noon / weekend 已删除（删时段会连带删掉引用它的规则），模型上只留高峰、空闲两张卡片。</div>
+</div>
+</body></html>
