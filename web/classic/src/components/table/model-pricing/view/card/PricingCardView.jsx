@@ -44,6 +44,7 @@ import {
   getNormalRatio,
   getTimePriceDelta,
   getTimeRatioView,
+  hasPointDeduction,
 } from '../../../../../helpers';
 import TimeRulesTooltip from '../../TimeRulesTooltip';
 import PricingCardSkeleton from './PricingCardSkeleton';
@@ -372,7 +373,7 @@ const PricingCardView = ({
                           : priceData.isVideoMatrix
                             ? formatVideoMatrixSummary(priceData, t)
                             : formatPriceInfo(priceData, t, siteDisplayType)}
-                        {priceData?.points ? (
+                        {hasPointDeduction(priceData) ? (
                           <Tooltip
                             content={t('可用积分抵扣，实际消耗以账单为准')}
                           >

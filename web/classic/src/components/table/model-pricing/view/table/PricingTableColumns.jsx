@@ -30,6 +30,7 @@ import {
   getNormalRatio,
   getTimePriceDelta,
   getTimeRatioView,
+  hasPointDeduction,
 } from '../../../../../helpers';
 import {
   renderLimitedItems,
@@ -423,7 +424,7 @@ export const getPricingTableColumns = ({
               </div>
             );
           })}
-          {priceData?.points ? (
+          {hasPointDeduction(priceData) ? (
             <Tooltip content={t('可用积分抵扣，实际消耗以账单为准')}>
               <Tag color='light-blue' shape='circle' size='small'>
                 {t('积分抵扣')}

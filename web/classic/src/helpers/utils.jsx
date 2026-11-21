@@ -1583,3 +1583,15 @@ export const resetPricingFilters = ({
   setFilterCapability?.(DEFAULT_PRICING_FILTERS.filterCapability);
   setCurrentPage?.(DEFAULT_PRICING_FILTERS.currentPage);
 };
+
+/**
+ * 该模型在「当前分组」下是否真的能用积分抵扣。
+ *
+ * priceData.points 永远是个对象（键在、值可能全是 null），直接判真值会把
+ * 「分组不在积分白名单」的模型也标成可用。这里按「有没有任何一个非空值」判断。
+ */
+export const hasPointDeduction = (priceData) => {
+  const pm = priceData?.points;
+  if (!pm || typeof pm !== 'object') return false;
+  return Object.values(pm).some((v) => v !== null && v !== undefined);
+};
