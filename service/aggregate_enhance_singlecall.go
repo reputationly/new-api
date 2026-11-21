@@ -710,7 +710,7 @@ func transportIssues(out *singleCallOutput, ev singleCallEvidence) (errs []strin
 		}
 	}
 
-	errs = append(errs, shotTimingIssues(out.plan.Shots, ev.Task.DurationSeconds)...)
+	errs = append(errs, shotTimingIssues(out.plan.Shots, ev.Task.DurationSeconds, ev.Task.EffectiveDurationSeconds)...)
 	errs = append(errs, labelIssues(out.H3Prompt, ev.Assets)...)
 	errs = append(errs, dialogueIssues(ev.UserRequest, out.H3Prompt)...)
 	errs = append(errs, missingSections(out.H3Prompt, ev.Task.Type)...)
@@ -719,13 +719,24 @@ func transportIssues(out *singleCallOutput, ev singleCallEvidence) (errs []strin
 	return errs, warns
 }
 
-// shotTimingIssues 镜头时间必须是数字、从 0 起连续递增、正好覆盖到请求时长。
+// shotTimingIssues 镜头时间必须是数字、从 0 起连续递增、正好覆盖到目标时长。
 //
 // 这是整套检查里唯一真正"硬"的一条,因为它的失败是**静默的**:镜头加起来
 // 比请求短,H3 照样生成,只是最后一段被拉长或截断,没有任何地方报错。
-func shotTimingIssues(shots []singleCallShot, duration float64) []string {
+//
+// **终点允许落在两个时长上**:客户请求的(5)与引擎真正交付的(5.17,帧栅格 17k+5)。
+//
+// 证据里两个都写着,而官方规范(base-en.txt:34)要求提示词用 effective,于是模型按
+// 5.17 收尾**完全正确**。早先这里只跟 requested 比,模型写 5.17 就被判"超出目标时长",
+// 整次编译作废、回落 text;而同一个模型写 5.00 时又能过 —— 表现为同一份提示词时好时坏。
+// 线上参考族就是这么反复失败的(实测 raw 里 shots 收在 5.17)。
+func shotTimingIssues(shots []singleCallShot, requested, effective float64) []string {
 	if len(shots) == 0 {
 		return []string{"shots must be a nonempty array"}
+	}
+	end := requested
+	if effective > 0 {
+		end = effective
 	}
 	last := 0.0
 	for _, s := range shots {
@@ -734,14 +745,14 @@ func shotTimingIssues(shots []singleCallShot, duration float64) []string {
 		}
 		a, b := s.StartSeconds.Value, s.EndSeconds.Value
 		if math.IsNaN(a) || math.IsInf(a, 0) || math.IsNaN(b) || math.IsInf(b, 0) ||
-			math.Abs(a-last) >= shotTimeTolerance || b <= a || b > duration+shotTimeTolerance {
+			math.Abs(a-last) >= shotTimeTolerance || b <= a || b > end+shotTimeTolerance {
 			return []string{"Shot times must be numeric, contiguous, increasing and within target duration"}
 		}
 		last = b
 	}
-	if math.Abs(last-duration) > shotTimeTolerance {
+	if math.Abs(last-end) > shotTimeTolerance && math.Abs(last-requested) > shotTimeTolerance {
 		return []string{"Shot plan must end at exact target duration " +
-			strconv.FormatFloat(duration, 'g', -1, 64)}
+			strconv.FormatFloat(end, 'g', -1, 64)}
 	}
 	return nil
 }

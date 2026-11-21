@@ -46,7 +46,7 @@ func TestEvidenceLabelsMatchRenderNumbering(t *testing.T) {
 func TestShotTimingIssues(t *testing.T) {
 	f := func(v float64) flexSeconds { return flexSeconds{Value: v, Set: true} }
 	ok := []singleCallShot{{StartSeconds: f(0), EndSeconds: f(2)}, {StartSeconds: f(2), EndSeconds: f(5)}}
-	if errs := shotTimingIssues(ok, 5); len(errs) != 0 {
+	if errs := shotTimingIssues(ok, 5, 0); len(errs) != 0 {
 		t.Errorf("合法的镜头计划被拒: %v", errs)
 	}
 
@@ -60,7 +60,7 @@ func TestShotTimingIssues(t *testing.T) {
 		"缺 start 字段": {{EndSeconds: f(5)}},
 	}
 	for name, shots := range bad {
-		if errs := shotTimingIssues(shots, 5); len(errs) == 0 {
+		if errs := shotTimingIssues(shots, 5, 0); len(errs) == 0 {
 			t.Errorf("%s：该被拦下却放过了", name)
 		}
 	}
@@ -77,7 +77,7 @@ func TestMissingShotFieldIsNotZero(t *testing.T) {
 	if plan.Shots[0].StartSeconds.Set {
 		t.Fatal("缺失的 start_seconds 不该被标记为已设置")
 	}
-	if errs := shotTimingIssues(plan.Shots, 5); len(errs) == 0 {
+	if errs := shotTimingIssues(plan.Shots, 5, 0); len(errs) == 0 {
 		t.Error("缺 start_seconds 的镜头被当成了「从 0 开始」")
 	}
 }
@@ -742,8 +742,8 @@ func TestSingleCallEvidenceCarriesEffectiveDuration(t *testing.T) {
 		requested float64
 		want      float64
 	}{
-		{5, 5.17},  // 124 帧
-		{6, 6.58},  // 144 帧不够栅格,吸附到 158 帧
+		{5, 5.17},   // 124 帧
+		{6, 6.58},   // 144 帧不够栅格,吸附到 158 帧
 		{10, 10.13}, // 243 帧
 		{15, 15.08}, // 362 帧
 	}
@@ -890,7 +890,6 @@ func TestSingleCallFallsBackToThinkingSwitch(t *testing.T) {
 	require.Contains(t, body, "chat_template_kwargs")
 }
 
-
 // **同一节写两遍要被拦下。**
 //
 // 实测 r2va 三次里有一次把 summary 整段原样写了两遍:节名一个不缺,
@@ -964,7 +963,6 @@ func TestSingleCallSystemIncludesAppendixBeforeWriting(t *testing.T) {
 		"清单要排在证据之前")
 }
 
-
 // **正文节名用错要被确定性修掉,而不是花一轮重修。**
 //
 // 实测 r2va 四份样本里三份把正文节写成 integrated_multimodal_description ——
@@ -1019,7 +1017,6 @@ non_diegetic_music: z
 	require.Equal(t, prompt, fixed)
 }
 
-
 // **不发 response_format 是刻意的。**
 //
 // qwen3.8(MTP 投机解码)+ json_object 会被引擎的语法约束放过不去,线上日志:
@@ -1049,7 +1046,6 @@ func TestSingleCallParsesWithoutResponseFormat(t *testing.T) {
 	require.Contains(t, res.EnhancedPrompt, "[Shot 1]")
 	require.NotEmpty(t, (*got)[0])
 }
-
 
 // **参考视频不进请求体,但它的标签必须留在证据里。**
 //
@@ -1114,7 +1110,6 @@ func TestSingleCallAppendixExplainsVisibility(t *testing.T) {
 	require.Contains(t, singleCallAppendix, "the user-supplied audio reference")
 }
 
-
 // **参考素材在提示词里一句都不提 → 拦。**
 //
 // 参考视频不发给增强模型之后,实测出现过整段不提 <Video 1>(subject_definitions
@@ -1152,7 +1147,6 @@ func TestMissingAssetMentionsOnlyForReferenceFamily(t *testing.T) {
 	require.Empty(t, missingAssetMentions("integrated_multimodal_description: [Shot 1] x", assets, "i2v"))
 }
 
-
 // **编号未知的音频也要被检查到过。** 它没有数字可查,但 appendix 第 11 条把措辞
 // 定死了("user-supplied audio reference"),整段不提它,H3 就只能自己编一条嗓子 ——
 // 那正是这个函数要防的。
@@ -1175,3 +1169,24 @@ func TestMissingAssetMentionsRequiresUnlabelledAudio(t *testing.T) {
 	require.Empty(t, missingAssetMentions(upper, assets, "r2va"), "大小写不敏感")
 }
 
+// **终点允许落在 effective 时长上。**
+//
+// 证据里同时写着 duration_seconds(5) 与 effective_duration_seconds(5.17,帧栅格 17k+5),
+// 而官方规范要求提示词用 effective —— 模型按 5.17 收尾完全正确。早先这里只跟 5 比,
+// 写 5.17 就被判超界、整次编译作废、回落 text;写 5.00 又能过,表现为时好时坏。
+// 线上参考族就是这么反复失败的。
+func TestShotTimingAcceptsEffectiveDuration(t *testing.T) {
+	f := func(v float64) flexSeconds { return flexSeconds{Value: v, Set: true} }
+	eff := []singleCallShot{{StartSeconds: f(0), EndSeconds: f(5.17)}}
+	if errs := shotTimingIssues(eff, 5, 5.17); len(errs) != 0 {
+		t.Fatalf("按 effective 5.17 收尾应通过: %v", errs)
+	}
+	req := []singleCallShot{{StartSeconds: f(0), EndSeconds: f(5)}}
+	if errs := shotTimingIssues(req, 5, 5.17); len(errs) != 0 {
+		t.Fatalf("按 requested 5.00 收尾也应通过: %v", errs)
+	}
+	over := []singleCallShot{{StartSeconds: f(0), EndSeconds: f(6)}}
+	if errs := shotTimingIssues(over, 5, 5.17); len(errs) == 0 {
+		t.Fatal("收在 6 秒应被拒")
+	}
+}
