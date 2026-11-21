@@ -1,0 +1,56 @@
+<!doctype html><html lang='zh-CN'><head><meta charset='utf-8'><style>
+*{box-sizing:border-box}
+body{margin:0;background:#f7f8fa;font-family:-apple-system,"PingFang SC","Helvetica Neue",Arial,sans-serif;color:#1c1f23;padding:24px}
+h1{font-size:15.5px;margin:0 0 3px}
+.sub{color:#8f959e;font-size:12px;margin-bottom:16px}
+.wrap{display:flex;gap:16px;align-items:flex-start}
+.col{width:360px}
+.col h5{margin:0 0 6px;font-size:12px;color:#8f959e;font-weight:500}
+.card{background:#fff;border:1px solid #e6e8eb;border-radius:14px;padding:12px 14px}
+.top{display:flex;align-items:flex-start;gap:8px}
+.left{flex:1;min-width:0}
+.name{font-size:14.5px;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.price{font-size:12px;color:#333;margin-top:5px;line-height:1.7}
+.strike{color:#9aa1ad;text-decoration:line-through;margin-right:4px}
+.num{font-weight:600}
+.unit{color:#8f959e;font-size:11px}
+.badges{display:flex;gap:5px;flex-shrink:0;padding-top:2px}
+.tag{font-size:11px;line-height:18px;padding:0 7px;border-radius:9px;white-space:nowrap;flex-shrink:0}
+.t-disc{background:#fff0e8;color:#d93a00}
+.t-night{background:#e8f7ff;color:#0077a8}
+.t-points{background:#eaf2ff;color:#1d4ed8}
+.bad{border-color:#f0b4b4;box-shadow:0 0 0 2px #fde8e8 inset}
+.note{font-size:11.5px;color:#8f959e;margin-top:8px}
+</style></head><body>
+<h1>问题复现：长模型名 + 三个角标（含运营自定义的长时段名）</h1>
+<div class="sub">卡片实际宽度：xl 两列约 520px、2xl 三列约 380px、窄屏/侧栏约 340px。下面三列分别按这三种宽度渲染同一张卡。</div>
+<div class="wrap">
+  <div class="col"><h5>520px（xl 两列）</h5>
+    <div class="card"><div class="top">
+      <div class="left"><div class="name">deepseek-v4-1-flash-1017-overseas-preview</div>
+        <div class="price"><div><span class="unit">输入价格</span> <span class="strike">¥1.00</span><span class="num">¥0.50</span><span class="unit"> / 1M Tokens</span></div>
+        <div><span class="unit">输出价格</span> <span class="strike">¥7.00</span><span class="num">¥3.50</span><span class="unit"> / 1M Tokens</span></div></div></div>
+      <div class="badges"><span class="tag t-points">积分抵扣</span><span class="tag t-night">工作时间（上午）</span><span class="tag t-disc">5折</span></div>
+    </div></div>
+    <div class="note">名字被截断到「deepseek-v4-1-flash…」，价格正常</div>
+  </div>
+  <div class="col" style="width:380px"><h5>380px（2xl 三列）</h5>
+    <div class="card bad"><div class="top">
+      <div class="left"><div class="name">deepseek-v4-1-flash-1017-overseas-preview</div>
+        <div class="price"><div><span class="unit">输入价格</span> <span class="strike">¥1.00</span><span class="num">¥0.50</span><span class="unit"> / 1M Tokens</span></div>
+        <div><span class="unit">输出价格</span> <span class="strike">¥7.00</span><span class="num">¥3.50</span><span class="unit"> / 1M Tokens</span></div></div></div>
+      <div class="badges"><span class="tag t-points">积分抵扣</span><span class="tag t-night">工作时间（上午）</span><span class="tag t-disc">5折</span></div>
+    </div></div>
+    <div class="note">名字只剩「deepseek-v…」，几乎不可读</div>
+  </div>
+  <div class="col" style="width:340px"><h5>340px（更窄）</h5>
+    <div class="card bad"><div class="top">
+      <div class="left"><div class="name">deepseek-v4-1-flash-1017-overseas-preview</div>
+        <div class="price"><div><span class="unit">输入价格</span> <span class="strike">¥1.00</span><span class="num">¥0.50</span><span class="unit"> / 1M Tokens</span></div>
+        <div><span class="unit">输出价格</span> <span class="strike">¥7.00</span><span class="num">¥3.50</span><span class="unit"> / 1M Tokens</span></div></div></div>
+      <div class="badges"><span class="tag t-points">积分抵扣</span><span class="tag t-night">工作时间（上午）</span><span class="tag t-disc">5折</span></div>
+    </div></div>
+    <div class="note">名字几乎全被吃掉，价格行仍完整</div>
+  </div>
+</div>
+</body></html>

@@ -230,3 +230,17 @@ export const getTimePriceDelta = (
     active: Boolean(view.active),
   };
 };
+
+/**
+ * 时间档标签的显示文本：**限长**。
+ *
+ * 时段模板名是运营自己起的，可能很长（「工作时间（上午）」「夜间低谷·次日」）。
+ * 模型广场卡片的右上角是「时段 + 折扣（+ 积分抵扣）」一组角标，名字那行是 truncate 的，
+ * 角标不设上限就会把模型名压成「deepseek-v…」——这是本项目踩过一次的坑。
+ * 这里只截显示文本，完整名字由调用方放进 tooltip。
+ */
+export const clampTimeLabel = (label, max = 4) => {
+  const s = String(label || '').trim();
+  if (!s) return '';
+  return s.length > max ? s.slice(0, max) + '…' : s;
+};

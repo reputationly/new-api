@@ -53,6 +53,7 @@ import {
 import {
   getGroupDiscountInfo,
   getNormalRatio,
+  clampTimeLabel,
   getTimeRatioView,
   getTimePriceDelta,
   formatWindowDays,
@@ -63,6 +64,7 @@ import {
 export {
   getGroupDiscountInfo,
   getNormalRatio,
+  clampTimeLabel,
   getTimeRatioView,
   getTimePriceDelta,
   formatWindowDays,

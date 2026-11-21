@@ -23,6 +23,7 @@ import {
   getGroupDiscountInfo,
   getNormalRatio,
   getTimePriceDelta,
+  clampTimeLabel,
   buildTimeWindowRows,
   DISCOUNT_HEX,
 } from '@classic/helpers/discount';
@@ -273,7 +274,7 @@ const Models = () => {
           color: c.fg,
         }}
       >
-        {delta.label || (delta.cheaper ? '闲时' : '高峰')}
+        {clampTimeLabel(delta.label || (delta.cheaper ? '闲时' : '高峰'))}
       </span>
     );
   };

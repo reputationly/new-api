@@ -30,6 +30,7 @@ import {
   getNormalRatio,
   getTimePriceDelta,
   getTimeRatioView,
+  clampTimeLabel,
 } from '../../../../../helpers';
 import {
   renderLimitedItems,
@@ -338,6 +339,7 @@ export const getPricingTableColumns = ({
                 style={{ maxWidth: 'none' }}
                 content={
                   <div style={{ whiteSpace: 'nowrap' }}>
+                    {delta.label ? delta.label + ' · ' : ''}
                     {t('常规价')} {Number(delta.normal.toFixed(4))}x{' · '}
                     {t('此刻价')} {Number(delta.current.toFixed(4))}x
                   </div>
@@ -348,7 +350,10 @@ export const getPricingTableColumns = ({
                   shape='circle'
                   size='small'
                 >
-                  {delta.label || (delta.cheaper ? t('闲时') : t('高峰'))}
+                  {/* 限长：时段名是运营起的，完整名字在 tooltip 里 */}
+                  {clampTimeLabel(
+                    delta.label || (delta.cheaper ? t('闲时') : t('高峰')),
+                  )}
                 </Tag>
               </Tooltip>
             );
@@ -453,6 +458,17 @@ export const getPricingTableColumns = ({
               </div>
             );
           })}
+          {/* 积分抵扣：只打小标、不列积分价目（积分消耗随套餐与用量变，写死会误导），
+              放在价格区而不是模型名旁的角标位——角标位要留给「会改变此刻价格」的时段标签 */}
+          {priceData?.points ? (
+            <div className='pt-0.5'>
+              <Tooltip content={t('可用积分抵扣，实际消耗以账单为准')}>
+                <Tag color='light-blue' shape='circle' size='small'>
+                  {t('积分抵扣')}
+                </Tag>
+              </Tooltip>
+            </div>
+          ) : null}
         </div>
       );
     },

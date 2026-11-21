@@ -44,6 +44,7 @@ import {
   getNormalRatio,
   getTimePriceDelta,
   getTimeRatioView,
+  clampTimeLabel,
 } from '../../../../../helpers';
 import TimeRulesTooltip from '../../TimeRulesTooltip';
 import PricingCardSkeleton from './PricingCardSkeleton';
@@ -372,19 +373,36 @@ const PricingCardView = ({
                           : priceData.isVideoMatrix
                             ? formatVideoMatrixSummary(priceData, t)
                             : formatPriceInfo(priceData, t, siteDisplayType)}
+                        {/*
+                          积分抵扣放这里而不是右上角角标：它是支付方式属性、不是模型属性，
+                          而且角标位要留给「会改变此刻价格」的时段标签。
+                        */}
+                        {priceData?.points ? (
+                          <span className='flex'>
+                            <Tooltip
+                              content={t('可用积分抵扣，实际消耗以账单为准')}
+                            >
+                              <Tag
+                                color='light-blue'
+                                shape='circle'
+                                size='small'
+                              >
+                                {t('积分抵扣')}
+                              </Tag>
+                            </Tooltip>
+                          </span>
+                        ) : null}
                       </div>
                     </div>
                   </div>
 
-                  <div className='flex items-center space-x-2 ml-3'>
-                    {/* 积分抵扣只打小标，不列具体积分价目（原因见表格视图同处注释） */}
-                    {priceData?.points ? (
-                      <Tooltip content={t('可用积分抵扣，实际消耗以账单为准')}>
-                        <Tag color='light-blue' shape='circle' size='small'>
-                          {t('积分抵扣')}
-                        </Tag>
-                      </Tooltip>
-                    ) : null}
+                  {/*
+                    角标区最多两个（时段 + 折扣），并且**限宽可换行**：
+                    时段名是运营起的、可能很长，三个角标排一行会把模型名压成
+                    「deepseek-v…」（本项目踩过这个坑）。积分抵扣不占这个位置，
+                    它是支付方式属性，见价格块下方的小标。
+                  */}
+                  <div className='flex items-center gap-1 flex-wrap justify-end max-w-[45%] ml-3 shrink-0'>
                     {(() => {
                       // 时段价标签：与折扣角标并列但不合并——角标是合同折扣（永不随时段变），
                       // 这个是「此刻价目 ≠ 常规价」。合并回一个数就退回「折扣随时钟漂移」的老问题。
@@ -400,6 +418,8 @@ const PricingCardView = ({
                           style={{ maxWidth: 'none' }}
                           content={
                             <div style={{ whiteSpace: 'nowrap' }}>
+                              {/* 完整的时段名放这里：标签上被限长了 */}
+                              {delta.label ? delta.label + ' · ' : ''}
                               {t('常规价')} {Number(delta.normal.toFixed(4))}x
                               {' · '}
                               {t('此刻价')} {Number(delta.current.toFixed(4))}x
@@ -411,8 +431,11 @@ const PricingCardView = ({
                             shape='circle'
                             size='small'
                           >
-                            {delta.label ||
-                              (delta.cheaper ? t('闲时') : t('高峰'))}
+                            {/* 限长：时段名是运营起的，可能很长，角标不设上限会把模型名压没 */}
+                            {clampTimeLabel(
+                              delta.label ||
+                                (delta.cheaper ? t('闲时') : t('高峰')),
+                            )}
                           </Tag>
                         </Tooltip>
                       );
