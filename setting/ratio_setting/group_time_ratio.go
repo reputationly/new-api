@@ -892,7 +892,11 @@ type TimeWindowView struct {
 	// 多段窗口下这三个字段为空属正常，不是数据缺失。
 	Segments []TimeSegment `json:"segments,omitempty"`
 	TZ       string        `json:"tz,omitempty"`
-	Value    float64       `json:"value"` // 配置值（取代模型折扣的那个系数）
+	// ComplementOf 非空表示该档位是「其余时间」补集窗口，值为被排除窗口的
+	// 展示名（label 或键名）。补集展开后的 Segments 对用户没有信息量——
+	// 它只是「X 以外」的另一种写法——展示层应渲染成「除「X」以外」一行。
+	ComplementOf string  `json:"complement_of,omitempty"`
+	Value        float64 `json:"value"` // 配置值（取代模型折扣的那个系数）
 	// Ratio 是该时段的**最终倍率**，与 group_model_ratio 下发的终值同口径，可以直接
 	// 比较。前端要显示「空闲时段 5.6 折」必须用它——光有 Value 拼不出来，而让前端自己
 	// 乘一遍分组基础倍率，等于把解析逻辑抄一份到前端。
@@ -934,6 +938,11 @@ type TimeRatioView struct {
 	// 只列配了规则的时段，用户看不到全天覆盖：表里两行 5 折，其余时间是 3.5 折
 	// 还是 8 折完全看不出来。
 	NormalRatio float64 `json:"normal_ratio"`
+	// NormalApplies 为 false 表示已配规则的窗口并集覆盖整周，「其余时段」
+	// 不再有适用时间，详情页/角标应省略那一行（它永远不会命中）。
+	// 只配了补集窗口的一种情形仍为 true：补集扣掉的时段落在常规价上，
+	// 那行恰恰是唯一说明「那几个小时按几折」的地方。
+	NormalApplies bool `json:"normal_applies"`
 	// Label 是此刻所处档位的名字（未命中任何时段时为空）。命中 ×1 的原价档时
 	// 它有值而 Active 为假——两者回答的是不同的问题。
 	Label   string           `json:"label,omitempty"`
@@ -987,6 +996,7 @@ func ResolveTimeRatioView(usingGroup, modelName string, at time.Time, res RatioR
 	bestValue := math.Inf(1)
 	bestRatio := math.Inf(1)
 	chargedValue := math.Inf(1)
+	var allSegs []TimeSegment
 	for _, rule := range list {
 		win, ok := windows[rule.Window]
 		if !ok {
@@ -1003,6 +1013,7 @@ func ResolveTimeRatioView(usingGroup, modelName string, at time.Time, res RatioR
 		// win 是编译后的窗口：Start/End/Days 已被清空，时段信息只在 Segments 里。
 		// 单段时回填旧字段，多段只能靠 Segments 表达。
 		segs := append([]TimeSegment(nil), win.Segments...)
+		allSegs = append(allSegs, segs...)
 		wv := TimeWindowView{
 			Label:                win.displayName(rule.Window),
 			Segments:             segs,
@@ -1012,6 +1023,13 @@ func ResolveTimeRatioView(usingGroup, modelName string, at time.Time, res RatioR
 			InputDirectoryRatio:  base * inFactor,
 			OutputDirectoryRatio: base * outFactor,
 			DiscountRatio:        discountRatio,
+		}
+		// 补集窗口（compileWindows 保留了 ExcludeOf）：把「除「X」以外」
+		// 的参照名解析出来，前端据此渲染单行而不是铺开展开后的多段。
+		if refKey := strings.TrimSpace(win.ExcludeOf); refKey != "" {
+			if ref, ok := windows[refKey]; ok {
+				wv.ComplementOf = ref.displayName(refKey)
+			}
 		}
 		if len(segs) == 1 {
 			wv.Start, wv.End, wv.Days = segs[0].Start, segs[0].End, segs[0].Days
@@ -1065,6 +1083,16 @@ func ResolveTimeRatioView(usingGroup, modelName string, at time.Time, res RatioR
 	view.OutputDirectoryRatio = base * outFactor
 	view.DiscountRatio = discountRatio
 	view.EffectiveCompletionRatio = modelCompletionRatio * (outFactor / inFactor)
+	// 「其余时段」是否还有适用时间：已配规则的窗口并集若覆盖整周，
+	// 常规价永远不会命中，那一行就是死信息。complementSegments 求出的
+	// 正是「这些段之外的全部时间」，为空即全覆盖；算不出来时保守地保留
+	// 该行（宁可多显示一行，也不能让用户看不到常规价的存在）。
+	view.NormalApplies = true
+	if len(allSegs) > 0 {
+		if free, err := complementSegments(allSegs); err == nil && len(free) == 0 {
+			view.NormalApplies = false
+		}
+	}
 	if !until.IsZero() {
 		view.Until = until.Format(time.RFC3339)
 	}
@@ -1143,9 +1171,10 @@ func compileWindows(windows map[string]TimeWindow) (map[string]TimeWindow, error
 			return nil, fmt.Errorf("window %q: %w", key, err)
 		}
 		out[key] = TimeWindow{
-			Label:    win.Label,
-			TZ:       win.TZ,
-			Segments: segs,
+			Label:     win.Label,
+			TZ:        win.TZ,
+			Segments:  segs,
+			ExcludeOf: win.ExcludeOf, // 展示层要还原「除「X」以外」的写法
 		}
 	}
 	return out, nil

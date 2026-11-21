@@ -226,4 +226,70 @@ describe('buildTimeWindowRows', () => {
     });
     expect(rows.every((r) => r.group === 'default')).toBe(true);
   });
+
+  // 补集窗口（「其余时间」）展开后的多段只是实现细节：用户配的是
+  // 「空闲 = 除高峰以外」，展示就该是一行参照描述，而不是把补集
+  // 铺成「周末全天 + 工作日三个碎段」。
+  it('补集窗口渲染为「除「X」以外」，不铺开展开段', () => {
+    const rows = build({
+      active: false,
+      best_ratio: 0.25,
+      normal_ratio: 0.5,
+      normal_applies: false,
+      windows: [
+        {
+          label: '高峰时段',
+          segments: [
+            { start: '09:00', end: '12:00', days: [1, 2, 3, 4, 5] },
+            { start: '14:00', end: '18:00', days: [1, 2, 3, 4, 5] },
+          ],
+          ratio: 0.5,
+          active: false,
+        },
+        {
+          label: '空闲时段',
+          complement_of: '高峰时段',
+          segments: [
+            { start: '00:00', end: '09:00', days: [1, 2, 3, 4, 5] },
+            { start: '12:00', end: '14:00', days: [1, 2, 3, 4, 5] },
+            { start: '18:00', end: '24:00', days: [1, 2, 3, 4, 5] },
+            { start: '00:00', end: '24:00', days: [0, 6] },
+          ],
+          ratio: 0.25,
+          active: true,
+        },
+      ],
+    });
+    expect(rows.map((r) => r.range)).toEqual([
+      '高峰时段 工作日 09:00-12:00、14:00-18:00',
+      '空闲时段 除「高峰时段」以外',
+    ]);
+  });
+
+  // 高峰+空闲并集覆盖整周时，「其余时段」永远不会命中——死行不展示。
+  // 反之只配补集规则时被排除的时段落在常规价上，那行必须留着。
+  it('normal_applies=false 时省略「其余时段」行，缺省字段仍保留', () => {
+    const fullCoverage = {
+      active: false,
+      best_ratio: 0.5,
+      normal_ratio: 0.35,
+      normal_applies: false,
+      windows: [
+        {
+          label: '全天档',
+          start: '00:00',
+          end: '24:00',
+          ratio: 0.5,
+          active: true,
+        },
+      ],
+    };
+    expect(build(fullCoverage)).toHaveLength(1);
+
+    // 旧后端不下发 normal_applies：按「可能未覆盖」处理，行照旧出现
+    const legacy = { ...fullCoverage };
+    delete legacy.normal_applies;
+    expect(build(legacy)).toHaveLength(2);
+    expect(build(legacy)[1].label).toBe('其余时段');
+  });
 });

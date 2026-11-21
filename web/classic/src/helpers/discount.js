@@ -126,6 +126,11 @@ const windowSegments = (win) => {
  * 让用户把周六的时段读成工作日的。
  */
 export const formatWindowSegments = (win) => {
+  // 补集窗口（「其余时间」）：后端把它展开成的多段只是「除 X 以外」的
+  // 实现细节，渲染出来既长又读不出配置意图，统一收成一行参照描述。
+  if (win?.complement_of) {
+    return `除「${win.complement_of}」以外`;
+  }
   const segs = windowSegments(win);
   if (segs.length === 0) return '';
   const dayKey = (s) =>
@@ -210,7 +215,13 @@ export const buildTimeWindowRows = ({
     // 「其余时段」这一行是必须的：只列配了规则的时段，表里两行 5 折，其余时间是
     // 3.5 折还是 8 折用户完全看不出来，也就说不出自己此刻按哪一档付钱。
     // 没有任何窗口生效时它就是当前档。
-    if (Number.isFinite(Number(entry.normal_ratio))) {
+    // 例外：后端判定已配窗口并集覆盖整周（normal_applies=false）时常规价
+    // 永远不会命中，那一行是死信息——高峰+空闲这种「两个时段组成全集」的
+    // 配置下用户只想看到自己配的两档。字段缺省（旧后端）按 true 处理。
+    if (
+      Number.isFinite(Number(entry.normal_ratio)) &&
+      entry.normal_applies !== false
+    ) {
       rows.push({
         key: `${group}-normal`,
         group,

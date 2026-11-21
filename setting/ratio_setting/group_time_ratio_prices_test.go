@@ -102,3 +102,58 @@ func TestResolveTimeRatioView_PricesFormatNonZero(t *testing.T) {
 
 	seedTimeRatio(t, `{}`)
 }
+
+// 「空闲时段 = 除高峰以外」这类补集配置在广场上必须收成一行「除「X」以外」，
+// 且高峰∪空闲并集覆盖整周时「其余时段」是死行、应标 NormalApplies=false。
+// 反过来只配补集规则时，被排除的时段落在常规价上，那行必须保留。
+func TestResolveTimeRatioView_ComplementAndCoverage(t *testing.T) {
+	seedRatios(t, `{"default":1}`, `{}`, `{}`)
+	require.NoError(t, UpdateModelRatioByJSONString(`{"m": 2}`))
+	require.NoError(t, UpdateCompletionRatioByJSONString(`{"m": 4}`))
+	windows := `"peak":{"label":"高峰时段","segments":[
+		{"start":"09:00","end":"12:00","days":[1,2,3,4,5]},
+		{"start":"14:00","end":"18:00","days":[1,2,3,4,5]}]},
+	"off":{"label":"空闲时段","exclude_of":"peak"}`
+
+	seedTimeRatio(t, `{
+		"windows": {`+windows+`},
+		"rules": {"*": {"m": [
+			{"window":"peak","prices":{"input":1,"output":4}},
+			{"window":"off", "prices":{"input":0.5,"output":2}}
+		]}}
+	}`)
+	atPeak := at(t, 1, 10, 0) // 周一 10 点，高峰时段
+	res := ResolveGroupRatioAt("default", "default", "m", atPeak)
+	view, ok := ResolveTimeRatioView("default", "m", atPeak, res)
+	require.True(t, ok)
+	require.Len(t, view.Windows, 2)
+
+	var off *TimeWindowView
+	for i := range view.Windows {
+		w := &view.Windows[i]
+		if w.Label == "高峰时段" {
+			require.Empty(t, w.ComplementOf)
+		}
+		if w.Label == "空闲时段" {
+			off = w
+		}
+	}
+	require.NotNil(t, off)
+	require.Equal(t, "高峰时段", off.ComplementOf, "补集窗口要带出参照名，前端渲染「除「X」以外」")
+	require.False(t, view.NormalApplies, "高峰∪空闲覆盖整周，其余时段永不命中")
+
+	// 只给模型配补集规则：被排除的高峰时段落在常规价上，
+	// 「其余时段」此时是唯一说明那段时间价格的行，必须保留。
+	seedTimeRatio(t, `{
+		"windows": {`+windows+`},
+		"rules": {"*": {"m": [{"window":"off","prices":{"input":0.5,"output":2}}]}}
+	}`)
+	res2 := ResolveGroupRatioAt("default", "default", "m", atPeak)
+	view2, ok2 := ResolveTimeRatioView("default", "m", atPeak, res2)
+	require.True(t, ok2)
+	require.Len(t, view2.Windows, 1)
+	require.Equal(t, "高峰时段", view2.Windows[0].ComplementOf)
+	require.True(t, view2.NormalApplies, "高峰时段落在常规价上，其余时段行必须保留")
+
+	seedTimeRatio(t, `{}`)
+}
