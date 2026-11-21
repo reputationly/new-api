@@ -88,6 +88,7 @@ var singleCallWriting string
 //
 // 它和 rules.txt 的关系是"覆盖而非替换":rules.txt 讲怎么写计划,这份只写
 // 实测会写错的九条。上游改 v20 时**不需要**同步这份。
+//
 //go:embed h3v20/appendix.txt
 var singleCallAppendix string
 
@@ -339,7 +340,24 @@ func compileViaSingleCall(
 			map[string]any{"role": "user", "content": buildSingleCallRepair(lastErrs)},
 		)
 	}
-	return nil, fmt.Errorf("传输检查未通过: %s", strings.Join(lastErrs, "; "))
+	// 附上模型的原始回答片段。没有它,线上只能看到"镜头时间不规范"这种
+	// 结论、看不到它到底写成了什么形状 —— 而修法(补提示词例子 / 放宽解析 /
+	// 换档位)完全取决于那个形状。400 字够看出结构,又不会把库撑大。
+	return nil, fmt.Errorf("传输检查未通过: %s%s", strings.Join(lastErrs, "; "), rawReplySnippet(lastRaw))
+}
+
+// rawReplySnippet 把模型原始回答压成一行,附在失败原因后面便于复现。
+func rawReplySnippet(raw string) string {
+	s := strings.Join(strings.Fields(strings.TrimSpace(raw)), " ")
+	if s == "" {
+		return ""
+	}
+	const maxRunes = 400
+	r := []rune(s)
+	if len(r) > maxRunes {
+		s = string(r[:maxRunes]) + "…"
+	}
+	return " | raw: " + s
 }
 
 // buildSingleCallRepair 重修指令。逐字对齐上游 compile_once 里那句。
