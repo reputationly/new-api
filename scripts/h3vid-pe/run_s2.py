@@ -27,10 +27,6 @@ MODEL = "qwen3.8-flash-fp8"
 MAXTOK = int(os.environ.get("MAXTOK", "0") or 0)
 EFF = os.environ.get("EFF", "") not in ("", "0")
 TAG = os.environ.get("TAG", "")
-# NORF=1 不发 response_format —— 生产已经不发（qwen3.8 + json_object 会被 xgrammar 拒成 500）
-NORF = os.environ.get("NORF", "") not in ("", "0")
-# NOVIDEO=1 参考视频不发给模型（生产 plan C），证据里只留 <Video N> 标签 + observable:false
-NOVIDEO = os.environ.get("NOVIDEO", "") not in ("", "0")
 
 def eff_seconds(sec):
     n = max(1, round(sec * 24))
@@ -42,17 +38,12 @@ def system(c):
     assets, cnt = [], {}
     names = {"image": "Picture", "video": "Video", "audio": "Audio"}
     role_map = {"first_frame": "first_frame", "last_frame": "last_frame"}
-    has_video = any(k == "video" for k, _, _ in c["media"])
     for kind, src, role in c["media"]:
+        if kind == "audio":      # 现网不把音频编进 CompilerInput
+            continue
         cnt[kind] = cnt.get(kind, 0) + 1
-        a = {"asset_id": f"{kind}_{cnt[kind]}", "media_type": kind,
-             "role": role_map.get(role, "reference"), "official_label": f"<{names[kind]} {cnt[kind]}>",
-             "observable": (kind == "image")}
-        # 与 Go 侧一致:有参考视频时音频不写死编号(引擎会给视频音轨先占一个槽)
-        if kind == "audio" and has_video:
-            a["official_label"] = ""
-            a["label_unknown"] = True
-        assets.append(a)
+        assets.append({"asset_id": f"{kind}_{cnt[kind]}", "media_type": kind,
+                       "role": role_map.get(role, "reference"), "official_label": f"<{names[kind]} {cnt[kind]}>"})
     task = {"type": c["task"], "duration_seconds": float(c["dur"]), "generate_audio": True}
     if EFF:
         task["effective_duration_seconds"] = eff_seconds(c["dur"])
@@ -67,16 +58,11 @@ def user(c):
     parts = [{"type": "text", "text": c["prompt"]}]
     for kind, src, role in c["media"]:
         if kind == "image": parts.append({"type": "image_url", "image_url": {"url": vcases.src_url(src)}})
-        if kind == "video":
-            if NOVIDEO:
-                continue
-            parts.append({"type": "video_url", "video_url": {"url": src}})
+        if kind == "video": parts.append({"type": "video_url", "video_url": {"url": src}})
     return parts if len(parts) > 1 else c["prompt"]
 
 def kw():
-    k = {}
-    if not NORF:
-        k["response_format"] = {"type": "json_object"}
+    k = {"response_format": {"type": "json_object"}}
     if MAXTOK:
         k["max_tokens"] = MAXTOK
     if cfg == "none":

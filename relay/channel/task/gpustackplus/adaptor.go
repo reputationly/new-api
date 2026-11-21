@@ -235,8 +235,12 @@ func (a *TaskAdaptor) ValidateRequestAndSetAction(c *gin.Context, info *relaycom
 // 见 relay/channel/task/kling/adaptor.go:184。只认图片 action 白名单,
 // 避免别处塞进来的任意字符串污染这一列。
 func taskActionOf(c *gin.Context) string {
-	if a := c.GetString("action"); constant.IsImageTaskAction(a) {
-		return a
+	if a := c.GetString("action"); a != "" {
+		// 图片任务(异步生图)与续写各有自己的 action：前者决定查询端点回哪种对象，
+		// 后者让任务列表/日志能把"基于已有视频的续写"与普通生成分开。
+		if constant.IsImageTaskAction(a) || a == constant.TaskActionContinuation {
+			return a
+		}
 	}
 	return constant.TaskActionGenerate
 }
@@ -427,6 +431,12 @@ func (a *TaskAdaptor) BuildRequestBody(c *gin.Context, info *relaycommon.RelayIn
 	}
 	if taskType == "flf2v" && len(req.Images) < 2 {
 		return nil, localBadRequest(fmt.Errorf("模型 %s 的任务类型 flf2v(首尾帧)需要首帧和尾帧两张图:请提供 images=[首帧,尾帧]", modelName))
+	}
+	// 反向:`flf2v` 只消费 images[0]/images[1],第 3 张起会被静默丢弃;而引擎侧
+	// frame_indices 的元素个数必须与图片数相等([0,-1] 只对两张),多给会让门面与
+	// 引擎对不上。与 i2v/l2va/s2v 的同类防呆保持一致:400,不静默降级。
+	if taskType == "flf2v" && len(req.Images) > 2 {
+		return nil, localBadRequest(fmt.Errorf("模型 %s 的任务类型 flf2v(首尾帧)只接受首帧和尾帧两张图,收到 %d 张", modelName, len(req.Images)))
 	}
 	// 反向防呆:i2v 只物化 images[0](materializeVideoInputs 仅在 flf2v 分支读 images[1]),
 	// 多传的尾帧会被静默丢弃 —— 引擎侧同样如此(I2VInputInfo 没有 last_frame_path 字段,
@@ -938,6 +948,17 @@ func taskTypeOfRequest(req *relaycommon.TaskSubmitReq, inferName string, configN
 	if v, ok := req.Metadata["task_type"].(string); ok && strings.TrimSpace(v) != "" {
 		return strings.TrimSpace(v), nil
 	}
+	// 1.5 玩法声明(MiniMax Design / 官方口径):metadata.image_mode。
+	//
+	// 客户端按"生成方式"表达玩法,而不是按我们门面的 task_type 词表。与 task_type
+	// 同时给时以 task_type 为准(上面已 return)—— 显式声明永远优先,不在这里猜。
+	//
+	// 放在解析链的这一级而不是适配器内部另起一条:它是**声明**,与 task_type 同义,
+	// 必须让校验阶段(ValidateRequestAndSetAction 的白名单/时长校验)也看到同一个答案,
+	// 否则两处会按不同的 task_type 判。
+	if v, ok := req.Metadata["image_mode"].(string); ok && strings.TrimSpace(v) != "" {
+		return taskTypeFromImageMode(v, req)
+	}
 	// 2/4. 体验区配置声明的候选集。
 	cands := common.PlaygroundTaskTypeCandidates(configNames...)
 	if len(cands) == 0 {
@@ -985,6 +1006,36 @@ func taskTypeOfRequest(req *relaycommon.TaskSubmitReq, inferName string, configN
 	return "", fmt.Errorf(
 		"模型 %s 同时服务多种玩法(%s),本次请求的输入形态无法判定是哪一种:请在 metadata.task_type 里显式指定",
 		firstNonEmpty(configNames...), strings.Join(ambiguous, "/"))
+}
+
+// taskTypeFromImageMode 把官方口径的"生成方式"(metadata.image_mode)翻成门面 task_type。
+//
+// 取值来自 MiniMax Design 的模型契约(image_mode: text-to-video / first-last-frame /
+// reference / video-extension),客户端只认这四个词;门面认的是 t2v / i2v / flf2v / r2va。
+// 两套词表必须在这里收口,否则客户端要么被迫背我们的 task_type,要么各渠道各写一套。
+//
+// first-last-frame 按**张数**再分岔:官方把"两张=首尾帧、一张=首帧"都叫这个 mode,
+// 而门面的 frame_indices 不同([0,-1] vs [0])—— 多传/少传都得能拦下,所以拆成两个
+// task_type,而不是塞给引擎让它静默丢帧。
+//
+// video-extension(续写)在 M3 上线前显式报错:它需要源视频预处理 + 拼接,不是一条
+// task_type 能表达的,提前给可照做的错,好过让调用方以为是参数问题。
+func taskTypeFromImageMode(raw string, req *relaycommon.TaskSubmitReq) (string, error) {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "text-to-video", "t2v":
+		return "t2v", nil
+	case "first-last-frame", "flf2v":
+		if len(req.FrameImages()) >= 2 {
+			return "flf2v", nil
+		}
+		return "i2v", nil
+	case "reference", "r2va", "ref2va":
+		return "r2va", nil
+	case "video-extension", "continuation":
+		return "", fmt.Errorf("image_mode=video-extension(视频续写)尚未上线:续写需要源视频预处理(抽尾帧)与成品拼接,见 docs/video-multimodal-plan.md 的 M3")
+	default:
+		return "", fmt.Errorf("不支持的 image_mode: %q(允许:text-to-video / first-last-frame / reference / video-extension)", raw)
+	}
 }
 
 // InferTaskType 把名字推断导出给同步 Adaptor 的报错提示复用(见

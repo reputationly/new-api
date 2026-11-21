@@ -560,6 +560,16 @@ func updateVideoSingleTask(ctx context.Context, adaptor TaskPollingAdaptor, ch *
 			// 回去会被客户端渲染成"重新开始了"。
 			break
 		}
+		// 续写(video-extension):生成段完成 → 与源片拼成整段再落盘。
+		//
+		// 放在落盘之前：落的是**最终交付物**，不能先把生成段交付出去再换。
+		// 拼接失败不判失败，降级交付生成段(原因记进 Properties.Continuation)——
+		// 生成段已经烧了 GPU，丢掉它等于让客户既没片子又要等退款。
+		if task.Properties.Continuation != nil && !task.Properties.Continuation.ConcatDone {
+			if merged, ok := TryConcatContinuation(ctx, task, taskResult.NFSPath); ok && merged != "" {
+				taskResult.NFSPath = merged
+			}
+		}
 		task.Progress = taskcommon.ProgressComplete
 		if task.FinishTime == 0 {
 			task.FinishTime = now
@@ -650,6 +660,16 @@ func updateVideoSingleTask(ctx context.Context, adaptor TaskPollingAdaptor, ch *
 	case model.TaskStatusFailure:
 		logger.LogJson(ctx, fmt.Sprintf("Task %s failed", taskId), task)
 		task.Status = model.TaskStatusFailure
+		// 续写(video-extension):生成段完成 → 与源片拼成整段再落盘。
+		//
+		// 放在落盘之前：落的是**最终交付物**，不能先把生成段交付出去再换。
+		// 拼接失败不判失败，降级交付生成段(原因记进 Properties.Continuation)——
+		// 生成段已经烧了 GPU，丢掉它等于让客户既没片子又要等退款。
+		if task.Properties.Continuation != nil && !task.Properties.Continuation.ConcatDone {
+			if merged, ok := TryConcatContinuation(ctx, task, taskResult.NFSPath); ok && merged != "" {
+				taskResult.NFSPath = merged
+			}
+		}
 		task.Progress = taskcommon.ProgressComplete
 		if task.FinishTime == 0 {
 			task.FinishTime = now

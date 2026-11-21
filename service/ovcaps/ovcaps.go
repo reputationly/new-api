@@ -69,6 +69,47 @@ type Limits struct {
 	MaxInputBytes      int64 `json:"maxInputBytes"`
 }
 
+// MediaRefRule 某一类参考素材的数量区间。0/0 = 这个玩法不吃这类素材。
+type MediaRefRule struct {
+	Min int `json:"min"`
+	Max int `json:"max"`
+}
+
+// ModeReferences 一个玩法的参考素材规则。
+type ModeReferences struct {
+	Image MediaRefRule `json:"image"`
+	Video MediaRefRule `json:"video"`
+	Audio MediaRefRule `json:"audio"`
+}
+
+// Mode 一个"玩法"：客户端按它决定填哪些参考、发哪个 task_type。
+//
+// 为什么要单独列出来：同一个模型名下面的玩法，输入契约完全不同（首尾帧只吃 2 张图、
+// 参考族能吃 9 图 + 3 视频 + 3 音频、续写只吃 1 段视频）。只看顶层 `limits` 的
+// `maxReferenceImages`，客户端会把 9 张图塞进首尾帧，请求到引擎才 400 —— 错误来自
+// 上游，文案与"你选错了玩法"毫无关联。
+type Mode struct {
+	// ID 玩法标识，也是提交时 metadata.image_mode 的取值。
+	ID    string    `json:"id"`
+	Label Localized `json:"label"`
+	// TaskType 显式提交时 metadata.task_type 的取值（等价写法，二选一）。
+	TaskType string `json:"taskType"`
+	// TaskTypeIfSingleImage 首尾帧专用：只给 1 张图时其实要走 i2v —— 客户端不必自己
+	// 背这条规则，也不必为"一张图算不算首尾帧"去猜。
+	TaskTypeIfSingleImage string         `json:"taskTypeIfSingleImage,omitempty"`
+	References            ModeReferences `json:"references"`
+	// RequiresSourceVideo 续写专用：必须给 metadata.source_video（URL / data: / task:<id>）。
+	RequiresSourceVideo bool `json:"requiresSourceVideo,omitempty"`
+	// Note 给客户端看的补充说明（如续写的 duration 语义）。
+	Note Localized `json:"note,omitempty"`
+}
+
+// DeliveryDurations 这个能力**实际能交付**的秒数（不是请求秒数）。
+//
+// 带帧栅格的引擎族（H3，17n+5 @24fps）请求 1 s 交付 1.625 s，客户端拿它做进度条与
+// 时长展示，比"按请求值猜"准确；不带栅格的模型为空（等价于按请求值交付）。
+type DeliveryDurations []float64
+
 // Capability 目录里的一条。
 type Capability struct {
 	// ID 客户端提交任务时用的能力标识：`<operation>:<model>`。
@@ -85,6 +126,11 @@ type Capability struct {
 	// ParamSchema 参数表，JSON Schema 的最小子集（type/properties/enum/default/title）。
 	ParamSchema map[string]any `json:"paramSchema,omitempty"`
 	Limits      Limits         `json:"limits"`
+	// Modes 这个能力的玩法列表（只有视频类、且目录声明了 image_mode 的才有）。
+	// 为空表示"单一玩法"：按顶层 limits 与 taskTypes 提交即可。
+	Modes []Mode `json:"modes,omitempty"`
+	// DeliveryDurations 实际可交付的时长阶梯（见类型注释）。
+	DeliveryDurations DeliveryDurations `json:"deliveryDurations,omitempty"`
 	// Default 是不是这个操作下的默认模型。同一操作最多一条为 true。
 	Default bool `json:"default"`
 }
@@ -318,15 +364,17 @@ func fromCatalogEntry(entry setting.HiloCatalogEntry, platformModel, group strin
 		probe = agg.Generate.Model
 	}
 	return Capability{
-		ID:          capabilityID(operation, platformModel),
-		Operation:   operation,
-		Model:       platformModel,
-		DisplayName: Localized{Zh: display, En: display},
-		Description: Localized{Zh: entry.Model.Description, En: entry.Model.Description},
-		Transport:   Transport{Kind: transport},
-		TaskTypes:   taskTypesOf(probe),
-		ParamSchema: paramSchema(entry.Model.Params),
-		Limits:      limitsOf(&entry.Model, probe, transport),
+		ID:                capabilityID(operation, platformModel),
+		Operation:         operation,
+		Model:             platformModel,
+		DisplayName:       Localized{Zh: display, En: display},
+		Description:       Localized{Zh: entry.Model.Description, En: entry.Model.Description},
+		Transport:         Transport{Kind: transport},
+		TaskTypes:         taskTypesOf(probe),
+		ParamSchema:       paramSchema(entry.Model.Params),
+		Limits:            limitsOf(&entry.Model, probe, transport),
+		Modes:             modesOf(entry, probe, transport),
+		DeliveryDurations: deliveryDurationsOf(probe, entry),
 	}, true
 }
 
