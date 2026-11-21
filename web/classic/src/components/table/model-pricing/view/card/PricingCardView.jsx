@@ -378,20 +378,21 @@ const PricingCardView = ({
                           整条横条（子项默认 stretch）。这里只做"一排价格"末尾的小胶囊，
                           视觉重量低于价格本身。
                         */}
+                        {/*
+                          积分抵扣做成"脚注"而不是色块：一行浅蓝小字，视觉重量低于价格。
+                          它是模型级信息，所以只出现一次，不跟着价格行数变化。
+                        */}
                         {hasPointDeduction(priceData) ? (
-                          <span className='self-start'>
-                            <Tooltip
-                              content={t('可用积分抵扣，实际消耗以账单为准')}
+                          <Tooltip
+                            content={t('可用积分抵扣，实际消耗以账单为准')}
+                          >
+                            <span
+                              className='self-start text-xs leading-4'
+                              style={{ color: 'var(--semi-color-primary)' }}
                             >
-                              <Tag
-                                color='light-blue'
-                                shape='circle'
-                                size='small'
-                              >
-                                {t('积分抵扣')}
-                              </Tag>
-                            </Tooltip>
-                          </span>
+                              · {t('可用积分抵扣')}
+                            </span>
+                          </Tooltip>
                         ) : null}
                       </div>
                     </div>

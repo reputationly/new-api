@@ -424,11 +424,15 @@ export const getPricingTableColumns = ({
               </div>
             );
           })}
+          {/* 与卡片视图同款：脚注式浅蓝小字，不用色块 */}
           {hasPointDeduction(priceData) ? (
             <Tooltip content={t('可用积分抵扣，实际消耗以账单为准')}>
-              <Tag color='light-blue' shape='circle' size='small'>
-                {t('积分抵扣')}
-              </Tag>
+              <div
+                className='text-xs leading-4'
+                style={{ color: 'var(--semi-color-primary)' }}
+              >
+                · {t('可用积分抵扣')}
+              </div>
             </Tooltip>
           ) : null}
         </div>
