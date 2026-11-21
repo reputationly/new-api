@@ -68,6 +68,10 @@ func appendTimeRule(other map[string]interface{}, info types.GroupRatioInfo) {
 		return
 	}
 	other["time_rule"] = info.TimeRuleLog()
+	// 分量系数表随日志下发：前端要把「基础价 × 0.25」改写成
+	// 「该时段目录价 × 常规倍率」才讲得通——group_ratio 本身已含 input
+	// 系数，只发 time_rule 字符串的话前端拿不到 output/cache 各自的系数。
+	other["time_factors"] = info.TimeFactors
 }
 
 func GenerateTextOtherInfo(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, modelRatio, groupRatio, completionRatio float64,
