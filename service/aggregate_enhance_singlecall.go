@@ -295,7 +295,10 @@ func compileViaSingleCall(
 			return nil, err
 		}
 		if strings.TrimSpace(raw) == "" {
-			return nil, fmt.Errorf("编译返回空内容")
+			// 空正文 + usage 一起报。只有"空"这一个词的话线上没法判断是
+			// 模型什么都没说、还是思考把 max_tokens 吃光(正文被挤掉) ——
+			// 两种的修法完全不同(换档位 vs 提 max_output_tokens)。
+			return nil, fmt.Errorf("编译返回空内容%s", usageSnippet(usage, total))
 		}
 		lastRaw = raw
 
@@ -344,6 +347,23 @@ func compileViaSingleCall(
 	// 结论、看不到它到底写成了什么形状 —— 而修法(补提示词例子 / 放宽解析 /
 	// 换档位)完全取决于那个形状。400 字够看出结构,又不会把库撑大。
 	return nil, fmt.Errorf("传输检查未通过: %s%s", strings.Join(lastErrs, "; "), rawReplySnippet(lastRaw))
+}
+
+// usageSnippet 把本轮与累计的 token 用量压成一段,附在失败原因后面。
+//
+// 判断"正文被思考挤空"看 completion_tokens 就够:它包含思考 tokens,
+// 贴近 max_tokens 上限而正文为空,基本可以断定是预算问题而不是模型行为。
+func usageSnippet(round, total *dto.Usage) string {
+	if round == nil && total == nil {
+		return ""
+	}
+	part := func(u *dto.Usage) string {
+		if u == nil {
+			return "?"
+		}
+		return fmt.Sprintf("prompt=%d completion=%d total=%d", u.PromptTokens, u.CompletionTokens, u.TotalTokens)
+	}
+	return fmt.Sprintf(" | usage: round{%s} total{%s}", part(round), part(total))
 }
 
 // rawReplySnippet 把模型原始回答压成一行,附在失败原因后面便于复现。
