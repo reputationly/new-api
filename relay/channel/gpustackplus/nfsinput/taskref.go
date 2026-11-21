@@ -263,3 +263,15 @@ func effectiveSizeLimit(maxBytes int64) int64 {
 	}
 	return limit
 }
+
+// FetchURLBytes 把 http(s) URL 抓成字节，走与输入物化同一套 SSRF / 域名白名单校验。
+//
+// 导出它是为了让 service 层的本地预处理（如续写的源视频下载）复用同一条下载路径，
+// 而不是各自 new 一个 http.Client —— 那样每多一处就多一个绕过 SSRF 配置的入口。
+func FetchURLBytes(ctx context.Context, rawURL string, capBytes int64) ([]byte, error) {
+	var trusted []string
+	if h := mediastore.OwnOBSHost(); h != "" {
+		trusted = append(trusted, h)
+	}
+	return downloadURL(ctx, rawURL, capBytes, trusted...)
+}

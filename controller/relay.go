@@ -713,6 +713,14 @@ func RelayTask(c *gin.Context) {
 		}
 
 		task := model.InitTask(result.Platform, relayInfo)
+		// H3 时长快照:请求秒数 → 交付秒数(17n+5 帧栅格)。响应回显与对账都靠它,
+		// 只在 H3 引擎族上写,非 H3 是 no-op。
+		relay.ApplyH3DurationSnapshot(c, relayInfo, task)
+		// 续写快照：源片时长 / 生成段秒数 / 客户要的总时长。轮询期没有请求体，
+		// 回显与对账只能靠这份冻结值。非续写请求是 nil。
+		if snap := middleware.GetContinuationSnapshot(c); snap != nil {
+			task.Properties.Continuation = snap
+		}
 		// MiniMax v2 兼容层的回显 / 用量快照。这些值只存在于提交请求里，而查询发生在
 		// 几百秒后的轮询之后，那时请求体早已不在。非 v2 端点提交的任务是 no-op。
 		minimaxv2.ApplyTaskSnapshot(c, task)
@@ -811,11 +819,12 @@ func freezeVideoBilling(relayInfo *relaycommon.RelayInfo) *model.TaskVideoBillin
 	}
 	v := relayInfo.VideoBilling
 	return &model.TaskVideoBilling{
-		Mode:          v.Mode,
-		UnitPrice:     v.UnitPrice,
-		Resolution:    v.Resolution,
-		Seconds:       v.Seconds,
-		HasVideoInput: v.HasVideoInput,
+		Mode:             v.Mode,
+		UnitPrice:        v.UnitPrice,
+		Resolution:       v.Resolution,
+		Seconds:          v.Seconds,
+		HasVideoInput:    v.HasVideoInput,
+		DeliveredSeconds: v.DeliveredSeconds,
 	}
 }
 
