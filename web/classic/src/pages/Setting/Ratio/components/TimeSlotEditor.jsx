@@ -219,13 +219,39 @@ const TimeSlotEditor = ({ value, onChange }) => {
                     onChange={(v) => updateSlot(slot.key, { label: v })}
                   />
                 </Space>
-                <Button
-                  size='small'
-                  type='danger'
-                  theme='borderless'
-                  icon={<IconDelete />}
-                  onClick={() => removeSlot(slot.key)}
-                />
+                <Space>
+                  {/* 顶层快捷开关：一次把本时段的**所有段**设成同一种生效日。
+                      官方口径的"工作日 09-12 + 14-18"就是这种形状，先选工作日再填两段，
+                      比每段各点一次省事，也不会出现两段生效日不一致的低级错。 */}
+                  <Select
+                    size='small'
+                    style={{ width: 110 }}
+                    placeholder={t('生效日')}
+                    value={undefined}
+                    disabled={isExclude}
+                    optionList={DAY_PRESETS.map((d) => ({
+                      value: d.key,
+                      label: d.label,
+                    }))}
+                    onChange={(v) => {
+                      const p = DAY_PRESETS.find((x) => x.key === v);
+                      if (!p) return;
+                      updateSlot(slot.key, {
+                        segments: slot.segments.map((seg) => ({
+                          ...seg,
+                          days: p.days,
+                        })),
+                      });
+                    }}
+                  />
+                  <Button
+                    size='small'
+                    type='danger'
+                    theme='borderless'
+                    icon={<IconDelete />}
+                    onClick={() => removeSlot(slot.key)}
+                  />
+                </Space>
               </div>
 
               <Space
