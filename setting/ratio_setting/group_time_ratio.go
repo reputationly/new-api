@@ -55,12 +55,80 @@ const globalTimeRatioScope = "*"
 //
 // Start/End 为 "HH:MM"。Start > End 表示跨午夜（如 22:00→06:00）。
 // Days 为空表示每天；否则是 time.Weekday 取值（0=周日）的集合。
-type TimeWindow struct {
-	Label string `json:"label,omitempty"`
+// TimeSegment 是时段里的**一个连续区间**：「工作日 09:00-12:00」就是一段。
+type TimeSegment struct {
 	Start string `json:"start"`
 	End   string `json:"end"`
 	Days  []int  `json:"days,omitempty"`
+}
+
+// TimeWindow 是一个**时段**（官方口径里的「高峰时段」「空闲时段」）。
+//
+// 一个时段可以含**多个不连续区间**：官方的高峰时段 = 工作日 09-12 + 工作日 14-18，
+// 就是两段。所以 Segments 是权威字段，Start/End/Days 只作为单段的历史格式读入时归一。
+//
+// ExcludeOf 表达**补集**：「本时段 = 除 ExcludeOf 指向的时段以外的所有时间」。
+// 这正是「空闲时段」的定义（高峰之外），也避免了让运营手工铺 3 段还容易漏。
+// 它只在存储/编辑层存在：解析前会展开成显式 Segments（compileWindows），
+// 所以 pickTimeRule / 视图这些热路径拿到的永远是普通多段，没有补集分支。
+type TimeWindow struct {
+	Label string `json:"label,omitempty"`
+	// 历史格式：单段。读入时归一到 Segments；写回不再产生。
+	Start string `json:"start,omitempty"`
+	End   string `json:"end,omitempty"`
+	Days  []int  `json:"days,omitempty"`
 	TZ    string `json:"tz,omitempty"`
+	// Segments 是该时段的全部区间（不连续时段就放多段）。
+	Segments []TimeSegment `json:"segments,omitempty"`
+	// ExcludeOf 非空表示「其余时间」：本时段 = 目标时段之外的全部时间。
+	ExcludeOf string `json:"exclude_of,omitempty"`
+}
+
+// normalizedSegments 返回该时段的显式区间列表（把历史单段格式也算进来）。
+func (w TimeWindow) normalizedSegments() []TimeSegment {
+	if len(w.Segments) > 0 {
+		return w.Segments
+	}
+	if strings.TrimSpace(w.Start) == "" || strings.TrimSpace(w.End) == "" {
+		return nil
+	}
+	return []TimeSegment{{Start: w.Start, End: w.End, Days: w.Days}}
+}
+
+// ActiveAtSegment 判断单个区间在 at 时刻是否生效（跨午夜按起始日判定）。
+func segmentActive(seg TimeSegment, loc *time.Location, at time.Time) bool {
+	startMin, err := parseClock(seg.Start)
+	if err != nil {
+		return false
+	}
+	endMin, err := parseClockAllowEndOfDay(seg.End)
+	if err != nil {
+		return false
+	}
+	local := at.In(loc)
+	cur := local.Hour()*60 + local.Minute()
+	dayOK := func(d time.Weekday) bool {
+		if len(seg.Days) == 0 {
+			return true
+		}
+		for _, v := range seg.Days {
+			if v == int(d) {
+				return true
+			}
+		}
+		return false
+	}
+	if startMin < endMin {
+		return cur >= startMin && cur < endMin && dayOK(local.Weekday())
+	}
+	// 跨午夜
+	if cur >= startMin {
+		return dayOK(local.Weekday())
+	}
+	if cur < endMin {
+		return dayOK(local.AddDate(0, 0, -1).Weekday())
+	}
+	return false
 }
 
 // TimeRule 是「某模型在某时段的价目系数」。Window 指向 TimeWindow 的键。
@@ -258,6 +326,9 @@ var (
 		Windows: map[string]TimeWindow{},
 		Rules:   map[string]map[string][]TimeRule{},
 	}
+	// compiledWindows 是 Windows 的**展开版**（补集已在加载时解开）。
+	// 解析/展示/校验都读它，所以热路径上不存在"补集"这个分支。
+	compiledWindows = map[string]TimeWindow{}
 )
 
 func GroupTimeRatio2JSONString() string {
@@ -279,9 +350,14 @@ func UpdateGroupTimeRatioByJSONString(jsonStr string) error {
 	if err != nil {
 		return err
 	}
+	compiled, err := compileWindows(cfg.Windows)
+	if err != nil {
+		return err
+	}
 	groupTimeRatioMu.Lock()
 	defer groupTimeRatioMu.Unlock()
 	groupTimeRatio = cfg
+	compiledWindows = compiled
 	return nil
 }
 
@@ -388,8 +464,8 @@ func matchedTimeRulesLocked(group, modelName string) ([]TimeRule, map[string]Tim
 	if len(matched) == 0 {
 		return nil, nil
 	}
-	windows := make(map[string]TimeWindow, len(groupTimeRatio.Windows))
-	for k, v := range groupTimeRatio.Windows {
+	windows := make(map[string]TimeWindow, len(compiledWindows))
+	for k, v := range compiledWindows {
 		windows[k] = v
 	}
 	return append([]TimeRule(nil), matched...), windows
@@ -425,7 +501,24 @@ func CheckGroupTimeRatio(jsonStr string) error {
 		if strings.TrimSpace(key) == "" {
 			return fmt.Errorf("time window has an empty key")
 		}
-		if err := win.validate(key); err != nil {
+		if strings.TrimSpace(win.ExcludeOf) != "" {
+			// 补集时段：自身不带区间，只校验引用
+			ref, ok := cfg.Windows[win.ExcludeOf]
+			if !ok {
+				return fmt.Errorf("time window %q excludes unknown window %q", key, win.ExcludeOf)
+			}
+			if strings.TrimSpace(ref.ExcludeOf) != "" {
+				return fmt.Errorf("time window %q excludes %q, which is itself a complement window", key, win.ExcludeOf)
+			}
+			if len(ref.normalizedSegments()) == 0 {
+				return fmt.Errorf("time window %q excludes %q, which has no segments", key, win.ExcludeOf)
+			}
+			if err := win.validateSegments(key); err != nil {
+				return err
+			}
+			continue
+		}
+		if err := win.validateSegments(key); err != nil {
 			return err
 		}
 	}
@@ -505,16 +598,28 @@ func checkWindowOverlap(windows map[string]TimeWindow, group, pattern string, li
 	var spans []span
 	for _, rule := range list {
 		win := windows[rule.Window]
-		startMin, _ := parseClock(win.Start)
-		endMin, _ := parseClock(win.End)
-		for _, day := range win.effectiveDays() {
-			if startMin < endMin {
-				spans = append(spans, span{day, startMin, endMin, rule.Window})
+		for _, seg := range win.normalizedSegments() {
+			startMin, err := parseClock(seg.Start)
+			if err != nil {
+				continue // 已被 validateSegments 拦过，这里只为不 panic
+			}
+			endMin, err := parseClockAllowEndOfDay(seg.End)
+			if err != nil {
 				continue
 			}
-			// 跨午夜：拆成起始日的 [start, 1440) 与次日的 [0, end)
-			spans = append(spans, span{day, startMin, 24 * 60, rule.Window})
-			spans = append(spans, span{(day + 1) % 7, 0, endMin, rule.Window})
+			days := seg.Days
+			if len(days) == 0 {
+				days = []int{0, 1, 2, 3, 4, 5, 6}
+			}
+			for _, day := range days {
+				if startMin < endMin {
+					spans = append(spans, span{day, startMin, endMin, rule.Window})
+					continue
+				}
+				// 跨午夜：拆成起始日的 [start, 1440) 与次日的 [0, end)
+				spans = append(spans, span{day, startMin, 24 * 60, rule.Window})
+				spans = append(spans, span{(day + 1) % 7, 0, endMin, rule.Window})
+			}
 		}
 	}
 	for i := 0; i < len(spans); i++ {
@@ -531,23 +636,30 @@ func checkWindowOverlap(windows map[string]TimeWindow, group, pattern string, li
 	return nil
 }
 
-func (w TimeWindow) validate(key string) error {
-	startMin, err := parseClock(w.Start)
-	if err != nil {
-		return fmt.Errorf("time window %q start: %w", key, err)
+// validateSegments 校验时段自身的区间列表（旧单段格式也会被归一后校验）。
+func (w TimeWindow) validateSegments(key string) error {
+	segs := w.normalizedSegments()
+	if len(segs) == 0 {
+		return fmt.Errorf("time window %q has no time segment", key)
 	}
-	endMin, err := parseClock(w.End)
-	if err != nil {
-		return fmt.Errorf("time window %q end: %w", key, err)
-	}
-	if startMin == endMin {
-		// 允许的话语义要么是「全天」要么是「空」，两种读法都说得通，
-		// 配错了不会报错只会静默算错价。要全天就别配时段规则。
-		return fmt.Errorf("time window %q: start and end must differ", key)
-	}
-	for _, d := range w.Days {
-		if d < 0 || d > 6 {
-			return fmt.Errorf("time window %q: weekday must be 0-6 (0=Sunday), got %d", key, d)
+	for _, seg := range segs {
+		startMin, err := parseClock(seg.Start)
+		if err != nil {
+			return fmt.Errorf("time window %q start: %w", key, err)
+		}
+		endMin, err := parseClock(seg.End)
+		if err != nil {
+			return fmt.Errorf("time window %q end: %w", key, err)
+		}
+		if startMin == endMin {
+			// 「起止相同」的语义要么是全天、要么是空，两种读法都说得通，
+			// 配错了不报错只会静默算错价。要全天就别配时段规则。
+			return fmt.Errorf("time window %q: start and end must differ", key)
+		}
+		for _, d := range seg.Days {
+			if d < 0 || d > 6 {
+				return fmt.Errorf("time window %q: weekday must be 0-6 (0=Sunday), got %d", key, d)
+			}
 		}
 	}
 	if w.TZ != "" {
@@ -555,10 +667,61 @@ func (w TimeWindow) validate(key string) error {
 			return fmt.Errorf("time window %q: unknown timezone %q", key, w.TZ)
 		}
 	}
+	// 同一时段内部的两段不能重叠（重叠意味着同一天同一分钟被算了两次）
+	if err := detectSegmentOverlap(key, segs); err != nil {
+		return err
+	}
+	return nil
+}
+
+func detectSegmentOverlap(key string, segs []TimeSegment) error {
+	type span struct{ day, start, end, idx int }
+	var spans []span
+	for i, seg := range segs {
+		startMin, errS := parseClock(seg.Start)
+		endMin, errE := parseClockAllowEndOfDay(seg.End)
+		if errS != nil || errE != nil {
+			continue
+		}
+		days := seg.Days
+		if len(days) == 0 {
+			days = []int{0, 1, 2, 3, 4, 5, 6}
+		}
+		for _, day := range days {
+			if startMin < endMin {
+				spans = append(spans, span{day, startMin, endMin, i})
+				continue
+			}
+			spans = append(spans, span{day, startMin, 24 * 60, i})
+			spans = append(spans, span{(day + 1) % 7, 0, endMin, i})
+		}
+	}
+	for i := 0; i < len(spans); i++ {
+		for j := i + 1; j < len(spans); j++ {
+			a, b := spans[i], spans[j]
+			if a.day != b.day || a.idx == b.idx {
+				continue
+			}
+			if a.start < b.end && b.start < a.end {
+				return fmt.Errorf("time window %q: segment %d and %d overlap", key, a.idx+1, b.idx+1)
+			}
+		}
+	}
 	return nil
 }
 
 // parseClock 解析 "HH:MM" 为当日分钟数。
+// parseClockAllowEndOfDay 与 parseClock 相同，但额外接受 "24:00" 表示"当天结束"。
+//
+// 只给**编译产物**用（补集展开出来的整天空闲就是 00:00-24:00）。用户输入仍走
+// parseClock，24:00 会被拒绝——不给运营留一个"看起来对、其实越界"的写法。
+func parseClockAllowEndOfDay(s string) (int, error) {
+	if strings.TrimSpace(s) == "24:00" {
+		return 24 * 60, nil
+	}
+	return parseClock(s)
+}
+
 func parseClock(s string) (int, error) {
 	parts := strings.Split(strings.TrimSpace(s), ":")
 	// 必须补零。Atoi 本身接受 "9"，但展示侧多处按定长 "HH:MM" 处理，放行 "9:00"
@@ -634,26 +797,11 @@ func (w TimeWindow) location() *time.Location {
 // 周五，周六凌晨 02:00 仍然生效。另一种读法（按当前日判定）会让跨午夜 + 工作日
 // 的组合在周六 00:00 突然断档，而配置上完全看不出来。
 func (w TimeWindow) ActiveAt(at time.Time) bool {
-	startMin, err := parseClock(w.Start)
-	if err != nil {
-		return false
-	}
-	endMin, err := parseClock(w.End)
-	if err != nil {
-		return false
-	}
-	local := at.In(w.location())
-	cur := local.Hour()*60 + local.Minute()
-
-	if startMin < endMin {
-		return cur >= startMin && cur < endMin && w.hasDay(local.Weekday())
-	}
-	// 跨午夜
-	if cur >= startMin {
-		return w.hasDay(local.Weekday()) // 今天是起始日
-	}
-	if cur < endMin {
-		return w.hasDay(local.AddDate(0, 0, -1).Weekday()) // 起始日是昨天
+	loc := w.location()
+	for _, seg := range w.normalizedSegments() {
+		if segmentActive(seg, loc, at) {
+			return true
+		}
 	}
 	return false
 }
@@ -664,12 +812,8 @@ func (w TimeWindow) ActiveAt(at time.Time) bool {
 // 与当前状态不同的即可——不需要逐分钟推进，也不需要为跨午夜和 Days 过滤各写一套
 // 边界推导（那正是最容易算错、且错了看不出来的地方）。
 func (w TimeWindow) NextBoundary(at time.Time) (time.Time, bool) {
-	startMin, err := parseClock(w.Start)
-	if err != nil {
-		return time.Time{}, false
-	}
-	endMin, err := parseClock(w.End)
-	if err != nil {
+	segs := w.normalizedSegments()
+	if len(segs) == 0 {
 		return time.Time{}, false
 	}
 	loc := w.location()
@@ -677,13 +821,24 @@ func (w TimeWindow) NextBoundary(at time.Time) (time.Time, bool) {
 	local := at.In(loc)
 	midnight := time.Date(local.Year(), local.Month(), local.Day(), 0, 0, 0, 0, loc)
 
-	candidates := make([]time.Time, 0, 18)
-	for d := 0; d <= 8; d++ {
-		base := midnight.AddDate(0, 0, d)
-		candidates = append(candidates,
-			base.Add(time.Duration(startMin)*time.Minute),
-			base.Add(time.Duration(endMin)*time.Minute),
-		)
+	// 多段时把所有段的起止钟点都当候选：状态只可能在某个段的 start/end 翻转。
+	candidates := make([]time.Time, 0, 18*len(segs))
+	for _, seg := range segs {
+		startMin, err := parseClock(seg.Start)
+		if err != nil {
+			continue
+		}
+		endMin, err := parseClockAllowEndOfDay(seg.End)
+		if err != nil {
+			continue
+		}
+		for d := 0; d <= 8; d++ {
+			base := midnight.AddDate(0, 0, d)
+			candidates = append(candidates,
+				base.Add(time.Duration(startMin)*time.Minute),
+				base.Add(time.Duration(endMin)*time.Minute),
+			)
+		}
 	}
 	sort.Slice(candidates, func(i, j int) bool { return candidates[i].Before(candidates[j]) })
 	for _, c := range candidates {
@@ -920,4 +1075,157 @@ func pickTimeRule(usingGroup, modelName string, at time.Time) (string, TimeWindo
 		}
 	}
 	return bestKey, bestWin, bestRule, found
+}
+
+// compileWindows 把配置里的时段**展开成显式多段**，补集（ExcludeOf）在这一步解开。
+//
+// 为什么在加载期展开而不是在解析期判断：补集只是「编辑时的便利写法」，一旦展开，
+// pickTimeRule / 视图 / 重叠校验都只面对普通多段，不需要各自再写一套补集分支
+// （那正是最容易出现"展示与计费不一致"的地方）。
+func compileWindows(windows map[string]TimeWindow) (map[string]TimeWindow, error) {
+	out := make(map[string]TimeWindow, len(windows))
+	for key, win := range windows {
+		if strings.TrimSpace(win.ExcludeOf) == "" {
+			copyWin := win
+			copyWin.Segments = win.normalizedSegments()
+			copyWin.Start, copyWin.End = "", ""
+			copyWin.Days = nil
+			out[key] = copyWin
+			continue
+		}
+		ref, ok := windows[win.ExcludeOf]
+		if !ok {
+			return nil, fmt.Errorf("window %q excludes unknown window %q", key, win.ExcludeOf)
+		}
+		if strings.TrimSpace(ref.ExcludeOf) != "" {
+			return nil, fmt.Errorf("window %q excludes %q, which is itself a complement window", key, win.ExcludeOf)
+		}
+		segs, err := complementSegments(ref.normalizedSegments())
+		if err != nil {
+			return nil, fmt.Errorf("window %q: %w", key, err)
+		}
+		out[key] = TimeWindow{
+			Label:    win.Label,
+			TZ:       win.TZ,
+			Segments: segs,
+		}
+	}
+	return out, nil
+}
+
+// complementSegments 计算「这些段之外的全部时间」，结果是显式多段。
+//
+// 做法：把一周展开成 7×1440 分钟表，标记被覆盖的分钟，再取反后合并成区间。
+// 跨午夜段（start > end）按起始日覆盖当天尾段与次日前段——与 ActiveAt 的判定一致。
+func complementSegments(segs []TimeSegment) ([]TimeSegment, error) {
+	if len(segs) == 0 {
+		return nil, fmt.Errorf("complement window must reference a window with segments")
+	}
+	var covered [7][1440]bool
+	for _, seg := range segs {
+		startMin, err := parseClock(seg.Start)
+		if err != nil {
+			return nil, err
+		}
+		endMin, err := parseClockAllowEndOfDay(seg.End)
+		if err != nil {
+			return nil, err
+		}
+		days := seg.Days
+		if len(days) == 0 {
+			days = []int{0, 1, 2, 3, 4, 5, 6}
+		}
+		for _, d := range days {
+			if d < 0 || d > 6 {
+				return nil, fmt.Errorf("invalid weekday %d", d)
+			}
+			if startMin < endMin {
+				for m := startMin; m < endMin; m++ {
+					covered[d][m] = true
+				}
+				continue
+			}
+			// 跨午夜：当天 [start,1440)，次日 [0,end)
+			for m := startMin; m < 1440; m++ {
+				covered[d][m] = true
+			}
+			next := (d + 1) % 7
+			for m := 0; m < endMin; m++ {
+				covered[next][m] = true
+			}
+		}
+	}
+
+	// 取反后按「每天的空闲区间列表」分组，相同列表的星期合并成一条 segment
+	type dayFree struct {
+		days []int
+		mins []int // 扁平化：[s0,e0,s1,e1,...]
+	}
+	groups := make([]dayFree, 0, 7)
+	for d := 0; d < 7; d++ {
+		var mins []int
+		m := 0
+		for m < 1440 {
+			if covered[d][m] {
+				m++
+				continue
+			}
+			startMin := m
+			for m < 1440 && !covered[d][m] {
+				m++
+			}
+			mins = append(mins, startMin, m)
+		}
+		matched := false
+		for i := range groups {
+			if equalInts(groups[i].mins, mins) {
+				groups[i].days = append(groups[i].days, d)
+				matched = true
+				break
+			}
+		}
+		if !matched {
+			groups = append(groups, dayFree{days: []int{d}, mins: mins})
+		}
+	}
+
+	out := make([]TimeSegment, 0, 4)
+	for _, g := range groups {
+		for i := 0; i+1 < len(g.mins); i += 2 {
+			s, e := g.mins[i], g.mins[i+1]
+			if s == e {
+				continue
+			}
+			out = append(out, TimeSegment{
+				Start: formatClock(s),
+				End:   formatClockEnd(e),
+				Days:  g.days,
+			})
+		}
+	}
+	return out, nil
+}
+
+func equalInts(a, b []int) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
+func formatClock(minute int) string {
+	return fmt.Sprintf("%02d:%02d", minute/60, minute%60)
+}
+
+// formatClockEnd 允许 1440 → "24:00"（跨到当天结束）。
+func formatClockEnd(minute int) string {
+	if minute == 1440 {
+		return "24:00"
+	}
+	return formatClock(minute)
 }
