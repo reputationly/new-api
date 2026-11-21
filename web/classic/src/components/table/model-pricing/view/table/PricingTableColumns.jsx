@@ -30,7 +30,6 @@ import {
   getNormalRatio,
   getTimePriceDelta,
   getTimeRatioView,
-  clampTimeLabel,
 } from '../../../../../helpers';
 import {
   renderLimitedItems,
@@ -324,40 +323,6 @@ export const getPricingTableColumns = ({
               </Tag>
             </Tooltip>
           )}
-          {(() => {
-            // 时段价标签：与折扣角标并列但不合并——角标是合同折扣（永随时段不变），
-            // 这个是「此刻价目 ≠ 常规价」。合并回一个数就退回「折扣随时钟漂移」的老问题。
-            const delta = getTimePriceDelta(
-              groupTimeRatio,
-              priceData?.usedGroup,
-              record.model_name,
-              priceData?.usedGroupRatio,
-            );
-            if (!delta) return null;
-            return (
-              <Tooltip
-                style={{ maxWidth: 'none' }}
-                content={
-                  <div style={{ whiteSpace: 'nowrap' }}>
-                    {delta.label ? delta.label + ' · ' : ''}
-                    {t('常规价')} {Number(delta.normal.toFixed(4))}x{' · '}
-                    {t('此刻价')} {Number(delta.current.toFixed(4))}x
-                  </div>
-                }
-              >
-                <Tag
-                  color={delta.cheaper ? 'cyan' : 'orange'}
-                  shape='circle'
-                  size='small'
-                >
-                  {/* 限长：时段名是运营起的，完整名字在 tooltip 里 */}
-                  {clampTimeLabel(
-                    delta.label || (delta.cheaper ? t('闲时') : t('高峰')),
-                  )}
-                </Tag>
-              </Tooltip>
-            );
-          })()}
           {renderEntitlementBadges(record)}
         </div>
       );
@@ -458,17 +423,58 @@ export const getPricingTableColumns = ({
               </div>
             );
           })}
-          {/* 积分抵扣：只打小标、不列积分价目（积分消耗随套餐与用量变，写死会误导），
-              放在价格区而不是模型名旁的角标位——角标位要留给「会改变此刻价格」的时段标签 */}
-          {priceData?.points ? (
-            <div className='pt-0.5'>
+          {/*
+            价格块下方的「时段/权益」带：时段名 + 生效时间 + 目录价系数，
+            与价格贴在一起看。模型名列只留折扣角标——那一列要放模型名。
+          */}
+          {(() => {
+            const delta = getTimePriceDelta(
+              groupTimeRatio,
+              priceData?.usedGroup,
+              record.model_name,
+              priceData?.usedGroupRatio,
+            );
+            const view = getTimeRatioView(
+              groupTimeRatio,
+              priceData?.usedGroup,
+              record.model_name,
+            );
+            const win = (view?.windows || []).find((w) => w.active);
+            const range =
+              win && win.start && win.end ? `${win.start}–${win.end}` : '';
+            const factor =
+              delta && delta.normal > 0 ? delta.current / delta.normal : 0;
+            const pointsChip = priceData?.points ? (
               <Tooltip content={t('可用积分抵扣，实际消耗以账单为准')}>
                 <Tag color='light-blue' shape='circle' size='small'>
                   {t('积分抵扣')}
                 </Tag>
               </Tooltip>
-            </div>
-          ) : null}
+            ) : null;
+            if (!delta && !pointsChip) return null;
+            return (
+              <div className='mt-1 flex items-center gap-1.5 flex-wrap rounded-lg bg-[var(--semi-color-fill-0)] px-2 py-1'>
+                {delta ? (
+                  <>
+                    <Tag
+                      color={delta.cheaper ? 'cyan' : 'orange'}
+                      shape='circle'
+                      size='small'
+                    >
+                      {delta.label || (delta.cheaper ? t('闲时') : t('高峰'))}
+                    </Tag>
+                    {range ? (
+                      <span className='text-gray-500'>{range}</span>
+                    ) : null}
+                    <span className='ml-auto shrink-0 text-gray-500'>
+                      {t('目录价')} ×{Number(factor.toFixed(2))}
+                    </span>
+                  </>
+                ) : null}
+                {pointsChip}
+              </div>
+            );
+          })()}
         </div>
       );
     },

@@ -44,7 +44,6 @@ import {
   getNormalRatio,
   getTimePriceDelta,
   getTimeRatioView,
-  clampTimeLabel,
 } from '../../../../../helpers';
 import TimeRulesTooltip from '../../TimeRulesTooltip';
 import PricingCardSkeleton from './PricingCardSkeleton';
@@ -374,11 +373,34 @@ const PricingCardView = ({
                             ? formatVideoMatrixSummary(priceData, t)
                             : formatPriceInfo(priceData, t, siteDisplayType)}
                         {/*
-                          积分抵扣放这里而不是右上角角标：它是支付方式属性、不是模型属性，
-                          而且角标位要留给「会改变此刻价格」的时段标签。
+                          价格块下方的「时段/权益」条：时段名、生效时间、目录价系数都放这里，
+                          与价格贴在一起看；右上角只留折扣角标（模型名的可见宽度最重要）。
+                          积分抵扣也在这条里——它们回答的都是"这行价格是怎么来的"。
                         */}
-                        {priceData?.points ? (
-                          <span className='flex'>
+                        {(() => {
+                          const delta = getTimePriceDelta(
+                            groupTimeRatio,
+                            priceData?.usedGroup,
+                            model.model_name,
+                            priceData?.usedGroupRatio,
+                          );
+                          const view = getTimeRatioView(
+                            groupTimeRatio,
+                            priceData?.usedGroup,
+                            model.model_name,
+                          );
+                          const win = (view?.windows || []).find(
+                            (w) => w.active,
+                          );
+                          const range =
+                            win && win.start && win.end
+                              ? `${win.start}–${win.end}`
+                              : '';
+                          const factor =
+                            delta && delta.normal > 0
+                              ? delta.current / delta.normal
+                              : 0;
+                          const pointsChip = priceData?.points ? (
                             <Tooltip
                               content={t('可用积分抵扣，实际消耗以账单为准')}
                             >
@@ -390,8 +412,34 @@ const PricingCardView = ({
                                 {t('积分抵扣')}
                               </Tag>
                             </Tooltip>
-                          </span>
-                        ) : null}
+                          ) : null;
+                          if (!delta && !pointsChip) return null;
+                          return (
+                            <div className='mt-1.5 flex items-center gap-1.5 flex-wrap rounded-lg bg-[var(--semi-color-fill-0)] px-2 py-1'>
+                              {delta ? (
+                                <>
+                                  <Tag
+                                    color={delta.cheaper ? 'cyan' : 'orange'}
+                                    shape='circle'
+                                    size='small'
+                                  >
+                                    {delta.label ||
+                                      (delta.cheaper ? t('闲时') : t('高峰'))}
+                                  </Tag>
+                                  {range ? (
+                                    <span className='text-gray-500'>
+                                      {range}
+                                    </span>
+                                  ) : null}
+                                  <span className='ml-auto shrink-0 text-gray-500'>
+                                    {t('目录价')} ×{Number(factor.toFixed(2))}
+                                  </span>
+                                </>
+                              ) : null}
+                              {pointsChip}
+                            </div>
+                          );
+                        })()}
                       </div>
                     </div>
                   </div>
@@ -402,44 +450,7 @@ const PricingCardView = ({
                     「deepseek-v…」（本项目踩过这个坑）。积分抵扣不占这个位置，
                     它是支付方式属性，见价格块下方的小标。
                   */}
-                  <div className='flex items-center gap-1 flex-wrap justify-end max-w-[45%] ml-3 shrink-0'>
-                    {(() => {
-                      // 时段价标签：与折扣角标并列但不合并——角标是合同折扣（永不随时段变），
-                      // 这个是「此刻价目 ≠ 常规价」。合并回一个数就退回「折扣随时钟漂移」的老问题。
-                      const delta = getTimePriceDelta(
-                        groupTimeRatio,
-                        priceData?.usedGroup,
-                        model.model_name,
-                        priceData?.usedGroupRatio,
-                      );
-                      if (!delta) return null;
-                      return (
-                        <Tooltip
-                          style={{ maxWidth: 'none' }}
-                          content={
-                            <div style={{ whiteSpace: 'nowrap' }}>
-                              {/* 完整的时段名放这里：标签上被限长了 */}
-                              {delta.label ? delta.label + ' · ' : ''}
-                              {t('常规价')} {Number(delta.normal.toFixed(4))}x
-                              {' · '}
-                              {t('此刻价')} {Number(delta.current.toFixed(4))}x
-                            </div>
-                          }
-                        >
-                          <Tag
-                            color={delta.cheaper ? 'cyan' : 'orange'}
-                            shape='circle'
-                            size='small'
-                          >
-                            {/* 限长：时段名是运营起的，可能很长，角标不设上限会把模型名压没 */}
-                            {clampTimeLabel(
-                              delta.label ||
-                                (delta.cheaper ? t('闲时') : t('高峰')),
-                            )}
-                          </Tag>
-                        </Tooltip>
-                      );
-                    })()}
+                  <div className='flex items-center gap-1 ml-3 shrink-0'>
                     {/*
                       折扣标签放操作区而不是跟在模型名后面：模型名那行是 truncate 的，
                       长名字会把标签挤没，而这里的位置固定、每张卡片对齐。
