@@ -283,6 +283,11 @@ func EnhancePrompt(ctx context.Context, agg *common.AggregateModel, authHeader s
 		} else if out, err := compileSingleCallWithTimeout(
 			ctx, authHeader, res.Model, in, singleCallBudget(cfg)); err != nil {
 			res.FallbackReason = err.Error()
+			// 编译失败不等于没花 token：失败前的调用用量照样计过费，
+			// 先存下，text 改写成功后与它累加，不能只记 text 那一次。
+			if out != nil {
+				res.Usage = out.Usage
+			}
 		} else {
 			res.EnhancedPrompt = out.Prompt
 			res.ContentPlan = out.Plan
@@ -350,7 +355,11 @@ func EnhancePrompt(ctx context.Context, agg *common.AggregateModel, authHeader s
 	}
 
 	res.EnhancedPrompt = enhanced
-	res.Usage = usage
+	// res.Usage 可能已带着 singlecall 失败前的用量，这里累加而不是覆盖。
+	if res.Usage == nil {
+		res.Usage = &dto.Usage{}
+	}
+	accumulateUsage(res.Usage, usage)
 	res.ElapsedMs = time.Since(started).Milliseconds()
 	// 音乐的预算是按外推定的一次性决定,而"够不够"只能从线上看:这条日志就是当初
 	// 「先按 30s 跑、实测 P90 再收尾」里那个实测数据来源。只在音乐上打 ——

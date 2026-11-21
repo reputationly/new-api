@@ -730,6 +730,31 @@ func TestSingleCallAccumulatesUsageAcrossRepair(t *testing.T) {
 	require.Equal(t, 60, res.Usage.TotalTokens, "两轮各 30，必须累加")
 }
 
+// **回落 text 时，singlecall 已烧掉的 token 不能丢。**
+//
+// 编译失败的每一轮都是真实计费的 relay 调用；只记 text 那一次的话，
+// 聚合记录里的用量会小于实际扣费，对账永远对不上。
+func TestSingleCallFallbackKeepsFailedCompileUsage(t *testing.T) {
+	bad, _ := json.Marshal(map[string]any{
+		"h3_prompt": "x",
+		"content_plan": map[string]any{"bindings": []any{},
+			"shots": []any{map[string]any{"start_seconds": 0, "end_seconds": 3}}},
+	})
+	fakeSequence(t,
+		chatResponse(string(bad)), // 首轮编译失败，各 30
+		chatResponse(string(bad)), // 重修仍失败，各 30
+		chatResponse("文本改写的结果"),   // text 成功，30
+	)
+
+	res := EnhancePrompt(context.Background(), scCfg(), "Bearer sk-x", scInput("一只猫"))
+
+	require.Equal(t, common.EnhanceModeText, res.Mode)
+	require.NotEmpty(t, res.FallbackReason)
+	require.NotNil(t, res.Usage)
+	require.Equal(t, 90, res.Usage.TotalTokens,
+		"两轮失败编译 60 + text 30，必须全部累加")
+}
+
 // ── 有效时长、输出上限、思考档位、音频标签 ────────────────────────────
 
 // **证据里的时长必须是引擎交付的时长,不是客户请求的秒数。**
@@ -742,8 +767,8 @@ func TestSingleCallEvidenceCarriesEffectiveDuration(t *testing.T) {
 		requested float64
 		want      float64
 	}{
-		{5, 5.17},  // 124 帧
-		{6, 6.58},  // 144 帧不够栅格,吸附到 158 帧
+		{5, 5.17},   // 124 帧
+		{6, 6.58},   // 144 帧不够栅格,吸附到 158 帧
 		{10, 10.13}, // 243 帧
 		{15, 15.08}, // 362 帧
 	}
@@ -890,7 +915,6 @@ func TestSingleCallFallsBackToThinkingSwitch(t *testing.T) {
 	require.Contains(t, body, "chat_template_kwargs")
 }
 
-
 // **同一节写两遍要被拦下。**
 //
 // 实测 r2va 三次里有一次把 summary 整段原样写了两遍:节名一个不缺,
@@ -964,7 +988,6 @@ func TestSingleCallSystemIncludesAppendixBeforeWriting(t *testing.T) {
 		"清单要排在证据之前")
 }
 
-
 // **正文节名用错要被确定性修掉,而不是花一轮重修。**
 //
 // 实测 r2va 四份样本里三份把正文节写成 integrated_multimodal_description ——
@@ -1019,7 +1042,6 @@ non_diegetic_music: z
 	require.Equal(t, prompt, fixed)
 }
 
-
 // **不发 response_format 是刻意的。**
 //
 // qwen3.8(MTP 投机解码)+ json_object 会被引擎的语法约束放过不去,线上日志:
@@ -1049,7 +1071,6 @@ func TestSingleCallParsesWithoutResponseFormat(t *testing.T) {
 	require.Contains(t, res.EnhancedPrompt, "[Shot 1]")
 	require.NotEmpty(t, (*got)[0])
 }
-
 
 // **参考视频不进请求体,但它的标签必须留在证据里。**
 //
@@ -1114,7 +1135,6 @@ func TestSingleCallAppendixExplainsVisibility(t *testing.T) {
 	require.Contains(t, singleCallAppendix, "the user-supplied audio reference")
 }
 
-
 // **参考素材在提示词里一句都不提 → 拦。**
 //
 // 参考视频不发给增强模型之后,实测出现过整段不提 <Video 1>(subject_definitions
@@ -1152,7 +1172,6 @@ func TestMissingAssetMentionsOnlyForReferenceFamily(t *testing.T) {
 	require.Empty(t, missingAssetMentions("integrated_multimodal_description: [Shot 1] x", assets, "i2v"))
 }
 
-
 // **编号未知的音频也要被检查到过。** 它没有数字可查,但 appendix 第 11 条把措辞
 // 定死了("user-supplied audio reference"),整段不提它,H3 就只能自己编一条嗓子 ——
 // 那正是这个函数要防的。
@@ -1174,4 +1193,3 @@ func TestMissingAssetMentionsRequiresUnlabelledAudio(t *testing.T) {
 		"The User-Supplied Audio Reference is the voice-timbre reference for <Subject 1>."
 	require.Empty(t, missingAssetMentions(upper, assets, "r2va"), "大小写不敏感")
 }
-

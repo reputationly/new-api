@@ -292,13 +292,16 @@ func compileViaSingleCall(
 		raw, usage, err := callEnhance(ctx, authHeader, payload)
 		accumulateUsage(total, usage)
 		if err != nil {
-			return nil, err
+			// 失败也要把已累计的用量带出去：这些调用真实计过费，
+			// 回落 text 后 res.Usage 不能只记 text 那一次。
+			return &singleCallResult{Usage: total}, err
 		}
 		if strings.TrimSpace(raw) == "" {
 			// 空正文 + usage 一起报。只有"空"这一个词的话线上没法判断是
 			// 模型什么都没说、还是思考把 max_tokens 吃光(正文被挤掉) ——
 			// 两种的修法完全不同(换档位 vs 提 max_output_tokens)。
-			return nil, fmt.Errorf("编译返回空内容%s", usageSnippet(usage, total))
+			return &singleCallResult{Usage: total},
+				fmt.Errorf("编译返回空内容%s", usageSnippet(usage, total))
 		}
 		lastRaw = raw
 
@@ -346,7 +349,8 @@ func compileViaSingleCall(
 	// 附上模型的原始回答片段。没有它,线上只能看到"镜头时间不规范"这种
 	// 结论、看不到它到底写成了什么形状 —— 而修法(补提示词例子 / 放宽解析 /
 	// 换档位)完全取决于那个形状。400 字够看出结构,又不会把库撑大。
-	return nil, fmt.Errorf("传输检查未通过: %s%s", strings.Join(lastErrs, "; "), rawReplySnippet(lastRaw))
+	return &singleCallResult{Usage: total},
+		fmt.Errorf("传输检查未通过: %s%s", strings.Join(lastErrs, "; "), rawReplySnippet(lastRaw))
 }
 
 // usageSnippet 把本轮与累计的 token 用量压成一段,附在失败原因后面。
@@ -730,17 +734,20 @@ func shotTimingIssues(shots []singleCallShot, duration float64) []string {
 	last := 0.0
 	for _, s := range shots {
 		if !s.StartSeconds.Set || !s.EndSeconds.Set {
-			return []string{"Shot times must be numeric, contiguous, increasing and within target duration"}
+			return []string{"Shot times must be numeric, contiguous, increasing and within task.duration_seconds"}
 		}
 		a, b := s.StartSeconds.Value, s.EndSeconds.Value
 		if math.IsNaN(a) || math.IsInf(a, 0) || math.IsNaN(b) || math.IsInf(b, 0) ||
 			math.Abs(a-last) >= shotTimeTolerance || b <= a || b > duration+shotTimeTolerance {
-			return []string{"Shot times must be numeric, contiguous, increasing and within target duration"}
+			return []string{"Shot times must be numeric, contiguous, increasing and within task.duration_seconds"}
 		}
 		last = b
 	}
 	if math.Abs(last-duration) > shotTimeTolerance {
-		return []string{"Shot plan must end at exact target duration " +
+		// 这句话会原样进重修指令：必须点名字段，否则模型分不清
+		// 「target duration」指 duration_seconds 还是 effective_duration_seconds，
+		// 按后者写就会再被判一次失败。
+		return []string{"Shot plan must end at exact task.duration_seconds " +
 			strconv.FormatFloat(duration, 'g', -1, 64)}
 	}
 	return nil
