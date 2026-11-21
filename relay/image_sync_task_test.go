@@ -200,3 +200,40 @@ func TestBuildSyncImageTaskFreezesTokenIdentity(t *testing.T) {
 		t.Errorf("TokenName = %q, want my-key", task.PrivateData.TokenName)
 	}
 }
+
+// **聚合生图的记录也要带增强结果。**
+//
+// 异步任务(视频/音乐)在 controller.RelayTask 里组装 aggregate,而同步生图是
+// 「出生即终态」的一条记录、由这里补写 —— 不接这一段,同一件事在任务日志里就只剩
+// result_url,「改写后的提示词是什么」查不到。取的是展开点预先放进 context 的形态
+// (这个包不能 import middleware,会成环)。
+func TestBuildSyncImageTaskCarriesAggregateInfo(t *testing.T) {
+	c := syncImageCtx(constant.ChannelTypeGPUStackPlus)
+	c.Set(string(constant.ContextKeyAggregateTaskInfo), &model.TaskAggregateInfo{
+		PublicModel:    "minimax-h3-image-enhanced",
+		EnhanceModel:   "qwen3.8-flash-fp8",
+		EnhanceMode:    "h3_image_pe",
+		OriginalPrompt: "一只猫",
+		EnhancedPrompt: "一只橘猫坐在窗台上，午后侧光",
+	})
+
+	task := buildSyncImageTask(c, syncImageInfo(relayconstant.RelayModeImagesGenerations))
+	if task == nil || task.PrivateData.Aggregate == nil {
+		t.Fatal("聚合生图的任务记录没有带上 aggregate")
+	}
+	got := task.PrivateData.Aggregate
+	if got.PublicModel != "minimax-h3-image-enhanced" || got.EnhancedPrompt == "" || got.EnhanceMode != "h3_image_pe" {
+		t.Fatalf("aggregate 内容不对: %+v", got)
+	}
+}
+
+// 非聚合请求不带 —— 这条守的是「别凭空造出一个 aggregate」。
+func TestBuildSyncImageTaskWithoutAggregate(t *testing.T) {
+	task := buildSyncImageTask(syncImageCtx(constant.ChannelTypeGPUStackPlus), syncImageInfo(relayconstant.RelayModeImagesGenerations))
+	if task == nil {
+		t.Fatal("应生成任务记录")
+	}
+	if task.PrivateData.Aggregate != nil {
+		t.Fatal("非聚合请求不该有 aggregate")
+	}
+}

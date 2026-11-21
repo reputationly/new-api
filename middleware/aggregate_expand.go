@@ -10,6 +10,7 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
+	"github.com/QuantumNous/new-api/model"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/setting"
@@ -366,7 +367,52 @@ func applyAggregateExpansion(c *gin.Context, publicName, realModel string, agg *
 		return fmt.Errorf("改写请求体失败: %w", err)
 	}
 	common.SetContextKey(c, constant.ContextKeyAggregateExpansion, exp)
+	// 同步生图也进任务日志,但它的落库路径在 relay 包里 —— 拿不到这里的展开类型。
+	// 所以在展开点就把"随任务持久化的形态"算好放进 context,两条路读同一份,
+	// 不会出现"异步有 enhance 记录、同步没有"这种同一件事两种记法。
+	common.SetContextKey(c, constant.ContextKeyAggregateTaskInfo, exp.ToTaskAggregateInfo(c))
 	return nil
+}
+
+// ToTaskAggregateInfo 把一次聚合展开的结果转成随任务持久化的形态。
+//
+// 只在这里做一次转换,不让 model 包认识 middleware 的类型(那会造成包依赖倒置)。
+//
+// **超分段不是配了就一定跑**:客户要的最终档不高于生成段的起步档时跳过
+// (判据与理由见 upscaleSkipReason)。跳过的表达方式是**不填** UpscaleModel ——
+// TaskAggregateInfo.HasUpscale() 就是它的判据,轮询侧 TryAdvanceAggregatePipeline
+// 据此根本不会提交第二段,不需要再加一个开关。
+func (e *AggregateExpansion) ToTaskAggregateInfo(c *gin.Context) *model.TaskAggregateInfo {
+	if e == nil {
+		return nil
+	}
+	info := &model.TaskAggregateInfo{PublicModel: e.PublicName}
+	if e.Config != nil && e.Config.Upscale.IsEnabled() && !e.UpscaleSkipped {
+		info.Stage = 1
+		info.UpscaleModel = e.Config.Upscale.Model
+		info.UpscaleTarget = e.Config.Upscale.Target
+		// 超分段计费按交付档位记(配置里没写交付档位则回落到目标档位)。
+		info.UpscaleDelivered = e.Config.Upscale.BilledSize()
+		// 下发给超分引擎的倍率。nil = 沿用 4.0(见 service.aggregateUpscaleSRRatio)。
+		// 必须随任务落库:超分段是轮询时才提交的,那时手上只剩任务里这份。
+		info.UpscaleSRRatio = e.Config.Upscale.SRRatio
+		// 只有真要跑第二段时才留客户令牌 —— 没有超分段就没人会用它,
+		// 存了只是白白多一处明文凭证。
+		info.CallerKey = strings.TrimPrefix(c.Request.Header.Get("Authorization"), "Bearer ")
+	}
+	if en := e.Enhance; en != nil {
+		info.EnhanceModel = en.Model
+		info.OriginalPrompt = en.OriginalPrompt
+		info.EnhancedPrompt = en.EnhancedPrompt
+		info.EnhanceDegraded = en.Degraded
+		info.EnhanceReason = en.DegradeReason
+		info.EnhanceMode = en.Mode
+		info.ContentPlan = en.ContentPlan
+		info.EnhanceUncertainties = en.Uncertainties
+		info.CompilerRevision = en.CompilerRevision
+		info.EnhanceFallbackReason = en.FallbackReason
+	}
+	return info
 }
 
 // isMusicAggregate 这个聚合模型声称自己是音乐(不看引擎族)。

@@ -7,8 +7,12 @@ const (
 	ContextKeyPromptTokens    ContextKey = "prompt_tokens"
 	ContextKeyEstimatedTokens ContextKey = "estimated_tokens"
 
-	ContextKeyOriginalModel    ContextKey = "original_model"
-	ContextKeyRequestStartTime ContextKey = "request_start_time"
+	ContextKeyOriginalModel ContextKey = "original_model"
+	// ContextKeyAggregateTaskInfo 聚合展开结果转成"随任务持久化"的形态。
+	// 异步任务(视频/音乐)在 controller 里自己组装,同步生图在 relay 里没有 middleware
+	// 的类型,所以由展开点先算好放这里,两条落库路径读同一份。
+	ContextKeyAggregateTaskInfo ContextKey = "aggregate_task_info"
+	ContextKeyRequestStartTime  ContextKey = "request_start_time"
 	// ContextKeyAggregateExpansion 聚合模型展开结果。model 字段在 distributor 里已被
 	// 改写成生成段的真实模型,这里留着客户原本调用的那个聚合模型名与其流水线配置。
 	ContextKeyAggregateExpansion ContextKey = "aggregate_expansion"
@@ -118,4 +122,11 @@ const (
 	// （释放在飞计数）。三条文本入口请求结束时各调一次；DoApiRequest 放弃直连
 	// 改走网关时提前调一次——那次失败不该给实例记在飞账。
 	ContextKeyGPUStackAffinityDone ContextKey = "gpustack_affinity_done"
+
+	// ContextKeyContinuationSnapshot 续写(video-extension)的预处理结果。
+	//
+	// 中间件在提交阶段算完(源片时长、生成段秒数、总时长)后挂在这里,任务落库时由
+	// controller 搬进 task.Properties.Continuation —— 轮询发生在几百秒之后,那时既
+	// 没有请求体也没有 ffprobe 结果,回显与对账都只能靠这份快照。
+	ContextKeyContinuationSnapshot ContextKey = "continuation_snapshot"
 )

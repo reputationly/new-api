@@ -13,6 +13,7 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
+	"github.com/QuantumNous/new-api/model"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relay/hilo"
 	"github.com/QuantumNous/new-api/service"
@@ -1493,3 +1494,24 @@ func TestBuildCompilerInputReferenceAudioAfterVideo(t *testing.T) {
 	require.Equal(t, "reference", in.Assets[2].Role)
 }
 
+// **两条落库路径必须读到同一份记录。**
+//
+// 异步任务(视频/音乐)在 controller 里用 GetAggregateExpansion 自己组装;同步生图
+// 由 relay 补写、拿不到 middleware 的类型 —— 所以展开点把「随任务持久化的形态」
+// 提前放进 context。这里钉住那一步真的发生了,否则图片那条会静默地什么都没记。
+func TestApplyExpansionPublishesTaskAggregateInfo(t *testing.T) {
+	withAggregateConfig(t, aggConfig)
+
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/videos",
+		strings.NewReader(`{"model":"h3-2k","prompt":"a cat"}`))
+
+	require.NoError(t, applyAggregateExpansion(c, "h3-2k", "minimax-h3", common.GetAggregateModel("h3-2k")))
+
+	v, ok := c.Get(string(constant.ContextKeyAggregateTaskInfo))
+	require.True(t, ok, "展开点必须把随任务持久化的形态放进 context")
+	info, ok := v.(*model.TaskAggregateInfo)
+	require.True(t, ok && info != nil)
+	require.Equal(t, "h3-2k", info.PublicModel, "对外模型名要带过去")
+}
