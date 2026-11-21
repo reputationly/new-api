@@ -385,7 +385,9 @@ export default function ModelPricingEditor({
 
   // 分时价卡片：**按量**与**按次**都支持（后端白名单里有 per_call 分量），
   // 只有表达式计费互斥——表达式自己能用 hour() 表达时段，两边都乘会双计。
-  const timePriceCard = (
+  // JSX props 在元素创建时就求值，selectedModel 为空（未选模型）时必须短路，
+  // 否则整个编辑器在渲染期抛 null.name，把页面带崩。
+  const timePriceCard = selectedModel ? (
     <Card bodyStyle={{ padding: 16 }} style={{ marginBottom: 16 }}>
       <ModelTimePriceSection
         modelName={selectedModel.name}
@@ -396,7 +398,7 @@ export default function ModelPricingEditor({
         allRules={timeCfg.rules}
       />
     </Card>
-  );
+  ) : null;
 
   return (
     <>
