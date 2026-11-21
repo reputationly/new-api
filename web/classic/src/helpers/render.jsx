@@ -1529,7 +1529,9 @@ function renderPriceSimpleCore({
   const tfd = timeFactorDisplay({ time_factors: timeFactors });
   const tfs = (c) => (tfd ? tfd.scale(c) : 1);
   const rel = (c) => (tfd ? tfd.scale(c) / tfd.fIn : 1);
-  const shownGroupRatio = tfd ? effectiveGroupRatio / tfd.fIn : effectiveGroupRatio;
+  const shownGroupRatio = tfd
+    ? effectiveGroupRatio / tfd.fIn
+    : effectiveGroupRatio;
   const shownUserGroupRatio =
     tfd && isValidGroupRatio(user_group_ratio)
       ? user_group_ratio / tfd.fIn
@@ -1580,7 +1582,9 @@ function renderPriceSimpleCore({
         segments.push({
           tone: 'secondary',
           text: i18next.t('缓存命中 {{price}} / 1M tokens', {
-            price: formatCompactDisplayPrice(modelRatio * cacheRatio * tfs('cache')),
+            price: formatCompactDisplayPrice(
+              modelRatio * cacheRatio * tfs('cache'),
+            ),
           }),
         });
       }
@@ -1590,8 +1594,8 @@ function renderPriceSimpleCore({
           tone: 'secondary',
           text: i18next.t('5m缓存创建 {{price}} / 1M tokens', {
             price: formatCompactDisplayPrice(
-            modelRatio * cacheCreationRatio5m * tfs('create_cache'),
-          ),
+              modelRatio * cacheCreationRatio5m * tfs('create_cache'),
+            ),
           }),
         });
       }
@@ -1600,8 +1604,8 @@ function renderPriceSimpleCore({
           tone: 'secondary',
           text: i18next.t('1h缓存创建 {{price}} / 1M tokens', {
             price: formatCompactDisplayPrice(
-            modelRatio * cacheCreationRatio1h * tfs('create_cache'),
-          ),
+              modelRatio * cacheCreationRatio1h * tfs('create_cache'),
+            ),
           }),
         });
       }
@@ -1609,7 +1613,9 @@ function renderPriceSimpleCore({
         segments.push({
           tone: 'secondary',
           text: i18next.t('缓存创建 {{price}} / 1M tokens', {
-            price: formatCompactDisplayPrice(modelRatio * cacheCreationRatio * tfs('create_cache')),
+            price: formatCompactDisplayPrice(
+              modelRatio * cacheCreationRatio * tfs('create_cache'),
+            ),
           }),
         });
       }
@@ -1618,7 +1624,9 @@ function renderPriceSimpleCore({
         segments.push({
           tone: 'secondary',
           text: i18next.t('图片输入 {{price}} / 1M tokens', {
-            price: formatCompactDisplayPrice(modelRatio * imageRatio * tfs('image')),
+            price: formatCompactDisplayPrice(
+              modelRatio * imageRatio * tfs('image'),
+            ),
           }),
         });
       }
@@ -1646,8 +1654,10 @@ function renderPriceSimpleCore({
             text: i18next.t(
               '缓存创建: 5m {{cacheCreationRatio5m}} / 1h {{cacheCreationRatio1h}}',
               {
-                cacheCreationRatio5m: cacheCreationRatio5m * rel('create_cache'),
-                cacheCreationRatio1h: cacheCreationRatio1h * rel('create_cache'),
+                cacheCreationRatio5m:
+                  cacheCreationRatio5m * rel('create_cache'),
+                cacheCreationRatio1h:
+                  cacheCreationRatio1h * rel('create_cache'),
               },
             ),
           });
@@ -1735,7 +1745,9 @@ function renderPriceSimpleCore({
     if (shouldShowCache) {
       parts.push(
         i18next.t('缓存命中 {{price}} / 1M tokens', {
-          price: formatCompactDisplayPrice(modelRatio * cacheRatio * tfs('cache')),
+          price: formatCompactDisplayPrice(
+            modelRatio * cacheRatio * tfs('cache'),
+          ),
         }),
       );
     }
@@ -1761,7 +1773,9 @@ function renderPriceSimpleCore({
     if (!hasSplitCacheCreation && shouldShowLegacyCacheCreation) {
       parts.push(
         i18next.t('缓存创建 {{price}} / 1M tokens', {
-          price: formatCompactDisplayPrice(modelRatio * cacheCreationRatio * tfs('create_cache')),
+          price: formatCompactDisplayPrice(
+            modelRatio * cacheCreationRatio * tfs('create_cache'),
+          ),
         }),
       );
     }
@@ -1769,7 +1783,9 @@ function renderPriceSimpleCore({
     if (image) {
       parts.push(
         i18next.t('图片输入 {{price}} / 1M tokens', {
-          price: formatCompactDisplayPrice(modelRatio * imageRatio * tfs('image')),
+          price: formatCompactDisplayPrice(
+            modelRatio * imageRatio * tfs('image'),
+          ),
         }),
       );
     }
@@ -1889,8 +1905,7 @@ export function renderModelPrice(opts) {
     modelPrice !== -1 ? modelPrice * tfs('per_call') : modelPrice;
   // 各分量展示价（已含自己的时段系数），两个展示分支共用。
   const inputRatioPriceEff = modelRatio * tfs('input');
-  const completionRatioPriceEff =
-    modelRatio * completionRatio * tfs('output');
+  const completionRatioPriceEff = modelRatio * completionRatio * tfs('output');
   const cacheRatioPriceEff = modelRatio * cacheRatio * tfs('cache');
   const imageRatioPriceEff = modelRatio * imageRatio * tfs('image');
   const audioInputPriceEff = audioInputPrice * tfs('audio_input');
@@ -1981,10 +1996,7 @@ export function renderModelPrice(opts) {
           audioInput: audioInputTokens,
           symbol,
           price: formatBillingDisplayPrice(inputRatioPrice, ratePerCny),
-          audioPrice: formatBillingDisplayPrice(
-            audioInputPriceEff,
-            ratePerCny,
-          ),
+          audioPrice: formatBillingDisplayPrice(audioInputPriceEff, ratePerCny),
         },
       );
     } else {
@@ -2150,7 +2162,9 @@ export function renderModelPrice(opts) {
   // 金额计算用上面的绝对分量价——两者乘积与后端逐位一致。
   const rel = (c) => (tfd ? tfd.scale(c) / tfd.fIn : 1);
   const modelRatioValue = formatRatioValue(modelRatio * tfs('input'));
-  const completionRatioValue = formatRatioValue(completionRatio * rel('output'));
+  const completionRatioValue = formatRatioValue(
+    completionRatio * rel('output'),
+  );
   const cacheRatioValue = formatRatioValue(cacheRatio * rel('cache'));
   const imageRatioValue = formatRatioValue(imageRatio * rel('image'));
   const inputRatioPrice = inputRatioPriceEff;
@@ -2386,10 +2400,7 @@ export function renderLogContent(opts) {
     const parts = [
       i18next.t('输入价格 {{symbol}}{{price}} / 1M tokens', {
         symbol,
-        price: formatBillingDisplayPrice(
-          modelRatio * tfs('input'),
-          ratePerCny,
-        ),
+        price: formatBillingDisplayPrice(modelRatio * tfs('input'), ratePerCny),
       }),
       i18next.t('输出价格 {{symbol}}{{price}} / 1M tokens', {
         symbol,
@@ -3095,9 +3106,7 @@ export function renderAudioModelPrice(opts) {
     const audioOutputPrice =
       modelRatio * audioRatio * audioCompletionRatio * tfs('audio_output');
     const textPrice =
-      ((inputTokens -
-        cacheTokens +
-        cacheTokens * cacheRatio * rel('cache')) /
+      ((inputTokens - cacheTokens + cacheTokens * cacheRatio * rel('cache')) /
         1000000) *
         inputRatioPrice *
         groupRatio +
@@ -3197,7 +3206,9 @@ export function renderAudioModelPrice(opts) {
     ? tfd.scale('audio_output') / tfd.scale('audio_input')
     : 1;
   const modelRatioValue = formatRatioValue(modelRatio * tfs('input'));
-  const completionRatioValue = formatRatioValue(completionRatio * rel('output'));
+  const completionRatioValue = formatRatioValue(
+    completionRatio * rel('output'),
+  );
   const cacheRatioValue = formatRatioValue(cacheRatio * rel('cache'));
   const audioRatioValue = formatRatioValue(audioRatio * rel('audio_input'));
   const audioCompletionRatioValue = formatRatioValue(
@@ -3598,7 +3609,9 @@ export function renderClaudeModelPrice(opts) {
   }
 
   const modelRatioValue = formatRatioValue(modelRatio * tfs('input'));
-  const completionRatioValue = formatRatioValue(completionRatio * rel('output'));
+  const completionRatioValue = formatRatioValue(
+    completionRatio * rel('output'),
+  );
   const cacheRatioValue = formatRatioValue(cacheRatio * rel('cache'));
   const cacheCreationRatioValue = formatRatioValue(
     cacheCreationRatio * rel('create_cache'),
