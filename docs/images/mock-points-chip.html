@@ -1,0 +1,52 @@
+<!doctype html><html lang='zh-CN'><head><meta charset='utf-8'><style>
+*{box-sizing:border-box}
+body{margin:0;background:#f7f8fa;font-family:-apple-system,"PingFang SC",Arial,sans-serif;color:#1c1f23;padding:24px}
+h1{font-size:15px;margin:0 0 3px}
+.sub{color:#8f959e;font-size:12px;margin-bottom:16px}
+.wrap{display:flex;gap:20px;align-items:flex-start}
+.col h5{margin:0 0 6px;font-size:12px;color:#8f959e;font-weight:500}
+.card{background:#fff;border:1px solid #e6e8eb;border-radius:16px;padding:14px 16px;width:330px}
+.top{display:flex;align-items:flex-start;justify-content:space-between;gap:8px}
+.name{font-size:15px;font-weight:700;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.tags{display:flex;gap:5px;flex-shrink:0}
+.tag{font-size:11px;line-height:18px;padding:0 8px;border-radius:9px;white-space:nowrap;display:inline-block}
+.t-disc{background:#fff0e8;color:#d93a00}
+.t-pts{background:#e8f0ff;color:#2249b8}
+.price{display:flex;flex-direction:column;gap:4px;font-size:12px;margin-top:6px;line-height:1.8}
+.strike{color:#9aa1ad;text-decoration:line-through;margin:0 4px}
+.num{font-weight:700}
+.unit{color:#9aa1ad;font-size:11px}
+.stretch .t-pts{display:block;width:100%;text-align:left;border-radius:8px}  /* 现状：被拉伸成横条 */
+.cap .t-pts{align-self:flex-start}                                      /* 修复：小胶囊 */
+.hiddenpts .t-pts{display:none}                                          /* 方案 A：不展示 */
+.note{font-size:11.5px;color:#8f959e;margin-top:10px;width:330px}
+.arrow{color:#c9ced6;font-size:20px;align-self:center}
+</style></head><body>
+<h1>积分抵扣标记：三种做法</h1>
+<div class="sub">问题根源：标签放在 flex-col 容器里，子项默认 stretch → 被拉成整条横条。</div>
+<div class="wrap">
+  <div><h5>现状（横条，丑）</h5>
+    <div class="card stretch"><div class="top"><div class="name">deepseek-v4-1-flash-1017</div><div class="tags"><span class="tag t-disc">5折</span></div></div>
+      <div class="price"><div>输入 ¥0.50 <span class="strike">¥1.00</span><span class="unit">/1M</span></div>
+      <div>输出 ¥3.50 <span class="strike">¥7.00</span><span class="unit">/1M</span></div>
+      <div><span class="tag t-pts">积分抵扣</span></div></div></div>
+    <div class="note">整条灰蓝横条，比价格本身还显眼</div></div>
+
+  <div class="arrow">→</div>
+
+  <div><h5>方案 B（小胶囊，推荐）</h5>
+    <div class="card cap"><div class="top"><div class="name">deepseek-v4-1-flash-1017</div><div class="tags"><span class="tag t-disc">5折</span></div></div>
+      <div class="price"><div>输入 ¥0.50 <span class="strike">¥1.00</span><span class="unit">/1M</span></div>
+      <div>输出 ¥3.50 <span class="strike">¥7.00</span><span class="unit">/1M</span></div>
+      <div><span class="tag t-pts">积分抵扣</span></div></div></div>
+    <div class="note">变成一枚窄胶囊，视觉重量低于价格</div></div>
+
+  <div class="arrow">→</div>
+
+  <div><h5>方案 A（不展示）</h5>
+    <div class="card hiddenpts"><div class="top"><div class="name">deepseek-v4-1-flash-1017</div><div class="tags"><span class="tag t-disc">5折</span></div></div>
+      <div class="price"><div>输入 ¥0.50 <span class="strike">¥1.00</span><span class="unit">/1M</span></div>
+      <div>输出 ¥3.50 <span class="strike">¥7.00</span><span class="unit">/1M</span></div></div></div>
+    <div class="note">最干净；但用户不知道能积分抵扣</div></div>
+</div>
+</body></html>

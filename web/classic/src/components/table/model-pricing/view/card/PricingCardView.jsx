@@ -373,14 +373,25 @@ const PricingCardView = ({
                           : priceData.isVideoMatrix
                             ? formatVideoMatrixSummary(priceData, t)
                             : formatPriceInfo(priceData, t, siteDisplayType)}
+                        {/*
+                          积分抵扣：用 self-start 包一层，否则在 flex-col 里会被拉伸成
+                          整条横条（子项默认 stretch）。这里只做"一排价格"末尾的小胶囊，
+                          视觉重量低于价格本身。
+                        */}
                         {hasPointDeduction(priceData) ? (
-                          <Tooltip
-                            content={t('可用积分抵扣，实际消耗以账单为准')}
-                          >
-                            <Tag color='light-blue' shape='circle' size='small'>
-                              {t('积分抵扣')}
-                            </Tag>
-                          </Tooltip>
+                          <span className='self-start'>
+                            <Tooltip
+                              content={t('可用积分抵扣，实际消耗以账单为准')}
+                            >
+                              <Tag
+                                color='light-blue'
+                                shape='circle'
+                                size='small'
+                              >
+                                {t('积分抵扣')}
+                              </Tag>
+                            </Tooltip>
+                          </span>
                         ) : null}
                       </div>
                     </div>
