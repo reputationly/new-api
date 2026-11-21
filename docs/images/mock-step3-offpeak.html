@@ -1,0 +1,81 @@
+<!doctype html><html lang='zh-CN'><head><meta charset='utf-8'><style>
+*{box-sizing:border-box}
+body{margin:0;background:#f7f8fa;font-family:-apple-system,"PingFang SC",Arial,sans-serif;color:#1c1f23;padding:20px}
+h1{font-size:15px;margin:0 0 3px}
+.sub{color:#8f959e;font-size:12px;margin-bottom:14px}
+.step{background:#fff;border:1px solid #e6e8eb;border-radius:12px;padding:12px 14px;margin-bottom:12px;max-width:1100px}
+.stephd{display:flex;align-items:center;gap:8px;margin-bottom:10px}
+.no{width:20px;height:20px;border-radius:10px;background:#0064fa;color:#fff;font-size:12px;display:flex;align-items:center;justify-content:center}
+.ttl{font-size:13px;font-weight:600}
+.slot{border:1px solid #e6e8eb;border-radius:11px;padding:10px 11px;width:360px;background:#fff}
+.slot .sh{display:flex;justify-content:space-between;align-items:center;margin-bottom:7px}
+.key{background:#eef4ff;color:#2249b8;border-radius:8px;padding:1px 7px;font-size:11px}
+.nm{font-size:12.5px;margin-left:6px;color:#9aa1ad}
+.nm.filled{color:#1c1f23;font-weight:600}
+.row{display:flex;align-items:center;gap:6px;font-size:11.5px;color:#6b7280;margin-bottom:6px;flex-wrap:wrap}
+.inp{border:1px solid #d9dde2;border-radius:7px;padding:3px 8px;font-size:12px;background:#fff;font-variant-numeric:tabular-nums}
+.sel{border:1px solid #d9dde2;border-radius:7px;padding:3px 8px;font-size:12px;background:#fff}
+.caret{color:#9aa1ad;margin-left:5px}
+.ring{outline:2px solid #ffd666;outline-offset:1px}
+.opt{background:#eef4ff;color:#1a4fd0;border:1px solid #b9cdf5;border-radius:7px;padding:2px 8px;font-size:11.5px;font-weight:600}
+.hintbox{margin-top:8px;background:#f4f5f7;border-radius:8px;padding:6px 9px;font-size:11px;color:#6b7280}
+.del{color:#b6bcc4;font-size:11.5px}
+</style></head><body>
+<h1>第三步：把「空闲时段」建成「其余时间」（补集）</h1>
+<div class="sub">前置：上一步已建好「高峰时段」（工作日 09:00-12:00 + 14:00-18:00 两段）。下面按顺序点。</div>
+
+<div class="step">
+  <div class="stephd"><span class="no">1</span><span class="ttl">点时段标题行最右侧的「+ 新建时段」</span></div>
+  <div style="display:flex;gap:12px">
+    <div class="slot">
+      <div class="sh"><div><span class="key">slot1</span><span class="nm filled">高峰时段</span></div><span class="del">🗑</span></div>
+      <div class="row">类型 <span class="sel">指定时间段<span class="caret">▾</span></span></div>
+      <div class="row"><span class="sel">09:00-12:00<span class="caret">▾</span></span><span class="inp">09:00</span>→<span class="inp">12:00</span><span class="sel">工作日<span class="caret">▾</span></span></div>
+      <div class="row"><span class="sel">14:00-18:00<span class="caret">▾</span></span><span class="inp">14:00</span>→<span class="inp">18:00</span><span class="sel">工作日<span class="caret">▾</span></span> <span class="del">🗑</span></div>
+      <div class="row" style="color:#0064fa">+ 添加时间段</div>
+    </div>
+    <div style="display:flex;align-items:center;color:#b6bcc4;font-size:12px">← 点完会出现第二张卡片（slot2）</div>
+  </div>
+</div>
+
+<div class="step">
+  <div class="stephd"><span class="no">2</span><span class="ttl">把新卡片的「类型」从「指定时间段」改成「其余时间」</span></div>
+  <div class="slot">
+    <div class="sh"><div><span class="key">slot2</span><span class="nm">（显示名还空着）</span></div><span class="del">🗑</span></div>
+    <div class="row">类型 <span class="sel ring">指定时间段<span class="caret">▾</span></span> <span style="color:#9aa1ad">→ 选</span> <span class="opt">其余时间</span></div>
+    <div class="hintbox">选「其余时间」后，下面的「09:00 → 12:00 / 生效日」整行会消失——补集不需要写区间。</div>
+  </div>
+</div>
+
+<div class="step">
+  <div class="stephd"><span class="no">3</span><span class="ttl">在「除 [ ] 以外的全部时间」里选「高峰时段」</span></div>
+  <div class="slot">
+    <div class="sh"><div><span class="key">slot2</span><span class="nm">（显示名还空着）</span></div><span class="del">🗑</span></div>
+    <div class="row">类型 <span class="sel">其余时间<span class="caret">▾</span></span></div>
+    <div class="row">除 <span class="sel ring">选择时段<span class="caret">▾</span></span> <span style="color:#9aa1ad">→ 选</span> <span class="opt">高峰时段</span> 以外的全部时间</div>
+    <div class="hintbox">下拉里只列「非补集」的其它时段，所以只会看到「高峰时段」一个选项。</div>
+  </div>
+</div>
+
+<div class="step">
+  <div class="stephd"><span class="no">4</span><span class="ttl">显示名填「空闲时段」→ 两个时段建完，覆盖全天</span></div>
+  <div style="display:flex;gap:12px">
+    <div class="slot">
+      <div class="sh"><div><span class="key">slot1</span><span class="nm filled">高峰时段</span></div><span class="del">🗑</span></div>
+      <div class="row">类型 <span class="sel">指定时间段<span class="caret">▾</span></span></div>
+      <div class="row">工作日 09:00-12:00、工作日 14:00-18:00</div>
+    </div>
+    <div class="slot">
+      <div class="sh"><div><span class="key">slot2</span><span class="nm filled">空闲时段</span></div><span class="del">🗑</span></div>
+      <div class="row">类型 <span class="sel">其余时间<span class="caret">▾</span></span></div>
+      <div class="row">除 <span class="sel">高峰时段<span class="caret">▾</span></span> 以外的全部时间</div>
+    </div>
+  </div>
+</div>
+
+<div class="step">
+  <div class="stephd"><span class="no">5</span><span class="ttl">用页面下半部分「添加时段」下拉，把「空闲时段」挂到模型上</span></div>
+  <div class="row" style="font-size:12px"><span class="inp" style="width:200px;color:#9aa1ad">添加时段<span class="caret">▾</span></span> <span style="color:#8f959e">选项里会出现：高峰时段 / 空闲时段</span></div>
+  <div class="hintbox">挂上后右侧多出一张「空闲时段」卡片：输入 <b>1</b>、输出 <b>4</b>、缓存命中 <b>0.02</b>，每格右侧折算显示 ×0.500。</div>
+</div>
+</body></html>
