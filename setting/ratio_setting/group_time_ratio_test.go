@@ -266,7 +266,7 @@ func TestCheckGroupTimeRatio(t *testing.T) {
 		{
 			"系数为0",
 			`{` + validWindows + `, "rules":{"default":{"m":[{"window":"night","value":0}]}}}`,
-			"value must be in (0, 20]",
+			"至少要配一个分量系数",
 		},
 		{
 			"中缀通配",
@@ -699,7 +699,7 @@ func TestCheckGroupTimeRatio_ValueRange(t *testing.T) {
 	tooBig := `{"windows":{"am":{"start":"09:00","end":"12:00"}},"rules":{"default":{"m":[{"window":"am","value":21}]}}}`
 	require.ErrorContains(t, CheckGroupTimeRatio(tooBig), "value must be in (0, 20]")
 	zero := `{"windows":{"am":{"start":"09:00","end":"12:00"}},"rules":{"default":{"m":[{"window":"am","value":0}]}}}`
-	require.ErrorContains(t, CheckGroupTimeRatio(zero), "value must be in (0, 20]")
+	require.ErrorContains(t, CheckGroupTimeRatio(zero), "至少要配一个分量系数")
 }
 
 // TestResolveGroupRatio_OutputFactorIndependent 锁死「分时段价目不等比例变化」。
@@ -716,9 +716,9 @@ func TestResolveGroupRatio_OutputFactorIndependent(t *testing.T) {
 	night := ResolveGroupRatioAt("default", "default", "m", at(t, 0, 2, 0))
 	require.InDelta(t, 0.5, night.Final, 1e-9, "输入侧系数")
 	require.InDelta(t, 0.5, night.TimeValue, 1e-9)
-	require.InDelta(t, 0.875, night.TimeOutputFactor, 1e-9, "输出侧系数独立")
+	require.InDelta(t, 0.875, night.TimeFactors["output"], 1e-9, "输出侧系数独立")
 	// 折算：输出价倍率 = Final × 补全倍率 × (0.875/0.5)
-	require.InDelta(t, 1.75, types.ScaleCompletionRatio(night.TimeValue, night.TimeOutputFactor), 1e-12)
+	require.InDelta(t, 1.75, types.ScaleComponent("output", night.TimeFactors), 1e-12)
 
 	// 没配 output_factor 时跟随输入侧（旧配置逐位不变）
 	seedTimeRatio(t, `{
@@ -726,8 +726,8 @@ func TestResolveGroupRatio_OutputFactorIndependent(t *testing.T) {
 		"rules":   {"*": {"m": [{"window":"night","value":0.5}]}}
 	}`)
 	same := ResolveGroupRatioAt("default", "default", "m", at(t, 0, 2, 0))
-	require.InDelta(t, 0.5, same.TimeOutputFactor, 1e-9)
-	require.Equal(t, 1.0, types.ScaleCompletionRatio(same.TimeValue, same.TimeOutputFactor))
+	require.InDelta(t, 1.0, types.ScaleComponent("output", same.TimeFactors), 1e-9)
+	require.Equal(t, 1.0, types.ScaleComponent("output", same.TimeFactors))
 	seedTimeRatio(t, `{}`)
 }
 
@@ -772,3 +772,36 @@ func TestResolveTimeRatioView_DirectoryAndDiscount(t *testing.T) {
 	seedTimeRatio(t, `{}`)
 }
 
+// TestResolveGroupRatio_ComponentFactors 锁死「新格式：只配的分量才变」。
+//
+// 只配 input 0.5 + cache 0.25（输入 2→1、缓存 0.04→0.01，输出不变）：
+//
+//	· 整单倍率乘 0.5；
+//	· 输出**不随时段变** → 补全倍率折 2.0 抵掉整单缩放；
+//	· 缓存折 0.5 → 缓存价 = 输入价(1) × 0.02 × 0.5 = 0.01。
+func TestResolveGroupRatio_ComponentFactors(t *testing.T) {
+	seedRatios(t, `{"default":1}`, `{}`, `{}`)
+	seedTimeRatio(t, `{
+		"windows": {"night": {"label":"闲时","start":"00:00","end":"08:00"}},
+		"rules":   {"*": {"m": [{"window":"night","factors":{"input":0.5,"cache":0.25}}]}}
+	}`)
+
+	night := ResolveGroupRatioAt("default", "default", "m", at(t, 0, 2, 0))
+	require.InDelta(t, 0.5, night.Final, 1e-9, "整单只乘 input")
+	require.InDelta(t, 0.5, night.TimeFactors["input"], 1e-9)
+	require.InDelta(t, 0.25, night.TimeFactors["cache"], 1e-9)
+	_, hasOutput := night.TimeFactors["output"]
+	require.False(t, hasOutput, "没配的分量不进表 = 不随时段变")
+	require.InDelta(t, 2.0, types.ScaleComponent("output", night.TimeFactors), 1e-12)
+	require.InDelta(t, 0.5, types.ScaleComponent("cache", night.TimeFactors), 1e-12)
+
+	// 旧格式（单 value）仍然是"整价统一乘"：所有分量都进表
+	seedTimeRatio(t, `{
+		"windows": {"night": {"label":"闲时","start":"00:00","end":"08:00"}},
+		"rules":   {"*": {"m": [{"window":"night","value":0.5}]}}
+	}`)
+	legacy := ResolveGroupRatioAt("default", "default", "m", at(t, 0, 2, 0))
+	require.InDelta(t, 0.5, legacy.TimeFactors["output"], 1e-9, "旧格式展开到全部分量")
+	require.InDelta(t, 1.0, types.ScaleComponent("output", legacy.TimeFactors), 1e-12)
+	seedTimeRatio(t, `{}`)
+}

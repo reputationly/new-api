@@ -40,32 +40,36 @@ type GroupRatioInfo struct {
 	// （忙时输入 2/输出 8、闲时输入 1/输出 7 是合法且常见的价目），
 	// 而整单只乘 GroupRatio（= 输入侧），所以输出价要靠它把差额折回 completion_ratio。
 	// 未命中时段或与输入同比例时，它等于 TimeValue。
-	TimeOutputFactor float64
+	// TimeFactors 是命中时段的**分量系数表**（分量 → 系数，稀疏）。
+	// 整单只乘 input 那一项（TimeValue），其余分量的差额由 ScaleComponent
+	// 折回各自的相对倍率（completion / cache / image / audio…）。
+	TimeFactors map[string]float64
 }
 
-// CompletionRatioScale 返回应折进 completion_ratio 的系数。
+// ScaleComponent 返回应折进该分量相对倍率的系数 = f_component / f_input。
 //
-// 计费公式是 (输入tokens + 输出tokens × completionRatio) × ModelRatio × GroupRatio，
-// 而 GroupRatio 用的是**输入侧**时段系数。要让输出走自己的系数，就把
-// outputFactor/inputFactor 乘进 completionRatio —— 这样 162 处读 CompletionRatio 的
-// 地方一处都不用改，只有「取值的那 4 个点」需要调这个函数。
+// 计费公式里整单只乘一个标量（GroupRatio = NormalRatio × f_input），所以除 input 外的
+// 每个分量只要把 f_c / f_input 折进自己的相对倍率，最终价格就等于
+// 「该分量的时段目录价 × 折扣」。这样 160 余处读 CompletionRatio / CacheRatio … 的
+// 地方一行都不用改，只需在取值的那 9 个点调这个函数。
 //
-// 未命中时段、或输入输出同比例时返回 1（逐位不变）。
-func (g GroupRatioInfo) CompletionRatioScale() float64 {
-	if g.TimeWindow == "" {
+// 未配置某分量（表里没有该键）= 该分量不随时段变 → f_c = 1。
+func ScaleComponent(component string, factors map[string]float64) float64 {
+	if len(factors) == 0 {
 		return 1
 	}
-	return ScaleCompletionRatio(g.TimeValue, g.TimeOutputFactor)
-}
-
-// ScaleCompletionRatio 是 CompletionRatioScale 的不依赖 GroupRatioInfo 版本，
-// 供只拿到两个系数的调用点使用（如 QuotaInfo 那条音频结算路径）。
-// 任一系数未设置（<=0）或两者相等时返回 1。
-func ScaleCompletionRatio(inputFactor, outputFactor float64) float64 {
-	if inputFactor <= 0 || outputFactor <= 0 || inputFactor == outputFactor {
+	fIn := factors["input"]
+	if fIn <= 0 {
+		fIn = 1
+	}
+	fC := 1.0
+	if v, ok := factors[component]; ok && v > 0 {
+		fC = v
+	}
+	if fC == fIn {
 		return 1
 	}
-	return outputFactor / inputFactor
+	return fC / fIn
 }
 
 // ModelRuleLog 返回模型级折扣规则的紧凑表示，供日志 other 字段使用。

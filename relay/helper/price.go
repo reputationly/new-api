@@ -66,7 +66,7 @@ func HandleGroupRatio(ctx *gin.Context, relayInfo *relaycommon.RelayInfo) types.
 		TimeWindow:        res.TimeWindow,
 		TimeLabel:         res.TimeLabel,
 		TimeValue:         res.TimeValue,
-		TimeOutputFactor:  res.TimeOutputFactor,
+		TimeFactors:       res.TimeFactors,
 	}
 	if res.HasSpecialRatio {
 		groupRatioInfo.HasSpecialRatio = true
@@ -108,18 +108,26 @@ func ModelPriceHelper(c *gin.Context, info *relaycommon.RelayInfo, promptTokens 
 		if !success {
 			return types.PriceData{}, modelPriceNotConfiguredError(matchName, info.UserId)
 		}
-		// 输出侧的时段系数与输入侧不同时（如忙时输入 2/输出 8、闲时输入 1/输出 7），
-		// 差额在这里折进 completion_ratio：整单乘的是输入侧系数。
+		// 时段价按**分量**折算：整单乘的是 input 系数，其余分量把 f_c/f_input
+		// 折进各自的相对倍率（未配置的分量不随时段变，系数为 1）。
+		tf := groupRatioInfo.TimeFactors
 		completionRatio = ratio_setting.GetCompletionRatio(info.OriginModelName) *
-			groupRatioInfo.CompletionRatioScale()
+			types.ScaleComponent("output", tf)
 		cacheRatio, _ = ratio_setting.GetCacheRatio(info.OriginModelName)
+		cacheRatio *= types.ScaleComponent("cache", tf)
 		cacheCreationRatio, _ = ratio_setting.GetCreateCacheRatio(info.OriginModelName)
+		cacheCreationRatio *= types.ScaleComponent("create_cache", tf)
 		cacheCreationRatio5m = cacheCreationRatio
 		// 固定1h和5min缓存写入价格的比例
 		cacheCreationRatio1h = cacheCreationRatio * claudeCacheCreation1hMultiplier
 		imageRatio, _ = ratio_setting.GetImageRatio(info.OriginModelName)
-		audioRatio = ratio_setting.GetAudioRatio(info.OriginModelName)
-		audioCompletionRatio = ratio_setting.GetAudioCompletionRatio(info.OriginModelName)
+		imageRatio *= types.ScaleComponent("image", tf)
+		audioRatio = ratio_setting.GetAudioRatio(info.OriginModelName) *
+			types.ScaleComponent("audio_input", tf)
+		// 音频输出 = 音频输入 × 该倍率；两端各自的时段系数之差折进来
+		audioCompletionRatio = ratio_setting.GetAudioCompletionRatio(info.OriginModelName) *
+			types.ScaleComponent("audio_output", tf) /
+			types.ScaleComponent("audio_input", tf)
 		// common.PreConsumedQuota 名字里带 quota，实际是**预扣 token 数下限**，
 		// 所以它不乘 QuotaPerMillionTokens、单位迁移也不改它：再乘一次会把冻结额放大两次。
 		// 倍率换算只发生在下面 ratio 这一步（倍率是 ¥/百万 tokens → quota/token = 倍率 × 1000）。

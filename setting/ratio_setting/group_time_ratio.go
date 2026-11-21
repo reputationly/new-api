@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
-	"github.com/QuantumNous/new-api/types"
 )
 
 // 时段折扣（解析链 Layer 4）。
@@ -79,20 +78,116 @@ type TimeWindow struct {
 // 没有做「新旧双语义字段」那种 expand/contract：为一个只影响少数规则的迁移，
 // 留两套解析、两套校验、两套测试的代价更大。代价就是上面这条纪律必须守住。
 type TimeRule struct {
-	Window string  `json:"window"`
-	Value  float64 `json:"value"` // 输入侧系数
-	// OutputFactor 是输出侧系数。分时段价目不一定等比例变化：忙时输入 2/输出 8、
-	// 闲时输入 1/输出 7 是合法价目（输入 5 折、输出 8.75 折）。0 表示与输入同比例。
+	Window string `json:"window"`
+	// Factors 是**分量 → 系数**的稀疏表：任何价目分量都可以有自己的时段系数。
+	// 键取自 timeFactorComponents，值是「该时段价格 ÷ 常规价格」。
+	//
+	// 语义：**没出现在表里的分量不随时段变**（保持常规价）。这条默认是保守方向——
+	// 运营只填了输入价，输出价绝不该跟着悄悄变。
+	// 「整价按比例」这类主流需求由界面的一个「整价系数」入口来满足，它会把
+	// 所有分量一次性写进这张表，两种用法互不干扰。
+	Factors map[string]float64 `json:"factors,omitempty"`
+	// Value / OutputFactor 是历史格式（整价系数 / 输出侧系数），只在读入时归一，
+	// 归一后一律走 Factors，写回时不再产生这两个字段。
+	Value        float64 `json:"value,omitempty"`
 	OutputFactor float64 `json:"output_factor,omitempty"`
 	Remark       string  `json:"remark,omitempty"` // 运营备注，同 ModelRatioRule.Remark
 }
 
-// EffectiveOutputFactor 返回输出侧系数：没单独配就跟随输入侧（单一系数向后兼容）。
-func (r TimeRule) EffectiveOutputFactor() float64 {
-	if r.OutputFactor > 0 {
-		return r.OutputFactor
+// timeFactorComponents 是允许按时段变价的分量白名单。
+//
+// 覆盖「按量计费 + 按次计费」的全部价目分量：
+//   - input         ModelRatio（输入价，唯一绝对值基准）
+//   - output        CompletionRatio（输出 = 输入 × C）
+//   - cache         CacheRatio（缓存命中）
+//   - create_cache  CreateCacheRatio（缓存创建）
+//   - image         ImageRatio（图片输入）
+//   - audio_input   AudioRatio（音频输入）
+//   - audio_output  AudioCompletionRatio（音频输出 = 音频输入 × r）
+//   - per_call      ModelPrice（按次价）
+//
+// 明确**不**支持的两类：tiered_expr 表达式（它用 hour() 自己表达时间维度，
+// 与时段价互斥）与视频矩阵（绝对 ¥/秒、按分辨率分格，另属一块）。
+var timeFactorComponents = map[string]struct{}{
+	"input":        {},
+	"output":       {},
+	"cache":        {},
+	"create_cache": {},
+	"image":        {},
+	"audio_input":  {},
+	"audio_output": {},
+	"per_call":     {},
+}
+
+// effectiveFactor 取某分量的时段系数（未配置时 = 1，即不随时段变）。
+func effectiveFactor(rule TimeRule, component string) float64 {
+	if f := rule.EffectiveFactors(); f != nil {
+		if v, ok := f[component]; ok && v > 0 {
+			return v
+		}
 	}
-	return r.Value
+	return 1
+}
+
+// TimeFactorComponents 返回分量白名单（供校验/界面提示）。
+func TimeFactorComponents() []string {
+	out := make([]string, 0, len(timeFactorComponents))
+	for k := range timeFactorComponents {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// EffectiveFactors 返回归一后的分量系数表（不含"未配置"的分量）。
+//
+// 归一规则：
+//   - 旧格式 value（整价系数）→ 展开成**全部分量**，逐位还原旧语义；
+//   - 上一版 output_factor → 并入 output；
+//   - 新格式 factors 原样使用，显式值优先。
+func (r TimeRule) EffectiveFactors() map[string]float64 {
+	if len(r.Factors) == 0 && r.Value <= 0 && r.OutputFactor <= 0 {
+		return nil
+	}
+	if len(r.Factors) > 0 {
+		out := make(map[string]float64, len(r.Factors))
+		for k, v := range r.Factors {
+			if v > 0 {
+				out[k] = v
+			}
+		}
+		// 旧字段若同时存在，作为兜底补齐（新格式没写该分量时生效）
+		if r.Value > 0 {
+			if _, ok := out["input"]; !ok {
+				out["input"] = r.Value
+			}
+		}
+		if r.OutputFactor > 0 {
+			if _, ok := out["output"]; !ok {
+				out["output"] = r.OutputFactor
+			}
+		}
+		return out
+	}
+	// 只有旧格式：整价系数乘所有分量（含按次价），与旧代码逐位一致
+	out := make(map[string]float64, len(timeFactorComponents))
+	for k := range timeFactorComponents {
+		out[k] = r.Value
+	}
+	if r.OutputFactor > 0 {
+		out["output"] = r.OutputFactor
+	}
+	return out
+}
+
+// InputFactor 返回输入侧系数（未配置时为 1）。整单倍率乘的就是它。
+func (r TimeRule) InputFactor() float64 {
+	if f := r.EffectiveFactors(); f != nil {
+		if v, ok := f["input"]; ok && v > 0 {
+			return v
+		}
+	}
+	return 1
 }
 
 // GroupTimeRatioConfig: windows 是全局共用的模板表，rules 是
@@ -301,13 +396,24 @@ func CheckGroupTimeRatio(jsonStr string) error {
 				}
 				// 系数乘在常规价上，所以 >1 是「紧缺时段加价」，合法且必要（见 maxTimePriceFactor）。
 				// 仍不允许 0：免费用 Layer 2 的 override 表达，误打一个 0 会让整批模型在某个时段白送。
-				if rule.Value <= 0 || rule.Value > maxTimePriceFactor {
+				// 旧格式 value（整价系数）若存在，同样要校验区间。
+				if rule.Value < 0 || rule.Value > maxTimePriceFactor {
 					return fmt.Errorf("group %s time rule %q window %q: value must be in (0, %g], got %g", group, pattern, rule.Window, maxTimePriceFactor, rule.Value)
 				}
-				// 输出侧系数可以独立于输入侧（输入输出不同比例变化），区间同输入侧；
-				// 0 表示"跟随输入"，故下界允许 0。
 				if rule.OutputFactor < 0 || rule.OutputFactor > maxTimePriceFactor {
-					return fmt.Errorf("group %s time rule %q window %q: output_factor must be in [0, %g], got %g", group, pattern, rule.Window, maxTimePriceFactor, rule.OutputFactor)
+					return fmt.Errorf("group %s time rule %q window %q: output_factor must be in (0, %g], got %g", group, pattern, rule.Window, maxTimePriceFactor, rule.OutputFactor)
+				}
+				// 分量白名单 + 区间校验：键打错就是"配了但不生效"，必须拦住而不是忽略。
+				for comp, factor := range rule.Factors {
+					if _, ok := timeFactorComponents[comp]; !ok {
+						return fmt.Errorf("group %s time rule %q window %q: unknown price component %q (allowed: %v)", group, pattern, rule.Window, comp, TimeFactorComponents())
+					}
+					if factor <= 0 || factor > maxTimePriceFactor {
+						return fmt.Errorf("group %s time rule %q window %q component %q: factor must be in (0, %g], got %g", group, pattern, rule.Window, comp, maxTimePriceFactor, factor)
+					}
+				}
+				if len(rule.Factors) == 0 && rule.Value <= 0 {
+					return fmt.Errorf("group %s time rule %q window %q: 至少要配一个分量系数", group, pattern, rule.Window)
 				}
 			}
 			if err := checkWindowOverlap(cfg.Windows, group, pattern, list); err != nil {
@@ -631,14 +737,14 @@ func ResolveTimeRatioView(usingGroup, modelName string, at time.Time, res RatioR
 		// 该时段的最终倍率，口径与 ResolveGroupRatioAt 的 Layer 4 逐位一致：
 		// 系数乘在常规价上（normalRatio 已含用户档乘数）。
 		windowRatio := normalRatio * rule.Value
-		outFactor := rule.EffectiveOutputFactor()
+		outFactor := effectiveFactor(rule, "output")
 		view.Windows = append(view.Windows, TimeWindowView{
 			Label:                win.displayName(rule.Window),
 			Start:                win.Start,
 			End:                  win.End,
 			Days:                 win.Days,
 			TZ:                   win.TZ,
-			Value:                rule.Value,
+			Value:                rule.InputFactor(),
 			Ratio:                windowRatio,
 			InputDirectoryRatio:  base * rule.Value,
 			OutputDirectoryRatio: base * outFactor,
@@ -684,13 +790,13 @@ func ResolveTimeRatioView(usingGroup, modelName string, at time.Time, res RatioR
 	// 此刻生效的展示口径：命中某档就用该档的系数，未命中则回到常规（系数 1/1）。
 	inFactor, outFactor := 1.0, 1.0
 	if chargedIdx >= 0 {
-		inFactor = list[chargedIdx].Value
-		outFactor = list[chargedIdx].EffectiveOutputFactor()
+		inFactor = list[chargedIdx].InputFactor()
+		outFactor = effectiveFactor(list[chargedIdx], "output")
 	}
 	view.InputDirectoryRatio = base * inFactor
 	view.OutputDirectoryRatio = base * outFactor
 	view.DiscountRatio = discountRatio
-	view.EffectiveCompletionRatio = modelCompletionRatio * types.ScaleCompletionRatio(inFactor, outFactor)
+	view.EffectiveCompletionRatio = modelCompletionRatio * (outFactor / inFactor)
 	if !until.IsZero() {
 		view.Until = until.Format(time.RFC3339)
 	}
