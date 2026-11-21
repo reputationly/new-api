@@ -94,6 +94,21 @@ describe('分时价日志展示', () => {
     expect(text).toContain('分组倍率 0.25');
   });
 
+  it('专属倍率命中时时段系数不剥它：Layer-1 基准本就不含时段', () => {
+    // SpecialRatio 是 ResolveGroupRatio 的 Layer-1（覆盖 Base），Layer-4 时段
+    // 系数是之后才乘上去的——user_group_ratio 里没有 f_in 可剥。
+    // 若误除 fIn，0.7 的身份折扣会显示成 1.4x 溢价。
+    const text = renderText(
+      renderModelPrice({
+        ...idleLog,
+        group_ratio: 0.35, // 0.7 专属 × 0.5 时段终值
+        user_group_ratio: 0.7,
+      }),
+    );
+    expect(text).toContain('专属倍率 0.7');
+    expect(text).not.toContain('1.4');
+  });
+
   it('timeFactorDisplay：缺省分量不随时段变、非分量项随 input', () => {
     const tfd = timeFactorDisplay({
       time_factors: { input: 0.5, output: 0.25 },

@@ -1520,22 +1520,16 @@ function renderPriceSimpleCore({
   displayMode = 'price',
   outputMode = 'text',
 }) {
-  const { ratio: effectiveGroupRatio, label: ratioLabel } = getEffectiveRatio(
-    groupRatio,
-    user_group_ratio,
-  );
+  const { label: ratioLabel } = getEffectiveRatio(groupRatio, user_group_ratio);
   // 分时价展示归一（与 renderModelPrice 同口径）：分量价乘各自系数，
   // 组/专属倍率除以 input 系数，乘积与后端计费逐位一致。
   const tfd = timeFactorDisplay({ time_factors: timeFactors });
   const tfs = (c) => (tfd ? tfd.scale(c) : 1);
   const rel = (c) => (tfd ? tfd.scale(c) / tfd.fIn : 1);
-  const shownGroupRatio = tfd
-    ? effectiveGroupRatio / tfd.fIn
-    : effectiveGroupRatio;
-  const shownUserGroupRatio =
-    tfd && isValidGroupRatio(user_group_ratio)
-      ? user_group_ratio / tfd.fIn
-      : user_group_ratio;
+  // 只剥 final 派生值的时段系数：SpecialRatio 是 Layer-1 基准（不含时段），
+  // getEffectiveRatio 命中专属倍率时直接透传，不能除 fIn——否则 0.7 的
+  // 身份折扣会显示成 1.4x 溢价。
+  const shownGroupRatio = tfd ? groupRatio / tfd.fIn : groupRatio;
   const finalGroupRatio = shownGroupRatio;
   const modelPriceEff =
     modelPrice !== -1 ? modelPrice * tfs('per_call') : modelPrice;
@@ -1557,7 +1551,7 @@ function renderPriceSimpleCore({
     const segments = [
       {
         tone: 'primary',
-        text: getGroupRatioText(shownGroupRatio, shownUserGroupRatio),
+        text: getGroupRatioText(shownGroupRatio, user_group_ratio),
       },
     ];
 
@@ -1712,7 +1706,7 @@ function renderPriceSimpleCore({
           symbol: symbol,
           price: formatBillingDisplayPrice(modelPriceEff, ratePerCny),
         }),
-        getGroupRatioText(shownGroupRatio, shownUserGroupRatio),
+        getGroupRatioText(shownGroupRatio, user_group_ratio),
       ]);
     }
     const displayPrice = formatBillingDisplayPrice(modelPriceEff, ratePerCny);
@@ -1732,7 +1726,7 @@ function renderPriceSimpleCore({
           price: formatCompactDisplayPrice(modelPriceEff),
         }),
       );
-      parts.push(getGroupRatioText(shownGroupRatio, shownUserGroupRatio));
+      parts.push(getGroupRatioText(shownGroupRatio, user_group_ratio));
       return joinBillingSummary(parts);
     }
 
@@ -1790,7 +1784,7 @@ function renderPriceSimpleCore({
       );
     }
 
-    parts.push(getGroupRatioText(shownGroupRatio, shownUserGroupRatio));
+    parts.push(getGroupRatioText(shownGroupRatio, user_group_ratio));
 
     let result = joinBillingSummary(parts);
     if (isSystemPromptOverride) {
@@ -1888,18 +1882,19 @@ export function renderModelPrice(opts) {
     displayMode = 'price',
     totalRoundDigits = 9,
   } = opts;
-  const { ratio: effectiveGroupRatio, label: ratioLabel } = getEffectiveRatio(
-    _groupRatio,
-    user_group_ratio,
-  );
+  const {
+    ratio: effectiveGroupRatio,
+    label: ratioLabel,
+    useUserGroupRatio,
+  } = getEffectiveRatio(_groupRatio, user_group_ratio);
   let groupRatio = effectiveGroupRatio;
   const completionRatio = _completionRatio ?? 0;
 
   // 分时价展示归一：分量价乘各自系数、倍率除以 input 系数（见 timeFactorDisplay）。
-  // 乘积逐位不变，只是把「基础价 × 含时段的混合倍率」拆成「时段目录价 × 常规倍率」。
+  // 只剥 final 派生值：专属倍率是 Layer-1 基准（不含时段），命中时原样透传。
   const tfd = timeFactorDisplay(opts);
   const tfs = (c) => (tfd ? tfd.scale(c) : 1);
-  if (tfd) groupRatio = groupRatio / tfd.fIn;
+  if (tfd && !useUserGroupRatio) groupRatio = groupRatio / tfd.fIn;
   // 按次价是分量价目之一：展示价 = 基础按次价 × per_call 系数。
   const modelPriceEff =
     modelPrice !== -1 ? modelPrice * tfs('per_call') : modelPrice;
@@ -2374,12 +2369,9 @@ export function renderLogContent(opts) {
   const tfd = timeFactorDisplay(opts);
   const tfs = (c) => (tfd ? tfd.scale(c) : 1);
   const rel = (c) => (tfd ? tfd.scale(c) / tfd.fIn : 1);
-  const shownRatio = tfd ? ratio / tfd.fIn : ratio;
+  // 只剥 final 派生值的时段系数：专属倍率（Layer-1 基准）不含时段，原样透传。
+  const shownRatio = tfd && !useUserGroupRatio ? ratio / tfd.fIn : ratio;
   const shownGroupRatio = tfd ? groupRatio / tfd.fIn : groupRatio;
-  const shownUserGroupRatio =
-    tfd && isValidGroupRatio(user_group_ratio)
-      ? user_group_ratio / tfd.fIn
-      : user_group_ratio;
   const modelPriceEff =
     modelPrice !== -1 ? modelPrice * tfs('per_call') : modelPrice;
 
@@ -2393,7 +2385,7 @@ export function renderLogContent(opts) {
           symbol,
           price: formatBillingDisplayPrice(modelPriceEff, ratePerCny),
         }),
-        getGroupRatioText(shownGroupRatio, shownUserGroupRatio),
+        getGroupRatioText(shownGroupRatio, user_group_ratio),
       ]);
     }
 
@@ -2450,7 +2442,7 @@ export function renderLogContent(opts) {
         fileSearchCallCount,
       },
     );
-    parts.push(getGroupRatioText(shownGroupRatio, shownUserGroupRatio));
+    parts.push(getGroupRatioText(shownGroupRatio, user_group_ratio));
     return joinBillingSummary(parts);
   }
 
@@ -3052,10 +3044,11 @@ export function renderAudioModelPrice(opts) {
     displayMode = 'price',
     totalRoundDigits = 9,
   } = opts;
-  const { ratio: effectiveGroupRatio, label: ratioLabel } = getEffectiveRatio(
-    _groupRatio,
-    user_group_ratio,
-  );
+  const {
+    ratio: effectiveGroupRatio,
+    label: ratioLabel,
+    useUserGroupRatio,
+  } = getEffectiveRatio(_groupRatio, user_group_ratio);
   let groupRatio = effectiveGroupRatio;
   const completionRatio = _completionRatio ?? 0;
   const audioRatio = parseFloat(_audioRatio ?? 0).toFixed(6);
@@ -3063,10 +3056,11 @@ export function renderAudioModelPrice(opts) {
 
   // 分时价展示归一（与 renderModelPrice 同口径）：分量价乘各自系数，
   // 组/专属倍率除以 input 系数；rel() 是分量相对系数（ScaleComponent 语义）。
+  // 只剥 final 派生值：专属倍率（Layer-1 基准）不含时段，命中时原样透传。
   const tfd = timeFactorDisplay(opts);
   const tfs = (c) => (tfd ? tfd.scale(c) : 1);
   const rel = (c) => (tfd ? tfd.scale(c) / tfd.fIn : 1);
-  if (tfd) groupRatio = groupRatio / tfd.fIn;
+  if (tfd && !useUserGroupRatio) groupRatio = groupRatio / tfd.fIn;
   const modelPriceEff =
     modelPrice !== -1 ? modelPrice * tfs('per_call') : modelPrice;
 
@@ -3374,20 +3368,22 @@ export function renderClaudeModelPrice(opts) {
     displayMode = 'price',
     totalRoundDigits = 9,
   } = opts;
-  const { ratio: effectiveGroupRatio, label: ratioLabel } = getEffectiveRatio(
-    _groupRatio,
-    user_group_ratio,
-  );
+  const {
+    ratio: effectiveGroupRatio,
+    label: ratioLabel,
+    useUserGroupRatio,
+  } = getEffectiveRatio(_groupRatio, user_group_ratio);
   let groupRatio = effectiveGroupRatio;
   const completionRatio = _completionRatio ?? 0;
 
   // 分时价展示归一（与 renderModelPrice 同口径）：分量价乘各自系数，
   // 组/专属倍率除以 input 系数；rel() 是分量相对系数（ScaleComponent 语义），
   // 折进 input 价的 token 折算用它，乘积与后端逐位一致。
+  // 只剥 final 派生值：专属倍率（Layer-1 基准）不含时段，命中时原样透传。
   const tfd = timeFactorDisplay(opts);
   const tfs = (c) => (tfd ? tfd.scale(c) : 1);
   const rel = (c) => (tfd ? tfd.scale(c) / tfd.fIn : 1);
-  if (tfd) groupRatio = groupRatio / tfd.fIn;
+  if (tfd && !useUserGroupRatio) groupRatio = groupRatio / tfd.fIn;
   const modelPriceEff =
     modelPrice !== -1 ? modelPrice * tfs('per_call') : modelPrice;
 
@@ -3801,21 +3797,19 @@ export function renderClaudeLogContent(opts) {
     cache_creation_ratio_1h: cacheCreationRatio1h = 1.0,
     displayMode = 'price',
   } = opts;
-  const { ratio: effectiveGroupRatio, label: ratioLabel } = getEffectiveRatio(
-    _groupRatio,
-    user_group_ratio,
-  );
+  const {
+    ratio: effectiveGroupRatio,
+    label: ratioLabel,
+    useUserGroupRatio,
+  } = getEffectiveRatio(_groupRatio, user_group_ratio);
   let groupRatio = effectiveGroupRatio;
 
   // 分时价展示归一（与 renderModelPrice 同口径）。
+  // 只剥 final 派生值：专属倍率（Layer-1 基准）不含时段，命中时原样透传。
   const tfd = timeFactorDisplay(opts);
   const tfs = (c) => (tfd ? tfd.scale(c) : 1);
   const rel = (c) => (tfd ? tfd.scale(c) / tfd.fIn : 1);
-  if (tfd) groupRatio = groupRatio / tfd.fIn;
-  const shownUserGroupRatio =
-    tfd && isValidGroupRatio(user_group_ratio)
-      ? user_group_ratio / tfd.fIn
-      : user_group_ratio;
+  if (tfd && !useUserGroupRatio) groupRatio = groupRatio / tfd.fIn;
   const modelPriceEff =
     modelPrice !== -1 ? modelPrice * tfs('per_call') : modelPrice;
 
@@ -3829,7 +3823,7 @@ export function renderClaudeLogContent(opts) {
           symbol,
           price: formatBillingDisplayPrice(modelPriceEff, ratePerCny),
         }),
-        getGroupRatioText(groupRatio, shownUserGroupRatio),
+        getGroupRatioText(groupRatio, user_group_ratio),
       ]);
     }
 
@@ -3891,7 +3885,7 @@ export function renderClaudeLogContent(opts) {
         ),
       },
     );
-    parts.push(getGroupRatioText(groupRatio, shownUserGroupRatio));
+    parts.push(getGroupRatioText(groupRatio, user_group_ratio));
     return joinBillingSummary(parts);
   }
 
