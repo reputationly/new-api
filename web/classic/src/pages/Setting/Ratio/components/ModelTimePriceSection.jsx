@@ -3,7 +3,6 @@ import {
   Banner,
   Button,
   Empty,
-  InputNumber,
   Popconfirm,
   Select,
   Space,
@@ -13,6 +12,8 @@ import {
 import { IconDelete, IconPlus } from '@douyinfe/semi-icons';
 import { useTranslation } from 'react-i18next';
 import { describeDays } from './TimeSlotEditor';
+import PriceInput from './PriceInput';
+import { PRICE_SUFFIX } from '../hooks/useModelPricingEditorState';
 
 const { Text } = Typography;
 
@@ -323,35 +324,24 @@ const ModelTimePriceSection = ({
                       {t('留空 = 该分量不随时段变')}
                     </Text>
                   </div>
-                  <div className='grid grid-cols-2 xl:grid-cols-4 gap-x-4 gap-y-2'>
+                  {/* 与「基础价格」同一套 PriceInput 行式：标签在上、输入通栏、
+                      单位后缀、×系数挂在标签右侧。按次价单位是 ¥/次不是
+                      ¥/1M tokens，单独给后缀；留空 = 该分量不随时段变。 */}
+                  <div className='grid grid-cols-1 md:grid-cols-2 gap-x-6'>
                     {componentList.map((c) => {
                       const value = Number((rule.prices || {})[c.key]);
                       const baseValue = Number(base[c.key]);
                       const factor =
                         value > 0 && baseValue > 0 ? value / baseValue : null;
                       return (
-                        <div key={c.key}>
-                          <Text size='small' type='tertiary'>
-                            {t(c.label)}
-                          </Text>
-                          <Space>
-                            <InputNumber
-                              size='small'
-                              min={0}
-                              step={0.1}
-                              precision={4}
-                              style={{ width: 110 }}
-                              value={value > 0 ? value : undefined}
-                              placeholder={t('不变')}
-                              onChange={(v) =>
-                                setPrice(
-                                  idx,
-                                  c.key,
-                                  typeof v === 'number' ? v : null,
-                                )
-                              }
-                            />
-                            {factor ? (
+                        <PriceInput
+                          key={c.key}
+                          label={t(c.label)}
+                          value={value > 0 ? value : ''}
+                          placeholder={t('不变')}
+                          suffix={c.key === 'per_call' ? '¥/次' : PRICE_SUFFIX}
+                          headerAction={
+                            factor ? (
                               <Tag
                                 color={factor > 1 ? 'orange' : 'cyan'}
                                 shape='circle'
@@ -359,9 +349,20 @@ const ModelTimePriceSection = ({
                               >
                                 ×{Number(factor.toFixed(3))}
                               </Tag>
-                            ) : null}
-                          </Space>
-                        </div>
+                            ) : null
+                          }
+                          onChange={(v) => {
+                            const s = String(v ?? '').trim();
+                            if (s === '') {
+                              setPrice(idx, c.key, null);
+                              return;
+                            }
+                            const n = Number(s);
+                            if (Number.isFinite(n)) {
+                              setPrice(idx, c.key, n);
+                            }
+                          }}
+                        />
                       );
                     })}
                   </div>
