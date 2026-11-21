@@ -33,6 +33,42 @@ export const getGroupDiscountInfo = (ratio) => {
   return { text, color, ratio: r };
 };
 
+// catalog 模式（动态目录价）时段的价目摘要：「输入¥1 输出¥4 缓存¥0.02」。
+// 分量顺序固定（输入/输出/缓存命中优先），最多列 max 个，超出补「…」——
+// tooltip 一行不折行，分量全列会把浮层撑得很宽。
+const TIME_PRICE_COMPONENTS = [
+  ['input', '输入'],
+  ['output', '输出'],
+  ['cache', '缓存命中'],
+  ['create_cache', '缓存创建'],
+  ['image', '图片'],
+  ['audio_input', '音频输入'],
+  ['audio_output', '音频输出'],
+  ['per_call', '按次'],
+];
+
+const formatTimePriceValue = (v) => {
+  const n = Number(v);
+  if (!Number.isFinite(n)) return '';
+  return `¥${Number.isInteger(n) ? n : Number(n.toFixed(4))}`;
+};
+
+export const formatTimePrices = (prices, t, max = 3) => {
+  if (!prices || typeof prices !== 'object') return '';
+  const tr = typeof t === 'function' ? t : (s) => s;
+  const parts = [];
+  for (const [comp, label] of TIME_PRICE_COMPONENTS) {
+    const price = Number(prices[comp]);
+    if (!Number.isFinite(price) || price <= 0) continue;
+    parts.push(`${tr(label)}${formatTimePriceValue(price)}`);
+    if (parts.length >= max) break;
+  }
+  const total = TIME_PRICE_COMPONENTS.filter(
+    ([comp]) => Number(prices[comp]) > 0,
+  ).length;
+  return parts.join(' ') + (total > max ? ' …' : '');
+};
+
 /**
  * 折扣标签的展示色 -> 手机端色值。
  *
@@ -194,9 +230,21 @@ export const buildTimeWindowRows = ({
         // 用户对不上号——他看到的那个名字在表里找不到。
         label: w.label || '',
         range: [w.label, formatWindowSegments(w)].filter(Boolean).join(' '),
-        // 展示该时段的**最终倍率**对应的折扣，而不是配置倍率：用户要知道的是
-        // 「这个时段几折」，配置值是管理端的事
-        discount: getGroupDiscountInfo(w.ratio),
+        // 价目模式：catalog = 动态目录价（绝对价目，分组折扣照常叠加），
+        // factor/缺省 = 动态折扣（系数乘常规价）。同模型不同窗口可混配。
+        priceMode: w.price_mode === 'catalog' ? 'catalog' : 'factor',
+        // catalog 模式下「实际改了价」的分量绝对价目（后端已过滤系数≈1 的分量）。
+        prices: w.prices && typeof w.prices === 'object' ? w.prices : null,
+        // 折数口径按模式分：
+        //   catalog —— 用 discount_ratio（与时刻无关的固定折扣）。w.ratio 是
+        //     「组折扣 × 价目比」的合成值，标成折会把价目调整误读成折扣力度；
+        //   factor  —— 保持 w.ratio（该时段最终倍率），「这个时段几折」成立。
+        discount:
+          w.price_mode === 'catalog'
+            ? getGroupDiscountInfo(
+                Number(w.discount_ratio) > 0 ? w.discount_ratio : null,
+              )
+            : getGroupDiscountInfo(w.ratio),
         ratio: Number(w.ratio),
         // 该时段的目录倍率（不含折扣）与固定折扣：详情页要同时列「目录价 / 折后价」，
         // 而广场卡片只显示折后价。

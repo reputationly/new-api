@@ -157,3 +157,49 @@ func TestResolveTimeRatioView_ComplementAndCoverage(t *testing.T) {
 
 	seedTimeRatio(t, `{}`)
 }
+
+// 展示视图必须把「动态目录价 / 动态折扣」的模式与实际改价分量下发：
+// 前端靠 price_mode 决定标题文案，靠 prices 列出该时段的绝对价目。
+// 系数≈1 的分量（时段价=常规价）不下发——列出来是噪音。
+func TestResolveTimeRatioView_PriceModeAndPrices(t *testing.T) {
+	seedRatios(t, `{"default":1}`, `{}`, `{}`)
+	require.NoError(t, UpdateModelRatioByJSONString(`{"m": 2}`))
+	require.NoError(t, UpdateCompletionRatioByJSONString(`{"m": 4}`))
+	// 常规输入 ¥2 / 输出 ¥8。prices 里 input=2 与常规持平（系数 1）应被过滤，
+	// output=4（系数 0.5）保留。
+	seedTimeRatio(t, `{
+		"windows": {
+			"cat": {"label":"空闲","start":"00:00","end":"08:00"},
+			"fac": {"label":"平谷","start":"08:00","end":"10:00"}
+		},
+		"rules": {"*": {"m": [
+			{"window":"cat","prices":{"input":2,"output":4}},
+			{"window":"fac","value":0.5}
+		]}}
+	}`)
+	defer seedTimeRatio(t, `{}`)
+
+	res := ResolveGroupRatioAt("default", "default", "m", at(t, 0, 2, 0))
+	view, ok := ResolveTimeRatioView("default", "m", at(t, 0, 2, 0), res)
+	require.True(t, ok)
+	require.Len(t, view.Windows, 2)
+
+	var cat, fac *TimeWindowView
+	for i := range view.Windows {
+		switch view.Windows[i].Label {
+		case "空闲":
+			cat = &view.Windows[i]
+		case "平谷":
+			fac = &view.Windows[i]
+		}
+	}
+	require.NotNil(t, cat)
+	require.NotNil(t, fac)
+
+	require.Equal(t, "catalog", cat.PriceMode)
+	require.Equal(t, map[string]float64{"output": 4}, cat.Prices,
+		"input=常规价（系数1）不下发，output=4 保留")
+
+	require.Empty(t, fac.PriceMode, "系数形态（旧 value）不标 catalog")
+	require.Empty(t, fac.Prices)
+}

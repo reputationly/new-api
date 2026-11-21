@@ -25,6 +25,7 @@ import {
   getTimePriceDelta,
   clampTimeLabel,
   buildTimeWindowRows,
+  formatTimePrices,
   DISCOUNT_HEX,
 } from '@classic/helpers/discount';
 import {
@@ -783,32 +784,50 @@ const Models = () => {
                 normalLabel: '其余时段',
               });
               if (rows.length === 0) return null;
+              // 与 PC 端同口径：全部窗口是动态目录价时标题换「动态目录价」，
+              // catalog 行在时段名后列已配置的绝对价目。
+              const modes = new Set(
+                rows.filter((r) => r.priceMode).map((r) => r.priceMode),
+              );
+              const allCatalog = modes.size === 1 && modes.has('catalog');
               return (
                 <div style={{ marginTop: 12 }}>
                   <div
                     style={{ fontSize: 12, color: '#9aa1ad', marginBottom: 6 }}
                   >
-                    分时定价（命中时段时取代分组折扣）
+                    {allCatalog
+                      ? '动态目录价（各时段独立价目，分组折扣照常叠加）'
+                      : '分时定价（命中时段时取代分组折扣）'}
                   </div>
-                  {rows.map((r) => (
-                    <div
-                      key={r.key}
-                      style={{
-                        display: 'flex',
-                        justifyContent: 'space-between',
-                        fontSize: 13,
-                        lineHeight: '22px',
-                      }}
-                    >
-                      <span style={{ color: '#6b7280' }}>
-                        {r.range}
-                        {r.active ? ' · 进行中' : ''}
-                      </span>
-                      <span style={{ color: DISCOUNT_HEX.cyan.fg }}>
-                        {r.discount?.text ?? `${Number(r.ratio.toFixed(4))}x`}
-                      </span>
-                    </div>
-                  ))}
+                  {rows.map((r) => {
+                    const priceText =
+                      r.priceMode === 'catalog'
+                        ? formatTimePrices(r.prices)
+                        : '';
+                    return (
+                      <div
+                        key={r.key}
+                        style={{
+                          display: 'flex',
+                          justifyContent: 'space-between',
+                          fontSize: 13,
+                          lineHeight: '22px',
+                        }}
+                      >
+                        <span style={{ color: '#6b7280' }}>
+                          {r.range}
+                          {priceText ? ` · ${priceText}` : ''}
+                          {r.active ? ' · 进行中' : ''}
+                        </span>
+                        <span style={{ color: DISCOUNT_HEX.cyan.fg }}>
+                          {r.discount?.text ??
+                            (r.priceMode === 'catalog'
+                              ? ''
+                              : `${Number(r.ratio.toFixed(4))}x`)}
+                        </span>
+                      </div>
+                    );
+                  })}
                 </div>
               );
             })()}

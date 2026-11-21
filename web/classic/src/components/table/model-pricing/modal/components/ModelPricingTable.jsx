@@ -291,6 +291,15 @@ const ModelPricingTable = ({
 
     if (rows.length === 0) return null;
 
+    // 标题与副标题按窗口价目模式聚合：「其余时段」行没有 priceMode，不参与。
+    // 全 catalog = 动态目录价（绝对价目）；全 factor = 动态折扣（系数乘常规价）；
+    // 混配回落中性文案——同一模型不同窗口可以是两种语义。
+    const modes = new Set(
+      rows.filter((r) => r.priceMode).map((r) => r.priceMode),
+    );
+    const allCatalog = modes.size === 1 && modes.has('catalog');
+    const allFactor = modes.size === 1 && modes.has('factor');
+
     return (
       <div className='mt-6'>
         <div className='flex items-center mb-4'>
@@ -298,11 +307,17 @@ const ModelPricingTable = ({
             <IconClock size={16} />
           </Avatar>
           <div>
-            <Text className='text-lg font-medium'>{t('分时定价')}</Text>
+            <Text className='text-lg font-medium'>
+              {allCatalog ? t('动态目录价') : t('分时定价')}
+            </Text>
             <div className='text-xs text-gray-600'>
-              {t(
-                '时段价乘在常规价上：小于 1 是空闲时段更便宜，大于 1 是紧缺时段更贵',
-              )}
+              {allCatalog
+                ? t('各时段使用独立目录价，分组折扣照常叠加')
+                : allFactor
+                  ? t(
+                      '时段价乘在常规价上：小于 1 是空闲时段更便宜，大于 1 是紧缺时段更贵',
+                    )
+                  : t('各时段价目独立配置，分组折扣照常叠加')}
             </div>
           </div>
         </div>
@@ -329,6 +344,18 @@ const ModelPricingTable = ({
               render: (text, record) => (
                 <span className='flex items-center gap-1 flex-wrap'>
                   {text}
+                  {record.priceMode === 'catalog' && (
+                    <Tag
+                      size='small'
+                      shape='circle'
+                      style={{
+                        backgroundColor: DISCOUNT_HEX.cyan.bg,
+                        color: DISCOUNT_HEX.cyan.fg,
+                      }}
+                    >
+                      {t('目录价')}
+                    </Tag>
+                  )}
                   {record.active && (
                     <Tag
                       size='small'

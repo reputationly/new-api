@@ -1,5 +1,8 @@
 import { describe, it, expect } from 'vitest';
-import { buildTimeWindowRows } from '../../../../helpers/discount';
+import {
+  buildTimeWindowRows,
+  formatTimePrices,
+} from '../../../../helpers/discount';
 
 // 「分时定价」表要回答的是「哪个时段几折、此刻走哪一档」。这两件事靠肉眼看渲染
 // 结果验不出来——漏一行、标错「进行中」、或者把配置倍率当成最终倍率显示，
@@ -188,9 +191,7 @@ describe('buildTimeWindowRows', () => {
         },
       ],
     });
-    expect(rows[0].range).toBe(
-      '工作日高峰 工作日 09:00-12:00、14:00-18:00',
-    );
+    expect(rows[0].range).toBe('工作日高峰 工作日 09:00-12:00、14:00-18:00');
   });
 
   it('段间天数不同时逐段标注，不能把周六的时段读成工作日的', () => {
@@ -291,5 +292,94 @@ describe('buildTimeWindowRows', () => {
     delete legacy.normal_applies;
     expect(build(legacy)).toHaveLength(2);
     expect(build(legacy)[1].label).toBe('其余时段');
+  });
+});
+
+describe('动态目录价（catalog）模式', () => {
+  // 用户的真实配置：default 固定 5 折 + 空闲时段绝对价目 输入¥1/输出¥4。
+  // w.ratio = normal_ratio(0.5) × 价目比(0.5) = 0.25 —— 合成折 2.5 折不是
+  // 配置出来的折扣，catalog 行的折数必须取与时刻无关的 discount_ratio(0.5)。
+  const catalogEntry = {
+    active: true,
+    best_ratio: 0.25,
+    normal_ratio: 0.5,
+    normal_applies: false,
+    windows: [
+      {
+        label: '高峰时段',
+        start: '09:00',
+        end: '18:00',
+        days: [1, 2, 3, 4, 5],
+        price_mode: 'catalog',
+        prices: { input: 2, output: 8 },
+        ratio: 0.5,
+        discount_ratio: 0.5,
+        active: false,
+      },
+      {
+        label: '空闲时段',
+        complement_of: '高峰时段',
+        price_mode: 'catalog',
+        prices: { input: 1, output: 4, cache: 0.02 },
+        ratio: 0.25,
+        discount_ratio: 0.5,
+        active: true,
+      },
+    ],
+  };
+
+  it('catalog 行：折数取固定折扣而非合成终值，价目透传', () => {
+    const rows = build(catalogEntry);
+    expect(rows).toHaveLength(2);
+    const idle = rows[1];
+    expect(idle.priceMode).toBe('catalog');
+    expect(idle.prices).toEqual({ input: 1, output: 4, cache: 0.02 });
+    // discount_ratio 0.5 → 5折；若误用 w.ratio 0.25 会显示 2.5折
+    expect(idle.discount.text).toBe('5折');
+    expect(idle.discount.text).not.toBe('2.5折');
+  });
+
+  it('factor 行（无 price_mode）：维持「该时段最终几折」', () => {
+    const rows = build(twoWindowEntry(0));
+    expect(rows[0].priceMode).toBe('factor');
+    expect(rows[0].prices).toBeNull();
+    expect(rows[0].discount.text).toBe('5折'); // ratio 0.5 → 5折，旧行为不变
+  });
+
+  it('混配：同行可有 catalog 与 factor 两种 priceMode', () => {
+    const mixed = {
+      ...catalogEntry,
+      windows: [
+        catalogEntry.windows[0],
+        {
+          ...catalogEntry.windows[1],
+          price_mode: undefined,
+          prices: undefined,
+        },
+      ],
+    };
+    const rows = build(mixed);
+    expect(rows[0].priceMode).toBe('catalog');
+    expect(rows[1].priceMode).toBe('factor');
+    // factor 行仍按 w.ratio 折算（0.25 → 2.5折），catalog 行按固定折扣
+    expect(rows[1].discount.text).toBe('2.5折');
+  });
+});
+
+describe('formatTimePrices', () => {
+  it('按固定分量序输出「标签¥价」，最多 3 个 + …', () => {
+    expect(
+      formatTimePrices({ output: 4, input: 1, cache: 0.02 }, (s) => s),
+    ).toBe('输入¥1 输出¥4 缓存命中¥0.02');
+    expect(
+      formatTimePrices(
+        { input: 1, output: 4, cache: 0.02, create_cache: 0.01 },
+        (s) => s,
+      ),
+    ).toBe('输入¥1 输出¥4 缓存命中¥0.02 …');
+    expect(formatTimePrices(null, (s) => s)).toBe('');
+    expect(formatTimePrices({}, (s) => s)).toBe('');
+    // 非法/非正值分量跳过
+    expect(formatTimePrices({ input: 0, output: -1 }, (s) => s)).toBe('');
   });
 });

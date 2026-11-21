@@ -916,6 +916,16 @@ type TimeWindowView struct {
 	// 由后端标而不是让前端按 label 反推：label 互为子串时（「深夜」与「深夜加强」）
 	// 字符串匹配会把两档都标成生效，而用户看到的折扣与实扣对不上。
 	Active bool `json:"active"`
+	// PriceMode 区分两种互斥的时段价语义：
+	//   "catalog" —— 动态目录价：Prices 是该时段的绝对价目（¥/1M，per_call 为 ¥/次），
+	//                分组折扣照常叠加；展示层不能把它说成「折扣」。
+	//   "factor"  —— 动态折扣：Value/Factors 系数乘在常规价上（存量配置的归一形态）。
+	// 同一模型的不同窗口允许混配，所以标志按窗口下发，标题由前端聚合。
+	PriceMode string `json:"price_mode,omitempty"`
+	// Prices 是 catalog 模式下**实际改变了价**的分量绝对价目（系数≠1 才下发——
+	// 价目等于常规价的分量对用户没有信息量）。只含展示需要的键，不回传 factors
+	// 换算细节；计费侧仍走 EffectiveFactors，不受影响。
+	Prices map[string]float64 `json:"prices,omitempty"`
 }
 
 // TimeRatioView 是某 (分组, 模型) 的时段折扣展示数据。
@@ -1029,6 +1039,25 @@ func ResolveTimeRatioView(usingGroup, modelName string, at time.Time, res RatioR
 		if refKey := strings.TrimSpace(win.ExcludeOf); refKey != "" {
 			if ref, ok := windows[refKey]; ok {
 				wv.ComplementOf = ref.displayName(refKey)
+			}
+		}
+		// 价目模式按规则的存储形态判：Prices 非空 = 动态目录价（绝对价目），
+		// 否则是系数形态的动态折扣。展示层靠它决定标题与行内后缀，混配时逐行区分。
+		if len(rule.Prices) > 0 {
+			wv.PriceMode = "catalog"
+			// 只下发「实际改了价」的分量：系数≈1 说明该分量时段价=常规价，
+			// 列出来是噪音。系数表与计费同源（EffectiveFactors），base≤0
+			// 换算不出来的分量本来就不参与计费，一并排除。
+			factors := rule.EffectiveFactors(modelName)
+			for comp, price := range rule.Prices {
+				f, ok := factors[comp]
+				if !ok || math.Abs(f-1) <= 1e-9 {
+					continue
+				}
+				if wv.Prices == nil {
+					wv.Prices = make(map[string]float64, len(rule.Prices))
+				}
+				wv.Prices[comp] = price
 			}
 		}
 		if len(segs) == 1 {

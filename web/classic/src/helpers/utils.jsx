@@ -59,6 +59,7 @@ import {
   formatWindowDays,
   formatWindowRange,
   buildTimeWindowRows,
+  formatTimePrices,
 } from './discount';
 
 export {
@@ -70,6 +71,7 @@ export {
   formatWindowDays,
   formatWindowRange,
   buildTimeWindowRows,
+  formatTimePrices,
 };
 
 const HTMLToastContent = ({ htmlContent }) => {
