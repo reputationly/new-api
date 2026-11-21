@@ -578,11 +578,18 @@ func CheckGroupTimeRatio(jsonStr string) error {
 					return fmt.Errorf("group %s time rule %q window %q: 至少要配一个分量价目", group, pattern, rule.Window)
 				}
 			}
+			seen := make(map[string]bool, len(list))
+			for _, rule := range list {
+				if seen[rule.Window] {
+					return fmt.Errorf("group %s time rule %q: window %q is configured twice", group, pattern, rule.Window)
+				}
+				seen[rule.Window] = true
+			}
 			compiled, cErr := compileWindows(cfg.Windows)
 			if cErr != nil {
 				return cErr
 			}
-			if err := checkWindowOverlap(compiled, group, pattern, list); err != nil {
+			if err := checkWindowOverlap(compiled, cfg.Windows, group, pattern, list); err != nil {
 				return err
 			}
 		}
@@ -595,7 +602,7 @@ func CheckGroupTimeRatio(jsonStr string) error {
 // 重叠本身有确定的运行时解（取最小值，见 pickTimeRule），但那是防手改 JSON 的兜底。
 // 正常配置路径拦住它，是因为重叠的两档折扣里必有一档永远不生效——那是一条管理员
 // 以为配上了、实际从未发生的折扣。
-func checkWindowOverlap(windows map[string]TimeWindow, group, pattern string, list []TimeRule) error {
+func checkWindowOverlap(windows, raw map[string]TimeWindow, group, pattern string, list []TimeRule) error {
 	type span struct {
 		day        int // time.Weekday
 		start, end int // 分钟，[start, end)
@@ -635,6 +642,17 @@ func checkWindowOverlap(windows map[string]TimeWindow, group, pattern string, li
 				continue
 			}
 			if a.start < b.end && b.start < a.end {
+				// 「其余时间」是补集，天然覆盖其它所有时段：一旦同时存在就必然重叠。
+				// 这条最容易撞上，所以单独给一句能照着做的提示。
+				aIsComp := strings.TrimSpace(raw[a.window].ExcludeOf) != ""
+				bIsComp := strings.TrimSpace(raw[b.window].ExcludeOf) != ""
+				if aIsComp || bIsComp {
+					comp, other := a.window, b.window
+					if bIsComp {
+						comp, other = b.window, a.window
+					}
+					return fmt.Errorf("group %s time rule %q: window %q is the complement (rest-of-time) and covers %q; remove the other windows or narrow the complement", group, pattern, comp, other)
+				}
 				return fmt.Errorf("group %s time rule %q: windows %q and %q overlap", group, pattern, a.window, b.window)
 			}
 		}

@@ -136,3 +136,58 @@ func TestCheckGroupTimeRatio_ComplementWindowSaves(t *testing.T) {
 	require.Error(t, CheckGroupTimeRatio(`{"windows":{"a":{"exclude_of":"nope"}},"rules":{}}`))
 	require.Error(t, CheckGroupTimeRatio(`{"windows":{"a":{"label":"甲","start":"09:00","end":"10:00"},"b":{"exclude_of":"a"},"c":{"exclude_of":"b"}},"rules":{}}`))
 }
+
+// 已有旧配置（旧面板留下的 3 个单段时段 + 该模型的 3 条规则）之后再新增「其余时间」
+// 会发生什么？这里把两种场景钉住：
+//  1. 旧配置本身能保存、能生效（升级不破坏存量）；
+//  2. 再叠加一个补集时段会**重叠**，必须被拒绝——否则同一分钟有两个价，
+//     计费取谁全看 pickTimeRule 的顺序，属于必须挡住的配置。
+func TestLegacyConfigThenAddComplement(t *testing.T) {
+	legacy := `{
+		"windows": {
+		  "night":   {"label":"空闲·夜间","start":"18:00","end":"09:00"},
+		  "noon":    {"label":"空闲·午休","start":"12:00","end":"14:00","days":[1,2,3,4,5]},
+		  "weekend": {"label":"空闲·周末","start":"09:00","end":"18:00","days":[0,6]}
+		},
+		"rules": {"*": {"m": [
+		  {"window":"night","prices":{"input":1}},
+		  {"window":"noon","prices":{"input":1}},
+		  {"window":"weekend","prices":{"input":1}}
+		]}}
+	}`
+	require.NoError(t, CheckGroupTimeRatio(legacy), "旧配置必须能继续保存")
+
+	// 追加「其余时间」（除 night 以外）后与 noon/weekend 完全重叠
+	overlapping := `{
+		"windows": {
+		  "night":   {"label":"空闲·夜间","start":"18:00","end":"09:00"},
+		  "noon":    {"label":"空闲·午休","start":"12:00","end":"14:00","days":[1,2,3,4,5]},
+		  "weekend": {"label":"空闲·周末","start":"09:00","end":"18:00","days":[0,6]},
+		  "rest":    {"label":"其余时间","exclude_of":"night"}
+		},
+		"rules": {"*": {"m": [
+		  {"window":"night","prices":{"input":1}},
+		  {"window":"noon","prices":{"input":1}},
+		  {"window":"weekend","prices":{"input":1}},
+		  {"window":"rest","prices":{"input":2}}
+		]}}
+	}`
+	err := CheckGroupTimeRatio(overlapping)
+	require.Error(t, err, "补集与既有单段时段重叠时必须报错")
+	// 报错要能照着做：指出哪个是补集、被它盖住的是谁
+	require.Contains(t, err.Error(), "complement")
+	require.Contains(t, err.Error(), "rest")
+}
+
+// 同一个模型不能给同一个时段配两条规则（会静默按最小值生效，改哪条都说不清）。
+func TestCheckGroupTimeRatio_DuplicateWindow(t *testing.T) {
+	cfg := `{
+		"windows": {"peak": {"label":"高峰","start":"09:00","end":"12:00"}},
+		"rules": {"*": {"m": [
+		  {"window":"peak","prices":{"input":2}},
+		  {"window":"peak","prices":{"input":1}}
+		]}}
+	}`
+	err := CheckGroupTimeRatio(cfg)
+	require.Error(t, err, "同一模型的同一时段不应允许重复配置")
+}
