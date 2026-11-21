@@ -290,9 +290,31 @@ const ModelPricingTable = ({
               ),
             },
             {
-              title: t('时段价格'),
+              title: t('折后 / 目录价'),
               dataIndex: 'discount',
               render: (d, record) => {
+                // 详情页才需要摊开计费规则：这里同时给「折后价」与「目录价」，
+                // 广场卡片只显示折后价（当前时段的成交价）。
+                const mRatio = Number(modelData?.model_ratio) || 0;
+                const cRatio = Number(modelData?.completion_ratio) || 1;
+                const inDir = Number(record.inDir) || 0;
+                const outDir = Number(record.outDir) || 0;
+                const disc = Number(record.fixedDiscount) || 0;
+                const inFinal = Number(record.ratio) || 0;
+                const cEff =
+                  inDir > 0 && outDir > 0 ? cRatio * (outDir / inDir) : cRatio;
+                const outFinal = Number((cEff * inFinal).toFixed(6));
+                const inList = Number(
+                  (disc > 0 ? inFinal / disc : inDir * 1).toFixed(6),
+                );
+                const outList = Number((cEff * inList).toFixed(6));
+                const fmt = (v) => `¥${Number(v).toFixed(4)}`;
+                const listPair =
+                  disc > 0 && disc !== 1 ? (
+                    <span className='text-gray-400 line-through'>
+                      {fmt(mRatio * inList)} / {fmt(mRatio * outList)}
+                    </span>
+                  ) : null;
                 // 两件事并排但不混：d.text 是**绝对折扣**（相对目录价），
                 // relative 是「相对常规价」。只显示折数看不出这个时段贵还是便宜。
                 const rel = Number(record.relative);
@@ -307,11 +329,19 @@ const ModelPricingTable = ({
                     </Tag>
                   ) : null;
                 return (
-                  <span className='flex items-center gap-1 flex-wrap'>
-                    <Tag color='white' size='small' shape='circle'>
-                      {d ? d.text : `${Number(record.ratio.toFixed(4))}x`}
-                    </Tag>
-                    {relTag}
+                  <span className='flex flex-col gap-0.5'>
+                    <span className='flex items-center gap-1 flex-wrap'>
+                      <strong>
+                        {fmt(mRatio * inFinal)} / {fmt(mRatio * outFinal)}
+                      </strong>
+                      {listPair}
+                    </span>
+                    <span className='flex items-center gap-1 flex-wrap'>
+                      {relTag}
+                      <Tag color='white' size='small' shape='circle'>
+                        {d ? d.text : `${Number(record.ratio.toFixed(4))}x`}
+                      </Tag>
+                    </span>
                   </span>
                 );
               },

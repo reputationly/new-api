@@ -157,6 +157,11 @@ export const buildTimeWindowRows = ({
         // 「这个时段几折」，配置值是管理端的事
         discount: getGroupDiscountInfo(w.ratio),
         ratio: Number(w.ratio),
+        // 该时段的目录倍率（不含折扣）与固定折扣：详情页要同时列「目录价 / 折后价」，
+        // 而广场卡片只显示折后价。
+        inDir: Number(w.input_directory_ratio) || 0,
+        outDir: Number(w.output_directory_ratio) || 0,
+        fixedDiscount: Number(entry.discount_ratio) || 0,
         // 相对常规价：>1 是紧缺时段加价、<1 是空闲优惠。折扣角标讲的是合同折扣，
         // 这一列讲的是「这个时段比常规贵/便宜多少」，两者不要混在一个数字里。
         relative: Number(
@@ -177,6 +182,10 @@ export const buildTimeWindowRows = ({
         range: normalLabel,
         discount: getGroupDiscountInfo(entry.normal_ratio),
         ratio: Number(entry.normal_ratio),
+        // 其余时段 = 常规价：目录倍率相对值 1/1
+        inDir: 1,
+        outDir: 1,
+        fixedDiscount: Number(entry.discount_ratio) || 0,
         relative: 1,
         active: !anyActive,
       });

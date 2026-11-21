@@ -384,22 +384,6 @@ const PricingCardView = ({
                             model.model_name,
                             priceData?.usedGroupRatio,
                           );
-                          const view = getTimeRatioView(
-                            groupTimeRatio,
-                            priceData?.usedGroup,
-                            model.model_name,
-                          );
-                          const win = (view?.windows || []).find(
-                            (w) => w.active,
-                          );
-                          const range =
-                            win && win.start && win.end
-                              ? `${win.start}–${win.end}`
-                              : '';
-                          const factor =
-                            delta && delta.normal > 0
-                              ? delta.current / delta.normal
-                              : 0;
                           const pointsChip = priceData?.points ? (
                             <Tooltip
                               content={t('可用积分抵扣，实际消耗以账单为准')}
@@ -426,13 +410,8 @@ const PricingCardView = ({
                                     {delta.label ||
                                       (delta.cheaper ? t('闲时') : t('高峰'))}
                                   </Tag>
-                                  {range ? (
-                                    <span className='text-gray-500'>
-                                      {range}
-                                    </span>
-                                  ) : null}
-                                  <span className='ml-auto shrink-0 text-gray-500'>
-                                    {t('目录价')} ×{Number(factor.toFixed(2))}
+                                  <span className='text-gray-500'>
+                                    {t('当前时段价')}
                                   </span>
                                 </>
                               ) : null}
