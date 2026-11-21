@@ -76,6 +76,20 @@ func buildSyncImageTask(c *gin.Context, info *relaycommon.RelayInfo) *model.Task
 	if keys := relaycommon.GetSyncImageOBSKeys(c); len(keys) > 0 {
 		task.PrivateData.ResultURL = mediastore.WrapKey(keys[0])
 	}
+
+	// 聚合生图:把增强记录一并落库。
+	//
+	// 异步任务(视频/音乐)在 controller.RelayTask 里自己组装,而同步生图是"出生即终态"
+	// 的一条记录、由这里补写 —— 不接这一段的话,同一件事在任务日志里就只剩 result_url,
+	// 「改写后的提示词是什么」查不到(按聚合模型出图时,这恰恰是最该能回查的东西)。
+	//
+	// 取的是展开点预先算好的形态(见 middleware.AggregateExpansion.ToTaskAggregateInfo):
+	// 这个包不能 import middleware(会成环),所以走 context 传值。
+	if v, ok := c.Get(string(constant.ContextKeyAggregateTaskInfo)); ok {
+		if info, ok := v.(*model.TaskAggregateInfo); ok && info != nil {
+			task.PrivateData.Aggregate = info
+		}
+	}
 	return task
 }
 

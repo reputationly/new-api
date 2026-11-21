@@ -168,9 +168,10 @@ func DryRunAggregateModel(m *common.AggregateModel, peers map[string]int) *Aggre
 			// 而出厂配置里的 minimax-music3 在刚部署的站点上通常还没声明过 ——
 			// 把它报成 error 会让每条出厂配置在面板上是红的。
 			add("generate", AggregateCheckWarn,
-				"音乐聚合的生成段模型 %q 未在「音乐模型配置」里声明引擎族:运行时按模型名"+
-					"判定是否为 MiniMax-Music3;建议声明上,避免换了对外名之后判错(判错的"+
-					"表现是增强写进引擎不读的字段,且不报错)",
+				"音乐聚合的生成段模型 %q 未在「音乐模型配置」里声明引擎族:运行时只能按"+
+					"模型名猜是 MiniMax-Music3 还是 ACE-Step;建议声明上(engine 写 "+
+					"minimax-music3 或 acestep),避免换了对外名之后判错 —— 两个引擎的字段"+
+					"语义相反(描述与歌词互换),判错的表现是增强写进引擎不读的字段,且不报错",
 				strings.TrimSpace(m.Generate.Model))
 		case family != common.MusicEngineMinimaxMusic3 && !isAceStepEngineFamily(family):
 			add("generate", AggregateCheckError,
