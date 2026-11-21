@@ -383,6 +383,20 @@ export default function ModelPricingEditor({
     onChange: (selectedRowKeys) => setSelectedModelNames(selectedRowKeys),
   };
 
+  // 分时价卡片：**按量**与**按次**都支持（后端白名单里有 per_call 分量），
+  // 只有表达式计费互斥——表达式自己能用 hour() 表达时段，两边都乘会双计。
+  const timePriceCard = (
+    <Card bodyStyle={{ padding: 16 }} style={{ marginBottom: 16 }}>
+      <ModelTimePriceSection
+        modelName={selectedModel.name}
+        windows={timeCfg.windows}
+        rules={(timeCfg.rules['*'] || {})[selectedModel.name] || []}
+        base={basePriceOf(selectedModel.name)}
+        onChange={(rules) => setModelTimeRules(selectedModel.name, rules)}
+      />
+    </Card>
+  );
+
   return (
     <>
       <Space vertical align='start' style={{ width: '100%' }}>
@@ -593,24 +607,37 @@ export default function ModelPricingEditor({
                 ) : null}
 
                 {selectedModel.billingMode === 'per-request' ? (
-                  <PriceInput
-                    label={t('固定价格')}
-                    value={selectedModel.fixedPrice}
-                    placeholder={t('输入每次调用价格')}
-                    suffix={t('¥/次')}
-                    onChange={(value) =>
-                      handleNumericFieldChange('fixedPrice', value)
-                    }
-                    extraText={t('适合 MJ / 任务类等按次收费模型。')}
-                  />
+                  <>
+                    <PriceInput
+                      label={t('固定价格')}
+                      value={selectedModel.fixedPrice}
+                      placeholder={t('输入每次调用价格')}
+                      suffix={t('¥/次')}
+                      onChange={(value) =>
+                        handleNumericFieldChange('fixedPrice', value)
+                      }
+                      extraText={t('适合 MJ / 任务类等按次收费模型。')}
+                    />
+                    {timePriceCard}
+                  </>
                 ) : selectedModel.billingMode === 'tiered_expr' ? (
-                  <TieredPricingEditor
-                    model={selectedModel}
-                    onExprChange={handleBillingExprChange}
-                    requestRuleExpr={selectedModel.requestRuleExpr}
-                    onRequestRuleExprChange={handleRequestRuleExprChange}
-                    t={t}
-                  />
+                  <>
+                    <Banner
+                      type='info'
+                      closeIcon={null}
+                      style={{ marginBottom: 16 }}
+                      description={t(
+                        '表达式计费没有「分时价」：它自己能按 hour() / weekday() 表达时段，两边同时乘会把时间系数算两遍。要按时段改价，请在下面的表达式里写，或改用按量计费 + 分时价。',
+                      )}
+                    />
+                    <TieredPricingEditor
+                      model={selectedModel}
+                      onExprChange={handleBillingExprChange}
+                      requestRuleExpr={selectedModel.requestRuleExpr}
+                      onRequestRuleExprChange={handleRequestRuleExprChange}
+                      t={t}
+                    />
+                  </>
                 ) : (
                   <>
                     <Card
@@ -764,22 +791,7 @@ export default function ModelPricingEditor({
                       />
                     </Card>
 
-                    <Card
-                      bodyStyle={{ padding: 16 }}
-                      style={{ marginBottom: 16 }}
-                    >
-                      <ModelTimePriceSection
-                        modelName={selectedModel.name}
-                        windows={timeCfg.windows}
-                        rules={
-                          (timeCfg.rules['*'] || {})[selectedModel.name] || []
-                        }
-                        base={basePriceOf(selectedModel.name)}
-                        onChange={(rules) =>
-                          setModelTimeRules(selectedModel.name, rules)
-                        }
-                      />
-                    </Card>
+                    {timePriceCard}
 
                     <Card
                       bodyStyle={{ padding: 16 }}
