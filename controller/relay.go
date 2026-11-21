@@ -881,31 +881,11 @@ func shouldRetryTaskRelay(c *gin.Context, channelId int, taskErr *dto.TaskError,
 // UpscaleModel —— `TaskAggregateInfo.HasUpscale()` 就是它的判据,轮询侧
 // `TryAdvanceAggregatePipeline` 据此根本不会提交第二段,不需要再加一个开关。
 func buildTaskAggregateInfo(c *gin.Context, exp *middleware.AggregateExpansion) *model.TaskAggregateInfo {
-	info := &model.TaskAggregateInfo{PublicModel: exp.PublicName}
-	if exp.Config != nil && exp.Config.Upscale.IsEnabled() && !exp.UpscaleSkipped {
-		info.Stage = 1
-		info.UpscaleModel = exp.Config.Upscale.Model
-		info.UpscaleTarget = exp.Config.Upscale.Target
-		// 超分段计费按交付档位记(配置里没写交付档位则回落到目标档位)。
-		info.UpscaleDelivered = exp.Config.Upscale.BilledSize()
-		// 下发给超分引擎的倍率。nil = 沿用 4.0(见 service.aggregateUpscaleSRRatio)。
-		// 必须随任务落库:超分段是轮询时才提交的,那时手上只剩任务里这份。
-		info.UpscaleSRRatio = exp.Config.Upscale.SRRatio
-		// 只有真要跑第二段时才留客户令牌 —— 没有超分段就没人会用它,
-		// 存了只是白白多一处明文凭证。
-		info.CallerKey = strings.TrimPrefix(c.Request.Header.Get("Authorization"), "Bearer ")
-	}
-	if e := exp.Enhance; e != nil {
-		info.EnhanceModel = e.Model
-		info.OriginalPrompt = e.OriginalPrompt
-		info.EnhancedPrompt = e.EnhancedPrompt
-		info.EnhanceDegraded = e.Degraded
-		info.EnhanceReason = e.DegradeReason
-		info.EnhanceMode = e.Mode
-		info.ContentPlan = e.ContentPlan
-		info.EnhanceUncertainties = e.Uncertainties
-		info.CompilerRevision = e.CompilerRevision
-		info.EnhanceFallbackReason = e.FallbackReason
-	}
-	return info
+	// **唯一实现放在 middleware**(AggregateExpansion.ToTaskAggregateInfo)。
+	//
+	// 这里曾经是第二份手抄的转换代码:2026-11-21 加 enhance_fell_back 时只改了
+	// middleware 那份、忘了这份 —— 而异步任务(视频/音乐)走的恰恰是这份,于是
+	// 出现"回落了、fallback_reason 有值、fell_back 却是 false"。两份实现只要还在,
+	// 这种漏改就一定会再发生,所以留这一个入口,只做委托。
+	return exp.ToTaskAggregateInfo(c)
 }
