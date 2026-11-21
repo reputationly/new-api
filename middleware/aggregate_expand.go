@@ -411,6 +411,9 @@ func (e *AggregateExpansion) ToTaskAggregateInfo(c *gin.Context) *model.TaskAggr
 		info.EnhanceUncertainties = en.Uncertainties
 		info.CompilerRevision = en.CompilerRevision
 		info.EnhanceFallbackReason = en.FallbackReason
+		// 回落了但改写成功时 EnhanceDegraded 仍是 false(那一位的含义是"用了
+		// 原始提示词"),所以要单独记一位"配置的档位没跑成"。
+		info.EnhanceFellBack = strings.TrimSpace(en.FallbackReason) != ""
 	}
 	return info
 }

@@ -415,6 +415,13 @@ type TaskAggregateInfo struct {
 	// 此前只进日志不进库 —— 于是 enhance_mode 显示 text 时说不出为什么,
 	// 排查只能去翻 docker logs。线上第一次验证就栽在这上面。
 	EnhanceFallbackReason string `json:"enhance_fallback_reason,omitempty"`
+	// EnhanceFellBack 这次**确实回落**了(不等于增强失败)。
+	//
+	// 为什么要单独一个布尔量:enhance_degraded 的语义是"用的是原始提示词",
+	// 而回落 text 时改写其实成功了、prompt 也写回了 —— 于是线上出现
+	// "enhance_mode=text + enhance_fallback_reason 有值 + enhance_degraded=false"
+	// 这种自相矛盾的记录,统计"配置的档位达成率"时没法用。
+	EnhanceFellBack bool `json:"enhance_fell_back,omitempty"`
 }
 
 // HasUpscale 该流水线是否还有一段超分要跑。
