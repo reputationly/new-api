@@ -18,11 +18,12 @@ For commercial licensing, please contact support@quantumnous.com
 */
 
 import React from 'react';
-import { Avatar, Typography, Table, Tag } from '@douyinfe/semi-ui';
+import { Avatar, Typography, Table, Tag, Tooltip } from '@douyinfe/semi-ui';
 import { IconCoinMoneyStroked, IconClock } from '@douyinfe/semi-icons';
 import {
   calculateModelPrice,
   getEffectiveGroupRatio,
+  getGroupDiscountInfo,
   getModelPriceItems,
   formatVideoMatrixSummary,
   buildTimeWindowRows,
@@ -160,6 +161,46 @@ const ModelPricingTable = ({
           </Tag>
         );
       },
+    });
+
+    // 折扣：不同分组/令牌的实际折扣不同（线路倍率 × 模型折扣 × 用户档），
+    // 摊在这一列里，用户能直接比较「我这个令牌几折」。
+    columns.push({
+      title: t('折扣'),
+      dataIndex: 'ratio',
+      render: (ratio, record) => {
+        const d = getGroupDiscountInfo(record?.priceData?.usedGroupRatio);
+        if (!d) {
+          return (
+            <Text type='tertiary' size='small'>
+              {t('原价')}
+            </Text>
+          );
+        }
+        return (
+          <Tag color={d.color} shape='circle' size='small'>
+            {d.text}
+          </Tag>
+        );
+      },
+    });
+
+    // 积分抵扣：支持就标一个，不列具体积分价目（消耗随套餐与用量变化）。
+    columns.push({
+      title: t('积分抵扣'),
+      dataIndex: 'points',
+      render: (_, record) =>
+        record?.priceData?.points ? (
+          <Tooltip content={t('可用积分抵扣，实际消耗以账单为准')}>
+            <Tag color='light-blue' shape='circle' size='small'>
+              {t('可用')}
+            </Tag>
+          </Tooltip>
+        ) : (
+          <Text type='tertiary' size='small'>
+            -
+          </Text>
+        ),
     });
 
     columns.push({

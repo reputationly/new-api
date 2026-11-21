@@ -423,43 +423,13 @@ export const getPricingTableColumns = ({
               </div>
             );
           })}
-          {/*
-            价格块下方的「时段/权益」带：时段名 + 生效时间 + 目录价系数，
-            与价格贴在一起看。模型名列只留折扣角标——那一列要放模型名。
-          */}
-          {(() => {
-            const delta = getTimePriceDelta(
-              groupTimeRatio,
-              priceData?.usedGroup,
-              record.model_name,
-              priceData?.usedGroupRatio,
-            );
-            const pointsChip = priceData?.points ? (
-              <Tooltip content={t('可用积分抵扣，实际消耗以账单为准')}>
-                <Tag color='light-blue' shape='circle' size='small'>
-                  {t('积分抵扣')}
-                </Tag>
-              </Tooltip>
-            ) : null;
-            if (!delta && !pointsChip) return null;
-            return (
-              <div className='mt-1 flex items-center gap-1.5 flex-wrap rounded-lg bg-[var(--semi-color-fill-0)] px-2 py-1'>
-                {delta ? (
-                  <>
-                    <Tag
-                      color={delta.cheaper ? 'cyan' : 'orange'}
-                      shape='circle'
-                      size='small'
-                    >
-                      {delta.label || (delta.cheaper ? t('闲时') : t('高峰'))}
-                    </Tag>
-                    <span className='text-gray-500'>{t('当前时段价')}</span>
-                  </>
-                ) : null}
-                {pointsChip}
-              </div>
-            );
-          })()}
+          {priceData?.points ? (
+            <Tooltip content={t('可用积分抵扣，实际消耗以账单为准')}>
+              <Tag color='light-blue' shape='circle' size='small'>
+                {t('积分抵扣')}
+              </Tag>
+            </Tooltip>
+          ) : null}
         </div>
       );
     },
