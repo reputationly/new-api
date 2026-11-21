@@ -1,0 +1,107 @@
+<!doctype html><html lang='zh-CN'><head><meta charset='utf-8'><style>
+*{box-sizing:border-box}
+body{margin:0;background:#f7f8fa;font-family:-apple-system,"PingFang SC",Arial,sans-serif;color:#1c1f23;padding:20px}
+h1{font-size:15px;margin:0 0 2px}
+.sub{color:#8f959e;font-size:11.5px;margin-bottom:12px}
+.panel{background:#fff;border:1px solid #e6e8eb;border-radius:14px;max-width:1240px}
+.hd{padding:13px 18px;border-bottom:1px solid #eef0f2;display:flex;justify-content:space-between;align-items:flex-start;gap:12px}
+.hd .t{font-size:14.5px;font-weight:700}
+.hd .d{font-size:11.5px;color:#8f959e;margin-top:3px;line-height:1.5;max-width:900px}
+.btn{font-size:12.5px;padding:5px 12px;border-radius:7px;border:1px solid #d9dde2;background:#fff}
+.btn.primary{background:#0064fa;border-color:#0064fa;color:#fff}
+.sec{padding:14px 18px}
+.sechd{display:flex;justify-content:space-between;align-items:center;margin-bottom:10px}
+.sechd .lt{font-size:13px;font-weight:600}
+.sechd .hint{font-size:11.5px;color:#8f959e;font-weight:400;margin-left:8px}
+.slots{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+.slot{border:1px solid #e6e8eb;border-radius:12px;padding:11px 12px}
+.slot .sh{display:flex;justify-content:space-between;align-items:center;margin-bottom:8px}
+.key{background:#eef4ff;color:#2249b8;border-radius:8px;padding:1px 7px;font-size:11px}
+.name{font-size:12.5px;font-weight:600;margin-left:6px}
+.row{display:flex;align-items:center;gap:6px;font-size:11.5px;color:#6b7280;margin-bottom:6px;flex-wrap:wrap}
+.inp{border:1px solid #d9dde2;border-radius:7px;padding:3px 8px;font-size:12px;background:#fff;font-variant-numeric:tabular-nums}
+.tag{font-size:11px;line-height:18px;padding:0 7px;border-radius:9px;display:inline-block}
+.t-blue{background:#eef4ff;color:#2249b8}
+.t-cyan{background:#e8f7ff;color:#0b6c8f}
+.t-orange{background:#fff3e0;color:#a85000}
+.arrow{color:#9aa1ad}
+.body{display:grid;grid-template-columns:250px 1fr;border-top:1px solid #eef0f2}
+.left{padding:14px;border-right:1px solid #eef0f2}
+.mitem{display:flex;justify-content:space-between;padding:7px 10px;border-radius:8px;font-size:12.5px;margin-bottom:3px}
+.mitem.active{background:#eef4ff;color:#1a4fd0;font-weight:600}
+.mitem .n{color:#8f959e;font-size:11px}
+.right{padding:14px 18px}
+.base{background:#f7f8fa;border-radius:9px;padding:8px 11px;font-size:11.5px;color:#494f57;margin-bottom:10px}
+.rule{border:1px solid #e6e8eb;border-radius:12px;padding:11px 12px;margin-bottom:10px}
+.rule .rh{display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;gap:8px}
+.grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:6px 14px}
+.f{font-size:11.5px;color:#6b7280}
+.f .v{display:flex;align-items:center;gap:5px;margin-top:2px}
+.fx{font-size:10.5px;color:#0b6c8f;background:#e8f7ff;border-radius:6px;padding:0 5px}
+.muted{color:#b6bcc4}
+</style></head><body>
+<h1>分时价面板（改版后）：左边选模型，右边就是它每个时段的全部价目</h1>
+<div class="sub">上面两个时段按官方口径配：高峰 = 工作日 09-12 + 14-18（两段）；空闲 = 其余时间（补集，不用手工铺 3 段）。</div>
+<div class="panel">
+  <div class="hd">
+    <div><div class="t">分时价</div><div class="d">每个时段填该时段的目录价（¥）。对全网线路生效；折扣按用户档计算、不随时段变化。常规目录价变更不会自动改这里，需要时点「按比例调整」。</div></div>
+    <button class="btn primary">保存分时价</button>
+  </div>
+
+  <div class="sec">
+    <div class="sechd"><div class="lt">时段 <span class="hint">（2 个）一个时段可以含多个不连续区间；「其余时间」表示除另一时段之外的全部时间</span></div><button class="btn">+ 新建时段</button></div>
+    <div class="slots">
+      <div class="slot">
+        <div class="sh"><div><span class="key">peak</span><span class="name">高峰时段</span></div><span class="muted">删除</span></div>
+        <div class="row">类型 <span class="inp">指定时间段 ▾</span></div>
+        <div class="row"><span class="inp">09:00-12:00 ▾</span><span class="inp">09:00</span><span class="arrow">→</span><span class="inp">12:00</span><span class="inp">工作日 ▾</span></div>
+        <div class="row"><span class="inp">14:00-18:00 ▾</span><span class="inp">14:00</span><span class="arrow">→</span><span class="inp">18:00</span><span class="inp">工作日 ▾</span> 删除</div>
+        <div class="row" style="color:#0064fa">+ 添加时间段</div>
+      </div>
+      <div class="slot">
+        <div class="sh"><div><span class="key">offpeak</span><span class="name">空闲时段</span></div><span class="muted">删除</span></div>
+        <div class="row">类型 <span class="inp">其余时间 ▾</span></div>
+        <div class="row">除 <span class="inp">高峰时段 ▾</span> 以外的全部时间</div>
+        <div class="row" style="color:#8f959e">（无需手写区间，后端按补集展开）</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="body">
+    <div class="left">
+      <div class="sub" style="margin:0 0 6px">已配置的模型（1）</div>
+      <div class="mitem active"><span>deepseek-v4-1-flash</span><span class="n">2 个时段</span></div>
+      <div class="row" style="margin-top:8px"><span class="inp" style="width:130px">模型名或 deepseek-*</span><button class="btn">+ 添加模型</button></div>
+    </div>
+    <div class="right">
+      <div class="base">常规目录价（模型定价页）　输入 ¥2.0000　输出 ¥8.0000　缓存命中 ¥0.0400</div>
+
+      <div class="rule">
+        <div class="rh">
+          <div><span class="tag t-cyan">高峰时段</span> <span class="muted" style="font-size:11.5px">工作日 09:00-12:00、工作日 14:00-18:00</span></div>
+          <div><button class="btn" style="padding:2px 8px">×0.5</button> <button class="btn" style="padding:2px 8px">×1.2</button> <button class="btn" style="padding:2px 8px">重置为常规价</button></div>
+        </div>
+        <div class="grid">
+          <div class="f">输入<span class="v"><span class="inp">2.0000</span><span class="fx">×1.000</span></span></div>
+          <div class="f">输出<span class="v"><span class="inp">8.0000</span><span class="fx">×1.000</span></span></div>
+          <div class="f">缓存命中<span class="v"><span class="inp">0.0400</span><span class="fx">×1.000</span></span></div>
+        </div>
+      </div>
+
+      <div class="rule">
+        <div class="rh">
+          <div><span class="tag t-blue">空闲时段</span> <span class="muted" style="font-size:11.5px">其余时间（除「高峰时段」以外）</span></div>
+          <div><button class="btn" style="padding:2px 8px">×0.5</button> <button class="btn" style="padding:2px 8px">×1.2</button> <button class="btn" style="padding:2px 8px">重置为常规价</button></div>
+        </div>
+        <div class="grid">
+          <div class="f">输入<span class="v"><span class="inp">1.0000</span><span class="fx">×0.500</span></span></div>
+          <div class="f">输出<span class="v"><span class="inp">4.0000</span><span class="fx">×0.500</span></span></div>
+          <div class="f">缓存命中<span class="v"><span class="inp">0.0200</span><span class="fx">×0.500</span></span></div>
+        </div>
+      </div>
+
+      <div class="row"><span class="inp" style="width:200px">添加时段 ▾</span> 留空 = 该分量不随时段变</div>
+    </div>
+  </div>
+</div>
+</body></html>

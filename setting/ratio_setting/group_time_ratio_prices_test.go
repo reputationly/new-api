@@ -94,4 +94,3 @@ func TestResolveTimeRatioView_PricesFormatNonZero(t *testing.T) {
 
 	seedTimeRatio(t, `{}`)
 }
-

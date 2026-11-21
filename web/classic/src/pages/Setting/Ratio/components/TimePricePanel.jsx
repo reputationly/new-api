@@ -9,99 +9,61 @@ import {
   Popconfirm,
   Select,
   Space,
-  Table,
   Tag,
   Typography,
 } from '@douyinfe/semi-ui';
 import { IconDelete, IconPlus, IconSave } from '@douyinfe/semi-icons';
 import { useTranslation } from 'react-i18next';
 import { API, showError, showSuccess, showWarning } from '../../../../helpers';
-import TimeWindowEditor from '../../../GroupManagement/components/TimeWindowEditor';
-import TimePriceRuleEditor from './TimePriceRuleEditor';
+import TimeSlotEditor, { describeDays } from './TimeSlotEditor';
 
 const { Text } = Typography;
 
-// 全网作用域键。与后端 setting/ratio_setting 的保留键一致：
-// 规则挂在这个 key 下 = 对所有线路生效；按线路名存的是存量配置，解析时优先于全网。
-const GLOBAL_SCOPE = '*';
+// 可以按时段变价的分量，顺序按"最常改"排。
+// 后端白名单见 setting/ratio_setting/group_time_ratio.go: timeFactorComponents。
+const COMPONENTS = [
+  { key: 'input', label: '输入', unit: '¥/1M' },
+  { key: 'output', label: '输出', unit: '¥/1M' },
+  { key: 'cache', label: '缓存命中', unit: '¥/1M' },
+  { key: 'create_cache', label: '缓存创建', unit: '¥/1M' },
+  { key: 'image', label: '图片输入', unit: '¥/1M' },
+  { key: 'audio_input', label: '音频输入', unit: '¥/1M' },
+  { key: 'audio_output', label: '音频输出', unit: '¥/1M' },
+  { key: 'per_call', label: '按次价', unit: '¥/次' },
+];
 
 const MAX_FACTOR = 20;
+const GLOBAL_SCOPE = '*';
 
-const parseConfig = (raw) => {
-  try {
-    const parsed = JSON.parse(raw || '{}') || {};
-    return { windows: parsed.windows || {}, rules: parsed.rules || {} };
-  } catch (e) {
-    return { windows: {}, rules: {} };
-  }
-};
-
-const clockMinutes = (s) => {
-  const m = /^(\d{1,2}):(\d{2})$/.exec(String(s == null ? '' : s).trim());
-  return m ? Number(m[1]) * 60 + Number(m[2]) : null;
-};
-
-/** 窗口此刻是否生效（按浏览器时区，仅供管理端预览；计费侧一律由后端判定）。 */
-const windowActiveNow = (win, now) => {
-  if (!win) return false;
-  const start = clockMinutes(win.start);
-  const end = clockMinutes(win.end);
-  if (start === null || end === null || start === end) return false;
-  const days = Array.isArray(win.days) && win.days.length ? win.days : null;
-  const cur = now.getHours() * 60 + now.getMinutes();
-  const day = now.getDay();
-  if (start < end) {
-    return days
-      ? days.includes(day) && cur >= start && cur < end
-      : cur >= start && cur < end;
-  }
-  // 跨午夜按起始日判定，与后端 ActiveAt 同一读法
-  if (cur >= start) return days ? days.includes(day) : true;
-  if (cur < end) return days ? days.includes((day + 6) % 7) : true;
-  return false;
-};
-
-/**
- * 分时价编辑器（模型定价页）。
- *
- * 时段价是**价目**的一部分：系数乘在常规价（目录价 × 线路基准 × 模型定价）上，
- * 小于 1 是空闲时段更便宜、大于 1 是紧缺时段更贵；对全网线路生效，与客户折扣无关
- * （折扣只看用户档，永远不随时段变）。设计见 docs/time-price-axis-design.md §6。
- */
-export default function TimePricePanel({ options, refresh }) {
+// 分时价面板：以**模型**为主轴。
+//
+// 原来是一张平铺规则表（模型 + 时段 + 两个价格），一个模型的配置散在多行，
+// 补缓存还得再点弹窗。现在：左边选模型，右边是它每个时段的全部价目，一次配完。
+//
+// 存储语义：每个时段存**绝对价目**（prices），不是系数。目录价是对外公布的价目表，
+// 填 1 就是 1；常规目录价变了不会偷偷改这里（要跟就点「按比例调整」）。
+const TimePricePanel = ({ options, refresh }) => {
   const { t } = useTranslation();
-  const [raw, setRaw] = useState((options && options.GroupTimeRatio) || '{}');
-  const [originRaw, setOriginRaw] = useState(
-    (options && options.GroupTimeRatio) || '{}',
-  );
+
+  const raw = (options && options.GroupTimeRatio) || '{}';
+  const [draft, setDraft] = useState(raw);
   const [saving, setSaving] = useState(false);
-  const [addPattern, setAddPattern] = useState('');
-  const [addWindow, setAddWindow] = useState(null);
-  const [addFactor, setAddFactor] = useState(1.1111);
-  const [addOutFactor, setAddOutFactor] = useState(null); // 空 = 跟随输入系数
-  // 按目录价填写时的两个输入（¥/1M）；模式串是通配时没有单一目录价，退回填系数
-  const [addInPrice, setAddInPrice] = useState(null);
-  const [addOutPrice, setAddOutPrice] = useState(null);
-  // 正在编辑的规则（打开分量表弹窗）：{ pattern, index, factors, remark }
-  const [editing, setEditing] = useState(null);
+  const [selectedModel, setSelectedModel] = useState('');
+  const [newModel, setNewModel] = useState('');
 
   useEffect(() => {
-    const next = (options && options.GroupTimeRatio) || '{}';
-    setRaw(next);
-    setOriginRaw(next);
-  }, [options && options.GroupTimeRatio]);
+    setDraft(raw);
+  }, [raw]);
 
-  const cfg = useMemo(() => parseConfig(raw), [raw]);
-  const modelRatioMap = useMemo(() => {
+  const cfg = useMemo(() => {
     try {
-      return JSON.parse((options && options.ModelRatio) || '{}') || {};
+      const parsed = JSON.parse(draft || '{}') || {};
+      return { windows: parsed.windows || {}, rules: parsed.rules || {} };
     } catch (e) {
-      return {};
+      return { windows: {}, rules: {} };
     }
-  }, [options && options.ModelRatio]);
+  }, [draft]);
 
-  // 各分量的相对倍率：算「常规目录价」用（输入价 × 该倍率 = 分量常规价）。
-  // 与 calculateModelPrice 用的是同一批 option key，口径不会分叉。
   const ratioOption = (key) => {
     try {
       return JSON.parse((options && options[key]) || '{}') || {};
@@ -109,6 +71,11 @@ export default function TimePricePanel({ options, refresh }) {
       return {};
     }
   };
+
+  const modelRatioMap = useMemo(
+    () => ratioOption('ModelRatio'),
+    [options && options.ModelRatio],
+  );
   const completionRatioMap = useMemo(
     () => ratioOption('CompletionRatio'),
     [options && options.CompletionRatio],
@@ -138,266 +105,182 @@ export default function TimePricePanel({ options, refresh }) {
     [options && options.ModelPrice],
   );
 
-  // 某模型的分量常规目录价表（¥），供编辑器展示与换算。
-  const basePriceOf = (pattern) => {
-    const m = Number(modelRatioMap[pattern]) || 0;
-    const rel = (map) => {
-      const v = Number(map[pattern]);
-      return Number.isFinite(v) && v > 0 ? v : null;
-    };
-    const c = rel(completionRatioMap);
-    const a = rel(audioRatioMap);
-    const ac = rel(audioCompletionRatioMap);
-    const price = Number(modelPriceMap[pattern]) || 0;
-    return {
-      input: m > 0 ? m : null,
-      output: m > 0 && c ? m * c : null,
-      cache: m > 0 && rel(cacheRatioMap) ? m * rel(cacheRatioMap) : null,
-      create_cache:
-        m > 0 && rel(createCacheRatioMap) ? m * rel(createCacheRatioMap) : null,
-      image: m > 0 && rel(imageRatioMap) ? m * rel(imageRatioMap) : null,
-      audio_input: m > 0 && a ? m * a : null,
-      audio_output: m > 0 && a && ac ? m * a * ac : null,
-      per_call: price > 0 ? price : null,
-    };
-  };
-
-  const windowOptions = useMemo(
-    () =>
-      Object.entries(cfg.windows).map(([key, win]) => ({
-        label: (win && win.label) || key,
-        value: key,
-      })),
-    [cfg.windows],
+  // 某模型的**常规目录价**（¥）：既是展示基准，也是折算系数与「重置」的依据。
+  const basePriceOf = useCallback(
+    (pattern) => {
+      const m = Number(modelRatioMap[pattern]) || 0;
+      const rel = (map) => {
+        const v = Number(map[pattern]);
+        return Number.isFinite(v) && v > 0 ? v : null;
+      };
+      const c = rel(completionRatioMap);
+      const a = rel(audioRatioMap);
+      const ac = rel(audioCompletionRatioMap);
+      const price = Number(modelPriceMap[pattern]) || 0;
+      return {
+        input: m > 0 ? m : null,
+        output: m > 0 && c ? m * c : null,
+        cache: m > 0 && rel(cacheRatioMap) ? m * rel(cacheRatioMap) : null,
+        create_cache:
+          m > 0 && rel(createCacheRatioMap)
+            ? m * rel(createCacheRatioMap)
+            : null,
+        image: m > 0 && rel(imageRatioMap) ? m * rel(imageRatioMap) : null,
+        audio_input: m > 0 && a ? m * a : null,
+        audio_output: m > 0 && a && ac ? m * a * ac : null,
+        per_call: price > 0 ? price : null,
+      };
+    },
+    [
+      modelRatioMap,
+      completionRatioMap,
+      cacheRatioMap,
+      createCacheRatioMap,
+      imageRatioMap,
+      audioRatioMap,
+      audioCompletionRatioMap,
+      modelPriceMap,
+    ],
   );
 
-  const globalRules = cfg.rules[GLOBAL_SCOPE] || {};
+  const globalRules = useMemo(() => cfg.rules[GLOBAL_SCOPE] || {}, [cfg]);
+  const models = useMemo(
+    () => Object.keys(globalRules).sort((a, b) => a.localeCompare(b)),
+    [globalRules],
+  );
+
+  useEffect(() => {
+    if (models.length === 0) {
+      setSelectedModel('');
+      return;
+    }
+    if (!selectedModel || !globalRules[selectedModel]) {
+      setSelectedModel(models[0]);
+    }
+  }, [models, globalRules, selectedModel]);
+
   const legacyScopes = useMemo(
     () =>
       Object.keys(cfg.rules).filter(
-        (k) =>
-          k !== GLOBAL_SCOPE &&
-          cfg.rules[k] &&
-          Object.keys(cfg.rules[k]).length,
+        (scope) =>
+          scope !== GLOBAL_SCOPE &&
+          Object.keys(cfg.rules[scope] || {}).length > 0,
       ),
-    [cfg.rules],
+    [cfg],
   );
 
-  const emit = useCallback((nextCfg) => {
-    setRaw(JSON.stringify(nextCfg, null, 2));
-  }, []);
-
-  const setRulesForScope = useCallback(
-    (scope, rules) => {
-      const nextRules = Object.assign({}, cfg.rules);
-      if (!rules || Object.keys(rules).length === 0) {
-        delete nextRules[scope];
-      } else {
-        nextRules[scope] = rules;
-      }
-      emit({ windows: cfg.windows, rules: nextRules });
-    },
-    [cfg, emit],
-  );
-
-  const setGlobalList = useCallback(
-    (pattern, list) => {
-      const next = Object.assign({}, globalRules);
-      if (!list || list.length === 0) {
-        delete next[pattern];
-      } else {
-        next[pattern] = list;
-      }
-      setRulesForScope(GLOBAL_SCOPE, next);
-    },
-    [globalRules, setRulesForScope],
-  );
-
-  // 把按线路存的旧规则并进全网：同模型同时段冲突时按全网为准，并在提示里点名。
-  const migrateLegacy = useCallback(() => {
-    const merged = Object.assign({}, globalRules);
-    const conflicts = [];
-    legacyScopes.forEach((scope) => {
-      Object.entries(cfg.rules[scope] || {}).forEach(([pattern, list]) => {
-        const base = (merged[pattern] || []).slice();
-        (list || []).forEach((rule) => {
-          const idx = base.findIndex((r) => r.window === rule.window);
-          if (idx >= 0) {
-            if (Number(base[idx].value) !== Number(rule.value)) {
-              conflicts.push(pattern + '/' + rule.window);
-            }
-            return;
-          }
-          base.push(rule);
-        });
-        merged[pattern] = base;
-      });
-    });
-    const nextRules = {};
-    nextRules[GLOBAL_SCOPE] = merged;
-    emit({ windows: cfg.windows, rules: nextRules });
-    if (conflicts.length) {
-      showWarning(t('已合并，冲突项按全网规则为准：') + conflicts.join('、'));
+  const emitRules = (nextGlobalRules) => {
+    const nextRules = { ...cfg.rules };
+    if (Object.keys(nextGlobalRules).length === 0) {
+      delete nextRules[GLOBAL_SCOPE];
+    } else {
+      nextRules[GLOBAL_SCOPE] = nextGlobalRules;
     }
-  }, [cfg, emit, globalRules, legacyScopes, t]);
-  const windowUsage = useMemo(() => {
-    const usage = {};
-    Object.values(cfg.rules).forEach((scopeRules) => {
-      Object.values(scopeRules || {}).forEach((list) => {
-        (list || []).forEach((r) => {
-          if (r && r.window) usage[r.window] = (usage[r.window] || 0) + 1;
-        });
-      });
-    });
-    return usage;
-  }, [cfg.rules]);
-
-  // 把一条规则归一成**绝对价目**（¥）：新格式直接读 prices；旧格式（factors/value）
-  // 用 base 换算成价格再展示，保证历史配置照样看得见、改得动。
-  const pricesOf = (rule, base) => {
-    const out = {};
-    const prices = rule.prices || {};
-    Object.entries(prices).forEach(([k, v]) => {
-      if (Number(v) > 0) out[k] = Number(v);
-    });
-    if (Object.keys(out).length > 0) return out;
-    const factors = rule.factors || {};
-    Object.entries(factors).forEach(([k, v]) => {
-      const b = Number(base?.[k]);
-      if (Number(v) > 0 && b > 0) out[k] = Number((b * Number(v)).toFixed(4));
-    });
-    if (Number(rule.value) > 0) {
-      Object.entries(base || {}).forEach(([k, b]) => {
-        if (Number(b) > 0)
-          out[k] = Number((Number(b) * Number(rule.value)).toFixed(4));
-      });
-    }
-    if (Number(rule.output_factor) > 0 && Number(base?.output) > 0) {
-      out.output = Number(
-        (Number(base.output) * Number(rule.output_factor)).toFixed(4),
-      );
-    }
-    return out;
+    setDraft(
+      JSON.stringify({ windows: cfg.windows, rules: nextRules }, null, 2),
+    );
   };
 
-  const rows = useMemo(() => {
-    const out = [];
-    Object.entries(globalRules).forEach(([pattern, list]) => {
-      (list || []).forEach((rule, idx) => {
-        out.push({
-          key: pattern + '|' + rule.window + '|' + idx,
-          pattern,
-          window: rule.window,
-          // 归一后的**绝对价目**（旧格式用 base 换算出来）
-          prices: pricesOf(rule, basePriceOf(pattern)),
-          remark: rule.remark || '',
-          listIndex: idx,
-        });
-      });
-    });
-    return out.sort((a, b) =>
-      a.pattern === b.pattern
-        ? String(a.window).localeCompare(String(b.window))
-        : a.pattern.localeCompare(b.pattern),
-    );
-  }, [globalRules]);
+  const setModelRules = (model, list) => {
+    const next = { ...globalRules };
+    if (!list || list.length === 0) {
+      delete next[model];
+    } else {
+      next[model] = list;
+    }
+    emitRules(next);
+  };
 
-  // 编辑器回写：存**绝对价目**。旧字段（value / output_factor / factors）一并清掉，
-  // 避免同一档里同时存在两套语义。
-  const updateRowPrices = (row, prices) => {
-    const list = (globalRules[row.pattern] || []).map((r, i) => {
-      if (i !== row.listIndex) return r;
-      const next = Object.assign({}, r, { prices });
+  const patchRule = (model, idx, updater) => {
+    const list = (globalRules[model] || []).map((r, i) =>
+      i === idx ? updater(r) : r,
+    );
+    setModelRules(model, list);
+  };
+
+  // 单个分量改价：留空 = 该分量不随时段变（从 prices 里删掉这个键）
+  const setPrice = (model, idx, comp, value) => {
+    patchRule(model, idx, (rule) => {
+      const prices = { ...(rule.prices || {}) };
+      if (value === null || !(value > 0)) {
+        delete prices[comp];
+      } else {
+        prices[comp] = Number(value.toFixed(4));
+      }
+      const next = { ...rule, prices };
       delete next.value;
       delete next.output_factor;
       delete next.factors;
       return next;
     });
-    setGlobalList(row.pattern, list);
   };
 
-  const updateRowRemark = (row, remark) => {
-    const list = (globalRules[row.pattern] || []).map((r, i) =>
-      i === row.listIndex ? Object.assign({}, r, { remark }) : r,
-    );
-    setGlobalList(row.pattern, list);
-  };
-
-  const removeRow = (row) => {
-    const list = (globalRules[row.pattern] || []).filter(
-      (_, i) => i !== row.listIndex,
-    );
-    setGlobalList(row.pattern, list);
-  };
-
-  const AddOutSameAsIn = (prices) =>
-    Number(prices.output) > 0 &&
-    Math.abs(Number(prices.output) - Number(prices.input)) < 1e-9;
-
-  const addRule = () => {
-    const pattern = addPattern.trim();
-    if (!pattern) {
-      showWarning(t('请填写模型名或模式串'));
-      return;
-    }
-    if (!addWindow) {
-      showWarning(t('请选择时段模板'));
-      return;
-    }
-    const base = basePriceOf(pattern);
-    const byPrice = Number(base.input) > 0;
-    // 存的是**绝对价目**：输入框里填多少就存多少；通配模式串没有单一常规价，
-    // 只能填系数，这里按系数 × 常规价 折算成价格后再存。
-    const prices = {};
-    if (byPrice) {
-      if (!(addInPrice > 0)) {
-        showWarning(t('请填写该时段的输入目录价'));
-        return;
-      }
-      prices.input = Number(Number(addInPrice).toFixed(4));
-      if (addOutPrice > 0)
-        prices.output = Number(Number(addOutPrice).toFixed(4));
-      if (AddOutSameAsIn(prices)) delete prices.output;
-    } else {
-      if (!(addFactor > 0 && addFactor <= MAX_FACTOR)) {
-        showWarning(t('系数必须在 (0, 20] 之间'));
-        return;
-      }
-      Object.entries(base || {}).forEach(([k, b]) => {
-        if (Number(b) > 0) {
-          prices[k] = Number((Number(b) * addFactor).toFixed(4));
-        }
+  // 按比例调整这一档（上游调价后手动跟一下），作用于**已填**的分量
+  const scaleRule = (model, idx, factor) => {
+    patchRule(model, idx, (rule) => {
+      const prices = {};
+      Object.entries(rule.prices || {}).forEach(([k, v]) => {
+        const n = Number(v) * factor;
+        if (n > 0) prices[k] = Number(n.toFixed(4));
       });
-      if (Object.keys(prices).length === 0) {
-        showWarning(t('该模型没有可折算的常规目录价，请先在模型定价页配置'));
-        return;
-      }
-      if (addOutFactor > 0 && prices.output) {
-        prices.output = Number((Number(base.output) * addOutFactor).toFixed(4));
-      }
-    }
+      return { ...rule, prices };
+    });
+  };
 
-    const list = (globalRules[pattern] || []).slice();
-    const idx = list.findIndex((r) => r.window === addWindow);
-    if (idx >= 0) {
-      const merged = Object.assign({}, list[idx], { prices });
-      delete merged.value;
-      delete merged.output_factor;
-      delete merged.factors;
-      list[idx] = merged;
-    } else {
-      list.push({ window: addWindow, prices });
+  const resetRule = (model, idx) => {
+    const base = basePriceOf(model);
+    patchRule(model, idx, (rule) => {
+      const prices = {};
+      Object.entries(base).forEach(([k, v]) => {
+        if (Number(v) > 0) prices[k] = Number(Number(v).toFixed(4));
+      });
+      return { ...rule, prices };
+    });
+  };
+
+  const removeRule = (model, idx) => {
+    const list = (globalRules[model] || []).filter((_, i) => i !== idx);
+    setModelRules(model, list);
+  };
+
+  const addRule = (model, windowKey) => {
+    if (!windowKey) return;
+    const list = [...(globalRules[model] || [])];
+    if (list.some((r) => r.window === windowKey)) {
+      showWarning(t('该时段已经配过了'));
+      return;
     }
-    setGlobalList(pattern, list);
-    setAddPattern('');
-    setAddWindow(null);
-    setAddOutFactor(null);
-    setAddInPrice(null);
-    setAddOutPrice(null);
+    const base = basePriceOf(model);
+    const prices = {};
+    if (Number(base.input) > 0) {
+      prices.input = Number(Number(base.input).toFixed(4));
+    }
+    list.push({ window: windowKey, prices });
+    setModelRules(model, list);
+  };
+
+  const slotSummary = (windowKey) => {
+    const win = cfg.windows[windowKey];
+    if (!win) return windowKey;
+    if (win.exclude_of) {
+      const ref = cfg.windows[win.exclude_of];
+      return t('其余时间（除「{{name}}」以外）', {
+        name: (ref && ref.label) || win.exclude_of,
+      });
+    }
+    const segs =
+      Array.isArray(win.segments) && win.segments.length > 0
+        ? win.segments
+        : win.start && win.end
+          ? [{ start: win.start, end: win.end, days: win.days }]
+          : [];
+    return segs
+      .map((s) => describeDays(s.days) + ' ' + s.start + '-' + s.end)
+      .join('、');
   };
 
   const onSubmit = async () => {
-    if (raw === originRaw) {
+    if (draft === raw) {
       showWarning(t('你似乎并没有修改什么'));
       return;
     }
@@ -405,7 +288,7 @@ export default function TimePricePanel({ options, refresh }) {
     try {
       const res = await API.put('/api/option/', {
         key: 'GroupTimeRatio',
-        value: raw,
+        value: draft,
       });
       if (!res || !res.data || !res.data.success) {
         showError(
@@ -414,8 +297,7 @@ export default function TimePricePanel({ options, refresh }) {
         return;
       }
       showSuccess(t('保存成功'));
-      setOriginRaw(raw);
-      if (refresh) refresh();
+      refresh && refresh();
     } catch (e) {
       showError(t('保存失败，请重试'));
     } finally {
@@ -423,130 +305,26 @@ export default function TimePricePanel({ options, refresh }) {
     }
   };
 
-  const columns = [
-    {
-      title: t('模型'),
-      dataIndex: 'pattern',
-      render: (text) => <Text strong>{text}</Text>,
-    },
-    {
-      title: t('时段'),
-      dataIndex: 'window',
-      render: (key) => {
-        const win = cfg.windows[key];
-        const active = windowActiveNow(win, new Date());
-        return (
-          <Space>
-            <Tag color='cyan' shape='circle'>
-              {(win && win.label) || key}
-            </Tag>
-            {win && (
-              <Text type='tertiary' size='small'>
-                {String(win.start || '')}-{String(win.end || '')}
-              </Text>
-            )}
-            {active && (
-              <Tag color='green' shape='circle'>
-                {t('此刻生效')}
-              </Tag>
-            )}
-          </Space>
-        );
-      },
-    },
-    {
-      title: t('该时段价目'),
-      dataIndex: 'prices',
-      render: (_, record) => {
-        const base = basePriceOf(record.pattern);
-        const entries = Object.entries(record.prices || {});
-        if (entries.length === 0) {
-          return (
-            <Text type='tertiary' size='small'>
-              {t('未配分量')}
-            </Text>
-          );
-        }
-        const LABEL = {
-          input: t('输入'),
-          output: t('输出'),
-          cache: t('缓存命中'),
-          create_cache: t('缓存创建'),
-          image: t('图片'),
-          audio_input: t('音频输入'),
-          audio_output: t('音频输出'),
-          per_call: t('按次'),
-        };
-        return (
-          <Space vertical align='start' spacing={2}>
-            {entries.map(([comp, f]) => {
-              const b = Number(base?.[comp]);
-              return (
-                <Text key={comp} size='small'>
-                  {LABEL[comp] || comp}{' '}
-                  {b > 0 ? Number((b * f).toFixed(4)) : '-'}
-                  <Text type='tertiary' size='small'>
-                    {' '}
-                    ×{Number(Number(f).toFixed(3))}
-                  </Text>
-                </Text>
-              );
-            })}
-          </Space>
-        );
-      },
-    },
-    {
-      title: t('操作'),
-      dataIndex: 'action2',
-      width: 110,
-      render: (_, record) => (
-        <Button
-          size='small'
-          onClick={() =>
-            setEditing({
-              pattern: record.pattern,
-              index: record.listIndex,
-              factors: record.factors,
-              remark: record.remark,
-            })
-          }
-        >
-          {t('编辑价目')}
-        </Button>
-      ),
-    },
-    {
-      title: t('备注'),
-      dataIndex: 'remark',
-      render: (text, record) => (
-        <Input
-          size='small'
-          value={text}
-          placeholder={t('为什么是这个价')}
-          onChange={(v) => updateRowRemark(record, v)}
-        />
-      ),
-    },
-    {
-      title: '',
-      key: 'action',
-      width: 50,
-      render: (_, record) => (
-        <Popconfirm
-          title={t('确认删除该时段价？')}
-          onConfirm={() => removeRow(record)}
-        >
-          <Button
-            icon={<IconDelete />}
-            type='danger'
-            theme='borderless'
-            size='small'
-          />
-        </Popconfirm>
-      ),
-    },
-  ];
+  const migrateLegacy = () => {
+    const merged = { ...globalRules };
+    legacyScopes.forEach((scope) => {
+      Object.entries(cfg.rules[scope] || {}).forEach(([model, list]) => {
+        merged[model] = [...(merged[model] || []), ...(list || [])];
+      });
+    });
+    const nextRules = { [GLOBAL_SCOPE]: merged };
+    setDraft(
+      JSON.stringify({ windows: cfg.windows, rules: nextRules }, null, 2),
+    );
+  };
+
+  const base = selectedModel ? basePriceOf(selectedModel) : {};
+  const rules = selectedModel ? globalRules[selectedModel] || [] : [];
+  const usedWindows = new Set(rules.map((r) => r.window));
+  const availableWindows = Object.keys(cfg.windows).filter(
+    (k) => !usedWindows.has(k),
+  );
+  const componentList = COMPONENTS.filter((c) => Number(base[c.key]) > 0);
 
   return (
     <Card
@@ -557,7 +335,7 @@ export default function TimePricePanel({ options, refresh }) {
           <Text strong>{t('分时价')}</Text>
           <Text type='tertiary' size='small' style={{ display: 'block' }}>
             {t(
-              '系数乘在常规价上：小于 1 是空闲时段更便宜，大于 1 是紧缺时段更贵。对全网线路生效，与客户折扣无关（折扣按用户档计算，不随时段变化）。',
+              '每个时段填该时段的目录价（¥）。对全网线路生效；折扣按用户档计算、不随时段变化。常规目录价变更不会自动改这里，需要时点「按比例调整」。',
             )}
           </Text>
         </div>
@@ -573,18 +351,13 @@ export default function TimePricePanel({ options, refresh }) {
         </Button>
       }
     >
-      <TimeWindowEditor
-        value={raw}
-        onChange={(v) => setRaw(v)}
-        usage={windowUsage}
-      />
+      <TimeSlotEditor value={draft} onChange={setDraft} />
 
       {legacyScopes.length > 0 && (
         <Banner
           type='warning'
           closeIcon={null}
-          className='mt-2'
-          style={{ marginBottom: 8 }}
+          className='mt-3'
           description={
             <Space vertical align='start'>
               <Text>
@@ -595,7 +368,7 @@ export default function TimePricePanel({ options, refresh }) {
               <Popconfirm
                 title={t('把按线路配的时段价变成全网规则？')}
                 content={t(
-                  '合并后这条规则对所有线路生效，原来只在那条线路上生效。值按原样搬过去，不做语义换算——若这些规则还是旧口径（取代模型折扣），请先按更新说明重配，不要直接合并。',
+                  '合并后这些规则对所有线路生效。同一模型同一时段若两边都有，会变成两条重复规则，请合并后核对。',
                 )}
                 okText={t('确认合并')}
                 onConfirm={migrateLegacy}
@@ -607,120 +380,212 @@ export default function TimePricePanel({ options, refresh }) {
         />
       )}
 
-      <Space wrap className='mt-3 mb-2'>
-        <Input
-          size='small'
-          style={{ width: 240 }}
-          placeholder={t('模型名或模式串（如 deepseek-*）')}
-          value={addPattern}
-          onChange={setAddPattern}
-        />
-        <Select
-          size='small'
-          style={{ width: 180 }}
-          placeholder={t('选择时段')}
-          value={addWindow}
-          optionList={windowOptions}
-          onChange={setAddWindow}
-        />
-        {/*
-          按**目录价**填写（¥/1M）。该模式串没有单一目录价时（通配符/未定价模型）
-          退回填系数——否则填了 ¥ 也无从换算。
-        */}
-        {Number(modelRatioMap[addPattern.trim()]) > 0 ? (
-          <>
-            <InputNumber
-              size='small'
-              min={0.0001}
-              step={0.1}
-              precision={4}
-              value={addInPrice}
-              style={{ width: 128 }}
-              prefix={t('输入')}
-              placeholder={t('¥/1M')}
-              onChange={(v) => setAddInPrice(typeof v === 'number' ? v : null)}
-            />
-            <InputNumber
-              size='small'
-              min={0.0001}
-              step={0.1}
-              precision={4}
-              value={addOutPrice}
-              style={{ width: 128 }}
-              prefix={t('输出')}
-              placeholder={t('同输入')}
-              onChange={(v) => setAddOutPrice(typeof v === 'number' ? v : null)}
-            />
-          </>
-        ) : (
-          <>
-            <InputNumber
-              size='small'
-              min={0.01}
-              max={MAX_FACTOR}
-              step={0.05}
-              value={addFactor}
-              style={{ width: 100 }}
-              prefix={t('×')}
-              onChange={(v) => setAddFactor(typeof v === 'number' ? v : 1)}
-            />
-            <InputNumber
-              size='small'
-              min={0.01}
-              max={MAX_FACTOR}
-              step={0.05}
-              value={addOutFactor}
-              style={{ width: 120 }}
-              prefix={t('×')}
-              placeholder={t('同输入')}
-              onChange={(v) =>
-                setAddOutFactor(typeof v === 'number' ? v : null)
-              }
-            />
-          </>
-        )}
-        <Button
-          size='small'
-          theme='solid'
-          icon={<IconPlus />}
-          onClick={addRule}
-        >
-          {t('添加时段价')}
-        </Button>
-      </Space>
-
-      {rows.length === 0 ? (
-        <Empty description={t('还没有分时价：价格全天一个数')} />
-      ) : (
-        <Table
-          size='small'
-          bordered={false}
-          pagination={false}
-          dataSource={rows}
-          columns={columns}
-          className='!rounded-lg'
-        />
-      )}
-      {/* 分量价目编辑器：把「分量 × 该时段目录价」摊成一张表 */}
-      <TimePriceRuleEditor
-        t={t}
-        visible={Boolean(editing)}
-        rule={editing ? { prices: editing.prices } : null}
-        base={editing ? basePriceOf(editing.pattern) : {}}
-        onCancel={() => setEditing(null)}
-        onOk={(prices, error) => {
-          if (error) {
-            showWarning(error);
-            return;
-          }
-          if (!prices || Object.keys(prices).length === 0) {
-            showWarning(t('至少要给一个分量设定时段价'));
-            return;
-          }
-          updateRowPrices(editing, prices);
-          setEditing(null);
+      <div
+        className='grid grid-cols-1 xl:grid-cols-2 gap-4 mt-4'
+        style={{
+          borderTop: '1px solid var(--semi-color-border)',
+          paddingTop: 16,
         }}
-      />
+      >
+        <div>
+          <Text type='tertiary' size='small'>
+            {t('已配置的模型（{{n}}）', { n: models.length })}
+          </Text>
+          <Space vertical align='start' spacing={4} className='mt-2'>
+            {models.map((model) => (
+              <div
+                key={model}
+                className={
+                  'w-full flex items-center justify-between px-3 py-2 rounded-lg cursor-pointer ' +
+                  (model === selectedModel
+                    ? 'bg-[var(--semi-color-primary-light-default)]'
+                    : '')
+                }
+                onClick={() => setSelectedModel(model)}
+              >
+                <Text strong={model === selectedModel}>{model}</Text>
+                <Text type='tertiary' size='small'>
+                  {t('{{n}} 个时段', { n: (globalRules[model] || []).length })}
+                </Text>
+              </div>
+            ))}
+          </Space>
+          <Space className='mt-2'>
+            <Input
+              size='small'
+              style={{ width: 170 }}
+              value={newModel}
+              placeholder={t('模型名或 deepseek-*')}
+              onChange={setNewModel}
+            />
+            <Button
+              size='small'
+              icon={<IconPlus />}
+              onClick={() => {
+                const name = newModel.trim();
+                if (!name) {
+                  showWarning(t('请填写模型名或模式串'));
+                  return;
+                }
+                if (globalRules[name]) {
+                  showWarning(t('该模型已经配过了'));
+                  return;
+                }
+                setModelRules(name, []);
+                setSelectedModel(name);
+                setNewModel('');
+              }}
+            >
+              {t('添加模型')}
+            </Button>
+          </Space>
+        </div>
+
+        <div>
+          {!selectedModel ? (
+            <Empty description={t('左边选一个模型，或先添加模型')} />
+          ) : (
+            <div>
+              <div className='rounded-lg bg-[var(--semi-color-fill-0)] px-3 py-2 mb-3'>
+                <Text size='small' type='tertiary'>
+                  {t('常规目录价（模型定价页）')}
+                </Text>
+                <div className='mt-1'>
+                  {componentList.length === 0 ? (
+                    <Text type='warning' size='small'>
+                      {t('该模型没配常规目录价，请先在「模型定价」页配置')}
+                    </Text>
+                  ) : (
+                    <Space wrap>
+                      {componentList.map((c) => (
+                        <Text key={c.key} size='small'>
+                          {t(c.label)} ¥{Number(base[c.key]).toFixed(4)}
+                        </Text>
+                      ))}
+                    </Space>
+                  )}
+                </div>
+              </div>
+
+              {rules.map((rule, idx) => (
+                <div
+                  key={rule.window + '-' + idx}
+                  className='rounded-xl border px-3 py-3 mb-3'
+                  style={{ borderColor: 'var(--semi-color-border)' }}
+                >
+                  <div className='flex items-center justify-between mb-2'>
+                    <Space wrap>
+                      <Tag color='cyan' shape='circle' size='small'>
+                        {(cfg.windows[rule.window] &&
+                          cfg.windows[rule.window].label) ||
+                          rule.window}
+                      </Tag>
+                      <Text type='tertiary' size='small'>
+                        {slotSummary(rule.window)}
+                      </Text>
+                    </Space>
+                    <Space>
+                      <Button
+                        size='small'
+                        onClick={() => scaleRule(selectedModel, idx, 0.5)}
+                      >
+                        ×0.5
+                      </Button>
+                      <Button
+                        size='small'
+                        onClick={() => scaleRule(selectedModel, idx, 1.2)}
+                      >
+                        ×1.2
+                      </Button>
+                      <Button
+                        size='small'
+                        onClick={() => resetRule(selectedModel, idx)}
+                      >
+                        {t('重置为常规价')}
+                      </Button>
+                      <Popconfirm
+                        title={t('确认删除该时段价？')}
+                        onConfirm={() => removeRule(selectedModel, idx)}
+                      >
+                        <Button
+                          size='small'
+                          type='danger'
+                          theme='borderless'
+                          icon={<IconDelete />}
+                        />
+                      </Popconfirm>
+                    </Space>
+                  </div>
+
+                  <div className='grid grid-cols-2 xl:grid-cols-3 gap-x-4 gap-y-2'>
+                    {componentList.map((c) => {
+                      const value = Number((rule.prices || {})[c.key]);
+                      const factor =
+                        value > 0 && Number(base[c.key]) > 0
+                          ? value / Number(base[c.key])
+                          : null;
+                      return (
+                        <div key={c.key}>
+                          <Text size='small' type='tertiary'>
+                            {t(c.label)}
+                          </Text>
+                          <Space>
+                            <InputNumber
+                              size='small'
+                              min={0}
+                              step={0.1}
+                              precision={4}
+                              style={{ width: 118 }}
+                              value={value > 0 ? value : undefined}
+                              placeholder={t('不变')}
+                              onChange={(v) =>
+                                setPrice(
+                                  selectedModel,
+                                  idx,
+                                  c.key,
+                                  typeof v === 'number' ? v : null,
+                                )
+                              }
+                            />
+                            {factor ? (
+                              <Tag
+                                color={factor > 1 ? 'orange' : 'cyan'}
+                                shape='circle'
+                                size='small'
+                              >
+                                ×{Number(factor.toFixed(3))}
+                              </Tag>
+                            ) : null}
+                          </Space>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              ))}
+
+              <Space>
+                <Select
+                  size='small'
+                  style={{ width: 220 }}
+                  placeholder={t('添加时段')}
+                  value={undefined}
+                  optionList={availableWindows.map((k) => ({
+                    value: k,
+                    label: (cfg.windows[k] && cfg.windows[k].label) || k,
+                  }))}
+                  onChange={(v) => addRule(selectedModel, v)}
+                />
+                <Text type='tertiary' size='small'>
+                  {t('留空 = 该分量不随时段变')}
+                </Text>
+              </Space>
+            </div>
+          )}
+        </div>
+      </div>
     </Card>
   );
-}
+};
+
+export default TimePricePanel;
