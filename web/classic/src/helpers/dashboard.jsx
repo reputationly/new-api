@@ -102,9 +102,11 @@ export const getPresetRange = (key) => {
   const toStr = (date) => timestamp2string(date.getTime() / 1000);
   switch (key) {
     case 'today':
+      // 与各日志页的默认区间保持一致：今天 00:00:00 ~ 23:59:59。
+      // 后端是纯区间过滤、不按 end 补零，未来时段不会在趋势图里冒出空桶。
       return {
         start_timestamp: toStr(startOfDay(now)),
-        end_timestamp: toStr(now),
+        end_timestamp: toStr(endOfDay(now)),
         granularity: 'hour',
       };
     case 'yesterday': {

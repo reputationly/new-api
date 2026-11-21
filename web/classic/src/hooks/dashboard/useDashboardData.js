@@ -25,6 +25,7 @@ import {
   isAdmin,
   showError,
   showWarning,
+  getTodayEndTimestamp,
   timestamp2string,
 } from '../../helpers';
 import {
@@ -59,7 +60,7 @@ export const useDashboardData = (userState, userDispatch, statusState) => {
     token_name: '',
     model_name: '',
     start_timestamp: getInitialTimestamp(),
-    end_timestamp: timestamp2string(new Date().getTime() / 1000 + 3600),
+    end_timestamp: timestamp2string(getTodayEndTimestamp()),
     channel: '',
     data_export_default_time: '',
   });

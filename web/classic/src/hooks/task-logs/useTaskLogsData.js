@@ -26,6 +26,7 @@ import {
   isAdmin,
   showError,
   showSuccess,
+  getTodayEndTimestamp,
   timestamp2string,
 } from '../../helpers';
 import { ITEMS_PER_PAGE } from '../../constants';
@@ -97,7 +98,7 @@ export const useTaskLogsData = () => {
     task_id: '',
     dateRange: [
       timestamp2string(zeroNow.getTime() / 1000),
-      timestamp2string(now.getTime() / 1000 + 3600),
+      timestamp2string(getTodayEndTimestamp()),
     ],
   };
 
@@ -195,7 +196,7 @@ export const useTaskLogsData = () => {
 
     // 处理时间范围
     let start_timestamp = timestamp2string(zeroNow.getTime() / 1000);
-    let end_timestamp = timestamp2string(now.getTime() / 1000 + 3600);
+    let end_timestamp = timestamp2string(getTodayEndTimestamp());
 
     if (
       formValues.dateRange &&

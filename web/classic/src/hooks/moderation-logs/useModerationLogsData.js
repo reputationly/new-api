@@ -1,6 +1,11 @@
 import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { API, showError, timestamp2string } from '../../helpers';
+import {
+  API,
+  getTodayEndTimestamp,
+  showError,
+  timestamp2string,
+} from '../../helpers';
 import { ITEMS_PER_PAGE } from '../../constants';
 import { useTableCompactMode } from '../common/useTableCompactMode';
 
@@ -37,7 +42,7 @@ export const useModerationLogsData = () => {
   const formInitValues = {
     dateRange: [
       timestamp2string(zeroNow.getTime() / 1000),
-      timestamp2string(now.getTime() / 1000 + 3600),
+      timestamp2string(getTodayEndTimestamp()),
     ],
     username: '',
     word: '',

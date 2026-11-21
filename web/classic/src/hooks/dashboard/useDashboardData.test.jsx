@@ -18,6 +18,8 @@ vi.mock('../../helpers', () => ({
   showError: mocks.showError,
   showWarning: vi.fn(),
   timestamp2string: (seconds) => new Date(seconds * 1000).toISOString(),
+  // 默认区间改用「今天 23:59:59」，mock 里要跟着提供，否则 hook 初始化就会抛
+  getTodayEndTimestamp: () => 0,
 }));
 vi.mock('../common/useIsMobile', () => ({
   useIsMobile: () => false,

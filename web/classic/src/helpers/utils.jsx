@@ -1605,3 +1605,29 @@ export const hasPointDeduction = (priceData) => {
   if (!pm || typeof pm !== 'object') return false;
   return Object.values(pm).some((v) => v !== null && v !== undefined);
 };
+
+/**
+ * 「今天」的结束时刻 = 今天 23:59:59（本地时区，秒级）。
+ *
+ * 为什么不用 `now + 3600`（上游 v1.0 前端的写法）：
+ *   · 界面会把结束时间显示成未来（22:10 打开显示 23:10），像"包含未来时段"；
+ *   · 与看板「今天」预设（原本 end = now）给出两个不同的值，同一概念两套答案；
+ *   · end 按秒变化，任何缓存的 key 都永不重复。
+ * 取当天末尾后语义与"今天"一致，同一天内查询条件稳定。
+ *
+ * 后端是纯区间过滤（created_at >= start AND created_at <= end），没有"按 end 补零到
+ * 未来时段"的逻辑，所以把 end 放到今天末尾不会让趋势图多出未来的空桶。
+ */
+export function getTodayEndTimestamp() {
+  var now = new Date();
+  now.setHours(23, 59, 59, 0);
+  return Math.floor(now.getTime() / 1000);
+}
+
+/** 今天 00:00:00 ~ 23:59:59 的字符串区间（DatePicker 与接口共用格式）。 */
+export function getTodayRangeStrings() {
+  return {
+    start_timestamp: timestamp2string(getTodayStartTimestamp()),
+    end_timestamp: timestamp2string(getTodayEndTimestamp()),
+  };
+}

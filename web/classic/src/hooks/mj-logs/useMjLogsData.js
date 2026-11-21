@@ -26,6 +26,7 @@ import {
   isAdmin,
   showError,
   showSuccess,
+  getTodayEndTimestamp,
   timestamp2string,
 } from '../../helpers';
 import { ITEMS_PER_PAGE } from '../../constants';
@@ -79,7 +80,7 @@ export const useMjLogsData = () => {
     mj_id: '',
     dateRange: [
       timestamp2string(now.getTime() / 1000 - 2592000),
-      timestamp2string(now.getTime() / 1000 + 3600),
+      timestamp2string(getTodayEndTimestamp()),
     ],
   };
 
@@ -184,7 +185,7 @@ export const useMjLogsData = () => {
     const formValues = formApi ? formApi.getValues() : {};
 
     let start_timestamp = timestamp2string(now.getTime() / 1000 - 2592000);
-    let end_timestamp = timestamp2string(now.getTime() / 1000 + 3600);
+    let end_timestamp = timestamp2string(getTodayEndTimestamp());
 
     if (
       formValues.dateRange &&
