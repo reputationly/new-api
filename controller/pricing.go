@@ -265,12 +265,12 @@ func GetPricing(c *gin.Context) {
 		"group_time_ratio": groupTimeRatio,
 		// 逐分量折算系数（稀疏）。前端每个价格行按自己的分量折算。
 		"group_model_component_scale": groupComponentScale,
-		"usable_group":                 usableGroup,
-		"supported_endpoint":           model.GetSupportedEndpointMap(),
-		"auto_groups":                  service.GetUserAutoGroup(group),
-		"points_enabled":               pointsSetting.Enabled,
-		"quota_per_point":              common.GetQuotaPerPoint(),
-		"points_enabled_groups":        pointsEnabledGroups,
+		"usable_group":                usableGroup,
+		"supported_endpoint":          model.GetSupportedEndpointMap(),
+		"auto_groups":                 service.GetUserAutoGroup(group),
+		"points_enabled":              pointsSetting.Enabled,
+		"quota_per_point":             common.GetQuotaPerPoint(),
+		"points_enabled_groups":       pointsEnabledGroups,
 		// nil = 未启用渠道白名单，前端退回只看分组的旧口径
 		"points_enabled_models": pointsEnabledModels,
 		"pricing_version":       "a42d372ccf0b5dd13ecf71203521f9d2",

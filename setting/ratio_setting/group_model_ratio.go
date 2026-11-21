@@ -301,9 +301,9 @@ func ResolveGroupRatioAt(userGroup, usingGroup, modelName string, at time.Time) 
 	if key, win, rule, ok := pickTimeRule(usingGroup, modelName, at); ok {
 		res.TimeWindow = key
 		res.TimeLabel = win.Label
-		res.TimeValue = rule.InputFactor()
-		res.TimeFactors = rule.EffectiveFactors()
-		res.Final = res.NormalRatio * rule.InputFactor()
+		res.TimeValue = rule.InputFactor(modelName)
+		res.TimeFactors = rule.EffectiveFactors(modelName)
+		res.Final = res.NormalRatio * rule.InputFactor(modelName)
 	}
 
 	res.AfterModelRule = res.Final

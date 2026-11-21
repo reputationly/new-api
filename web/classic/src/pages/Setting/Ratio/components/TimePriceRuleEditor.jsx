@@ -42,11 +42,10 @@ const TimePriceRuleEditor = ({ t, visible, rule, base, onCancel, onOk }) => {
   useEffect(() => {
     if (!visible) return;
     const next = {};
-    const factors = rule?.factors || {};
+    const prices = rule?.prices || {};
     COMPONENTS.forEach(({ key }) => {
-      const f = Number(factors[key]);
-      const b = Number(base?.[key]);
-      next[key] = f > 0 && b > 0 ? Number((b * f).toFixed(4)) : null;
+      const v = Number(prices[key]);
+      next[key] = v > 0 ? Number(v.toFixed(4)) : null;
     });
     setDraft(next);
   }, [visible, rule, base]);
@@ -70,34 +69,43 @@ const TimePriceRuleEditor = ({ t, visible, rule, base, onCancel, onOk }) => {
     [base, draft],
   );
 
-  // 整价系数：一次把所有分量按同一比例改
-  const applyUniform = (f) => {
-    if (!(f > 0)) return;
+  // 按比例调整当前已填的价格：常规目录价变了（比如上游涨价 1.5 倍）时用它
+  // 一键把这一档跟着放大，而不是让系统偷偷改。
+  const scaleDraft = (f) => {
+    setDraft((prev) => {
+      const next = { ...prev };
+      COMPONENTS.forEach(({ key }) => {
+        const v = Number(prev[key]);
+        if (v > 0) next[key] = Number((v * f).toFixed(4));
+      });
+      return next;
+    });
+  };
+
+  const resetToBase = () => {
     const next = {};
     COMPONENTS.forEach(({ key }) => {
       const b = Number(base?.[key]);
-      next[key] = b > 0 ? Number((b * f).toFixed(4)) : null;
+      next[key] = b > 0 ? Number(b.toFixed(4)) : null;
     });
     setDraft(next);
   };
 
   const submit = () => {
-    const factors = {};
+    const prices = {};
     let bad = false;
     COMPONENTS.forEach(({ key }) => {
-      const b = Number(base?.[key]);
       const v = draft[key];
-      if (!(v > 0)) return; // 留空 = 不随时段变
-      const f = v / b;
-      if (!(f > 0 && f <= MAX_FACTOR)) bad = true;
-      factors[key] = Number(f.toFixed(6));
+      if (!(v > 0)) return;
+      const b = Number(base?.[key]);
+      if (b > 0 && v / b > MAX_FACTOR) bad = true;
+      prices[key] = Number(v.toFixed(4));
     });
     if (bad) {
-      // 交给外层统一提示（与面板其它校验同一套文案）
-      onOk(null, t('有分量的折算系数超出 (0, 20]，请检查目录价'));
+      onOk(null, t('有分量的价目超过常规价的 20 倍，请检查'));
       return;
     }
-    onOk(factors);
+    onOk(prices);
   };
 
   const columns = [
@@ -167,15 +175,18 @@ const TimePriceRuleEditor = ({ t, visible, rule, base, onCancel, onOk }) => {
     >
       <div className='mb-3 flex items-center gap-2 flex-wrap'>
         <Text type='tertiary' size='small'>
-          {t('整价系数')}
+          {t('按比例调整本档')}
         </Text>
-        {[0.5, 0.6, 0.8, 1].map((f) => (
-          <Button key={f} size='small' onClick={() => applyUniform(f)}>
+        {[0.8, 1.2, 1.5].map((f) => (
+          <Button key={f} size='small' onClick={() => scaleDraft(f)}>
             ×{f}
           </Button>
         ))}
+        <Button size='small' onClick={resetToBase}>
+          {t('重置为常规价')}
+        </Button>
         <Text type='tertiary' size='small'>
-          {t('一键按比例写满所有分量')}
+          {t('常规目录价变更不会自动改这里，需要时手动调')}
         </Text>
       </div>
       <Table

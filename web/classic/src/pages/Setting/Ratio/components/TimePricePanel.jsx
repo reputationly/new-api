@@ -252,35 +252,30 @@ export default function TimePricePanel({ options, refresh }) {
     return usage;
   }, [cfg.rules]);
 
-  // 与后端 TimeRule.EffectiveFactors 同规则：旧格式 value（整价系数）展开到全部分量，
-  // output_factor 并入 output。展示与保存都用归一后的结果，避免两套读法。
-  const normalizeFactors = (rule) => {
-    const ALL = [
-      'input',
-      'output',
-      'cache',
-      'create_cache',
-      'image',
-      'audio_input',
-      'audio_output',
-      'per_call',
-    ];
+  // 把一条规则归一成**绝对价目**（¥）：新格式直接读 prices；旧格式（factors/value）
+  // 用 base 换算成价格再展示，保证历史配置照样看得见、改得动。
+  const pricesOf = (rule, base) => {
     const out = {};
-    if (rule.factors && Object.keys(rule.factors).length > 0) {
-      Object.entries(rule.factors).forEach(([k, v]) => {
-        if (Number(v) > 0) out[k] = Number(v);
-      });
-      if (Number(rule.value) > 0 && !out.input) out.input = Number(rule.value);
-      if (Number(rule.output_factor) > 0 && !out.output)
-        out.output = Number(rule.output_factor);
-      return out;
-    }
+    const prices = rule.prices || {};
+    Object.entries(prices).forEach(([k, v]) => {
+      if (Number(v) > 0) out[k] = Number(v);
+    });
+    if (Object.keys(out).length > 0) return out;
+    const factors = rule.factors || {};
+    Object.entries(factors).forEach(([k, v]) => {
+      const b = Number(base?.[k]);
+      if (Number(v) > 0 && b > 0) out[k] = Number((b * Number(v)).toFixed(4));
+    });
     if (Number(rule.value) > 0) {
-      ALL.forEach((k) => {
-        out[k] = Number(rule.value);
+      Object.entries(base || {}).forEach(([k, b]) => {
+        if (Number(b) > 0)
+          out[k] = Number((Number(b) * Number(rule.value)).toFixed(4));
       });
-      if (Number(rule.output_factor) > 0)
-        out.output = Number(rule.output_factor);
+    }
+    if (Number(rule.output_factor) > 0 && Number(base?.output) > 0) {
+      out.output = Number(
+        (Number(base.output) * Number(rule.output_factor)).toFixed(4),
+      );
     }
     return out;
   };
@@ -293,8 +288,8 @@ export default function TimePricePanel({ options, refresh }) {
           key: pattern + '|' + rule.window + '|' + idx,
           pattern,
           window: rule.window,
-          // 归一后的分量表（与后端 EffectiveFactors 同规则）：旧格式 value 展开到全部分量
-          factors: normalizeFactors(rule),
+          // 归一后的**绝对价目**（旧格式用 base 换算出来）
+          prices: pricesOf(rule, basePriceOf(pattern)),
           remark: rule.remark || '',
           listIndex: idx,
         });
@@ -307,13 +302,15 @@ export default function TimePricePanel({ options, refresh }) {
     );
   }, [globalRules]);
 
-  // 编辑器回写：factors 为空表示该档不再有任何时段系数（调用方会拦住）
-  const updateRowFactors = (row, factors) => {
+  // 编辑器回写：存**绝对价目**。旧字段（value / output_factor / factors）一并清掉，
+  // 避免同一档里同时存在两套语义。
+  const updateRowPrices = (row, prices) => {
     const list = (globalRules[row.pattern] || []).map((r, i) => {
       if (i !== row.listIndex) return r;
-      const next = Object.assign({}, r, { factors });
+      const next = Object.assign({}, r, { prices });
       delete next.value;
       delete next.output_factor;
+      delete next.factors;
       return next;
     });
     setGlobalList(row.pattern, list);
@@ -333,6 +330,10 @@ export default function TimePricePanel({ options, refresh }) {
     setGlobalList(row.pattern, list);
   };
 
+  const AddOutSameAsIn = (prices) =>
+    Number(prices.output) > 0 &&
+    Math.abs(Number(prices.output) - Number(prices.input)) < 1e-9;
+
   const addRule = () => {
     const pattern = addPattern.trim();
     if (!pattern) {
@@ -343,48 +344,49 @@ export default function TimePricePanel({ options, refresh }) {
       showWarning(t('请选择时段模板'));
       return;
     }
-    // 该模式串若对应一个真实模型（有按量目录价），就按 ¥ 换算成系数；
-    // 通配模式串没有单一目录价，只能填系数。
-    const baseIn = Number(modelRatioMap[pattern]);
-    const baseCR = Number(completionRatioMap[pattern]);
-    const byPrice = Number.isFinite(baseIn) && baseIn > 0;
-    const baseOut =
-      byPrice && Number.isFinite(baseCR) && baseCR > 0 ? baseIn * baseCR : 0;
-
-    let inFactor = addFactor;
-    let outFactor = addOutFactor;
+    const base = basePriceOf(pattern);
+    const byPrice = Number(base.input) > 0;
+    // 存的是**绝对价目**：输入框里填多少就存多少；通配模式串没有单一常规价，
+    // 只能填系数，这里按系数 × 常规价 折算成价格后再存。
+    const prices = {};
     if (byPrice) {
       if (!(addInPrice > 0)) {
         showWarning(t('请填写该时段的输入目录价'));
         return;
       }
-      inFactor = addInPrice / baseIn;
-      outFactor =
-        addOutPrice && addOutPrice > 0 && baseOut > 0
-          ? addOutPrice / baseOut
-          : null;
-      if (Math.abs((outFactor ?? inFactor) - inFactor) < 1e-9) outFactor = null;
+      prices.input = Number(Number(addInPrice).toFixed(4));
+      if (addOutPrice > 0)
+        prices.output = Number(Number(addOutPrice).toFixed(4));
+      if (AddOutSameAsIn(prices)) delete prices.output;
+    } else {
+      if (!(addFactor > 0 && addFactor <= MAX_FACTOR)) {
+        showWarning(t('系数必须在 (0, 20] 之间'));
+        return;
+      }
+      Object.entries(base || {}).forEach(([k, b]) => {
+        if (Number(b) > 0) {
+          prices[k] = Number((Number(b) * addFactor).toFixed(4));
+        }
+      });
+      if (Object.keys(prices).length === 0) {
+        showWarning(t('该模型没有可折算的常规目录价，请先在模型定价页配置'));
+        return;
+      }
+      if (addOutFactor > 0 && prices.output) {
+        prices.output = Number((Number(base.output) * addOutFactor).toFixed(4));
+      }
     }
 
-    if (!(inFactor > 0 && inFactor <= MAX_FACTOR)) {
-      showWarning(t('折算后的输入系数超出 (0, 20]，请检查目录价'));
-      return;
-    }
-    if (outFactor !== null && !(outFactor > 0 && outFactor <= MAX_FACTOR)) {
-      showWarning(t('折算后的输出系数超出 (0, 20]，请检查目录价'));
-      return;
-    }
     const list = (globalRules[pattern] || []).slice();
     const idx = list.findIndex((r) => r.window === addWindow);
-    // 输出侧留空（null）= 跟随输入，不写字段，保持 JSON 干净
-    const extra =
-      outFactor && outFactor > 0 ? { output_factor: outFactor } : {};
     if (idx >= 0) {
-      const merged = Object.assign({}, list[idx], { value: inFactor }, extra);
-      if (!extra.output_factor) delete merged.output_factor;
+      const merged = Object.assign({}, list[idx], { prices });
+      delete merged.value;
+      delete merged.output_factor;
+      delete merged.factors;
       list[idx] = merged;
     } else {
-      list.push(Object.assign({ window: addWindow, value: inFactor }, extra));
+      list.push({ window: addWindow, prices });
     }
     setGlobalList(pattern, list);
     setAddPattern('');
@@ -454,10 +456,10 @@ export default function TimePricePanel({ options, refresh }) {
     },
     {
       title: t('该时段价目'),
-      dataIndex: 'factors',
+      dataIndex: 'prices',
       render: (_, record) => {
         const base = basePriceOf(record.pattern);
-        const entries = Object.entries(record.factors || {});
+        const entries = Object.entries(record.prices || {});
         if (entries.length === 0) {
           return (
             <Text type='tertiary' size='small'>
@@ -703,19 +705,19 @@ export default function TimePricePanel({ options, refresh }) {
       <TimePriceRuleEditor
         t={t}
         visible={Boolean(editing)}
-        rule={editing ? { factors: editing.factors } : null}
+        rule={editing ? { prices: editing.prices } : null}
         base={editing ? basePriceOf(editing.pattern) : {}}
         onCancel={() => setEditing(null)}
-        onOk={(factors, error) => {
+        onOk={(prices, error) => {
           if (error) {
             showWarning(error);
             return;
           }
-          if (!factors || Object.keys(factors).length === 0) {
+          if (!prices || Object.keys(prices).length === 0) {
             showWarning(t('至少要给一个分量设定时段价'));
             return;
           }
-          updateRowFactors(editing, factors);
+          updateRowPrices(editing, prices);
           setEditing(null);
         }}
       />

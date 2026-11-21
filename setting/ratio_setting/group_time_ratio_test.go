@@ -266,7 +266,7 @@ func TestCheckGroupTimeRatio(t *testing.T) {
 		{
 			"系数为0",
 			`{` + validWindows + `, "rules":{"default":{"m":[{"window":"night","value":0}]}}}`,
-			"至少要配一个分量系数",
+			"至少要配一个分量价目",
 		},
 		{
 			"中缀通配",
@@ -699,7 +699,7 @@ func TestCheckGroupTimeRatio_ValueRange(t *testing.T) {
 	tooBig := `{"windows":{"am":{"start":"09:00","end":"12:00"}},"rules":{"default":{"m":[{"window":"am","value":21}]}}}`
 	require.ErrorContains(t, CheckGroupTimeRatio(tooBig), "value must be in (0, 20]")
 	zero := `{"windows":{"am":{"start":"09:00","end":"12:00"}},"rules":{"default":{"m":[{"window":"am","value":0}]}}}`
-	require.ErrorContains(t, CheckGroupTimeRatio(zero), "至少要配一个分量系数")
+	require.ErrorContains(t, CheckGroupTimeRatio(zero), "至少要配一个分量价目")
 }
 
 // TestResolveGroupRatio_OutputFactorIndependent 锁死「分时段价目不等比例变化」。
