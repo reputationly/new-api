@@ -411,9 +411,22 @@ const TimePricePanel = ({ options, refresh }) => {
             ))}
           </Space>
           <Space className='mt-2'>
+            {/* 可搜的模型下拉：从「模型定价」里已有的模型里挑，省得手打错名字；
+                也允许直接输入通配符（如 deepseek-*），所以旁边仍保留自由输入框。 */}
+            <Select
+              size='small'
+              style={{ width: 200 }}
+              filter
+              placeholder={t('搜索模型')}
+              value={undefined}
+              optionList={Object.keys(modelRatioMap)
+                .sort((a, b) => a.localeCompare(b))
+                .map((m) => ({ value: m, label: m }))}
+              onChange={(v) => setNewModel(String(v || ''))}
+            />
             <Input
               size='small'
-              style={{ width: 170 }}
+              style={{ width: 150 }}
               value={newModel}
               placeholder={t('模型名或 deepseek-*')}
               onChange={setNewModel}
