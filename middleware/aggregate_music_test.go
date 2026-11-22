@@ -328,16 +328,16 @@ func TestMusic3OfficialRouteWithoutPromptDoesNotEnhance(t *testing.T) {
 
 // 官方形状的纯器乐:没有歌词但 is_instrumental=true,描述仍在 prompt,
 // 照样要增强(歌词位传空串,事实块会说明是器乐)。
-func TestMusic3OfficialRouteInstrumentalEnhances(t *testing.T) {
+// 纯器乐在 Music3 上不支持(实测:只给段落标记 9.8–22.7 秒;给足段落 121–144 秒但有人声),
+// 兼容层对它明确 400。所以展开阶段不能先花增强的钱 —— 这条断言由"要增强"翻转为"不增强"。
+func TestMusic3OfficialRouteInstrumentalSkipsEnhancement(t *testing.T) {
 	withMusic3Engine(t, "minimax-music3")
 	withAggregateConfig(t, musicAggConfig)
 
 	body, got := expandMusicAt(t, "/v1/music_generation",
 		`{"model":"music3-enhanced","prompt":"calm piano","is_instrumental":true}`)
-	require.NotNil(t, got, "纯器乐没有歌词也要增强(描述仍在 prompt)")
-	require.Equal(t, "calm piano", got.Prompt)
-	require.Equal(t, "", got.Lyrics)
-	require.Equal(t, "NEW CAPTION", body["prompt"])
+	require.Nil(t, got, "器乐请求会被兼容层 400,不该先增强")
+	require.Equal(t, "calm piano", body["prompt"], "描述原样不动")
 }
 
 // 官方形状:有描述但既没歌词又没声明 is_instrumental —— 兼容层会以
@@ -483,4 +483,12 @@ func TestMusic3OfficialRouteRealEnhanceCall(t *testing.T) {
 	require.Contains(t, req.Messages[1].Content, "calm piano")
 	require.Contains(t, req.Messages[1].Content, "=== LYRICS")
 	require.Contains(t, req.Messages[1].Content, "[Verse]\nrain on neon")
+}
+
+func TestMusic3OfficialRouteWithoutLyricsSkipsEnhancement(t *testing.T) {
+	withMusic3Engine(t, "minimax-music3")
+	withAggregateConfig(t, musicAggConfig)
+
+	_, got := expandMusic(t, `{"model":"music3-enhanced","prompt":"a calm piano solo"}`)
+	require.Nil(t, got, "没有歌词必然被拒,不该先增强")
 }

@@ -537,10 +537,10 @@ func enhanceMusic3Aggregate(c *gin.Context, agg *common.AggregateModel, body map
 			// 请求花一次增强的钱。
 			return nil
 		}
-		instrumental, _ := body["is_instrumental"].(bool)
-		if strings.TrimSpace(lyrics) == "" && !instrumental {
-			// 兼容层会以 "Music3 needs lyrics unless is_instrumental=true" 拒掉
-			// 这条请求 —— 同样不该先计费。
+		// 没有歌词就一定被兼容层拒(纯器乐在该引擎上不支持,详见 buildMusicTaskBody 的注释:
+		// 只给段落标记只有 10–23 秒,给足段落则带出人声)。**不先花增强的钱**。
+		// is_instrumental=true 也不例外 —— 它同样会被拒。
+		if strings.TrimSpace(lyrics) == "" {
 			return nil
 		}
 	} else {
