@@ -136,10 +136,13 @@ package common
 // 编译事实(singlecall 存在的理由),所以 text + 内置模板就够。模板由
 // DefaultEnhanceTemplate 按**引擎族声明**挑(见 service/aggregate_enhance_music.go)。
 //
-// 只配 Music3:同一个「文生音乐」能力标签下还有 ACE-Step,而两者在统一任务契约里的
-// 字段语义相反 —— Music3 的顶层 prompt 是**歌词**、描述在 metadata.instructions,
-// ACE-Step 的 prompt 是**描述**、歌词在 metadata.lyrics。增强按引擎族决定改写哪个字段,
-// 配错引擎会写到对方不读的字段上,钱花了、描述没动、不报错。
+// 出厂只配 Music3(ACE-Step 现在**也支持**,见 service/aggregate_enhance_music_acestep.go,
+// 模板按引擎族分派):同一个「文生音乐」能力标签下两者字段语义相反 —— Music3 的顶层
+// prompt 是**歌词**、描述在 metadata.instructions;ACE-Step 的 prompt 是**描述**、歌词在
+// metadata.lyrics。增强按引擎族决定改写哪个字段,配错引擎会写到对方不读的字段上,
+// 钱花了、描述没动、不报错 —— 所以出厂默认仍只给 Music3,ACE-Step 那条由运营按需添加。
+//
+// 另外那条注释里的单测样例路径也随实验脚本一起移出了仓库(实验脚本不落库)。
 //
 // H3-Image 用 h3_image_pe:四个 MaaS 模型中 qwen3.8-flash-fp8 的 low 档在 16 个编辑样例
 // 上召回率 1.00、p50 约 45 秒,连续三轮稳定;none 档不稳定。

@@ -101,3 +101,23 @@ func TestBuildAceStepEnhanceContext(t *testing.T) {
 		t.Errorf("repaint 要说清玩法: %s", repaint)
 	}
 }
+
+// **cover / repaint 必须用自己的字数上限。**
+//
+// 适配器按真实 taskType 校验 prompt / sample_query(ValidateMusicTextForModel),而增强这边
+// 算预算、写回后复核都要用同一档上限。写死 t2m 的后果:运营给 cover 配了更小的上限时,
+// 增强按 t2m 预算产出 → 写回后按 t2m 判为合规 → 到适配器才 400,而 LLM 已经计费。
+func TestAceStepCaptionBudgetUsesRealTaskType(t *testing.T) {
+	withMusicEngineConfig(t, `{"models":{"ace-step":{"maxChars":1000,"tabs":{"cover":{"maxChars":300}}}}}`)
+
+	if got := AceStepCaptionBudget("ace-step", "t2m"); got != 1000 {
+		t.Fatalf("t2m 应取模型级 1000,得到 %d", got)
+	}
+	if got := AceStepCaptionBudget("ace-step", "cover"); got != 300 {
+		t.Fatalf("cover 应取 tab 级 300,得到 %d —— 写死 t2m 会放过超限", got)
+	}
+	// 空 taskType 回落到 t2m,避免调用方漏传时拿到 0。
+	if got := AceStepCaptionBudget("ace-step", "  "); got != 1000 {
+		t.Fatalf("空 taskType 应回落 t2m,得到 %d", got)
+	}
+}
