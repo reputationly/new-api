@@ -1,10 +1,20 @@
 import json, os, re, sys, time, base64, concurrent.futures as cf
 from pathlib import Path
-REPO = Path('/Users/reputationly/Desktop/code/api/new-api/.wtp')
-sys.path.insert(0, '/Users/reputationly/Desktop/code/api/new-api/.h3exp/h3pe')
-os.environ['MAAS_API_KEY'] = 'sk-80EwJPBlvmh2sGl6WrMZj9c4ZkM6GU2jUoRtjMV3TGzuXSdr'
+
+# **不要把密钥写进仓库。** 需要时在环境里给:
+#   export MAAS_API_KEY=sk-...
+# 缺了就直接失败,而不是悄悄用某个内置 key(那正是密钥泄漏的原因)。
+KEY = os.environ.get('MAAS_API_KEY', '').strip()
+if not KEY:
+    raise SystemExit('MAAS_API_KEY is required (export it before running this script)')
+
+# 仓库根目录:默认取本文件上两级,可用 REPO 覆盖。
+REPO = Path(os.environ.get('REPO') or Path(__file__).resolve().parents[2])
+# h3pe 试验素材(examples/assets)所在目录;不在仓库里,需要本机另备。
+H3PE = Path(os.environ.get('H3PE_DIR') or (REPO / '.h3exp' / 'h3pe'))
+sys.path.insert(0, str(H3PE))
 import lib
-MODEL = 'qwen3.8-flash-fp8'
+MODEL = os.environ.get('MAAS_MODEL', 'qwen3.8-flash-fp8')
 def readf(p):
     return (REPO / p).read_text(encoding='utf-8')
 QWEN_EDIT = readf('service/qwenpe/system_prompt_edit.txt').rstrip('\n')
@@ -98,6 +108,8 @@ def run(case, tier):
     return rec
 def main():
     cases = json.load(open(sys.argv[1], encoding='utf-8'))
+    for c in cases:
+        c['images'] = [str(x if os.path.isabs(x) else (H3PE / x)) for x in (c.get('images') or [])]
     outdir = Path(sys.argv[2]); outdir.mkdir(parents=True, exist_ok=True)
     tiers = sys.argv[3].split(',') if len(sys.argv) > 3 else ['none', 'low']
     jobs = [(c, t) for c in cases for t in tiers]
