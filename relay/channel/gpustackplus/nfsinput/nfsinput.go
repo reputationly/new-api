@@ -243,6 +243,15 @@ func audioExtFromMagic(b []byte) string {
 	return ""
 }
 
+// AudioExtFromMagic 导出 audioExtFromMagic 给「回写响应头」这类场景用(见
+// gpustackplus/speech.go 的 speechContentType)。
+//
+// 为什么需要它:产物容器以前是拿 NFS 文件的扩展名反推的,而扩展名由门面按 task_type
+// 硬编码(音频固定 .wav)。一旦引擎按 response_format 出了 mp3,扩展名和字节就不一致,
+// 客户端会拿到「mp3 字节 + audio/wav 头」。以字节为准可以整类消灭这个错误 ——
+// 扩展名退化成兜底,而不是权威。
+func AudioExtFromMagic(b []byte) string { return audioExtFromMagic(b) }
+
 // isAudioField 判断字段是否属于音频类。与 extForField 共用同一份名单,避免两处漂移。
 func isAudioField(field Field) bool {
 	switch field {

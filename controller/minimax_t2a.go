@@ -22,6 +22,7 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/dto"
+	"github.com/QuantumNous/new-api/relay/channel/gpustackplus/nfsinput"
 	"github.com/QuantumNous/new-api/types"
 
 	"github.com/gin-gonic/gin"
@@ -111,11 +112,23 @@ func MiniMaxV2Speech(c *gin.Context) {
 			"status": 0,
 		},
 		"extra_info": gin.H{
-			"audio_format": audioReq.ResponseFormat,
+			"audio_format": minimaxAudioFormat(audio, audioReq.ResponseFormat),
 			"audio_size":   len(audio),
 		},
 		"base_resp": gin.H{"status_code": 0, "status_msg": "success"},
 	})
+}
+
+// minimaxAudioFormat 报**字节的真实容器**,不是请求值。
+//
+// 两者可以合法地不一致(客户端省略 audio_setting.format、或上游按能力回落到默认容器),
+// 而 MiniMax 客户端会拿这个字段决定怎么落盘/解码:报错了就是"扩展名与字节不符",
+// 症状是播放器报错、服务端却一切正常。认不出魔数时才回落到请求格式。
+func minimaxAudioFormat(audio []byte, requested string) string {
+	if f := strings.TrimPrefix(nfsinput.AudioExtFromMagic(audio), "."); f != "" {
+		return f
+	}
+	return requested
 }
 
 // binaryCaptureWriter 缓冲下游写出的响应（状态码 + body），供调用方决定怎么回写。

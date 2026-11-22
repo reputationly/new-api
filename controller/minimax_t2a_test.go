@@ -60,3 +60,26 @@ func TestConvertT2ARequestRejectsUnsupported(t *testing.T) {
 		})
 	}
 }
+
+// audio_format 报的是字节的真实容器,不是请求值:客户端拿它决定落盘/解码,
+// 报错了就是"扩展名与字节不符",播放器报错而服务端看起来一切正常。
+func TestMinimaxAudioFormatUsesBytes(t *testing.T) {
+	cases := []struct {
+		name      string
+		audio     []byte
+		requested string
+		want      string
+	}{
+		{"mp3 字节、请求 mp3", []byte("ID3\x04\x00\x00"), "mp3", "mp3"},
+		{"wav 字节、请求 mp3(上游回落默认容器)", []byte("RIFF\x24\x00\x00\x00WAVEfmt "), "mp3", "wav"},
+		{"mp3 字节、请求 wav", []byte("ID3\x04\x00\x00"), "wav", "mp3"},
+		{"认不出魔数 → 回落到请求值", []byte("opaque"), "flac", "flac"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := minimaxAudioFormat(tc.audio, tc.requested); got != tc.want {
+				t.Fatalf("audio_format 应为 %q,实际 %q", tc.want, got)
+			}
+		})
+	}
+}

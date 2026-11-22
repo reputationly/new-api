@@ -223,7 +223,7 @@ func TestValidateBreezeParams(t *testing.T) {
 		body    map[string]any
 		wantMsg string // 空 = 应放行
 	}{
-		{name: "response_format=mp3", body: map[string]any{"response_format": "mp3"}, wantMsg: "只支持 response_format=wav"},
+		{name: "response_format=aac(引擎不认)", body: map[string]any{"response_format": "aac"}, wantMsg: "不支持 response_format=aac"},
 		{name: "speed=1.2", body: map[string]any{"speed": 1.2}, wantMsg: "不支持 speed"},
 		{name: "language=zh", body: map[string]any{"language": "zh"}, wantMsg: "不接受 language"},
 		{name: "x_vector_only_mode", body: map[string]any{"x_vector_only_mode": true}, wantMsg: "不支持 x_vector_only_mode"},
@@ -233,6 +233,7 @@ func TestValidateBreezeParams(t *testing.T) {
 		// 放行
 		{name: "speed=1.0", body: map[string]any{"speed": 1.0}},
 		{name: "response_format=wav", body: map[string]any{"response_format": "WAV"}},
+		{name: "response_format=mp3", body: map[string]any{"response_format": "mp3"}},
 		{name: "response_format 未传", body: map[string]any{}},
 		{name: "标签 speaker", body: map[string]any{"speaker": "[S0]"}},
 		{name: "speaker=default", body: map[string]any{"speaker": "default"}},
@@ -568,7 +569,7 @@ func TestBuildRequestBodyBreeze(t *testing.T) {
 	}{
 		{"speed 非 1", map[string]any{"task_type": "tts", "speed": 1.2}, "不支持 speed"},
 		{"language", map[string]any{"task_type": "tts", "language": "zh"}, "不接受 language"},
-		{"非 wav 格式", map[string]any{"task_type": "tts", "response_format": "mp3"}, "只支持 response_format=wav"},
+		{"引擎不认的容器", map[string]any{"task_type": "tts", "response_format": "aac"}, "不支持 response_format=aac"},
 		{"emo_vector 未知键", map[string]any{"task_type": "tts", "emo_vector": []any{0.1}}, "不支持 extra_params 键"},
 		{"voice 非标签", map[string]any{"task_type": "tts", "voice": "alloy"}, "只接受说话人标签"},
 	} {
@@ -617,5 +618,17 @@ func TestBuildRequestBodyBreezeRejectsBeforeMaterialization(t *testing.T) {
 				t.Fatalf("NFS root must remain empty: entries=%v err=%v", entries, err)
 			}
 		})
+	}
+}
+
+// 空串 response_format 必须被删掉而不是原样下发:引擎的该字段是 Literal,
+// 收到 "" 会变成 pydantic 422(客户端看到的是校验错,不是"按默认走")。
+func TestValidateBreezeParamsDropsEmptyResponseFormat(t *testing.T) {
+	body := map[string]any{"response_format": "   "}
+	if err := ValidateBreezeParams(body, "tts2"); err != nil {
+		t.Fatalf("空白 response_format 应放行: %v", err)
+	}
+	if _, ok := body["response_format"]; ok {
+		t.Fatalf("空白 response_format 应被删除,实际仍在下发: %v", body)
 	}
 }

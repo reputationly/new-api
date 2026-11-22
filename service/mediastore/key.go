@@ -143,6 +143,12 @@ func InferContentType(key string) string {
 		return "audio/flac"
 	case "ogg":
 		return "audio/ogg"
+	// 语音产物新增的容器(引擎 vLLM-Omni 能编码,门面按 response_format 命名)。
+	// 漏在这里的后果是制品 URL 的 Content-Type 变成 octet-stream,浏览器不播。
+	case "opus":
+		return "audio/opus"
+	case "pcm":
+		return "audio/pcm"
 	default:
 		return "application/octet-stream"
 	}

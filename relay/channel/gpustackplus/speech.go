@@ -66,10 +66,13 @@ var (
 // speechMaxResultBytes 成品音频读盘上限(字节),防御异常巨大的产物撑爆内存。
 var speechMaxResultBytes = int64(common.GetEnvOrDefault("GPUSTACKPLUS_TTS_MAX_RESULT_MB", 64)) << 20
 
-// speechContentTypes 输出容器 → Content-Type。既是「允许透传给引擎的 response_format
-// 白名单」(引擎 AudioTaskRequest 继承 OpenAICreateSpeechRequest,原生认 response_format),
-// 也是回写响应头的依据 —— 两者共用一张表,避免出现「放行了某种格式却标不出正确 MIME」。
-// 不做转码:不在表内即 400,免得客户端拿到与 response_format 不符的字节还以为成功。
+// speechContentTypes 输出容器 → Content-Type。
+//
+// 只负责「怎么标 MIME」,**不再兼任请求白名单**:可选项由 common.CheckAudioOutputFormatForModel
+// 按模型能力(默认 = 引擎能力 EngineAudioOutputFormats)决定。两张表以前是同一张,
+// 结果网关对外承诺 8 种容器、引擎只认 5 种 —— aac/m4a/ogg 到引擎是 pydantic 422,
+// 而不是一条能读懂的 400。保留 ogg/aac/m4a 三行是因为它们仍是合法的「字节→MIME」映射
+// (历史产物、或将来引擎支持后直接可用),但它们不在可选项里。
 var speechContentTypes = map[string]string{
 	"mp3":  "audio/mpeg",
 	"wav":  "audio/wav",
@@ -82,18 +85,37 @@ var speechContentTypes = map[string]string{
 }
 
 // speechFormatContextKey 把客户端请求的 response_format 从 ConvertAudioRequest 传到
-// DoResponse:成品扩展名不可靠(引擎可能落 .bin / 无扩展名)时,用请求格式兜底标注 MIME。
+// DoResponse:成品字节与扩展名都认不出时,用请求格式兜底标注 MIME。
 const speechFormatContextKey = "gpustackplus_speech_response_format"
 
-// speechContentType 决定回写的 Content-Type:成品真实扩展名优先(引擎最终产出什么就标什么),
-// 其次回落到客户端请求的格式;都认不出时宁可标 octet-stream,也不谎称是 MP3 —— 客户端按错误
-// 的容器去解码,失败得比拿到 octet-stream 更晚也更难查。
-func speechContentType(resolvedPath, requestedFormat string) string {
-	ext := strings.ToLower(strings.TrimPrefix(filepath.Ext(resolvedPath), "."))
-	if ct, ok := speechContentTypes[ext]; ok {
+// speechContentType 决定回写的 Content-Type,优先级:**真实字节 > 成品扩展名 > 请求格式**。
+//
+// 顺序是这里唯一重要的东西。历史实现是「扩展名优先」,而扩展名由门面按 task_type 硬编码
+// (音频固定 .wav),于是引擎按 response_format=mp3 编出来的字节被标成 audio/wav ——
+// 客户端按 WAV 去解一份 MP3,失败得既晚又难查。以魔数为准后,扩展名只在前 12 字节
+// 认不出容器时(例如门面落了个 .bin)才参与判断。
+//
+// 三档都认不出时宁可 octet-stream,也不谎称是 MP3:客户端按错误的容器解码,
+// 失败得比拿到 octet-stream 更晚也更难查。
+func speechContentType(data []byte, resolvedPath, requestedFormat string) string {
+	pathExt := strings.ToLower(strings.TrimPrefix(filepath.Ext(resolvedPath), "."))
+	reqFormat := strings.ToLower(strings.TrimSpace(requestedFormat))
+	if ext := nfsinput.AudioExtFromMagic(data); ext != "" {
+		key := strings.TrimPrefix(ext, ".")
+		if key == "ogg" && (pathExt == "opus" || reqFormat == "opus") {
+			// OggS 只是容器,里面可能是 Vorbis 也可能是 Opus —— 魔数分不出来。
+			// 引擎的 response_format=opus 落的正是 Ogg/Opus,所以在同一容器内用
+			// 扩展名/请求格式收敛到 audio/opus,免得客户端拿到 audio/ogg 后按 Vorbis 解。
+			return "audio/opus"
+		}
+		if ct, ok := speechContentTypes[key]; ok {
+			return ct
+		}
+	}
+	if ct, ok := speechContentTypes[pathExt]; ok {
 		return ct
 	}
-	if ct, ok := speechContentTypes[strings.ToLower(strings.TrimSpace(requestedFormat))]; ok {
+	if ct, ok := speechContentTypes[reqFormat]; ok {
 		return ct
 	}
 	return "application/octet-stream"
@@ -200,12 +222,15 @@ func (a *Adaptor) convertSpeechRequest(c *gin.Context, info *relaycommon.RelayIn
 		body["instructions"] = s
 	}
 	if f := strings.ToLower(strings.TrimSpace(request.ResponseFormat)); f != "" {
-		if _, ok := speechContentTypes[f]; !ok {
-			return nil, fmt.Errorf("不支持的 response_format: %q(允许:mp3/wav/flac/opus/ogg/aac/m4a/pcm)", f)
+		// 可选项按模型能力收口(默认=引擎能编码的容器),不再用 MIME 表当白名单。
+		normalized, err := common.CheckAudioOutputFormatForModel(
+			f, request.Model, info.OriginModelName, modelName)
+		if err != nil {
+			return nil, err
 		}
-		body["response_format"] = f
-		// 供 DoResponse 在成品扩展名认不出来时兜底标注 Content-Type。
-		c.Set(speechFormatContextKey, f)
+		body["response_format"] = normalized
+		// 供 DoResponse 在字节与扩展名都认不出来时兜底标注 Content-Type。
+		c.Set(speechFormatContextKey, normalized)
 	}
 	if request.Speed != nil {
 		if *request.Speed < 0.25 || *request.Speed > 4 {
@@ -343,7 +368,7 @@ func (a *Adaptor) doSpeechResponse(c *gin.Context, resp *http.Response, info *re
 	if rErr != nil {
 		return nil, types.NewError(rErr, types.ErrorCodeBadResponse)
 	}
-	contentType := speechContentType(resolvedPath, c.GetString(speechFormatContextKey))
+	contentType := speechContentType(data, resolvedPath, c.GetString(speechFormatContextKey))
 
 	// 直接回二进制音频:不能复用 IOCopyBytesGracefully(它会把提交响应的
 	// Content-Type: application/json 一并搬过来,客户端会按 JSON 解析而失败)。
