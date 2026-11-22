@@ -803,3 +803,31 @@ func TestDryRunWarnsOnSuspectEnhanceFields(t *testing.T) {
 		t.Fatalf("正常配置不该警告: %+v", ch)
 	}
 }
+
+// overrides 里写 prompt_optimizer 是无效配置:客户请求才控制它。干跑要 warn 出来,
+// 否则配置的人以为设了默认值,实际被当成客户传值吞掉。
+func TestDryRunWarnsPromptOptimizerInOverrides(t *testing.T) {
+	withFakeModels(t, map[string]fakeModel{
+		"minimax-h3": {groups: []string{"default"}},
+		"enh":        {groups: []string{"default"}},
+	})
+	cfg := &common.AggregateModel{
+		Name: "h3-2k", Type: "video", Enabled: true,
+		Generate: common.AggregateGenerate{
+			Model:     "minimax-h3",
+			Overrides: map[string]any{"prompt_optimizer": false},
+		},
+		PromptEnhance: &common.AggregatePromptEnhance{Model: "enh", SystemPrompt: "x"},
+	}
+	res := DryRunAggregateModel(cfg, map[string]int{"h3-2k": 1})
+	ch := checkByKey(res, "generate")
+	if ch == nil {
+		t.Fatal("应报 generate warn")
+	}
+	if ch.Level != AggregateCheckWarn {
+		t.Fatalf("级别应为 warn: %s", ch.Level)
+	}
+	if !strings.Contains(ch.Message, "prompt_optimizer") {
+		t.Fatalf("消息应点名 prompt_optimizer: %s", ch.Message)
+	}
+}
