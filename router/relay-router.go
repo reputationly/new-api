@@ -72,7 +72,7 @@ func SetRelayRouter(router *gin.Engine) {
 		// 跑在 Distribute 之前，而本组的 Distribute 是分组级中间件，插不进去。
 		playgroundRouter.POST("/responses", controller.PlaygroundResponses)
 		playgroundRouter.POST("/audio/speech", controller.PlaygroundAudioSpeech)
-		playgroundRouter.POST("/videos", middleware.TaskPostStages(), controller.PlaygroundVideo)
+		playgroundRouter.POST("/videos", middleware.TaskPostStages(), middleware.ContinuationConvert(), controller.PlaygroundVideo)
 		playgroundRouter.GET("/videos/:task_id", controller.PlaygroundVideoFetch)
 	}
 	// 体验区图片：与 playgroundRouter 同一套鉴权，但把 Distribute 留到路由级，
@@ -152,6 +152,17 @@ func SetRelayRouter(router *gin.Engine) {
 		httpRouter.POST("/embeddings", func(c *gin.Context) {
 			controller.Relay(c, types.RelayFormatEmbedding)
 		})
+
+		// MiniMax 语音协议兼容层（POST /v1/t2a_v2）。MiniMax Design 的内置 minimax
+		// 适配器「语音」打的就是这条：同步、output_format=url，响应读 data.audio。
+		// 我们把它转成自己的 /v1/audio/speech，再把二进制音频 hex 回去，见
+		// controller.MiniMaxV2Speech。与上面的 /audio/speech 并存，互不影响。
+		httpRouter.POST("/t2a_v2",
+			middleware.TokenAuth(), middleware.Distribute(), controller.MiniMaxV2Speech)
+		// MiniMax 音乐协议兼容层（POST /v1/music_generation）。官方是同步返回 data.audio，
+		// 我们是任务制，这里用"提交 + 阻塞轮询"伪装成同步，见 controller.MiniMaxMusicGeneration。
+		httpRouter.POST("/music_generation",
+			middleware.TokenAuth(), middleware.Distribute(), controller.MiniMaxMusicGeneration)
 
 		// audio related routes
 		httpRouter.POST("/audio/transcriptions", func(c *gin.Context) {

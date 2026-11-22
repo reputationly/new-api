@@ -80,13 +80,14 @@ type HiloTextEntry struct {
 // 客户端会把视频/音频喂过去，而模型只会编一段听起来合理的描述）。
 // 要把它当"已验证"看待之前，先补测那两项。
 func defaultHiloTextCatalog() []HiloTextEntry {
-	entry := func(platform, id, name string, video bool) HiloTextEntry {
+	entry := func(platform, id, name string, video, image bool) HiloTextEntry {
 		return HiloTextEntry{
 			PlatformModel: platform,
 			Model: dto.HiloTextModel{
 				ID:            id,
 				Name:          name,
 				SupportsVideo: video,
+				SupportsImage: image,
 				// **没验过的一律 false。** 报了 true 之后客户端会把音频喂过去，
 				// 而模型只会编一段听起来合理的描述，不报错。
 				SupportsAudio: false,
@@ -95,9 +96,9 @@ func defaultHiloTextCatalog() []HiloTextEntry {
 	}
 	return []HiloTextEntry{
 		// 排第一 = 客户端的默认对话模型（controller/hilo.go 取第一个真的报出去的）。
-		entry("deepseek-v4-1-flash", "deepseek-v4-1-flash", "DeepSeek V4.1 Flash", false),
-		entry("GPT-5.4", "GPT-5.4", "GPT-5.4", false),
-		entry("Gemini-3.1-Pro-Preview", "Gemini-3.1-Pro-Preview", "Gemini 3.1 Pro", false),
+		entry("deepseek-v4-1-flash", "deepseek-v4-1-flash", "DeepSeek V4.1 Flash", false, false),
+		entry("GPT-5.4", "GPT-5.4", "GPT-5.4", false, true),
+		entry("Gemini-3.1-Pro-Preview", "Gemini-3.1-Pro-Preview", "Gemini 3.1 Pro", false, true),
 	}
 }
 

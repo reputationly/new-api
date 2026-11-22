@@ -16,6 +16,10 @@ const (
 	TaskActionFirstTailGenerate = "firstTailGenerate"
 	TaskActionReferenceGenerate = "referenceGenerate"
 	TaskActionRemix             = "remixGenerate"
+	// TaskActionContinuation 续写(video-extension):源视频抽末帧 → i2v 生成 → 拼接。
+	// 与 generate 分开是为了让任务列表/日志能把"基于已有视频的续写"筛出来 ——
+	// 它与一次普通生成产物相同、工序完全不同(有本地预处理与后处理)。
+	TaskActionContinuation = "continuationGenerate"
 
 	// 异步图片任务(见 docs/image-async-task-design.md)。与视频 action 分开是因为
 	// 查询端点要按它决定回 OpenAI video 对象还是 image job 对象,而 task 表里两者
@@ -37,6 +41,7 @@ var VideoTaskActions = []string{
 	TaskActionFirstTailGenerate,
 	TaskActionReferenceGenerate,
 	TaskActionRemix,
+	TaskActionContinuation,
 }
 
 // IsVideoTaskAction 判断一个 task action 是否属于视频链路。

@@ -144,11 +144,16 @@ func applyVideoPricing(c *gin.Context, info *relaycommon.RelayInfo) bool {
 	resolution = videoBillingResolution(&req, resolution)
 	seconds = videoBillingSeconds(c, &req, seconds)
 
+	// H3 这类有帧栅格的引擎:交付秒数与请求秒数不同(1 s → 1.625 s)。
+	// 冻结进上下文,供 per_second 计价与排障/对账使用。
+	deliveredSeconds := h3DeliveredBillingSeconds(info, seconds)
+
 	frozen := &relaycommon.VideoBillingContext{
-		Mode:          entry.Mode,
-		Resolution:    resolution,
-		Seconds:       seconds,
-		HasVideoInput: hasVideoInput,
+		Mode:             entry.Mode,
+		Resolution:       resolution,
+		Seconds:          seconds,
+		HasVideoInput:    hasVideoInput,
+		DeliveredSeconds: deliveredSeconds,
 	}
 
 	switch entry.Mode {
@@ -205,7 +210,9 @@ func applyVideoPricing(c *gin.Context, info *relaycommon.RelayInfo) bool {
 		// video_seconds 一起下发,前端与对账靠 unit × seconds 反算,存总价就丢了
 		// 「这一单为什么是这个数」的依据。总价只进 PriceData。
 		frozen.UnitPrice = unit
-		total := unit * float64(seconds)
+		// 按交付秒计价:请求 1 s 的 H3 单实际出 1.625 s,按 1 s 收就是白送 0.625 s
+		// 的 GPU 时间。没有交付口径的引擎族(大多数)退回请求值,行为不变。
+		total := unit * effectiveVideoBillingSeconds(seconds, deliveredSeconds)
 		// 结算口径与 per_call 完全一致:提交时定死,轮询期不差额结算。
 		// service/ 那 5 处 Mode 判断(task_billing.go:34/58/67/570、
 		// task_polling.go:641)全是判 token,per_second 天然落进 per_call 这条路。

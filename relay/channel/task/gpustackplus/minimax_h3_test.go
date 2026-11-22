@@ -227,11 +227,11 @@ func TestH3DoesNotOverrideExplicitValues(t *testing.T) {
 	}
 }
 
-// 长视频开关:时长超过 full 档上限(15 s)时补 long_video=true + long_video_mode=full。
+// 长视频开关:时长超过标准档上限(20 s)时补 long_video=true + long_video_mode=full。
 //
-// 引擎的时长上限是三档常量,不是白名单:未开 long_video → 15 s,full → 30 s,
-// continuation → 300 s(仅 Ref2VA)。只放开平台白名单不做这一步,引擎照旧按 15 秒拒
-// (实测报错文案 `must be in [4, 15]`)。
+// 引擎的时长上限是三档常量,不是白名单:未开 long_video → 20 s(2026-11-19 由 15
+// 放宽,见 vllm-omni `MINIMAX_H3_MAX_STANDARD_SECONDS`),full → 30 s,
+// continuation → 300 s(仅 Ref2VA)。只放开平台白名单不做这一步,引擎照旧按标准档拒。
 func TestH3InjectsLongVideoAboveFullModeCap(t *testing.T) {
 	cases := []struct {
 		name       string
@@ -239,8 +239,9 @@ func TestH3InjectsLongVideoAboveFullModeCap(t *testing.T) {
 		wantLong   bool
 		wantInMode bool
 	}{
-		{"15 秒是 full 档上限,不注入", 15, false, false},
-		{"16 秒越过上限,注入", 16, true, true},
+		{"20 秒是标准档上限,不注入", 20, false, false},
+		{"16 秒仍在标准档内(引擎已放宽到 20),不注入", 16, false, false},
+		{"21 秒越过上限,注入", 21, true, true},
 		{"30 秒 —— 本次要开的目标档", 30, true, true},
 		{"5 秒不注入", 5, false, false},
 	}

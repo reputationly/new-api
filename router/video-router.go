@@ -20,14 +20,14 @@ func SetVideoRouter(router *gin.Engine) {
 	videoV1Router.Use(middleware.RouteTag("relay"))
 	videoV1Router.Use(middleware.TokenAuth(), middleware.Distribute())
 	{
-		videoV1Router.POST("/video/generations", middleware.TaskPostStages(), controller.RelayTask)
+		videoV1Router.POST("/video/generations", middleware.TaskPostStages(), middleware.ContinuationConvert(), controller.RelayTask)
 		videoV1Router.GET("/video/generations/:task_id", controller.RelayTaskFetch)
 		videoV1Router.POST("/videos/:video_id/remix", controller.RelayTask)
 	}
 	// openai compatible API video routes
 	// docs: https://platform.openai.com/docs/api-reference/videos/create
 	{
-		videoV1Router.POST("/videos", middleware.TaskPostStages(), controller.RelayTask)
+		videoV1Router.POST("/videos", middleware.TaskPostStages(), middleware.ContinuationConvert(), controller.RelayTask)
 		videoV1Router.GET("/videos/:task_id", controller.RelayTaskFetch)
 		// 取消只对排队中的任务有效，见 controller.RelayVideoCancel。
 		videoV1Router.DELETE("/videos/:task_id", controller.RelayVideoCancel)
@@ -42,6 +42,18 @@ func SetVideoRouter(router *gin.Engine) {
 	// ⚠️ 与 MiniMax v2 那组同样依赖 SetRelayRouter 先于 SetVideoRouter 调用：engine 级的
 	// BodyStorageCleanup 只对其后注册的路由生效，而提交端点会 ReplaceRequestBody
 	// 新建一份 body storage，靠它收尾。
+	// 图片：方舟的同步图片协议（Seedream 语义）。与下面那条视频路由同属 /api/v3 前缀，
+	// 但一个是 /images/generations、一个是 /contents/generations/tasks，互不重叠。
+	//
+	// 走 imageEntry 而不是 controller.RelayTask：图片支持同步返回（方舟的图片 API 就是同步的）。
+	arkV3ImageRouter := router.Group("/api/v3")
+	arkV3ImageRouter.Use(middleware.RouteTag("relay"))
+	{
+		arkV3ImageRouter.POST("/images/generations",
+			middleware.ArkV3ImageConvert(), middleware.TokenAuth(), middleware.Distribute(),
+			imageEntry)
+	}
+
 	arkV3Router := router.Group("/api/v3/contents/generations")
 	arkV3Router.Use(middleware.RouteTag("relay"))
 	{

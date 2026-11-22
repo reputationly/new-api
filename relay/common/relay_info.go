@@ -729,6 +729,9 @@ type VideoBillingContext struct {
 	Resolution    string
 	Seconds       int
 	HasVideoInput bool
+	// DeliveredSeconds 真实交付秒数（H3 这类有帧栅格的引擎族才有值）。
+	// 0 = 与 Seconds 等价；按秒计价的模型用它算钱，per_call 仍按 Seconds 查列。
+	DeliveredSeconds float64
 }
 
 type TaskSubmitReq struct {

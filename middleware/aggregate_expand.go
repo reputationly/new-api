@@ -1,7 +1,9 @@
 package middleware
 
 import (
+	"encoding/json"
 	"fmt"
+	"strconv"
 	"strings"
 
 	"github.com/QuantumNous/new-api/relay/hilo"
@@ -50,6 +52,9 @@ type AggregateExpansion struct {
 	RequestedSize string
 	// GenerateSize 套完 Overrides 之后真正发给生成段的尺寸档位。
 	GenerateSize string
+	// RequestedDuration 客户显式传的时长（秒，0 = 没传）。overrides.duration 只在它
+	// 为 0 时生效 —— 它服务的是增强编译器的时长事实，不是替客户改时长。
+	RequestedDuration int
 	// UpscaleSkipped:客户要的最终档**不高于**生成段能出的档,超分段跳过,
 	// 按生成段成品交付。UpscaleSkipReason 是给人看的原因(跳过时非空)。
 	UpscaleSkipped    bool
@@ -211,6 +216,14 @@ func applyAggregateExpansion(c *gin.Context, publicName, realModel string, agg *
 	// 只读改写后的那份,得到的永远是生成段的中间档,超分段就再也没有依据判断该不该跑。
 	requestedSize, _ := body["size"].(string)
 	requestedSize = strings.TrimSpace(requestedSize)
+	// 客户显式给的时长**优先于 overrides.duration**。
+	//
+	// overrides.duration 的用途是给提示词增强编译器一个"时长事实"（不传时长就不编
+	// singlecall，会静默回落 text 模板），不是替客户改时长。原来的实现无差别
+	// `body[k]=v`，会把客户传的 10 s 覆盖成 5 s —— 而整条链路上没有任何地方报错，
+	// 客户只会看到"我明明要 10 秒"。营销文案里的"客户显式传 duration 时以客户为准"
+	// 依赖这一条，别删。
+	requestedDuration := requestedDurationSeconds(body)
 	// 先套 Overrides,再定 model —— 顺序不能反,见下面对 model 的保护。
 	//
 	// Overrides 是聚合模型存在的意义所在,不是可选装饰:客户传的尺寸语义是「我要的**最终**
@@ -223,6 +236,9 @@ func applyAggregateExpansion(c *gin.Context, publicName, realModel string, agg *
 		alignVideoAspectRatio(body, agg, requestedSize)
 	}
 	for k, v := range agg.Generate.Overrides {
+		if (k == "duration" || k == "seconds") && requestedDuration > 0 {
+			continue
+		}
 		body[k] = v
 	}
 	// model 由展开结果决定,不允许被 Overrides 顶掉:运营在 overrides 里手滑写一个 model
@@ -248,10 +264,11 @@ func applyAggregateExpansion(c *gin.Context, publicName, realModel string, agg *
 	generateSize = strings.TrimSpace(generateSize)
 
 	exp := &AggregateExpansion{
-		PublicName:    publicName,
-		Config:        agg,
-		RequestedSize: requestedSize,
-		GenerateSize:  generateSize,
+		PublicName:        publicName,
+		Config:            agg,
+		RequestedSize:     requestedSize,
+		GenerateSize:      generateSize,
+		RequestedDuration: requestedDuration,
 	}
 	exp.UpscaleSkipReason = upscaleSkipReason(requestedSize, generateSize)
 	exp.UpscaleSkipped = exp.UpscaleSkipReason != ""
@@ -1384,4 +1401,47 @@ func hasMetadataMaterial(md map[string]any, keys ...string) bool {
 		}
 	}
 	return false
+}
+
+// requestedDurationSeconds 客户显式传的时长（秒）。duration 优先，兼容 seconds 字符串。
+//
+// 只用于"overrides.duration 该不该生效"这一个判断 —— 增强编译器读的是归一化后的
+// TaskSubmitReq，两处不要合并：那边还有"不认 seconds 回落"的渠道判据。
+func requestedDurationSeconds(body map[string]any) int {
+	if v, ok := body["duration"]; ok {
+		if n, ok := jsonIntValue(v); ok && n > 0 {
+			return n
+		}
+	}
+	if v, ok := body["seconds"]; ok {
+		// seconds 既可能是 "10"、10，也可能是 json.Number —— 只认 string 会让
+		// overrides.duration 在数字形态下错误生效（客户明明传了时长）。
+		if n, ok := jsonIntValue(v); ok && n > 0 {
+			return n
+		}
+	}
+	return 0
+}
+
+func jsonIntValue(v any) (int, bool) {
+	switch n := v.(type) {
+	case json.Number:
+		if i, err := n.Int64(); err == nil {
+			return int(i), true
+		}
+		if f, err := n.Float64(); err == nil {
+			return int(f), true
+		}
+	case float64:
+		return int(n), true
+	case int:
+		return n, true
+	case int64:
+		return int(n), true
+	case string:
+		if i, err := strconv.Atoi(strings.TrimSpace(strings.TrimSuffix(n, "s"))); err == nil {
+			return i, true
+		}
+	}
+	return 0, false
 }

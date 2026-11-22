@@ -1,9 +1,12 @@
 package minimaxv2
 
 import (
+	"fmt"
 	"net/http"
 	"strings"
 	"testing"
+
+	"github.com/QuantumNous/new-api/common"
 )
 
 func convert(t *testing.T, body string) (map[string]any, *Snapshot) {
@@ -203,6 +206,23 @@ func TestConvertFrameAndReferenceAreMutuallyExclusive(t *testing.T) {
 	}
 }
 
+// 窗口两端都要能过：客户端按目录里的 1–20 提交，兼容层不能比网关更窄。
+func TestConvertAcceptsWidenedDurationWindow(t *testing.T) {
+	for _, d := range []int{1, 3, 16, 20} {
+		body := fmt.Sprintf(`{"model":"MiniMax-H3","content":[{"type":"text","text":"go"}],"resolution":"768P","ratio":"16:9","duration":%d}`, d)
+		parsed, snap, err := ConvertCreateRequest([]byte(body))
+		if err != nil {
+			t.Fatalf("duration=%d 被拒：%+v", d, err)
+		}
+		if parsed["duration"] != d {
+			t.Fatalf("duration=%d 回显成 %v", d, parsed["duration"])
+		}
+		if snap == nil || snap.Duration != d {
+			t.Fatalf("duration=%d 快照不对：%+v", d, snap)
+		}
+	}
+}
+
 func TestConvertRejectsUnsupportedInputs(t *testing.T) {
 	base := func(extra, content string) string {
 		if content == "" {
@@ -267,8 +287,9 @@ func TestConvertRejectsUnsupportedInputs(t *testing.T) {
 		},
 		{
 			name: "duration 越界",
-			body: `{"model":"MiniMax-H3","content":[{"type":"text","text":"go"}],"resolution":"768P","ratio":"16:9","duration":16}`,
-			want: "between 4 and 15",
+			// 窗口是 1–20（引擎 2026-11-19 放宽），越界要报新的边界值。
+			body: `{"model":"MiniMax-H3","content":[{"type":"text","text":"go"}],"resolution":"768P","ratio":"16:9","duration":21}`,
+			want: "between 1 and 20",
 		},
 		{
 			name: "没有 text",
@@ -402,5 +423,42 @@ func TestConvertRejectsRatioOutsideEleven(t *testing.T) {
 	}
 	if strings.Contains(err.Message, "5:3") == false {
 		t.Errorf("错误信息应点名请求值:%s", err.Message)
+	}
+}
+
+// 2K 只在"后面有超分段"时才可接受。MiniMax Design 的预设默认就是 2K ——
+// 一律硬拒会让这类客户端一进来就 400，而它点的正是我们为 2K 配好的聚合模型。
+func TestConvertAccepts2KOnlyForAggregate(t *testing.T) {
+	common.OptionMapRWMutex.Lock()
+	if common.OptionMap == nil {
+		common.OptionMap = map[string]string{}
+	}
+	prev, had := common.OptionMap["AggregateModelConfig"]
+	common.OptionMap["AggregateModelConfig"] = `[{"name":"minimax-h3-2k","type":"video","enabled":true,
+	  "generate":{"model":"minimax-h3-fl2va","overrides":{"size":"768P"}},
+	  "upscale":{"model":"relayvsr","target_size":"2k","sr_ratio":2,"delivered_size":"2K"}}]`
+	common.OptionMapRWMutex.Unlock()
+	t.Cleanup(func() {
+		common.OptionMapRWMutex.Lock()
+		if had {
+			common.OptionMap["AggregateModelConfig"] = prev
+		} else {
+			delete(common.OptionMap, "AggregateModelConfig")
+		}
+		common.OptionMapRWMutex.Unlock()
+	})
+
+	withAgg := `{"model":"minimax-h3-2k","content":[{"type":"text","text":"go"}],"resolution":"2K","ratio":"16:9","duration":5}`
+	parsed, snap, err := ConvertCreateRequest([]byte(withAgg))
+	if err != nil {
+		t.Fatalf("聚合模型选 2K 不该被拒：%+v", err)
+	}
+	if parsed["size"] != "2K" || snap.Resolution != "2K" {
+		t.Fatalf("2K 没透传：size=%v snap=%+v", parsed["size"], snap)
+	}
+
+	plain := `{"model":"minimax-h3-fl2va","content":[{"type":"text","text":"go"}],"resolution":"2K","ratio":"16:9","duration":5}`
+	if _, _, err := ConvertCreateRequest([]byte(plain)); err == nil {
+		t.Fatal("裸模型选 2K 应被拒（引擎只出 768P）")
 	}
 }

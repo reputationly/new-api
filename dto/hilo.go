@@ -163,7 +163,11 @@ type HiloTextModel struct {
 	PromptMaxLength int                       `json:"promptMaxLength,omitempty"`
 	SupportsVideo   bool                      `json:"supportsVideo,omitempty"`
 	SupportsAudio   bool                      `json:"supportsAudio,omitempty"`
-	Region          string                    `json:"region,omitempty"`
+	// SupportsImage 这个对话模型能不能读图片（视觉）。与上面两个同一条纪律：
+	// **没实测验证过就留 false** —— 读不了图的模型不会报错，只会编一段听起来
+	// 合理的描述，客户端会把用户上传的图当"看过了"。
+	SupportsImage bool   `json:"supportsImage,omitempty"`
+	Region        string `json:"region,omitempty"`
 }
 
 // HiloModelsConfig 是 `/api/v1/models/config` 的完整响应。

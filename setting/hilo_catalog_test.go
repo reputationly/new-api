@@ -288,3 +288,47 @@ func TestVideoRatiosCoverEngineBuckets(t *testing.T) {
 		t.Errorf("默认值 = %q,期望 adaptive(跟随素材/引擎缺省画幅)", p.Default)
 	}
 }
+
+// H3 出厂目录的时长窗口与玩法必须与引擎/网关的真实能力一致：
+//   - 1–20 秒（引擎 2026-11-19 放宽；交付按 17n+5 栅格吸附）
+//   - 四种玩法（reference / first-last-frame / text-to-video / video-extension），
+//     少一个客户端就选不到，能力目录也不会报出对应 mode
+func TestH3CatalogCoversWidenedWindowAndEveryMode(t *testing.T) {
+	catalog := defaultHiloCatalog()
+	var h3 HiloCatalogEntry
+	for _, entry := range catalog.Video {
+		if entry.PlatformModel == "minimax-h3-2k" {
+			h3 = entry
+			break
+		}
+	}
+	if h3.PlatformModel == "" {
+		t.Fatal("出厂目录缺少 minimax-h3-2k")
+	}
+
+	// 面板对外保持官方的 4–15：底层放到 1–20 是能力，不是面板该展示的默认值。
+	dur := h3.Model.Params["duration"].Options
+	for _, want := range []string{"4", "5", "15"} {
+		if !slices.Contains(dur, want) {
+			t.Errorf("时长档位缺少 %s：%v", want, dur)
+		}
+	}
+	if len(dur) != 12 {
+		t.Errorf("时长应有 12 档（4–15），实际 %d", len(dur))
+	}
+	for _, unwanted := range []string{"1", "2", "3", "16", "20"} {
+		if slices.Contains(dur, unwanted) {
+			t.Errorf("面板不该出现 %s 秒：%v", unwanted, dur)
+		}
+	}
+
+	for _, mode := range []string{"reference", "first-last-frame", "text-to-video", "video-extension"} {
+		want, ok := h3.ModeModels[mode]
+		if !ok || want == "" {
+			t.Errorf("mode_models 缺少玩法 %s", mode)
+		}
+		if !slices.Contains(h3.Model.Params["image_mode"].Options, mode) {
+			t.Errorf("image_mode 缺少玩法 %s", mode)
+		}
+	}
+}

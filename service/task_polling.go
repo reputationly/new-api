@@ -560,6 +560,20 @@ func updateVideoSingleTask(ctx context.Context, adaptor TaskPollingAdaptor, ch *
 			// 回去会被客户端渲染成"重新开始了"。
 			break
 		}
+		// 续写(video-extension):生成段完成 → 与源片拼成整段再落盘。
+		//
+		// 放在落盘之前：落的是**最终交付物**，不能先把生成段交付出去再换。
+		// 拼接失败不判失败，降级交付生成段(原因记进 Properties.Continuation)——
+		// 生成段已经烧了 GPU，丢掉它等于让客户既没片子又要等退款。
+		// **不能加 `!ConcatDone` 守卫**：拼接成功但落 OBS 失败时任务会留在 InProgress
+		// 等下一轮重试，那时 ConcatDone 已是 true，守卫会让整块被跳过 —— 下一轮拿生成段
+		// 路径去落盘成功，客户拿到没有源片的半截片，而 metadata 还写着 concat_done。
+		// TryConcatContinuation 内部本来就按"产物已存在"幂等，重复调用不重复烧 CPU。
+		if task.Properties.Continuation != nil {
+			if merged, ok := TryConcatContinuation(ctx, task, taskResult.NFSPath); ok && merged != "" {
+				taskResult.NFSPath = merged
+			}
+		}
 		task.Progress = taskcommon.ProgressComplete
 		if task.FinishTime == 0 {
 			task.FinishTime = now
@@ -650,6 +664,7 @@ func updateVideoSingleTask(ctx context.Context, adaptor TaskPollingAdaptor, ch *
 	case model.TaskStatusFailure:
 		logger.LogJson(ctx, fmt.Sprintf("Task %s failed", taskId), task)
 		task.Status = model.TaskStatusFailure
+		// 失败分支**不做续写拼接**：没有成品可拼（NFSPath 通常为空），拼了也没有出口。
 		task.Progress = taskcommon.ProgressComplete
 		if task.FinishTime == 0 {
 			task.FinishTime = now

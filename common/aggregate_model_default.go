@@ -165,42 +165,91 @@ const DefaultAggregateModelConfig = `[
     "name": "minimax-h3-2k",
     "type": "video",
     "enabled": true,
-    "note": "H3 帧族(文生/图生/首尾帧/尾帧)2K:生成 → RelayVSR 超分。等价于体验区的两段编排,集成方只看到一个模型名和一个任务。提示词请自行扩写后再传。",
-    "prompt_enhance": { "model": "qwen3.8-flash-fp8", "mode": "singlecall", "reasoning_effort": "low", "timeout_seconds": 180 },
-    "generate": { "model": "minimax-h3-fl2va", "overrides": { "size": "768P" } },
-    "upscale": { "model": "relayvsr", "target_size": "2k", "sr_ratio": 2, "delivered_size": "2K" }
+    "note": "H3 帧族(文生/图生/首尾帧/尾帧)2K:生成 → RelayVSR 超分。overrides.duration 是给增强编译器的时长事实(不传时长就不编译、静默回落 text 模板),客户显式传 duration 时以客户为准。",
+    "prompt_enhance": {
+      "model": "qwen3.8-flash-fp8",
+      "mode": "singlecall",
+      "reasoning_effort": "low",
+      "timeout_seconds": 180
+    },
+    "generate": {
+      "model": "minimax-h3-fl2va",
+      "overrides": {
+        "size": "768P",
+        "duration": 5
+      }
+    },
+    "upscale": {
+      "model": "relayvsr",
+      "target_size": "2k",
+      "sr_ratio": 2,
+      "delivered_size": "2K"
+    }
   },
   {
     "name": "minimax-h3-ref-2k",
     "type": "video",
     "enabled": true,
-    "note": "H3 参考族(参考图/参考视频生视频)2K。参考族是另一个 checkpoint,不能和帧族共用一条流水线。",
-    "prompt_enhance": { "model": "qwen3.8-flash-fp8", "mode": "singlecall", "reasoning_effort": "low", "timeout_seconds": 180 },
-    "generate": { "model": "minimax-h3-ref2va", "overrides": { "size": "768P" } },
-    "upscale": { "model": "relayvsr", "target_size": "2k", "sr_ratio": 2, "delivered_size": "2K" }
-  },
-  {
-    "name": "qwen-image-pro-enhanced",
-    "type": "image",
-    "enabled": true,
-    "note": "Qwen-Image-2.1(qwen-image-pro)+官方 PE 提示词增强(qwen3.8 关思考),自动定画幅",
-    "prompt_enhance": { "model": "qwen3.8-flash-fp8", "mode": "qwen_pe" },
-    "generate": { "model": "qwen-image-pro" }
+    "note": "H3 参考族(参考图/参考视频生视频)2K。参考族是另一个 checkpoint,不能和帧族共用一条流水线。overrides.duration 同上。",
+    "prompt_enhance": {
+      "model": "qwen3.8-flash-fp8",
+      "mode": "singlecall",
+      "reasoning_effort": "low",
+      "timeout_seconds": 180
+    },
+    "generate": {
+      "model": "minimax-h3-ref2va",
+      "overrides": {
+        "size": "768P",
+        "duration": 5
+      }
+    },
+    "upscale": {
+      "model": "relayvsr",
+      "target_size": "2k",
+      "sr_ratio": 2,
+      "delivered_size": "2K"
+    }
   },
   {
     "name": "minimax-h3-image-enhanced",
     "type": "image",
     "enabled": true,
     "note": "MiniMax H3-Image + 官方 PE 提示词增强,自动定画幅",
-    "prompt_enhance": { "model": "qwen3.8-flash-fp8", "mode": "h3_image_pe", "reasoning_effort": "low" },
-    "generate": { "model": "minimax-h3-image" }
+    "prompt_enhance": {
+      "model": "qwen3.8-flash-fp8",
+      "mode": "h3_image_pe",
+      "reasoning_effort": "low"
+    },
+    "generate": {
+      "model": "minimax-h3-image"
+    }
   },
   {
     "name": "minimax-music3-enhanced",
     "type": "music",
     "enabled": true,
-    "note": "MiniMax-Music3 + 官方 music-caption-rewriter 口径的提示词增强:把一句话音乐描述扩成三节结构化 caption(Global Metadata / Vocal Details / Arrangement)。改写的是 metadata.instructions,**歌词(顶层 prompt 位)原样不动**。",
-    "prompt_enhance": { "model": "qwen3.8-flash-fp8", "mode": "text" },
-    "generate": { "model": "minimax-music3" }
+    "note": "MiniMax-Music3 + 官方 music-caption-rewriter 口径的提示词增强:扩成三节结构化 caption(Global Metadata / Vocal Details / Arrangement)。改写 metadata.instructions,歌词(顶层 prompt)原样不动。思考刻意不开:实测 none 与 low 都是三段齐全,low 只更紧凑但慢约 1.7 倍。",
+    "prompt_enhance": {
+      "model": "qwen3.8-flash-fp8",
+      "mode": "text"
+    },
+    "generate": {
+      "model": "minimax-music3"
+    }
+  },
+  {
+    "name": "ace-step-enhanced",
+    "type": "music",
+    "enabled": true,
+    "note": "ACE-Step(V1.5)+ 提示词增强:曲风简述扩成一条 dense caption(英文、单行逗号分隔、不写 BPM/调性)。改顶层 prompt;sample 模式改 metadata.sample_query;歌词原样不动。思考必须 low:none 档会写成散文段落。",
+    "prompt_enhance": {
+      "model": "qwen3.8-flash-fp8",
+      "mode": "text",
+      "reasoning_effort": "low"
+    },
+    "generate": {
+      "model": "ace-step"
+    }
   }
 ]`
