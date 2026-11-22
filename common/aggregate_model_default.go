@@ -141,15 +141,13 @@ package common
 // prompt 是**歌词**、描述在 metadata.instructions;ACE-Step 的 prompt 是**描述**、歌词在
 // metadata.lyrics。增强按引擎族决定改写哪个字段,配错引擎会写到对方不读的字段上,
 // 钱花了、描述没动、不报错 —— 所以出厂默认仍只给 Music3,ACE-Step 那条由运营按需添加。
-//
-// 另外那条注释里的单测样例路径也随实验脚本一起移出了仓库(实验脚本不落库)。
-//
+
 // H3-Image 用 h3_image_pe:四个 MaaS 模型中 qwen3.8-flash-fp8 的 low 档在 16 个编辑样例
 // 上召回率 1.00、p50 约 45 秒,连续三轮稳定;none 档不稳定。
 //
 // ── H3 视频为什么带 reasoning_effort=low 与 180 秒 ─────────────────────
 //
-// 8 条用例(scripts/h3vid-pe/)与官方 Context-IR 逐条对照的结论:
+// 8 条用例(实验脚本不入库,见 service/h3v20/NOTES.md)与官方 Context-IR 逐条对照的结论:
 //
 //	none(关思考)  13-34 秒   首帧只写 "as shown in <Picture 1>",清点不到位,
 //	                         non_diegetic_music 3/7 写 N/A

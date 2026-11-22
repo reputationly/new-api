@@ -573,16 +573,27 @@ func enhanceAceStepAggregate(c *gin.Context, agg *common.AggregateModel, body ma
 	md, mdOK := expansionMetadata(body)
 	lyrics, sampleQuery, taskType := "", "", "t2m"
 	hasSourceAudio := false
+	explicitTaskType := false
 	if mdOK {
 		lyrics, _ = md["lyrics"].(string)
 		sampleQuery, _ = md["sample_query"].(string)
 		if v, ok := md["task_type"].(string); ok && strings.TrimSpace(v) != "" {
 			taskType = strings.TrimSpace(v)
+			explicitTaskType = true
 		}
 		for _, key := range []string{"reference_audio", "src_audio"} {
 			if v, ok := md[key].(string); ok && strings.TrimSpace(v) != "" {
 				hasSourceAudio = true
 			}
+		}
+	}
+	// 客户没写 task_type 时,不能想当然按 t2m:适配器用 taskTypeOfRequest 推断(显式值 →
+	// 体验区配置的候选集),某个 ACE-Step 模型若只挂在 cover / repaint 这一个 tab 下,
+	// 适配器会按那一档的字数上限校验,而这里按 t2m 预算产出并写着 text-to-music
+	// —— 正是这轮修的那个缺陷的隐式入口。候选只有一个时就用它,否则维持 t2m。
+	if !explicitTaskType {
+		if cands := common.PlaygroundTaskTypeCandidates(agg.Generate.Model); len(cands) == 1 {
+			taskType = cands[0]
 		}
 	}
 	prompt, _ := body["prompt"].(string)
