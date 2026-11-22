@@ -257,3 +257,28 @@ python3 scripts/h3vid-pe/check.py runs/official runs/sc_none runs/prod
 | `knownReasoningEffort` 插在文档注释与函数之间 | **已挪**到注释之前，避免 godoc 挂错 |
 | `labelIssues` 注释引用了不存在的 `hasVideoUncertainAudio` | **已改**为 `hasVideo` |
 | appendix 第 10 条与第 11 条字面冲突、第 11 条前多空行 | **已改**：第 10 条补指向第 11 条，空行删掉 |
+
+## 9. 档位对照实验的结论（脚本不入库，结论留档）
+
+为了回答「各模式该不该开思考、开哪一档」，用与生产**同一份**提示词（直接读本目录下的
+`skills/*`、`rules.txt`、`writing.txt`、`appendix.txt` 拼接）打真实端点做过 3 模式 × 3 档位
+（none / low / high）× 6–7 条用例的对照。脚本是绕过网关直连上游的临时工具，与本机路径、
+实验密钥耦合，**不入库**（`.gitignore` 已忽略 `scripts/enhance-tiers/`）；结论在此留档。
+
+| 模式 | none（默认） | low | high |
+| --- | --- | --- | --- |
+| 生图 `qwen_pe` | 5/7 JSON 合格,1 条跑飞 | **6/7,9–14s 稳定** | 4/7,2 条空正文 + 1 条 300s 504 |
+| 生音乐 Music3 | 6/6 三段齐、不泄歌词 | 6/6 齐、更紧凑,慢约 1.7× | 6/6 但被压到 1278–1734 字,慢 4–8× |
+| 生音乐 ACE-Step | **写成散文段落**(违反单行逗号分隔) | **正确的单行 tag 列表** | 正确但过短 |
+| 生视频 singlecall | 不传 duration 时不编译 | 采光/机位/小字都写得准 | 慢 4–8×,正文被压 |
+
+由此定的配置：视频与 H3-Image 用 `low`；ACE-Step 必须 `low`；Music3 维持不配档位；
+`qwen_pe` 用 `low`。另一个副产品是发现了 `text` / `qwen_pe` 从来不发 `max_tokens`
+（开档位后正文会被思考挤空），补上之后档位才真正可用。
+
+### 9.1 已知残余（提示词层面）
+
+- 参考族 round1 偶尔漏 `detailed_description`，由重修轮补齐；
+- `appendix` 规则 3（`h3_prompt` 用 effective 时长）与规则 12（`shots` 用 requested）措辞
+  仍有轻微歧义，试过加澄清反而降低一次通过率，已放弃并留档；
+- 规则 6/10/14 已显式限定到参考族（帧族不写 `subject_definitions` / `retention_analysis`）。

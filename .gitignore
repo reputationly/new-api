@@ -70,3 +70,9 @@ scripts/h3vid-pe/__pycache__/
 
 # 构建产物（`new-api-linux-amd64` 那类单文件二进制，动辄 130 MB）。
 /dist/
+__pycache__/
+*.pyc
+
+# 提示词实验脚本不落库
+scripts/enhance-tiers/
+scripts/h3vid-pe/
