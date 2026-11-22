@@ -130,3 +130,14 @@ const (
 	// 没有请求体也没有 ffprobe 结果,回显与对账都只能靠这份快照。
 	ContextKeyContinuationSnapshot ContextKey = "continuation_snapshot"
 )
+
+// 聚合流水线的自调用归类头。
+//
+// 放在 constant 而不是 service:同步调用(提示词增强走 /v1/chat/completions)的消费
+// 日志由 model.RecordConsumeLog 写,而 model 不能 import service(会成环)。头是自调用
+// 与日志之间唯一的带外通道,两侧都要读得到,所以下沉到这里。仅用于日志展示归类。
+const (
+	AggregateParentTaskHeader  = "X-Aggregate-Parent-Task"
+	AggregatePublicModelHeader = "X-Aggregate-Public-Model"
+	AggregateStageHeader       = "X-Aggregate-Stage"
+)

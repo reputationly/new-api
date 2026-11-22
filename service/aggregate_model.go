@@ -246,13 +246,18 @@ func DryRunAggregateModel(m *common.AggregateModel, peers map[string]int) *Aggre
 	if !m.PromptEnhance.IsEnabled() {
 		// 关掉不是错,但要明确告诉运营"这段不会跑":否则配了 model/mode 却看不到增强效果,
 		// 会当成 bug 去查增强模型。
-		msg := "提示词增强默认关闭:客户原始输入直接进生成段,不调用增强模型,也不产生额外延迟与费用"
-		if m.PromptEnhance.AllowsClientOverride() {
-			msg += ";客户仍可在请求体顶层传 prompt_optimizer:true 打开(与 MiniMax 官方同名字段)"
+		if m.PromptEnhance == nil {
+			// 整段没配:别把"没配"说成"锁了",运营会去翻 lock_enabled 而找不到问题。
+			add("prompt_enhance", AggregateCheckOK, "未配置提示词增强段:客户原始输入直接进生成段")
 		} else {
-			msg += ";已锁定(lock_enabled),客户传 prompt_optimizer 也不会生效"
+			msg := "提示词增强默认关闭:客户原始输入直接进生成段,不调用增强模型,也不产生额外延迟与费用"
+			if m.PromptEnhance.AllowsClientOverride() {
+				msg += ";客户仍可在请求体顶层传 prompt_optimizer:true 打开(与 MiniMax 官方同名字段)"
+			} else {
+				msg += ";已锁定(lock_enabled),客户传 prompt_optimizer 也不会生效"
+			}
+			add("prompt_enhance", AggregateCheckOK, "%s", msg)
 		}
-		add("prompt_enhance", AggregateCheckOK, "%s", msg)
 	}
 	if m.PromptEnhance.IsEnabled() {
 		enhModel := strings.TrimSpace(m.PromptEnhance.Model)

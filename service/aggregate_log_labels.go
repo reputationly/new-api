@@ -24,9 +24,9 @@ const (
 // 超分段走的是自调用(父任务以客户身份提交),父任务把归属放进请求头带过去。
 // 这些头只用于日志展示归类,不参与计费,也不影响引擎出片。
 const (
-	AggregateParentTaskHeader  = "X-Aggregate-Parent-Task"
-	AggregatePublicModelHeader = "X-Aggregate-Public-Model"
-	AggregateStageHeader       = "X-Aggregate-Stage"
+	AggregateParentTaskHeader  = constant.AggregateParentTaskHeader
+	AggregatePublicModelHeader = constant.AggregatePublicModelHeader
+	AggregateStageHeader       = constant.AggregateStageHeader
 )
 
 // PipelineLogLabels 本次提交属于聚合流水线的哪一段,以及它归属哪个聚合请求。

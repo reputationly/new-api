@@ -265,14 +265,8 @@ func RecordConsumeLog(c *gin.Context, userId int, params RecordConsumeLogParams)
 	// 而**同步生图**的消费日志走这里 —— 不合并的话,图片聚合的日志只有一个内部
 	// 模型名,看不到它属于哪条流水线、是哪一段。
 	// 不从 service 调 PipelineLogLabels:model 被 service 依赖,反向引用会成环。
-	if c != nil {
-		if v, ok := common.GetContextKey(c, constant.ContextKeyAggregateLabels); ok {
-			if labels, ok := v.(map[string]string); ok {
-				for k, val := range labels {
-					params.Other[k] = val
-				}
-			}
-		}
+	for k, val := range aggregateLabelsForLog(c) {
+		params.Other[k] = val
 	}
 	otherStr := common.MapToJsonStr(params.Other)
 	log := &Log{
@@ -308,6 +302,46 @@ func RecordConsumeLog(c *gin.Context, userId int, params RecordConsumeLogParams)
 			LogQuotaData(userId, username, params.ModelName, params.Quota, common.GetTimestamp(), params.PromptTokens+params.CompletionTokens)
 		})
 	}
+}
+
+// aggregateLabelsForLog 这条消费日志该带的聚合流水线归类标签。
+//
+// 两个来源,顺序不能反:
+//
+//  1. context key:聚合展开时写入,覆盖异步任务与同步生图(生成段);
+//  2. 自调用请求头:提示词增强走 /v1/chat/completions,那是一次普通同步 chat,
+//     请求里没有聚合展开,context key 必然是空的 —— 只读 context 的话,增强那次
+//     调用在日志里就是一条没有任何标签的孤立记录,而它恰恰是该被归因的那一条。
+//
+// 头只有两个读者:service.PipelineLogLabels(异步任务路径)与这里。这里只做合并,
+// 不做归因取舍,所以不存在父子归因被覆写的问题。
+func aggregateLabelsForLog(c *gin.Context) map[string]string {
+	if c == nil {
+		return nil
+	}
+	out := map[string]string{}
+	if v, ok := common.GetContextKey(c, constant.ContextKeyAggregateLabels); ok {
+		if labels, ok := v.(map[string]string); ok {
+			for k, val := range labels {
+				out[k] = val
+			}
+		}
+	}
+	if out["aggregate_model"] == "" {
+		publicModel := c.GetHeader(constant.AggregatePublicModelHeader)
+		stage := c.GetHeader(constant.AggregateStageHeader)
+		if publicModel != "" && stage != "" {
+			out["aggregate_model"] = publicModel
+			out["pipeline_stage"] = stage
+			if parent := c.GetHeader(constant.AggregateParentTaskHeader); parent != "" {
+				out["aggregate_task_id"] = parent
+			}
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
 }
 
 type RecordTaskBillingLogParams struct {
