@@ -222,15 +222,14 @@ func (a *Adaptor) convertSpeechRequest(c *gin.Context, info *relaycommon.RelayIn
 		body["instructions"] = s
 	}
 	if f := strings.ToLower(strings.TrimSpace(request.ResponseFormat)); f != "" {
-		// 可选项按模型能力收口(默认=引擎能编码的容器),不再用 MIME 表当白名单。
-		normalized, err := common.CheckAudioOutputFormatForModel(
-			f, request.Model, info.OriginModelName, modelName)
-		if err != nil {
+		body["response_format"] = f
+		// 与任务口共用同一个归一化/校验函数,避免两条链路对同一份能力表给出不同答案。
+		if err := taskgpustackplus.NormalizeAudioResponseFormat(
+			body, request.Model, info.OriginModelName, modelName); err != nil {
 			return nil, err
 		}
-		body["response_format"] = normalized
 		// 供 DoResponse 在字节与扩展名都认不出来时兜底标注 Content-Type。
-		c.Set(speechFormatContextKey, normalized)
+		c.Set(speechFormatContextKey, body["response_format"].(string))
 	}
 	if request.Speed != nil {
 		if *request.Speed < 0.25 || *request.Speed > 4 {

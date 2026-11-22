@@ -521,6 +521,12 @@ func (a *TaskAdaptor) BuildRequestBody(c *gin.Context, info *relaycommon.RelayIn
 	// Breeze 引擎族判定只算一次:物化分支与下面的参数折叠都要用,而
 	// AudioEngineFamilyForModel 每次都要解一遍整份 AudioModelConfig。
 	isBreeze := taskType == "tts" && IsBreezeTTSRequest(modelName, req.Model, info.OriginModelName)
+	if taskType == "tts" && !isMusic3 {
+		// 容器能力:所有语音模型都要过,而不只是 Breeze(见 normalizeAudioResponseFormat)。
+		if err := NormalizeAudioResponseFormat(body, req.Model, info.OriginModelName, modelName); err != nil {
+			return nil, localBadRequest(err)
+		}
+	}
 	if isBreeze {
 		if err := validateBreezeInputs(req.Metadata, modelName); err != nil {
 			return nil, localBadRequest(err)
@@ -763,6 +769,32 @@ var breezeAllowedExtraKeys = map[string]bool{
 	"top_k": true, "top_p": true, "repetition_penalty": true,
 }
 
+// NormalizeAudioResponseFormat 归一化并校验 body 里的 response_format。
+//
+// 两条入口共用:同步口(/v1/audio/speech)与任务口(/v1/videos)。以前这段逻辑只写在
+// Breeze 分支里,于是同一个容器限制对别的语音模型(以及从任务口进的部分请求)不生效 ——
+// 引擎那边才报 422,而且报的是 pydantic 文案。可选项按模型能力取(见
+// common.CheckAudioOutputFormatForModel),因此候选名要把对外名/上游名都带上:
+// AudioModelConfig 可能按其中任意一个登记。
+//
+// 空串必须删键:引擎该字段是 Literal,收到 "" 是 422,而不是"按默认走"。
+func NormalizeAudioResponseFormat(body map[string]any, candidates ...string) error {
+	v, ok := body["response_format"].(string)
+	if !ok {
+		return nil
+	}
+	f, err := common.CheckAudioOutputFormatForModel(v, candidates...)
+	if err != nil {
+		return err
+	}
+	if f == "" {
+		delete(body, "response_format")
+		return nil
+	}
+	body["response_format"] = f
+	return nil
+}
+
 // ValidateBreezeParams 校验**最终提交体**(异步口的 body 与同步口组好的 body 共用一份)。
 //
 // 覆盖引擎必然会拒的输入:response_format / speed / language / x_vector_only_mode /
@@ -770,26 +802,9 @@ var breezeAllowedExtraKeys = map[string]bool{
 // 换一条英文文案,排查成本更高;而 speaker 与 extra_params 两类更糟 —— 拼错会静默
 // 劣化音色(见 IsBreezeSpeakerTag),未知键则要等下一条英文报错。
 func ValidateBreezeParams(body map[string]any, modelName string) error {
-	// response_format:按模型能力校验,并且**必须口径一致地传下去**。
-	//
-	// 历史上这里硬限 wav,理由是门面把产物名固定成 .wav(gpustack routes/videos.py 的
-	// _output_ext),放行 mp3 会得到"mp3 字节 + audio/wav 头"。那其实是**门面的命名缺陷**,
-	// 不该由网关用"只准 wav"来兜:现在门面按 response_format 命名产物,同步口回写 MIME
-	// 也改成以魔数为准(见 gpustackplus/speech.go),这条限制的成因已经消失。
-	// 保留的只有一件事:引擎认不出的容器要在网关变成 400,而不是去引擎换一条 pydantic 报错。
-	if v, ok := body["response_format"].(string); ok {
-		f, err := common.CheckAudioOutputFormatForModel(v, modelName)
-		if err != nil {
-			return err
-		}
-		if f == "" {
-			// 空串必须删掉,不能原样下发:引擎的 response_format 是 Literal,
-			// 收到 "" 会变成 pydantic 422 而不是"按默认走"。
-			delete(body, "response_format")
-		} else {
-			body["response_format"] = f
-		}
-	}
+	// response_format 不在这里校验:它是**服务器能力**问题,与 Breeze 无关,由
+	// normalizeAudioResponseFormat 在两条入口统一处理(以前写在 Breeze 分支里,导致
+	// 别的语音模型和部分任务口请求绕过了它)。
 	if v, ok := body["speed"]; ok && v != nil {
 		if f, isNum := toFloat(v); isNum && f != 1 {
 			return fmt.Errorf("模型 %s 不支持 speed 调速(Breeze 固定语速);请去掉 speed 或传 1.0", modelName)

@@ -561,6 +561,7 @@ export const parseAudioModelConfig = (raw) => {
     default: {
       maxChars: AUDIO_DEFAULT_MAX_CHARS,
       refAudioMaxMB: AUDIO_DEFAULT_REF_AUDIO_MB,
+      audioFormats: [],
     },
     models: {},
   };
@@ -586,6 +587,10 @@ export const parseAudioModelConfig = (raw) => {
           capabilities: normalizeList(cfg?.capabilities),
           maxChars: toPositiveInt(cfg?.maxChars),
           refAudioMaxMB: toPositiveInt(cfg?.refAudioMaxMB),
+          // 语音产物容器白名单(wav/mp3/flac/opus/pcm),缺口径由后端
+          // common.AudioOutputFormatsForModel 读同一份配置。白名单式重建漏了它,
+          // 运营每保存一次语音配置就会把限制清空 —— 而且不报错。
+          audioFormats: normalizeList(cfg?.audioFormats),
           tabs: normalizeAudioTabs(cfg?.tabs),
         };
       });
@@ -595,6 +600,7 @@ export const parseAudioModelConfig = (raw) => {
         maxChars: toPositiveInt(def.maxChars) ?? AUDIO_DEFAULT_MAX_CHARS,
         refAudioMaxMB:
           toPositiveInt(def.refAudioMaxMB) ?? AUDIO_DEFAULT_REF_AUDIO_MB,
+        audioFormats: normalizeList(def.audioFormats),
       },
       models,
     };

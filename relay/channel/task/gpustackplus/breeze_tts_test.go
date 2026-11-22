@@ -223,7 +223,6 @@ func TestValidateBreezeParams(t *testing.T) {
 		body    map[string]any
 		wantMsg string // 空 = 应放行
 	}{
-		{name: "response_format=aac(引擎不认)", body: map[string]any{"response_format": "aac"}, wantMsg: "不支持 response_format=aac"},
 		{name: "speed=1.2", body: map[string]any{"speed": 1.2}, wantMsg: "不支持 speed"},
 		{name: "language=zh", body: map[string]any{"language": "zh"}, wantMsg: "不接受 language"},
 		{name: "x_vector_only_mode", body: map[string]any{"x_vector_only_mode": true}, wantMsg: "不支持 x_vector_only_mode"},
@@ -621,14 +620,45 @@ func TestBuildRequestBodyBreezeRejectsBeforeMaterialization(t *testing.T) {
 	}
 }
 
-// 空串 response_format 必须被删掉而不是原样下发:引擎的该字段是 Literal,
-// 收到 "" 会变成 pydantic 422(客户端看到的是校验错,不是"按默认走")。
-func TestValidateBreezeParamsDropsEmptyResponseFormat(t *testing.T) {
-	body := map[string]any{"response_format": "   "}
-	if err := ValidateBreezeParams(body, "tts2"); err != nil {
-		t.Fatalf("空白 response_format 应放行: %v", err)
-	}
-	if _, ok := body["response_format"]; ok {
-		t.Fatalf("空白 response_format 应被删除,实际仍在下发: %v", body)
-	}
+// 容器校验不再属于 Breeze 专属逻辑:它只依赖服务器能力,与引擎族无关。
+// 两条入口(同步 /v1/audio/speech、任务 /v1/videos)都调这一个函数,
+// 否则别的语音模型和任务口的部分请求会绕过限制、到引擎才换一条 pydantic 报错。
+func TestNormalizeAudioResponseFormat(t *testing.T) {
+	t.Run("引擎不认的容器就地 400", func(t *testing.T) {
+		body := map[string]any{"response_format": "aac"}
+		err := NormalizeAudioResponseFormat(body, "tts2")
+		if err == nil || !strings.Contains(err.Error(), "不支持 response_format=aac") {
+			t.Fatalf("应拒绝 aac,实际: %v", err)
+		}
+	})
+
+	t.Run("归一化后原样下发", func(t *testing.T) {
+		body := map[string]any{"response_format": "  MP3 "}
+		if err := NormalizeAudioResponseFormat(body, "tts2"); err != nil {
+			t.Fatalf("mp3 应放行: %v", err)
+		}
+		if body["response_format"] != "mp3" {
+			t.Fatalf("应归一化成 mp3,实际 %v", body["response_format"])
+		}
+	})
+
+	t.Run("空串删键而不是下发空值", func(t *testing.T) {
+		body := map[string]any{"response_format": "   "}
+		if err := NormalizeAudioResponseFormat(body, "tts2"); err != nil {
+			t.Fatalf("空白应放行: %v", err)
+		}
+		if _, ok := body["response_format"]; ok {
+			t.Fatalf("空白 response_format 应被删除,实际仍在下发: %v", body)
+		}
+	})
+
+	t.Run("没有该字段时不动 body", func(t *testing.T) {
+		body := map[string]any{}
+		if err := NormalizeAudioResponseFormat(body, "tts2"); err != nil {
+			t.Fatalf("不应报错: %v", err)
+		}
+		if len(body) != 0 {
+			t.Fatalf("body 不应被改写: %v", body)
+		}
+	})
 }

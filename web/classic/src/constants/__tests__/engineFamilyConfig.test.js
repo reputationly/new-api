@@ -333,3 +333,40 @@ describe('LTX-2.5 引擎族的接入面', () => {
     );
   });
 });
+
+// 语音产物容器白名单(audioFormats)必须一起保住。
+//
+// 与 engine 完全同一条路径:parseAudioModelConfig 是白名单式重建,管理页草稿用它水合,
+// 保存时 recomputeModelLevel 只做 {...model} 展开 —— parse 漏掉 = 每次保存都被删掉。
+// 后端口径见 new-api 的 common.AudioOutputFormatsForModel(读同一份 JSON)。
+describe('parseAudioModelConfig 的 audioFormats 声明', () => {
+  it('保住模型级容器白名单', () => {
+    const parsed = parseAudioModelConfig({
+      models: {
+        'tts-2': { capabilities: ['语音合成'], audioFormats: ['wav', 'mp3'] },
+      },
+    });
+    expect(parsed.models['tts-2'].audioFormats).toEqual(['wav', 'mp3']);
+  });
+
+  it('保住全局默认的容器白名单', () => {
+    const parsed = parseAudioModelConfig({
+      default: { audioFormats: ['wav'] },
+      models: {},
+    });
+    expect(parsed.default.audioFormats).toEqual(['wav']);
+  });
+
+  it('未声明时落空数组而不是 undefined', () => {
+    const parsed = parseAudioModelConfig({ models: { 'tts-2': {} } });
+    expect(parsed.models['tts-2'].audioFormats).toEqual([]);
+    expect(parsed.default.audioFormats).toEqual([]);
+  });
+
+  it('归一化:去空、去空白、去重', () => {
+    const parsed = parseAudioModelConfig({
+      models: { 'tts-2': { audioFormats: [' wav ', 'wav', '', 'MP3'] } },
+    });
+    expect(parsed.models['tts-2'].audioFormats).toEqual(['wav', 'MP3']);
+  });
+});
