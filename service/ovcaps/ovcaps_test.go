@@ -214,8 +214,8 @@ func TestParamSchemaCarriesEnumsAndDefaults(t *testing.T) {
 	if duration["default"] != "5" {
 		t.Errorf("duration 默认值是 %v", duration["default"])
 	}
-	// 时长上限取档位最大值。面板对外是官方的 4–15（底层 1–20 是能力，不上面板）。
-	if video.Limits.MaxDurationSeconds != 15 {
+	// 时长上限取档位最大值（目录 1–20，与引擎一致）。
+	if video.Limits.MaxDurationSeconds != 20 {
 		t.Errorf("maxDurationSeconds = %d，期望 15（目录档位最大值）", video.Limits.MaxDurationSeconds)
 	}
 	if video.Limits.MaxReferenceImages != 9 {

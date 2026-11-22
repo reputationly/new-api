@@ -443,11 +443,10 @@ func defaultHiloCatalog() HiloCatalog {
 					Params: map[string]dto.HiloModelParam{
 						"image_mode": hiloSelect("生成方式",
 							[]string{"reference", "first-last-frame", "text-to-video", "video-extension"}, "reference"),
-						// **对外仍是官方的 4–15。** 引擎与网关底层已放宽到 1–20（见
-						// common/h3_duration.go 与 minimaxv2 的窗口），但面板跟官方保持一致 ——
-						// 能力面靠"能不能调通"体现，不靠把下拉撑到 20 档。
-						// 需要 1–3 / 16–20 的客户直接调 API（网关接受），不在面板上引导。
-						"duration": hiloSelect("时长", []string{"4", "5", "6", "7", "8", "9", "10", "11", "12", "13", "14", "15"}, "5"),
+						// 1–20 秒：引擎 2026-11-19 把标准档从 15 s 放宽到 20 s、下限降到 1 s，
+						// 目录跟着放开（比官方公开文档的 4–15 更宽，但这是本部署的真实能力）。
+						// 交付时长按 17n+5 帧栅格向上吸附，见 common/h3_duration.go。
+						"duration": hiloSelect("时长", []string{"1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12", "13", "14", "15", "16", "17", "18", "19", "20"}, "5"),
 						"ratio":    hiloSelect("宽高比", videoRatios, "adaptive"),
 						// 768P 停在生成段，2K 才跑超分。依据是 upscaleSkipReason：
 						// 客户要的短边不高于生成段（overrides.size=768P）时跳过超分。

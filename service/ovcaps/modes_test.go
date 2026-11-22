@@ -246,13 +246,13 @@ func TestCapabilityJSONCarriesModesAndDeliveryDurations(t *testing.T) {
 		t.Fatalf("续写参考视频应为 1–1: %v", refs)
 	}
 
-	// 阶梯与目录档位一一对应（面板对外 4–15，共 12 档），首档是 4 s → 4.458。
+	// 阶梯与目录档位一一对应（目录 1–20，共 20 档），首档是 1 s → 1.625。
 	durations, ok := decoded["deliveryDurations"].([]any)
-	if !ok || len(durations) != 12 {
-		t.Fatalf("deliveryDurations 应有 12 档（4–15 s），实际 %v", decoded["deliveryDurations"])
+	if !ok || len(durations) != 20 {
+		t.Fatalf("deliveryDurations 应有 20 档（1–20 s），实际 %v", decoded["deliveryDurations"])
 	}
-	if durations[0] != 4.458 {
-		t.Fatalf("4 s 的交付时长应为 4.458，实际 %v", durations[0])
+	if durations[0] != 1.625 {
+		t.Fatalf("1 s 的交付时长应为 1.625，实际 %v", durations[0])
 	}
 }
 

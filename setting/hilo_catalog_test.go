@@ -306,20 +306,15 @@ func TestH3CatalogCoversWidenedWindowAndEveryMode(t *testing.T) {
 		t.Fatal("出厂目录缺少 minimax-h3-2k")
 	}
 
-	// 面板对外保持官方的 4–15：底层放到 1–20 是能力，不是面板该展示的默认值。
+	// 面板跟引擎一致，放开到 1–20（比官方公开文档的 4–15 更宽，是本部署的真实能力）。
 	dur := h3.Model.Params["duration"].Options
-	for _, want := range []string{"4", "5", "15"} {
+	for _, want := range []string{"1", "2", "3", "4", "15", "16", "20"} {
 		if !slices.Contains(dur, want) {
 			t.Errorf("时长档位缺少 %s：%v", want, dur)
 		}
 	}
-	if len(dur) != 12 {
-		t.Errorf("时长应有 12 档（4–15），实际 %d", len(dur))
-	}
-	for _, unwanted := range []string{"1", "2", "3", "16", "20"} {
-		if slices.Contains(dur, unwanted) {
-			t.Errorf("面板不该出现 %s 秒：%v", unwanted, dur)
-		}
+	if len(dur) != 20 {
+		t.Errorf("时长应有 20 档（1–20），实际 %d", len(dur))
 	}
 
 	for _, mode := range []string{"reference", "first-last-frame", "text-to-video", "video-extension"} {
