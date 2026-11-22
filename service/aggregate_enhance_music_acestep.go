@@ -126,8 +126,13 @@ func BuildAceStepEnhanceContext(caption, lyrics, taskType string, hasSourceAudio
 // ACE-Step 的 caption 与歌词共用 MusicModelConfig 的 maxChars 闸(适配器会就地 400)。
 // 增强后超限的代价是**整条请求被拒**,而那时 LLM 已经计费过 —— 所以先算出来让模型
 // 从源头控制长度,写回后再核一次。
-func AceStepCaptionBudget(generateModel string) int {
-	if maxChars, configured := common.MusicMaxCharsForModel("t2m", generateModel); configured && maxChars > 0 {
+func AceStepCaptionBudget(generateModel, taskType string) int {
+	// taskType 必须用真实那个:cover / repaint 各有自己的 tab 与可配 maxChars,
+	// 写死 t2m 会让改写按 t2m 预算产出,而适配器校验用真实 taskType,超限就地 400。
+	if strings.TrimSpace(taskType) == "" {
+		taskType = "t2m"
+	}
+	if maxChars, configured := common.MusicMaxCharsForModel(taskType, generateModel); configured && maxChars > 0 {
 		return maxChars
 	}
 	return aceStepDefaultCaptionBudget

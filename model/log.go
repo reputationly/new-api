@@ -265,8 +265,14 @@ func RecordConsumeLog(c *gin.Context, userId int, params RecordConsumeLogParams)
 	// 而**同步生图**的消费日志走这里 —— 不合并的话,图片聚合的日志只有一个内部
 	// 模型名,看不到它属于哪条流水线、是哪一段。
 	// 不从 service 调 PipelineLogLabels:model 被 service 依赖,反向引用会成环。
-	for k, val := range aggregateLabelsForLog(c) {
-		params.Other[k] = val
+	if labels := aggregateLabelsForLog(c); len(labels) > 0 {
+		// Other 是导出字段,调用方可能传 nil(现状都非 nil,但这类 panic 不值得留)。
+		if params.Other == nil {
+			params.Other = make(map[string]interface{}, len(labels))
+		}
+		for k, val := range labels {
+			params.Other[k] = val
+		}
 	}
 	otherStr := common.MapToJsonStr(params.Other)
 	log := &Log{
