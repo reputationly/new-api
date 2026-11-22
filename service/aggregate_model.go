@@ -192,6 +192,14 @@ func DryRunAggregateModel(m *common.AggregateModel, peers map[string]int) *Aggre
 		}
 	}
 
+	// prompt_optimizer 由**客户请求**控制(见 middleware.takePromptOptimizer):
+	// 写进 overrides 会被当成客户传值吞掉,还会让 enhance_source 记成 client ——
+	// 配置的人以为自己在设默认值,实际什么都没发生。与类型无关,所以放在类型分支之外。
+	if _, has := m.Generate.Overrides["prompt_optimizer"]; has {
+		add("generate", AggregateCheckWarn,
+			"generate.overrides 里的 prompt_optimizer 不会生效:该字段由客户请求控制,"+
+				"写在 overrides 会被当成客户传值;要固定行为请用 prompt_enhance.enabled + lock_enabled")
+	}
 	// —— 2. 生成段 ——
 	genExists, genGroups, _ := currentModelFacts(m.Generate.Model)
 	if strings.TrimSpace(m.Generate.Model) == "" {

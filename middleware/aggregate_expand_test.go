@@ -1645,3 +1645,33 @@ func TestPromptOptimizerEnablesWhenConfigDefaultOff(t *testing.T) {
 	require.False(t, exp.EnhanceSkipped)
 	require.Equal(t, "client", exp.EnhanceSource)
 }
+
+// 跳过增强时,「为什么没增强」要能直接在日志里答:标签带上 enhance_skipped / enhance_source。
+// 正常增强时不加,避免给每条日志灌噪音。
+func TestAggregateLabelsCarryEnhanceSkipReason(t *testing.T) {
+	withAggregateConfig(t, `[{"name":"h3-2k","type":"video","enabled":true,
+		"generate":{"model":"minimax-h3"},
+		"prompt_enhance":{"model":"enh","system_prompt":"x"}}]`)
+
+	labelsFor := func(body string) map[string]string {
+		rec := httptest.NewRecorder()
+		c, _ := gin.CreateTestContext(rec)
+		c.Request = httptest.NewRequest(http.MethodPost, "/v1/videos", strings.NewReader(body))
+		require.NoError(t, applyAggregateExpansion(c, "h3-2k", "minimax-h3", common.GetAggregateModel("h3-2k")))
+		v, _ := common.GetContextKey(c, constant.ContextKeyAggregateLabels)
+		m, _ := v.(map[string]string)
+		return m
+	}
+
+	t.Run("客户关掉:标签带上来源", func(t *testing.T) {
+		labels := labelsFor(`{"model":"h3-2k","prompt":"a cat","prompt_optimizer":false}`)
+		require.Equal(t, "true", labels["enhance_skipped"])
+		require.Equal(t, "client", labels["enhance_source"])
+	})
+
+	t.Run("正常增强:不带噪音字段", func(t *testing.T) {
+		labels := labelsFor(`{"model":"h3-2k","prompt":"a cat"}`)
+		require.NotContains(t, labels, "enhance_skipped")
+		require.NotContains(t, labels, "enhance_source")
+	})
+}

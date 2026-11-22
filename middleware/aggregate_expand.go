@@ -322,6 +322,12 @@ func applyAggregateExpansion(c *gin.Context, publicName, realModel string, agg *
 	} else {
 		exp.EnhanceSource = "config"
 	}
+	// 把「为什么没增强」写进日志标签 —— 但只在异常态:正常增强时这两个值没有信息量,
+	// 塞进去只是给每条日志加噪音;客户主动关、或配置默认关,才是运营看日志时会问的两种情形。
+	if exp.EnhanceSkipped || exp.EnhanceSource == "client" {
+		labels["enhance_skipped"] = strconv.FormatBool(exp.EnhanceSkipped)
+		labels["enhance_source"] = exp.EnhanceSource
+	}
 	if enhanceOn {
 		// 音乐与视频/图片**改写的字段不同**,不能共用下面那段。
 		//
