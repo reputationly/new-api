@@ -1414,10 +1414,10 @@ func requestedDurationSeconds(body map[string]any) int {
 		}
 	}
 	if v, ok := body["seconds"]; ok {
-		if s, ok := v.(string); ok {
-			if n, err := strconv.Atoi(strings.TrimSuffix(strings.TrimSpace(s), "s")); err == nil && n > 0 {
-				return n
-			}
+		// seconds 既可能是 "10"、10，也可能是 json.Number —— 只认 string 会让
+		// overrides.duration 在数字形态下错误生效（客户明明传了时长）。
+		if n, ok := jsonIntValue(v); ok && n > 0 {
+			return n
 		}
 	}
 	return 0

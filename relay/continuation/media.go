@@ -87,8 +87,8 @@ func decodeContinuationDataURI(raw string) ([]byte, string, error) {
 		mime = mime[:i]
 	}
 	// 先按长度粗判，避免为了看大小先解出几十 MB。
-	if int64(len(payload))*3/4 > continuationMaxSourceBytes+1024 {
-		return nil, "", fmt.Errorf("data URI 超过 %d MB 上限", continuationMaxSourceBytes>>20)
+	if int64(len(payload))*3/4 > MaxSourceBytes+1024 {
+		return nil, "", fmt.Errorf("data URI 超过 %d MB 上限", MaxSourceBytes>>20)
 	}
 	body, err := base64.StdEncoding.DecodeString(strings.TrimSpace(payload))
 	if err != nil {
@@ -107,21 +107,6 @@ func extFromMime(mime string) string {
 		return ".webm"
 	case "video/x-matroska":
 		return ".mkv"
-	default:
-		return ""
-	}
-}
-
-// extFromSourceURL 从 URL 路径取扩展名；取不到返回空串（调用方回退 .mp4）。
-func extFromSourceURL(raw string) string {
-	path := raw
-	if i := strings.IndexAny(path, "?#"); i >= 0 {
-		path = path[:i]
-	}
-	ext := strings.ToLower(filepath.Ext(path))
-	switch ext {
-	case ".mp4", ".mov", ".webm", ".mkv", ".m4v":
-		return ext
 	default:
 		return ""
 	}
@@ -206,6 +191,11 @@ func parseFrameRate(raw string) float64 {
 // 真正的末帧（实测有时退到倒数第 3 帧）。从尾部窗口开始解码、用 `-update 1` 反复覆盖
 // 同一个文件，落盘的就是解出来的最后一帧 —— 窗口只为省解码时间，不影响结果。
 //
+// **不能加 `-frames:v 1`**：那句会让 ffmpeg 在 `-sseof` 的定位点只吐一帧就停，
+// 拿到的其实是"duration − 窗口"那一帧（窗口恒 ≈1s，于是早约 1 秒），
+// 而 `-update 1` 的值恰好是"越写越靠后"。两者叠一起会得到一个看起来很合理、
+// 实际是中间帧的图——接缝处重复约 1 秒内容，且不报错。
+//
 // 产物过大/边长过大时再走一次缩放或转 JPEG：末帧会以 base64 进请求体，尺寸必须有上限。
 func ffmpegLastFrame(ctx context.Context, path string, probe ContinuationProbe) ([]byte, string, error) {
 	dir := filepath.Dir(path)
@@ -221,7 +211,6 @@ func ffmpegLastFrame(ctx context.Context, path string, probe ContinuationProbe) 
 		"-sseof", "-"+strconv.FormatFloat(window, 'f', 2, 64),
 		"-i", path,
 		"-update", "1",
-		"-frames:v", "1",
 		"-q:v", "2",
 		outPNG,
 	); err != nil {

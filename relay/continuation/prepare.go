@@ -30,8 +30,11 @@ const (
 	continuationMaxSourceSeconds = 15.0
 	// continuationMinSourceEdgePx 源片短边下限（引擎 fl2va 关键帧的 256px 下限）。
 	continuationMinSourceEdgePx = 256
-	// continuationMaxSourceBytes 源片字节上限（官方 max_bytes=52428800）。
-	continuationMaxSourceBytes = 50 << 20
+	// MaxSourceBytes 源片字节上限（官方 max_bytes=52428800）。
+	//
+	// 导出是给抓取层用的：抓取时就把它当 cap，超限在**下载途中**就被截断，
+	// 而不是整块读进内存再比一遍（那样一个配大了上限的源片会先把内存吃掉）。
+	MaxSourceBytes = 50 << 20
 	// continuationMaxFirstFrameBytes 首帧 PNG 的字节上限：超了就先缩，再超就转 JPEG。
 	// 首帧会以 data URI 进请求体，几 MB 的 base64 会把内存和日志一起撑爆。
 	continuationMaxFirstFrameBytes = 6 << 20
@@ -125,8 +128,8 @@ func PrepareContinuation(ctx context.Context, opts ContinuationPrepareOptions, d
 	if len(bytes) == 0 {
 		return nil, continuationErr("source_unreadable", "源视频是空文件")
 	}
-	if len(bytes) > continuationMaxSourceBytes {
-		return nil, continuationErr("source_too_large", "源视频 %.1f MB 超过上限 %d MB", float64(len(bytes))/(1<<20), continuationMaxSourceBytes>>20)
+	if len(bytes) > MaxSourceBytes {
+		return nil, continuationErr("source_too_large", "源视频 %.1f MB 超过上限 %d MB", float64(len(bytes))/(1<<20), MaxSourceBytes>>20)
 	}
 
 	// 探测与抽帧都需要一个本地文件：mp4 的 moov 可能在尾部，管道不可 seek。

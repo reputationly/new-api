@@ -73,15 +73,6 @@ func TestParseFrameRate(t *testing.T) {
 }
 
 func TestExtHelpers(t *testing.T) {
-	if got := extFromSourceURL("https://x.com/a/b/c.MOV?sig=1#f"); got != ".mov" {
-		t.Fatalf("extFromSourceURL = %q", got)
-	}
-	if got := extFromSourceURL("https://x.com/download"); got != "" {
-		t.Fatalf("无扩展名应返回空串, got %q", got)
-	}
-	if got := extFromSourceURL("https://x.com/a.exe"); got != "" {
-		t.Fatalf("非视频扩展名应返回空串, got %q", got)
-	}
 	if got := extFromMime("video/webm"); got != ".webm" {
 		t.Fatalf("extFromMime = %q", got)
 	}

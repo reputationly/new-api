@@ -1032,7 +1032,11 @@ func taskTypeFromImageMode(raw string, req *relaycommon.TaskSubmitReq) (string, 
 	case "reference", "r2va", "ref2va":
 		return "r2va", nil
 	case "video-extension", "continuation":
-		return "", fmt.Errorf("image_mode=video-extension(视频续写)尚未上线:续写需要源视频预处理(抽尾帧)与成品拼接,见 docs/video-multimodal-plan.md 的 M3")
+		// 续写本身已上线，但它必须在**提交入口**被改写（抽尾帧 → i2v → 拼接）：
+		// metadata.image_mode=video-extension + metadata.source_video，由
+		// middleware.ContinuationConvert 处理。走到适配器说明这条路径绕过了那个入口
+		// （例如 remix、或直接把 video-extension 下发给别的端点），此时下发必然失败。
+		return "", fmt.Errorf("image_mode=video-extension(视频续写)需要在提交入口改写：请把 metadata.source_video 一并提交到 POST /v1/videos（或 /v1/video/generations），由续写入口抽尾帧后自动转成 i2v；当前路径不经过该入口")
 	default:
 		return "", fmt.Errorf("不支持的 image_mode: %q(允许:text-to-video / first-last-frame / reference / video-extension)", raw)
 	}

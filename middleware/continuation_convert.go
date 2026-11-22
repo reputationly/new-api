@@ -65,8 +65,10 @@ func ContinuationConvert() gin.HandlerFunc {
 			c.Next()
 			return
 		}
-		mode := strings.TrimSpace(jsonString(meta["image_mode"]))
-		taskType := strings.TrimSpace(jsonString(meta["task_type"]))
+		// 大小写都收：客户端把 image_mode 写成 "Video-Extension" 时不能漏过去 ——
+		// 漏了会一路走到适配器吃到"请走续写入口"的错，而调用方其实已经给了 source_video。
+		mode := strings.ToLower(strings.TrimSpace(jsonString(meta["image_mode"])))
+		taskType := strings.ToLower(strings.TrimSpace(jsonString(meta["task_type"])))
 		if mode != "video-extension" && taskType != "continuation" {
 			c.Next()
 			return
@@ -185,10 +187,9 @@ func continuationTotalSeconds(body map[string]any) int {
 		}
 	}
 	if v, ok := body["seconds"]; ok {
-		if s := strings.TrimSpace(jsonString(v)); s != "" {
-			if n, err := strconv.Atoi(strings.TrimSuffix(s, "s")); err == nil {
-				return n
-			}
+		// 数字形态的 seconds 也要认（jsonIntValue 覆盖 string / float64 / json.Number）。
+		if n, ok := jsonIntValue(v); ok {
+			return n
 		}
 	}
 	return 0

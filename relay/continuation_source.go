@@ -23,9 +23,9 @@ func init() {
 
 func fetchContinuationSourceBytes(ctx context.Context, userID int, source string) ([]byte, string, error) {
 	if nfsinput.IsTaskRef(source) {
-		return nfsinput.ResolveTaskRefBytes(ctx, userID, source, 0)
+		return nfsinput.ResolveTaskRefBytes(ctx, userID, source, continuation.MaxSourceBytes)
 	}
-	body, err := nfsinput.FetchURLBytes(ctx, source, 0)
+	body, err := nfsinput.FetchURLBytes(ctx, source, continuation.MaxSourceBytes)
 	if err != nil {
 		return nil, "", err
 	}

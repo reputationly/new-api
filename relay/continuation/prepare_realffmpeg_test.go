@@ -2,7 +2,11 @@ package continuation
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
+	"fmt"
+	"math"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -71,6 +75,55 @@ func TestPrepareContinuationWithRealFFmpeg(t *testing.T) {
 	if len(png) < 1024 {
 		t.Fatalf("首帧只有 %d 字节，不像一张图", len(png))
 	}
+
+	// **必须是真末帧，不是窗口起点那一帧。** 只断言"是合法 PNG"查不出抽错帧 ——
+	// 这正是上一版的盲区（`-frames:v 1` 会让 ffmpeg 在 -sseof 定位点只吐一帧，
+	// 拿到的是 duration−窗口，早约 1 秒）。这里用帧序号独立取参考帧做像素比对。
+	frames := int(math.Round(3 * 24)) // testsrc 3 s / 24 fps
+	last := framePixels(t, src, frames-1)
+	first := framePixels(t, src, 0)
+	mid := framePixels(t, src, frames/2)
+	gotPixels := pngPixels(t, png)
+
+	if gotPixels != last {
+		t.Fatalf("抽到的不是末帧（第 %d 帧）: got=%s last=%s first=%s mid=%s",
+			frames-1, gotPixels[:8], last[:8], first[:8], mid[:8])
+	}
+	if gotPixels == mid || gotPixels == first {
+		t.Fatal("抽到的是中间帧/首帧，不是末帧")
+	}
+}
+
+// framePixels 用帧序号独立取一帧的像素摘要（与生产代码走不同的过滤路径，避免自证）。
+func framePixels(t *testing.T, src string, index int) string {
+	t.Helper()
+	cmd := exec.Command("ffmpeg", "-v", "error", "-i", src,
+		"-vf", fmt.Sprintf("select=eq(n\\,%d)", index),
+		"-vsync", "0", "-frames:v", "1",
+		"-f", "rawvideo", "-pix_fmt", "rgb24", "pipe:1")
+	out, err := cmd.Output()
+	if err != nil {
+		t.Fatalf("取第 %d 帧失败: %v", index, err)
+	}
+	sum := sha256.Sum256(out)
+	return hex.EncodeToString(sum[:])
+}
+
+// pngPixels 把一张 PNG 解成 rgb24 后取摘要，用来和上面的帧比较。
+func pngPixels(t *testing.T, png []byte) string {
+	t.Helper()
+	tmp := filepath.Join(t.TempDir(), "frame.png")
+	if err := os.WriteFile(tmp, png, 0o600); err != nil {
+		t.Fatalf("写临时 PNG 失败: %v", err)
+	}
+	cmd := exec.Command("ffmpeg", "-v", "error", "-i", tmp,
+		"-f", "rawvideo", "-pix_fmt", "rgb24", "pipe:1")
+	out, err := cmd.Output()
+	if err != nil {
+		t.Fatalf("解码 PNG 失败: %v", err)
+	}
+	sum := sha256.Sum256(out)
+	return hex.EncodeToString(sum[:])
 }
 
 func min(a, b int) int {

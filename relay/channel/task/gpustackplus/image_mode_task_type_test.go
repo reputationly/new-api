@@ -30,7 +30,7 @@ func TestTaskTypeFromImageMode(t *testing.T) {
 		{name: "参考生视频", mode: "reference", want: "r2va"},
 		{name: "参考生视频别名 ref2va", mode: "ref2va", want: "r2va"},
 		{name: "大小写与空白容错", mode: "  Reference  ", want: "r2va"},
-		{name: "续写未上线要明说", mode: "video-extension", wantErr: "尚未上线"},
+		{name: "续写绕过改写入口要明说", mode: "video-extension", wantErr: "需要在提交入口改写"},
 		{name: "未知取值要报错而不是猜", mode: "first-frame", wantErr: "不支持的 image_mode"},
 	}
 	for _, tc := range cases {

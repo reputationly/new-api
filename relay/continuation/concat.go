@@ -90,7 +90,15 @@ func Concat(ctx context.Context, sourcePath, generatePath, outPath string, deps 
 		fps = int(genProbe.FPS + 0.5)
 	}
 
-	dir := filepath.Dir(outPath)
+	// 临时文件放**任务唯一的子目录**：上游 nfs_path 可能是多任务共享目录，
+	// 固定文件名会让并发续写互相覆盖（而且失败时还会互相删掉对方的中间产物）。
+	baseDir := filepath.Dir(outPath)
+	workDir, err := os.MkdirTemp(baseDir, ".concat-")
+	if err != nil {
+		return nil, fmt.Errorf("创建拼接临时目录失败: %w", err)
+	}
+	defer os.RemoveAll(workDir)
+	dir := workDir
 	srcPrepared := filepath.Join(dir, "source_normalized.mp4")
 	genPrepared := filepath.Join(dir, "generate_normalized.mp4")
 	if err := normalizeForConcat(ctx, d, sourcePath, srcPrepared, width, height, fps, srcProbe.HasAudio); err != nil {

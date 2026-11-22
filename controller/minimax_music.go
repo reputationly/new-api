@@ -21,6 +21,8 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/model"
+	"github.com/QuantumNous/new-api/service"
+	"github.com/QuantumNous/new-api/service/mediastore"
 
 	"github.com/gin-gonic/gin"
 )
@@ -78,18 +80,16 @@ func MiniMaxMusicGeneration(c *gin.Context) {
 		return
 	}
 
-	// 官方把"纯器乐"与歌词分两个字段；我们这边歌词走 metadata.lyrics（Music3 的门面
-	// 还会把它映到引擎 input，ACE-Step 直接读 metadata）。
-	metadata := map[string]any{}
-	if lyrics := strings.TrimSpace(req.Lyrics); lyrics != "" {
-		metadata["lyrics"] = lyrics
+	if format := strings.ToLower(strings.TrimSpace(req.OutputFormat)); format != "" && format != "url" {
+		minimaxMusicError(c, "invalid params: output_format="+req.OutputFormat+
+			" is not supported by this gateway (only output_format=url)")
+		return
 	}
-	if req.IsInstrumental != nil {
-		metadata["is_instrumental"] = *req.IsInstrumental
-	}
-	taskBody := map[string]any{"model": modelName, "prompt": prompt}
-	if len(metadata) > 0 {
-		taskBody["metadata"] = metadata
+
+	taskBody, message := buildMusicTaskBody(modelName, prompt, req.Lyrics, req.IsInstrumental)
+	if message != "" {
+		minimaxMusicError(c, message)
+		return
 	}
 	body, err := common.Marshal(taskBody)
 	if err != nil {
@@ -134,7 +134,10 @@ func MiniMaxMusicGeneration(c *gin.Context) {
 		if exist {
 			switch task.Status {
 			case model.TaskStatusSuccess:
-				url := task.GetResultURL()
+				// 自建链路的 ResultURL 存的是 obs:// 内部占位符，必须实时签名后再给出去；
+				// 直接回 GetResultURL() 会让客户端拿到一个不可用的 URI（全仓其它出口都过
+				// ResolveResultURL，这里曾漏了）。
+				url := mediastore.ResolveResultURL(c.Request.Context(), task.GetResultURL())
 				if strings.TrimSpace(url) == "" {
 					minimaxMusicError(c, "任务成功但没有产物 URL（任务 "+taskID+"）")
 					return
@@ -153,7 +156,13 @@ func MiniMaxMusicGeneration(c *gin.Context) {
 				return
 			}
 		}
-		time.Sleep(musicPollInterval)
+		select {
+		case <-c.Request.Context().Done():
+			// 客户端断开就别再空转到 10 分钟：任务已在库里，他可以随时用任务接口查。
+			c.AbortWithStatus(http.StatusRequestTimeout)
+			return
+		case <-time.After(musicPollInterval):
+		}
 	}
 	minimaxMusicError(c, "音乐生成超时（任务 "+taskID+" 仍可继续查询）")
 }
@@ -179,4 +188,54 @@ func minimaxMusicError(c *gin.Context, message string) {
 		"base_resp": gin.H{"status_code": 1004, "status_msg": message},
 	})
 	c.Abort()
+}
+
+// buildMusicTaskBody 把 MiniMax 音乐请求映射成我们的任务契约。
+//
+// **两个模型族的字段语义是反的**，这是这个端点最容易写错的地方：
+//
+//	官方的 prompt   = 风格描述   lyrics = 歌词
+//	ACE-Step(t2m)   : 顶层 prompt = 描述、metadata.lyrics = 歌词      → 直接对应
+//	Music3          : 顶层 prompt = **歌词**（门面映射到引擎 input）、
+//	                  风格描述走 metadata.instructions；
+//	                  metadata.lyrics 引擎不认，到了就丢
+//
+// 无条件按 ACE-Step 那套映射会让 Music3 把风格描述当歌词唱、真歌词被丢弃，
+// 而且不报错 —— 静默产出错误的歌。
+func buildMusicTaskBody(modelName, prompt, lyrics string, instrumental *bool) (map[string]any, string) {
+	prompt = strings.TrimSpace(prompt)
+	lyrics = strings.TrimSpace(lyrics)
+	if prompt == "" {
+		return nil, "invalid params: prompt is required"
+	}
+	// 聚合名（minimax-music3-enhanced 等）要先解析到生成段模型，再判模型族。
+	generateModel := modelName
+	if agg := common.GetAggregateModel(modelName); agg != nil && strings.TrimSpace(agg.Generate.Model) != "" {
+		generateModel = strings.TrimSpace(agg.Generate.Model)
+	}
+
+	body := map[string]any{"model": modelName}
+	metadata := map[string]any{}
+	if service.IsMusic3GeneratingModel(generateModel) {
+		// 我们的链路不会替客户写词（官方 lyrics_optimizer 那种），所以无词又非要唱时
+		// 直接说清楚，而不是把风格描述当歌词送进引擎。
+		if lyrics == "" && (instrumental == nil || !*instrumental) {
+			return nil, "invalid params: Music3 needs lyrics unless is_instrumental=true " +
+				"(this gateway does not write lyrics for you)"
+		}
+		body["prompt"] = lyrics
+		metadata["instructions"] = prompt
+	} else {
+		body["prompt"] = prompt
+		if lyrics != "" {
+			metadata["lyrics"] = lyrics
+		}
+	}
+	if instrumental != nil {
+		metadata["is_instrumental"] = *instrumental
+	}
+	if len(metadata) > 0 {
+		body["metadata"] = metadata
+	}
+	return body, ""
 }

@@ -40,7 +40,8 @@ func TryConcatContinuation(ctx context.Context, task *model.Task, generatedPath 
 	snap := task.Properties.Continuation
 	if strings.TrimSpace(generatedPath) == "" {
 		// 上游只回了 URL、没有共享存储上的文件 —— 没有可拼接的输入，按原样交付。
-		return "", false
+		// **原因要留下**：否则客户拿到的是没有源片的生成段，metadata 里却什么都看不出来。
+		return "", failConcat(task, fmt.Errorf("上游只返回了 URL，没有可拼接的本地文件（渠道未落共享存储）"))
 	}
 	outPath := continuationOutputPath(generatedPath)
 	// 幂等：上一轮已经拼好（或拼到一半留下完整产物）就直接复用，别重复烧 CPU。

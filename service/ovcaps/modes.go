@@ -159,7 +159,7 @@ func deliveryDurationsOf(probe string, entry setting.HiloCatalogEntry) DeliveryD
 	seconds := make([]int, 0, len(durationParam.Options))
 	for _, opt := range durationParam.Options {
 		n, err := strconv.Atoi(strings.TrimSpace(opt))
-		if err != nil || n <= 0 || n > 20 {
+		if err != nil || n <= 0 {
 			continue
 		}
 		seconds = append(seconds, n)
