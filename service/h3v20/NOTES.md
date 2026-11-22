@@ -1,4 +1,4 @@
-> 本文件是 H3 视频提示词增强的设计说明与实测记录。数据来源：8 条用例（`scripts/h3vid-pe/vcases.py`）
+> 本文件是 H3 视频提示词增强的设计说明与实测记录。数据来源：8 条用例（实验脚本不入库，见下方第 6 节）
 > 与官方 Context-IR 基线逐条对照；实验包 `docs/h3pe_h3vid_实验包.tar.gz`（`docs/` 不入库）。
 > 文中出现的 `runs/…` 目录都是实验时的工作目录，不在仓库里；复跑方法见最后一节。
 
@@ -26,7 +26,7 @@
 
 - 用例：`vcases.py` 8 条（t2v×3、i2v×1、l2v×1、r2v×2，含官方示例的原素材）。
 - 官方基线：`runs/official/*.json`，8/8 成功，21–111 秒，正文 2033–4881 字符。
-- 现网复刻：`scripts/h3vid-pe/run_sc.py`（现网形状）与 `run_s2.py`（候选配置，支持 `MAXTOK`、`EFF`、附加规则），系统提示词的拼接顺序与 `buildSingleCallSystem` 逐字一致。
+- 现网复刻：实验阶段用的两个脚本（现网形状 / 候选配置，支持 `MAXTOK`、`EFF`、附加规则）**不入库**，系统提示词的拼接顺序与 `buildSingleCallSystem` 逐字一致。
 - **结构合规用确定性检查器**（`check.py`）：节名是否齐、镜头编号、切点格式与时长、素材标号是否越过实际素材数、台词是否逐字、引号外是否漏中文、`or` 二选一计数、段落是否重复。检查器先在**官方 8 条**上跑一遍做基线校准，官方必须全绿（校准中修掉 3 个误报）。
 - **语义判断由 agent 逐条对照素材做**，不用模型当评委：读图/读原视频，核对清点是否虚报、保留标记判得对不对、有没有编造小字。
 
@@ -186,7 +186,7 @@ and physical identity are resolved directly from the reference video.
 8. ~~参考视频内联成 data URI~~ / ~~带参考视频时关思考~~：都实现并实测过，按需求方决定**撤回**（方案 A 暂缓，见 §3.8），revert 提交留在历史里可随时复活。
 9. **方案 C：参考视频/音频不发给增强模型**，证据新增 `observable` 字段显式声明可见性（图片随 `send_input_images` 为 true，视频/音频恒 false）；appendix 第 10 条要求看不见的素材只按标签与角色引用、不得编造；新增 `missingAssetMentions` 校验参考族的视频/音频标签必须出现。
 10. **不发 `response_format`**：`json_object` 会被引擎的 xgrammar 拒成 500（见 §3.8 根因一），与 qwen_pe / h3_image_pe 一致。
-11. 实验脚本入仓 `scripts/h3vid-pe/`，提示词拼接与生产逐字一致（含 appendix）。
+11. 实验脚本不入库（`.gitignore`），但其提示词拼接与生产逐字一致（含 appendix）——复现时按本文件第 6 节重写即可。
 
 `go build` 通过；`go test ./service/ ./middleware/ ./common/ ./relay/hilo/` 全绿。
 
@@ -199,16 +199,13 @@ and physical identity are resolved directly from the reference video.
 
 ## 6. 复现
 
-脚本在 `scripts/h3vid-pe/`，用例素材与官方基线在实验包里（解包到 `.h3exp/`，可用 `H3PE` 覆盖路径）。
+脚本不入库（`.gitignore`）；用例素材与官方基线在实验包里（解包到 `.h3exp/`，可用 `H3PE` 覆盖路径）。
 
-```bash
-# 现网形状 / 候选配置（`-` = 不加额外规则）
-MAAS_API_KEY=… python3 scripts/h3vid-pe/run_sc.py none runs/sc_none
-MAAS_API_KEY=… MAXTOK=8192 EFF=1 python3 scripts/h3vid-pe/run_s2.py low runs/prod -
+实验脚本**不入库**。复现时按下面的形状重写(拼接顺序必须与 `buildSingleCallSystem` 逐字一致,含 `appendix.txt`):
 
-# 结构检查（先对官方基线校准，官方必须全绿）
-python3 scripts/h3vid-pe/check.py runs/official runs/sc_none runs/prod
-```
+1. `run_sc.py`(现网形状):按本包 `skills/*`、`rules.txt`、`writing.txt`、`appendix.txt` 拼 system prompt;证据带 `task.duration_seconds`,需要时再加 `effective_duration_seconds`。
+2. `run_s2.py`(候选配置):同上,支持 `MAXTOK`(输出上限)、`EFF=1`、第三个参数追加额外规则文本。
+3. `check.py`:对产出的 `h3_prompt` 做结构检查 —— 先对官方基线跑一遍,全绿再比候选。
 
 环境变量：`MAXTOK`（输出上限）、`EFF=1`（证据带有效时长）、`TAG`（输出文件名后缀）、`H3PE`（实验包 h3pe 目录）。
 

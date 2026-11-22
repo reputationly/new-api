@@ -74,8 +74,8 @@ var singleCallWriting string
 // singleCallAppendix 我们自己的合规清单,**唯一一处非逐字移植**。
 //
 // 上游 v20 的提示词是逐字移植的(见本文件顶部),这一份不是 —— 它是拿 8 条用例
-// 与官方 Context-IR 逐条对照之后补的差距清单,由实验阶段用 run_s2.py 的第三个
-// 参数注入验证过(实验脚本与规则原文在 scripts/h3vid-pe/):
+// 与官方 Context-IR 逐条对照之后补的差距清单,由实验阶段逐条注入验证过
+// (实验脚本不入库;规则原文即本包的 appendix.txt):
 //
 //	首帧/参考图清点      i2v 1689 → 2270 字符(官方 3779),元素级信息补齐
 //	non_diegetic_music   从"N/A 3/7"变成逐条谱曲

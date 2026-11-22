@@ -1689,3 +1689,50 @@ func TestPromptOptimizerAcceptsNumericForm(t *testing.T) {
 	require.True(t, run("{\"model\":\"h3-2k\",\"prompt\":\"a cat\",\"prompt_optimizer\":0}").EnhanceSkipped)
 	require.False(t, run("{\"model\":\"h3-2k\",\"prompt\":\"a cat\",\"prompt_optimizer\":1}").EnhanceSkipped)
 }
+
+// 客户没写 metadata.task_type、而该模型只挂在一个非 t2m 的玩法下时,增强要跟着那个玩法走。
+// 否则适配器按 cover/repaint 的上限校验,增强却按 t2m 预算产出 —— 写回后才会 400(LLM 已计费)。
+func TestAceStepImplicitTaskTypeUsesSoleCandidate(t *testing.T) {
+	withAggregateConfig(t, "[{\"name\":\"ace-cover\",\"type\":\"music\",\"enabled\":true,\"generate\":{\"model\":\"ace-step-cover\"},\"prompt_enhance\":{\"model\":\"enh\",\"system_prompt\":\"x\"}}]")
+	orig := common.OptionMap["MusicModelConfig"]
+	common.OptionMap["MusicModelConfig"] = `{"models":{"ace-step-cover":{"tabs":{"cover":{}}}}}`
+	t.Cleanup(func() {
+		if orig == "" {
+			delete(common.OptionMap, "MusicModelConfig")
+		} else {
+			common.OptionMap["MusicModelConfig"] = orig
+		}
+	})
+	require.Equal(t, []string{"cover"}, common.PlaygroundTaskTypeCandidates("ace-step-cover"))
+}
+
+// 端到端:隐式 task_type 时,展开阶段真的按候选(cover)算预算,而不是 t2m。
+func TestAceStepExpandUsesSoleCandidateBudget(t *testing.T) {
+	withAggregateConfig(t, "[{\"name\":\"ace-cover\",\"type\":\"music\",\"enabled\":true,\"generate\":{\"model\":\"ace-step-cover\"},\"prompt_enhance\":{\"model\":\"enh\",\"system_prompt\":\"x\"}}]")
+	orig := common.OptionMap["MusicModelConfig"]
+	common.OptionMap["MusicModelConfig"] = "{\"models\":{\"ace-step-cover\":{\"maxChars\":1000,\"tabs\":{\"cover\":{\"maxChars\":120}}}}}"
+	t.Cleanup(func() {
+		if orig == "" {
+			delete(common.OptionMap, "MusicModelConfig")
+		} else {
+			common.OptionMap["MusicModelConfig"] = orig
+		}
+	})
+	origEnhance := enhancePrompt
+	t.Cleanup(func() { enhancePrompt = origEnhance })
+	gotBudget := 0
+	enhancePrompt = func(_ context.Context, _ *common.AggregateModel, _ string, in service.EnhanceInput) *service.EnhanceResult {
+		// TaskContext 是 JSON 文本:看里面有没有 cover 的 120 上限。
+		if strings.Contains(string(in.TaskContext), "120") {
+			gotBudget = 120
+		}
+		return &service.EnhanceResult{OriginalPrompt: in.Prompt, EnhancedPrompt: in.Prompt, Degraded: true}
+	}
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/music/generations", strings.NewReader("{\"model\":\"ace-cover\",\"prompt\":\"warm lofi loop\"}"))
+	require.NoError(t, applyAggregateExpansion(c, "ace-cover", "ace-step-cover", common.GetAggregateModel("ace-cover")))
+	if gotBudget != 120 {
+		t.Fatalf("隐式 cover 时应按 cover 的 120 算预算,得到 %d", gotBudget)
+	}
+}
