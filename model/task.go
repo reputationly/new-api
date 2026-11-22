@@ -472,6 +472,8 @@ type TaskAggregateInfo struct {
 	//   EnhanceFellBack 要了但没跑成、退到了文本改写;
 	//   EnhanceDegraded 彻底没用上,生成段收到的是客户原文。
 	EnhanceSkipped bool `json:"enhance_skipped,omitempty"`
+	// EnhanceSource 这次「增强与否」是谁定的:client 或 config。
+	EnhanceSource string `json:"enhance_source,omitempty"`
 }
 
 // HasUpscale 该流水线是否还有一段超分要跑。

@@ -60,7 +60,9 @@ type AggregateExpansion struct {
 	UpscaleSkipped bool
 	// EnhanceSkipped 配置里把增强段关掉了(enabled:false 或整块不存在)。
 	// 与"增强失败降级"不是一回事:那种情况 Enhance 非空、带着 fallback_reason。
-	EnhanceSkipped    bool
+	EnhanceSkipped bool
+	// EnhanceSource 这次「增强与否」是谁定的:client(客户传了 prompt_optimizer)或 config(默认值)。
+	EnhanceSource     string
 	UpscaleSkipReason string
 }
 
@@ -306,10 +308,21 @@ func applyAggregateExpansion(c *gin.Context, publicName, realModel string, agg *
 	// 它是一次同步的 LLM 调用,会给请求加上几秒延迟;这是这个功能的固有成本,不是缺陷
 	// (体验区那条路是用户点按钮等,这里换成我们替他等)。EnhancePrompt 永远不返回错误,
 	// 任何失败都体现为"用原始提示词继续",所以这里没有失败分支可漏。
-	// 关掉时留一个显式标记:否则记录里只是没有 enhance_mode,与增强失败降级在库里长得一样,
-	// 排障时分不出是配置关的还是跑挂了。
-	exp.EnhanceSkipped = !agg.PromptEnhance.IsEnabled()
-	if agg.PromptEnhance.IsEnabled() {
+	// 是否增强:配置给默认值,客户可以用请求体顶层的 prompt_optimizer 覆盖(与 MiniMax 官方同名),
+	// 运营想锁死就配 lock_enabled。
+	//
+	// **读完必须把键从 body 删掉**:H3 / Music3 / ACE-Step 都不认这个字段,留着就是"多带一个键、
+	// 不报错"的隐患。
+	clientOptimizer := takePromptOptimizer(body)
+	enhanceOn := agg.PromptEnhance.EffectiveEnabled(clientOptimizer)
+	// 关掉时留一个显式标记:否则记录里只是没有 enhance_mode,与增强失败降级在库里长得一样。
+	exp.EnhanceSkipped = !enhanceOn
+	if clientOptimizer != nil && agg.PromptEnhance.AllowsClientOverride() {
+		exp.EnhanceSource = "client"
+	} else {
+		exp.EnhanceSource = "config"
+	}
+	if enhanceOn {
 		// 音乐与视频/图片**改写的字段不同**,不能共用下面那段。
 		//
 		// MiniMax-Music3 的统一契约是反的:顶层 prompt 放**歌词**(门面把它映射到引擎
@@ -415,6 +428,7 @@ func (e *AggregateExpansion) ToTaskAggregateInfo(c *gin.Context) *model.TaskAggr
 	info := &model.TaskAggregateInfo{PublicModel: e.PublicName}
 	// 增强段被配置关掉时 e.Enhance 为 nil,所以这一位必须在 if 之外拷贝。
 	info.EnhanceSkipped = e.EnhanceSkipped
+	info.EnhanceSource = e.EnhanceSource
 	if e.Config != nil && e.Config.Upscale.IsEnabled() && !e.UpscaleSkipped {
 		info.Stage = 1
 		info.UpscaleModel = e.Config.Upscale.Model
@@ -1455,4 +1469,35 @@ func jsonIntValue(v any) (int, bool) {
 		}
 	}
 	return 0, false
+}
+
+// takePromptOptimizer 读出客户请求体顶层的 prompt_optimizer(与 MiniMax 官方同名同位置),
+// **并从 body 删除**:它不是生成段引擎的字段,透传下去只会多带一个没人认的键。
+//
+// 容忍三种写法:true / false / "true" / "false"(表单与部分 SDK 会传字符串)。
+// 认不出时返回 nil,等同"客户没表态",继续用配置默认值 —— 静默忽略一个坏值,而不是让请求失败。
+func takePromptOptimizer(body map[string]any) *bool {
+	if body == nil {
+		return nil
+	}
+	raw, ok := body["prompt_optimizer"]
+	if !ok {
+		return nil
+	}
+	delete(body, "prompt_optimizer")
+	switch v := raw.(type) {
+	case bool:
+		out := v
+		return &out
+	case string:
+		switch strings.ToLower(strings.TrimSpace(v)) {
+		case "true", "1", "yes":
+			t := true
+			return &t
+		case "false", "0", "no":
+			f := false
+			return &f
+		}
+	}
+	return nil
 }
