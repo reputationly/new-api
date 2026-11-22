@@ -142,6 +142,7 @@ func MiniMaxMusicGeneration(c *gin.Context) {
 					minimaxMusicError(c, "任务成功但没有产物 URL（任务 "+taskID+"）")
 					return
 				}
+				resetResponseHeaders(c)
 				c.JSON(http.StatusOK, gin.H{
 					"data":      gin.H{"audio": url, "status": 0},
 					"base_resp": gin.H{"status_code": 0, "status_msg": "success"},

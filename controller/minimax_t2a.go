@@ -100,6 +100,11 @@ func MiniMaxV2Speech(c *gin.Context) {
 		minimaxSpeechError(c, "upstream returned an empty audio stream")
 		return
 	}
+	// **必须清掉下游留下的 Content-Type / Content-Length**：语音适配器在写二进制时
+	// 显式设了 audio/wav + 音频字节数，而这几百 KB 的音频只进了我们的缓冲区。
+	// 不清的话真响应会带着"audio/wav + 音频长度"的头去装一段 JSON（实测客户端拿到
+	// 200 但 body 为空）——头是共享的 header map，替换 writer 挡不住。
+	resetResponseHeaders(c)
 	c.JSON(http.StatusOK, gin.H{
 		"data": gin.H{
 			"audio":  hex.EncodeToString(audio),
@@ -151,11 +156,20 @@ func (w *binaryCaptureWriter) Flush()        {}
 // flush 把捕获到的内容原样写到真 writer（失败路径用）。
 func (w *binaryCaptureWriter) flush(c *gin.Context) {
 	target := w.ResponseWriter
-	for key, values := range target.Header() {
-		c.Writer.Header()[key] = values
-	}
+	// Content-Length 一律重算：下游可能是流式写出的，长度与缓冲后的字节数未必一致。
+	target.Header().Del("Content-Length")
 	target.WriteHeader(w.Status())
 	_, _ = target.Write(w.buf.Bytes())
+}
+
+// resetResponseHeaders 清掉下游写响应时留下的实体头。
+//
+// 我们替换了 c.Writer 但**没有隔离 header map**（gin 的 ResponseWriter 共享同一份），
+// 所以二进制路径设过的 Content-Type / Content-Length 会残留到我们改写后的 JSON 上。
+func resetResponseHeaders(c *gin.Context) {
+	h := c.Writer.Header()
+	h.Del("Content-Type")
+	h.Del("Content-Length")
 }
 
 // minimaxSpeechError 用 MiniMax 的错误信封回错（base_resp 是官方约定的位置）。
