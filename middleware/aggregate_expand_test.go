@@ -1566,3 +1566,53 @@ func TestAggregateMarksEnhanceSkipped(t *testing.T) {
 	require.True(t, exp.EnhanceSkipped, "要标出跳过")
 	require.True(t, exp.ToTaskAggregateInfo(c).EnhanceSkipped, "落库记录也要带上")
 }
+
+// 客户可以用 prompt_optimizer 覆盖配置默认值(与 MiniMax 官方同名字段、同位置)。
+// 覆盖后这个键必须从 body 里消失 —— H3 / Music3 / ACE-Step 都不认它。
+func TestPromptOptimizerOverridesConfigDefault(t *testing.T) {
+	withAggregateConfig(t, `[{"name":"h3-2k","type":"video","enabled":true,
+		"generate":{"model":"minimax-h3"},
+		"prompt_enhance":{"model":"enh","system_prompt":"x"}}]`)
+
+	run := func(body string) (*AggregateExpansion, map[string]any) {
+		rec := httptest.NewRecorder()
+		c, _ := gin.CreateTestContext(rec)
+		c.Request = httptest.NewRequest(http.MethodPost, "/v1/videos", strings.NewReader(body))
+		require.NoError(t, applyAggregateExpansion(c, "h3-2k", "minimax-h3", common.GetAggregateModel("h3-2k")))
+		return GetAggregateExpansion(c), readBodyMap(t, c)
+	}
+
+	t.Run("客户传 false:跳过增强,且键被删掉", func(t *testing.T) {
+		exp, body := run(`{"model":"h3-2k","prompt":"a cat","prompt_optimizer":false}`)
+		require.True(t, exp.EnhanceSkipped)
+		require.Equal(t, "client", exp.EnhanceSource)
+		require.NotContains(t, body, "prompt_optimizer")
+	})
+
+	t.Run("不传:按配置默认开启", func(t *testing.T) {
+		exp, _ := run(`{"model":"h3-2k","prompt":"a cat"}`)
+		require.False(t, exp.EnhanceSkipped)
+		require.Equal(t, "config", exp.EnhanceSource)
+	})
+
+	t.Run("字符串 false 也认", func(t *testing.T) {
+		exp, _ := run(`{"model":"h3-2k","prompt":"a cat","prompt_optimizer":"false"}`)
+		require.True(t, exp.EnhanceSkipped)
+	})
+}
+
+// 锁定后客户说了不算:运营要的是「这个模型的增强就是卖点」。
+func TestPromptOptimizerIgnoredWhenLocked(t *testing.T) {
+	withAggregateConfig(t, `[{"name":"h3-2k","type":"video","enabled":true,
+		"generate":{"model":"minimax-h3"},
+		"prompt_enhance":{"model":"enh","system_prompt":"x","lock_enabled":true}}]`)
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/videos",
+		strings.NewReader(`{"model":"h3-2k","prompt":"a cat","prompt_optimizer":false}`))
+	require.NoError(t, applyAggregateExpansion(c, "h3-2k", "minimax-h3", common.GetAggregateModel("h3-2k")))
+
+	exp := GetAggregateExpansion(c)
+	require.False(t, exp.EnhanceSkipped)
+	require.Equal(t, "config", exp.EnhanceSource)
+}

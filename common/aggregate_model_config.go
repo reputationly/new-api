@@ -60,9 +60,11 @@ type AggregatePromptEnhance struct {
 	// Enabled 漏写 = 开启:配了 prompt_enhance 这一段的人就是想用它,漏写 enabled 而
 	// 静默不增强属于"默默出差档"那一类,不报错、只是效果变差。要临时停用请显式写 false
 	// (保留整段配置,不必删掉再重配)。
-	Enabled *bool  `json:"enabled"`
-	Model   string `json:"model"` // 空 = 继承体验区通用设置里的优化模型
-	Group   string `json:"group"` // 空 = 继承
+	Enabled *bool `json:"enabled"`
+	// LockEnabled 锁定默认值,忽略客户传的 prompt_optimizer。漏写 = 允许客户覆盖。
+	LockEnabled *bool  `json:"lock_enabled,omitempty"`
+	Model       string `json:"model"` // 空 = 继承体验区通用设置里的优化模型
+	Group       string `json:"group"` // 空 = 继承
 	// SystemPrompt 空 = 继承体验区模板(模型级 → tab 级 → 内置默认)。
 	SystemPrompt string `json:"system_prompt"`
 	// SendInputImages 把本次请求的输入图一并发给增强模型。**漏写 = 开启**,关掉要非常
@@ -212,6 +214,28 @@ func (p *AggregatePromptEnhance) EnhanceMode() string {
 }
 
 // IsEnabled 提示词增强段是否启用(段不存在 = 不启用;存在但漏写 enabled = 启用)。
+// AllowsClientOverride 客户能否用请求体顶层的 prompt_optimizer 覆盖默认值。
+func (p *AggregatePromptEnhance) AllowsClientOverride() bool {
+	if p == nil {
+		return false
+	}
+	return p.LockEnabled == nil || !*p.LockEnabled
+}
+
+// EffectiveEnabled 这一次请求到底增不增强。clientOverride 为 nil 表示客户没表态。
+//
+// 优先级:锁定时只认默认值;未锁定时客户端显式取值优先于默认值。
+// 与 MiniMax 官方一致(请求体顶层 prompt_optimizer,默认 true)。
+func (p *AggregatePromptEnhance) EffectiveEnabled(clientOverride *bool) bool {
+	if p == nil {
+		return false
+	}
+	if p.AllowsClientOverride() && clientOverride != nil {
+		return *clientOverride
+	}
+	return p.IsEnabled()
+}
+
 func (p *AggregatePromptEnhance) IsEnabled() bool {
 	if p == nil {
 		return false

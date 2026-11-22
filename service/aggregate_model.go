@@ -246,8 +246,13 @@ func DryRunAggregateModel(m *common.AggregateModel, peers map[string]int) *Aggre
 	if !m.PromptEnhance.IsEnabled() {
 		// 关掉不是错,但要明确告诉运营"这段不会跑":否则配了 model/mode 却看不到增强效果,
 		// 会当成 bug 去查增强模型。
-		add("prompt_enhance", AggregateCheckOK,
-			"提示词增强已关闭:客户原始输入直接进生成段,不调用增强模型、不产生额外延迟与费用")
+		msg := "提示词增强默认关闭:客户原始输入直接进生成段,不调用增强模型,也不产生额外延迟与费用"
+		if m.PromptEnhance.AllowsClientOverride() {
+			msg += ";客户仍可在请求体顶层传 prompt_optimizer:true 打开(与 MiniMax 官方同名字段)"
+		} else {
+			msg += ";已锁定(lock_enabled),客户传 prompt_optimizer 也不会生效"
+		}
+		add("prompt_enhance", AggregateCheckOK, "%s", msg)
 	}
 	if m.PromptEnhance.IsEnabled() {
 		enhModel := strings.TrimSpace(m.PromptEnhance.Model)
@@ -395,6 +400,11 @@ func DryRunAggregateModel(m *common.AggregateModel, peers map[string]int) *Aggre
 				enhModel, unknownSuffix())
 		} else {
 			add("prompt_enhance", AggregateCheckOK, "增强模型 %q 可路由", enhModel)
+			if m.PromptEnhance.AllowsClientOverride() {
+				add("enhance_override", AggregateCheckOK, "客户可在请求体顶层传 prompt_optimizer:false 跳过增强(与 MiniMax 官方同名);不传则按默认开启")
+			} else {
+				add("enhance_override", AggregateCheckOK, "已锁定增强(lock_enabled:true):客户传 prompt_optimizer 会被忽略")
+			}
 			res.Billable = append(res.Billable, enhModel)
 			// 增强以客户身份自调用一次 /v1/chat/completions,会过令牌的模型白名单。
 			// 客户令牌若开了白名单却没放行这个模型,增强每次都吃 403 并降级 ——
