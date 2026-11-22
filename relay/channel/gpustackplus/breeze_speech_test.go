@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/setting/system_setting"
 	"github.com/QuantumNous/new-api/types"
@@ -126,7 +127,8 @@ func TestConvertSpeechRequestBreezeSpeakerTag(t *testing.T) {
 }
 
 // TestConvertSpeechRequestBreezeParams 同步口不再漏阀(A3):language / speed /
-// 非 wav 格式 / 未知 extra_params 都要在网关变中文 400,而不是引擎英文 400。
+// 引擎认不出的容器 / 未知 extra_params 都要在网关变中文 400,而不是引擎英文 400。
+// 注意 wav 与 mp3 现在**都**是合法容器(门面按 response_format 命名产物),见下面的专项用例。
 func TestConvertSpeechRequestBreezeParams(t *testing.T) {
 	speed := 1.2
 	one := 1.0
@@ -151,9 +153,9 @@ func TestConvertSpeechRequestBreezeParams(t *testing.T) {
 			wantMsg: "不支持 x_vector_only_mode",
 		},
 		{
-			name:    "response_format=mp3",
-			request: dto.AudioRequest{Model: "tts2", Input: "你好。", Voice: "S0", ResponseFormat: "mp3"},
-			wantMsg: "只支持 response_format=wav",
+			name:    "response_format=aac(引擎不认)",
+			request: dto.AudioRequest{Model: "tts2", Input: "你好。", Voice: "S0", ResponseFormat: "aac"},
+			wantMsg: "不支持 response_format=aac",
 		},
 		{
 			name:    "extra_params 未知键",
@@ -177,8 +179,30 @@ func TestConvertSpeechRequestBreezeParams(t *testing.T) {
 	require.InDelta(t, 1.0, body["speed"], 1e-9)
 }
 
+// TestConvertSpeechRequestBreezeAcceptsEveryEngineContainer 锁住「wav 与 mp3 同时支持」:
+// 引擎能编码的每一种容器都必须原样传到提交体,一个都不能在网关被吞掉或改写。
+//
+// 这条用例是 wav-only 限制拆除后的正样本 —— 之前 mp3 在这里是必须报错的,
+// 现在必须放行,且**下发值要与请求值一致**(不能悄悄回落成 wav:那样客户端要 mp3
+// 却拿到 wav,比报错更难发现)。
+func TestConvertSpeechRequestBreezeAcceptsEveryEngineContainer(t *testing.T) {
+	for _, format := range common.EngineAudioOutputFormats {
+		t.Run(format, func(t *testing.T) {
+			body := convertSpeechBody(t, "tts2", dto.AudioRequest{
+				Model: "tts2", Input: "你好。", Voice: "S0", ResponseFormat: strings.ToUpper(format),
+			})
+			require.Equal(t, format, body["response_format"], "大小写应归一后原样下发")
+		})
+	}
+
+	// 显式不传 → 不写该键,由引擎默认(wav)兜住。写死 wav 会让"请求没提格式"变成
+	// 网关替客户端做决定,以后引擎改默认值就要改网关。
+	body := convertSpeechBody(t, "tts2", dto.AudioRequest{Model: "tts2", Input: "你好。", Voice: "S0"})
+	require.NotContains(t, body, "response_format")
+}
+
 // TestConvertSpeechRequestBreezeKeepsOtherModelsIntact 锁住 C2 的决策:
-// Breeze 的格式收紧**只对 Breeze 生效**,同渠道其它模型的能力不能被连带砍掉。
+// Breeze 的特有校验**只对 Breeze 生效**,同渠道其它模型的能力不能被连带影响。
 func TestConvertSpeechRequestBreezeKeepsOtherModelsIntact(t *testing.T) {
 	body := convertSpeechBody(t, "qwen3-tts", dto.AudioRequest{
 		Model: "qwen3-tts", Input: "hi", Voice: "vivian", ResponseFormat: "mp3",

@@ -770,12 +770,24 @@ var breezeAllowedExtraKeys = map[string]bool{
 // 换一条英文文案,排查成本更高;而 speaker 与 extra_params 两类更糟 —— 拼错会静默
 // 劣化音色(见 IsBreezeSpeakerTag),未知键则要等下一条英文报错。
 func ValidateBreezeParams(body map[string]any, modelName string) error {
-	// 门面把产物名固定成 .wav(见 gpustack routes/videos.py 的 _output_ext),而引擎按
-	// response_format 编码,放行 mp3 会得到"mp3 字节 + audio/wav 头",客户端解码失败且
-	// 极难排查。本轮只放 wav;不传则由引擎默认(wav)兜住。
+	// response_format:按模型能力校验,并且**必须口径一致地传下去**。
+	//
+	// 历史上这里硬限 wav,理由是门面把产物名固定成 .wav(gpustack routes/videos.py 的
+	// _output_ext),放行 mp3 会得到"mp3 字节 + audio/wav 头"。那其实是**门面的命名缺陷**,
+	// 不该由网关用"只准 wav"来兜:现在门面按 response_format 命名产物,同步口回写 MIME
+	// 也改成以魔数为准(见 gpustackplus/speech.go),这条限制的成因已经消失。
+	// 保留的只有一件事:引擎认不出的容器要在网关变成 400,而不是去引擎换一条 pydantic 报错。
 	if v, ok := body["response_format"].(string); ok {
-		if f := strings.ToLower(strings.TrimSpace(v)); f != "" && f != "wav" {
-			return fmt.Errorf("模型 %s 当前只支持 response_format=wav(产物固定 .wav,其它容器会与文件扩展名不一致)", modelName)
+		f, err := common.CheckAudioOutputFormatForModel(v, modelName)
+		if err != nil {
+			return err
+		}
+		if f == "" {
+			// 空串必须删掉,不能原样下发:引擎的 response_format 是 Literal,
+			// 收到 "" 会变成 pydantic 422 而不是"按默认走"。
+			delete(body, "response_format")
+		} else {
+			body["response_format"] = f
 		}
 	}
 	if v, ok := body["speed"]; ok && v != nil {

@@ -185,6 +185,14 @@ func GetMimeTypeByExtension(ext string) string {
 		return "audio/wav"
 	case "mpeg":
 		return "audio/mpeg"
+	case "flac":
+		return "audio/flac"
+	case "ogg":
+		return "audio/ogg"
+	case "opus":
+		return "audio/opus"
+	case "pcm":
+		return "audio/pcm"
 
 	// Video files
 	case "mp4":

@@ -496,6 +496,109 @@ func AudioMaxCharsForModel(taskType string, candidates ...string) (maxChars int,
 	return 0, false
 }
 
+// EngineAudioOutputFormats 是自部署语音引擎(vLLM-Omni)真正能编码的音频容器集合。
+//
+// 与引擎的 SUPPORTED_AUDIO_FORMATS(entrypoints/openai/protocol/audio.py)保持同集合:
+// 引擎的 OpenAICreateSpeechRequest.response_format 就是这份名单的 Literal,多报一种
+// (历史白名单里的 aac/m4a/ogg)在引擎侧是 422,客户端拿到的不是"参数不受支持"而是
+// pydantic 校验错。所以网关这层的可选项必须由这里收口,而不是各自维护一张更宽的表。
+var EngineAudioOutputFormats = []string{"wav", "mp3", "flac", "opus", "pcm"}
+
+// audioOutputFormatSet 是 EngineAudioOutputFormats 的查表形式。
+var audioOutputFormatSet = func() map[string]bool {
+	out := make(map[string]bool, len(EngineAudioOutputFormats))
+	for _, f := range EngineAudioOutputFormats {
+		out[f] = true
+	}
+	return out
+}()
+
+// AudioOutputFormatsForModel 返回该模型允许的音频产物容器(小写、去重、按引擎能力收口)。
+//
+// 配置位置为 AudioModelConfig:models[name].audioFormats,其次 default.audioFormats。
+// **未配置时返回引擎能力全集** —— 缺省即"引擎能出什么就允许什么",不需要运营先填配置
+// 才能用 mp3;配置只用于按模型收紧(某个模型只想对外给 wav 时)。
+// 语音四个玩法共用 task_type=tts,解析不出 tab,故只支持模型级与全局默认两级,
+// 与 AudioMaxCharsForModel 的说明一致。
+//
+// 返回的 (formats, configured):configured 表示调用方是否显式声明过。
+func AudioOutputFormatsForModel(candidates ...string) ([]string, bool) {
+	OptionMapRWMutex.RLock()
+	raw := OptionMap["AudioModelConfig"]
+	OptionMapRWMutex.RUnlock()
+
+	var declared []string
+	configured := false
+	if strings.TrimSpace(raw) != "" {
+		var cfg struct {
+			Default struct {
+				AudioFormats []string `json:"audioFormats"`
+			} `json:"default"`
+			Models map[string]struct {
+				AudioFormats []string `json:"audioFormats"`
+			} `json:"models"`
+		}
+		if err := UnmarshalJsonStr(raw, &cfg); err == nil {
+			for _, name := range candidates {
+				name = strings.TrimSpace(name)
+				if name == "" {
+					continue
+				}
+				if m, ok := cfg.Models[name]; ok && len(m.AudioFormats) > 0 {
+					declared = m.AudioFormats
+					configured = true
+					break
+				}
+			}
+			if !configured && len(cfg.Default.AudioFormats) > 0 {
+				declared = cfg.Default.AudioFormats
+				configured = true
+			}
+		}
+	}
+	if !configured {
+		return append([]string(nil), EngineAudioOutputFormats...), false
+	}
+
+	seen := make(map[string]bool, len(declared))
+	out := make([]string, 0, len(declared))
+	for _, f := range declared {
+		f = strings.ToLower(strings.TrimSpace(f))
+		if f == "" || seen[f] || !audioOutputFormatSet[f] {
+			continue
+		}
+		seen[f] = true
+		out = append(out, f)
+	}
+	if len(out) == 0 {
+		// 配了但全是引擎不识别的值(写错/历史遗留):回落到引擎能力,别把模型打成不可用。
+		SysLog(fmt.Sprintf("AudioModelConfig audioFormats=%v 与引擎能力 %v 无交集,回落到引擎全集",
+			declared, EngineAudioOutputFormats))
+		return append([]string(nil), EngineAudioOutputFormats...), true
+	}
+	return out, true
+}
+
+// CheckAudioOutputFormatForModel 归一化并校验请求的音频产物容器。
+//
+// 返回归一化后的格式(未传时为空串,表示交给引擎默认=wav);不合法返回带可选项的 error。
+// 同步口(/v1/audio/speech)与任务口(/v1/videos, task_type=tts)共用这一份判断,
+// 避免两条链路对同一个模型给出不同的可选项。
+func CheckAudioOutputFormatForModel(format string, candidates ...string) (string, error) {
+	f := strings.ToLower(strings.TrimSpace(format))
+	if f == "" {
+		return "", nil
+	}
+	allowed, _ := AudioOutputFormatsForModel(candidates...)
+	for _, ok := range allowed {
+		if f == ok {
+			return f, nil
+		}
+	}
+	return "", fmt.Errorf("模型 %s 不支持 response_format=%s(允许:%s)",
+		firstNonEmptyStr(candidates...), f, strings.Join(allowed, "/"))
+}
+
 // ValidateAudioTextForModel 校验合成文本长度:未配置或上限=0 放行;否则要求字符数不超过上限。
 // 按 rune 计数(与前端 text.length 对中文一致)。
 func ValidateAudioTextForModel(taskType, text string, candidates ...string) error {

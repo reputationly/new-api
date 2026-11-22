@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/QuantumNous/new-api/common"
@@ -110,7 +111,7 @@ func TestConvertSpeechRequestRejectsBadInput(t *testing.T) {
 			name:    "不支持的输出容器",
 			model:   "qwen3-tts",
 			request: dto.AudioRequest{Model: "qwen3-tts", Input: "hi", Voice: "vivian", ResponseFormat: "midi"},
-			wantMsg: "不支持的 response_format",
+			wantMsg: "不支持 response_format=midi",
 		},
 		{
 			name:    "流式",
@@ -185,27 +186,78 @@ func TestReadNFSResultRejectsPathOutsideRoot(t *testing.T) {
 	require.Error(t, err)
 }
 
-// 放行的每种 response_format 都必须能标出正确的 Content-Type ——
-// 标错容器的字节流,客户端会按 MP3 去解一份 opus/aac/pcm,失败得又晚又难查。
+// 回写的 Content-Type 必须与**字节的实际容器**一致 —— 标错容器的字节流,
+// 客户端会按错误的容器去解,失败得又晚又难查。
+//
+// 优先级:真实字节(魔数) > 成品扩展名 > 请求格式 > octet-stream。
+// 字节优先是这条契约的要点:扩展名由门面按 task_type 派生,曾经硬编码成 .wav,
+// 一旦引擎按 response_format 出了 mp3,扩展名就会和字节打架。
 func TestSpeechContentType(t *testing.T) {
+	// 各容器"能认出自己"的最小字节头。pcm/opus 没有独立的魔数:
+	// pcm 只能靠扩展名或请求格式;opus 落在 OggS 里,魔数只能到"Ogg"这一层,
+	// 需要扩展名/请求格式在同一容器内收敛(见 speechContentType 的注释)。
+	magic := map[string][]byte{
+		"wav":  []byte("RIFF\x24\x00\x00\x00WAVEfmt "),
+		"mp3":  []byte("ID3\x04\x00\x00\x00\x00\x00\x00"),
+		"flac": []byte("fLaC\x00\x00\x00\x22"),
+		"opus": []byte("OggS\x00\x02\x00\x00"),
+	}
 	for format, want := range speechContentTypes {
 		t.Run("ext:"+format, func(t *testing.T) {
-			require.Equal(t, want, speechContentType("/nfs/out/speech."+format, ""))
+			require.Equal(t, want, speechContentType(nil, "/nfs/out/speech."+format, ""))
 		})
 		t.Run("requested:"+format, func(t *testing.T) {
-			// 引擎落了个认不出扩展名的文件时，回落到客户端请求的格式。
-			require.Equal(t, want, speechContentType("/nfs/out/speech.bin", format))
+			// 引擎落了个认不出扩展名的文件时,回落到客户端请求的格式。
+			require.Equal(t, want, speechContentType(nil, "/nfs/out/speech.bin", format))
 		})
 	}
+	// 字节说了算:扩展名和请求格式都在说 wav,mp3 字节也必须标 audio/mpeg。
+	for format, head := range magic {
+		if format == "opus" {
+			continue // OggS 需要额外提示才能收敛到 opus,单独用例覆盖
+		}
+		t.Run("magic:"+format, func(t *testing.T) {
+			require.Equal(t, speechContentTypes[format], speechContentType(head, "/nfs/out/a.wav", "wav"))
+		})
+	}
+	// OggS + opus 提示 → audio/opus;没有提示时如实标 audio/ogg(不能谎称 opus)。
+	require.Equal(t, "audio/opus", speechContentType(magic["opus"], "/nfs/out/a.opus", ""))
+	require.Equal(t, "audio/opus", speechContentType(magic["opus"], "/nfs/out/a.bin", "opus"))
+	require.Equal(t, "audio/ogg", speechContentType(magic["opus"], "/nfs/out/a.bin", ""))
 
-	// 文件真实扩展名优先于请求格式：引擎最终产出什么就标什么。
-	require.Equal(t, "audio/wav", speechContentType("/nfs/out/a.wav", "mp3"))
+	// 只有魔数、没有扩展名(门面落了 .bin)时也能标对。
+	require.Equal(t, "audio/mpeg", speechContentType(magic["mp3"], "/nfs/out/a.bin", ""))
+	// 魔数认不出才看扩展名:扩展名优先于请求格式。
+	require.Equal(t, "audio/wav", speechContentType([]byte{}, "/nfs/out/a.wav", "mp3"))
 	// 大小写与空格容错。
-	require.Equal(t, "audio/flac", speechContentType("/nfs/out/a.FLAC", ""))
-	require.Equal(t, "audio/opus", speechContentType("/nfs/out/a", "  OPUS "))
-	// 两头都认不出时宁可 octet-stream，也不谎称 MP3。
-	require.Equal(t, "application/octet-stream", speechContentType("/nfs/out/a.bin", ""))
-	require.Equal(t, "application/octet-stream", speechContentType("/nfs/out/a.bin", "midi"))
+	require.Equal(t, "audio/flac", speechContentType(nil, "/nfs/out/a.FLAC", ""))
+	require.Equal(t, "audio/opus", speechContentType(nil, "/nfs/out/a", "  OPUS "))
+	// 三档都认不出时宁可 octet-stream,也不谎称 MP3。
+	require.Equal(t, "application/octet-stream", speechContentType(nil, "/nfs/out/a.bin", ""))
+	require.Equal(t, "application/octet-stream", speechContentType([]byte("not audio"), "/nfs/out/a.bin", "midi"))
+}
+
+// 请求侧的可选项由模型能力决定,不再用 MIME 表当白名单:
+// 网关以前对外承诺 8 种容器,引擎只认 5 种(aac/m4a/ogg 到引擎是 pydantic 422)。
+func TestCheckAudioOutputFormatForModel(t *testing.T) {
+	for _, format := range common.EngineAudioOutputFormats {
+		got, err := common.CheckAudioOutputFormatForModel(strings.ToUpper(format), "tts2")
+		require.NoError(t, err)
+		require.Equal(t, format, got)
+	}
+	// 未传 → 空串(交给引擎默认),不是错误。
+	got, err := common.CheckAudioOutputFormatForModel("  ", "tts2")
+	require.NoError(t, err)
+	require.Equal(t, "", got)
+
+	for _, bad := range []string{"aac", "m4a", "ogg", "midi"} {
+		t.Run("拒绝:"+bad, func(t *testing.T) {
+			_, err := common.CheckAudioOutputFormatForModel(bad, "tts2")
+			require.Error(t, err)
+			require.Contains(t, err.Error(), "允许:")
+			require.Contains(t, err.Error(), "mp3", "文案要列全可选项,否则客户端不知道能用什么")
+		})
+	}
 }
 
 // convertSpeechRequest 必须把请求的 response_format 落到 context，DoResponse 才能兜底标注。

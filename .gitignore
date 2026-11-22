@@ -72,3 +72,7 @@ scripts/h3vid-pe/__pycache__/
 /dist/
 __pycache__/
 *.pyc
+
+# 提示词实验脚本不落库
+scripts/enhance-tiers/
+scripts/h3vid-pe/
