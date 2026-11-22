@@ -44,6 +44,10 @@ type minimaxMusicRequest struct {
 	IsInstrumental *bool  `json:"is_instrumental"`
 	Stream         *bool  `json:"stream"`
 	OutputFormat   string `json:"output_format"`
+	// Metadata 官方协议里的扩展位。早先没有它:展开阶段写进去的东西(尤其是增强后的
+	// 描述)会被 buildMusicTaskBody 重建 body 时丢掉 —— 记录显示已增强,引擎收到的
+	// 是原文,且没有任何报错。
+	Metadata map[string]any `json:"metadata"`
 }
 
 // MiniMaxMusicGeneration 处理 POST /v1/music_generation。
@@ -86,7 +90,7 @@ func MiniMaxMusicGeneration(c *gin.Context) {
 		return
 	}
 
-	taskBody, message := buildMusicTaskBody(modelName, prompt, req.Lyrics, req.IsInstrumental)
+	taskBody, message := buildMusicTaskBody(modelName, prompt, req.Lyrics, req.IsInstrumental, req.Metadata)
 	if message != "" {
 		minimaxMusicError(c, message)
 		return
@@ -203,7 +207,7 @@ func minimaxMusicError(c *gin.Context, message string) {
 //
 // 无条件按 ACE-Step 那套映射会让 Music3 把风格描述当歌词唱、真歌词被丢弃，
 // 而且不报错 —— 静默产出错误的歌。
-func buildMusicTaskBody(modelName, prompt, lyrics string, instrumental *bool) (map[string]any, string) {
+func buildMusicTaskBody(modelName, prompt, lyrics string, instrumental *bool, extra map[string]any) (map[string]any, string) {
 	prompt = strings.TrimSpace(prompt)
 	lyrics = strings.TrimSpace(lyrics)
 	if prompt == "" {
@@ -216,7 +220,16 @@ func buildMusicTaskBody(modelName, prompt, lyrics string, instrumental *bool) (m
 	}
 
 	body := map[string]any{"model": modelName}
+	// 先透传客户端 metadata(官方协议的扩展位:task_type / sample_query / reference_audio 等),
+	// 再写下面三个由 prompt/lyrics 映射而来的键 —— 后者必须赢,否则会出现两套说法。
 	metadata := map[string]any{}
+	for k, v := range extra {
+		switch strings.ToLower(strings.TrimSpace(k)) {
+		case "instructions", "lyrics", "is_instrumental":
+			continue
+		}
+		metadata[k] = v
+	}
 	if service.IsMusic3GeneratingModel(generateModel) {
 		// 我们的链路不会替客户写词（官方 lyrics_optimizer 那种），所以无词又非要唱时
 		// 直接说清楚，而不是把风格描述当歌词送进引擎。

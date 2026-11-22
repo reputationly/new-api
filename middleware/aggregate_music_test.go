@@ -272,3 +272,29 @@ func TestAceStepSkipsEnhancementWithoutCaption(t *testing.T) {
 	md, _ := body["metadata"].(map[string]any)
 	require.Equal(t, "[Verse] rain on neon", md["lyrics"])
 }
+
+// **官方 MiniMax 形状**(prompt=描述、lyrics=歌词、没有 metadata.instructions)。
+//
+// /v1/music_generation 兼容层在展开**之后**才重建 body,所以展开阶段看到的是这个形状。
+// 只认内部形状的后果是静默的:caption 取不到 → 不增强,记录里连 enhance_mode 都没有。
+func TestMusic3AggregateAcceptsOfficialShape(t *testing.T) {
+	withMusic3Engine(t, "minimax-music3")
+	withAggregateConfig(t, musicAggConfig)
+
+	body, got := expandMusic(t, `{"model":"music3-enhanced","prompt":"a warm acoustic pop song","lyrics":"[Verse]\nthe night falls"}`)
+	require.NotNil(t, got, "官方形状下也必须触发增强")
+	require.Equal(t, "a warm acoustic pop song", got.Prompt, "改写的应是描述")
+	require.Equal(t, "[Verse]\nthe night falls", got.Lyrics, "歌词只读")
+	require.Equal(t, "NEW CAPTION", body["prompt"], "写回 prompt:兼容层正是从这里取描述")
+	require.Equal(t, "[Verse]\nthe night falls", body["lyrics"], "歌词一字不动")
+}
+
+// 官方形状但既没描述也没歌词之外的东西时,仍然不增强(不猜)。
+func TestMusic3OfficialShapeWithoutDescriptionDoesNothing(t *testing.T) {
+	withMusic3Engine(t, "minimax-music3")
+	withAggregateConfig(t, musicAggConfig)
+
+	body, got := expandMusic(t, `{"model":"music3-enhanced","prompt":""}`)
+	require.Nil(t, got, "没有描述就没有可改写的东西")
+	require.NotContains(t, body, "lyrics")
+}
