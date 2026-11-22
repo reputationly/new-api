@@ -591,7 +591,7 @@ func enhanceAceStepAggregate(c *gin.Context, agg *common.AggregateModel, body ma
 		// 没有可改写的描述。**绝不用歌词顶上** —— 那是把用户的词拿去优化。
 		return nil
 	}
-	budget := service.AceStepCaptionBudget(agg.Generate.Model)
+	budget := service.AceStepCaptionBudget(agg.Generate.Model, taskType)
 	res := enhancePrompt(c.Request.Context(), agg,
 		c.Request.Header.Get("Authorization"), service.EnhanceInput{
 			Prompt:      caption,
@@ -1495,6 +1495,19 @@ func takePromptOptimizer(body map[string]any) *bool {
 	case bool:
 		out := v
 		return &out
+	case float64:
+		// 有些 SDK 会把布尔序列化成 1/0;与 requestedDurationSeconds 对数字的口径一致。
+		if v == 0 || v == 1 {
+			b := v == 1
+			return &b
+		}
+		return nil
+	case json.Number:
+		if i, err := v.Int64(); err == nil && (i == 0 || i == 1) {
+			b := i == 1
+			return &b
+		}
+		return nil
 	case string:
 		switch strings.ToLower(strings.TrimSpace(v)) {
 		case "true", "1", "yes":

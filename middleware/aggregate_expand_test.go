@@ -1675,3 +1675,17 @@ func TestAggregateLabelsCarryEnhanceSkipReason(t *testing.T) {
 		require.NotContains(t, labels, "enhance_source")
 	})
 }
+
+// 数字形态(1/0)也认:有些 SDK 把布尔序列化成数字。
+func TestPromptOptimizerAcceptsNumericForm(t *testing.T) {
+	withAggregateConfig(t, "[{\"name\":\"h3-2k\",\"type\":\"video\",\"enabled\":true,\"generate\":{\"model\":\"minimax-h3\"},\"prompt_enhance\":{\"model\":\"enh\",\"system_prompt\":\"x\"}}]")
+	run := func(body string) *AggregateExpansion {
+		rec := httptest.NewRecorder()
+		c, _ := gin.CreateTestContext(rec)
+		c.Request = httptest.NewRequest(http.MethodPost, "/v1/videos", strings.NewReader(body))
+		require.NoError(t, applyAggregateExpansion(c, "h3-2k", "minimax-h3", common.GetAggregateModel("h3-2k")))
+		return GetAggregateExpansion(c)
+	}
+	require.True(t, run("{\"model\":\"h3-2k\",\"prompt\":\"a cat\",\"prompt_optimizer\":0}").EnhanceSkipped)
+	require.False(t, run("{\"model\":\"h3-2k\",\"prompt\":\"a cat\",\"prompt_optimizer\":1}").EnhanceSkipped)
+}
