@@ -1,5 +1,5 @@
 import React from 'react';
-import { buildTimeWindowRows, formatTimePrices } from '../../../helpers';
+import { buildTimeWindowRows } from '../../../helpers';
 
 // 「动态折扣 / 动态目录价」角标的悬浮内容：逐条列出时段规则，并标出此刻生效的那一档。
 //
@@ -41,21 +41,20 @@ const TimeRulesTooltip = ({ group, modelName, groupTimeRatio, t }) => {
         {allCatalog ? t('动态目录价') : t('分时定价')}
       </div>
       {rows.map((r) => {
-        const isCatalog = r.priceMode === 'catalog';
-        const priceText = isCatalog ? formatTimePrices(r.prices, t) : '';
+        // catalog 行的折数就是「顶行已写的固定折扣」，再列一遍是重复；
+        // 价目明细也不在这里铺——明细交给详情页（点开卡片即可）。
+        // factor 行的折数是「该时段最终几折」，顶行没有这个信息，必须保留。
+        const rowDiscount =
+          r.priceMode === 'factor' && r.discount ? r.discount.text : '';
         return (
           <div key={r.key}>
             {r.range}
-            {priceText ? ` · ${priceText}` : ''}
-            {r.discount
-              ? ` · ${r.discount.text}`
-              : isCatalog
-                ? ''
-                : ` · ${r.ratio}x`}
-            {r.active ? ` · ${t('生效中')}` : ''}
+            {rowDiscount ? ' · ' + rowDiscount : ''}
+            {r.active ? ' · ' + t('生效中') : ''}
           </div>
         );
       })}
+      <div className='mt-1 opacity-70'>{t('点击查看详情')}</div>
     </div>
   );
 };

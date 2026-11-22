@@ -52,16 +52,17 @@ const show = (entry) =>
   );
 
 describe('TimeRulesTooltip 价目模式', () => {
-  it('全动态目录价：标题换「动态目录价」，行内列价目与固定折扣', () => {
+  it('全动态目录价：标题换「动态目录价」，行内不重复折数与价目，底部引导点详情', () => {
     const text = show(baseEntry);
     expect(text).toContain('动态目录价');
     expect(text).not.toContain('分时定价');
-    // 空闲行：价目 + 固定 5 折（discount_ratio），不是合成的 2.5 折
     expect(text).toContain('空闲时段 除「高峰时段」以外');
-    expect(text).toContain('输入¥1 输出¥4 缓存命中¥0.02');
-    expect(text).toContain('5折');
-    expect(text).not.toContain('2.5折');
+    // 折数在顶行（「已按 5 折 计价」）已经写过，逐行不再重复
+    expect(text).not.toContain('5折');
+    // 价目明细交给详情页，不在这里铺
+    expect(text).not.toContain('输入¥1');
     expect(text).toContain('生效中');
+    expect(text).toContain('点击查看详情');
   });
 
   it('全动态折扣：维持「分时定价」+ 该时段最终折', () => {
@@ -76,8 +77,9 @@ describe('TimeRulesTooltip 价目模式', () => {
     const text = show(factorEntry);
     expect(text).toContain('分时定价');
     expect(text).not.toContain('动态目录价');
-    // factor 行按 w.ratio 折算：空闲 0.25 → 2.5折
+    // factor 行按 w.ratio 折算：空闲 0.25 → 2.5折（顶行没有这个信息，必须保留）
     expect(text).toContain('2.5折');
+    expect(text).toContain('点击查看详情');
   });
 
   it('混配：标题回落「分时定价」，catalog 行仍列价目', () => {
@@ -90,7 +92,8 @@ describe('TimeRulesTooltip 价目模式', () => {
     };
     const text = show(mixed);
     expect(text).toContain('分时定价');
-    expect(text).toContain('输入¥2 输出¥8'); // 高峰 catalog 行
-    expect(text).toContain('2.5折'); // 空闲 factor 行按 ratio
+    // catalog 行不铺价目；factor 行保留该档最终折
+    expect(text).not.toContain('输入¥2');
+    expect(text).toContain('2.5折');
   });
 });
