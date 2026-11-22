@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/logger"
 	"github.com/QuantumNous/new-api/types"
 
@@ -260,6 +261,19 @@ func RecordConsumeLog(c *gin.Context, userId int, params RecordConsumeLogParams)
 	username := c.GetString("username")
 	requestId := c.GetString(common.RequestIdKey)
 	appendUpstreamCost(params.Other, params.Quota, params.ChannelId, params.ModelName)
+	// 聚合流水线的归类标签(只展示)。异步任务在 service/task_billing 里合并,
+	// 而**同步生图**的消费日志走这里 —— 不合并的话,图片聚合的日志只有一个内部
+	// 模型名,看不到它属于哪条流水线、是哪一段。
+	// 不从 service 调 PipelineLogLabels:model 被 service 依赖,反向引用会成环。
+	if c != nil {
+		if v, ok := common.GetContextKey(c, constant.ContextKeyAggregateLabels); ok {
+			if labels, ok := v.(map[string]string); ok {
+				for k, val := range labels {
+					params.Other[k] = val
+				}
+			}
+		}
+	}
 	otherStr := common.MapToJsonStr(params.Other)
 	log := &Log{
 		UserId:           userId,

@@ -243,6 +243,12 @@ func DryRunAggregateModel(m *common.AggregateModel, peers map[string]int) *Aggre
 	}
 
 	// —— 4. 提示词增强段 ——
+	if !m.PromptEnhance.IsEnabled() {
+		// 关掉不是错,但要明确告诉运营"这段不会跑":否则配了 model/mode 却看不到增强效果,
+		// 会当成 bug 去查增强模型。
+		add("prompt_enhance", AggregateCheckOK,
+			"提示词增强已关闭:客户原始输入直接进生成段,不调用增强模型、不产生额外延迟与费用")
+	}
 	if m.PromptEnhance.IsEnabled() {
 		enhModel := strings.TrimSpace(m.PromptEnhance.Model)
 

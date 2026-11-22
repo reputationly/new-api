@@ -289,7 +289,7 @@ func compileViaSingleCall(
 		if err != nil {
 			return nil, fmt.Errorf("构造编译请求失败: %w", err)
 		}
-		raw, usage, err := callEnhance(ctx, authHeader, payload)
+		raw, usage, err := callEnhance(ctx, authHeader, payload, in.AggregateName)
 		accumulateUsage(total, usage)
 		if err != nil {
 			// 失败也要把已累计的用量带出去：这些调用真实计过费，

@@ -13,8 +13,11 @@ import (
 	"github.com/QuantumNous/new-api/constant"
 )
 
-// 展开阶段写入的使用日志标签:有超分段真要跑时,生成段那一条标成「生成段」。
-func TestAggregateLabelsMarkGenerateStageOnlyWhenUpscaleRuns(t *testing.T) {
+// 展开阶段写入的使用日志标签:**生成段一律标段名**。
+//
+// 早先只在"超分真要跑"时才标,于是图片/音乐与单段视频的日志只有一个模型名,
+// 客户与运营对着"增强段/生成段/超分段"几行账单时,第一行没有段名只能猜。
+func TestAggregateLabelsAlwaysMarkGenerateStage(t *testing.T) {
 	expandLabels := func(t *testing.T, cfg, body string) map[string]string {
 		t.Helper()
 		withAggregateConfig(t, cfg)
@@ -40,22 +43,20 @@ func TestAggregateLabelsMarkGenerateStageOnlyWhenUpscaleRuns(t *testing.T) {
 		require.Equal(t, "generate", labels["pipeline_stage"])
 	})
 
-	t.Run("客户要的档不高于生成段,超分跳过:不标段", func(t *testing.T) {
+	t.Run("客户要的档不高于生成段,超分跳过:仍然标生成段", func(t *testing.T) {
 		labels := expandLabels(t, `[{"name":"h3-2k","type":"video","enabled":true,
 			"generate":{"model":"minimax-h3","overrides":{"size":"768P"}},
 			"upscale":{"model":"seedvr2","target_size":"2k"}}]`,
 			`{"model":"h3-2k","prompt":"a cat","size":"768P"}`)
 		require.Equal(t, "h3-2k", labels["aggregate_model"])
-		_, hasStage := labels["pipeline_stage"]
-		require.False(t, hasStage, "超分段不会跑,就不该标成生成段")
+		require.Equal(t, "generate", labels["pipeline_stage"], "超分跳过也还是生成段")
 	})
 
-	t.Run("没有超分段的单段聚合:只带聚合名", func(t *testing.T) {
+	t.Run("没有超分段的单段聚合:仍带生成段", func(t *testing.T) {
 		labels := expandLabels(t, `[{"name":"h3-2k","type":"video","enabled":true,
 			"generate":{"model":"minimax-h3","overrides":{"size":"768P"}}}]`,
 			`{"model":"h3-2k","prompt":"a cat","size":"2k"}`)
 		require.Equal(t, "h3-2k", labels["aggregate_model"])
-		_, hasStage := labels["pipeline_stage"]
-		require.False(t, hasStage)
+		require.Equal(t, "generate", labels["pipeline_stage"], "单段聚合同样要标生成段")
 	})
 }

@@ -277,11 +277,13 @@ function renderWithAggregateTag(node, record, t) {
     return node;
   }
   const stage =
-    other.pipeline_stage === 'generate'
-      ? t('生成段')
-      : other.pipeline_stage === 'upscale'
-        ? t('超分段')
-        : '';
+    other.pipeline_stage === 'enhance'
+      ? t('增强段')
+      : other.pipeline_stage === 'generate'
+        ? t('生成段')
+        : other.pipeline_stage === 'upscale'
+          ? t('超分段')
+          : '';
   return (
     <Space vertical align={'start'}>
       {node}

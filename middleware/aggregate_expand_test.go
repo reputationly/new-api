@@ -1548,3 +1548,21 @@ func TestOverridesDurationDoesNotClobberClientValue(t *testing.T) {
 	require.Equal(t, "8", withSeconds["seconds"], "seconds 原样保留")
 	require.Nil(t, withSeconds["duration"], "不该被 overrides 补一个 5")
 }
+
+// 关掉增强时:Enhance 为 nil,但记录里要能看出是"配置关掉"而不是"跑挂了"。
+func TestAggregateMarksEnhanceSkipped(t *testing.T) {
+	withAggregateConfig(t, `[{
+		"name":"h3-2k","type":"video","enabled":true,
+		"generate":{"model":"minimax-h3"},
+		"prompt_enhance":{"enabled":false,"model":"enh","system_prompt":"x"}
+	}]`)
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/videos", strings.NewReader(`{"model":"h3-2k","prompt":"a cat"}`))
+	require.NoError(t, applyAggregateExpansion(c, "h3-2k", "minimax-h3", common.GetAggregateModel("h3-2k")))
+
+	exp := GetAggregateExpansion(c)
+	require.Nil(t, exp.Enhance, "关掉时不该有增强记录")
+	require.True(t, exp.EnhanceSkipped, "要标出跳过")
+	require.True(t, exp.ToTaskAggregateInfo(c).EnhanceSkipped, "落库记录也要带上")
+}
