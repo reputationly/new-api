@@ -48,9 +48,16 @@ const (
 	// 基准短边。引擎 preprocessing.py:37 MINIMAX_H3_OUTPUT_SHORT_EDGE。
 	h3OutputShortEdge = 768
 
-	// full 模式的时长上限(秒):long_video 未开时引擎的上限也是 15。
-	// 超过它就必须带 long_video=true,见 applyMiniMaxH3Request 的长视频开关那段。
-	h3FullModeMaxSec = 15
+	// 标准档的时长上限(秒),与引擎的标准上限对齐。
+	//
+	// 引擎 2026-11-19 把标准档从 15 s 放宽到 20 s(`long_video.py`
+	// `MINIMAX_H3_MAX_STANDARD_SECONDS = 20.0`,实测 20 s = 481 帧 / 437-458 s /
+	// 28-29 GiB 每卡),这里的常量必须跟着抬 —— 否则 16-20 s 会被多打一个
+	// `long_video=true`,虽然功能上无害(那个开关只抬上限),但会让同一档时长的
+	// 请求走进"长视频档"这个名字,排查时误导人。
+	//
+	// 超过它仍按老逻辑补 `long_video=true`(full 档,引擎上限 30 s)。
+	h3FullModeMaxSec = 20
 
 	// t2va 缺省宽高比。取 16:9 不是随手挑的:引擎的 Ref2VA 分支缺省就是它
 	// (_resolve_minimax_h3_aspect_ratio 的注释 "Ref2VA defaults to 16:9"),

@@ -18,7 +18,14 @@ const FACTORY = {
   image: [
     {
       platform_model: 'qwen-image',
-      model: { id: 'qwen-image', name: 'Qwen', backend: 'qwen', type: 'image', display_name: 'Qwen', params: {} },
+      model: {
+        id: 'qwen-image',
+        name: 'Qwen',
+        backend: 'qwen',
+        type: 'image',
+        display_name: 'Qwen',
+        params: {},
+      },
     },
   ],
   video: [
@@ -26,7 +33,14 @@ const FACTORY = {
       // **存的是聚合编排名，而 model.id 是 MiniMax-H3** —— 两者不同,
       // 正是「载入出厂目录」曾经猜错的地方。
       platform_model: 'minimax-h3-2k',
-      model: { id: 'MiniMax-H3', name: 'H3', backend: 'minimax_v3', type: 'video', display_name: 'H3', params: {} },
+      model: {
+        id: 'MiniMax-H3',
+        name: 'H3',
+        backend: 'minimax_v3',
+        type: 'video',
+        display_name: 'H3',
+        params: {},
+      },
     },
   ],
   audio: [],
@@ -40,9 +54,7 @@ const AGG = JSON.stringify([
 const renderPage = async (options) => {
   let utils;
   await act(async () => {
-    utils = render(
-      <SettingsHiloCatalog options={options} refresh={vi.fn()} />,
-    );
+    utils = render(<SettingsHiloCatalog options={options} refresh={vi.fn()} />);
   });
   return utils;
 };
@@ -64,7 +76,9 @@ beforeEach(() => {
   // 一开始就把候选传进去的话，坏掉的写法也能过。
   API.get.mockImplementation((url) => {
     if (url === '/api/models/pricing') {
-      return Promise.resolve({ data: { data: [{ model_name: 'qwen-image' }] } });
+      return Promise.resolve({
+        data: { data: [{ model_name: 'qwen-image' }] },
+      });
     }
     if (url === '/api/option/hilo_catalog_default') {
       return Promise.resolve({ data: { data: JSON.stringify(FACTORY) } });
@@ -133,7 +147,10 @@ describe('空配置 ≠ 空目录', () => {
     const withText = {
       ...FACTORY,
       text: [
-        { platform_model: 'qwen3.8-27b', model: { id: 'qwen3.8-27b', name: 'Qwen3.8 27B' } },
+        {
+          platform_model: 'qwen3.8-27b',
+          model: { id: 'qwen3.8-27b', name: 'Qwen3.8 27B' },
+        },
       ],
     };
     await renderPage({ HiloCatalog: JSON.stringify(withText) });
@@ -152,7 +169,12 @@ describe('空配置 ≠ 空目录', () => {
   it('「编辑原文 JSON」的预填要带上 text', async () => {
     const withText = {
       ...FACTORY,
-      text: [{ platform_model: 'qwen3.8-27b', model: { id: 'qwen3.8-27b', name: 'Q' } }],
+      text: [
+        {
+          platform_model: 'qwen3.8-27b',
+          model: { id: 'qwen3.8-27b', name: 'Q' },
+        },
+      ],
     };
     await renderPage({ HiloCatalog: JSON.stringify(withText) });
     await clickText('编辑原文 JSON');
@@ -169,7 +191,12 @@ describe('空配置 ≠ 空目录', () => {
   it('「载入出厂目录」之后保存，text 要还在', async () => {
     const factoryWithText = {
       ...FACTORY,
-      text: [{ platform_model: 'qwen3.8-27b', model: { id: 'qwen3.8-27b', name: 'Q' } }],
+      text: [
+        {
+          platform_model: 'qwen3.8-27b',
+          model: { id: 'qwen3.8-27b', name: 'Q' },
+        },
+      ],
     };
     API.get.mockImplementation((url) => {
       if (url.includes('hilo_catalog_default')) {
@@ -198,7 +225,12 @@ describe('空配置 ≠ 空目录', () => {
   it('原文里删掉 text 后回到表格，保存不该把它还原', async () => {
     const withText = {
       ...FACTORY,
-      text: [{ platform_model: 'qwen3.8-27b', model: { id: 'qwen3.8-27b', name: 'Q' } }],
+      text: [
+        {
+          platform_model: 'qwen3.8-27b',
+          model: { id: 'qwen3.8-27b', name: 'Q' },
+        },
+      ],
     };
     await renderPage({ HiloCatalog: JSON.stringify(withText) });
     await clickText('编辑原文 JSON');
@@ -209,7 +241,8 @@ describe('空配置 ≠ 空目录', () => {
     delete edited.text;
     await act(async () => {
       const setter = Object.getOwnPropertyDescriptor(
-        window.HTMLTextAreaElement.prototype, 'value',
+        window.HTMLTextAreaElement.prototype,
+        'value',
       ).set;
       setter.call(box, JSON.stringify(edited, null, 2));
       box.dispatchEvent(new Event('input', { bubbles: true }));
@@ -221,7 +254,9 @@ describe('空配置 ≠ 空目录', () => {
     const sent = JSON.parse(API.put.mock.calls[0][1].value);
     // 删掉之后存的是「没有对话模型」（缺键或空数组都算），关键是**不能**
     // 把旧那条还原回来 —— 那才是静默回滚。
-    expect(sent.text ?? [], '管理员刚删掉的 text 又被还原回去了').toHaveLength(0);
+    expect(sent.text ?? [], '管理员刚删掉的 text 又被还原回去了').toHaveLength(
+      0,
+    );
   });
 
   it('有内容时正常保存', async () => {
@@ -294,7 +329,14 @@ describe('表格行', () => {
         FACTORY.image[0],
         {
           platform_model: 'qwen-image-edit',
-          model: { id: 'qwen-image-edit', name: 'E', backend: 'qwen', type: 'image', display_name: 'E', params: {} },
+          model: {
+            id: 'qwen-image-edit',
+            name: 'E',
+            backend: 'qwen',
+            type: 'image',
+            display_name: 'E',
+            params: {},
+          },
         },
       ],
     };
@@ -335,7 +377,10 @@ describe('对话模型', () => {
   const WITH_TEXT = {
     ...FACTORY,
     text: [
-      { platform_model: 'qwen3.8-27b', model: { id: 'qwen3.8-27b', name: 'Qwen3.8 27B', supportsVideo: true } },
+      {
+        platform_model: 'qwen3.8-27b',
+        model: { id: 'qwen3.8-27b', name: 'Qwen3.8 27B', supportsVideo: true },
+      },
       { platform_model: 'GPT-5.4', model: { id: 'GPT-5.4', name: 'GPT-5.4' } },
     ],
   };
@@ -345,11 +390,16 @@ describe('对话模型', () => {
 
     expect(screen.getByText('对话'), '没有对话分组').toBeTruthy();
     // 显示名渲染在 <input value> 里，不是文本节点
-    const names = [...document.querySelectorAll('input.semi-input')].map((i) => i.value);
+    const names = [...document.querySelectorAll('input.semi-input')].map(
+      (i) => i.value,
+    );
     expect(names, '对话模型没渲染出来').toContain('Qwen3.8 27B');
     expect(names).toContain('GPT-5.4');
     // 模型 ID 是文本节点
-    expect(screen.getAllByText('qwen3.8-27b').length, '模型 ID 没显示').toBeGreaterThan(0);
+    expect(
+      screen.getAllByText('qwen3.8-27b').length,
+      '模型 ID 没显示',
+    ).toBeGreaterThan(0);
     // 2 图/视 + 2 对话 = 4；早先总数只数媒体，和客户端实际拿到的对不上
     expect(screen.getByText(/共 4 个模型/)).toBeTruthy();
   });
@@ -368,8 +418,44 @@ describe('对话模型', () => {
     const added = sent.text[sent.text.length - 1];
     expect(sent.text).toHaveLength(3);
     for (const k of ['backend', 'params', 'tool_names', 'type']) {
-      expect(added.model, `新增的对话模型带上了 ${k}，整份目录会被拒`).not.toHaveProperty(k);
+      expect(
+        added.model,
+        `新增的对话模型带上了 ${k}，整份目录会被拒`,
+      ).not.toHaveProperty(k);
     }
+  });
+
+  // 「能读图片」是对话模型独有的开关（对应 dto.HiloTextModel.supportsImage）：
+  // 它决定客户端会不会把用户上传的图喂给这个模型。存储层漏写的话开关点了不生效，
+  // 而界面看起来一切正常。
+  it('能读图片的开关能存下去', async () => {
+    await renderPage({ HiloCatalog: JSON.stringify(WITH_TEXT) });
+
+    // 显示名在 <input value> 里，不在文本节点上，所以按 input 的值找行。
+    const row = [...document.querySelectorAll('.semi-table-row')].find(
+      (r) => r.querySelector('input.semi-input')?.value === 'Qwen3.8 27B',
+    );
+    expect(row, '没找到对话模型那一行').toBeTruthy();
+    const switches = row.querySelectorAll('.semi-switch');
+    // 对话模型行有两个开关：能读视频、能读图片（图片是后加的那个）
+    expect(switches.length, '对话模型应有「能读视频 / 能读图片」两个开关').toBe(
+      2,
+    );
+    // Semi 的 Switch 是「外层 div + 原生 checkbox」，点外层 div 不会触发 onChange，
+    // 要点里面那个 role="switch" 的 input。
+    await act(async () =>
+      switches[1].querySelector('input[role="switch"]').click(),
+    );
+    await clickText('保存');
+
+    const sent = JSON.parse(API.put.mock.calls[0][1].value);
+    expect(sent.text[0].model.supportsImage, 'supportsImage 没存下去').toBe(
+      true,
+    );
+    expect(
+      sent.text[1].model.supportsImage ?? false,
+      '另一条被带成了 true',
+    ).toBe(false);
   });
 
   // 渲染出来之后它就不再是 passthrough 的一部分了（pickPassthrough 按
@@ -377,12 +463,14 @@ describe('对话模型', () => {
   it('改显示名能存下去', async () => {
     await renderPage({ HiloCatalog: JSON.stringify(WITH_TEXT) });
 
-    const box = [...document.querySelectorAll('input.semi-input')]
-      .find((i) => i.value === 'Qwen3.8 27B');
+    const box = [...document.querySelectorAll('input.semi-input')].find(
+      (i) => i.value === 'Qwen3.8 27B',
+    );
     expect(box, '对话模型的显示名不可编辑').toBeTruthy();
     await act(async () => {
       const setter = Object.getOwnPropertyDescriptor(
-        window.HTMLInputElement.prototype, 'value',
+        window.HTMLInputElement.prototype,
+        'value',
       ).set;
       setter.call(box, '通义 27B');
       box.dispatchEvent(new Event('input', { bubbles: true }));

@@ -5,6 +5,7 @@ import (
 	"context"
 	"database/sql/driver"
 	"encoding/json"
+	"strconv"
 	"strings"
 	"time"
 
@@ -181,6 +182,16 @@ type Properties struct {
 	// 只为排查留档，不参与任何筛选、也不在任务日志里展示——对用户来说
 	// 「我调 API 出了图，日志里有一条已完成的图片任务」，走同步还是异步是网关内部的事。
 	SyncMode bool `json:"sync_mode,omitempty"`
+	// Continuation 是续写(video-extension)的预处理快照：源片多长、生成段请求多少秒、
+	// 客户要的最终总时长。交付物是"源片 + 生成段"拼起来的整段，所以这三个数缺一不可
+	// —— 回显要它、对账要它、排障("为什么只出了一半")也要它。
+	Continuation *ContinuationProperties `json:"continuation,omitempty"`
+	// H3 是 MiniMax H3 的时长快照。H3 的交付帧数按 17n+5 栅格向上吸附（请求 1 s
+	// 实际出 1.625 s），所以"客户付的时长"与"产物的时长"不是一个数，两者都要留档：
+	// 响应用它回显真实交付时长，对账用它解释"为什么账单比请求多/少"。
+	//
+	// 放 Properties（json 列，加字段无迁移）：只在 H3 引擎族的任务上写，其它任务是 nil。
+	H3 *H3Properties `json:"h3,omitempty"`
 	// QueueAhead / EstimatedStartSeconds 排队回显，与上面几个「提交时冻结」的字段不同，
 	// 它们每轮轮询都会被覆盖：还要等几次生成、大约多少秒。任务进终态时由轮询侧清空。
 	//
@@ -189,6 +200,38 @@ type Properties struct {
 	// 指针类型区分 0（下一个就是我）与 nil（说不准），见 gpustackplus.statusResponse。
 	QueueAhead            *int `json:"queue_ahead,omitempty"`
 	EstimatedStartSeconds *int `json:"estimated_start_seconds,omitempty"`
+}
+
+// ContinuationProperties 续写(源片 + 生成段拼接)的快照。
+type ContinuationProperties struct {
+	// SourceRef 客户端给的源片引用(task:<id> / URL / data:)，排障时对得上"他到底传了什么"。
+	SourceRef string `json:"source_ref,omitempty"`
+	// SourceSeconds 源片时长(ffprobe 实测，非客户端声称)。
+	SourceSeconds float64 `json:"source_seconds,omitempty"`
+	// GenerateSeconds 生成段请求秒数 = ceil(总时长) − ceil(源时长)。
+	GenerateSeconds int `json:"generate_seconds,omitempty"`
+	// TotalSeconds 客户要的最终总时长(官方 duration 语义)。
+	TotalSeconds int `json:"total_seconds,omitempty"`
+	// FirstFrameBytes 首帧 data URI 的字节数，只用于排障(不回显内容)。
+	FirstFrameBytes int `json:"first_frame_bytes,omitempty"`
+	// ConcatDone 生成段是否已经拼回源片、作为整段交付。
+	// 轮询重试会重复进入拼接分支，靠它(last)与产物文件(兜底)双重幂等。
+	ConcatDone bool `json:"concat_done,omitempty"`
+	// MergedPath 拼接产物在共享存储上的路径(排障用；对外只给签名 URL)。
+	MergedPath string `json:"merged_path,omitempty"`
+	// ConcatError 拼接失败的原因。失败**不判任务失败**：生成段已经烧了 GPU，
+	// 降级交付生成段，把原因记在这里 —— 客户端能从 metadata.continuation 看到。
+	ConcatError string `json:"concat_error,omitempty"`
+}
+
+// H3Properties MiniMax H3 的时长快照（见 Properties.H3 的说明）。
+type H3Properties struct {
+	// RequestedSeconds 客户请求的秒数（整数）。空/0 = 他没指定，走引擎默认档。
+	RequestedSeconds int `json:"requested_seconds,omitempty"`
+	// DeliveredSeconds 按 17n+5 栅格吸附后的真实交付秒数（如 1 s → 1.625）。
+	DeliveredSeconds float64 `json:"delivered_seconds,omitempty"`
+	// Frames 对齐后的帧数，排障时与引擎侧的数字对得上。
+	Frames int `json:"frames,omitempty"`
 }
 
 // MiniMaxV2Properties 冻结 v2 查询接口要回显的请求维度与用量。
@@ -514,6 +557,10 @@ type TaskVideoBilling struct {
 	Resolution    string  `json:"resolution,omitempty"`
 	Seconds       int     `json:"seconds,omitempty"`
 	HasVideoInput bool    `json:"has_video_input,omitempty"`
+	// DeliveredSeconds 真实交付秒数（仅 H3 这类有帧栅格的引擎族填写）。
+	// 与 Seconds（请求值）分开存：按秒计价的模型要用它算钱，而 per_call 的列名
+	// 仍然是整数秒的请求档位。0 = 该引擎族没有栅格偏差，等价于 Seconds。
+	DeliveredSeconds float64 `json:"delivered_seconds,omitempty"`
 }
 
 // GetUpstreamTaskID 获取上游真实 task ID（用于与 provider 通信）
@@ -1066,6 +1113,33 @@ func (t *Task) ToOpenAIVideo() *dto.OpenAIVideo {
 	}
 	// obs:// 占位符 → 实时签名 URL（§5.4）；非 obs 引用原样返回。
 	openAIVideo.SetMetadata("url", mediastore.ResolveResultURL(context.Background(), t.GetResultURL()))
+	// H3 这类带帧栅格的引擎：交付时长 ≠ 请求时长（1 s 实际出 1.625 s）。
+	// `seconds` 保持 OpenAI 的整数语义（客户买的就是它），真实值放 metadata ——
+	// 加字段对存量客户端安全，而把 `seconds` 改成 "1.625" 会让按整数解析的客户端炸。
+	// 续写：交付的是"源片 + 生成段"整段，客户端要知道自己拿到的是拼好的片子。
+	// 只回三个数，不回源片引用（可能带签名、也可能是 data URI）。
+	if c := t.Properties.Continuation; c != nil {
+		meta := map[string]any{
+			"source_seconds":   c.SourceSeconds,
+			"generate_seconds": c.GenerateSeconds,
+			"total_seconds":    c.TotalSeconds,
+			"concat_done":      c.ConcatDone,
+		}
+		if c.ConcatError != "" {
+			meta["concat_error"] = c.ConcatError
+		}
+		openAIVideo.SetMetadata("continuation", meta)
+	}
+	if h3 := t.Properties.H3; h3 != nil && h3.DeliveredSeconds > 0 {
+		if strings.TrimSpace(openAIVideo.Seconds) == "" && h3.RequestedSeconds > 0 {
+			openAIVideo.Seconds = strconv.Itoa(h3.RequestedSeconds)
+		}
+		openAIVideo.SetMetadata("duration_seconds", h3.DeliveredSeconds)
+		openAIVideo.SetMetadata("frames", h3.Frames)
+		if h3.RequestedSeconds > 0 {
+			openAIVideo.SetMetadata("requested_seconds", h3.RequestedSeconds)
+		}
+	}
 	if t.PrivateData.ScoreABC != "" {
 		openAIVideo.SetMetadata("score_abc", t.PrivateData.ScoreABC)
 	}

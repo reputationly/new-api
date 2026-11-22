@@ -41,11 +41,30 @@ const { Text } = Typography;
 
 /** 官方 backendSchema 的全部枚举值。写一个不在里面的，客户端会拒掉**整份目录**。 */
 const BACKENDS = [
-  'nano_banana', 'kling', 'kontext', 'openai', 'midjourney', 'seedream',
-  'qwen', 'minimax', 'minimax_v3', 'veo3', 'wan_i2v', 'minimax_tts',
-  'seedaudio', 'minimax_music', 'minimax_music_cover', 'elevenlabs_music',
-  'seedance', 'kling_avatar', 'kling_motion_control', 'jimeng_motion_control',
-  'text_anthropic', 'text_openai', 'text_gemini', 'mediakit_enhance',
+  'nano_banana',
+  'kling',
+  'kontext',
+  'openai',
+  'midjourney',
+  'seedream',
+  'qwen',
+  'minimax',
+  'minimax_v3',
+  'veo3',
+  'wan_i2v',
+  'minimax_tts',
+  'seedaudio',
+  'minimax_music',
+  'minimax_music_cover',
+  'elevenlabs_music',
+  'seedance',
+  'kling_avatar',
+  'kling_motion_control',
+  'jimeng_motion_control',
+  'text_anthropic',
+  'text_openai',
+  'text_gemini',
+  'mediakit_enhance',
   'mediakit_erase_subtitle',
 ];
 
@@ -226,7 +245,10 @@ const SettingsHiloCatalog = (props) => {
   };
 
   const removeRow = (group, index) => {
-    const next = { ...catalog, [group]: catalog[group].filter((_, i) => i !== index) };
+    const next = {
+      ...catalog,
+      [group]: catalog[group].filter((_, i) => i !== index),
+    };
     mutate(next);
   };
 
@@ -265,7 +287,15 @@ const SettingsHiloCatalog = (props) => {
         ...catalog,
         text: [
           ...(catalog.text ?? []),
-          { platform_model: '', model: { id: '', name: '', supportsVideo: false } },
+          {
+            platform_model: '',
+            model: {
+              id: '',
+              name: '',
+              supportsVideo: false,
+              supportsImage: false,
+            },
+          },
         ],
       });
       return;
@@ -278,10 +308,20 @@ const SettingsHiloCatalog = (props) => {
         {
           platform_model: '',
           model: {
-            id: '', name: '', backend: '', type,
-            display_name: '', description: '', visibility: '', icon_url: '',
-            tool_names: [`hub_generate_${group === 'audio' ? 'audio_music' : group}`],
-            hot: false, max_refs: 0, params: {},
+            id: '',
+            name: '',
+            backend: '',
+            type,
+            display_name: '',
+            description: '',
+            visibility: '',
+            icon_url: '',
+            tool_names: [
+              `hub_generate_${group === 'audio' ? 'audio_music' : group}`,
+            ],
+            hot: false,
+            max_refs: 0,
+            params: {},
           },
         },
       ],
@@ -403,6 +443,26 @@ const SettingsHiloCatalog = (props) => {
       ),
     },
     {
+      title: (
+        <Tooltip
+          content={t(
+            '报了 true 之后客户端才会允许给它发图。没实测验证过的一律留 false——' +
+              '读不了图的模型不会报错，只会编一段听起来合理的描述。',
+          )}
+        >
+          <span>{t('能读图片')} ⓘ</span>
+        </Tooltip>
+      ),
+      width: 110,
+      render: (_v, r, index) => (
+        <Switch
+          size='small'
+          checked={!!r.model?.supportsImage}
+          onChange={(val) => patchModel('text', index, { supportsImage: val })}
+        />
+      ),
+    },
+    {
       title: t('操作'),
       width: 130,
       render: (_v, r, index) => (
@@ -456,7 +516,9 @@ const SettingsHiloCatalog = (props) => {
     },
     {
       title: (
-        <Tooltip content={t('客户端往哪条路径发、发什么字段，由它决定。不是标签。')}>
+        <Tooltip
+          content={t('客户端往哪条路径发、发什么字段，由它决定。不是标签。')}
+        >
           <span>{t('backend')} ⓘ</span>
         </Tooltip>
       ),
@@ -618,7 +680,9 @@ const SettingsHiloCatalog = (props) => {
                     setCatalog(catalogFromParsed(parsed));
                     setRawMode(false);
                   } catch (e) {
-                    showError(t('JSON 还有语法错误，改好才能切回表格：') + e.message);
+                    showError(
+                      t('JSON 还有语法错误，改好才能切回表格：') + e.message,
+                    );
                   }
                 }}
               >
@@ -640,7 +704,11 @@ const SettingsHiloCatalog = (props) => {
                 }}
               >
                 <Text strong>{t(g.label)}</Text>
-                <Button size='small' theme='light' onClick={() => addRow(g.key)}>
+                <Button
+                  size='small'
+                  theme='light'
+                  onClick={() => addRow(g.key)}
+                >
                   {t('+ 上架模型')}
                 </Button>
               </div>
@@ -658,7 +726,7 @@ const SettingsHiloCatalog = (props) => {
                   ...r,
                   __rowKey: `${g.key}-${i}`,
                 }))}
-                rowKey='__rowKey' 
+                rowKey='__rowKey'
                 empty={<Empty description={t('这一类还没有上架模型')} />}
               />
             </div>

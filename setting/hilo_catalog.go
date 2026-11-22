@@ -361,12 +361,13 @@ func hiloSelect(label string, options []string, def string) dto.HiloModelParam {
 
 // defaultHiloCatalog 出厂默认目录。
 //
-// **结构抄官方，取值用引擎实际收下的范围。** H3 时长上限是 15 秒
-// （引擎报错原文 `must be in [4, 15]`）。目录若停在 10 秒，界面会少一截。
+// **结构抄官方，取值用引擎实际收下的范围。** H3 的时长窗口是 1–20 秒
+// （引擎 2026-11-19 从 [4, 15] 放宽；交付时长按 17n+5 帧栅格向上吸附）。
+// 目录若停在旧窗口，界面会少一截，而引擎其实能出。
 //
 // 官方的真实响应存在 `ovaijisuandesign/reference/hilo/` 下，用来对照升级。
 func defaultHiloCatalog() HiloCatalog {
-	imageRatios := []string{"adaptive", "1:1", "16:9", "9:16", "4:3", "3:4", "3:2", "2:3"}
+	imageRatios := []string{"adaptive", "1:1", "16:9", "9:16", "4:3", "3:4", "3:2", "2:3", "21:9", "5:4", "4:5"}
 	// 引擎(Pika H3)支持的 11 个比例，取自它在 preprocessing.py:73-85 里的白名单，
 	// 与官方 Pika-H3-Flex 的 buckets.yaml 逐项一致。原来的 6 个之外还有 3:2 / 5:4 / 4:5 /
 	// 2:3 / 9:21 —— 少一个的话客户端下拉里就没有它，用户选不到、也发现不了我们其实支持。
@@ -375,33 +376,22 @@ func defaultHiloCatalog() HiloCatalog {
 	return HiloCatalog{
 		Image: []HiloCatalogEntry{
 			{
-				PlatformModel: "qwen-image",
+				// MiniMax H3 图像：文生图与图生图共用同一个模型（不带底图=文生图，
+				// 带底图=图生图，最多 4 张）。qwen-image / qwen-image-edit 已下线。
+				PlatformModel: "minimax-h3-image",
 				Model: dto.HiloMediaModel{
-					ID: "qwen-image", Name: "Qwen Image", Backend: "qwen",
-					ModelName: "qwen-image", Type: "image",
-					DisplayName: "Qwen Image", SeriesID: "Qwen", MentionName: "qwen-image",
-					ToolNames: []string{"hub_generate_image"}, MaxRefs: 0,
-					Params: map[string]dto.HiloModelParam{
-						"aspect_ratio": hiloSelect("宽高比", imageRatios, "adaptive"),
-						// 1K/2K 是我们 `resolve_size` 认识的两档；给 4K 会落进
-						// 兜底，出图尺寸和界面显示对不上。
-						"resolution": hiloSelect("分辨率", []string{"1K", "2K"}, "1K"),
-					},
-				},
-			},
-			{
-				PlatformModel: "qwen-image-edit",
-				Model: dto.HiloMediaModel{
-					ID: "qwen-image-edit", Name: "Qwen Image Edit", Backend: "qwen",
-					ModelName: "qwen-image-edit", Type: "image",
-					DisplayName: "Qwen 图像编辑", SeriesID: "Qwen", MentionName: "qwen-image-edit",
+					ID: "MiniMax-H3-Image", Name: "MiniMax H3 图像", Backend: "minimax",
+					ModelName: "minimax-h3-image", Type: "image",
+					DisplayName: "MiniMax H3 图像（文生图 / 图生图）",
+					Description: "文生图与图生图共用同一个模型：不带底图是文生图，带底图（最多 4 张）是图生图。",
+					SeriesID:    "MiniMax", MentionName: "MiniMax-H3-Image",
 					ToolNames: []string{"hub_generate_image"},
-					// 图生图要收底图。**必须大于 0** —— 为 0 的话界面不给拖图
-					// 进来，这个模型就退化成文生图了，而且不报错。
+					// 图生图要收底图，**必须大于 0**：为 0 时界面不给拖图进来，
+					// 这个模型会退化成文生图且不报错。
 					MaxRefs: 4,
 					Params: map[string]dto.HiloModelParam{
-						// 图生图的画幅由底图决定，只留分辨率。
-						"resolution": hiloSelect("分辨率", []string{"1K", "2K"}, "1K"),
+						"aspect_ratio": hiloSelect("宽高比", imageRatios, "adaptive"),
+						"resolution":   hiloSelect("分辨率", []string{"1K", "2K"}, "2K"),
 					},
 				},
 			},
@@ -436,6 +426,13 @@ func defaultHiloCatalog() HiloCatalog {
 				ModeModels: map[string]string{
 					"reference":        "minimax-h3-ref-2k",
 					"first-last-frame": "minimax-h3-2k",
+					// 文生视频没有参考素材，仍落在帧族的 checkpoint 上。
+					"text-to-video": "minimax-h3-2k",
+					// 续写（video-extension）在提交期被改写成一次 i2v（源片末帧当首帧），
+					// 生成段仍是帧族的 checkpoint —— 这里映射过去只是让"按玩法取平台模型"
+					// 的调用方拿到一个真实存在的名字，真正的改写在中
+					// middleware.ContinuationConvert。
+					"video-extension": "minimax-h3-2k",
 				},
 				Model: dto.HiloMediaModel{
 					ID: "MiniMax-H3", Name: "MiniMax H3", Backend: "minimax_v3",
@@ -445,7 +442,11 @@ func defaultHiloCatalog() HiloCatalog {
 					MaxRefs:   9, PromptMaxLength: 7000,
 					Params: map[string]dto.HiloModelParam{
 						"image_mode": hiloSelect("生成方式",
-							[]string{"reference", "first-last-frame"}, "reference"),
+							[]string{"reference", "first-last-frame", "text-to-video", "video-extension"}, "reference"),
+						// **对外仍是官方的 4–15。** 引擎与网关底层已放宽到 1–20（见
+						// common/h3_duration.go 与 minimaxv2 的窗口），但面板跟官方保持一致 ——
+						// 能力面靠"能不能调通"体现，不靠把下拉撑到 20 档。
+						// 需要 1–3 / 16–20 的客户直接调 API（网关接受），不在面板上引导。
 						"duration": hiloSelect("时长", []string{"4", "5", "6", "7", "8", "9", "10", "11", "12", "13", "14", "15"}, "5"),
 						"ratio":    hiloSelect("宽高比", videoRatios, "adaptive"),
 						// 768P 停在生成段，2K 才跑超分。依据是 upscaleSkipReason：
@@ -493,14 +494,20 @@ func defaultHiloCatalog() HiloCatalog {
 				},
 			},
 			{
-				PlatformModel: "indextts-2.5",
+				// ACE-Step：描述式提示词 + 可选歌词。index-tts 2.5 已下线，语音走独立通道。
+				PlatformModel: "ace-step",
 				Model: dto.HiloMediaModel{
-					ID: "speech-2.5", Name: "Speech 2.5", Backend: "minimax_tts",
-					ModelName: "indextts-2.5", Type: "audio",
-					DisplayName: "语音合成", SeriesID: "IndexTTS", MentionName: "speech-2.5",
-					ToolNames: []string{"hub_generate_speech"}, MaxRefs: 0,
-					PromptLabel: "text", PromptMaxLength: 10000,
-					Params: map[string]dto.HiloModelParam{},
+					ID: "ACE-Step", Name: "ACE-Step", Backend: "minimax_music",
+					ModelName: "ace-step", Type: "audio",
+					DisplayName: "ACE-Step 文生音乐",
+					Description: "描述式提示词生成音乐，可另附歌词。",
+					SeriesID:    "ACE-Step", MentionName: "ACE-Step",
+					ToolNames: []string{"hub_generate_audio_music"}, MaxRefs: 0,
+					PromptLabel: "musicStyle",
+					Params: map[string]dto.HiloModelParam{
+						"is_instrumental": hiloSelect("纯器乐", []string{"true", "false"}, "false"),
+						"lyrics":          {Type: "textarea", Label: "歌词", Default: "", Optional: true},
+					},
 				},
 			},
 		},

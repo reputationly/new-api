@@ -54,11 +54,18 @@ const (
 	resolution2K   = "2K"
 )
 
-// 官方 duration 是 4–15 的整数。官方把 17n+5 帧对齐藏了起来,我们也照藏(回显请求值),
-// 只是实际产物会多出 ≤0.083 秒。
+// duration 的可用窗口:1–20 秒。
+//
+// 官方的旧窗口是 4–15,但引擎在 2026-11-19 把标准档放宽到 [1, 20](分支
+// feat/h3-duration-window-1-20),门面与体验区都已跟到 1–20。**兼容层不能比网关更窄** ——
+// 客户端(MiniMax Design 的自定义供应商走的就是这套 /v2 协议)拿目录里的 1–20 去提交,
+// 这里若还按 4–15 拦,1–3 与 16–20 会被我们自己拒掉,报的却是"官方参数不合法"。
+//
+// 17n+5 帧对齐照旧对客户端隐藏(回显请求值),实际产物最多多 0.083 秒,
+// 见 common/h3_duration.go。
 const (
-	minDurationSec = 4
-	maxDurationSec = 15
+	minDurationSec = 1
+	maxDurationSec = 20
 )
 
 // 官方媒体数量上限。引擎侧还有一道总数 ≤12 的闸(gpustackplus 的 maxR2VARefTotal),
@@ -123,7 +130,7 @@ func ConvertCreateRequest(raw []byte) (map[string]any, *Snapshot, *APIError) {
 
 	taskType, images := parsed.resolveTaskType()
 
-	resolution, apiErr := resolveResolution(req.Resolution, taskType)
+	resolution, apiErr := resolveResolution(req.Resolution, taskType, model)
 	if apiErr != nil {
 		return nil, nil, apiErr
 	}
@@ -329,14 +336,21 @@ func mediaURL(index int, contentType string, ref *MediaRef) (string, *APIError) 
 }
 
 // resolveResolution 校验并归一分辨率档。
-func resolveResolution(raw, taskType string) (string, *APIError) {
+func resolveResolution(raw, taskType, model string) (string, *APIError) {
 	res := strings.ToUpper(strings.TrimSpace(raw))
 	if res == "" {
 		return "", badRequest("invalid params: resolution is required")
 	}
 	switch res {
 	case resolution2K:
-		return "", badRequest("resolution=2K is not supported by this gateway: the self-hosted MiniMax-H3 deployment tops out at 768P (2K depends on the closed-source H3-Regenerate-2K model)")
+		// 2K 不是裸引擎的能力（它只出 768P），但**聚合流水线能给**：生成段 768P →
+		// RelayVSR 超分到 2K。判据只能是"客户端点的这个名字后面有没有超分段" ——
+		// 硬拒会让 MiniMax Design 这类默认就选 2K 的客户端一进来就 400，
+		// 而它点的正是我们为 2K 配好的聚合模型。
+		if aggregateDelivers2K(model) {
+			return res, nil
+		}
+		return "", badRequest("resolution=2K is not supported by this gateway: the self-hosted MiniMax-H3 deployment tops out at 768P (2K depends on the closed-source H3-Regenerate-2K model); use a 2K aggregate model such as minimax-h3-2k / minimax-h3-ref-2k")
 	case resolution768P:
 		return res, nil
 	case resolution480P:
@@ -403,4 +417,16 @@ func toAnySlice(in []string) []any {
 		out = append(out, v)
 	}
 	return out
+}
+
+// aggregateDelivers2K 该模型名的聚合流水线是否交付 2K。
+//
+// 只看模型名背后的聚合配置，不看引擎 —— 引擎永远只出 768P，2K 是超分段挣来的。
+func aggregateDelivers2K(model string) bool {
+	agg := common.GetAggregateModel(strings.TrimSpace(model))
+	if agg == nil || agg.Upscale == nil {
+		return false
+	}
+	target := strings.ToLower(agg.Upscale.Target + " " + agg.Upscale.DeliveredSize)
+	return strings.Contains(target, "2k")
 }

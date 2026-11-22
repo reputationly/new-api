@@ -48,7 +48,10 @@ func TestDefaultAggregateModelConfigParses(t *testing.T) {
 func hasBuiltinEnhanceTemplate(generateModel string) bool {
 	m := strings.ToLower(strings.TrimSpace(generateModel))
 	return strings.Contains(m, "h3") || strings.Contains(m, "hailuo") ||
-		strings.Contains(m, "music3")
+		strings.Contains(m, "music3") ||
+		// ACE-Step 也已在 service 侧有专属模板（aggregate_enhance_music_acestep.go），
+		// 判据是运营声明的引擎族；这里只能镜像名字这一半。
+		strings.Contains(m, "ace-step")
 }
 
 func TestDefaultAggregateShipsNoEnhanceStageUntilTemplatesInherit(t *testing.T) {

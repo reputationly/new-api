@@ -53,11 +53,11 @@ func withAggregateConfig(t *testing.T, raw string) {
 func TestBuildReportsEveryModality(t *testing.T) {
 	withAggregateConfig(t, common.DefaultAggregateModelConfig)
 	// 只给**裸模型**：聚合模型没有渠道 ability，永远不在这个集合里
-	// （`qwen-image-pro-enhanced` 这类名字靠分段可用性判定，见 Scope.callable）。
+	// （`minimax-h3-image-enhanced` 这类名字靠分段可用性判定，见 Scope.callable）。
 	enabled := map[string]bool{
-		"qwen-image": true, "qwen-image-edit": true, "qwen-image-pro": true,
+		"minimax-h3-image": true,
 		"minimax-h3-fl2va": true, "minimax-h3-ref2va": true, "relayvsr": true,
-		"minimax-music3": true, "indextts-2.5": true,
+		"minimax-music3": true, "ace-step": true,
 	}
 	capabilities := Build(Scope{Enabled: enabled})
 
@@ -65,7 +65,8 @@ func TestBuildReportsEveryModality(t *testing.T) {
 	for _, capability := range capabilities {
 		byOperation[capability.Operation] = append(byOperation[capability.Operation], capability)
 	}
-	for _, operation := range []string{OperationGenerateImage, OperationGenerateVideo, OperationGenerateSpeech, OperationGenerateMusic} {
+	// 语音（index-tts 2.5）已下线，出厂目录里不再有语音条目。
+	for _, operation := range []string{OperationGenerateImage, OperationGenerateVideo, OperationGenerateMusic} {
 		if len(byOperation[operation]) == 0 {
 			t.Fatalf("缺少 %s 的能力，实际：%+v", operation, byOperation)
 		}
@@ -73,7 +74,7 @@ func TestBuildReportsEveryModality(t *testing.T) {
 
 	// 聚合模型必须报出来 —— 客户端预设用的就是它，而它不在 /v1/models 里。
 	image := modelsOf(byOperation[OperationGenerateImage])
-	for _, want := range []string{"qwen-image-pro-enhanced", "qwen-image", "qwen-image-edit"} {
+	for _, want := range []string{"minimax-h3-image", "minimax-h3-image-enhanced"} {
 		if !image[want] {
 			t.Errorf("图片能力缺少 %s，实际 %v", want, image)
 		}
@@ -91,7 +92,8 @@ func TestBuildReportsEveryModality(t *testing.T) {
 func TestBuildMarksOneDefaultPerOperation(t *testing.T) {
 	withAggregateConfig(t, common.DefaultAggregateModelConfig)
 	capabilities := Build(Scope{Enabled: map[string]bool{
-		"qwen-image": true, "qwen-image-pro": true, "minimax-h3-fl2va": true, "relayvsr": true,
+		"minimax-h3-image": true, "minimax-h3-fl2va": true, "minimax-h3-ref2va": true,
+		"relayvsr": true, "minimax-music3": true, "ace-step": true,
 	}})
 	defaults := map[string]int{}
 	for _, capability := range capabilities {
@@ -110,13 +112,13 @@ func TestBuildMarksOneDefaultPerOperation(t *testing.T) {
 func TestBuildHonoursTokenAllowList(t *testing.T) {
 	withAggregateConfig(t, common.DefaultAggregateModelConfig)
 	capabilities := Build(Scope{
-		Enabled:      map[string]bool{"qwen-image": true, "qwen-image-pro": true, "minimax-h3-fl2va": true, "relayvsr": true},
-		TokenAllowed: map[string]bool{"qwen-image-pro-enhanced": true},
+		Enabled:      map[string]bool{"minimax-h3-image": true, "minimax-h3-fl2va": true, "relayvsr": true},
+		TokenAllowed: map[string]bool{"minimax-h3-image-enhanced": true},
 	})
 	if len(capabilities) != 1 {
 		t.Fatalf("期望只报 1 条，实际 %d 条：%+v", len(capabilities), capabilities)
 	}
-	if capabilities[0].Model != "qwen-image-pro-enhanced" {
+	if capabilities[0].Model != "minimax-h3-image-enhanced" {
 		t.Errorf("报出的是 %s", capabilities[0].Model)
 	}
 }
@@ -166,13 +168,13 @@ func TestBuildHonoursAggregateGroups(t *testing.T) {
 // 版本号必须只跟内容有关：同样的输入两次一样，内容变了就变。
 func TestVersionIsStableAndContentSensitive(t *testing.T) {
 	withAggregateConfig(t, common.DefaultAggregateModelConfig)
-	enabled := map[string]bool{"qwen-image": true, "indextts-2.5": true}
+	enabled := map[string]bool{"minimax-h3-image": true, "ace-step": true}
 	first := Version(Build(Scope{Enabled: enabled}))
 	second := Version(Build(Scope{Enabled: enabled}))
 	if first == "" || first != second {
 		t.Fatalf("同样输入版本不一致：%q / %q", first, second)
 	}
-	more := map[string]bool{"qwen-image": true, "indextts-2.5": true, "minimax-music3": true}
+	more := map[string]bool{"minimax-h3-image": true, "ace-step": true, "minimax-music3": true}
 	if Version(Build(Scope{Enabled: more})) == first {
 		t.Fatalf("多了一条能力，版本没变")
 	}
@@ -212,7 +214,7 @@ func TestParamSchemaCarriesEnumsAndDefaults(t *testing.T) {
 	if duration["default"] != "5" {
 		t.Errorf("duration 默认值是 %v", duration["default"])
 	}
-	// 时长上限取档位最大值，不是写死的 10。
+	// 时长上限取档位最大值。面板对外是官方的 4–15（底层 1–20 是能力，不上面板）。
 	if video.Limits.MaxDurationSeconds != 15 {
 		t.Errorf("maxDurationSeconds = %d，期望 15（目录档位最大值）", video.Limits.MaxDurationSeconds)
 	}

@@ -37,11 +37,11 @@ func TestOvCapabilitiesEndToEnd(t *testing.T) {
 
 	// 只给"裸模型"建 ability —— 聚合模型本来就不在 abilities 表里。
 	for _, name := range []string{
-		"qwen-image-pro", "qwen-image", "qwen-image-edit",
+		"minimax-h3-image", "ace-step",
 		// 超分段是 relayvsr(出厂聚合配置就是这么写的):能力目录按「每一段都有渠道」
 		// 判定聚合模型是否可用,这里少一条,整条流水线就会在目录里消失。
 		"minimax-h3-fl2va", "minimax-h3-ref2va", "relayvsr",
-		"minimax-music3", "indextts-2.5",
+		"minimax-music3",
 	} {
 		require.NoError(t, db.Create(&model.Ability{Group: "default", Model: name, ChannelId: 1, Enabled: true}).Error)
 	}
@@ -55,11 +55,13 @@ func TestOvCapabilitiesEndToEnd(t *testing.T) {
 		for _, capability := range body.Capabilities {
 			models[capability.Model] = capability.Operation
 		}
-		require.Equal(t, ovcaps.OperationGenerateImage, models["qwen-image-pro-enhanced"])
+		require.Equal(t, ovcaps.OperationGenerateImage, models["minimax-h3-image"])
+		require.Equal(t, ovcaps.OperationGenerateImage, models["minimax-h3-image-enhanced"])
 		require.Equal(t, ovcaps.OperationGenerateVideo, models["minimax-h3-2k"])
 		require.Equal(t, ovcaps.OperationGenerateVideo, models["minimax-h3-ref-2k"])
-		require.Equal(t, ovcaps.OperationGenerateSpeech, models["indextts-2.5"])
+		// 语音(index-tts 2.5)已下线:出厂目录不再有语音条目。
 		require.Equal(t, ovcaps.OperationGenerateMusic, models["minimax-music3"])
+		require.Equal(t, ovcaps.OperationGenerateMusic, models["ace-step-enhanced"])
 		// 图片聚合的生成段在，超分段也在 —— 这条流水线兑现得了它承诺的东西。
 		defaults := 0
 		for _, capability := range body.Capabilities {
@@ -67,13 +69,13 @@ func TestOvCapabilitiesEndToEnd(t *testing.T) {
 				defaults++
 			}
 		}
-		require.GreaterOrEqual(t, defaults, 3, "每个操作应有一条默认")
+		require.GreaterOrEqual(t, defaults, 3, "每个操作（图片/视频/音乐）应有一条默认")
 	})
 
 	t.Run("令牌白名单只放开图片聚合：其余一条都不报", func(t *testing.T) {
-		body := getOvCapabilities(t, engine, createOvToken(t, db, "ovlimit", true, "qwen-image-pro-enhanced"))
+		body := getOvCapabilities(t, engine, createOvToken(t, db, "ovlimit", true, "minimax-h3-image-enhanced"))
 		require.Len(t, body.Capabilities, 1)
-		require.Equal(t, "qwen-image-pro-enhanced", body.Capabilities[0].Model)
+		require.Equal(t, "minimax-h3-image-enhanced", body.Capabilities[0].Model)
 	})
 
 	t.Run("生成段没有渠道时，聚合模型整条消失", func(t *testing.T) {

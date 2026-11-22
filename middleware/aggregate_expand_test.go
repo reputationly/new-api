@@ -1515,3 +1515,36 @@ func TestApplyExpansionPublishesTaskAggregateInfo(t *testing.T) {
 	require.True(t, ok && info != nil)
 	require.Equal(t, "h3-2k", info.PublicModel, "对外模型名要带过去")
 }
+
+// overrides.duration 是"给增强编译器的时长事实"，**不是替客户改时长**。
+// 出厂配置里 h3-2k / h3-ref-2k 都写了 overrides.duration=5：客户显式传 10 s 时必须
+// 还是 10 s（否则整条按秒计费与续写的时长语义全错，而且不报错）；客户没传时才取 5。
+func TestOverridesDurationDoesNotClobberClientValue(t *testing.T) {
+	withAggregateConfig(t, `[{"name":"agg-dur","type":"video","enabled":true,
+	  "generate":{"model":"minimax-h3-fl2va","overrides":{"size":"768P","duration":5}}}]`)
+
+	run := func(body string) map[string]any {
+		rec := httptest.NewRecorder()
+		c, _ := gin.CreateTestContext(rec)
+		c.Request = httptest.NewRequest(http.MethodPost, "/v1/videos", strings.NewReader(body))
+		agg := common.GetAggregateModel("agg-dur")
+		require.NotNil(t, agg)
+		require.NoError(t, applyAggregateExpansion(c, "agg-dur", "minimax-h3-fl2va", agg))
+		return readBodyMap(t, c)
+	}
+
+	withClient := run(`{"model":"agg-dur","prompt":"p","duration":10}`)
+	require.Equal(t, float64(10), withClient["duration"], "客户显式时长不能被 overrides 覆盖")
+	require.Equal(t, "768P", withClient["size"], "size 仍然由 overrides 接管（客户传的是最终档）")
+
+	withoutClient := run(`{"model":"agg-dur","prompt":"p"}`)
+	require.Equal(t, float64(5), withoutClient["duration"], "客户没传时长时取 overrides 的事实值")
+
+	// seconds 形态同样算"客户显式传了"：不能被塞进一个 duration=5，
+	// 否则适配器拿到两个互相矛盾的时长（而 gpustackplus 优先读 Duration）。
+	// 客户只给 seconds 时 overrides 不生效，增强编译器因此拿不到"时长事实"、
+	// 回落 text 模板 —— 这是既有取舍（见 buildCompilerInput 的注释），不是本次引入的。
+	withSeconds := run(`{"model":"agg-dur","prompt":"p","seconds":"8"}`)
+	require.Equal(t, "8", withSeconds["seconds"], "seconds 原样保留")
+	require.Nil(t, withSeconds["duration"], "不该被 overrides 补一个 5")
+}
