@@ -133,6 +133,41 @@ func TestBuildMusicTaskBodyCarriesEnhancedCaption(t *testing.T) {
 	require.Equal(t, "[Verse] lyrics", taskBody["prompt"], "prompt 位是歌词")
 }
 
+// 跨层接缝:展开阶段写回后的官方形状 body,必须能被兼容层正确翻译成任务契约。
+// 两边各自测各自证明不了"中间那份 body 长什么样"——以前就是只查记录才漏掉丢数据,
+// 这条直接把**即将发出去的 taskBody** 钉死。
+func TestOfficialRoutePostExpansionBodiesFlowThrough(t *testing.T) {
+	withMusicEngineConfig(t)
+
+	// Music3 纯器乐:prompt 是增强后的描述,没有歌词、is_instrumental=true。
+	var music3Req minimaxMusicRequest
+	require.NoError(t, common.Unmarshal([]byte(
+		`{"model":"minimax-music3","prompt":"NEW CAPTION","is_instrumental":true}`), &music3Req))
+	prompt := strings.TrimSpace(music3Req.Prompt)
+	require.NotEmpty(t, prompt, "prompt is required 之前的那道门")
+	taskBody, msg := buildMusicTaskBody(music3Req.Model, prompt, music3Req.Lyrics,
+		music3Req.IsInstrumental, music3Req.Metadata)
+	require.Empty(t, msg)
+	meta, ok := taskBody["metadata"].(map[string]any)
+	require.True(t, ok, "必须带 metadata")
+	require.Equal(t, "NEW CAPTION", meta["instructions"], "增强后的描述要进 instructions")
+	require.Equal(t, true, meta["is_instrumental"], "is_instrumental 要透传")
+
+	// ACE-Step:prompt 是增强后的描述,歌词在顶层 lyrics → metadata.lyrics。
+	var aceReq minimaxMusicRequest
+	require.NoError(t, common.Unmarshal([]byte(
+		`{"model":"ace-step","prompt":"NEW CAPTION","lyrics":"[Verse]\nrain on neon"}`), &aceReq))
+	prompt = strings.TrimSpace(aceReq.Prompt)
+	require.NotEmpty(t, prompt)
+	taskBody, msg = buildMusicTaskBody(aceReq.Model, prompt, aceReq.Lyrics,
+		aceReq.IsInstrumental, aceReq.Metadata)
+	require.Empty(t, msg)
+	require.Equal(t, "NEW CAPTION", taskBody["prompt"], "ACE-Step 的 prompt 位就是描述")
+	meta, ok = taskBody["metadata"].(map[string]any)
+	require.True(t, ok, "必须带 metadata")
+	require.Equal(t, "[Verse]\nrain on neon", meta["lyrics"], "歌词要进 metadata.lyrics")
+}
+
 // 客户端 metadata 透传:扩展位要原样带到任务契约里(task_type / sample_query / reference_audio 等)。
 // 与 prompt/lyrics 映射冲突的三个键必须被映射结果覆盖,不能出现两套说法。
 func TestBuildMusicTaskBodyPassesThroughClientMetadata(t *testing.T) {

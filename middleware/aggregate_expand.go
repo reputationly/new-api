@@ -488,12 +488,31 @@ func isMusic3Aggregate(agg *common.AggregateModel) bool {
 	return service.IsMusic3GeneratingModel(agg.Generate.Model)
 }
 
-// enhanceMusic3Aggregate 改写音乐聚合的**描述**(metadata.instructions),歌词原样不动。
+// minimaxMusicCompatPath MiniMax 官方音乐协议兼容层的路由(见 router/relay-router.go)。
+const minimaxMusicCompatPath = "/v1/music_generation"
+
+// isMiniMaxMusicCompatRequest 这次请求是不是走官方音乐协议兼容层。
+//
+// 兼容层的 body 形状与内部契约相反(官方:prompt=曲风描述、lyrics=歌词;
+// 内部:prompt=歌词、metadata.instructions=曲风描述),而展开发生在兼容层
+// 重建 body **之前**。按 body 字段猜形状会猜错 —— 官方请求完全可以不带
+// lyrics、或在 metadata 里塞 instructions,猜错的后果是静默的(增强写进
+// 兼容层会丢弃的字段,或干脆不增强)。路由是唯一不会说谎的判据。
+func isMiniMaxMusicCompatRequest(c *gin.Context) bool {
+	return c != nil && c.Request != nil && c.Request.URL != nil &&
+		c.Request.URL.Path == minimaxMusicCompatPath
+}
+
+// enhanceMusic3Aggregate 改写音乐聚合的**描述**,歌词原样不动。
+//
+// 两条入口的字段语义相反,改写对象与歌词位都不同:
+//
+//	内部契约(/v1/videos 等):顶层 prompt = 歌词,metadata.instructions = 曲风描述
+//	官方兼容层(/v1/music_generation):顶层 prompt = 曲风描述,顶层 lyrics = 歌词
 //
 // 与视频/图片那条路的三处不同,每一处都是"弄错了不报错"的坑:
 //
-//  1. 改写对象是 metadata.instructions,不是 body["prompt"] —— 后者是**歌词**
-//     (门面把它映射到引擎的 input)。照视频那段改 prompt,就是把用户的词拿去"优化"。
+//  1. 改写对象是描述位,不是歌词位 —— 歌词是只读上下文,改它等于毁掉用户的词。
 //  2. 歌词作为**只读上下文**传下去(EnhanceInput.Lyrics → user 消息里的 LYRICS 块),
 //     并在写回后守一道"歌词字节不变"。
 //  3. 回填前用引擎的联合预算再核一次:caption + 歌词超过 5000 字符时,适配器会整条拒
@@ -501,38 +520,45 @@ func isMusic3Aggregate(agg *common.AggregateModel) bool {
 //     400,账上还多了一笔。
 //
 // metadata 可能是对象也可能是 JSON 编码的字符串(见 expansionMetadata),写回走同一个
-// helper,与 alignVideoAspectRatio 同一手法。
+// helper,与 alignVideoAspectRatio 同一手法。官方兼容层那条路不读 metadata:
+// 兼容层重建任务 body 时会丢掉 instructions(它由 prompt 映射),读了也是白读。
 func enhanceMusic3Aggregate(c *gin.Context, agg *common.AggregateModel, body map[string]any) *service.EnhanceResult {
-	md, ok := expansionMetadata(body)
-	if !ok {
-		// metadata 解析不了:交给下游的校验去报错,不在这里猜着改。
-		return nil
-	}
-	caption, _ := md["instructions"].(string)
-	caption = strings.TrimSpace(caption)
-	lyrics, _ := body["prompt"].(string)
-
-	// MiniMax 官方协议(/v1/music_generation)的形状与我们的内部契约**相反**:
-	// 官方是「prompt = 曲风描述、lyrics = 歌词」,而这里(内部形状)是
-	// 「prompt = 歌词、metadata.instructions = 曲风描述」。兼容层在**展开之后**
-	// 才把 body 重建成任务契约,所以展开阶段看到的是官方形状。
-	//
-	// 只认内部形状的后果是静默的:caption 取不到 → return nil → 记录里连
-	// enhance_mode 都没有,客户拿到的是没增强的产物。而认出形状后**必须写回 prompt**
-	// (兼容层正是从 prompt 取描述、从 lyrics 取歌词),写到 metadata.instructions
-	// 会被兼容层重建 body 时丢弃 —— 同样静默。
-	compatShape := false
-	if caption == "" {
-		if lyr, has := body["lyrics"].(string); has && strings.TrimSpace(lyr) != "" {
-			caption = strings.TrimSpace(fmt.Sprint(body["prompt"]))
-			lyrics = lyr
-			compatShape = true
+	official := isMiniMaxMusicCompatRequest(c)
+	var caption, lyrics, lyricField string
+	var md map[string]any
+	if official {
+		// 官方形状:描述在顶层 prompt,歌词在顶层 lyrics。
+		caption, _ = body["prompt"].(string)
+		caption = strings.TrimSpace(caption)
+		lyrics, _ = body["lyrics"].(string)
+		lyricField = "lyrics"
+		if caption == "" {
+			// prompt 空了兼容层必 400("prompt is required")—— 不为注定被拒的
+			// 请求花一次增强的钱。
+			return nil
 		}
-	}
-	if caption == "" {
-		// 没有描述就没有可改写的东西。**绝不用歌词顶上**:prompt 位是歌词,
-		// 把它当 caption 改写等于毁掉用户的词,而引擎会把它当描述去生成编曲。
-		return nil
+		instrumental, _ := body["is_instrumental"].(bool)
+		if strings.TrimSpace(lyrics) == "" && !instrumental {
+			// 兼容层会以 "Music3 needs lyrics unless is_instrumental=true" 拒掉
+			// 这条请求 —— 同样不该先计费。
+			return nil
+		}
+	} else {
+		var ok bool
+		md, ok = expansionMetadata(body)
+		if !ok {
+			// metadata 解析不了:交给下游的校验去报错,不在这里猜着改。
+			return nil
+		}
+		caption, _ = md["instructions"].(string)
+		caption = strings.TrimSpace(caption)
+		lyrics, _ = body["prompt"].(string)
+		lyricField = "prompt"
+		if caption == "" {
+			// 没有描述就没有可改写的东西。**绝不用歌词顶上**:prompt 位是歌词,
+			// 把它当 caption 改写等于毁掉用户的词,而引擎会把它当描述去生成编曲。
+			return nil
+		}
 	}
 	res := enhancePrompt(c.Request.Context(), agg,
 		c.Request.Header.Get("Authorization"), service.EnhanceInput{
@@ -556,30 +582,19 @@ func enhanceMusic3Aggregate(c *gin.Context, agg *common.AggregateModel, body map
 		res.EnhancedPrompt = caption
 		return res
 	}
-	if compatShape {
+	if official {
+		// 兼容层正是从 prompt 取描述 —— 写到 metadata.instructions 会被它丢弃。
 		body["prompt"] = res.EnhancedPrompt
 	} else {
 		md["instructions"] = res.EnhancedPrompt
 		body["metadata"] = md
 	}
-	// 歌词一字不动。这条在当前代码里恒真(上面只写 instructions)—— 留着是因为它守的是
-	// **静默毁数据**类错误:哪天有人在这条路上补一句 body["prompt"]=...，或者运营在
-	// overrides 里塞了 prompt，用户拿到的是被改过的词,而且没有任何报错。
-	// 歌词位在两种形状里不同:内部形状是 prompt,官方形状是 lyrics。按形状守。
-	lyricField := "prompt"
-	if compatShape {
-		lyricField = "lyrics"
-	}
-	// 官方形状下我们刚把 prompt 换成增强后的描述,那是应该变的;所以那边比 lyrics。
-	if !compatShape {
-		if cur, _ := body["prompt"].(string); cur != lyrics {
-			body["prompt"] = lyrics
-			common.SysLog(fmt.Sprintf(
-				"aggregate enhance: 聚合模型 %s 的歌词在增强过程中被改动,已还原(%d 字 → %d 字)",
-				agg.Name, len([]rune(cur)), len([]rune(lyrics))))
-		}
-	} else if cur, _ := body["lyrics"].(string); cur != lyrics {
-		body["lyrics"] = lyrics
+	// 歌词一字不动。这条在当前代码里恒真(上面只写描述位)—— 留着是因为它守的是
+	// **静默毁数据**类错误:哪天有人在这条路上补一句 body[lyricField]=...，或者运营在
+	// overrides 里塞了歌词位，用户拿到的是被改过的词,而且没有任何报错。
+	// 歌词位随入口形状不同:内部形状是 prompt,官方形状是 lyrics。
+	if cur, _ := body[lyricField].(string); cur != lyrics {
+		body[lyricField] = lyrics
 		common.SysLog(fmt.Sprintf(
 			"aggregate enhance: 聚合模型 %s 的歌词在增强过程中被改动,已还原(%d 字 → %d 字,字段 %s)",
 			agg.Name, len([]rune(cur)), len([]rune(lyrics)), lyricField))
@@ -606,12 +621,20 @@ func isAceStepAggregate(agg *common.AggregateModel) bool {
 // 而用回用户自己的原话至少是完整的一句;而超限本身会被适配器就地 400,那时 LLM
 // 已经计费过了 —— 两头都不划算。
 func enhanceAceStepAggregate(c *gin.Context, agg *common.AggregateModel, body map[string]any) *service.EnhanceResult {
+	// 官方兼容层(/v1/music_generation)的歌词在顶层 lyrics,不在 metadata.lyrics;
+	// 其余事实(sample_query / task_type / 参考音频)仍在 metadata 里,两条路都读。
+	official := isMiniMaxMusicCompatRequest(c)
 	md, mdOK := expansionMetadata(body)
 	lyrics, sampleQuery, taskType := "", "", "t2m"
 	hasSourceAudio := false
 	explicitTaskType := false
+	if official {
+		lyrics, _ = body["lyrics"].(string)
+	}
 	if mdOK {
-		lyrics, _ = md["lyrics"].(string)
+		if !official {
+			lyrics, _ = md["lyrics"].(string)
+		}
 		sampleQuery, _ = md["sample_query"].(string)
 		if v, ok := md["task_type"].(string); ok && strings.TrimSpace(v) != "" {
 			taskType = strings.TrimSpace(v)
@@ -633,6 +656,11 @@ func enhanceAceStepAggregate(c *gin.Context, agg *common.AggregateModel, body ma
 		}
 	}
 	prompt, _ := body["prompt"].(string)
+	if official && strings.TrimSpace(prompt) == "" {
+		// 官方形状下 prompt 是描述;空了兼容层必 400("prompt is required"),
+		// sample_query 也救不了 —— 不为注定被拒的请求花一次增强。
+		return nil
+	}
 	field, caption := service.AceStepCaptionTarget(prompt, sampleQuery)
 	if field == "" {
 		// 没有可改写的描述。**绝不用歌词顶上** —— 那是把用户的词拿去优化。
@@ -668,7 +696,15 @@ func enhanceAceStepAggregate(c *gin.Context, agg *common.AggregateModel, body ma
 	}
 	// 歌词一字不动。当前代码恒真(上面只写 prompt / sample_query),留着守的是
 	// **静默毁数据**类错误:哪天有人在这条路上补一句 body["prompt"]=…,用户的词就被换了。
-	if mdOK {
+	// 歌词位随入口形状不同:官方兼容层是顶层 lyrics,内部契约是 metadata.lyrics。
+	if official {
+		if cur, _ := body["lyrics"].(string); cur != lyrics {
+			body["lyrics"] = lyrics
+			common.SysLog(fmt.Sprintf(
+				"aggregate enhance: 聚合模型 %s 的歌词在增强过程中被改动,已还原(%d 字 → %d 字,字段 lyrics)",
+				agg.Name, len([]rune(cur)), len([]rune(lyrics))))
+		}
+	} else if mdOK {
 		if cur, _ := md["lyrics"].(string); cur != lyrics {
 			md["lyrics"] = lyrics
 			body["metadata"] = md
