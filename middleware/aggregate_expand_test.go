@@ -1616,3 +1616,32 @@ func TestPromptOptimizerIgnoredWhenLocked(t *testing.T) {
 	require.False(t, exp.EnhanceSkipped)
 	require.Equal(t, "config", exp.EnhanceSource)
 }
+
+// 默认关 + 客户传 true → 必须真的跑增强。
+//
+// 这是 prompt_optimizer 的语义变化点:enabled:false 从硬关变成默认关。
+// 只测 EffectiveEnabled 不够 —— 那只证明判定正确,证明不了展开流程真的用它。
+func TestPromptOptimizerEnablesWhenConfigDefaultOff(t *testing.T) {
+	withAggregateConfig(t, `[{"name":"h3-2k","type":"video","enabled":true,
+		"generate":{"model":"minimax-h3"},
+		"prompt_enhance":{"enabled":false,"model":"enh","system_prompt":"x"}}]`)
+
+	orig := enhancePrompt
+	t.Cleanup(func() { enhancePrompt = orig })
+	called := false
+	enhancePrompt = func(_ context.Context, _ *common.AggregateModel, _ string, in service.EnhanceInput) *service.EnhanceResult {
+		called = true
+		return &service.EnhanceResult{OriginalPrompt: in.Prompt, EnhancedPrompt: "ENHANCED"}
+	}
+
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/videos",
+		strings.NewReader(`{"model":"h3-2k","prompt":"a cat","prompt_optimizer":true}`))
+	require.NoError(t, applyAggregateExpansion(c, "h3-2k", "minimax-h3", common.GetAggregateModel("h3-2k")))
+
+	require.True(t, called)
+	exp := GetAggregateExpansion(c)
+	require.False(t, exp.EnhanceSkipped)
+	require.Equal(t, "client", exp.EnhanceSource)
+}
