@@ -74,6 +74,12 @@ func textBudget(cfg *common.AggregatePromptEnhance, base time.Duration) time.Dur
 type EnhanceInput struct {
 	// Prompt 客户的原始提示词,逐字。
 	Prompt string
+	// AggregateName 客户实际调用的聚合模型名。
+	//
+	// 只用于给这次增强自调用打**日志标签**(stage=enhance + aggregate_model):
+	// 增强是客户请求发出后、生成段任务落库前的一次独立 relay 调用,不标的话
+	// 使用日志里就只剩一条孤立的 qwen 调用,运营看不出它属于哪条流水线。
+	AggregateName string
 	// Lyrics 客户的歌词,逐字(**只有音乐类型才有**)。
 	//
 	// **只作上下文,永不改写**:MiniMax-Music3 的顶层 prompt 位放的是歌词(门面把它
@@ -191,6 +197,11 @@ func appendTaskContext(systemPrompt, taskContext string) string {
 // **永远不返回错误** —— 任何失败都体现为 Degraded=true + 原样返回的 prompt。
 // 这是刻意的签名设计:让调用方无法"忘记处理增强失败",因为根本没有失败分支可漏。
 func EnhancePrompt(ctx context.Context, agg *common.AggregateModel, authHeader string, in EnhanceInput) *EnhanceResult {
+	// 聚合名只给日志标签用:调用点很多,集中在这里补一次。
+	if strings.TrimSpace(in.AggregateName) == "" && agg != nil {
+		in.AggregateName = agg.Name
+	}
+
 	started := time.Now()
 	prompt := in.Prompt
 	res := &EnhanceResult{OriginalPrompt: prompt, EnhancedPrompt: prompt, Mode: common.EnhanceModeText}
@@ -346,7 +357,7 @@ func EnhancePrompt(ctx context.Context, agg *common.AggregateModel, authHeader s
 	}
 	reqCtx, cancel := context.WithTimeout(ctx, textBudget(cfg, base))
 	defer cancel()
-	enhanced, usage, err := callEnhance(reqCtx, authHeader, payload)
+	enhanced, usage, err := callEnhance(reqCtx, authHeader, payload, in.AggregateName)
 	if err != nil {
 		return degrade("%v", err)
 	}
@@ -548,7 +559,7 @@ var enhanceEndpoint = func() string {
 
 // callEnhance 以客户身份向本站发一次 chat 请求,取回首个 choice 的文本与 usage。
 // 走完整 relay 链路,所以这次调用会像客户自己调一样被计费、限流、记日志。
-func callEnhance(ctx context.Context, authHeader string, payload []byte) (string, *dto.Usage, error) {
+func callEnhance(ctx context.Context, authHeader string, payload []byte, aggregateName string) (string, *dto.Usage, error) {
 	endpoint := enhanceEndpoint()
 	if endpoint == "" {
 		// ServerAddress 没配就无法自调用。这是站点配置缺失,不是客户的问题,故降级而非报错。
@@ -560,6 +571,13 @@ func callEnhance(ctx context.Context, authHeader string, payload []byte) (string
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", authHeader)
+	// 日志归类头:这次自调用属于哪条聚合流水线的**增强段**。与超分段共用同一套头,
+	// 只有展示用途,不参与计费、不进上游请求体。增强段没有父任务(它跑在任务落库之前),
+	// 所以不带 X-Aggregate-Parent-Task。
+	req.Header.Set(AggregateStageHeader, LogStageEnhance)
+	if strings.TrimSpace(aggregateName) != "" {
+		req.Header.Set(AggregatePublicModelHeader, strings.TrimSpace(aggregateName))
+	}
 
 	// GetHttpClient 返回的是由 InitHttpClient 在启动时赋值的包级变量,拿到 nil 会直接
 	// panic。生产虽然一定初始化过,但这里的失败语义是"降级",不该有任何路径把它变成

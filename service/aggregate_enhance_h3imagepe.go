@@ -162,7 +162,7 @@ func compileH3ImagePE(ctx context.Context, authHeader, model string, in EnhanceI
 		if err != nil {
 			return nil, fmt.Errorf("构造改写请求失败: %w", err)
 		}
-		content, usage, err := callEnhance(ctx, authHeader, payload)
+		content, usage, err := callEnhance(ctx, authHeader, payload, in.AggregateName)
 		accumulateUsage(totalUsage, usage)
 		if err != nil {
 			return nil, err

@@ -15,6 +15,7 @@ const (
 	LogKeyPipelineStage   = "pipeline_stage"
 	LogKeyAggregateTaskID = "aggregate_task_id"
 
+	LogStageEnhance  = "enhance"
 	LogStageGenerate = "generate"
 	LogStageUpscale  = "upscale"
 	LogStageDub      = "dub"
@@ -52,14 +53,17 @@ func PipelineLogLabels(c *gin.Context, ownTaskID string) map[string]string {
 			return out
 		}
 	}
-	if stage := c.GetHeader(AggregateStageHeader); stage == LogStageUpscale || stage == LogStageDub {
+	if stage := c.GetHeader(AggregateStageHeader); stage == LogStageUpscale || stage == LogStageDub || stage == LogStageEnhance {
 		parent := strings.TrimSpace(c.GetHeader(AggregateParentTaskHeader))
-		if parent == "" {
+		// 增强段**没有父任务**:它跑在生成段请求发出之前,那时任务还没落库。
+		// 所以这一段的标签只带"哪条聚合流水线的增强",不带 aggregate_task_id ——
+		// 硬要求 parent 会让增强的日志一条都标不上。
+		if parent == "" && stage != LogStageEnhance {
 			return nil
 		}
-		out := map[string]string{
-			LogKeyPipelineStage:   stage,
-			LogKeyAggregateTaskID: parent,
+		out := map[string]string{LogKeyPipelineStage: stage}
+		if parent != "" {
+			out[LogKeyAggregateTaskID] = parent
 		}
 		if m := strings.TrimSpace(c.GetHeader(AggregatePublicModelHeader)); m != "" {
 			out[LogKeyAggregateModel] = m

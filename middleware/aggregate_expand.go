@@ -57,7 +57,10 @@ type AggregateExpansion struct {
 	RequestedDuration int
 	// UpscaleSkipped:客户要的最终档**不高于**生成段能出的档,超分段跳过,
 	// 按生成段成品交付。UpscaleSkipReason 是给人看的原因(跳过时非空)。
-	UpscaleSkipped    bool
+	UpscaleSkipped bool
+	// EnhanceSkipped 配置里把增强段关掉了(enabled:false 或整块不存在)。
+	// 与"增强失败降级"不是一回事:那种情况 Enhance 非空、带着 fallback_reason。
+	EnhanceSkipped    bool
 	UpscaleSkipReason string
 }
 
@@ -289,9 +292,12 @@ func applyAggregateExpansion(c *gin.Context, publicName, realModel string, agg *
 
 	// 使用日志标签:客户调的是聚合名,两段的日志要能对回这个名字。有超分段真的要跑时,
 	// 生成段那一条标成「生成段」;没有超分段的单段聚合只带聚合名,不标段。仅展示用。
-	labels := map[string]string{"aggregate_model": publicName}
-	if agg.Upscale.IsEnabled() && !exp.UpscaleSkipped {
-		labels["pipeline_stage"] = "generate"
+	// **生成段一律标 stage**:早先只在"超分真要跑"时才标,于是图片/音乐与单段视频
+	// 的日志只有一个模型名,看不出这是流水线的哪一段。客户与运营对着"生成段/超分段"
+	// 两行账单时,第一行没有段名就必然要猜。
+	labels := map[string]string{
+		"aggregate_model": publicName,
+		"pipeline_stage":  "generate",
 	}
 	common.SetContextKey(c, constant.ContextKeyAggregateLabels, labels)
 
@@ -300,6 +306,9 @@ func applyAggregateExpansion(c *gin.Context, publicName, realModel string, agg *
 	// 它是一次同步的 LLM 调用,会给请求加上几秒延迟;这是这个功能的固有成本,不是缺陷
 	// (体验区那条路是用户点按钮等,这里换成我们替他等)。EnhancePrompt 永远不返回错误,
 	// 任何失败都体现为"用原始提示词继续",所以这里没有失败分支可漏。
+	// 关掉时留一个显式标记:否则记录里只是没有 enhance_mode,与增强失败降级在库里长得一样,
+	// 排障时分不出是配置关的还是跑挂了。
+	exp.EnhanceSkipped = !agg.PromptEnhance.IsEnabled()
 	if agg.PromptEnhance.IsEnabled() {
 		// 音乐与视频/图片**改写的字段不同**,不能共用下面那段。
 		//
@@ -404,6 +413,8 @@ func (e *AggregateExpansion) ToTaskAggregateInfo(c *gin.Context) *model.TaskAggr
 		return nil
 	}
 	info := &model.TaskAggregateInfo{PublicModel: e.PublicName}
+	// 增强段被配置关掉时 e.Enhance 为 nil,所以这一位必须在 if 之外拷贝。
+	info.EnhanceSkipped = e.EnhanceSkipped
 	if e.Config != nil && e.Config.Upscale.IsEnabled() && !e.UpscaleSkipped {
 		info.Stage = 1
 		info.UpscaleModel = e.Config.Upscale.Model

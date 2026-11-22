@@ -465,6 +465,13 @@ type TaskAggregateInfo struct {
 	// "enhance_mode=text + enhance_fallback_reason 有值 + enhance_degraded=false"
 	// 这种自相矛盾的记录,统计"配置的档位达成率"时没法用。
 	EnhanceFellBack bool `json:"enhance_fell_back,omitempty"`
+	// EnhanceSkipped 配置里把增强段关掉了(enabled:false 或整块不存在)。
+	//
+	// 与 EnhanceFellBack / EnhanceDegraded 三者分工:
+	//   EnhanceSkipped  配置就不要这一段(原始输入直接进生成段);
+	//   EnhanceFellBack 要了但没跑成、退到了文本改写;
+	//   EnhanceDegraded 彻底没用上,生成段收到的是客户原文。
+	EnhanceSkipped bool `json:"enhance_skipped,omitempty"`
 }
 
 // HasUpscale 该流水线是否还有一段超分要跑。
