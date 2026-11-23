@@ -207,3 +207,36 @@ func TestMusic3WithLyricsUnaffected(t *testing.T) {
 	require.Empty(t, msg)
 	require.Equal(t, "[Verse] hello", body["prompt"])
 }
+
+// ACE-Step 等非 Music3 引擎:玩法必须随 metadata 下发。顶层 task_type 会被门面
+// 转成一条丢末尾斜杠的引擎路径 → 405(线上实测 2026-11-23)。缺省补 t2m。
+func TestAceStepTaskBodyCarriesMetadataTaskType(t *testing.T) {
+	body, msg := buildMusicTaskBody("ace-step", "warm lofi loop", "", nil, nil)
+	require.Empty(t, msg)
+	meta, ok := body["metadata"].(map[string]any)
+	require.True(t, ok, "必须带 metadata")
+	require.Equal(t, "t2m", meta["task_type"], "缺省玩法要放 metadata")
+	require.Equal(t, true, meta["thinking"], "与体验区对齐:开思考")
+	require.Equal(t, 1, meta["batch_size"], "门面只搬第一首,压到 1")
+	require.Equal(t, "warm lofi loop", body["prompt"])
+}
+
+// 客户显式指定 cover/repaint 时不能被缺省值覆盖;thinking/batch_size 仍补上。
+func TestAceStepClientTaskTypeWins(t *testing.T) {
+	body, msg := buildMusicTaskBody("ace-step", "dreamy shoegaze", "", nil,
+		map[string]any{"task_type": "cover", "reference_audio": "https://x/y.wav"})
+	require.Empty(t, msg)
+	meta, _ := body["metadata"].(map[string]any)
+	require.Equal(t, "cover", meta["task_type"], "客户的玩法优先")
+	require.Equal(t, "https://x/y.wav", meta["reference_audio"])
+	require.Equal(t, true, meta["thinking"])
+}
+
+// 客户自己给了 thinking/batch_size 时同样尊重。
+func TestAceStepClientTuningWins(t *testing.T) {
+	body, _ := buildMusicTaskBody("ace-step", "slow ambient", "", nil,
+		map[string]any{"thinking": false, "batch_size": 2})
+	meta, _ := body["metadata"].(map[string]any)
+	require.Equal(t, false, meta["thinking"])
+	require.Equal(t, 2, meta["batch_size"])
+}
