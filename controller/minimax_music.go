@@ -235,11 +235,10 @@ func buildMusicTaskBody(modelName, prompt, lyrics string, instrumental *bool, ex
 		// 而不是把风格描述当歌词送进引擎。
 		//
 		// **纯器乐在这套部署上不可用**,is_instrumental=true 也不是出路:这个字段引擎不读
-		// (带着它 + 歌词仍会出人声),而无歌词时长度由段落结构决定 —— 只给少量段落只有
-		// 数秒到二三十秒(实测 9.8s / 22.7s),不是可交付的曲子。与其给客户一段残片,
+		// (带着它 + 歌词仍会出人声),而无歌词时长度由段落结构决定 —— 只给少量段落标签时只有
+		// 数秒到二三十秒(实测 9.8s / 22.7s 都是"只有段落标签、没有唱词"的产物),不是可交付的曲子。与其给客户一段残片,
 		// 不如明确拒绝。
-		// 口径(与展开阶段一致):is_instrumental=true 一律拒 —— 这个字段引擎根本不读,
-		// 放过去会让客户以为拿到的是器乐(实测带着它+歌词仍然有人声)。
+		// 口径与展开阶段一致:is_instrumental=true 一律拒。
 		unusableInstrumental := instrumental != nil && *instrumental
 		if lyrics == "" || unusableInstrumental {
 			return nil, "invalid params: MiniMax-Music3 does not support instrumental generation on this gateway; " +
