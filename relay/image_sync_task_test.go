@@ -237,3 +237,73 @@ func TestBuildSyncImageTaskWithoutAggregate(t *testing.T) {
 		t.Fatal("非聚合请求不该有 aggregate")
 	}
 }
+
+// chat / Gemini 原生把成图塞在响应体里，RelayMode 里没有图片模式：只有适配器打了
+// 「产出了图片」的标记才补记录，否则每一次纯文本对话都会多出一条图片任务。
+func TestBuildSyncImageTaskRecordsInlineImageFromChat(t *testing.T) {
+	c := syncImageCtx(constant.ChannelTypeGemini)
+	relaycommon.MarkSyncImageProduced(c)
+	relaycommon.AppendSyncImageOBSKeys(c, "t2i/gemini-nano-banana-2.1/42/img_abc.png")
+	common.SetContextKey(c, constant.ContextKeySyncConsumedQuota, 2700)
+
+	info := syncImageInfo(relayconstant.RelayModeChatCompletions)
+	info.ChannelMeta = &relaycommon.ChannelMeta{ChannelType: constant.ChannelTypeGemini}
+	task := buildSyncImageTask(c, info)
+	if task == nil {
+		t.Fatal("内联出图必须补一条任务记录")
+	}
+	if task.Action != constant.TaskActionImageGenerate {
+		t.Errorf("Action = %q, want %q", task.Action, constant.TaskActionImageGenerate)
+	}
+	if task.APIProtocol != model.TaskAPIProtocolImage {
+		t.Errorf("APIProtocol = %q, want image", task.APIProtocol)
+	}
+	if task.Quota != 2700 {
+		t.Errorf("Quota = %d, want 2700", task.Quota)
+	}
+	if got, want := task.PrivateData.ResultURL, "obs://t2i/gemini-nano-banana-2.1/42/img_abc.png"; got != want {
+		t.Errorf("ResultURL = %q, want %q", got, want)
+	}
+}
+
+// 没有标记 = 纯文本 / 未见图片：一条都不能写，否则任务日志会被文本对话淹没。
+func TestBuildSyncImageTaskSkipsChatWithoutImageFlag(t *testing.T) {
+	info := syncImageInfo(relayconstant.RelayModeChatCompletions)
+	info.ChannelMeta = &relaycommon.ChannelMeta{ChannelType: constant.ChannelTypeGemini}
+	if task := buildSyncImageTask(syncImageCtx(constant.ChannelTypeGemini), info); task != nil {
+		t.Fatalf("期望不写记录，实际写了：%+v", task.Action)
+	}
+}
+
+// 流式（只标记、不落盘）也必须留下记录，只是没有预览。
+func TestBuildSyncImageTaskStreamRecordsWithoutPreview(t *testing.T) {
+	c := syncImageCtx(constant.ChannelTypeGemini)
+	relaycommon.MarkSyncImageProduced(c)
+
+	info := syncImageInfo(relayconstant.RelayModeGemini)
+	info.ChannelMeta = &relaycommon.ChannelMeta{ChannelType: constant.ChannelTypeGemini}
+	task := buildSyncImageTask(c, info)
+	if task == nil {
+		t.Fatal("流式出图也要有一条记录（无预览）")
+	}
+	if task.PrivateData.ResultURL != "" {
+		t.Errorf("ResultURL = %q, want empty（流式不落盘）", task.PrivateData.ResultURL)
+	}
+}
+
+// 重试复用同一个 gin.Context：上一轮留下的图片标记必须清掉，否则第二次尝试即使
+// 是纯文本响应，也会凭空多出一条指向不存在图片的任务记录。
+func TestResetSyncImageOBSKeysClearsProducedFlag(t *testing.T) {
+	c := syncImageCtx(constant.ChannelTypeGemini)
+	relaycommon.MarkSyncImageProduced(c)
+	relaycommon.AppendSyncImageOBSKeys(c, "attempt1/stale.png")
+
+	relaycommon.ResetSyncImageOBSKeys(c)
+
+	if relaycommon.SyncImageProduced(c) {
+		t.Error("ResetSyncImageOBSKeys 必须同时清掉「产出了图片」标记")
+	}
+	if keys := relaycommon.GetSyncImageOBSKeys(c); len(keys) != 0 {
+		t.Errorf("keys = %v, want empty", keys)
+	}
+}

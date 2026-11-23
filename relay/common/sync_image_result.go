@@ -43,6 +43,26 @@ func GetSyncImageOBSKeys(c *gin.Context) []string {
 	return common.GetContextKeyStringSlice(c, constant.ContextKeySyncImageOBSKeys)
 }
 
+// MarkSyncImageProduced 标记本次请求产出了内联图片。
+//
+// chat 与 Gemini 原生把图片塞在响应体里（markdown data URI / inlineData），
+// RelayMode 与之无关，所以任务日志只能靠这个标记决定要不要补一条记录。
+// 每次 relay 尝试开始时由 ResetSyncImageOBSKeys 一并清掉。
+func MarkSyncImageProduced(c *gin.Context) {
+	if c == nil {
+		return
+	}
+	common.SetContextKey(c, constant.ContextKeySyncImageProduced, true)
+}
+
+// SyncImageProduced 本次请求是否产出了内联图片。
+func SyncImageProduced(c *gin.Context) bool {
+	if c == nil {
+		return false
+	}
+	return common.GetContextKeyBool(c, constant.ContextKeySyncImageProduced)
+}
+
 // ResetSyncImageOBSKeys 清空上一次尝试留下的 key，必须在每次 relay 尝试开始时调用。
 //
 // 重试循环（controller/relay.go）复用同一个 gin.Context，而落盘发生在返回错误**之前**
@@ -55,4 +75,7 @@ func ResetSyncImageOBSKeys(c *gin.Context) {
 		return
 	}
 	common.SetContextKey(c, constant.ContextKeySyncImageOBSKeys, []string(nil))
+	// 重试复用的是同一个 gin.Context：上一轮产出的图片标记也要一起清，
+	// 否则第二次尝试若变成纯文本响应，仍会凭空多出一条图片任务记录。
+	common.SetContextKey(c, constant.ContextKeySyncImageProduced, false)
 }

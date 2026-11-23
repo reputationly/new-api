@@ -126,6 +126,9 @@ func TextHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *types
 		} else {
 			service.PostTextConsumeQuota(c, info, usage, nil)
 		}
+		// chat 内联出图也进任务日志（标记由 gemini 适配器在响应处理里打，见
+		// relay/channel/gemini/image_task_hook.go）。纯文本请求这里直接返回 nil。
+		recordSyncImageTask(c, info)
 		return nil
 	}
 
@@ -253,5 +256,7 @@ func TextHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *types
 	} else {
 		service.PostTextConsumeQuota(c, info, usage.(*dto.Usage), nil)
 	}
+	// 同上：结算后补任务日志，未标记出图的请求不会写记录。
+	recordSyncImageTask(c, info)
 	return nil
 }

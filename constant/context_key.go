@@ -107,6 +107,11 @@ const (
 	// 签名 URL 不能存库（有有效期），存的是 key，查询时实时签发。
 	ContextKeySyncImageOBSKeys ContextKey = "sync_image_obs_keys"
 
+	// ContextKeySyncImageProduced 本次请求产出了图片（但成品塞在响应体里、没有走
+	// images 端点）。chat 与 Gemini 原生这两条入口用它给任务日志补记录：
+	// RelayMode 里没有对应的图片模式，只能靠这个标记判断该不该写一条任务。
+	ContextKeySyncImageProduced ContextKey = "sync_image_produced"
+
 	// ContextKeySyncConsumedQuota PostTextConsumeQuota 实际结算掉的额度。
 	// 同步生图的任务记录要在结算之后才知道扣了多少，而结算函数本身不返回值。
 	ContextKeySyncConsumedQuota ContextKey = "sync_consumed_quota"

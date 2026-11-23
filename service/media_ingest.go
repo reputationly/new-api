@@ -424,6 +424,25 @@ func persistThirdPartyImage(ctx context.Context, userID int, group, modelName st
 	return signed, key, nil
 }
 
+// PersistInlineImageToOBS 把「塞在响应体里」的图片（base64 原件）落盘到我方 OBS，
+// 返回签名 URL 与对象 key。
+//
+// 与 RewriteImageResponseToOBS 的分工：那条只处理 /v1/images/* 的 OpenAI 图片响应；
+// chat 与 Gemini 原生把图片放在 message content / inlineData 里，客户端拿到的必须是
+// 原始 base64（不能改写响应），所以这里只落一份留档给任务日志预览用
+// （见 relay/image_sync_task.go 的「内联图片」分支）。
+//
+// best-effort：OBS 未启用或落盘失败都返回 error，调用方据此退化成「只记任务、不留图」。
+func PersistInlineImageToOBS(ctx context.Context, userID int, group, modelName string, raw []byte, ext string) (string, string, error) {
+	if len(raw) == 0 {
+		return "", "", fmt.Errorf("图片内容为空")
+	}
+	if !mediastore.Enabled() {
+		return "", "", fmt.Errorf("OBS 未启用")
+	}
+	return persistThirdPartyImage(ctx, userID, group, modelName, mediastore.PersistSource{Data: raw}, ext)
+}
+
 func watermarkB64Image(ctx context.Context, value string, userID int, group string) (string, bool) {
 	tpl := system_setting.GetWatermarkSettings().ResolveTemplate(group, system_setting.MediaKindImage)
 	if tpl == nil {

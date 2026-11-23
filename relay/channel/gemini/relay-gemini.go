@@ -1328,6 +1328,8 @@ func geminiStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http
 }
 
 func GeminiChatStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Response) (*dto.Usage, *types.NewAPIError) {
+	// 流式的图片分片在 SSE 里，第一版不做还原：只标记，任务日志照写但没有预览。
+	markGeminiImageProducedForStream(c, info)
 	id := helper.GetResponseID(c)
 	createAt := common.GetTimestamp()
 	finishReason := constant.FinishReasonStop
@@ -1445,6 +1447,8 @@ func GeminiChatHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.R
 	if err != nil {
 		return nil, types.NewOpenAIError(err, types.ErrorCodeBadResponseBody, http.StatusInternalServerError)
 	}
+	// 图片成图在 parts 里（转换成 markdown 之前先留档），供结算后补任务日志。
+	captureGeminiInlineImages(c, info, geminiResponse.Candidates)
 	if len(geminiResponse.Candidates) == 0 {
 		usage := buildUsageFromGeminiMetadata(geminiResponse.UsageMetadata, info.GetEstimatePromptTokens())
 
@@ -1787,17 +1791,33 @@ func GeminiImageChatHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *h
 			types.ErrorCodeEmptyResponse, http.StatusInternalServerError)
 	}
 
+	// 这条路径不经过 openai 适配器的 RewriteImageResponseToOBS，所以结果引用要自己登记。
+	// 顺带支撑 response_format：OpenAI 语义下缺省是 url，只有显式 b64_json 才回 base64。
+	//
+	// 上游 Gemini 只给 inlineData（base64），没有 URL 可透传——这里的 url 一律是我方
+	// OBS 的签名链接（有效期 SignedURLTTLHours，默认 7 天）。OBS 未启用或某张落盘失败
+	// 时逐张降级回 b64，不让整单失败。
+	imageURLs := persistGeminiInlineImages(c, info, geminiResponse.Candidates)
+	wantURL := wantsImageURL(imageResponseFormat(info))
+
 	openAIResponse := dto.ImageResponse{
 		Created: common.GetTimestamp(),
 		Data:    make([]dto.ImageData, 0),
 	}
+	imageIndex := 0
 	for _, candidate := range geminiResponse.Candidates {
 		for _, part := range candidate.Content.Parts {
-			if part.InlineData != nil && strings.HasPrefix(part.InlineData.MimeType, "image") {
-				openAIResponse.Data = append(openAIResponse.Data, dto.ImageData{
-					B64Json: part.InlineData.Data,
-				})
+			if !isInlineImagePart(&part) {
+				continue
 			}
+			item := dto.ImageData{}
+			if wantURL && imageIndex < len(imageURLs) && imageURLs[imageIndex] != "" {
+				item.Url = imageURLs[imageIndex]
+			} else {
+				item.B64Json = part.InlineData.Data
+			}
+			openAIResponse.Data = append(openAIResponse.Data, item)
+			imageIndex++
 		}
 	}
 

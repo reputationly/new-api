@@ -46,7 +46,13 @@ func recordSyncImageTask(c *gin.Context, info *relaycommon.RelayInfo) {
 func buildSyncImageTask(c *gin.Context, info *relaycommon.RelayInfo) *model.Task {
 	action := syncImageAction(info.RelayMode)
 	if action == "" {
-		return nil // 不是图片端点，不该走到这里
+		// chat 与 Gemini 原生把成图塞在响应体里（markdown data URI / inlineData），
+		// RelayMode 里没有对应的图片模式，只有适配器明确标记「产出了图片」时才补记录
+		// ——否则每一次纯文本对话都会凭空多出一条图片任务。
+		if !relaycommon.SyncImageProduced(c) {
+			return nil
+		}
+		action = constant.TaskActionImageGenerate
 	}
 
 	task := model.InitTask(GetTaskPlatform(c), info)

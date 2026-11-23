@@ -44,6 +44,10 @@ func GeminiTextGenerationHandler(c *gin.Context, info *relaycommon.RelayInfo, re
 	// 计算使用量（基于 UsageMetadata）
 	usage := buildUsageFromGeminiMetadata(geminiResponse.UsageMetadata, info.GetEstimatePromptTokens())
 
+	// 图片成图在响应体里（inlineData）。落一份 OBS 留档并标记，供结算后补任务日志；
+	// 客户端收到的仍是原始 base64。
+	captureGeminiInlineImages(c, info, geminiResponse.Candidates)
+
 	service.IOCopyBytesGracefully(c, resp, responseBody)
 
 	return &usage, nil
@@ -84,6 +88,8 @@ func NativeGeminiEmbeddingHandler(c *gin.Context, resp *http.Response, info *rel
 
 func GeminiTextGenerationStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Response) (*dto.Usage, *types.NewAPIError) {
 	helper.SetEventStreamHeaders(c)
+	// 流式的图片分片在 SSE 里，第一版不做还原：只标记，任务日志照写但没有预览。
+	markGeminiImageProducedForStream(c, info)
 
 	return geminiStreamHandler(c, info, resp, func(data string, geminiResponse *dto.GeminiChatResponse) bool {
 		err := helper.StringData(c, data)

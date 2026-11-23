@@ -195,6 +195,9 @@ func GeminiHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *typ
 	}
 
 	service.PostTextConsumeQuota(c, info, usage.(*dto.Usage), nil)
+	// Gemini 原生出图（inlineData）补一条任务日志：流式只有记录没有预览，
+	// 非流式会把图落 OBS 后带预览（见 image_task_hook.go）。
+	recordSyncImageTask(c, info)
 	return nil
 }
 

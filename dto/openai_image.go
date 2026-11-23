@@ -204,7 +204,10 @@ type ImageOutputTokenDetails struct {
 	ImageTokens int `json:"image_tokens"`
 }
 type ImageData struct {
-	Url           string `json:"url"`
-	B64Json       string `json:"b64_json"`
-	RevisedPrompt string `json:"revised_prompt"`
+	// 与 OpenAI 一致：url 与 b64_json 只出现有值的那个，空值不落盘。
+	// 少了 omitempty，gemini 渠道回 url 时会同时带一个 "b64_json":""，
+	// 反过来回 b64 时会带 "url":""——对严格校验的客户端是噪音。
+	Url           string `json:"url,omitempty"`
+	B64Json       string `json:"b64_json,omitempty"`
+	RevisedPrompt string `json:"revised_prompt,omitempty"`
 }
