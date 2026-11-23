@@ -31,11 +31,10 @@ func ResponsesResponseToChatCompletionsResponse(resp *dto.OpenAIResponsesRespons
 		} else {
 			usage.TotalTokens = usage.PromptTokens + usage.CompletionTokens
 		}
-		if resp.Usage.InputTokensDetails != nil {
-			usage.PromptTokensDetails.CachedTokens = resp.Usage.InputTokensDetails.CachedTokens
-			usage.PromptTokensDetails.ImageTokens = resp.Usage.InputTokensDetails.ImageTokens
-			usage.PromptTokensDetails.AudioTokens = resp.Usage.InputTokensDetails.AudioTokens
-		}
+		// 缓存命中 / 写入 / TTL 明细都在 input_tokens_details 里，必须整体合并进
+		// 计费字段（主来源优先、为零才回退，不累加）；只搬命中会让缓存写入按普通
+		// 输入价结算。
+		usage.PromptTokensDetails.MergeInputDetails(resp.Usage.InputTokensDetails)
 		if resp.Usage.CompletionTokenDetails.ReasoningTokens != 0 {
 			usage.CompletionTokenDetails.ReasoningTokens = resp.Usage.CompletionTokenDetails.ReasoningTokens
 		}

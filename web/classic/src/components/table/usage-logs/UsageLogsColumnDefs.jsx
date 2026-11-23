@@ -369,7 +369,7 @@ function formatTokenCount(value) {
   return toTokenNumber(value).toLocaleString();
 }
 
-function getPromptCacheSummary(other) {
+export function getPromptCacheSummary(other) {
   if (!other || typeof other !== 'object') {
     return null;
   }
@@ -381,9 +381,13 @@ function getPromptCacheSummary(other) {
 
   const hasSplitCacheCreation =
     cacheCreationTokens5m > 0 || cacheCreationTokens1h > 0;
-  const cacheWriteTokens = hasSplitCacheCreation
-    ? cacheCreationTokens5m + cacheCreationTokens1h
-    : cacheCreationTokens;
+  // 后端写的 cache_write_tokens 已经是「汇总与明细之和取较大」，但历史日志可能只有
+  // 拆分或只有汇总。三者取最大，避免拆分存在时把汇总更大的那部分漏展示。
+  const cacheWriteTokens = Math.max(
+    toTokenNumber(other.cache_write_tokens),
+    cacheCreationTokens,
+    hasSplitCacheCreation ? cacheCreationTokens5m + cacheCreationTokens1h : 0,
+  );
 
   if (cacheReadTokens <= 0 && cacheWriteTokens <= 0) {
     return null;

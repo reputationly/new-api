@@ -149,7 +149,9 @@ const ModelTimePriceSection = ({
       if (value === null || !(value > 0)) {
         delete prices[comp];
       } else {
-        prices[comp] = Number(Number(value).toFixed(4));
+        // 10 位：分时价同样要能装下极低单价（4 位会把 1e-7 量级抹成 0）。
+        // 精度收敛只做一次，与基础价 PriceInput 的 12 位存储口径不冲突。
+        prices[comp] = Number(Number(value).toFixed(10));
       }
       const next = { ...rule, prices };
       delete next.value;

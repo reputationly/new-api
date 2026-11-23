@@ -85,3 +85,82 @@ func TestCacheWriteSplitRequiresDetails(t *testing.T) {
 	require.Equal(t, 1200, shortTTL)
 	require.Equal(t, 249, longTTL)
 }
+
+// 汇总缺失时以 TTL 明细之和为准：上游只给 eca_cache_creation_details 时，
+// 汇总字段是 0，不算进总数会让这批 token 既留在输入里又按分量价计一遍。
+func TestCacheWriteTokensTotalFallsBackToSplitSum(t *testing.T) {
+	onlySplit := InputTokenDetails{
+		EcaCacheCreationDetails: &EcaCacheCreationDetails{
+			Ephemeral5mInputTokens: 30,
+			Ephemeral1hInputTokens: 10,
+		},
+	}
+	require.Equal(t, 40, onlySplit.CacheWriteTokensTotal())
+
+	// 汇总偏小时同样取明细之和
+	partial := InputTokenDetails{
+		CacheWriteTokens: 5,
+		EcaCacheCreationDetails: &EcaCacheCreationDetails{
+			Ephemeral5mInputTokens: 30,
+			Ephemeral1hInputTokens: 10,
+		},
+	}
+	require.Equal(t, 40, partial.CacheWriteTokensTotal())
+
+	// 汇总更大时保留汇总
+	bigger := InputTokenDetails{
+		CacheWriteTokens: 50,
+		EcaCacheCreationDetails: &EcaCacheCreationDetails{
+			Ephemeral5mInputTokens: 20,
+			Ephemeral1hInputTokens: 10,
+		},
+	}
+	require.Equal(t, 50, bigger.CacheWriteTokensTotal())
+}
+
+// 两份明细都在且内容相同时不能累加成两倍；主来源为零的字段才回退。
+func TestMergeInputDetailsDoesNotAccumulate(t *testing.T) {
+	dst := InputTokenDetails{
+		CachedTokens:     100,
+		CacheWriteTokens: 40,
+		ImageTokens:      7,
+	}
+	src := InputTokenDetails{
+		CachedTokens:     100,
+		CacheWriteTokens: 40,
+		ImageTokens:      7,
+		TextTokens:       90,
+		EcaCacheCreationDetails: &EcaCacheCreationDetails{
+			Ephemeral5mInputTokens: 40,
+		},
+	}
+
+	dst.MergeInputDetails(&src)
+
+	require.Equal(t, 100, dst.CachedTokens)
+	require.Equal(t, 40, dst.CacheWriteTokens)
+	require.Equal(t, 7, dst.ImageTokens)
+	require.Equal(t, 90, dst.TextTokens)
+	require.NotNil(t, dst.EcaCacheCreationDetails)
+}
+
+func TestMergeInputDetailsFallsBackWhenPrimaryEmpty(t *testing.T) {
+	var dst InputTokenDetails
+	src := InputTokenDetails{
+		CachedTokens:     60,
+		CacheWriteTokens: 40,
+		CreationTokens:   40,
+		TextTokens:       100,
+	}
+
+	dst.MergeInputDetails(&src)
+
+	require.Equal(t, 60, dst.CachedTokens)
+	require.Equal(t, 40, dst.CacheWriteTokens)
+	require.Equal(t, 40, dst.CreationTokens)
+	require.Equal(t, 100, dst.TextTokens)
+	require.Equal(t, 40, dst.CacheWriteTokensTotal())
+
+	// nil 入参不 panic
+	dst.MergeInputDetails(nil)
+}

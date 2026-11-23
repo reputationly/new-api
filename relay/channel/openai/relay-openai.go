@@ -605,9 +605,8 @@ func OpenaiHandlerWithUsage(c *gin.Context, info *relaycommon.RelayInfo, resp *h
 		usageResp.CompletionTokens += usageResp.OutputTokens
 	}
 	// Responses 协议把缓存统计放在 input_tokens_details 里，而计费读的是
-	// PromptTokensDetails。逐字段「主来源优先、为零才回退」，两份都在时不累加
-	// ——累加会把缓存命中/写入翻倍（见 mergeInputTokenDetails）。
-	mergeInputTokenDetails(&usageResp.PromptTokensDetails, usageResp.InputTokensDetails)
+	// PromptTokensDetails（逐字段优先、为零才回退，不累加）。
+	usageResp.PromptTokensDetails.MergeInputDetails(usageResp.InputTokensDetails)
 	applyUsagePostProcessing(info, &usageResp.Usage, responseBody)
 	return &usageResp.Usage, nil
 }

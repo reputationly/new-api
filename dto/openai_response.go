@@ -281,6 +281,9 @@ type InputTokenDetails struct {
 //
 // cached_creation_tokens 是历史字段，优先；缺失时回退到网关别名
 // cache_write_tokens / creation_tokens（取较大者，两者通常同值）。
+//
+// 汇总缺失或偏小时以 TTL 明细之和为准：上游只给 eca_cache_creation_details 时
+// 汇总字段是 0，不这么取会让这批 token 既留在输入里、又按分量价计一遍。
 func (d InputTokenDetails) CacheWriteTokensTotal() int {
 	total := d.CachedCreationTokens
 	if d.CacheWriteTokens > total {
@@ -289,7 +292,48 @@ func (d InputTokenDetails) CacheWriteTokensTotal() int {
 	if d.CreationTokens > total {
 		total = d.CreationTokens
 	}
+	if shortTTL, longTTL := d.CacheWriteSplit(); shortTTL+longTTL > total {
+		total = shortTTL + longTTL
+	}
 	return total
+}
+
+// MergeInputDetails 把另一份 token 明细合并进来——典型场景是把 Responses 协议的
+// input_tokens_details 并进计费读取的 prompt_tokens_details。
+//
+// 规则：**每个字段以本对象为准，本对象该字段为零才回退，绝不累加**。
+// 有的网关两份都返回同一份数据，累加会让缓存命中/写入翻倍（扣费翻倍）。
+//
+// 已知局限：int 字段区分不了「显式 0」和「字段缺失」，主来源写 0、回退来源非 0 时
+// 会取回退值。要彻底区分得把这些字段改成指针，牵动全仓；现有报文没有这种冲突。
+func (d *InputTokenDetails) MergeInputDetails(src *InputTokenDetails) {
+	if d == nil || src == nil {
+		return
+	}
+	if d.CachedTokens == 0 {
+		d.CachedTokens = src.CachedTokens
+	}
+	if d.CachedCreationTokens == 0 {
+		d.CachedCreationTokens = src.CachedCreationTokens
+	}
+	if d.CacheWriteTokens == 0 {
+		d.CacheWriteTokens = src.CacheWriteTokens
+	}
+	if d.CreationTokens == 0 {
+		d.CreationTokens = src.CreationTokens
+	}
+	if d.TextTokens == 0 {
+		d.TextTokens = src.TextTokens
+	}
+	if d.AudioTokens == 0 {
+		d.AudioTokens = src.AudioTokens
+	}
+	if d.ImageTokens == 0 {
+		d.ImageTokens = src.ImageTokens
+	}
+	if d.EcaCacheCreationDetails == nil {
+		d.EcaCacheCreationDetails = src.EcaCacheCreationDetails
+	}
 }
 
 // CacheWriteSplit 返回缓存写入的（短 TTL, 长 TTL）token 数。
