@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"sync"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/pkg/billingexpr"
@@ -45,6 +46,57 @@ func GetBillingMode(model string) string {
 	return BillingModeRatio
 }
 
+// ---------------------------------------------------------------------------
+// ModelSourceRate — 每个模型的源货币汇率（上游美元目录价 → 人民币的换算率）
+// ---------------------------------------------------------------------------
+//
+// 为什么单独存：表达式里的系数是人民币，而供应商按美元报价、汇率由它定且会变。
+// 把汇率做成按模型的参数后，表达式可以写成 `p * 1.5 * fx`（美元价 × fx），
+// 改汇率只需改这一个数，不必重写表达式。
+//
+// 存在这里而不是 billing_setting 的配置结构里：前端用的顶层 key 是 ModelSourceRate，
+// 与 ModelRatio/GroupModelRatio 一样走 model/option.go 的显式 case，避免改 key、
+// 也避免给已存数据做迁移。
+var (
+	modelSourceRateMu sync.RWMutex
+	modelSourceRate   = make(map[string]float64)
+)
+
+func UpdateModelSourceRateByJSONString(jsonStr string) error {
+	parsed := make(map[string]float64)
+	if strings.TrimSpace(jsonStr) != "" {
+		if err := common.UnmarshalJsonStr(jsonStr, &parsed); err != nil {
+			return err
+		}
+	}
+	modelSourceRateMu.Lock()
+	modelSourceRate = parsed
+	modelSourceRateMu.Unlock()
+	return nil
+}
+
+func ModelSourceRate2JSONString() string {
+	modelSourceRateMu.RLock()
+	defer modelSourceRateMu.RUnlock()
+	// 用 common.Marshal 保证与其它 option 的序列化口径一致。
+	data, err := common.Marshal(modelSourceRate)
+	if err != nil {
+		return "{}"
+	}
+	return string(data)
+}
+
+// GetModelSourceRate 返回某模型的源货币汇率；未配置时 ok=false。
+func GetModelSourceRate(model string) (float64, bool) {
+	modelSourceRateMu.RLock()
+	rate, ok := modelSourceRate[model]
+	modelSourceRateMu.RUnlock()
+	if !ok || rate <= 0 {
+		return 0, false
+	}
+	return rate, true
+}
+
 func GetBillingExpr(model string) (string, bool) {
 	expr, ok := billingSetting.BillingExpr[model]
 	return expr, ok
@@ -78,11 +130,12 @@ func SmokeTestExpr(exprStr string) error {
 }
 
 func smokeTestExpr(exprStr string) error {
+	// fx 取 1：引用 fx 的表达式在 fx=0 时会算出 0，那样冒烟测试等于什么都没验。
 	vectors := []billingexpr.TokenParams{
-		{P: 0, C: 0, Len: 0},
-		{P: 1000, C: 1000, Len: 1000},
-		{P: 100000, C: 100000, Len: 100000},
-		{P: 1000000, C: 1000000, Len: 1000000},
+		{P: 0, C: 0, Len: 0, FX: 1},
+		{P: 1000, C: 1000, Len: 1000, FX: 1},
+		{P: 100000, C: 100000, Len: 100000, FX: 1},
+		{P: 1000000, C: 1000000, Len: 1000000, FX: 1},
 	}
 	requests := []billingexpr.RequestInput{
 		{},
@@ -137,6 +190,13 @@ func ValidateBillingExprJSON(jsonStr string) error {
 		}
 		if err := SmokeTestExpr(expr); err != nil {
 			return fmt.Errorf("模型 %s 的计费表达式无法编译：%w", model, err)
+		}
+		// 表达式引用了 fx（本模型的源货币汇率），但该模型没配汇率 —— 存进去会在
+		// 每次请求预扣费时失败（fail closed），不如保存时就拒绝，并说清是哪个模型。
+		if billingexpr.UsedVars(expr)["fx"] {
+			if _, ok := GetModelSourceRate(model); !ok {
+				return fmt.Errorf("模型 %s 的计费表达式引用了 fx，但该模型没有设置「源货币汇率」；请先填汇率再保存", model)
+			}
 		}
 	}
 	return nil

@@ -99,7 +99,7 @@ function describeGroup(group, t) {
   return parts.join(' && ');
 }
 
-export default function DynamicPricingBreakdown({ billingExpr, t }) {
+export default function DynamicPricingBreakdown({ billingExpr, t, fx = 0 }) {
   const { symbol, ratePerCny } = getModelPricingCurrencyConfig();
   // v1 表达式是历史美元口径（已拒绝结算）：系数展示前先按汇率折成人民币，
   // 只保证这里的数字与历史价格一致。v2 的系数本身已是 ¥/百万 tokens。
@@ -107,7 +107,8 @@ export default function DynamicPricingBreakdown({ billingExpr, t }) {
   const { billingExpr: baseExpr, requestRuleExpr: ruleExpr } =
     splitBillingExprAndRequestRules(billingExpr || '');
 
-  const tiers = parseTiersFromExpr(baseExpr);
+  // 表达式引用 fx 时系数是美元目录价，乘上该模型的汇率才是人民币（未引用则为 1）。
+  const tiers = parseTiersFromExpr(baseExpr, fx);
   const ruleGroups = tryParseRequestRuleExpr(ruleExpr || '');
 
   const hasTiers = tiers && tiers.length > 0;

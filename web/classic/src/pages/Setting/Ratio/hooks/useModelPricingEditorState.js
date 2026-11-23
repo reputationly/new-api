@@ -35,6 +35,15 @@ export const PAGE_SIZE = 10;
  * 按比例缩放一个价格字符串（空值/非数字原样返回）。
  * 用于「改汇率」：运营只改汇率，价格与表达式系数由机器按比例重算，避免手改漏改。
  */
+/**
+ * 表达式是否引用了 fx（本模型的源货币汇率）。
+ *
+ * 引用了 fx 的表达式，系数写的是**美元目录价**，汇率在运行/展示时乘进去；
+ * 所以改汇率时**不能**再去缩放文本（否则 `p * 1.5 * fx` 会被乘成 `p * 1.545 * fx`，
+ * 一次比一次离谱）。这里的判据必须与 helpers/render.jsx 的 exprUsesFX 一致。
+ */
+export const exprReferencesFX = (expr) => /\bfx\b/.test(String(expr || ''));
+
 export const scaleNumericString = (value, factor) => {
   const num = toNumberOrNull(value);
   if (num === null) return value;
@@ -1382,6 +1391,13 @@ export function useModelPricingEditorState({
       }
       const factor = newRate / oldRate;
       const next = { ...model, sourceRate: value };
+      // 表达式引用 fx 时，系数是美元价、汇率由 fx 承担：只记汇率，不缩放文本。
+      const usesFX =
+        exprReferencesFX(model.billingExpr) ||
+        exprReferencesFX(model.requestRuleExpr);
+      if (usesFX) {
+        return next;
+      }
       RATE_SCALED_PRICE_FIELDS.forEach((field) => {
         if (hasValue(next[field])) {
           next[field] = scaleNumericString(next[field], factor);

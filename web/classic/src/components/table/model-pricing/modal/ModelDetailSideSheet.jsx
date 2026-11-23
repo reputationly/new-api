@@ -107,6 +107,7 @@ const ModelDetailSideSheet = ({
                     <DynamicPricingBreakdown
                       billingExpr={modelData.billing_expr}
                       t={t}
+                      fx={modelData.source_rate}
                     />
                   </div>
                 </>

@@ -45,6 +45,9 @@ type Pricing struct {
 	SupportedEndpointTypes []constant.EndpointType `json:"supported_endpoint_types"`
 	BillingMode            string                  `json:"billing_mode,omitempty"`
 	BillingExpr            string                  `json:"billing_expr,omitempty"`
+	// SourceRate 是该模型的源货币汇率。表达式引用 fx 时，系数写的是美元目录价，
+	// 前端展示必须乘上它才能与实扣一致（未引用 fx 的老表达式不看这个字段）。
+	SourceRate float64 `json:"source_rate,omitempty"`
 	// VideoPricing 视频计费矩阵（docs/video-billing-matrix-design.md §2.6 接入点 3）。
 	// 不透出的话定价页只能展示 ModelRatio——那是预扣锚点，不是真实单价，
 	// 对用户是误导（480p 实际 ¥46 却显示 ¥51，还多出一个无意义的「补全价格」）。
@@ -485,6 +488,9 @@ func updatePricing(imgRaw, vidRaw, audRaw, musRaw string) {
 			if expr, ok := billing_setting.GetBillingExpr(model); ok && strings.TrimSpace(expr) != "" {
 				pricing.BillingMode = billingMode
 				pricing.BillingExpr = expr
+				if rate, ok := billing_setting.GetModelSourceRate(model); ok {
+					pricing.SourceRate = rate
+				}
 			}
 		}
 		if entry, ok := ratio_setting.GetVideoPricing(model); ok {

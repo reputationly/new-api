@@ -2595,12 +2595,29 @@ export function normalizeLogPricing(other) {
   return next;
 }
 
-function parseTierBody(bodyStr) {
+// 表达式是否引用了 fx（本模型的源货币汇率）。引用时系数是美元目录价，
+// 展示必须乘汇率；没引用时系数本来就是人民币，乘 1。
+export function exprUsesFX(exprStr) {
+  return /\bfx\b/.test(String(exprStr || ''));
+}
+
+/**
+ * 表达式系数 → 展示用的人民币单价倍数。
+ * 引用 fx 且汇率已知 → 乘汇率；引用 fx 但汇率缺失 → 返回 0（价格显示成 0，
+ * 明显是错的，逼着配置侧修，而不是显示一个"看着像对的"数）。
+ */
+export function exprFXMultiplier(exprStr, fx) {
+  if (!exprUsesFX(exprStr)) return 1;
+  const rate = Number(fx);
+  return Number.isFinite(rate) && rate > 0 ? rate : 0;
+}
+
+function parseTierBody(bodyStr, fxMultiplier = 1) {
   const coeffs = {};
   const re = new RegExp(BILLING_VAR_REGEX.source, 'g');
   let m;
   while ((m = re.exec(bodyStr)) !== null) {
-    if (!(m[1] in coeffs)) coeffs[m[1]] = Number(m[2]);
+    if (!(m[1] in coeffs)) coeffs[m[1]] = Number(m[2]) * fxMultiplier;
   }
   const tier = {};
   for (const [varName, field] of Object.entries(BILLING_VAR_KEY_TO_FIELD)) {
@@ -2609,10 +2626,11 @@ function parseTierBody(bodyStr) {
   return tier;
 }
 
-export function parseTiersFromExpr(exprStr) {
+export function parseTiersFromExpr(exprStr, fx = 0) {
   if (!exprStr) return [];
   try {
     const { body } = stripExprVersion(exprStr);
+    const fxMultiplier = exprFXMultiplier(exprStr, fx);
     const condGroup = `((?:(?:p|c|len)\\s*(?:<|<=|>|>=)\\s*[\\d.eE+]+)(?:\\s*&&\\s*(?:p|c|len)\\s*(?:<|<=|>|>=)\\s*[\\d.eE+]+)*)`;
     const tierRe = new RegExp(
       `(?:${condGroup}\\s*\\?\\s*)?tier\\("([^"]*)",\\s*([^)]+)\\)`,
@@ -2630,7 +2648,7 @@ export function parseTiersFromExpr(exprStr) {
             conditions.push({ var: cm[1], op: cm[2], value: Number(cm[3]) });
         }
       }
-      const tier = parseTierBody(m[3]);
+      const tier = parseTierBody(m[3], fxMultiplier);
       tier.label = m[2];
       tier.conditions = conditions;
       tiers.push(tier);
@@ -2687,6 +2705,8 @@ export function renderTieredModelPrice(opts) {
     cache_creation_tokens_1h: cacheCreationTokens1h = 0,
     // normalizeLogPricing 算好的系数口径：v1 表达式是美元口径，得先乘汇率才是人民币。
     expr_price_scale: exprPriceScale = 1,
+    // 表达式引用 fx 时，日志里记下的当时汇率（后端 other.expr_fx）。
+    expr_fx: exprFX = 0,
   } = opts;
   let exprStr = '';
   try {
@@ -2694,7 +2714,7 @@ export function renderTieredModelPrice(opts) {
   } catch {
     /* ignore */
   }
-  const tiers = parseTiersFromExpr(exprStr);
+  const tiers = parseTiersFromExpr(exprStr, exprFX);
   if (tiers.length === 0) {
     return i18next.t('阶梯计费（表达式解析失败）');
   }
@@ -2752,6 +2772,8 @@ export function renderTieredModelPriceSimple(opts) {
     outputMode = 'segments',
     // 同 renderTieredModelPrice：v1 表达式是美元口径，系数先乘汇率
     expr_price_scale: exprPriceScale = 1,
+    // 表达式引用 fx 时，日志里记下的当时汇率（后端 other.expr_fx）。
+    expr_fx: exprFX = 0,
   } = opts;
   let exprStr = '';
   try {
@@ -2759,7 +2781,7 @@ export function renderTieredModelPriceSimple(opts) {
   } catch {
     /* ignore */
   }
-  const tiers = parseTiersFromExpr(exprStr);
+  const tiers = parseTiersFromExpr(exprStr, exprFX);
   const tier = tiers.find((t) => {
     const l1 = normalizeLabel(t.label);
     const l2 = normalizeLabel(matchedTier);

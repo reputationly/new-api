@@ -41,6 +41,11 @@ func ComputeTieredQuota(snap *BillingSnapshot, params TokenParams) (TieredResult
 }
 
 func ComputeTieredQuotaWithRequest(snap *BillingSnapshot, params TokenParams, request RequestInput) (TieredResult, error) {
+	// fx 以**快照**为准：预扣时冻结的那个值才是这笔请求的成交价依据。
+	// 运营在请求在途时改汇率，不能让同一笔请求预扣与结算各算一个价。
+	if snap.ExprFX > 0 {
+		params.FX = snap.ExprFX
+	}
 	cost, trace, err := RunExprByHashWithRequest(snap.ExprString, snap.ExprHash, params, request)
 	if err != nil {
 		return TieredResult{}, err

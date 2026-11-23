@@ -283,10 +283,24 @@ func modelPriceHelperTiered(c *gin.Context, info *relaycommon.RelayInfo, promptT
 		return types.PriceData{}, err
 	}
 
+	// fx：表达式引用 fx 表示系数写的是美元目录价，必须取到本模型的源货币汇率。
+	// 取不到就**拒绝这次请求**：默认 0 会白送，默认 1 会少收一个汇率倍数，
+	// 两种都比报错糟得多（错误至少可以立刻发现）。
+	exprFX := float64(0)
+	if billingexpr.UsedVars(exprStr)["fx"] {
+		rate, ok := billing_setting.GetModelSourceRate(info.OriginModelName)
+		if !ok {
+			return types.PriceData{}, fmt.Errorf(
+				"model %s 的计费表达式引用了 fx，但该模型没有设置源货币汇率", info.OriginModelName)
+		}
+		exprFX = rate
+	}
+
 	rawCost, trace, err := billingexpr.RunExprWithRequest(exprStr, billingexpr.TokenParams{
 		P:   float64(promptTokens),
 		C:   float64(estimatedCompletionTokens),
 		Len: float64(promptTokens),
+		FX:  exprFX,
 	}, requestInput)
 	if err != nil {
 		return types.PriceData{}, fmt.Errorf("model %s tiered expr run failed: %w", info.OriginModelName, err)
@@ -321,6 +335,8 @@ func modelPriceHelperTiered(c *gin.Context, info *relaycommon.RelayInfo, promptT
 		EstimatedTier:             trace.MatchedTier,
 		QuotaPerUnit:              common.QuotaPerUnit, // 仅 v1 快照语义；v2 结算不读它
 		ExprVersion:               billingexpr.ExprVersion(exprStr),
+		// 冻结本次使用的 fx：结算按快照重算，运营中途改汇率不影响在途请求。
+		ExprFX: exprFX,
 	}
 	info.TieredBillingSnapshot = snapshot
 	info.BillingRequestInput = &requestInput

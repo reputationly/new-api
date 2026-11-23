@@ -62,3 +62,24 @@ func TestValidateBillingExprJSONMixedVersions(t *testing.T) {
 	}`
 	require.NoError(t, ValidateBillingExprJSON(jsonStr))
 }
+
+// 引用 fx 的表达式必须有源货币汇率；没有就保存时报错，而不是等到请求时炸。
+func TestValidateBillingExprJSON_RequiresFXRate(t *testing.T) {
+	expr := `{"gpt-fx":"v2:tier(\"base\", p * 1.5 * fx + c * 7.5 * fx)"}`
+	t.Cleanup(func() { _ = UpdateModelSourceRateByJSONString("") })
+
+	require.NoError(t, UpdateModelSourceRateByJSONString("{}"))
+	err := ValidateBillingExprJSON(expr)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "没有设置「源货币汇率」")
+
+	require.NoError(t, UpdateModelSourceRateByJSONString(`{"gpt-fx":6.8}`))
+	require.NoError(t, ValidateBillingExprJSON(expr))
+}
+
+// 不引用 fx 的表达式不受汇率影响（老写法继续可用）。
+func TestValidateBillingExprJSON_NoFXNoRateOK(t *testing.T) {
+	t.Cleanup(func() { _ = UpdateModelSourceRateByJSONString("") })
+	require.NoError(t, UpdateModelSourceRateByJSONString("{}"))
+	require.NoError(t, ValidateBillingExprJSON(`{"m":"v2:tier(\"base\", p * 1.36)"}`))
+}

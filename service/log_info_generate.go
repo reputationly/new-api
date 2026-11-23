@@ -376,6 +376,11 @@ func InjectTieredBillingInfo(other map[string]interface{}, relayInfo *relaycommo
 	}
 	other["billing_mode"] = "tiered_expr"
 	other["expr_b64"] = base64.StdEncoding.EncodeToString([]byte(snap.ExprString))
+	// 表达式引用 fx 时，日志必须记下当时的汇率：否则同一条表达式在不同日期
+	// 会算出不同价格，历史扣费无法复现（对账与客诉都要靠它）。
+	if snap.ExprFX > 0 {
+		other["expr_fx"] = snap.ExprFX
+	}
 	if result != nil {
 		other["matched_tier"] = result.MatchedTier
 	}

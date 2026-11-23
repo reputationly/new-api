@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import {
+  exprReferencesFX,
   scaleBillingExpr,
   scaleNumericString,
 } from '../hooks/useModelPricingEditorState';
@@ -40,5 +41,22 @@ describe('scaleNumericString（价格字段）', () => {
   it('空值与非数字原样返回', () => {
     expect(scaleNumericString('', 2)).toBe('');
     expect(scaleNumericString('.', 2)).toBe('.');
+  });
+});
+
+// 引用 fx 的表达式：系数是美元价，汇率由 fx 承担 → 改汇率时**不得**缩放文本。
+describe('exprReferencesFX', () => {
+  it('识别 fx 引用', () => {
+    expect(exprReferencesFX('tier("base", p * 1.5 * fx + c * 7.5 * fx)')).toBe(
+      true,
+    );
+    expect(exprReferencesFX('tier("base", p * 1.36 + c * 8.16)')).toBe(false);
+    expect(exprReferencesFX('')).toBe(false);
+    expect(exprReferencesFX(null)).toBe(false);
+  });
+
+  it('fx 只作为完整标识符才算（不能误判 fxx / affx）', () => {
+    expect(exprReferencesFX('tier("base", p * fxx)')).toBe(false);
+    expect(exprReferencesFX('tier("base", p * affx)')).toBe(false);
   });
 });

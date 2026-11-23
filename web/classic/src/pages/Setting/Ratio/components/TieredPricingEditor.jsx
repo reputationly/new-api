@@ -34,7 +34,12 @@ import {
 import { IconCopy, IconDelete, IconPlus } from '@douyinfe/semi-icons';
 import { renderQuotaTrimmed } from '../../../../helpers/render';
 import { getQuotaPerYuan } from '../../../../helpers/quota';
-import { copy, showSuccess, stripExprVersion } from '../../../../helpers';
+import {
+  copy,
+  showSuccess,
+  stripExprVersion,
+  exprUsesFX,
+} from '../../../../helpers';
 import {
   BILLING_EXTRA_VARS,
   BILLING_CACHE_VAR_MAP,
@@ -1078,7 +1083,8 @@ function RawExprEditor({ exprString, onChange, t }) {
               {t('输出 Token')}), <code>len</code> ({t('输入长度')}),{' '}
               <code>cr</code> ({t('缓存命中')}), <code>cc</code> (
               {t('缓存创建（短 TTL）')}), <code>cc1h</code> (
-              {t('缓存创建（长 TTL）')})
+              {t('缓存创建（长 TTL）')}), <code>fx</code> (
+              {t('本模型源货币汇率')})
             </div>
             <div>
               {t('函数')}: <code>tier(name, value)</code>,{' '}
@@ -1742,7 +1748,11 @@ export default function TieredPricingEditor({
   );
 
   useEffect(() => {
-    const parsed = tryParseVisualConfig(currentExpr);
+    // 引用 fx 的表达式不能进可视化编辑：可视化模型只认「变量 * 数字」的系数，
+    // 一旦在那边编辑保存，`* fx` 会被丢掉（价格直接少一个汇率倍数）。
+    const parsed = exprUsesFX(currentExpr)
+      ? null
+      : tryParseVisualConfig(currentExpr);
     if (parsed) {
       setEditorMode('visual');
       setVisualConfig(parsed);
@@ -1898,7 +1908,9 @@ export default function TieredPricingEditor({
           value={editorMode}
           onChange={handleModeSwitch}
         >
-          <Radio value='visual'>{t('可视化编辑')}</Radio>
+          <Radio value='visual' disabled={exprUsesFX(currentExpr)}>
+            {t('可视化编辑')}
+          </Radio>
           <Radio value='raw'>{t('表达式编辑')}</Radio>
         </RadioGroup>
       </div>

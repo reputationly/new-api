@@ -24,6 +24,13 @@ type TokenParams struct {
 	ImgO float64 // image output tokens
 	AI   float64 // audio input tokens
 	AO   float64 // audio output tokens
+	// FX is the model's source-currency exchange rate (USD list price → CNY).
+	// Expressions that reference `fx` let the operator keep USD coefficients
+	// in the expression and maintain the rate in one place per model.
+	// Callers MUST resolve it from ModelSourceRate; a missing rate has to be
+	// rejected before evaluation (see relay/helper/price.go), never defaulted
+	// to 1 — a silent 1 would look like a 6.8x under-charge.
+	FX float64
 }
 
 // TraceResult holds side-channel info captured by the tier() function
@@ -49,6 +56,11 @@ type BillingSnapshot struct {
 	EstimatedTier             string  `json:"estimated_tier"`
 	QuotaPerUnit              float64 `json:"quota_per_unit"`
 	ExprVersion               int     `json:"expr_version"`
+	// ExprFX is the `fx` value frozen at pre-consume time. Settlement re-runs
+	// the same expression, so it must use the same rate: an operator editing
+	// the rate mid-request would otherwise pre-consume and settle at two
+	// different prices for one request.
+	ExprFX float64 `json:"expr_fx"`
 }
 
 // TieredResult holds everything needed after running tiered settlement.
