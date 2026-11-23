@@ -600,39 +600,57 @@ export default function ModelPricingEditor({
                       '普通按量/按次直接填价格就行；如果价格要跟请求参数或请求头联动，请切到表达式/阶梯计费。',
                     )}
                   </div>
-                  {/* 录入单位开关：只换算下面价格框的显示与输入，落库口径一个字不变。 */}
+                  {/*
+                    源货币汇率：**始终显示**。它是每个模型自己的参数，改它会把该模型的
+                    价格与表达式系数按比例重算——表达式模式没有价格框、也没有美元开关，
+                    如果继续把它藏在开关后面，改汇率这条路就断了。
+                  */}
                   <div className='mt-3 flex flex-wrap items-center gap-3'>
-                    <Switch
-                      size='small'
-                      checked={usdEntry}
-                      onChange={setUsdEntry}
-                    />
                     <span className='text-sm font-medium text-gray-700'>
-                      {t('按美元目录价录入')}
+                      {t('源货币汇率')}
                     </span>
-                    {usdEntry ? (
-                      <Input
-                        size='small'
-                        style={{ width: 140 }}
-                        value={selectedModel.sourceRate}
-                        placeholder='6.8'
-                        suffix={<span className='text-xs'>¥/$</span>}
-                        onChange={(v) => {
-                          if (NUMERIC_INPUT_REGEX.test(v)) {
-                            handleSourceRateChange(v);
-                          }
-                        }}
-                      />
-                    ) : null}
-                  </div>
-                  {usdEntry ? (
-                    <div className='mt-2 text-xs text-gray-500'>
+                    <Input
+                      size='small'
+                      style={{ width: 140 }}
+                      value={selectedModel.sourceRate}
+                      placeholder='6.8'
+                      suffix={<span className='text-xs'>¥/$</span>}
+                      onChange={(v) => {
+                        if (NUMERIC_INPUT_REGEX.test(v)) {
+                          handleSourceRateChange(v);
+                        }
+                      }}
+                    />
+                    <span className='text-xs text-gray-500'>
                       {t(
-                        '下面价格框改为 $/1M tokens 或 $/次，直接照抄供应商目录价；保存时按本模型自己的汇率折算成人民币入库。改汇率时该模型的价格与表达式系数会按比例自动重算。分组折扣 / 分组倍率在分组管理里配置。',
+                        '供应商按美元报价时，这里填它的结算汇率。改这个数字会把本模型的价格与表达式系数按比例重算（先点「应用更改」才生效）。',
                       )}
-                    </div>
+                    </span>
+                  </div>
+                  {/* 录入单位开关：只换算下面价格框的显示与输入，落库口径一个字不变。
+                      表达式模式没有价格框，开关对它没有意义，直接不显示。 */}
+                  {selectedModel.billingMode !== 'tiered_expr' ? (
+                    <>
+                      <div className='mt-3 flex flex-wrap items-center gap-3'>
+                        <Switch
+                          size='small'
+                          checked={usdEntry}
+                          onChange={setUsdEntry}
+                        />
+                        <span className='text-sm font-medium text-gray-700'>
+                          {t('按美元目录价录入')}
+                        </span>
+                      </div>
+                      {usdEntry ? (
+                        <div className='mt-2 text-xs text-gray-500'>
+                          {t(
+                            '下面价格框改为 $/1M tokens 或 $/次，直接照抄供应商目录价；保存时按上方「源货币汇率」折算成人民币入库。分组折扣 / 分组倍率在分组管理里配置。',
+                          )}
+                        </div>
+                      ) : null}
+                    </>
                   ) : null}
-                  {usdEntry && !Number(selectedModel.sourceRate) ? (
+                  {!Number(selectedModel.sourceRate) ? (
                     <div
                       className='mt-1 text-xs'
                       style={{ color: 'var(--semi-color-warning)' }}
@@ -692,7 +710,7 @@ export default function ModelPricingEditor({
                         closeIcon={null}
                         style={{ marginBottom: 16 }}
                         description={t(
-                          '表达式里的系数固定按 ¥/百万 tokens 填写，不随上面的美元开关换算：系数 = 美元价 × {{rate}}（本模型汇率）。改汇率时这些系数会自动按比例重算。',
+                          '表达式里的系数固定按 ¥/百万 tokens 填写：系数 = 美元价 × 本模型汇率（{{rate}}）。改汇率时这些系数会按比例自动重算。',
                           { rate: selectedModel.sourceRate || t('未填') },
                         )}
                       />
