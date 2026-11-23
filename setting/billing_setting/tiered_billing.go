@@ -2,7 +2,10 @@ package billing_setting
 
 import (
 	"fmt"
+	"sort"
+	"strings"
 
+	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/pkg/billingexpr"
 	"github.com/QuantumNous/new-api/setting/config"
 	"github.com/samber/lo"
@@ -100,6 +103,40 @@ func smokeTestExpr(exprStr string) error {
 			if result < 0 {
 				return fmt.Errorf("vector {p=%g, c=%g}: result %f < 0", v.P, v.C, result)
 			}
+		}
+	}
+	return nil
+}
+
+// ValidateBillingExprJSON 校验一整张「模型 → 表达式」映射，返回第一个失败的模型与原因。
+//
+// 为什么需要：保存路径此前只校验「表达式 vs 时段价」互斥，**没有任何编译校验**
+// （SmokeTestExpr 写好了却没人调用）。于是写坏的表达式能静默存库，直到下一次请求
+// 预扣费时才在 relay/helper/price.go 里炸 —— 那时已经影响了线上调用。
+//
+// 只校验带 v2: 前缀的表达式：存量 v1（美元口径）的配置继续放行，避免一次升级把
+// 老配置全拦住；按模型名字排序遍历，保证报错信息稳定（map 迭代顺序是随机的）。
+func ValidateBillingExprJSON(jsonStr string) error {
+	if strings.TrimSpace(jsonStr) == "" {
+		return nil
+	}
+	var exprs map[string]string
+	if err := common.UnmarshalJsonStr(jsonStr, &exprs); err != nil {
+		// 结构本身有问题交给既有的反序列化路径报错，这里只负责表达式语义。
+		return nil
+	}
+	models := make([]string, 0, len(exprs))
+	for model := range exprs {
+		models = append(models, model)
+	}
+	sort.Strings(models)
+	for _, model := range models {
+		expr := strings.TrimSpace(exprs[model])
+		if !strings.HasPrefix(expr, "v2:") {
+			continue
+		}
+		if err := SmokeTestExpr(expr); err != nil {
+			return fmt.Errorf("模型 %s 的计费表达式无法编译：%w", model, err)
 		}
 	}
 	return nil

@@ -11,6 +11,7 @@ import (
 	"github.com/QuantumNous/new-api/service/mediastore"
 	"github.com/QuantumNous/new-api/service/moderation"
 	"github.com/QuantumNous/new-api/setting"
+	"github.com/QuantumNous/new-api/setting/billing_setting"
 	"github.com/QuantumNous/new-api/setting/console_setting"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
 	"github.com/QuantumNous/new-api/setting/ratio_setting"
@@ -292,6 +293,14 @@ func UpdateOption(c *gin.Context) {
 	case "billing_setting.billing_expr":
 		// 反方向互斥：表达式里引用时间函数时，该模型不能再有时段价。
 		if err = checkExprVsTimePrice(option.Value.(string)); err != nil {
+			c.JSON(http.StatusOK, gin.H{
+				"success": false,
+				"message": err.Error(),
+			})
+			return
+		}
+		// 编译校验：坏表达式存进库只会在下一次请求预扣费时炸，这里提前拦住。
+		if err = billing_setting.ValidateBillingExprJSON(option.Value.(string)); err != nil {
 			c.JSON(http.StatusOK, gin.H{
 				"success": false,
 				"message": err.Error(),
