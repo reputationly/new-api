@@ -100,19 +100,16 @@ func TestBuildMusicTaskBodyAceStepKeepsPrompt(t *testing.T) {
 }
 
 // Music3 无词又非要唱：明确拒绝，别把风格描述当歌词送进引擎。
-func TestBuildMusicTaskBodyMusic3RequiresLyricsUnlessInstrumental(t *testing.T) {
+// Music3 无歌词一律拒:该引擎上 is_instrumental 不生效(带着它 + 歌词仍然可能有人声),
+// 而无歌词时产物长度仅数秒到二三十秒,不是可交付的曲子。
+func TestBuildMusicTaskBodyMusic3RejectsWithoutLyrics(t *testing.T) {
 	withMusicEngineConfig(t)
-	if _, msg := buildMusicTaskBody("minimax-music3", "chill lo-fi", "", nil, nil); !strings.Contains(msg, "needs lyrics") {
-		t.Fatalf("应提示缺歌词，实际 %q", msg)
+	if _, msg := buildMusicTaskBody("minimax-music3", "chill lo-fi", "", nil, nil); !strings.Contains(msg, "lyrics are required") {
+		t.Fatalf("应说明需要歌词，实际 %q", msg)
 	}
 	instrumental := true
-	body, msg := buildMusicTaskBody("minimax-music3", "chill lo-fi", "", &instrumental, nil)
-	if msg != "" {
-		t.Fatalf("纯器乐不该要求歌词: %s", msg)
-	}
-	meta, _ := body["metadata"].(map[string]any)
-	if meta["is_instrumental"] != true {
-		t.Fatalf("is_instrumental 应透传: %+v", meta)
+	if _, msg := buildMusicTaskBody("minimax-music3", "chill lo-fi", "", &instrumental, nil); !strings.Contains(msg, "does not support instrumental") {
+		t.Fatalf("器乐请求同样要拒，实际 %q", msg)
 	}
 }
 
@@ -139,10 +136,10 @@ func TestBuildMusicTaskBodyCarriesEnhancedCaption(t *testing.T) {
 func TestOfficialRoutePostExpansionBodiesFlowThrough(t *testing.T) {
 	withMusicEngineConfig(t)
 
-	// Music3 纯器乐:prompt 是增强后的描述,没有歌词、is_instrumental=true。
+	// Music3:描述在 prompt、歌词在 lyrics(纯器乐会被拒,所以这里带歌词)。
 	var music3Req minimaxMusicRequest
 	require.NoError(t, common.Unmarshal([]byte(
-		`{"model":"minimax-music3","prompt":"NEW CAPTION","is_instrumental":true}`), &music3Req))
+		`{"model":"minimax-music3","prompt":"NEW CAPTION","lyrics":"[Verse] rain","is_instrumental":false}`), &music3Req))
 	prompt := strings.TrimSpace(music3Req.Prompt)
 	require.NotEmpty(t, prompt, "prompt is required 之前的那道门")
 	taskBody, msg := buildMusicTaskBody(music3Req.Model, prompt, music3Req.Lyrics,
@@ -151,7 +148,7 @@ func TestOfficialRoutePostExpansionBodiesFlowThrough(t *testing.T) {
 	meta, ok := taskBody["metadata"].(map[string]any)
 	require.True(t, ok, "必须带 metadata")
 	require.Equal(t, "NEW CAPTION", meta["instructions"], "增强后的描述要进 instructions")
-	require.Equal(t, true, meta["is_instrumental"], "is_instrumental 要透传")
+	require.Equal(t, "[Verse] rain", taskBody["prompt"], "prompt 位是歌词")
 
 	// ACE-Step:prompt 是增强后的描述,歌词在顶层 lyrics → metadata.lyrics。
 	var aceReq minimaxMusicRequest
@@ -189,4 +186,24 @@ func TestBuildMusicTaskBodyPassesThroughClientMetadata(t *testing.T) {
 	require.NotContains(t, meta, "instructions", "客户端传的 instructions 应被忽略")
 	require.NotContains(t, meta, "lyrics", "没有歌词时不该写 lyrics")
 	require.Equal(t, "warm lofi loop", taskBody["prompt"])
+}
+
+// 纯器乐在 Music3 上不支持:is_instrumental 引擎不读,无歌词时产物只有数秒到二三十秒。
+// 明确 400,而不是给客户一条 10 秒的曲子。
+func TestMusic3RejectsInstrumental(t *testing.T) {
+	instrumental := true
+	_, msg := buildMusicTaskBody("minimax-music3", "a calm piano solo", "", &instrumental, nil)
+	require.Contains(t, msg, "does not support instrumental")
+}
+
+func TestMusic3RejectsMissingLyrics(t *testing.T) {
+	_, msg := buildMusicTaskBody("minimax-music3", "a calm piano solo", "", nil, nil)
+	require.Contains(t, msg, "lyrics are required")
+}
+
+// 有歌词的请求完全不受影响。
+func TestMusic3WithLyricsUnaffected(t *testing.T) {
+	body, msg := buildMusicTaskBody("minimax-music3", "a warm pop song", "[Verse] hello", nil, nil)
+	require.Empty(t, msg)
+	require.Equal(t, "[Verse] hello", body["prompt"])
 }
