@@ -64,13 +64,17 @@ const EMPTY_CANDIDATE_MODEL_NAMES = [];
 
 // 「按美元目录价录入」开关：纯录入体验，不改任何存储口径。
 // 开关与汇率只是运营的记事本能用就行，放 localStorage，不占后端 option。
-const USD_ENTRY_KEY = 'model_pricing_usd_entry';
+// 「按美元目录价录入」是**按模型**记的：不同模型的源货币可能不同（有的上游美元、
+// 有的本来就人民币），做成全局开关会让切换模型时状态互相污染——之前就是这个毛病：
+// 给一个模型打开后，切到任何模型都还是"美元"，看起来像"所有模型都变成美元计价"。
+const USD_ENTRY_MAP_KEY = 'model_pricing_usd_entry_map';
 
-const readUSDEntry = () => {
+const readUSDEntryMap = () => {
   try {
-    return localStorage.getItem(USD_ENTRY_KEY) === '1';
+    const raw = JSON.parse(localStorage.getItem(USD_ENTRY_MAP_KEY) || '{}');
+    return raw && typeof raw === 'object' && !Array.isArray(raw) ? raw : {};
   } catch (e) {
-    return false;
+    return {};
   }
 };
 
@@ -100,14 +104,14 @@ export default function ModelPricingEditor({
   // 汇率是**每个模型自己的**（ModelSourceRate）：不同供应商/模型可能给不同汇率，
   // 改它时会按比例缩放该模型的价格与表达式系数（见 handleSourceRateChange），
   // 所以运营只需要改这一个数字，不用手改每个系数。
-  const [usdEntry, setUsdEntry] = useState(readUSDEntry);
+  const [usdEntryMap, setUsdEntryMap] = useState(readUSDEntryMap);
   useEffect(() => {
     try {
-      localStorage.setItem(USD_ENTRY_KEY, usdEntry ? '1' : '0');
+      localStorage.setItem(USD_ENTRY_MAP_KEY, JSON.stringify(usdEntryMap));
     } catch (e) {
       // 隐私模式写不进去也不影响本次录入。
     }
-  }, [usdEntry]);
+  }, [usdEntryMap]);
 
   const {
     selectedModel,
@@ -152,6 +156,16 @@ export default function ModelPricingEditor({
   // 分组折扣 / 分组倍率由分组管理配置，在这份人民币价上继续乘。
   // 汇率是每个模型自己的（ModelSourceRate），必须在 hook 解构之后才能读。
   const modelSourceRate = Number(selectedModel?.sourceRate);
+  // **默认全部按人民币显示**，谁要用美元入录谁自己打开（按模型记住）。
+  // 不做「有汇率就默认美元」——那会让所有配过汇率的模型一进来就是美元，
+  // 运营会以为全站被切成了美元计价。
+  const usdEntry = selectedModel
+    ? Boolean(usdEntryMap[selectedModel.name])
+    : false;
+  const setUsdEntry = (checked) => {
+    if (!selectedModel) return;
+    setUsdEntryMap((prev) => ({ ...prev, [selectedModel.name]: !!checked }));
+  };
   const effectiveUsdRate =
     usdEntry && Number.isFinite(modelSourceRate) && modelSourceRate > 0
       ? modelSourceRate
