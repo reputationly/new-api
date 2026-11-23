@@ -342,7 +342,7 @@ func UpdateOptions(options map[string]string, stateKeys []string, validate func(
 	values := make(map[string]string, len(options))
 	for _, key := range keys {
 		if err := ValidateOptionValueForBatch(key, options[key]); err != nil {
-			return err
+			return &OptionValidationError{err}
 		}
 		value := options[key]
 		switch key {
@@ -376,7 +376,7 @@ func UpdateOptions(options map[string]string, stateKeys []string, validate func(
 			final[key] = value
 		}
 		if err := validate(final); err != nil {
-			return err
+			return &OptionValidationError{err}
 		}
 		for _, key := range keys {
 			option := Option{Key: key}
@@ -413,6 +413,10 @@ func UpdateOptions(options map[string]string, stateKeys []string, validate func(
 	}
 	return nil
 }
+
+type OptionValidationError struct{ error }
+
+func (e *OptionValidationError) Unwrap() error { return e.error }
 
 // ValidateOptionValueForBatch 只解析/校验批量保存允许的 key，不写库也不动内存。
 func ValidateOptionValueForBatch(key, value string) error {

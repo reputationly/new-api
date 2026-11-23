@@ -2,6 +2,7 @@ package controller
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"sort"
@@ -192,12 +193,9 @@ func validatePricingFinalState(final map[string]string) error {
 }
 
 func savePricingOptions(c *gin.Context, options map[string]string) {
-	var validationErr error
-	if err := model.UpdateOptions(options, pricingStateKeys, func(final map[string]string) error {
-		validationErr = validatePricingFinalState(final)
-		return validationErr
-	}); err != nil {
-		if validationErr != nil {
+	if err := model.UpdateOptions(options, pricingStateKeys, validatePricingFinalState); err != nil {
+		var validationErr *model.OptionValidationError
+		if errors.As(err, &validationErr) {
 			common.ApiError(c, validationErr)
 			return
 		}

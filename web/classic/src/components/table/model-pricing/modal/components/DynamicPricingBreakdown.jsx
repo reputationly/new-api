@@ -157,12 +157,14 @@ export default function DynamicPricingBreakdown({ billingExpr, t, fx = 0 }) {
       ),
     },
     ...priceFields
-      .filter(([field]) => hasTiers && tiers.some((tier) => tier[field] > 0))
+      .filter(
+        ([field]) => hasTiers && tiers.some((tier) => tier[field] !== undefined),
+      )
       .map(([field, label]) => ({
         title: `${t(label)} (${symbol}/1M tokens)`,
         dataIndex: field,
         render: (v) =>
-          v > 0 ? (
+          v !== undefined ? (
             <Text
               strong
             >{`${symbol}${formatPriceWithCeiling(v * exprPriceScale * ratePerCny)}`}</Text>
@@ -179,7 +181,7 @@ export default function DynamicPricingBreakdown({ billingExpr, t, fx = 0 }) {
         indivisible: tier.indivisible,
         condSummary: formatConditionSummary(tier.conditions, t),
         ...Object.fromEntries(
-          priceFields.map(([field]) => [field, tier[field] || 0]),
+          priceFields.map(([field]) => [field, tier[field]]),
         ),
       }))
     : [];

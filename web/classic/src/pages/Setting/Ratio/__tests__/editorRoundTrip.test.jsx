@@ -15,7 +15,7 @@ vi.mock('../../../../helpers', async () => {
   };
 });
 
-import { API } from '../../../../helpers';
+import { API, showError } from '../../../../helpers';
 import { useModelPricingEditorState } from '../hooks/useModelPricingEditorState';
 
 /**
@@ -112,6 +112,34 @@ beforeEach(() => {
 });
 
 describe('编辑器「读 → 不改 → 保存」往返', () => {
+  it('清空分段计费表达式时阻止保存，直到明确切换计费模式', async () => {
+    const { result } = renderHook(() =>
+      useModelPricingEditorState({
+        options: OPTIONS,
+        refresh,
+        t,
+        candidateModelNames: CANDIDATES,
+      }),
+    );
+    await waitFor(() => expect(result.current.selectedModel).toBeTruthy());
+    act(() => result.current.setSelectedModelName('tiered-x'));
+    act(() => result.current.handleBillingExprChange(''));
+    await act(async () => result.current.handleSubmit());
+
+    expect(API.post).not.toHaveBeenCalled();
+    expect(showError).toHaveBeenCalledWith(
+      '模型 tiered-x 缺少计费表达式，请填写表达式或切换计费模式',
+    );
+    expect(result.current.selectedModel.billingMode).toBe('tiered_expr');
+    expect(result.current.selectedModel.billingExpr).toBe('');
+    expect(result.current.dirty).toBe(true);
+
+    act(() => result.current.handleBillingModeChange('per-token'));
+    await act(async () => result.current.handleSubmit());
+    expect(putPayloads()['billing_setting.billing_mode']).toEqual({});
+    expect(putPayloads()['billing_setting.billing_expr']).toEqual({});
+  });
+
   it('倍率原样回写（¥/百万 tokens，不再 ÷ 汇率 ÷ 2）', async () => {
     const payload = await submitAndGetPayload();
     expect(payload.ModelRatio).toEqual(JSON.parse(OPTIONS.ModelRatio));

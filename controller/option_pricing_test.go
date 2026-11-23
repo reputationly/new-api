@@ -39,13 +39,17 @@ func TestPricingOptionFinalState(t *testing.T) {
 	router := gin.New()
 	router.POST("/batch", UpdatePricingOptions)
 	router.PUT("/option", UpdateOption)
-	send := func(method, path string, payload any) bool {
+	request := func(method, path string, payload any) *httptest.ResponseRecorder {
 		body, e := common.Marshal(payload)
 		if e != nil {
 			panic(e)
 		}
 		w := httptest.NewRecorder()
 		router.ServeHTTP(w, httptest.NewRequest(method, path, strings.NewReader(string(body))))
+		return w
+	}
+	send := func(method, path string, payload any) bool {
+		w := request(method, path, payload)
 		var result struct{ Success bool }
 		if e := common.Unmarshal(w.Body.Bytes(), &result); e != nil {
 			panic(e)
@@ -64,6 +68,15 @@ func TestPricingOptionFinalState(t *testing.T) {
 	require.False(t, put(exprKey, "{"))
 	require.False(t, batch(map[string]string{rateKey: rate, "VideoPricingConfig": "{"}))
 	require.False(t, batch(map[string]string{"GroupTimeRatio": "{}"}))
+	badRatio := `{"gpt-image-1":"2"}`
+	for _, w := range []*httptest.ResponseRecorder{
+		request(http.MethodPost, "/batch", optionBatchRequest{Options: map[string]string{"ModelRatio": badRatio}}),
+		request(http.MethodPut, "/option", OptionUpdateRequest{Key: "ModelRatio", Value: badRatio}),
+	} {
+		require.Equal(t, http.StatusOK, w.Code)
+		require.Contains(t, w.Body.String(), `"success":false`)
+		require.Contains(t, w.Body.String(), "ModelRatio 不是合法的 JSON 数值表")
+	}
 	var count int64
 	require.NoError(t, db.Model(&model.Option{}).Count(&count).Error)
 	require.Zero(t, count)

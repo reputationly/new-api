@@ -156,7 +156,7 @@ function splitTierBranches(body, conditions = []) {
   const match = body
     .trim()
     .match(/^tier\s*\(\s*("(?:\\.|[^"\\])*")\s*,([\s\S]+)\)$/);
-  if (!match) return [{ conditions, coefficients: null }];
+  if (!match) return [{ body, conditions }];
   return [{ label: JSON.parse(match[1]), body: match[2], conditions }];
 }
 
@@ -167,16 +167,20 @@ export function parseTiersFromExpr(exprStr, fx = 0) {
       stripExprVersion(exprStr).body,
     );
     return splitTierBranches(billingExpr).map(({ label, body, conditions }) => {
-      const prices = body === undefined ? null : linearTokenPrices(body, fx);
+      const prices = linearTokenPrices(body, fx);
+      const isBareZero =
+        label === undefined &&
+        prices !== null &&
+        Object.values(prices).every((price) => price === 0);
       return {
         label,
         conditions,
-        ...(prices === null
+        ...(prices === null || (label === undefined && !isBareZero)
           ? { indivisible: true }
           : Object.fromEntries(
-              Object.entries(BILLING_VAR_KEY_TO_FIELD).map(([key, field]) => [
-                field,
-                prices[key] || 0,
+              Object.entries(prices).map(([key, price]) => [
+                BILLING_VAR_KEY_TO_FIELD[key],
+                price,
               ]),
             )),
       };

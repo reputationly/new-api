@@ -1,9 +1,14 @@
-import { describe, it, expect } from 'vitest';
+import React from 'react';
+import { fireEvent, render, screen } from '@testing-library/react';
+import { beforeEach, describe, it, expect, vi } from 'vitest';
 import {
   exprFXMultiplier,
   exprUsesFX,
   parseTiersFromExpr,
 } from '../../../../helpers/render';
+import { formatDynamicPriceSummary } from '../../../../helpers/utils';
+import TieredPricingEditor from '../../../../pages/Setting/Ratio/components/TieredPricingEditor';
+import DynamicPricingBreakdown from '../modal/components/DynamicPricingBreakdown';
 
 // 表达式引用 fx 时，系数是美元目录价：展示必须乘该模型汇率，才与实扣一致。
 describe('表达式 fx 展示口径', () => {
@@ -79,6 +84,7 @@ describe('fx 按项生效（混合写法）', () => {
       'tier("base", p * c)',
       'tier("base", p * 2 + 1)',
       'tier("base", p * 2) * 3',
+      'p * 2',
     ]) {
       expect(parseTiersFromExpr(expression)[0]).toMatchObject({
         indivisible: true,
@@ -94,5 +100,54 @@ describe('fx 按项生效（混合写法）', () => {
       ['short', 2],
       ['long', 3],
     ]);
+  });
+});
+
+describe('显式零价', () => {
+  const t = (s) => s;
+
+  beforeEach(() => {
+    localStorage.setItem('quota_display_type', 'CNY');
+    localStorage.setItem('quota_per_yuan', '1000000000');
+  });
+
+  it('区分零价输入与未定价的输出', () => {
+    const expr = 'v2:tier("free", p * 0)';
+    expect(parseTiersFromExpr(expr)[0]).toMatchObject({ inputPrice: 0 });
+    expect(parseTiersFromExpr(expr)[0]).not.toHaveProperty('outputPrice');
+
+    const { container } = render(formatDynamicPriceSummary(expr, t));
+    expect(container.textContent).toContain('¥0.00');
+    expect(container.textContent.match(/¥0\.00/g)).toHaveLength(1);
+  });
+
+  it('卡片与详情识别可视化编辑器生成的单档条件和零价兜底', () => {
+    const onExprChange = vi.fn();
+    const editor = render(
+      <TieredPricingEditor
+        model={{ name: 'm', billingExpr: 'tier("base", p * 2 + c * 0)' }}
+        onExprChange={onExprChange}
+        onRequestRuleExprChange={vi.fn()}
+        t={t}
+      />,
+    );
+    fireEvent.click(screen.getByText('添加条件'));
+    expect(onExprChange).toHaveBeenCalledWith(
+      'len < 200000 ? tier("base", p * 2 + c * 0) : p * 0 + c * 0',
+    );
+    const expr = `v2:${onExprChange.mock.lastCall[0]}`;
+    editor.unmount();
+
+    const card = render(formatDynamicPriceSummary(expr, t));
+    expect(card.container.textContent).toContain('¥2.00');
+    expect(card.container.textContent).toContain('¥0.00');
+    expect(card.container.textContent).not.toContain('单价不可拆分');
+    card.unmount();
+
+    render(<DynamicPricingBreakdown billingExpr={expr} t={t} />);
+    expect(screen.queryByText('单价不可拆分')).toBeNull();
+    expect(screen.getByText('默认')).toBeTruthy();
+    expect(screen.getByText('¥2.00')).toBeTruthy();
+    expect(screen.getAllByText('¥0.00')).toHaveLength(3);
   });
 });

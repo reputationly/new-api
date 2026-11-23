@@ -1307,7 +1307,7 @@ export const formatDynamicPriceSummary = (
   const indivisible = tierCount === 0 || tiers.some((tier) => tier.indivisible);
   const varLabels = indivisible
     ? []
-    : BILLING_PRICING_VARS.filter(({ field }) => tiers[0][field] > 0);
+    : BILLING_PRICING_VARS.filter(({ field }) => tiers[0][field] !== undefined);
 
   const hasTimeCondition = /\b(?:hour|minute|weekday|month|day)\(/.test(
     exprBody,

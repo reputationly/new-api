@@ -1675,15 +1675,20 @@ export function useModelPricingEditorState({
             model.billingExpr,
             model.requestRuleExpr,
           );
-          if (finalBillingExpr) {
-            tieredOutput['billing_setting.billing_mode'][model.name] =
-              'tiered_expr';
-            // 新保存的表达式一律是人民币口径的 v2（后端拒绝写入 v1）。
-            // 用 toV2BillingExpr 而不是直接拼 `v2:`：正文里可能已经带了前缀
-            // （预设模板、从文档粘的），重复拼会变成 v2:v2:… 编译失败。
-            tieredOutput['billing_setting.billing_expr'][model.name] =
-              toV2BillingExpr(finalBillingExpr);
+          if (!finalBillingExpr) {
+            throw new Error(
+              t('模型 {{name}} 缺少计费表达式，请填写表达式或切换计费模式', {
+                name: model.name,
+              }),
+            );
           }
+          tieredOutput['billing_setting.billing_mode'][model.name] =
+            'tiered_expr';
+          // 新保存的表达式一律是人民币口径的 v2（后端拒绝写入 v1）。
+          // 用 toV2BillingExpr 而不是直接拼 `v2:`：正文里可能已经带了前缀
+          // （预设模板、从文档粘的），重复拼会变成 v2:v2:… 编译失败。
+          tieredOutput['billing_setting.billing_expr'][model.name] =
+            toV2BillingExpr(finalBillingExpr);
         }
 
         // Always serialize ratio/price values for all models (including
