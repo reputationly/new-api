@@ -27,8 +27,34 @@ import {
   combineBillingExpr,
   splitBillingExprAndRequestRules,
 } from '../components/requestRuleExpr';
+import { BILLING_VAR_REGEX } from '../../../../constants/billing.constants';
 
 export const PAGE_SIZE = 10;
+
+/**
+ * 按比例缩放一个价格字符串（空值/非数字原样返回）。
+ * 用于「改汇率」：运营只改汇率，价格与表达式系数由机器按比例重算，避免手改漏改。
+ */
+export const scaleNumericString = (value, factor) => {
+  const num = toNumberOrNull(value);
+  if (num === null) return value;
+  return formatNumber(num * factor);
+};
+
+/**
+ * 按比例缩放表达式里的系数。
+ *
+ * 只替换「变量 * 数字」这种系数写法（BILLING_VAR_REGEX），不解析 AST，
+ * 因此 `tier("≤272K", …)` 的档位标签、三元条件、请求规则都原样保留。
+ */
+export const scaleBillingExpr = (expr, factor) => {
+  if (!expr) return expr;
+  return String(expr).replace(BILLING_VAR_REGEX, (whole, varName, numText) => {
+    const num = Number(numText);
+    if (!Number.isFinite(num)) return whole;
+    return `${varName} * ${formatNumber(num * factor)}`;
+  });
+};
 
 /**
  * 把表达式正文规范成存储形态：**先剥掉可能已存在的版本前缀，再统一加 `v2:`**。
@@ -37,7 +63,8 @@ export const PAGE_SIZE = 10;
  * 的表达式都带 `v2:`，直接粘进去保存会拼成 `v2:v2:...`，后端编译失败。
  * 这里做成幂等，任何来源的表达式都能安全保存。
  */
-export const toV2BillingExpr = (expr) => `v2:${stripExprVersion(String(expr || '')).body}`;
+export const toV2BillingExpr = (expr) =>
+  `v2:${stripExprVersion(String(expr || '')).body}`;
 export const PRICE_SUFFIX = '¥/1M tokens';
 const EMPTY_CANDIDATE_MODEL_NAMES = [];
 
@@ -72,6 +99,9 @@ const EMPTY_MODEL = {
   audioOutputPrice: '',
   billingExpr: '',
   requestRuleExpr: '',
+  // 该模型的「源货币汇率」：表达式/价格是按「美元目录价 × 这个汇率」编制的。
+  // 只有它存在时，改汇率才会按比例缩放价格与表达式系数。
+  sourceRate: '',
   // 表达式口径版本：0 = 无表达式，1 = 美元口径旧表达式（后端拒绝结算），2 = 人民币口径
   billingExprVersion: 0,
   // null = 未启用视频计费矩阵；对象 = 已启用（形状见 emptyVideoMatrix）
@@ -335,6 +365,7 @@ const buildModelState = (name, sourceMaps) => {
   const videoMatrix = parseVideoMatrixEntry(sourceMaps.VideoPricing?.[name]);
   const billingMode = sourceMaps.ModelBillingMode?.[name];
 
+  const sourceRate = toNumericString(sourceMaps.ModelSourceRate?.[name]);
   const modelRatio = toNumericString(sourceMaps.ModelRatio[name]);
   const completionRatio = toNumericString(sourceMaps.CompletionRatio[name]);
   const completionRatioMeta = normalizeCompletionRatioMeta(
@@ -373,12 +404,12 @@ const buildModelState = (name, sourceMaps) => {
     const fullBillingExpr = sourceMaps.ModelBillingExpr?.[name] || '';
     const { version: billingExprVersion, body } =
       stripExprVersion(fullBillingExpr);
-    const { billingExpr, requestRuleExpr } = splitBillingExprAndRequestRules(
-      body,
-    );
+    const { billingExpr, requestRuleExpr } =
+      splitBillingExprAndRequestRules(body);
     return {
       ...EMPTY_MODEL,
       name,
+      sourceRate,
       billingMode: 'tiered_expr',
       billingExpr,
       requestRuleExpr,
@@ -405,6 +436,7 @@ const buildModelState = (name, sourceMaps) => {
   return {
     ...EMPTY_MODEL,
     name,
+    sourceRate,
     billingMode: hasValue(fixedPrice) ? 'per-request' : 'per-token',
     fixedPrice,
     inputPrice,
@@ -480,9 +512,11 @@ export const isBasePricingUnset = (model) =>
     // 后端 videoPerCallPriceable 会为两者放行，不需要任何 legacy 价格。
     // 漏掉 per_second 会让运营去补一个用不上的 ModelPrice，正好制造出
     // 这段注释本来要消除的「两边都配」。
-    [VIDEO_MODE_PER_CALL, VIDEO_MODE_PER_SECOND].includes(
-      model.videoMatrix?.mode,
-    ) && hasAnyVideoMatrixCell(model.videoMatrix)
+    (
+      [VIDEO_MODE_PER_CALL, VIDEO_MODE_PER_SECOND].includes(
+        model.videoMatrix?.mode,
+      ) && hasAnyVideoMatrixCell(model.videoMatrix)
+    )
   );
 
 /**
@@ -1016,11 +1050,17 @@ export function useModelPricingEditorState({
   const [loading, setLoading] = useState(false);
   const [conflictOnly, setConflictOnly] = useState(false);
   const [optionalFieldToggles, setOptionalFieldToggles] = useState({});
+  // 有未保存的改动：所有模型写入都汇聚到 upsertModel，在那里打标；
+  // 保存成功或 options 重新加载后清掉。没有这个标记时，改了汇率却忘记点
+  // 「应用更改」会静默丢弃，而界面上看起来已经改好了。
+  const [dirty, setDirty] = useState(false);
 
   useEffect(() => {
     const sourceMaps = {
       ModelPrice: parseOptionJSON(options.ModelPrice),
       ModelRatio: parseOptionJSON(options.ModelRatio),
+      // 每个模型的源货币汇率（美元目录价 → 人民币的换算率），单独一张 map。
+      ModelSourceRate: parseOptionJSON(options.ModelSourceRate),
       CompletionRatio: parseOptionJSON(options.CompletionRatio),
       CompletionRatioMeta: parseOptionJSON(options.CompletionRatioMeta),
       CacheRatio: parseOptionJSON(options.CacheRatio),
@@ -1146,6 +1186,7 @@ export function useModelPricingEditorState({
   }, [selectedModelName, visibleModels]);
 
   const upsertModel = (name, updater) => {
+    setDirty(true);
     setModels((previous) =>
       previous.map((model) => {
         if (model.name !== name) return model;
@@ -1315,6 +1356,52 @@ export function useModelPricingEditorState({
       ...model,
       billingExpr: newExpr,
     }));
+  };
+
+  const RATE_SCALED_PRICE_FIELDS = [
+    'fixedPrice',
+    'inputPrice',
+    'completionPrice',
+    'cachePrice',
+    'createCachePrice',
+    'imagePrice',
+    'audioInputPrice',
+    'audioOutputPrice',
+  ];
+
+  const handleSourceRateChange = (value) => {
+    if (!selectedModel || !NUMERIC_INPUT_REGEX.test(value)) {
+      return;
+    }
+    upsertModel(selectedModel.name, (model) => {
+      const oldRate = toNumberOrNull(model.sourceRate);
+      const newRate = toNumberOrNull(value);
+      // 第一次填汇率（旧值为空）没有比例可算，只记录；以后改才会缩放。
+      if (oldRate === null || newRate === null || oldRate === newRate) {
+        return { ...model, sourceRate: value };
+      }
+      const factor = newRate / oldRate;
+      const next = { ...model, sourceRate: value };
+      RATE_SCALED_PRICE_FIELDS.forEach((field) => {
+        if (hasValue(next[field])) {
+          next[field] = scaleNumericString(next[field], factor);
+        }
+      });
+      if (next.billingExpr) {
+        next.billingExpr = scaleBillingExpr(next.billingExpr, factor);
+      }
+      if (next.requestRuleExpr) {
+        next.requestRuleExpr = scaleBillingExpr(next.requestRuleExpr, factor);
+      }
+      // 按量模式下 ModelRatio 是「¥/百万 tokens」的锚点，也要跟着缩。
+      if (hasValue(next.rawRatios?.modelRatio)) {
+        next.rawRatios = {
+          ...next.rawRatios,
+          modelRatio: scaleNumericString(next.rawRatios.modelRatio, factor),
+        };
+      }
+      return next;
+    });
   };
 
   const handleVideoMatrixChange = (nextMatrix) => {
@@ -1527,6 +1614,9 @@ export function useModelPricingEditorState({
         AudioCompletionRatio: {},
       };
 
+      // 每个模型自己的源货币汇率（仅供下次改汇率时算比例与展示，不参与计费）。
+      const sourceRateOutput = {};
+
       const tieredOutput = {
         'billing_setting.billing_mode': {},
         'billing_setting.billing_expr': {},
@@ -1575,14 +1665,18 @@ export function useModelPricingEditorState({
         // delay.  ModelPriceHelper checks billing_mode first, so these values
         // are only used when billing_setting hasn't propagated yet.
         const writeSerialized = (source) => {
-          Object.entries(serializeModel(source, t)).forEach(
-            ([key, value]) => {
-              if (value !== null) {
-                output[key][model.name] = value;
-              }
-            },
-          );
+          Object.entries(serializeModel(source, t)).forEach(([key, value]) => {
+            if (value !== null) {
+              output[key][model.name] = value;
+            }
+          });
         };
+        if (
+          hasValue(model.sourceRate) &&
+          toNumberOrNull(model.sourceRate) !== null
+        ) {
+          sourceRateOutput[model.name] = toNormalizedNumber(model.sourceRate);
+        }
         try {
           writeSerialized(model);
         } catch (e) {
@@ -1626,6 +1720,10 @@ export function useModelPricingEditorState({
             value: JSON.stringify(value, null, 2),
           }),
         ),
+        API.put('/api/option/', {
+          key: 'ModelSourceRate',
+          value: JSON.stringify(sourceRateOutput, null, 2),
+        }),
       ];
 
       const results = await Promise.all(requestQueue);
@@ -1636,6 +1734,7 @@ export function useModelPricingEditorState({
       }
 
       showSuccess(t('保存成功'));
+      setDirty(false);
       await refresh();
     } catch (error) {
       console.error('保存失败:', error);
@@ -1657,6 +1756,7 @@ export function useModelPricingEditorState({
     currentPage,
     setCurrentPage,
     loading,
+    dirty,
     conflictOnly,
     setConflictOnly,
     filteredModels,
@@ -1668,6 +1768,7 @@ export function useModelPricingEditorState({
     handleNumericFieldChange,
     handleBillingModeChange,
     handleBillingExprChange,
+    handleSourceRateChange,
     handleRequestRuleExprChange,
     handleVideoMatrixChange,
     handleVideoMatrixToggle,

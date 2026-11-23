@@ -65,22 +65,12 @@ const EMPTY_CANDIDATE_MODEL_NAMES = [];
 // 「按美元目录价录入」开关：纯录入体验，不改任何存储口径。
 // 开关与汇率只是运营的记事本能用就行，放 localStorage，不占后端 option。
 const USD_ENTRY_KEY = 'model_pricing_usd_entry';
-const USD_RATE_KEY = 'model_pricing_usd_rate';
 
 const readUSDEntry = () => {
   try {
     return localStorage.getItem(USD_ENTRY_KEY) === '1';
   } catch (e) {
     return false;
-  }
-};
-
-const readUSDRate = (fallback) => {
-  try {
-    const raw = Number(localStorage.getItem(USD_RATE_KEY));
-    return Number.isFinite(raw) && raw > 0 ? String(raw) : fallback;
-  } catch (e) {
-    return fallback;
   }
 };
 
@@ -106,23 +96,18 @@ export default function ModelPricingEditor({
   const [newModelName, setNewModelName] = useState('');
 
   // 美元目录价录入：只换算输入框的显示单位，落库仍是人民币（见 PriceInput 顶部注释）。
-  // 默认汇率取站点汇率，运营改成 6.8 之后本机会记住。
+  //
+  // 汇率是**每个模型自己的**（ModelSourceRate）：不同供应商/模型可能给不同汇率，
+  // 改它时会按比例缩放该模型的价格与表达式系数（见 handleSourceRateChange），
+  // 所以运营只需要改这一个数字，不用手改每个系数。
   const [usdEntry, setUsdEntry] = useState(readUSDEntry);
-  const [usdRate, setUsdRate] = useState(() =>
-    readUSDRate(String(options?.USDExchangeRate || 7.3)),
-  );
   useEffect(() => {
     try {
       localStorage.setItem(USD_ENTRY_KEY, usdEntry ? '1' : '0');
-      localStorage.setItem(USD_RATE_KEY, usdRate);
     } catch (e) {
       // 隐私模式写不进去也不影响本次录入。
     }
-  }, [usdEntry, usdRate]);
-  // 这里只做「美元 → 人民币」的汇率折算，不碰任何折扣：
-  // 分组折扣 / 分组倍率由分组管理配置，在这份人民币价上继续乘。
-  const effectiveUsdRate =
-    usdEntry && Number(usdRate) > 0 ? Number(usdRate) : null;
+  }, [usdEntry]);
 
   const {
     selectedModel,
@@ -144,6 +129,8 @@ export default function ModelPricingEditor({
     isOptionalFieldEnabled,
     handleOptionalFieldToggle,
     handleNumericFieldChange,
+    dirty,
+    handleSourceRateChange,
     handleBillingModeChange,
     handleBillingExprChange,
     handleRequestRuleExprChange,
@@ -160,6 +147,15 @@ export default function ModelPricingEditor({
     candidateModelNames,
     filterMode,
   });
+
+  // 这里只做「美元 → 人民币」的汇率折算，不碰任何折扣：
+  // 分组折扣 / 分组倍率由分组管理配置，在这份人民币价上继续乘。
+  // 汇率是每个模型自己的（ModelSourceRate），必须在 hook 解构之后才能读。
+  const modelSourceRate = Number(selectedModel?.sourceRate);
+  const effectiveUsdRate =
+    usdEntry && Number.isFinite(modelSourceRate) && modelSourceRate > 0
+      ? modelSourceRate
+      : null;
 
   // 分时价草稿：时段模板来自顶部的折叠栏，这里只管"当前模型绑了哪些档、各档多少钱"。
   const timeCfg = useMemo(() => {
@@ -427,6 +423,11 @@ export default function ModelPricingEditor({
           >
             {t('应用更改')}
           </Button>
+          {dirty ? (
+            <Tag color='orange' shape='circle' size='small'>
+              {t('有未保存的更改')}
+            </Tag>
+          ) : null}
           <Button
             disabled={!selectedModel || selectedModelNames.length === 0}
             onClick={() => setBatchVisible(true)}
@@ -599,12 +600,12 @@ export default function ModelPricingEditor({
                       <Input
                         size='small'
                         style={{ width: 140 }}
-                        value={usdRate}
-                        placeholder='7.3'
+                        value={selectedModel.sourceRate}
+                        placeholder='6.8'
                         suffix={<span className='text-xs'>¥/$</span>}
                         onChange={(v) => {
                           if (NUMERIC_INPUT_REGEX.test(v)) {
-                            setUsdRate(v);
+                            handleSourceRateChange(v);
                           }
                         }}
                       />
@@ -613,7 +614,17 @@ export default function ModelPricingEditor({
                   {usdEntry ? (
                     <div className='mt-2 text-xs text-gray-500'>
                       {t(
-                        '下面价格框改为 $/1M tokens 或 $/次，直接照抄供应商目录价；保存时按上方汇率折算成人民币入库。分组折扣 / 分组倍率在分组管理里配置，令牌折扣与分时价照旧，两者都在这份人民币价上继续乘。',
+                        '下面价格框改为 $/1M tokens 或 $/次，直接照抄供应商目录价；保存时按本模型自己的汇率折算成人民币入库。改汇率时该模型的价格与表达式系数会按比例自动重算。分组折扣 / 分组倍率在分组管理里配置。',
+                      )}
+                    </div>
+                  ) : null}
+                  {usdEntry && !Number(selectedModel.sourceRate) ? (
+                    <div
+                      className='mt-1 text-xs'
+                      style={{ color: 'var(--semi-color-warning)' }}
+                    >
+                      {t(
+                        '该模型还没有记录源汇率：先填当前汇率（如 6.8）并点「应用更改」保存一次；之后改汇率才会自动按比例重算价格与表达式系数。',
                       )}
                     </div>
                   ) : null}
@@ -667,8 +678,8 @@ export default function ModelPricingEditor({
                         closeIcon={null}
                         style={{ marginBottom: 16 }}
                         description={t(
-                          '表达式里的系数固定按 ¥/百万 tokens 填写，不随上面的美元开关换算：系数 = 美元价 × {{rate}}。',
-                          { rate: usdRate },
+                          '表达式里的系数固定按 ¥/百万 tokens 填写，不随上面的美元开关换算：系数 = 美元价 × {{rate}}（本模型汇率）。改汇率时这些系数会自动按比例重算。',
+                          { rate: selectedModel.sourceRate || t('未填') },
                         )}
                       />
                     ) : null}
