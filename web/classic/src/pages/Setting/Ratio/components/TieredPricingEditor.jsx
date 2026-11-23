@@ -16,7 +16,13 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react';
 import {
   Banner,
   Button,
@@ -1715,6 +1721,15 @@ function LlmPromptHelper({ t, model }) {
 // Main component
 // ---------------------------------------------------------------------------
 
+function getLosslessVisualConfig(expr) {
+  if (!expr) return createDefaultVisualConfig();
+  if (exprUsesFX(expr)) return null;
+  const config = tryParseVisualConfig(expr);
+  return config && generateExprFromVisualConfig(config) === expr
+    ? config
+    : null;
+}
+
 export default function TieredPricingEditor({
   model,
   onExprChange,
@@ -1724,9 +1739,16 @@ export default function TieredPricingEditor({
 }) {
   const currentExpr = model?.billingExpr || '';
 
-  const [editorMode, setEditorMode] = useState('visual');
-  const [visualConfig, setVisualConfig] = useState(null);
-  const [rawExpr, setRawExpr] = useState('');
+  const currentRequestRuleExpr = requestRuleExpr || '';
+  const [visualConfig, setVisualConfig] = useState(() =>
+    getLosslessVisualConfig(currentExpr),
+  );
+  const [editorMode, setEditorMode] = useState(visualConfig ? 'visual' : 'raw');
+  const [rawExpr, setRawExpr] = useState(
+    () =>
+      combineBillingExpr(currentExpr, currentRequestRuleExpr) || currentExpr,
+  );
+  const publishedExpr = useRef(null);
   const [promptTokens, setPromptTokens] = useState(200000);
   const [completionTokens, setCompletionTokens] = useState(10000);
   const [cacheReadTokens, setCacheReadTokens] = useState(0);
@@ -1737,7 +1759,6 @@ export default function TieredPricingEditor({
   const [audioInputTokens, setAudioInputTokens] = useState(0);
   const [audioOutputTokens, setAudioOutputTokens] = useState(0);
 
-  const currentRequestRuleExpr = requestRuleExpr || '';
   const parsedRequestRuleGroups = useMemo(
     () => tryParseRequestRuleExpr(currentRequestRuleExpr),
     [currentRequestRuleExpr],
@@ -1764,109 +1785,65 @@ export default function TieredPricingEditor({
   );
 
   useEffect(() => {
-    // 依赖里带 currentExpr：改汇率会按比例重写表达式，编辑框必须跟着更新，
-    // 否则框里还留着旧文本，用户再编辑一次就把缩放结果覆盖回去了。
-    // 只在真的不同才 setState，避免与 onExprChange 形成回环。
-    // 引用 fx 的表达式不能进可视化编辑：可视化模型只认「变量 * 数字」的系数，
-    // 一旦在那边编辑保存，`* fx` 会被丢掉（价格直接少一个汇率倍数）。
-    const parsedConfig = exprUsesFX(currentExpr)
-      ? null
-      : tryParseVisualConfig(currentExpr);
-    // 只有"可视化配置能原样还原出这条表达式"时才进可视化编辑：
-    // 反向系数（`1.5 * p`）、多余括号等写法会被解析成 0 系数，一旦回写就会把
-    // 价格改成 `p * 0 + c * 0`（本地复现过）。
-    const parsed =
-      parsedConfig && generateExprFromVisualConfig(parsedConfig) === currentExpr
-        ? parsedConfig
-        : null;
-    if (parsed) {
-      setEditorMode('visual');
-      setVisualConfig(parsed);
-      setRawExpr((prev) => (prev === currentExpr ? prev : currentExpr));
-    } else if (currentExpr) {
-      setEditorMode('raw');
-      setVisualConfig(null);
-      setRawExpr((prev) => (prev === currentExpr ? prev : currentExpr));
-    } else {
-      setEditorMode('visual');
-      setVisualConfig(createDefaultVisualConfig());
-      setRawExpr('');
+    if (
+      publishedExpr.current?.name === model?.name &&
+      publishedExpr.current?.value === currentExpr
+    ) {
+      return;
     }
-  }, [model?.name, currentExpr]);
+    publishedExpr.current = null;
+    const parsed = getLosslessVisualConfig(currentExpr);
+    setEditorMode(parsed ? 'visual' : 'raw');
+    setVisualConfig(parsed);
+    setRawExpr(
+      combineBillingExpr(currentExpr, currentRequestRuleExpr) || currentExpr,
+    );
+  }, [model?.name, currentExpr, currentRequestRuleExpr]);
 
-  const effectiveExpr = useMemo(() => {
-    if (editorMode === 'visual') {
-      return generateExprFromVisualConfig(visualConfig);
-    }
-    const { billingExpr } = splitBillingExprAndRequestRules(rawExpr);
-    return billingExpr;
-  }, [editorMode, visualConfig, rawExpr]);
+  const publishExpr = (value) => {
+    publishedExpr.current = { name: model?.name, value };
+    if (value !== currentExpr) onExprChange(value);
+  };
 
-  useEffect(() => {
-    if (effectiveExpr !== currentExpr) {
-      onExprChange(effectiveExpr);
-    }
-  }, [effectiveExpr]);
-
-  const handleVisualChange = useCallback((newConfig) => {
+  const handleVisualChange = (newConfig) => {
     setVisualConfig(newConfig);
-  }, []);
+    publishExpr(generateExprFromVisualConfig(newConfig));
+  };
 
-  const handleRawChange = useCallback(
-    (val) => {
-      setRawExpr(val);
-      const { requestRuleExpr: ruleStr } = splitBillingExprAndRequestRules(val);
-      onRequestRuleExprChange(ruleStr);
-    },
-    [onRequestRuleExprChange],
-  );
+  const handleRawChange = (val) => {
+    setRawExpr(val);
+    const { billingExpr, requestRuleExpr: ruleStr } =
+      splitBillingExprAndRequestRules(val);
+    publishExpr(billingExpr);
+    onRequestRuleExprChange(ruleStr);
+  };
 
-  const handleModeSwitch = useCallback(
-    (e) => {
-      const newMode = e.target.value;
-      if (newMode === 'visual') {
-        const { billingExpr, requestRuleExpr: ruleStr } =
-          splitBillingExprAndRequestRules(rawExpr);
-        const parsed = tryParseVisualConfig(billingExpr);
-        if (parsed) {
-          setVisualConfig(parsed);
-        } else {
-          setVisualConfig(createDefaultVisualConfig());
-        }
-        const parsedGroups = tryParseRequestRuleExpr(ruleStr);
-        setRequestRuleGroups(parsedGroups || []);
-        onRequestRuleExprChange(ruleStr);
-      } else {
-        const expr = generateExprFromVisualConfig(visualConfig);
-        const ruleExpr = buildRequestRuleExpr(requestRuleGroups);
-        setRawExpr(combineBillingExpr(expr, ruleExpr) || expr);
-      }
-      setEditorMode(newMode);
-    },
-    [rawExpr, visualConfig, requestRuleGroups, onRequestRuleExprChange],
-  );
+  const handleModeSwitch = (e) => {
+    const newMode = e.target.value;
+    if (newMode === 'visual') {
+      const parsed = getLosslessVisualConfig(currentExpr);
+      if (!parsed) return;
+      setVisualConfig(parsed);
+    } else {
+      setRawExpr(
+        combineBillingExpr(currentExpr, currentRequestRuleExpr) || currentExpr,
+      );
+    }
+    setEditorMode(newMode);
+  };
 
-  const applyPreset = useCallback(
-    (preset) => {
-      const presetGroups = preset.requestRules || [];
-      const ruleExpr = buildRequestRuleExpr(presetGroups);
-      // 预设模板自带 `v2:` 前缀；编辑框只收正文（与加载已保存表达式一致），
-      // 保存时再由 toV2BillingExpr 统一加前缀，避免双前缀。
-      const presetBody = stripExprVersion(preset.expr).body;
-      const combined = combineBillingExpr(presetBody, ruleExpr) || presetBody;
-      setRawExpr(combined);
-      const parsed = tryParseVisualConfig(preset.expr);
-      if (parsed) {
-        setVisualConfig(parsed);
-      } else {
-        setEditorMode('raw');
-        setVisualConfig(null);
-      }
-      setRequestRuleGroups(presetGroups);
-      onRequestRuleExprChange(ruleExpr);
-    },
-    [onRequestRuleExprChange],
-  );
+  const applyPreset = (preset) => {
+    const presetGroups = preset.requestRules || [];
+    const ruleExpr = buildRequestRuleExpr(presetGroups);
+    const presetBody = stripExprVersion(preset.expr).body;
+    const parsed = getLosslessVisualConfig(presetBody);
+    setRawExpr(combineBillingExpr(presetBody, ruleExpr) || presetBody);
+    setEditorMode(parsed ? 'visual' : 'raw');
+    setVisualConfig(parsed);
+    setRequestRuleGroups(presetGroups);
+    publishExpr(presetBody);
+    onRequestRuleExprChange(ruleExpr);
+  };
 
   const extraTokenValues = {
     cacheReadTokens,
@@ -1887,6 +1864,7 @@ export default function TieredPricingEditor({
     audioOutputTokens: setAudioOutputTokens,
   };
 
+  const effectiveExpr = currentExpr;
   const evalResult = useMemo(() => {
     const result = evalExprLocally(
       effectiveExpr,
@@ -1937,7 +1915,10 @@ export default function TieredPricingEditor({
           value={editorMode}
           onChange={handleModeSwitch}
         >
-          <Radio value='visual' disabled={exprUsesFX(currentExpr)}>
+          <Radio
+            value='visual'
+            disabled={!getLosslessVisualConfig(currentExpr)}
+          >
             {t('可视化编辑')}
           </Radio>
           <Radio value='raw'>{t('表达式编辑')}</Radio>

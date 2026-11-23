@@ -148,4 +148,22 @@ describe('formatDynamicPriceSummary：v1 / v2 表达式的系数口径', () => {
     expect(text).toContain('¥14.60');
     expect(text).toContain('¥29.20');
   });
+
+  it('卡片使用模型汇率并按括号和重复项计算，不显示不完整的单价', () => {
+    const text = textOf(
+      formatDynamicPriceSummary(
+        'v2:tier("base", p * (1.5 * fx) - 0.2 * p + c * 7.5)',
+        t,
+        1,
+        6.8,
+      ),
+    );
+    expect(text).toContain('¥10.00');
+    expect(text).toContain('¥7.50');
+    const fallback = textOf(
+      formatDynamicPriceSummary('v2:tier("base", p * c + 1)', t, 1),
+    );
+    expect(fallback).toContain('单价不可拆分');
+    expect(fallback).not.toContain('¥');
+  });
 });

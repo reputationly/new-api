@@ -26,19 +26,10 @@ import {
   getUsdExchangeRate,
 } from './quota';
 import { stripExprVersion } from './exprVersion';
-import {
-  exprUsesFX,
-  extractTermCoefficients,
-  splitTopLevelTerms,
-  termUsesFX,
-} from './billingExprTerms';
+import { exprUsesFX, parseTiersFromExpr } from './billingExprTerms';
 import { getExprPriceScale } from './exprPrice';
 import { MOBILE_BREAKPOINT } from '../hooks/common/useIsMobile';
-import {
-  BILLING_PRICING_VARS,
-  BILLING_VAR_KEY_TO_FIELD,
-  BILLING_VAR_REGEX,
-} from '../constants';
+import { BILLING_PRICING_VARS, BILLING_VAR_REGEX } from '../constants';
 import { visit } from 'unist-util-visit';
 import * as LobeIcons from '@lobehub/icons';
 import {
@@ -2603,75 +2594,13 @@ export function normalizeLogPricing(other) {
 
 // fx 的判定与「按项取系数」统一由 helpers/billingExprTerms 提供：
 // 展示与录入必须同一个口径，否则会出现"编辑器缩放了、广场没缩放"。
-export { exprUsesFX };
+export { exprUsesFX, parseTiersFromExpr };
 
 /** 表达式系数 → 展示用的人民币单价倍数（整条同口径时使用）。 */
 export function exprFXMultiplier(exprStr, fx) {
   if (!exprUsesFX(exprStr)) return 1;
   const rate = Number(fx);
   return Number.isFinite(rate) && rate > 0 ? rate : 0;
-}
-
-/**
- * 解析某一档的系数（¥/百万 tokens）。
- *
- * fx 按**项**生效：`p * 1.5 * fx + c * 7.5` 里只有 p 那一项是美元价，
- * 输出价必须保持 7.5 —— 按整条表达式乘汇率会把它显示成 51（实扣仍是 7.5）。
- */
-function parseTierBody(bodyStr, fx = 0) {
-  const coeffs = {};
-  const rate = Number(fx);
-  const fxReady = Number.isFinite(rate) && rate > 0;
-  for (const term of splitTopLevelTerms(bodyStr)) {
-    const usesFX = termUsesFX(term);
-    if (usesFX && !fxReady) {
-      for (const { varName } of extractTermCoefficients(term)) {
-        if (!(varName in coeffs)) coeffs[varName] = 0;
-      }
-      continue;
-    }
-    const multiplier = usesFX ? rate : 1;
-    for (const { varName, value } of extractTermCoefficients(term)) {
-      if (!(varName in coeffs)) coeffs[varName] = value * multiplier;
-    }
-  }
-  const tier = {};
-  for (const [varName, field] of Object.entries(BILLING_VAR_KEY_TO_FIELD)) {
-    tier[field] = coeffs[varName] || 0;
-  }
-  return tier;
-}
-
-export function parseTiersFromExpr(exprStr, fx = 0) {
-  if (!exprStr) return [];
-  try {
-    const { body } = stripExprVersion(exprStr);
-    const condGroup = `((?:(?:p|c|len)\\s*(?:<|<=|>|>=)\\s*[\\d.eE+]+)(?:\\s*&&\\s*(?:p|c|len)\\s*(?:<|<=|>|>=)\\s*[\\d.eE+]+)*)`;
-    const tierRe = new RegExp(
-      `(?:${condGroup}\\s*\\?\\s*)?tier\\("([^"]*)",\\s*([^)]+)\\)`,
-      'g',
-    );
-    const tiers = [];
-    let m;
-    while ((m = tierRe.exec(body)) !== null) {
-      const condStr = m[1] || '';
-      const conditions = [];
-      if (condStr) {
-        for (const cp of condStr.split(/\s*&&\s*/)) {
-          const cm = cp.trim().match(/^(p|c|len)\s*(<|<=|>|>=)\s*([\d.eE+]+)$/);
-          if (cm)
-            conditions.push({ var: cm[1], op: cm[2], value: Number(cm[3]) });
-        }
-      }
-      const tier = parseTierBody(m[3], fx);
-      tier.label = m[2];
-      tier.conditions = conditions;
-      tiers.push(tier);
-    }
-    return tiers;
-  } catch {
-    return [];
-  }
 }
 
 export const decodeFromBase64 = (base64) => {
@@ -2741,6 +2670,9 @@ export function renderTieredModelPrice(opts) {
   });
 
   if (!tier) {
+    if (tiers.some((item) => item.indivisible)) {
+      return i18next.t('阶梯计费（单价不可拆分）');
+    }
     return i18next.t('阶梯计费（未匹配到对应阶梯）');
   }
   const { symbol, ratePerCny } = getDisplayCurrency();
@@ -2759,6 +2691,7 @@ export function renderTieredModelPrice(opts) {
 
   const lines = [
     buildBillingText('命中档位：{{tier}}', { tier: matchedTier || tier.label }),
+    ...(tier.indivisible ? [i18next.t('单价不可拆分')] : []),
     ...priceLines
       .filter(([field]) => tier[field] > 0)
       .map(([field, label]) =>
@@ -2812,7 +2745,12 @@ export function renderTieredModelPriceSimple(opts) {
       },
     ];
 
-    if (!tier) {
+    if (
+      tier?.indivisible ||
+      (!tier && tiers.some((item) => item.indivisible))
+    ) {
+      segments.push({ tone: 'secondary', text: i18next.t('单价不可拆分') });
+    } else if (!tier) {
       segments.push({
         tone: 'secondary',
         text:

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"sort"
 	"strings"
 
 	"github.com/QuantumNous/new-api/common"
@@ -146,51 +147,66 @@ type optionBatchRequest struct {
 	Options map[string]string `json:"options"`
 }
 
-// UpdatePricingOptions 一次性保存计费编辑器涉及的全部配置。
-//
-// 为什么需要这个入口：这些值之间有依赖（表达式引用 fx 必须有汇率；模式切到
-// tiered_expr 必须有表达式）。前端逐个 PUT 时任何一步失败都会留下半套配置，
-// 而「模式 = 表达式计费但没有表达式」会让该模型之后所有请求直接报错。
-// 这里做两件事：① 以「这次保存之后的最终状态」校验；② 单事务写库。
-// validatePricingFinalState 以「这次保存之后的最终状态」校验计费相关配置。
-//
-// 权威状态从**数据库**读，不用本副本内存：多副本部署下落后副本的内存可能是旧的，
-// 用它校验会放行"删掉仍被引用的汇率"这类组合（本地两进程共用一个 PostgreSQL 复现过）。
-// 另外要区分「没提交这个 key」和「提交了空表/null」——后者是显式清空，必须照实校验。
-func validatePricingFinalState(options map[string]string) error {
-	dbValues, err := model.GetOptionValuesFromDB([]string{
-		"billing_setting.billing_expr",
-		"ModelSourceRate",
-	})
+var pricingStateKeys = []string{
+	"billing_setting.billing_mode", "billing_setting.billing_expr", "ModelSourceRate", "GroupTimeRatio",
+}
+
+func parsePricingStringMap(raw string) (map[string]string, error) {
+	values := make(map[string]string)
+	if strings.TrimSpace(raw) != "" {
+		if err := common.UnmarshalJsonStr(raw, &values); err != nil {
+			return nil, err
+		}
+	}
+	return values, nil
+}
+
+func validatePricingFinalState(final map[string]string) error {
+	modes, err := parsePricingStringMap(final["billing_setting.billing_mode"])
 	if err != nil {
-		return fmt.Errorf("读取当前计费配置失败：%w", err)
+		return fmt.Errorf("计费模式配置不是合法的 JSON：%w", err)
 	}
-	exprJSON, exprSubmitted := options["billing_setting.billing_expr"]
-	if !exprSubmitted {
-		exprJSON = dbValues["billing_setting.billing_expr"]
+	exprJSON := final["billing_setting.billing_expr"]
+	exprs, err := parsePricingStringMap(exprJSON)
+	if err != nil {
+		return fmt.Errorf("计费表达式配置不是合法的 JSON：%w", err)
 	}
-	rateJSON, rateSubmitted := options["ModelSourceRate"]
-	if !rateSubmitted {
-		rateJSON = dbValues["ModelSourceRate"]
+	var missing []string
+	for name, mode := range modes {
+		if mode == billing_setting.BillingModeTieredExpr && strings.TrimSpace(exprs[name]) == "" {
+			missing = append(missing, name)
+		}
 	}
-	rates, err := billing_setting.ParseModelSourceRateJSON(rateJSON)
+	if len(missing) > 0 {
+		sort.Strings(missing)
+		return fmt.Errorf("模型 %s 使用分段计费，但没有设置计费表达式", strings.Join(missing, "、"))
+	}
+	rates, err := billing_setting.ParseModelSourceRateJSON(final["ModelSourceRate"])
 	if err != nil {
 		return fmt.Errorf("汇率配置不是合法的 JSON：%w", err)
 	}
 	if err := billing_setting.ValidateBillingExprJSONWithRates(exprJSON, rates); err != nil {
 		return err
 	}
-	if exprSubmitted {
-		if err := checkExprVsTimePrice(exprJSON); err != nil {
-			return err
+	return checkTimePriceVsExprs(final["GroupTimeRatio"], exprs)
+}
+
+func savePricingOptions(c *gin.Context, options map[string]string) {
+	var validationErr error
+	if err := model.UpdateOptions(options, pricingStateKeys, func(final map[string]string) error {
+		validationErr = validatePricingFinalState(final)
+		return validationErr
+	}); err != nil {
+		if validationErr != nil {
+			common.ApiError(c, validationErr)
+			return
 		}
+		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "保存失败：" + err.Error()})
+		return
 	}
-	if modeJSON, ok := options["billing_setting.billing_mode"]; ok {
-		if err := checkBillingModeVsTimePriceWithExprs(modeJSON, exprJSON); err != nil {
-			return err
-		}
-	}
-	return nil
+	model.InvalidatePricingCache()
+	ratio_setting.InvalidateExposedDataCache()
+	c.JSON(http.StatusOK, gin.H{"success": true, "message": ""})
 }
 
 func UpdatePricingOptions(c *gin.Context) {
@@ -209,22 +225,7 @@ func UpdatePricingOptions(c *gin.Context) {
 		}
 	}
 
-	if err := validatePricingFinalState(req.Options); err != nil {
-		c.JSON(http.StatusOK, gin.H{"success": false, "message": err.Error()})
-		return
-	}
-
-	// ③ 单事务写库
-	if err := model.UpdateOptions(req.Options); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "保存失败：" + err.Error()})
-		return
-	}
-	// ④ 汇率/表达式/价格都参与定价展示，必须立刻失效缓存，否则最多 1 分钟内
-	//    「扣费按新值、模型广场按旧值」。
-	model.InvalidatePricingCache()
-	ratio_setting.InvalidateExposedDataCache()
-
-	c.JSON(http.StatusOK, gin.H{"success": true, "message": ""})
+	savePricingOptions(c, req.Options)
 }
 
 func UpdateOption(c *gin.Context) {
@@ -236,6 +237,10 @@ func UpdateOption(c *gin.Context) {
 			"message": "无效的参数",
 		})
 		return
+	}
+	pricingOption := pricingBatchKeys[option.Key] || option.Key == "GroupTimeRatio"
+	if pricingOption && option.Value == nil {
+		option.Value = "null"
 	}
 	switch option.Value.(type) {
 	case bool:
@@ -249,13 +254,9 @@ func UpdateOption(c *gin.Context) {
 	}
 	// 计费相关的 key 单键 PUT 也必须走同一套「最终状态」校验：
 	// 否则旧接口仍能把仍被 fx 表达式引用的汇率删掉（本地复现：删完请求 400）。
-	if pricingBatchKeys[option.Key] {
-		if err := validatePricingFinalState(map[string]string{
-			option.Key: option.Value.(string),
-		}); err != nil {
-			c.JSON(http.StatusOK, gin.H{"success": false, "message": err.Error()})
-			return
-		}
+	if pricingOption {
+		savePricingOptions(c, map[string]string{option.Key: option.Value.(string)})
+		return
 	}
 	switch option.Key {
 	case "GitHubOAuthEnabled":
@@ -374,103 +375,12 @@ func UpdateOption(c *gin.Context) {
 			})
 			return
 		}
-	case "GroupTimeRatio":
-		err = ratio_setting.CheckGroupTimeRatio(option.Value.(string))
-		if err != nil {
-			c.JSON(http.StatusOK, gin.H{
-				"success": false,
-				"message": err.Error(),
-			})
-			return
-		}
-		// 与「计费表达式里的时间函数」互斥（§4.3）：两处都按时刻改价，同一笔单会乘两次
-		// 时间系数，而表达式那一半不进日志也不进分时表。
-		if err = checkTimePriceVsExpr(option.Value.(string)); err != nil {
-			c.JSON(http.StatusOK, gin.H{
-				"success": false,
-				"message": err.Error(),
-			})
-			return
-		}
-	case "billing_setting.billing_mode":
-		// 第三条防线：把模式切成 tiered_expr 时，表达式里的时间函数会开始生效。
-		// 只拦 expr 而不拦 mode，等于给"先配时段价、后切模式"留了一个洞。
-		if err = checkBillingModeVsTimePrice(option.Value.(string)); err != nil {
-			c.JSON(http.StatusOK, gin.H{
-				"success": false,
-				"message": err.Error(),
-			})
-			return
-		}
-	case "billing_setting.billing_expr":
-		// 反方向互斥：表达式里引用时间函数时，该模型不能再有时段价。
-		if err = checkExprVsTimePrice(option.Value.(string)); err != nil {
-			c.JSON(http.StatusOK, gin.H{
-				"success": false,
-				"message": err.Error(),
-			})
-			return
-		}
-		// 编译校验：坏表达式存进库只会在下一次请求预扣费时炸，这里提前拦住。
-		if err = billing_setting.ValidateBillingExprJSON(option.Value.(string)); err != nil {
-			c.JSON(http.StatusOK, gin.H{
-				"success": false,
-				"message": err.Error(),
-			})
-			return
-		}
 	case "points_setting.channel_rewards":
 		err = operation_setting.CheckChannelPointsRewards(option.Value.(string))
 		if err != nil {
 			c.JSON(http.StatusOK, gin.H{
 				"success": false,
 				"message": err.Error(),
-			})
-			return
-		}
-	case "ImageRatio":
-		err = ratio_setting.UpdateImageRatioByJSONString(option.Value.(string))
-		if err != nil {
-			c.JSON(http.StatusOK, gin.H{
-				"success": false,
-				"message": "图片倍率设置失败: " + err.Error(),
-			})
-			return
-		}
-	case "AudioRatio":
-		err = ratio_setting.UpdateAudioRatioByJSONString(option.Value.(string))
-		if err != nil {
-			c.JSON(http.StatusOK, gin.H{
-				"success": false,
-				"message": "音频倍率设置失败: " + err.Error(),
-			})
-			return
-		}
-	case "AudioCompletionRatio":
-		err = ratio_setting.UpdateAudioCompletionRatioByJSONString(option.Value.(string))
-		if err != nil {
-			c.JSON(http.StatusOK, gin.H{
-				"success": false,
-				"message": "音频补全倍率设置失败: " + err.Error(),
-			})
-			return
-		}
-	case "CreateCacheRatio":
-		err = ratio_setting.UpdateCreateCacheRatioByJSONString(option.Value.(string))
-		if err != nil {
-			c.JSON(http.StatusOK, gin.H{
-				"success": false,
-				"message": "缓存创建倍率设置失败: " + err.Error(),
-			})
-			return
-		}
-	case "VideoPricingConfig":
-		// 计费配置校验不过就整条拒绝——半张表生效造成的错账比保存失败糟糕得多。
-		err = ratio_setting.UpdateVideoPricingByJSONString(option.Value.(string))
-		if err != nil {
-			c.JSON(http.StatusOK, gin.H{
-				"success": false,
-				"message": "视频计费配置设置失败: " + err.Error(),
 			})
 			return
 		}

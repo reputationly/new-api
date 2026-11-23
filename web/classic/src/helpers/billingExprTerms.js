@@ -8,7 +8,15 @@
 //   - `1.5 * p * 2` 被前后两种正则各缩放一次，系数翻倍
 //   - `tier("fx-档", ...)` 里的字符串被当成 fx 引用
 
-import { BILLING_PRICING_VARS } from '../constants/billing.constants';
+import {
+  BILLING_PRICING_VARS,
+  BILLING_VAR_KEY_TO_FIELD,
+} from '../constants/billing.constants';
+import { stripExprVersion } from './exprVersion';
+import {
+  splitBillingExprAndRequestRules,
+  unwrapOuterParens,
+} from '../pages/Setting/Ratio/components/requestRuleExpr';
 
 const VAR_NAMES = BILLING_PRICING_VARS.map((v) => v.key);
 const VAR_PATTERN = VAR_NAMES.join('|');
@@ -22,13 +30,161 @@ const COEFF_REGEX = new RegExp(
 
 /** 去掉字符串字面量，避免档位标签里的内容被当成变量/关键字。 */
 export const stripStringLiterals = (expr) =>
-  String(expr || '').replace(/"[^"]*"/g, '""');
+  String(expr || '').replace(/"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'/g, '""');
 
 /** 表达式是否引用了 fx（本模型的源货币汇率）。 */
 export const exprUsesFX = (expr) => /\bfx\b/.test(stripStringLiterals(expr));
 
 /** 某一项是否引用了 fx。 */
 export const termUsesFX = (term) => /\bfx\b/.test(stripStringLiterals(term));
+
+export function linearTokenPrices(body, fx) {
+  const token = new RegExp(`\\s*(${NUM_PATTERN}|[a-zA-Z_]\\w*|[()+*/-])`, 'y');
+  const source = body.trim();
+  let pos = 0;
+  const peek = () => {
+    token.lastIndex = pos;
+    return token.exec(source);
+  };
+  const take = () => {
+    const match = peek();
+    if (!match) throw new Error('Unexpected token');
+    pos += match[0].length;
+    return match[1];
+  };
+  const constant = (value) => [value, {}];
+  const scale = ([offset, prices], factor) => [
+    offset * factor,
+    Object.fromEntries(
+      Object.entries(prices).map(([key, value]) => [key, value * factor]),
+    ),
+  ];
+  const atom = () => {
+    const value = take();
+    if (value === '+' || value === '-')
+      return scale(atom(), value === '-' ? -1 : 1);
+    if (value === '(') {
+      const result = sum();
+      if (take() !== ')') throw new Error('Expected closing parenthesis');
+      return result;
+    }
+    if (VAR_NAMES.includes(value)) return [0, { [value]: 1 }];
+    if (value === 'fx' && Number(fx) > 0) return constant(Number(fx));
+    if (/^\d/.test(value)) return constant(Number(value));
+    throw new Error('Unsupported variable');
+  };
+  const product = () => {
+    let result = atom();
+    while (['*', '/'].includes(peek()?.[1])) {
+      const op = take();
+      const right = atom();
+      if (
+        Object.keys(right[1]).length === 0 &&
+        (op === '*' || right[0] !== 0)
+      ) {
+        result = scale(result, op === '*' ? right[0] : 1 / right[0]);
+      } else if (op === '*' && Object.keys(result[1]).length === 0) {
+        result = scale(right, result[0]);
+      } else {
+        throw new Error('Nonlinear price');
+      }
+    }
+    return result;
+  };
+  const sum = () => {
+    let [offset, prices] = product();
+    while (['+', '-'].includes(peek()?.[1])) {
+      const sign = take() === '+' ? 1 : -1;
+      const [rightOffset, rightPrices] = product();
+      offset += sign * rightOffset;
+      for (const [key, value] of Object.entries(rightPrices)) {
+        prices[key] = (prices[key] || 0) + sign * value;
+      }
+    }
+    return [offset, prices];
+  };
+  try {
+    const [offset, prices] = sum();
+    return pos === source.length &&
+      offset === 0 &&
+      Object.values(prices).every(
+        (value) => Number.isFinite(value) && value >= 0,
+      )
+      ? prices
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+function splitTierBranches(body, conditions = []) {
+  body = unwrapOuterParens(body);
+  const condition = (text) =>
+    text.split(/\s*&&\s*/).flatMap((part) => {
+      const match = part
+        .trim()
+        .match(/^(p|c|len)\s*(<=|>=|<|>)\s*([\d.eE+-]+)$/);
+      return match
+        ? [{ var: match[1], op: match[2], value: Number(match[3]) }]
+        : [];
+    });
+  let depth = 0;
+  let question = -1;
+  let branches = 0;
+  const structural = /"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|[()?:]/g;
+  for (const { 0: char, index } of body.matchAll(structural)) {
+    if (char === '(') depth += 1;
+    else if (char === ')') depth -= 1;
+    else if (depth === 0 && char === '?') {
+      if (branches === 0) question = index;
+      branches += 1;
+    } else if (
+      depth === 0 &&
+      char === ':' &&
+      branches > 0 &&
+      --branches === 0
+    ) {
+      return [
+        ...splitTierBranches(
+          body.slice(question + 1, index),
+          condition(body.slice(0, question)),
+        ),
+        ...splitTierBranches(body.slice(index + 1), conditions),
+      ];
+    }
+  }
+  const match = body
+    .trim()
+    .match(/^tier\s*\(\s*("(?:\\.|[^"\\])*")\s*,([\s\S]+)\)$/);
+  if (!match) return [{ conditions, coefficients: null }];
+  return [{ label: JSON.parse(match[1]), body: match[2], conditions }];
+}
+
+export function parseTiersFromExpr(exprStr, fx = 0) {
+  if (!exprStr) return [];
+  try {
+    const { billingExpr } = splitBillingExprAndRequestRules(
+      stripExprVersion(exprStr).body,
+    );
+    return splitTierBranches(billingExpr).map(({ label, body, conditions }) => {
+      const prices = body === undefined ? null : linearTokenPrices(body, fx);
+      return {
+        label,
+        conditions,
+        ...(prices === null
+          ? { indivisible: true }
+          : Object.fromEntries(
+              Object.entries(BILLING_VAR_KEY_TO_FIELD).map(([key, field]) => [
+                field,
+                prices[key] || 0,
+              ]),
+            )),
+      };
+    });
+  } catch {
+    return [];
+  }
+}
 
 /**
  * 把 tier(...) 的成本体按顶层加减号切成若干项。

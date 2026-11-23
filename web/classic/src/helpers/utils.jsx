@@ -18,13 +18,10 @@ For commercial licensing, please contact support@quantumnous.com
 */
 
 import { Toast, Pagination } from '@douyinfe/semi-ui';
-import {
-  toastConstants,
-  BILLING_PRICING_VARS,
-  BILLING_VAR_REGEX,
-} from '../constants';
+import { toastConstants, BILLING_PRICING_VARS } from '../constants';
 import { getDisplayCurrency, getQuotaPerYuan } from './quota';
 import { getExprPriceScale } from './exprPrice';
+import { parseTiersFromExpr, stripStringLiterals } from './billingExprTerms';
 import React from 'react';
 import { toast } from 'react-toastify';
 import {
@@ -1287,7 +1284,12 @@ export const getModelPriceItems = (priceData, t, quotaDisplayType = 'USD') => {
 };
 
 // 格式化动态计费摘要（用于卡片视图，与 formatPriceInfo 风格统一）
-export const formatDynamicPriceSummary = (billingExpr, t, groupRatio = 1) => {
+export const formatDynamicPriceSummary = (
+  billingExpr,
+  t,
+  groupRatio = 1,
+  fx = 0,
+) => {
   if (!billingExpr)
     return (
       <span style={{ color: 'var(--semi-color-text-1)' }}>{t('动态计费')}</span>
@@ -1299,19 +1301,13 @@ export const formatDynamicPriceSummary = (billingExpr, t, groupRatio = 1) => {
   // v1 表达式是历史美元口径（后端已拒绝结算），这里的系数先按汇率折成人民币，
   // 只保证展示数字与历史价格一致；v2 的系数本身已是 ¥/百万 tokens。
   const exprPriceScale = getExprPriceScale(billingExpr);
-  const exprBody = billingExpr.replace(/^v\d+:/, '');
-  const tierMatches = exprBody.match(/tier\(/g) || [];
-  const tierCount = tierMatches.length;
-
-  const varCoeffs = {};
-  const varRe = new RegExp(BILLING_VAR_REGEX.source, 'g');
-  let vm;
-  while ((vm = varRe.exec(exprBody)) !== null) {
-    if (!(vm[1] in varCoeffs)) varCoeffs[vm[1]] = Number(vm[2]);
-  }
-  const hasCoeffs = 'p' in varCoeffs || 'c' in varCoeffs;
-
-  const varLabels = BILLING_PRICING_VARS.map((v) => [v.key, v.label]);
+  const exprBody = stripStringLiterals(billingExpr);
+  const tiers = parseTiersFromExpr(billingExpr, fx);
+  const tierCount = tiers.length;
+  const indivisible = tierCount === 0 || tiers.some((tier) => tier.indivisible);
+  const varLabels = indivisible
+    ? []
+    : BILLING_PRICING_VARS.filter(({ field }) => tiers[0][field] > 0);
 
   const hasTimeCondition = /\b(?:hour|minute|weekday|month|day)\(/.test(
     exprBody,
@@ -1328,18 +1324,13 @@ export const formatDynamicPriceSummary = (billingExpr, t, groupRatio = 1) => {
 
   return (
     <>
-      {hasCoeffs && (
-        <>
-          {varLabels.map(([key, label]) =>
-            key in varCoeffs ? (
-              <span key={key} style={lineStyle}>
-                {`${t(label)} ${symbol}${formatPriceWithCeiling(varCoeffs[key] * exprPriceScale * gr * ratePerCny)}${unitSuffix}`}
-              </span>
-            ) : null,
-          )}
-        </>
-      )}
-      {(tierCount > 1 || hasTimeCondition || hasRequestCondition) && (
+      {varLabels.map(({ field, label }) => (
+        <span key={field} style={lineStyle}>
+          {`${t(label)} ${symbol}${formatPriceWithCeiling(tiers[0][field] * exprPriceScale * gr * ratePerCny)}${unitSuffix}`}
+        </span>
+      ))}
+      {indivisible && <span style={lineStyle}>{t('单价不可拆分')}</span>}
+      {(tags.length > 0 || (!indivisible && varLabels.length === 0)) && (
         <span style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
           <span
             style={{

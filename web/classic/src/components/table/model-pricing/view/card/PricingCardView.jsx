@@ -369,6 +369,7 @@ const PricingCardView = ({
                               priceData.billingExpr,
                               t,
                               priceData.usedGroupRatio,
+                              model.source_rate,
                             )
                           : priceData.isVideoMatrix
                             ? formatVideoMatrixSummary(priceData, t)

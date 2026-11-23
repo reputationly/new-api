@@ -28,7 +28,10 @@ import {
   splitBillingExprAndRequestRules,
 } from '../components/requestRuleExpr';
 import { BILLING_VAR_REGEX } from '../../../../constants/billing.constants';
-import { scaleTermCoefficients } from '../../../../helpers/billingExprTerms';
+import {
+  exprUsesFX,
+  scaleTermCoefficients,
+} from '../../../../helpers/billingExprTerms';
 
 export const PAGE_SIZE = 10;
 
@@ -43,7 +46,7 @@ export const PAGE_SIZE = 10;
  * 所以改汇率时**不能**再去缩放文本（否则 `p * 1.5 * fx` 会被乘成 `p * 1.545 * fx`，
  * 一次比一次离谱）。这里的判据必须与 helpers/render.jsx 的 exprUsesFX 一致。
  */
-export const exprReferencesFX = (expr) => /\bfx\b/.test(String(expr || ''));
+export const exprReferencesFX = exprUsesFX;
 
 export const scaleNumericString = (value, factor) => {
   const num = toNumberOrNull(value);

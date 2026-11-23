@@ -59,6 +59,10 @@ describe('exprReferencesFX', () => {
     expect(exprReferencesFX('tier("base", p * fxx)')).toBe(false);
     expect(exprReferencesFX('tier("base", p * affx)')).toBe(false);
   });
+
+  it('档位标签里的 fx 不阻止换算', () => {
+    expect(exprReferencesFX('tier("fx", p * 10.2)')).toBe(false);
+  });
 });
 
 // 系数写在前面（`1.5 * p`）同样要缩放；比较里的数字不能碰。

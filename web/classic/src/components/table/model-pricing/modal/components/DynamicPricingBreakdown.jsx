@@ -148,6 +148,11 @@ export default function DynamicPricingBreakdown({ billingExpr, t, fx = 0 }) {
               {record.condSummary}
             </div>
           )}
+          {record.indivisible && (
+            <div className='text-xs text-gray-500 mt-1'>
+              {t('单价不可拆分')}
+            </div>
+          )}
         </div>
       ),
     },
@@ -171,6 +176,7 @@ export default function DynamicPricingBreakdown({ billingExpr, t, fx = 0 }) {
     ? tiers.map((tier, i) => ({
         key: `tier-${i}`,
         label: tier.label,
+        indivisible: tier.indivisible,
         condSummary: formatConditionSummary(tier.conditions, t),
         ...Object.fromEntries(
           priceFields.map(([field]) => [field, tier[field] || 0]),

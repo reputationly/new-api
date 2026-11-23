@@ -5,9 +5,11 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/setting"
@@ -23,6 +25,10 @@ type Option struct {
 	Key   string `json:"key" gorm:"primaryKey"`
 	Value string `json:"value"`
 }
+
+const pricingWriteLockKey = "_internal.pricing_write_lock"
+
+var pricingWriteMu sync.Mutex
 
 func AllOption() ([]*Option, error) {
 	var options []*Option
@@ -230,8 +236,13 @@ func InitOptionMap() {
 }
 
 func loadOptionsFromDatabase() {
+	pricingWriteMu.Lock()
+	defer pricingWriteMu.Unlock()
 	options, _ := AllOption()
 	for _, option := range options {
+		if option.Key == pricingWriteLockKey {
+			continue
+		}
 		err := updateOptionMap(option.Key, option.Value)
 		if err != nil {
 			common.SysLog("failed to update option map: " + err.Error())
@@ -317,7 +328,7 @@ func UpdateOption(key string, value string) error {
 // 这些值之间有依赖（表达式引用 fx 就必须有汇率；模式切到 tiered_expr 就必须有表达式）。
 // 逐个 PUT 时任何一步失败都会留下半套配置，而"模式=表达式计费但没有表达式"会让整个
 // 模型之后所有请求直接报错。这里保证要么全写、要么全不写。
-func UpdateOptions(options map[string]string) error {
+func UpdateOptions(options map[string]string, stateKeys []string, validate func(map[string]string) error) error {
 	if len(options) == 0 {
 		return nil
 	}
@@ -328,18 +339,51 @@ func UpdateOptions(options map[string]string) error {
 	sort.Strings(keys) // 固定顺序，便于排查与测试
 	// **提交前**把每个 key 都解析一遍：真正应用发生在 commit 之后，若那时才报错，
 	// 库里已经写进去了（返回 500 但数据生效，是最难排查的一类）。这里先失败先返回。
+	values := make(map[string]string, len(options))
 	for _, key := range keys {
 		if err := ValidateOptionValueForBatch(key, options[key]); err != nil {
 			return err
 		}
+		value := options[key]
+		switch key {
+		case "billing_setting.billing_mode", "billing_setting.billing_expr":
+			if strings.TrimSpace(value) == "" {
+				value = "{}"
+			}
+		}
+		values[key] = value
 	}
+
+	pricingWriteMu.Lock()
+	defer pricingWriteMu.Unlock()
+	var final map[string]string
 	err := DB.Transaction(func(tx *gorm.DB) error {
+		// A write to one shared row comes first: it takes the row lock on
+		// PostgreSQL/MySQL and the writer lock before any read on SQLite.
+		lock := Option{Key: pricingWriteLockKey}
+		if err := tx.Clauses(clause.OnConflict{
+			Columns:   []clause.Column{{Name: "key"}},
+			DoUpdates: clause.AssignmentColumns([]string{"value"}),
+		}).Create(&lock).Error; err != nil {
+			return err
+		}
+		var err error
+		final, err = getOptionValues(tx, stateKeys)
+		if err != nil {
+			return err
+		}
+		for key, value := range values {
+			final[key] = value
+		}
+		if err := validate(final); err != nil {
+			return err
+		}
 		for _, key := range keys {
 			option := Option{Key: key}
 			if err := tx.FirstOrCreate(&option, Option{Key: key}).Error; err != nil {
 				return err
 			}
-			option.Value = options[key]
+			option.Value = values[key]
 			if err := tx.Save(&option).Error; err != nil {
 				return err
 			}
@@ -350,8 +394,19 @@ func UpdateOptions(options map[string]string) error {
 		return err
 	}
 	// 落库成功后逐个应用到内存；复用 updateOptionMap（它只做内存，不写库）。
+	for _, key := range stateKeys {
+		if _, submitted := values[key]; !submitted {
+			if value, exists := final[key]; exists {
+				if (key == "billing_setting.billing_mode" || key == "billing_setting.billing_expr") && strings.TrimSpace(value) == "" {
+					value = "{}"
+				}
+				values[key] = value
+				keys = append(keys, key)
+			}
+		}
+	}
 	for _, key := range keys {
-		if applyErr := updateOptionMap(key, options[key]); applyErr != nil {
+		if applyErr := updateOptionMap(key, values[key]); applyErr != nil {
 			common.SysLog("failed to apply option to memory: " + key + ": " + applyErr.Error())
 			return applyErr
 		}
@@ -385,22 +440,20 @@ func ValidateOptionValueForBatch(key, value string) error {
 		return nil
 	case "VideoPricingConfig":
 		return ratio_setting.CheckVideoPricingByJSONString(value)
+	case "GroupTimeRatio":
+		return ratio_setting.CheckGroupTimeRatio(value)
 	default:
 		return fmt.Errorf("该接口不支持批量写入：%s", key)
 	}
 }
 
-// GetOptionValuesFromDB 读取指定 key 在**库里**的当前值。
-//
-// 批量保存的"最终状态"校验必须用库里的值，不能用本副本内存：多副本部署下，
-// 落后副本的内存可能是旧的，用它校验会放行"删掉仍被引用的汇率"这类组合。
-func GetOptionValuesFromDB(keys []string) (map[string]string, error) {
+func getOptionValues(tx *gorm.DB, keys []string) (map[string]string, error) {
 	out := make(map[string]string, len(keys))
 	if len(keys) == 0 {
 		return out, nil
 	}
 	rows := make([]Option, 0, len(keys))
-	if err := DB.Find(&rows, keys).Error; err != nil {
+	if err := tx.Find(&rows, keys).Error; err != nil {
 		return nil, err
 	}
 	for _, row := range rows {

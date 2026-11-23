@@ -56,12 +56,43 @@ describe('fx 按项生效（混合写法）', () => {
     expect(tiers[0].inputPrice).toBeCloseTo(10.2, 6);
   });
 
-  it('引用 fx 但汇率缺失时该项显示 0', () => {
+  it('引用 fx 但汇率缺失时不显示猜测的单价', () => {
     const tiers = parseTiersFromExpr(
       'v2:tier("base", p * 1.5 * fx + c * 7.5)',
       0,
     );
-    expect(tiers[0].inputPrice).toBe(0);
-    expect(tiers[0].outputPrice).toBeCloseTo(7.5, 6);
+    expect(tiers[0]).toMatchObject({ label: 'base', indivisible: true });
+    expect(tiers[0]).not.toHaveProperty('inputPrice');
+  });
+
+  it('括号和重复变量按完整数值计算', () => {
+    expect(
+      parseTiersFromExpr(
+        'v2:tier("base", p * (1.5 * fx) + c * 7.5 - 0.2 * p)',
+        6.8,
+      )[0],
+    ).toMatchObject({ inputPrice: 10, outputPrice: 7.5 });
+  });
+
+  it('非线性、固定加价和档位外倍率不展示拆分单价', () => {
+    for (const expression of [
+      'tier("base", p * c)',
+      'tier("base", p * 2 + 1)',
+      'tier("base", p * 2) * 3',
+    ]) {
+      expect(parseTiersFromExpr(expression)[0]).toMatchObject({
+        indivisible: true,
+      });
+    }
+  });
+
+  it('用量日志仍能展示带独立请求倍率的分档目录价', () => {
+    const tiers = parseTiersFromExpr(
+      'v2:(len <= 2000 ? tier("short", p * 2) : tier("long", p * 3)) * (header("mode") == "fast" ? 2 : 1)',
+    );
+    expect(tiers.map((tier) => [tier.label, tier.inputPrice])).toEqual([
+      ['short', 2],
+      ['long', 3],
+    ]);
   });
 });
