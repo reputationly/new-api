@@ -34,7 +34,7 @@ import {
 import { IconCopy, IconDelete, IconPlus } from '@douyinfe/semi-icons';
 import { renderQuotaTrimmed } from '../../../../helpers/render';
 import { getQuotaPerYuan } from '../../../../helpers/quota';
-import { copy, showSuccess } from '../../../../helpers';
+import { copy, showSuccess, stripExprVersion } from '../../../../helpers';
 import {
   BILLING_EXTRA_VARS,
   BILLING_CACHE_VAR_MAP,
@@ -1814,7 +1814,10 @@ export default function TieredPricingEditor({
     (preset) => {
       const presetGroups = preset.requestRules || [];
       const ruleExpr = buildRequestRuleExpr(presetGroups);
-      const combined = combineBillingExpr(preset.expr, ruleExpr) || preset.expr;
+      // 预设模板自带 `v2:` 前缀；编辑框只收正文（与加载已保存表达式一致），
+      // 保存时再由 toV2BillingExpr 统一加前缀，避免双前缀。
+      const presetBody = stripExprVersion(preset.expr).body;
+      const combined = combineBillingExpr(presetBody, ruleExpr) || presetBody;
       setRawExpr(combined);
       const parsed = tryParseVisualConfig(preset.expr);
       if (parsed) {

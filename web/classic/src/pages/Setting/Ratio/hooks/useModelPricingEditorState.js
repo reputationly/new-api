@@ -29,6 +29,15 @@ import {
 } from '../components/requestRuleExpr';
 
 export const PAGE_SIZE = 10;
+
+/**
+ * 把表达式正文规范成存储形态：**先剥掉可能已存在的版本前缀，再统一加 `v2:`**。
+ *
+ * 为什么需要：编辑框只收正文（加载时 `stripExprVersion` 已剥），但预设模板与文档里
+ * 的表达式都带 `v2:`，直接粘进去保存会拼成 `v2:v2:...`，后端编译失败。
+ * 这里做成幂等，任何来源的表达式都能安全保存。
+ */
+export const toV2BillingExpr = (expr) => `v2:${stripExprVersion(String(expr || '')).body}`;
 export const PRICE_SUFFIX = '¥/1M tokens';
 const EMPTY_CANDIDATE_MODEL_NAMES = [];
 
@@ -1553,9 +1562,11 @@ export function useModelPricingEditorState({
           if (finalBillingExpr) {
             tieredOutput['billing_setting.billing_mode'][model.name] =
               'tiered_expr';
-            // 新保存的表达式一律是人民币口径的 v2（后端拒绝写入 v1）
+            // 新保存的表达式一律是人民币口径的 v2（后端拒绝写入 v1）。
+            // 用 toV2BillingExpr 而不是直接拼 `v2:`：正文里可能已经带了前缀
+            // （预设模板、从文档粘的），重复拼会变成 v2:v2:… 编译失败。
             tieredOutput['billing_setting.billing_expr'][model.name] =
-              `v2:${finalBillingExpr}`;
+              toV2BillingExpr(finalBillingExpr);
           }
         }
 
