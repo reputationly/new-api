@@ -604,20 +604,10 @@ func OpenaiHandlerWithUsage(c *gin.Context, info *relaycommon.RelayInfo, resp *h
 	if usageResp.OutputTokens > 0 {
 		usageResp.CompletionTokens += usageResp.OutputTokens
 	}
-	if usageResp.InputTokensDetails != nil {
-		usageResp.PromptTokensDetails.ImageTokens += usageResp.InputTokensDetails.ImageTokens
-		usageResp.PromptTokensDetails.TextTokens += usageResp.InputTokensDetails.TextTokens
-		// Responses 协议把缓存统计放在 input_tokens_details 里（实测网宿：详情只有
-		// cached_tokens + cache_write_tokens），而计费读的是 PromptTokensDetails。
-		// 不搬过来的话，走原生 /responses 的请求会把缓存命中/写入按普通输入计费。
-		usageResp.PromptTokensDetails.CachedTokens += usageResp.InputTokensDetails.CachedTokens
-		usageResp.PromptTokensDetails.CachedCreationTokens += usageResp.InputTokensDetails.CachedCreationTokens
-		usageResp.PromptTokensDetails.CacheWriteTokens += usageResp.InputTokensDetails.CacheWriteTokens
-		usageResp.PromptTokensDetails.CreationTokens += usageResp.InputTokensDetails.CreationTokens
-		if usageResp.PromptTokensDetails.EcaCacheCreationDetails == nil {
-			usageResp.PromptTokensDetails.EcaCacheCreationDetails = usageResp.InputTokensDetails.EcaCacheCreationDetails
-		}
-	}
+	// Responses 协议把缓存统计放在 input_tokens_details 里，而计费读的是
+	// PromptTokensDetails。逐字段「主来源优先、为零才回退」，两份都在时不累加
+	// ——累加会把缓存命中/写入翻倍（见 mergeInputTokenDetails）。
+	mergeInputTokenDetails(&usageResp.PromptTokensDetails, usageResp.InputTokensDetails)
 	applyUsagePostProcessing(info, &usageResp.Usage, responseBody)
 	return &usageResp.Usage, nil
 }

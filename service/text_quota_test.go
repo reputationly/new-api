@@ -490,3 +490,44 @@ func TestCalculateTextQuotaSummaryGatewayCacheWriteSplit(t *testing.T) {
 	require.Equal(t, 1200, summary.CacheCreationTokens5m)
 	require.Equal(t, 249, summary.CacheCreationTokens1h)
 }
+
+// 上游只给 TTL 明细、不给汇总（或汇总为 0）时，必须以明细之和为准扣掉 baseTokens：
+// 否则这批 token 既留在 baseTokens 里按输入价计，又按分量价加一遍 —— 同一批计两次。
+func TestCalculateTextQuotaSummarySplitWithoutTotalNotDoubleCounted(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	w := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(w)
+
+	relayInfo := &relaycommon.RelayInfo{
+		RelayFormat:     types.RelayFormatOpenAI,
+		OriginModelName: "gpt-5.6-terra",
+		PriceData: types.PriceData{
+			ModelRatio:           1,
+			CompletionRatio:      1,
+			CacheCreationRatio:   1,
+			CacheCreation5mRatio: 2,
+			CacheCreation1hRatio: 3,
+			GroupRatioInfo: types.GroupRatioInfo{
+				GroupRatio: 1,
+			},
+		},
+		StartTime: time.Now(),
+	}
+
+	usage := &dto.Usage{
+		PromptTokens: 100,
+		PromptTokensDetails: dto.InputTokenDetails{
+			// 注意：没有 cache_write_tokens / creation_tokens 汇总字段
+			EcaCacheCreationDetails: &dto.EcaCacheCreationDetails{
+				Ephemeral5mInputTokens: 10,
+				Ephemeral1hInputTokens: 10,
+			},
+		},
+	}
+
+	summary := calculateTextQuotaSummary(ctx, relayInfo, usage)
+
+	// base = 100 - 20 = 80 → 80000；分量 10×2 + 10×3 = 50 → 50000；合计 130000
+	require.Equal(t, 130000, summary.Quota)
+	require.Equal(t, 20, summary.CacheCreationTokens)
+}

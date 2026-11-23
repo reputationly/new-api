@@ -907,3 +907,26 @@ func TestBuildTieredTokenParams_GatewayCacheWriteTTLSplit(t *testing.T) {
 		t.Fatalf("quota = %f, want %f", got, want)
 	}
 }
+
+// 汇总大于明细之和时，多出来的部分归短 TTL 档：与 convert.go 的
+// NormalizeCacheCreationSplit 同口径，不能留在 p 里按输入价计。
+func TestBuildTieredTokenParams_CacheWriteRemainderGoesToShortTTL(t *testing.T) {
+	usage := &dto.Usage{
+		PromptTokens: 100,
+		PromptTokensDetails: dto.InputTokenDetails{
+			CacheWriteTokens: 100, // 汇总
+			EcaCacheCreationDetails: &dto.EcaCacheCreationDetails{
+				Ephemeral5mInputTokens: 30,
+				Ephemeral1hInputTokens: 20,
+			},
+		},
+	}
+	expr := `v2:tier("base", p * 2 + c * 1 + cc * 3 + cc1h * 5)`
+	got := tieredQuota(expr, usage, false, 1.0)
+	// cc = 30 + (100-30-20) = 80；p = 100 - 80 - 20 = 0
+	// cost = 80*3 + 20*5 = 340 → ×1000
+	want := 340000.0
+	if math.Abs(got-want) > 0.01 {
+		t.Fatalf("quota = %f, want %f", got, want)
+	}
+}

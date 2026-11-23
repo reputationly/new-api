@@ -35,7 +35,15 @@ func BuildTieredTokenParams(usage *dto.Usage, isClaudeUsageSemantic bool, usedVa
 	} else if shortTTL, longTTL := usage.PromptTokensDetails.CacheWriteSplit(); shortTTL > 0 || longTTL > 0 {
 		// 非 Claude 语义但网关给了 TTL 拆分（eca_cache_creation_details）：
 		// cc = 短 TTL、cc1h = 长 TTL，两档分别计价。
-		cc5m = float64(shortTTL)
+		//
+		// 汇总比明细多出来的部分没有 TTL 信息，归到短档——与 service/convert.go 的
+		// NormalizeCacheCreationSplit 同一口径。否则这部分 token 会留在 p 里按输入价
+		// 计，而协议转换那边按缓存写入价报，同一个请求两处金额对不上。
+		remainder := usage.PromptTokensDetails.CacheWriteTokensTotal() - shortTTL - longTTL
+		if remainder < 0 {
+			remainder = 0
+		}
+		cc5m = float64(shortTTL + remainder)
 		cc1h = float64(longTTL)
 	} else {
 		// 没有 TTL 拆分时退回总量。总量必须把 cache_write_tokens /

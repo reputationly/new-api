@@ -195,6 +195,11 @@ func calculateTextQuotaSummary(ctx *gin.Context, relayInfo *relaycommon.RelayInf
 	if shortTTL, longTTL := usage.PromptTokensDetails.CacheWriteSplit(); shortTTL > 0 || longTTL > 0 {
 		summary.CacheCreationTokens5m = shortTTL
 		summary.CacheCreationTokens1h = longTTL
+		// 明细比汇总可信：上游只给明细（汇总为 0）或汇总偏小时，以明细之和为准。
+		// 否则 baseTokens 没被扣掉这部分，却又按分量价加了一遍 —— 同一批 token 计两次。
+		if splitTotal := shortTTL + longTTL; splitTotal > summary.CacheCreationTokens {
+			summary.CacheCreationTokens = splitTotal
+		}
 	}
 	summary.ImageTokens = usage.PromptTokensDetails.ImageTokens
 	summary.AudioTokens = usage.PromptTokensDetails.AudioTokens

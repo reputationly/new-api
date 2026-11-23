@@ -49,9 +49,10 @@ func OaiResponsesHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http
 		usage.PromptTokens = responsesResponse.Usage.InputTokens
 		usage.CompletionTokens = responsesResponse.Usage.OutputTokens
 		usage.TotalTokens = responsesResponse.Usage.TotalTokens
-		if responsesResponse.Usage.InputTokensDetails != nil {
-			usage.PromptTokensDetails.CachedTokens = responsesResponse.Usage.InputTokensDetails.CachedTokens
-		}
+		// 缓存统计（命中 + 写入 + TTL 明细）都在 input_tokens_details 里，计费读的
+		// 是 PromptTokensDetails：必须整体搬过来，只搬 cached_tokens 会让缓存写入
+		// 按普通输入价结算。
+		mergeInputTokenDetails(&usage.PromptTokensDetails, responsesResponse.Usage.InputTokensDetails)
 	}
 	if info == nil || info.ResponsesUsageInfo == nil || info.ResponsesUsageInfo.BuiltInTools == nil {
 		return &usage, nil
@@ -102,9 +103,7 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 					if streamResponse.Response.Usage.TotalTokens != 0 {
 						usage.TotalTokens = streamResponse.Response.Usage.TotalTokens
 					}
-					if streamResponse.Response.Usage.InputTokensDetails != nil {
-						usage.PromptTokensDetails.CachedTokens = streamResponse.Response.Usage.InputTokensDetails.CachedTokens
-					}
+					mergeInputTokenDetails(&usage.PromptTokensDetails, streamResponse.Response.Usage.InputTokensDetails)
 				}
 				if streamResponse.Response.HasImageGenerationCall() {
 					c.Set("image_generation_call", true)
