@@ -77,3 +77,34 @@ describe('PriceInput 美元录入模式', () => {
     expect(screen.getByText('¥/1M tokens')).toBeTruthy();
   });
 });
+
+describe('PriceInput 美元录入：极低单价不被精度截断', () => {
+  // $0.00000002 × 7.3 = ¥0.000000146：原先按 6 位取整会在换算这一步就变成 0。
+  it('换算后保留到 12 位，不会存成 0', () => {
+    const onChange = vi.fn();
+    render(
+      <PriceInput
+        label='输入价格'
+        value=''
+        onChange={onChange}
+        usdRate={7.3}
+      />,
+    );
+    fireEvent.change(screen.getByRole('textbox'), {
+      target: { value: '0.00000002' },
+    });
+    expect(onChange).toHaveBeenLastCalledWith('0.000000146');
+  });
+
+  it('显示侧也不被圆成 0.00', () => {
+    render(
+      <PriceInput
+        label='输入价格'
+        value='0.000000146'
+        onChange={() => {}}
+        usdRate={7.3}
+      />,
+    );
+    expect(screen.getByDisplayValue('0.00000002')).toBeTruthy();
+  });
+});

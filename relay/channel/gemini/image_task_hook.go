@@ -9,7 +9,6 @@ import (
 	"github.com/QuantumNous/new-api/logger"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/service"
-	"github.com/QuantumNous/new-api/setting/model_setting"
 
 	"github.com/gin-gonic/gin"
 )
@@ -95,11 +94,12 @@ func persistOneInlineImage(c *gin.Context, info *relaycommon.RelayInfo, part *dt
 
 // wantsImageURL 决定 /v1/images/generations 回 url 还是 b64_json。
 //
-// OpenAI 语义：response_format 缺省即 url，只有显式 b64_json 才回 base64。
+// **缺省回 b64**，只有客户端显式要 url 才转链接：这条 gemini 路径此前一直回
+// base64，改成缺省 url 会让老客户端（按 b64_json 解析）直接拿不到图。
 // 注意上游 Gemini 只给 inlineData（base64），没有 URL 可透传——这里的 url 一律是
 // 我方 OBS 的签名链接（有效期取 SignedURLTTLHours，默认 7 天）。
 func wantsImageURL(responseFormat string) bool {
-	return !strings.EqualFold(strings.TrimSpace(responseFormat), "b64_json")
+	return strings.EqualFold(strings.TrimSpace(responseFormat), "url")
 }
 
 // imageResponseFormat 取客户端原始请求里的 response_format；拿不到时按缺省（url）处理。
@@ -120,15 +120,23 @@ func isInlineImagePart(part *dto.GeminiPart) bool {
 	return strings.HasPrefix(strings.ToLower(part.InlineData.MimeType), "image/")
 }
 
-// markGeminiImageProducedForStream 流式路径拿不到完整响应体，只能按模型判定：命中
-// 「支持的图像模型」就认为本次会出图，任务记录留一条没有预览的记录。
-func markGeminiImageProducedForStream(c *gin.Context, info *relaycommon.RelayInfo) {
-	// ChannelMeta 是嵌入字段，未初始化时读 UpstreamModelName 会空指针。
-	if c == nil || info == nil || info.ChannelMeta == nil {
+// markIfGeminiChunkHasImage 流式路径在每个 SSE 分片里判定：只有真的读到非空
+// image/* 分片才打「产出了图片」标记。
+//
+// 不能按模型能力预判——图片模型回纯文本（拒答、只返回说明文字）时也会被记成一条
+// 成功的出图任务，任务日志里就是一堆没有图的记录。
+func markIfGeminiChunkHasImage(c *gin.Context, chunk *dto.GeminiChatResponse) {
+	if c == nil || chunk == nil || len(chunk.Candidates) == 0 {
 		return
 	}
-	if model_setting.IsGeminiModelSupportImagine(info.UpstreamModelName) {
-		relaycommon.MarkSyncImageProduced(c)
+	for i := range chunk.Candidates {
+		parts := chunk.Candidates[i].Content.Parts
+		for j := range parts {
+			if isInlineImagePart(&parts[j]) {
+				relaycommon.MarkSyncImageProduced(c)
+				return
+			}
+		}
 	}
 }
 

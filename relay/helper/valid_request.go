@@ -154,6 +154,9 @@ func GetAndValidOpenAIImageRequest(c *gin.Context, relayMode int) (*dto.ImageReq
 			imageRequest.N = common.GetPointer(uint(common.String2Int(formData.Get("n"))))
 			imageRequest.Quality = formData.Get("quality")
 			imageRequest.Size = formData.Get("size")
+			// multipart 的 edits 请求同样要认 response_format，否则客户端点明要
+			// b64_json 也会被当成缺省值处理。
+			imageRequest.ResponseFormat = formData.Get("response_format")
 			if imageValue := formData.Get("image"); imageValue != "" {
 				imageRequest.Image, _ = common.Marshal(imageValue)
 			}

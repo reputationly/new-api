@@ -8,13 +8,35 @@ import {
 // 美元录入模式（usdRate 非空）只改**输入框这一层**：state 与后端存储始终是人民币，
 // 显示值与键入值按汇率折算。运营商照抄供应商的美元价目表时不用自己乘，
 // 序列化链路（ModelRatio = ¥/百万 tokens、ModelPrice = ¥/次）一个字都不用动。
+// toFixed 不会输出科学计数法，但 parseFloat+String 会（2e-8）；这里统一保留小数串，
+// 避免极低单价（如 $0.00000002）在往返里被压成 0。
+const trimTrailingZeros = (text) =>
+  text.includes('.') ? text.replace(/0+$/, '').replace(/\.$/, '') : text;
+
+const toFixedString = (num, digits) => {
+  if (!Number.isFinite(num)) {
+    return '';
+  }
+  return trimTrailingZeros(num.toFixed(digits));
+};
+
 const toUSDDisplay = (value, rate) => {
   if (!hasNumber(value)) {
     return '';
   }
-  const num = Number(value);
-  // 先收敛到 6 位：¥10.95 ÷ 6.8 = 1.6102941176470589 这种尾巴不该出现在输入框里。
-  return String(parseFloat((num / rate).toFixed(6)));
+  // 10 位足够：再细的价格也没有实际意义，但 6 位会把 1e-7 量级直接抹成 0。
+  return toFixedString(Number(value) / rate, 10);
+};
+
+// 展示用：不足 2 位补 0，超过则保留原精度（不走 formatDisplayPrice：
+// 它把 2e-8 这类型值圆成 "0.00"，低价模型的数字会凭空消失）。
+const formatUSDDisplay = (value, rate) => {
+  const raw = toUSDDisplay(value, rate);
+  if (raw === '') {
+    return '';
+  }
+  const [intPart, fracPart = ''] = raw.split('.');
+  return `${intPart}.${fracPart.length < 2 ? fracPart.padEnd(2, '0') : fracPart}`;
 };
 
 const toCNYValue = (draft, rate) => {
@@ -24,8 +46,9 @@ const toCNYValue = (draft, rate) => {
     // 空串 / 半截输入（"."、"1." 由父级正则决定收不收）原样透传，保持既有手感。
     return draft;
   }
-  // 6 位对齐后端 roundTo6（¥0.000001），再细的精度本来就存不住。
-  return String(parseFloat((num * rate).toFixed(6)));
+  // 12 位：后端按 6 位存（roundTo6），但这里必须比存储精度更细，
+  // 否则 $0.00000002 × 7.3 会在换算这一步就变成 0。
+  return toFixedString(num * rate, 12);
 };
 
 const hasNumber = (value) =>
@@ -54,7 +77,9 @@ const PriceInput = ({
   const useUSD = Number.isFinite(rate) && rate > 0;
   const displayValue = focused
     ? draft
-    : formatDisplayPrice(useUSD ? toUSDDisplay(value, rate) : value);
+    : useUSD
+      ? formatUSDDisplay(value, rate)
+      : formatDisplayPrice(value);
   // 单位后缀随模式换符号，"/1M tokens" 与 "/次" 两种都覆盖到。
   const effectiveSuffix = useUSD ? String(suffix).replace('¥', '$') : suffix;
   // 美元模式下必须让人看见落库的人民币值，否则存进去多少是个惊喜。
