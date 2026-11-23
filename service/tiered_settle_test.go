@@ -865,3 +865,45 @@ func BenchmarkRatioBilling_Parallel(b *testing.B) {
 		}
 	})
 }
+
+// 网宿 edgecloudapp 用 cache_write_tokens / creation_tokens 上报缓存写入（实测 1449），
+// 以前只认 cached_creation_tokens，导致 cc 恒 0、缓存写入退回输入价计费。
+func TestBuildTieredTokenParams_GatewayCacheWriteAliases(t *testing.T) {
+	usage := &dto.Usage{
+		PromptTokens:     1452,
+		CompletionTokens: 10,
+		PromptTokensDetails: dto.InputTokenDetails{
+			CacheWriteTokens: 1449,
+			CreationTokens:   1449,
+		},
+	}
+	expr := `v2:tier("base", p * 2 + c * 12 + cc * 2.5)`
+	got := tieredQuota(expr, usage, false, 1.0)
+	// P = 1452 - 1449 = 3 → 3*2 + 10*12 + 1449*2.5 = 3748.5 → ×1000
+	want := 3748500.0
+	if math.Abs(got-want) > 0.01 {
+		t.Fatalf("quota = %f, want %f", got, want)
+	}
+}
+
+// 网关给了 TTL 明细时，cc / cc1h 按两档分别计价（这家是 30m / 12h）。
+func TestBuildTieredTokenParams_GatewayCacheWriteTTLSplit(t *testing.T) {
+	usage := &dto.Usage{
+		PromptTokens: 1452,
+		PromptTokensDetails: dto.InputTokenDetails{
+			CacheWriteTokens: 1449,
+			CreationTokens:   1449,
+			EcaCacheCreationDetails: &dto.EcaCacheCreationDetails{
+				Ephemeral5mInputTokens: 1200,
+				Ephemeral1hInputTokens: 249,
+			},
+		},
+	}
+	expr := `v2:tier("base", p * 2 + c * 12 + cc * 2.5 + cc1h * 5)`
+	got := tieredQuota(expr, usage, false, 1.0)
+	// P = 1452 - 1200 - 249 = 3 → 3*2 + 1200*2.5 + 249*5 = 4251 → ×1000
+	want := 4251000.0
+	if math.Abs(got-want) > 0.01 {
+		t.Fatalf("quota = %f, want %f", got, want)
+	}
+}

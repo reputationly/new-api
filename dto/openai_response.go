@@ -252,12 +252,54 @@ type OpenAIVideoResponse struct {
 	Purpose   string `json:"purpose" example:"fine-tune"`
 }
 
+// EcaCacheCreationDetails 是部分 OpenAI 兼容网关额外提供的「缓存写入 TTL 明细」。
+//
+// 键名沿用 Claude 的 ephemeral_5m/1h 命名，但实际 TTL 由供应商定义——网宿
+// edgecloudapp 实测是 30m / 12h 两档，报价单也按这两档分价。new-api 的表达式
+// 变量 cc / cc1h 就是「短 TTL / 长 TTL」，映射关系见 CacheWriteSplit。
+type EcaCacheCreationDetails struct {
+	Ephemeral5mInputTokens int `json:"ephemeral_5m_input_tokens,omitempty"`
+	Ephemeral1hInputTokens int `json:"ephemeral_1h_input_tokens,omitempty"`
+}
+
 type InputTokenDetails struct {
 	CachedTokens         int `json:"cached_tokens"`
 	CachedCreationTokens int `json:"cached_creation_tokens,omitempty"`
-	TextTokens           int `json:"text_tokens"`
-	AudioTokens          int `json:"audio_tokens"`
-	ImageTokens          int `json:"image_tokens"`
+	// CacheWriteTokens / CreationTokens 是 cached_creation_tokens 的同义字段。
+	// 部分网关只报这两个名字（网宿 edgecloudapp 实测：cache_write_tokens +
+	// creation_tokens 同时出现），漏读会让缓存写入 token 退回输入价计费。
+	CacheWriteTokens int `json:"cache_write_tokens,omitempty"`
+	CreationTokens   int `json:"creation_tokens,omitempty"`
+	// EcaCacheCreationDetails 非空时，缓存写入按 TTL 拆分计价（cc / cc1h）。
+	EcaCacheCreationDetails *EcaCacheCreationDetails `json:"eca_cache_creation_details,omitempty"`
+	TextTokens              int                      `json:"text_tokens"`
+	AudioTokens             int                      `json:"audio_tokens"`
+	ImageTokens             int                      `json:"image_tokens"`
+}
+
+// CacheWriteTokensTotal 返回缓存写入 token 总数。
+//
+// cached_creation_tokens 是历史字段，优先；缺失时回退到网关别名
+// cache_write_tokens / creation_tokens（取较大者，两者通常同值）。
+func (d InputTokenDetails) CacheWriteTokensTotal() int {
+	total := d.CachedCreationTokens
+	if d.CacheWriteTokens > total {
+		total = d.CacheWriteTokens
+	}
+	if d.CreationTokens > total {
+		total = d.CreationTokens
+	}
+	return total
+}
+
+// CacheWriteSplit 返回缓存写入的（短 TTL, 长 TTL）token 数。
+// 没有 TTL 明细时返回 (0, 0)，调用方应退回 CacheWriteTokensTotal 按单一价格计。
+func (d InputTokenDetails) CacheWriteSplit() (int, int) {
+	if d.EcaCacheCreationDetails == nil {
+		return 0, 0
+	}
+	return d.EcaCacheCreationDetails.Ephemeral5mInputTokens,
+		d.EcaCacheCreationDetails.Ephemeral1hInputTokens
 }
 
 type OutputTokenDetails struct {

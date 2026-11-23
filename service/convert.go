@@ -358,15 +358,23 @@ func buildClaudeUsageFromOpenAIUsage(oaiUsage *dto.Usage) *dto.ClaudeUsage {
 	if oaiUsage == nil {
 		return nil
 	}
+	// 缓存写入总量要认网关别名（cache_write_tokens / creation_tokens），
+	// TTL 拆分优先用网关自带的明细（网宿 30m/12h），再退回 Claude 语义的 5m/1h。
+	cacheWriteTotal := oaiUsage.PromptTokensDetails.CacheWriteTokensTotal()
+	cacheWrite5m, cacheWrite1h := oaiUsage.PromptTokensDetails.CacheWriteSplit()
+	if cacheWrite5m == 0 && cacheWrite1h == 0 {
+		cacheWrite5m = oaiUsage.ClaudeCacheCreation5mTokens
+		cacheWrite1h = oaiUsage.ClaudeCacheCreation1hTokens
+	}
 	cacheCreation5m, cacheCreation1h := NormalizeCacheCreationSplit(
-		oaiUsage.PromptTokensDetails.CachedCreationTokens,
-		oaiUsage.ClaudeCacheCreation5mTokens,
-		oaiUsage.ClaudeCacheCreation1hTokens,
+		cacheWriteTotal,
+		cacheWrite5m,
+		cacheWrite1h,
 	)
 	usage := &dto.ClaudeUsage{
 		InputTokens:              oaiUsage.PromptTokens,
 		OutputTokens:             oaiUsage.CompletionTokens,
-		CacheCreationInputTokens: oaiUsage.PromptTokensDetails.CachedCreationTokens,
+		CacheCreationInputTokens: cacheWriteTotal,
 		CacheReadInputTokens:     oaiUsage.PromptTokensDetails.CachedTokens,
 	}
 	if cacheCreation5m > 0 || cacheCreation1h > 0 {

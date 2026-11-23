@@ -41,7 +41,8 @@ import {
 
 const { Text } = Typography;
 
-const VAR_LABELS = { p: '输入', c: '输出' };
+// len 是阶梯条件专用变量，缺了它档位条件会显示成英文 "len ≤ 278.5K"。
+const VAR_LABELS = { p: '输入', c: '输出', len: '输入长度' };
 const OP_LABELS = { '<': '<', '<=': '≤', '>': '>', '>=': '≥' };
 const TIME_FUNC_LABELS = {
   hour: '小时',

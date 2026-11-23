@@ -187,9 +187,15 @@ func calculateTextQuotaSummary(ctx *gin.Context, relayInfo *relaycommon.RelayInf
 	summary.CompletionTokens = usage.CompletionTokens
 	summary.TotalTokens = usage.PromptTokens + usage.CompletionTokens
 	summary.CacheTokens = usage.PromptTokensDetails.CachedTokens
-	summary.CacheCreationTokens = usage.PromptTokensDetails.CachedCreationTokens
+	summary.CacheCreationTokens = usage.PromptTokensDetails.CacheWriteTokensTotal()
 	summary.CacheCreationTokens5m = usage.ClaudeCacheCreation5mTokens
 	summary.CacheCreationTokens1h = usage.ClaudeCacheCreation1hTokens
+	// 网关自带的 TTL 明细（如网宿的 30m/12h，键名沿用 ephemeral_5m/1h）优先于
+	// Claude 语义的 5m/1h 字段：两条路径互斥，谁有值用谁。
+	if shortTTL, longTTL := usage.PromptTokensDetails.CacheWriteSplit(); shortTTL > 0 || longTTL > 0 {
+		summary.CacheCreationTokens5m = shortTTL
+		summary.CacheCreationTokens1h = longTTL
+	}
 	summary.ImageTokens = usage.PromptTokensDetails.ImageTokens
 	summary.AudioTokens = usage.PromptTokensDetails.AudioTokens
 	legacyClaudeDerived := isLegacyClaudeDerivedOpenAIUsage(relayInfo, usage)
@@ -249,10 +255,16 @@ func calculateTextQuotaSummary(ctx *gin.Context, relayInfo *relaycommon.RelayInf
 		var cachedCreationTokensWithRatio decimal.Decimal
 		hasSplitCacheCreationTokens := summary.CacheCreationTokens5m > 0 || summary.CacheCreationTokens1h > 0
 		if !dCachedCreationTokens.IsZero() || hasSplitCacheCreationTokens {
-			if !summary.IsClaudeUsageSemantic && !legacyClaudeDerived {
+			// 拆分计价只在「没有任何 TTL 拆分」时才退回单一「缓存创建价格」。
+			// OpenAI 语义下 prompt_tokens 含缓存 token，进拆分分支前同样要扣掉，
+			// 否则缓存写入会被「基础输入价 + 分量价」重复计一遍。
+			if !summary.IsClaudeUsageSemantic && !legacyClaudeDerived && !hasSplitCacheCreationTokens {
 				baseTokens = baseTokens.Sub(dCachedCreationTokens)
 				cachedCreationTokensWithRatio = dCachedCreationTokens.Mul(dCacheCreationRatio)
 			} else {
+				if !summary.IsClaudeUsageSemantic && !legacyClaudeDerived {
+					baseTokens = baseTokens.Sub(dCachedCreationTokens)
+				}
 				remaining := summary.CacheCreationTokens - summary.CacheCreationTokens5m - summary.CacheCreationTokens1h
 				if remaining < 0 {
 					remaining = 0

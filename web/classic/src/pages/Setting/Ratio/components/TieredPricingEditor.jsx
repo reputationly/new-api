@@ -1077,7 +1077,8 @@ function RawExprEditor({ exprString, onChange, t }) {
               {t('变量')}: <code>p</code> ({t('输入 Token')}), <code>c</code> (
               {t('输出 Token')}), <code>len</code> ({t('输入长度')}),{' '}
               <code>cr</code> ({t('缓存命中')}), <code>cc</code> (
-              {t('缓存创建')}), <code>cc1h</code> ({t('缓存创建-1小时')})
+              {t('缓存创建（短 TTL）')}), <code>cc1h</code> (
+              {t('缓存创建（长 TTL）')})
             </div>
             <div>
               {t('函数')}: <code>tier(name, value)</code>,{' '}
@@ -1555,8 +1556,8 @@ const LLM_PROMPT_TEMPLATE = `你是一个 AI API 计费表达式设计助手。�
 - p — 输入 token 数（计价用）。系统会自动排除表达式中单独计价的子类别（如用了 cr，缓存 token 就从 p 中扣除）
 - len — 输入上下文总长度（条件判断用）。不受自动排除影响，始终反映完整输入长度。用于阶梯条件判断
 - cr — 缓存命中（读取）token 数
-- cc — 缓存创建 token 数（5分钟 TTL）
-- cc1h — 缓存创建 token 数（1小时 TTL，Claude 专用）
+- cc — 缓存创建 token 数（短 TTL：Claude 5分钟 / 网宿 30分钟）
+- cc1h — 缓存创建 token 数（长 TTL：Claude 1小时 / 网宿 12小时）
 - img — 图片输入 token 数
 - ai — 音频输入 token 数
 

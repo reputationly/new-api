@@ -26,12 +26,22 @@ func BuildTieredTokenParams(usage *dto.Usage, isClaudeUsageSemantic bool, usedVa
 	p := float64(usage.PromptTokens)
 	c := float64(usage.CompletionTokens)
 	cr := float64(usage.PromptTokensDetails.CachedTokens)
-	cc5m := float64(usage.PromptTokensDetails.CachedCreationTokens)
+	cc5m := float64(0)
 	cc1h := float64(0)
 
 	if usage.UsageSemantic == "anthropic" {
-		cc1h = float64(usage.ClaudeCacheCreation1hTokens)
 		cc5m = float64(usage.ClaudeCacheCreation5mTokens)
+		cc1h = float64(usage.ClaudeCacheCreation1hTokens)
+	} else if shortTTL, longTTL := usage.PromptTokensDetails.CacheWriteSplit(); shortTTL > 0 || longTTL > 0 {
+		// 非 Claude 语义但网关给了 TTL 拆分（eca_cache_creation_details）：
+		// cc = 短 TTL、cc1h = 长 TTL，两档分别计价。
+		cc5m = float64(shortTTL)
+		cc1h = float64(longTTL)
+	} else {
+		// 没有 TTL 拆分时退回总量。总量必须把 cache_write_tokens /
+		// creation_tokens 这些同义字段算进来，否则缓存写入会退回输入价计费
+		//（网宿 edgecloudapp 就是这么上报的）。
+		cc5m = float64(usage.PromptTokensDetails.CacheWriteTokensTotal())
 	}
 
 	img := float64(usage.PromptTokensDetails.ImageTokens)

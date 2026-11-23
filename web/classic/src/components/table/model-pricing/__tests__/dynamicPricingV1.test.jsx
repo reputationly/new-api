@@ -56,3 +56,22 @@ describe('DynamicPricingBreakdown：v1 / v2 的系数口径', () => {
     expect(v1Text).not.toContain('¥2.00');
   });
 });
+
+describe('DynamicPricingBreakdown：阶梯条件与双档缓存写入', () => {
+  // gpt-5.6-terra 那类价目：按输入长度分两档，每档都有短/长 TTL 缓存写入价。
+  const expr =
+    'v2:len <= 278528 ? tier("le272k", p * 13.6 + c * 81.6 + cc * 17 + cc1h * 34 + cr * 1.36) : tier("gt272k", p * 27.2 + c * 122.4 + cc * 34 + cc1h * 68 + cr * 2.72)';
+
+  it('档位条件显示中文「输入长度」，不露出 len 变量名', () => {
+    render(<DynamicPricingBreakdown billingExpr={expr} t={t} />);
+    expect(screen.getByText(/输入长度 ≤ 278\.5K/)).toBeTruthy();
+    expect(screen.queryByText(/^len /)).toBeNull();
+  });
+
+  it('短/长两档缓存写入各占一列', () => {
+    render(<DynamicPricingBreakdown billingExpr={expr} t={t} />);
+    expect(screen.getByText('缓存创建 (¥/1M tokens)')).toBeTruthy();
+    // 长 TTL 列名不再叫「1h」：网宿是 12h，Claude 才是 1h。
+    expect(screen.getByText('长缓存创建 (¥/1M tokens)')).toBeTruthy();
+  });
+});

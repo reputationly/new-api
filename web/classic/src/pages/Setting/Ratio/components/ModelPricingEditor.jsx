@@ -17,7 +17,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 
-import React, { useCallback, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Banner,
   Button,
@@ -46,6 +46,7 @@ import ModelTimePriceSection from './ModelTimePriceSection';
 import PriceInput from './PriceInput';
 import {
   PAGE_SIZE,
+  NUMERIC_INPUT_REGEX,
   VIDEO_MODE_TOKEN,
   VIDEO_MODE_PER_SECOND,
   buildSummaryText,
@@ -60,6 +61,28 @@ import VideoMatrixEditor from './VideoMatrixEditor';
 
 const { Text } = Typography;
 const EMPTY_CANDIDATE_MODEL_NAMES = [];
+
+// 「按美元目录价录入」开关：纯录入体验，不改任何存储口径。
+// 开关与汇率只是运营的记事本能用就行，放 localStorage，不占后端 option。
+const USD_ENTRY_KEY = 'model_pricing_usd_entry';
+const USD_RATE_KEY = 'model_pricing_usd_rate';
+
+const readUSDEntry = () => {
+  try {
+    return localStorage.getItem(USD_ENTRY_KEY) === '1';
+  } catch (e) {
+    return false;
+  }
+};
+
+const readUSDRate = (fallback) => {
+  try {
+    const raw = Number(localStorage.getItem(USD_RATE_KEY));
+    return Number.isFinite(raw) && raw > 0 ? String(raw) : fallback;
+  } catch (e) {
+    return fallback;
+  }
+};
 
 export default function ModelPricingEditor({
   options,
@@ -81,6 +104,25 @@ export default function ModelPricingEditor({
   const [addVisible, setAddVisible] = useState(false);
   const [batchVisible, setBatchVisible] = useState(false);
   const [newModelName, setNewModelName] = useState('');
+
+  // 美元目录价录入：只换算输入框的显示单位，落库仍是人民币（见 PriceInput 顶部注释）。
+  // 默认汇率取站点汇率，运营改成 6.8 之后本机会记住。
+  const [usdEntry, setUsdEntry] = useState(readUSDEntry);
+  const [usdRate, setUsdRate] = useState(() =>
+    readUSDRate(String(options?.USDExchangeRate || 7.3)),
+  );
+  useEffect(() => {
+    try {
+      localStorage.setItem(USD_ENTRY_KEY, usdEntry ? '1' : '0');
+      localStorage.setItem(USD_RATE_KEY, usdRate);
+    } catch (e) {
+      // 隐私模式写不进去也不影响本次录入。
+    }
+  }, [usdEntry, usdRate]);
+  // 这里只做「美元 → 人民币」的汇率折算，不碰任何折扣：
+  // 分组折扣 / 分组倍率由分组管理配置，在这份人民币价上继续乘。
+  const effectiveUsdRate =
+    usdEntry && Number(usdRate) > 0 ? Number(usdRate) : null;
 
   const {
     selectedModel,
@@ -348,6 +390,7 @@ export default function ModelPricingEditor({
         base={basePriceOf(selectedModel.name)}
         onChange={(rules) => setModelTimeRules(selectedModel.name, rules)}
         allRules={timeCfg.rules}
+        usdRate={effectiveUsdRate}
       />
     </Card>
   ) : null;
@@ -362,7 +405,7 @@ export default function ModelPricingEditor({
           closeIcon={null}
           style={{ width: '100%' }}
           description={t(
-            '价格单位统一为人民币（¥）：输入价是 ¥/百万 tokens，按次价是 ¥/次，视频矩阵是 ¥/秒 或 ¥/次。填什么就存什么，不再按汇率折算。价格显示保留 2 位小数，存储仍为高精度，计费不受影响。',
+            '价格单位统一为人民币（¥）：输入价是 ¥/百万 tokens，按次价是 ¥/次，视频矩阵是 ¥/秒 或 ¥/次。填什么就存什么，不再按汇率折算；下方的「按美元目录价录入」只把输入框换成 $ 显示，保存时仍折算成人民币。价格显示保留 2 位小数，存储仍为高精度，计费不受影响。',
           )}
         />
         <Space wrap className='mt-2'>
@@ -542,6 +585,38 @@ export default function ModelPricingEditor({
                       '普通按量/按次直接填价格就行；如果价格要跟请求参数或请求头联动，请切到表达式/阶梯计费。',
                     )}
                   </div>
+                  {/* 录入单位开关：只换算下面价格框的显示与输入，落库口径一个字不变。 */}
+                  <div className='mt-3 flex flex-wrap items-center gap-3'>
+                    <Switch
+                      size='small'
+                      checked={usdEntry}
+                      onChange={setUsdEntry}
+                    />
+                    <span className='text-sm font-medium text-gray-700'>
+                      {t('按美元目录价录入')}
+                    </span>
+                    {usdEntry ? (
+                      <Input
+                        size='small'
+                        style={{ width: 140 }}
+                        value={usdRate}
+                        placeholder='7.3'
+                        suffix={<span className='text-xs'>¥/$</span>}
+                        onChange={(v) => {
+                          if (NUMERIC_INPUT_REGEX.test(v)) {
+                            setUsdRate(v);
+                          }
+                        }}
+                      />
+                    ) : null}
+                  </div>
+                  {usdEntry ? (
+                    <div className='mt-2 text-xs text-gray-500'>
+                      {t(
+                        '下面价格框改为 $/1M tokens 或 $/次，直接照抄供应商目录价；保存时按上方汇率折算成人民币入库。分组折扣 / 分组倍率在分组管理里配置，令牌折扣与分时价照旧，两者都在这份人民币价上继续乘。',
+                      )}
+                    </div>
+                  ) : null}
                 </div>
 
                 {selectedWarnings.length > 0 ? (
@@ -566,6 +641,7 @@ export default function ModelPricingEditor({
                     <PriceInput
                       label={t('固定价格')}
                       value={selectedModel.fixedPrice}
+                      usdRate={effectiveUsdRate}
                       placeholder={t('输入每次调用价格')}
                       suffix={t('¥/次')}
                       onChange={(value) =>
@@ -585,6 +661,17 @@ export default function ModelPricingEditor({
                         '表达式计费没有「分时价」：它自己能按 hour() / weekday() 表达时段，两边同时乘会把时间系数算两遍。要按时段改价，请在下面的表达式里写，或改用按量计费 + 分时价。',
                       )}
                     />
+                    {usdEntry ? (
+                      <Banner
+                        type='warning'
+                        closeIcon={null}
+                        style={{ marginBottom: 16 }}
+                        description={t(
+                          '表达式里的系数固定按 ¥/百万 tokens 填写，不随上面的美元开关换算：系数 = 美元价 × {{rate}}。',
+                          { rate: usdRate },
+                        )}
+                      />
+                    ) : null}
                     <TieredPricingEditor
                       model={selectedModel}
                       onExprChange={handleBillingExprChange}
@@ -606,6 +693,7 @@ export default function ModelPricingEditor({
                       <PriceInput
                         label={t('输入价格')}
                         value={selectedModel.inputPrice}
+                        usdRate={effectiveUsdRate}
                         placeholder={t('输入 ¥/1M tokens')}
                         onChange={(value) =>
                           handleNumericFieldChange('inputPrice', value)
@@ -630,6 +718,7 @@ export default function ModelPricingEditor({
                       <PriceInput
                         label={t('输出价格')}
                         value={selectedModel.completionPrice}
+                        usdRate={effectiveUsdRate}
                         placeholder={t('输入 ¥/1M tokens')}
                         onChange={(value) =>
                           handleNumericFieldChange('completionPrice', value)
@@ -680,6 +769,7 @@ export default function ModelPricingEditor({
                       <PriceInput
                         label={t('缓存命中价格')}
                         value={selectedModel.cachePrice}
+                        usdRate={effectiveUsdRate}
                         placeholder={t('输入 ¥/1M tokens')}
                         onChange={(value) =>
                           handleNumericFieldChange('cachePrice', value)
@@ -709,6 +799,7 @@ export default function ModelPricingEditor({
                       <PriceInput
                         label={t('缓存创建价格')}
                         value={selectedModel.createCachePrice}
+                        usdRate={effectiveUsdRate}
                         placeholder={t('输入 ¥/1M tokens')}
                         onChange={(value) =>
                           handleNumericFieldChange('createCachePrice', value)
@@ -764,6 +855,7 @@ export default function ModelPricingEditor({
                       <PriceInput
                         label={t('图片输入价格')}
                         value={selectedModel.imagePrice}
+                        usdRate={effectiveUsdRate}
                         placeholder={t('输入 ¥/1M tokens')}
                         onChange={(value) =>
                           handleNumericFieldChange('imagePrice', value)
@@ -793,6 +885,7 @@ export default function ModelPricingEditor({
                       <PriceInput
                         label={t('音频输入价格')}
                         value={selectedModel.audioInputPrice}
+                        usdRate={effectiveUsdRate}
                         placeholder={t('输入 ¥/1M tokens')}
                         onChange={(value) =>
                           handleNumericFieldChange('audioInputPrice', value)
@@ -831,6 +924,7 @@ export default function ModelPricingEditor({
                       <PriceInput
                         label={t('音频输出价格')}
                         value={selectedModel.audioOutputPrice}
+                        usdRate={effectiveUsdRate}
                         placeholder={t('输入 ¥/1M tokens')}
                         onChange={(value) =>
                           handleNumericFieldChange('audioOutputPrice', value)

@@ -60,8 +60,9 @@ export const BILLING_VARS = [
     key: 'cc1h',
     field: 'cacheCreate1hPrice',
     tierField: 'cache_create_1h_unit_cost',
-    label: '1h缓存创建价格',
-    shortLabel: '1h缓存创建',
+    // 长 TTL 的缓存写入：Claude 是 1h，部分网关（如网宿）是 12h，两者都由 cc1h 承载。
+    label: '缓存创建价格（长 TTL：1h/12h）',
+    shortLabel: '长缓存创建',
     side: 'input',
     group: 'cache',
   },

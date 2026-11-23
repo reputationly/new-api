@@ -84,6 +84,9 @@ const ModelTimePriceSection = ({
   base,
   onChange,
   allRules,
+  // 非空 = 按美元录入（见 ModelPricingEditor 的开关）：只影响输入框显示单位，
+  // state 与存储仍是人民币。
+  usdRate = null,
 }) => {
   const { t } = useTranslation();
   const [expanded, setExpanded] = useState({});
@@ -339,6 +342,7 @@ const ModelTimePriceSection = ({
                           label={t(c.label)}
                           value={value > 0 ? value : ''}
                           placeholder={t('不变')}
+                          usdRate={usdRate}
                           suffix={c.key === 'per_call' ? '¥/次' : PRICE_SUFFIX}
                           headerAction={
                             factor ? (

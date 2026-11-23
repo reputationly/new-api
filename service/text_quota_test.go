@@ -446,3 +446,47 @@ func TestComposeTieredTextQuotaErrorFallbackUsesPreConsumedQuota(t *testing.T) {
 	require.Equal(t, int64(182500000), summary.ToolCallSurchargeQuota.Round(0).IntPart())
 	require.Equal(t, 182502000, quota)
 }
+
+// OpenAI 语义 + 网关 TTL 明细：缓存写入要按两档分价，且 prompt_tokens 里的
+// 缓存 token 必须先扣掉，否则会被「基础输入价 + 分量价」重复计一遍。
+func TestCalculateTextQuotaSummaryGatewayCacheWriteSplit(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	w := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(w)
+
+	relayInfo := &relaycommon.RelayInfo{
+		RelayFormat:     types.RelayFormatOpenAI,
+		OriginModelName: "gpt-5.6-terra",
+		PriceData: types.PriceData{
+			ModelRatio:           1,
+			CompletionRatio:      1,
+			CacheCreationRatio:   1,
+			CacheCreation5mRatio: 1.25,
+			CacheCreation1hRatio: 2.5,
+			GroupRatioInfo: types.GroupRatioInfo{
+				GroupRatio: 1,
+			},
+		},
+		StartTime: time.Now(),
+	}
+
+	usage := &dto.Usage{
+		PromptTokens: 1452,
+		PromptTokensDetails: dto.InputTokenDetails{
+			CacheWriteTokens: 1449,
+			CreationTokens:   1449,
+			EcaCacheCreationDetails: &dto.EcaCacheCreationDetails{
+				Ephemeral5mInputTokens: 1200,
+				Ephemeral1hInputTokens: 249,
+			},
+		},
+	}
+
+	summary := calculateTextQuotaSummary(ctx, relayInfo, usage)
+
+	// base = 1452 - 1449 = 3；分量价 1200×1.25 + 249×2.5 = 2122.5
+	// quota = (3 + 2122.5) × 模型倍率 1 × 分组倍率 1 × 1000
+	require.Equal(t, 2125500, summary.Quota)
+	require.Equal(t, 1200, summary.CacheCreationTokens5m)
+	require.Equal(t, 249, summary.CacheCreationTokens1h)
+}
