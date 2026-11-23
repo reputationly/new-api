@@ -100,15 +100,15 @@ func TestBuildMusicTaskBodyAceStepKeepsPrompt(t *testing.T) {
 }
 
 // Music3 无词又非要唱：明确拒绝，别把风格描述当歌词送进引擎。
-// Music3 无歌词一律拒:纯器乐在该引擎上不支持(只给段落标记 9.8–22.7 秒,
-// 给足段落 121–144 秒但有人声),is_instrumental=true 也不是出路。
+// Music3 无歌词一律拒:该引擎上 is_instrumental 不生效(带着它 + 歌词仍然可能有人声),
+// 而无歌词时产物长度仅数秒到二三十秒,不是可交付的曲子。
 func TestBuildMusicTaskBodyMusic3RejectsWithoutLyrics(t *testing.T) {
 	withMusicEngineConfig(t)
-	if _, msg := buildMusicTaskBody("minimax-music3", "chill lo-fi", "", nil, nil); !strings.Contains(msg, "纯器乐") {
-		t.Fatalf("应说明纯器乐不支持，实际 %q", msg)
+	if _, msg := buildMusicTaskBody("minimax-music3", "chill lo-fi", "", nil, nil); !strings.Contains(msg, "lyrics are required") {
+		t.Fatalf("应说明需要歌词，实际 %q", msg)
 	}
 	instrumental := true
-	if _, msg := buildMusicTaskBody("minimax-music3", "chill lo-fi", "", &instrumental, nil); !strings.Contains(msg, "纯器乐") {
+	if _, msg := buildMusicTaskBody("minimax-music3", "chill lo-fi", "", &instrumental, nil); !strings.Contains(msg, "does not support instrumental") {
 		t.Fatalf("器乐请求同样要拒，实际 %q", msg)
 	}
 }
@@ -188,17 +188,17 @@ func TestBuildMusicTaskBodyPassesThroughClientMetadata(t *testing.T) {
 	require.Equal(t, "warm lofi loop", taskBody["prompt"])
 }
 
-// 纯器乐在 Music3 上不支持:只给段落标记 9.8–22.7 秒,给足段落 121–144 秒但有人声。
+// 纯器乐在 Music3 上不支持:is_instrumental 引擎不读,无歌词时产物只有数秒到二三十秒。
 // 明确 400,而不是给客户一条 10 秒的曲子。
 func TestMusic3RejectsInstrumental(t *testing.T) {
 	instrumental := true
 	_, msg := buildMusicTaskBody("minimax-music3", "a calm piano solo", "", &instrumental, nil)
-	require.Contains(t, msg, "纯器乐")
+	require.Contains(t, msg, "does not support instrumental")
 }
 
 func TestMusic3RejectsMissingLyrics(t *testing.T) {
 	_, msg := buildMusicTaskBody("minimax-music3", "a calm piano solo", "", nil, nil)
-	require.Contains(t, msg, "纯器乐")
+	require.Contains(t, msg, "lyrics are required")
 }
 
 // 有歌词的请求完全不受影响。

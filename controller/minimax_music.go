@@ -234,18 +234,16 @@ func buildMusicTaskBody(modelName, prompt, lyrics string, instrumental *bool, ex
 		// 我们的链路不会替客户写词（官方 lyrics_optimizer 那种），所以无词时直接说清楚，
 		// 而不是把风格描述当歌词送进引擎。
 		//
-		// **纯器乐在这套部署上不支持**,is_instrumental=true 也不是出路 —— 实测(见下):
-		//   * 只给一个段落标记([Instrumental])            → 产物 9.8s;
-		//   * 只给非人声短结构([Intro][Solo][Interlude]…) → 22.7s;
-		//   * 给足 7–8 段([Intro][Verse][Chorus]…,或掺 [Instrumental]) → 121–144s 但**有人声**。
-		// 时长由引擎按段落结构决定(歌曲长度不是可传参数,上限已是 360s 帧预算),所以
-		// "时长够"与"没有人声"在当前引擎上不能同时成立。与其给客户一条 10 秒的曲子,
+		// **纯器乐在这套部署上不可用**,is_instrumental=true 也不是出路:这个字段引擎不读
+		// (带着它 + 歌词仍会出人声),而无歌词时长度由段落结构决定 —— 只给少量段落只有
+		// 数秒到二三十秒(实测 9.8s / 22.7s),不是可交付的曲子。与其给客户一段残片,
 		// 不如明确拒绝。
-		if lyrics == "" || (instrumental != nil && *instrumental) {
-			return nil, "invalid params: MiniMax-Music3 不支持纯器乐 —— " +
-				"只给段落标记时产物只有约 10–23 秒(引擎按时长结构收尾)," +
-				"而能出满 2 分钟的段落结构会带出人声;" +
-				"(this gateway does not write lyrics for you either) 请提供歌词"
+		// 口径(与展开阶段一致):is_instrumental=true 一律拒 —— 这个字段引擎根本不读,
+		// 放过去会让客户以为拿到的是器乐(实测带着它+歌词仍然有人声)。
+		unusableInstrumental := instrumental != nil && *instrumental
+		if lyrics == "" || unusableInstrumental {
+			return nil, "invalid params: MiniMax-Music3 does not support instrumental generation on this gateway; " +
+				"lyrics are required (this gateway does not write lyrics for you)"
 		}
 		body["prompt"] = lyrics
 		metadata["instructions"] = prompt

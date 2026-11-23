@@ -537,10 +537,11 @@ func enhanceMusic3Aggregate(c *gin.Context, agg *common.AggregateModel, body map
 			// 请求花一次增强的钱。
 			return nil
 		}
-		// 没有歌词就一定被兼容层拒(纯器乐在该引擎上不支持,详见 buildMusicTaskBody 的注释:
-		// 只给段落标记只有 10–23 秒,给足段落则带出人声)。**不先花增强的钱**。
-		// is_instrumental=true 也不例外 —— 它同样会被拒。
-		if strings.TrimSpace(lyrics) == "" {
+		// 与兼容层**同一个口径**(见 buildMusicTaskBody):没有歌词、或带了
+		// is_instrumental=true,都会被 400。这里必须用同一组条件,否则会出现
+		// "先跑增强计费、再在兼容层 400" —— 正是这一轮要修的。
+		instrumental, _ := body["is_instrumental"].(bool)
+		if strings.TrimSpace(lyrics) == "" || instrumental {
 			return nil
 		}
 	} else {

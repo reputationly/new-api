@@ -326,10 +326,8 @@ func TestMusic3OfficialRouteWithoutPromptDoesNotEnhance(t *testing.T) {
 	require.Equal(t, "[Verse]\nx", body["lyrics"])
 }
 
-// 官方形状的纯器乐:没有歌词但 is_instrumental=true,描述仍在 prompt,
-// 照样要增强(歌词位传空串,事实块会说明是器乐)。
-// 纯器乐在 Music3 上不支持(实测:只给段落标记 9.8–22.7 秒;给足段落 121–144 秒但有人声),
-// 兼容层对它明确 400。所以展开阶段不能先花增强的钱 —— 这条断言由"要增强"翻转为"不增强"。
+// 官方形状的纯器乐:is_instrumental=true 会被兼容层 400(字段引擎不读,放过去会让客户
+// 以为拿到器乐)。展开阶段因此也不能先花增强的钱 —— 条件必须与兼容层一致。
 func TestMusic3OfficialRouteInstrumentalSkipsEnhancement(t *testing.T) {
 	withMusic3Engine(t, "minimax-music3")
 	withAggregateConfig(t, musicAggConfig)
@@ -341,7 +339,7 @@ func TestMusic3OfficialRouteInstrumentalSkipsEnhancement(t *testing.T) {
 }
 
 // 官方形状:有描述但既没歌词又没声明 is_instrumental —— 兼容层会以
-// "Music3 needs lyrics unless is_instrumental=true" 拒掉,不该先花增强的钱。
+// "does not support instrumental generation" 拒掉,不该先花增强的钱。
 func TestMusic3OfficialRouteWithoutLyricsDoesNotEnhance(t *testing.T) {
 	withMusic3Engine(t, "minimax-music3")
 	withAggregateConfig(t, musicAggConfig)
@@ -485,10 +483,26 @@ func TestMusic3OfficialRouteRealEnhanceCall(t *testing.T) {
 	require.Contains(t, req.Messages[1].Content, "[Verse]\nrain on neon")
 }
 
-func TestMusic3OfficialRouteWithoutLyricsSkipsEnhancement(t *testing.T) {
+// 有歌词但带 is_instrumental=true:兼容层同样拒(字段引擎不读,放过去会让客户以为拿到器乐),
+// 所以展开阶段也必须不增强 —— 两边条件一致才不会"先扣费再 400"。
+func TestMusic3OfficialRouteLyricsWithInstrumentalFlagSkipsEnhancement(t *testing.T) {
 	withMusic3Engine(t, "minimax-music3")
 	withAggregateConfig(t, musicAggConfig)
 
-	_, got := expandMusic(t, `{"model":"music3-enhanced","prompt":"a calm piano solo"}`)
-	require.Nil(t, got, "没有歌词必然被拒,不该先增强")
+	body, got := expandMusicAt(t, "/v1/music_generation",
+		`{"model":"music3-enhanced","prompt":"calm piano","lyrics":"[Verse] rain","is_instrumental":true}`)
+	require.Nil(t, got, "带 is_instrumental 会被兼容层拒,不该先增强")
+	require.Equal(t, "calm piano", body["prompt"])
+}
+
+// 有歌词且没带 is_instrumental:正常增强(唯一能跑通的形状)。
+func TestMusic3OfficialRouteLyricsOnlyEnhances(t *testing.T) {
+	withMusic3Engine(t, "minimax-music3")
+	withAggregateConfig(t, musicAggConfig)
+
+	body, got := expandMusicAt(t, "/v1/music_generation",
+		`{"model":"music3-enhanced","prompt":"calm piano","lyrics":"[Verse] rain"}`)
+	require.NotNil(t, got, "这是唯一能成功跑通的形状,必须增强")
+	require.Equal(t, "NEW CAPTION", body["prompt"])
+	require.Equal(t, "[Verse] rain", body["lyrics"], "歌词一字不动")
 }
