@@ -106,3 +106,17 @@ func TestValidateBillingExprJSONWithRates_FinalState(t *testing.T) {
 
 	require.NoError(t, ValidateBillingExprJSONWithRates(exprJSON, map[string]float64{"m": 6.8}))
 }
+
+// 显式提交 null 必须当成「空表」而不是「没传」：本地复现过 null 绕过校验、
+// 把汇率清空但仍留下引用 fx 的表达式。
+func TestParseModelSourceRateJSON_NullIsEmpty(t *testing.T) {
+	for _, in := range []string{"", "null", "  "} {
+		rates, err := ParseModelSourceRateJSON(in)
+		require.NoError(t, err)
+		require.NotNil(t, rates, "不能返回 nil（调用方会把 nil 当成没提交）")
+		require.Empty(t, rates)
+	}
+	rates, err := ParseModelSourceRateJSON(`{"m":6.8}`)
+	require.NoError(t, err)
+	require.Equal(t, 6.8, rates["m"])
+}

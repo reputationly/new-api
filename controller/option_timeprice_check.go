@@ -3,6 +3,7 @@ package controller
 import (
 	"fmt"
 	"sort"
+	"strings"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/pkg/billingexpr"
@@ -56,6 +57,12 @@ func checkTimePriceVsExpr(timeRatioJSON string) error {
 // 的模型配时段价（那时 checkTimePriceVsExpr 因为模式判断会放行），随后再把模式切到
 // tiered_expr —— 双重时间轴就在切模式那一刻悄悄生效了。
 func checkBillingModeVsTimePrice(modeJSON string) error {
+	return checkBillingModeVsTimePriceWithExprs(modeJSON, "")
+}
+
+// checkBillingModeVsTimePriceWithExprs 与上面相同，但用**这批要写入的表达式**判断，
+// 而不是内存里的旧表达式：同一次保存里既切模式又换表达式时，用旧值会误拒。
+func checkBillingModeVsTimePriceWithExprs(modeJSON, exprJSON string) error {
 	if modeJSON == "" {
 		return nil
 	}
@@ -64,6 +71,12 @@ func checkBillingModeVsTimePrice(modeJSON string) error {
 		return nil
 	}
 	exprs := billing_setting.GetBillingExprCopy()
+	if strings.TrimSpace(exprJSON) != "" {
+		parsed := map[string]string{}
+		if err := common.UnmarshalJsonStr(exprJSON, &parsed); err == nil {
+			exprs = parsed
+		}
+	}
 	models := make([]string, 0, len(modes))
 	for model := range modes {
 		models = append(models, model)

@@ -65,19 +65,28 @@ func VideoPricing2JSONString() string {
 	return videoPricingMap.MarshalJSONString()
 }
 
+// CheckVideoPricingByJSONString 只校验、不写入（批量保存的「提交前校验」用）。
+func CheckVideoPricingByJSONString(jsonStr string) error {
+	if strings.TrimSpace(jsonStr) == "" {
+		return nil
+	}
+	parsed := map[string]VideoPriceEntry{}
+	if err := common.UnmarshalJsonStr(jsonStr, &parsed); err != nil {
+		return fmt.Errorf("视频计费配置不是合法 JSON: %w", err)
+	}
+	for name, entry := range parsed {
+		if err := entry.validate(name); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // UpdateVideoPricingByJSONString 先整体校验再写入——半张校验不过的表生效会造成错账,
 // 比整个保存失败糟糕得多。
 func UpdateVideoPricingByJSONString(jsonStr string) error {
-	if strings.TrimSpace(jsonStr) != "" {
-		parsed := map[string]VideoPriceEntry{}
-		if err := common.UnmarshalJsonStr(jsonStr, &parsed); err != nil {
-			return fmt.Errorf("视频计费配置不是合法 JSON: %w", err)
-		}
-		for name, entry := range parsed {
-			if err := entry.validate(name); err != nil {
-				return err
-			}
-		}
+	if err := CheckVideoPricingByJSONString(jsonStr); err != nil {
+		return err
 	}
 	return types.LoadFromJsonString(videoPricingMap, jsonStr)
 }

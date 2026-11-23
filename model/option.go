@@ -1,6 +1,7 @@
 package model
 
 import (
+	"fmt"
 	"sort"
 	"strconv"
 	"strings"
@@ -325,6 +326,13 @@ func UpdateOptions(options map[string]string) error {
 		keys = append(keys, key)
 	}
 	sort.Strings(keys) // 固定顺序，便于排查与测试
+	// **提交前**把每个 key 都解析一遍：真正应用发生在 commit 之后，若那时才报错，
+	// 库里已经写进去了（返回 500 但数据生效，是最难排查的一类）。这里先失败先返回。
+	for _, key := range keys {
+		if err := ValidateOptionValueForBatch(key, options[key]); err != nil {
+			return err
+		}
+	}
 	err := DB.Transaction(func(tx *gorm.DB) error {
 		for _, key := range keys {
 			option := Option{Key: key}
@@ -349,6 +357,56 @@ func UpdateOptions(options map[string]string) error {
 		}
 	}
 	return nil
+}
+
+// ValidateOptionValueForBatch 只解析/校验批量保存允许的 key，不写库也不动内存。
+func ValidateOptionValueForBatch(key, value string) error {
+	trimmed := strings.TrimSpace(value)
+	switch key {
+	case "ModelPrice", "ModelRatio", "CompletionRatio", "CacheRatio",
+		"CreateCacheRatio", "ImageRatio", "AudioRatio", "AudioCompletionRatio",
+		"ModelSourceRate":
+		if trimmed == "" || trimmed == "null" {
+			return nil
+		}
+		parsed := map[string]float64{}
+		if err := common.UnmarshalJsonStr(value, &parsed); err != nil {
+			return fmt.Errorf("%s 不是合法的 JSON 数值表: %w", key, err)
+		}
+		return nil
+	case "billing_setting.billing_mode", "billing_setting.billing_expr":
+		if trimmed == "" || trimmed == "null" {
+			return nil
+		}
+		parsed := map[string]string{}
+		if err := common.UnmarshalJsonStr(value, &parsed); err != nil {
+			return fmt.Errorf("%s 不是合法的 JSON 字符串表: %w", key, err)
+		}
+		return nil
+	case "VideoPricingConfig":
+		return ratio_setting.CheckVideoPricingByJSONString(value)
+	default:
+		return fmt.Errorf("该接口不支持批量写入：%s", key)
+	}
+}
+
+// GetOptionValuesFromDB 读取指定 key 在**库里**的当前值。
+//
+// 批量保存的"最终状态"校验必须用库里的值，不能用本副本内存：多副本部署下，
+// 落后副本的内存可能是旧的，用它校验会放行"删掉仍被引用的汇率"这类组合。
+func GetOptionValuesFromDB(keys []string) (map[string]string, error) {
+	out := make(map[string]string, len(keys))
+	if len(keys) == 0 {
+		return out, nil
+	}
+	rows := make([]Option, 0, len(keys))
+	if err := DB.Find(&rows, keys).Error; err != nil {
+		return nil, err
+	}
+	for _, row := range rows {
+		out[row.Key] = row.Value
+	}
+	return out, nil
 }
 
 func updateOptionMap(key string, value string) (err error) {

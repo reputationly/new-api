@@ -152,6 +152,47 @@ type optionBatchRequest struct {
 // tiered_expr 必须有表达式）。前端逐个 PUT 时任何一步失败都会留下半套配置，
 // 而「模式 = 表达式计费但没有表达式」会让该模型之后所有请求直接报错。
 // 这里做两件事：① 以「这次保存之后的最终状态」校验；② 单事务写库。
+// validatePricingFinalState 以「这次保存之后的最终状态」校验计费相关配置。
+//
+// 权威状态从**数据库**读，不用本副本内存：多副本部署下落后副本的内存可能是旧的，
+// 用它校验会放行"删掉仍被引用的汇率"这类组合（本地两进程共用一个 PostgreSQL 复现过）。
+// 另外要区分「没提交这个 key」和「提交了空表/null」——后者是显式清空，必须照实校验。
+func validatePricingFinalState(options map[string]string) error {
+	dbValues, err := model.GetOptionValuesFromDB([]string{
+		"billing_setting.billing_expr",
+		"ModelSourceRate",
+	})
+	if err != nil {
+		return fmt.Errorf("读取当前计费配置失败：%w", err)
+	}
+	exprJSON, exprSubmitted := options["billing_setting.billing_expr"]
+	if !exprSubmitted {
+		exprJSON = dbValues["billing_setting.billing_expr"]
+	}
+	rateJSON, rateSubmitted := options["ModelSourceRate"]
+	if !rateSubmitted {
+		rateJSON = dbValues["ModelSourceRate"]
+	}
+	rates, err := billing_setting.ParseModelSourceRateJSON(rateJSON)
+	if err != nil {
+		return fmt.Errorf("汇率配置不是合法的 JSON：%w", err)
+	}
+	if err := billing_setting.ValidateBillingExprJSONWithRates(exprJSON, rates); err != nil {
+		return err
+	}
+	if exprSubmitted {
+		if err := checkExprVsTimePrice(exprJSON); err != nil {
+			return err
+		}
+	}
+	if modeJSON, ok := options["billing_setting.billing_mode"]; ok {
+		if err := checkBillingModeVsTimePriceWithExprs(modeJSON, exprJSON); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func UpdatePricingOptions(c *gin.Context) {
 	var req optionBatchRequest
 	if err := common.DecodeJson(c.Request.Body, &req); err != nil || len(req.Options) == 0 {
@@ -168,44 +209,9 @@ func UpdatePricingOptions(c *gin.Context) {
 		}
 	}
 
-	// ① 最终状态：这次要写的汇率（没写就用当前值）
-	finalRates := billing_setting.GetModelSourceRateCopy()
-	if raw, ok := req.Options["ModelSourceRate"]; ok {
-		parsed, err := billing_setting.ParseModelSourceRateJSON(raw)
-		if err != nil {
-			c.JSON(http.StatusOK, gin.H{"success": false, "message": "汇率配置不是合法的 JSON：" + err.Error()})
-			return
-		}
-		finalRates = parsed
-	}
-	// ② 最终状态：这次要写的表达式（没写就用当前值）。
-	//    两个方向都要校验：改了表达式要能配上汇率；只删汇率也要发现「还有人引用了它」。
-	exprJSON, hasExpr := req.Options["billing_setting.billing_expr"]
-	validateExpr := hasExpr
-	if !hasExpr {
-		exprBytes, err := common.Marshal(billing_setting.GetBillingExprCopy())
-		if err == nil {
-			exprJSON = string(exprBytes)
-			validateExpr = true
-		}
-	}
-	if validateExpr {
-		if err := billing_setting.ValidateBillingExprJSONWithRates(exprJSON, finalRates); err != nil {
-			c.JSON(http.StatusOK, gin.H{"success": false, "message": err.Error()})
-			return
-		}
-		if hasExpr {
-			if err := checkExprVsTimePrice(exprJSON); err != nil {
-				c.JSON(http.StatusOK, gin.H{"success": false, "message": err.Error()})
-				return
-			}
-		}
-	}
-	if mode, ok := req.Options["billing_setting.billing_mode"]; ok {
-		if err := checkBillingModeVsTimePrice(mode); err != nil {
-			c.JSON(http.StatusOK, gin.H{"success": false, "message": err.Error()})
-			return
-		}
+	if err := validatePricingFinalState(req.Options); err != nil {
+		c.JSON(http.StatusOK, gin.H{"success": false, "message": err.Error()})
+		return
 	}
 
 	// ③ 单事务写库
@@ -240,6 +246,16 @@ func UpdateOption(c *gin.Context) {
 		option.Value = common.Interface2String(option.Value.(int))
 	default:
 		option.Value = fmt.Sprintf("%v", option.Value)
+	}
+	// 计费相关的 key 单键 PUT 也必须走同一套「最终状态」校验：
+	// 否则旧接口仍能把仍被 fx 表达式引用的汇率删掉（本地复现：删完请求 400）。
+	if pricingBatchKeys[option.Key] {
+		if err := validatePricingFinalState(map[string]string{
+			option.Key: option.Value.(string),
+		}); err != nil {
+			c.JSON(http.StatusOK, gin.H{"success": false, "message": err.Error()})
+			return
+		}
 	}
 	switch option.Key {
 	case "GitHubOAuthEnabled":

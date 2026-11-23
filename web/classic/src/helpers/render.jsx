@@ -26,6 +26,12 @@ import {
   getUsdExchangeRate,
 } from './quota';
 import { stripExprVersion } from './exprVersion';
+import {
+  exprUsesFX,
+  extractTermCoefficients,
+  splitTopLevelTerms,
+  termUsesFX,
+} from './billingExprTerms';
 import { getExprPriceScale } from './exprPrice';
 import { MOBILE_BREAKPOINT } from '../hooks/common/useIsMobile';
 import {
@@ -2595,33 +2601,15 @@ export function normalizeLogPricing(other) {
   return next;
 }
 
-// 表达式是否引用了 fx（本模型的源货币汇率）。
-//
-// 先剥掉字符串字面量：档位标签里出现 "fx"（如 tier("fx-档", …)）不该算引用，
-// 否则会把整条表达式判成美元口径、价格全乘一个汇率。
-export function exprUsesFX(exprStr) {
-  const withoutLiterals = String(exprStr || '').replace(/"[^"]*"/g, '""');
-  return /\bfx\b/.test(withoutLiterals);
-}
+// fx 的判定与「按项取系数」统一由 helpers/billingExprTerms 提供：
+// 展示与录入必须同一个口径，否则会出现"编辑器缩放了、广场没缩放"。
+export { exprUsesFX };
 
-/**
- * 表达式系数 → 展示用的人民币单价倍数。
- *
- * 保留给"整条表达式同口径"的调用方；真正的展示用 parseTiersFromExpr，
- * 它按**每一项**判断有没有 `* fx`（混合写法也不会算错）。
- */
+/** 表达式系数 → 展示用的人民币单价倍数（整条同口径时使用）。 */
 export function exprFXMultiplier(exprStr, fx) {
   if (!exprUsesFX(exprStr)) return 1;
   const rate = Number(fx);
   return Number.isFinite(rate) && rate > 0 ? rate : 0;
-}
-
-// 把 tier(...) 的成本体按顶层加减号切成若干项（括号内不切，`1e-7` 这种不切）。
-function splitTopLevelTerms(bodyStr) {
-  return String(bodyStr || '')
-    .split(/\s[+-]\s/)
-    .map((term) => term.trim())
-    .filter((term) => term !== '');
 }
 
 /**
@@ -2635,21 +2623,16 @@ function parseTierBody(bodyStr, fx = 0) {
   const rate = Number(fx);
   const fxReady = Number.isFinite(rate) && rate > 0;
   for (const term of splitTopLevelTerms(bodyStr)) {
-    const usesFX = /\bfx\b/.test(term);
+    const usesFX = termUsesFX(term);
     if (usesFX && !fxReady) {
-      // 引用了 fx 却没有汇率：显示成 0 逼着修配置，而不是显示一个"看着像对的"数。
-      const empty = new RegExp(BILLING_VAR_REGEX.source, 'g');
-      let m;
-      while ((m = empty.exec(term)) !== null) {
-        if (!(m[1] in coeffs)) coeffs[m[1]] = 0;
+      for (const { varName } of extractTermCoefficients(term)) {
+        if (!(varName in coeffs)) coeffs[varName] = 0;
       }
       continue;
     }
     const multiplier = usesFX ? rate : 1;
-    const re = new RegExp(BILLING_VAR_REGEX.source, 'g');
-    let m;
-    while ((m = re.exec(term)) !== null) {
-      if (!(m[1] in coeffs)) coeffs[m[1]] = Number(m[2]) * multiplier;
+    for (const { varName, value } of extractTermCoefficients(term)) {
+      if (!(varName in coeffs)) coeffs[varName] = value * multiplier;
     }
   }
   const tier = {};

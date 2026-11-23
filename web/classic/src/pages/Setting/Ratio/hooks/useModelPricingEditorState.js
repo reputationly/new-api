@@ -27,10 +27,8 @@ import {
   combineBillingExpr,
   splitBillingExprAndRequestRules,
 } from '../components/requestRuleExpr';
-import {
-  BILLING_PRICING_VARS,
-  BILLING_VAR_REGEX,
-} from '../../../../constants/billing.constants';
+import { BILLING_VAR_REGEX } from '../../../../constants/billing.constants';
+import { scaleTermCoefficients } from '../../../../helpers/billingExprTerms';
 
 export const PAGE_SIZE = 10;
 
@@ -59,29 +57,19 @@ export const scaleNumericString = (value, factor) => {
  * 只替换「变量 * 数字」这种系数写法（BILLING_VAR_REGEX），不解析 AST，
  * 因此 `tier("≤272K", …)` 的档位标签、三元条件、请求规则都原样保留。
  */
-const BILLING_VAR_NAMES = BILLING_PRICING_VARS.map((v) => v.key);
-
+/**
+ * 按比例缩放表达式里的系数。
+ *
+ * 用共享的分项实现（helpers/billingExprTerms）：
+ *  - 两种书写顺序都支持（`p * 1.36` / `1.36 * p`）
+ *  - 一次扫描，`1.5 * p * 2` 不会被前后两种规则各缩放一次
+ *  - 档位条件（`len <= 272000`）里的数字不动，档位标签里的字符串也不动
+ */
 export const scaleBillingExpr = (expr, factor) => {
   if (!expr) return expr;
-  const scaled = String(expr).replace(
-    BILLING_VAR_REGEX,
-    (whole, varName, numText) => {
-      const num = Number(numText);
-      if (!Number.isFinite(num)) return whole;
-      return `${varName} * ${formatNumber(num * factor)}`;
-    },
-  );
-  // 也支持系数写在前面（`1.5 * p`）。只认「数字 * 变量」，变量必须是完整标识符 ——
-  // 否则 `len <= 272000` 这类比较里的数字也会被乘掉。
-  const reversed = new RegExp(
-    `(\\d+(?:\\.\\d+)?(?:[eE][+-]?\\d+)?)\\s*\\*\\s*\\b(${BILLING_VAR_NAMES.join('|')})\\b`,
-    'g',
-  );
-  return scaled.replace(reversed, (whole, numText, varName) => {
-    const num = Number(numText);
-    if (!Number.isFinite(num)) return whole;
-    return `${formatNumber(num * factor)} * ${varName}`;
-  });
+  // 不切分整条表达式（里面可能有三元/比较/tier 调用），直接对系数做一次扫描替换：
+  // 正则在整串上按「变量 * 数字」或「数字 * 变量」匹配，每个系数只会被替换一次。
+  return scaleTermCoefficients(String(expr), factor);
 };
 
 /**

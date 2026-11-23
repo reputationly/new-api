@@ -1769,9 +1769,16 @@ export default function TieredPricingEditor({
     // 只在真的不同才 setState，避免与 onExprChange 形成回环。
     // 引用 fx 的表达式不能进可视化编辑：可视化模型只认「变量 * 数字」的系数，
     // 一旦在那边编辑保存，`* fx` 会被丢掉（价格直接少一个汇率倍数）。
-    const parsed = exprUsesFX(currentExpr)
+    const parsedConfig = exprUsesFX(currentExpr)
       ? null
       : tryParseVisualConfig(currentExpr);
+    // 只有"可视化配置能原样还原出这条表达式"时才进可视化编辑：
+    // 反向系数（`1.5 * p`）、多余括号等写法会被解析成 0 系数，一旦回写就会把
+    // 价格改成 `p * 0 + c * 0`（本地复现过）。
+    const parsed =
+      parsedConfig && generateExprFromVisualConfig(parsedConfig) === currentExpr
+        ? parsedConfig
+        : null;
     if (parsed) {
       setEditorMode('visual');
       setVisualConfig(parsed);
@@ -1904,6 +1911,8 @@ export default function TieredPricingEditor({
     imageOutputTokens,
     audioInputTokens,
     audioOutputTokens,
+    // 汇率进估算器：只改汇率时也要重算（否则金额是上一版汇率的）
+    model?.sourceRate,
   ]);
 
   return (

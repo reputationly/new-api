@@ -311,7 +311,13 @@ func modelPriceHelperTiered(c *gin.Context, info *relaycommon.RelayInfo, promptT
 	if err != nil {
 		return types.PriceData{}, fmt.Errorf("model %s: %w", info.OriginModelName, err)
 	}
-	preConsumedQuota := billingexpr.QuotaRound(quotaBeforeGroup * groupRatioInfo.GroupRatio)
+	quotaAfterGroup := quotaBeforeGroup * groupRatioInfo.GroupRatio
+	// 乘完分组倍率也要校验：倍率是管理员可配的任意浮点数，
+	// 1e15 这类值会把额度溢出成 MinInt64（预扣与结算两侧都要拦）。
+	if err := billingexpr.ValidateFinalQuota(quotaAfterGroup); err != nil {
+		return types.PriceData{}, fmt.Errorf("model %s: %w", info.OriginModelName, err)
+	}
+	preConsumedQuota := billingexpr.QuotaRound(quotaAfterGroup)
 
 	freeModel := false
 	if !operation_setting.GetQuotaSetting().EnableFreeModelPreConsume {
@@ -332,9 +338,10 @@ func modelPriceHelperTiered(c *gin.Context, info *relaycommon.RelayInfo, promptT
 		EstimatedCompletionTokens: estimatedCompletionTokens,
 		EstimatedQuotaBeforeGroup: quotaBeforeGroup,
 		EstimatedQuotaAfterGroup:  preConsumedQuota,
-		EstimatedTier:             trace.MatchedTier,
-		QuotaPerUnit:              common.QuotaPerUnit, // 仅 v1 快照语义；v2 结算不读它
-		ExprVersion:               billingexpr.ExprVersion(exprStr),
+		// 预扣额本身也要过一遍范围校验（见上），这里只是把同一份数据留在快照里。
+		EstimatedTier: trace.MatchedTier,
+		QuotaPerUnit:  common.QuotaPerUnit, // 仅 v1 快照语义；v2 结算不读它
+		ExprVersion:   billingexpr.ExprVersion(exprStr),
 		// 冻结本次使用的 fx：结算按快照重算，运营中途改汇率不影响在途请求。
 		ExprFX: exprFX,
 	}

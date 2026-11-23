@@ -67,3 +67,14 @@ func TestQuotaFromExprOutputRejectsInvalid(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, float64(0), quota)
 }
+
+// 乘完分组倍率后的最终额度也要校验：分组倍率是任意浮点，1e15 会把 int64 溢出。
+func TestValidateFinalQuota(t *testing.T) {
+	require.NoError(t, ValidateFinalQuota(0))
+	require.NoError(t, ValidateFinalQuota(1e9))
+
+	require.Error(t, ValidateFinalQuota(-1))
+	require.Error(t, ValidateFinalQuota(math.NaN()))
+	require.Error(t, ValidateFinalQuota(math.Inf(1)))
+	require.Error(t, ValidateFinalQuota(1e16)) // > 2^53
+}

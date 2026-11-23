@@ -100,7 +100,11 @@ func GetModelSourceRateCopy() map[string]float64 {
 // ParseModelSourceRateJSON 解析一张「模型 → 汇率」JSON；空串视为空表。
 func ParseModelSourceRateJSON(jsonStr string) (map[string]float64, error) {
 	parsed := make(map[string]float64)
-	if strings.TrimSpace(jsonStr) == "" {
+	trimmed := strings.TrimSpace(jsonStr)
+	// "" 与 "null" 都表示**空表**（显式清空）。绝不能返回 nil：
+	// 调用方把 nil 当成"没提交、回退去读旧值"，于是"清空汇率"会被静默当成"不改"，
+	// 校验也就放行了（本地复现过：提交 null 后库里汇率被清空，表达式仍引用 fx）。
+	if trimmed == "" || trimmed == "null" {
 		return parsed, nil
 	}
 	if err := common.UnmarshalJsonStr(jsonStr, &parsed); err != nil {
@@ -192,6 +196,15 @@ func smokeTestExpr(exprStr string, fx float64) error {
 			}
 			if result < 0 {
 				return fmt.Errorf("vector {p=%g, c=%g}: result %f < 0", v.P, v.C, result)
+			}
+			// 与运行期同一套范围校验（这里分组倍率按 1 算）：系数写大了（少 /1e6、
+			// 把美元价当人民币价）会在这里被拦下，而不是等到用户请求时溢出。
+			quota, convErr := billingexpr.QuotaFromExprOutput(result, billingexpr.ExprVersionV2)
+			if convErr != nil {
+				return fmt.Errorf("vector {p=%g, c=%g}: %w", v.P, v.C, convErr)
+			}
+			if err := billingexpr.ValidateFinalQuota(quota); err != nil {
+				return fmt.Errorf("vector {p=%g, c=%g}: %w", v.P, v.C, err)
 			}
 		}
 	}

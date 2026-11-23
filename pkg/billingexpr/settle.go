@@ -47,6 +47,24 @@ func QuotaFromExprOutput(exprOutput float64, version int) (float64, error) {
 	}
 }
 
+// ValidateFinalQuota 校验**乘完分组倍率之后**的最终额度。
+//
+// 只检查乘倍率之前是不够的：分组倍率是管理员可配的任意浮点数，1e15 这种值
+// 与额度相乘后会把 int64 溢出成 MinInt64（本地 Go 实测），再往下就是一次
+// 巨额退/扣款。所以最终落库前再校验一次。
+func ValidateFinalQuota(quota float64) error {
+	if math.IsNaN(quota) || math.IsInf(quota, 0) {
+		return fmt.Errorf("最终额度非法（NaN/Inf），请检查表达式与分组倍率")
+	}
+	if quota < 0 {
+		return fmt.Errorf("最终额度为负（%.6f），拒绝结算", quota)
+	}
+	if quota > maxSafeQuota {
+		return fmt.Errorf("最终额度越界（%.6g），请检查分组倍率或表达式系数", quota)
+	}
+	return nil
+}
+
 // quotaConversion converts raw expression output to quota based on the
 // expression version. This is the central dispatch point for future versions
 // that may use a different conversion formula.
@@ -75,7 +93,11 @@ func ComputeTieredQuotaWithRequest(snap *BillingSnapshot, params TokenParams, re
 	if err != nil {
 		return TieredResult{}, err
 	}
-	afterGroup := QuotaRound(quotaBeforeGroup * snap.GroupRatio)
+	afterGroupRaw := quotaBeforeGroup * snap.GroupRatio
+	if err := ValidateFinalQuota(afterGroupRaw); err != nil {
+		return TieredResult{}, err
+	}
+	afterGroup := QuotaRound(afterGroupRaw)
 	crossed := trace.MatchedTier != snap.EstimatedTier
 
 	return TieredResult{
