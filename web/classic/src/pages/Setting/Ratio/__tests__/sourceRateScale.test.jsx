@@ -60,3 +60,21 @@ describe('exprReferencesFX', () => {
     expect(exprReferencesFX('tier("base", p * affx)')).toBe(false);
   });
 });
+
+// 系数写在前面（`1.5 * p`）同样要缩放；比较里的数字不能碰。
+describe('scaleBillingExpr 反向系数', () => {
+  it('数字 * 变量 形式也缩放', () => {
+    expect(scaleBillingExpr('1.36 * p + 8.16 * c', 7 / 6.8)).toBe(
+      '1.4 * p + 8.4 * c',
+    );
+  });
+
+  it('不动档位条件里的数字', () => {
+    const got = scaleBillingExpr(
+      'len <= 272000 ? tier("≤272K", 1.36 * p) : tier(">272K", 2.72 * p)',
+      2,
+    );
+    expect(got).toContain('len <= 272000');
+    expect(got).toContain('2.72 * p'.replace('2.72', '5.44'));
+  });
+});

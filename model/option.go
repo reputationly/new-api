@@ -1,9 +1,12 @@
 package model
 
 import (
+	"sort"
 	"strconv"
 	"strings"
 	"time"
+
+	"gorm.io/gorm"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/setting"
@@ -305,6 +308,47 @@ func UpdateOption(key string, value string) error {
 	}
 	// Update OptionMap
 	return updateOptionMap(key, value)
+}
+
+// UpdateOptions 在一个事务里写入多个 option，然后逐个应用到内存。
+//
+// 为什么需要：计费编辑器一次保存会同时改「计费模式 / 表达式 / 源货币汇率 / 六个价格表」，
+// 这些值之间有依赖（表达式引用 fx 就必须有汇率；模式切到 tiered_expr 就必须有表达式）。
+// 逐个 PUT 时任何一步失败都会留下半套配置，而"模式=表达式计费但没有表达式"会让整个
+// 模型之后所有请求直接报错。这里保证要么全写、要么全不写。
+func UpdateOptions(options map[string]string) error {
+	if len(options) == 0 {
+		return nil
+	}
+	keys := make([]string, 0, len(options))
+	for key := range options {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys) // 固定顺序，便于排查与测试
+	err := DB.Transaction(func(tx *gorm.DB) error {
+		for _, key := range keys {
+			option := Option{Key: key}
+			if err := tx.FirstOrCreate(&option, Option{Key: key}).Error; err != nil {
+				return err
+			}
+			option.Value = options[key]
+			if err := tx.Save(&option).Error; err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		return err
+	}
+	// 落库成功后逐个应用到内存；复用 updateOptionMap（它只做内存，不写库）。
+	for _, key := range keys {
+		if applyErr := updateOptionMap(key, options[key]); applyErr != nil {
+			common.SysLog("failed to apply option to memory: " + key + ": " + applyErr.Error())
+			return applyErr
+		}
+	}
+	return nil
 }
 
 func updateOptionMap(key string, value string) (err error) {

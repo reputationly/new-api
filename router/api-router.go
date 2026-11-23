@@ -323,6 +323,8 @@ func SetApiRouter(router *gin.Engine) {
 			// 不能拿下发接口的结果反推，那份响应里没有 platform_model。
 			optionRoute.GET("/hilo_catalog_default", controller.GetHiloCatalogDefault)
 			optionRoute.PUT("/", controller.UpdateOption)
+			// 计费编辑器一次保存涉及多个互相依赖的 key，必须整体校验 + 单事务落库。
+			optionRoute.POST("/pricing_batch", controller.UpdatePricingOptions)
 			optionRoute.GET("/channel_affinity_cache", controller.GetChannelAffinityCacheStats)
 			optionRoute.DELETE("/channel_affinity_cache", controller.ClearChannelAffinityCache)
 			optionRoute.POST("/rest_model_ratio", controller.ResetModelRatio)

@@ -2595,16 +2595,20 @@ export function normalizeLogPricing(other) {
   return next;
 }
 
-// 表达式是否引用了 fx（本模型的源货币汇率）。引用时系数是美元目录价，
-// 展示必须乘汇率；没引用时系数本来就是人民币，乘 1。
+// 表达式是否引用了 fx（本模型的源货币汇率）。
+//
+// 先剥掉字符串字面量：档位标签里出现 "fx"（如 tier("fx-档", …)）不该算引用，
+// 否则会把整条表达式判成美元口径、价格全乘一个汇率。
 export function exprUsesFX(exprStr) {
-  return /\bfx\b/.test(String(exprStr || ''));
+  const withoutLiterals = String(exprStr || '').replace(/"[^"]*"/g, '""');
+  return /\bfx\b/.test(withoutLiterals);
 }
 
 /**
  * 表达式系数 → 展示用的人民币单价倍数。
- * 引用 fx 且汇率已知 → 乘汇率；引用 fx 但汇率缺失 → 返回 0（价格显示成 0，
- * 明显是错的，逼着配置侧修，而不是显示一个"看着像对的"数）。
+ *
+ * 保留给"整条表达式同口径"的调用方；真正的展示用 parseTiersFromExpr，
+ * 它按**每一项**判断有没有 `* fx`（混合写法也不会算错）。
  */
 export function exprFXMultiplier(exprStr, fx) {
   if (!exprUsesFX(exprStr)) return 1;
@@ -2612,12 +2616,41 @@ export function exprFXMultiplier(exprStr, fx) {
   return Number.isFinite(rate) && rate > 0 ? rate : 0;
 }
 
-function parseTierBody(bodyStr, fxMultiplier = 1) {
+// 把 tier(...) 的成本体按顶层加减号切成若干项（括号内不切，`1e-7` 这种不切）。
+function splitTopLevelTerms(bodyStr) {
+  return String(bodyStr || '')
+    .split(/\s[+-]\s/)
+    .map((term) => term.trim())
+    .filter((term) => term !== '');
+}
+
+/**
+ * 解析某一档的系数（¥/百万 tokens）。
+ *
+ * fx 按**项**生效：`p * 1.5 * fx + c * 7.5` 里只有 p 那一项是美元价，
+ * 输出价必须保持 7.5 —— 按整条表达式乘汇率会把它显示成 51（实扣仍是 7.5）。
+ */
+function parseTierBody(bodyStr, fx = 0) {
   const coeffs = {};
-  const re = new RegExp(BILLING_VAR_REGEX.source, 'g');
-  let m;
-  while ((m = re.exec(bodyStr)) !== null) {
-    if (!(m[1] in coeffs)) coeffs[m[1]] = Number(m[2]) * fxMultiplier;
+  const rate = Number(fx);
+  const fxReady = Number.isFinite(rate) && rate > 0;
+  for (const term of splitTopLevelTerms(bodyStr)) {
+    const usesFX = /\bfx\b/.test(term);
+    if (usesFX && !fxReady) {
+      // 引用了 fx 却没有汇率：显示成 0 逼着修配置，而不是显示一个"看着像对的"数。
+      const empty = new RegExp(BILLING_VAR_REGEX.source, 'g');
+      let m;
+      while ((m = empty.exec(term)) !== null) {
+        if (!(m[1] in coeffs)) coeffs[m[1]] = 0;
+      }
+      continue;
+    }
+    const multiplier = usesFX ? rate : 1;
+    const re = new RegExp(BILLING_VAR_REGEX.source, 'g');
+    let m;
+    while ((m = re.exec(term)) !== null) {
+      if (!(m[1] in coeffs)) coeffs[m[1]] = Number(m[2]) * multiplier;
+    }
   }
   const tier = {};
   for (const [varName, field] of Object.entries(BILLING_VAR_KEY_TO_FIELD)) {
@@ -2630,7 +2663,6 @@ export function parseTiersFromExpr(exprStr, fx = 0) {
   if (!exprStr) return [];
   try {
     const { body } = stripExprVersion(exprStr);
-    const fxMultiplier = exprFXMultiplier(exprStr, fx);
     const condGroup = `((?:(?:p|c|len)\\s*(?:<|<=|>|>=)\\s*[\\d.eE+]+)(?:\\s*&&\\s*(?:p|c|len)\\s*(?:<|<=|>|>=)\\s*[\\d.eE+]+)*)`;
     const tierRe = new RegExp(
       `(?:${condGroup}\\s*\\?\\s*)?tier\\("([^"]*)",\\s*([^)]+)\\)`,
@@ -2648,7 +2680,7 @@ export function parseTiersFromExpr(exprStr, fx = 0) {
             conditions.push({ var: cm[1], op: cm[2], value: Number(cm[3]) });
         }
       }
-      const tier = parseTierBody(m[3], fxMultiplier);
+      const tier = parseTierBody(m[3], fx);
       tier.label = m[2];
       tier.conditions = conditions;
       tiers.push(tier);

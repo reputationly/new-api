@@ -27,7 +27,10 @@ import {
   combineBillingExpr,
   splitBillingExprAndRequestRules,
 } from '../components/requestRuleExpr';
-import { BILLING_VAR_REGEX } from '../../../../constants/billing.constants';
+import {
+  BILLING_PRICING_VARS,
+  BILLING_VAR_REGEX,
+} from '../../../../constants/billing.constants';
 
 export const PAGE_SIZE = 10;
 
@@ -56,12 +59,28 @@ export const scaleNumericString = (value, factor) => {
  * 只替换「变量 * 数字」这种系数写法（BILLING_VAR_REGEX），不解析 AST，
  * 因此 `tier("≤272K", …)` 的档位标签、三元条件、请求规则都原样保留。
  */
+const BILLING_VAR_NAMES = BILLING_PRICING_VARS.map((v) => v.key);
+
 export const scaleBillingExpr = (expr, factor) => {
   if (!expr) return expr;
-  return String(expr).replace(BILLING_VAR_REGEX, (whole, varName, numText) => {
+  const scaled = String(expr).replace(
+    BILLING_VAR_REGEX,
+    (whole, varName, numText) => {
+      const num = Number(numText);
+      if (!Number.isFinite(num)) return whole;
+      return `${varName} * ${formatNumber(num * factor)}`;
+    },
+  );
+  // 也支持系数写在前面（`1.5 * p`）。只认「数字 * 变量」，变量必须是完整标识符 ——
+  // 否则 `len <= 272000` 这类比较里的数字也会被乘掉。
+  const reversed = new RegExp(
+    `(\\d+(?:\\.\\d+)?(?:[eE][+-]?\\d+)?)\\s*\\*\\s*\\b(${BILLING_VAR_NAMES.join('|')})\\b`,
+    'g',
+  );
+  return scaled.replace(reversed, (whole, numText, varName) => {
     const num = Number(numText);
     if (!Number.isFinite(num)) return whole;
-    return `${varName} * ${formatNumber(num * factor)}`;
+    return `${formatNumber(num * factor)} * ${varName}`;
   });
 };
 
@@ -1717,38 +1736,30 @@ export function useModelPricingEditorState({
         }
       }
 
-      const requestQueue = [
-        ...Object.entries(output).map(([key, value]) =>
-          API.put('/api/option/', {
-            key,
-            value: JSON.stringify(value, null, 2),
-          }),
-        ),
-        ...Object.entries(tieredOutput).map(([key, value]) =>
-          API.put('/api/option/', {
-            key,
-            value: JSON.stringify(value, null, 2),
-          }),
-        ),
-        ...Object.entries(videoOutput).map(([key, value]) =>
-          API.put('/api/option/', {
-            key,
-            value: JSON.stringify(value, null, 2),
-          }),
-        ),
-        API.put('/api/option/', {
-          key: 'ModelSourceRate',
-          value: JSON.stringify(sourceRateOutput, null, 2),
-        }),
-      ];
+      // 一次保存涉及多个互相依赖的 key（模式、表达式、汇率、六个价格表）。
+      // 逐个 PUT 时任何一步失败都会留下半套配置，而「模式=表达式计费但没有表达式」
+      // 会让该模型之后所有请求直接报错；多副本下即使前端按顺序发也够呛
+      // （两次请求可能命中不同 Pod，而 option 的同步周期是 60 秒）。
+      // 所以走一个入口：服务端以「这次保存之后的最终状态」校验，再单事务写库。
+      const batchOptions = {};
+      const putOption = (key, value) => {
+        batchOptions[key] = JSON.stringify(value, null, 2);
+      };
+      Object.entries(output).forEach(([key, value]) => putOption(key, value));
+      Object.entries(tieredOutput).forEach(([key, value]) =>
+        putOption(key, value),
+      );
+      Object.entries(videoOutput).forEach(([key, value]) =>
+        putOption(key, value),
+      );
+      putOption('ModelSourceRate', sourceRateOutput);
 
-      const results = await Promise.all(requestQueue);
-      for (const res of results) {
-        if (!res?.data?.success) {
-          throw new Error(res?.data?.message || t('保存失败，请重试'));
-        }
+      const batchRes = await API.post('/api/option/pricing_batch', {
+        options: batchOptions,
+      });
+      if (!batchRes?.data?.success) {
+        throw new Error(batchRes?.data?.message || t('保存失败，请重试'));
       }
-
       showSuccess(t('保存成功'));
       setDirty(false);
       await refresh();

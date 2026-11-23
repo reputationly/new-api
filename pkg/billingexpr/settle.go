@@ -3,9 +3,15 @@ package billingexpr
 import (
 	"errors"
 	"fmt"
+	"math"
 
 	"github.com/QuantumNous/new-api/common"
 )
+
+// maxSafeQuota 是允许落库的额度上限（quota 以 int 存储）。
+// 超过它的值基本可以断定是表达式配错了（比如把「美元价」当「人民币价」写、
+// 或者少了 /1e6），继续放行会让 int 溢出成负数。
+const maxSafeQuota = float64(1 << 53)
 
 // ErrExprV1Unsupported v1 表达式（系数是美元/百万 tokens）在 1 quota = ¥1e-9 之后
 // 无法与余额同单位结算：它的输出单位是旧单位（1 quota = ¥1e-6），照原样结算会少收 1000 倍。
@@ -17,9 +23,23 @@ var ErrExprV1Unsupported = errors.New(
 //   - v2：系数是 ¥/百万 tokens，人民币金额 × QuotaPerYuan。
 //   - v1：系数是美元/百万 tokens，输出单位是旧单位，与当前余额不同单位 → 拒绝结算。
 func QuotaFromExprOutput(exprOutput float64, version int) (float64, error) {
+	// 非法金额一律拒绝，绝不能返回给结算层：service/quota.go 的 PostConsumeQuota
+	// 对 quota <= 0 走的是 IncreaseUserQuota（退/加额度），一个负的表达式金额
+	// 等于凭空给用户充值。0 是合法的（免费模型），所以只拦负数与非有限值。
+	if math.IsNaN(exprOutput) || math.IsInf(exprOutput, 0) {
+		return 0, fmt.Errorf("计费表达式算出了非法金额（NaN/Inf），请检查表达式与汇率")
+	}
+	if exprOutput < 0 {
+		return 0, fmt.Errorf(
+			"计费表达式算出了负金额 %.6f：表达式在这组 token/汇率下为负，拒绝结算", exprOutput)
+	}
 	switch version {
 	case ExprVersionV2:
-		return exprOutput / 1_000_000 * common.QuotaPerYuan, nil
+		quota := exprOutput / 1_000_000 * common.QuotaPerYuan
+		if math.IsNaN(quota) || math.IsInf(quota, 0) || quota > maxSafeQuota {
+			return 0, fmt.Errorf("计费表达式换算后的额度越界（%.6g），请检查表达式系数", quota)
+		}
+		return quota, nil
 	case ExprVersionV1:
 		return 0, ErrExprV1Unsupported
 	default:

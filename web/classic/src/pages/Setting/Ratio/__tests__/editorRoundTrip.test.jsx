@@ -8,7 +8,7 @@ vi.mock('../../../../helpers', async () => {
     API: {
       get: vi.fn().mockResolvedValue({ data: { success: true, data: [] } }),
       put: vi.fn().mockResolvedValue({ data: { success: true } }),
-      post: vi.fn(),
+      post: vi.fn().mockResolvedValue({ data: { success: true } }),
     },
     showSuccess: vi.fn(),
     showError: vi.fn(),
@@ -74,11 +74,16 @@ const CANDIDATES = [
 
 const refresh = vi.fn().mockResolvedValue(undefined);
 
+// 保存走统一入口：一次 POST 带全部 key（服务端按最终状态校验 + 单事务落库）。
 const putPayloads = () => {
   const payload = {};
-  // API.put(url, { key, value })
-  for (const [, body] of API.put.mock.calls) {
-    payload[body.key] = JSON.parse(body.value);
+  const call = API.post.mock.calls.find(
+    ([url]) => url === '/api/option/pricing_batch',
+  );
+  if (!call) return payload;
+  const options = call[1]?.options || {};
+  for (const [key, value] of Object.entries(options)) {
+    payload[key] = JSON.parse(value);
   }
   return payload;
 };

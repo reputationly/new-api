@@ -1,6 +1,7 @@
 package billingexpr
 
 import (
+	"math"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -46,4 +47,23 @@ func TestComputeTieredQuotaUsesSnapshotFX(t *testing.T) {
 	require.NoError(t, err)
 	// p=1e6 tokens × ¥1/百万 × fx 6.8 = ¥6.8 → quota = ¥6.8 × 1e9 = 6.8e9
 	require.InDelta(t, 6.8e9, res.ActualQuotaBeforeGroup, 1)
+}
+
+// 额度换算的硬门槛：负值/非有限值/越界一律拒绝（0 合法，免费模型要用）。
+func TestQuotaFromExprOutputRejectsInvalid(t *testing.T) {
+	_, err := QuotaFromExprOutput(-1, ExprVersionV2)
+	require.Error(t, err)
+
+	_, err = QuotaFromExprOutput(math.NaN(), ExprVersionV2)
+	require.Error(t, err)
+
+	_, err = QuotaFromExprOutput(math.Inf(1), ExprVersionV2)
+	require.Error(t, err)
+
+	_, err = QuotaFromExprOutput(1e13, ExprVersionV2) // 越界：1e13/1e6*1e9 = 1e16 > 2^53
+	require.Error(t, err)
+
+	quota, err := QuotaFromExprOutput(0, ExprVersionV2)
+	require.NoError(t, err)
+	require.Equal(t, float64(0), quota)
 }

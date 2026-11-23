@@ -1165,7 +1165,7 @@ function CacheTokenEstimatorInputs({
 // Cost estimator (works with any Expr string)
 // ---------------------------------------------------------------------------
 
-function evalExprLocally(exprStr, p, c, extraTokenValues) {
+function evalExprLocally(exprStr, p, c, extraTokenValues, fx = 0) {
   try {
     let matchedTier = '';
     const tierFn = (name, value) => {
@@ -1180,12 +1180,28 @@ function evalExprLocally(exprStr, p, c, extraTokenValues) {
       p,
       c,
       len,
+      // fx：本模型的源货币汇率。引用 fx 的表达式（美元目录价写法）没有它就会抛
+      // 「fx is not defined」，而文档推荐的正是这种写法。
+      fx: Number(fx) > 0 ? Number(fx) : 0,
       tier: tierFn,
       max: Math.max,
       min: Math.min,
       abs: Math.abs,
       ceil: Math.ceil,
       floor: Math.floor,
+      // 下面这些在浏览器里拿不到真实值（要请求头/请求体/时区），给安全兜底，
+      // 避免推荐写法或模板一带上它们估算器就直接报错。
+      header: () => '',
+      param: () => null,
+      has: (source, substr) =>
+        typeof source === 'string' && typeof substr === 'string'
+          ? source.includes(substr)
+          : false,
+      hour: () => 0,
+      minute: () => 0,
+      weekday: () => 0,
+      month: () => 1,
+      day: () => 1,
     };
     for (const field of EXTRA_ESTIMATOR_FIELDS) {
       env[field.var] = extraTokenValues[field.stateKey] || 0;
@@ -1748,6 +1764,9 @@ export default function TieredPricingEditor({
   );
 
   useEffect(() => {
+    // 依赖里带 currentExpr：改汇率会按比例重写表达式，编辑框必须跟着更新，
+    // 否则框里还留着旧文本，用户再编辑一次就把缩放结果覆盖回去了。
+    // 只在真的不同才 setState，避免与 onExprChange 形成回环。
     // 引用 fx 的表达式不能进可视化编辑：可视化模型只认「变量 * 数字」的系数，
     // 一旦在那边编辑保存，`* fx` 会被丢掉（价格直接少一个汇率倍数）。
     const parsed = exprUsesFX(currentExpr)
@@ -1756,17 +1775,17 @@ export default function TieredPricingEditor({
     if (parsed) {
       setEditorMode('visual');
       setVisualConfig(parsed);
-      setRawExpr(currentExpr);
+      setRawExpr((prev) => (prev === currentExpr ? prev : currentExpr));
     } else if (currentExpr) {
       setEditorMode('raw');
-      setRawExpr(currentExpr);
       setVisualConfig(null);
+      setRawExpr((prev) => (prev === currentExpr ? prev : currentExpr));
     } else {
       setEditorMode('visual');
       setVisualConfig(createDefaultVisualConfig());
       setRawExpr('');
     }
-  }, [model?.name]);
+  }, [model?.name, currentExpr]);
 
   const effectiveExpr = useMemo(() => {
     if (editorMode === 'visual') {
@@ -1867,6 +1886,7 @@ export default function TieredPricingEditor({
       promptTokens,
       completionTokens,
       extraTokenValues,
+      Number(model?.sourceRate),
     );
     if (!result.error) {
       // 表达式系数是 ¥/百万 tokens，输出单位就是元：先除 10⁶ 得元，再乘 QuotaPerYuan

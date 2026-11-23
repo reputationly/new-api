@@ -86,6 +86,29 @@ func ModelSourceRate2JSONString() string {
 	return string(data)
 }
 
+// GetModelSourceRateCopy 返回汇率表的副本（批量保存时用来算「最终状态」）。
+func GetModelSourceRateCopy() map[string]float64 {
+	modelSourceRateMu.RLock()
+	defer modelSourceRateMu.RUnlock()
+	out := make(map[string]float64, len(modelSourceRate))
+	for k, v := range modelSourceRate {
+		out[k] = v
+	}
+	return out
+}
+
+// ParseModelSourceRateJSON 解析一张「模型 → 汇率」JSON；空串视为空表。
+func ParseModelSourceRateJSON(jsonStr string) (map[string]float64, error) {
+	parsed := make(map[string]float64)
+	if strings.TrimSpace(jsonStr) == "" {
+		return parsed, nil
+	}
+	if err := common.UnmarshalJsonStr(jsonStr, &parsed); err != nil {
+		return nil, err
+	}
+	return parsed, nil
+}
+
 // GetModelSourceRate 返回某模型的源货币汇率；未配置时 ok=false。
 func GetModelSourceRate(model string) (float64, bool) {
 	modelSourceRateMu.RLock()
@@ -126,16 +149,30 @@ func GetPricingSyncData(base map[string]any) map[string]any {
 // ---------------------------------------------------------------------------
 
 func SmokeTestExpr(exprStr string) error {
-	return smokeTestExpr(exprStr)
+	return SmokeTestExprWithRate(exprStr, 0)
 }
 
-func smokeTestExpr(exprStr string) error {
-	// fx 取 1：引用 fx 的表达式在 fx=0 时会算出 0，那样冒烟测试等于什么都没验。
+// SmokeTestExprWithRate 与 SmokeTestExpr 相同，但用**真实汇率**跑冒烟向量。
+//
+// 为什么必须带汇率：引用 fx 的表达式在 fx=1 下可能恒为正（如 `p * (2 - fx)`），
+// 到真实汇率 6.8 就变成负数——而负额度在结算时会走「增加用户余额」的分支
+// （service/quota.go）。用真实汇率校验能把这种表达式拦在保存阶段。
+func SmokeTestExprWithRate(exprStr string, fx float64) error {
+	return smokeTestExpr(exprStr, fx)
+}
+
+func smokeTestExpr(exprStr string, fx float64) error {
+	// 引用 fx 的表达式必须按真实汇率跑：fx=0 会算出 0（等于没验），
+	// fx=1 会漏掉「真实汇率下为负」的表达式。没引用 fx 时取值无关紧要，用 1。
+	smokeFX := fx
+	if smokeFX <= 0 {
+		smokeFX = 1
+	}
 	vectors := []billingexpr.TokenParams{
-		{P: 0, C: 0, Len: 0, FX: 1},
-		{P: 1000, C: 1000, Len: 1000, FX: 1},
-		{P: 100000, C: 100000, Len: 100000, FX: 1},
-		{P: 1000000, C: 1000000, Len: 1000000, FX: 1},
+		{P: 0, C: 0, Len: 0, FX: smokeFX},
+		{P: 1000, C: 1000, Len: 1000, FX: smokeFX},
+		{P: 100000, C: 100000, Len: 100000, FX: smokeFX},
+		{P: 1000000, C: 1000000, Len: 1000000, FX: smokeFX},
 	}
 	requests := []billingexpr.RequestInput{
 		{},
@@ -170,6 +207,15 @@ func smokeTestExpr(exprStr string) error {
 // 只校验带 v2: 前缀的表达式：存量 v1（美元口径）的配置继续放行，避免一次升级把
 // 老配置全拦住；按模型名字排序遍历，保证报错信息稳定（map 迭代顺序是随机的）。
 func ValidateBillingExprJSON(jsonStr string) error {
+	return ValidateBillingExprJSONWithRates(jsonStr, nil)
+}
+
+// ValidateBillingExprJSONWithRates 用**给定的汇率表**校验表达式（rates 为 nil 时用当前内存值）。
+//
+// 批量保存必须传 nil 以外的值：那一刻库里/内存里的汇率还是旧的，只有把"这次要写的
+// 汇率"一起拿来校验，才能保证落库后的状态是自洽的（否则会出现"表达式引用了 fx，
+// 但同一次保存把汇率删了"这种组合）。
+func ValidateBillingExprJSONWithRates(jsonStr string, rates map[string]float64) error {
 	if strings.TrimSpace(jsonStr) == "" {
 		return nil
 	}
@@ -177,6 +223,9 @@ func ValidateBillingExprJSON(jsonStr string) error {
 	if err := common.UnmarshalJsonStr(jsonStr, &exprs); err != nil {
 		// 结构本身有问题交给既有的反序列化路径报错，这里只负责表达式语义。
 		return nil
+	}
+	if rates == nil {
+		rates = GetModelSourceRateCopy()
 	}
 	models := make([]string, 0, len(exprs))
 	for model := range exprs {
@@ -188,15 +237,16 @@ func ValidateBillingExprJSON(jsonStr string) error {
 		if !strings.HasPrefix(expr, "v2:") {
 			continue
 		}
-		if err := SmokeTestExpr(expr); err != nil {
-			return fmt.Errorf("模型 %s 的计费表达式无法编译：%w", model, err)
+		rate := rates[model]
+		// 表达式引用了 fx（本模型的源货币汇率）却拿不到汇率时，用 1 跑冒烟没有意义，
+		// 而且存进去会在每次请求预扣费时失败（fail closed）——保存阶段就拒绝。
+		if billingexpr.UsedVars(expr)["fx"] && !(rate > 0) {
+			return fmt.Errorf("模型 %s 的计费表达式引用了 fx，但该模型没有设置「源货币汇率」；请先填汇率再保存", model)
 		}
-		// 表达式引用了 fx（本模型的源货币汇率），但该模型没配汇率 —— 存进去会在
-		// 每次请求预扣费时失败（fail closed），不如保存时就拒绝，并说清是哪个模型。
-		if billingexpr.UsedVars(expr)["fx"] {
-			if _, ok := GetModelSourceRate(model); !ok {
-				return fmt.Errorf("模型 %s 的计费表达式引用了 fx，但该模型没有设置「源货币汇率」；请先填汇率再保存", model)
-			}
+		// 用真实汇率跑冒烟：引用 fx 的表达式在 fx=1 下恒正、到真实汇率可能变负，
+		// 而负额度在结算时会变成「给用户加额度」。
+		if err := SmokeTestExprWithRate(expr, rate); err != nil {
+			return fmt.Errorf("模型 %s 的计费表达式无法编译或算出了非法金额：%w", model, err)
 		}
 	}
 	return nil

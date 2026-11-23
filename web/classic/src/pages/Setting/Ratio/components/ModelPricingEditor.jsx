@@ -156,6 +156,24 @@ export default function ModelPricingEditor({
   // 分组折扣 / 分组倍率由分组管理配置，在这份人民币价上继续乘。
   // 汇率是每个模型自己的（ModelSourceRate），必须在 hook 解构之后才能读。
   const modelSourceRate = Number(selectedModel?.sourceRate);
+  // 汇率输入是「草稿 + 失焦提交」：确认是有效正数才一次性换算价格与系数。
+  const [rateDraft, setRateDraft] = useState('');
+  useEffect(() => {
+    setRateDraft(selectedModel?.sourceRate ?? '');
+  }, [selectedModel?.name, selectedModel?.sourceRate]);
+  const commitRateDraft = () => {
+    if (!selectedModel) return;
+    const stored = selectedModel.sourceRate ?? '';
+    const next = String(rateDraft).trim();
+    const num = Number(next);
+    if (next === stored) return;
+    if (!Number.isFinite(num) || num <= 0) {
+      // 非法（空 / 0 / 非数字）：回到已保存的值，不换算。
+      setRateDraft(stored);
+      return;
+    }
+    handleSourceRateChange(next);
+  };
   // **默认全部按人民币显示**，谁要用美元入录谁自己打开（按模型记住）。
   // 不做「有汇率就默认美元」——那会让所有配过汇率的模型一进来就是美元，
   // 运营会以为全站被切成了美元计价。
@@ -612,14 +630,18 @@ export default function ModelPricingEditor({
                     <Input
                       size='small'
                       style={{ width: 140 }}
-                      value={selectedModel.sourceRate}
+                      value={rateDraft}
                       placeholder='6.8'
                       suffix={<span className='text-xs'>¥/$</span>}
                       onChange={(v) => {
+                        // 只改草稿：逐键换算会拿"上一次输入"当分母，
+                        // 清空再填 7 不会缩放、中间经过 0 会把价格算成空。
                         if (NUMERIC_INPUT_REGEX.test(v)) {
-                          handleSourceRateChange(v);
+                          setRateDraft(v);
                         }
                       }}
+                      onBlur={commitRateDraft}
+                      onEnterPress={commitRateDraft}
                     />
                     <span className='text-xs text-gray-500'>
                       {t(

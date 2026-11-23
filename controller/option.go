@@ -125,6 +125,102 @@ type OptionUpdateRequest struct {
 	Value any    `json:"value"`
 }
 
+// pricingBatchKeys 批量保存允许的 key：只开放计费编辑器用到的那一组，
+// 避免这个接口变成「任意 option 批量写入」的后门（其它 key 有各自的校验逻辑）。
+var pricingBatchKeys = map[string]bool{
+	"ModelPrice":                   true,
+	"ModelRatio":                   true,
+	"CompletionRatio":              true,
+	"CacheRatio":                   true,
+	"CreateCacheRatio":             true,
+	"ImageRatio":                   true,
+	"AudioRatio":                   true,
+	"AudioCompletionRatio":         true,
+	"billing_setting.billing_mode": true,
+	"billing_setting.billing_expr": true,
+	"ModelSourceRate":              true,
+	"VideoPricingConfig":           true,
+}
+
+type optionBatchRequest struct {
+	Options map[string]string `json:"options"`
+}
+
+// UpdatePricingOptions 一次性保存计费编辑器涉及的全部配置。
+//
+// 为什么需要这个入口：这些值之间有依赖（表达式引用 fx 必须有汇率；模式切到
+// tiered_expr 必须有表达式）。前端逐个 PUT 时任何一步失败都会留下半套配置，
+// 而「模式 = 表达式计费但没有表达式」会让该模型之后所有请求直接报错。
+// 这里做两件事：① 以「这次保存之后的最终状态」校验；② 单事务写库。
+func UpdatePricingOptions(c *gin.Context) {
+	var req optionBatchRequest
+	if err := common.DecodeJson(c.Request.Body, &req); err != nil || len(req.Options) == 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": "无效的参数"})
+		return
+	}
+	for key := range req.Options {
+		if !pricingBatchKeys[key] {
+			c.JSON(http.StatusBadRequest, gin.H{
+				"success": false,
+				"message": "该接口不支持批量写入：" + key,
+			})
+			return
+		}
+	}
+
+	// ① 最终状态：这次要写的汇率（没写就用当前值）
+	finalRates := billing_setting.GetModelSourceRateCopy()
+	if raw, ok := req.Options["ModelSourceRate"]; ok {
+		parsed, err := billing_setting.ParseModelSourceRateJSON(raw)
+		if err != nil {
+			c.JSON(http.StatusOK, gin.H{"success": false, "message": "汇率配置不是合法的 JSON：" + err.Error()})
+			return
+		}
+		finalRates = parsed
+	}
+	// ② 最终状态：这次要写的表达式（没写就用当前值）。
+	//    两个方向都要校验：改了表达式要能配上汇率；只删汇率也要发现「还有人引用了它」。
+	exprJSON, hasExpr := req.Options["billing_setting.billing_expr"]
+	validateExpr := hasExpr
+	if !hasExpr {
+		exprBytes, err := common.Marshal(billing_setting.GetBillingExprCopy())
+		if err == nil {
+			exprJSON = string(exprBytes)
+			validateExpr = true
+		}
+	}
+	if validateExpr {
+		if err := billing_setting.ValidateBillingExprJSONWithRates(exprJSON, finalRates); err != nil {
+			c.JSON(http.StatusOK, gin.H{"success": false, "message": err.Error()})
+			return
+		}
+		if hasExpr {
+			if err := checkExprVsTimePrice(exprJSON); err != nil {
+				c.JSON(http.StatusOK, gin.H{"success": false, "message": err.Error()})
+				return
+			}
+		}
+	}
+	if mode, ok := req.Options["billing_setting.billing_mode"]; ok {
+		if err := checkBillingModeVsTimePrice(mode); err != nil {
+			c.JSON(http.StatusOK, gin.H{"success": false, "message": err.Error()})
+			return
+		}
+	}
+
+	// ③ 单事务写库
+	if err := model.UpdateOptions(req.Options); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "保存失败：" + err.Error()})
+		return
+	}
+	// ④ 汇率/表达式/价格都参与定价展示，必须立刻失效缓存，否则最多 1 分钟内
+	//    「扣费按新值、模型广场按旧值」。
+	model.InvalidatePricingCache()
+	ratio_setting.InvalidateExposedDataCache()
+
+	c.JSON(http.StatusOK, gin.H{"success": true, "message": ""})
+}
+
 func UpdateOption(c *gin.Context) {
 	var option OptionUpdateRequest
 	err := common.DecodeJson(c.Request.Body, &option)

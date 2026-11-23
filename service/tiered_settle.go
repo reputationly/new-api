@@ -137,6 +137,12 @@ func TryTieredSettle(relayInfo *relaycommon.RelayInfo, params billingexpr.TokenP
 			common.SysError(fmt.Sprintf(
 				"分段表达式 v1 快照按预扣额结账（model=%s, expr_hash=%s, 预扣=%d）：%v",
 				snap.ModelName, snap.ExprHash, relayInfo.FinalPreConsumedQuota, err))
+		} else {
+			// 负金额/越界等非法结果：按预扣额结账（不能把负差额退成额度），
+			// 但必须留一条可检索的告警，运营才知道哪个模型需要改表达式。
+			common.SysError(fmt.Sprintf(
+				"分段表达式结算失败，按预扣额结账（model=%s, expr_hash=%s, 预扣=%d）：%v",
+				snap.ModelName, snap.ExprHash, relayInfo.FinalPreConsumedQuota, err))
 		}
 		quota = relayInfo.FinalPreConsumedQuota
 		if quota <= 0 {

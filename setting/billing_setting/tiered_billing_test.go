@@ -83,3 +83,26 @@ func TestValidateBillingExprJSON_NoFXNoRateOK(t *testing.T) {
 	require.NoError(t, UpdateModelSourceRateByJSONString("{}"))
 	require.NoError(t, ValidateBillingExprJSON(`{"m":"v2:tier(\"base\", p * 1.36)"}`))
 }
+
+// 用**真实汇率**校验：`p * (2 - fx)` 在 fx=1 下恒正，到 6.8 就是负数，
+// 负额度在结算时会走 IncreaseUserQuota（凭空加额度），必须在保存阶段拦住。
+func TestValidateBillingExprJSON_NegativeAtRealRate(t *testing.T) {
+	t.Cleanup(func() { _ = UpdateModelSourceRateByJSONString("") })
+	require.NoError(t, UpdateModelSourceRateByJSONString(`{"neg":6.8}`))
+
+	err := ValidateBillingExprJSON(`{"neg":"v2:tier(\"base\", p * (2 - fx))"}`)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "非法金额")
+}
+
+// 批量保存用「这次要写的汇率」校验，而不是内存里的旧值：
+// 同一个请求里把汇率删掉、表达式却还引用 fx，必须报错。
+func TestValidateBillingExprJSONWithRates_FinalState(t *testing.T) {
+	exprJSON := `{"m":"v2:tier(\"base\", p * 1.5 * fx)"}`
+
+	err := ValidateBillingExprJSONWithRates(exprJSON, map[string]float64{})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "没有设置「源货币汇率」")
+
+	require.NoError(t, ValidateBillingExprJSONWithRates(exprJSON, map[string]float64{"m": 6.8}))
+}
