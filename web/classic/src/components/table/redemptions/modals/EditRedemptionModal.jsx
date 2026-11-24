@@ -59,6 +59,20 @@ import {
 
 const { Text, Title } = Typography;
 
+// buildRedemptionInitValues 表单初值。**必须**含 points_expire_days：
+// 编辑走整对象 PUT，表单没带这个字段时后端把它当 0，已设的有效期会被静默改成
+// 「永不过期」——二期验收要求对这条有覆盖。
+export const buildRedemptionInitValues = (pointsEnabled) => ({
+  name: '',
+  reward_type: pointsEnabled ? 'points' : 'quota',
+  quota: 100000,
+  amount: Number(quotaToDisplayAmount(100000).toFixed(6)),
+  points: 500,
+  count: 1,
+  expired_time: null,
+  points_expire_days: 0,
+});
+
 const EditRedemptionModal = (props) => {
   const { t } = useTranslation();
   const isEdit = props.editingRedemption.id !== undefined;
@@ -74,15 +88,7 @@ const EditRedemptionModal = (props) => {
   // 未启用积分时必须退回 quota——那种情况下「奖励类型」选择器根本不渲染
   // （下方 pointsEnabled 判断），默认成 points 会把人卡在积分输入框上，
   // 没有任何入口切回额度。
-  const getInitValues = () => ({
-    name: '',
-    reward_type: pointsEnabled ? 'points' : 'quota',
-    quota: 100000,
-    amount: Number(quotaToDisplayAmount(100000).toFixed(6)),
-    points: 500,
-    count: 1,
-    expired_time: null,
-  });
+  const getInitValues = () => buildRedemptionInitValues(pointsEnabled);
 
   const handleCancel = () => {
     props.handleClose();
@@ -287,9 +293,11 @@ const EditRedemptionModal = (props) => {
                     <Col span={24}>
                       <Form.DatePicker
                         field='expired_time'
-                        label={t('过期时间')}
+                        label={t('兑换码有效期')}
                         type='dateTime'
-                        placeholder={t('选择过期时间（可选，留空为永久）')}
+                        placeholder={t(
+                          '这张码什么时候不能再兑（可选，留空为永久）',
+                        )}
                         style={{ width: '100%' }}
                         showClear
                       />
@@ -344,7 +352,7 @@ const EditRedemptionModal = (props) => {
                         />
                       </Col>
                     )}
-                    {values.reward_type === 'points' ? (
+                    {values.reward_type === 'points' && (
                       <Col span={24}>
                         <Form.InputNumber
                           field='points'
@@ -387,7 +395,25 @@ const EditRedemptionModal = (props) => {
                           showClear
                         />
                       </Col>
-                    ) : (
+                    )}
+                    {values.reward_type === 'points' && (
+                      <Col span={24}>
+                        <Form.InputNumber
+                          field='points_expire_days'
+                          label={t('兑入积分有效期（天）')}
+                          placeholder={t('0 = 永不过期')}
+                          min={0}
+                          max={3650}
+                          precision={0}
+                          step={1}
+                          style={{ width: '100%' }}
+                          extraText={t(
+                            '从兑换那一刻起算：兑进来的这笔积分多少天后作废。与上面的「兑换码有效期」是两回事——那个管这张码什么时候不能再兑。0 = 永不过期。',
+                          )}
+                        />
+                      </Col>
+                    )}
+                    {values.reward_type !== 'points' && (
                       <Col span={24}>
                         <Form.InputNumber
                           field='amount'

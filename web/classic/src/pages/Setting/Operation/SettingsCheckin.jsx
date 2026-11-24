@@ -39,6 +39,8 @@ export default function SettingsCheckin(props) {
     'checkin_setting.reward_type': 'quota',
     'checkin_setting.min_points': 0,
     'checkin_setting.max_points': 0,
+    // 签到积分的有效期：获得所在周之后第 N 周的周日 23:59（北京时间）过期。0 = 永不过期。
+    'checkin_setting.points_expire_weeks': 0,
   });
   const refForm = useRef();
   const [inputsRow, setInputsRow] = useState(inputs);
@@ -205,6 +207,28 @@ export default function SettingsCheckin(props) {
                     !inputs['checkin_setting.enabled'] ||
                     inputs['checkin_setting.reward_type'] !== 'points'
                   }
+                />
+              </Col>
+            </Row>
+            <Row gutter={16}>
+              <Col xs={24} sm={12} md={12} lg={12} xl={12}>
+                <Form.InputNumber
+                  field={'checkin_setting.points_expire_weeks'}
+                  label={t('签到积分有效期（周）')}
+                  placeholder={t('0 = 永不过期')}
+                  onChange={handleFieldChange(
+                    'checkin_setting.points_expire_weeks',
+                  )}
+                  min={0}
+                  max={52}
+                  precision={0}
+                  disabled={
+                    !inputs['checkin_setting.enabled'] ||
+                    inputs['checkin_setting.reward_type'] !== 'points'
+                  }
+                  extraText={t(
+                    '获得所在周之后第 N 周的周日 23:59（北京时间）过期，0 = 永不过期。注意 N=1 时实际有效期是 7~13 天（周日获得 7 天、周一获得 13 天）——这是「周清」语义，配不出月级有效期。同周内多次签到合并为一笔。',
+                  )}
                 />
               </Col>
             </Row>

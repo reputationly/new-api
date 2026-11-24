@@ -104,6 +104,10 @@ export default function TopupPackagesCard({
                   {pkg.grant_points > 0 && (
                     <Tag color='green' size='small' className='ml-1'>
                       {t('赠送')} {pkg.grant_points} {t('积分')}
+                      {/* 设了有效期就必须展示：发一张有期限的券却不说明，
+                          用户会在到期那天发现积分凭空少了 */}
+                      {Number(pkg.grant_points_expire_days) > 0 &&
+                        `，${t('有效期')} ${Number(pkg.grant_points_expire_days)} ${t('天')}`}
                     </Tag>
                   )}
                 </div>

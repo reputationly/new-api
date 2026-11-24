@@ -32,11 +32,14 @@ const { Text } = Typography;
  * 只送积分之后让利可精确计算且封顶在电费：积分只能用于自建模型（积分白名单）。
  */
 
-const emptyForm = {
+export const emptyForm = {
   title: '',
   subtitle: '',
   price_amount: 100,
   grant_points: 0,
+  // 赠品积分有效期（天），0 = 永不过期。必须出现在初值里：编辑是整对象 PUT，
+  // 表单没带这个字段时后端会当成 0，把已设的有效期静默改成「永不过期」。
+  grant_points_expire_days: 0,
   max_purchase_per_user: 0,
   sort_order: 0,
   enabled: true,
@@ -157,6 +160,17 @@ export default function TopupPackagePage() {
         width: 120,
         render: (v) =>
           v > 0 ? <Tag color='green'>{v}</Tag> : <Text type='tertiary'>—</Text>,
+      },
+      {
+        title: t('赠品有效期'),
+        dataIndex: 'grant_points_expire_days',
+        width: 120,
+        render: (v) =>
+          Number(v) > 0 ? (
+            <Tag color='blue'>{Number(v)} 天</Tag>
+          ) : (
+            <Text type='tertiary'>{t('永不过期')}</Text>
+          ),
       },
       {
         title: t('限购'),
@@ -306,6 +320,22 @@ export default function TopupPackagePage() {
             value={formValues.grant_points}
             onChange={(v) => setField('grant_points', v)}
             extraText={t('额外赠送，只能用于积分白名单里的模型')}
+            style={{ width: '100%' }}
+          />
+          <Form.InputNumber
+            field='grant_points_expire_days'
+            label={t('赠送积分有效期（天）')}
+            min={0}
+            max={3650}
+            precision={0}
+            step={1}
+            value={formValues.grant_points_expire_days}
+            onChange={(v) =>
+              setField('grant_points_expire_days', Math.floor(Number(v) || 0))
+            }
+            extraText={t(
+              '从充值到账那一刻起算，0 = 永不过期。设了有效期后，购买卡片会展示这条信息——发了有期限的券却不告诉用户是不行的。',
+            )}
             style={{ width: '100%' }}
           />
           <Form.InputNumber

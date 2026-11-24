@@ -56,6 +56,12 @@ export default function ChannelPointsRewards({ options, refresh, disabled }) {
 
   // 已配过的邀请人不再出现在搜索结果里：后端 CheckChannelPointsRewards 会拒绝重复
   // 的 inviter_id，与其让人选完了才在保存时报错，不如根本选不到。
+  // 新建规则时把「注册礼有效期」预填进去：渠道奖励通常就该跟注册礼同一口径。
+  // 这只是表单初值——保存下去的是明确天数，0 依然表示永不过期，不会「继承」。
+  const defaultExpireDays = Number(
+    options?.['points_setting.new_user_expire_days'] ?? 0,
+  );
+
   const configuredIds = useMemo(
     () => new Set(rules.map((r) => r.inviter_id)),
     [rules],
@@ -154,6 +160,21 @@ export default function ChannelPointsRewards({ options, refresh, disabled }) {
             // 否则会被当成「没填」而去补一个数
             <Tag color='grey' shape='circle'>
               {t('不赠送')}
+            </Tag>
+          ),
+      },
+      {
+        title: t('有效期（天）'),
+        dataIndex: 'expire_days',
+        width: 120,
+        render: (v) =>
+          Number(v) > 0 ? (
+            <Tag color='blue' shape='circle'>
+              {Number(v)}
+            </Tag>
+          ) : (
+            <Tag color='grey' shape='circle'>
+              {t('永不过期')}
             </Tag>
           ),
       },
@@ -341,6 +362,26 @@ export default function ChannelPointsRewards({ options, refresh, disabled }) {
             }
             style={{ width: '100%' }}
             extraText={t('0 = 该渠道不赠送积分（不会回落到默认值）')}
+          />
+          <Form.InputNumber
+            field='expire_days'
+            label={t('有效期（天）')}
+            placeholder={t('0 = 永不过期')}
+            min={0}
+            max={3650}
+            precision={0}
+            step={1}
+            initValue={defaultExpireDays}
+            onChange={(v) =>
+              setDraft((prev) => ({
+                ...prev,
+                expire_days: Math.floor(Number(v) || 0),
+              }))
+            }
+            style={{ width: '100%' }}
+            extraText={t(
+              '只影响这条渠道的注册赠分；「新用户注册赠送积分」折进的注册礼仍用积分设置里的有效期。0 = 永不过期。',
+            )}
           />
           <Form.Input
             field='remark'
