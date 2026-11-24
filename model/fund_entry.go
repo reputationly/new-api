@@ -80,6 +80,13 @@ const (
 	// 自洽：ledger(期初+入账-冲销) - consume(他的消费) == 0 == 他在 balance 里的贡献。
 	// 比直接删流水好：审计记录完整保留，还能看出这个账户注销时带走了多少余额。
 	FundKindClosed = "closed"
+	// FundKindExpire 积分批次到期作废。QuotaDelta 为负。
+	//
+	// 它是「赠送积分」自洽校验里减号的那一项：期初 + 发放 − 消耗 − 过期 == 当前
+	// points_balance。不落这条流水，过期归零会让校验从此每天都报不平，而那个告警
+	// 本来是用来发现「有代码绕过流水表」的。
+	// 报表上单列（决策 9）：消耗是买了服务，过期是白发了，两者性质不同。
+	FundKindExpire = "expire"
 )
 
 // Source —— 入账渠道，用于报表下钻。
@@ -108,6 +115,8 @@ const (
 	FundRefCheckin           = "checkin"            // userId:date
 	FundRefUser              = "user"               // userId（注册礼、实名奖励等一次性发放）
 	FundRefAdminOp           = "admin_op"           // 管理员操作，单号在写入时生成
+	// FundRefPointsLot 积分批次到期作废，RefId 为批次 id。作废重跑时靠它幂等。
+	FundRefPointsLot = "points_lot"
 )
 
 var ErrFundEntryRefEmpty = errors.New("fund entry ref_type/ref_id 不能为空")

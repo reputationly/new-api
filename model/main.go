@@ -308,6 +308,7 @@ func migrateDB() error {
 		&ChannelModelCost{},
 		&TopupPackage{},
 		&ComputePointLot{},
+		&PointsLot{},
 		&SubscriptionPlanEntitlement{},
 		&UserSubscriptionEntitlement{},
 		&FundEntry{},

@@ -56,6 +56,7 @@ func TestMain(m *testing.M) {
 		&BankTransferOrder{},
 		&BankTransferReceipt{},
 		&ComputePointLot{},
+		&PointsLot{},
 		&SubscriptionPlanEntitlement{},
 		&UserSubscriptionEntitlement{},
 		&SubscriptionPreConsumeRecord{},
