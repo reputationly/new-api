@@ -50,19 +50,24 @@ func openPointsExternalDB(t *testing.T, dialect, dsn string) *gorm.DB {
 
 	prevDB, prevLogDB := DB, LOG_DB
 	prevSq, prevMy, prevPg := common.UsingSQLite, common.UsingMySQL, common.UsingPostgreSQL
-	prevRedis := common.RedisEnabled
+	// ⚠️ 本函数**全程不写** common.RedisEnabled（见下方 setup 处注释）：热路径的缓存
+	// 更新是 detached 的 `gopool.Go`，第一件事就是读这个全局，清理阶段写它会构成数据
+	// 竞争——一审 S8 的 -race 失败即是此因。TestMain 已把它设为 false，够用。
 	t.Cleanup(func() {
+		// 等后台缓存协程彻底跑完再改回其它全局，避免同类竞争。
+		time.Sleep(50 * time.Millisecond)
 		DB, LOG_DB = prevDB, prevLogDB
 		common.UsingSQLite, common.UsingMySQL, common.UsingPostgreSQL = prevSq, prevMy, prevPg
-		common.RedisEnabled = prevRedis
 		initCol()
 	})
 
 	DB, LOG_DB = db, db
+	// 完全不碰 common.RedisEnabled：本包 TestMain 已设为 false，而热路径的缓存协程
+	// 会读它。任何一次写（哪怕在 setup、哪怕前一个协程已经结束）都与那次读没有
+	// happens-before 关系，-race 会如实报出来。
 	common.UsingSQLite = false
 	common.UsingMySQL = dialect == "mysql"
 	common.UsingPostgreSQL = dialect == "postgres"
-	common.RedisEnabled = false
 	// group / key 这类保留字列名要按方言重算
 	initCol()
 
