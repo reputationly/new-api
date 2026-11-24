@@ -112,6 +112,67 @@ beforeEach(() => {
 });
 
 describe('编辑器「读 → 不改 → 保存」往返', () => {
+  it('修改一个模型时保留其它按次模型未显示的倍率，仍允许显式删除', async () => {
+    const tts = 'gpt-4o-mini-tts';
+    const gizmo = 'gpt-4-gizmo-*';
+    const options = {
+      ...OPTIONS,
+      ModelPrice: JSON.stringify({ 'img-x': 0.2, [tts]: 0.3, [gizmo]: 0.1 }),
+      AudioRatio: JSON.stringify({ [tts]: 25 }),
+      AudioCompletionRatio: JSON.stringify({ [tts]: 1 }),
+      CompletionRatio: JSON.stringify({ [gizmo]: 2 }),
+    };
+    const { result } = renderHook(() =>
+      useModelPricingEditorState({
+        options,
+        refresh,
+        t,
+        candidateModelNames: CANDIDATES,
+      }),
+    );
+    await act(async () => result.current.setSelectedModelName('gpt-x'));
+    await act(async () =>
+      result.current.handleNumericFieldChange('inputPrice', '3'),
+    );
+    await act(async () => result.current.deleteModel('img-x'));
+    await act(async () => result.current.handleSubmit());
+
+    const payload = putPayloads();
+    expect(payload.ModelRatio['gpt-x']).toBe(3);
+    expect(payload.ModelPrice).not.toHaveProperty('img-x');
+    expect({
+      AudioRatio: payload.AudioRatio,
+      AudioCompletionRatio: payload.AudioCompletionRatio,
+      CompletionRatio: payload.CompletionRatio,
+    }).toMatchObject({
+      AudioRatio: { [tts]: 25 },
+      AudioCompletionRatio: { [tts]: 1 },
+      CompletionRatio: { [gizmo]: 2 },
+    });
+  });
+
+  it('只改按次价时保留该模型的隐藏倍率', async () => {
+    const model = 'tts-model';
+    const options = {
+      ...OPTIONS,
+      ModelPrice: JSON.stringify({ [model]: 0.3 }),
+      AudioRatio: JSON.stringify({ [model]: 25 }),
+      AudioCompletionRatio: JSON.stringify({ [model]: 1 }),
+    };
+    const { result } = renderHook(() =>
+      useModelPricingEditorState({ options, refresh, t }),
+    );
+    await act(async () => result.current.setSelectedModelName(model));
+    await act(async () =>
+      result.current.handleNumericFieldChange('fixedPrice', '0.4'),
+    );
+    await act(async () => result.current.handleSubmit());
+
+    const payload = putPayloads();
+    expect(payload.ModelPrice).toEqual({ [model]: 0.4 });
+    expect(payload.AudioRatio).toEqual({ [model]: 25 });
+    expect(payload.AudioCompletionRatio).toEqual({ [model]: 1 });
+  });
   it('不修改含 map 查值和分项乘数的原始公式', async () => {
     const expr =
       'v2:{normal: 4}["normal"] + tier("base", p * 2) * (header("mode") == "fast" ? 2 : 1)';

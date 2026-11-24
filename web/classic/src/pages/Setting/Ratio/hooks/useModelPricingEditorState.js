@@ -16,7 +16,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   API,
   showError,
@@ -1061,6 +1061,7 @@ export function useModelPricingEditorState({
   filterMode = 'all',
 }) {
   const [models, setModels] = useState([]);
+  const initialModels = useRef(new Map());
   const [initialVisibleModelNames, setInitialVisibleModelNames] = useState([]);
   const [selectedModelName, setSelectedModelName] = useState('');
   const [selectedModelNames, setSelectedModelNames] = useState([]);
@@ -1118,6 +1119,9 @@ export function useModelPricingEditorState({
       .map((name) => buildModelState(name, sourceMaps))
       .sort((a, b) => a.name.localeCompare(b.name));
 
+    initialModels.current = new Map(
+      nextModels.map((model) => [model.name, model]),
+    );
     setModels(nextModels);
     setInitialVisibleModelNames(
       filterMode === 'unset'
@@ -1639,6 +1643,10 @@ export function useModelPricingEditorState({
         AudioRatio: {},
         AudioCompletionRatio: {},
       };
+      const pricingKeys = Object.keys(output);
+      const originalPricing = Object.fromEntries(
+        pricingKeys.map((key) => [key, parseOptionJSON(options[key])]),
+      );
 
       // 每个模型自己的源货币汇率（仅供下次改汇率时算比例与展示，不参与计费）。
       const sourceRateOutput = {};
@@ -1691,16 +1699,26 @@ export function useModelPricingEditorState({
             toV2BillingExpr(finalBillingExpr);
         }
 
-        // Always serialize ratio/price values for all models (including
-        // tiered_expr) so they serve as fallback during multi-instance sync
-        // delay.  ModelPriceHelper checks billing_mode first, so these values
-        // are only used when billing_setting hasn't propagated yet.
+        // 未编辑的模型原样回写；按次模式没切换时，其隐藏倍率也不应被删。
+        // 分段计费仍保留基础价，供计费模式尚未同步到其它实例时使用。
+        const original = initialModels.current.get(model.name);
         const writeSerialized = (source) => {
-          Object.entries(serializeModel(source, t)).forEach(([key, value]) => {
-            if (value !== null) {
-              output[key][model.name] = value;
+          const serialized =
+            original === model ? null : serializeModel(source, t);
+          for (const key of pricingKeys) {
+            if (
+              !serialized ||
+              (key !== 'ModelPrice' &&
+                original?.billingMode === 'per-request' &&
+                model.billingMode === 'per-request')
+            ) {
+              if (Object.hasOwn(originalPricing[key], model.name)) {
+                output[key][model.name] = originalPricing[key][model.name];
+              }
+            } else if (serialized[key] !== null) {
+              output[key][model.name] = serialized[key];
             }
-          });
+          }
         };
         if (
           hasValue(model.sourceRate) &&

@@ -741,13 +741,11 @@ export const useLogsData = () => {
           value: entInfo.text,
         });
       }
-      if (isAdminUser && logs[i].type !== 6 && logs[i].type !== 1) {
+      if (isAdminUser && ![1, 3, 6].includes(logs[i].type)) {
         expandDataLocal.push({
           key: t('请求转换'),
           value: requestConversionDisplayValue(other?.request_conversion),
         });
-      }
-      if (isAdminUser && logs[i].type !== 6 && logs[i].type !== 1) {
         let localCountMode = '';
         if (other?.admin_info?.local_count_tokens) {
           localCountMode = t('本地计费');
@@ -838,27 +836,50 @@ export const useLogsData = () => {
         if (Array.isArray(adminInfo.changes)) {
           const renderValue = (value, exists) =>
             exists ? JSON.stringify(value, null, 2) : t('未设置');
+          const cellStyle = {
+            padding: '4px 12px',
+            verticalAlign: 'top',
+            overflowWrap: 'anywhere',
+          };
           expandDataLocal.push({
             key: t('配置变更'),
             value: (
               <div className='overflow-auto'>
-                <table className='text-left align-top'>
+                <table
+                  className='text-left'
+                  style={{
+                    width: '100%',
+                    minWidth: '36rem',
+                    tableLayout: 'fixed',
+                  }}
+                >
+                  <colgroup>
+                    <col style={{ width: '38%' }} />
+                    <col />
+                    <col />
+                  </colgroup>
                   <thead>
                     <tr>
-                      <th className='pr-4'>{t('配置项')}</th>
-                      <th className='pr-4'>{t('修改前')}</th>
-                      <th>{t('修改后')}</th>
+                      <th style={cellStyle}>{t('配置项')}</th>
+                      <th style={cellStyle}>{t('修改前')}</th>
+                      <th style={cellStyle}>{t('修改后')}</th>
                     </tr>
                   </thead>
                   <tbody>
                     {adminInfo.changes.map((change) => (
                       <tr key={JSON.stringify([change.key, change.path])}>
-                        <td className='pr-4 align-top'>{[change.key, ...(change.path || [])].join(' / ')}</td>
-                        <td className='pr-4 align-top'>
-                          <pre className='whitespace-pre-wrap break-all'>{renderValue(change.before, change.before_exists)}</pre>
+                        <td style={cellStyle}>
+                          {[change.key, ...(change.path || [])].join(' / ')}
                         </td>
-                        <td className='align-top'>
-                          <pre className='whitespace-pre-wrap break-all'>{renderValue(change.after, change.after_exists)}</pre>
+                        <td style={cellStyle}>
+                          <pre className='m-0 whitespace-pre-wrap'>
+                            {renderValue(change.before, change.before_exists)}
+                          </pre>
+                        </td>
+                        <td style={cellStyle}>
+                          <pre className='m-0 whitespace-pre-wrap'>
+                            {renderValue(change.after, change.after_exists)}
+                          </pre>
                         </td>
                       </tr>
                     ))}
