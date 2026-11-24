@@ -1151,10 +1151,17 @@ func ManageUser(c *gin.Context) {
 				common.ApiErrorMsg(c, "积分余额不能为负")
 				return
 			}
-			expiresAt, expErr := resolvePointsExpiresAt(req)
-			if expErr != nil {
-				common.ApiErrorMsg(c, expErr.Error())
-				return
+			// 只有调高需要有效期（决策 7 说的是「发放」）；调低只是收回积分，
+			// 前端在调低时也不显示该选项，所以这里不强制。
+			expiresAt := int64(0)
+			expiryProvided := strings.TrimSpace(req.PointsExpireMode) != ""
+			if expiryProvided {
+				resolved, expErr := resolvePointsExpiresAt(req)
+				if expErr != nil {
+					common.ApiErrorMsg(c, expErr.Error())
+					return
+				}
+				expiresAt = resolved
 			}
 			refId := model.NewAdminOpRefId()
 			oldPoints := user.PointsBalance
@@ -1169,7 +1176,7 @@ func ManageUser(c *gin.Context) {
 					RefType: model.FundRefAdminOp, RefId: refId,
 					OperatorId: adminId, Remark: "add_points/override",
 				},
-			})
+			}, expiryProvided)
 			if err != nil {
 				common.ApiError(c, err)
 				return

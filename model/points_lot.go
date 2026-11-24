@@ -560,7 +560,7 @@ func GrantPoints(g PointsGrant) (lotId int, err error) {
 //
 // grant 提供调高时的来源 / 有效期 / 幂等键与流水模板；返回的 diff 是实际差额，
 // 供调用方写日志（记请求值会和流水、和实际余额三者对不上）。
-func SetUserPointsBalance(userId int, target int64, now int64, grant PointsGrant) (diff int64, err error) {
+func SetUserPointsBalance(userId int, target int64, now int64, grant PointsGrant, expiryProvided bool) (diff int64, err error) {
 	if target < 0 {
 		return 0, errors.New("积分余额不能为负")
 	}
@@ -579,6 +579,11 @@ func SetUserPointsBalance(userId int, target int64, now int64, grant PointsGrant
 		diff = target - balance
 		switch {
 		case diff > 0:
+			// 决策 7 的适用范围是「发放」：调低只是收回积分，不需要有效期。
+			// 调高则必须显式给出——漏设会变成永久有效，而这正是要逼运营决定的事。
+			if !expiryProvided {
+				return errors.New("请选择积分有效期")
+			}
 			g := grant
 			g.UserId = userId
 			g.Quota = diff
