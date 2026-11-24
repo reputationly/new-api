@@ -34,3 +34,14 @@ func TestValidateOptionValueForBatch(t *testing.T) {
 	// 白名单外拒绝
 	require.Error(t, ValidateOptionValueForBatch("GitHubClientSecret", "x"))
 }
+
+func TestPricingOptionApplyOrder(t *testing.T) {
+	const mode, expr = "billing_setting.billing_mode", "billing_setting.billing_expr"
+	for _, keys := range [][]string{
+		{mode, expr, "ModelSourceRate", "GroupTimeRatio"},
+		{expr, mode, "ModelSourceRate", "GroupTimeRatio"},
+	} {
+		require.Equal(t, []string{expr, "ModelSourceRate", "GroupTimeRatio", mode}, pricingOptionApplyOrder(keys))
+	}
+	require.Equal(t, []string{expr, "ModelSourceRate"}, pricingOptionApplyOrder([]string{expr, "ModelSourceRate"}))
+}

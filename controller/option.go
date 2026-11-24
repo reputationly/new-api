@@ -127,7 +127,7 @@ type OptionUpdateRequest struct {
 	Value any    `json:"value"`
 }
 
-// pricingBatchKeys 批量保存允许的 key：只开放计费编辑器用到的那一组，
+// pricingBatchKeys 批量保存允许的 key：只开放相关计费配置，
 // 避免这个接口变成「任意 option 批量写入」的后门（其它 key 有各自的校验逻辑）。
 var pricingBatchKeys = map[string]bool{
 	"ModelPrice":                   true,
@@ -142,6 +142,7 @@ var pricingBatchKeys = map[string]bool{
 	"billing_setting.billing_expr": true,
 	"ModelSourceRate":              true,
 	"VideoPricingConfig":           true,
+	"GroupTimeRatio":               true,
 }
 
 type optionBatchRequest struct {
@@ -236,7 +237,7 @@ func UpdateOption(c *gin.Context) {
 		})
 		return
 	}
-	pricingOption := pricingBatchKeys[option.Key] || option.Key == "GroupTimeRatio"
+	pricingOption := pricingBatchKeys[option.Key]
 	if pricingOption && option.Value == nil {
 		option.Value = "null"
 	}

@@ -1,3 +1,5 @@
+import { EXPR_STRING_LITERAL } from '../../../../helpers/exprStringLiteral';
+
 export const SOURCE_PARAM = 'param';
 export const SOURCE_HEADER = 'header';
 export const SOURCE_TIME = 'time';
@@ -154,14 +156,13 @@ export function splitTopLevelMultiply(expr) {
   const parts = [];
   let start = 0;
   let depth = 0;
-  for (let index = 0; index < expr.length; index += 1) {
-    const char = expr[index];
-    if (char === '(') depth += 1;
-    if (char === ')') depth -= 1;
-    if (depth === 0 && expr.slice(index, index + 3) === ' * ') {
+  const tokens = new RegExp(EXPR_STRING_LITERAL.source + '|[()]| \\* ', 'g');
+  for (const { 0: token, index } of expr.matchAll(tokens)) {
+    if (token === '(') depth += 1;
+    if (token === ')') depth -= 1;
+    if (depth === 0 && token === ' * ') {
       parts.push(expr.slice(start, index).trim());
       start = index + 3;
-      index += 2;
     }
   }
   parts.push(expr.slice(start).trim());
@@ -390,10 +391,11 @@ export function tryParseRequestRuleExpr(expr) {
 function hasFullOuterParens(expr) {
   if (!expr.startsWith('(') || !expr.endsWith(')')) return false;
   let depth = 0;
-  for (let i = 0; i < expr.length; i += 1) {
-    if (expr[i] === '(') depth += 1;
-    if (expr[i] === ')') depth -= 1;
-    if (depth === 0 && i < expr.length - 1) return false;
+  const tokens = new RegExp(EXPR_STRING_LITERAL.source + '|[()]', 'g');
+  for (const { 0: token, index } of expr.matchAll(tokens)) {
+    if (token === '(') depth += 1;
+    if (token === ')') depth -= 1;
+    if (depth === 0 && index < expr.length - 1) return false;
   }
   return depth === 0;
 }

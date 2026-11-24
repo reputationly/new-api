@@ -14,6 +14,10 @@ import {
 } from '../constants/billing.constants';
 import { stripExprVersion } from './exprVersion';
 import {
+  EXPR_STRING_LITERAL,
+  decodeExprStringLiteral,
+} from './exprStringLiteral';
+import {
   splitBillingExprAndRequestRules,
   unwrapOuterParens,
 } from '../pages/Setting/Ratio/components/requestRuleExpr';
@@ -21,6 +25,9 @@ import {
 const VAR_NAMES = BILLING_PRICING_VARS.map((v) => v.key);
 const VAR_PATTERN = VAR_NAMES.join('|');
 const NUM_PATTERN = '\\d+(?:\\.\\d+)?(?:[eE][+-]?\\d+)?';
+const TIER_CALL = new RegExp(
+  '^tier\\s*\\(\\s*(' + EXPR_STRING_LITERAL.source + ')\\s*,([\\s\\S]+)\\)$',
+);
 
 // 一次扫描同时匹配两种顺序，保证同一个系数只会被处理一次。
 const COEFF_REGEX = new RegExp(
@@ -30,7 +37,7 @@ const COEFF_REGEX = new RegExp(
 
 /** 去掉字符串字面量，避免档位标签里的内容被当成变量/关键字。 */
 export const stripStringLiterals = (expr) =>
-  String(expr || '').replace(/"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'/g, '""');
+  String(expr || '').replace(new RegExp(EXPR_STRING_LITERAL.source, 'g'), '""');
 
 /** 表达式是否引用了 fx（本模型的源货币汇率）。 */
 export const exprUsesFX = (expr) => /\bfx\b/.test(stripStringLiterals(expr));
@@ -131,7 +138,7 @@ function splitTierBranches(body, conditions = []) {
   let depth = 0;
   let question = -1;
   let branches = 0;
-  const structural = /"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|[()?:]/g;
+  const structural = new RegExp(EXPR_STRING_LITERAL.source + '|[()?:]', 'g');
   for (const { 0: char, index } of body.matchAll(structural)) {
     if (char === '(') depth += 1;
     else if (char === ')') depth -= 1;
@@ -153,11 +160,11 @@ function splitTierBranches(body, conditions = []) {
       ];
     }
   }
-  const match = body
-    .trim()
-    .match(/^tier\s*\(\s*("(?:\\.|[^"\\])*")\s*,([\s\S]+)\)$/);
+  const match = body.trim().match(TIER_CALL);
   if (!match) return [{ body, conditions }];
-  return [{ label: JSON.parse(match[1]), body: match[2], conditions }];
+  return [
+    { label: decodeExprStringLiteral(match[1]), body: match[2], conditions },
+  ];
 }
 
 export function parseTiersFromExpr(exprStr, fx = 0) {

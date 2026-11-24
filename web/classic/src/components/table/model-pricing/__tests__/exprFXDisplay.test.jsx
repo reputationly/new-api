@@ -5,7 +5,9 @@ import {
   exprFXMultiplier,
   exprUsesFX,
   parseTiersFromExpr,
+  renderTieredModelPriceSimple,
 } from '../../../../helpers/render';
+import '../../../../i18n/i18n';
 import { formatDynamicPriceSummary } from '../../../../helpers/utils';
 import TieredPricingEditor from '../../../../pages/Setting/Ratio/components/TieredPricingEditor';
 import DynamicPricingBreakdown from '../modal/components/DynamicPricingBreakdown';
@@ -149,5 +151,39 @@ describe('显式零价', () => {
     expect(screen.getByText('默认')).toBeTruthy();
     expect(screen.getByText('¥2.00')).toBeTruthy();
     expect(screen.getAllByText('¥0.00')).toHaveLength(3);
+  });
+});
+
+describe('单引号档位标签', () => {
+  const t = (s) => s;
+
+  it('分档支持单引号及转义，标签内的标点不影响条件或请求规则', () => {
+    const expr =
+      String.raw`v2:(len < 1000 ? tier('it\'s "fx)"\\\u{6863}', p * 1.36) : tier("long", p * 2)) * (header("mode") == "fast" ? 2 : 1)`;
+    expect(exprUsesFX(expr)).toBe(false);
+    expect(parseTiersFromExpr(expr)).toMatchObject([
+      { label: 'it\'s "fx)"\\档', inputPrice: 1.36 },
+      { label: 'long', inputPrice: 2 },
+    ]);
+  });
+
+  it('卡片、详情和用量日志显示同一档的单价', () => {
+    localStorage.setItem('quota_display_type', 'CNY');
+    const expr = String.raw`v2:tier('it\'s base', p * 1.36)`;
+    const card = render(formatDynamicPriceSummary(expr, t));
+    expect(card.container.textContent).toContain('¥1.36');
+    expect(card.container.textContent).not.toContain('单价不可拆分');
+    card.unmount();
+
+    render(<DynamicPricingBreakdown billingExpr={expr} t={t} />);
+    expect(screen.getByText("it's base")).toBeTruthy();
+    expect(screen.getByText('¥1.36')).toBeTruthy();
+
+    const segments = renderTieredModelPriceSimple({
+      expr_b64: btoa(expr),
+      matched_tier: "it's base",
+      group_ratio: 1,
+    });
+    expect(segments.map(({ text }) => text).join(' ')).toContain('¥1.36');
   });
 });

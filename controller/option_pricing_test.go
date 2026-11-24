@@ -9,6 +9,7 @@ import (
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/setting/billing_setting"
+	"github.com/QuantumNous/new-api/setting/ratio_setting"
 	"github.com/gin-gonic/gin"
 	"github.com/glebarez/sqlite"
 	"github.com/stretchr/testify/require"
@@ -22,6 +23,7 @@ func TestPricingOptionFinalState(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, db.AutoMigrate(&model.Option{}))
 	prevDB, prevOptions := model.DB, common.OptionMap
+	prevTimeRatio := ratio_setting.GroupTimeRatio2JSONString()
 	model.DB, common.OptionMap = db, map[string]string{}
 	t.Cleanup(func() {
 		// Clear the runtime settings written by this test before restoring the DB.
@@ -30,6 +32,7 @@ func TestPricingOptionFinalState(t *testing.T) {
 			"billing_setting.billing_expr": "{}",
 			"ModelSourceRate":              "{}",
 		}, pricingStateKeys, validatePricingFinalState)
+		require.NoError(t, ratio_setting.UpdateGroupTimeRatioByJSONString(prevTimeRatio))
 		model.DB, common.OptionMap = prevDB, prevOptions
 		_ = sqlDB.Close()
 	})
@@ -67,7 +70,7 @@ func TestPricingOptionFinalState(t *testing.T) {
 	require.False(t, batch(map[string]string{rateKey: rate, exprKey: "{"}))
 	require.False(t, put(exprKey, "{"))
 	require.False(t, batch(map[string]string{rateKey: rate, "VideoPricingConfig": "{"}))
-	require.False(t, batch(map[string]string{"GroupTimeRatio": "{}"}))
+	require.False(t, batch(map[string]string{"GroupTimeRatio": "{"}))
 	badRatio := `{"gpt-image-1":"2"}`
 	for _, w := range []*httptest.ResponseRecorder{
 		request(http.MethodPost, "/batch", optionBatchRequest{Options: map[string]string{"ModelRatio": badRatio}}),
@@ -101,4 +104,14 @@ func TestPricingOptionFinalState(t *testing.T) {
 	go func() { results <- batch(map[string]string{rateKey: "{}"}) }()
 	go func() { results <- batch(map[string]string{exprKey: expr}) }()
 	require.NotEqual(t, <-results, <-results)
+
+	const timeRatioKey = "GroupTimeRatio"
+	const timeRatio = `{"windows":{"off_peak":{"start":"09:00","end":"10:00"}}}`
+	require.True(t, batch(map[string]string{timeRatioKey: timeRatio, exprKey: "{}"}))
+	var timeRow model.Option
+	require.NoError(t, db.First(&timeRow, &model.Option{Key: timeRatioKey}).Error)
+	require.Equal(t, timeRatio, timeRow.Value)
+	require.Contains(t, ratio_setting.GetGroupTimeRatioCopy().Windows, "off_peak")
+	require.True(t, put(timeRatioKey, "{}"))
+	require.Empty(t, ratio_setting.GetGroupTimeRatioCopy().Windows)
 }

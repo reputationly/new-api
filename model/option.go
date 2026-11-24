@@ -2,6 +2,7 @@ package model
 
 import (
 	"fmt"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -405,13 +406,23 @@ func UpdateOptions(options map[string]string, stateKeys []string, validate func(
 			}
 		}
 	}
-	for _, key := range keys {
+	for _, key := range pricingOptionApplyOrder(keys) {
 		if applyErr := updateOptionMap(key, values[key]); applyErr != nil {
 			common.SysLog("failed to apply option to memory: " + key + ": " + applyErr.Error())
 			return applyErr
 		}
 	}
 	return nil
+}
+
+func pricingOptionApplyOrder(keys []string) []string {
+	const mode = "billing_setting.billing_mode"
+	if i := slices.Index(keys, mode); i >= 0 {
+		// 切换计费模式前，先应用表达式、汇率等依赖。
+		copy(keys[i:], keys[i+1:])
+		keys[len(keys)-1] = mode
+	}
+	return keys
 }
 
 type OptionValidationError struct{ error }

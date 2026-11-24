@@ -62,6 +62,12 @@ describe('exprReferencesFX', () => {
 
   it('档位标签里的 fx 不阻止换算', () => {
     expect(exprReferencesFX('tier("fx", p * 10.2)')).toBe(false);
+    expect(exprReferencesFX(String.raw`tier('it\'s fx', p * 10.2)`)).toBe(
+      false,
+    );
+    expect(exprReferencesFX(String.raw`tier('it\'s fx', p * 1.5 * fx)`)).toBe(
+      true,
+    );
   });
 });
 
