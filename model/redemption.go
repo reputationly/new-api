@@ -31,7 +31,11 @@ type Redemption struct {
 	Count        int            `json:"count" gorm:"-:all"` // only for api request
 	UsedUserId   int            `json:"used_user_id"`
 	DeletedAt    gorm.DeletedAt `gorm:"index"`
-	ExpiredTime  int64          `json:"expired_time" gorm:"bigint"` // 过期时间，0 表示不过期
+	ExpiredTime  int64          `json:"expired_time" gorm:"bigint"` // 兑换码本身的过期时间，0 表示不过期
+	// PointsExpireDays 兑入积分的有效期（天），仅 reward_type=points 生效，0 = 永不过期。
+	// 与上面的 ExpiredTime 是两回事：那个管「这张码什么时候不能兑」，这个管
+	// 「兑进来的积分什么时候作废」。卖出去的码不设有效期（默认 0）。
+	PointsExpireDays int `json:"points_expire_days" gorm:"default:0"`
 }
 
 func GetAllRedemptions(startIdx int, num int) (redemptions []*Redemption, total int64, err error) {
@@ -154,34 +158,47 @@ func Redeem(key string, userId int) (quota int, rewardType string, err error) {
 		}
 		// 注意：此处刻意不做 RequireKyc/IsUserPointsEligible 检查——码是用户主动持有的，
 		// 拒兑等于没收。RequireKyc 只是发放侧（签到、邀请人赠分）的门，兑入与使用都不设门。
-		// 按奖励类型分支充值（面值同为 quota unit，同单位直接相加）
-		if redemption.RewardType == RedemptionRewardPoints {
-			err = tx.Model(&User{}).Where("id = ?", userId).Update("points_balance", gorm.Expr("points_balance + ?", redemption.Quota)).Error
-		} else {
-			err = tx.Model(&User{}).Where("id = ?", userId).Update("quota", gorm.Expr("quota + ?", redemption.Quota)).Error
-		}
-		if err != nil {
-			return err
-		}
 		// 入账流水。兑换码是赠送物（CashFen=0，不计营收）——即使是卖出去的码，收入也已在
 		// 售卖那一刻由支付流水记过，这里再记一次就是重复确认收入。
 		// 幂等键取兑换码 id：一张码只能兑一次（Status 已置 used），天然唯一。
-		account := FundAccountCash
+		redemptionRefId := strconv.Itoa(redemption.Id)
 		if redemption.RewardType == RedemptionRewardPoints {
-			account = FundAccountPoints
-		}
-		if _, err := insertFundEntryTx(tx, &FundEntry{
-			UserId:     userId,
-			Account:    account,
-			Kind:       FundKindGift,
-			QuotaDelta: int64(redemption.Quota),
-			CashFen:    0,
-			Source:     FundSourceRedemption,
-			RefType:    FundRefRedemption,
-			RefId:      strconv.Itoa(redemption.Id),
-			Remark:     redemption.Name,
-		}); err != nil {
-			return err
+			// 积分码：余额、批次、流水一起走 GrantPointsTx。裸写 points_balance 会让这笔
+			// 余额没有批次，下次 sync 直接表现为 surplus。
+			now := common.GetTimestamp()
+			if _, err := GrantPointsTx(tx, PointsGrant{
+				UserId:    userId,
+				Quota:     int64(redemption.Quota),
+				Source:    FundSourceRedemption,
+				RefId:     redemptionRefId,
+				ExpiresAt: ExpireAtDays(now, redemption.PointsExpireDays),
+				Now:       now,
+				Fund: FundEntry{
+					Kind: FundKindGift, Source: FundSourceRedemption,
+					RefType: FundRefRedemption, RefId: redemptionRefId,
+					Remark: redemption.Name,
+				},
+			}); err != nil {
+				return err
+			}
+		} else {
+			if err := tx.Model(&User{}).Where("id = ?", userId).
+				Update("quota", gorm.Expr("quota + ?", redemption.Quota)).Error; err != nil {
+				return err
+			}
+			if _, err := insertFundEntryTx(tx, &FundEntry{
+				UserId:     userId,
+				Account:    FundAccountCash,
+				Kind:       FundKindGift,
+				QuotaDelta: int64(redemption.Quota),
+				CashFen:    0,
+				Source:     FundSourceRedemption,
+				RefType:    FundRefRedemption,
+				RefId:      redemptionRefId,
+				Remark:     redemption.Name,
+			}); err != nil {
+				return err
+			}
 		}
 		redemption.RedeemedTime = common.GetTimestamp()
 		redemption.Status = common.RedemptionCodeStatusUsed

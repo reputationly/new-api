@@ -36,22 +36,26 @@ func GrantKycPoints(userId int) {
 
 	// 本人奖励（本人天然已实名，无需再判资格）
 	if ps.KycVerifiedPoints > 0 {
-		q := common.PointsToQuota(ps.KycVerifiedPoints)
-		if err := model.IncreaseUserPoints(userId, q, true); err != nil {
+		q := int64(common.PointsToQuota(ps.KycVerifiedPoints))
+		now := common.GetTimestamp()
+		// 赠送流水（CashFen=0，不计营收）。幂等键用被实名用户的 id：
+		// 一个用户的实名事件最多触发一次奖励，与 TryMarkKycPointsGranted 的占位同源。
+		// 余额、批次、流水三者同成同败（GrantPoints 内部一个事务），失败仍只记日志。
+		refId := fmt.Sprintf("kyc:%d", userId)
+		if _, err := model.GrantPoints(model.PointsGrant{
+			UserId:    userId,
+			Quota:     q,
+			Source:    model.FundSourceKyc,
+			RefId:     refId,
+			ExpiresAt: model.ExpireAtDays(now, ps.KycVerifiedExpireDays),
+			Now:       now,
+			Fund: model.FundEntry{
+				Kind: model.FundKindGift, Source: model.FundSourceKyc,
+				RefType: model.FundRefUser, RefId: refId,
+			},
+		}); err != nil {
 			common.SysLog("GrantKycPoints: grant self failed: " + err.Error())
 		} else {
-			// 赠送流水（CashFen=0，不计营收）。幂等键用被实名用户的 id：
-			// 一个用户的实名事件最多触发一次奖励，与 TryMarkKycPointsGranted 的占位同源。
-			model.RecordFundEntry(&model.FundEntry{
-				UserId:     userId,
-				Account:    model.FundAccountPoints,
-				Kind:       model.FundKindGift,
-				QuotaDelta: int64(q),
-				CashFen:    0,
-				Source:     model.FundSourceKyc,
-				RefType:    model.FundRefUser,
-				RefId:      fmt.Sprintf("kyc:%d", userId),
-			})
 			model.RecordLog(userId, model.LogTypeSystem,
 				fmt.Sprintf("实名认证赠送 %d 积分", ps.KycVerifiedPoints))
 		}
@@ -59,27 +63,30 @@ func GrantKycPoints(userId int) {
 
 	// 邀请人奖励：邀请人本人也须已实名，否则未实名老号靠拉人头薅积分
 	if user.InviterId != 0 && ps.KycInviterPoints > 0 && model.IsUserPointsEligible(user.InviterId) {
-		q := common.PointsToQuota(ps.KycInviterPoints)
-		if err := model.IncreaseUserPoints(user.InviterId, q, true); err != nil {
+		q := int64(common.PointsToQuota(ps.KycInviterPoints))
+		now := common.GetTimestamp()
+		// 邀请奖励流水记在**邀请人**账上（钱进的是他的池子），
+		// 幂等键仍用被邀请人 id —— 触发这笔奖励的是后者的实名事件，只会发生一次。
+		refId := fmt.Sprintf("invite:%d", userId)
+		if _, err := model.GrantPoints(model.PointsGrant{
+			UserId:    user.InviterId,
+			Quota:     q,
+			Source:    model.FundSourceInvite,
+			RefId:     refId,
+			ExpiresAt: model.ExpireAtDays(now, ps.KycInviterExpireDays),
+			Now:       now,
+			Fund: model.FundEntry{
+				Kind: model.FundKindGift, Source: model.FundSourceInvite,
+				RefType: model.FundRefUser, RefId: refId,
+				Remark: fmt.Sprintf("邀请用户 %d 实名", userId),
+			},
+		}); err != nil {
 			common.SysLog("GrantKycPoints: grant inviter failed: " + err.Error())
 		} else {
 			// 累加邀请人「累计邀请积分」统计（展示用），与积分发放绑定同一次占位，不重复。
-			if err := model.AddUserAffPointsEarned(user.InviterId, q); err != nil {
+			if err := model.AddUserAffPointsEarned(user.InviterId, int(q)); err != nil {
 				common.SysLog("GrantKycPoints: add aff points earned failed: " + err.Error())
 			}
-			// 邀请奖励流水记在**邀请人**账上（钱进的是他的池子），
-			// 幂等键仍用被邀请人 id —— 触发这笔奖励的是后者的实名事件，只会发生一次。
-			model.RecordFundEntry(&model.FundEntry{
-				UserId:     user.InviterId,
-				Account:    model.FundAccountPoints,
-				Kind:       model.FundKindGift,
-				QuotaDelta: int64(q),
-				CashFen:    0,
-				Source:     model.FundSourceInvite,
-				RefType:    model.FundRefUser,
-				RefId:      fmt.Sprintf("invite:%d", userId),
-				Remark:     fmt.Sprintf("邀请用户 %d 实名", userId),
-			})
 			model.RecordLog(user.InviterId, model.LogTypeSystem,
 				fmt.Sprintf("邀请用户(ID:%d)完成实名认证赠送 %d 积分", userId, ps.KycInviterPoints))
 		}

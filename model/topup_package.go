@@ -40,6 +40,9 @@ type TopupPackage struct {
 
 	// GrantPoints 赠送积分数（不是 quota unit）
 	GrantPoints int `json:"grant_points" gorm:"type:int;not null;default:0"`
+	// GrantPointsExpireDays 赠品积分的有效期（天），0 = 永不过期。从到账时刻起算。
+	// 设了有效期后购买卡片必须展示（否则等于发了一张有期限的券却不告诉用户）。
+	GrantPointsExpireDays int `json:"grant_points_expire_days" gorm:"default:0"`
 
 	Enabled            bool `json:"enabled" gorm:"default:true"`
 	SortOrder          int  `json:"sort_order" gorm:"type:int;default:0"`
@@ -193,26 +196,28 @@ func GrantTopupPackageBonus(topUp *TopUp) {
 	// 500 quota unit，用户账户页按 floor 展示就是 0 积分——看起来是「赠品完全没发」，
 	// 而不是「发少了」。修复时生产尚无任何套餐赠品订单，无需补发历史。
 	q := common.PointsToQuota(pkg.GrantPoints)
-	if err := IncreaseUserPoints(topUp.UserId, q, true); err != nil {
+	now := common.GetTimestamp()
+	// 余额、批次、流水同事务：赠品入账流水（CashFen=0，这笔充值的收入已由充值流水记过，
+	// 赠品本身是市场成本，再记一次现金就是重复确认收入；幂等键挂在订单号上）。
+	// 失败仍然只记日志，不影响充值主流程。
+	if _, err := GrantPoints(PointsGrant{
+		UserId:    topUp.UserId,
+		Quota:     int64(q),
+		Source:    FundSourcePackageBonus,
+		RefId:     bonusRefId,
+		ExpiresAt: ExpireAtDays(now, pkg.GrantPointsExpireDays),
+		Now:       now,
+		Fund: FundEntry{
+			Kind: FundKindGift, Source: FundSourcePackageBonus,
+			RefType: FundRefTopUp, RefId: bonusRefId,
+			Remark: pkg.Title,
+		},
+	}); err != nil {
 		common.SysError(fmt.Sprintf(
 			"failed to grant %d points for topup %s: %s",
 			pkg.GrantPoints, topUp.TradeNo, err.Error()))
 		return
 	}
-	// 赠品入账流水。CashFen=0：这笔充值的收入已由充值流水记过，赠品本身是市场成本，
-	// 再记一次现金就是重复确认收入。幂等键挂在订单号上，补发不会重复记账。
-	// QuotaDelta 取换算后的 q，与实际余额变化一致——流水与余额必须同值，否则自洽校验不平。
-	RecordFundEntry(&FundEntry{
-		UserId:     topUp.UserId,
-		Account:    FundAccountPoints,
-		Kind:       FundKindGift,
-		QuotaDelta: int64(q),
-		CashFen:    0,
-		Source:     FundSourcePackageBonus,
-		RefType:    FundRefTopUp,
-		RefId:      bonusRefId,
-		Remark:     pkg.Title,
-	})
 	RecordLog(topUp.UserId, LogTypeTopup, fmt.Sprintf(
 		"购买套餐「%s」赠送积分 %d（订单 %s）",
 		pkg.Title, pkg.GrantPoints, topUp.TradeNo))

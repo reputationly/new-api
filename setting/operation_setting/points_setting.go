@@ -37,6 +37,12 @@ type PointsSetting struct {
 	KycInviterPoints  int   `json:"kyc_inviter_points"`  // 被邀请用户实名通过时邀请人赠送积分数，0=关闭
 	NewUserPoints     int   `json:"new_user_points"`     // 新用户注册赠送积分数，0=关闭；不受 RequireKyc 约束
 
+	// 有效期（天）。0 一律表示**永不过期**，不做「0 = 继承全局默认」的二义设计。
+	// 改配置只影响之后的发放：已发批次的到期时刻在发放那一刻已固化。
+	NewUserExpireDays     int `json:"new_user_expire_days"`     // 注册礼（含 QuotaForNewUser 折入部分）
+	KycVerifiedExpireDays int `json:"kyc_verified_expire_days"` // 实名本人
+	KycInviterExpireDays  int `json:"kyc_inviter_expire_days"`  // 邀请人
+
 	// ChannelRewards 渠道积分奖励：按**邀请人**覆盖 NewUserPoints。
 	// 用渠道商自己的邀请链接注册的新人拿这里的数，其他人拿 NewUserPoints。
 	ChannelRewards []ChannelPointsReward `json:"channel_rewards"`
@@ -61,6 +67,10 @@ type ChannelPointsReward struct {
 	// 未声明的字段能活下来纯属这个顺序的副产物。一旦有人调 SaveToDB（现在无调用点）
 	// 或在后端做一次读出改回写，这个字段就会被静默抹掉，表现是所有邀请链接列变空。
 	AffCode string `json:"aff_code"`
+
+	// ExpireDays 该渠道注册礼积分的有效期（天），0 = 永不过期。
+	// 只影响 NewUserPoints 那一笔；QuotaForNewUser 折入的那笔始终用 NewUserExpireDays。
+	ExpireDays int `json:"expire_days"`
 }
 
 // CheckChannelPointsRewards 保存前校验渠道奖励配置。
@@ -89,9 +99,16 @@ func CheckChannelPointsRewards(jsonStr string) error {
 		if r.Points < 0 {
 			return fmt.Errorf("用户 %s(ID %d) 的奖励积分不能为负", r.Username, r.InviterId)
 		}
+		if r.ExpireDays < 0 || r.ExpireDays > MaxPointsExpireDays {
+			return fmt.Errorf("用户 %s(ID %d) 的有效期需在 0~%d 天之间", r.Username, r.InviterId, MaxPointsExpireDays)
+		}
 	}
 	return nil
 }
+
+// MaxPointsExpireDays 有效期天数上限（10 年）。防误填把批次推到遥远的未来，
+// 也避免前端输入框溢出。0 仍表示永不过期。
+const MaxPointsExpireDays = 3650
 
 // GetChannelPointsReward 查某个邀请人是否配了渠道奖励。
 //

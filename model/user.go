@@ -461,6 +461,11 @@ func HardDeleteUserById(id int) error {
 			Where("id = ?", id).First(&snapshot).Error; err == nil {
 			closeFundAccountTx(tx, id, snapshot.Quota, snapshot.PointsBalance)
 		}
+		// 批次随用户一起删：留着它们会让过期任务每天为这个已删用户开一个空事务，
+		// 而且它们的余额（users 行）已经不存在，任何后续归属都没有意义。
+		if err := tx.Where("user_id = ?", id).Delete(&PointsLot{}).Error; err != nil {
+			return err
+		}
 		return tx.Unscoped().Delete(&User{}, "id = ?", id).Error
 	})
 }
@@ -645,9 +650,10 @@ func (user *User) Insert(inviterId int) error {
 	}
 	applyNewUserRegisterGrant(user)
 	// 注册礼分两路配置（QuotaForNewUser 与积分设置），运营可只发其一、都发或都不发。
-	// 积分系统启用时两者都落进积分池（见 applyNewUserRegisterGrant），现金池只留真金白银。
-	newUserPoints, newUserPointsQuota, pointsChannel := NewUserPointsGrant(inviterId)
-	user.PointsBalance += newUserPointsQuota
+	// 积分系统启用时两者都落进积分池，且**必须走 GrantPointsTx 建批次**——
+	// 随 Create 一起落库的话这笔余额没有批次，下次 sync 会被当成 surplus。
+	newUserPoints, _, pointsChannel := NewUserPointsGrant(inviterId)
+	user.PointsBalance = 0
 	//user.SetAccessToken(common.GetUUID())
 	user.AffCode = common.GetRandomString(4)
 	// 持久化邀请关系：邮箱注册由 controller 预设 InviterId，但 GitHub/LinuxDO 走本函数时未预设。
@@ -661,11 +667,20 @@ func (user *User) Insert(inviterId int) error {
 		user.SetSetting(defaultSetting)
 	}
 
-	result := DB.Create(user)
-	if result.Error != nil {
-		return result.Error
+	// ⚠️ 事务闭包里**只能**有 Create 与注册礼发放。后面那串步骤全部走包级 DB / LOG_DB，
+	// 其中 createdUser.Update(false) 还会写同一行 users——放进闭包就会与事务抢行锁：
+	// 连接池 > 1 时注册接口挂到锁超时（MySQL 默认 50 秒）后失败，连接池 = 1 时永久阻塞。
+	// 见 docs/points-expiry-design.md §4.3。
+	if err := DB.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Create(user).Error; err != nil {
+			return err
+		}
+		return grantRegisterPointsTx(tx, user.Id, inviterId)
+	}); err != nil {
+		return err
 	}
 
+	// ↑ 提交之后才执行以下步骤
 	// 用户创建成功后，根据角色初始化边栏配置
 	// 需要重新获取用户以确保有正确的ID和Role
 	var createdUser User
@@ -690,10 +705,8 @@ func (user *User) Insert(inviterId int) error {
 	if newUserPoints > 0 {
 		RecordLog(user.Id, LogTypeSystem, newUserPointsLog(newUserPoints, pointsChannel))
 	}
-	// 第三参传本次**赠分**的 quota，不能传 user.PointsBalance：积分系统启用时
-	// applyNewUserRegisterGrant 已把 QuotaForNewUser 折进 PointsBalance，再传总余额会让
-	// 注册礼额度被两条流水各记一次，合计比真实余额变化多出一个 QuotaForNewUser。
-	recordNewUserGrantEntries(user.Id, common.QuotaForNewUser, newUserPointsQuota, pointsChannel)
+	// 积分池的入账流水已在事务内由 GrantPointsTx 写过，这里只补积分系统未启用时的现金池那条。
+	recordNewUserCashGrantEntry(user.Id, common.QuotaForNewUser)
 	// 只要存在邀请人就记录邀请关系（aff_count++），与奖励解耦。
 	// 邀请奖励改为被邀请人实名后发放积分（service.GrantKycPoints），此处不再发放任何额度。
 	if inviterId != 0 {
@@ -714,10 +727,10 @@ func (user *User) InsertWithTx(tx *gorm.DB, inviterId int) error {
 		}
 	}
 	applyNewUserRegisterGrant(user)
-	// 注册礼见 Insert 处注释；OAuth 路径同样随 tx.Create 一起落库，
+	// 注册礼见 Insert 处注释；OAuth 路径同样在调用方事务内走 GrantPointsTx 建批次，
 	// 积分数带给提交后的 FinalizeOAuthUserCreation 记日志
-	newUserPoints, newUserPointsQuota, pointsChannel := NewUserPointsGrant(inviterId)
-	user.PointsBalance += newUserPointsQuota
+	newUserPoints, _, pointsChannel := NewUserPointsGrant(inviterId)
+	user.PointsBalance = 0
 	user.newUserPointsGranted = newUserPoints
 	user.newUserPointsChannel = pointsChannel
 	user.AffCode = common.GetRandomString(4)
@@ -731,12 +744,11 @@ func (user *User) InsertWithTx(tx *gorm.DB, inviterId int) error {
 		user.SetSetting(defaultSetting)
 	}
 
-	result := tx.Create(user)
-	if result.Error != nil {
-		return result.Error
+	if err := tx.Create(user).Error; err != nil {
+		return err
 	}
 
-	return nil
+	return grantRegisterPointsTx(tx, user.Id, inviterId)
 }
 
 // FinalizeOAuthUserCreation performs post-transaction tasks for OAuth user creation.
@@ -763,11 +775,9 @@ func (user *User) FinalizeOAuthUserCreation(inviterId int) {
 		RecordLog(user.Id, LogTypeSystem,
 			newUserPointsLog(user.newUserPointsGranted, user.newUserPointsChannel))
 	}
-	// 同 Insert 路径：传本次赠分的 quota 而非总余额。此处没有 newUserPointsQuota 局部变量，
-	// 用发放数换算——NewUserPointsGrant 返回的就是 (points, PointsToQuota(points), channel)，
-	// 两者恒等。
-	recordNewUserGrantEntries(user.Id, common.QuotaForNewUser,
-		common.PointsToQuota(user.newUserPointsGranted), user.newUserPointsChannel)
+	// 同 Insert 路径：积分池的入账流水已在事务内由 GrantPointsTx 写过，
+	// 这里只补积分系统未启用时的现金池那条。
+	recordNewUserCashGrantEntry(user.Id, common.QuotaForNewUser)
 	// 只要存在邀请人就记录邀请关系（aff_count++），与奖励解耦。
 	// 邀请奖励改为被邀请人实名后发放积分（service.GrantKycPoints），此处不再发放任何额度。
 	if inviterId != 0 {
@@ -1432,52 +1442,111 @@ func RootUserExists() bool {
 // 额度与积分分两条：它们进的是两个钱包，合成一条就看不出哪份落在哪边，
 // 而「现金池里混了多少赠送」正是资金对账要回答的问题。
 //
-// Account 跟随注册礼的实际落点（applyNewUserRegisterGrant）：积分系统启用时进积分池，
-// 未启用时仍进现金池。流水账户与余额实际变动的那个池子必须一致，否则自洽校验不平。
-func recordNewUserGrantEntries(userId int, quotaGranted int, pointsQuota int, pointsChannel string) {
-	if quotaGranted > 0 {
-		RecordFundEntry(&FundEntry{
-			UserId:     userId,
-			Account:    newUserRegisterGrantAccount(),
-			Kind:       FundKindGift,
-			QuotaDelta: int64(quotaGranted),
-			CashFen:    0,
-			Source:     FundSourceRegister,
-			RefType:    FundRefUser,
-			RefId:      fmt.Sprintf("register-quota:%d", userId),
-		})
+// recordNewUserCashGrantEntry 注册礼里**现金池**那一条流水。
+//
+// 积分池的两条（register-quota / register-points）已在注册事务内由 GrantPointsTx
+// 与余额、批次一起写入，这里再写一次会撞唯一键（也因此不能写成 best-effort）。
+// 积分系统未启用时注册礼仍进现金池（applyNewUserRegisterGrant），那条保持提交后补记。
+func recordNewUserCashGrantEntry(userId int, quotaGranted int) {
+	if quotaGranted <= 0 {
+		return
 	}
-	if pointsQuota > 0 {
-		RecordFundEntry(&FundEntry{
-			UserId:     userId,
-			Account:    FundAccountPoints,
-			Kind:       FundKindGift,
-			QuotaDelta: int64(pointsQuota),
-			CashFen:    0,
-			Source:     FundSourceRegister,
-			RefType:    FundRefUser,
-			RefId:      fmt.Sprintf("register-points:%d", userId),
-			Remark:     pointsChannel,
-		})
+	account := newUserRegisterGrantAccount()
+	if account != FundAccountCash {
+		return
 	}
+	RecordFundEntry(&FundEntry{
+		UserId:     userId,
+		Account:    account,
+		Kind:       FundKindGift,
+		QuotaDelta: int64(quotaGranted),
+		CashFen:    0,
+		Source:     FundSourceRegister,
+		RefType:    FundRefUser,
+		RefId:      fmt.Sprintf("register-quota:%d", userId),
+	})
+}
+
+// newUserPointsGrantWithExpiry 在 NewUserPointsGrant 之上带出到期天数。
+//
+// 命中渠道规则时用该规则自己的 ExpireDays（0 就是永不过期，不回落默认值——
+// 0 一律表示永不过期，这是全局无二义约定），否则用注册礼的有效期。
+func newUserPointsGrantWithExpiry(inviterId int, defaultDays int) (points, quota int, channel string, expireDays int) {
+	points, quota, channel = NewUserPointsGrant(inviterId)
+	if r, ok := operation_setting.GetChannelPointsReward(inviterId); ok {
+		return points, quota, channel, r.ExpireDays
+	}
+	return points, quota, channel, defaultDays
+}
+
+// grantRegisterPointsTx 在注册事务内发放注册礼的两笔积分。
+//
+// 两笔分别对应历史口径的两条流水：QuotaForNewUser 折入的部分（register-quota）
+// 与积分设置里的 NewUserPoints（register-points，命中渠道规则时被覆盖）。它们进的是
+// 同一个积分池，所以各自建一条批次、各自一条流水——合成一笔就看不出哪份钱是哪个
+// 活动发的，而「渠道奖励发出去多少」正是运营要看的。
+func grantRegisterPointsTx(tx *gorm.DB, userId int, inviterId int) error {
+	ps := operation_setting.GetPointsSetting()
+	if !ps.Enabled {
+		return nil
+	}
+	now := common.GetTimestamp()
+
+	if common.QuotaForNewUser > 0 {
+		refId := fmt.Sprintf("register-quota:%d", userId)
+		if _, err := GrantPointsTx(tx, PointsGrant{
+			UserId:    userId,
+			Quota:     int64(common.QuotaForNewUser),
+			Source:    FundSourceRegister,
+			RefId:     refId,
+			ExpiresAt: ExpireAtDays(now, ps.NewUserExpireDays),
+			Now:       now,
+			Fund: FundEntry{
+				Kind: FundKindGift, Source: FundSourceRegister,
+				RefType: FundRefUser, RefId: refId,
+			},
+		}); err != nil {
+			return err
+		}
+	}
+
+	points, pointsQuota, channel, expireDays := newUserPointsGrantWithExpiry(inviterId, ps.NewUserExpireDays)
+	if points > 0 && pointsQuota > 0 {
+		refId := fmt.Sprintf("register-points:%d", userId)
+		if _, err := GrantPointsTx(tx, PointsGrant{
+			UserId:    userId,
+			Quota:     int64(pointsQuota),
+			Source:    FundSourceRegister,
+			RefId:     refId,
+			ExpiresAt: ExpireAtDays(now, expireDays),
+			Now:       now,
+			Fund: FundEntry{
+				Kind: FundKindGift, Source: FundSourceRegister,
+				RefType: FundRefUser, RefId: refId, Remark: channel,
+			},
+		}); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // applyNewUserRegisterGrant 决定注册礼落到哪个钱包。
 //
 // 赠送一律走积分池：发进 User.Quota（现金池）会让资金对账的「真实入账」虚高，
-// 与签到、兑换码已收敛的口径一致。QuotaForNewUser 配的就是 quota unit，
-// 与 PointsBalance 同单位，直接并入即可，无需换算。
+// 与签到、兑换码已收敛的口径一致。
 //
 // 积分系统未启用时保持原样发额度——那种部署里整个赠送体系不存在，
 // 收敛过去等于把注册礼作废（积分不可用），与签到/兑换码的降级逻辑同理。
 //
-// 随 Create 一起落库而不是建完再 Increase：新号还没有缓存，一次写入即最终态。
+// 积分系统启用时这里**只**做「不发额度」的决定：积分那部分必须由 grantRegisterPointsTx
+// 走 GrantPointsTx 建批次。随 Create 一起落库会让这笔余额没有批次，下次 sync 直接
+// 表现为 surplus（用户凭空多分）。
 func applyNewUserRegisterGrant(user *User) {
 	if common.QuotaForNewUser <= 0 {
 		return
 	}
 	if operation_setting.GetPointsSetting().Enabled {
-		user.PointsBalance += common.QuotaForNewUser
 		return
 	}
 	user.Quota = common.QuotaForNewUser

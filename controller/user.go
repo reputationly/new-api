@@ -17,6 +17,7 @@ import (
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/setting"
+	"github.com/QuantumNous/new-api/setting/operation_setting"
 
 	"github.com/QuantumNous/new-api/constant"
 
@@ -919,6 +920,32 @@ type ManageRequest struct {
 	CashFen int64  `json:"cash_fen"` // 实收人民币（分），仅 prepay / ar_settle 必填且 > 0
 	Ref     string `json:"ref"`      // 凭证号 / 合同号 / 授信协议号 / 回款凭证
 	Remark  string `json:"remark"`   // 备注；gift 用作赠送事由
+
+	// 积分有效期（决策 7：管理员发放的有效期**必选**，不给默认值）。
+	// 适用 fund_op/gift、add_points/add、add_points/override（仅调高时）。
+	PointsExpireMode string `json:"points_expire_mode"` // never | days | date
+	PointsExpireDays int    `json:"points_expire_days"` // mode=days，1~3650
+	PointsExpireDate string `json:"points_expire_date"` // mode=date，YYYY-MM-DD
+}
+
+// resolvePointsExpiresAt 把管理端选择的有效期换算成绝对到期时刻（Unix 秒，0 = 永不过期）。
+//
+// 到期时刻一律由**服务端**按北京时间计算，不信任浏览器时区。
+// mode 缺失或非法直接报错：漏设就变成永久有效，而这个字段存在的意义正是逼运营显式决定。
+func resolvePointsExpiresAt(req ManageRequest) (int64, error) {
+	switch strings.TrimSpace(req.PointsExpireMode) {
+	case "never":
+		return 0, nil
+	case "days":
+		if req.PointsExpireDays < 1 || req.PointsExpireDays > operation_setting.MaxPointsExpireDays {
+			return 0, fmt.Errorf("有效期需在 1~%d 天之间；永久有效请选择「永不过期」", operation_setting.MaxPointsExpireDays)
+		}
+		return model.ExpireAtDays(common.GetTimestamp(), req.PointsExpireDays), nil
+	case "date":
+		return model.ExpireAtDate(req.PointsExpireDate)
+	default:
+		return 0, errors.New("请选择积分有效期")
+	}
 }
 
 // ManageUser Only admin user can do this
@@ -1072,11 +1099,27 @@ func ManageUser(c *gin.Context) {
 				common.ApiErrorI18n(c, i18n.MsgUserQuotaChangeZero)
 				return
 			}
-			if err := model.IncreaseUserPoints(user.Id, req.Value, true); err != nil {
+			expiresAt, expErr := resolvePointsExpiresAt(req)
+			if expErr != nil {
+				common.ApiErrorMsg(c, expErr.Error())
+				return
+			}
+			refId := model.NewAdminOpRefId()
+			if _, err := model.GrantPoints(model.PointsGrant{
+				UserId:    user.Id,
+				Quota:     int64(req.Value),
+				Source:    model.FundSourceAdminAdjust,
+				RefId:     refId,
+				ExpiresAt: expiresAt,
+				Fund: model.FundEntry{
+					Kind: model.FundKindAdjust, Source: model.FundSourceAdminAdjust,
+					RefType: model.FundRefAdminOp, RefId: refId,
+					OperatorId: adminId, Remark: "add_points/add",
+				},
+			}); err != nil {
 				common.ApiError(c, err)
 				return
 			}
-			recordAdjustEntry(user.Id, adminId, model.FundAccountPoints, int64(req.Value), "add_points/add")
 			model.RecordLogWithAdminInfo(user.Id, model.LogTypeManage,
 				fmt.Sprintf("管理员增加用户积分 %d", common.QuotaToPoints(req.Value)), adminInfo)
 		case "subtract":
@@ -1102,18 +1145,38 @@ func ManageUser(c *gin.Context) {
 			}
 			model.RecordLogWithAdminInfo(user.Id, model.LogTypeManage, subtractMsg, adminInfo)
 		case "override":
-			// 单列赋值式 Update（非 Updates(struct)）→ 目标为 0 也写入，绕过零值陷阱
+			// 目标值必须非负：余额为负会破坏分摊算法依赖的「余额 ≥ 0」前提
+			//（旧实现只靠前端限制最小值 0）。
+			if req.Value < 0 {
+				common.ApiErrorMsg(c, "积分余额不能为负")
+				return
+			}
+			expiresAt, expErr := resolvePointsExpiresAt(req)
+			if expErr != nil {
+				common.ApiErrorMsg(c, expErr.Error())
+				return
+			}
+			refId := model.NewAdminOpRefId()
 			oldPoints := user.PointsBalance
-			if err := model.DB.Model(&model.User{}).Where("id = ?", user.Id).Update("points_balance", req.Value).Error; err != nil {
+			// 差额在事务内按加锁后的余额计算，消除「读旧余额 → 覆盖」与并发扣费的竞态；
+			// 调高会建批次，调低只减余额（归属惰性完成）。
+			diff, err := model.SetUserPointsBalance(user.Id, int64(req.Value), common.GetTimestamp(), model.PointsGrant{
+				Source:    model.FundSourceAdminAdjust,
+				RefId:     refId,
+				ExpiresAt: expiresAt,
+				Fund: model.FundEntry{
+					Kind: model.FundKindAdjust, Source: model.FundSourceAdminAdjust,
+					RefType: model.FundRefAdminOp, RefId: refId,
+					OperatorId: adminId, Remark: "add_points/override",
+				},
+			})
+			if err != nil {
 				common.ApiError(c, err)
 				return
 			}
-			if err := model.InvalidateUserCache(user.Id); err != nil {
-				common.SysLog(fmt.Sprintf("failed to invalidate user cache for user %d: %s", user.Id, err.Error()))
-			}
-			recordAdjustEntry(user.Id, adminId, model.FundAccountPoints, int64(req.Value-oldPoints), "add_points/override")
 			model.RecordLogWithAdminInfo(user.Id, model.LogTypeManage,
-				fmt.Sprintf("管理员覆盖用户积分从 %d 为 %d", common.QuotaToPoints(oldPoints), common.QuotaToPoints(req.Value)), adminInfo)
+				fmt.Sprintf("管理员覆盖用户积分从 %d 为 %d（差额 %d）",
+					common.QuotaToPoints(oldPoints), common.QuotaToPoints(req.Value), common.QuotaToPoints(int(diff))), adminInfo)
 		default:
 			common.ApiErrorI18n(c, i18n.MsgInvalidParams)
 			return
