@@ -72,10 +72,12 @@ func ImageHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *type
 		policyModel = info.OriginModelName
 	}
 	if isSizePolicyModel(policyModel) {
-		if sizeErr := validateBilledImageSize(request.Size); sizeErr != nil {
+		normalizedSize, sizeErr := normalizeBilledImageSize(request.Size)
+		if sizeErr != nil {
 			return types.NewErrorWithStatusCode(sizeErr, types.ErrorCodeInvalidRequest,
 				http.StatusBadRequest, types.ErrOptionWithSkipRetry())
 		}
+		request.Size = normalizedSize
 	}
 
 	adaptor := GetAdaptor(info.ApiType)

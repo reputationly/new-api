@@ -2,6 +2,7 @@ package relay
 
 import (
 	"fmt"
+	"math"
 	"strconv"
 	"strings"
 )
@@ -13,10 +14,16 @@ import (
 // canvas identical to the delivered image, which is what makes token accounting
 // unambiguous. It enforces this itself (400 unsupported_size), but letting the
 // request travel to a GPU replica first wastes queue time and, worse, turns a
-// client mistake into a 500 the customer cannot act on. Rejecting here gives a
-// clean 400 plus the list of allowed sizes.
+// client mistake into a 500 the customer cannot act on.
 //
-// Keep this table in sync with the engine contract:
+// Clients speaking the Ark image protocol send the sizes their own tier table
+// documents (Seedream 5.0 Pro: 1776x2368, 2816x1584, 1584x2816, …). Those sit on a
+// 16 px grid and their areas straddle our billed bands, so rejecting them outright
+// would make this endpoint unusable from an Ark SDK. Instead a size whose area lands
+// around a billed band is mapped to the band's size with the closest aspect ratio —
+// the delivered canvas keeps the requested framing, the billed tier stays exact.
+//
+// Keep the table in sync with the engine contract:
 // vllm-omni `MINIMAX_H3_IMAGE_BILLABLE_AREA_BANDS` (usage spec h3-image-v1).
 type imageAreaBand struct {
 	name     string
@@ -30,7 +37,7 @@ var h3ImageAreaBands = []imageAreaBand{
 		name:     "2k",
 		lowArea:  4_000_000,
 		highArea: 4_300_000,
-		sizes:    []string{"2048x2048", "2368x1760", "1760x2368", "2720x1536", "1536x2720", "3552x1184", "1184x3552"},
+		sizes:    []string{"2048x2048", "2368x1760", "1760x2368", "2720x1536", "1536x2720", "3136x1344", "1344x3136", "3552x1184", "1184x3552"},
 	},
 	{
 		name:     "16mp",
@@ -41,6 +48,29 @@ var h3ImageAreaBands = []imageAreaBand{
 }
 
 const h3ImagePixelGrid = 32
+
+// imageBandAreaTolerance is how far outside a band's area a requested size may sit
+// and still be mapped into it. 15% covers the neighbouring tier tables (a 2k 9:16
+// from Seedream is 4.46 MP against our 4.0–4.3 MP band) without letting a request
+// for a genuinely different resolution silently become a 4 MP image.
+const imageBandAreaTolerance = 0.15
+
+// h3ImageMaxOutputAspect mirrors the engine's 3:1 output bound.
+const h3ImageMaxOutputAspect = 3
+
+func maxInt(a, b int) int {
+	if a > b {
+		return a
+	}
+	return b
+}
+
+func minInt(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
+}
 
 // imageSizePolicyModels lists models that only sell the billed tiers. Prefix match
 // so a channel can name the model with or without a vendor prefix.
@@ -79,34 +109,86 @@ func allowedSizeList() string {
 	return strings.Join(out, " | ")
 }
 
-// validateBilledImageSize rejects sizes the engine cannot bill unambiguously.
+// bandOfArea returns the billed band a requested area belongs to, allowing the
+// tolerance above. nil means the area is a different resolution than we sell.
+func bandOfArea(area int) *imageAreaBand {
+	for i := range h3ImageAreaBands {
+		band := &h3ImageAreaBands[i]
+		low := int(float64(band.lowArea) * (1 - imageBandAreaTolerance))
+		high := int(float64(band.highArea) * (1 + imageBandAreaTolerance))
+		if area >= low && area <= high {
+			return band
+		}
+	}
+	return nil
+}
+
+// closestSizeInBand picks the band size whose aspect ratio is closest to the
+// requested one (log distance, so 1:2 and 2:1 are equally far from 1:1); an exact
+// match wins, then the nearest area.
+func closestSizeInBand(band *imageAreaBand, width, height int) string {
+	requestedAspect := math.Log(float64(width) / float64(height))
+	requestedArea := width * height
+	best := ""
+	bestAspect := math.Inf(1)
+	bestArea := math.Inf(1)
+	for _, candidate := range band.sizes {
+		cw, ch, ok := parseWidthHeight(candidate)
+		if !ok {
+			continue
+		}
+		aspect := math.Abs(math.Log(float64(cw)/float64(ch)) - requestedAspect)
+		area := math.Abs(float64(cw*ch - requestedArea))
+		if aspect < bestAspect-1e-9 || (math.Abs(aspect-bestAspect) <= 1e-9 && area < bestArea) {
+			best, bestAspect, bestArea = candidate, aspect, area
+		}
+	}
+	return best
+}
+
+// normalizeBilledImageSize validates a requested size and, when it is not one of the
+// billed sizes, maps it to the band size with the closest aspect ratio.
 //
-// An empty size is accepted: it means "the engine decides" (aspect_ratio/resolution
-// path) and the engine still enforces its own contract. "auto" is rejected because
-// this deployment requires an explicit size, so passing it on would only produce a
-// confusing downstream 400.
-func validateBilledImageSize(size string) error {
+// An empty size is passed through: it means "the engine decides" (aspect_ratio /
+// resolution path) and the engine still enforces its own contract. "auto" is
+// rejected because this deployment requires an explicit size, so passing it on would
+// only produce a confusing downstream 400.
+func normalizeBilledImageSize(size string) (string, error) {
 	trimmed := strings.TrimSpace(strings.ToLower(size))
 	if trimmed == "" {
-		return nil
+		return "", nil
 	}
 	if trimmed == "auto" {
-		return fmt.Errorf("size must be an explicit WIDTHxHEIGHT; allowed sizes -> %s", allowedSizeList())
+		return "", fmt.Errorf("size must be an explicit WIDTHxHEIGHT; allowed sizes -> %s", allowedSizeList())
 	}
 	width, height, ok := parseWidthHeight(trimmed)
 	if !ok {
-		return fmt.Errorf("invalid size %q, expected WIDTHxHEIGHT; allowed sizes -> %s", size, allowedSizeList())
+		return "", fmt.Errorf("invalid size %q, expected WIDTHxHEIGHT; allowed sizes -> %s", size, allowedSizeList())
 	}
-	if width%h3ImagePixelGrid != 0 || height%h3ImagePixelGrid != 0 {
-		return fmt.Errorf("size %dx%d must have both sides as multiples of %d; allowed sizes -> %s",
-			width, height, h3ImagePixelGrid, allowedSizeList())
-	}
-	area := width * height
+	exact := fmt.Sprintf("%dx%d", width, height)
 	for _, band := range h3ImageAreaBands {
-		if area >= band.lowArea && area <= band.highArea {
-			return nil
+		for _, candidate := range band.sizes {
+			if candidate == exact {
+				return candidate, nil
+			}
 		}
 	}
-	return fmt.Errorf("unsupported_size: %dx%d (%d px) is outside the billed tiers; allowed sizes -> %s",
-		width, height, area, allowedSizeList())
+	// A size the engine already accepts travels untouched: the engine's own gate is
+	// "32-aligned sides, area inside a billed band, aspect at most 3:1", not membership
+	// of the table above (the table is only the ratio family we advertise).
+	if width%h3ImagePixelGrid == 0 && height%h3ImagePixelGrid == 0 &&
+		bandOfArea(width*height) != nil && maxInt(width, height) <= h3ImageMaxOutputAspect*minInt(width, height) {
+		return exact, nil
+	}
+	band := bandOfArea(width * height)
+	if band == nil {
+		return "", fmt.Errorf("unsupported_size: %dx%d (%d px) is outside the billed tiers; allowed sizes -> %s",
+			width, height, width*height, allowedSizeList())
+	}
+	mapped := closestSizeInBand(band, width, height)
+	if mapped == "" {
+		return "", fmt.Errorf("unsupported_size: %dx%d (%d px) is outside the billed tiers; allowed sizes -> %s",
+			width, height, width*height, allowedSizeList())
+	}
+	return mapped, nil
 }
