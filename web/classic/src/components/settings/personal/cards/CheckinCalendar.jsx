@@ -136,16 +136,33 @@ const CheckinCalendar = ({ t, status, turnstileEnabled, turnstileSiteKey }) => {
     return message.includes('Turnstile');
   };
 
+  // 到期日按本地时区展示成「12-06」。后端给的是一定在 23:59:59 的绝对时刻，
+  // 这里只取月日——年份对「下周到期」这种粒度没有意义。
+  const formatCheckinExpiry = (ts) => {
+    const d = new Date(ts * 1000);
+    const pad = (n) => String(n).padStart(2, '0');
+    return `${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+  };
+
   const doCheckin = async (token) => {
     setCheckinLoading(true);
     try {
       const res = await postCheckin(token);
       const { success, data, message } = res.data;
       if (success) {
+        // 积分模式把到期日一起说清楚：用户有权在拿到的那一刻就知道这笔积分什么时候作废。
+        // points_expires_at 为 0 表示永不过期，此时不追加任何提示。
+        const expiresText =
+          data.reward_type === 'points' && data.points_expires_at
+            ? t('，{{date}} 到期', {
+                date: formatCheckinExpiry(data.points_expires_at),
+              })
+            : '';
         showSuccess(
           t('签到成功！获得') +
             ' ' +
-            formatReward(data.quota_awarded, data.reward_type),
+            formatReward(data.quota_awarded, data.reward_type) +
+            expiresText,
         );
         // 刷新签到状态
         fetchCheckinStatus(currentMonth);

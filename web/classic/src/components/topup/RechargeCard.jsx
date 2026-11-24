@@ -49,8 +49,10 @@ import {
 import { IconGift } from '@douyinfe/semi-icons';
 import { useMinimumLoadingTime } from '../../hooks/common/useMinimumLoadingTime';
 import { getCurrencyConfig, getQuotaPerUnit } from '../../helpers/render';
+import { API } from '../../helpers';
 import { quotaToPoints, isPointsEnabled } from '../../helpers/quota';
 import { buildWalletSummary } from '../../helpers/walletSummary';
+import PointsLotsModal from './PointsLotsModal';
 import SubscriptionPlansCard from './SubscriptionPlansCard';
 
 const { Text } = Typography;
@@ -117,6 +119,34 @@ const RechargeCard = ({
     pointsEnabled: isPointsEnabled(),
   });
   const credit = wallet.credit;
+
+  // 临期提示与批次明细。只在积分开启时请求——关掉积分系统的部署里这两个接口
+  // 一律返回空，没必要多打两次。
+  const [expiring, setExpiring] = useState(null);
+  const [lotsModalOpen, setLotsModalOpen] = useState(false);
+  useEffect(() => {
+    if (!wallet.showPoints) {
+      setExpiring(null);
+      return;
+    }
+    let cancelled = false;
+    API.get('/api/user/points/lots/summary')
+      .then((res) => {
+        if (cancelled) return;
+        setExpiring(res.data?.data?.expiring || null);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [wallet.showPoints, wallet.points]);
+
+  const formatExpiringDate = (ts) => {
+    if (!ts) return '';
+    const d = new Date(ts * 1000);
+    const pad = (n) => String(n).padStart(2, '0');
+    return `${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+  };
   // When QuotaDisplayType = CNY, amounts are already in CNY — skip Price conversion.
   const isCNYDisplay =
     (localStorage.getItem('quota_display_type') || 'USD') === 'CNY';
@@ -276,6 +306,32 @@ const RechargeCard = ({
                       <Coins size={12} className='mr-1' />
                       {t('积分')} {quotaToPoints(wallet.points)}
                       {`（≈${renderQuota(wallet.points)}）`}
+                      {expiring && (
+                        <Tooltip
+                          content={
+                            <div>
+                              <div>
+                                {t('最近到期')}：
+                                {formatExpiringDate(expiring.earliest_at)}
+                              </div>
+                              <div>{t('点击查看全部')}</div>
+                            </div>
+                          }
+                        >
+                          <Tag
+                            color='orange'
+                            size='small'
+                            className='ml-1'
+                            style={{ cursor: 'pointer' }}
+                            onClick={() => setLotsModalOpen(true)}
+                          >
+                            {quotaToPoints(expiring.quota)}
+                            {t('积分')}{' '}
+                            {formatExpiringDate(expiring.earliest_at)}
+                            {t('过期')}
+                          </Tag>
+                        </Tooltip>
+                      )}
                     </span>
                   )}
                   {credit && (
@@ -838,6 +894,10 @@ const RechargeCard = ({
       ) : (
         topupContent
       )}
+      <PointsLotsModal
+        visible={lotsModalOpen}
+        onClose={() => setLotsModalOpen(false)}
+      />
     </Card>
   );
 };
