@@ -150,16 +150,24 @@ func closestSizeInBand(band *imageAreaBand, width, height int) string {
 // billed sizes, maps it to the band size with the closest aspect ratio.
 //
 // An empty size is passed through: it means "the engine decides" (aspect_ratio /
-// resolution path) and the engine still enforces its own contract. "auto" is
-// rejected because this deployment requires an explicit size, so passing it on would
-// only produce a confusing downstream 400.
+// resolution path) and the engine still enforces its own contract.
+//
+// A size below the smallest billed tier is upgraded to the 2K tier (nearest aspect
+// ratio), and "auto" becomes 2K 1:1. Vendor SDKs send their own tier tables — a 1K
+// request is the common case — and the vendor itself floors the generated canvas at
+// 2048x2048, i.e. bills such a request as 2K. Upgrading keeps that same bargain here
+// and keeps the billed canvas equal to the delivered image. Sizes above the largest
+// tier are still rejected: delivering 16 MP for a request the client priced higher is
+// a different (and costlier) decision, not a rounding one.
 func normalizeBilledImageSize(size string) (string, error) {
 	trimmed := strings.TrimSpace(strings.ToLower(size))
 	if trimmed == "" {
 		return "", nil
 	}
 	if trimmed == "auto" {
-		return "", fmt.Errorf("size must be an explicit WIDTHxHEIGHT; allowed sizes -> %s", allowedSizeList())
+		// The vendor sizes an "auto" request itself; the closest thing we can honour is
+		// the smallest billed canvas.
+		return h3ImageAreaBands[0].sizes[0], nil
 	}
 	width, height, ok := parseWidthHeight(trimmed)
 	if !ok {
@@ -182,6 +190,14 @@ func normalizeBilledImageSize(size string) (string, error) {
 	}
 	band := bandOfArea(width * height)
 	if band == nil {
+		// Below the smallest tier: upgrade to it (the vendor floors 1K to 2K as well).
+		// Above the largest tier: refuse, never silently re-price the request.
+		smallest := &h3ImageAreaBands[0]
+		if width*height < smallest.lowArea {
+			if mapped := closestSizeInBand(smallest, width, height); mapped != "" {
+				return mapped, nil
+			}
+		}
 		return "", fmt.Errorf("unsupported_size: %dx%d (%d px) is outside the billed tiers; allowed sizes -> %s",
 			width, height, width*height, allowedSizeList())
 	}
