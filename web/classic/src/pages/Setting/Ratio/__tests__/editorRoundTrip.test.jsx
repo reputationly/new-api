@@ -112,6 +112,26 @@ beforeEach(() => {
 });
 
 describe('编辑器「读 → 不改 → 保存」往返', () => {
+  it('不修改含 map 查值和分项乘数的原始公式', async () => {
+    const expr =
+      'v2:{normal: 4}["normal"] + tier("base", p * 2) * (header("mode") == "fast" ? 2 : 1)';
+    const options = {
+      ...OPTIONS,
+      'billing_setting.billing_expr': JSON.stringify({ 'tiered-x': expr }),
+    };
+    const { result } = renderHook(() =>
+      useModelPricingEditorState({
+        options,
+        refresh,
+        t,
+        candidateModelNames: CANDIDATES,
+      }),
+    );
+    await waitFor(() => expect(result.current.selectedModel).toBeTruthy());
+    await act(async () => result.current.handleSubmit());
+    expect(putPayloads()['billing_setting.billing_expr']['tiered-x']).toBe(expr);
+  });
+
   it('清空分段计费表达式时阻止保存，直到明确切换计费模式', async () => {
     const { result } = renderHook(() =>
       useModelPricingEditorState({

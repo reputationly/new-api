@@ -1,4 +1,5 @@
 import { EXPR_STRING_LITERAL } from '../../../../helpers/exprStringLiteral';
+import { stripExprVersion } from '../../../../helpers/exprVersion';
 
 export const SOURCE_PARAM = 'param';
 export const SOURCE_HEADER = 'header';
@@ -152,22 +153,38 @@ export function normalizeRequestRule(rule) {
 // Helpers
 // ---------------------------------------------------------------------------
 
-export function splitTopLevelMultiply(expr) {
+const QUOTED_TOKEN = EXPR_STRING_LITERAL.source + '|`[^`]*`';
+const PRODUCT_TOKENS = new RegExp(
+  QUOTED_TOKEN +
+    '| \\* |//|/\\*|\\?\\?|\\?\\.|\\.\\.|[()\\[\\]{}?:+*/%^<>=!&|;,-]' +
+    '|\\b(?:and|or|not|in|matches|contains|startsWith|endsWith|let|if|else)\\b',
+  'g',
+);
+const CLOSING_TOKEN = { '(': ')', '[': ']', '{': '}', '?': ':' };
+
+function splitTopLevelMultiply(expr) {
   const parts = [];
+  const closing = [];
   let start = 0;
-  let depth = 0;
-  const tokens = new RegExp(EXPR_STRING_LITERAL.source + '|[()?]| \\* ', 'g');
-  for (const { 0: token, index } of expr.matchAll(tokens)) {
-    if (token === '(') depth += 1;
-    if (token === ')') depth -= 1;
-    if (depth === 0 && token === '?') return [expr.trim()];
-    if (depth === 0 && token === ' * ') {
+  for (const { 0: token, index } of expr.matchAll(PRODUCT_TOKENS)) {
+    if (/^["'`]/.test(token)) continue;
+    if (token === '//' || token === '/*') return [expr];
+    if (token === closing.at(-1)) {
+      closing.pop();
+    } else if (token === '?' && closing.length === 0) {
+      return [expr];
+    } else if (CLOSING_TOKEN[token]) {
+      closing.push(CLOSING_TOKEN[token]);
+    } else if (token === ')' || token === ']' || token === '}') {
+      return [expr];
+    } else if (closing.length === 0) {
+      if (token !== ' * ') return [expr];
       parts.push(expr.slice(start, index).trim());
-      start = index + 3;
+      start = index + token.length;
     }
   }
   parts.push(expr.slice(start).trim());
-  return parts.filter(Boolean);
+  return closing.length === 0 && parts.every(Boolean) ? parts : [expr];
 }
 
 function splitTopLevelAnd(expr) {
@@ -398,7 +415,7 @@ export function tryParseRequestRuleExpr(expr) {
 function hasFullOuterParens(expr) {
   if (!expr.startsWith('(') || !expr.endsWith(')')) return false;
   let depth = 0;
-  const tokens = new RegExp(EXPR_STRING_LITERAL.source + '|[()]', 'g');
+  const tokens = new RegExp(QUOTED_TOKEN + '|[()]', 'g');
   for (const { 0: token, index } of expr.matchAll(tokens)) {
     if (token === '(') depth += 1;
     if (token === ')') depth -= 1;
@@ -420,21 +437,25 @@ export function combineBillingExpr(baseExpr, requestRuleExpr) {
   const rules = (requestRuleExpr || '').trim();
   if (!base) return '';
   if (!rules) return base;
-  return `(${base}) * ${rules}`;
+  const { body } = stripExprVersion(base);
+  const prefix = base.slice(0, base.length - body.length);
+  return `${prefix}(${body.trim()}) * ${rules}`;
 }
 
 export function splitBillingExprAndRequestRules(expr) {
   const trimmed = (expr || '').trim();
   if (!trimmed) return { billingExpr: '', requestRuleExpr: '' };
 
-  const parts = splitTopLevelMultiply(trimmed);
+  const { body } = stripExprVersion(trimmed);
+  const prefix = trimmed.slice(0, trimmed.length - body.length);
+  const parts = splitTopLevelMultiply(body.trim());
   if (parts.length <= 1) return { billingExpr: trimmed, requestRuleExpr: '' };
 
   const ruleParts = [];
   const baseParts = [];
 
   parts.forEach((part) => {
-    if (tryParseRequestRuleExpr(part) !== null && tryParseRequestRuleExpr(part).length > 0) {
+    if (tryParseRequestRuleExpr(part)?.length > 0) {
       ruleParts.push(part);
     } else {
       baseParts.push(part);
@@ -446,7 +467,7 @@ export function splitBillingExprAndRequestRules(expr) {
   }
 
   return {
-    billingExpr: unwrapOuterParens(baseParts[0]),
+    billingExpr: prefix + unwrapOuterParens(baseParts[0]),
     requestRuleExpr: ruleParts.join(' * '),
   };
 }
