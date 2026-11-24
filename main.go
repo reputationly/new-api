@@ -201,6 +201,9 @@ func main() {
 	// Subscription quota reset task (daily/weekly/monthly/custom)
 	service.StartSubscriptionQuotaResetTask()
 
+	// Points lot expiry: daily at 00:05 Asia/Shanghai (+ one catch-up run on start)
+	service.StartPointsExpiryTask()
+
 	// Direct payment (Alipay/WeChat Pay) expired order cleanup
 	service.StartDirectPaymentExpiryScan()
 

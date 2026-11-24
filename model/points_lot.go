@@ -834,3 +834,57 @@ func PointsCheckinWeekKey(now int64) string {
 	monday := time.Date(y, m, d, 0, 0, 0, 0, pointsExpiryLoc).AddDate(0, 0, -offsetFromMonday)
 	return fmt.Sprintf("checkin-week:%s", monday.Format("2006-01-02"))
 }
+
+// UserIDsWithDuePointsLots 列出有「已到期但尚未作废」批次的用户，供过期任务分批处理。
+//
+// 条件用 expires_at <= now 而非「今天到期」：任务停摆几天后补跑时，一次能把积压的
+// 全部处理掉，不会漏掉中间那些天。
+func UserIDsWithDuePointsLots(now int64, limit int) ([]int, error) {
+	if limit <= 0 {
+		limit = 300
+	}
+	var ids []int
+	err := DB.Model(&PointsLot{}).
+		Where("status = ? AND expires_at > 0 AND expires_at <= ?", PointsLotStatusActive, now).
+		Distinct("user_id").
+		Order("user_id").
+		Limit(limit).
+		Pluck("user_id", &ids).Error
+	return ids, err
+}
+
+// PointsLotSourceLabel 批次来源的中文名，用于使用日志与展示文案。
+func PointsLotSourceLabel(source string) string {
+	switch source {
+	case FundSourceRegister:
+		return "注册赠送"
+	case FundSourceCheckin:
+		return "签到"
+	case FundSourceKyc:
+		return "实名认证"
+	case FundSourceInvite:
+		return "邀请奖励"
+	case FundSourceRedemption:
+		return "兑换码"
+	case FundSourcePackageBonus:
+		return "套餐赠品"
+	case FundSourceAdminGift:
+		return "管理员赠送"
+	case FundSourceAdminAdjust:
+		return "管理员调整"
+	case PointsLotSourceLegacy:
+		return "存量积分"
+	case PointsLotSourceSurplus:
+		return "余额溢出"
+	default:
+		return source
+	}
+}
+
+// FormatPointsExpiryDate 把到期时刻格式化成「01-06」（北京时间），用于日志与提示。
+func FormatPointsExpiryDate(ts int64) string {
+	if ts <= 0 {
+		return ""
+	}
+	return time.Unix(ts, 0).In(pointsExpiryLoc).Format("01-02")
+}
