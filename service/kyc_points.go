@@ -60,7 +60,8 @@ func GrantKycPoints(userId int) {
 			common.SysLog("GrantKycPoints: grant self failed: " + err.Error())
 		} else {
 			model.RecordLog(userId, model.LogTypeSystem,
-				fmt.Sprintf("实名认证赠送 %d 积分", ps.KycVerifiedPoints))
+				fmt.Sprintf("实名认证赠送 %d 积分", ps.KycVerifiedPoints)+
+					model.PointsExpiryLogSuffix(model.ExpireAtDays(now, ps.KycVerifiedExpireDays)))
 		}
 	}
 
@@ -91,7 +92,8 @@ func GrantKycPoints(userId int) {
 				common.SysLog("GrantKycPoints: add aff points earned failed: " + err.Error())
 			}
 			model.RecordLog(user.InviterId, model.LogTypeSystem,
-				fmt.Sprintf("邀请用户(ID:%d)完成实名认证赠送 %d 积分", userId, ps.KycInviterPoints))
+				fmt.Sprintf("邀请用户(ID:%d)完成实名认证赠送 %d 积分", userId, ps.KycInviterPoints)+
+					model.PointsExpiryLogSuffix(model.ExpireAtDays(now, ps.KycInviterExpireDays)))
 		}
 	}
 }

@@ -1198,3 +1198,15 @@ func GetSurplusPointsLots(offset, limit int) ([]PointsSurplusLotView, int64, err
 	}
 	return views, total, nil
 }
+
+// PointsExpiryLogSuffix 日志文案里追加的「，有效期至 MM-DD（北京时间）」。
+// 永不过期时返回空串——那种情况在日志里多说一句只会制造噪音。
+//
+// 用户有权在拿到积分的那一刻知道它什么时候作废，所以发放日志统一带上这个后缀
+// （决策 10 的「获得时提示有效期」在服务端的落点）。
+func PointsExpiryLogSuffix(expiresAt int64) string {
+	if expiresAt <= 0 {
+		return ""
+	}
+	return fmt.Sprintf("，有效期至 %s", FormatPointsExpiryDate(expiresAt))
+}

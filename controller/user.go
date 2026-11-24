@@ -1121,7 +1121,8 @@ func ManageUser(c *gin.Context) {
 				return
 			}
 			model.RecordLogWithAdminInfo(user.Id, model.LogTypeManage,
-				fmt.Sprintf("管理员增加用户积分 %d", common.QuotaToPoints(req.Value)), adminInfo)
+				fmt.Sprintf("管理员增加用户积分 %d", common.QuotaToPoints(req.Value))+
+					model.PointsExpiryLogSuffix(expiresAt), adminInfo)
 		case "subtract":
 			if req.Value <= 0 {
 				common.ApiErrorI18n(c, i18n.MsgUserQuotaChangeZero)

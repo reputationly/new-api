@@ -213,7 +213,9 @@ func Redeem(key string, userId int) (quota int, rewardType string, err error) {
 	if redemption.RewardType == RedemptionRewardPoints {
 		// 积分走 Redis-first 热路径，兑换后失效缓存下次回源，避免读到旧值
 		_ = InvalidateUserCache(userId)
-		RecordLog(userId, LogTypeTopup, fmt.Sprintf("通过兑换码获得 %d 积分，兑换码ID %d", common.QuotaToPoints(redemption.Quota), redemption.Id))
+		RecordLog(userId, LogTypeTopup, fmt.Sprintf("通过兑换码获得 %d 积分，兑换码ID %d",
+			common.QuotaToPoints(redemption.Quota), redemption.Id)+
+			PointsExpiryLogSuffix(ExpireAtDays(redemption.RedeemedTime, redemption.PointsExpireDays)))
 	} else {
 		RecordLog(userId, LogTypeTopup, fmt.Sprintf("通过兑换码充值 %s，兑换码ID %d", logger.LogQuotaShort(redemption.Quota), redemption.Id))
 	}

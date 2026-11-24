@@ -652,7 +652,8 @@ func (user *User) Insert(inviterId int) error {
 	// 注册礼分两路配置（QuotaForNewUser 与积分设置），运营可只发其一、都发或都不发。
 	// 积分系统启用时两者都落进积分池，且**必须走 GrantPointsTx 建批次**——
 	// 随 Create 一起落库的话这笔余额没有批次，下次 sync 会被当成 surplus。
-	newUserPoints, _, pointsChannel := NewUserPointsGrant(inviterId)
+	newUserPoints, _, pointsChannel, pointsExpireDays := newUserPointsGrantWithExpiry(
+		inviterId, operation_setting.GetPointsSetting().NewUserExpireDays)
 	user.PointsBalance = 0
 	//user.SetAccessToken(common.GetUUID())
 	user.AffCode = common.GetRandomString(4)
@@ -697,13 +698,17 @@ func (user *User) Insert(inviterId int) error {
 	}
 
 	if common.QuotaForNewUser > 0 {
-		RecordLog(user.Id, LogTypeSystem, newUserRegisterGrantLog())
+		// 日志带上有效期：用户有权在到账那一刻知道这笔什么时候作废
+		RecordLog(user.Id, LogTypeSystem, newUserRegisterGrantLog()+
+			PointsExpiryLogSuffix(ExpireAtDays(common.GetTimestamp(),
+				operation_setting.GetPointsSetting().NewUserExpireDays)))
 	}
 	// 额度与积分各记一条：两者是两个钱包，合成一条反而看不出哪份进了哪边。
 	// 渠道奖励额度通常远高于默认值，日志里必须带上是哪个渠道给的，否则对账时
 	// 只看见一个偏大的数字，查不出该记到谁的推广账上。
 	if newUserPoints > 0 {
-		RecordLog(user.Id, LogTypeSystem, newUserPointsLog(newUserPoints, pointsChannel))
+		RecordLog(user.Id, LogTypeSystem, newUserPointsLog(newUserPoints, pointsChannel)+
+			PointsExpiryLogSuffix(ExpireAtDays(common.GetTimestamp(), pointsExpireDays)))
 	}
 	// 积分池的入账流水已在事务内由 GrantPointsTx 写过，这里只补积分系统未启用时的现金池那条。
 	recordNewUserCashGrantEntry(user.Id, common.QuotaForNewUser)

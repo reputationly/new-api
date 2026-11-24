@@ -22,9 +22,9 @@ describe('有效期字段的表单初值', () => {
       ).toBe(true);
       expect(values.points_expire_days).toBe(0);
       // 与「兑换码有效期」是两个字段，不能混
-      expect(
-        Object.prototype.hasOwnProperty.call(values, 'expired_time'),
-      ).toBe(true);
+      expect(Object.prototype.hasOwnProperty.call(values, 'expired_time')).toBe(
+        true,
+      );
     }
   });
 

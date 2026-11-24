@@ -121,7 +121,8 @@ func handleFundOperation(c *gin.Context, user *model.User, req ManageRequest) {
 		}
 		model.RecordLogWithAdminInfo(user.Id, model.LogTypeManage,
 			fmt.Sprintf("管理员赠送 %d 积分（事由：%s，流水 %s）",
-				common.QuotaToPoints(req.Value), remark, refId), adminInfo)
+				common.QuotaToPoints(req.Value), remark, refId)+
+				model.PointsExpiryLogSuffix(expiresAt), adminInfo)
 
 	case FundOpCreditGrant:
 		// 授信上限是绝对值设定而非增量：运营填的是「这个客户的额度是多少」。
