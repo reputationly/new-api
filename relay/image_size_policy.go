@@ -101,6 +101,11 @@ func parseWidthHeight(size string) (int, int, bool) {
 	return w, h, true
 }
 
+// allowedSizeHint 是错误文案里的"可用尺寸"提示，统一一种写法。
+func allowedSizeHint() string {
+	return " allowed sizes -> " + allowedSizeList()
+}
+
 func allowedSizeList() string {
 	var out []string
 	for _, band := range h3ImageAreaBands {
@@ -165,13 +170,11 @@ func normalizeBilledImageSize(size string) (string, error) {
 		return "", nil
 	}
 	if trimmed == "auto" {
-		// The vendor sizes an "auto" request itself; the closest thing we can honour is
-		// the smallest billed canvas.
-		return h3ImageAreaBands[0].sizes[0], nil
+		return "", fmt.Errorf("size must be an explicit WIDTHxHEIGHT (auto is not supported);%s", allowedSizeHint())
 	}
 	width, height, ok := parseWidthHeight(trimmed)
 	if !ok {
-		return "", fmt.Errorf("invalid size %q, expected WIDTHxHEIGHT; allowed sizes -> %s", size, allowedSizeList())
+		return "", fmt.Errorf("invalid size %q, expected WIDTHxHEIGHT;%s", size, allowedSizeHint())
 	}
 	exact := fmt.Sprintf("%dx%d", width, height)
 	for _, band := range h3ImageAreaBands {
@@ -190,15 +193,15 @@ func normalizeBilledImageSize(size string) (string, error) {
 	}
 	band := bandOfArea(width * height)
 	if band == nil {
-		// Below the smallest tier travels untouched: the engine's canvas planner generates
-		// on a larger 32-aligned canvas and downsamples back to the requested size, so a
-		// small request is a delivery decision the engine owns, not one to re-price here.
-		smallest := &h3ImageAreaBands[0]
-		if width*height < smallest.lowArea {
-			return exact, nil
+		// Below the smallest tier is refused, never upgraded: delivering 2K for a 1K
+		// request would silently change what the client asked for, and letting it travel
+		// costs a GPU slot (measured: ~2 minutes) before the engine answers the same 400.
+		if smallest := &h3ImageAreaBands[0]; width*height < smallest.lowArea {
+			return "", fmt.Errorf("size %dx%d (%d px) is below the smallest billed tier (2K, %d..%d px); %s",
+				width, height, width*height, smallest.lowArea, smallest.highArea, allowedSizeHint())
 		}
-		return "", fmt.Errorf("unsupported_size: %dx%d (%d px) is outside the billed tiers; allowed sizes -> %s",
-			width, height, width*height, allowedSizeList())
+		return "", fmt.Errorf("unsupported_size: %dx%d (%d px) is outside the billed tiers;%s",
+			width, height, width*height, allowedSizeHint())
 	}
 	mapped := closestSizeInBand(band, width, height)
 	if mapped == "" {

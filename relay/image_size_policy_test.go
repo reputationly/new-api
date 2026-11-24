@@ -34,9 +34,7 @@ func TestNormalizeBilledImageSize(t *testing.T) {
 		"2816x1584": "2720x1536", // 16:9
 		"1584x2816": "1536x2720", // 9:16
 		"2000x2000": "2048x2048", // 4.0 MP: on the band floor, 16 px grid
-		"1024x1024": "1024x1024", // 低于 2K 档原样透传，由引擎决定画布与降采样
-		"1248x832":  "1248x832",  // 同上（16 网格的 1K 尺寸也交给引擎）
-		"auto":      "2048x2048", // auto 落到最小计费画布
+
 		"4096x1024": "3552x1184", // 4:1 exceeds the engine's 3:1 output bound
 	}
 	for size, want := range mapped {
@@ -60,6 +58,9 @@ func TestNormalizeBilledImageSize(t *testing.T) {
 	}
 
 	reject := map[string]string{
+		"1024x1024": "below the 2K tier: refused fast, never upgraded (delivery must match the request)",
+		"1248x832":  "below the 2K tier",
+		"auto":      "auto is not an explicit size",
 		"3000x3000": "between the bands, no tier to map into",
 		"8000x8000": "above the 16MP band",
 	}
