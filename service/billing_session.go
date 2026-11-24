@@ -256,7 +256,17 @@ func (s *BillingSession) preConsume(c *gin.Context, quota int) *types.NewAPIErro
 func (s *BillingSession) reserveFunding(delta int) error {
 	switch funding := s.funding.(type) {
 	case *WalletFunding:
-		if err := model.DecreaseUserQuota(funding.userId, delta, false); err != nil {
+		var err error
+		if s.relayInfo.RelayFormat == types.RelayFormatOpenAIRealtime && s.relayInfo.TieredBillingSnapshot != nil {
+			var ok bool
+			ok, err = model.TryDecreaseUserQuotaWithinCredit(funding.userId, delta)
+			if err == nil && !ok {
+				return ErrWalletInsufficient
+			}
+		} else {
+			err = model.DecreaseUserQuota(funding.userId, delta, false)
+		}
+		if err != nil {
 			return types.NewError(err, types.ErrorCodeUpdateDataError, types.ErrOptionWithSkipRetry())
 		}
 		funding.consumed += delta

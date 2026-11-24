@@ -74,19 +74,49 @@ export default function ToolPriceSettings({ options, refresh }) {
   const [mode, setMode] = useState('visual');
   const [jsonText, setJsonText] = useState('');
   const [jsonError, setJsonError] = useState('');
+  const [configError, setConfigError] = useState(false);
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
     let prices = {};
     let currencies = {};
+    let invalid = false;
     try {
       const raw = options?.[OPTION_KEY];
       if (raw) {
         prices = typeof raw === 'string' ? JSON.parse(raw) : raw;
       }
-      currencies = JSON.parse(options?.[CURRENCY_KEY] || '{}') || {};
+      if (
+        prices != null &&
+        (typeof prices !== 'object' ||
+          Array.isArray(prices) ||
+          Object.values(prices).some(
+            (price) =>
+              typeof price !== 'number' || !Number.isFinite(price) || price < 0,
+          ))
+      ) {
+        prices = {};
+        invalid = true;
+      }
     } catch {
-      prices = {};
+      invalid = true;
+    }
+    try {
+      const raw = options?.[CURRENCY_KEY];
+      currencies =
+        (typeof raw === 'string' ? JSON.parse(raw || '{}') : raw) || {};
+      if (
+        typeof currencies !== 'object' ||
+        Array.isArray(currencies) ||
+        Object.values(currencies).some(
+          (currency) => currency !== 'CNY' && currency !== 'USD',
+        )
+      ) {
+        currencies = {};
+        invalid = true;
+      }
+    } catch {
+      invalid = true;
     }
 
     if (!prices || Object.keys(prices).length === 0) {
@@ -95,6 +125,7 @@ export default function ToolPriceSettings({ options, refresh }) {
 
     setRows(objectToRows(prices, currencies));
     setJsonText(JSON.stringify(prices, null, 2));
+    setConfigError(invalid);
   }, [options]);
 
   const syncToJson = (nextRows) => {
@@ -107,14 +138,20 @@ export default function ToolPriceSettings({ options, refresh }) {
     setJsonText(text);
     try {
       const parsed = JSON.parse(text);
-      if (typeof parsed !== 'object' || Array.isArray(parsed) || parsed === null) {
+      if (
+        typeof parsed !== 'object' ||
+        Array.isArray(parsed) ||
+        parsed === null
+      ) {
         setJsonError(t('JSON 必须是对象'));
         return;
       }
-      setRows(objectToRows(
-        parsed,
-        Object.fromEntries(rows.map((row) => [row.key, row.currency])),
-      ));
+      setRows(
+        objectToRows(
+          parsed,
+          Object.fromEntries(rows.map((row) => [row.key, row.currency])),
+        ),
+      );
       setJsonError('');
     } catch (e) {
       setJsonError(e.message);
@@ -140,15 +177,19 @@ export default function ToolPriceSettings({ options, refresh }) {
   const currentPrices = useMemo(() => rowsToObject(rows), [rows]);
 
   const handleSave = async () => {
+    if (configError) return;
     setSaving(true);
     try {
       const res = await API.post('/api/model_pricing/options', {
         options: {
           [OPTION_KEY]: JSON.stringify(currentPrices),
-          [CURRENCY_KEY]: JSON.stringify(Object.fromEntries(
-            rows.filter((row) => row.key.trim() && row.currency === 'USD')
-              .map((row) => [row.key.trim(), 'USD']),
-          )),
+          [CURRENCY_KEY]: JSON.stringify(
+            Object.fromEntries(
+              rows
+                .filter((row) => row.key.trim() && row.currency === 'USD')
+                .map((row) => [row.key.trim(), 'USD']),
+            ),
+          ),
         },
       });
       if (res.data.success) {
@@ -224,7 +265,11 @@ export default function ToolPriceSettings({ options, refresh }) {
         type='info'
         description={
           <>
-            <div>{t('按所选币种保存价格，美元使用全局模型源汇率换算。搜索工具按千次，图片生成按次，Gemini 音频输入按百万 tokens。按次计费模型不额外收取工具费用。')}</div>
+            <div>
+              {t(
+                '按所选币种保存价格，美元使用全局模型源汇率换算。搜索工具按千次，图片生成按次，Gemini 音频输入按百万 tokens。按次计费模型不额外收取工具费用。',
+              )}
+            </div>
             <div style={{ marginTop: 4 }}>
               <Text strong>{t('格式')}：</Text>
               <code>web_search_preview</code> {t('为默认价格')}，
@@ -232,13 +277,21 @@ export default function ToolPriceSettings({ options, refresh }) {
             </div>
             <div>
               <code>image_generation_high_1024x1024</code>{' '}
-              {t('图片生成可按 low、medium、high 和尺寸分别配置；Gemini 音频输入用下方工具标识。')}{' '}
+              {t(
+                '图片生成可按 low、medium、high 和尺寸分别配置；Gemini 音频输入用下方工具标识。',
+              )}{' '}
               <code>gemini_audio_input:gemini-2.5-flash*</code>
             </div>
           </>
         }
         style={{ marginBottom: 16 }}
       />
+      {configError && (
+        <Banner
+          type='danger'
+          description={t('已保存的工具价格或币种配置无效，不能覆盖保存。')}
+        />
+      )}
 
       <RadioGroup
         type='button'
@@ -278,7 +331,11 @@ export default function ToolPriceSettings({ options, refresh }) {
             style={{ fontFamily: 'monospace', fontSize: 13 }}
           />
           {jsonError && (
-            <Text type='danger' size='small' style={{ display: 'block', marginTop: 4 }}>
+            <Text
+              type='danger'
+              size='small'
+              style={{ display: 'block', marginTop: 4 }}
+            >
               {jsonError}
             </Text>
           )}
@@ -287,7 +344,9 @@ export default function ToolPriceSettings({ options, refresh }) {
               icon={<IconCopy />}
               size='small'
               theme='borderless'
-              onClick={() => { copy(jsonText, t('JSON')); }}
+              onClick={() => {
+                copy(jsonText, t('JSON'));
+              }}
             >
               {t('复制')}
             </Button>
@@ -298,12 +357,14 @@ export default function ToolPriceSettings({ options, refresh }) {
         </>
       )}
 
-      <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 16 }}>
+      <div
+        style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 16 }}
+      >
         <Button
           theme='solid'
           type='primary'
           loading={saving}
-          disabled={mode === 'json' && !!jsonError}
+          disabled={configError || (mode === 'json' && !!jsonError)}
           onClick={handleSave}
         >
           {t('保存')}

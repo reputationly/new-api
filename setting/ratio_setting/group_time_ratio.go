@@ -490,6 +490,66 @@ func parseGroupTimeRatio(jsonStr string) (GroupTimeRatioConfig, error) {
 	return cfg, nil
 }
 
+func CheckTimePricesOnCurrencyChange(before, after string, models []string) error {
+	if len(models) == 0 {
+		return nil
+	}
+	old, err := parseGroupTimeRatio(before)
+	if err != nil {
+		return err
+	}
+	next, err := parseGroupTimeRatio(after)
+	if err != nil {
+		return err
+	}
+	scopes := make(map[string]bool)
+	for scope := range old.Rules {
+		scopes[scope] = true
+	}
+	for scope := range next.Rules {
+		scopes[scope] = true
+	}
+	scopeNames := make([]string, 0, len(scopes))
+	for scope := range scopes {
+		scopeNames = append(scopeNames, scope)
+	}
+	sort.Strings(scopeNames)
+	resolve := func(cfg GroupTimeRatioConfig, scope, name string) (string, string, []TimeRule) {
+		if pattern, rules, ok := pickRuleFrom(cfg.Rules[scope], name); ok {
+			return scope, pattern, rules
+		}
+		pattern, rules, _ := pickRuleFrom(cfg.Rules[globalTimeRatioScope], name)
+		return globalTimeRatioScope, pattern, rules
+	}
+	pricesByWindow := func(rules []TimeRule) map[string]map[string]float64 {
+		prices := make(map[string]map[string]float64, len(rules))
+		for _, rule := range rules {
+			prices[rule.Window] = rule.Prices
+		}
+		return prices
+	}
+	hasPrice := func(prices map[string]float64, component string, value float64) bool {
+		previous, exists := prices[component]
+		return exists && previous == value
+	}
+	for _, name := range models {
+		for _, scope := range scopeNames {
+			_, _, priorRules := resolve(old, scope, name)
+			prior := pricesByWindow(priorRules)
+			matchedScope, pattern, rules := resolve(next, scope, name)
+			stored := pricesByWindow(old.Rules[matchedScope][pattern])
+			for _, rule := range rules {
+				for component, value := range rule.Prices {
+					if hasPrice(prior[rule.Window], component, value) || hasPrice(stored[rule.Window], component, value) {
+						return fmt.Errorf("模型 %s 切换定价币种时，请同时更新分组 %s 时段 %s 的绝对价，或改用相对系数", name, scope, rule.Window)
+					}
+				}
+			}
+		}
+	}
+	return nil
+}
+
 // CheckGroupTimeRatio 校验时段折扣配置。保存前调用。
 func CheckGroupTimeRatio(jsonStr string) error {
 	cfg, err := parseGroupTimeRatio(jsonStr)

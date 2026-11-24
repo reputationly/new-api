@@ -105,11 +105,12 @@ func TestToolCallSurchargeE6(t *testing.T) {
 	require.Equal(t, 73.0, operation_setting.GetToolPriceForModel("web_search_preview", "o1"),
 		"默认工具价必须已是人民币（B3）")
 
-	res := ComputeToolCallQuota(ToolCallUsage{
+	res, err := ComputeToolCallQuota(ToolCallUsage{
 		ModelName:         "o1",
 		WebSearchCalls:    3,
 		WebSearchToolName: "web_search_preview",
 	}, 1)
+	require.NoError(t, err)
 	require.Equal(t, 219_000_000, res.TotalQuota)
 	require.Len(t, res.Items, 1)
 	require.Equal(t, 219_000_000, res.Items[0].Quota)
@@ -154,9 +155,9 @@ func TestPerCallPriceBoundaryValues(t *testing.T) {
 		price float64
 		want  int
 	}{
-		{0.000000001, 1},       // ¥1e-9 = 恰好 1 quota
-		{0.005, 5_000_000},      // 半分钱
-		{0.2, 200_000_000},      // E5：按次生图
+		{0.000000001, 1},   // ¥1e-9 = 恰好 1 quota
+		{0.005, 5_000_000}, // 半分钱
+		{0.2, 200_000_000}, // E5：按次生图
 		{1000, 1_000_000_000_000},
 	} {
 		relayInfo := textRelayInfo(types.PriceData{

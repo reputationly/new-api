@@ -27,53 +27,7 @@ import {
   combineBillingExpr,
   splitBillingExprAndRequestRules,
 } from '../components/requestRuleExpr';
-import { BILLING_VAR_REGEX } from '../../../../constants/billing.constants';
-import {
-  exprUsesFX,
-  scaleTermCoefficients,
-} from '../../../../helpers/billingExprTerms';
-
 export const PAGE_SIZE = 10;
-
-/**
- * 按比例缩放一个价格字符串（空值/非数字原样返回）。
- * 用于「改汇率」：运营只改汇率，价格与表达式系数由机器按比例重算，避免手改漏改。
- */
-/**
- * 表达式是否引用了 fx（本模型的源货币汇率）。
- *
- * 引用了 fx 的表达式，系数写的是**美元目录价**，汇率在运行/展示时乘进去；
- * 所以改汇率时**不能**再去缩放文本（否则 `p * 1.5 * fx` 会被乘成 `p * 1.545 * fx`，
- * 一次比一次离谱）。这里的判据必须与 helpers/render.jsx 的 exprUsesFX 一致。
- */
-export const exprReferencesFX = exprUsesFX;
-
-export const scaleNumericString = (value, factor) => {
-  const num = toNumberOrNull(value);
-  if (num === null) return value;
-  return formatNumber(num * factor);
-};
-
-/**
- * 按比例缩放表达式里的系数。
- *
- * 只替换「变量 * 数字」这种系数写法（BILLING_VAR_REGEX），不解析 AST，
- * 因此 `tier("≤272K", …)` 的档位标签、三元条件、请求规则都原样保留。
- */
-/**
- * 按比例缩放表达式里的系数。
- *
- * 用共享的分项实现（helpers/billingExprTerms）：
- *  - 两种书写顺序都支持（`p * 1.36` / `1.36 * p`）
- *  - 一次扫描，`1.5 * p * 2` 不会被前后两种规则各缩放一次
- *  - 档位条件（`len <= 272000`）里的数字不动，档位标签里的字符串也不动
- */
-export const scaleBillingExpr = (expr, factor) => {
-  if (!expr) return expr;
-  // 不切分整条表达式（里面可能有三元/比较/tier 调用），直接对系数做一次扫描替换：
-  // 正则在整串上按「变量 * 数字」或「数字 * 变量」匹配，每个系数只会被替换一次。
-  return scaleTermCoefficients(String(expr), factor);
-};
 
 /**
  * 把表达式正文规范成存储形态：**先剥掉可能已存在的版本前缀，再统一加 `v2:`**。
@@ -1384,7 +1338,10 @@ export function useModelPricingEditorState({
 
   const handlePricingCurrencyChange = (value) => {
     if (selectedModel) {
-      upsertModel(selectedModel.name, (model) => ({ ...model, pricingCurrency: value }));
+      upsertModel(selectedModel.name, (model) => ({
+        ...model,
+        pricingCurrency: value,
+      }));
     }
   };
 

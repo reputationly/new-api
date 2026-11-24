@@ -16,6 +16,9 @@ import ModelSourceFXCard from './components/ModelSourceFXCard';
 export default function ModelPricingCombined({ options, refresh }) {
   const { t } = useTranslation();
   const [editMode, setEditMode] = useState('visual');
+  const configuredRate = options?.ModelSourceRate || '';
+  const [sourceRate, setSourceRate] = useState(configuredRate);
+  useEffect(() => setSourceRate(configuredRate), [configuredRate]);
 
   const rawTime = (options && options.GroupTimeRatio) || '{}';
   const [timeDraft, setTimeDraft] = useState(rawTime);
@@ -24,7 +27,8 @@ export default function ModelPricingCombined({ options, refresh }) {
     setTimeDraft(rawTime);
   }, [rawTime]);
 
-  const timeOptions = timeDraft === rawTime ? {} : { GroupTimeRatio: timeDraft };
+  const timeOptions =
+    timeDraft === rawTime ? {} : { GroupTimeRatio: timeDraft };
 
   return (
     <div>
@@ -41,11 +45,15 @@ export default function ModelPricingCombined({ options, refresh }) {
       </div>
       <TimeSlotTemplates value={timeDraft} onChange={setTimeDraft} />
       {editMode === 'visual' && (
-        <ModelSourceFXCard configuredRate={options?.ModelSourceRate} />
+        <ModelSourceFXCard
+          configuredRate={sourceRate}
+          onRateChange={setSourceRate}
+        />
       )}
       {editMode === 'visual' ? (
         <ModelPricingEditor
           options={options}
+          sourceRate={sourceRate}
           refresh={refresh}
           timeDraft={timeDraft}
           onTimeDraftChange={setTimeDraft}
@@ -63,7 +71,11 @@ export default function ModelPricingCombined({ options, refresh }) {
               '高级模式：此处直接编辑后端原始 JSON。模型倍率（ModelRatio）即人民币/百万 tokens 输入价，按次价格（ModelPrice）即人民币/次，与上方「可视化编辑」同一口径；补全、缓存等倍率是相对输入价的无量纲系数。不熟悉 JSON 的话建议使用可视化编辑。',
             )}
           />
-          <ModelRatioSettings options={options} refresh={refresh} timeOptions={timeOptions} />
+          <ModelRatioSettings
+            options={options}
+            refresh={refresh}
+            timeOptions={timeOptions}
+          />
         </>
       )}
     </div>

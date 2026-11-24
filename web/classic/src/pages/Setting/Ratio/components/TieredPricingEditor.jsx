@@ -1186,9 +1186,7 @@ function evalExprLocally(exprStr, p, c, extraTokenValues, fx = 0) {
       p,
       c,
       len,
-      // fx：本模型的源货币汇率。引用 fx 的表达式（美元目录价写法）没有它就会抛
-      // 「fx is not defined」，而文档推荐的正是这种写法。
-      fx: Number(fx) > 0 ? Number(fx) : 0,
+      fx,
       tier: tierFn,
       max: Math.max,
       min: Math.min,
@@ -1732,6 +1730,7 @@ function getLosslessVisualConfig(expr) {
 
 export default function TieredPricingEditor({
   model,
+  sourceRate,
   onExprChange,
   requestRuleExpr,
   onRequestRuleExprChange,
@@ -1866,12 +1865,16 @@ export default function TieredPricingEditor({
 
   const effectiveExpr = currentExpr;
   const evalResult = useMemo(() => {
+    const fx = Number(sourceRate);
+    if (exprUsesFX(effectiveExpr) && !(Number.isFinite(fx) && fx > 0)) {
+      return { missingRate: true, error: true };
+    }
     const result = evalExprLocally(
       effectiveExpr,
       promptTokens,
       completionTokens,
       extraTokenValues,
-      Number(model?.sourceRate),
+      fx,
     );
     if (!result.error) {
       // 表达式系数是 ¥/百万 tokens，输出单位就是元：先除 10⁶ 得元，再乘 QuotaPerYuan
@@ -1890,7 +1893,7 @@ export default function TieredPricingEditor({
     audioInputTokens,
     audioOutputTokens,
     // 汇率进估算器：只改汇率时也要重算（否则金额是上一版汇率的）
-    model?.sourceRate,
+    sourceRate,
   ]);
 
   return (
@@ -2077,7 +2080,9 @@ export default function TieredPricingEditor({
             border: `1px solid ${evalResult.error ? 'var(--semi-color-danger)' : 'var(--semi-color-primary)'}`,
           }}
         >
-          {evalResult.error ? (
+          {evalResult.missingRate ? (
+            <Text type='danger'>{t('未设置全局模型源汇率，不可估算')}</Text>
+          ) : evalResult.error ? (
             <Text type='danger'>
               {t('表达式错误')}: {evalResult.error}
             </Text>

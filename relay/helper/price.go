@@ -430,12 +430,11 @@ func freezeToolPrices(modelName string) (map[string]float64, float64, error) {
 		}
 	}
 	for _, name := range names {
-		amount, usd := operation_setting.GetToolPriceWithCurrency(name, modelName)
+		amount, usd, err := operation_setting.ResolveToolPriceCNY(name, modelName, rate, hasRate)
+		if err != nil {
+			return nil, 0, err
+		}
 		if usd {
-			if !hasRate {
-				return nil, 0, fmt.Errorf("工具 %s 使用美元定价: %w", name, billing_setting.ErrModelSourceRateUnavailable)
-			}
-			amount *= rate
 			usedRate = rate
 		}
 		prices[name] = amount

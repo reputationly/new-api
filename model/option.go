@@ -343,10 +343,10 @@ func UpdateOption(key string, value string) error {
 // 逐个 PUT 时任何一步失败都会留下半套配置，而"模式=表达式计费但没有表达式"会让整个
 // 模型之后所有请求直接报错。这里保证要么全写、要么全不写。
 func UpdateOptions(options map[string]string, stateKeys []string, validate func(map[string]string) error) error {
-	return UpdateOptionsWithAudit(options, stateKeys, validate, nil)
+	return UpdateOptionsWithAudit(options, stateKeys, validate, nil, nil)
 }
 
-func UpdateOptionsWithAudit(options map[string]string, stateKeys []string, validate func(map[string]string) error, audit *OptionAudit) error {
+func UpdateOptionsWithAudit(options map[string]string, stateKeys []string, validate func(map[string]string) error, validateChange func(before, after map[string]string) error, audit *OptionAudit) error {
 	if len(options) == 0 {
 		return nil
 	}
@@ -391,11 +391,20 @@ func UpdateOptionsWithAudit(options map[string]string, stateKeys []string, valid
 		if err != nil {
 			return err
 		}
+		beforeState := final
+		if validateChange != nil {
+			final = maps.Clone(beforeState)
+		}
 		for key, value := range values {
 			final[key] = value
 		}
 		if err := validate(final); err != nil {
 			return &OptionValidationError{err}
+		}
+		if validateChange != nil {
+			if err := validateChange(beforeState, final); err != nil {
+				return &OptionValidationError{err}
+			}
 		}
 		if audit != nil {
 			before, err := getOptionValues(tx, keys)

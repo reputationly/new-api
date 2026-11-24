@@ -432,6 +432,8 @@ func TestLogTaskConsumption_CarriesVideoMatrixFields(t *testing.T) {
 	info.UserId = 9201
 	info.ChannelMeta = &relaycommon.ChannelMeta{ChannelId: 9201}
 	info.UsingGroup = "default"
+	info.PriceData.PricingCurrency = "USD"
+	info.PriceData.ModelSourceRate = 6.8
 
 	LogTaskConsumption(c, info)
 
@@ -442,6 +444,8 @@ func TestLogTaskConsumption_CarriesVideoMatrixFields(t *testing.T) {
 
 	require.Equal(t, ratio_setting.VideoPriceModeToken, other["video_price_mode"])
 	require.Equal(t, "1080p", other["video_resolution"])
+	require.Equal(t, "USD", other["pricing_currency"])
+	require.Equal(t, 6.8, other["model_source_rate"])
 	require.Equal(t, true, other["video_has_input"])
 	require.InDelta(t, 8.3836, other["video_unit_price"].(float64), 1e-9)
 	// token 计费任务不能标计件——对账据此按「个」计数，会把 20 万 token 算成 1 个

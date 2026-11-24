@@ -86,7 +86,6 @@ const ModelTimePriceSection = ({
   allRules,
   // 非空 = 按美元录入（见 ModelPricingEditor 的开关）：只影响输入框显示单位，
   // state 与存储仍是人民币。
-  usdRate = null,
   sourceCurrency = 'CNY',
 }) => {
   const { t } = useTranslation();
@@ -108,19 +107,25 @@ const ModelTimePriceSection = ({
       const pattern = effectivePattern(allRules[scope], modelName);
       if (pattern) {
         warnings.push(
-          t('分组「{{scope}}」下配置了匹配「{{pattern}}」的分时规则，该分组用户不受此处编辑影响', {
-            scope,
-            pattern,
-          }),
+          t(
+            '分组「{{scope}}」下配置了匹配「{{pattern}}」的分时规则，该分组用户不受此处编辑影响',
+            {
+              scope,
+              pattern,
+            },
+          ),
         );
       }
     });
     const starPattern = effectivePattern(allRules['*'], modelName);
     if (starPattern && starPattern !== modelName) {
       warnings.push(
-        t('计费实际命中通配规则「{{pattern}}」（本模型没有精确条目），此处显示为空但计费生效中', {
-          pattern: starPattern,
-        }),
+        t(
+          '计费实际命中通配规则「{{pattern}}」（本模型没有精确条目），此处显示为空但计费生效中',
+          {
+            pattern: starPattern,
+          },
+        ),
       );
     }
     return warnings;
@@ -345,7 +350,6 @@ const ModelTimePriceSection = ({
                           label={t(c.label)}
                           value={value > 0 ? value : ''}
                           placeholder={t('不变')}
-                          usdRate={usdRate}
                           sourceCurrency={sourceCurrency}
                           suffix={c.key === 'per_call' ? '¥/次' : PRICE_SUFFIX}
                           headerAction={

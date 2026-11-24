@@ -104,7 +104,32 @@ func calculateAudioQuota(info QuotaInfo, snapshot ...types.PriceData) int {
 	return int(quota.Round(0).IntPart())
 }
 
-func PreWssConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, usage *dto.RealtimeUsage) error {
+func realtimeTieredParams(usage *dto.RealtimeUsage) billingexpr.TokenParams {
+	return billingexpr.TokenParams{
+		P:   float64(usage.InputTokens),
+		C:   float64(usage.OutputTokens),
+		Len: float64(usage.InputTokens),
+	}
+}
+
+func PreWssConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, usage, totalUsage *dto.RealtimeUsage) error {
+	if snap := relayInfo.TieredBillingSnapshot; snap != nil {
+		var input billingexpr.RequestInput
+		if relayInfo.BillingRequestInput != nil {
+			input = *relayInfo.BillingRequestInput
+		}
+		result, err := billingexpr.ComputeTieredQuotaWithRequest(snap, realtimeTieredParams(totalUsage), input)
+		if err != nil {
+			return err
+		}
+		if result.ActualQuotaAfterGroup == 0 {
+			return nil
+		}
+		if relayInfo.Billing == nil {
+			return fmt.Errorf("realtime tiered billing session is unavailable")
+		}
+		return relayInfo.Billing.Reserve(result.ActualQuotaAfterGroup)
+	}
 	if relayInfo.UsePrice {
 		return nil
 	}
@@ -180,11 +205,7 @@ func PostWssConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, mod
 	usage *dto.RealtimeUsage, extraContent string) {
 
 	var tieredResult *billingexpr.TieredResult
-	tieredOk, tieredQuota, tieredRes := TryTieredSettle(relayInfo, billingexpr.TokenParams{
-		P:   float64(usage.InputTokens),
-		C:   float64(usage.OutputTokens),
-		Len: float64(usage.InputTokens),
-	})
+	tieredOk, tieredQuota, tieredRes := TryTieredSettle(relayInfo, realtimeTieredParams(usage))
 	if tieredOk {
 		tieredResult = tieredRes
 	}

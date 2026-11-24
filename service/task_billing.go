@@ -145,6 +145,7 @@ func LogTaskConsumption(c *gin.Context, info *relaycommon.RelayInfo) {
 	}
 	other["request_path"] = c.Request.URL.Path
 	other["price_unit"] = common.PriceUnitCNY
+	appendPricingCurrency(other, info.PriceData)
 	other["model_price"] = info.PriceData.ModelPrice
 	if info.PriceData.ModelRatio > 0 {
 		other["model_ratio"] = info.PriceData.ModelRatio

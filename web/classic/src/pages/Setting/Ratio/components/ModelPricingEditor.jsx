@@ -63,6 +63,7 @@ const EMPTY_CANDIDATE_MODEL_NAMES = [];
 
 export default function ModelPricingEditor({
   options,
+  sourceRate = options?.ModelSourceRate,
   refresh,
   candidateModelNames = EMPTY_CANDIDATE_MODEL_NAMES,
   filterMode = 'all',
@@ -127,7 +128,9 @@ export default function ModelPricingEditor({
   const changeCurrency = (currency) => {
     Modal.confirm({
       title: t('切换定价币种'),
-      content: t('现有数值不会自动换算。请核对基础价、分时价、视频矩阵和表达式，再应用更改。'),
+      content: t(
+        '现有数值不会自动换算。请核对基础价、分时价、视频矩阵和表达式，再应用更改。',
+      ),
       onOk: () => handlePricingCurrencyChange(currency),
     });
   };
@@ -605,11 +608,14 @@ export default function ModelPricingEditor({
                       <Banner
                         type='info'
                         closeIcon={null}
-                        description={t('美元系数请显式乘以 fx。fx 取全局模型源汇率，表达式结果为人民币。')}
+                        description={t(
+                          '美元系数请显式乘以 fx。fx 取全局模型源汇率，表达式结果为人民币。',
+                        )}
                       />
                     ) : null}
                     <TieredPricingEditor
                       model={selectedModel}
+                      sourceRate={sourceRate}
                       onExprChange={handleBillingExprChange}
                       requestRuleExpr={selectedModel.requestRuleExpr}
                       onRequestRuleExprChange={handleRequestRuleExprChange}

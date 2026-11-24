@@ -11,6 +11,7 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/model"
+	"github.com/QuantumNous/new-api/pkg/billingexpr"
 	"github.com/QuantumNous/new-api/service/mediastore"
 	"github.com/QuantumNous/new-api/service/moderation"
 	"github.com/QuantumNous/new-api/setting/billing_setting"
@@ -206,8 +207,15 @@ func validatePricingFinalState(final map[string]string) error {
 		return err
 	}
 	for name, currency := range currencies {
-		if currency == billing_setting.CurrencyUSD && rate <= 0 {
+		if currency != billing_setting.CurrencyUSD {
+			continue
+		}
+		if rate <= 0 {
 			return fmt.Errorf("模型 %s 使用美元定价，请先设置全局源汇率", name)
+		}
+		expr, _, _ := strings.Cut(strings.TrimSpace(exprs[name]), "|||")
+		if modes[name] == billing_setting.BillingModeTieredExpr && !billingexpr.UsedVars(strings.TrimSpace(expr))["fx"] {
+			return fmt.Errorf("模型 %s 使用美元分段计费，计价表达式必须引用 fx", name)
 		}
 	}
 	toolCurrencies, err := operation_setting.ParseToolPriceCurrencies(final["tool_price_setting.currencies"])
@@ -222,12 +230,39 @@ func validatePricingFinalState(final map[string]string) error {
 	return checkTimePriceVsExprs(final["GroupTimeRatio"], exprs)
 }
 
+func validatePricingChange(before, after map[string]string) error {
+	if before["ModelPriceCurrency"] == after["ModelPriceCurrency"] {
+		return nil
+	}
+	from, err := billing_setting.ParseModelPriceCurrencies(before["ModelPriceCurrency"])
+	if err != nil {
+		return err
+	}
+	to, err := billing_setting.ParseModelPriceCurrencies(after["ModelPriceCurrency"])
+	if err != nil {
+		return err
+	}
+	var changed []string
+	for name, currency := range from {
+		if currency == billing_setting.CurrencyUSD && to[name] != billing_setting.CurrencyUSD {
+			changed = append(changed, name)
+		}
+	}
+	for name, currency := range to {
+		if currency == billing_setting.CurrencyUSD && from[name] != billing_setting.CurrencyUSD {
+			changed = append(changed, name)
+		}
+	}
+	sort.Strings(changed)
+	return ratio_setting.CheckTimePricesOnCurrencyChange(before["GroupTimeRatio"], after["GroupTimeRatio"], changed)
+}
+
 func savePricingOptions(c *gin.Context, options map[string]string, action, summary string) {
 	audit := model.OptionAudit{
 		ActorID: c.GetInt("id"), Username: c.GetString("username"), Role: c.GetInt("role"),
 		IP: c.ClientIP(), RequestID: c.GetString(common.RequestIdKey), Action: action, Summary: summary,
 	}
-	if err := model.UpdateOptionsWithAudit(options, pricingStateKeys, validatePricingFinalState, &audit); err != nil {
+	if err := model.UpdateOptionsWithAudit(options, pricingStateKeys, validatePricingFinalState, validatePricingChange, &audit); err != nil {
 		var validationErr *model.OptionValidationError
 		if errors.As(err, &validationErr) {
 			common.ApiError(c, validationErr)

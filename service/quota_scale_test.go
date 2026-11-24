@@ -7,6 +7,8 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/dto"
+	"github.com/QuantumNous/new-api/model"
+	"github.com/QuantumNous/new-api/pkg/billingexpr"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/types"
 
@@ -215,6 +217,43 @@ func TestCalculateAudioQuotaRatioPathThousandPerRatio(t *testing.T) {
 		common.QuotaPerUnit = qpu
 		require.Equal(t, 1_000_000, calculateAudioQuota(info), "QuotaPerUnit=%v", qpu)
 	}
+}
+
+func TestRealtimeTieredReserveTracksCumulativeUsageAndSettlesOnce(t *testing.T) {
+	truncate(t)
+	const id = 9211
+	seedUser(t, id, 500_000)
+	seedChannel(t, id)
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	c.Request = httptest.NewRequest("GET", "/v1/realtime", nil)
+	info := &relaycommon.RelayInfo{
+		UserId: id, IsPlayground: true, ForcePreConsume: true,
+		ChannelMeta: &relaycommon.ChannelMeta{ChannelId: id},
+		RelayFormat: types.RelayFormatOpenAIRealtime, OriginModelName: "tiered-realtime",
+		TieredBillingSnapshot: &billingexpr.BillingSnapshot{
+			BillingMode: "tiered_expr", ExprVersion: 2, ExprFX: 2, GroupRatio: 1,
+			ExprString: "v2:len <= 100 ? tier(\"low\", p * fx) : tier(\"high\", p * fx * 2)",
+		},
+	}
+	session := &BillingSession{relayInfo: info, funding: &WalletFunding{userId: id}}
+	info.Billing = session
+	require.Nil(t, session.preConsume(c, 100_000))
+	usage := func(n int) *dto.RealtimeUsage {
+		return &dto.RealtimeUsage{InputTokens: n, TotalTokens: n}
+	}
+	require.NoError(t, PreWssConsumeQuota(c, info, usage(100), usage(100)))
+	require.Equal(t, 200_000, session.GetPreConsumedQuota())
+	require.NoError(t, PreWssConsumeQuota(c, info, usage(10), usage(110)))
+	require.Equal(t, 440_000, session.GetPreConsumedQuota())
+	require.ErrorIs(t, PreWssConsumeQuota(c, info, usage(90), usage(200)), ErrWalletInsufficient)
+	require.Equal(t, 440_000, session.GetPreConsumedQuota())
+	ok, final, _ := TryTieredSettle(info, realtimeTieredParams(usage(110)))
+	require.True(t, ok)
+	require.Equal(t, 440_000, final)
+	require.NoError(t, session.Settle(final))
+	balance, err := model.GetUserQuota(id, true)
+	require.NoError(t, err)
+	require.Equal(t, 60_000, balance)
 }
 
 // calculateAudioQuota 的 UsePrice 分支必须 × QuotaPerYuan 并四舍五入，不得用 int() 截断。

@@ -35,30 +35,27 @@ type ToolCallResult struct {
 }
 
 // ComputeToolCallQuota calculates the total quota for all tool calls in a
-// request. Tool prices are resolved via GetToolPriceForModel which supports
+// request. Tool prices use the shared currency resolver, which supports
 // model-prefix overrides. groupRatio is applied.
-func ComputeToolCallQuota(usage ToolCallUsage, groupRatio float64) ToolCallResult {
+func ComputeToolCallQuota(usage ToolCallUsage, groupRatio float64) (ToolCallResult, error) {
 	var items []ToolCallItem
 	totalQuota := 0
 	rate, hasRate := billing_setting.GetModelSourceRate()
-	effectivePrice := func(toolName string) float64 {
-		amount, usd := operation_setting.GetToolPriceWithCurrency(toolName, usage.ModelName)
-		if usd {
-			if !hasRate {
-				return 0
-			}
-			return amount * rate
-		}
-		return amount
+	effectivePrice := func(toolName string) (float64, error) {
+		price, _, err := operation_setting.ResolveToolPriceCNY(toolName, usage.ModelName, rate, hasRate)
+		return price, err
 	}
 
-	addItem := func(toolName string, count int) {
+	addItem := func(toolName string, count int) error {
 		if count <= 0 {
-			return
+			return nil
 		}
-		pricePer1K := effectivePrice(toolName)
+		pricePer1K, err := effectivePrice(toolName)
+		if err != nil {
+			return err
+		}
 		if pricePer1K <= 0 {
-			return
+			return nil
 		}
 		totalPrice := pricePer1K * float64(count) / 1000
 		quota := int(math.Round(totalPrice * common.QuotaPerYuan * groupRatio))
@@ -70,18 +67,26 @@ func ComputeToolCallQuota(usage ToolCallUsage, groupRatio float64) ToolCallResul
 			Quota:      quota,
 		})
 		totalQuota += quota
+		return nil
 	}
 
 	if usage.WebSearchCalls > 0 && usage.WebSearchToolName != "" {
-		addItem(usage.WebSearchToolName, usage.WebSearchCalls)
+		if err := addItem(usage.WebSearchToolName, usage.WebSearchCalls); err != nil {
+			return ToolCallResult{}, err
+		}
 	}
 
 	if usage.FileSearchCalls > 0 {
-		addItem("file_search", usage.FileSearchCalls)
+		if err := addItem("file_search", usage.FileSearchCalls); err != nil {
+			return ToolCallResult{}, err
+		}
 	}
 
 	if usage.ImageGenerationCall {
-		price := effectivePrice(operation_setting.ImageGenerationToolName(usage.ImageGenerationQuality, usage.ImageGenerationSize))
+		price, err := effectivePrice(operation_setting.ImageGenerationToolName(usage.ImageGenerationQuality, usage.ImageGenerationSize))
+		if err != nil {
+			return ToolCallResult{}, err
+		}
 		quota := int(math.Round(price * common.QuotaPerYuan * groupRatio))
 		items = append(items, ToolCallItem{
 			Name:       "image_generation",
@@ -96,5 +101,5 @@ func ComputeToolCallQuota(usage ToolCallUsage, groupRatio float64) ToolCallResul
 	return ToolCallResult{
 		TotalQuota: totalQuota,
 		Items:      items,
-	}
+	}, nil
 }

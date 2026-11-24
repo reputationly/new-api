@@ -147,6 +147,13 @@ func TestAdminPricingGroupAndLogAudit(t *testing.T) {
 	require.Contains(t, exprLog.Other, `"key":"billing_setting.billing_expr"`)
 	require.Contains(t, exprLog.Other, `"before":"v2:p * 2 * fx","after":"v2:p * 3 * fx"`)
 
+	require.Contains(t, request(2, http.MethodPost, pricing, `{"options":{"billing_setting.billing_expr":"{\"priced-model\":\"v2:tier(\\\"fx\\\", p * 3)\"}"}}`, false), "计价表达式必须引用 fx")
+	request(2, http.MethodPost, pricing, `{"options":{"GroupTimeRatio":"{\"windows\":{\"quiet\":{\"start\":\"00:00\",\"end\":\"06:00\"}},\"rules\":{\"default\":{\"ordinary-*\":[{\"window\":\"quiet\",\"prices\":{\"input\":2}}]}}}"}}`, true)
+	require.Contains(t, request(2, http.MethodPost, pricing, `{"options":{"ModelPriceCurrency":"{\"priced-model\":\"USD\",\"ordinary-one\":\"USD\"}"}}`, false), "同时更新分组 default")
+	request(2, http.MethodPost, pricing, `{"options":{"GroupTimeRatio":"{\"windows\":{\"quiet\":{\"start\":\"00:00\",\"end\":\"06:00\"}},\"rules\":{\"default\":{\"ordinary-*\":[{\"window\":\"quiet\",\"prices\":{\"input\":2}}],\"ordinary-one\":[{\"window\":\"quiet\",\"factors\":{\"input\":0.8}}]}}}"}}`, true)
+	require.Contains(t, request(2, http.MethodPost, pricing, `{"options":{"ModelPriceCurrency":"{\"priced-model\":\"USD\",\"ordinary-one\":\"USD\"}","GroupTimeRatio":"{\"windows\":{\"quiet\":{\"start\":\"00:00\",\"end\":\"06:00\"}},\"rules\":{\"default\":{\"ordinary-*\":[{\"window\":\"quiet\",\"prices\":{\"input\":2}}]}}}"}}`, false), "同时更新分组 default")
+	request(2, http.MethodPost, pricing, `{"options":{"ModelPriceCurrency":"{\"priced-model\":\"USD\",\"ordinary-one\":\"USD\"}","GroupTimeRatio":"{\"windows\":{\"quiet\":{\"start\":\"00:00\",\"end\":\"06:00\"}},\"rules\":{\"default\":{\"ordinary-*\":[{\"window\":\"quiet\",\"factors\":{\"input\":0.5}}]}}}"}}`, true)
+
 	var stored model.Option
 	require.NoError(t, db.Migrator().DropTable(&model.Log{}))
 	request(2, http.MethodPost, groups, `{"options":{"GroupDescription":"{}"}}`, false)

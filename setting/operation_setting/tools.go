@@ -7,6 +7,7 @@ import (
 	"sync/atomic"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/setting/billing_setting"
 	"github.com/QuantumNous/new-api/setting/config"
 )
 
@@ -135,6 +136,17 @@ func GetToolPriceForModel(toolName, modelName string) float64 {
 func GetToolPriceWithCurrency(toolName, modelName string) (float64, bool) {
 	price := resolveToolPrice(toolName, modelName)
 	return price.amount, price.usd
+}
+
+func ResolveToolPriceCNY(toolName, modelName string, rate float64, hasRate bool) (float64, bool, error) {
+	amount, usd := GetToolPriceWithCurrency(toolName, modelName)
+	if !usd {
+		return amount, false, nil
+	}
+	if !hasRate {
+		return 0, true, fmt.Errorf("工具 %s 使用美元定价: %w", toolName, billing_setting.ErrModelSourceRateUnavailable)
+	}
+	return amount * rate, true, nil
 }
 
 func ParseToolPriceCurrencies(raw string) (map[string]string, error) {

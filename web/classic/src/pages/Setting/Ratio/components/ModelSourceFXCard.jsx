@@ -1,5 +1,13 @@
-import React, { useEffect, useState } from 'react';
-import { Banner, Button, Card, Input, Space, Spin } from '@douyinfe/semi-ui';
+import React, { useEffect, useRef, useState } from 'react';
+import {
+  Banner,
+  Button,
+  Card,
+  Input,
+  Modal,
+  Space,
+  Spin,
+} from '@douyinfe/semi-ui';
 import { useTranslation } from 'react-i18next';
 import { API, showError, showSuccess } from '../../../../helpers';
 
@@ -128,7 +136,7 @@ function FXChart({ series, t }) {
   );
 }
 
-export default function ModelSourceFXCard({ configuredRate }) {
+export default function ModelSourceFXCard({ configuredRate, onRateChange }) {
   const { t } = useTranslation();
   const [rate, setRate] = useState(configuredRate || '');
   const [draft, setDraft] = useState(configuredRate || '');
@@ -136,6 +144,7 @@ export default function ModelSourceFXCard({ configuredRate }) {
   const [loadError, setLoadError] = useState(false);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const busy = useRef(false);
 
   useEffect(() => {
     setRate(configuredRate || '');
@@ -156,6 +165,7 @@ export default function ModelSourceFXCard({ configuredRate }) {
         const stored = data.data.current_rate || '';
         setRate(stored);
         setDraft((value) => (value === rate ? stored : value));
+        onRateChange?.(stored);
       }
     } catch {
       if (!signal?.aborted) setLoadError(true);
@@ -170,13 +180,38 @@ export default function ModelSourceFXCard({ configuredRate }) {
     return () => request.abort();
   }, []);
 
-  const save = async () => {
+  const save = () => {
+    if (busy.current) return;
     const parsed = Number(draft);
     if (!Number.isFinite(parsed) || parsed <= 0) {
       showError(t('请输入有效的全局模型源汇率'));
       return;
     }
+    busy.current = true;
     setSaving(true);
+    const previous = Number(rate);
+    if (
+      previous > 0 &&
+      Math.abs(parsed - previous) >
+        previous * 0.1 + Math.abs(previous) * Number.EPSILON
+    ) {
+      Modal.confirm({
+        title: t('确认大幅调整模型源汇率'),
+        content: `${previous} → ${parsed} ¥/$`,
+        onOk: () => persistRate(parsed),
+        onCancel: finishSaving,
+      });
+    } else {
+      void persistRate(parsed);
+    }
+  };
+
+  const finishSaving = () => {
+    busy.current = false;
+    setSaving(false);
+  };
+
+  const persistRate = async (parsed) => {
     try {
       const value = String(parsed);
       const { data } = await API.post('/api/model_pricing/options', {
@@ -188,12 +223,13 @@ export default function ModelSourceFXCard({ configuredRate }) {
       }
       setRate(value);
       setDraft(value);
+      onRateChange?.(value);
       showSuccess(t('保存成功'));
       await load();
     } catch (error) {
       showError(error.message);
     } finally {
-      setSaving(false);
+      finishSaving();
     }
   };
 
@@ -228,10 +264,11 @@ export default function ModelSourceFXCard({ configuredRate }) {
           suffix='¥/$'
           placeholder='6.8'
           value={draft}
+          disabled={saving}
           onChange={setDraft}
           style={{ width: 160 }}
         />
-        <Button loading={saving} onClick={save}>
+        <Button loading={saving} disabled={saving} onClick={save}>
           {t('保存全局汇率')}
         </Button>
         <span>
@@ -295,7 +332,7 @@ export default function ModelSourceFXCard({ configuredRate }) {
         )}
         {latestDate && latestDate !== series.today && (
           <p className='mt-2 text-xs text-gray-500'>
-            {t('最新中间价为 {{date}}（休市期间不发布）', {
+            {t('最新中间价 {{date}}', {
               date: latestDate.slice(5).replace('-', '/'),
             })}
           </p>
