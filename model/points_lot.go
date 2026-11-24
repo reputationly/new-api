@@ -955,29 +955,93 @@ func simulatePointsLots(userId int, now int64) (lots []PointsLot, remaining map[
 	return lots, remaining, surplus, nil
 }
 
-// GetActivePointsLotViews 用户当前可用的批次（剩余 > 0），按到期升序、永不过期最后。
+// pointsLotRow 内部用：视图 + 排序所需的 updated_at（不对外暴露）。
+type pointsLotRow struct {
+	view      PointsLotView
+	updatedAt int64
+}
+
+// loadPointsLotViewRows 一次性算出该用户全部批次在「此刻」的展示状态。
 //
-// amount = 0 的 legacy 初始化标记不展示——那是内部状态，不是用户的一笔积分。
-// surplus > 0 时在末尾追加一行 id=0 的虚拟行（下次 sync 会把它建成正式批次）。
-func GetActivePointsLotViews(userId int, now int64) ([]PointsLotView, int64, error) {
+// 关键点：分摊是惰性的，库里 status='active' 的批次可能**在逻辑上已经用完**
+// （余额被扣到低于批次合计）。只按库里 status 分栏的话，这些批次会从「可用」里消失
+// 却又不进「历史」，用户会觉得积分凭空蒸发。所以两栏都由同一份模拟结果派生。
+func loadPointsLotViewRows(userId int, now int64) (rows []pointsLotRow, surplus int64, err error) {
+	if now <= 0 {
+		now = common.GetTimestamp()
+	}
 	lots, remaining, surplus, err := simulatePointsLots(userId, now)
 	if err != nil {
 		return nil, 0, err
 	}
-	views := make([]PointsLotView, 0, len(lots)+1)
+	seen := make(map[int]bool, len(lots))
+	rows = make([]pointsLotRow, 0, len(lots))
 	for _, l := range lots {
+		seen[l.Id] = true
 		if l.Amount == 0 {
-			continue
+			continue // legacy 初始化标记：内部状态，不是用户的一笔积分
 		}
 		rem := remaining[l.Id]
-		if rem <= 0 {
-			continue
+		if rem < 0 {
+			rem = 0
 		}
-		views = append(views, PointsLotView{
-			Id: l.Id, Source: l.Source, GrantedAt: l.GrantedAt,
-			AmountQuota: l.Amount, RemainingQuota: rem,
-			ExpiresAt: l.ExpiresAt, Status: PointsLotStatusActive,
+		status := l.Status
+		if l.Status == PointsLotStatusActive && rem <= 0 {
+			// 逻辑上已用完（数据库尚未 sync），展示为已用完
+			status = PointsLotStatusExhausted
+		}
+		rows = append(rows, pointsLotRow{
+			updatedAt: l.UpdatedAt,
+			view: PointsLotView{
+				Id: l.Id, Source: l.Source, GrantedAt: l.GrantedAt,
+				AmountQuota: l.Amount, RemainingQuota: rem,
+				ExpiresAt: l.ExpiresAt, Status: status,
+			},
 		})
+	}
+
+	// 已过期 / 已作废的批次不在分摊集合里（expires_at <= now 的 active 会被排除），
+	// 单独查一次补进历史。
+	var terminal []PointsLot
+	if err := DB.Where(
+		"user_id = ? AND amount > 0 AND status IN ?", userId,
+		[]string{PointsLotStatusExpired, PointsLotStatusExhausted},
+	).Find(&terminal).Error; err != nil {
+		return nil, 0, err
+	}
+	for _, l := range terminal {
+		if seen[l.Id] {
+			continue // 已经在分摊集合里（exhausted 且未过期的批次两边都会查到）
+		}
+		rem := l.Amount - l.Attributed - l.Forfeited
+		if rem < 0 {
+			rem = 0
+		}
+		rows = append(rows, pointsLotRow{
+			updatedAt: l.UpdatedAt,
+			view: PointsLotView{
+				Id: l.Id, Source: l.Source, GrantedAt: l.GrantedAt,
+				AmountQuota: l.Amount, RemainingQuota: rem,
+				ExpiresAt: l.ExpiresAt, Status: l.Status,
+			},
+		})
+	}
+	return rows, surplus, nil
+}
+
+// GetActivePointsLotViews 用户当前可用的批次（剩余 > 0），按到期升序、永不过期最后。
+//
+// surplus > 0 时在末尾追加一行 id=0 的虚拟行（下次 sync 会把它建成正式批次）。
+func GetActivePointsLotViews(userId int, now int64) ([]PointsLotView, int64, error) {
+	rows, surplus, err := loadPointsLotViewRows(userId, now)
+	if err != nil {
+		return nil, 0, err
+	}
+	views := make([]PointsLotView, 0, len(rows)+1)
+	for _, r := range rows {
+		if r.view.Status == PointsLotStatusActive && r.view.RemainingQuota > 0 {
+			views = append(views, r.view)
+		}
 	}
 	sort.SliceStable(views, func(i, j int) bool {
 		return earlierExpiryFirst(
@@ -995,32 +1059,33 @@ func GetActivePointsLotViews(userId int, now int64) ([]PointsLotView, int64, err
 	return views, surplus, nil
 }
 
-// GetPointsLotHistory 已过期 / 已用完的批次，按 updated_at 降序分页。
-func GetPointsLotHistory(userId int, offset, limit int) ([]PointsLotView, int64, error) {
-	query := DB.Model(&PointsLot{}).
-		Where("user_id = ? AND amount > 0 AND status IN ?", userId,
-			[]string{PointsLotStatusExpired, PointsLotStatusExhausted})
-	var total int64
-	if err := query.Count(&total).Error; err != nil {
-		return nil, 0, err
+// GetPointsLotHistory 已过期 / 已用完的批次，按 updated_at 降序。
+//
+// 「已用完」包含两种情况：库里 status=exhausted，以及**逻辑上已用完但尚未 sync** 的
+// active 批次。后者必须显示——否则用户刚花掉的积分对应的那笔批次会从两份列表里
+// 同时消失，看起来像凭空蒸发。
+func GetPointsLotHistory(userId int, now int64) ([]PointsLotView, error) {
+	rows, _, err := loadPointsLotViewRows(userId, now)
+	if err != nil {
+		return nil, err
 	}
-	var lots []PointsLot
-	if err := query.Order("updated_at DESC, id DESC").Offset(offset).Limit(limit).Find(&lots).Error; err != nil {
-		return nil, 0, err
-	}
-	views := make([]PointsLotView, 0, len(lots))
-	for _, l := range lots {
-		rem := l.Amount - l.Attributed - l.Forfeited
-		if rem < 0 {
-			rem = 0
+	history := make([]pointsLotRow, 0, len(rows))
+	for _, r := range rows {
+		if r.view.Status != PointsLotStatusActive {
+			history = append(history, r)
 		}
-		views = append(views, PointsLotView{
-			Id: l.Id, Source: l.Source, GrantedAt: l.GrantedAt,
-			AmountQuota: l.Amount, RemainingQuota: rem,
-			ExpiresAt: l.ExpiresAt, Status: l.Status,
-		})
 	}
-	return views, total, nil
+	sort.SliceStable(history, func(i, j int) bool {
+		if history[i].updatedAt != history[j].updatedAt {
+			return history[i].updatedAt > history[j].updatedAt
+		}
+		return history[i].view.Id > history[j].view.Id
+	})
+	views := make([]PointsLotView, 0, len(history))
+	for _, r := range history {
+		views = append(views, r.view)
+	}
+	return views, nil
 }
 
 // GetPointsExpirySummary 汇总 withinSeconds 内到期的金额，并给出最近 topN 个到期日。

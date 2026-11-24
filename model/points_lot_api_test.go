@@ -137,10 +137,9 @@ func TestGetPointsLotHistory_ExcludesActiveAndMarker(t *testing.T) {
 		ExpiresAt: 0, Status: PointsLotStatusExhausted, UpdatedAt: 30,
 	})
 
-	views, total, err := GetPointsLotHistory(id, 0, 10)
+	views, err := GetPointsLotHistory(id, now)
 	require.NoError(t, err)
-	require.EqualValues(t, 2, total, "0 额标记不进历史列表")
-	require.Len(t, views, 2)
+	require.Len(t, views, 2, "0 额标记不进历史列表")
 	// 按 updated_at 降序：expired（updated_at=20）排在 exhausted（10）前面
 	require.Equal(t, PointsLotStatusExpired, views[0].Status)
 	require.Equal(t, PointsLotStatusExhausted, views[1].Status)

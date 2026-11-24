@@ -159,10 +159,19 @@ func GetPointsLots(c *gin.Context) {
 	}
 
 	if status == "history" {
-		items, total, err := model.GetPointsLotHistory(userId, offset, pageSize)
+		all, err := model.GetPointsLotHistory(userId, common.GetTimestamp())
 		if err != nil {
 			common.ApiError(c, err)
 			return
+		}
+		total := len(all)
+		items := []model.PointsLotView{}
+		if offset < total {
+			end := offset + pageSize
+			if end > total {
+				end = total
+			}
+			items = all[offset:end]
 		}
 		c.JSON(http.StatusOK, gin.H{"success": true, "data": gin.H{"total": total, "items": items}})
 		return
