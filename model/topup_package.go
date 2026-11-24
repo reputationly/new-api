@@ -124,6 +124,7 @@ func TopupPackageUpdateSelectFieldsForTest() []string {
 func topupPackageUpdateSelectFields() []string {
 	return []string{
 		"title", "subtitle", "price_amount", "currency", "grant_points",
+		"grant_points_expire_days",
 		"enabled", "sort_order", "max_purchase_per_user", "updated_at",
 	}
 }

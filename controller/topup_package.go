@@ -101,6 +101,12 @@ func validateTopupPackage(pkg *model.TopupPackage) error {
 	if pkg.MaxPurchasePerUser < 0 {
 		return errors.New("购买次数上限不能为负")
 	}
+	// 赠品积分有效期：0 = 永不过期。上界与积分设置共用同一常量。
+	// 没有这条校验时，前端填个 99999 会原样落库，赠品批次永远等不到清理。
+	if pkg.GrantPointsExpireDays < 0 || pkg.GrantPointsExpireDays > operation_setting.MaxPointsExpireDays {
+		return fmt.Errorf("赠送积分有效期需在 0~%d 天之间（0 = 永不过期）",
+			operation_setting.MaxPointsExpireDays)
+	}
 	if strings.TrimSpace(pkg.Currency) == "" {
 		pkg.Currency = "CNY"
 	}

@@ -186,3 +186,7 @@ func IsPointsEnabledForChannel(channelId int) bool {
 	}
 	return false
 }
+
+// MaxPointsExpireWeeks 签到有效期周数上限（一年）。与 MaxPointsExpireDays 分开，
+// 因为签到用的是「第 N 周的周日」语义，填 3650 周没有意义。
+const MaxPointsExpireWeeks = 52
