@@ -241,7 +241,10 @@ func laterExpiryFirst(a, b PointsLot) bool {
 // 所以 MySQL/PG 从 Scan 的结果判断。
 func lockUserPointsTx(tx *gorm.DB, userId int) (balance int64, exists bool, err error) {
 	if common.UsingSQLite {
-		res := tx.Model(&User{}).Where("id = ?", userId).
+		// Unscoped：软删用户也是「存在」的用户——批次与余额都还在，过期照常作废。
+		// 只有硬删除才算不存在（那才该删批次）。GORM 默认给带 DeletedAt 的模型加
+		// deleted_at IS NULL，不 Unscoped 会把软删用户判成不存在、进而删光其批次。
+		res := tx.Unscoped().Model(&User{}).Where("id = ?", userId).
 			Update("points_balance", gorm.Expr("points_balance"))
 		if res.Error != nil {
 			return 0, false, res.Error
@@ -249,7 +252,7 @@ func lockUserPointsTx(tx *gorm.DB, userId int) (balance int64, exists bool, err 
 		if res.RowsAffected == 0 {
 			return 0, false, nil
 		}
-		if err := tx.Model(&User{}).Where("id = ?", userId).
+		if err := tx.Unscoped().Model(&User{}).Where("id = ?", userId).
 			Select("points_balance").Scan(&balance).Error; err != nil {
 			return 0, false, err
 		}
@@ -259,7 +262,7 @@ func lockUserPointsTx(tx *gorm.DB, userId int) (balance int64, exists bool, err 
 	var row struct {
 		PointsBalance int64
 	}
-	res := tx.Model(&User{}).
+	res := tx.Unscoped().Model(&User{}).
 		Clauses(clause.Locking{Strength: "UPDATE"}).
 		Where("id = ?", userId).
 		Select("points_balance").
@@ -506,7 +509,7 @@ func grantPointsAfterSyncTx(tx *gorm.DB, g PointsGrant) (lotId int, err error) {
 		lotId = lot.Id
 	}
 
-	if err := tx.Model(&User{}).Where("id = ?", g.UserId).
+	if err := tx.Unscoped().Model(&User{}).Where("id = ?", g.UserId).
 		Update("points_balance", gorm.Expr("points_balance + ?", g.Quota)).Error; err != nil {
 		return 0, err
 	}
@@ -594,7 +597,7 @@ func SetUserPointsBalance(userId int, target int64, now int64, grant PointsGrant
 			_, grantErr := grantPointsAfterSyncTx(tx, g)
 			return grantErr
 		case diff < 0:
-			if upErr := tx.Model(&User{}).Where("id = ?", userId).
+			if upErr := tx.Unscoped().Model(&User{}).Where("id = ?", userId).
 				Update("points_balance", gorm.Expr("points_balance + ?", diff)).Error; upErr != nil {
 				return upErr
 			}
@@ -749,7 +752,7 @@ func ExpireUserPointsLots(userId int, now int64) (forfeited int64, bySource []Po
 				continue
 			}
 			if f > 0 {
-				if _, err := insertFundEntryTx(tx, &FundEntry{
+				inserted, insErr := insertFundEntryTx(tx, &FundEntry{
 					UserId:     userId,
 					Account:    FundAccountPoints,
 					Kind:       FundKindExpire,
@@ -758,9 +761,16 @@ func ExpireUserPointsLots(userId int, now int64) (forfeited int64, bySource []Po
 					Source:     lot.Source,
 					RefType:    FundRefPointsLot,
 					RefId:      fmt.Sprintf("%d", lot.Id),
-					Remark:     fmt.Sprintf("批次到期作废，到期时间 %d", lot.ExpiresAt),
-				}); err != nil {
-					return err
+					Remark:     fmt.Sprintf("批次到期作废（到期日 %s）", FormatPointsExpiryDate(lot.ExpiresAt)),
+				})
+				if insErr != nil {
+					return insErr
+				}
+				if !inserted {
+					// 幂等键已存在：说明这笔作废的流水早就落过了，而批次又被重新置回
+					// active（或数据被人工改过）。此时余额不能跟着扣——扣了就是「钱少了、
+					// 流水没多」，每日自洽校验会一直报不平。整笔回滚，留给人工排查。
+					return fmt.Errorf("积分作废流水已存在（lot=%d），整笔回滚", lot.Id)
 				}
 				if agg, ok := perSource[lot.Source]; ok {
 					agg.Forfeited += f
@@ -775,7 +785,7 @@ func ExpireUserPointsLots(userId int, now int64) (forfeited int64, bySource []Po
 
 		if forfeited > 0 {
 			// 锁内 B == Σactive剩余 ≥ 本次作废额，不会扣成负数。
-			if err := tx.Model(&User{}).Where("id = ?", userId).
+			if err := tx.Unscoped().Model(&User{}).Where("id = ?", userId).
 				Update("points_balance", gorm.Expr("points_balance - ?", forfeited)).Error; err != nil {
 				return err
 			}
@@ -937,7 +947,7 @@ func simulatePointsLots(userId int, now int64) (lots []PointsLot, remaining map[
 		now = common.GetTimestamp()
 	}
 	var balance int64
-	if err = DB.Model(&User{}).Where("id = ?", userId).Select("points_balance").Scan(&balance).Error; err != nil {
+	if err = DB.Unscoped().Model(&User{}).Where("id = ?", userId).Select("points_balance").Scan(&balance).Error; err != nil {
 		return nil, nil, 0, err
 	}
 	lots, err = loadAllocatableLots(userId, now)
@@ -986,9 +996,17 @@ func loadPointsLotViewRows(userId int, now int64) (rows []pointsLotRow, surplus 
 			rem = 0
 		}
 		status := l.Status
-		if l.Status == PointsLotStatusActive && rem <= 0 {
-			// 逻辑上已用完（数据库尚未 sync），展示为已用完
-			status = PointsLotStatusExhausted
+		if l.Status == PointsLotStatusActive {
+			switch {
+			case l.ExpiresAt > 0 && l.ExpiresAt <= now:
+				// 已到期、但过期任务还没跑（到期→00:05 的窗口，或任务停摆）。
+				// 它的剩余马上就要归零，既不能出现在「可用」，也不该出现在临期汇总里；
+				// 按已过期展示，剩余表示「即将作废的量」。
+				status = PointsLotStatusExpired
+			case rem <= 0:
+				// 逻辑上已用完（数据库尚未 sync），展示为已用完
+				status = PointsLotStatusExhausted
+			}
 		}
 		rows = append(rows, pointsLotRow{
 			updatedAt: l.UpdatedAt,
@@ -1000,8 +1018,9 @@ func loadPointsLotViewRows(userId int, now int64) (rows []pointsLotRow, surplus 
 		})
 	}
 
-	// 已过期 / 已作废的批次不在分摊集合里（expires_at <= now 的 active 会被排除），
-	// 单独查一次补进历史。
+	// 已作废的批次（status=expired）不在分摊集合里（那集合只取 active 与未过期的
+	// exhausted），单独查一次补进历史。已到期但尚未作废的 active 批次**在**分摊集合里
+	// （写库路径需要它们参与归属），上面已按 expired 归类。
 	var terminal []PointsLot
 	if err := DB.Where(
 		"user_id = ? AND amount > 0 AND status IN ?", userId,
