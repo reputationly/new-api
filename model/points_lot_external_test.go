@@ -23,6 +23,11 @@ import (
 // 语义与 SQLite 不同，`exists` 的取法必须按方言分支——这条也只有在真库上才验得出。
 //
 // 未设置 TEST_MYSQL_DSN / TEST_POSTGRES_DSN 时跳过；S8 验收要求两者都设置。
+//
+// ⚠️ 命名刻意用 TestPointsExternal 前缀，**不含** TestPointsLot：
+// S5 的正则 `-run 'TestPointsLot|...'` 会捞走所有含该子串的用例，而本文件的用例在没有
+// DSN 的环境下会 SKIP——那样任何人不开 Docker 跑 S5 都会看到 6 个 SKIP 并按判据误判失败。
+// 两套门禁因此用互不重叠的命名。
 
 func openPointsExternalDB(t *testing.T, dialect, dsn string) *gorm.DB {
 	t.Helper()
@@ -205,7 +210,7 @@ func assertPointsGrantConcurrency(t *testing.T) {
 	require.Equal(t, balance, sumActiveRemaining(listLots(t, id)), "sync 后不变式必须成立")
 }
 
-func TestPointsLotsLockMySQL(t *testing.T) {
+func TestPointsExternalLockMySQL(t *testing.T) {
 	dsn := os.Getenv("TEST_MYSQL_DSN")
 	if dsn == "" {
 		t.Skip("set TEST_MYSQL_DSN to run the MySQL lock test")
@@ -214,7 +219,7 @@ func TestPointsLotsLockMySQL(t *testing.T) {
 	assertPointsLockBehaviour(t)
 }
 
-func TestPointsLotsLockPostgres(t *testing.T) {
+func TestPointsExternalLockPostgres(t *testing.T) {
 	dsn := os.Getenv("TEST_POSTGRES_DSN")
 	if dsn == "" {
 		t.Skip("set TEST_POSTGRES_DSN to run the Postgres lock test")
@@ -223,7 +228,7 @@ func TestPointsLotsLockPostgres(t *testing.T) {
 	assertPointsLockBehaviour(t)
 }
 
-func TestPointsLotsConcurrentForfeitMySQL(t *testing.T) {
+func TestPointsExternalForfeitMySQL(t *testing.T) {
 	dsn := os.Getenv("TEST_MYSQL_DSN")
 	if dsn == "" {
 		t.Skip("set TEST_MYSQL_DSN to run the MySQL concurrent forfeit test")
@@ -232,7 +237,7 @@ func TestPointsLotsConcurrentForfeitMySQL(t *testing.T) {
 	assertPointsForfeitOnce(t)
 }
 
-func TestPointsLotsConcurrentForfeitPostgres(t *testing.T) {
+func TestPointsExternalForfeitPostgres(t *testing.T) {
 	dsn := os.Getenv("TEST_POSTGRES_DSN")
 	if dsn == "" {
 		t.Skip("set TEST_POSTGRES_DSN to run the Postgres concurrent forfeit test")
@@ -241,7 +246,7 @@ func TestPointsLotsConcurrentForfeitPostgres(t *testing.T) {
 	assertPointsForfeitOnce(t)
 }
 
-func TestPointsLotsGrantConcurrencyMySQL(t *testing.T) {
+func TestPointsExternalGrantConcurrencyMySQL(t *testing.T) {
 	dsn := os.Getenv("TEST_MYSQL_DSN")
 	if dsn == "" {
 		t.Skip("set TEST_MYSQL_DSN to run the MySQL grant concurrency test")
@@ -250,7 +255,7 @@ func TestPointsLotsGrantConcurrencyMySQL(t *testing.T) {
 	assertPointsGrantConcurrency(t)
 }
 
-func TestPointsLotsGrantConcurrencyPostgres(t *testing.T) {
+func TestPointsExternalGrantConcurrencyPostgres(t *testing.T) {
 	dsn := os.Getenv("TEST_POSTGRES_DSN")
 	if dsn == "" {
 		t.Skip("set TEST_POSTGRES_DSN to run the Postgres grant concurrency test")
