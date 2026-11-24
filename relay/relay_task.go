@@ -23,6 +23,7 @@ import (
 	"github.com/QuantumNous/new-api/relay/minimaxv2"
 	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/service/moderation"
+	"github.com/QuantumNous/new-api/setting/billing_setting"
 	"github.com/QuantumNous/new-api/types"
 	"github.com/gin-gonic/gin"
 )
@@ -220,21 +221,28 @@ func RelayTaskSubmit(c *gin.Context, info *relaycommon.RelayInfo) (*TaskSubmitRe
 
 	// 4. 价格计算：基础模型价格
 	info.OriginModelName = modelName
+	firstPrice := info.TaskBasePriceData == nil
 	priceData, err := helper.ModelPriceHelperPerCall(c, info)
 	if err != nil {
 		// 「按次」视频矩阵可以完全脱离 legacy 价格：它在提交时就知道终价，
 		// 不该逼运营为它补一个假的 ModelPrice。token 模式仍需 ModelRatio 当预扣
 		// 锚点（否则预扣为 0 = 不查余额），缺它照旧报错。见设计文档 §2.6。
-		if !videoPerCallPriceable(c, info) {
+		if errors.Is(err, billing_setting.ErrModelSourceRateUnavailable) || !videoPerCallPriceable(c, info) {
 			return nil, service.TaskErrorWrapper(err, "model_price_error", http.StatusBadRequest)
 		}
-		priceData = types.PriceData{GroupRatioInfo: helper.HandleGroupRatio(c, info)}
+	}
+	if firstPrice {
+		frozen := priceData
+		info.TaskBasePriceData = &frozen
+		info.TaskBasePriceError = err
+		info.TaskBasePriceGroup = info.UsingGroup
 	}
 	info.PriceData = priceData
 
 	// 4.5 视频计费矩阵（运营可配，见 docs/video-billing-matrix-design.md）。
 	//     命中则由矩阵接管定价，跳过下面第 5、6 步——矩阵单价已是终价，
 	//     再乘一遍适配器里硬编码的 video_input 折扣就是二次计费。
+	info.VideoBilling = nil
 	videoMatrixHit := applyVideoPricing(c, info)
 
 	if !videoMatrixHit {

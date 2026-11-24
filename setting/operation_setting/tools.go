@@ -1,10 +1,12 @@
 package operation_setting
 
 import (
+	"fmt"
 	"sort"
 	"strings"
 	"sync/atomic"
 
+	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/setting/config"
 )
 
@@ -36,10 +38,12 @@ var defaultToolPriceOverrides = map[string]float64{
 
 // ToolPriceSetting is managed by config.GlobalConfig.Register.
 type ToolPriceSetting struct {
-	Prices map[string]float64 `json:"prices"`
+	Prices     map[string]float64 `json:"prices"`
+	Currencies map[string]string  `json:"currencies"`
 }
 
 var toolPriceSetting = ToolPriceSetting{
+	Currencies: map[string]string{},
 	Prices: func() map[string]float64 {
 		m := make(map[string]float64, len(defaultToolPrices)+len(defaultToolPriceOverrides))
 		for k, v := range defaultToolPrices {
@@ -63,11 +67,16 @@ func init() {
 
 type prefixEntry struct {
 	prefix string
-	price  float64
+	price  toolPrice
+}
+
+type toolPrice struct {
+	amount float64
+	usd    bool
 }
 
 type toolPriceIndex struct {
-	defaults map[string]float64
+	defaults map[string]toolPrice
 	prefixes map[string][]prefixEntry
 }
 
@@ -88,11 +97,12 @@ func RebuildToolPriceIndex() {
 	}
 
 	idx := &toolPriceIndex{
-		defaults: make(map[string]float64),
+		defaults: make(map[string]toolPrice),
 		prefixes: make(map[string][]prefixEntry),
 	}
 
-	for key, price := range merged {
+	for key, amount := range merged {
+		price := toolPrice{amount: amount, usd: toolPriceSetting.Currencies[key] == "USD"}
 		colonIdx := strings.IndexByte(key, ':')
 		if colonIdx < 0 {
 			idx.defaults[key] = price
@@ -115,15 +125,40 @@ func RebuildToolPriceIndex() {
 	currentIndex.Store(idx)
 }
 
-// GetToolPriceForModel returns the price ($/1K calls) for a tool given a model name.
+// GetToolPriceForModel returns the configured amount in its source currency.
 // Lookup: longest prefix match → tool default → 0.
 func GetToolPriceForModel(toolName, modelName string) float64 {
+	price := resolveToolPrice(toolName, modelName)
+	return price.amount
+}
+
+func GetToolPriceWithCurrency(toolName, modelName string) (float64, bool) {
+	price := resolveToolPrice(toolName, modelName)
+	return price.amount, price.usd
+}
+
+func ParseToolPriceCurrencies(raw string) (map[string]string, error) {
+	var currencies map[string]string
+	if strings.TrimSpace(raw) != "" {
+		if err := common.UnmarshalJsonStr(raw, &currencies); err != nil {
+			return nil, fmt.Errorf("工具定价币种不是合法的 JSON: %w", err)
+		}
+	}
+	for tool, currency := range currencies {
+		if strings.TrimSpace(tool) == "" || (currency != "CNY" && currency != "USD") {
+			return nil, fmt.Errorf("工具 %q 的定价币种无效: %q", tool, currency)
+		}
+	}
+	return currencies, nil
+}
+
+func resolveToolPrice(toolName, modelName string) toolPrice {
 	idx := currentIndex.Load()
 	if idx == nil {
 		if v, ok := defaultToolPrices[toolName]; ok {
-			return v
+			return toolPrice{amount: v}
 		}
-		return 0
+		return fallbackToolPrice(toolName, modelName)
 	}
 
 	if entries, ok := idx.prefixes[toolName]; ok && modelName != "" {
@@ -137,7 +172,29 @@ func GetToolPriceForModel(toolName, modelName string) float64 {
 	if p, ok := idx.defaults[toolName]; ok {
 		return p
 	}
-	return 0
+	return fallbackToolPrice(toolName, modelName)
+}
+
+func fallbackToolPrice(toolName, modelName string) toolPrice {
+	if toolName == "gemini_audio_input" {
+		return toolPrice{amount: GetGeminiInputAudioPricePerMillionTokens(modelName)}
+	}
+	if qualitySize, ok := strings.CutPrefix(toolName, "image_generation_"); ok {
+		quality, size, _ := strings.Cut(qualitySize, "_")
+		return toolPrice{amount: GetGPTImage1PriceOnceCall(quality, size)}
+	}
+	return toolPrice{}
+}
+
+func ImageGenerationToolName(quality, size string) string {
+	switch quality {
+	case "low", "medium", "high":
+		switch size {
+		case "1024x1024", "1024x1536", "1536x1024":
+			return "image_generation_" + quality + "_" + size
+		}
+	}
+	return "image_generation_high_1024x1024"
 }
 
 // GetToolPrice is a convenience wrapper when no model name is needed.

@@ -70,6 +70,7 @@ const PriceInput = ({
   hidden = false,
   // 非空即进入美元录入模式（值为 1 美元折多少人民币）。null/0 = 原来的纯人民币输入。
   usdRate = null,
+  sourceCurrency = 'CNY',
 }) => {
   const [focused, setFocused] = useState(false);
   const [draft, setDraft] = useState('');
@@ -81,7 +82,10 @@ const PriceInput = ({
       ? formatUSDDisplay(value, rate)
       : formatDisplayPrice(value);
   // 单位后缀随模式换符号，"/1M tokens" 与 "/次" 两种都覆盖到。
-  const effectiveSuffix = useUSD ? String(suffix).replace('¥', '$') : suffix;
+  const effectiveSuffix =
+    useUSD || sourceCurrency === 'USD'
+      ? String(suffix).replace('¥', '$')
+      : suffix;
   // 美元模式下必须让人看见落库的人民币值，否则存进去多少是个惊喜。
   const unit = String(suffix).replace(/[¥$]/g, '');
   const cnyHint =

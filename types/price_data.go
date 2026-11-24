@@ -108,6 +108,10 @@ func (g GroupRatioInfo) TimeRuleLog() string {
 }
 
 type PriceData struct {
+	PricingCurrency      string
+	ModelSourceRate      float64
+	ToolSourceRate       float64
+	ToolPrices           map[string]float64
 	FreeModel            bool
 	ModelPrice           float64
 	ModelRatio           float64
@@ -124,6 +128,13 @@ type PriceData struct {
 	Quota                int // 按次计费的最终额度（MJ / Task）
 	QuotaToPreConsume    int // 按量计费的预消耗额度
 	GroupRatioInfo       GroupRatioInfo
+}
+
+func (p PriceData) ModelPriceFactor() float64 {
+	if p.ModelSourceRate > 0 {
+		return p.ModelSourceRate
+	}
+	return 1
 }
 
 func (p *PriceData) AddOtherRatio(key string, ratio float64) {

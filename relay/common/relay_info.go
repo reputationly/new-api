@@ -15,6 +15,7 @@ import (
 	"github.com/QuantumNous/new-api/pkg/billingexpr"
 	relayconstant "github.com/QuantumNous/new-api/relay/constant"
 	"github.com/QuantumNous/new-api/setting/model_setting"
+	"github.com/QuantumNous/new-api/setting/ratio_setting"
 	"github.com/QuantumNous/new-api/types"
 
 	"github.com/gin-gonic/gin"
@@ -89,16 +90,20 @@ type TokenCountMeta struct {
 }
 
 type RelayInfo struct {
-	TokenId           int
-	TokenKey          string
-	TokenGroup        string
-	UserId            int
-	UsingGroup        string // 使用的分组，当auto跨分组重试时，会变动
-	UserGroup         string // 用户所在分组
-	TokenUnlimited    bool
-	StartTime         time.Time
-	FirstResponseTime time.Time
-	isFirstResponse   bool
+	VideoPricingAtSubmit *ratio_setting.VideoPriceEntry
+	TaskBasePriceData    *types.PriceData
+	TaskBasePriceError   error
+	TaskBasePriceGroup   string
+	TokenId              int
+	TokenKey             string
+	TokenGroup           string
+	UserId               int
+	UsingGroup           string // 使用的分组，当auto跨分组重试时，会变动
+	UserGroup            string // 用户所在分组
+	TokenUnlimited       bool
+	StartTime            time.Time
+	FirstResponseTime    time.Time
+	isFirstResponse      bool
 	//SendLastReasoningResponse bool
 	IsStream               bool
 	IsGeminiBatchEmbedding bool
@@ -721,9 +726,9 @@ type TaskRelayInfo struct {
 // 必须冻结:视频任务的结算发生在几百秒后的异步轮询里，那时既没有 gin context
 // 也没有请求体，无从重新解析分辨率 / 秒数 / 是否含视频输入。
 //
-// UnitPrice 单位是**美元**——token 模式为 $/百万 tokens，per_call 模式为 $/次。
-// 货币换算只发生在管理端编辑器里，后端全程不碰汇率。
+// UnitPrice 和 TokenPrices 均为提交时已折算的人民币价格。
 type VideoBillingContext struct {
+	TokenPrices   *ratio_setting.VideoPriceEntry
 	Mode          string
 	UnitPrice     float64
 	Resolution    string

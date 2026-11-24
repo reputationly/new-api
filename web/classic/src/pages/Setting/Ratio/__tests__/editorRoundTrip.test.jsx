@@ -16,7 +16,7 @@ vi.mock('../../../../helpers', async () => {
 });
 
 import { API, showError } from '../../../../helpers';
-import { useModelPricingEditorState } from '../hooks/useModelPricingEditorState';
+import { buildSummaryText, useModelPricingEditorState } from '../hooks/useModelPricingEditorState';
 
 /**
  * F3：编辑器所见即所存（往返测试）。
@@ -73,6 +73,25 @@ const CANDIDATES = [
 ];
 
 const refresh = vi.fn().mockResolvedValue(undefined);
+
+it('preserves USD source prices and never submits the global rate from the model editor', async () => {
+  const options = {
+    ...OPTIONS,
+    ModelPriceCurrency: '{"gpt-x":"USD"}',
+    ModelSourceRate: '7',
+  };
+  const { result } = renderHook(() =>
+    useModelPricingEditorState({ options, refresh, t, candidateModelNames: CANDIDATES }),
+  );
+  await waitFor(() => expect(result.current.selectedModel).toBeTruthy());
+  act(() => result.current.setSelectedModelName('gpt-x'));
+  expect(buildSummaryText(result.current.selectedModel, t)).toContain('$2.00');
+  await act(async () => result.current.handleSubmit());
+  const payload = putPayloads();
+  expect(payload.ModelPriceCurrency).toEqual({ 'gpt-x': 'USD' });
+  expect(payload.ModelRatio['gpt-x']).toBe(2);
+  expect(payload).not.toHaveProperty('ModelSourceRate');
+});
 
 // 保存走统一入口：一次 POST 带全部 key（服务端按最终状态校验 + 单事务落库）。
 const putPayloads = () => {

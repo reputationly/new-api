@@ -130,20 +130,22 @@ type OptionUpdateRequest struct {
 // pricingBatchKeys 批量保存允许的 key：只开放相关计费配置，
 // 避免这个接口变成「任意 option 批量写入」的后门（其它 key 有各自的校验逻辑）。
 var pricingBatchKeys = map[string]bool{
-	"ModelPrice":                   true,
-	"ModelRatio":                   true,
-	"CompletionRatio":              true,
-	"CacheRatio":                   true,
-	"CreateCacheRatio":             true,
-	"ImageRatio":                   true,
-	"AudioRatio":                   true,
-	"AudioCompletionRatio":         true,
-	"billing_setting.billing_mode": true,
-	"billing_setting.billing_expr": true,
-	"ModelSourceRate":              true,
-	"VideoPricingConfig":           true,
-	"GroupTimeRatio":               true,
-	"tool_price_setting.prices":    true,
+	"ModelPrice":                    true,
+	"ModelRatio":                    true,
+	"CompletionRatio":               true,
+	"CacheRatio":                    true,
+	"CreateCacheRatio":              true,
+	"ImageRatio":                    true,
+	"AudioRatio":                    true,
+	"AudioCompletionRatio":          true,
+	"billing_setting.billing_mode":  true,
+	"billing_setting.billing_expr":  true,
+	"ModelSourceRate":               true,
+	"ModelPriceCurrency":            true,
+	"VideoPricingConfig":            true,
+	"GroupTimeRatio":                true,
+	"tool_price_setting.prices":     true,
+	"tool_price_setting.currencies": true,
 }
 
 var groupBatchKeys = map[string]bool{
@@ -158,7 +160,8 @@ type optionBatchRequest struct {
 }
 
 var pricingStateKeys = []string{
-	"billing_setting.billing_mode", "billing_setting.billing_expr", "ModelSourceRate", "GroupTimeRatio",
+	"billing_setting.billing_mode", "billing_setting.billing_expr", "ModelSourceRate", "ModelPriceCurrency", "GroupTimeRatio",
+	"tool_price_setting.currencies",
 }
 
 func parsePricingStringMap(raw string) (map[string]string, error) {
@@ -191,12 +194,30 @@ func validatePricingFinalState(final map[string]string) error {
 		sort.Strings(missing)
 		return fmt.Errorf("模型 %s 使用分段计费，但没有设置计费表达式", strings.Join(missing, "、"))
 	}
-	rates, err := billing_setting.ParseModelSourceRateJSON(final["ModelSourceRate"])
+	rate, err := billing_setting.ParseGlobalModelSourceRate(final["ModelSourceRate"])
 	if err != nil {
 		return fmt.Errorf("汇率配置不是合法的 JSON：%w", err)
 	}
-	if err := billing_setting.ValidateBillingExprJSONWithRates(exprJSON, rates); err != nil {
+	if err := billing_setting.ValidateBillingExprJSONWithRate(exprJSON, rate); err != nil {
 		return err
+	}
+	currencies, err := billing_setting.ParseModelPriceCurrencies(final["ModelPriceCurrency"])
+	if err != nil {
+		return err
+	}
+	for name, currency := range currencies {
+		if currency == billing_setting.CurrencyUSD && rate <= 0 {
+			return fmt.Errorf("模型 %s 使用美元定价，请先设置全局源汇率", name)
+		}
+	}
+	toolCurrencies, err := operation_setting.ParseToolPriceCurrencies(final["tool_price_setting.currencies"])
+	if err != nil {
+		return err
+	}
+	for tool, currency := range toolCurrencies {
+		if currency == billing_setting.CurrencyUSD && rate <= 0 {
+			return fmt.Errorf("工具 %s 使用美元定价，请先设置全局源汇率", tool)
+		}
 	}
 	return checkTimePriceVsExprs(final["GroupTimeRatio"], exprs)
 }
@@ -242,6 +263,10 @@ func updateScopedOptions(c *gin.Context, allowed map[string]bool, action, summar
 			})
 			return
 		}
+	}
+	if _, hasRate := req.Options["ModelSourceRate"]; hasRate && len(req.Options) != 1 {
+		common.ApiError(c, fmt.Errorf("全局源汇率必须独立保存"))
+		return
 	}
 
 	savePricingOptions(c, req.Options, action, summary)

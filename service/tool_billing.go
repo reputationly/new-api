@@ -4,6 +4,7 @@ import (
 	"math"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/setting/billing_setting"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
 )
 
@@ -39,12 +40,23 @@ type ToolCallResult struct {
 func ComputeToolCallQuota(usage ToolCallUsage, groupRatio float64) ToolCallResult {
 	var items []ToolCallItem
 	totalQuota := 0
+	rate, hasRate := billing_setting.GetModelSourceRate()
+	effectivePrice := func(toolName string) float64 {
+		amount, usd := operation_setting.GetToolPriceWithCurrency(toolName, usage.ModelName)
+		if usd {
+			if !hasRate {
+				return 0
+			}
+			return amount * rate
+		}
+		return amount
+	}
 
 	addItem := func(toolName string, count int) {
 		if count <= 0 {
 			return
 		}
-		pricePer1K := operation_setting.GetToolPriceForModel(toolName, usage.ModelName)
+		pricePer1K := effectivePrice(toolName)
 		if pricePer1K <= 0 {
 			return
 		}
@@ -69,7 +81,7 @@ func ComputeToolCallQuota(usage ToolCallUsage, groupRatio float64) ToolCallResul
 	}
 
 	if usage.ImageGenerationCall {
-		price := operation_setting.GetGPTImage1PriceOnceCall(usage.ImageGenerationQuality, usage.ImageGenerationSize)
+		price := effectivePrice(operation_setting.ImageGenerationToolName(usage.ImageGenerationQuality, usage.ImageGenerationSize))
 		quota := int(math.Round(price * common.QuotaPerYuan * groupRatio))
 		items = append(items, ToolCallItem{
 			Name:       "image_generation",

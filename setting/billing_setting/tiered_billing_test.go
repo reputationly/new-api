@@ -68,19 +68,19 @@ func TestValidateBillingExprJSON_RequiresFXRate(t *testing.T) {
 	expr := `{"gpt-fx":"v2:tier(\"base\", p * 1.5 * fx + c * 7.5 * fx)"}`
 	t.Cleanup(func() { _ = UpdateModelSourceRateByJSONString("") })
 
-	require.NoError(t, UpdateModelSourceRateByJSONString("{}"))
+	require.NoError(t, UpdateModelSourceRateByJSONString(""))
 	err := ValidateBillingExprJSON(expr)
 	require.Error(t, err)
-	require.Contains(t, err.Error(), "没有设置「源货币汇率」")
+	require.Contains(t, err.Error(), "没有设置全局源汇率")
 
-	require.NoError(t, UpdateModelSourceRateByJSONString(`{"gpt-fx":6.8}`))
+	require.NoError(t, UpdateModelSourceRateByJSONString("6.8"))
 	require.NoError(t, ValidateBillingExprJSON(expr))
 }
 
 // 不引用 fx 的表达式不受汇率影响（老写法继续可用）。
 func TestValidateBillingExprJSON_NoFXNoRateOK(t *testing.T) {
 	t.Cleanup(func() { _ = UpdateModelSourceRateByJSONString("") })
-	require.NoError(t, UpdateModelSourceRateByJSONString("{}"))
+	require.NoError(t, UpdateModelSourceRateByJSONString(""))
 	require.NoError(t, ValidateBillingExprJSON(`{"m":"v2:tier(\"base\", p * 1.36)"}`))
 }
 
@@ -88,7 +88,7 @@ func TestValidateBillingExprJSON_NoFXNoRateOK(t *testing.T) {
 // 负额度在结算时会走 IncreaseUserQuota（凭空加额度），必须在保存阶段拦住。
 func TestValidateBillingExprJSON_NegativeAtRealRate(t *testing.T) {
 	t.Cleanup(func() { _ = UpdateModelSourceRateByJSONString("") })
-	require.NoError(t, UpdateModelSourceRateByJSONString(`{"neg":6.8}`))
+	require.NoError(t, UpdateModelSourceRateByJSONString("6.8"))
 
 	err := ValidateBillingExprJSON(`{"neg":"v2:tier(\"base\", p * (2 - fx))"}`)
 	require.Error(t, err)
@@ -97,26 +97,23 @@ func TestValidateBillingExprJSON_NegativeAtRealRate(t *testing.T) {
 
 // 批量保存用「这次要写的汇率」校验，而不是内存里的旧值：
 // 同一个请求里把汇率删掉、表达式却还引用 fx，必须报错。
-func TestValidateBillingExprJSONWithRates_FinalState(t *testing.T) {
+func TestValidateBillingExprJSONWithRate_FinalState(t *testing.T) {
 	exprJSON := `{"m":"v2:tier(\"base\", p * 1.5 * fx)"}`
 
-	err := ValidateBillingExprJSONWithRates(exprJSON, map[string]float64{})
+	err := ValidateBillingExprJSONWithRate(exprJSON, 0)
 	require.Error(t, err)
-	require.Contains(t, err.Error(), "没有设置「源货币汇率」")
+	require.Contains(t, err.Error(), "没有设置全局源汇率")
 
-	require.NoError(t, ValidateBillingExprJSONWithRates(exprJSON, map[string]float64{"m": 6.8}))
+	require.NoError(t, ValidateBillingExprJSONWithRate(exprJSON, 6.8))
 }
 
-// 显式提交 null 必须当成「空表」而不是「没传」：本地复现过 null 绕过校验、
-// 把汇率清空但仍留下引用 fx 的表达式。
-func TestParseModelSourceRateJSON_NullIsEmpty(t *testing.T) {
+func TestParseGlobalModelSourceRate_NullIsEmpty(t *testing.T) {
 	for _, in := range []string{"", "null", "  "} {
-		rates, err := ParseModelSourceRateJSON(in)
+		rate, err := ParseGlobalModelSourceRate(in)
 		require.NoError(t, err)
-		require.NotNil(t, rates, "不能返回 nil（调用方会把 nil 当成没提交）")
-		require.Empty(t, rates)
+		require.Zero(t, rate)
 	}
-	rates, err := ParseModelSourceRateJSON(`{"m":6.8}`)
+	rate, err := ParseGlobalModelSourceRate("6.8")
 	require.NoError(t, err)
-	require.Equal(t, 6.8, rates["m"])
+	require.Equal(t, 6.8, rate)
 }

@@ -24,6 +24,7 @@ import {
   InputNumber,
   Radio,
   RadioGroup,
+  Select,
   Table,
   TextArea,
   Typography,
@@ -35,6 +36,7 @@ import { API, copy, showError, showSuccess } from '../../../helpers';
 const { Text } = Typography;
 
 const OPTION_KEY = 'tool_price_setting.prices';
+const CURRENCY_KEY = 'tool_price_setting.currencies';
 
 const DEFAULT_PRICES = {
   web_search: 10.0,
@@ -57,11 +59,12 @@ function rowsToObject(rows) {
   return prices;
 }
 
-function objectToRows(prices) {
+function objectToRows(prices, currencies = {}) {
   return Object.entries(prices).map(([key, price], i) => ({
     id: i,
     key,
     price,
+    currency: currencies[key] || 'CNY',
   }));
 }
 
@@ -75,11 +78,13 @@ export default function ToolPriceSettings({ options, refresh }) {
 
   useEffect(() => {
     let prices = {};
+    let currencies = {};
     try {
       const raw = options?.[OPTION_KEY];
       if (raw) {
         prices = typeof raw === 'string' ? JSON.parse(raw) : raw;
       }
+      currencies = JSON.parse(options?.[CURRENCY_KEY] || '{}') || {};
     } catch {
       prices = {};
     }
@@ -88,7 +93,7 @@ export default function ToolPriceSettings({ options, refresh }) {
       prices = { ...DEFAULT_PRICES };
     }
 
-    setRows(objectToRows(prices));
+    setRows(objectToRows(prices, currencies));
     setJsonText(JSON.stringify(prices, null, 2));
   }, [options]);
 
@@ -106,7 +111,10 @@ export default function ToolPriceSettings({ options, refresh }) {
         setJsonError(t('JSON 必须是对象'));
         return;
       }
-      setRows(objectToRows(parsed));
+      setRows(objectToRows(
+        parsed,
+        Object.fromEntries(rows.map((row) => [row.key, row.currency])),
+      ));
       setJsonError('');
     } catch (e) {
       setJsonError(e.message);
@@ -135,7 +143,13 @@ export default function ToolPriceSettings({ options, refresh }) {
     setSaving(true);
     try {
       const res = await API.post('/api/model_pricing/options', {
-        options: { [OPTION_KEY]: JSON.stringify(currentPrices) },
+        options: {
+          [OPTION_KEY]: JSON.stringify(currentPrices),
+          [CURRENCY_KEY]: JSON.stringify(Object.fromEntries(
+            rows.filter((row) => row.key.trim() && row.currency === 'USD')
+              .map((row) => [row.key.trim(), 'USD']),
+          )),
+        },
       });
       if (res.data.success) {
         showSuccess(t('保存成功'));
@@ -164,7 +178,7 @@ export default function ToolPriceSettings({ options, refresh }) {
       ),
     },
     {
-      title: t('价格') + ' (¥/1K' + t('次') + ')',
+      title: t('价格'),
       dataIndex: 'price',
       width: 160,
       render: (val, record) => (
@@ -174,6 +188,18 @@ export default function ToolPriceSettings({ options, refresh }) {
           step={0.5}
           onChange={(v) => updateRow(record.id, 'price', v ?? 0)}
           style={{ width: '100%' }}
+        />
+      ),
+    },
+    {
+      title: t('币种'),
+      dataIndex: 'currency',
+      width: 100,
+      render: (_, record) => (
+        <Select
+          value={record.currency || 'CNY'}
+          optionList={['CNY', 'USD']}
+          onChange={(value) => updateRow(record.id, 'currency', value)}
         />
       ),
     },
@@ -198,11 +224,16 @@ export default function ToolPriceSettings({ options, refresh }) {
         type='info'
         description={
           <>
-            <div>{t('配置各工具的调用价格（¥/1K次调用）。按次计费模型不额外收取工具费用。')}</div>
+            <div>{t('按所选币种保存价格，美元使用全局模型源汇率换算。搜索工具按千次，图片生成按次，Gemini 音频输入按百万 tokens。按次计费模型不额外收取工具费用。')}</div>
             <div style={{ marginTop: 4 }}>
               <Text strong>{t('格式')}：</Text>
               <code>web_search_preview</code> {t('为默认价格')}，
               <code>web_search_preview:gpt-4o*</code> {t('为模型前缀覆盖')}
+            </div>
+            <div>
+              <code>image_generation_high_1024x1024</code>{' '}
+              {t('图片生成可按 low、medium、high 和尺寸分别配置；Gemini 音频输入用下方工具标识。')}{' '}
+              <code>gemini_audio_input:gemini-2.5-flash*</code>
             </div>
           </>
         }

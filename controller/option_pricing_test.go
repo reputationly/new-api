@@ -36,7 +36,7 @@ func TestPricingOptionFinalState(t *testing.T) {
 		_ = model.UpdateOptions(map[string]string{
 			"billing_setting.billing_mode": "{}",
 			"billing_setting.billing_expr": "{}",
-			"ModelSourceRate":              "{}",
+			"ModelSourceRate":              "",
 		}, pricingStateKeys, validatePricingFinalState)
 		require.NoError(t, ratio_setting.UpdateGroupTimeRatioByJSONString(prevTimeRatio))
 		model.DB, common.OptionMap = prevDB, prevOptions
@@ -44,7 +44,7 @@ func TestPricingOptionFinalState(t *testing.T) {
 	})
 
 	const modeKey, exprKey, rateKey = "billing_setting.billing_mode", "billing_setting.billing_expr", "ModelSourceRate"
-	const tiered, expr, rate = `{"m":"tiered_expr"}`, `{"m":"v2:tier(\"base\", p * 1.5 * fx + c * 7.5)"}`, `{"m":7.2}`
+	const tiered, expr, rate = `{"m":"tiered_expr"}`, `{"m":"v2:tier(\"base\", p * 1.5 * fx + c * 7.5)"}`, "7.2"
 	router := gin.New()
 	router.POST("/batch", UpdatePricingOptions)
 	router.PUT("/option", UpdateOption)
@@ -92,7 +92,7 @@ func TestPricingOptionFinalState(t *testing.T) {
 
 	require.True(t, put(rateKey, rate))
 	// The authoritative lookup must work even when this process has not applied the rate.
-	require.NoError(t, billing_setting.UpdateModelSourceRateByJSONString("{}"))
+	require.NoError(t, billing_setting.UpdateModelSourceRateByJSONString(""))
 	require.True(t, put(exprKey, expr))
 	require.True(t, put(modeKey, tiered))
 	for _, clear := range []string{"", "null", "{}"} {
@@ -107,7 +107,7 @@ func TestPricingOptionFinalState(t *testing.T) {
 	require.Empty(t, billing_setting.GetBillingExprCopy())
 
 	results := make(chan bool, 2)
-	go func() { results <- batch(map[string]string{rateKey: "{}"}) }()
+	go func() { results <- batch(map[string]string{rateKey: ""}) }()
 	go func() { results <- batch(map[string]string{exprKey: expr}) }()
 	require.NotEqual(t, <-results, <-results)
 

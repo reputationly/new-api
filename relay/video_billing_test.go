@@ -64,6 +64,22 @@ func TestApplyVideoPricing_TokenModeFreezesUnitPrice(t *testing.T) {
 // UsePrice 若为 true，controller 会把 PerCallBilling 也置为 true，
 // 轮询期的 settleTaskBillingOnComplete 第 0 步就会跳过全部差额结算——
 // 结果是 720p 与 1080p 收一样的钱。这条断言守住那道门。
+func TestApplyVideoPricingFreezesConvertedTokenMatrix(t *testing.T) {
+	c, info := videoPricingCtx(t, "doubao-seedance-2-0-260128", relaycommon.TaskSubmitReq{})
+	entry, ok := ratio_setting.GetVideoPricing(info.OriginModelName)
+	require.True(t, ok)
+	info.VideoPricingAtSubmit = &entry
+	info.PriceData.PricingCurrency = "USD"
+	info.PriceData.ModelSourceRate = 6.8
+	require.False(t, applyVideoPricing(c, info))
+	require.NotNil(t, info.VideoBilling)
+	original, hit := entry.LookupToken("720p", false)
+	require.True(t, hit)
+	converted, hit := info.VideoBilling.TokenPrices.LookupToken("720p", false)
+	require.True(t, hit)
+	require.InDelta(t, original*6.8, converted, 1e-9)
+}
+
 func TestApplyVideoPricing_TokenModeForcesUsePriceOff(t *testing.T) {
 	c, info := videoPricingCtx(t, "doubao-seedance-2-0-260128",
 		relaycommon.TaskSubmitReq{Size: "720p"})

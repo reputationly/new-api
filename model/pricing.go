@@ -11,6 +11,7 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
+	"github.com/QuantumNous/new-api/pkg/billingexpr"
 	"github.com/QuantumNous/new-api/setting/billing_setting"
 	"github.com/QuantumNous/new-api/setting/ratio_setting"
 	"github.com/QuantumNous/new-api/types"
@@ -47,7 +48,9 @@ type Pricing struct {
 	BillingExpr            string                  `json:"billing_expr,omitempty"`
 	// SourceRate 是该模型的源货币汇率。表达式引用 fx 时，系数写的是美元目录价，
 	// 前端展示必须乘上它才能与实扣一致（未引用 fx 的老表达式不看这个字段）。
-	SourceRate float64 `json:"source_rate,omitempty"`
+	SourceRate       float64 `json:"source_rate,omitempty"`
+	PricingCurrency  string  `json:"pricing_currency,omitempty"`
+	PriceUnavailable bool    `json:"price_unavailable,omitempty"`
 	// VideoPricing 视频计费矩阵（docs/video-billing-matrix-design.md §2.6 接入点 3）。
 	// 不透出的话定价页只能展示 ModelRatio——那是预扣锚点，不是真实单价，
 	// 对用户是误导（480p 实际 ¥46 却显示 ¥51，还多出一个无意义的「补全价格」）。
@@ -94,6 +97,7 @@ var (
 )
 
 func GetPricing() []Pricing {
+	defer LockPricingRead()()
 	if time.Since(lastGetPricingTime) > time.Minute*1 || len(pricingMap) == 0 {
 		// 先在持锁之前快照运营配置，避免在持有 updatePricingLock 时再取
 		// OptionMapRWMutex，与 updateOptionMap(持 OptionMap 写锁)->InvalidatePricingCache
@@ -457,13 +461,16 @@ func updatePricing(imgRaw, vidRaw, audRaw, musRaw string) {
 			}
 			pricing.CapabilityTags = capTags
 		}
+		currency, factor, conversionErr := billing_setting.ResolveModelPriceConversion(model)
+		pricing.PricingCurrency = currency
+		pricing.PriceUnavailable = conversionErr != nil
 		modelPrice, findPrice := ratio_setting.GetModelPrice(model, false)
 		if findPrice {
-			pricing.ModelPrice = modelPrice
+			pricing.ModelPrice = modelPrice * factor
 			pricing.QuotaType = 1
 		} else {
 			modelRatio, _, _ := ratio_setting.GetModelRatio(model)
-			pricing.ModelRatio = modelRatio
+			pricing.ModelRatio = modelRatio * factor
 			pricing.CompletionRatio = ratio_setting.GetCompletionRatio(model)
 			pricing.QuotaType = 0
 		}
@@ -488,13 +495,19 @@ func updatePricing(imgRaw, vidRaw, audRaw, musRaw string) {
 			if expr, ok := billing_setting.GetBillingExpr(model); ok && strings.TrimSpace(expr) != "" {
 				pricing.BillingMode = billingMode
 				pricing.BillingExpr = expr
-				if rate, ok := billing_setting.GetModelSourceRate(model); ok {
+				if rate, ok := billing_setting.GetModelSourceRate(); ok {
 					pricing.SourceRate = rate
+				} else if billingexpr.UsedVars(expr)["fx"] {
+					pricing.PriceUnavailable = true
 				}
 			}
 		}
 		if entry, ok := ratio_setting.GetVideoPricing(model); ok {
+			entry = entry.ScalePrices(factor)
 			pricing.VideoPricing = &entry
+		}
+		if pricing.PriceUnavailable {
+			pricing.VideoPricing = nil
 		}
 		pricingMap = append(pricingMap, pricing)
 	}

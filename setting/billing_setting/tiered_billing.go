@@ -1,6 +1,7 @@
 package billing_setting
 
 import (
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -47,81 +48,90 @@ func GetBillingMode(model string) string {
 }
 
 // ---------------------------------------------------------------------------
-// ModelSourceRate — 每个模型的源货币汇率（上游美元目录价 → 人民币的换算率）
-// ---------------------------------------------------------------------------
-//
-// 为什么单独存：表达式里的系数是人民币，而供应商按美元报价、汇率由它定且会变。
-// 把汇率做成按模型的参数后，表达式可以写成 `p * 1.5 * fx`（美元价 × fx），
-// 改汇率只需改这一个数，不必重写表达式。
-//
-// 存在这里而不是 billing_setting 的配置结构里：前端用的顶层 key 是 ModelSourceRate，
-// 与 ModelRatio/GroupModelRatio 一样走 model/option.go 的显式 case，避免改 key、
-// 也避免给已存数据做迁移。
 var (
-	modelSourceRateMu sync.RWMutex
-	modelSourceRate   = make(map[string]float64)
+	priceCurrencyMu sync.RWMutex
+	priceCurrencies map[string]string
+	modelSourceRate float64
 )
 
-func UpdateModelSourceRateByJSONString(jsonStr string) error {
-	parsed := make(map[string]float64)
-	if strings.TrimSpace(jsonStr) != "" {
-		if err := common.UnmarshalJsonStr(jsonStr, &parsed); err != nil {
-			return err
-		}
+const (
+	CurrencyCNY = "CNY"
+	CurrencyUSD = "USD"
+)
+
+func UpdateModelSourceRateByJSONString(value string) error {
+	rate, err := ParseGlobalModelSourceRate(value)
+	if err != nil {
+		return err
 	}
-	modelSourceRateMu.Lock()
-	modelSourceRate = parsed
-	modelSourceRateMu.Unlock()
+	priceCurrencyMu.Lock()
+	modelSourceRate = rate
+	priceCurrencyMu.Unlock()
 	return nil
 }
 
 func ModelSourceRate2JSONString() string {
-	modelSourceRateMu.RLock()
-	defer modelSourceRateMu.RUnlock()
-	// 用 common.Marshal 保证与其它 option 的序列化口径一致。
-	data, err := common.Marshal(modelSourceRate)
+	rate, ok := GetModelSourceRate()
+	if !ok {
+		return ""
+	}
+	raw, _ := common.Marshal(rate)
+	return string(raw)
+}
+
+func GetModelSourceRate() (float64, bool) {
+	priceCurrencyMu.RLock()
+	defer priceCurrencyMu.RUnlock()
+	return modelSourceRate, modelSourceRate > 0
+}
+
+func ParseModelPriceCurrencies(raw string) (map[string]string, error) {
+	var currencies map[string]string
+	if strings.TrimSpace(raw) != "" {
+		if err := common.UnmarshalJsonStr(raw, &currencies); err != nil {
+			return nil, fmt.Errorf("ModelPriceCurrency 不是合法的币种表: %w", err)
+		}
+	}
+	for name, currency := range currencies {
+		if strings.TrimSpace(name) == "" || strings.Contains(name, "*") || (currency != CurrencyCNY && currency != CurrencyUSD) {
+			return nil, fmt.Errorf("模型 %q 的定价币种无效: %q", name, currency)
+		}
+	}
+	return currencies, nil
+}
+
+func UpdateModelPriceCurrencies(raw string) error {
+	currencies, err := ParseModelPriceCurrencies(raw)
 	if err != nil {
-		return "{}"
+		return err
 	}
-	return string(data)
+	priceCurrencyMu.Lock()
+	priceCurrencies = currencies
+	priceCurrencyMu.Unlock()
+	return nil
 }
 
-// GetModelSourceRateCopy 返回汇率表的副本（批量保存时用来算「最终状态」）。
-func GetModelSourceRateCopy() map[string]float64 {
-	modelSourceRateMu.RLock()
-	defer modelSourceRateMu.RUnlock()
-	out := make(map[string]float64, len(modelSourceRate))
-	for k, v := range modelSourceRate {
-		out[k] = v
+func GetModelPriceCurrency(name string) string {
+	priceCurrencyMu.RLock()
+	defer priceCurrencyMu.RUnlock()
+	if priceCurrencies[name] == CurrencyUSD {
+		return CurrencyUSD
 	}
-	return out
+	return CurrencyCNY
 }
 
-// ParseModelSourceRateJSON 解析一张「模型 → 汇率」JSON；空串视为空表。
-func ParseModelSourceRateJSON(jsonStr string) (map[string]float64, error) {
-	parsed := make(map[string]float64)
-	trimmed := strings.TrimSpace(jsonStr)
-	// "" 与 "null" 都表示**空表**（显式清空）。绝不能返回 nil：
-	// 调用方把 nil 当成"没提交、回退去读旧值"，于是"清空汇率"会被静默当成"不改"，
-	// 校验也就放行了（本地复现过：提交 null 后库里汇率被清空，表达式仍引用 fx）。
-	if trimmed == "" || trimmed == "null" {
-		return parsed, nil
-	}
-	if err := common.UnmarshalJsonStr(jsonStr, &parsed); err != nil {
-		return nil, err
-	}
-	return parsed, nil
-}
+var ErrModelSourceRateUnavailable = errors.New("全局源汇率未配置")
 
-// GetModelSourceRate 返回某模型的源货币汇率；未配置时 ok=false。
-func GetModelSourceRate(model string) (float64, bool) {
-	modelSourceRateMu.RLock()
-	rate, ok := modelSourceRate[model]
-	modelSourceRateMu.RUnlock()
-	if !ok || rate <= 0 {
-		return 0, false
+func ResolveModelPriceConversion(name string) (currency string, factor float64, err error) {
+	priceCurrencyMu.RLock()
+	defer priceCurrencyMu.RUnlock()
+	if priceCurrencies[name] != CurrencyUSD {
+		return CurrencyCNY, 1, nil
 	}
-	return rate, true
+	if modelSourceRate <= 0 {
+		return CurrencyUSD, 0, fmt.Errorf("模型 %s 使用美元定价: %w", name, ErrModelSourceRateUnavailable)
+	}
+	return CurrencyUSD, modelSourceRate, nil
 }
 
 func GetBillingExpr(model string) (string, bool) {
@@ -220,15 +230,11 @@ func smokeTestExpr(exprStr string, fx float64) error {
 // 只校验带 v2: 前缀的表达式：存量 v1（美元口径）的配置继续放行，避免一次升级把
 // 老配置全拦住；按模型名字排序遍历，保证报错信息稳定（map 迭代顺序是随机的）。
 func ValidateBillingExprJSON(jsonStr string) error {
-	return ValidateBillingExprJSONWithRates(jsonStr, nil)
+	rate, _ := GetModelSourceRate()
+	return ValidateBillingExprJSONWithRate(jsonStr, rate)
 }
 
-// ValidateBillingExprJSONWithRates 用**给定的汇率表**校验表达式（rates 为 nil 时用当前内存值）。
-//
-// 批量保存必须传 nil 以外的值：那一刻库里/内存里的汇率还是旧的，只有把"这次要写的
-// 汇率"一起拿来校验，才能保证落库后的状态是自洽的（否则会出现"表达式引用了 fx，
-// 但同一次保存把汇率删了"这种组合）。
-func ValidateBillingExprJSONWithRates(jsonStr string, rates map[string]float64) error {
+func ValidateBillingExprJSONWithRate(jsonStr string, rate float64) error {
 	if strings.TrimSpace(jsonStr) == "" {
 		return nil
 	}
@@ -236,9 +242,6 @@ func ValidateBillingExprJSONWithRates(jsonStr string, rates map[string]float64) 
 	if err := common.UnmarshalJsonStr(jsonStr, &exprs); err != nil {
 		// 结构本身有问题交给既有的反序列化路径报错，这里只负责表达式语义。
 		return nil
-	}
-	if rates == nil {
-		rates = GetModelSourceRateCopy()
 	}
 	models := make([]string, 0, len(exprs))
 	for model := range exprs {
@@ -250,11 +253,10 @@ func ValidateBillingExprJSONWithRates(jsonStr string, rates map[string]float64) 
 		if !strings.HasPrefix(expr, "v2:") {
 			continue
 		}
-		rate := rates[model]
 		// 表达式引用了 fx（本模型的源货币汇率）却拿不到汇率时，用 1 跑冒烟没有意义，
 		// 而且存进去会在每次请求预扣费时失败（fail closed）——保存阶段就拒绝。
 		if billingexpr.UsedVars(expr)["fx"] && !(rate > 0) {
-			return fmt.Errorf("模型 %s 的计费表达式引用了 fx，但该模型没有设置「源货币汇率」；请先填汇率再保存", model)
+			return fmt.Errorf("模型 %s 的计费表达式引用了 fx，但没有设置全局源汇率；请先填汇率再保存", model)
 		}
 		// 用真实汇率跑冒烟：引用 fx 的表达式在 fx=1 下恒正、到真实汇率可能变负，
 		// 而负额度在结算时会变成「给用户加额度」。

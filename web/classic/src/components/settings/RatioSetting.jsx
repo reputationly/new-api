@@ -18,7 +18,7 @@ For commercial licensing, please contact support@quantumnous.com
 */
 
 import React, { useEffect, useState } from 'react';
-import { Banner, Button, Card, Spin, Tabs } from '@douyinfe/semi-ui';
+import { Banner, Button, Card, Input, Space, Spin, Tabs } from '@douyinfe/semi-ui';
 import { useTranslation } from 'react-i18next';
 import { useNavigate } from 'react-router-dom';
 
@@ -26,7 +26,7 @@ import ModelPricingCombined from '../../pages/Setting/Ratio/ModelPricingCombined
 import ModelRatioNotSetEditor from '../../pages/Setting/Ratio/ModelRationNotSetEditor';
 import ToolPriceSettings from '../../pages/Setting/Ratio/ToolPriceSettings';
 
-import { API, showError } from '../../helpers';
+import { API, showError, showSuccess } from '../../helpers';
 
 const RatioSetting = () => {
   const { t } = useTranslation();
@@ -45,6 +45,35 @@ const RatioSetting = () => {
 
   const [loading, setLoading] = useState(false);
   const [enabledModels, setEnabledModels] = useState([]);
+  const [savedRate, setSavedRate] = useState('');
+  const [rateDraft, setRateDraft] = useState('');
+  const [savingRate, setSavingRate] = useState(false);
+  useEffect(() => setRateDraft(savedRate), [savedRate]);
+
+  const saveRate = async () => {
+    const rate = Number(rateDraft);
+    if (!Number.isFinite(rate) || rate <= 0) {
+      showError(t('请输入有效的全局模型源汇率'));
+      return;
+    }
+    setSavingRate(true);
+    try {
+      const value = String(rate);
+      const { data } = await API.post('/api/model_pricing/options', {
+        options: { ModelSourceRate: value },
+      });
+      if (!data.success) {
+        showError(data.message);
+        return;
+      }
+      setSavedRate(value);
+      showSuccess(t('保存成功'));
+    } catch (error) {
+      showError(error.message);
+    } finally {
+      setSavingRate(false);
+    }
+  };
 
   const getOptions = async () => {
     const res = await API.get('/api/model_pricing/options');
@@ -62,6 +91,7 @@ const RatioSetting = () => {
         newInputs[item.key] = item.value;
       });
       setInputs(newInputs);
+      setSavedRate(newInputs.ModelSourceRate || '');
       setEnabledModels(enabled_models || []);
     } else {
       showError(message);
@@ -87,6 +117,20 @@ const RatioSetting = () => {
   return (
     <Spin spinning={loading} size='large'>
       <Card style={{ marginTop: '10px' }}>
+        <Space wrap className='mb-3'>
+          <Input
+            aria-label={t('全局模型源汇率')}
+            prefix={t('全局模型源汇率')}
+            suffix='¥/$'
+            value={rateDraft}
+            onChange={setRateDraft}
+            style={{ width: 260 }}
+          />
+          <Button loading={savingRate} onClick={saveRate}>
+            {t('保存全局汇率')}
+          </Button>
+          <span>{t('只影响美元价格及引用 fx 的新请求，不改原价。')}</span>
+        </Space>
         <Banner
           type='info'
           closeIcon={null}

@@ -25,6 +25,7 @@ const { Text } = Typography;
  * useModelPricingEditorState.js 的 isVideoMatrixMissingAnchor 上方。
  */
 export default function VideoMatrixEditor({
+  sourceCurrency = 'CNY',
   value,
   onChange,
   allowTokenMode = true,
@@ -78,7 +79,7 @@ export default function VideoMatrixEditor({
           value={value.cells?.[videoCellKey(record.resolution, col.key)] ?? ''}
           onChange={(v) => updateCell(record.resolution, col.key, v)}
           placeholder={t('留空即不配置')}
-          prefix='¥'
+          prefix={sourceCurrency === 'USD' ? '$' : '¥'}
           size='small'
         />
       ),
@@ -139,10 +140,10 @@ export default function VideoMatrixEditor({
 
       <Text type='tertiary' size='small'>
         {value.mode === VIDEO_MODE_TOKEN
-          ? t('单位：¥ / 百万 tokens')
+          ? t('单位：{{currency}} / 百万 tokens', { currency: sourceCurrency })
           : value.mode === VIDEO_MODE_PER_SECOND
-            ? t('单位：¥ / 秒，实收 = 单价 × 本次时长')
-            : t('单位：¥ / 次')}
+            ? t('单位：{{currency}} / 秒，实收 = 单价 × 本次时长', { currency: sourceCurrency })
+            : t('单位：{{currency}} / 次', { currency: sourceCurrency })}
       </Text>
 
       <div style={{ marginTop: 8 }}>

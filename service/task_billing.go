@@ -341,6 +341,12 @@ func taskBillingOther(task *model.Task) map[string]interface{} {
 	}
 	if bc := task.PrivateData.BillingContext; bc != nil {
 		// 标记随任务一起冻结：迁移会把历史任务补齐为 "cny"
+		if bc.PricingCurrency != "" {
+			other["pricing_currency"] = bc.PricingCurrency
+		}
+		if bc.ModelSourceRate > 0 {
+			other["model_source_rate"] = bc.ModelSourceRate
+		}
 		if bc.PriceUnit != "" {
 			other["price_unit"] = bc.PriceUnit
 		}
@@ -636,6 +642,9 @@ func RecalculateTaskQuotaByTokens(ctx context.Context, task *model.Task, totalTo
 
 	// 获取模型价格和倍率
 	modelRatio, hasRatioSetting, _ := ratio_setting.GetModelRatio(modelName)
+	if bc := task.PrivateData.BillingContext; bc != nil && bc.PricingCurrency != "" {
+		modelRatio, hasRatioSetting = bc.ModelRatio, true
+	}
 	// 只有配置了倍率(非固定价格)时才按 token 重新计费
 	if !hasRatioSetting || modelRatio <= 0 {
 		return false
@@ -721,7 +730,7 @@ func taskGroupRatio(task *model.Task) (float64, bool) {
 //   - **不读 GetModelRatio**：模型可能配的是固定价格（hasRatioSetting=false），
 //     那条路径会直接 return，导致 480p 与 1080p 收一样的钱。
 //   - **不乘 OtherRatios**：矩阵单价已是终价，再乘一遍适配器的 video_input 折扣是二次计费。
-//   - **不碰汇率**：单价是美元，货币换算只发生在管理端编辑器里。
+//   - **不重读汇率**：矩阵单价已经在提交时折算成人民币。
 //
 // upstreamResolution 是上游回执里的**实际**出片档位，只在提交时没查到单价时用到。
 func RecalculateTaskQuotaByVideoMatrix(ctx context.Context, task *model.Task, totalTokens int, upstreamResolution string) bool {
@@ -781,9 +790,13 @@ func resolveUnitPriceFromUpstream(ctx context.Context, task *model.Task, vb *mod
 	if strings.TrimSpace(upstreamResolution) == "" {
 		return false
 	}
-	entry, ok := ratio_setting.GetVideoPricing(taskModelName(task))
-	if !ok {
-		return false
+	entry := vb.TokenPrices
+	if entry == nil {
+		legacyEntry, ok := ratio_setting.GetVideoPricing(taskModelName(task))
+		if !ok {
+			return false
+		}
+		entry = &legacyEntry
 	}
 	price, hit := entry.LookupToken(upstreamResolution, vb.HasVideoInput)
 	if !hit {

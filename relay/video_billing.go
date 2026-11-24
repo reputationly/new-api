@@ -94,8 +94,8 @@ func videoPerCallPriceable(c *gin.Context, info *relaycommon.RelayInfo) bool {
 	if info == nil {
 		return false
 	}
-	entry, ok := ratio_setting.GetVideoPricing(info.OriginModelName)
-	if !ok {
+	entry := taskVideoPriceEntry(info)
+	if entry == nil {
 		return false
 	}
 	req, err := relaycommon.GetTaskRequest(c)
@@ -132,8 +132,8 @@ func applyVideoPricing(c *gin.Context, info *relaycommon.RelayInfo) bool {
 	if info == nil || info.TaskRelayInfo == nil {
 		return false
 	}
-	entry, ok := ratio_setting.GetVideoPricing(info.OriginModelName)
-	if !ok {
+	entry := taskVideoPriceEntry(info)
+	if entry == nil {
 		return false
 	}
 	req, err := relaycommon.GetTaskRequest(c)
@@ -147,6 +147,8 @@ func applyVideoPricing(c *gin.Context, info *relaycommon.RelayInfo) bool {
 	// H3 这类有帧栅格的引擎:交付秒数与请求秒数不同(1 s → 1.625 s)。
 	// 冻结进上下文,供 per_second 计价与排障/对账使用。
 	deliveredSeconds := h3DeliveredBillingSeconds(info, seconds)
+	effective := entry.ScalePrices(info.PriceData.ModelPriceFactor())
+	entry = &effective
 
 	frozen := &relaycommon.VideoBillingContext{
 		Mode:             entry.Mode,
@@ -158,6 +160,7 @@ func applyVideoPricing(c *gin.Context, info *relaycommon.RelayInfo) bool {
 
 	switch entry.Mode {
 	case ratio_setting.VideoPriceModeToken:
+		frozen.TokenPrices = entry
 		price, hit := entry.LookupToken(resolution, hasVideoInput)
 		if !hit {
 			// 提交时定不出档位——图生视频 / 参考生视频按设计就不下发 size(画幅跟随
@@ -236,4 +239,15 @@ func applyVideoPricing(c *gin.Context, info *relaycommon.RelayInfo) bool {
 
 	info.VideoBilling = frozen
 	return true
+}
+
+func taskVideoPriceEntry(info *relaycommon.RelayInfo) *ratio_setting.VideoPriceEntry {
+	if info.VideoPricingAtSubmit != nil || info.PriceData.PricingCurrency != "" {
+		return info.VideoPricingAtSubmit
+	}
+	entry, ok := ratio_setting.GetVideoPricing(info.OriginModelName)
+	if !ok {
+		return nil
+	}
+	return &entry
 }

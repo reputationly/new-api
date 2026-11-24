@@ -78,13 +78,21 @@ func HandleGroupRatio(ctx *gin.Context, relayInfo *relaycommon.RelayInfo) types.
 
 func ModelPriceHelper(c *gin.Context, info *relaycommon.RelayInfo, promptTokens int, meta *types.TokenCountMeta) (types.PriceData, error) {
 	defer model.LockPricingRead()()
+	currency, factor, err := billing_setting.ResolveModelPriceConversion(info.OriginModelName)
+	if err != nil {
+		return types.PriceData{}, err
+	}
 	modelPrice, usePrice := ratio_setting.GetModelPrice(info.OriginModelName, false)
 
 	groupRatioInfo := HandleGroupRatio(c, info)
 
 	// Check if this model uses tiered_expr billing
 	if billing_setting.GetBillingMode(info.OriginModelName) == billing_setting.BillingModeTieredExpr {
-		return modelPriceHelperTiered(c, info, promptTokens, meta, groupRatioInfo)
+		return modelPriceHelperTiered(c, info, promptTokens, meta, groupRatioInfo, currency, factor)
+	}
+	toolPrices, toolRate, err := freezeToolPrices(info.OriginModelName)
+	if err != nil {
+		return types.PriceData{}, err
 	}
 
 	var preConsumedQuota int
@@ -109,6 +117,7 @@ func ModelPriceHelper(c *gin.Context, info *relaycommon.RelayInfo, promptTokens 
 		if !success {
 			return types.PriceData{}, modelPriceNotConfiguredError(matchName, info.UserId)
 		}
+		modelRatio *= factor
 		// 时段价按**分量**折算：整单乘的是 input 系数，其余分量把 f_c/f_input
 		// 折进各自的相对倍率（未配置的分量不随时段变，系数为 1）。
 		tf := groupRatioInfo.TimeFactors
@@ -135,6 +144,7 @@ func ModelPriceHelper(c *gin.Context, info *relaycommon.RelayInfo, promptTokens 
 		ratio := modelRatio * groupRatioInfo.GroupRatio * common.QuotaPerMillionTokens
 		preConsumedQuota = int(math.Round(float64(preConsumedTokens) * ratio))
 	} else {
+		modelPrice *= factor
 		if meta.ImagePriceRatio != 0 {
 			modelPrice = modelPrice * meta.ImagePriceRatio
 		}
@@ -164,6 +174,9 @@ func ModelPriceHelper(c *gin.Context, info *relaycommon.RelayInfo, promptTokens 
 	}
 
 	priceData := types.PriceData{
+		PricingCurrency:      currency,
+		ToolPrices:           toolPrices,
+		ToolSourceRate:       toolRate,
 		FreeModel:            freeModel,
 		ModelPrice:           modelPrice,
 		ModelRatio:           modelRatio,
@@ -179,6 +192,9 @@ func ModelPriceHelper(c *gin.Context, info *relaycommon.RelayInfo, promptTokens 
 		CacheCreation1hRatio: cacheCreationRatio1h,
 		QuotaToPreConsume:    preConsumedQuota,
 	}
+	if currency == billing_setting.CurrencyUSD {
+		priceData.ModelSourceRate = factor
+	}
 
 	if common.DebugEnabled {
 		println(fmt.Sprintf("model_price_helper result: %s", priceData.ToSetting()))
@@ -190,7 +206,31 @@ func ModelPriceHelper(c *gin.Context, info *relaycommon.RelayInfo, promptTokens 
 // ModelPriceHelperPerCall 按次/按量计费的 PriceHelper (MJ、Task)
 func ModelPriceHelperPerCall(c *gin.Context, info *relaycommon.RelayInfo) (types.PriceData, error) {
 	defer model.LockPricingRead()()
+	if info.TaskBasePriceData != nil {
+		data := *info.TaskBasePriceData
+		group := HandleGroupRatio(c, info)
+		if info.UsingGroup != info.TaskBasePriceGroup {
+			data.GroupRatioInfo = group
+			if info.TaskBasePriceError == nil {
+				data = priceTaskWithGroup(data)
+			}
+		}
+		return data, info.TaskBasePriceError
+	}
+	currency, factor, err := billing_setting.ResolveModelPriceConversion(info.OriginModelName)
+	if err != nil {
+		return types.PriceData{}, err
+	}
+	entry, ok := ratio_setting.GetVideoPricing(info.OriginModelName)
+	info.VideoPricingAtSubmit = nil
+	if ok {
+		info.VideoPricingAtSubmit = &entry
+	}
 	groupRatioInfo := HandleGroupRatio(c, info)
+	priceData := types.PriceData{PricingCurrency: currency, GroupRatioInfo: groupRatioInfo}
+	if currency == billing_setting.CurrencyUSD {
+		priceData.ModelSourceRate = factor
+	}
 
 	modelPrice, success := ratio_setting.GetModelPrice(info.OriginModelName, true)
 	usePrice := success
@@ -206,15 +246,24 @@ func ModelPriceHelperPerCall(c *gin.Context, info *relaycommon.RelayInfo) (types
 			var matchName string
 			modelRatio, ratioSuccess, matchName = ratio_setting.GetModelRatio(info.OriginModelName)
 			if !ratioSuccess {
-				return types.PriceData{}, modelPriceNotConfiguredError(matchName, info.UserId)
+				return priceData, modelPriceNotConfiguredError(matchName, info.UserId)
 			}
 		}
 	}
 
+	priceData.ModelPrice = modelPrice * factor
+	priceData.ModelRatio = modelRatio * factor
+	priceData.UsePrice = usePrice
+	return priceTaskWithGroup(priceData), nil
+}
+
+func priceTaskWithGroup(priceData types.PriceData) types.PriceData {
+	modelPrice, modelRatio := priceData.ModelPrice, priceData.ModelRatio
+	groupRatioInfo := priceData.GroupRatioInfo
 	var quota int
 	freeModel := false
 
-	if usePrice {
+	if priceData.UsePrice {
 		// per_call 分量系数与 ModelPriceHelper 的按次分支同一约定：
 		// 整单乘的是 input 系数，按次价的差额折进 ScaleComponent。
 		quota = int(math.Round(modelPrice * common.QuotaPerYuan * groupRatioInfo.GroupRatio *
@@ -238,15 +287,10 @@ func ModelPriceHelperPerCall(c *gin.Context, info *relaycommon.RelayInfo) (types
 		}
 	}
 
-	priceData := types.PriceData{
-		FreeModel:      freeModel,
-		ModelPrice:     modelPrice,
-		ModelRatio:     modelRatio,
-		UsePrice:       usePrice,
-		Quota:          quota,
-		GroupRatioInfo: groupRatioInfo,
-	}
-	return priceData, nil
+	priceData.FreeModel = freeModel
+	priceData.ModelPrice = modelPrice
+	priceData.Quota = quota
+	return priceData
 }
 
 func HasModelBillingConfig(modelName string) bool {
@@ -269,7 +313,11 @@ func HasModelBillingConfig(modelName string) bool {
 	return ok && strings.TrimSpace(expr) != ""
 }
 
-func modelPriceHelperTiered(c *gin.Context, info *relaycommon.RelayInfo, promptTokens int, meta *types.TokenCountMeta, groupRatioInfo types.GroupRatioInfo) (types.PriceData, error) {
+func modelPriceHelperTiered(c *gin.Context, info *relaycommon.RelayInfo, promptTokens int, meta *types.TokenCountMeta, groupRatioInfo types.GroupRatioInfo, currency string, factor float64) (types.PriceData, error) {
+	toolPrices, toolRate, err := freezeToolPrices(info.OriginModelName)
+	if err != nil {
+		return types.PriceData{}, err
+	}
 	exprStr, ok := billing_setting.GetBillingExpr(info.OriginModelName)
 	if !ok {
 		return types.PriceData{}, fmt.Errorf("model %s is configured as tiered_expr but has no billing expression", info.OriginModelName)
@@ -285,15 +333,15 @@ func modelPriceHelperTiered(c *gin.Context, info *relaycommon.RelayInfo, promptT
 		return types.PriceData{}, err
 	}
 
-	// fx：表达式引用 fx 表示系数写的是美元目录价，必须取到本模型的源货币汇率。
+	// fx：表达式引用 fx 表示系数写的是美元目录价，必须取到全局源汇率。
 	// 取不到就**拒绝这次请求**：默认 0 会白送，默认 1 会少收一个汇率倍数，
 	// 两种都比报错糟得多（错误至少可以立刻发现）。
 	exprFX := float64(0)
 	if billingexpr.UsedVars(exprStr)["fx"] {
-		rate, ok := billing_setting.GetModelSourceRate(info.OriginModelName)
+		rate, ok := billing_setting.GetModelSourceRate()
 		if !ok {
 			return types.PriceData{}, fmt.Errorf(
-				"model %s 的计费表达式引用了 fx，但该模型没有设置源货币汇率", info.OriginModelName)
+				"model %s 的计费表达式引用了 fx，但没有设置全局源汇率", info.OriginModelName)
 		}
 		exprFX = rate
 	}
@@ -351,9 +399,16 @@ func modelPriceHelperTiered(c *gin.Context, info *relaycommon.RelayInfo, promptT
 	info.BillingRequestInput = &requestInput
 
 	priceData := types.PriceData{
+		PricingCurrency:   currency,
+		ModelSourceRate:   exprFX,
+		ToolPrices:        toolPrices,
+		ToolSourceRate:    toolRate,
 		FreeModel:         freeModel,
 		GroupRatioInfo:    groupRatioInfo,
 		QuotaToPreConsume: preConsumedQuota,
+	}
+	if currency == billing_setting.CurrencyUSD {
+		priceData.ModelSourceRate = factor
 	}
 
 	if common.DebugEnabled {
@@ -362,4 +417,28 @@ func modelPriceHelperTiered(c *gin.Context, info *relaycommon.RelayInfo, promptT
 
 	info.PriceData = priceData
 	return priceData, nil
+}
+
+func freezeToolPrices(modelName string) (map[string]float64, float64, error) {
+	prices := make(map[string]float64, 4)
+	var usedRate float64
+	rate, hasRate := billing_setting.GetModelSourceRate()
+	names := []string{"web_search_preview", "web_search", "file_search", "gemini_audio_input"}
+	for _, quality := range []string{"low", "medium", "high"} {
+		for _, size := range []string{"1024x1024", "1024x1536", "1536x1024"} {
+			names = append(names, operation_setting.ImageGenerationToolName(quality, size))
+		}
+	}
+	for _, name := range names {
+		amount, usd := operation_setting.GetToolPriceWithCurrency(name, modelName)
+		if usd {
+			if !hasRate {
+				return nil, 0, fmt.Errorf("工具 %s 使用美元定价: %w", name, billing_setting.ErrModelSourceRateUnavailable)
+			}
+			amount *= rate
+			usedRate = rate
+		}
+		prices[name] = amount
+	}
+	return prices, usedRate, nil
 }

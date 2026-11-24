@@ -120,7 +120,7 @@ const EMPTY_MODEL = {
   requestRuleExpr: '',
   // 该模型的「源货币汇率」：表达式/价格是按「美元目录价 × 这个汇率」编制的。
   // 只有它存在时，改汇率才会按比例缩放价格与表达式系数。
-  sourceRate: '',
+  pricingCurrency: 'CNY',
   // 表达式口径版本：0 = 无表达式，1 = 美元口径旧表达式（后端拒绝结算），2 = 人民币口径
   billingExprVersion: 0,
   // null = 未启用视频计费矩阵；对象 = 已启用（形状见 emptyVideoMatrix）
@@ -384,7 +384,7 @@ const buildModelState = (name, sourceMaps) => {
   const videoMatrix = parseVideoMatrixEntry(sourceMaps.VideoPricing?.[name]);
   const billingMode = sourceMaps.ModelBillingMode?.[name];
 
-  const sourceRate = toNumericString(sourceMaps.ModelSourceRate?.[name]);
+  const pricingCurrency = sourceMaps.ModelPriceCurrency?.[name] || 'CNY';
   const modelRatio = toNumericString(sourceMaps.ModelRatio[name]);
   const completionRatio = toNumericString(sourceMaps.CompletionRatio[name]);
   const completionRatioMeta = normalizeCompletionRatioMeta(
@@ -428,7 +428,7 @@ const buildModelState = (name, sourceMaps) => {
     return {
       ...EMPTY_MODEL,
       name,
-      sourceRate,
+      pricingCurrency,
       billingMode: 'tiered_expr',
       billingExpr,
       requestRuleExpr,
@@ -455,7 +455,7 @@ const buildModelState = (name, sourceMaps) => {
   return {
     ...EMPTY_MODEL,
     name,
-    sourceRate,
+    pricingCurrency,
     billingMode: hasValue(fixedPrice) ? 'per-request' : 'per-token',
     fixedPrice,
     inputPrice,
@@ -709,6 +709,7 @@ export const getModelWarnings = (model, t) => {
 };
 
 export const buildSummaryText = (model, t) => {
+  const currencySymbol = model.pricingCurrency === 'USD' ? '$' : '¥';
   const requestRuleSuffix =
     (model.billingMode === 'tiered_expr' && model.requestRuleExpr
       ? `，${t('请求规则')}`
@@ -724,7 +725,7 @@ export const buildSummaryText = (model, t) => {
   }
 
   if (model.billingMode === 'per-request' && hasValue(model.fixedPrice)) {
-    return `${t('按次')} ¥${formatDisplayPrice(model.fixedPrice)} / ${t('次')}${requestRuleSuffix}`;
+    return `${t('按次')} ${currencySymbol}${formatDisplayPrice(model.fixedPrice)} / ${t('次')}${requestRuleSuffix}`;
   }
 
   if (hasValue(model.inputPrice)) {
@@ -738,7 +739,7 @@ export const buildSummaryText = (model, t) => {
     ].filter(hasValue).length;
     const extraLabel =
       extraCount > 0 ? `，${t('额外价格项')} ${extraCount}` : '';
-    return `${t('输入')} ¥${formatDisplayPrice(model.inputPrice)}${extraLabel}${requestRuleSuffix}`;
+    return `${t('输入')} ${currencySymbol}${formatDisplayPrice(model.inputPrice)}${extraLabel}${requestRuleSuffix}`;
   }
 
   return `${t('未设置价格')}${requestRuleSuffix}`;
@@ -1079,8 +1080,7 @@ export function useModelPricingEditorState({
     const sourceMaps = {
       ModelPrice: parseOptionJSON(options.ModelPrice),
       ModelRatio: parseOptionJSON(options.ModelRatio),
-      // 每个模型的源货币汇率（美元目录价 → 人民币的换算率），单独一张 map。
-      ModelSourceRate: parseOptionJSON(options.ModelSourceRate),
+      ModelPriceCurrency: parseOptionJSON(options.ModelPriceCurrency),
       CompletionRatio: parseOptionJSON(options.CompletionRatio),
       CompletionRatioMeta: parseOptionJSON(options.CompletionRatioMeta),
       CacheRatio: parseOptionJSON(options.CacheRatio),
@@ -1101,6 +1101,7 @@ export function useModelPricingEditorState({
       ...candidateModelNames,
       ...Object.keys(sourceMaps.ModelPrice),
       ...Object.keys(sourceMaps.ModelRatio),
+      ...Object.keys(sourceMaps.ModelPriceCurrency),
       ...Object.keys(sourceMaps.CompletionRatio),
       ...Object.keys(sourceMaps.CompletionRatioMeta),
       ...Object.keys(sourceMaps.CacheRatio),
@@ -1381,57 +1382,10 @@ export function useModelPricingEditorState({
     }));
   };
 
-  const RATE_SCALED_PRICE_FIELDS = [
-    'fixedPrice',
-    'inputPrice',
-    'completionPrice',
-    'cachePrice',
-    'createCachePrice',
-    'imagePrice',
-    'audioInputPrice',
-    'audioOutputPrice',
-  ];
-
-  const handleSourceRateChange = (value) => {
-    if (!selectedModel || !NUMERIC_INPUT_REGEX.test(value)) {
-      return;
+  const handlePricingCurrencyChange = (value) => {
+    if (selectedModel) {
+      upsertModel(selectedModel.name, (model) => ({ ...model, pricingCurrency: value }));
     }
-    upsertModel(selectedModel.name, (model) => {
-      const oldRate = toNumberOrNull(model.sourceRate);
-      const newRate = toNumberOrNull(value);
-      // 第一次填汇率（旧值为空）没有比例可算，只记录；以后改才会缩放。
-      if (oldRate === null || newRate === null || oldRate === newRate) {
-        return { ...model, sourceRate: value };
-      }
-      const factor = newRate / oldRate;
-      const next = { ...model, sourceRate: value };
-      // 表达式引用 fx 时，系数是美元价、汇率由 fx 承担：只记汇率，不缩放文本。
-      const usesFX =
-        exprReferencesFX(model.billingExpr) ||
-        exprReferencesFX(model.requestRuleExpr);
-      if (usesFX) {
-        return next;
-      }
-      RATE_SCALED_PRICE_FIELDS.forEach((field) => {
-        if (hasValue(next[field])) {
-          next[field] = scaleNumericString(next[field], factor);
-        }
-      });
-      if (next.billingExpr) {
-        next.billingExpr = scaleBillingExpr(next.billingExpr, factor);
-      }
-      if (next.requestRuleExpr) {
-        next.requestRuleExpr = scaleBillingExpr(next.requestRuleExpr, factor);
-      }
-      // 按量模式下 ModelRatio 是「¥/百万 tokens」的锚点，也要跟着缩。
-      if (hasValue(next.rawRatios?.modelRatio)) {
-        next.rawRatios = {
-          ...next.rawRatios,
-          modelRatio: scaleNumericString(next.rawRatios.modelRatio, factor),
-        };
-      }
-      return next;
-    });
   };
 
   const handleVideoMatrixChange = (nextMatrix) => {
@@ -1648,8 +1602,7 @@ export function useModelPricingEditorState({
         pricingKeys.map((key) => [key, parseOptionJSON(options[key])]),
       );
 
-      // 每个模型自己的源货币汇率（仅供下次改汇率时算比例与展示，不参与计费）。
-      const sourceRateOutput = {};
+      const currencyOutput = {};
 
       const tieredOutput = {
         'billing_setting.billing_mode': {},
@@ -1720,11 +1673,8 @@ export function useModelPricingEditorState({
             }
           }
         };
-        if (
-          hasValue(model.sourceRate) &&
-          toNumberOrNull(model.sourceRate) !== null
-        ) {
-          sourceRateOutput[model.name] = toNormalizedNumber(model.sourceRate);
+        if (model.pricingCurrency === 'USD') {
+          currencyOutput[model.name] = 'USD';
         }
         try {
           writeSerialized(model);
@@ -1766,7 +1716,7 @@ export function useModelPricingEditorState({
       Object.entries(videoOutput).forEach(([key, value]) =>
         putOption(key, value),
       );
-      putOption('ModelSourceRate', sourceRateOutput);
+      putOption('ModelPriceCurrency', currencyOutput);
 
       const batchRes = await API.post('/api/model_pricing/options', {
         options: batchOptions,
@@ -1809,7 +1759,7 @@ export function useModelPricingEditorState({
     handleNumericFieldChange,
     handleBillingModeChange,
     handleBillingExprChange,
-    handleSourceRateChange,
+    handlePricingCurrencyChange,
     handleRequestRuleExprChange,
     handleVideoMatrixChange,
     handleVideoMatrixToggle,

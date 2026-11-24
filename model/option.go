@@ -181,6 +181,7 @@ func InitOptionMap() {
 	common.OptionMap["ModelRequestRateLimitGroup"] = setting.ModelRequestRateLimitGroup2JSONString()
 	common.OptionMap["ModelRatio"] = ratio_setting.ModelRatio2JSONString()
 	common.OptionMap["ModelSourceRate"] = billing_setting.ModelSourceRate2JSONString()
+	common.OptionMap["ModelPriceCurrency"] = "{}"
 	common.OptionMap["ModelPrice"] = ratio_setting.ModelPrice2JSONString()
 	common.OptionMap["CacheRatio"] = ratio_setting.CacheRatio2JSONString()
 	common.OptionMap["CreateCacheRatio"] = ratio_setting.CreateCacheRatio2JSONString()
@@ -253,7 +254,7 @@ func loadOptionsFromDatabase() {
 	pricingApplyMu.Lock()
 	defer pricingApplyMu.Unlock()
 	for _, option := range options {
-		if option.Key == pricingWriteLockKey {
+		if option.Key == pricingWriteLockKey || option.Key == legacyModelSourceRateKey {
 			continue
 		}
 		err := updateOptionMap(option.Key, option.Value)
@@ -482,8 +483,7 @@ func ValidateOptionValueForBatch(key, value string) error {
 	trimmed := strings.TrimSpace(value)
 	switch key {
 	case "ModelPrice", "ModelRatio", "CompletionRatio", "CacheRatio",
-		"CreateCacheRatio", "ImageRatio", "AudioRatio", "AudioCompletionRatio",
-		"ModelSourceRate":
+		"CreateCacheRatio", "ImageRatio", "AudioRatio", "AudioCompletionRatio":
 		if trimmed == "" || trimmed == "null" {
 			return nil
 		}
@@ -492,6 +492,15 @@ func ValidateOptionValueForBatch(key, value string) error {
 			return fmt.Errorf("%s 不是合法的 JSON 数值表: %w", key, err)
 		}
 		return nil
+	case "ModelSourceRate":
+		_, err := billing_setting.ParseGlobalModelSourceRate(value)
+		return err
+	case "ModelPriceCurrency":
+		_, err := billing_setting.ParseModelPriceCurrencies(value)
+		return err
+	case "tool_price_setting.currencies":
+		_, err := operation_setting.ParseToolPriceCurrencies(value)
+		return err
 	case "billing_setting.billing_mode", "billing_setting.billing_expr":
 		if trimmed == "" || trimmed == "null" {
 			return nil
@@ -883,6 +892,14 @@ func updateOptionMap(key string, value string) (err error) {
 		common.DataExportDefaultTime = value
 	case "ModelSourceRate":
 		err = billing_setting.UpdateModelSourceRateByJSONString(value)
+		if err == nil {
+			InvalidatePricingCache()
+		}
+	case "ModelPriceCurrency":
+		err = billing_setting.UpdateModelPriceCurrencies(value)
+		if err == nil {
+			InvalidatePricingCache()
+		}
 	case "ModelRatio":
 		err = ratio_setting.UpdateModelRatioByJSONString(value)
 	case "GroupRatio":

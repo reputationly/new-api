@@ -14,7 +14,7 @@ func TestValidateOptionValueForBatch(t *testing.T) {
 		"ModelPrice":                   `{"m": 0.2}`,
 		"billing_setting.billing_mode": `{"m": "tiered_expr"}`,
 		"billing_setting.billing_expr": `{"m": "v2:tier(\"base\", p * 1)"}`,
-		"ModelSourceRate":              `{"m": 6.8}`,
+		"ModelSourceRate":              "6.8",
 		"VideoPricingConfig":           `{}`,
 	}
 	for key, value := range valid {
@@ -22,7 +22,7 @@ func TestValidateOptionValueForBatch(t *testing.T) {
 	}
 
 	// 空表/显式 null 放行（表示清空）
-	require.NoError(t, ValidateOptionValueForBatch("ModelSourceRate", "{}"))
+	require.Error(t, ValidateOptionValueForBatch("ModelSourceRate", "{}"))
 	require.NoError(t, ValidateOptionValueForBatch("ModelSourceRate", "null"))
 	require.NoError(t, ValidateOptionValueForBatch("billing_setting.billing_expr", ""))
 

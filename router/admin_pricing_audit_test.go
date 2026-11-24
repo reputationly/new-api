@@ -130,6 +130,20 @@ func TestAdminPricingGroupAndLogAudit(t *testing.T) {
 	require.NoError(t, db.Model(&model.Log{}).Where("created_at = ?", 2).Count(&count).Error)
 	require.EqualValues(t, 1, count)
 
+	request(2, http.MethodPost, pricing, `{"options":{"ModelSourceRate":"6.8"}}`, true)
+	request(3, http.MethodPost, pricing, `{"options":{"ModelSourceRate":"7"}}`, true)
+	var sourceRateLog model.Log
+	require.NoError(t, db.Last(&sourceRateLog).Error)
+	require.Contains(t, sourceRateLog.Other, `"key":"ModelSourceRate"`)
+	require.Contains(t, sourceRateLog.Other, `"before":6.8,"after":7`)
+	require.Contains(t, sourceRateLog.Other, `"total_changes":1`)
+	request(2, http.MethodPost, pricing, `{"options":{"billing_setting.billing_mode":"{\"priced-model\":\"tiered_expr\"}","billing_setting.billing_expr":"{\"priced-model\":\"v2:p * 2 * fx\"}","ModelPriceCurrency":"{\"priced-model\":\"USD\"}"}}`, true)
+	request(2, http.MethodPost, pricing, `{"options":{"billing_setting.billing_expr":"{\"priced-model\":\"v2:p * 3 * fx\"}"}}`, true)
+	var exprLog model.Log
+	require.NoError(t, db.Last(&exprLog).Error)
+	require.Contains(t, exprLog.Other, `"key":"billing_setting.billing_expr"`)
+	require.Contains(t, exprLog.Other, `"before":"v2:p * 2 * fx","after":"v2:p * 3 * fx"`)
+
 	var stored model.Option
 	require.NoError(t, db.Migrator().DropTable(&model.Log{}))
 	request(2, http.MethodPost, groups, `{"options":{"GroupDescription":"{}"}}`, false)

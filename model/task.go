@@ -14,6 +14,7 @@ import (
 	"github.com/QuantumNous/new-api/dto"
 	commonRelay "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/service/mediastore"
+	"github.com/QuantumNous/new-api/setting/ratio_setting"
 	"gorm.io/gorm"
 )
 
@@ -530,6 +531,8 @@ const (
 
 // TaskBillingContext 记录任务提交时的计费参数，以便轮询阶段可以重新计算额度。
 type TaskBillingContext struct {
+	PricingCurrency string             `json:"pricing_currency,omitempty"`
+	ModelSourceRate float64            `json:"model_source_rate,omitempty"`
 	ModelPrice      float64            `json:"model_price,omitempty"`       // 模型单价
 	GroupRatio      float64            `json:"group_ratio,omitempty"`       // 分组倍率
 	ModelRatio      float64            `json:"model_ratio,omitempty"`       // 模型倍率
@@ -561,11 +564,12 @@ type TaskBillingContext struct {
 // UnitPrice 单位是**人民币**——token 模式为 ¥/百万 tokens，per_call 模式为 ¥/次。
 // 定价配置本身就是人民币价，后端不碰汇率。
 type TaskVideoBilling struct {
-	Mode          string  `json:"mode,omitempty"`
-	UnitPrice     float64 `json:"unit_price,omitempty"`
-	Resolution    string  `json:"resolution,omitempty"`
-	Seconds       int     `json:"seconds,omitempty"`
-	HasVideoInput bool    `json:"has_video_input,omitempty"`
+	TokenPrices   *ratio_setting.VideoPriceEntry `json:"token_prices,omitempty"`
+	Mode          string                         `json:"mode,omitempty"`
+	UnitPrice     float64                        `json:"unit_price,omitempty"`
+	Resolution    string                         `json:"resolution,omitempty"`
+	Seconds       int                            `json:"seconds,omitempty"`
+	HasVideoInput bool                           `json:"has_video_input,omitempty"`
 	// DeliveredSeconds 真实交付秒数（仅 H3 这类有帧栅格的引擎族填写）。
 	// 与 Seconds（请求值）分开存：按秒计价的模型要用它算钱，而 per_call 的列名
 	// 仍然是整数秒的请求档位。0 = 该引擎族没有栅格偏差，等价于 Seconds。

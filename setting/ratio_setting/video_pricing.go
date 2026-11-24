@@ -59,6 +59,33 @@ type VideoPriceEntry struct {
 	PerSecond map[string]float64            `json:"per_second,omitempty"`
 }
 
+func (e VideoPriceEntry) ScalePrices(factor float64) VideoPriceEntry {
+	if factor == 1 {
+		return e
+	}
+	scaleRow := func(row map[string]float64) map[string]float64 {
+		if row == nil {
+			return nil
+		}
+		out := make(map[string]float64, len(row))
+		for key, price := range row {
+			out[key] = price * factor
+		}
+		return out
+	}
+	scaleMatrix := func(matrix map[string]map[string]float64) map[string]map[string]float64 {
+		if matrix == nil {
+			return nil
+		}
+		out := make(map[string]map[string]float64, len(matrix))
+		for key, row := range matrix {
+			out[key] = scaleRow(row)
+		}
+		return out
+	}
+	return VideoPriceEntry{Mode: e.Mode, Token: scaleMatrix(e.Token), PerCall: scaleMatrix(e.PerCall), PerSecond: scaleRow(e.PerSecond)}
+}
+
 var videoPricingMap = types.NewRWMap[string, VideoPriceEntry]()
 
 func VideoPricing2JSONString() string {

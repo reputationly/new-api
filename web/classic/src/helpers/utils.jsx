@@ -799,6 +799,9 @@ export const calculateModelPrice = ({
   // 不传 = 全部按 1，行为与改造前逐位一致。
   componentScaleMap = null,
 }) => {
+  if (record.price_unavailable) {
+    return { priceUnavailable: true };
+  }
   // 1. 选择实际使用的分组
   let usedGroup = selectedGroup;
   let usedGroupRatio = getEffectiveGroupRatio(
@@ -1110,6 +1113,9 @@ export const calculateModelPrice = ({
 };
 
 export const getModelPriceItems = (priceData, t, quotaDisplayType = 'USD') => {
+  if (priceData.priceUnavailable) {
+    return [{ key: 'unavailable', label: t('价格不可用'), value: t('未配置全局模型源汇率') }];
+  }
   // 套餐内价：与 appendPoints 同构，追加在每个货币价格行之后。
   //
   // 刻意不把它抬成主价：算力点烧完就按原价扣，把原价降级成副信息，恰恰是在用户

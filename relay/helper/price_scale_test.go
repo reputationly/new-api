@@ -8,6 +8,7 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
+	"github.com/QuantumNous/new-api/setting/billing_setting"
 	"github.com/QuantumNous/new-api/setting/ratio_setting"
 	"github.com/QuantumNous/new-api/types"
 
@@ -93,6 +94,43 @@ func TestModelPriceHelperPerCallPricePath(t *testing.T) {
 
 // 按次价的取整方向：int() 截断会少收 1 quota，必须是 math.Round。
 // ¥0.0099999999 × 1e9 = 9,999,999.9 → 10,000,000。
+func TestModelPriceHelperUSDRequiresAndFreezesGlobalRate(t *testing.T) {
+	const modelName = "usd-percall-model"
+	oldPrices := ratio_setting.ModelPrice2JSONString()
+	oldRate := billing_setting.ModelSourceRate2JSONString()
+	t.Cleanup(func() {
+		_ = ratio_setting.UpdateModelPriceByJSONString(oldPrices)
+		_ = billing_setting.UpdateModelSourceRateByJSONString(oldRate)
+		_ = billing_setting.UpdateModelPriceCurrencies("{}")
+	})
+	require.NoError(t, ratio_setting.UpdateModelPriceByJSONString(`{"usd-percall-model":2}`))
+	require.NoError(t, billing_setting.UpdateModelPriceCurrencies(`{"usd-percall-model":"USD"}`))
+	require.NoError(t, billing_setting.UpdateModelSourceRateByJSONString(""))
+	ctx, _ := gin.CreateTestContext(nil)
+	info := &relaycommon.RelayInfo{OriginModelName: modelName, UserGroup: "default", UsingGroup: "default"}
+	_, err := ModelPriceHelperPerCall(ctx, info)
+	require.ErrorIs(t, err, billing_setting.ErrModelSourceRateUnavailable)
+	require.NoError(t, billing_setting.UpdateModelSourceRateByJSONString("6.8"))
+	first, err := ModelPriceHelperPerCall(ctx, info)
+	require.NoError(t, err)
+	require.Equal(t, "USD", first.PricingCurrency)
+	require.Equal(t, 6.8, first.ModelSourceRate)
+	require.Equal(t, 13_600_000_000, first.Quota)
+	require.NoError(t, billing_setting.UpdateModelSourceRateByJSONString("7"))
+	info.TaskBasePriceData = &first
+	info.TaskBasePriceGroup = info.UsingGroup
+	retry, err := ModelPriceHelperPerCall(ctx, info)
+	require.NoError(t, err)
+	require.Equal(t, first.Quota, retry.Quota)
+	require.Equal(t, first.ModelSourceRate, retry.ModelSourceRate)
+	info.TaskBasePriceData = nil
+	next, err := ModelPriceHelperPerCall(ctx, info)
+	require.NoError(t, err)
+	require.Equal(t, 14_000_000_000, next.Quota)
+	require.Equal(t, 13.6, first.ModelPrice)
+	require.JSONEq(t, `{"usd-percall-model":2}`, ratio_setting.ModelPrice2JSONString())
+}
+
 func TestModelPriceHelperPerCallRoundsPerCallPrice(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 

@@ -50,7 +50,7 @@ func hasCustomModelRatio(modelName string, currentRatio float64) bool {
 	return currentRatio != defaultRatio
 }
 
-func calculateAudioQuota(info QuotaInfo) int {
+func calculateAudioQuota(info QuotaInfo, snapshot ...types.PriceData) int {
 	if info.UsePrice {
 		modelPrice := decimal.NewFromFloat(info.ModelPrice)
 		// 按次价是人民币，直接 × QuotaPerYuan 得 quota。
@@ -71,6 +71,11 @@ func calculateAudioQuota(info QuotaInfo) int {
 	)
 	audioRatio := decimal.NewFromFloat(ratio_setting.GetAudioRatio(info.ModelName) * types.ScaleComponent("audio_input", info.TimeFactors))
 	audioCompletionRatio := decimal.NewFromFloat(ratio_setting.GetAudioCompletionRatio(info.ModelName) * types.ScaleComponent("audio_output", info.TimeFactors) / types.ScaleComponent("audio_input", info.TimeFactors))
+	if len(snapshot) != 0 && snapshot[0].PricingCurrency != "" {
+		completionRatio = decimal.NewFromFloat(snapshot[0].CompletionRatio)
+		audioRatio = decimal.NewFromFloat(snapshot[0].AudioRatio)
+		audioCompletionRatio = decimal.NewFromFloat(snapshot[0].AudioCompletionRatio)
+	}
 
 	groupRatio := decimal.NewFromFloat(info.GroupRatio)
 	modelRatio := decimal.NewFromFloat(info.ModelRatio)
@@ -119,6 +124,9 @@ func PreWssConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, usag
 	audioInputTokens := usage.InputTokenDetails.AudioTokens
 	audioOutTokens := usage.OutputTokenDetails.AudioTokens
 	modelRatio, _, _ := ratio_setting.GetModelRatio(modelName)
+	if relayInfo.PriceData.PricingCurrency != "" {
+		modelRatio = relayInfo.PriceData.ModelRatio
+	}
 
 	// 用预扣费时冻结的倍率，不重新解析。
 	//
@@ -150,7 +158,7 @@ func PreWssConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, usag
 		TimeFactors: relayInfo.PriceData.GroupRatioInfo.TimeFactors,
 	}
 
-	quota := calculateAudioQuota(quotaInfo)
+	quota := calculateAudioQuota(quotaInfo, relayInfo.PriceData)
 
 	if userQuota < quota {
 		return fmt.Errorf("user quota is not enough, user quota: %s, need quota: %s", logger.FormatQuota(userQuota), logger.FormatQuota(quota))
@@ -221,7 +229,7 @@ func PostWssConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, mod
 		TimeFactors: relayInfo.PriceData.GroupRatioInfo.TimeFactors,
 	}
 
-	quota := calculateAudioQuota(quotaInfo)
+	quota := calculateAudioQuota(quotaInfo, relayInfo.PriceData)
 	if tieredOk {
 		quota = tieredQuota
 	}
@@ -357,7 +365,7 @@ func PostAudioConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, u
 		TimeFactors: relayInfo.PriceData.GroupRatioInfo.TimeFactors,
 	}
 
-	quota := calculateAudioQuota(quotaInfo)
+	quota := calculateAudioQuota(quotaInfo, relayInfo.PriceData)
 	if tieredOk {
 		quota = tieredQuota
 	}
