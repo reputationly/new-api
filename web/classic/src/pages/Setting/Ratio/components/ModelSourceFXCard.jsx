@@ -207,6 +207,7 @@ export default function ModelSourceFXCard({ configuredRate }) {
     ? `${dateTime.format(status.last_success)} (UTC+8)`
     : t('尚无成功记录');
   const lastChange = series?.last_change;
+  const latestDate = series?.latest_date;
 
   return (
     <Card title={t('全局模型源汇率')} className='my-3'>
@@ -251,13 +252,6 @@ export default function ModelSourceFXCard({ configuredRate }) {
           description={`${t('CFETS 请求失败')}：${status.error}；${t('最后成功拉取')}：${lastSuccess}`}
         />
       )}
-      {series?.stale && (
-        <Banner
-          type='warning'
-          closeIcon={null}
-          description={`${t('CFETS 数据未更新：超过两个预期发布日（周一至周五），可能为节假日休市。')} ${t('最后成功拉取')}：${lastSuccess}`}
-        />
-      )}
       <div className='mt-3'>
         <strong>{t('近 30 天 USD/CNY 汇率')}</strong>
         <span
@@ -298,6 +292,13 @@ export default function ModelSourceFXCard({ configuredRate }) {
               </span>
             )}
           </Space>
+        )}
+        {latestDate && latestDate !== series.today && (
+          <p className='mt-2 text-xs text-gray-500'>
+            {t('最新中间价为 {{date}}（休市期间不发布）', {
+              date: latestDate.slice(5).replace('-', '/'),
+            })}
+          </p>
         )}
         {!loading && !latest && <p>{t('暂无 CFETS 中间价数据')}</p>}
         {series && <FXChart series={series} t={t} />}

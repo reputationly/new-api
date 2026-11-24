@@ -30,10 +30,17 @@ func TestCFETSSyncAndFailure(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case cfetsHistory:
-			if r.Method != http.MethodPost || r.URL.Query().Get("currency") != "USD/CNY" || r.URL.Query().Get("startDate") != "2026-10-26" {
+			if r.Method != http.MethodPost || r.URL.Query().Get("currency") != "USD/CNY" {
 				t.Error("unexpected CFETS history request")
 				w.WriteHeader(http.StatusBadRequest)
 				return
+			}
+			if r.URL.Query().Get("startDate") == "2026-11-25" {
+				fmt.Fprint(w, `{"head":{"rep_code":"200"},"data":{"searchlist":["USD/CNY"]},"records":[]}`)
+				return
+			}
+			if r.URL.Query().Get("startDate") != "2026-10-26" {
+				t.Error("unexpected CFETS history start date")
 			}
 			fmt.Fprint(w, `{"head":{"rep_code":"200"},"data":{"searchlist":["USD/CNY"]},"records":[{"date":"2026-11-23","values":["6.7111"]},{"date":"2026-11-24","values":["6.7100"]}]}`)
 		case cfetsLatest:
@@ -74,13 +81,19 @@ func TestCFETSSyncAndFailure(t *testing.T) {
 	_, status, err = model.ReadModelSourceFX(ctx, "2026-10-26", "2026-11-24")
 	require.NoError(t, err)
 	require.Empty(t, status.Error)
+
+	// A successful pull during a closure need not contain any new quotes.
+	closed := now.AddDate(0, 0, 30)
+	require.NoError(t, client.sync(ctx, closed))
+	quotes, status, err = model.ReadModelSourceFX(ctx, "2026-10-26", "2026-12-24")
+	require.NoError(t, err)
+	require.Len(t, quotes, 2)
+	require.Equal(t, closed.UnixMilli(), status.LastSuccess)
+	require.Empty(t, status.Error)
 }
 
-func TestCFETSPublishDays(t *testing.T) {
+func TestCFETSSkipsWeekend(t *testing.T) {
 	tuesday := time.Date(2026, 11, 24, 9, 30, 0, 0, cfetsLocation)
-	require.Equal(t, 2, CFETSMissingPublishDays("2026-11-19", tuesday.Add(-time.Second)))
-	require.Equal(t, 3, CFETSMissingPublishDays("2026-11-19", tuesday))
-	require.Equal(t, 2, CFETSMissingPublishDays("2026-11-20", tuesday))
 	friday := tuesday.AddDate(0, 0, 3)
 	require.Equal(t, friday.AddDate(0, 0, 3), nextCFETSRun(friday))
 }

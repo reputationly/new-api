@@ -38,20 +38,6 @@ func cfetsWeekday(day time.Time) bool {
 	return day.Weekday() != time.Saturday && day.Weekday() != time.Sunday
 }
 
-func CFETSMissingPublishDays(latest string, now time.Time) int {
-	date, err := time.ParseInLocation(time.DateOnly, latest, cfetsLocation)
-	if err != nil {
-		return 0
-	}
-	missing := 0
-	for day := date.AddDate(0, 0, 1); !cfetsPublishTime(day).After(now); day = day.AddDate(0, 0, 1) {
-		if cfetsWeekday(day) {
-			missing++
-		}
-	}
-	return missing
-}
-
 func nextCFETSRun(now time.Time) time.Time {
 	_, day := ModelSourceFXWindow(now)
 	for !cfetsWeekday(day) || !cfetsPublishTime(day).After(now) {
@@ -119,7 +105,7 @@ func (c cfetsClient) fetch(ctx context.Context, now time.Time) ([]model.ModelSou
 	if err := c.request(ctx, http.MethodPost, cfetsHistory+"?"+query.Encode(), &history); err != nil {
 		return nil, err
 	}
-	if history.Head.Code != "200" || len(history.Data.SearchList) != 1 || history.Data.SearchList[0] != model.CFETSPair || len(history.Records) == 0 {
+	if history.Head.Code != "200" || len(history.Data.SearchList) != 1 || history.Data.SearchList[0] != model.CFETSPair || history.Records == nil {
 		return nil, errors.New("CFETS 历史中间价响应缺少 USD/CNY 数据")
 	}
 	byDate := make(map[string]model.ModelSourceFXQuote, len(history.Records)+1)
@@ -152,7 +138,7 @@ func (c cfetsClient) fetch(ctx context.Context, now time.Time) ([]model.ModelSou
 			if row.Pair != model.CFETSPair {
 				continue
 			}
-			if quote, ok := parseCFETSQuote(date, row.Price, from, through); ok {
+			if quote, ok := parseCFETSQuote(date, row.Price, time.Time{}, through); ok {
 				byDate[quote.QuoteDate] = quote
 				quotes := make([]model.ModelSourceFXQuote, 0, len(byDate))
 				for _, quote := range byDate {

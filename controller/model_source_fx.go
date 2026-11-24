@@ -28,16 +28,16 @@ func GetModelSourceFX(c *gin.Context) {
 		common.ApiError(c, err)
 		return
 	}
-	missing := 0
+	latestDate := ""
 	if len(quotes) != 0 {
-		missing = service.CFETSMissingPublishDays(quotes[len(quotes)-1].QuoteDate, now)
+		latestDate = quotes[len(quotes)-1].QuoteDate
 	} else if status.LastSuccess > 0 {
 		latest, err := model.ReadLatestModelSourceFXQuote(ctx, through.Format(time.DateOnly))
 		if err != nil {
 			common.ApiError(c, err)
 			return
 		}
-		missing = service.CFETSMissingPublishDays(latest.QuoteDate, now)
+		latestDate = latest.QuoteDate
 	}
 	lastChange := baseline
 	if len(changes) != 0 {
@@ -45,7 +45,7 @@ func GetModelSourceFX(c *gin.Context) {
 	}
 	common.ApiSuccess(c, gin.H{
 		"from": from.Unix(), "through": through.AddDate(0, 0, 1).Unix() - 1, "quotes": quotes,
-		"status": status, "stale": missing > 2,
+		"status": status, "today": through.Format(time.DateOnly), "latest_date": latestDate,
 		"baseline": baseline, "changes": changes, "last_change": lastChange,
 		"current_rate": current,
 	})
