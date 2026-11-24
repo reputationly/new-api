@@ -623,8 +623,11 @@ func (user *User) TransferAffQuotaToQuota(quota int) error {
 	user.AffQuota -= quota
 	user.Quota += quota
 
-	// 保存用户状态
-	if err := tx.Save(user).Error; err != nil {
+	// 保存用户状态。积分两列 Omit，理由同 User.Update：Save 会整行回写，
+	// 把上面 First 读到的旧 points_balance 覆盖掉并发扣费/发放的结果。
+	// 注：上面的 gorm:query_option "FOR UPDATE" 在 GORM v2 下不生效（v1 遗留机制），
+	// 所以这里读到的值本来就不是加锁值，更不能回写积分列。
+	if err := tx.Omit("points_balance", "points_used").Save(user).Error; err != nil {
 		return err
 	}
 
@@ -782,7 +785,14 @@ func (user *User) Update(updatePassword bool) error {
 	}
 	newUser := *user
 	DB.First(&user, user.Id)
-	if err = DB.Model(user).Updates(newUser).Error; err != nil {
+	// 积分两列必须 Omit：newUser 是**调用方手里的旧快照**，整行 Updates 会把读取时的
+	// points_balance / points_used 原样写回，覆盖掉这期间并发的扣费与发放（丢失更新）。
+	// 积分列由积分批次机制事务内维护，任何整行回写都会绕过它：旧值偏高会在下次批次归属
+	// 时表现为 surplus（用户凭空多分），旧值偏低会被归属成一笔消耗（用户少分，且余额与
+	// 流水不符）。points_used 同理，由 AddUserPointsUsed 独占累加。
+	// 全仓除注册路径外没有任何地方给这两个字段赋值，Omit 不会吞掉合法写入。
+	// （quota / aff_points_earned 有同类问题，不在本次范围，见 docs/points-expiry-design.md §2.6）
+	if err = DB.Model(user).Omit("points_balance", "points_used").Updates(newUser).Error; err != nil {
 		return err
 	}
 
