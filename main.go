@@ -359,6 +359,15 @@ func main() {
 	// ListenAndServe 在 Shutdown 开始关监听器的那一刻就返回，早于等待在途请求 / 刷库 / 排空队列。
 	// 所以必须用这个 channel 把 main 挂住，否则进程会在收尾做完之前就退出，前面全白做。
 	shutdownDone := make(chan struct{})
+	fxContext, stopFX := context.WithCancel(context.Background())
+	defer stopFX()
+	fxDone := make(chan struct{})
+	go func() {
+		defer close(fxDone)
+		if common.IsMasterNode {
+			service.RunModelSourceFX(fxContext)
+		}
+	}()
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGTERM, syscall.SIGINT)
 	go func() {
@@ -374,8 +383,10 @@ func main() {
 		// 收到信号后不再接管：如果运维发现收尾卡住，第二次 SIGTERM/SIGINT 会走默认动作
 		// 立即结束进程。这比干等到 SIGKILL 可控。
 		signal.Stop(sigCh)
+		stopFX()
 		common.SysLog("received " + sig.String() + ", starting graceful shutdown")
 		shutdownGracefully(httpServer, pprofServer, shutdownTimeout())
+		<-fxDone
 	}()
 
 	err = httpServer.ListenAndServe()

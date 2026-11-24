@@ -26,7 +26,7 @@ func TestAdminPricingGroupAndLogAudit(t *testing.T) {
 	require.NoError(t, err)
 	sqlDB, err := db.DB()
 	require.NoError(t, err)
-	require.NoError(t, db.AutoMigrate(&model.Option{}, &model.User{}, &model.Ability{}, &model.Log{}))
+	require.NoError(t, db.AutoMigrate(&model.Option{}, &model.User{}, &model.Ability{}, &model.Log{}, &model.ModelSourceFXQuote{}, &model.ModelSourceFXStatus{}))
 	prevDB, prevLogDB, prevOptions := model.DB, model.LOG_DB, common.OptionMap
 	prevRatio, prevDescription := ratio_setting.ModelRatio2JSONString(), setting.GroupDescriptions2JSONString()
 	prevTool := config.GlobalConfig.ExportAllConfigs()["tool_price_setting.prices"]
@@ -67,12 +67,15 @@ func TestAdminPricingGroupAndLogAudit(t *testing.T) {
 		return w.Body.String()
 	}
 	const pricing, groups = "/api/model_pricing/options", "/api/group/options"
+	const sourceFX = "/api/model_pricing/source_fx"
+	request(1, http.MethodGet, sourceFX, "", false)
 	const change = `{"options":{"ModelRatio":"{\"priced-model\":2,\"new-model\":0}"}}`
 	for _, path := range []string{pricing, groups} {
 		request(1, http.MethodGet, path, "", false)
 		request(1, http.MethodPost, path, change, false)
 	}
 	for _, id := range []int{2, 3} {
+		require.Contains(t, request(id, http.MethodGet, sourceFX, "", true), `"quotes":[]`)
 		body := request(id, http.MethodGet, pricing, "", true)
 		require.Contains(t, body, "CompletionRatioMeta")
 		require.Contains(t, body, `"enabled_models":["priced-model"]`)

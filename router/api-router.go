@@ -342,6 +342,7 @@ func SetApiRouter(router *gin.Engine) {
 		modelPricingRoute := apiRouter.Group("/model_pricing", middleware.AdminAuth())
 		{
 			modelPricingRoute.GET("/options", controller.GetPricingOptions)
+			modelPricingRoute.GET("/source_fx", controller.GetModelSourceFX)
 			modelPricingRoute.POST("/options", controller.UpdatePricingOptions)
 			modelPricingRoute.POST("/reset_model_ratio", controller.ResetModelRatio)
 		}

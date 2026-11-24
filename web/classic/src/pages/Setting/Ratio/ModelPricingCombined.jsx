@@ -4,6 +4,7 @@ import { useTranslation } from 'react-i18next';
 import ModelPricingEditor from './components/ModelPricingEditor';
 import ModelRatioSettings from './ModelRatioSettings';
 import TimeSlotTemplates from './components/TimeSlotTemplates';
+import ModelSourceFXCard from './components/ModelSourceFXCard';
 
 // 模型定价页。
 //
@@ -39,6 +40,9 @@ export default function ModelPricingCombined({ options, refresh }) {
         </RadioGroup>
       </div>
       <TimeSlotTemplates value={timeDraft} onChange={setTimeDraft} />
+      {editMode === 'visual' && (
+        <ModelSourceFXCard configuredRate={options?.ModelSourceRate} />
+      )}
       {editMode === 'visual' ? (
         <ModelPricingEditor
           options={options}
