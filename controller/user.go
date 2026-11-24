@@ -961,8 +961,10 @@ func ManageUser(c *gin.Context) {
 		Id: req.Id,
 	}
 	// Fill attributes
-	model.DB.Unscoped().Where(&user).First(&user)
-	if user.Id == 0 {
+	// 查询错误不能忽略：查不到时 user.Id 仍是请求里的 id，会通过下面的 Id==0 检查，
+	// 对一个不存在的用户写下流水与积分批次。id<=0 时 Where(&user) 没有条件，
+	// 会取到表里第一个用户，同样必须拦住。
+	if req.Id <= 0 || model.DB.Unscoped().Where(&user).First(&user).Error != nil {
 		common.ApiErrorI18n(c, i18n.MsgUserNotExists)
 		return
 	}

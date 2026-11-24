@@ -33,16 +33,6 @@ export function formatPointsExpiryFullDate(ts) {
   return `${p.year}-${p.month}-${p.day}`;
 }
 
-// isPointsExpiringSoon 判断某到期时刻是否落在 withinDays 个自然日内（含当天）。
-// 与后端一致：窗口按自然日算，不是按秒数——到期时刻在当天 23:59:59，按秒数比会漏掉
-// 最后一天。前端只在 Tooltip 里做「近 N 天」的措辞时用到，判定本身仍由后端给。
-export function isPointsExpiringSoon(ts, nowTs, withinDays) {
-  if (!ts || ts <= 0) return false;
-  const horizon = nowTs + withinDays * 86400;
-  // 多给一天余量：到期时刻是当天 23:59:59，比「now + N 天」晚几个小时
-  return ts <= horizon + 86400;
-}
-
 // pickExpiringHighlights 从 lots/summary 里取出展示需要的三样东西。
 //
 // **Tag 上的数量与日期必须取自最近的一个到期日**（v2.5 §10.2）：

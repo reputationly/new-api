@@ -1564,9 +1564,6 @@ func newUserRegisterGrantAccount() string {
 	return FundAccountCash
 }
 
-// newUserRegisterGrantLog 注册礼的日志文案，口径跟随实际落点：
-// 进积分池就按积分数展示，进现金池才按额度展示。两者数字量级差约 685 倍，
-// 用错口径会让运营在日志里看到一个完全对不上的数。
 // newUserRegisterGrantLogLine 注册礼的日志文案（含有效期后缀），两条注册路径共用。
 //
 // 有效期只在**积分系统启用时**才该出现：关闭时这笔进的是现金余额
@@ -1581,6 +1578,9 @@ func newUserRegisterGrantLogLine() string {
 	return line + PointsExpiryLogSuffix(ExpireAtDays(common.GetTimestamp(), ps.NewUserExpireDays))
 }
 
+// newUserRegisterGrantLog 注册礼的日志文案，口径跟随实际落点：
+// 进积分池就按积分数展示，进现金池才按额度展示。两者数字量级差约 685 倍，
+// 用错口径会让运营在日志里看到一个完全对不上的数。
 func newUserRegisterGrantLog() string {
 	if operation_setting.GetPointsSetting().Enabled {
 		return fmt.Sprintf("新用户注册赠送 %d 积分", common.QuotaToPoints(common.QuotaForNewUser))

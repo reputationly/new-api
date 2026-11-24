@@ -205,3 +205,24 @@ func TestHandleFundOperation_GiftRequiresExpireMode(t *testing.T) {
 	require.Len(t, lots, 1)
 	require.EqualValues(t, 6849, lots[0].Amount)
 }
+
+// 管理员接口对不存在的用户 id 必须拒绝：此前查询错误被忽略，user.Id 仍是请求里的 id，
+// 会对一个不存在的用户写下积分批次与流水（预览环境造数时实测）。
+func TestManageUser_RejectsNonexistentUser(t *testing.T) {
+	setupPointsAdminControllerDB(t)
+	seedManagedUser(t, 7, 0)
+
+	for _, body := range []string{
+		`{"id":501,"action":"add_points","mode":"add","value":6849,"points_expire_mode":"never"}`,
+		`{"id":0,"action":"add_points","mode":"add","value":6849,"points_expire_mode":"never"}`,
+	} {
+		w := callManageUser(t, body)
+		require.Contains(t, w.Body.String(), `"success":false`, body)
+	}
+
+	var lots, entries int64
+	require.NoError(t, model.DB.Model(&model.PointsLot{}).Count(&lots).Error)
+	require.NoError(t, model.DB.Model(&model.FundEntry{}).Count(&entries).Error)
+	require.Zero(t, lots, "不得留下孤儿批次")
+	require.Zero(t, entries, "不得留下孤儿流水")
+}

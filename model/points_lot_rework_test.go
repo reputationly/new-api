@@ -252,3 +252,18 @@ func TestPointsExpiry_ReusedLotIdStillForfeits(t *testing.T) {
 	require.NoError(t, err, "复用了 id 的新批次仍须能作废")
 	require.EqualValues(t, 200, forfeited)
 }
+
+// GrantPoints 对不存在的用户必须整笔失败：sync 对不存在的用户只清批次、不报错，
+// 若不检查余额更新命中的行数，会留下孤儿批次与孤儿流水，资金自洽校验从此不平。
+func TestGrantPoints_NonexistentUserRollsBack(t *testing.T) {
+	const id = 9400
+	_, err := GrantPoints(PointsGrant{
+		UserId: id, Quota: 1000, Source: FundSourceAdminGift, RefId: "nx",
+		Fund: FundEntry{Kind: FundKindGift, Source: FundSourceAdminGift, RefType: FundRefAdminOp, RefId: "nx-9400"},
+	})
+	require.ErrorIs(t, err, ErrPointsGrantUserNotFound)
+	require.Empty(t, listLots(t, id))
+	var n int64
+	require.NoError(t, DB.Model(&FundEntry{}).Where("user_id = ?", id).Count(&n).Error)
+	require.Zero(t, n)
+}

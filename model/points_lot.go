@@ -436,6 +436,8 @@ type PointsGrant struct {
 
 var ErrPointsGrantDuplicate = errors.New("points grant already recorded")
 
+var ErrPointsGrantUserNotFound = errors.New("发放积分失败：用户不存在")
+
 // GrantPointsTx 在调用方事务内发放。顺序固定：先 sync（把此前的消耗归属给旧批次，
 // 新批次不背锅），再插批次、加余额、记流水。
 //
@@ -509,9 +511,15 @@ func grantPointsAfterSyncTx(tx *gorm.DB, g PointsGrant) (lotId int, err error) {
 		lotId = lot.Id
 	}
 
-	if err := tx.Unscoped().Model(&User{}).Where("id = ?", g.UserId).
-		Update("points_balance", gorm.Expr("points_balance + ?", g.Quota)).Error; err != nil {
-		return 0, err
+	res := tx.Unscoped().Model(&User{}).Where("id = ?", g.UserId).
+		Update("points_balance", gorm.Expr("points_balance + ?", g.Quota))
+	if res.Error != nil {
+		return 0, res.Error
+	}
+	if res.RowsAffected != 1 {
+		// 用户不存在（sync 对不存在的用户只清批次、不报错）。不拦的话会留下一条孤儿批次
+		// 和一条孤儿流水，资金自洽校验从此不平。
+		return 0, ErrPointsGrantUserNotFound
 	}
 
 	entry := g.Fund
