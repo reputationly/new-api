@@ -49,8 +49,14 @@ import {
 import { IconGift } from '@douyinfe/semi-icons';
 import { useMinimumLoadingTime } from '../../hooks/common/useMinimumLoadingTime';
 import { getCurrencyConfig, getQuotaPerUnit } from '../../helpers/render';
+import { API } from '../../helpers';
+import {
+  formatPointsExpiryDate,
+  pickExpiringHighlights,
+} from '../../helpers/pointsExpiry';
 import { quotaToPoints, isPointsEnabled } from '../../helpers/quota';
 import { buildWalletSummary } from '../../helpers/walletSummary';
+import PointsLotsModal from './PointsLotsModal';
 import SubscriptionPlansCard from './SubscriptionPlansCard';
 
 const { Text } = Typography;
@@ -117,6 +123,43 @@ const RechargeCard = ({
     pointsEnabled: isPointsEnabled(),
   });
   const credit = wallet.credit;
+
+  // 临期提示与批次明细。只在积分开启时请求——关掉积分系统的部署里这两个接口
+  // 一律返回空，没必要多打两次。
+  // 整个 summary 都要：Tag 取 next_expiries[0]，Tooltip 逐行列出（最多 3 个）
+  // 加 30 天内合计。
+  const [pointsSummary, setPointsSummary] = useState(null);
+  const [lotsModalOpen, setLotsModalOpen] = useState(false);
+  useEffect(() => {
+    if (!wallet.showPoints) {
+      setPointsSummary(null);
+      return;
+    }
+    let cancelled = false;
+    API.get('/api/user/points/lots/summary')
+      .then((res) => {
+        if (cancelled) return;
+        const data = res.data?.data || {};
+        setPointsSummary(
+          data.expiring
+            ? {
+                expiring: data.expiring,
+                nextExpiries: Array.isArray(data.next_expiries)
+                  ? data.next_expiries
+                  : [],
+              }
+            : null,
+        );
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [wallet.showPoints, wallet.points]);
+
+  // §10.2：Tag 上的数量与日期必须同源，取**最近一个到期日**及其当天到期的量。
+  // expiring.quota 是 30 天内多个到期日的合计，配上最早日期会读成「这些全在那天过期」。
+  const highlights = pickExpiringHighlights(pointsSummary);
   // When QuotaDisplayType = CNY, amounts are already in CNY — skip Price conversion.
   const isCNYDisplay =
     (localStorage.getItem('quota_display_type') || 'USD') === 'CNY';
@@ -276,6 +319,47 @@ const RechargeCard = ({
                       <Coins size={12} className='mr-1' />
                       {t('积分')} {quotaToPoints(wallet.points)}
                       {`（≈${renderQuota(wallet.points)}）`}
+                      {highlights.nearest && (
+                        <Tooltip
+                          content={
+                            <div>
+                              {highlights.lines.map((e) => (
+                                <div key={e.expires_at}>
+                                  {formatPointsExpiryDate(e.expires_at)}：
+                                  {quotaToPoints(e.quota)} {t('积分')}
+                                </div>
+                              ))}
+                              <div
+                                style={{
+                                  marginTop: 4,
+                                  paddingTop: 4,
+                                  borderTop:
+                                    '1px solid var(--semi-color-border)',
+                                }}
+                              >
+                                {t('30 天内共')}{' '}
+                                {quotaToPoints(highlights.total30d)} {t('积分')}
+                              </div>
+                              <div>{t('点击查看全部')}</div>
+                            </div>
+                          }
+                        >
+                          <Tag
+                            color='orange'
+                            size='small'
+                            className='ml-1'
+                            style={{ cursor: 'pointer' }}
+                            onClick={() => setLotsModalOpen(true)}
+                          >
+                            {quotaToPoints(highlights.nearest.quota)}
+                            {t('积分')}{' '}
+                            {formatPointsExpiryDate(
+                              highlights.nearest.expires_at,
+                            )}
+                            {t('过期')}
+                          </Tag>
+                        </Tooltip>
+                      )}
                     </span>
                   )}
                   {credit && (
@@ -838,6 +922,10 @@ const RechargeCard = ({
       ) : (
         topupContent
       )}
+      <PointsLotsModal
+        visible={lotsModalOpen}
+        onClose={() => setLotsModalOpen(false)}
+      />
     </Card>
   );
 };

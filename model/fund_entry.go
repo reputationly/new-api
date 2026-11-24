@@ -80,6 +80,13 @@ const (
 	// 自洽：ledger(期初+入账-冲销) - consume(他的消费) == 0 == 他在 balance 里的贡献。
 	// 比直接删流水好：审计记录完整保留，还能看出这个账户注销时带走了多少余额。
 	FundKindClosed = "closed"
+	// FundKindExpire 积分批次到期作废。QuotaDelta 为负。
+	//
+	// 它是「赠送积分」自洽校验里减号的那一项：期初 + 发放 − 消耗 − 过期 == 当前
+	// points_balance。不落这条流水，过期归零会让校验从此每天都报不平，而那个告警
+	// 本来是用来发现「有代码绕过流水表」的。
+	// 报表上单列（决策 9）：消耗是买了服务，过期是白发了，两者性质不同。
+	FundKindExpire = "expire"
 )
 
 // Source —— 入账渠道，用于报表下钻。
@@ -108,6 +115,8 @@ const (
 	FundRefCheckin           = "checkin"            // userId:date
 	FundRefUser              = "user"               // userId（注册礼、实名奖励等一次性发放）
 	FundRefAdminOp           = "admin_op"           // 管理员操作，单号在写入时生成
+	// FundRefPointsLot 积分批次到期作废，RefId 为批次 id。作废重跑时靠它幂等。
+	FundRefPointsLot = "points_lot"
 )
 
 var ErrFundEntryRefEmpty = errors.New("fund entry ref_type/ref_id 不能为空")
@@ -223,4 +232,43 @@ func FundEntryExists(refType, refId string) bool {
 		return false
 	}
 	return n > 0
+}
+
+// fundEntryExistsTx 在给定事务内查幂等键是否已存在。
+//
+// 必须用 tx 而不是包级 DB：注册的发放就发生在调用方已开好的事务里，池=1 时再用另一条
+// 连接发查询会自锁（见 docs/points-expiry-design.md §2.5 的同一个坑）。
+func fundEntryExistsTx(tx *gorm.DB, refType, refId string) bool {
+	if refType == "" || refId == "" {
+		return false
+	}
+	var n int64
+	if err := tx.Model(&FundEntry{}).
+		Where("ref_type = ? AND ref_id = ?", refType, refId).Count(&n).Error; err != nil {
+		common.SysLog("failed to check fund entry existence (tx): " + err.Error())
+		return false
+	}
+	return n > 0
+}
+
+// PointsUserRefId 构造只用 userId 做幂等键的赠送流水单号（register-* / kyc / invite）。
+//
+// 用户 id 会被复用：`users.id` 是 `integer PRIMARY KEY`（无 AUTOINCREMENT），硬删后
+// 自增会回落；MySQL 上失败的插入不回滚自增值（下一个用户拿 id+1，偶发一次即可恢复），
+// SQLite 上回滚后下一次插入会拿**同一个** id，于是同一个键永久相撞。
+//
+// 历史流水不能删（审计与对账要用），所以撞键时改用带发放时刻的键：正常路径的键保持
+// 不变（不影响报表口径），只有真的复用 id 时才换一个必然唯一的键。
+func PointsUserRefId(prefix string, userId int, now int64, tx *gorm.DB) string {
+	base := fmt.Sprintf("%s:%d", prefix, userId)
+	if tx != nil {
+		if !fundEntryExistsTx(tx, FundRefUser, base) {
+			return base
+		}
+	} else if !FundEntryExists(FundRefUser, base) {
+		return base
+	}
+	common.SysLog(fmt.Sprintf(
+		"points grant ref %q already used (user id reused after hard delete); falling back to a timestamped ref", base))
+	return fmt.Sprintf("%s:%d#%d", prefix, userId, now)
 }

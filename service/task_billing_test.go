@@ -49,6 +49,7 @@ func TestMain(m *testing.M) {
 		&model.SubscriptionPlanEntitlement{},
 		&model.UserSubscriptionEntitlement{},
 		&model.ComputePointLot{},
+		&model.PointsLot{},
 		&model.FundEntry{},
 		&model.SubscriptionOrder{},
 		&model.ChannelModelCost{},

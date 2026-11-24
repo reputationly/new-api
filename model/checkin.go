@@ -24,6 +24,10 @@ type Checkin struct {
 	QuotaAwarded int    `json:"quota_awarded" gorm:"not null"`                                                   // 当次奖励(quota unit)，积分模式存换算后的 quota unit
 	RewardType   string `json:"reward_type" gorm:"type:varchar(20);default:'quota'"`                             // 当次奖励类型，历史行默认 quota
 	CreatedAt    int64  `json:"created_at" gorm:"bigint"`
+
+	// PointsExpiresAt 本次签到积分批次的到期时刻（Unix 秒，0 = 永不过期）。
+	// 不落库：它属于批次表的属性，这里只用于把结果带回给接口。
+	PointsExpiresAt int64 `json:"points_expires_at" gorm:"-"`
 }
 
 // CheckinRecord 用于API返回的签到记录（不包含敏感字段）
@@ -131,7 +135,12 @@ func UserCheckin(userId int) (*Checkin, error) {
 		CreatedAt:    time.Now().Unix(),
 	}
 
-	// 根据数据库类型选择不同的策略
+	// 积分模式三库统一走一个事务：签到记录、积分批次、余额、流水必须同成同败。
+	if isPoints {
+		return userCheckinPoints(checkin, userId, quotaAwarded)
+	}
+
+	// 额度模式（积分系统未启用的部署）：两条旧路径保持原样不动。
 	if common.UsingSQLite {
 		// SQLite 不支持嵌套事务，使用顺序操作 + 手动回滚
 		return userCheckinWithoutTransaction(checkin, userId, quotaAwarded, isPoints)
@@ -139,6 +148,55 @@ func UserCheckin(userId int) (*Checkin, error) {
 
 	// MySQL 和 PostgreSQL 支持事务，使用事务保证原子性
 	return userCheckinWithTransaction(checkin, userId, quotaAwarded, isPoints)
+}
+
+// userCheckinPoints 积分模式签到：签到记录、积分批次、余额、流水在同一个事务里。
+//
+// 三库统一走事务（旧代码对 SQLite 走的是「顺序操作 + 手动回滚」，那是因为额度模式
+// 的 Update 走包级 DB；积分模式本来就必须建批次，没有理由再分叉）。
+//
+// 批次按「周」合并：同一周内多次签到并入同一笔（ExpireAtWeeks 对同一周给出同一个
+// 到期时刻），避免每人每年 365 行。流水幂等键仍是 userId:date，逐日一条。
+func userCheckinPoints(checkin *Checkin, userId int, quotaAwarded int) (*Checkin, error) {
+	now := common.GetTimestamp()
+	cs := operation_setting.GetCheckinSetting()
+	expiresAt := ExpireAtWeeks(now, cs.PointsExpireWeeks)
+	weekKey := PointsCheckinWeekKey(now)
+	entryRefId := CheckinRefId(userId, checkin.CheckinDate)
+
+	err := DB.Transaction(func(tx *gorm.DB) error {
+		// 数据库有唯一约束 (user_id, checkin_date)，可以防止并发重复签到
+		if err := tx.Create(checkin).Error; err != nil {
+			return errors.New("签到失败，请稍后重试")
+		}
+		_, err := GrantPointsTx(tx, PointsGrant{
+			UserId:    userId,
+			Quota:     int64(quotaAwarded),
+			Source:    FundSourceCheckin,
+			RefId:     weekKey,
+			ExpiresAt: expiresAt,
+			MergeWeek: true,
+			Now:       now,
+			Fund: FundEntry{
+				Kind: FundKindGift, Source: FundSourceCheckin,
+				RefType: FundRefCheckin, RefId: entryRefId,
+			},
+		})
+		return err
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	// 缓存只在提交后更新（GrantPointsTx 不碰 Redis）。
+	go func() {
+		if cacheErr := cacheIncrUserPoints(userId, int64(quotaAwarded)); cacheErr != nil {
+			common.SysLog("failed to increase user points cache after checkin: " + cacheErr.Error())
+		}
+	}()
+
+	checkin.PointsExpiresAt = expiresAt
+	return checkin, nil
 }
 
 // userCheckinWithTransaction 使用事务执行签到（适用于 MySQL 和 PostgreSQL）

@@ -56,6 +56,7 @@ func TestMain(m *testing.M) {
 		&BankTransferOrder{},
 		&BankTransferReceipt{},
 		&ComputePointLot{},
+		&PointsLot{},
 		&SubscriptionPlanEntitlement{},
 		&UserSubscriptionEntitlement{},
 		&SubscriptionPreConsumeRecord{},
@@ -95,6 +96,7 @@ func truncateTables(t *testing.T) {
 		DB.Exec("DELETE FROM bank_transfer_orders")
 		DB.Exec("DELETE FROM bank_transfer_receipts")
 		DB.Exec("DELETE FROM compute_point_lots")
+		DB.Exec("DELETE FROM points_lots")
 		DB.Exec("DELETE FROM subscription_plan_entitlements")
 		DB.Exec("DELETE FROM user_subscription_entitlements")
 		DB.Exec("DELETE FROM subscription_pre_consume_records")

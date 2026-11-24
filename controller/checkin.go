@@ -69,12 +69,19 @@ func DoCheckin(c *gin.Context) {
 	} else {
 		model.RecordLog(userId, model.LogTypeSystem, fmt.Sprintf("用户签到，获得额度 %s", logger.LogQuota(checkin.QuotaAwarded)))
 	}
+	// 积分模式带回本次批次的到期时刻（Unix 秒，0 = 永不过期），供前端提示。
+	// 额度模式不返回该字段（额度不参与批次过期）。
+	data := gin.H{
+		"quota_awarded": checkin.QuotaAwarded,
+		"reward_type":   checkin.RewardType,
+		"checkin_date":  checkin.CheckinDate,
+	}
+	if checkin.RewardType == model.CheckinRewardPoints {
+		data["points_expires_at"] = checkin.PointsExpiresAt
+	}
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
 		"message": "签到成功",
-		"data": gin.H{
-			"quota_awarded": checkin.QuotaAwarded,
-			"reward_type":   checkin.RewardType,
-			"checkin_date":  checkin.CheckinDate},
+		"data":    data,
 	})
 }

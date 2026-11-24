@@ -32,6 +32,10 @@ export default function SettingsPoints(props) {
     'points_setting.kyc_verified_points': 0,
     'points_setting.kyc_inviter_points': 0,
     'points_setting.new_user_points': 0,
+    // 有效期（天）：0 = 永不过期。改配置只影响之后的发放，已发批次的到期时刻在发放时已固化。
+    'points_setting.new_user_expire_days': 0,
+    'points_setting.kyc_verified_expire_days': 0,
+    'points_setting.kyc_inviter_expire_days': 0,
     'points_setting.enabled_channels': [],
   });
   const refForm = useRef();
@@ -226,6 +230,34 @@ export default function SettingsPoints(props) {
                   disabled={!inputs['points_setting.enabled']}
                 />
               </Col>
+            </Row>
+            {/* 有效期与上面三个赠送额一一对应。0 一律表示永不过期（不是「继承默认」），
+                改配置只影响之后的发放——已发批次的到期时刻在发放时就固化了。 */}
+            <Row gutter={16}>
+              {[
+                ['points_setting.new_user_expire_days', '注册赠分有效期（天）'],
+                [
+                  'points_setting.kyc_verified_expire_days',
+                  '实名赠分有效期（天）',
+                ],
+                [
+                  'points_setting.kyc_inviter_expire_days',
+                  '邀请人赠分有效期（天）',
+                ],
+              ].map(([field, label]) => (
+                <Col key={field} xs={24} sm={12} md={8} lg={8} xl={8}>
+                  <Form.InputNumber
+                    field={field}
+                    label={t(label)}
+                    extraText={t('0 = 永不过期；到期未用完的部分自动作废')}
+                    onChange={handleFieldChange(field)}
+                    min={0}
+                    max={3650}
+                    precision={0}
+                    disabled={!inputs['points_setting.enabled']}
+                  />
+                </Col>
+              ))}
             </Row>
             <Row gutter={16}>
               <Col xs={24} sm={24} md={16} lg={16} xl={16}>

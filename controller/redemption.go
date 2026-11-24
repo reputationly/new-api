@@ -1,6 +1,7 @@
 package controller
 
 import (
+	"fmt"
 	"net/http"
 	"strconv"
 	"unicode/utf8"
@@ -103,17 +104,24 @@ func AddRedemption(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"success": false, "message": msg})
 		return
 	}
+	// 积分码的有效期（兑入积分多久后作废）。与码本身的 ExpiredTime 是两回事：
+	// 那个管「这张码什么时候不能兑」，这个管「兑进来的积分什么时候作废」。
+	if msg := validatePointsExpireDays(redemption.PointsExpireDays); msg != "" {
+		c.JSON(http.StatusOK, gin.H{"success": false, "message": msg})
+		return
+	}
 	var keys []string
 	for i := 0; i < redemption.Count; i++ {
 		key := common.GetUUID()
 		cleanRedemption := model.Redemption{
-			UserId:      c.GetInt("id"),
-			Name:        redemption.Name,
-			Key:         key,
-			CreatedTime: common.GetTimestamp(),
-			Quota:       redemption.Quota,
-			RewardType:  redemption.RewardType,
-			ExpiredTime: redemption.ExpiredTime,
+			UserId:           c.GetInt("id"),
+			Name:             redemption.Name,
+			Key:              key,
+			CreatedTime:      common.GetTimestamp(),
+			Quota:            redemption.Quota,
+			RewardType:       redemption.RewardType,
+			ExpiredTime:      redemption.ExpiredTime,
+			PointsExpireDays: redemption.PointsExpireDays,
 		}
 		err = cleanRedemption.Insert()
 		if err != nil {
@@ -167,6 +175,10 @@ func UpdateRedemption(c *gin.Context) {
 			c.JSON(http.StatusOK, gin.H{"success": false, "message": msg})
 			return
 		}
+		if msg := validatePointsExpireDays(redemption.PointsExpireDays); msg != "" {
+			c.JSON(http.StatusOK, gin.H{"success": false, "message": msg})
+			return
+		}
 		// 积分系统启用后额度码只出不进：面额不可再改。否则拿一张存量未使用的额度码
 		// 改大面额，就等价于新发了一张大额额度码，绕开 AddRedemption 那道门。
 		// 改小一并禁止——请求里区分不出意图，而「改小」的正当需求极少（禁用后重发
@@ -181,6 +193,7 @@ func UpdateRedemption(c *gin.Context) {
 		cleanRedemption.Name = redemption.Name
 		cleanRedemption.Quota = redemption.Quota
 		cleanRedemption.ExpiredTime = redemption.ExpiredTime
+		cleanRedemption.PointsExpireDays = redemption.PointsExpireDays
 	}
 	if statusOnly != "" {
 		cleanRedemption.Status = redemption.Status
@@ -217,4 +230,16 @@ func validateExpiredTime(c *gin.Context, expired int64) (bool, string) {
 		return false, i18n.T(c, i18n.MsgRedemptionExpireTimeInvalid)
 	}
 	return true, ""
+}
+
+// validatePointsExpireDays 积分码有效期（天）的范围校验，返回错误文案（空串表示通过）。
+//
+// 0 = 永不过期（卖出去的码默认不设有效期）。上限与积分设置共用同一个常量，
+// 免得两处各写一个数、哪天改了一处忘了另一处。
+func validatePointsExpireDays(days int) string {
+	if days < 0 || days > operation_setting.MaxPointsExpireDays {
+		return fmt.Sprintf("兑入积分有效期需在 0~%d 天之间（0 = 永不过期）",
+			operation_setting.MaxPointsExpireDays)
+	}
+	return ""
 }

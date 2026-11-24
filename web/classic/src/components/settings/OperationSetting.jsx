@@ -126,6 +126,9 @@ const OperationSetting = () => {
     'checkin_setting.reward_type': 'quota',
     'checkin_setting.min_points': 0,
     'checkin_setting.max_points': 0,
+    // 子组件 SettingsCheckin 只接收这里声明过的 key（它按自身状态过滤 props.options，
+    // 首轮拿到的是这里的初值），漏声明就会在页面上显示为空。
+    'checkin_setting.points_expire_weeks': 0,
 
     /* 积分设置：布尔 key 必须在此声明，getOptions 只对声明为布尔的 key 做
        toBoolean，否则 "false" 字符串透传给 Form.Switch 会显示为开 */
@@ -137,6 +140,9 @@ const OperationSetting = () => {
     'points_setting.kyc_verified_points': 0,
     'points_setting.kyc_inviter_points': 0,
     'points_setting.new_user_points': 0,
+    'points_setting.new_user_expire_days': 0,
+    'points_setting.kyc_verified_expire_days': 0,
+    'points_setting.kyc_inviter_expire_days': 0,
 
     /* 令牌设置 */
     'token_setting.max_user_tokens': 1000,

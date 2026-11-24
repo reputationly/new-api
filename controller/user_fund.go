@@ -90,26 +90,39 @@ func handleFundOperation(c *gin.Context, user *model.User, req ManageRequest) {
 			common.ApiErrorMsg(c, "请填写赠送事由")
 			return
 		}
-		if err := model.IncreaseUserPoints(user.Id, req.Value, true); err != nil {
-			common.ApiError(c, err)
+		// 决策 7：管理员赠送的有效期必选。漏设会变成永久有效，而「赠送多久」正是
+		// 运营在这笔操作里必须显式决定的事。
+		expiresAt, expErr := resolvePointsExpiresAt(req)
+		if expErr != nil {
+			common.ApiErrorMsg(c, expErr.Error())
 			return
 		}
 		refId := model.NewAdminOpRefId()
-		model.RecordFundEntry(&model.FundEntry{
-			UserId:     user.Id,
-			Account:    model.FundAccountPoints,
-			Kind:       model.FundKindGift,
-			QuotaDelta: int64(req.Value),
-			CashFen:    0, // 赠送恒为 0：这是市场成本，不是营收
-			Source:     model.FundSourceAdminGift,
-			RefType:    model.FundRefAdminOp,
-			RefId:      refId,
-			OperatorId: adminId,
-			Remark:     buildFundRemark(ref, remark),
-		})
+		// 余额、批次、流水同事务：流水曾是提交后 best-effort 补记，现在撞键即整笔回滚。
+		if _, err := model.GrantPoints(model.PointsGrant{
+			UserId:    user.Id,
+			Quota:     int64(req.Value),
+			Source:    model.FundSourceAdminGift,
+			RefId:     refId,
+			ExpiresAt: expiresAt,
+			Fund: model.FundEntry{
+				Kind: model.FundKindGift,
+				// 赠送恒为 0：这是市场成本，不是营收
+				CashFen:    0,
+				Source:     model.FundSourceAdminGift,
+				RefType:    model.FundRefAdminOp,
+				RefId:      refId,
+				OperatorId: adminId,
+				Remark:     buildFundRemark(ref, remark),
+			},
+		}); err != nil {
+			common.ApiError(c, err)
+			return
+		}
 		model.RecordLogWithAdminInfo(user.Id, model.LogTypeManage,
 			fmt.Sprintf("管理员赠送 %d 积分（事由：%s，流水 %s）",
-				common.QuotaToPoints(req.Value), remark, refId), adminInfo)
+				common.QuotaToPoints(req.Value), remark, refId)+
+				model.PointsExpiryLogSuffix(expiresAt), adminInfo)
 
 	case FundOpCreditGrant:
 		// 授信上限是绝对值设定而非增量：运营填的是「这个客户的额度是多少」。

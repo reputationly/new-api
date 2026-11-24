@@ -32,6 +32,7 @@ const KIND_LABEL = {
   adjust: '差错调整',
   opening: '期初余额',
   closed: '账户注销冲销',
+  expire: '积分过期',
 };
 
 const SOURCE_LABEL = {
@@ -71,6 +72,8 @@ export default function FundReconcilePanel() {
   const [loading, setLoading] = useState(false);
   const [summary, setSummary] = useState(null);
   const [consistency, setConsistency] = useState(null);
+  // §9.3 余额溢出批次核查：正常应恒为空，出现即说明有发放路径绕过 GrantPoints。
+  const [surplusLots, setSurplusLots] = useState({ items: [], total: 0 });
   const [entries, setEntries] = useState([]);
   const [entryTotal, setEntryTotal] = useState(0);
   const [page, setPage] = useState(1);
@@ -113,6 +116,26 @@ export default function FundReconcilePanel() {
     },
     [startTs, endTs],
   );
+
+  const loadSurplusLots = useCallback(async () => {
+    try {
+      const res = await API.get(
+        '/api/user/points/lots/surplus?p=1&page_size=20',
+      );
+      if (res.data?.success) {
+        setSurplusLots({
+          items: res.data.data?.items || [],
+          total: Number(res.data.data?.total) || 0,
+        });
+      }
+    } catch {
+      // 溢出核查是辅助信息，失败不该打断对账页
+    }
+  }, []);
+
+  useEffect(() => {
+    loadSurplusLots();
+  }, [loadSurplusLots]);
 
   useEffect(() => {
     if (startTs && endTs) {
@@ -276,6 +299,45 @@ export default function FundReconcilePanel() {
           />
         )}
 
+        {surplusLots.total > 0 && (
+          <Card title={t('积分余额溢出批次')} bordered>
+            <Banner
+              type='warning'
+              closeIcon={null}
+              description={t(
+                '这些批次表示「余额里有一部分找不到对应的发放记录」。优先排查是否有发放路径绕过 GrantPoints（新增发放点、或整行回写复发）；只有能定位到具体一笔跨到期退款时才属正常。核对后可对相应用户用「减少积分」扣回。',
+              )}
+              style={{ marginBottom: 12 }}
+            />
+            <Table
+              size='small'
+              rowKey='id'
+              pagination={false}
+              dataSource={surplusLots.items}
+              columns={[
+                { title: t('用户'), dataIndex: 'username' },
+                { title: 'ID', dataIndex: 'user_id', width: 80 },
+                {
+                  title: t('溢出金额'),
+                  dataIndex: 'amount_quota',
+                  render: (v) => `¥${quota2yuan(v)}`,
+                },
+                {
+                  title: t('产生时间'),
+                  dataIndex: 'granted_at',
+                  render: (v) => new Date(v * 1000).toLocaleString(),
+                },
+              ]}
+            />
+            {surplusLots.total > surplusLots.items.length && (
+              <Text type='tertiary' size='small'>
+                {t('共')} {surplusLots.total} {t('条，仅显示最近')}{' '}
+                {surplusLots.items.length} {t('条')}
+              </Text>
+            )}
+          </Card>
+        )}
+
         <div className='grid grid-cols-1 md:grid-cols-3 gap-3'>
           <Card title={t('真实入账')} bordered>
             <Title heading={3}>
@@ -292,8 +354,9 @@ export default function FundReconcilePanel() {
             <div className='mt-2'>
               <Text type='tertiary' size='small'>
                 {t('不计营收')}：{t('赠送')} ¥
-                {quota2yuan(summary?.revenue?.gift_quota)} · {t('授信开额')} ¥
-                {quota2yuan(summary?.revenue?.credit_grant)}
+                {quota2yuan(summary?.revenue?.gift_quota)} · {t('积分过期')} ¥
+                {quota2yuan(summary?.revenue?.expired_points_quota)} ·{' '}
+                {t('授信开额')} ¥{quota2yuan(summary?.revenue?.credit_grant)}
               </Text>
             </div>
           </Card>

@@ -47,7 +47,8 @@ func openSplitTestDB(t *testing.T) (*gorm.DB, *gorm.DB) {
 		&model.Task{}, &model.Midjourney{}, &model.QuotaData{}, &model.Redemption{},
 		&model.Checkin{}, &model.FundEntry{}, &model.BankTransferOrder{},
 		&model.SubscriptionPlan{}, &model.UserSubscription{},
-		&model.SubscriptionPreConsumeRecord{}, &model.ComputePointLot{}, &model.TopUp{},
+		&model.SubscriptionPreConsumeRecord{}, &model.ComputePointLot{}, &model.PointsLot{},
+		&model.TopUp{},
 	))
 	require.NoError(t, logDB.AutoMigrate(&model.Log{}))
 	return mainDB, logDB

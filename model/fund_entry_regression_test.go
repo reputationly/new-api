@@ -41,6 +41,10 @@ func TestApproveBankTransferOrder_FundEntryUsesCreditedFen(t *testing.T) {
 
 // 注册礼落点：积分系统启用时进积分池（赠送不得混入现金池，否则「真实入账」虚高），
 // 未启用时仍进现金池（那种部署里积分不可用，收敛过去等于把注册礼作废）。
+//
+// ⚠️ 契约变更（docs/points-expiry-design.md §4.3）：积分启用时本函数**不再**把额度
+// 折进 PointsBalance。那笔钱必须由 grantRegisterPointsTx 走 GrantPointsTx 与批次、
+// 流水一起落库——随 Create 落库的余额没有批次，下次 sync 会把它当成 surplus。
 func TestApplyNewUserRegisterGrant_RoutesByPointsSwitch(t *testing.T) {
 	origQuota := common.QuotaForNewUser
 	common.QuotaForNewUser = 68493
@@ -54,7 +58,7 @@ func TestApplyNewUserRegisterGrant_RoutesByPointsSwitch(t *testing.T) {
 	u := &User{}
 	applyNewUserRegisterGrant(u)
 	require.Equal(t, 0, u.Quota, "积分启用时注册礼不得进现金池")
-	require.Equal(t, 68493, u.PointsBalance)
+	require.Equal(t, 0, u.PointsBalance, "积分启用时余额必须留给 GrantPointsTx 建批次")
 	require.Equal(t, FundAccountPoints, newUserRegisterGrantAccount())
 
 	ps.Enabled = false
@@ -66,22 +70,39 @@ func TestApplyNewUserRegisterGrant_RoutesByPointsSwitch(t *testing.T) {
 }
 
 // 注册礼额度与注册赠分是两路独立配置，同时配置时必须叠加而非互相覆盖。
-// applyNewUserRegisterGrant 先于 NewUserPointsGrant 执行，后者若用 `=` 赋值会吞掉前者。
-func TestApplyNewUserRegisterGrant_AccumulatesWithPointsGrant(t *testing.T) {
+// 改造后两笔各自走 GrantPointsTx，叠加由余额与批次共同保证：端到端验一遍，
+// 并确认两条批次分别存在（合成一笔就看不出哪份是哪个活动发的）。
+func TestRegisterGrants_AreAdditiveAcrossLots(t *testing.T) {
+	truncateTables(t)
+
 	origQuota := common.QuotaForNewUser
 	common.QuotaForNewUser = 1000
 	t.Cleanup(func() { common.QuotaForNewUser = origQuota })
 
 	ps := operation_setting.GetPointsSetting()
-	origEnabled := ps.Enabled
-	ps.Enabled = true
-	t.Cleanup(func() { ps.Enabled = origEnabled })
+	origEnabled, origNew := ps.Enabled, ps.NewUserPoints
+	ps.Enabled, ps.NewUserPoints = true, 2000
+	t.Cleanup(func() { ps.Enabled, ps.NewUserPoints = origEnabled, origNew })
 
-	u := &User{}
-	applyNewUserRegisterGrant(u)
-	u.PointsBalance += 2000 // 模拟 NewUserPointsGrant 的注册赠分
+	u := &User{Username: "reg_additive_1", Password: "pass12345", DisplayName: "t"}
+	require.NoError(t, u.Insert(0))
 
-	require.Equal(t, 3000, u.PointsBalance, "两路注册礼必须叠加，不能互相覆盖")
+	want := int64(1000) + int64(common.PointsToQuota(2000))
+	var persisted User
+	require.NoError(t, DB.Where("id = ?", u.Id).First(&persisted).Error)
+	require.EqualValues(t, want, persisted.PointsBalance, "两路注册礼必须叠加，不能互相覆盖")
+
+	var lots []PointsLot
+	require.NoError(t, DB.Where("user_id = ? AND source = ?", u.Id, FundSourceRegister).Order("id").Find(&lots).Error)
+	require.Len(t, lots, 2, "两笔注册礼各建一条批次")
+	require.EqualValues(t, 1000, lots[0].Amount)
+
+	// 批次合计必须等于余额（sync 之后的不变式在注册当下就已成立）
+	var rem int64
+	require.NoError(t, DB.Model(&PointsLot{}).
+		Where("user_id = ? AND status = ?", u.Id, PointsLotStatusActive).
+		Select("COALESCE(SUM(amount - attributed), 0)").Scan(&rem).Error)
+	require.EqualValues(t, want, rem)
 }
 
 // 注册礼的核心不变量：**两条流水之和必须等于账户余额的实际变化**。

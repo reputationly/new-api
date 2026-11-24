@@ -79,7 +79,12 @@ func newUserPointsLog(points int, channel string) string {
 // GrantTopupPackageBonus 直传积分数，结果配置「赠送 500 积分」实发 500 quota unit，
 // 用户账户页按 floor 展示就是 0 积分。故统一改名为 quotaUnits 以正视听。
 
-// IncreaseUserPoints 增加积分（发放/退款）。
+// IncreaseUserPoints 增加积分（**只用于退款 / 回补**）。
+//
+// ⚠️ 发放必须走 GrantPoints / GrantPointsTx（见 model/points_lot.go）：那里会同时
+// 建批次、加余额、记流水。直接调本函数加余额会让这笔钱没有批次，下次 sync 直接
+// 表现为一次 surplus——用户凭空多分，且只有每天的健康检查能发现。
+// 本函数的合法调用点只剩混扣退款（funding_hybrid 的 giveBack）与异步任务退款。
 // ⚠️ 批量模式陷阱：db=false 且 BatchUpdateEnabled 时 DB 写入进队列延迟落库，而
 // TryDecreaseUserPoints 条件扣减直击 DB——窗口内 Redis 超前、DB 滞后，会误判积分
 // 不足（混扣积分优先失效甚至误拒请求）。凡与混扣扣减同账户交织的回补

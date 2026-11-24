@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/QuantumNous/new-api/common"
@@ -371,6 +372,30 @@ func UpdateOption(c *gin.Context) {
 			c.JSON(http.StatusOK, gin.H{
 				"success": false,
 				"message": err.Error(),
+			})
+			return
+		}
+	case "points_setting.new_user_expire_days",
+		"points_setting.kyc_verified_expire_days",
+		"points_setting.kyc_inviter_expire_days",
+		"checkin_setting.points_expire_weeks":
+		// 积分有效期的范围校验。0 一律表示「永不过期」，不是「继承默认」——所以下限是 0
+		// 而不是 1。上限防误填把批次推到遥远的未来（天数 10 年 / 周数 52 周）。
+		//
+		// 没有这道校验时，输入框里填个负数或 99999 会原样落库，进而在发放时把
+		// expires_at 算成一个荒诞值：负数当天就全作废，过大则永远等不到清理。
+		raw, _ := option.Value.(string)
+		n, convErr := strconv.Atoi(strings.TrimSpace(raw))
+		upper := operation_setting.MaxPointsExpireDays
+		unit := "天"
+		if option.Key == "checkin_setting.points_expire_weeks" {
+			upper = operation_setting.MaxPointsExpireWeeks
+			unit = "周"
+		}
+		if convErr != nil || n < 0 || n > upper {
+			c.JSON(http.StatusOK, gin.H{
+				"success": false,
+				"message": fmt.Sprintf("积分有效期需是 0~%d 之间的整数（%s，0 = 永不过期）", upper, unit),
 			})
 			return
 		}

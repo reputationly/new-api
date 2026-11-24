@@ -12,6 +12,10 @@ import {
 } from '@douyinfe/semi-ui';
 import { useTranslation } from 'react-i18next';
 import { API, showError, showSuccess } from '../../../../helpers';
+import PointsExpireField, {
+  pointsExpirePayload,
+  validatePointsExpire,
+} from './PointsExpireField';
 import {
   displayAmountToQuota,
   quotaToDisplayAmount,
@@ -100,8 +104,12 @@ export default function FundOperationModal(props) {
         const amount = Number(form.amount) || 0;
         if (amount <= 0) return showError(t('请填写赠送金额'));
         if (!form.reason) return showError(t('请选择赠送事由'));
+        // 有效期必选（决策 7）：漏设会变成永久有效
+        const expireErr = validatePointsExpire(form);
+        if (expireErr) return showError(t(expireErr));
         payload.value = displayAmountToQuota(amount);
         payload.cash_fen = 0;
+        Object.assign(payload, pointsExpirePayload(form));
         break;
       }
       case 'credit_grant': {
@@ -230,6 +238,7 @@ export default function FundOperationModal(props) {
               onChange={setField('reason')}
               style={{ width: '100%' }}
             />
+            <PointsExpireField form={form} onChange={setField} />
           </>
         );
       case 'credit_grant':

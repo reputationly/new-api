@@ -34,6 +34,7 @@ var smallNumericScopes = []numericScope{
 	{"user_subscriptions", []string{"amount_total", "amount_used"}, ""},
 	{"subscription_pre_consume_records", []string{"pre_consumed"}, ""},
 	{"compute_point_lots", []string{"points_total", "points_used"}, ""},
+	{"points_lots", []string{"amount", "attributed", "forfeited"}, ""},
 	// amount 的单位随 payment_provider 而异：直连渠道（支付宝 / 微信）与 Creem、
 	// 对公转账写的是 quota，epay / stripe / waffo / waffo_pancake 写的是金额。
 	// 见 model/topup.go ManualCompleteTopUp 的同一判断。

@@ -36,6 +36,10 @@ import {
 } from '../../../../helpers/quota';
 import { useIsMobile } from '../../../../hooks/common/useIsMobile';
 import FundOperationModal from './FundOperationModal';
+import PointsExpireField, {
+  pointsExpirePayload,
+  validatePointsExpire,
+} from './PointsExpireField';
 import {
   Button,
   Modal,
@@ -79,6 +83,10 @@ const EditUserModal = (props) => {
   const [adjustPointsLocal, setAdjustPointsLocal] = useState('');
   const [adjustPointsMode, setAdjustPointsMode] = useState('add');
   const [adjustPointsLoading, setAdjustPointsLoading] = useState(false);
+  // 积分有效期（决策 7）。只在「添加」与「覆盖且调高」时才需要，见下方 needsExpiry。
+  const [pointsExpire, setPointsExpire] = useState({});
+  const setPointsExpireField = (field, value) =>
+    setPointsExpire((prev) => ({ ...prev, [field]: value }));
   const isMobile = useIsMobile();
   const [groupOptions, setGroupOptions] = useState([]);
   const [bindingModalVisible, setBindingModalVisible] = useState(false);
@@ -226,6 +234,18 @@ const EditUserModal = (props) => {
       (adjustPointsLocal === '' || adjustPointsLocal == null)
     )
       return;
+    // 有效期只在「添加」与「覆盖且调高」时要求：调低只是收回积分，不需要。
+    const currentPoints = quotaToPoints(inputs?.points_balance || 0);
+    const needsExpiry =
+      adjustPointsMode === 'add' ||
+      (adjustPointsMode === 'override' && pointsVal > currentPoints);
+    if (needsExpiry) {
+      const expireErr = validatePointsExpire(pointsExpire);
+      if (expireErr) {
+        showError(t(expireErr));
+        return;
+      }
+    }
     setAdjustPointsLoading(true);
     try {
       const res = await API.post('/api/user/manage', {
@@ -235,6 +255,7 @@ const EditUserModal = (props) => {
         value: pointsToQuota(
           adjustPointsMode === 'override' ? pointsVal : Math.abs(pointsVal),
         ),
+        ...(needsExpiry ? pointsExpirePayload(pointsExpire) : {}),
       });
       const { success, message } = res.data;
       if (success) {
@@ -242,6 +263,7 @@ const EditUserModal = (props) => {
         setAdjustPointsModalOpen(false);
         setAdjustPointsLocal('');
         setAdjustPointsMode('add');
+        setPointsExpire({});
         const userRes = await API.get(`/api/user/${userId}`);
         if (userRes.data.success) {
           const data = userRes.data.data;
@@ -691,6 +713,7 @@ const EditUserModal = (props) => {
           setAdjustPointsModalOpen(false);
           setAdjustPointsLocal('');
           setAdjustPointsMode('add');
+          setPointsExpire({});
         }}
         confirmLoading={adjustPointsLoading}
         closable={null}
@@ -740,6 +763,17 @@ const EditUserModal = (props) => {
             showClear
           />
         </div>
+        {/* 只有「添加」与「覆盖且调高」才需要有效期——调低只是收回积分。
+            与后端 SetUserPointsBalance 的 expiryProvided 语义一致。 */}
+        {(adjustPointsMode === 'add' ||
+          (adjustPointsMode === 'override' &&
+            (parseInt(adjustPointsLocal) || 0) >
+              quotaToPoints(inputs?.points_balance || 0))) && (
+          <PointsExpireField
+            form={pointsExpire}
+            onChange={setPointsExpireField}
+          />
+        )}
       </Modal>
     </>
   );

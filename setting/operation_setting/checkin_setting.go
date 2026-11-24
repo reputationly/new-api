@@ -10,6 +10,10 @@ type CheckinSetting struct {
 	RewardType string `json:"reward_type"` // 奖励类型 "quota"(默认,向后兼容) | "points"
 	MinPoints  int    `json:"min_points"`  // RewardType=points 时生效，单位:积分
 	MaxPoints  int    `json:"max_points"`  // RewardType=points 时生效，单位:积分
+	// PointsExpireWeeks 签到积分的有效期：获得所在周之后第 N 周的周日 23:59:59（北京时间）过期。
+	// 0 = 永不过期。N=1 时实际有效期 7~13 天（周日获得 7 天、周一获得 13 天），是「周清」语义，
+	// 配不出月级有效期——设置页文案必须写明这一点。
+	PointsExpireWeeks int `json:"points_expire_weeks"`
 }
 
 // 默认配置

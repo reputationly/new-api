@@ -38,6 +38,7 @@ import {
 } from 'lucide-react';
 import Turnstile from 'react-turnstile';
 import { API, showError, showSuccess, renderQuota } from '../../../../helpers';
+import { formatPointsExpiryDate } from '../../../../helpers/pointsExpiry';
 import { quotaToPoints } from '../../../../helpers/quota';
 
 const CheckinCalendar = ({ t, status, turnstileEnabled, turnstileSiteKey }) => {
@@ -142,10 +143,19 @@ const CheckinCalendar = ({ t, status, turnstileEnabled, turnstileSiteKey }) => {
       const res = await postCheckin(token);
       const { success, data, message } = res.data;
       if (success) {
+        // 积分模式把到期日一起说清楚：用户有权在拿到的那一刻就知道这笔积分什么时候作废。
+        // points_expires_at 为 0 表示永不过期，此时不追加任何提示。
+        const expiresText =
+          data.reward_type === 'points' && data.points_expires_at
+            ? t('，{{date}} 到期', {
+                date: formatPointsExpiryDate(data.points_expires_at),
+              })
+            : '';
         showSuccess(
           t('签到成功！获得') +
             ' ' +
-            formatReward(data.quota_awarded, data.reward_type),
+            formatReward(data.quota_awarded, data.reward_type) +
+            expiresText,
         );
         // 刷新签到状态
         fetchCheckinStatus(currentMonth);
