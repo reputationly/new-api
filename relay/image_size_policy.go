@@ -151,6 +151,16 @@ func closestSizeInBand(band *imageAreaBand, width, height int) string {
 	return best
 }
 
+// NormalizeBilledImageSize 是给前置校验复用的入口：非尺寸策略模型原样返回，策略
+// 模型的尺寸按 normalizeBilledImageSize 归一。聚合模型在改写提示词之前用它，避免
+// 一次 20 秒的 LLM 调用之后才发现尺寸不合法。
+func NormalizeBilledImageSize(model, size string) (string, error) {
+	if !isSizePolicyModel(model) {
+		return size, nil
+	}
+	return normalizeBilledImageSize(size)
+}
+
 // normalizeBilledImageSize validates a requested size and, when it is not one of the
 // billed sizes, maps it to the band size with the closest aspect ratio.
 //

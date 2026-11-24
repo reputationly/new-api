@@ -6,6 +6,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/QuantumNous/new-api/relay"
 	"github.com/QuantumNous/new-api/relay/hilo"
 
 	"github.com/gin-gonic/gin"
@@ -313,6 +314,23 @@ func applyAggregateExpansion(c *gin.Context, publicName, realModel string, agg *
 	//
 	// **读完必须把键从 body 删掉**:H3 / Music3 / ACE-Step 都不认这个字段,留着就是"多带一个键、
 	// 不报错"的隐患。
+	// 尺寸不合法的请求不该先进一次提示词改写:那次改写是一次同步 LLM 调用(实测约
+	// 20 秒),而尺寸校验是纯本地计算(几十微秒)。校验放在增强之前,非法请求立刻
+	// 400,改写根本不会发生;合法的"厂商档位表尺寸"(如 Seedream 的 1776x2368)也顺手
+	// 归一,于是改写看到的就是真正要发出去的那个尺寸。
+	//
+	// 只对尺寸策略模型生效(NormalizeBilledImageSize 内部按模型名 gate),视频/音乐
+	// 聚合不受影响。
+	if rawSize, ok := body["size"].(string); ok {
+		normalizedSize, sizeErr := relay.NormalizeBilledImageSize(realModel, rawSize)
+		if sizeErr != nil {
+			return sizeErr
+		}
+		if normalizedSize != rawSize {
+			body["size"] = normalizedSize
+		}
+	}
+
 	clientOptimizer := takePromptOptimizer(body)
 	enhanceOn := agg.PromptEnhance.EffectiveEnabled(clientOptimizer)
 	// 关掉时留一个显式标记:否则记录里只是没有 enhance_mode,与增强失败降级在库里长得一样。
