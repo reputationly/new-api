@@ -51,7 +51,8 @@ func openTestDB(t *testing.T) *gorm.DB {
 		&model.Task{}, &model.Midjourney{}, &model.QuotaData{}, &model.Redemption{},
 		&model.Checkin{}, &model.FundEntry{}, &model.BankTransferOrder{},
 		&model.SubscriptionPlan{}, &model.UserSubscription{},
-		&model.SubscriptionPreConsumeRecord{}, &model.ComputePointLot{}, &model.TopUp{},
+		&model.SubscriptionPreConsumeRecord{}, &model.ComputePointLot{}, &model.PointsLot{},
+		&model.TopUp{},
 	))
 
 	testHookAfterLogBatch = nil
@@ -149,6 +150,10 @@ func seedSmallTables(t *testing.T, db *gorm.DB) {
 	}).Error)
 	require.NoError(t, db.Create(&model.ComputePointLot{
 		Id: 1, UserId: 1, PointsTotal: fAmount, PointsUsed: fSmall,
+	}).Error)
+	require.NoError(t, db.Create(&model.PointsLot{
+		Id: 1, UserId: 1, Source: model.FundSourceCheckin, RefId: "w1",
+		Amount: fAmount, Attributed: fSmall, Forfeited: fSmall,
 	}).Error)
 
 	// top_ups：每种 provider 各一行，amount 单位不同（M1.5 的 WHERE 条件）
@@ -294,6 +299,9 @@ func assertM15(t *testing.T, db *gorm.DB) {
 		{"subscription_pre_consume_records", "pre_consumed", 1, expectScaled(fSmall)},
 		{"compute_point_lots", "points_total", 1, expectScaled(fAmount)},
 		{"compute_point_lots", "points_used", 1, expectScaled(fSmall)},
+		{"points_lots", "amount", 1, expectScaled(fAmount)},
+		{"points_lots", "attributed", 1, expectScaled(fSmall)},
+		{"points_lots", "forfeited", 1, expectScaled(fSmall)},
 	}
 	for _, c := range checks {
 		var got int64
@@ -619,7 +627,7 @@ var snapshotTableList = []string{
 	"options", "users", "tokens", "channels", "logs", "tasks", "midjourneys",
 	"quota_data", "redemptions", "checkins", "fund_entries", "bank_transfer_orders",
 	"subscription_plans", "user_subscriptions", "subscription_pre_consume_records",
-	"compute_point_lots", "top_ups",
+	"compute_point_lots", "points_lots", "top_ups",
 }
 
 // volatileColumns 在快照里跳过：它们由插入时刻决定，两次独立运行必然不同，
@@ -694,7 +702,8 @@ func isMigrationStateKey(key string) bool {
 
 // normalizeOptionValue 抹掉迁移状态里的时间戳：状态机的进度值参与比对，
 // 但 started_at / finished_at 天然随运行时刻变化。
-func normalizeOptionValue(t *testing.T, values []interface{}, cell string) string {	t.Helper()
+func normalizeOptionValue(t *testing.T, values []interface{}, cell string) string {
+	t.Helper()
 	isStateKey := false
 	for _, v := range values {
 		if isMigrationStateKey(cellString(v)) {

@@ -888,3 +888,211 @@ func FormatPointsExpiryDate(ts int64) string {
 	}
 	return time.Unix(ts, 0).In(pointsExpiryLoc).Format("01-02")
 }
+
+// ---------------------------------------------------------------------------
+// 展示与查询（用户端 / 管理端）
+// ---------------------------------------------------------------------------
+
+// PointsLotView 一条批次的展示视图。金额一律 quota unit，由前端换算成积分数。
+type PointsLotView struct {
+	Id        int    `json:"id"` // 0 = 尚未建批次的 surplus 虚拟行
+	Source    string `json:"source"`
+	GrantedAt int64  `json:"granted_at"`
+	// AmountQuota 发放额；虚拟行为 surplus 金额本身。
+	AmountQuota int64 `json:"amount_quota"`
+	// RemainingQuota 当前剩余（只读模拟分摊之后）。
+	RemainingQuota int64  `json:"remaining_quota"`
+	ExpiresAt      int64  `json:"expires_at"`
+	Status         string `json:"status"`
+}
+
+// PointsExpirySummary 用户端临期提示。
+type PointsExpirySummary struct {
+	Expiring     *PointsExpiring  `json:"expiring"`      // 30 天内到期合计；无则 null
+	NextExpiries []PointsExpiring `json:"next_expiries"` // 最近 N 个到期日，升序
+}
+
+// PointsExpiring 某个到期时刻的到期金额。
+type PointsExpiring struct {
+	ExpiresAt int64 `json:"expires_at"`
+	Quota     int64 `json:"quota"`
+}
+
+// loadAllocatableLots 取出只读模拟分摊所需的批次集合（与写库路径的加载条件一致）。
+func loadAllocatableLots(userId int, now int64) ([]PointsLot, error) {
+	return loadPointsLotsForSync(DB, userId, now)
+}
+
+// simulatePointsLots 只读模拟一次归属：不写库、不加锁，算出每笔的当前剩余。
+//
+// 它调用的就是写库路径用的同一个纯函数，所以展示与「即将发生的真实归属」不会分叉。
+// 返回每笔的剩余（按批次 id）与尚未归属的 surplus。
+func simulatePointsLots(userId int, now int64) (lots []PointsLot, remaining map[int]int64, surplus int64, err error) {
+	if now <= 0 {
+		now = common.GetTimestamp()
+	}
+	var balance int64
+	if err = DB.Model(&User{}).Where("id = ?", userId).Select("points_balance").Scan(&balance).Error; err != nil {
+		return nil, nil, 0, err
+	}
+	lots, err = loadAllocatableLots(userId, now)
+	if err != nil {
+		return nil, nil, 0, err
+	}
+	mutations, surplus := allocatePointsLots(lots, balance, now)
+	remaining = make(map[int]int64, len(lots))
+	for _, l := range lots {
+		remaining[l.Id] = l.Amount - l.Attributed
+	}
+	for _, m := range mutations {
+		remaining[m.LotId] -= m.AttributedDelta
+	}
+	return lots, remaining, surplus, nil
+}
+
+// GetActivePointsLotViews 用户当前可用的批次（剩余 > 0），按到期升序、永不过期最后。
+//
+// amount = 0 的 legacy 初始化标记不展示——那是内部状态，不是用户的一笔积分。
+// surplus > 0 时在末尾追加一行 id=0 的虚拟行（下次 sync 会把它建成正式批次）。
+func GetActivePointsLotViews(userId int, now int64) ([]PointsLotView, int64, error) {
+	lots, remaining, surplus, err := simulatePointsLots(userId, now)
+	if err != nil {
+		return nil, 0, err
+	}
+	views := make([]PointsLotView, 0, len(lots)+1)
+	for _, l := range lots {
+		if l.Amount == 0 {
+			continue
+		}
+		rem := remaining[l.Id]
+		if rem <= 0 {
+			continue
+		}
+		views = append(views, PointsLotView{
+			Id: l.Id, Source: l.Source, GrantedAt: l.GrantedAt,
+			AmountQuota: l.Amount, RemainingQuota: rem,
+			ExpiresAt: l.ExpiresAt, Status: PointsLotStatusActive,
+		})
+	}
+	sort.SliceStable(views, func(i, j int) bool {
+		return earlierExpiryFirst(
+			PointsLot{Id: views[i].Id, ExpiresAt: views[i].ExpiresAt},
+			PointsLot{Id: views[j].Id, ExpiresAt: views[j].ExpiresAt},
+		)
+	})
+	if surplus > 0 {
+		views = append(views, PointsLotView{
+			Id: 0, Source: PointsLotSourceSurplus, GrantedAt: now,
+			AmountQuota: surplus, RemainingQuota: surplus,
+			ExpiresAt: 0, Status: PointsLotStatusActive,
+		})
+	}
+	return views, surplus, nil
+}
+
+// GetPointsLotHistory 已过期 / 已用完的批次，按 updated_at 降序分页。
+func GetPointsLotHistory(userId int, offset, limit int) ([]PointsLotView, int64, error) {
+	query := DB.Model(&PointsLot{}).
+		Where("user_id = ? AND amount > 0 AND status IN ?", userId,
+			[]string{PointsLotStatusExpired, PointsLotStatusExhausted})
+	var total int64
+	if err := query.Count(&total).Error; err != nil {
+		return nil, 0, err
+	}
+	var lots []PointsLot
+	if err := query.Order("updated_at DESC, id DESC").Offset(offset).Limit(limit).Find(&lots).Error; err != nil {
+		return nil, 0, err
+	}
+	views := make([]PointsLotView, 0, len(lots))
+	for _, l := range lots {
+		rem := l.Amount - l.Attributed - l.Forfeited
+		if rem < 0 {
+			rem = 0
+		}
+		views = append(views, PointsLotView{
+			Id: l.Id, Source: l.Source, GrantedAt: l.GrantedAt,
+			AmountQuota: l.Amount, RemainingQuota: rem,
+			ExpiresAt: l.ExpiresAt, Status: l.Status,
+		})
+	}
+	return views, total, nil
+}
+
+// GetPointsExpirySummary 汇总 withinSeconds 内到期的金额，并给出最近 topN 个到期日。
+func GetPointsExpirySummary(userId int, now int64, withinSeconds int64, topN int) (*PointsExpirySummary, error) {
+	if now <= 0 {
+		now = common.GetTimestamp()
+	}
+	views, _, err := GetActivePointsLotViews(userId, now)
+	if err != nil {
+		return nil, err
+	}
+	horizon := now + withinSeconds
+	byExpiry := map[int64]int64{}
+	for _, v := range views {
+		if v.ExpiresAt <= 0 || v.ExpiresAt > horizon {
+			continue
+		}
+		byExpiry[v.ExpiresAt] += v.RemainingQuota
+	}
+	out := &PointsExpirySummary{NextExpiries: []PointsExpiring{}}
+	if len(byExpiry) == 0 {
+		return out, nil
+	}
+	keys := make([]int64, 0, len(byExpiry))
+	for k := range byExpiry {
+		keys = append(keys, k)
+	}
+	sort.Slice(keys, func(i, j int) bool { return keys[i] < keys[j] })
+
+	total := int64(0)
+	for _, k := range keys {
+		total += byExpiry[k]
+	}
+	out.Expiring = &PointsExpiring{ExpiresAt: keys[0], Quota: total}
+
+	n := topN
+	if n <= 0 || n > len(keys) {
+		n = len(keys)
+	}
+	for _, k := range keys[:n] {
+		out.NextExpiries = append(out.NextExpiries, PointsExpiring{ExpiresAt: k, Quota: byExpiry[k]})
+	}
+	return out, nil
+}
+
+// PointsSurplusLotView 管理端「余额溢出批次」核查视图。
+type PointsSurplusLotView struct {
+	Id          int    `json:"id"`
+	UserId      int    `json:"user_id"`
+	Username    string `json:"username"`
+	AmountQuota int64  `json:"amount_quota"`
+	GrantedAt   int64  `json:"granted_at"`
+}
+
+// GetSurplusPointsLots 列出余额溢出批次，供运营核对后人工扣回。
+//
+// 正常运营下这里应当恒为空：一旦出现，优先排查是否有发放路径绕过 GrantPoints。
+func GetSurplusPointsLots(offset, limit int) ([]PointsSurplusLotView, int64, error) {
+	query := DB.Model(&PointsLot{}).Where("source = ?", PointsLotSourceSurplus)
+	var total int64
+	if err := query.Count(&total).Error; err != nil {
+		return nil, 0, err
+	}
+	var lots []PointsLot
+	if err := query.Order("id DESC").Offset(offset).Limit(limit).Find(&lots).Error; err != nil {
+		return nil, 0, err
+	}
+	views := make([]PointsSurplusLotView, 0, len(lots))
+	for _, l := range lots {
+		username := ""
+		if u, err := GetUserById(l.UserId, false); err == nil && u != nil {
+			username = u.Username
+		}
+		views = append(views, PointsSurplusLotView{
+			Id: l.Id, UserId: l.UserId, Username: username,
+			AmountQuota: l.Amount, GrantedAt: l.GrantedAt,
+		})
+	}
+	return views, total, nil
+}

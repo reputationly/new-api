@@ -135,6 +135,8 @@ func SetApiRouter(router *gin.Engine) {
 				selfRoute.GET("/checkin", controller.GetCheckinStatus)
 				selfRoute.POST("/checkin", middleware.SubAccountForbidden(), middleware.TurnstileCheck(), controller.DoCheckin)
 				selfRoute.GET("/points/overview", controller.GetPointsOverview)
+				selfRoute.GET("/points/lots/summary", controller.GetPointsLotsSummary)
+				selfRoute.GET("/points/lots", controller.GetPointsLots)
 
 				// Custom OAuth bindings
 				selfRoute.GET("/oauth/bindings", controller.GetUserOAuthBindings)
@@ -205,6 +207,9 @@ func SetApiRouter(router *gin.Engine) {
 			adminRoute.Use(middleware.AdminAuth())
 			{
 				adminRoute.GET("/topup", controller.GetAllTopUps)
+				// 积分余额溢出批次核查（§9.3）。正常应恒为空；出现即排查发放路径
+				// 是否绕过 GrantPoints。
+				adminRoute.GET("/points/lots/surplus", controller.GetPointsSurplusLots)
 				adminRoute.POST("/topup/complete", controller.AdminCompleteTopUp)
 				// 单个用户详情留在 AdminAuth：日志页（使用日志、任务日志）点用户要读
 				adminRoute.GET("/:id", controller.GetUser)

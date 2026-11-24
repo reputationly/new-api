@@ -26,7 +26,13 @@ func seedLotUser(t *testing.T, id int, balance int64) {
 		Group:         "default",
 		PointsBalance: int(balance),
 	}).Error)
-	t.Cleanup(func() { DB.Unscoped().Where("id = ?", id).Delete(&User{}) })
+	t.Cleanup(func() {
+		// 批次与流水都要清：本包测试共用一个内存库，残留的 surplus / 负余额批次会
+		// 让 §十一 的三项健康检查在别的用例里报红。
+		DB.Exec("DELETE FROM points_lots WHERE user_id = ?", id)
+		DB.Exec("DELETE FROM fund_entries WHERE user_id = ?", id)
+		DB.Unscoped().Where("id = ?", id).Delete(&User{})
+	})
 }
 
 func readLotBalance(t *testing.T, id int) int64 {

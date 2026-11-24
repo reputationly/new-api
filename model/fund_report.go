@@ -57,6 +57,9 @@ type FundRevenueDigest struct {
 	GiftQuota    int64 `json:"gift_quota"`     // 赠送发放（不计营收）
 	CreditGrant  int64 `json:"credit_grant"`   // 授信开额（不计营收）
 	AdjustQuota  int64 `json:"adjust_quota"`   // 性质不明的调整，异常监控项
+	// ExpiredPointsQuota 积分批次到期作废额，**存正数**（流水里是负数）。
+	// 与「赠送发放」同为市场成本，但性质不同：消耗是买了服务，过期是白发了，故单列（决策 9）。
+	ExpiredPointsQuota int64 `json:"expired_points_quota"`
 }
 
 // GetFundSummary 汇总指定时间窗内的入账与消耗，并附当前余额快照。
@@ -88,6 +91,9 @@ func GetFundSummary(start, end int64) (*FundSummary, error) {
 			s.Revenue.CreditGrant += r.QuotaTotal
 		case FundKindAdjust:
 			s.Revenue.AdjustQuota += r.QuotaTotal
+		case FundKindExpire:
+			// 流水里 QuotaDelta 为负，这里取正数存，汇总卡不该出现负数金额。
+			s.Revenue.ExpiredPointsQuota += -r.QuotaTotal
 		}
 	}
 
@@ -285,7 +291,7 @@ func CheckFundConsistency() (*FundConsistencyReport, error) {
 	// 赠送：期初 + 发放 - 积分消耗 == 当前 points_balance
 	pointsExpected := ledgerBy[FundAccountPoints] - consume.PointsConsumed
 	rep.Items = append(rep.Items, buildCheckItem("赠送积分", pointsExpected, balance.Points,
-		"期初 + 发放 - 积分消耗"))
+		"期初 + 发放 − 积分消耗 − 过期"))
 
 	// 信用：消耗累加、回款核销抵减，净额即当前应收。
 	// ledgerBy[credit] 里 credit_grant 是开额（不构成欠款）、ar_settle 是回款（为负），
@@ -306,6 +312,43 @@ func CheckFundConsistency() (*FundConsistencyReport, error) {
 		rep.Items = append(rep.Items, buildCheckItem("信用", creditExpected, balance.CreditUsed,
 			"期初欠款 + 信用消耗 − 已核销回款"))
 	}
+
+	// --- 积分批次机制的三项健康检查（docs/points-expiry-design.md §十一）---
+	// 它们不参与余额等式，但都是「机制在跑、且没有代码绕过批次表」的证据。
+	now := common.GetTimestamp()
+
+	// 1) 过期任务停摆：已到期超过 24 小时仍未被作废的批次数。
+	//    任务正常时 00:05 就清完了，这里留一天余量避免和任务本身抢时间。
+	var stalledLots int64
+	if err := DB.Model(&PointsLot{}).
+		Where("status = ? AND expires_at > 0 AND expires_at < ?", PointsLotStatusActive, now-86400).
+		Count(&stalledLots).Error; err != nil {
+		return nil, err
+	}
+	rep.Items = append(rep.Items, buildCheckItem("积分过期任务", 0, stalledLots,
+		"已到期超过 24 小时仍有效的批次数（非 0 = 过期任务停摆）"))
+
+	// 2) 余额溢出批次：近 24 小时新建的 surplus 金额。正常恒为 0。
+	//    一旦出现，优先排查是否有发放路径绕过 GrantPoints（新增发放点、或整行回写复发）；
+	//    只有能定位到具体一笔跨到期退款时才归入正常。
+	var surplusQuota int64
+	if err := DB.Model(&PointsLot{}).
+		Where("source = ? AND granted_at >= ?", PointsLotSourceSurplus, now-86400).
+		Select("COALESCE(SUM(amount), 0)").Scan(&surplusQuota).Error; err != nil {
+		return nil, err
+	}
+	rep.Items = append(rep.Items, buildCheckItem("积分余额溢出", 0, surplusQuota,
+		"近 24 小时新建的 surplus 金额（非 0 = 有发放绕过 GrantPoints 或跨到期退款）"))
+
+	// 3) 负积分余额：新代码不可达（override 非负校验、TryDecrease 有 >= 守卫、
+	//    Decrease 钳到 0），但存量库里可能有；sync 对负余额按 0 降级而不是报错，
+	//    所以必须靠这里发现。
+	var negativeUsers int64
+	if err := DB.Model(&User{}).Where("points_balance < 0").Count(&negativeUsers).Error; err != nil {
+		return nil, err
+	}
+	rep.Items = append(rep.Items, buildCheckItem("积分负余额", 0, negativeUsers,
+		"points_balance < 0 的用户数"))
 
 	rep.AllOK = true
 	for _, it := range rep.Items {
