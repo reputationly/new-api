@@ -190,13 +190,12 @@ func normalizeBilledImageSize(size string) (string, error) {
 	}
 	band := bandOfArea(width * height)
 	if band == nil {
-		// Below the smallest tier: upgrade to it (the vendor floors 1K to 2K as well).
-		// Above the largest tier: refuse, never silently re-price the request.
+		// Below the smallest tier travels untouched: the engine's canvas planner generates
+		// on a larger 32-aligned canvas and downsamples back to the requested size, so a
+		// small request is a delivery decision the engine owns, not one to re-price here.
 		smallest := &h3ImageAreaBands[0]
 		if width*height < smallest.lowArea {
-			if mapped := closestSizeInBand(smallest, width, height); mapped != "" {
-				return mapped, nil
-			}
+			return exact, nil
 		}
 		return "", fmt.Errorf("unsupported_size: %dx%d (%d px) is outside the billed tiers; allowed sizes -> %s",
 			width, height, width*height, allowedSizeList())
