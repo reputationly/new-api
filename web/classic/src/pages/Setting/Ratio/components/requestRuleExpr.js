@@ -156,11 +156,11 @@ export function splitTopLevelMultiply(expr) {
   const parts = [];
   let start = 0;
   let depth = 0;
-  const tokens = new RegExp(EXPR_STRING_LITERAL.source + '|[()?:]| \\* ', 'g');
+  const tokens = new RegExp(EXPR_STRING_LITERAL.source + '|[()?]| \\* ', 'g');
   for (const { 0: token, index } of expr.matchAll(tokens)) {
     if (token === '(') depth += 1;
     if (token === ')') depth -= 1;
-    if (depth === 0 && (token === '?' || token === ':')) return [expr.trim()];
+    if (depth === 0 && token === '?') return [expr.trim()];
     if (depth === 0 && token === ' * ') {
       parts.push(expr.slice(start, index).trim());
       start = index + 3;

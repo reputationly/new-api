@@ -38,6 +38,14 @@ describe('DynamicPricingBreakdown：v1 / v2 的系数口径', () => {
     expect(screen.getByText('¥14.60')).toBeTruthy();
   });
 
+  it('v2：同时展示分档价格、请求条件和乘数', () => {
+    const expr = 'v2:(tier("base", p * 14.6)) * (header("mode") == "fast" ? 2 : 1)';
+    render(<DynamicPricingBreakdown billingExpr={expr} t={t} />);
+    expect(screen.getByText('¥14.60')).toBeTruthy();
+    expect(screen.getByText('请求头 mode = fast')).toBeTruthy();
+    expect(screen.getByText('2x')).toBeTruthy();
+  });
+
   it('v1 与 v2 表达同一个价格时，两处展示一致', () => {
     const v1 = render(
       <DynamicPricingBreakdown billingExpr={'tier("base", p * 2)'} t={t} />,
