@@ -88,8 +88,14 @@ const OperationSetting = () => {
     // 拒不拒绝用户请求，显示反了会让人做出完全相反的判断。
     'moderation.fail_open': true,
     'moderation.output_mode': 'off',
-    // 策略三件套。都是字符串（JSON），不是布尔，所以不受上面那条 toBoolean 规则影响，
-    // 但必须在这里声明——getOptions 只把「已声明的 key」放进 inputs。
+    // 策略三件套。都是字符串（JSON），不是布尔，所以不受上面那条 toBoolean 规则影响。
+    // 留在这里只为接口回来之前的占位——注意 getOptions 实际是把 /api/option/ 返回的
+    // **所有** key 都放进 inputs，并不按这里的声明过滤。
+    // 真正必须在这里声明的是两类：
+    //   1) 布尔 key：toBoolean 的判定是 `typeof inputs[key] === 'boolean'`，不声明就拿不到；
+    //   2) 子组件要用、且该子组件是「按自身 state 过滤 props.options 并整个替换状态」的 key
+    //      （如 SettingsCheckin）。漏声明会让它在首帧被滤掉、随后从子组件 state 中永久消失，
+    //      表现为该字段一直显示为空，而接口返回其实是对的。
     'moderation.policies': '',
     'moderation.default_policy': '',
     'moderation.group_policies': '',
