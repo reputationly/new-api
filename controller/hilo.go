@@ -76,8 +76,7 @@ func GetHiloModelsConfig(c *gin.Context) {
 			// 它的注释写明「调用方只读」）。而这是个被轮询的匿名接口，
 			// 并发请求会互相踩：一个响应里可能出现另一个请求禁用的选项。
 			m := e.Model
-			m.ParamConstraints = append(
-				append([]dto.HiloParamConstraint(nil), e.Model.ParamConstraints...))
+			m.ParamConstraints = append([]dto.HiloParamConstraint(nil), e.Model.ParamConstraints...)
 			for mode, pm := range e.ModeModels {
 				if mode == "" || pm == "" || pm == e.PlatformModel {
 					continue
