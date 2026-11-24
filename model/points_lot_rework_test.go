@@ -267,3 +267,27 @@ func TestGrantPoints_NonexistentUserRollsBack(t *testing.T) {
 	require.NoError(t, DB.Model(&FundEntry{}).Where("user_id = ?", id).Count(&n).Error)
 	require.Zero(t, n)
 }
+
+// 新增的「余额更新必须命中 1 行」判定不能误伤**软删除**用户：
+// 积分路径对 users 的读写一律 Unscoped（R1），软删用户的批次与余额都还在，
+// 管理员按 id 给他们发放（ManageUser 也用 Unscoped 查人）必须照常成功。
+func TestGrantPoints_SoftDeletedUserStillGranted(t *testing.T) {
+	const id = 4151
+	seedLotUser(t, id, 0)
+	require.NoError(t, DB.Delete(&User{}, id).Error)
+
+	_, err := GrantPoints(PointsGrant{
+		UserId: id, Quota: 1000, Source: FundSourceAdminGift, RefId: "sd-1",
+		Fund: FundEntry{
+			Kind: FundKindGift, Source: FundSourceAdminGift,
+			RefType: FundRefAdminOp, RefId: "sd-1",
+		},
+	})
+	require.NoError(t, err, "软删用户仍应能收到积分（Unscoped 下余额行存在）")
+
+	var balance int64
+	require.NoError(t, DB.Unscoped().Model(&User{}).Where("id = ?", id).
+		Select("points_balance").Scan(&balance).Error)
+	require.EqualValues(t, 1000, balance)
+	require.Len(t, listLots(t, id), 2, "一条 legacy 标记 + 一条发放批次")
+}
