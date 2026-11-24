@@ -1493,7 +1493,9 @@ func grantRegisterPointsTx(tx *gorm.DB, userId int, inviterId int) error {
 	now := common.GetTimestamp()
 
 	if common.QuotaForNewUser > 0 {
-		refId := fmt.Sprintf("register-quota:%d", userId)
+		// 幂等键可能已被「上一个用过同一个 id 的、已被硬删的用户」占着（id 复用）。
+		// PointsUserRefId 会退化成带发放时刻的键，而不是让整个注册失败。
+		refId := PointsUserRefId("register-quota", userId, now, tx)
 		if _, err := GrantPointsTx(tx, PointsGrant{
 			UserId:    userId,
 			Quota:     int64(common.QuotaForNewUser),
@@ -1512,7 +1514,7 @@ func grantRegisterPointsTx(tx *gorm.DB, userId int, inviterId int) error {
 
 	points, pointsQuota, channel, expireDays := newUserPointsGrantWithExpiry(inviterId, ps.NewUserExpireDays)
 	if points > 0 && pointsQuota > 0 {
-		refId := fmt.Sprintf("register-points:%d", userId)
+		refId := PointsUserRefId("register-points", userId, now, tx)
 		if _, err := GrantPointsTx(tx, PointsGrant{
 			UserId:    userId,
 			Quota:     int64(pointsQuota),

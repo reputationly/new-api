@@ -41,7 +41,10 @@ func GrantKycPoints(userId int) {
 		// 赠送流水（CashFen=0，不计营收）。幂等键用被实名用户的 id：
 		// 一个用户的实名事件最多触发一次奖励，与 TryMarkKycPointsGranted 的占位同源。
 		// 余额、批次、流水三者同成同败（GrantPoints 内部一个事务），失败仍只记日志。
-		refId := fmt.Sprintf("kyc:%d", userId)
+		// 幂等键可能被「上一个用过同一个 id 的、已被硬删的用户」占着（id 复用）。
+		// 撞键时退化成带发放时刻的键——否则这笔实名奖励会静默发不出去（占位已置位，
+		// 重试也不会再发），用户永久失去它。
+		refId := model.PointsUserRefId("kyc", userId, now, nil)
 		if _, err := model.GrantPoints(model.PointsGrant{
 			UserId:    userId,
 			Quota:     q,
@@ -67,7 +70,7 @@ func GrantKycPoints(userId int) {
 		now := common.GetTimestamp()
 		// 邀请奖励流水记在**邀请人**账上（钱进的是他的池子），
 		// 幂等键仍用被邀请人 id —— 触发这笔奖励的是后者的实名事件，只会发生一次。
-		refId := fmt.Sprintf("invite:%d", userId)
+		refId := model.PointsUserRefId("invite", userId, now, nil)
 		if _, err := model.GrantPoints(model.PointsGrant{
 			UserId:    user.InviterId,
 			Quota:     q,

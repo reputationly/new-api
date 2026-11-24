@@ -233,3 +233,68 @@ func itoa(v int) string {
 	}
 	return string(buf[i:])
 }
+
+// 用户 id 会被复用（硬删后自增回落；SQLite 上回滚也会复用）。上一个用过同一 id 的用户
+// 留下的 `register-*:<id>` 流水还在，幂等键就会相撞——改造前那会让整个注册失败，
+// 而且在 SQLite 上是**同一个 id 反复失败**（回滚后下次仍拿同一个 id）。
+// 现在撞键时退化成带发放时刻的键：注册照常成功、流水不缺。
+func TestRegisterGrant_SurvivesReusedUserId(t *testing.T) {
+	truncateTables(t)
+	ps := enablePointsForGrantPaths(t)
+
+	origQuota := common.QuotaForNewUser
+	common.QuotaForNewUser = 68493
+	t.Cleanup(func() { common.QuotaForNewUser = origQuota })
+	ps.NewUserPoints = 20
+	ps.NewUserExpireDays = 0
+
+	const id = 5301
+	// 模拟「上一个同 id 用户」留下的两条流水（已硬删，行还在）
+	for _, ref := range []string{"register-quota:5301", "register-points:5301"} {
+		_, err := InsertFundEntry(&FundEntry{
+			UserId: id, Account: FundAccountPoints, Kind: FundKindGift,
+			QuotaDelta: 1, CashFen: 0, Source: FundSourceRegister,
+			RefType: FundRefUser, RefId: ref,
+		})
+		require.NoError(t, err)
+	}
+
+	u := &User{Id: id, Username: "reuse_reg_1", Password: "pass12345", DisplayName: "t"}
+	require.NoError(t, u.Insert(0), "id 被复用时注册不得失败")
+
+	want := int64(68493) + int64(common.PointsToQuota(20))
+	var balance int64
+	require.NoError(t, DB.Unscoped().Model(&User{}).Where("id = ?", id).
+		Select("points_balance").Scan(&balance).Error)
+	require.EqualValues(t, want, balance, "注册礼必须足额到账")
+
+	// 两条批次都在，且永不过期
+	var lots []PointsLot
+	require.NoError(t, DB.Where("user_id = ? AND source = ?", id, FundSourceRegister).
+		Order("id").Find(&lots).Error)
+	require.Len(t, lots, 2)
+	require.EqualValues(t, want, sumActiveRemaining(listLots(t, id)))
+
+	// 新写的那两条流水用的是带时刻的键（前缀不变，便于报表按前缀归集）
+	var newEntries []FundEntry
+	require.NoError(t, DB.Where("user_id = ? AND ref_type = ? AND ref_id LIKE ?",
+		id, FundRefUser, "register-%#%").Order("id").Find(&newEntries).Error)
+	require.Len(t, newEntries, 2, "两条注册礼流水都要补上，不能只补一条")
+}
+
+// 正常路径（没有 id 复用）的幂等键必须保持原格式，否则报表口径会变。
+func TestRegisterGrant_NormalPathKeepsPlainRef(t *testing.T) {
+	truncateTables(t)
+	ps := enablePointsForGrantPaths(t)
+
+	origQuota := common.QuotaForNewUser
+	common.QuotaForNewUser = 68493
+	t.Cleanup(func() { common.QuotaForNewUser = origQuota })
+	ps.NewUserPoints = 20
+
+	u := &User{Id: 5302, Username: "plain_ref_1", Password: "pass12345"}
+	require.NoError(t, u.Insert(0))
+
+	require.NotZero(t, ledgerOf(t, u.Id, FundRefUser, "register-quota:5302").QuotaDelta)
+	require.NotZero(t, ledgerOf(t, u.Id, FundRefUser, "register-points:5302").QuotaDelta)
+}

@@ -233,3 +233,42 @@ func FundEntryExists(refType, refId string) bool {
 	}
 	return n > 0
 }
+
+// fundEntryExistsTx 在给定事务内查幂等键是否已存在。
+//
+// 必须用 tx 而不是包级 DB：注册的发放就发生在调用方已开好的事务里，池=1 时再用另一条
+// 连接发查询会自锁（见 docs/points-expiry-design.md §2.5 的同一个坑）。
+func fundEntryExistsTx(tx *gorm.DB, refType, refId string) bool {
+	if refType == "" || refId == "" {
+		return false
+	}
+	var n int64
+	if err := tx.Model(&FundEntry{}).
+		Where("ref_type = ? AND ref_id = ?", refType, refId).Count(&n).Error; err != nil {
+		common.SysLog("failed to check fund entry existence (tx): " + err.Error())
+		return false
+	}
+	return n > 0
+}
+
+// PointsUserRefId 构造只用 userId 做幂等键的赠送流水单号（register-* / kyc / invite）。
+//
+// 用户 id 会被复用：`users.id` 是 `integer PRIMARY KEY`（无 AUTOINCREMENT），硬删后
+// 自增会回落；MySQL 上失败的插入不回滚自增值（下一个用户拿 id+1，偶发一次即可恢复），
+// SQLite 上回滚后下一次插入会拿**同一个** id，于是同一个键永久相撞。
+//
+// 历史流水不能删（审计与对账要用），所以撞键时改用带发放时刻的键：正常路径的键保持
+// 不变（不影响报表口径），只有真的复用 id 时才换一个必然唯一的键。
+func PointsUserRefId(prefix string, userId int, now int64, tx *gorm.DB) string {
+	base := fmt.Sprintf("%s:%d", prefix, userId)
+	if tx != nil {
+		if !fundEntryExistsTx(tx, FundRefUser, base) {
+			return base
+		}
+	} else if !FundEntryExists(FundRefUser, base) {
+		return base
+	}
+	common.SysLog(fmt.Sprintf(
+		"points grant ref %q already used (user id reused after hard delete); falling back to a timestamped ref", base))
+	return fmt.Sprintf("%s:%d#%d", prefix, userId, now)
+}

@@ -7,7 +7,9 @@ import (
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
+	"github.com/glebarez/sqlite"
 	"github.com/stretchr/testify/require"
+	"gorm.io/gorm"
 )
 
 // AC4：实名发放（本人 + 邀请人）的「有效期为 0 时行为不变」。
@@ -108,6 +110,10 @@ func TestPointsLotGrant_KycSelfAndInviter(t *testing.T) {
 
 // 发放失败时仍只记日志：占位不回滚（否则 KYC 审核会被积分发放拖垮，而占位一旦置位
 // 重试也不会再发，用户会永久失去这笔积分——两害相权下选择「记日志 + 人工补」）。
+//
+// 制造失败的手段：换到一个**故意不建 fund_entries 表**的独立库上发放。原先这里靠
+// 「预占 kyc:<id> 幂等键」制造失败，但 id 复用修复后撞键会自动换成带时刻的键、
+// 发放反而成功，那个前提不再成立（见 TestPointsLotGrant_KycSurvivesReusedUserId）。
 func TestPointsLotGrant_KycFailureOnlyLogsAndKeepsPlaceholder(t *testing.T) {
 	ps := snapshotPointsSetting(t)
 	ps.Enabled, ps.RequireKyc = true, false
@@ -117,22 +123,73 @@ func TestPointsLotGrant_KycFailureOnlyLogsAndKeepsPlaceholder(t *testing.T) {
 	const invitee = 6211
 	seedKycPathUser(t, invitee, 0)
 
-	// 预先占用幂等键，让 GrantPoints 撞键失败
-	_, err := model.InsertFundEntry(&model.FundEntry{
-		UserId: invitee, Account: model.FundAccountPoints, Kind: model.FundKindGift,
-		QuotaDelta: 1, CashFen: 0, Source: model.FundSourceKyc,
-		RefType: model.FundRefUser, RefId: fmt.Sprintf("kyc:%d", invitee),
-	})
+	// 独立库：users / points_lots 有，fund_entries 故意不建 → 记流水必然失败
+	dsn := "file:kyc_fail_case?mode=memory&cache=shared"
+	broken, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{})
 	require.NoError(t, err)
+	require.NoError(t, broken.AutoMigrate(&model.User{}, &model.PointsLot{}))
+	require.NoError(t, broken.Create(&model.User{
+		Id: invitee, Username: "kyc_fail_1", Role: 1, Status: 1,
+		Group: "default", AffCode: "kyf00001",
+	}).Error)
+
+	origDB, origLog := model.DB, model.LOG_DB
+	model.DB, model.LOG_DB = broken, broken
+	t.Cleanup(func() { model.DB, model.LOG_DB = origDB, origLog })
 
 	require.NotPanics(t, func() { GrantKycPoints(invitee) }, "发放失败不得 panic")
 
 	// 占位保持置位（不回滚）
 	var granted bool
-	require.NoError(t, model.DB.Model(&model.User{}).Where("id = ?", invitee).
+	require.NoError(t, broken.Model(&model.User{}).Where("id = ?", invitee).
 		Select("kyc_points_granted").Scan(&granted).Error)
 	require.True(t, granted, "占位不回滚——重试也不会再发，靠人工补")
 
-	// 余额未被改动（整笔回滚）
-	require.Zero(t, pointsBalance(t, invitee))
+	// 整笔回滚：余额与批次都没留下
+	var balance int64
+	require.NoError(t, broken.Model(&model.User{}).Where("id = ?", invitee).
+		Select("points_balance").Scan(&balance).Error)
+	require.Zero(t, balance)
+	var lotCount int64
+	require.NoError(t, broken.Model(&model.PointsLot{}).Where("user_id = ?", invitee).Count(&lotCount).Error)
+	require.Zero(t, lotCount, "事务回滚后不得残留批次")
+}
+
+func TestPointsLotGrant_KycSurvivesReusedUserId(t *testing.T) {
+	ps := snapshotPointsSetting(t)
+	ps.Enabled, ps.RequireKyc = true, false
+	ps.KycVerifiedPoints, ps.KycInviterPoints = 30, 50
+	ps.KycVerifiedExpireDays, ps.KycInviterExpireDays = 0, 0
+
+	const invitee, inviter = 6301, 6302
+	seedKycPathUser(t, inviter, 0)
+	seedKycPathUser(t, invitee, inviter)
+
+	// 模拟「上一个同 id 用户」留下的两条流水
+	for _, ref := range []string{fmt.Sprintf("kyc:%d", invitee), fmt.Sprintf("invite:%d", invitee)} {
+		_, err := model.InsertFundEntry(&model.FundEntry{
+			UserId: invitee, Account: model.FundAccountPoints, Kind: model.FundKindGift,
+			QuotaDelta: 1, CashFen: 0, Source: model.FundSourceKyc,
+			RefType: model.FundRefUser, RefId: ref,
+		})
+		require.NoError(t, err)
+	}
+
+	GrantKycPoints(invitee)
+
+	require.EqualValues(t, int64(common.PointsToQuota(30)), pointsBalance(t, invitee),
+		"id 被复用时本人奖励仍须到账")
+	require.EqualValues(t, int64(common.PointsToQuota(50)), pointsBalance(t, inviter),
+		"邀请人奖励仍须到账")
+
+	// 新流水用带时刻的键
+	var refreshed []model.FundEntry
+	require.NoError(t, model.DB.Where("ref_type = ? AND ref_id LIKE ?", model.FundRefUser, "%#%").
+		Order("id").Find(&refreshed).Error)
+	require.GreaterOrEqual(t, len(refreshed), 2)
+}
+
+func TestPointsUserRefId_KeepsPlainRefWhenFree(t *testing.T) {
+	ref := model.PointsUserRefId("kyc", 6399, 1795000000, nil)
+	require.Equal(t, "kyc:6399", ref, "没有撞键时必须保留原格式（报表按它归集）")
 }
