@@ -35,6 +35,17 @@ func TestValidateOptionValueForBatch(t *testing.T) {
 	require.Error(t, ValidateOptionValueForBatch("GitHubClientSecret", "x"))
 }
 
+func TestGroupTimeAuditRecordsChangedModelPath(t *testing.T) {
+	const key = "GroupTimeRatio"
+	before := map[string]string{key: `{"rules":{"default":{"m":[{"window":"am","value":1}],"other":[{"window":"am","value":1}]}}}`}
+	after := map[string]string{key: `{"rules":{"default":{"m":[{"window":"am","value":0}],"other":[{"window":"am","value":1}]}}}`}
+	log, err := (OptionAudit{}).log(before, after)
+	require.NoError(t, err)
+	require.NotNil(t, log)
+	require.Contains(t, log.Other, `"path":["rules","default","m"],"before":[{"value":1,"window":"am"}],"after":[{"value":0,"window":"am"}]`)
+	require.Contains(t, log.Other, `"total_changes":1`)
+}
+
 func TestPricingOptionApplyOrder(t *testing.T) {
 	const mode, expr = "billing_setting.billing_mode", "billing_setting.billing_expr"
 	for _, keys := range [][]string{

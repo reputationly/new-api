@@ -57,7 +57,7 @@ const { Text, Title } = Typography;
  * GroupRatio；页面只是把「问的是哪个轴的问题」分开。
  *
  * 只搬 UI，不搬存储：每个 Section 仍然读写它原本的 option key，保存依旧走
- * PUT /api/option/。概念说明见 docs/group-concepts.md。
+ * 分组配置通过 /api/group/options 保存。概念说明见 docs/group-concepts.md。
  */
 
 const OPTION_KEYS = [
@@ -117,7 +117,7 @@ export default function GroupManagementPage() {
   const dataVersionRef = useRef(0);
 
   const loadOptions = useCallback(async () => {
-    const res = await API.get('/api/option/');
+    const res = await API.get('/api/group/options');
     const { success, message, data } = res.data;
     if (!success) {
       showError(message);
@@ -259,20 +259,12 @@ export default function GroupManagementPage() {
     }
     setSaving(true);
     try {
-      const results = await Promise.all(
-        updateArray.map((item) =>
-          API.put('/api/option/', {
-            key: item.key,
-            value:
-              typeof inputs[item.key] === 'boolean'
-                ? String(inputs[item.key])
-                : inputs[item.key],
-          }),
-        ),
+      const options = Object.fromEntries(
+        updateArray.map(({ key }) => [key, String(inputs[key])]),
       );
-      const failed = results.find((r) => !r?.data?.success);
-      if (failed) {
-        showError(failed.data?.message || t('保存失败'));
+      const res = await API.post('/api/group/options', { options });
+      if (!res?.data?.success) {
+        showError(res?.data?.message || t('保存失败'));
         return;
       }
       showSuccess(t('保存成功'));

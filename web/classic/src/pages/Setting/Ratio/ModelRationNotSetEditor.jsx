@@ -17,39 +17,17 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 
-import React, { useEffect, useState } from 'react';
-import { API, showError } from '../../../helpers';
+import React from 'react';
 import { useTranslation } from 'react-i18next';
 import ModelPricingEditor from './components/ModelPricingEditor';
 
 export default function ModelRatioNotSetEditor(props) {
   const { t } = useTranslation();
-  const [enabledModels, setEnabledModels] = useState([]);
-
-  const getAllEnabledModels = async () => {
-    try {
-      const res = await API.get('/api/channel/models_enabled');
-      const { success, message, data } = res.data;
-      if (success) {
-        setEnabledModels(data);
-      } else {
-        showError(message);
-      }
-    } catch (error) {
-      console.error(t('获取启用模型失败:'), error);
-      showError(t('获取启用模型失败'));
-    }
-  };
-
-  useEffect(() => {
-    // 获取所有启用的模型
-    getAllEnabledModels();
-  }, []);
   return (
     <ModelPricingEditor
       options={props.options}
       refresh={props.refresh}
-      candidateModelNames={enabledModels}
+      candidateModelNames={props.enabledModels}
       filterMode='unset'
       allowAddModel={false}
       allowDeleteModel={false}

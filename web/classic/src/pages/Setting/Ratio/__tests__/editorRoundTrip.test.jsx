@@ -78,7 +78,7 @@ const refresh = vi.fn().mockResolvedValue(undefined);
 const putPayloads = () => {
   const payload = {};
   const call = API.post.mock.calls.find(
-    ([url]) => url === '/api/option/pricing_batch',
+    ([url]) => url === '/api/model_pricing/options',
   );
   if (!call) return payload;
   const options = call[1]?.options || {};

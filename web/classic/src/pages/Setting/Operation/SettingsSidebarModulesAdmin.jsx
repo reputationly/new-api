@@ -219,6 +219,7 @@ export default function SettingsSidebarModulesAdmin(props) {
           description: t('用户分组与倍率配置'),
         },
         { key: 'models', title: t('模型管理'), description: t('AI模型配置') },
+        { key: 'modelPricing', title: t('模型定价'), description: t('模型定价设置') },
         {
           key: 'deployment',
           title: t('模型部署'),

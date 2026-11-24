@@ -2,6 +2,7 @@ package model
 
 import (
 	"fmt"
+	"maps"
 	"slices"
 	"sort"
 	"strconv"
@@ -31,6 +32,7 @@ const pricingWriteLockKey = "_internal.pricing_write_lock"
 
 var pricingWriteMu sync.Mutex
 var pricingApplyMu sync.RWMutex
+var optionDefaults map[string]string
 
 // LockPricingRead keeps a request's pricing inputs on one in-memory revision.
 func LockPricingRead() func() {
@@ -239,6 +241,7 @@ func InitOptionMap() {
 		common.OptionMap[k] = v
 	}
 
+	optionDefaults = maps.Clone(common.OptionMap)
 	common.OptionMapRWMutex.Unlock()
 	loadOptionsFromDatabase()
 }
@@ -339,6 +342,10 @@ func UpdateOption(key string, value string) error {
 // 逐个 PUT 时任何一步失败都会留下半套配置，而"模式=表达式计费但没有表达式"会让整个
 // 模型之后所有请求直接报错。这里保证要么全写、要么全不写。
 func UpdateOptions(options map[string]string, stateKeys []string, validate func(map[string]string) error) error {
+	return UpdateOptionsWithAudit(options, stateKeys, validate, nil)
+}
+
+func UpdateOptionsWithAudit(options map[string]string, stateKeys []string, validate func(map[string]string) error, audit *OptionAudit) error {
 	if len(options) == 0 {
 		return nil
 	}
@@ -367,6 +374,7 @@ func UpdateOptions(options map[string]string, stateKeys []string, validate func(
 	pricingWriteMu.Lock()
 	defer pricingWriteMu.Unlock()
 	var final map[string]string
+	var auditLog *Log
 	err := DB.Transaction(func(tx *gorm.DB) error {
 		// A write to one shared row comes first: it takes the row lock on
 		// PostgreSQL/MySQL and the writer lock before any read on SQLite.
@@ -388,6 +396,25 @@ func UpdateOptions(options map[string]string, stateKeys []string, validate func(
 		if err := validate(final); err != nil {
 			return &OptionValidationError{err}
 		}
+		if audit != nil {
+			before, err := getOptionValues(tx, keys)
+			if err != nil {
+				return err
+			}
+			common.OptionMapRWMutex.RLock()
+			for _, key := range keys {
+				if _, persisted := before[key]; !persisted {
+					if value, ok := optionDefaults[key]; ok {
+						before[key] = value
+					}
+				}
+			}
+			common.OptionMapRWMutex.RUnlock()
+			auditLog, err = audit.log(before, values)
+			if err != nil {
+				return err
+			}
+		}
 		for _, key := range keys {
 			option := Option{Key: key}
 			if err := tx.FirstOrCreate(&option, Option{Key: key}).Error; err != nil {
@@ -398,10 +425,20 @@ func UpdateOptions(options map[string]string, stateKeys []string, validate func(
 				return err
 			}
 		}
+		if auditLog != nil && LOG_DB == DB {
+			return tx.Create(auditLog).Error
+		}
 		return nil
 	})
 	if err != nil {
 		return err
+	}
+	if auditLog != nil && LOG_DB != DB {
+		if LOG_DB == nil {
+			common.SysError("定价配置已提交，但审计日志库未初始化")
+		} else if err := LOG_DB.Create(auditLog).Error; err != nil {
+			common.SysError("定价配置已提交，但审计写入失败: " + err.Error())
+		}
 	}
 	// 落库成功后逐个应用到内存；复用 updateOptionMap（它只做内存，不写库）。
 	for _, key := range stateKeys {
@@ -469,7 +506,7 @@ func ValidateOptionValueForBatch(key, value string) error {
 	case "GroupTimeRatio":
 		return ratio_setting.CheckGroupTimeRatio(value)
 	default:
-		return fmt.Errorf("该接口不支持批量写入：%s", key)
+		return validateGroupOrToolOption(key, value)
 	}
 }
 

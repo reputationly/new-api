@@ -18,7 +18,7 @@ For commercial licensing, please contact support@quantumnous.com
 */
 
 import React, { lazy, Suspense, useContext, useMemo } from 'react';
-import { Route, Routes, useLocation, useParams } from 'react-router-dom';
+import { Navigate, Route, Routes, useLocation, useParams } from 'react-router-dom';
 import Loading from './components/common/ui/Loading';
 import User from './pages/User';
 import { AuthRedirect, PrivateRoute, AdminRoute, RootRoute } from './helpers';
@@ -43,6 +43,7 @@ import Pricing from './pages/Pricing';
 import Task from './pages/Task';
 import ModelPage from './pages/Model';
 import GroupManagementPage from './pages/GroupManagement';
+import RatioSetting from './components/settings/RatioSetting';
 import TopupPackagePage from './pages/TopupPackage';
 import ModelDeploymentPage from './pages/ModelDeployment';
 import PlaygroundAdminPage from './pages/PlaygroundAdmin';
@@ -127,9 +128,17 @@ function App() {
         <Route
           path='/console/group'
           element={
-            <RootRoute>
+            <AdminRoute>
               <GroupManagementPage />
-            </RootRoute>
+            </AdminRoute>
+          }
+        />
+        <Route
+          path='/console/model-pricing'
+          element={
+            <AdminRoute>
+              <RatioSetting />
+            </AdminRoute>
           }
         />
         <Route
@@ -397,7 +406,11 @@ function App() {
           element={
             <AdminRoute>
               <Suspense fallback={<Loading></Loading>} key={location.pathname}>
-                <Setting />
+                {new URLSearchParams(location.search).get('tab') === 'ratio' ? (
+                  <Navigate to='/console/model-pricing' replace />
+                ) : (
+                  <Setting />
+                )}
               </Suspense>
             </AdminRoute>
           }

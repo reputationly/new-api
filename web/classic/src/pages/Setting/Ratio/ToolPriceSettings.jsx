@@ -65,7 +65,7 @@ function objectToRows(prices) {
   }));
 }
 
-export default function ToolPriceSettings({ options }) {
+export default function ToolPriceSettings({ options, refresh }) {
   const { t } = useTranslation();
   const [rows, setRows] = useState([]);
   const [mode, setMode] = useState('visual');
@@ -134,12 +134,12 @@ export default function ToolPriceSettings({ options }) {
   const handleSave = async () => {
     setSaving(true);
     try {
-      const res = await API.put('/api/option/', {
-        key: OPTION_KEY,
-        value: JSON.stringify(currentPrices),
+      const res = await API.post('/api/model_pricing/options', {
+        options: { [OPTION_KEY]: JSON.stringify(currentPrices) },
       });
       if (res.data.success) {
         showSuccess(t('保存成功'));
+        await refresh();
       } else {
         showError(res.data.message || t('保存失败'));
       }

@@ -55,63 +55,40 @@ export default function ModelRatioSettings(props) {
 
   async function onSubmit() {
     try {
-      await refForm.current
-        .validate()
-        .then(() => {
-          const updateArray = compareObjects(inputs, inputsRow);
-          if (!updateArray.length)
-            return showWarning(t('你似乎并没有修改什么'));
-
-          const requestQueue = updateArray.map((item) => {
-            const value =
-              typeof inputs[item.key] === 'boolean'
-                ? String(inputs[item.key])
-                : inputs[item.key];
-            return API.put('/api/option/', { key: item.key, value });
-          });
-
-          setLoading(true);
-          Promise.all(requestQueue)
-            .then((res) => {
-              if (res.includes(undefined)) {
-                return showError(
-                  requestQueue.length > 1
-                    ? t('部分保存失败，请重试')
-                    : t('保存失败'),
-                );
-              }
-
-              for (let i = 0; i < res.length; i++) {
-                if (!res[i].data.success) {
-                  return showError(res[i].data.message);
-                }
-              }
-
-              showSuccess(t('保存成功'));
-              props.refresh();
-            })
-            .catch((error) => {
-              console.error('Unexpected error:', error);
-              showError(t('保存失败，请重试'));
-            })
-            .finally(() => {
-              setLoading(false);
-            });
-        })
-        .catch(() => {
-          showError(t('请检查输入'));
-        });
-    } catch (error) {
+      await refForm.current.validate();
+    } catch {
       showError(t('请检查输入'));
-      console.error(error);
+      return;
+    }
+    const options = { ...props.timeOptions };
+    compareObjects(inputs, inputsRow).forEach(({ key }) => {
+      options[key] = String(inputs[key]);
+    });
+    if (!Object.keys(options).length) {
+      showWarning(t('你似乎并没有修改什么'));
+      return;
+    }
+    setLoading(true);
+    try {
+      const res = await API.post('/api/model_pricing/options', { options });
+      if (!res?.data?.success) {
+        showError(res?.data?.message || t('保存失败'));
+        return;
+      }
+      showSuccess(t('保存成功'));
+      await props.refresh();
+    } catch {
+      showError(t('保存失败，请重试'));
+    } finally {
+      setLoading(false);
     }
   }
 
   async function resetModelRatio() {
     try {
-      let res = await API.post(`/api/option/rest_model_ratio`);
+      let res = await API.post('/api/model_pricing/reset_model_ratio');
       if (res.data.success) {
-        showSuccess(res.data.message);
+        showSuccess(t('重置模型倍率成功'));
         props.refresh();
       } else {
         showError(res.data.message);

@@ -65,7 +65,7 @@ const TIER_CONFIG = JSON.stringify({
 
 function mockAPIs(tierConfig = TIER_CONFIG) {
   API.get.mockImplementation((url) => {
-    if (url.startsWith('/api/option/')) {
+    if (url === '/api/group/options') {
       return Promise.resolve({
         data: {
           success: true,
@@ -91,7 +91,7 @@ function mockAPIs(tierConfig = TIER_CONFIG) {
     }
     return Promise.resolve({ data: { success: true, data: [] } });
   });
-  API.put.mockResolvedValue({ data: { success: true } });
+  API.post.mockResolvedValue({ data: { success: true } });
 }
 
 /**
@@ -139,11 +139,11 @@ async function deleteFirstRule(user) {
 }
 
 function savedTierConfig() {
-  const call = API.put.mock.calls.find(
-    (c) => c[1]?.key === 'UserGroupModelRatio',
+  const call = API.post.mock.calls.find(
+    ([url, payload]) => url === '/api/group/options' && payload.options?.UserGroupModelRatio,
   );
   expect(call, '保存请求里没有 UserGroupModelRatio').toBeTruthy();
-  return JSON.parse(call[1].value);
+  return JSON.parse(call[1].options.UserGroupModelRatio);
 }
 
 describe('档位折扣 · 端到端', () => {
@@ -172,7 +172,7 @@ describe('档位折扣 · 端到端', () => {
     await user.click(screen.getByText('保存'));
 
     // ③ 落到 payload 上验
-    await waitFor(() => expect(API.put).toHaveBeenCalled());
+    await waitFor(() => expect(API.post).toHaveBeenCalled());
     const saved = savedTierConfig();
 
     expect(saved.batch2026q3).toHaveProperty('Kimi-K3');
@@ -201,7 +201,7 @@ describe('档位折扣 · 端到端', () => {
     await user.type(numberInputs[0], '0.85');
 
     await user.click(screen.getByText('保存'));
-    await waitFor(() => expect(API.put).toHaveBeenCalled());
+    await waitFor(() => expect(API.post).toHaveBeenCalled());
 
     expect(savedTierConfig().batch2026q3['*'].value).toBe(0.85);
   });
@@ -222,7 +222,7 @@ describe('档位折扣 · 端到端', () => {
     expect(patternInputs().length, '规则没被删干净').toBe(0);
 
     await user.click(screen.getByText('保存'));
-    await waitFor(() => expect(API.put).toHaveBeenCalled());
+    await waitFor(() => expect(API.post).toHaveBeenCalled());
 
     const saved = savedTierConfig();
     expect(

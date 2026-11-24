@@ -572,7 +572,10 @@ func DeleteHistoryLogs(c *gin.Context) {
 		})
 		return
 	}
-	count, err := model.DeleteOldLog(c.Request.Context(), targetTimestamp, 100)
+	count, err := model.DeleteOldLog(c.Request.Context(), targetTimestamp, model.OptionAudit{
+		ActorID: c.GetInt("id"), Username: c.GetString("username"), Role: c.GetInt("role"),
+		IP: c.ClientIP(), RequestID: c.GetString(common.RequestIdKey),
+	})
 	if err != nil {
 		common.ApiError(c, err)
 		return

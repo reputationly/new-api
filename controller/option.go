@@ -13,7 +13,6 @@ import (
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/service/mediastore"
 	"github.com/QuantumNous/new-api/service/moderation"
-	"github.com/QuantumNous/new-api/setting"
 	"github.com/QuantumNous/new-api/setting/billing_setting"
 	"github.com/QuantumNous/new-api/setting/console_setting"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
@@ -144,6 +143,14 @@ var pricingBatchKeys = map[string]bool{
 	"ModelSourceRate":              true,
 	"VideoPricingConfig":           true,
 	"GroupTimeRatio":               true,
+	"tool_price_setting.prices":    true,
+}
+
+var groupBatchKeys = map[string]bool{
+	"GroupRatio": true, "UserUsableGroups": true, "GroupDescription": true, "GroupEnabled": true,
+	"GroupGroupRatio": true, "GroupModelRatio": true, "UserGroupModelRatio": true, "GroupTimeRatio": true,
+	"group_ratio_setting.group_special_usable_group": true, "AutoGroups": true, "DefaultUseAutoGroup": true,
+	"TopupGroupRatio": true, "ModelRequestRateLimitGroup": true, "points_setting.enabled_groups": true,
 }
 
 type optionBatchRequest struct {
@@ -194,8 +201,12 @@ func validatePricingFinalState(final map[string]string) error {
 	return checkTimePriceVsExprs(final["GroupTimeRatio"], exprs)
 }
 
-func savePricingOptions(c *gin.Context, options map[string]string) {
-	if err := model.UpdateOptions(options, pricingStateKeys, validatePricingFinalState); err != nil {
+func savePricingOptions(c *gin.Context, options map[string]string, action, summary string) {
+	audit := model.OptionAudit{
+		ActorID: c.GetInt("id"), Username: c.GetString("username"), Role: c.GetInt("role"),
+		IP: c.ClientIP(), RequestID: c.GetString(common.RequestIdKey), Action: action, Summary: summary,
+	}
+	if err := model.UpdateOptionsWithAudit(options, pricingStateKeys, validatePricingFinalState, &audit); err != nil {
 		var validationErr *model.OptionValidationError
 		if errors.As(err, &validationErr) {
 			common.ApiError(c, validationErr)
@@ -210,13 +221,21 @@ func savePricingOptions(c *gin.Context, options map[string]string) {
 }
 
 func UpdatePricingOptions(c *gin.Context) {
+	updateScopedOptions(c, pricingBatchKeys, "model_pricing_update", "修改模型定价")
+}
+
+func UpdateGroupOptions(c *gin.Context) {
+	updateScopedOptions(c, groupBatchKeys, "group_config_update", "修改分组配置")
+}
+
+func updateScopedOptions(c *gin.Context, allowed map[string]bool, action, summary string) {
 	var req optionBatchRequest
 	if err := common.DecodeJson(c.Request.Body, &req); err != nil || len(req.Options) == 0 {
 		c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": "无效的参数"})
 		return
 	}
 	for key := range req.Options {
-		if !pricingBatchKeys[key] {
+		if !allowed[key] {
 			c.JSON(http.StatusBadRequest, gin.H{
 				"success": false,
 				"message": "该接口不支持批量写入：" + key,
@@ -225,7 +244,36 @@ func UpdatePricingOptions(c *gin.Context) {
 		}
 	}
 
-	savePricingOptions(c, req.Options)
+	savePricingOptions(c, req.Options, action, summary)
+}
+
+func scopedOptions(values map[string]string, allowed map[string]bool) []*model.Option {
+	options := make([]*model.Option, 0, len(allowed))
+	for key := range allowed {
+		if value, ok := values[key]; ok {
+			options = append(options, &model.Option{Key: key, Value: value})
+		}
+	}
+	return options
+}
+
+func GetPricingOptions(c *gin.Context) {
+	names, err := model.GetEnabledModelNames()
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	values := model.OptionValuesFromDatabase()
+	options := scopedOptions(values, pricingBatchKeys)
+	options = append(options, &model.Option{Key: "CompletionRatioMeta", Value: buildCompletionRatioMetaValue(values)})
+	c.JSON(http.StatusOK, gin.H{"success": true, "data": options, "enabled_models": names})
+}
+
+func GetGroupOptions(c *gin.Context) {
+	values := model.OptionValuesFromDatabase()
+	options := scopedOptions(values, groupBatchKeys)
+	options = append(options, &model.Option{Key: "points_setting.enabled", Value: values["points_setting.enabled"]})
+	common.ApiSuccess(c, options)
 }
 
 func UpdateOption(c *gin.Context) {
@@ -255,7 +303,11 @@ func UpdateOption(c *gin.Context) {
 	// 计费相关的 key 单键 PUT 也必须走同一套「最终状态」校验：
 	// 否则旧接口仍能把仍被 fx 表达式引用的汇率删掉（本地复现：删完请求 400）。
 	if pricingOption {
-		savePricingOptions(c, map[string]string{option.Key: option.Value.(string)})
+		savePricingOptions(c, map[string]string{option.Key: option.Value.(string)}, "model_pricing_update", "修改模型定价")
+		return
+	}
+	if groupBatchKeys[option.Key] {
+		savePricingOptions(c, map[string]string{option.Key: option.Value.(string)}, "group_config_update", "修改分组配置")
 		return
 	}
 	switch option.Key {
@@ -348,33 +400,6 @@ func UpdateOption(c *gin.Context) {
 			})
 			return
 		}
-	case "GroupRatio":
-		err = ratio_setting.CheckGroupRatio(option.Value.(string))
-		if err != nil {
-			c.JSON(http.StatusOK, gin.H{
-				"success": false,
-				"message": err.Error(),
-			})
-			return
-		}
-	case "GroupModelRatio":
-		err = ratio_setting.CheckGroupModelRatio(option.Value.(string))
-		if err != nil {
-			c.JSON(http.StatusOK, gin.H{
-				"success": false,
-				"message": err.Error(),
-			})
-			return
-		}
-	case "UserGroupModelRatio":
-		err = ratio_setting.CheckUserGroupModelRatio(option.Value.(string))
-		if err != nil {
-			c.JSON(http.StatusOK, gin.H{
-				"success": false,
-				"message": err.Error(),
-			})
-			return
-		}
 	case "points_setting.new_user_expire_days",
 		"points_setting.kyc_verified_expire_days",
 		"points_setting.kyc_inviter_expire_days",
@@ -401,15 +426,6 @@ func UpdateOption(c *gin.Context) {
 		}
 	case "points_setting.channel_rewards":
 		err = operation_setting.CheckChannelPointsRewards(option.Value.(string))
-		if err != nil {
-			c.JSON(http.StatusOK, gin.H{
-				"success": false,
-				"message": err.Error(),
-			})
-			return
-		}
-	case "ModelRequestRateLimitGroup":
-		err = setting.CheckModelRequestRateLimitGroup(option.Value.(string))
 		if err != nil {
 			c.JSON(http.StatusOK, gin.H{
 				"success": false,

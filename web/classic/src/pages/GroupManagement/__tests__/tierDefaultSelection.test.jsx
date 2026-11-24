@@ -50,7 +50,7 @@ const GROUP_RATIO = JSON.stringify({
 
 function mockAPIs({ userTierConfig = USER_TIER_CONFIG } = {}) {
   API.get.mockImplementation((url) => {
-    if (url.startsWith('/api/option/')) {
+    if (url === '/api/group/options') {
       return Promise.resolve({
         data: {
           success: true,
@@ -127,7 +127,7 @@ describe('档位折扣的默认选中', () => {
  *
  * Semi Select 在 optionList 从空变非空后不更新内部选项，展开永远是「暂无数据」。
  * 这里的时序恰好命中：首次渲染时 inputs 还没加载，tierNames 是空数组，等
- * /api/option/ 回来选项才有值，而那时 Select 已经挂载完了。
+ * /api/group/options 回来选项才有值，而那时 Select 已经挂载完了。
  *
  * 后果是运营根本换不了档位——只能靠 allowCreate 把档名重新敲一遍，而敲错一个字
  * 就会创建出一个空档，看起来又像「配置丢了」。

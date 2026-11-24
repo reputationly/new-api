@@ -339,6 +339,13 @@ func SetApiRouter(router *gin.Engine) {
 			optionRoute.POST("/aggregate_model_dry_run", controller.AggregateModelDryRun)
 		}
 
+		modelPricingRoute := apiRouter.Group("/model_pricing", middleware.AdminAuth())
+		{
+			modelPricingRoute.GET("/options", controller.GetPricingOptions)
+			modelPricingRoute.POST("/options", controller.UpdatePricingOptions)
+			modelPricingRoute.POST("/reset_model_ratio", controller.ResetModelRatio)
+		}
+
 		// Custom OAuth provider management (root only)
 		customOAuthRoute := apiRouter.Group("/custom-oauth-provider")
 		customOAuthRoute.Use(middleware.RootAuth())
@@ -474,7 +481,7 @@ func SetApiRouter(router *gin.Engine) {
 		}
 		logRoute := apiRouter.Group("/log")
 		logRoute.GET("/", middleware.AdminAuth(), controller.GetAllLogs)
-		logRoute.DELETE("/", middleware.AdminAuth(), controller.DeleteHistoryLogs)
+		logRoute.DELETE("/", middleware.RootAuth(), controller.DeleteHistoryLogs)
 		logRoute.GET("/stat", middleware.AdminAuth(), controller.GetLogsStat)
 		logRoute.GET("/self/stat", middleware.UserAuth(), controller.GetLogsSelfStat)
 		logRoute.GET("/channel_affinity_usage_cache", middleware.AdminAuth(), controller.GetChannelAffinityUsageCacheStats)
@@ -527,20 +534,15 @@ func SetApiRouter(router *gin.Engine) {
 		}
 		// GET "/" 是既有接口（渠道编辑、订阅计划编辑、模型管理等多处在用，其中
 		// 模型管理仍对普通管理员开放），保持 AdminAuth 不动
-		groupSharedRoute := apiRouter.Group("/group")
-		groupSharedRoute.Use(middleware.AdminAuth())
+		groupRoute := apiRouter.Group("/group", middleware.AdminAuth())
 		{
-			groupSharedRoute.GET("/", controller.GetGroups)
-		}
-
-		// 分组管理页仅超管可见可配（前端 RootRoute），该页专用的子路径收紧到 RootAuth
-		groupRoute := apiRouter.Group("/group")
-		groupRoute.Use(middleware.RootAuth())
-		{
+			groupRoute.GET("/", controller.GetGroups)
 			groupRoute.GET("/overview", controller.GetGroupOverview)
 			groupRoute.GET("/models", controller.GetGroupModels)
 			groupRoute.GET("/references", controller.GetGroupReferences)
 			groupRoute.POST("/resolve", controller.ResolveGroupRatioPreview)
+			groupRoute.GET("/options", controller.GetGroupOptions)
+			groupRoute.POST("/options", controller.UpdateGroupOptions)
 		}
 
 		prefillGroupRoute := apiRouter.Group("/prefill_group")

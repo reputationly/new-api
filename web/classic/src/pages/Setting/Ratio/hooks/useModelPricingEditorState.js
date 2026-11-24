@@ -1626,7 +1626,7 @@ export function useModelPricingEditorState({
     return true;
   };
 
-  const handleSubmit = async () => {
+  const handleSubmit = async (additionalOptions = {}) => {
     setLoading(true);
     try {
       const output = {
@@ -1737,7 +1737,7 @@ export function useModelPricingEditorState({
       // 会让该模型之后所有请求直接报错；多副本下即使前端按顺序发也够呛
       // （两次请求可能命中不同 Pod，而 option 的同步周期是 60 秒）。
       // 所以走一个入口：服务端以「这次保存之后的最终状态」校验，再单事务写库。
-      const batchOptions = {};
+      const batchOptions = { ...additionalOptions };
       const putOption = (key, value) => {
         batchOptions[key] = JSON.stringify(value, null, 2);
       };
@@ -1750,7 +1750,7 @@ export function useModelPricingEditorState({
       );
       putOption('ModelSourceRate', sourceRateOutput);
 
-      const batchRes = await API.post('/api/option/pricing_batch', {
+      const batchRes = await API.post('/api/model_pricing/options', {
         options: batchOptions,
       });
       if (!batchRes?.data?.success) {

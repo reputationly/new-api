@@ -44,10 +44,11 @@ const RatioSetting = () => {
   });
 
   const [loading, setLoading] = useState(false);
+  const [enabledModels, setEnabledModels] = useState([]);
 
   const getOptions = async () => {
-    const res = await API.get('/api/option/');
-    const { success, message, data } = res.data;
+    const res = await API.get('/api/model_pricing/options');
+    const { success, message, data, enabled_models } = res.data;
     if (success) {
       let newInputs = {};
       data.forEach((item) => {
@@ -61,6 +62,7 @@ const RatioSetting = () => {
         newInputs[item.key] = item.value;
       });
       setInputs(newInputs);
+      setEnabledModels(enabled_models || []);
     } else {
       showError(message);
     }
@@ -111,10 +113,10 @@ const RatioSetting = () => {
             <ModelPricingCombined options={inputs} refresh={onRefresh} />
           </Tabs.TabPane>
           <Tabs.TabPane tab={t('未设置价格模型')} itemKey='unset_models'>
-            <ModelRatioNotSetEditor options={inputs} refresh={onRefresh} />
+            <ModelRatioNotSetEditor options={inputs} refresh={onRefresh} enabledModels={enabledModels} />
           </Tabs.TabPane>
           <Tabs.TabPane tab={t('工具调用定价')} itemKey='tool_price'>
-            <ToolPriceSettings options={inputs} />
+            <ToolPriceSettings options={inputs} refresh={onRefresh} />
           </Tabs.TabPane>
         </Tabs>
       </Card>

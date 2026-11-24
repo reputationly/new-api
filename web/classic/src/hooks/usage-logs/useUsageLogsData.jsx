@@ -835,6 +835,45 @@ export const useLogsData = () => {
             value: operatorValue,
           });
         }
+        if (Array.isArray(adminInfo.changes)) {
+          const renderValue = (value, exists) =>
+            exists ? JSON.stringify(value, null, 2) : t('未设置');
+          expandDataLocal.push({
+            key: t('配置变更'),
+            value: (
+              <div className='overflow-auto'>
+                <table className='text-left align-top'>
+                  <thead>
+                    <tr>
+                      <th className='pr-4'>{t('配置项')}</th>
+                      <th className='pr-4'>{t('修改前')}</th>
+                      <th>{t('修改后')}</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {adminInfo.changes.map((change) => (
+                      <tr key={JSON.stringify([change.key, change.path])}>
+                        <td className='pr-4 align-top'>{[change.key, ...(change.path || [])].join(' / ')}</td>
+                        <td className='pr-4 align-top'>
+                          <pre className='whitespace-pre-wrap break-all'>{renderValue(change.before, change.before_exists)}</pre>
+                        </td>
+                        <td className='align-top'>
+                          <pre className='whitespace-pre-wrap break-all'>{renderValue(change.after, change.after_exists)}</pre>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+                {adminInfo.truncated && (
+                  <div>{t('共 {{total}} 项变更，仅显示 {{shown}} 项', {
+                    total: adminInfo.total_changes,
+                    shown: adminInfo.changes.length,
+                  })}</div>
+                )}
+              </div>
+            ),
+          });
+        }
       }
       expandDatesLocal[logs[i].key] = expandDataLocal;
     }

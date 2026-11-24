@@ -126,7 +126,7 @@ const MessageContent = ({
                 theme='light'
                 type='warning'
                 icon={<Settings size={14} />}
-                onClick={() => window.open('/console/setting?tab=ratio', '_blank')}
+                onClick={() => window.open('/console/model-pricing', '_blank')}
               >
                 {t('前往设置')}
               </Button>

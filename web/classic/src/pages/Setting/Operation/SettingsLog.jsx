@@ -145,7 +145,7 @@ export default function SettingsLog(props) {
                 ({t('约')} {daysDiff} {t('天前')})
               </Text>
             )}
-            <Text style={{ color: '#333' }}> {t('之前的所有日志')}</Text>
+            <Text style={{ color: '#333' }}> {t('之前的非管理日志')}</Text>
           </div>
           <p style={{ marginTop: '12px' }}>
             <Text type='danger'>

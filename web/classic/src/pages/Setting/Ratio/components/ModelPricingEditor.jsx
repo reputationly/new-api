@@ -91,7 +91,7 @@ export default function ModelPricingEditor({
   emptyDescription = '',
   timeDraft = '{}',
   onTimeDraftChange,
-  saveTimePrice,
+  timeOptions,
 }) {
   const { t } = useTranslation();
   const isMobile = useIsMobile();
@@ -260,19 +260,7 @@ export default function ModelPricingEditor({
     [onTimeDraftChange, timeCfg],
   );
 
-  // 「应用更改」：先落分时价（另一个 option key），再落价格。两段分别报错，
-  // 不把"分时价保存失败"和"价格保存失败"混成一句。
-  const handleApply = useCallback(async () => {
-    if (saveTimePrice) {
-      try {
-        await saveTimePrice();
-      } catch (error) {
-        showError(error.message || t('保存分时价失败'));
-        return;
-      }
-    }
-    await handleSubmit();
-  }, [saveTimePrice, handleSubmit, t]);
+  const handleApply = () => handleSubmit(timeOptions);
 
   const getExprModeLabel = useCallback(
     (model) => {

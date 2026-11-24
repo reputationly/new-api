@@ -50,6 +50,7 @@ const routerMap = {
   pricing: '/pricing',
   task: '/console/task',
   models: '/console/models',
+  modelPricing: '/console/model-pricing',
   group: '/console/group',
   deployment: '/console/deployment',
   playgroundAdmin: '/console/playground-admin',
@@ -247,7 +248,7 @@ const SiderBar = ({ onNavigate = () => {} }) => {
         text: t('分组管理'),
         itemKey: 'group',
         to: '/console/group',
-        className: isRoot() ? '' : 'tableHiddle',
+        className: isAdmin() ? '' : 'tableHiddle',
       },
       {
         text: t('充值套餐'),
@@ -259,6 +260,12 @@ const SiderBar = ({ onNavigate = () => {} }) => {
         text: t('模型管理'),
         itemKey: 'models',
         to: '/console/models',
+        className: isAdmin() ? '' : 'tableHiddle',
+      },
+      {
+        text: t('模型定价'),
+        itemKey: 'modelPricing',
+        to: '/console/model-pricing',
         className: isAdmin() ? '' : 'tableHiddle',
       },
       {

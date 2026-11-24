@@ -893,26 +893,40 @@ func SumUsedToken(logType int, startTimestamp int64, endTimestamp int64, modelNa
 	return token
 }
 
-func DeleteOldLog(ctx context.Context, targetTimestamp int64, limit int) (int64, error) {
-	var total int64 = 0
-
-	for {
-		if nil != ctx.Err() {
-			return total, ctx.Err()
+func DeleteOldLog(ctx context.Context, targetTimestamp int64, audit OptionAudit) (int64, error) {
+	var total int64
+	err := LOG_DB.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		for {
+			var ids []int
+			if err := tx.Model(&Log{}).Where("created_at < ? AND type <> ?", targetTimestamp, LogTypeManage).
+				Order("id").Limit(100).Pluck("id", &ids).Error; err != nil {
+				return err
+			}
+			if len(ids) == 0 {
+				break
+			}
+			result := tx.Where("id IN ? AND type <> ?", ids, LogTypeManage).Delete(&Log{})
+			if result.Error != nil {
+				return result.Error
+			}
+			total += result.RowsAffected
 		}
-
-		result := LOG_DB.Where("created_at < ?", targetTimestamp).Limit(limit).Delete(&Log{})
-		if nil != result.Error {
-			return total, result.Error
+		other, err := common.Marshal(map[string]any{"admin_info": map[string]any{
+			"action": "history_logs_delete", "admin_id": audit.ActorID, "admin_username": audit.Username,
+			"admin_role": audit.Role, "operator_ip": audit.IP,
+			"target_timestamp": targetTimestamp, "deleted_count": total,
+		}})
+		if err != nil {
+			return err
 		}
-
-		total += result.RowsAffected
-
-		if result.RowsAffected < int64(limit) {
-			break
-		}
+		return tx.Create(&Log{UserId: audit.ActorID, Username: audit.Username, CreatedAt: common.GetTimestamp(),
+			Type: LogTypeManage, Content: fmt.Sprintf("清理历史日志（截止时间 %s，删除 %d 条）",
+				time.Unix(targetTimestamp, 0).UTC().Format(time.RFC3339), total),
+			Other: string(other), Ip: audit.IP, RequestId: audit.RequestID}).Error
+	})
+	if err != nil {
+		return 0, err
 	}
-
 	return total, nil
 }
 
