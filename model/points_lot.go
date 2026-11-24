@@ -1120,8 +1120,12 @@ func GetPointsLotHistory(userId int, now int64) ([]PointsLotView, error) {
 	return views, nil
 }
 
-// GetPointsExpirySummary 汇总 withinSeconds 内到期的金额，并给出最近 topN 个到期日。
-func GetPointsExpirySummary(userId int, now int64, withinSeconds int64, topN int) (*PointsExpirySummary, error) {
+// GetPointsExpirySummary 汇总 withinDays 内到期的金额，并给出最近 topN 个到期日。
+//
+// 窗口必须按**自然日**算，不能写成 now+withinDays*86400：到期时刻一律落在当天
+// 23:59:59，第 N 天到期的批次比「now + N×24h」晚几个小时，按秒数比较会把它漏掉
+// （实测：N=30 的赠分在汇总里显示为空，充值卡的临期标签也出不来）。
+func GetPointsExpirySummary(userId int, now int64, withinDays int, topN int) (*PointsExpirySummary, error) {
 	if now <= 0 {
 		now = common.GetTimestamp()
 	}
@@ -1129,7 +1133,7 @@ func GetPointsExpirySummary(userId int, now int64, withinSeconds int64, topN int
 	if err != nil {
 		return nil, err
 	}
-	horizon := now + withinSeconds
+	horizon := ExpireAtDays(now, withinDays)
 	byExpiry := map[int64]int64{}
 	for _, v := range views {
 		if v.ExpiresAt <= 0 || v.ExpiresAt > horizon {

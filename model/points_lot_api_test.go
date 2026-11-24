@@ -96,7 +96,7 @@ func TestGetPointsExpirySummary_WindowAndTopN(t *testing.T) {
 		UserId: id, Source: FundSourceCheckin, Amount: 100, ExpiresAt: ExpireAtDays(now, 100),
 	})
 
-	summary, err := GetPointsExpirySummary(id, now, 30*86400, 3)
+	summary, err := GetPointsExpirySummary(id, now, 30, 3)
 	require.NoError(t, err)
 	require.NotNil(t, summary.Expiring)
 	require.EqualValues(t, 600, summary.Expiring.Quota, "窗口内三笔合计 100+200+300")
@@ -113,7 +113,7 @@ func TestGetPointsExpirySummary_EmptyWhenNothingExpiring(t *testing.T) {
 	seedLotViewUser(t, id, 100)
 	insertLot(t, PointsLot{UserId: id, Source: FundSourceCheckin, Amount: 100, ExpiresAt: 0})
 
-	summary, err := GetPointsExpirySummary(id, now, 30*86400, 3)
+	summary, err := GetPointsExpirySummary(id, now, 30, 3)
 	require.NoError(t, err)
 	require.Nil(t, summary.Expiring)
 	require.Empty(t, summary.NextExpiries)
@@ -235,3 +235,29 @@ func TestGetSurplusPointsLots_ListsForReview(t *testing.T) {
 }
 
 func expLateTs() int64 { return shanghaiTime(2026, 12, 1, 23, 59, 59) }
+
+// 「30 天内到期」必须按**自然日**算：到期时刻都在当天 23:59:59，第 30 天到期的批次
+// 比 now+30×86400 晚几个小时。按秒数比会把它漏掉——实测表现为充值卡的临期标签
+// 完全不出现（运营会以为「没有积分要过期」）。
+func TestGetPointsExpirySummary_IncludesLastDayOfWindow(t *testing.T) {
+	const id = 3107
+	now := shanghaiTime(2026, 6, 1, 0, 5, 0)
+	seedLotViewUser(t, id, 300)
+
+	// 第 30 天到期：必须计入
+	insertLot(t, PointsLot{
+		UserId: id, Source: FundSourceCheckin, Amount: 100,
+		ExpiresAt: ExpireAtDays(now, 30),
+	})
+	// 第 31 天到期：必须排除
+	insertLot(t, PointsLot{
+		UserId: id, Source: FundSourceCheckin, Amount: 200,
+		ExpiresAt: ExpireAtDays(now, 31),
+	})
+
+	summary, err := GetPointsExpirySummary(id, now, 30, 3)
+	require.NoError(t, err)
+	require.NotNil(t, summary.Expiring, "第 30 天到期的批次必须进窗口")
+	require.EqualValues(t, 100, summary.Expiring.Quota, "第 31 天到期的不应计入")
+	require.Equal(t, ExpireAtDays(now, 30), summary.Expiring.ExpiresAt)
+}

@@ -133,7 +133,7 @@ func GetPointsLotsSummary(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"success": true, "data": empty})
 		return
 	}
-	summary, err := model.GetPointsExpirySummary(c.GetInt("id"), common.GetTimestamp(), 30*86400, 3)
+	summary, err := model.GetPointsExpirySummary(c.GetInt("id"), common.GetTimestamp(), 30, 3)
 	if err != nil {
 		common.ApiError(c, err)
 		return
