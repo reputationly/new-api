@@ -2,7 +2,6 @@ package model
 
 import (
 	"fmt"
-	"strconv"
 	"testing"
 	"time"
 
@@ -165,7 +164,7 @@ func TestPointsExpiry_ExistingLedgerEntryRollsBackWholeTx(t *testing.T) {
 	_, err := InsertFundEntry(&FundEntry{
 		UserId: id, Account: FundAccountPoints, Kind: FundKindExpire,
 		QuotaDelta: -600, CashFen: 0, Source: FundSourceCheckin,
-		RefType: FundRefPointsLot, RefId: strconv.Itoa(lot.Id),
+		RefType: FundRefPointsLot, RefId: pointsLotLedgerRef(lot),
 	})
 	require.NoError(t, err)
 
@@ -210,4 +209,46 @@ func TestPointsExpiry_RemarkUsesReadableDate(t *testing.T) {
 	require.NoError(t, DB.Where("user_id = ? AND kind = ?", id, FundKindExpire).First(&entry).Error)
 	require.Contains(t, entry.Remark, "03-15", "备注应是可读日期")
 	require.NotContains(t, entry.Remark, fmt.Sprintf("%d", exp), "不得出现 Unix 时间戳")
+}
+
+// 批次 id 会被复用（points_lots 没有 AUTOINCREMENT）：硬删用户或归档清理删掉最大 id 后，
+// 新批次可能拿到同一个 id。作废流水的幂等键若只用 id，就会与历史流水相撞，M1 会让这条
+// 新批次永远作废不了。这里直接钉住「同一 id、不同发放时刻 → 键不同」。
+func TestPointsLotLedgerRef_NotCollideOnReusedId(t *testing.T) {
+	a := PointsLot{Id: 7, GrantedAt: 1000}
+	b := PointsLot{Id: 7, GrantedAt: 2000}
+	require.NotEqual(t, pointsLotLedgerRef(a), pointsLotLedgerRef(b),
+		"同一 id 的不同批次实例必须有不同的幂等键")
+	require.Equal(t, pointsLotLedgerRef(a), pointsLotLedgerRef(PointsLot{Id: 7, GrantedAt: 1000}),
+		"同一条批次重复作废时键必须稳定（幂等）")
+}
+
+// 端到端：先作废一条批次并留下历史流水，再让新批次复用它的 id，
+// 新批次仍须能正常作废（不能因幂等键相撞而永久失败）。
+func TestPointsExpiry_ReusedLotIdStillForfeits(t *testing.T) {
+	const id = 4141
+	exp1 := shanghaiTime(2026, 3, 1, 23, 59, 59)
+	seedLotUser(t, id, 100)
+	first := insertLot(t, PointsLot{
+		UserId: id, Source: FundSourceCheckin, Amount: 100, ExpiresAt: exp1,
+		GrantedAt: exp1 - 86400, Status: PointsLotStatusActive,
+	})
+	_, _, err := ExpireUserPointsLots(id, exp1+60)
+	require.NoError(t, err)
+
+	// 模拟 id 复用：直接插入一条同 id、不同 granted_at 的批次（真实场景是删行后自增回落）
+	require.NoError(t, DB.Exec("DELETE FROM points_lots WHERE id = ?", first.Id).Error)
+	exp2 := shanghaiTime(2026, 4, 1, 23, 59, 59)
+	reused := insertLot(t, PointsLot{
+		Id:     first.Id, // 显式指定，复现「自增回落导致 id 复用」
+		UserId: id, Source: FundSourceCheckin, Amount: 200, ExpiresAt: exp2,
+		GrantedAt: exp2 - 3600, Status: PointsLotStatusActive,
+	})
+	require.Equal(t, first.Id, reused.Id, "这里就是要复用同一个 id")
+	require.NoError(t, DB.Unscoped().Model(&User{}).Where("id = ?", id).
+		Update("points_balance", 200).Error)
+
+	forfeited, _, err := ExpireUserPointsLots(id, exp2+60)
+	require.NoError(t, err, "复用了 id 的新批次仍须能作废")
+	require.EqualValues(t, 200, forfeited)
 }

@@ -710,6 +710,15 @@ type PointsLotExpiry struct {
 	ExpiresAt int64
 }
 
+// pointsLotLedgerRef 作废流水的幂等键：<批次 id>:<发放时刻>。
+//
+// 只用 id 不够——`points_lots` 没有 AUTOINCREMENT，删掉最大 id 后新批次会复用该 id，
+// 与历史作废流水的键相撞，导致这条批次永远作废不了。granted_at 在同一秒内也基本不会
+// 与旧批次重合，两者组合足以唯一。
+func pointsLotLedgerRef(lot PointsLot) string {
+	return fmt.Sprintf("%d:%d", lot.Id, lot.GrantedAt)
+}
+
 // ExpireUserPointsLots 作废某用户所有已到期批次。
 //
 // 幂等性不依赖锁：每笔作废都是条件更新（WHERE status='active'），只有真正改到 1 行
@@ -760,8 +769,12 @@ func ExpireUserPointsLots(userId int, now int64) (forfeited int64, bySource []Po
 					CashFen:    0,
 					Source:     lot.Source,
 					RefType:    FundRefPointsLot,
-					RefId:      fmt.Sprintf("%d", lot.Id),
-					Remark:     fmt.Sprintf("批次到期作废（到期日 %s）", FormatPointsExpiryDate(lot.ExpiresAt)),
+					// 幂等键必须**每一条批次实例**唯一，不能只用 id：points_lots 的建表是
+					// `id integer PRIMARY KEY`（无 AUTOINCREMENT），硬删用户或归档清理删掉
+					// 最大 id 之后，新批次会复用同一个 id；那时旧作废流水还在，幂等键撞车
+					// 会让这条新批次永远作废不了（M1 会整笔回滚）。带上 granted_at 即恒定唯一。
+					RefId:  pointsLotLedgerRef(lot),
+					Remark: fmt.Sprintf("批次到期作废（到期日 %s）", FormatPointsExpiryDate(lot.ExpiresAt)),
 				})
 				if insErr != nil {
 					return insErr

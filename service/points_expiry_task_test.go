@@ -22,7 +22,10 @@ func seedPointsExpiryUser(t *testing.T, id int, balance int64) {
 		AffCode: fmt.Sprintf("pa%06d", id),
 	}).Error)
 	t.Cleanup(func() {
+		// 流水必须一起清：points_lots 没有 AUTOINCREMENT，删行后 id 会被复用，
+		// 残留的历史作废流水会与新批次的幂等键相撞。
 		model.DB.Unscoped().Where("user_id = ?", id).Delete(&model.PointsLot{})
+		model.DB.Unscoped().Where("user_id = ?", id).Delete(&model.FundEntry{})
 		model.DB.Unscoped().Where("id = ?", id).Delete(&model.User{})
 	})
 }
