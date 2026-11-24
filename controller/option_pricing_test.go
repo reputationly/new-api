@@ -5,11 +5,17 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/model"
+	"github.com/QuantumNous/new-api/pkg/billingexpr"
+	relaycommon "github.com/QuantumNous/new-api/relay/common"
+	"github.com/QuantumNous/new-api/relay/helper"
+	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/setting/billing_setting"
 	"github.com/QuantumNous/new-api/setting/ratio_setting"
+	"github.com/QuantumNous/new-api/types"
 	"github.com/gin-gonic/gin"
 	"github.com/glebarez/sqlite"
 	"github.com/stretchr/testify/require"
@@ -114,4 +120,47 @@ func TestPricingOptionFinalState(t *testing.T) {
 	require.Contains(t, ratio_setting.GetGroupTimeRatioCopy().Windows, "off_peak")
 	require.True(t, put(timeRatioKey, "{}"))
 	require.Empty(t, ratio_setting.GetGroupTimeRatioCopy().Windows)
+
+	const timedExpr = `{"m":"v2:hour(\"UTC\") >= 0 ? tier(\"old\", p * 2) : tier(\"other\", p * 9)"}`
+	const flatExpr = `{"m":"v2:tier(\"flat\", p * 3)"}`
+	const timeRules = `{"windows":{"first":{"start":"00:00","end":"12:00"},"second":{"exclude_of":"first"}},"rules":{"*":{"m":[{"window":"first","factors":{"input":2}},{"window":"second","factors":{"input":2}}]}}}`
+	require.True(t, batch(map[string]string{exprKey: timedExpr, modeKey: tiered}))
+
+	checkCharge := func(expected int, tierName string) {
+		ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+		info := &relaycommon.RelayInfo{
+			OriginModelName:     "m",
+			UserGroup:           "default",
+			UsingGroup:          "default",
+			BillingRequestInput: &billingexpr.RequestInput{},
+		}
+		price, err := helper.ModelPriceHelper(ctx, info, 1000, &types.TokenCountMeta{})
+		require.NoError(t, err)
+		require.Equal(t, expected, price.QuotaToPreConsume)
+		require.Equal(t, tierName, info.TieredBillingSnapshot.EstimatedTier)
+		ok, quota, _ := service.TryTieredSettle(info, billingexpr.TokenParams{P: 1000, Len: 1000})
+		require.True(t, ok)
+		require.Equal(t, expected, quota)
+	}
+	checkCharge(2_000_000, "old")
+
+	done := make(chan struct{})
+	defer func() { <-done }()
+	var updated bool
+	func() {
+		defer model.LockPricingRead()()
+		go func() {
+			defer close(done)
+			updated = batch(map[string]string{exprKey: flatExpr, timeRatioKey: timeRules})
+		}()
+		require.Eventually(t, func() bool {
+			var stored model.Option
+			return db.First(&stored, &model.Option{Key: timeRatioKey}).Error == nil && stored.Value == timeRules
+		}, 5*time.Second, 10*time.Millisecond)
+		require.Empty(t, ratio_setting.GetGroupTimeRatioCopy().Rules)
+		require.Contains(t, billing_setting.GetBillingExprCopy()["m"], `hour("UTC")`)
+	}()
+	<-done
+	require.True(t, updated)
+	checkCharge(6_000_000, "flat")
 }

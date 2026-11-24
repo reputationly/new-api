@@ -30,6 +30,13 @@ type Option struct {
 const pricingWriteLockKey = "_internal.pricing_write_lock"
 
 var pricingWriteMu sync.Mutex
+var pricingApplyMu sync.RWMutex
+
+// LockPricingRead keeps a request's pricing inputs on one in-memory revision.
+func LockPricingRead() func() {
+	pricingApplyMu.RLock()
+	return pricingApplyMu.RUnlock
+}
 
 func AllOption() ([]*Option, error) {
 	var options []*Option
@@ -240,6 +247,8 @@ func loadOptionsFromDatabase() {
 	pricingWriteMu.Lock()
 	defer pricingWriteMu.Unlock()
 	options, _ := AllOption()
+	pricingApplyMu.Lock()
+	defer pricingApplyMu.Unlock()
 	for _, option := range options {
 		if option.Key == pricingWriteLockKey {
 			continue
@@ -406,6 +415,8 @@ func UpdateOptions(options map[string]string, stateKeys []string, validate func(
 			}
 		}
 	}
+	pricingApplyMu.Lock()
+	defer pricingApplyMu.Unlock()
 	for _, key := range pricingOptionApplyOrder(keys) {
 		if applyErr := updateOptionMap(key, values[key]); applyErr != nil {
 			common.SysLog("failed to apply option to memory: " + key + ": " + applyErr.Error())
