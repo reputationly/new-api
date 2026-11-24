@@ -251,6 +251,27 @@ func buildMusicTaskBody(modelName, prompt, lyrics string, instrumental *bool, ex
 		if lyrics != "" {
 			metadata["lyrics"] = lyrics
 		}
+		// **玩法必须随 metadata 下发**,不能只靠适配器推断后放顶层。
+		//
+		// 实测(2026-11-23,线上):ACE-Step 经本兼容层调用,若 task_type 只在顶层,
+		// 门面会把请求转成一条丢末尾斜杠的引擎路径,引擎回 405 Method Not Allowed,
+		// 表现为 0.1 秒的 "Engine rejected task";把同一个值放进 metadata.task_type
+		// 就正常出片。体验区一直发 metadata.task_type(useMusicGeneration.js),
+		// 所以那边从来没暴露这个问题。
+		//
+		// cover / repaint 由客户在 metadata.task_type 里显式指定(已在上面透传),
+		// 这里只补缺省值,不覆盖客户的选择。
+		if _, ok := metadata["task_type"]; !ok {
+			metadata["task_type"] = "t2m"
+		}
+		// 与体验区对齐的两项:thinking 让 5Hz LM 先出语义码(官方建议的质量档);
+		// batch_size=1 是因为门面只把第一首搬到 save_result_path,发 2 是白烧算力。
+		if _, ok := metadata["thinking"]; !ok {
+			metadata["thinking"] = true
+		}
+		if _, ok := metadata["batch_size"]; !ok {
+			metadata["batch_size"] = 1
+		}
 	}
 	if instrumental != nil {
 		metadata["is_instrumental"] = *instrumental
