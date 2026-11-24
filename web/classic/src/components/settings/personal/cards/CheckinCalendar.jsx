@@ -38,6 +38,7 @@ import {
 } from 'lucide-react';
 import Turnstile from 'react-turnstile';
 import { API, showError, showSuccess, renderQuota } from '../../../../helpers';
+import { formatPointsExpiryDate } from '../../../../helpers/pointsExpiry';
 import { quotaToPoints } from '../../../../helpers/quota';
 
 const CheckinCalendar = ({ t, status, turnstileEnabled, turnstileSiteKey }) => {
@@ -136,14 +137,6 @@ const CheckinCalendar = ({ t, status, turnstileEnabled, turnstileSiteKey }) => {
     return message.includes('Turnstile');
   };
 
-  // 到期日按本地时区展示成「12-06」。后端给的是一定在 23:59:59 的绝对时刻，
-  // 这里只取月日——年份对「下周到期」这种粒度没有意义。
-  const formatCheckinExpiry = (ts) => {
-    const d = new Date(ts * 1000);
-    const pad = (n) => String(n).padStart(2, '0');
-    return `${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
-  };
-
   const doCheckin = async (token) => {
     setCheckinLoading(true);
     try {
@@ -155,7 +148,7 @@ const CheckinCalendar = ({ t, status, turnstileEnabled, turnstileSiteKey }) => {
         const expiresText =
           data.reward_type === 'points' && data.points_expires_at
             ? t('，{{date}} 到期', {
-                date: formatCheckinExpiry(data.points_expires_at),
+                date: formatPointsExpiryDate(data.points_expires_at),
               })
             : '';
         showSuccess(

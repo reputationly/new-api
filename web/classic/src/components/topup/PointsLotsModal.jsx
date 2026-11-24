@@ -10,6 +10,7 @@ import {
 import { useTranslation } from 'react-i18next';
 import { API, showError } from '../../helpers';
 import { quotaToPoints } from '../../helpers/quota';
+import { formatPointsExpiryFullDate } from '../../helpers/pointsExpiry';
 
 const { Text } = Typography;
 
@@ -29,13 +30,6 @@ export const LOT_SOURCE_LABEL = {
 };
 
 const PAGE_SIZE = 10;
-
-function formatExpiry(ts, t) {
-  if (!ts) return t('永不过期');
-  const d = new Date(ts * 1000);
-  const pad = (n) => String(n).padStart(2, '0');
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
-}
 
 function ulid(prefix, idx) {
   return `${prefix}-${idx}`;
@@ -126,7 +120,7 @@ export default function PointsLotsModal({ visible, onClose }) {
             </div>
             <div className='flex items-center gap-2'>
               <Text type='tertiary' size='small'>
-                {formatExpiry(it.expires_at, t)}
+                {formatPointsExpiryFullDate(it.expires_at) || t('永不过期')}
               </Text>
               {it.status === 'expired' && (
                 <Tag size='small' color='red'>

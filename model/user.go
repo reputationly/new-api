@@ -698,10 +698,7 @@ func (user *User) Insert(inviterId int) error {
 	}
 
 	if common.QuotaForNewUser > 0 {
-		// 日志带上有效期：用户有权在到账那一刻知道这笔什么时候作废
-		RecordLog(user.Id, LogTypeSystem, newUserRegisterGrantLog()+
-			PointsExpiryLogSuffix(ExpireAtDays(common.GetTimestamp(),
-				operation_setting.GetPointsSetting().NewUserExpireDays)))
+		RecordLog(user.Id, LogTypeSystem, newUserRegisterGrantLogLine())
 	}
 	// 额度与积分各记一条：两者是两个钱包，合成一条反而看不出哪份进了哪边。
 	// 渠道奖励额度通常远高于默认值，日志里必须带上是哪个渠道给的，否则对账时
@@ -773,7 +770,7 @@ func (user *User) FinalizeOAuthUserCreation(inviterId int) {
 	}
 
 	if common.QuotaForNewUser > 0 {
-		RecordLog(user.Id, LogTypeSystem, newUserRegisterGrantLog())
+		RecordLog(user.Id, LogTypeSystem, newUserRegisterGrantLogLine())
 	}
 	// 用 InsertWithTx 带过来的发放数（user 就是写库时那个实例），与 Insert 路径同源
 	if user.newUserPointsGranted > 0 {
@@ -1570,6 +1567,20 @@ func newUserRegisterGrantAccount() string {
 // newUserRegisterGrantLog 注册礼的日志文案，口径跟随实际落点：
 // 进积分池就按积分数展示，进现金池才按额度展示。两者数字量级差约 685 倍，
 // 用错口径会让运营在日志里看到一个完全对不上的数。
+// newUserRegisterGrantLogLine 注册礼的日志文案（含有效期后缀），两条注册路径共用。
+//
+// 有效期只在**积分系统启用时**才该出现：关闭时这笔进的是现金余额
+// （applyNewUserRegisterGrant），根本不会过期，写上「有效期至 MM-DD」会让人
+// 误以为它也会作废。
+func newUserRegisterGrantLogLine() string {
+	line := newUserRegisterGrantLog()
+	ps := operation_setting.GetPointsSetting()
+	if !ps.Enabled {
+		return line
+	}
+	return line + PointsExpiryLogSuffix(ExpireAtDays(common.GetTimestamp(), ps.NewUserExpireDays))
+}
+
 func newUserRegisterGrantLog() string {
 	if operation_setting.GetPointsSetting().Enabled {
 		return fmt.Sprintf("新用户注册赠送 %d 积分", common.QuotaToPoints(common.QuotaForNewUser))

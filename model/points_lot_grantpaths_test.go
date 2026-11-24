@@ -298,3 +298,58 @@ func TestRegisterGrant_NormalPathKeepsPlainRef(t *testing.T) {
 	require.NotZero(t, ledgerOf(t, u.Id, FundRefUser, "register-quota:5302").QuotaDelta)
 	require.NotZero(t, ledgerOf(t, u.Id, FundRefUser, "register-points:5302").QuotaDelta)
 }
+
+// Q4（二期第 1 轮验收）：积分系统关闭时注册礼进的是现金余额、根本不会过期，
+// 日志里不能出现「有效期至 MM-DD」——否则用户会以为这笔钱也会作废。
+func TestRegisterLog_OmitsExpiryWhenPointsDisabled(t *testing.T) {
+	truncateTables(t)
+
+	origQuota := common.QuotaForNewUser
+	common.QuotaForNewUser = 68493
+	t.Cleanup(func() { common.QuotaForNewUser = origQuota })
+
+	ps := operation_setting.GetPointsSetting()
+	snap := *ps
+	ps.Enabled = false
+	// 即使配了有效期也不该出现——关闭时这笔进现金池
+	ps.NewUserExpireDays = 30
+	t.Cleanup(func() { *ps = snap })
+
+	u := &User{Id: 5401, Username: "log_off_1", Password: "pass12345"}
+	require.NoError(t, u.Insert(0))
+
+	var logs []Log
+	require.NoError(t, DB.Where("user_id = ? AND type = ?", u.Id, LogTypeSystem).
+		Order("id").Find(&logs).Error)
+	require.NotEmpty(t, logs, "注册礼应有日志")
+	joined := ""
+	for _, l := range logs {
+		joined += l.Content + "\n"
+	}
+	require.Contains(t, joined, "新用户注册赠送")
+	require.NotContains(t, joined, "有效期至", "积分关闭时不得写有效期")
+}
+
+// 积分系统启用且配了有效期时，注册礼日志必须带上到期日（决策 10：获得时提示有效期）。
+func TestRegisterLog_IncludesExpiryWhenPointsEnabled(t *testing.T) {
+	truncateTables(t)
+
+	origQuota := common.QuotaForNewUser
+	common.QuotaForNewUser = 68493
+	t.Cleanup(func() { common.QuotaForNewUser = origQuota })
+
+	ps := enablePointsForGrantPaths(t)
+	ps.NewUserExpireDays = 30
+
+	u := &User{Id: 5402, Username: "log_on_1", Password: "pass12345"}
+	require.NoError(t, u.Insert(0))
+
+	var logs []Log
+	require.NoError(t, DB.Where("user_id = ? AND type = ?", u.Id, LogTypeSystem).
+		Order("id").Find(&logs).Error)
+	joined := ""
+	for _, l := range logs {
+		joined += l.Content + "\n"
+	}
+	require.Contains(t, joined, "有效期至")
+}

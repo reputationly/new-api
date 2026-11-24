@@ -41,6 +41,15 @@ function parseRules(raw) {
  * 提交」的模式，这里是一张需要搜用户、发链接、单独存 JSON 的表，混在一起会让两套
  * 状态互相污染。它自己管自己的加载与保存。
  */
+// buildNewRuleDraft 新建规则的初值。**有效期必须出现在 draft 里**：输入框是用
+// initValue 显示预填值的，而 draft 只在 onChange 时才写入——运营不动输入框直接保存，
+// 存下的规则就没有 expire_days，后端按 0（永不过期）处理：界面显示 90 天、实际永不过期，
+// 而且没有任何提示。所以打开弹窗时就把预填值放进 draft，「看到的就是存下的」。
+export const buildNewRuleDraft = (defaultDays) => ({
+  points: 0,
+  expire_days: Math.max(0, Math.floor(Number(defaultDays) || 0)),
+});
+
 export default function ChannelPointsRewards({ options, refresh, disabled }) {
   const { t } = useTranslation();
   const [rules, setRules] = useState([]);
@@ -257,7 +266,7 @@ export default function ChannelPointsRewards({ options, refresh, disabled }) {
           theme='outline'
           disabled={disabled}
           onClick={() => {
-            setDraft(null);
+            setDraft(buildNewRuleDraft(defaultExpireDays));
             setUserOptions([]);
             setModalVisible(true);
           }}
