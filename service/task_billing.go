@@ -142,6 +142,9 @@ func LogTaskConsumption(c *gin.Context, info *relaycommon.RelayInfo) {
 	if info.TaskRelayInfo != nil && info.VideoBilling != nil {
 		vb := info.VideoBilling
 		fillVideoBillingOther(other, vb.Mode, vb.Resolution, vb.UnitPrice, vb.HasVideoInput, vb.Seconds)
+		if info.PriceData.PricingCurrency == "USD" && vb.DeliveredSeconds > 0 {
+			other["video_billed_seconds"] = vb.DeliveredSeconds
+		}
 	}
 	other["request_path"] = c.Request.URL.Path
 	other["price_unit"] = common.PriceUnitCNY
@@ -375,6 +378,9 @@ func taskBillingOther(task *model.Task) map[string]interface{} {
 		// 会渲染出一条算得 0 的算式，还把真正参与计算的 model_ratio 那行屏蔽掉。
 		if vb := bc.VideoBilling; vb != nil && vb.UnitPrice > 0 {
 			fillVideoBillingOther(other, vb.Mode, vb.Resolution, vb.UnitPrice, vb.HasVideoInput, vb.Seconds)
+			if bc.PricingCurrency == "USD" && vb.DeliveredSeconds > 0 {
+				other["video_billed_seconds"] = vb.DeliveredSeconds
+			}
 		}
 	}
 	props := task.Properties

@@ -32,7 +32,6 @@ import {
   renderNumber,
   getLogOther,
   normalizeLogPricing,
-  normalizeUSDLogTimeRatios,
   copy,
   renderClaudeLogContent,
   renderLogContent,
@@ -40,7 +39,7 @@ import {
   renderAudioModelPrice,
   renderClaudeModelPrice,
   renderModelPrice,
-  renderLogPricingFX,
+  renderLoggedToolFX,
   renderTieredModelPrice,
   renderTaskBillingProcess,
 } from '../../helpers';
@@ -440,9 +439,9 @@ export const useLogsData = () => {
       // 定价字段统一在这里换算成人民币：后面所有渲染函数只处理人民币一种口径。
       // 历史日志（含 V1 期）是美元口径，见 normalizeLogPricing 的注释。
       let other = normalizeLogPricing(getLogOther(logs[i].other));
-      const billingProcessOpts = normalizeUSDLogTimeRatios(other);
+      const pricingDetail = logs[i].pricing_detail;
       let expandDataLocal = [];
-      if (logs[i].type === 2 && other?.estimatedLegacyFX) {
+      if (logs[i].type === 2 && other?.estimatedLegacyFX && !pricingDetail) {
         expandDataLocal.push({
           key: t('历史汇率'),
           value: t('估算（1 USD = 7.3 CNY）'),
@@ -499,16 +498,20 @@ export const useLogsData = () => {
         });
       }
       if (logs[i].type === 2) {
-        if (other?.billing_mode !== 'tiered_expr' && !isVideoMatrix) {
+        if (
+          !pricingDetail &&
+          other?.billing_mode !== 'tiered_expr' &&
+          !isVideoMatrix
+        ) {
           expandDataLocal.push({
             key: t('日志详情'),
             value: other?.claude
               ? renderClaudeLogContent({
-                  ...billingProcessOpts,
+                  ...other,
                   displayMode: billingDisplayMode,
                 })
               : renderLogContent({
-                  ...billingProcessOpts,
+                  ...other,
                   displayMode: billingDisplayMode,
                 }),
           });
@@ -549,26 +552,50 @@ export const useLogsData = () => {
 
         let content = '';
         const pricingFX =
-          logs[i].type === 2 && !isViolationFeeLog
-            ? renderLogPricingFX(other || {})
+          !pricingDetail && !isViolationFeeLog
+            ? renderLoggedToolFX(other || {})
             : null;
+        if (pricingDetail) {
+          if (pricingDetail.catalog?.length) {
+            expandDataLocal.push({
+              key: t('目录价'),
+              value: pricingDetail.catalog.map((line, index) => (
+                <div key={index}>{line}</div>
+              )),
+            });
+          }
+          expandDataLocal.push({
+            key: t('计费过程'),
+            value: (
+              <div className='break-all'>
+                {pricingDetail.process.map((line, index) => (
+                  <div key={index}>{line}</div>
+                ))}
+              </div>
+            ),
+          });
+        }
         if (isVideoMatrix) {
-          buildVideoMatrixDetailRows({
-            ...other,
-            completion_tokens: logs[i].completion_tokens,
-            group_name: logs[i].group,
-          }).forEach((row) => expandDataLocal.push(row));
+          buildVideoMatrixDetailRows(
+            {
+              ...other,
+              completion_tokens: logs[i].completion_tokens,
+              group_name: logs[i].group,
+            },
+            !pricingDetail,
+          ).forEach((row) => expandDataLocal.push(row));
           if (pricingFX) {
             expandDataLocal.push({ key: t('币种换算'), value: pricingFX });
           }
         }
         if (
+          !pricingDetail &&
           !isViolationFeeLog &&
           other?.billing_mode !== 'tiered_expr' &&
           !isVideoMatrix
         ) {
           const logOpts = {
-            ...billingProcessOpts,
+            ...other,
             prompt_tokens: logs[i].prompt_tokens,
             completion_tokens: logs[i].completion_tokens,
             displayMode: billingDisplayMode,
@@ -601,7 +628,11 @@ export const useLogsData = () => {
             value: other.reasoning_effort,
           });
         }
-        if (other?.billing_mode === 'tiered_expr' && other?.expr_b64) {
+        if (
+          !pricingDetail &&
+          other?.billing_mode === 'tiered_expr' &&
+          other?.expr_b64
+        ) {
           expandDataLocal.push({
             key: t('计费过程'),
             value: (

@@ -51,7 +51,7 @@ func GetAllLogs(c *gin.Context) {
 		return
 	}
 	pageInfo.SetTotal(int(total))
-	pageInfo.SetItems(logs)
+	pageInfo.SetItems(usageLogViews(logs))
 	common.ApiSuccess(c, pageInfo)
 	return
 }
@@ -83,7 +83,7 @@ func GetUserLogs(c *gin.Context) {
 		return
 	}
 	pageInfo.SetTotal(int(total))
-	pageInfo.SetItems(logs)
+	pageInfo.SetItems(usageLogViews(logs))
 	common.ApiSuccess(c, pageInfo)
 	return
 }
@@ -148,7 +148,7 @@ func writeLogCSVHeader(c *gin.Context, w *csv.Writer, includeAdminCols bool) err
 	if includeAdminCols {
 		headers = append(headers, "IP")
 	}
-	headers = append(headers, "请求ID", "详情")
+	headers = append(headers, "请求ID", "详情", "目录价币种", "本次模型汇率", "本次工具汇率", "目录价", "计费过程")
 	return w.Write(headers)
 }
 
@@ -284,13 +284,7 @@ func logToRow(l *model.Log, includeAdminCols bool) []string {
 			l.Username,
 		)
 	}
-	// 费用按 CNY 输出：quota -> USD -> CNY，与前端 renderQuota 的 CNY 分支同款，
-	// 也与 controller/billing.go:50 的换算一致。
-	//
-	// 人民币金额 = quota / QuotaPerYuan（1 quota = ¥0.000000001，不读汇率）。
-	// 日志里只存整型 quota、不存历史汇率，而人民币口径本身与汇率无关，
-	// 所以这一列不会因为运营改汇率而漂。
-	// 展示币种不是 CNY 时不做换算（那会输出别的币种数值却挂 CNY 表头），直接留空。
+	// 人民币金额 = quota / QuotaPerYuan，不读汇率。
 	// 费用的正负与页面「消耗额度」同一口径：消费计正，退款计负，其它类型不计费。
 	// 原始 quota 列保留库里的值（退款行为正数，它是退回的金额），只有费用列带符号。
 	signedQuota := 0
@@ -300,10 +294,7 @@ func logToRow(l *model.Log, includeAdminCols bool) []string {
 	case model.LogTypeRefund:
 		signedQuota = -l.Quota
 	}
-	costCNY := ""
-	if common.QuotaPerYuan > 0 {
-		costCNY = strconv.FormatFloat(float64(signedQuota)/common.QuotaPerYuan, 'f', 9, 64)
-	}
+	costCNY := logQuotaYuan(signedQuota).StringFixed(9)
 	cacheRead, cacheWrite := otherCacheTokens(l.Other)
 	row = append(row,
 		l.TokenName,
@@ -325,7 +316,11 @@ func logToRow(l *model.Log, includeAdminCols bool) []string {
 		l.RequestId,
 		cleanLogContent(l.Content),
 	)
-	return row
+	if pricing := buildUsageLogPricing(l); pricing != nil {
+		return append(row, pricing.Currency, pricing.Rate, pricing.ToolRate,
+			strings.Join(pricing.Catalog, "\n"), strings.Join(pricing.Process, "\n"))
+	}
+	return append(row, "", "", "", "", "")
 }
 
 // logExportMaxRows 单次导出允许的最大行数（管理员与普通用户共用）。超过时在开始写 CSV 之前返回

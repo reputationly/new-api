@@ -380,13 +380,15 @@ func PostTextConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, us
 	summary := calculateTextQuotaSummary(ctx, relayInfo, usage)
 
 	var tieredResult *billingexpr.TieredResult
+	var tieredParams billingexpr.TokenParams
 	tieredBillingApplied := false
 	if originUsage != nil {
 		var tieredUsedVars map[string]bool
 		if snap := relayInfo.TieredBillingSnapshot; snap != nil {
 			tieredUsedVars = billingexpr.UsedVars(snap.ExprString)
 		}
-		tieredOk, tieredQuota, tieredRes := TryTieredSettle(relayInfo, BuildTieredTokenParams(usage, summary.IsClaudeUsageSemantic, tieredUsedVars))
+		tieredParams = BuildTieredTokenParams(usage, summary.IsClaudeUsageSemantic, tieredUsedVars)
+		tieredOk, tieredQuota, tieredRes := TryTieredSettle(relayInfo, tieredParams)
 		if tieredOk {
 			tieredBillingApplied = true
 			tieredResult = tieredRes
@@ -506,7 +508,15 @@ func PostTextConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, us
 		other["input_tokens_total"] = usage.InputTokens
 	}
 	if tieredBillingApplied {
-		InjectTieredBillingInfo(other, relayInfo, tieredResult)
+		InjectTieredBillingInfo(other, relayInfo, tieredResult, tieredParams)
+	}
+	if relayInfo.PriceData.PricingCurrency == "USD" {
+		if len(relayInfo.PriceData.OtherRatios) > 0 {
+			other["billing_other_ratios"] = relayInfo.PriceData.OtherRatios
+		}
+		if isLegacyClaudeDerivedOpenAIUsage(relayInfo, usage) {
+			other["legacy_claude_input"] = true
+		}
 	}
 
 	model.RecordConsumeLog(ctx, relayInfo.UserId, model.RecordConsumeLogParams{

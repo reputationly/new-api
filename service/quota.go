@@ -204,7 +204,8 @@ func PostWssConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, mod
 	usage *dto.RealtimeUsage, extraContent string) {
 
 	var tieredResult *billingexpr.TieredResult
-	tieredOk, tieredQuota, tieredRes := TryTieredSettle(relayInfo, realtimeTieredParams(usage))
+	tieredParams := realtimeTieredParams(usage)
+	tieredOk, tieredQuota, tieredRes := TryTieredSettle(relayInfo, tieredParams)
 	if tieredOk {
 		tieredResult = tieredRes
 	}
@@ -287,7 +288,7 @@ func PostWssConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, mod
 	other := GenerateWssOtherInfo(ctx, relayInfo, usage, modelRatio, groupRatio,
 		completionRatio.InexactFloat64(), audioRatio.InexactFloat64(), audioCompletionRatio.InexactFloat64(), modelPrice, relayInfo.PriceData.GroupRatioInfo.GroupSpecialRatio)
 	if tieredResult != nil {
-		InjectTieredBillingInfo(other, relayInfo, tieredResult)
+		InjectTieredBillingInfo(other, relayInfo, tieredResult, tieredParams)
 	}
 	model.RecordConsumeLog(ctx, relayInfo.UserId, model.RecordConsumeLogParams{
 		ChannelId:        relayInfo.ChannelId,
@@ -341,7 +342,8 @@ func PostAudioConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, u
 		tieredUsedVars = billingexpr.UsedVars(snap.ExprString)
 	}
 	var tieredResult *billingexpr.TieredResult
-	tieredOk, tieredQuota, tieredRes := TryTieredSettle(relayInfo, BuildTieredTokenParams(usage, false, tieredUsedVars))
+	tieredParams := BuildTieredTokenParams(usage, false, tieredUsedVars)
+	tieredOk, tieredQuota, tieredRes := TryTieredSettle(relayInfo, tieredParams)
 	if tieredOk {
 		tieredResult = tieredRes
 	}
@@ -424,7 +426,7 @@ func PostAudioConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, u
 	other := GenerateAudioOtherInfo(ctx, relayInfo, usage, modelRatio, groupRatio,
 		completionRatio.InexactFloat64(), audioRatio.InexactFloat64(), audioCompletionRatio.InexactFloat64(), modelPrice, relayInfo.PriceData.GroupRatioInfo.GroupSpecialRatio)
 	if tieredResult != nil {
-		InjectTieredBillingInfo(other, relayInfo, tieredResult)
+		InjectTieredBillingInfo(other, relayInfo, tieredResult, tieredParams)
 	}
 	model.RecordConsumeLog(ctx, relayInfo.UserId, model.RecordConsumeLogParams{
 		ChannelId:        relayInfo.ChannelId,

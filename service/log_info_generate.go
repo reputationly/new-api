@@ -317,6 +317,9 @@ func appendFinalRequestFormat(relayInfo *relaycommon.RelayInfo, other map[string
 }
 
 func GenerateWssOtherInfo(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, usage *dto.RealtimeUsage, modelRatio, groupRatio, completionRatio, audioRatio, audioCompletionRatio, modelPrice, userGroupRatio float64) map[string]interface{} {
+	if p := relayInfo.PriceData; p.PricingCurrency == "USD" {
+		completionRatio, audioRatio, audioCompletionRatio = p.CompletionRatio, p.AudioRatio, p.AudioCompletionRatio
+	}
 	info := GenerateTextOtherInfo(ctx, relayInfo, modelRatio, groupRatio, completionRatio, 0, 0.0, modelPrice, userGroupRatio)
 	info["ws"] = true
 	info["audio_input"] = usage.InputTokenDetails.AudioTokens
@@ -329,6 +332,9 @@ func GenerateWssOtherInfo(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, us
 }
 
 func GenerateAudioOtherInfo(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, usage *dto.Usage, modelRatio, groupRatio, completionRatio, audioRatio, audioCompletionRatio, modelPrice, userGroupRatio float64) map[string]interface{} {
+	if p := relayInfo.PriceData; p.PricingCurrency == "USD" {
+		completionRatio, audioRatio, audioCompletionRatio = p.CompletionRatio, p.AudioRatio, p.AudioCompletionRatio
+	}
 	info := GenerateTextOtherInfo(ctx, relayInfo, modelRatio, groupRatio, completionRatio, 0, 0.0, modelPrice, userGroupRatio)
 	info["audio"] = true
 	info["audio_input"] = usage.PromptTokensDetails.AudioTokens
@@ -380,7 +386,7 @@ func GenerateMjOtherInfo(relayInfo *relaycommon.RelayInfo, priceData types.Price
 // InjectTieredBillingInfo overlays tiered billing fields onto an existing
 // module-specific other map. Call this after GenerateTextOtherInfo /
 // GenerateClaudeOtherInfo / etc. when the request used tiered_expr billing.
-func InjectTieredBillingInfo(other map[string]interface{}, relayInfo *relaycommon.RelayInfo, result *billingexpr.TieredResult) {
+func InjectTieredBillingInfo(other map[string]interface{}, relayInfo *relaycommon.RelayInfo, result *billingexpr.TieredResult, params ...billingexpr.TokenParams) {
 	if relayInfo == nil || other == nil {
 		return
 	}
@@ -397,5 +403,16 @@ func InjectTieredBillingInfo(other map[string]interface{}, relayInfo *relaycommo
 	}
 	if result != nil {
 		other["matched_tier"] = result.MatchedTier
+		if relayInfo.PriceData.PricingCurrency == "USD" {
+			other["expr_quota_before_group"] = result.ActualQuotaBeforeGroup
+			other["expr_group_ratio"] = snap.GroupRatio
+			if len(params) > 0 {
+				p := params[0]
+				other["expr_tokens"] = map[string]float64{
+					"p": p.P, "c": p.C, "cr": p.CR, "cc": p.CC, "cc1h": p.CC1h,
+					"img": p.Img, "img_o": p.ImgO, "ai": p.AI, "ao": p.AO,
+				}
+			}
+		}
 	}
 }

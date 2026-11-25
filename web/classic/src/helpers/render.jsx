@@ -2647,13 +2647,9 @@ export const normalizeLabel = (label) => {
     .toLowerCase();
 };
 
-export function renderLogPricingFX(opts) {
+export function renderLoggedToolFX(opts) {
   const lines = [];
-  const isUSDModel = opts.pricing_currency === 'USD';
-  const isExpression = opts.billing_mode === 'tiered_expr';
   const validRate = (rate) => Number.isFinite(rate) && rate > 0;
-  const exchange = (rate) =>
-    buildBillingText('本次换算：1 USD = {{rate}} CNY', { rate });
   const unitPrice = (label, cny, rate, unit) =>
     buildBillingText('{{label}}：${{usd}} → ¥{{cny}} / {{unit}}', {
       label: i18next.t(label),
@@ -2661,66 +2657,7 @@ export function renderLogPricingFX(opts) {
       cny: formatBillingDisplayPrice(cny, 1, 9),
       unit: i18next.t(unit),
     });
-  if (isUSDModel && isExpression && opts.expr_b64) {
-    let expression;
-    try {
-      expression = decodeFromBase64(opts.expr_b64);
-    } catch {
-      // Older log rows may have an invalid snapshot.
-    }
-    if (expression) {
-      lines.push(
-        buildBillingText('计费表达式：{{expression}}', { expression }),
-      );
-      if (exprUsesFX(expression) && validRate(opts.expr_fx)) {
-        lines.push(
-          buildBillingText('本次 fx = {{rate}}（1 USD = {{rate}} CNY）', {
-            rate: opts.expr_fx,
-          }),
-        );
-      }
-    }
-  }
-
   if (opts.price_unit === 'cny') {
-    const modelRate = opts.model_source_rate;
-    if (isUSDModel && !isExpression && validRate(modelRate)) {
-      const time = timeFactorDisplay(opts);
-      const inputFactor = time?.fIn ?? 1;
-      const prices = [];
-      if (opts.video_price_mode) {
-        const unit =
-          opts.video_price_mode === 'token'
-            ? '1M tokens'
-            : opts.video_price_mode === 'per_second'
-              ? '秒'
-              : '次';
-        prices.push(['视频单价', opts.video_unit_price, unit]);
-      } else if (opts.model_price >= 0) {
-        prices.push([
-          time ? '时段按次价' : '按次单价',
-          opts.model_price * (time?.scale('per_call') ?? 1),
-          '次',
-        ]);
-      } else if (opts.model_ratio >= 0) {
-        const input = opts.model_ratio * inputFactor;
-        prices.push(
-          [time ? '时段输入单价' : '输入单价', input, '1M tokens'],
-          [
-            time ? '时段输出单价' : '输出单价',
-            input * opts.completion_ratio,
-            '1M tokens',
-          ],
-        );
-      }
-      const displayed = prices
-        .filter(([, amount]) => Number.isFinite(amount) && amount >= 0)
-        .map(([label, amount, unit]) =>
-          unitPrice(label, amount, modelRate, unit),
-        );
-      if (displayed.length > 0) lines.push(exchange(modelRate), ...displayed);
-    }
-
     const toolRate = opts.tool_source_rate;
     if (validRate(toolRate) && Array.isArray(opts.usd_tool_price_fields)) {
       const tools = [
@@ -2755,39 +2692,6 @@ export function renderLogPricingFX(opts) {
       ))}
     </div>
   ) : null;
-}
-
-export function normalizeUSDLogTimeRatios(opts) {
-  if (
-    opts?.price_unit !== 'cny' ||
-    opts.pricing_currency !== 'USD' ||
-    !Number.isFinite(opts.model_source_rate) ||
-    opts.model_source_rate <= 0
-  )
-    return opts;
-  const time = timeFactorDisplay(opts);
-  if (!time) return opts;
-  const base = { ...opts };
-  // Log ratios already include f_component / f_input; the process renderers
-  // apply time factors to base ratios when showing each unit price.
-  for (const [field, component] of [
-    ['completion_ratio', 'output'],
-    ['cache_ratio', 'cache'],
-    ['cache_creation_ratio', 'create_cache'],
-    ['cache_creation_ratio_5m', 'create_cache'],
-    ['cache_creation_ratio_1h', 'create_cache'],
-    ['image_ratio', 'image'],
-    ['audio_ratio', 'audio_input'],
-  ]) {
-    if (Number.isFinite(base[field])) {
-      base[field] *= time.fIn / time.scale(component);
-    }
-  }
-  if (Number.isFinite(base.audio_completion_ratio)) {
-    base.audio_completion_ratio *=
-      time.scale('audio_input') / time.scale('audio_output');
-  }
-  return base;
 }
 
 export function renderTieredModelPrice(opts) {
@@ -3050,7 +2954,7 @@ export function renderVideoMatrixPriceSimple(opts) {
 // `输入价格 = model_ratio`（¥/百万 tokens）展示，而 model_ratio 在这条路上只是预扣锚点、
 // 没参与最终扣费（实测显示 ¥51，实收单价 ¥46）；输出价格更是因为没有 completion_ratio
 // 直接算出 ¥NaN。给一个反算不出金额的数字，比不给更糟。
-export function buildVideoMatrixDetailRows(opts) {
+export function buildVideoMatrixDetailRows(opts, showPrices = true) {
   const {
     video_price_mode: mode,
     video_unit_price: unitPrice = 0,
@@ -3100,7 +3004,7 @@ export function buildVideoMatrixDetailRows(opts) {
       value: Number(tokens).toLocaleString(),
     });
   }
-  rows.push({ key: i18next.t('单价'), value: unitDisplay });
+  if (showPrices) rows.push({ key: i18next.t('单价'), value: unitDisplay });
   if (resolution) {
     rows.push({ key: i18next.t('分辨率'), value: resolution });
   }
@@ -3122,6 +3026,7 @@ export function buildVideoMatrixDetailRows(opts) {
       ? `${groupName} (${formatRatioValue(ratio, 4)}x)`
       : `${formatRatioValue(ratio, 4)}x`,
   });
+  if (!showPrices) return rows;
 
   if (isPerSecond && seconds > 0) {
     const amount = Number(unitPrice) * seconds * ratio;
