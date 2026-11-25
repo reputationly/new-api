@@ -482,7 +482,6 @@ function getUsageLogDetailSummary(record, text, billingDisplayMode, t) {
 }
 
 function buildUsageLogDetailSummary(record, text, billingDisplayMode, t) {
-  // 同 useUsageLogsData：定价字段先统一成人民币，渲染函数只处理人民币。
   const other = normalizeLogPricing(getLogOther(record.other));
 
   if (record.type === 6) {
@@ -516,6 +515,24 @@ function buildUsageLogDetailSummary(record, text, billingDisplayMode, t) {
         },
         text ? { text: `${t('详情')}：${text}`, tone: 'secondary' } : null,
       ].filter(Boolean),
+    };
+  }
+
+  const pricing = record.pricing_detail;
+  if (pricing?.currency === 'USD' && billingDisplayMode === 'price') {
+    const groupText = getUsageLogGroupSummary(
+      other.expr_group_ratio ?? other.group_ratio,
+      undefined,
+      t,
+    );
+    return {
+      segments: [
+        { text: groupText, tone: 'primary' },
+        ...(pricing.catalog ?? []).map((text) => ({ text, tone: 'secondary' })),
+        ...(!pricing.rate
+          ? [{ text: t('缺少当次汇率快照，不回算'), tone: 'secondary' }]
+          : []),
+      ],
     };
   }
 
