@@ -8,10 +8,17 @@ import (
 	"golang.org/x/net/http/httpguts"
 )
 
+// DefaultOutboundUserAgent 未配置时的出站 UA：Node.js 内置 fetch 的默认值，不指向任何具体产品。
+const DefaultOutboundUserAgent = "node"
+
 // outboundUserAgent 发往上游供应商请求的默认 User-Agent（选项 OutboundUserAgent）。
 // 空串表示不发 User-Agent 头；渠道请求头覆盖或适配器显式设置的值优先。
 // relay 请求并发读、后台保存时写，所以用 atomic。
 var outboundUserAgent atomic.Value
+
+func init() {
+	outboundUserAgent.Store(DefaultOutboundUserAgent)
+}
 
 func GetOutboundUserAgent() string {
 	v, _ := outboundUserAgent.Load().(string)

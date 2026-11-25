@@ -71,7 +71,7 @@ const SystemSetting = () => {
     SMTPFrom: '',
     SMTPToken: '',
     WorkerUrl: '',
-    OutboundUserAgent: '',
+    OutboundUserAgent: 'node',
     WorkerValidKey: '',
     WorkerAllowHttpImageRequestEnabled: '',
     Footer: '',
@@ -756,7 +756,7 @@ const SystemSetting = () => {
                         label={t('出站 User-Agent')}
                         placeholder={t('留空则不发送 User-Agent')}
                         extraText={t(
-                          '转发给上游供应商的请求默认带的 User-Agent。留空时不发送该请求头；渠道「请求头覆盖」里配置的 User-Agent 优先',
+                          '转发给上游供应商的请求默认带的 User-Agent，默认为 node。留空时不发送该请求头；渠道「请求头覆盖」里配置的 User-Agent 优先',
                         )}
                       />
                     </Col>
