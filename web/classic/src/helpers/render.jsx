@@ -23,6 +23,7 @@ import { copy, showSuccess } from './utils';
 import {
   getDisplayCurrency,
   getQuotaPerYuan,
+  getQuotaPerUnit,
   getUsdExchangeRate,
   LEGACY_LOG_SOURCE_RATE,
   getRecordedLogRate,
@@ -1155,11 +1156,10 @@ export { stripExprVersion };
 
 // 入参是**美元金额**（渠道余额是上游美元余额，channels.balance 不在单位迁移清单里），
 // TOKENS 展示模式下换成 quota 数。人民币金额的同类换算见 renderDisplayAmountFromCny。
+// 汇率必须走 getQuotaPerUnit()：直接读 localStorage 在键缺失时得到 NaN，
+// 整列金额会变成 "NaN"；该函数与 quota.js 的「1 美元对应的 quota」口径同源。
 export function renderUnitWithQuota(quota) {
-  let quotaPerUnit = localStorage.getItem('quota_per_unit');
-  quotaPerUnit = parseFloat(quotaPerUnit);
-  quota = parseFloat(quota);
-  return quotaPerUnit * quota;
+  return getQuotaPerUnit() * parseFloat(quota);
 }
 
 export function getQuotaWithUnit(quota, digits = 6) {
