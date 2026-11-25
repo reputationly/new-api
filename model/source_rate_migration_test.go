@@ -3,10 +3,36 @@ package model
 import (
 	"testing"
 
+	"github.com/QuantumNous/new-api/common"
 	"github.com/glebarez/sqlite"
 	"github.com/stretchr/testify/require"
 	"gorm.io/gorm"
 )
+
+func TestBackupLegacySiteFXIsIdempotent(t *testing.T) {
+	db, err := gorm.Open(sqlite.Open("file:"+t.Name()+"?mode=memory&cache=shared"), &gorm.Config{})
+	require.NoError(t, err)
+	sqlDB, err := db.DB()
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = sqlDB.Close() })
+	require.NoError(t, db.AutoMigrate(&Option{}))
+	require.NoError(t, db.Create(&[]Option{
+		{Key: "USDExchangeRate", Value: "7.3"},
+		{Key: "QuotaPerUnit", Value: "7300000000"},
+		{Key: "Price", Value: "7.3"},
+	}).Error)
+	require.NoError(t, backupLegacySiteFX(db))
+	require.NoError(t, db.Save(&Option{Key: "Price", Value: "8"}).Error)
+	require.NoError(t, backupLegacySiteFX(db))
+	opts, err := getOptionValues(db, []string{legacySiteFXBackupKey, "USDExchangeRate", "QuotaPerUnit", "Price"})
+	require.NoError(t, err)
+	require.Equal(t, "7.3", opts["USDExchangeRate"])
+	require.Equal(t, "7300000000", opts["QuotaPerUnit"])
+	require.Equal(t, "8", opts["Price"])
+	var backup map[string]string
+	require.NoError(t, common.UnmarshalJsonStr(opts[legacySiteFXBackupKey], &backup))
+	require.Equal(t, map[string]string{"USDExchangeRate": "7.3", "QuotaPerUnit": "7300000000", "Price": "7.3"}, backup)
+}
 
 func TestMigrateGlobalModelSourceRate(t *testing.T) {
 	const exprKey = "billing_setting.billing_expr"

@@ -205,7 +205,10 @@ func InitDB() (err error) {
 		if err := migrateDB(); err != nil {
 			return err
 		}
-		return migrateGlobalModelSourceRate(DB)
+		if err := migrateGlobalModelSourceRate(DB); err != nil {
+			return err
+		}
+		return backupLegacySiteFX(DB)
 	} else {
 		common.FatalLog(err)
 	}

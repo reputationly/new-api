@@ -78,6 +78,7 @@ func HandleGroupRatio(ctx *gin.Context, relayInfo *relaycommon.RelayInfo) types.
 
 func ModelPriceHelper(c *gin.Context, info *relaycommon.RelayInfo, promptTokens int, meta *types.TokenCountMeta) (types.PriceData, error) {
 	defer model.LockPricingRead()()
+	upstreamCostFX, _ := billing_setting.GetModelSourceRate()
 	currency, factor, err := billing_setting.ResolveModelPriceConversion(info.OriginModelName)
 	if err != nil {
 		return types.PriceData{}, err
@@ -192,6 +193,7 @@ func ModelPriceHelper(c *gin.Context, info *relaycommon.RelayInfo, promptTokens 
 		CacheCreation1hRatio: cacheCreationRatio1h,
 		QuotaToPreConsume:    preConsumedQuota,
 	}
+	priceData.UpstreamCostFX = upstreamCostFX
 	if currency == billing_setting.CurrencyUSD {
 		priceData.ModelSourceRate = factor
 	}
@@ -390,7 +392,6 @@ func modelPriceHelperTiered(c *gin.Context, info *relaycommon.RelayInfo, promptT
 		EstimatedQuotaAfterGroup:  preConsumedQuota,
 		// 预扣额本身也要过一遍范围校验（见上），这里只是把同一份数据留在快照里。
 		EstimatedTier: trace.MatchedTier,
-		QuotaPerUnit:  common.QuotaPerUnit, // 仅 v1 快照语义；v2 结算不读它
 		ExprVersion:   billingexpr.ExprVersion(exprStr),
 		// 冻结本次使用的 fx：结算按快照重算，运营中途改汇率不影响在途请求。
 		ExprFX: exprFX,

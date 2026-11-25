@@ -34,6 +34,30 @@ beforeEach(() => {
 const OLD_RATIO_FOR_2_CNY = 2 / (2 * RATE);
 
 describe('normalizeLogPricing：新旧两代日志', () => {
+  it('使用日志汇率或固定历史估算，不受实时汇率变化影响', () => {
+    localStorage.setItem('status', JSON.stringify({ model_source_rate: 6.8 }));
+    localStorage.setItem('quota_display_type', 'USD');
+    const historical = normalizeLogPricing({ model_price: 5 });
+    expect(historical.model_price).toBeCloseTo(36.5);
+    expect(historical.estimatedLegacyFX).toBe(true);
+    expect(renderQuotaTrimmed(36.5 * QPY, 9, historical.logCurrencyRate)).toBe(
+      '$5',
+    );
+
+    const recorded = normalizeLogPricing({
+      model_price: 5,
+      model_source_rate: 6.9,
+      tool_source_rate: 7.1,
+      web_search_price: 2,
+    });
+    expect(recorded.model_price).toBeCloseTo(34.5);
+    expect(recorded.web_search_price).toBeCloseTo(14.2);
+    expect(recorded.estimatedLegacyFX).toBe(false);
+    expect(renderQuotaTrimmed(34.5 * QPY, 9, recorded.logCurrencyRate)).toBe(
+      '$5',
+    );
+  });
+
   it('带 price_unit: cny 的新日志原样返回（同一个对象，不做任何换算）', () => {
     const other = {
       price_unit: 'cny',

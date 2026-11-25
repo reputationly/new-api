@@ -17,6 +17,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 
+import { getLogCurrencyRate } from '../../../helpers/quota';
 import React from 'react';
 import {
   Avatar,
@@ -510,7 +511,7 @@ function buildUsageLogDetailSummary(record, text, billingDisplayMode, t) {
         groupText ? { text: groupText, tone: 'primary' } : null,
         { text: t('违规扣费'), tone: 'primary' },
         {
-          text: `${t('扣费')}：${renderQuotaTrimmed(feeQuota)}`,
+          text: `${t('扣费')}：${renderQuotaTrimmed(feeQuota, 9, other.logCurrencyRate)}`,
           tone: 'secondary',
         },
         text ? { text: `${t('详情')}：${text}`, tone: 'secondary' } : null,
@@ -565,7 +566,15 @@ export const getCostColumnWidth = (logs) => {
         return 80;
       }
 
-      let width = estimateTextWidth(renderQuotaTrimmed(record.quota));
+      let width = estimateTextWidth(
+        renderQuotaTrimmed(
+          record.quota,
+          9,
+          record.type === 2 || record.type === 6
+            ? getLogCurrencyRate(other)
+            : undefined,
+        ),
+      );
       if (record.points_consumed > 0) {
         width +=
           estimateTextWidth(`积分 ${quotaToPoints(record.points_consumed)}`) +
@@ -935,6 +944,10 @@ export const getLogsColumns = ({
           return <></>;
         }
         const other = getLogOther(record.other);
+        const sourceRate =
+          record.type === 2 || record.type === 6
+            ? getLogCurrencyRate(other)
+            : undefined;
         const entInfo = getEntitlementLogInfo(other);
         // 套餐内：只显示「套餐名 N点」标签、不显示金额——钱包一分没动，显示一个真实金额
         // 会让用户以为被扣了钱。悬浮展开完整拆解，「等值金额」让用户算得出套餐帮他
@@ -945,7 +958,7 @@ export const getLogsColumns = ({
             entInfo.limit > 0
               ? `${t('次数')}：${t('剩余')} ${entInfo.remain}/${entInfo.limit}`
               : null,
-            `${t('等值金额')}：${renderQuotaTrimmed(text)}`,
+            `${t('等值金额')}：${renderQuotaTrimmed(text, 9, sourceRate)}`,
           ].filter(Boolean);
           return (
             <Tooltip
@@ -974,7 +987,7 @@ export const getLogsColumns = ({
         const pointsTag =
           pointsConsumed > 0 ? (
             <Tooltip
-              content={`${t('积分抵扣')}：${renderQuotaTrimmed(pointsConsumed)}`}
+              content={`${t('积分抵扣')}：${renderQuotaTrimmed(pointsConsumed, 9, sourceRate)}`}
             >
               <Tag color='orange' shape='circle' size='small'>
                 {t('积分')} {quotaToPoints(pointsConsumed)}
@@ -985,7 +998,7 @@ export const getLogsColumns = ({
           // 不扣钱包的来源只显示标签（不显示 $0），悬浮时给出等价成本。
           return (
             <Tooltip
-              content={`${t('由订阅抵扣')}：${renderQuotaTrimmed(text)}`}
+              content={`${t('由订阅抵扣')}：${renderQuotaTrimmed(text, 9, sourceRate)}`}
             >
               <span style={{ whiteSpace: 'nowrap' }}>
                 {renderBillingTag(record, t)}
@@ -1000,7 +1013,7 @@ export const getLogsColumns = ({
             wrap={false}
             style={{ whiteSpace: 'nowrap' }}
           >
-            {renderQuotaTrimmed(text)}
+            {renderQuotaTrimmed(text, 9, sourceRate)}
             {pointsTag}
             {overageTag}
           </Space>

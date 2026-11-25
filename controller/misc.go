@@ -3,6 +3,7 @@ package controller
 import (
 	"encoding/json"
 	"fmt"
+	"github.com/QuantumNous/new-api/setting/billing_setting"
 	"net/http"
 	"strings"
 
@@ -40,6 +41,7 @@ func TestStatus(c *gin.Context) {
 }
 
 func GetStatus(c *gin.Context) {
+	sourceRate, _ := billing_setting.GetModelSourceRate()
 
 	cs := console_setting.GetConsoleSetting()
 	common.OptionMapRWMutex.RLock()
@@ -72,7 +74,7 @@ func GetStatus(c *gin.Context) {
 		"turnstile_site_key":          common.TurnstileSiteKey,
 		"docs_link":                   operation_setting.GetGeneralSetting().DocsLink,
 		"assistant_link":              operation_setting.GetGeneralSetting().AssistantLink,
-		"quota_per_unit":              common.QuotaPerUnit,
+		"quota_per_unit":              sourceRate * common.QuotaPerYuan,
 		"quota_per_yuan":              common.QuotaPerYuan,
 		"points_enabled":              operation_setting.GetPointsSetting().Enabled,
 		"quota_per_point":             common.GetQuotaPerPoint(),
@@ -104,7 +106,8 @@ func GetStatus(c *gin.Context) {
 		// 判据是「两个变量都非空」，不是「token 不等于 compose 的默认值」（见 controller/system.go）。
 		"watchtower_configured": watchtowerConfigured(),
 
-		"usd_exchange_rate": operation_setting.USDExchangeRate,
+		"usd_exchange_rate": sourceRate,
+		"model_source_rate": sourceRate,
 		"price":             operation_setting.Price,
 		"stripe_unit_price": setting.StripeUnitPrice,
 

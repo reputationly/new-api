@@ -1,6 +1,18 @@
 package common
 
-import "github.com/shopspring/decimal"
+import (
+	"math"
+
+	"github.com/shopspring/decimal"
+)
+
+func YuanToQuota(yuan decimal.Decimal) (int64, bool) {
+	amount := yuan.Mul(decimal.NewFromInt(QuotaPerYuan))
+	if amount.LessThan(decimal.NewFromInt(1)) || amount.GreaterThan(decimal.NewFromInt(math.MaxInt64)) {
+		return 0, false
+	}
+	return amount.IntPart(), true
+}
 
 // FenToYuan converts an amount in fen (1/100 CNY) to yuan as float64.
 //

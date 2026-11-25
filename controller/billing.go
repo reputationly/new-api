@@ -3,6 +3,7 @@ package controller
 import (
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/model"
+	"github.com/QuantumNous/new-api/setting/billing_setting"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
 	"github.com/QuantumNous/new-api/types"
 	"github.com/gin-gonic/gin"
@@ -39,22 +40,15 @@ func GetSubscription(c *gin.Context) {
 		return
 	}
 	quota := remainQuota + usedQuota
-	amount := float64(quota)
-	// OpenAI 兼容接口中的 *_USD 字段含义保持“额度单位”对应值：
-	// 我们将其解释为以“站点展示类型”为准：
-	// - USD: 直接除以 QuotaPerUnit
-	// - CNY: 除以 QuotaPerYuan（1 quota = ¥1e-9，不读汇率）
-	// - TOKENS: 直接使用 tokens 数量
-	switch operation_setting.GetQuotaDisplayType() {
-	case operation_setting.QuotaDisplayTypeCNY:
-		amount = amount / common.QuotaPerYuan
-	case operation_setting.QuotaDisplayTypeTokens:
-		// amount 保持 tokens 数值
-	default:
-		amount = amount / common.QuotaPerUnit
-	}
+	var amount float64
 	if token != nil && token.UnlimitedQuota {
 		amount = 100000000
+	} else {
+		var ok bool
+		amount, ok = displayBillingQuota(c, quota)
+		if !ok {
+			return
+		}
 	}
 	subscription := OpenAISubscriptionResponse{
 		Object:             "billing_subscription",
@@ -90,14 +84,9 @@ func GetUsage(c *gin.Context) {
 		})
 		return
 	}
-	amount := float64(quota)
-	switch operation_setting.GetQuotaDisplayType() {
-	case operation_setting.QuotaDisplayTypeCNY:
-		amount = amount / common.QuotaPerYuan
-	case operation_setting.QuotaDisplayTypeTokens:
-		// tokens 保持原值
-	default:
-		amount = amount / common.QuotaPerUnit
+	amount, ok := displayBillingQuota(c, quota)
+	if !ok {
+		return
 	}
 	usage := OpenAIUsageResponse{
 		Object:     "list",
@@ -105,4 +94,27 @@ func GetUsage(c *gin.Context) {
 	}
 	c.JSON(200, usage)
 	return
+}
+
+func displayBillingQuota(c *gin.Context, quota int) (float64, bool) {
+	displayType := operation_setting.GetQuotaDisplayType()
+	if displayType == operation_setting.QuotaDisplayTypeTokens {
+		return float64(quota), true
+	}
+	amount := float64(quota) / common.QuotaPerYuan
+	if displayType == operation_setting.QuotaDisplayTypeCNY {
+		return amount, true
+	}
+	rate, ok := billing_setting.GetModelSourceRate()
+	if !ok {
+		c.JSON(503, gin.H{"error": types.OpenAIError{Message: "全局模型源汇率未配置", Type: "new_api_error"}})
+		return 0, false
+	}
+	amount /= rate
+	if displayType == operation_setting.QuotaDisplayTypeCustom {
+		if customRate := operation_setting.GetGeneralSetting().CustomCurrencyExchangeRate; customRate > 0 {
+			amount *= customRate
+		}
+	}
+	return amount, true
 }

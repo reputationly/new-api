@@ -602,8 +602,8 @@ func GetInviteesByInviter(inviterId, page, pageSize int) (list []InviteeInfo, to
 
 func (user *User) TransferAffQuotaToQuota(quota int) error {
 	// 检查quota是否小于最小额度
-	if float64(quota) < common.QuotaPerUnit {
-		return fmt.Errorf("转移额度最小为%s！", logger.LogQuota(int(common.QuotaPerUnit)))
+	if quota < common.MinAffiliateTransferQuota {
+		return fmt.Errorf("转移额度最小为%s！", logger.LogQuota(common.MinAffiliateTransferQuota))
 	}
 
 	// 开始数据库事务

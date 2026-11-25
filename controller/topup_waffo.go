@@ -3,6 +3,7 @@ package controller
 import (
 	"errors"
 	"fmt"
+	"github.com/QuantumNous/new-api/setting/billing_setting"
 	"io"
 	"net/http"
 	"strconv"
@@ -78,7 +79,7 @@ func formatWaffoAmount(amount float64, currency string) string {
 func getWaffoPayMoney(amount float64, group string) float64 {
 	originalAmount := amount
 	if operation_setting.GetQuotaDisplayType() == operation_setting.QuotaDisplayTypeTokens {
-		amount = amount / common.QuotaPerUnit
+		amount = amount / billing_setting.QuotaPerUSD()
 	}
 	topupGroupRatio := common.GetTopupGroupRatio(group)
 	if topupGroupRatio == 0 {
@@ -101,6 +102,9 @@ type WaffoPayRequest struct {
 }
 
 func RequestWaffoAmount(c *gin.Context) {
+	if !requireTopupFX(c) {
+		return
+	}
 	var req WaffoPayRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusOK, gin.H{"message": "error", "data": "参数错误"})
@@ -131,6 +135,9 @@ func RequestWaffoAmount(c *gin.Context) {
 
 // RequestWaffoPay 创建 Waffo 支付订单
 func RequestWaffoPay(c *gin.Context) {
+	if !requireTopupFX(c) {
+		return
+	}
 	if !setting.WaffoEnabled {
 		c.JSON(http.StatusOK, gin.H{"message": "error", "data": "Waffo 支付未启用"})
 		return
@@ -200,7 +207,7 @@ func RequestWaffoPay(c *gin.Context) {
 	// Token 模式下归一化 Amount（存等价美元/CNY 数量，避免 RechargeWaffo 双重放大）
 	amount := req.Amount
 	if operation_setting.GetQuotaDisplayType() == operation_setting.QuotaDisplayTypeTokens {
-		amount = int64(float64(req.Amount) / common.QuotaPerUnit)
+		amount = int64(float64(req.Amount) / billing_setting.QuotaPerUSD())
 		if amount < 1 {
 			amount = 1
 		}

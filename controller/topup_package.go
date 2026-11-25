@@ -51,13 +51,8 @@ func resolveTopupPackage(userId, packageId int) (*model.TopupPackage, float64, i
 	}
 
 	payMoney := pkg.PriceAmount
-	// 1:1 到账：金额 × QuotaPerUnit ÷ Price，与 CNY 展示模式的换算一致。
-	// 先乘后除，只在最后截断一次，误差恒 < 1 内部单位。
-	internalQuota := decimal.NewFromFloat(payMoney).
-		Mul(decimal.NewFromFloat(common.QuotaPerUnit)).
-		Div(decimal.NewFromFloat(operation_setting.Price)).
-		IntPart()
-	if internalQuota <= 0 {
+	internalQuota, ok := common.YuanToQuota(decimal.NewFromFloat(payMoney))
+	if !ok {
 		return nil, 0, 0, errors.New("套餐到账额度计算异常")
 	}
 	return pkg, payMoney, internalQuota, nil

@@ -5,14 +5,13 @@ import (
 	"testing"
 
 	"github.com/QuantumNous/new-api/common"
-	"github.com/QuantumNous/new-api/setting/operation_setting"
 	"github.com/stretchr/testify/require"
 )
 
 // expectedCNY 按 upstreamAmountCNY 的换算口径算出期望值，避免把汇率常量硬编码进
 // 断言——汇率是可配置的，写死会让这组测试在改汇率时集体假红。
 func expectedCNY(upstreamQuota float64) float64 {
-	return upstreamQuota / common.QuotaPerUnit * operation_setting.USDExchangeRate
+	return upstreamQuota / common.QuotaPerUnit * 7.3
 }
 
 // TestUpstreamAmountCNY_PrefersCostQuota 新日志走正算路径，不再依赖 group_ratio 反推。

@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/setting/billing_setting"
 
 	"github.com/stretchr/testify/require"
 )
@@ -43,13 +44,13 @@ func userQuota(t *testing.T, userId int) int {
 // quota；epay / waffo / waffo_pancake 写的是美元数量；Stripe 用 Money（美元）。
 // 改造前只区分了 Stripe，其余一律 Amount × QuotaPerUnit，直连订单补单会多发 QPU 倍。
 func TestManualCompleteTopUpMatchesProviderSemantics(t *testing.T) {
-	originalQPU := common.QuotaPerUnit
-	t.Cleanup(func() { common.QuotaPerUnit = originalQPU })
-	common.QuotaPerUnit = 7300000000
+	originalFX := billing_setting.ModelSourceRate2JSONString()
+	t.Cleanup(func() { require.NoError(t, billing_setting.UpdateModelSourceRateByJSONString(originalFX)) })
+	require.NoError(t, billing_setting.UpdateModelSourceRateByJSONString("6.8"))
 
 	const (
-		quotaOrderAmount  = int64(common.QuotaPerYuan) // 直连渠道：Amount 已经是 quota（¥1）
-		dollarOrderAmount = int64(1)                   // 外币渠道：Amount 是美元数量（$1）
+		quotaOrderAmount  = int64(100 * common.QuotaPerYuan) // 直连渠道：Amount 已经是 quota（¥100）
+		dollarOrderAmount = int64(1)                         // 外币渠道：Amount 是美元数量（$1）
 	)
 
 	cases := []struct {
@@ -59,14 +60,14 @@ func TestManualCompleteTopUpMatchesProviderSemantics(t *testing.T) {
 		money    float64
 		want     int
 	}{
-		{"支付宝直连", PaymentProviderAlipayDirect, quotaOrderAmount, 1, int(common.QuotaPerYuan)},
-		{"微信直连", PaymentProviderWxpayDirect, quotaOrderAmount, 1, int(common.QuotaPerYuan)},
-		{"Creem", PaymentProviderCreem, quotaOrderAmount, 1, int(common.QuotaPerYuan)},
-		{"对公转账补单", PaymentProviderBankTransfer, quotaOrderAmount, 1, int(common.QuotaPerYuan)},
-		{"易支付", PaymentProviderEpay, dollarOrderAmount, 7.3, int(common.QuotaPerUnit)},
-		{"Waffo", PaymentProviderWaffo, dollarOrderAmount, 7.3, int(common.QuotaPerUnit)},
-		{"Waffo Pancake", PaymentProviderWaffoPancake, dollarOrderAmount, 7.3, int(common.QuotaPerUnit)},
-		{"Stripe", PaymentProviderStripe, quotaOrderAmount, 1, int(common.QuotaPerUnit)},
+		{"支付宝直连", PaymentProviderAlipayDirect, quotaOrderAmount, 100, 100_000_000_000},
+		{"微信直连", PaymentProviderWxpayDirect, quotaOrderAmount, 100, 100_000_000_000},
+		{"Creem", PaymentProviderCreem, quotaOrderAmount, 100, 100_000_000_000},
+		{"对公转账补单", PaymentProviderBankTransfer, quotaOrderAmount, 100, 100_000_000_000},
+		{"易支付", PaymentProviderEpay, dollarOrderAmount, 7.3, 6_800_000_000},
+		{"Waffo", PaymentProviderWaffo, dollarOrderAmount, 7.3, 6_800_000_000},
+		{"Waffo Pancake", PaymentProviderWaffoPancake, dollarOrderAmount, 7.3, 6_800_000_000},
+		{"Stripe", PaymentProviderStripe, quotaOrderAmount, 1, 6_800_000_000},
 	}
 
 	for i, c := range cases {

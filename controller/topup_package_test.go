@@ -54,8 +54,8 @@ func TestResolveTopupPackage_OneToOneCredit(t *testing.T) {
 	_, payMoney, quota, err := resolveTopupPackage(1, pkg.Id)
 	require.NoError(t, err)
 
-	expected := int64(payMoney * common.QuotaPerUnit / operation_setting.Price)
-	require.Equal(t, expected, quota)
+	require.Equal(t, float64(100), payMoney)
+	require.Equal(t, int64(100_000_000_000), quota)
 	require.Greater(t, quota, int64(0))
 }
 

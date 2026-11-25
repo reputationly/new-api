@@ -14,7 +14,7 @@ import (
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/model"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
-	"github.com/QuantumNous/new-api/setting/operation_setting"
+	"github.com/QuantumNous/new-api/setting/billing_setting"
 	"github.com/QuantumNous/new-api/setting/ratio_setting"
 	"github.com/QuantumNous/new-api/types"
 	"github.com/gin-gonic/gin"
@@ -246,7 +246,7 @@ func TestVideoMatrix_LogsDimensions(t *testing.T) {
 	require.InDelta(t, 6.3, other["video_unit_price"].(float64), 1e-9)
 }
 
-// 计费彻底脱离汇率：矩阵单价是人民币，改 USDExchangeRate 不影响账单。
+// 矩阵单价是人民币，改 ModelSourceRate 不影响账单。
 // （对应 F1/G4：汇率只影响美元支付与美元展示。）
 func TestVideoMatrix_IgnoresExchangeRate(t *testing.T) {
 	truncate(t)
@@ -254,11 +254,11 @@ func TestVideoMatrix_IgnoresExchangeRate(t *testing.T) {
 
 	supplierCNY := float64(seedanceTokens) / 1e6 * seedanceCNYRate
 
-	original := operation_setting.USDExchangeRate
-	t.Cleanup(func() { operation_setting.USDExchangeRate = original })
+	original := billing_setting.ModelSourceRate2JSONString()
+	t.Cleanup(func() { require.NoError(t, billing_setting.UpdateModelSourceRateByJSONString(original)) })
 
 	for _, rate := range []float64{6.5, 7.3, 8.0} {
-		operation_setting.USDExchangeRate = rate
+		require.NoError(t, billing_setting.UpdateModelSourceRateByJSONString(strconv.FormatFloat(rate, 'f', -1, 64)))
 		task := makeVideoTask(t, 9007, 1, 0, &model.TaskVideoBilling{
 			Mode: "token", UnitPrice: seedanceCNYRate, Resolution: "720p",
 		})

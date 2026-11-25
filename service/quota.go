@@ -14,7 +14,6 @@ import (
 	"github.com/QuantumNous/new-api/pkg/billingexpr"
 	perfmetrics "github.com/QuantumNous/new-api/pkg/perf_metrics"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
-	"github.com/QuantumNous/new-api/setting/operation_setting"
 	"github.com/QuantumNous/new-api/setting/ratio_setting"
 	"github.com/QuantumNous/new-api/setting/system_setting"
 	"github.com/QuantumNous/new-api/types"
@@ -319,10 +318,11 @@ func CalcOpenRouterCacheCreateTokens(usage dto.Usage, priceData types.PriceData)
 	promptCacheReadPrice := quotaPrice * priceData.CacheRatio
 	completionPrice := quotaPrice * priceData.CompletionRatio
 
-	cost, _ := usage.Cost.(float64)
-	// 上游 OpenRouter 报的成本是**美元**，先按汇率换成人民币再参与反推——
-	// 这是计费路径里唯一合法读取汇率的地方（上游报的就是美元）。
-	cost = cost * operation_setting.USDExchangeRate
+	cost, ok := usage.Cost.(float64)
+	if !ok || cost <= 0 || priceData.UpstreamCostFX <= 0 || quotaPrice <= 0 {
+		return -1
+	}
+	cost *= priceData.UpstreamCostFX
 	totalPromptTokens := float64(usage.PromptTokens)
 	completionTokens := float64(usage.CompletionTokens)
 	promptCacheReadTokens := float64(usage.PromptTokensDetails.CachedTokens)

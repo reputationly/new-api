@@ -7,16 +7,19 @@
 //
 // 单独成模块是为了让 helpers/utils.jsx 与 model-pricing 组件共用同一份判定：
 // helpers/utils.jsx 不能 import helpers/render.jsx（render 依赖 utils，会成环）。
-import { getUsdExchangeRate } from './quota';
+import { LEGACY_LOG_SOURCE_RATE } from './quota';
 import { stripExprVersion } from './exprVersion';
 
 /**
  * 该表达式原文对应的「系数 → 人民币」倍数。
  *
  * @param {string} exprStr - 表达式原文（可能带 `v2:` / `v1:` 前缀）
- * @returns {number} v2 及以上是 1；v1 / 无前缀是当前美元汇率（1 美元 = X 元）
+ * @returns {number} v2 及以上是 1；v1 / 无前缀是历史美元汇率（1 美元 = X 元）
  */
-export function getExprPriceScale(exprStr) {
+export function getExprPriceScale(
+  exprStr,
+  legacyRate = LEGACY_LOG_SOURCE_RATE,
+) {
   const { version } = stripExprVersion(String(exprStr || ''));
-  return version >= 2 ? 1 : getUsdExchangeRate();
+  return version >= 2 ? 1 : legacyRate;
 }

@@ -439,6 +439,12 @@ export const useLogsData = () => {
       // 历史日志（含 V1 期）是美元口径，见 normalizeLogPricing 的注释。
       let other = normalizeLogPricing(getLogOther(logs[i].other));
       let expandDataLocal = [];
+      if (logs[i].type === 2 && other?.estimatedLegacyFX) {
+        expandDataLocal.push({
+          key: t('历史汇率'),
+          value: t('估算（1 USD = 7.3 CNY）'),
+        });
+      }
       // 视频计费矩阵自带一套展开行（对齐供应商账单），并屏蔽通用的
       // 「日志详情 / 计费过程」——那两行按 model_ratio 展示，而 model_ratio
       // 在这条路上只是预扣锚点、没参与最终扣费。与 tiered_expr 同一套处理方式。
@@ -886,10 +892,12 @@ export const useLogsData = () => {
                   </tbody>
                 </table>
                 {adminInfo.truncated && (
-                  <div>{t('共 {{total}} 项变更，仅显示 {{shown}} 项', {
-                    total: adminInfo.total_changes,
-                    shown: adminInfo.changes.length,
-                  })}</div>
+                  <div>
+                    {t('共 {{total}} 项变更，仅显示 {{shown}} 项', {
+                      total: adminInfo.total_changes,
+                      shown: adminInfo.changes.length,
+                    })}
+                  </div>
                 )}
               </div>
             ),

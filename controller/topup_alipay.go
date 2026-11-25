@@ -15,7 +15,6 @@ import (
 	"github.com/QuantumNous/new-api/setting"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
 	"github.com/gin-gonic/gin"
-	"github.com/shopspring/decimal"
 	"github.com/smartwalle/alipay/v3"
 )
 
@@ -152,25 +151,20 @@ func RequestAlipay(c *gin.Context) {
 		internalQuota = pkgQuota
 	} else {
 		// Calculate CNY to charge (direct pay: skip Price for CNY display mode)
+		if operation_setting.GetQuotaDisplayType() == operation_setting.QuotaDisplayTypeTokens && !requireTopupFX(c) {
+			return
+		}
 		payMoney = getDirectPayMoney(req.Amount, group)
 		if payMoney < 0.01 {
 			c.JSON(http.StatusOK, gin.H{"message": "error", "data": "充值金额过低"})
 			return
 		}
 
-		// Calculate internal quota to credit based on display type
-		dAmount := decimal.NewFromInt(req.Amount)
-		dQPU := decimal.NewFromFloat(common.QuotaPerUnit)
-		switch operation_setting.GetQuotaDisplayType() {
-		case operation_setting.QuotaDisplayTypeCNY:
-			// ¥amount → internal units: amount × QuotaPerUnit ÷ Price
-			dPrice := decimal.NewFromFloat(operation_setting.Price)
-			internalQuota = dAmount.Mul(dQPU).Div(dPrice).IntPart()
-		case operation_setting.QuotaDisplayTypeTokens:
-			// tokens = internal quota directly
-			internalQuota = req.Amount
-		default: // USD, CUSTOM
-			internalQuota = dAmount.Mul(dQPU).IntPart()
+		var ok bool
+		internalQuota, ok = directTopupQuota(req.Amount)
+		if !ok {
+			c.JSON(http.StatusOK, gin.H{"message": "error", "data": "充值额度无效"})
+			return
 		}
 	}
 

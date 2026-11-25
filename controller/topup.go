@@ -13,6 +13,7 @@ import (
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/setting"
+	"github.com/QuantumNous/new-api/setting/billing_setting"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
 	"github.com/QuantumNous/new-api/setting/system_setting"
 
@@ -200,7 +201,7 @@ func getPayMoney(amount int64, group string) float64 {
 	// 充值金额以“展示类型”为准：
 	// - USD/CNY: 前端传 amount 为金额单位；TOKENS: 前端传 tokens，需要换成 USD 金额
 	if operation_setting.GetQuotaDisplayType() == operation_setting.QuotaDisplayTypeTokens {
-		dQuotaPerUnit := decimal.NewFromFloat(common.QuotaPerUnit)
+		dQuotaPerUnit := decimal.NewFromFloat(billing_setting.QuotaPerUSD())
 		dAmount = dAmount.Div(dQuotaPerUnit)
 	}
 
@@ -235,7 +236,11 @@ func getDirectPayMoney(amount int64, group string) float64 {
 	case operation_setting.QuotaDisplayTypeCNY:
 		// amount is already in CNY — no Price conversion needed
 	case operation_setting.QuotaDisplayTypeTokens:
-		dQuotaPerUnit := decimal.NewFromFloat(common.QuotaPerUnit)
+		quotaPerUSD := billing_setting.QuotaPerUSD()
+		if quotaPerUSD <= 0 {
+			return 0
+		}
+		dQuotaPerUnit := decimal.NewFromFloat(quotaPerUSD)
 		dPrice := decimal.NewFromFloat(operation_setting.Price)
 		dAmount = dAmount.Div(dQuotaPerUnit).Mul(dPrice)
 	default: // USD, CUSTOM
@@ -256,35 +261,43 @@ func getDirectPayMoney(amount int64, group string) float64 {
 	return dAmount.Mul(decimal.NewFromFloat(topupGroupRatio)).Mul(decimal.NewFromFloat(discount)).InexactFloat64()
 }
 
-// getQuotaFromMoney converts a CNY payment into internal quota units.
-// Multiply-before-divide ordering ensures only one truncation at the very end,
-// so the rounding error is always < 1 internal unit (≈ ¥0.00002) regardless
-// of payment size.
-func getQuotaFromMoney(money float64, group string) int64 {
-	topupGroupRatio := common.GetTopupGroupRatio(group)
-	if topupGroupRatio == 0 {
-		topupGroupRatio = 1
+func directTopupQuota(amount int64) (int64, bool) {
+	switch operation_setting.GetQuotaDisplayType() {
+	case operation_setting.QuotaDisplayTypeCNY:
+		return common.YuanToQuota(decimal.NewFromInt(amount))
+	case operation_setting.QuotaDisplayTypeTokens:
+		return amount, amount > 0
+	default:
+		rate, ok := billing_setting.GetModelSourceRate()
+		if !ok {
+			return 0, false
+		}
+		return common.YuanToQuota(decimal.NewFromInt(amount).Mul(decimal.NewFromFloat(rate)))
 	}
-	dMoney := decimal.NewFromFloat(money)
-	dPrice := decimal.NewFromFloat(operation_setting.Price)
-	dGroupRatio := decimal.NewFromFloat(topupGroupRatio)
-	dQuotaPerUnit := decimal.NewFromFloat(common.QuotaPerUnit)
-	// Multiply by QuotaPerUnit FIRST, then divide — only one truncation at the end.
-	internalQuota := dMoney.Mul(dQuotaPerUnit).Div(dPrice).Div(dGroupRatio)
-	return internalQuota.IntPart()
+}
+
+func requireTopupFX(c *gin.Context) bool {
+	if _, ok := billing_setting.GetModelSourceRate(); ok {
+		return true
+	}
+	c.JSON(http.StatusOK, gin.H{"message": "error", "data": "全局模型源汇率未配置"})
+	return false
 }
 
 func getMinTopup() int64 {
 	minTopup := operation_setting.MinTopUp
 	if operation_setting.GetQuotaDisplayType() == operation_setting.QuotaDisplayTypeTokens {
 		dMinTopup := decimal.NewFromInt(int64(minTopup))
-		dQuotaPerUnit := decimal.NewFromFloat(common.QuotaPerUnit)
+		dQuotaPerUnit := decimal.NewFromFloat(billing_setting.QuotaPerUSD())
 		minTopup = int(dMinTopup.Mul(dQuotaPerUnit).IntPart())
 	}
 	return int64(minTopup)
 }
 
 func RequestEpay(c *gin.Context) {
+	if !requireTopupFX(c) {
+		return
+	}
 	var req EpayRequest
 	err := c.ShouldBindJSON(&req)
 	if err != nil {
@@ -340,7 +353,7 @@ func RequestEpay(c *gin.Context) {
 	amount := req.Amount
 	if operation_setting.GetQuotaDisplayType() == operation_setting.QuotaDisplayTypeTokens {
 		dAmount := decimal.NewFromInt(int64(amount))
-		dQuotaPerUnit := decimal.NewFromFloat(common.QuotaPerUnit)
+		dQuotaPerUnit := decimal.NewFromFloat(billing_setting.QuotaPerUSD())
 		amount = dAmount.Div(dQuotaPerUnit).IntPart()
 	}
 	topUp := &model.TopUp{
@@ -520,6 +533,11 @@ func EpayNotify(c *gin.Context) {
 			return
 		}
 		if topUp.Status == common.TopUpStatusPending {
+			quotaPerUSD := billing_setting.QuotaPerUSD()
+			if quotaPerUSD <= 0 {
+				logger.LogError(c.Request.Context(), "易支付入账失败：全局模型源汇率未配置")
+				return
+			}
 			if topUp.PaymentMethod != verifyInfo.Type {
 				logger.LogInfo(c.Request.Context(), fmt.Sprintf("易支付 实际支付方式与订单不同 trade_no=%s order_payment_method=%s actual_type=%s client_ip=%s", verifyInfo.ServiceTradeNo, topUp.PaymentMethod, verifyInfo.Type, c.ClientIP()))
 				topUp.PaymentMethod = verifyInfo.Type
@@ -533,7 +551,7 @@ func EpayNotify(c *gin.Context) {
 			//user, _ := model.GetUserById(topUp.UserId, false)
 			//user.Quota += topUp.Amount * 500000
 			dAmount := decimal.NewFromInt(int64(topUp.Amount))
-			dQuotaPerUnit := decimal.NewFromFloat(common.QuotaPerUnit)
+			dQuotaPerUnit := decimal.NewFromFloat(quotaPerUSD)
 			quotaToAdd := int(dAmount.Mul(dQuotaPerUnit).IntPart())
 			err = model.IncreaseUserQuota(topUp.UserId, quotaToAdd, true)
 			if err != nil {
@@ -572,6 +590,9 @@ func RequestAmount(c *gin.Context) {
 
 	if req.Amount < getMinTopup() {
 		c.JSON(http.StatusOK, gin.H{"message": "error", "data": fmt.Sprintf("充值数量不能小于 %d", getMinTopup())})
+		return
+	}
+	if (req.Type != "direct" || operation_setting.GetQuotaDisplayType() != operation_setting.QuotaDisplayTypeCNY) && !requireTopupFX(c) {
 		return
 	}
 	id := c.GetInt("id")

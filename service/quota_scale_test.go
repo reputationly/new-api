@@ -10,6 +10,7 @@ import (
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/pkg/billingexpr"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
+	"github.com/QuantumNous/new-api/setting/billing_setting"
 	"github.com/QuantumNous/new-api/types"
 
 	"github.com/gin-gonic/gin"
@@ -283,6 +284,9 @@ func TestCalculateAudioQuotaUsePriceUsesQuotaPerYuan(t *testing.T) {
 func TestCalcOpenRouterCacheCreateTokensIgnoresQuotaPerUnit(t *testing.T) {
 	original := common.QuotaPerUnit
 	t.Cleanup(func() { common.QuotaPerUnit = original })
+	originalFX := billing_setting.ModelSourceRate2JSONString()
+	t.Cleanup(func() { require.NoError(t, billing_setting.UpdateModelSourceRateByJSONString(originalFX)) })
+	require.NoError(t, billing_setting.UpdateModelSourceRateByJSONString("7.3"))
 
 	usage := dto.Usage{
 		PromptTokens:     10_000,
@@ -299,16 +303,20 @@ func TestCalcOpenRouterCacheCreateTokensIgnoresQuotaPerUnit(t *testing.T) {
 		CompletionRatio:    4,
 		CacheRatio:         0.1,
 		CacheCreationRatio: 1.25,
+		UpstreamCostFX:     7.3,
 	}
 
 	common.QuotaPerUnit = 7_300_000
 	atOld := CalcOpenRouterCacheCreateTokens(usage, priceData)
 
 	common.QuotaPerUnit = 7_300_000_000
+	require.NoError(t, billing_setting.UpdateModelSourceRateByJSONString("6.8"))
 	atNew := CalcOpenRouterCacheCreateTokens(usage, priceData)
 
 	require.Equal(t, 3000, atOld, "换算出的缓存创建 token 数应与构造样例一致")
 	require.Equal(t, atOld, atNew, "缓存创建 token 数是上游口径，不得随内部记账单位变化")
+	priceData.UpstreamCostFX = 0
+	require.Equal(t, -1, CalcOpenRouterCacheCreateTokens(usage, priceData))
 }
 
 // UsePrice 结算分支的 per_call 分量系数：与预扣侧 ModelPriceHelper* 同一约定——

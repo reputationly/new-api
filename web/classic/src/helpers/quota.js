@@ -59,17 +59,27 @@ export const getQuotaPerYuan = () => {
   return FALLBACK_QUOTA_PER_YUAN;
 };
 
-/**
- * 站点汇率（1 美元 = X 元）。只有两处该读它：
- *   1. 展示币种换算（getDisplayCurrency，USD/CUSTOM 模式要把人民币折回美元）；
- *   2. 历史日志/历史表达式里的美元口径定价字段（normalizeLogPricing）。
- * 计费与定价配置一律不读它——它们已经是人民币。
- */
+export const LEGACY_LOG_SOURCE_RATE = 7.3;
+
+export const getRecordedLogRate = (other) =>
+  [other?.expr_fx, other?.model_source_rate, other?.tool_source_rate]
+    .map(Number)
+    .find((rate) => Number.isFinite(rate) && rate > 0);
+
+export const getLogCurrencyRate = (other) =>
+  getRecordedLogRate(other) ??
+  (other && other.price_unit !== 'cny' ? LEGACY_LOG_SOURCE_RATE : undefined);
+
+// 实时展示使用全局模型源汇率。
 export const getUsdExchangeRate = () => {
   try {
     const status = JSON.parse(localStorage.getItem('status') || '{}');
-    const rate = Number(status?.usd_exchange_rate);
-    return Number.isFinite(rate) && rate > 0 ? rate : 7.3;
+    const rate = Number(status?.model_source_rate ?? status?.usd_exchange_rate);
+    return Number.isFinite(rate) && rate > 0
+      ? rate
+      : status?.model_source_rate != null
+        ? null
+        : LEGACY_LOG_SOURCE_RATE;
   } catch (e) {
     return 7.3;
   }
@@ -86,16 +96,20 @@ export const getUsdExchangeRate = () => {
  *
  * @returns {{symbol: string, ratePerCny: number, type: string}}
  */
-export const getDisplayCurrency = () => {
+export const getDisplayCurrency = (sourceRate) => {
   const type = localStorage.getItem('quota_display_type') || 'USD';
   let status = {};
   try {
     status = JSON.parse(localStorage.getItem('status') || '{}') || {};
   } catch (e) {}
-  const usdRate = getUsdExchangeRate();
+  const usdRate = sourceRate ?? getUsdExchangeRate();
 
-  if (type === 'CNY') {
-    return { symbol: '¥', ratePerCny: 1, type };
+  if (type === 'CNY' || usdRate == null) {
+    return {
+      symbol: '¥',
+      ratePerCny: 1,
+      type: type === 'TOKENS' ? type : 'CNY',
+    };
   }
   if (type === 'CUSTOM') {
     const customRate = Number(status?.custom_currency_exchange_rate);

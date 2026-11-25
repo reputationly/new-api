@@ -1114,7 +1114,13 @@ export const calculateModelPrice = ({
 
 export const getModelPriceItems = (priceData, t, quotaDisplayType = 'USD') => {
   if (priceData.priceUnavailable) {
-    return [{ key: 'unavailable', label: t('价格不可用'), value: t('未配置全局模型源汇率') }];
+    return [
+      {
+        key: 'unavailable',
+        label: t('价格不可用'),
+        value: t('未配置全局模型源汇率'),
+      },
+    ];
   }
   // 套餐内价：与 appendPoints 同构，追加在每个货币价格行之后。
   //
@@ -1295,13 +1301,15 @@ export const formatDynamicPriceSummary = (
   t,
   groupRatio = 1,
   fx = 0,
+  displayCurrency,
 ) => {
   if (!billingExpr)
     return (
       <span style={{ color: 'var(--semi-color-text-1)' }}>{t('动态计费')}</span>
     );
 
-  const { symbol, ratePerCny } = getModelPricingCurrencyConfig();
+  const { symbol, ratePerCny } =
+    displayCurrency ?? getModelPricingCurrencyConfig();
 
   const gr = groupRatio || 1;
   // v1 表达式是历史美元口径（后端已拒绝结算），这里的系数先按汇率折成人民币，
@@ -1386,7 +1394,7 @@ export {
  * 卡片/表格视图的紧凑摘要：矩阵有多格，列表里放不下，显示价格区间。
  * 详细的逐格价目在详情弹窗里（VideoMatrixBreakdown）。
  */
-export const formatVideoMatrixSummary = (priceData, t) => {
+export const formatVideoMatrixSummary = (priceData, t, displayCurrency) => {
   const rows = flattenVideoMatrix(
     priceData?.videoPricing,
     priceData?.usedGroupRatio,
@@ -1397,7 +1405,8 @@ export const formatVideoMatrixSummary = (priceData, t) => {
     );
   }
 
-  const { symbol, ratePerCny } = getModelPricingCurrencyConfig();
+  const { symbol, ratePerCny } =
+    displayCurrency ?? getModelPricingCurrencyConfig();
   const prices = rows.map((r) => r.priceCNY * ratePerCny);
   const lo = Math.min(...prices);
   const hi = Math.max(...prices);

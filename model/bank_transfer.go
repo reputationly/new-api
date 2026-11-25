@@ -7,7 +7,6 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/logger"
-	"github.com/QuantumNous/new-api/setting/operation_setting"
 	"github.com/shopspring/decimal"
 	"gorm.io/gorm"
 )
@@ -155,24 +154,14 @@ func GetBankTransferReceipt(orderId int) (*BankTransferReceipt, error) {
 	return &receipt, nil
 }
 
-// BankTransferQuotaForFen 按固定汇率参数把到账金额（分）折算为 quota（D3）。
-// 全程 decimal 整数运算，仅最终结果取整。
+// BankTransferQuotaForFen 把人民币到账金额（分）折算为 quota（D3）。
 func BankTransferQuotaForFen(creditedFen int64) (int, error) {
-	rate := operation_setting.USDExchangeRate
-	if rate <= 0 {
-		return 0, errors.New("系统汇率参数无效")
-	}
-	// 先乘后除：decimal 除法默认只保留 16 位小数，先算「分 ÷ 100 ÷ 汇率」会把
-	// 1/7.3 截为 0.1369863013698630，再乘 QPU 得 999999.9999999999，IntPart 后
-	// 少 1 quota（¥1 到账只有 ¥0.999999）。把乘法提到除法之前，结果是精确整数。
-	// 截断语义本身不变（用户拿整数部分，误差 < 1 quota）。
-	quota := decimal.NewFromInt(creditedFen).
-		Mul(decimal.NewFromFloat(common.QuotaPerUnit)).
-		Div(decimal.NewFromInt(100)).
-		Div(decimal.NewFromFloat(rate)).
-		IntPart()
-	if quota <= 0 {
+	if creditedFen <= 0 {
 		return 0, ErrBankTransferInvalidAmount
+	}
+	quota, ok := common.YuanToQuota(decimal.New(creditedFen, -2))
+	if !ok {
+		return 0, ErrBankTransferAmountTooLarge
 	}
 	return int(quota), nil
 }

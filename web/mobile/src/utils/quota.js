@@ -23,8 +23,7 @@ export function renderPoints(quota) {
   const raw = parseFloat(
     localStorage.getItem('quota_per_point') || String(FALLBACK_QUOTA_PER_POINT),
   );
-  const per =
-    Number.isFinite(raw) && raw > 0 ? raw : FALLBACK_QUOTA_PER_POINT;
+  const per = Number.isFinite(raw) && raw > 0 ? raw : FALLBACK_QUOTA_PER_POINT;
   const q = Number(quota || 0);
   if (!Number.isFinite(q) || q <= 0) return '0';
   return String(Math.floor(q / per + 1e-9));
@@ -61,7 +60,7 @@ function renderNumber(num) {
 const FALLBACK_QUOTA_PER_YUAN = 1000000000;
 const FALLBACK_USD_EXCHANGE_RATE = 7.3;
 
-export function renderQuota(quota, digits = 2) {
+export function renderQuota(quota, digits = 2, sourceRate) {
   const quotaPerYuan =
     parseFloat(localStorage.getItem('quota_per_yuan')) ||
     FALLBACK_QUOTA_PER_YUAN;
@@ -71,10 +70,13 @@ export function renderQuota(quota, digits = 2) {
   }
   // 汇率只影响 USD / CUSTOM 展示：ratePerCny 是「1 元 = X 展示币种」。
   const status = readStatus();
-  const usdRate = Number(status?.usd_exchange_rate) || FALLBACK_USD_EXCHANGE_RATE;
+  const usdRate =
+    sourceRate ??
+    (Number(status?.model_source_rate ?? status?.usd_exchange_rate) ||
+      (status?.model_source_rate == null ? FALLBACK_USD_EXCHANGE_RATE : 0));
   let symbol = '$';
   let ratePerCny = 1 / usdRate;
-  if (quotaDisplayType === 'CNY') {
+  if (quotaDisplayType === 'CNY' || !usdRate) {
     symbol = '¥';
     ratePerCny = 1;
   } else if (quotaDisplayType === 'CUSTOM') {

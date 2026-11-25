@@ -43,6 +43,7 @@ const ModelPricingTable = ({
   groupModelComponentScale,
   currency,
   siteDisplayType,
+  displayCurrency,
   displayPrice,
   usableGroup,
   autoGroups = [],
@@ -70,6 +71,7 @@ const ModelPricingTable = ({
             selectedGroup: group,
             groupRatio,
             groupModelRatio,
+            displayCurrency,
             displayPrice,
             currency,
             quotaDisplayType: siteDisplayType,
@@ -234,7 +236,7 @@ const ModelPricingTable = ({
           return (
             <div className='space-y-1'>
               <div className='font-semibold text-orange-600'>
-                {formatVideoMatrixSummary(record.priceData, t)}
+                {formatVideoMatrixSummary(record.priceData, t, displayCurrency)}
               </div>
               <div className='text-xs text-gray-500'>
                 {t('见上方场景计费价目表')}

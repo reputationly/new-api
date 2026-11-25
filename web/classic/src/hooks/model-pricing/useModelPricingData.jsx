@@ -86,7 +86,12 @@ export const useModelPricingData = () => {
   // 那是上游给"充值价高于汇率、体现溢价"的站点用的。本站两个值相等（都是 7.3），
   // 换算恒等于 1，开关点了数字纹丝不动，等于给用户一个坏掉的按钮，已下线。
   const usdExchangeRate = useMemo(
-    () => Number(statusState?.status?.usd_exchange_rate) || 1,
+    () =>
+      Number(
+        statusState?.status?.model_source_rate ??
+          statusState?.status?.usd_exchange_rate ??
+          1,
+      ),
     [statusState],
   );
   const customExchangeRate = useMemo(
@@ -99,6 +104,7 @@ export const useModelPricingData = () => {
   );
   const ratePerCny = useMemo(() => {
     if (currency === 'CNY') return 1;
+    if (!(usdExchangeRate > 0)) return 1;
     if (currency === 'CUSTOM') return customExchangeRate / usdExchangeRate;
     return 1 / usdExchangeRate;
   }, [currency, customExchangeRate, usdExchangeRate]);
@@ -255,14 +261,17 @@ export const useModelPricingData = () => {
     [selectedRowKeys],
   );
 
-  const displayPrice = (cnyPrice, digits = 3) => {
-    const symbol =
-      currency === 'CNY'
+  const displayCurrency = {
+    ratePerCny,
+    symbol:
+      currency === 'CNY' || !(usdExchangeRate > 0)
         ? '¥'
         : currency === 'CUSTOM'
           ? customCurrencySymbol
-          : '$';
-    return `${symbol}${(Number(cnyPrice) * ratePerCny).toFixed(digits)}`;
+          : '$',
+  };
+  const displayPrice = (cnyPrice, digits = 3) => {
+    return `${displayCurrency.symbol}${(Number(cnyPrice) * ratePerCny).toFixed(digits)}`;
   };
 
   const setModelsFormat = (models, groupRatio, vendorMap) => {
@@ -499,6 +508,7 @@ export const useModelPricingData = () => {
     statusState,
 
     // 方法
+    displayCurrency,
     displayPrice,
     refresh,
     copyText,

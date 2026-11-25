@@ -191,8 +191,10 @@ const Models = () => {
       siteStatus?.quota_display_type ||
       localStorage.getItem('quota_display_type') ||
       'USD';
-    const usdRate = Number(siteStatus?.usd_exchange_rate) || 7.3;
-    if (displayType === 'CNY') {
+    const usdRate = Number(
+      siteStatus?.model_source_rate ?? siteStatus?.usd_exchange_rate,
+    );
+    if (displayType === 'CNY' || !(usdRate > 0)) {
       return { symbol: '¥', ratePerCny: 1 };
     }
     if (displayType === 'CUSTOM') {

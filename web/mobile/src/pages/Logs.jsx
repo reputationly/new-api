@@ -5,6 +5,7 @@ import dayjs from 'dayjs';
 
 import { API } from '@classic/helpers/api';
 import { DISCOUNT_HEX } from '@classic/helpers/discount';
+import { getLogCurrencyRate, getRecordedLogRate } from '@classic/helpers/quota';
 // 与 PC 端使用日志共用同一份解析与文案：两端各写一份，同一笔超额在手机和电脑上
 // 会给出不同的解释
 import {
@@ -122,7 +123,7 @@ const Logs = () => {
                       {entitlementTagText(ent)}
                     </span>
                   ) : log.type === 2 ? (
-                    `-${renderQuota(log.quota || 0)}`
+                    `-${renderQuota(log.quota || 0, 2, getLogCurrencyRate(other))}`
                   ) : (
                     ''
                   )
@@ -133,6 +134,10 @@ const Logs = () => {
                     style={{ fontSize: 12, color: 'var(--adm-color-weak)' }}
                   >
                     输入 {log.prompt_tokens} / 输出 {log.completion_tokens}
+                    {other &&
+                      other.price_unit !== 'cny' &&
+                      !getRecordedLogRate(other) &&
+                      ' · 历史汇率估算'}
                   </span>
                 )}
                 {log.content && (

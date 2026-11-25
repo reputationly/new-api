@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import { formatVideoMatrixSummary } from '../utils';
+import VideoMatrixBreakdown from '../../components/table/model-pricing/modal/components/VideoMatrixBreakdown';
 
 /**
  * 视频矩阵在卡片/表格视图里的摘要行。
@@ -34,6 +35,27 @@ describe('formatVideoMatrixSummary', () => {
   it('per_second 的单位是「秒」而不是「次」', () => {
     render(<div>{formatVideoMatrixSummary(perSecond(1), t)}</div>);
     expect(screen.getByText(/\/ 秒/)).toBeTruthy();
+  });
+
+  it('视频矩阵摘要与详情跟随广场选择的币种', () => {
+    const data = priceData('per_second', { per_second: { '1080p': 34 } }, 1);
+    const cny = { symbol: '¥', ratePerCny: 1 };
+    const usd = { symbol: '$', ratePerCny: 1 / 6.8 };
+    const view = (displayCurrency) => (
+      <>
+        <div>{formatVideoMatrixSummary(data, t, displayCurrency)}</div>
+        <VideoMatrixBreakdown
+          videoPricing={data.videoPricing}
+          t={t}
+          displayCurrency={displayCurrency}
+        />
+      </>
+    );
+    const { container, rerender } = render(view(cny));
+    expect(container.textContent.match(/¥34/g)).toHaveLength(2);
+    rerender(view(usd));
+    expect(container.textContent.match(/\$5/g)).toHaveLength(2);
+    expect(container.textContent).not.toContain('¥');
   });
 
   it('per_call 仍然是「次」，token 仍然是 1M tokens', () => {

@@ -5,7 +5,6 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/pkg/billingexpr"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/setting/billing_setting"
@@ -60,7 +59,19 @@ func TestModelPriceHelperTieredUsesPreloadedRequestInput(t *testing.T) {
 	require.NotNil(t, info.TieredBillingSnapshot)
 	require.Equal(t, "stream", info.TieredBillingSnapshot.EstimatedTier)
 	require.Equal(t, billing_setting.BillingModeTieredExpr, info.TieredBillingSnapshot.BillingMode)
-	require.Equal(t, common.QuotaPerUnit, info.TieredBillingSnapshot.QuotaPerUnit)
+	require.Zero(t, info.TieredBillingSnapshot.QuotaPerUnit)
+}
+
+func TestModelPriceHelperFreezesUpstreamCostFX(t *testing.T) {
+	oldRate := billing_setting.ModelSourceRate2JSONString()
+	t.Cleanup(func() { require.NoError(t, billing_setting.UpdateModelSourceRateByJSONString(oldRate)) })
+	require.NoError(t, billing_setting.UpdateModelSourceRateByJSONString("6.8"))
+	ctx, _ := gin.CreateTestContext(nil)
+	info := &relaycommon.RelayInfo{OriginModelName: "gpt-4o-mini", UserGroup: "default", UsingGroup: "default"}
+	_, err := ModelPriceHelper(ctx, info, 1000, &types.TokenCountMeta{})
+	require.NoError(t, err)
+	require.NoError(t, billing_setting.UpdateModelSourceRateByJSONString("7.3"))
+	require.Equal(t, 6.8, info.PriceData.UpstreamCostFX)
 }
 
 // 视频计费矩阵是第四个定价源。不登记的话，只靠矩阵定价的模型会从 /v1/models

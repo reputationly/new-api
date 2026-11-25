@@ -27,7 +27,6 @@ import {
   Spin,
   Modal,
   Input,
-  Typography,
 } from '@douyinfe/semi-ui';
 import {
   compareObjects,
@@ -38,8 +37,6 @@ import {
 } from '../../../helpers';
 import { StatusContext } from '../../../context/Status';
 import { useTranslation } from 'react-i18next';
-
-const { Text } = Typography;
 
 export default function GeneralSettings(props) {
   const { t } = useTranslation();
@@ -53,9 +50,7 @@ export default function GeneralSettings(props) {
     'general_setting.quota_display_type': 'USD',
     'general_setting.custom_currency_symbol': '¤',
     'general_setting.custom_currency_exchange_rate': '',
-    QuotaPerUnit: '',
     RetryTimes: '',
-    USDExchangeRate: '',
     DisplayTokenStatEnabled: false,
     DefaultCollapseSidebar: false,
     DemoSiteEnabled: false,
@@ -118,29 +113,7 @@ export default function GeneralSettings(props) {
       });
   }
 
-  // 计算展示在输入框中的“1 USD = X <currency>”中的 X
-  const combinedRate = useMemo(() => {
-    const type = inputs['general_setting.quota_display_type'];
-    if (type === 'USD') return '1';
-    if (type === 'CNY') return String(inputs['USDExchangeRate'] || '');
-    if (type === 'TOKENS') return String(inputs['QuotaPerUnit'] || '');
-    if (type === 'CUSTOM')
-      return String(
-        inputs['general_setting.custom_currency_exchange_rate'] || '',
-      );
-    return '';
-  }, [inputs]);
-
-  const onCombinedRateChange = (val) => {
-    const type = inputs['general_setting.quota_display_type'];
-    if (type === 'CNY') {
-      handleFieldChange('USDExchangeRate')(val);
-    } else if (type === 'TOKENS') {
-      handleFieldChange('QuotaPerUnit')(val);
-    } else if (type === 'CUSTOM') {
-      handleFieldChange('general_setting.custom_currency_exchange_rate')(val);
-    }
-  };
+  const customRate = inputs['general_setting.custom_currency_exchange_rate'];
 
   const showTokensOption = useMemo(() => {
     const initialType = props.options?.['general_setting.quota_display_type'];
@@ -152,35 +125,6 @@ export default function GeneralSettings(props) {
   }, [props.options]);
 
   const quotaDisplayType = inputs['general_setting.quota_display_type'];
-
-  const rateLabel = useMemo(() => {
-    if (quotaDisplayType === 'CNY') return t('汇率');
-    if (quotaDisplayType === 'TOKENS') return t('每美元对应 Token 数');
-    if (quotaDisplayType === 'CUSTOM') return t('汇率');
-    return '';
-  }, [quotaDisplayType, t]);
-
-  const rateSuffix = useMemo(() => {
-    if (quotaDisplayType === 'CNY') return 'CNY (¥)';
-    if (quotaDisplayType === 'TOKENS') return 'Tokens';
-    if (quotaDisplayType === 'CUSTOM')
-      return inputs['general_setting.custom_currency_symbol'] || '¤';
-    return '';
-  }, [quotaDisplayType, inputs]);
-
-  const previewText = useMemo(() => {
-    if (quotaDisplayType === 'USD') return '$1.00';
-    const rate = parseFloat(combinedRate);
-    if (!rate || isNaN(rate)) return t('请输入汇率');
-    if (quotaDisplayType === 'CNY') return `$1.00 → ¥${rate.toFixed(2)}`;
-    if (quotaDisplayType === 'TOKENS')
-      return `$1.00 → ${Number(rate).toLocaleString()} Tokens`;
-    if (quotaDisplayType === 'CUSTOM') {
-      const symbol = inputs['general_setting.custom_currency_symbol'] || '¤';
-      return `$1.00 → ${symbol}${rate.toFixed(2)}`;
-    }
-    return '';
-  }, [quotaDisplayType, combinedRate, inputs, t]);
 
   useEffect(() => {
     const currentInputs = {};
@@ -292,14 +236,18 @@ export default function GeneralSettings(props) {
                   </Form.Select.Option>
                 </Form.Select>
               </Col>
-              {quotaDisplayType !== 'USD' && (
+              {quotaDisplayType === 'CUSTOM' && (
                 <Col xs={24} sm={12} md={8} lg={8} xl={8}>
-                  <Form.Slot label={rateLabel}>
+                  <Form.Slot label={t('汇率')}>
                     <Input
                       prefix='1 USD = '
-                      suffix={rateSuffix}
-                      value={combinedRate}
-                      onChange={onCombinedRateChange}
+                      suffix={
+                        inputs['general_setting.custom_currency_symbol'] || '¤'
+                      }
+                      value={customRate}
+                      onChange={handleFieldChange(
+                        'general_setting.custom_currency_exchange_rate',
+                      )}
                       disabled
                     />
                     <Text
@@ -336,11 +284,6 @@ export default function GeneralSettings(props) {
                   )}
                   showClear
                 />
-              </Col>
-              <Col span={24}>
-                <Text type='tertiary' size='small'>
-                  {t('预览效果')}：{previewText}
-                </Text>
               </Col>
             </Row>
             <Row gutter={16}>

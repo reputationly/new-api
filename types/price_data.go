@@ -110,6 +110,7 @@ func (g GroupRatioInfo) TimeRuleLog() string {
 type PriceData struct {
 	PricingCurrency      string
 	ModelSourceRate      float64
+	UpstreamCostFX       float64
 	ToolSourceRate       float64
 	ToolPrices           map[string]float64
 	FreeModel            bool

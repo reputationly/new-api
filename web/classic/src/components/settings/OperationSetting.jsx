@@ -44,8 +44,7 @@ const OperationSetting = () => {
     TopUpLink: '',
     'general_setting.docs_link': '',
     'general_setting.assistant_link': '',
-    QuotaPerUnit: 0,
-    USDExchangeRate: 0,
+
     RetryTimes: 0,
     'general_setting.quota_display_type': 'USD',
     DisplayTokenStatEnabled: false,

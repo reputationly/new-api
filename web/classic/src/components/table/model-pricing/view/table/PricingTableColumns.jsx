@@ -151,6 +151,7 @@ export const getPricingTableColumns = ({
   copyText,
   currency,
   siteDisplayType,
+  displayCurrency,
   displayPrice,
   pointsConfig,
   entitlementConfig,
@@ -166,6 +167,7 @@ export const getPricingTableColumns = ({
         selectedGroup,
         groupRatio,
         groupModelRatio,
+        displayCurrency,
         displayPrice,
         currency,
         quotaDisplayType: siteDisplayType,
@@ -201,6 +203,7 @@ export const getPricingTableColumns = ({
       selectedGroup: group,
       groupRatio: { [group]: normalRatio },
       groupModelRatio: {},
+      displayCurrency,
       displayPrice,
       currency,
       quotaDisplayType: siteDisplayType,
@@ -377,7 +380,7 @@ export const getPricingTableColumns = ({
       if (priceData.isVideoMatrix) {
         return (
           <div className='text-gray-700'>
-            {formatVideoMatrixSummary(priceData, t)}
+            {formatVideoMatrixSummary(priceData, t, displayCurrency)}
           </div>
         );
       }

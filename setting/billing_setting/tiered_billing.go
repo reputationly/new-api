@@ -85,6 +85,11 @@ func GetModelSourceRate() (float64, bool) {
 	return modelSourceRate, modelSourceRate > 0
 }
 
+func QuotaPerUSD() float64 {
+	rate, _ := GetModelSourceRate()
+	return rate * common.QuotaPerYuan
+}
+
 func ParseModelPriceCurrencies(raw string) (map[string]string, error) {
 	var currencies map[string]string
 	if strings.TrimSpace(raw) != "" {

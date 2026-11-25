@@ -32,7 +32,7 @@ import {
   quotaToPoints,
   pointsToQuota,
   isPointsEnabled,
-  getQuotaPerUnit,
+  getQuotaPerYuan,
 } from '../../../../helpers/quota';
 import { useIsMobile } from '../../../../hooks/common/useIsMobile';
 import FundOperationModal from './FundOperationModal';
@@ -699,7 +699,7 @@ const EditUserModal = (props) => {
             }}
             style={{ width: '100%' }}
             showClear
-            step={getQuotaPerUnit()}
+            step={Math.round(7.3 * getQuotaPerYuan())}
           />
         </div>
       </Modal>

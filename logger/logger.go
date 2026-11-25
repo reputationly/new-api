@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/setting/billing_setting"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
 
 	"github.com/bytedance/gopkg/util/gopool"
@@ -118,44 +119,39 @@ func logHelper(ctx context.Context, level string, msg string) {
 }
 
 // cnyFromQuota 把内部 quota 换算成人民币金额：1 quota = ¥0.000000001（不读汇率）。
+func formatMoneyQuota(quota int, digits int, custom bool) string {
+	cny := float64(quota) / common.QuotaPerYuan
+	rate, ok := billing_setting.GetModelSourceRate()
+	if !ok {
+		return fmt.Sprintf("¥%.*f", digits, cny)
+	}
+	if custom {
+		config := operation_setting.GetGeneralSetting()
+		customRate := config.CustomCurrencyExchangeRate
+		if customRate <= 0 {
+			customRate = 1
+		}
+		return fmt.Sprintf("%s%.*f", operation_setting.GetCurrencySymbol(), digits, cny/rate*customRate)
+	}
+	return fmt.Sprintf("＄%.*f", digits, cny/rate)
+}
+
 func cnyFromQuota(quota int) float64 {
 	return float64(quota) / common.QuotaPerYuan
 }
 
-// customFromQuota 把内部 quota 换算成自定义展示币种。
-//
-// CUSTOM 的换算系数是「1 美元 = X 自定义币」（历史约定），而基准币种现在是人民币，
-// 所以先按汇率折回美元、再乘自定义系数：
-// quota / QuotaPerYuan ÷ 汇率 × 自定义系数。
-func customFromQuota(quota int, customRate float64) float64 {
-	if customRate <= 0 {
-		customRate = 1
-	}
-	rate := operation_setting.USDExchangeRate
-	if rate <= 0 {
-		rate = 1
-	}
-	return cnyFromQuota(quota) / rate * customRate
-}
-
 func LogQuota(quota int) string {
 	// 新逻辑：根据额度展示类型输出
-	q := float64(quota)
 	switch operation_setting.GetQuotaDisplayType() {
 	case operation_setting.QuotaDisplayTypeCNY:
 		// 人民币金额 = quota / QuotaPerYuan；不读汇率（改汇率不影响人民币金额）
 		return fmt.Sprintf("¥%.9f 额度", cnyFromQuota(quota))
 	case operation_setting.QuotaDisplayTypeCustom:
-		rate := operation_setting.GetGeneralSetting().CustomCurrencyExchangeRate
-		symbol := operation_setting.GetGeneralSetting().CustomCurrencySymbol
-		if symbol == "" {
-			symbol = "¤"
-		}
-		return fmt.Sprintf("%s%.9f 额度", symbol, customFromQuota(quota, rate))
+		return formatMoneyQuota(quota, 9, true) + " 额度"
 	case operation_setting.QuotaDisplayTypeTokens:
 		return fmt.Sprintf("%d 点额度", quota)
 	default: // USD
-		return fmt.Sprintf("＄%.6f 额度", q/common.QuotaPerUnit)
+		return formatMoneyQuota(quota, 6, false) + " 额度"
 	}
 }
 
@@ -164,42 +160,30 @@ func LogQuota(quota int) string {
 // 噪音泄漏到用户可见的日志里（如「¥99.999999 额度」）。Tokens 模式
 // 不变。与前端 renderQuota(amount, digits=2) 行为对齐。
 func LogQuotaShort(quota int) string {
-	q := float64(quota)
 	switch operation_setting.GetQuotaDisplayType() {
 	case operation_setting.QuotaDisplayTypeCNY:
 		// 人民币金额 = quota / QuotaPerYuan；不读汇率（改汇率不影响人民币金额）
 		return fmt.Sprintf("¥%.2f 额度", cnyFromQuota(quota))
 	case operation_setting.QuotaDisplayTypeCustom:
-		rate := operation_setting.GetGeneralSetting().CustomCurrencyExchangeRate
-		symbol := operation_setting.GetGeneralSetting().CustomCurrencySymbol
-		if symbol == "" {
-			symbol = "¤"
-		}
-		return fmt.Sprintf("%s%.2f 额度", symbol, customFromQuota(quota, rate))
+		return formatMoneyQuota(quota, 2, true) + " 额度"
 	case operation_setting.QuotaDisplayTypeTokens:
 		return fmt.Sprintf("%d 点额度", quota)
 	default: // USD
-		return fmt.Sprintf("＄%.2f 额度", q/common.QuotaPerUnit)
+		return formatMoneyQuota(quota, 2, false) + " 额度"
 	}
 }
 
 func FormatQuota(quota int) string {
-	q := float64(quota)
 	switch operation_setting.GetQuotaDisplayType() {
 	case operation_setting.QuotaDisplayTypeCNY:
 		// 人民币金额 = quota / QuotaPerYuan；不读汇率（改汇率不影响人民币金额）
 		return fmt.Sprintf("¥%.9f", cnyFromQuota(quota))
 	case operation_setting.QuotaDisplayTypeCustom:
-		rate := operation_setting.GetGeneralSetting().CustomCurrencyExchangeRate
-		symbol := operation_setting.GetGeneralSetting().CustomCurrencySymbol
-		if symbol == "" {
-			symbol = "¤"
-		}
-		return fmt.Sprintf("%s%.9f", symbol, customFromQuota(quota, rate))
+		return formatMoneyQuota(quota, 9, true)
 	case operation_setting.QuotaDisplayTypeTokens:
 		return fmt.Sprintf("%d", quota)
 	default:
-		return fmt.Sprintf("＄%.6f", q/common.QuotaPerUnit)
+		return formatMoneyQuota(quota, 6, false)
 	}
 }
 
@@ -213,22 +197,16 @@ func FormatPoints(quota int) string {
 // 噪音（例如 ¥21.999995）泄漏到用户可见的日志里。Tokens 模式不变。
 // 与前端 renderQuota(amount, digits=2) 的行为对齐。
 func FormatQuotaShort(quota int) string {
-	q := float64(quota)
 	switch operation_setting.GetQuotaDisplayType() {
 	case operation_setting.QuotaDisplayTypeCNY:
 		// 人民币金额 = quota / QuotaPerYuan；不读汇率（改汇率不影响人民币金额）
 		return fmt.Sprintf("¥%.2f", cnyFromQuota(quota))
 	case operation_setting.QuotaDisplayTypeCustom:
-		rate := operation_setting.GetGeneralSetting().CustomCurrencyExchangeRate
-		symbol := operation_setting.GetGeneralSetting().CustomCurrencySymbol
-		if symbol == "" {
-			symbol = "¤"
-		}
-		return fmt.Sprintf("%s%.2f", symbol, customFromQuota(quota, rate))
+		return formatMoneyQuota(quota, 2, true)
 	case operation_setting.QuotaDisplayTypeTokens:
 		return fmt.Sprintf("%d", quota)
 	default:
-		return fmt.Sprintf("＄%.2f", q/common.QuotaPerUnit)
+		return formatMoneyQuota(quota, 2, false)
 	}
 }
 

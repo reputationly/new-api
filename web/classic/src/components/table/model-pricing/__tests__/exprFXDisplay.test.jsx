@@ -22,6 +22,37 @@ describe('表达式 fx 展示口径', () => {
     expect(exprUsesFX('v2:tier("base", p * 10.2)')).toBe(false);
   });
 
+  it('卡片与详情使用广场选择的币种，不读取站点默认币种', () => {
+    localStorage.setItem('quota_display_type', 'CNY');
+    const t = (key, args) => args?.price ?? key;
+    const expr = 'v2:tier("base", p * 5 * fx)';
+    const cny = { symbol: '¥', ratePerCny: 1 };
+    const usd = { symbol: '$', ratePerCny: 1 / 6.8 };
+    const card = render(formatDynamicPriceSummary(expr, t, 1, 6.8, cny));
+    expect(card.container.textContent).toContain('¥34');
+    card.rerender(formatDynamicPriceSummary(expr, t, 1, 6.8, usd));
+    expect(card.container.textContent).toContain('$5');
+
+    const details = render(
+      <DynamicPricingBreakdown
+        billingExpr={expr}
+        t={t}
+        fx={6.8}
+        displayCurrency={cny}
+      />,
+    );
+    expect(details.container.textContent).toContain('¥34');
+    details.rerender(
+      <DynamicPricingBreakdown
+        billingExpr={expr}
+        t={t}
+        fx={6.8}
+        displayCurrency={usd}
+      />,
+    );
+    expect(details.container.textContent).toContain('$5');
+  });
+
   it('乘汇率后等于人民币单价', () => {
     expect(exprFXMultiplier(usdExpr, 6.8)).toBe(6.8);
     expect(exprFXMultiplier('v2:tier("base", p * 10.2)', 6.8)).toBe(1);
@@ -158,8 +189,7 @@ describe('单引号档位标签', () => {
   const t = (s) => s;
 
   it('分档支持单引号及转义，标签内的标点不影响条件或请求规则', () => {
-    const expr =
-      String.raw`v2:(len < 1000 ? tier('it\'s "fx)"\\\u{6863}', p * 1.36) : tier("long", p * 2)) * (header("mode") == "fast" ? 2 : 1)`;
+    const expr = String.raw`v2:(len < 1000 ? tier('it\'s "fx)"\\\u{6863}', p * 1.36) : tier("long", p * 2)) * (header("mode") == "fast" ? 2 : 1)`;
     expect(exprUsesFX(expr)).toBe(false);
     expect(parseTiersFromExpr(expr)).toMatchObject([
       { label: 'it\'s "fx)"\\档', inputPrice: 1.36 },

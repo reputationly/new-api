@@ -64,6 +64,7 @@ const PricingPage = () => {
         usableGroup={pricingData.usableGroup}
         currency={pricingData.currency}
         siteDisplayType={pricingData.siteDisplayType}
+        displayCurrency={pricingData.displayCurrency}
         displayPrice={pricingData.displayPrice}
         vendorsMap={pricingData.vendorsMap}
         endpointMap={pricingData.endpointMap}

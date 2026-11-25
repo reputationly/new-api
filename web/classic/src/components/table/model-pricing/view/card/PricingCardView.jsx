@@ -81,6 +81,7 @@ const PricingCardView = ({
   copyText,
   currency,
   siteDisplayType,
+  displayCurrency,
   displayPrice,
   t,
   selectedRowKeys = [],
@@ -330,6 +331,7 @@ const PricingCardView = ({
             selectedGroup,
             groupRatio,
             groupModelRatio,
+            displayCurrency,
             displayPrice,
             currency,
             quotaDisplayType: siteDisplayType,
@@ -370,9 +372,14 @@ const PricingCardView = ({
                               t,
                               priceData.usedGroupRatio,
                               model.source_rate,
+                              displayCurrency,
                             )
                           : priceData.isVideoMatrix
-                            ? formatVideoMatrixSummary(priceData, t)
+                            ? formatVideoMatrixSummary(
+                                priceData,
+                                t,
+                                displayCurrency,
+                              )
                             : formatPriceInfo(priceData, t, siteDisplayType)}
                         {/*
                           积分抵扣：用 self-start 包一层，否则在 flex-col 里会被拉伸成

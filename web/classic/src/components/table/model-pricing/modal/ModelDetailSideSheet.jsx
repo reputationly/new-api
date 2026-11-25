@@ -41,6 +41,7 @@ const ModelDetailSideSheet = ({
   groupTimeRatio,
   currency,
   siteDisplayType,
+  displayCurrency,
   displayPrice,
   usableGroup,
   vendorsMap,
@@ -108,6 +109,7 @@ const ModelDetailSideSheet = ({
                       billingExpr={modelData.billing_expr}
                       t={t}
                       fx={modelData.source_rate}
+                      displayCurrency={displayCurrency}
                     />
                   </div>
                 </>
@@ -121,6 +123,7 @@ const ModelDetailSideSheet = ({
                       在这里挑其中一个折算反而误导。 */}
                   <VideoMatrixBreakdown
                     videoPricing={modelData.video_pricing}
+                    displayCurrency={displayCurrency}
                     t={t}
                     entitlementCoverage={getModelCoverage(
                       entitlementConfig?.coverage,
@@ -142,6 +145,7 @@ const ModelDetailSideSheet = ({
                 groupTimeRatio={groupTimeRatio}
                 currency={currency}
                 siteDisplayType={siteDisplayType}
+                displayCurrency={displayCurrency}
                 displayPrice={displayPrice}
                 usableGroup={usableGroup}
                 autoGroups={autoGroups}

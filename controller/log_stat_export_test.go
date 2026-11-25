@@ -8,7 +8,6 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/model"
-	"github.com/QuantumNous/new-api/setting/operation_setting"
 
 	"github.com/stretchr/testify/require"
 )
@@ -80,7 +79,7 @@ func TestExportCostSumMatchesStat(t *testing.T) {
 		exportRec := callExportHandler(t, ExportUserLogs, 9601, query)
 		costSum, rowCount := sumCostColumn(t, exportRec.Body.String())
 		require.Equal(t, c.wantRows, rowCount, "type=%s 导出行数", c.typ)
-		expectCost := float64(c.wantQuota) / common.QuotaPerUnit * operation_setting.USDExchangeRate
+		expectCost := float64(c.wantQuota) / common.QuotaPerYuan
 		require.InDelta(t, expectCost, costSum, 1e-5, "type=%s 表格费用合计应等于页面消耗额度", c.typ)
 	}
 }

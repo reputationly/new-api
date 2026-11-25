@@ -3,6 +3,7 @@ package model
 import (
 	"errors"
 	"fmt"
+	"github.com/QuantumNous/new-api/setting/billing_setting"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/logger"
@@ -148,7 +149,10 @@ func Recharge(referenceId string, customerId string, callerIp string) (err error
 			return err
 		}
 
-		quota = topUp.Money * common.QuotaPerUnit
+		quota = topUp.Money * billing_setting.QuotaPerUSD()
+		if quota <= 0 {
+			return errors.New("无效的充值额度或全局模型源汇率未配置")
+		}
 		err = tx.Model(&User{}).Where("id = ?", topUp.UserId).Updates(map[string]interface{}{"stripe_customer": customerId, "quota": gorm.Expr("quota + ?", quota)}).Error
 		if err != nil {
 			return err
@@ -371,11 +375,11 @@ func ManualCompleteTopUp(tradeNo string, callerIp string) error {
 			PaymentProviderCreem, PaymentProviderBankTransfer:
 			quotaToAdd = int(topUp.Amount)
 		case PaymentProviderStripe:
-			dQuotaPerUnit := decimal.NewFromFloat(common.QuotaPerUnit)
+			dQuotaPerUnit := decimal.NewFromFloat(billing_setting.QuotaPerUSD())
 			quotaToAdd = int(decimal.NewFromFloat(topUp.Money).Mul(dQuotaPerUnit).IntPart())
 		default:
 			dAmount := decimal.NewFromInt(topUp.Amount)
-			dQuotaPerUnit := decimal.NewFromFloat(common.QuotaPerUnit)
+			dQuotaPerUnit := decimal.NewFromFloat(billing_setting.QuotaPerUSD())
 			quotaToAdd = int(dAmount.Mul(dQuotaPerUnit).IntPart())
 		}
 		if quotaToAdd <= 0 {
@@ -525,7 +529,7 @@ func RechargeWaffo(tradeNo string, callerIp string) (err error) {
 		}
 
 		dAmount := decimal.NewFromInt(topUp.Amount)
-		dQuotaPerUnit := decimal.NewFromFloat(common.QuotaPerUnit)
+		dQuotaPerUnit := decimal.NewFromFloat(billing_setting.QuotaPerUSD())
 		quotaToAdd = int(dAmount.Mul(dQuotaPerUnit).IntPart())
 		if quotaToAdd <= 0 {
 			return errors.New("无效的充值额度")
@@ -696,7 +700,7 @@ func RechargeWaffoPancake(tradeNo string) (err error) {
 			return errors.New("充值订单状态错误")
 		}
 
-		quotaToAdd = int(decimal.NewFromInt(topUp.Amount).Mul(decimal.NewFromFloat(common.QuotaPerUnit)).IntPart())
+		quotaToAdd = int(decimal.NewFromInt(topUp.Amount).Mul(decimal.NewFromFloat(billing_setting.QuotaPerUSD())).IntPart())
 		if quotaToAdd <= 0 {
 			return errors.New("无效的充值额度")
 		}

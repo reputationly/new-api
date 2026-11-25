@@ -17,7 +17,6 @@ var EpayId = ""
 var EpayKey = ""
 var Price = 7.3
 var MinTopUp = 1
-var USDExchangeRate = 7.3
 
 // usdToCNY 只用于把**代码里静态的美元报价**（工具价、GPT-Image-1、Gemini 音频价）
 // 在编译期换成人民币：这些是写死的数据，不应该随运营改汇率而漂移。

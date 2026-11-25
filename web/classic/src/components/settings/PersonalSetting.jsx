@@ -34,7 +34,7 @@ import {
 import { UserContext } from '../../context/User';
 import { Modal } from '@douyinfe/semi-ui';
 import { useTranslation } from 'react-i18next';
-import { getQuotaPerUnit } from '../../helpers/quota';
+import { getQuotaPerYuan } from '../../helpers/quota';
 
 // 导入子组件
 import UserInfoHeader from './personal/components/UserInfoHeader';
@@ -208,7 +208,9 @@ const PersonalSetting = () => {
       const settings = JSON.parse(userState.user.setting);
       setNotificationSettings({
         warningType: settings.notify_type || 'email',
-        warningThreshold: settings.quota_warning_threshold || getQuotaPerUnit(),
+        warningThreshold:
+          settings.quota_warning_threshold ||
+          Math.round(7.3 * getQuotaPerYuan()),
         webhookUrl: settings.webhook_url || '',
         webhookSecret: settings.webhook_secret || '',
         notificationEmail: settings.notification_email || '',

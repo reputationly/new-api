@@ -48,7 +48,8 @@ import {
 } from 'lucide-react';
 import { IconGift } from '@douyinfe/semi-icons';
 import { useMinimumLoadingTime } from '../../hooks/common/useMinimumLoadingTime';
-import { getCurrencyConfig, getQuotaPerUnit } from '../../helpers/render';
+import { getCurrencyConfig } from '../../helpers/render';
+import { getUsdExchangeRate } from '../../helpers/quota';
 import { API } from '../../helpers';
 import {
   formatPointsExpiryDate,
@@ -666,14 +667,7 @@ const RechargeCard = ({
 
                       // 根据当前货币类型换算显示金额和数量
                       const { symbol, rate, type } = getCurrencyConfig();
-                      const statusStr = localStorage.getItem('status');
-                      let usdRate = 7; // 默认CNY汇率
-                      try {
-                        if (statusStr) {
-                          const s = JSON.parse(statusStr);
-                          usdRate = s?.usd_exchange_rate || 7;
-                        }
-                      } catch (e) {}
+                      const usdRate = getUsdExchangeRate();
 
                       let displayValue = preset.value; // 显示的数量
                       let displayActualPay = actualPay;
@@ -681,14 +675,14 @@ const RechargeCard = ({
 
                       if (isCNYDisplay) {
                         // CNY display mode: amounts are already in CNY, no conversion
-                      } else if (type === 'USD') {
+                      } else if (type === 'USD' && usdRate) {
                         // 数量保持USD，价格从CNY转USD
                         displayActualPay = actualPay / usdRate;
                         displaySave = save / usdRate;
                       } else if (type === 'CNY') {
                         // 数量转CNY，价格已是CNY
                         displayValue = preset.value * usdRate;
-                      } else if (type === 'CUSTOM') {
+                      } else if (type === 'CUSTOM' && usdRate) {
                         // 数量和价格都转自定义货币
                         displayValue = preset.value * rate;
                         displayActualPay = (actualPay / usdRate) * rate;

@@ -99,7 +99,6 @@ func InitOptionMap() {
 	common.OptionMap["EpayId"] = ""
 	common.OptionMap["EpayKey"] = ""
 	common.OptionMap["Price"] = strconv.FormatFloat(operation_setting.Price, 'f', -1, 64)
-	common.OptionMap["USDExchangeRate"] = strconv.FormatFloat(operation_setting.USDExchangeRate, 'f', -1, 64)
 	common.OptionMap["MinTopUp"] = strconv.Itoa(operation_setting.MinTopUp)
 	common.OptionMap["StripeMinTopUp"] = strconv.Itoa(setting.StripeMinTopUp)
 	common.OptionMap["StripeApiSecret"] = setting.StripeApiSecret
@@ -205,7 +204,6 @@ func InitOptionMap() {
 	common.OptionMap["TopUpLink"] = common.TopUpLink
 	//common.OptionMap["ChatLink"] = common.ChatLink
 	//common.OptionMap["ChatLink2"] = common.ChatLink2
-	common.OptionMap["QuotaPerUnit"] = strconv.FormatFloat(common.QuotaPerUnit, 'f', -1, 64)
 	common.OptionMap["RetryTimes"] = strconv.Itoa(common.RetryTimes)
 	common.OptionMap["KYCEnabled"] = strconv.FormatBool(common.KYCEnabled)
 	common.OptionMap["KYCMaxSubmitCount"] = strconv.Itoa(common.KYCMaxSubmitCount)
@@ -254,7 +252,7 @@ func loadOptionsFromDatabase() {
 	pricingApplyMu.Lock()
 	defer pricingApplyMu.Unlock()
 	for _, option := range options {
-		if option.Key == pricingWriteLockKey || option.Key == legacyModelSourceRateKey {
+		if option.Key == pricingWriteLockKey || option.Key == legacyModelSourceRateKey || isRetiredFXOption(option.Key) || option.Key == legacySiteFXBackupKey {
 			continue
 		}
 		err := updateOptionMap(option.Key, option.Value)
@@ -311,6 +309,9 @@ func OptionValuesFromDatabase() map[string]string {
 }
 
 func UpdateOption(key string, value string) error {
+	if isRetiredFXOption(key) || key == legacySiteFXBackupKey {
+		return fmt.Errorf("配置 %s 不可修改，请使用全局模型源汇率", key)
+	}
 	// Save to database first
 	option := Option{
 		Key: key,
@@ -489,6 +490,9 @@ func (e *OptionValidationError) Unwrap() error { return e.error }
 
 // ValidateOptionValueForBatch 只解析/校验批量保存允许的 key，不写库也不动内存。
 func ValidateOptionValueForBatch(key, value string) error {
+	if isRetiredFXOption(key) || key == legacySiteFXBackupKey {
+		return fmt.Errorf("配置 %s 不可修改，请使用全局模型源汇率", key)
+	}
 	trimmed := strings.TrimSpace(value)
 	switch key {
 	case "ModelPrice", "ModelRatio", "CompletionRatio", "CacheRatio",
@@ -692,8 +696,6 @@ func updateOptionMap(key string, value string) (err error) {
 		operation_setting.EpayKey = value
 	case "Price":
 		operation_setting.Price, _ = strconv.ParseFloat(value, 64)
-	case "USDExchangeRate":
-		operation_setting.USDExchangeRate, _ = strconv.ParseFloat(value, 64)
 	case "MinTopUp":
 		operation_setting.MinTopUp, _ = strconv.Atoi(value)
 	case "StripeApiSecret":
@@ -951,8 +953,6 @@ func updateOptionMap(key string, value string) (err error) {
 	//	common.ChatLink2 = value
 	case "ChannelDisableThreshold":
 		common.ChannelDisableThreshold, _ = strconv.ParseFloat(value, 64)
-	case "QuotaPerUnit":
-		common.QuotaPerUnit, _ = strconv.ParseFloat(value, 64)
 	case "SensitiveWords":
 		setting.SensitiveWordsFromString(value)
 	case "SensitiveRefusalText":

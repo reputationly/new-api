@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/QuantumNous/new-api/setting/billing_setting"
 	"io"
 	"net/http"
 	"strconv"
@@ -44,6 +45,9 @@ type StripeAdaptor struct {
 }
 
 func (*StripeAdaptor) RequestAmount(c *gin.Context, req *StripePayRequest) {
+	if !requireTopupFX(c) {
+		return
+	}
 	if req.Amount < getStripeMinTopup() {
 		c.JSON(http.StatusOK, gin.H{"message": "error", "data": fmt.Sprintf("充值数量不能小于 %d", getStripeMinTopup())})
 		return
@@ -63,6 +67,9 @@ func (*StripeAdaptor) RequestAmount(c *gin.Context, req *StripePayRequest) {
 }
 
 func (*StripeAdaptor) RequestPay(c *gin.Context, req *StripePayRequest) {
+	if !requireTopupFX(c) {
+		return
+	}
 	if req.PaymentMethod != model.PaymentMethodStripe {
 		c.JSON(http.StatusOK, gin.H{"message": "error", "data": "不支持的支付渠道"})
 		return
@@ -398,7 +405,7 @@ func GetChargedAmount(count float64, user model.User) float64 {
 func getStripePayMoney(amount float64, group string) float64 {
 	originalAmount := amount
 	if operation_setting.GetQuotaDisplayType() == operation_setting.QuotaDisplayTypeTokens {
-		amount = amount / common.QuotaPerUnit
+		amount = amount / billing_setting.QuotaPerUSD()
 	}
 	// Using float64 for monetary calculations is acceptable here due to the small amounts involved
 	topupGroupRatio := common.GetTopupGroupRatio(group)
@@ -419,7 +426,7 @@ func getStripePayMoney(amount float64, group string) float64 {
 func getStripeMinTopup() int64 {
 	minTopup := setting.StripeMinTopUp
 	if operation_setting.GetQuotaDisplayType() == operation_setting.QuotaDisplayTypeTokens {
-		minTopup = minTopup * int(common.QuotaPerUnit)
+		minTopup = minTopup * int(billing_setting.QuotaPerUSD())
 	}
 	return int64(minTopup)
 }

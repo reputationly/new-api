@@ -27,6 +27,7 @@ const { Text } = Typography;
  */
 export default function VideoMatrixBreakdown({
   videoPricing,
+  displayCurrency,
   t,
   // 套餐覆盖（null = 未覆盖）与算力点换算率。每格价格下追加该格的套餐内点数，
   // 口径与本表的货币价一致（基础单价），表下方「按分组倍率折算」的说明对两者同时适用。
@@ -40,7 +41,8 @@ export default function VideoMatrixBreakdown({
   // 三种模式不能用 isToken 一个布尔切：per_second 落进 else 分支会被当成 per_call，
   // 列头拼成「__per_second__ 秒」、单位写成「/次」，而它实际是每秒单价。
   const isPerSecond = videoPricing.mode === 'per_second';
-  const { symbol, ratePerCny } = getModelPricingCurrencyConfig();
+  const { symbol, ratePerCny } =
+    displayCurrency ?? getModelPricingCurrencyConfig();
 
   // 列：token 模式固定两列（与配置页、供应商价目表同序）；按次模式取出现过的秒数。
   // 秒数用 videoSecondsRank 解析——后端接受 '5s' / '5秒' 这类列名，
