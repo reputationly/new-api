@@ -49,9 +49,17 @@ func (t *outboundUATransport) RoundTrip(req *http.Request) (*http.Response, erro
 		if req.Header == nil {
 			req.Header = make(http.Header)
 		}
-		req.Header["User-Agent"] = []string{system_setting.GetOutboundUserAgent()}
+		ApplyOutboundUserAgent(req.Header)
 	}
 	return t.base.RoundTrip(req)
+}
+
+// ApplyOutboundUserAgent 头里没有 User-Agent 键时补系统设置值（空串即不发）。
+// 不走共享 client 的出站连接（如 realtime websocket 握手）也调这里。
+func ApplyOutboundUserAgent(h http.Header) {
+	if _, ok := h["User-Agent"]; !ok {
+		h["User-Agent"] = []string{system_setting.GetOutboundUserAgent()}
+	}
 }
 
 func (t *outboundUATransport) CloseIdleConnections() {
