@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"gorm.io/gorm"
@@ -243,16 +244,22 @@ func InitOptionMap() {
 
 	optionDefaults = maps.Clone(common.OptionMap)
 	common.OptionMapRWMutex.Unlock()
-	loadOptionsFromDatabase()
+	loadOptionsFromDatabase(true)
 }
 
-func loadOptionsFromDatabase() {
+var legacyQuotaDisplayWarningLogged atomic.Bool
+
+func loadOptionsFromDatabase(startup bool) {
 	pricingWriteMu.Lock()
 	defer pricingWriteMu.Unlock()
 	options, _ := AllOption()
 	pricingApplyMu.Lock()
 	defer pricingApplyMu.Unlock()
 	for _, option := range options {
+		if startup && option.Key == "general_setting.quota_display_type" && option.Value != operation_setting.QuotaDisplayTypeCNY &&
+			legacyQuotaDisplayWarningLogged.CompareAndSwap(false, true) {
+			common.SysLog(fmt.Sprintf("WARNING: ignoring legacy general_setting.quota_display_type=%q; quota display is fixed to CNY", option.Value))
+		}
 		if option.Key == pricingWriteLockKey || option.Key == legacyModelSourceRateKey || isRetiredFXOption(option.Key) || option.Key == legacySiteFXBackupKey || IsFixedQuotaDisplayOption(option.Key) {
 			continue
 		}
@@ -267,7 +274,7 @@ func SyncOptions(frequency int) {
 	for {
 		time.Sleep(time.Duration(frequency) * time.Second)
 		common.SysLog("syncing options from database")
-		loadOptionsFromDatabase()
+		loadOptionsFromDatabase(false)
 	}
 }
 

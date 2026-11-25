@@ -173,7 +173,8 @@ func (s *BillingSession) Reserve(targetQuota int) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	if s.settled || s.refunded || s.trusted || targetQuota <= s.preConsumedQuota {
+	isRealtime := s.relayInfo.RelayFormat == types.RelayFormatOpenAIRealtime
+	if s.settled || s.refunded || (s.trusted && !isRealtime) || targetQuota <= s.preConsumedQuota {
 		return nil
 	}
 
@@ -257,7 +258,7 @@ func (s *BillingSession) reserveFunding(delta int) error {
 	switch funding := s.funding.(type) {
 	case *WalletFunding:
 		var err error
-		if s.relayInfo.RelayFormat == types.RelayFormatOpenAIRealtime && s.relayInfo.TieredBillingSnapshot != nil {
+		if s.relayInfo.RelayFormat == types.RelayFormatOpenAIRealtime {
 			var ok bool
 			ok, err = model.TryDecreaseUserQuotaWithinCredit(funding.userId, delta)
 			if err == nil && !ok {

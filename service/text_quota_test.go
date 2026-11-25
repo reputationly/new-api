@@ -1,14 +1,18 @@
 package service
 
 import (
+	"bytes"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/pkg/billingexpr"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
+	"github.com/QuantumNous/new-api/setting/ratio_setting"
 	"github.com/QuantumNous/new-api/types"
 
 	"github.com/gin-gonic/gin"
@@ -23,6 +27,46 @@ func TestAppendTextToolLogPriceMarksOnlyUSDTools(t *testing.T) {
 	require.Equal(t, []string{"web_search_price"}, other["usd_tool_price_fields"])
 	require.Equal(t, 40.8, other["web_search_price"])
 	require.Equal(t, 6.8, other["file_search_price"])
+}
+
+func TestOpenRouterMissingCacheWriteFXWarnsOnceWithoutRejectingUsage(t *testing.T) {
+	var output bytes.Buffer
+	common.LogWriterMu.Lock()
+	previous := gin.DefaultErrorWriter
+	gin.DefaultErrorWriter = &output
+	common.LogWriterMu.Unlock()
+	t.Cleanup(func() {
+		common.LogWriterMu.Lock()
+		gin.DefaultErrorWriter = previous
+		common.LogWriterMu.Unlock()
+	})
+	last := lastOpenRouterMissingFXWarning.Swap(0)
+	t.Cleanup(func() { lastOpenRouterMissingFXWarning.Store(last) })
+	c := newTextQuotaCtx(t)
+	name := "claude-3-5-sonnet-20241022"
+	info := &relaycommon.RelayInfo{
+		OriginModelName: name, StartTime: time.Now(),
+		ChannelMeta: &relaycommon.ChannelMeta{ChannelType: constant.ChannelTypeOpenRouter},
+		PriceData: types.PriceData{
+			ModelRatio: ratio_setting.GetDefaultModelRatioMap()[name], CompletionRatio: 1,
+			CacheCreationRatio: 1.25, GroupRatioInfo: types.GroupRatioInfo{GroupRatio: 1},
+		},
+	}
+	usage := &dto.Usage{PromptTokens: 1000, TotalTokens: 1000, UsageSemantic: "anthropic", Cost: 0.001}
+	usage.PromptTokensDetails.CachedCreationTokens = 20
+	calculateTextQuotaSummary(c, info, usage)
+	require.Zero(t, lastOpenRouterMissingFXWarning.Load())
+	usage.PromptTokensDetails.CachedCreationTokens = 0
+	for range 2 {
+		summary := calculateTextQuotaSummary(c, info, usage)
+		require.Zero(t, summary.CacheCreationTokens)
+		require.Positive(t, summary.Quota)
+	}
+	common.LogWriterMu.Lock()
+	warnings := output.String()
+	common.LogWriterMu.Unlock()
+	require.Contains(t, warnings, "[WARN]")
+	require.Equal(t, 1, strings.Count(warnings, "OpenRouter cache-write token inference skipped"))
 }
 
 func TestCalculateTextQuotaSummaryUnifiedForClaudeSemantic(t *testing.T) {

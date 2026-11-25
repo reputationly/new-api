@@ -257,6 +257,77 @@ func TestRealtimeTieredReserveTracksCumulativeUsageAndSettlesOnce(t *testing.T) 
 	require.Equal(t, 60_000, balance)
 }
 
+func TestRealtimeRatioSettlementMatchesWalletTokenAndLog(t *testing.T) {
+	for _, tc := range []struct {
+		name          string
+		wallet, token int
+		inputs        []int
+		reject        int
+		want          int
+		perCall       bool
+	}{
+		{name: "multiple usage updates", wallet: 5_000_000, token: 5_000_000, inputs: []int{600, 400}, want: 1_000_000},
+		{name: "disconnect before any usage", wallet: 5_000_000, token: 5_000_000},
+		{name: "disconnect after one update", wallet: 5_000_000, token: 5_000_000, inputs: []int{600}, want: 600_000},
+		{name: "wallet exhausted", wallet: 700_000, token: 5_000_000, inputs: []int{600}, reject: 200, want: 600_000},
+		{name: "token exhausted", wallet: 5_000_000, token: 700_000, inputs: []int{600}, reject: 200, want: 600_000},
+		{name: "per call settles once", wallet: 5_000_000, token: 5_000_000, inputs: []int{600, 400}, want: 100_000, perCall: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			truncate(t)
+			const id, key = 9212, "realtime-ratio-test"
+			seedUser(t, id, tc.wallet)
+			seedChannel(t, id)
+			seedToken(t, id, id, key, tc.token)
+			c := newTextQuotaCtx(t)
+			c.Request = httptest.NewRequest("GET", "/v1/realtime", nil)
+			info := &relaycommon.RelayInfo{
+				UserId: id, UserQuota: tc.wallet, TokenId: id, TokenKey: key,
+				ChannelMeta: &relaycommon.ChannelMeta{ChannelId: id},
+				RelayFormat: types.RelayFormatOpenAIRealtime, OriginModelName: "realtime-ratio-test",
+				StartTime: time.Now(), ForcePreConsume: true,
+				PriceData: types.PriceData{
+					PricingCurrency: "CNY", ModelRatio: 1, ModelPrice: 0.0001, UsePrice: tc.perCall,
+					GroupRatioInfo: types.GroupRatioInfo{GroupRatio: 1},
+				},
+			}
+			session := &BillingSession{relayInfo: info, funding: &WalletFunding{userId: id}}
+			info.Billing = session
+			require.Nil(t, session.preConsume(c, 100_000))
+			usage := func(n int) *dto.RealtimeUsage {
+				u := &dto.RealtimeUsage{InputTokens: n, TotalTokens: n}
+				u.InputTokenDetails.TextTokens = n
+				return u
+			}
+			total := 0
+			for _, n := range tc.inputs {
+				total += n
+				require.NoError(t, PreWssConsumeQuota(c, info, usage(n), usage(total)))
+				if tc.perCall {
+					require.Equal(t, 100_000, session.GetPreConsumedQuota())
+				} else {
+					require.Equal(t, total*1000, session.GetPreConsumedQuota())
+				}
+			}
+			if tc.reject > 0 {
+				require.Error(t, PreWssConsumeQuota(c, info, usage(tc.reject), usage(total+tc.reject)))
+				require.Equal(t, tc.want, session.GetPreConsumedQuota())
+			}
+			PostWssConsumeQuota(c, info, info.OriginModelName, usage(total), "")
+			var log model.Log
+			require.NoError(t, model.LOG_DB.Where("user_id = ? AND type = ?", id, model.LogTypeConsume).Take(&log).Error)
+			require.Equal(t, tc.want, log.Quota)
+			require.Equal(t, total, log.PromptTokens)
+			wallet, err := model.GetUserQuota(id, true)
+			require.NoError(t, err)
+			token, err := model.GetTokenById(id)
+			require.NoError(t, err)
+			require.Equal(t, log.Quota, tc.wallet-wallet)
+			require.Equal(t, log.Quota, tc.token-token.RemainQuota)
+		})
+	}
+}
+
 // calculateAudioQuota 的 UsePrice 分支必须 × QuotaPerYuan 并四舍五入，不得用 int() 截断。
 func TestCalculateAudioQuotaUsePriceUsesQuotaPerYuan(t *testing.T) {
 	original := common.QuotaPerUnit

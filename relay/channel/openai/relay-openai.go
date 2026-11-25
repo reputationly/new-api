@@ -562,16 +562,19 @@ func preConsumeUsage(ctx *gin.Context, info *relaycommon.RelayInfo, usage *dto.R
 		return fmt.Errorf("invalid usage pointer")
 	}
 
-	totalUsage.TotalTokens += usage.TotalTokens
-	totalUsage.InputTokens += usage.InputTokens
-	totalUsage.OutputTokens += usage.OutputTokens
-	totalUsage.InputTokenDetails.CachedTokens += usage.InputTokenDetails.CachedTokens
-	totalUsage.InputTokenDetails.TextTokens += usage.InputTokenDetails.TextTokens
-	totalUsage.InputTokenDetails.AudioTokens += usage.InputTokenDetails.AudioTokens
-	totalUsage.OutputTokenDetails.TextTokens += usage.OutputTokenDetails.TextTokens
-	totalUsage.OutputTokenDetails.AudioTokens += usage.OutputTokenDetails.AudioTokens
-	// clear usage
-	err := service.PreWssConsumeQuota(ctx, info, usage, totalUsage)
+	next := *totalUsage
+	next.TotalTokens += usage.TotalTokens
+	next.InputTokens += usage.InputTokens
+	next.OutputTokens += usage.OutputTokens
+	next.InputTokenDetails.CachedTokens += usage.InputTokenDetails.CachedTokens
+	next.InputTokenDetails.TextTokens += usage.InputTokenDetails.TextTokens
+	next.InputTokenDetails.AudioTokens += usage.InputTokenDetails.AudioTokens
+	next.OutputTokenDetails.TextTokens += usage.OutputTokenDetails.TextTokens
+	next.OutputTokenDetails.AudioTokens += usage.OutputTokenDetails.AudioTokens
+	err := service.PreWssConsumeQuota(ctx, info, usage, &next)
+	if err == nil || info.TieredBillingSnapshot != nil {
+		*totalUsage = next
+	}
 	return err
 }
 

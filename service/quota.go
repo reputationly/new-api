@@ -4,7 +4,6 @@ import (
 	"errors"
 	"fmt"
 	"math"
-	"strings"
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
@@ -111,7 +110,7 @@ func realtimeTieredParams(usage *dto.RealtimeUsage) billingexpr.TokenParams {
 	}
 }
 
-func PreWssConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, usage, totalUsage *dto.RealtimeUsage) error {
+func PreWssConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, _ *dto.RealtimeUsage, totalUsage *dto.RealtimeUsage) error {
 	if snap := relayInfo.TieredBillingSnapshot; snap != nil {
 		var input billingexpr.RequestInput
 		if relayInfo.BillingRequestInput != nil {
@@ -129,75 +128,35 @@ func PreWssConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, usag
 		}
 		return relayInfo.Billing.Reserve(result.ActualQuotaAfterGroup)
 	}
-	if relayInfo.UsePrice {
+	if relayInfo.UsePrice || relayInfo.PriceData.UsePrice || totalUsage.TotalTokens == 0 {
 		return nil
 	}
-	userQuota, err := model.GetUserQuota(relayInfo.UserId, false)
-	if err != nil {
+	quota := realtimeAudioQuota(relayInfo, relayInfo.OriginModelName, totalUsage)
+	if quota == 0 {
+		return nil
+	}
+	if relayInfo.Billing == nil {
+		return fmt.Errorf("realtime billing session is unavailable")
+	}
+	if err := relayInfo.Billing.Reserve(quota); err != nil {
 		return err
 	}
-
-	token, err := model.GetTokenByKey(strings.TrimPrefix(relayInfo.TokenKey, "sk-"), false)
-	if err != nil {
-		return err
-	}
-
-	modelName := relayInfo.OriginModelName
-	textInputTokens := usage.InputTokenDetails.TextTokens
-	textOutTokens := usage.OutputTokenDetails.TextTokens
-	audioInputTokens := usage.InputTokenDetails.AudioTokens
-	audioOutTokens := usage.OutputTokenDetails.AudioTokens
-	modelRatio, _, _ := ratio_setting.GetModelRatio(modelName)
-	if relayInfo.PriceData.PricingCurrency != "" {
-		modelRatio = relayInfo.PriceData.ModelRatio
-	}
-
-	// 用预扣费时冻结的倍率，不重新解析。
-	//
-	// 这个函数在 realtime 长连接里每收到一段 usage 就跑一次，而同一会话最终的
-	// PostWssConsumeQuota 用的是 PriceData.GroupRatioInfo（预扣费冻结值）。原先这里
-	// 重新解析，两个来源本就可能分叉——只是过去只有「管理员正好在会话中途改配置」
-	// 才触发，几乎不发生。加入时段折扣后它变成每天必然发生两次（跨空闲时段的起止钟点），
-	// 所以必须对齐到同一个来源。
-	//
-	// auto_group 的落定逻辑一并删除：冻结值是 HandleGroupRatio 算的，那里已经把伪分组
-	// 替换成真实分组了（relay/helper/price.go）。调用时序已核实——controller/relay.go
-	// 的 ModelPriceHelper 在进入 WssHelper 之前执行，此时 PriceData 已填好。
-	actualGroupRatio := relayInfo.PriceData.GroupRatioInfo.GroupRatio
-
-	quotaInfo := QuotaInfo{
-		InputDetails: TokenDetails{
-			TextTokens:  textInputTokens,
-			AudioTokens: audioInputTokens,
-		},
-		OutputDetails: TokenDetails{
-			TextTokens:  textOutTokens,
-			AudioTokens: audioOutTokens,
-		},
-		ModelName:  modelName,
-		UsePrice:   relayInfo.UsePrice,
-		ModelRatio: modelRatio,
-		GroupRatio: actualGroupRatio,
-		// 时段系数同样取冻结值：跨时段边界时不能一半按旧档一半按新档
-		TimeFactors: relayInfo.PriceData.GroupRatioInfo.TimeFactors,
-	}
-
-	quota := calculateAudioQuota(quotaInfo, relayInfo.PriceData)
-
-	if userQuota < quota {
-		return fmt.Errorf("user quota is not enough, user quota: %s, need quota: %s", logger.FormatQuota(userQuota), logger.FormatQuota(quota))
-	}
-
-	if !token.UnlimitedQuota && token.RemainQuota < quota {
-		return fmt.Errorf("token quota is not enough, token remain quota: %s, need quota: %s", logger.FormatQuota(token.RemainQuota), logger.FormatQuota(quota))
-	}
-
-	err = PostConsumeQuota(relayInfo, quota, 0, false)
-	if err != nil {
-		return err
-	}
-	logger.LogInfo(ctx, "realtime streaming consume quota success, quota: "+fmt.Sprintf("%d", quota))
+	logger.LogInfo(ctx, fmt.Sprintf("realtime streaming reserve quota success, total quota: %d", quota))
 	return nil
+}
+
+func realtimeAudioQuota(info *relaycommon.RelayInfo, modelName string, usage *dto.RealtimeUsage) int {
+	price := info.PriceData
+	return calculateAudioQuota(QuotaInfo{
+		InputDetails:  TokenDetails{TextTokens: usage.InputTokenDetails.TextTokens, AudioTokens: usage.InputTokenDetails.AudioTokens},
+		OutputDetails: TokenDetails{TextTokens: usage.OutputTokenDetails.TextTokens, AudioTokens: usage.OutputTokenDetails.AudioTokens},
+		ModelName:     modelName,
+		UsePrice:      price.UsePrice,
+		ModelPrice:    price.ModelPrice,
+		ModelRatio:    price.ModelRatio,
+		GroupRatio:    price.GroupRatioInfo.GroupRatio,
+		TimeFactors:   price.GroupRatioInfo.TimeFactors,
+	}, price)
 }
 
 func PostWssConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, modelName string,
@@ -211,12 +170,6 @@ func PostWssConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, mod
 	}
 
 	useTimeSeconds := time.Now().Unix() - relayInfo.StartTime.Unix()
-	textInputTokens := usage.InputTokenDetails.TextTokens
-	textOutTokens := usage.OutputTokenDetails.TextTokens
-
-	audioInputTokens := usage.InputTokenDetails.AudioTokens
-	audioOutTokens := usage.OutputTokenDetails.AudioTokens
-
 	tokenName := ctx.GetString("token_name")
 	completionRatio := decimal.NewFromFloat(
 		ratio_setting.GetCompletionRatio(modelName) *
@@ -234,23 +187,7 @@ func PostWssConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, mod
 	modelPrice := relayInfo.PriceData.ModelPrice
 	usePrice := relayInfo.PriceData.UsePrice
 
-	quotaInfo := QuotaInfo{
-		InputDetails: TokenDetails{
-			TextTokens:  textInputTokens,
-			AudioTokens: audioInputTokens,
-		},
-		OutputDetails: TokenDetails{
-			TextTokens:  textOutTokens,
-			AudioTokens: audioOutTokens,
-		},
-		ModelName:   modelName,
-		UsePrice:    usePrice,
-		ModelRatio:  modelRatio,
-		GroupRatio:  groupRatio,
-		TimeFactors: relayInfo.PriceData.GroupRatioInfo.TimeFactors,
-	}
-
-	quota := calculateAudioQuota(quotaInfo, relayInfo.PriceData)
+	quota := realtimeAudioQuota(relayInfo, modelName, usage)
 	if tieredOk {
 		quota = tieredQuota
 	}

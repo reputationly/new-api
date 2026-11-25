@@ -3,6 +3,7 @@ package service
 import (
 	"fmt"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
@@ -20,6 +21,8 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/shopspring/decimal"
 )
+
+var lastOpenRouterMissingFXWarning atomic.Int64
 
 type textQuotaSummary struct {
 	PromptTokens             int
@@ -227,6 +230,13 @@ func calculateTextQuotaSummary(ctx *gin.Context, relayInfo *relaycommon.RelayInf
 		summary.PromptTokens -= summary.CacheTokens
 		isUsingCustomSettings := relayInfo.PriceData.UsePrice || hasCustomModelRatio(summary.ModelName, relayInfo.PriceData.ModelRatio)
 		if summary.CacheCreationTokens == 0 && relayInfo.PriceData.CacheCreationRatio != 1 && usage.Cost != 0 && !isUsingCustomSettings {
+			if cost, ok := usage.Cost.(float64); ok && cost > 0 && relayInfo.PriceData.ModelRatio > 0 && relayInfo.PriceData.UpstreamCostFX <= 0 {
+				now := time.Now().Unix()
+				last := lastOpenRouterMissingFXWarning.Load()
+				if now-last >= 60 && lastOpenRouterMissingFXWarning.CompareAndSwap(last, now) {
+					logger.LogWarn(ctx, "OpenRouter cache-write token inference skipped: missing ModelSourceRate")
+				}
+			}
 			maybeCacheCreationTokens := CalcOpenRouterCacheCreateTokens(*usage, relayInfo.PriceData)
 			if maybeCacheCreationTokens >= 0 && summary.PromptTokens >= maybeCacheCreationTokens {
 				summary.CacheCreationTokens = maybeCacheCreationTokens

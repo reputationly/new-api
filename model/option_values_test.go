@@ -1,13 +1,55 @@
 package model
 
 import (
+	"bytes"
+	"strings"
 	"testing"
 
+	"github.com/gin-gonic/gin"
 	"github.com/glebarez/sqlite"
+	"github.com/stretchr/testify/require"
 	"gorm.io/gorm"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/setting/operation_setting"
 )
+
+func TestLoadOptionsWarnsAboutLegacyQuotaDisplayOnlyAtStartup(t *testing.T) {
+	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	require.NoError(t, err)
+	sqlDB, err := db.DB()
+	require.NoError(t, err)
+	sqlDB.SetMaxOpenConns(1)
+	t.Cleanup(func() { _ = sqlDB.Close() })
+	require.NoError(t, db.AutoMigrate(&Option{}))
+	require.NoError(t, db.Create(&Option{Key: "general_setting.quota_display_type", Value: "USD"}).Error)
+	previousDB := DB
+	DB = db
+	t.Cleanup(func() { DB = previousDB })
+	logged := legacyQuotaDisplayWarningLogged.Swap(false)
+	t.Cleanup(func() { legacyQuotaDisplayWarningLogged.Store(logged) })
+
+	var output bytes.Buffer
+	common.LogWriterMu.Lock()
+	previousWriter := gin.DefaultWriter
+	gin.DefaultWriter = &output
+	common.LogWriterMu.Unlock()
+	t.Cleanup(func() {
+		common.LogWriterMu.Lock()
+		gin.DefaultWriter = previousWriter
+		common.LogWriterMu.Unlock()
+	})
+
+	loadOptionsFromDatabase(false)
+	require.False(t, legacyQuotaDisplayWarningLogged.Load())
+	loadOptionsFromDatabase(true)
+	loadOptionsFromDatabase(true)
+	require.Equal(t, operation_setting.QuotaDisplayTypeCNY, operation_setting.GetQuotaDisplayType())
+	common.LogWriterMu.Lock()
+	warnings := output.String()
+	common.LogWriterMu.Unlock()
+	require.Equal(t, 1, strings.Count(warnings, `WARNING: ignoring legacy general_setting.quota_display_type="USD"`))
+}
 
 // OptionValuesFromDatabase 存在的唯一理由：多副本下本副本内存里的设置可能还是旧的。
 //

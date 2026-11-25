@@ -11,24 +11,28 @@ import (
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/model"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
-	"github.com/glebarez/sqlite"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"gorm.io/gorm"
 )
 
 func TestMain(m *testing.M) {
-	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
-	if err != nil {
+	if err := os.Setenv("SQL_DSN", "local"); err != nil {
+		panic(err)
+	}
+	common.SQLitePath = ":memory:"
+	master := common.IsMasterNode
+	common.IsMasterNode = false
+	if err := model.InitDB(); err != nil {
 		panic("failed to open test db: " + err.Error())
 	}
+	common.IsMasterNode = master
+	db := model.DB
 	sqlDB, err := db.DB()
 	if err != nil {
 		panic("failed to get sql.DB: " + err.Error())
 	}
 	sqlDB.SetMaxOpenConns(1)
 
-	model.DB = db
 	model.LOG_DB = db
 
 	common.UsingSQLite = true

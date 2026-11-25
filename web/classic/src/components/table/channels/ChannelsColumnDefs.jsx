@@ -34,7 +34,6 @@ import {
   renderGroup,
   renderQuota,
   getChannelIcon,
-  renderQuotaWithAmount,
   showSuccess,
   showError,
   showInfo,
@@ -50,6 +49,15 @@ import {
   IconAlertTriangle,
 } from '@douyinfe/semi-icons';
 import { FaRandom } from 'react-icons/fa';
+
+const balanceCurrencySymbols = new Map([
+  [1, '$'], // OpenAI
+  [8, '$'], // Custom (OpenAI billing API)
+  [20, '$'], // OpenRouter
+  [25, '$'], // Moonshot (stored in USD)
+  [40, '¥'], // SiliconFlow
+  [43, '¥'], // DeepSeek
+]);
 
 // Render functions
 const renderType = (type, record = {}, t) => {
@@ -552,6 +560,9 @@ export const getChannelsColumns = ({
       dataIndex: 'expired_time',
       render: (text, record, index) => {
         if (record.children === undefined) {
+          const balance =
+            (balanceCurrencySymbols.get(record.type) ?? '') +
+            Number(record.balance ?? 0).toFixed(2);
           return (
             <div>
               <Space spacing={1}>
@@ -564,10 +575,7 @@ export const getChannelsColumns = ({
                   content={
                     record.type === 57
                       ? t('查看 Codex 帐号信息与用量')
-                      : t('剩余额度') +
-                        ': ' +
-                        renderQuotaWithAmount(record.balance) +
-                        t('，点击更新')
+                      : t('剩余额度') + ': ' + balance + t('，点击更新')
                   }
                 >
                   <Tag
@@ -577,9 +585,7 @@ export const getChannelsColumns = ({
                     className={record.type === 57 ? 'cursor-pointer' : ''}
                     onClick={() => updateChannelBalance(record)}
                   >
-                    {record.type === 57
-                      ? t('帐号信息')
-                      : renderQuotaWithAmount(record.balance)}
+                    {record.type === 57 ? t('帐号信息') : balance}
                   </Tag>
                 </Tooltip>
               </Space>

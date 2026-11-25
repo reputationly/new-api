@@ -7,6 +7,7 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/model"
+	"github.com/QuantumNous/new-api/setting/billing_setting"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
 )
@@ -62,6 +63,10 @@ func TestUSDUsageLogPricingShowsDualCurrencyCatalog(t *testing.T) {
 }
 
 func TestUsageLogPricingDoesNotInventHistoricalFX(t *testing.T) {
+	original := billing_setting.ModelSourceRate2JSONString()
+	t.Cleanup(func() { require.NoError(t, billing_setting.UpdateModelSourceRateByJSONString(original)) })
+	require.NoError(t, billing_setting.UpdateModelSourceRateByJSONString("9.9"))
+
 	legacy := buildUsageLogPricing(usdUsageLog(t, 13, map[string]any{"price_unit": "", "model_price": 0.2, "model_source_rate": nil}))
 	require.Equal(t, []string{"按次单价：$0.20 / 次", "未记录当次换算汇率"}, legacy.Catalog)
 	require.Empty(t, legacy.Rate)
