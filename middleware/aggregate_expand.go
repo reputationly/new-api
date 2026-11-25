@@ -389,7 +389,8 @@ func applyAggregateExpansion(c *gin.Context, publicName, realModel string, agg *
 			clientSize = strings.TrimSpace(clientSize)
 			res := enhancePrompt(c.Request.Context(), agg,
 				c.Request.Header.Get("Authorization"), service.EnhanceInput{
-					Prompt: prompt,
+					Prompt:          prompt,
+					ClientUserAgent: model.ClientUserAgent(c),
 					// **玩法解析一次,三处共用。**
 					//
 					// ImageURLs 是真正发给模型看的素材,Compiler.Assets 是证据
@@ -581,9 +582,10 @@ func enhanceMusic3Aggregate(c *gin.Context, agg *common.AggregateModel, body map
 	}
 	res := enhancePrompt(c.Request.Context(), agg,
 		c.Request.Header.Get("Authorization"), service.EnhanceInput{
-			Prompt:      caption,
-			Lyrics:      lyrics,
-			TaskContext: service.BuildMusic3EnhanceContext(caption, lyrics),
+			Prompt:          caption,
+			ClientUserAgent: model.ClientUserAgent(c),
+			Lyrics:          lyrics,
+			TaskContext:     service.BuildMusic3EnhanceContext(caption, lyrics),
 		})
 	if res == nil || res.Degraded {
 		// 降级时 res.EnhancedPrompt 就是原 caption(EnhancePrompt 的契约),
@@ -688,9 +690,10 @@ func enhanceAceStepAggregate(c *gin.Context, agg *common.AggregateModel, body ma
 	budget := service.AceStepCaptionBudget(agg.Generate.Model, taskType)
 	res := enhancePrompt(c.Request.Context(), agg,
 		c.Request.Header.Get("Authorization"), service.EnhanceInput{
-			Prompt:      caption,
-			Lyrics:      lyrics,
-			TaskContext: service.BuildAceStepEnhanceContext(caption, lyrics, taskType, hasSourceAudio, budget),
+			Prompt:          caption,
+			ClientUserAgent: model.ClientUserAgent(c),
+			Lyrics:          lyrics,
+			TaskContext:     service.BuildAceStepEnhanceContext(caption, lyrics, taskType, hasSourceAudio, budget),
 		})
 	if res == nil || res.Degraded {
 		// 降级时 res.EnhancedPrompt 就是原文(EnhancePrompt 的契约),不需要再写回。

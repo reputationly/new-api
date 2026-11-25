@@ -12,6 +12,7 @@ import (
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/model"
+	"github.com/QuantumNous/new-api/setting/system_setting"
 )
 
 // captureUpscaleRequest 把超分自调用指向假服务端,记录收到的请求头与请求体。
@@ -51,7 +52,7 @@ func TestUpscaleSubmitBillsDeliveredTierAndCarriesParentHeaders(t *testing.T) {
 		CallerKey:        "sk-customer",
 	}
 
-	_, err := submitUpscaleTask(context.Background(), agg, "/nfs/x.mp4", "task_parent")
+	_, err := submitUpscaleTask(context.Background(), agg, "/nfs/x.mp4", "task_parent", "WorkBuddy/5.11.3")
 	require.NoError(t, err)
 
 	require.Equal(t, "1080P", (*body)["size"], "计费行取顶层 size,必须是交付档位")
@@ -60,6 +61,26 @@ func TestUpscaleSubmitBillsDeliveredTierAndCarriesParentHeaders(t *testing.T) {
 	require.Equal(t, "task_parent", hdr.Get(AggregateParentTaskHeader))
 	require.Equal(t, "h3-2k", hdr.Get(AggregatePublicModelHeader))
 	require.Equal(t, LogStageUpscale, hdr.Get(AggregateStageHeader))
+	require.Equal(t, "WorkBuddy/5.11.3", hdr.Get("User-Agent"))
+}
+
+func TestUpscaleSubmitDoesNotApplyDefaultUserAgentWhenClientUAEmpty(t *testing.T) {
+	hdr, _ := captureUpscaleRequest(t)
+	prevClient := GetHttpClient()
+	prevUA := system_setting.GetOutboundUserAgent()
+	t.Cleanup(func() {
+		SetHttpClientForTest(prevClient)
+		system_setting.SetOutboundUserAgent(prevUA)
+	})
+	InitHttpClient()
+	system_setting.SetOutboundUserAgent("node")
+
+	agg := &model.TaskAggregateInfo{UpscaleModel: "swiftvr", UpscaleTarget: "2k", CallerKey: "sk-customer"}
+	_, err := submitUpscaleTask(context.Background(), agg, "/nfs/x.mp4", "task_parent", "")
+	require.NoError(t, err)
+
+	_, hasUserAgent := (*hdr)["User-Agent"]
+	require.False(t, hasUserAgent, "空的原始 User-Agent 必须阻止默认 User-Agent 被补上")
 }
 
 // 没配交付档位:回落到客户要的目标,与改动前一致。
@@ -67,7 +88,7 @@ func TestUpscaleSubmitFallsBackToTargetWhenNoDelivered(t *testing.T) {
 	_, body := captureUpscaleRequest(t)
 	agg := &model.TaskAggregateInfo{UpscaleModel: "swiftvr", UpscaleTarget: "2k", CallerKey: "sk-customer"}
 
-	_, err := submitUpscaleTask(context.Background(), agg, "/nfs/x.mp4", "task_parent")
+	_, err := submitUpscaleTask(context.Background(), agg, "/nfs/x.mp4", "task_parent", "")
 	require.NoError(t, err)
 
 	require.Equal(t, "2k", (*body)["size"])

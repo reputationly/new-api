@@ -149,8 +149,10 @@ func TestEnhanceSuccessUsesRewrittenPrompt(t *testing.T) {
 // 客户的 Authorization 必须原样透传 —— 增强以客户身份计费全靠它。
 func TestEnhanceForwardsCallerIdentity(t *testing.T) {
 	var gotAuth string
+	var gotUA string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		gotAuth = r.Header.Get("Authorization")
+		gotUA = r.Header.Get("User-Agent")
 		_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"x"}}]}`))
 	}))
 	t.Cleanup(srv.Close)
@@ -158,10 +160,14 @@ func TestEnhanceForwardsCallerIdentity(t *testing.T) {
 	t.Cleanup(func() { enhanceEndpoint = orig })
 	enhanceEndpoint = func() string { return srv.URL }
 
-	EnhancePrompt(context.Background(), enhanceCfg("改写", "gpt-4o-mini"), "Bearer sk-customer", EnhanceInput{Prompt: "a cat"})
+	EnhancePrompt(context.Background(), enhanceCfg("改写", "gpt-4o-mini"), "Bearer sk-customer", EnhanceInput{
+		Prompt:          "a cat",
+		ClientUserAgent: "WorkBuddy/5.11.3",
+	})
 
 	require.Equal(t, "Bearer sk-customer", gotAuth,
 		"必须带客户身份,否则计费落不到他账上")
+	require.Equal(t, "WorkBuddy/5.11.3", gotUA)
 }
 
 // 输入图要真的出现在发出去的请求体里,而不只是构造函数里正确。

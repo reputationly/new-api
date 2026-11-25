@@ -83,7 +83,7 @@ func advancePlaygroundStage(ctx context.Context, adaptor TaskPollingAdaptor, tas
 
 	reqCtx, cancel := context.WithTimeout(ctx, upscaleSubmitTimeout)
 	defer cancel()
-	sub, err := submitStageTask(reqCtx, token.Key, task.TaskID, videoRef, stage)
+	sub, err := submitStageTask(reqCtx, token.Key, task.TaskID, videoRef, stage, task.PrivateData.ClientUserAgent)
 	if err != nil {
 		common.SysError(fmt.Sprintf("playground pipeline: task %s 的 %s 段提交失败,按现有成品交付: %v",
 			task.TaskID, stage.Kind, err))
@@ -122,7 +122,7 @@ func advancePlaygroundStage(ctx context.Context, adaptor TaskPollingAdaptor, tas
 // target_short_edge）：服务端只是换了个提交者，不该顺手改请求语义。
 // 不发顶层 size：超分段的计费行由 target_short_edge 归档（后端 videoResolution 的
 // 第二级），而顶层 size 是"客户以为要什么"，两者在这里没有差别时就不多发一个字段。
-func submitStageTask(ctx context.Context, callerKey, parentTaskID, videoRef string, stage common.PostStage) (*model.Task, error) {
+func submitStageTask(ctx context.Context, callerKey, parentTaskID, videoRef string, stage common.PostStage, clientUA string) (*model.Task, error) {
 	endpoint := videosEndpoint()
 	if endpoint == "" {
 		return nil, fmt.Errorf("站点未配置服务器地址(ServerAddress)")
@@ -166,6 +166,7 @@ func submitStageTask(ctx context.Context, callerKey, parentTaskID, videoRef stri
 		stageLabel = LogStageDub
 	}
 	req.Header.Set(AggregateStageHeader, stageLabel)
+	setSelfCallUserAgent(req, clientUA)
 
 	client := GetHttpClient()
 	if client == nil {
