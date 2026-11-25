@@ -24,6 +24,7 @@ const dateTime = new Intl.DateTimeFormat('zh-CN', {
 });
 
 function FXChart({ series, t }) {
+  const [hoveredDate, setHoveredDate] = useState(null);
   const { from, through, quotes, baseline, changes } = series;
   const source = quotes.map(({ date, rate }) => ({
     at: Date.parse(date + 'T09:15:00+08:00') / 1000,
@@ -64,13 +65,40 @@ function FXChart({ series, t }) {
       ].join(' ');
     })
     .join(' ');
+  const hovered = source.find(({ date }) => date === hoveredDate);
+  const configuredRate = hovered
+    ? configured.findLast(
+        ({ at }) => at <= Date.parse(hovered.date + 'T23:59:59+08:00') / 1000,
+      )?.rate
+    : null;
+  const tooltipWidth = 180;
+  const onMouseMove = (event) => {
+    if (!source.length) return;
+    const bounds = event.currentTarget.getBoundingClientRect();
+    const scale = Math.min(bounds.width / width, bounds.height / height);
+    if (!scale) return;
+    const plotX =
+      (event.clientX - bounds.left - (bounds.width - width * scale) / 2) /
+      scale;
+    if (plotX < startX || plotX > endX) {
+      setHoveredDate(null);
+      return;
+    }
+    const at = from + ((plotX - startX) * (through - from)) / (endX - startX);
+    const nearest = source.reduce((best, point) =>
+      Math.abs(point.at - at) < Math.abs(best.at - at) ? point : best,
+    );
+    setHoveredDate(nearest.date);
+  };
 
   return (
     <svg
       viewBox={`0 0 ${width} ${height}`}
       role='img'
-      aria-label={t('近 30 天 CFETS 中间价和配置汇率走势图')}
+      aria-label={t('近 90 天 CFETS 中间价和配置汇率走势图')}
       className='w-full max-h-52'
+      onMouseMove={onMouseMove}
+      onMouseLeave={() => setHoveredDate(null)}
     >
       {[high, (high + low) / 2, low].map((rate) => (
         <g key={rate}>
@@ -92,7 +120,7 @@ function FXChart({ series, t }) {
           </text>
         </g>
       ))}
-      {[0, 7, 14, 21, 29].map((offset) => {
+      {[0, 15, 30, 45, 60, 75, 89].map((offset) => {
         const at = from + offset * 86400 + 3600;
         return (
           <text
@@ -120,11 +148,7 @@ function FXChart({ series, t }) {
           cy={y(rate)}
           r='2.5'
           fill='var(--semi-color-primary)'
-        >
-          <title>
-            {date}: {rate.toFixed(4)}
-          </title>
-        </circle>
+        />
       ))}
       <path
         d={stepPath}
@@ -132,6 +156,55 @@ function FXChart({ series, t }) {
         stroke='var(--semi-color-warning)'
         strokeWidth='2'
       />
+      {hovered && (
+        <g pointerEvents='none'>
+          <line
+            x1={x(hovered.at)}
+            x2={x(hovered.at)}
+            y1={startY}
+            y2={endY}
+            stroke='currentColor'
+            strokeDasharray='3 3'
+            opacity='0.35'
+          />
+          <circle
+            cx={x(hovered.at)}
+            cy={y(hovered.rate)}
+            r='4'
+            fill='var(--semi-color-primary)'
+          />
+          <foreignObject
+            x={
+              x(hovered.at) + tooltipWidth + 8 <= endX
+                ? x(hovered.at) + 8
+                : x(hovered.at) - tooltipWidth - 8
+            }
+            y={startY}
+            width={tooltipWidth}
+            height='92'
+          >
+            <div
+              role='tooltip'
+              className='rounded border p-2 text-xs leading-5 shadow'
+              style={{
+                background: 'var(--semi-color-bg-2)',
+                borderColor: 'var(--semi-color-border)',
+                color: 'var(--semi-color-text-0)',
+              }}
+            >
+              <strong>{hovered.date}</strong>
+              <div>
+                {t('CFETS 中间价')}：{hovered.rate.toFixed(4)}
+              </div>
+              {Number.isFinite(configuredRate) && (
+                <div>
+                  {t('当日配置汇率')}：{configuredRate.toFixed(4)}
+                </div>
+              )}
+            </div>
+          </foreignObject>
+        </g>
+      )}
     </svg>
   );
 }
@@ -233,7 +306,8 @@ export default function ModelSourceFXCard({ configuredRate, onRateChange }) {
     }
   };
 
-  const quotes = series?.quotes || [];
+  const quotes =
+    series?.quotes.filter(({ date }) => date >= series.stats_from) || [];
   const latest = quotes.at(-1);
   const values = quotes.map(({ rate }) => rate);
   const current = Number(rate);
@@ -290,7 +364,7 @@ export default function ModelSourceFXCard({ configuredRate, onRateChange }) {
         />
       )}
       <div className='mt-3'>
-        <strong>{t('近 30 天 USD/CNY 汇率')}</strong>
+        <strong>{t('近 90 天 USD/CNY 汇率')}</strong>
         <span
           className='ml-3 text-xs'
           style={{ color: 'var(--semi-color-primary)' }}
@@ -305,6 +379,7 @@ export default function ModelSourceFXCard({ configuredRate, onRateChange }) {
         </span>
       </div>
       <Spin spinning={loading}>
+        <div className='mt-2 text-sm font-semibold'>{t('近 30 天统计')}</div>
         {latest && (
           <Space wrap className='mt-2'>
             <span>
@@ -337,7 +412,7 @@ export default function ModelSourceFXCard({ configuredRate, onRateChange }) {
             })}
           </p>
         )}
-        {!loading && !latest && <p>{t('暂无 CFETS 中间价数据')}</p>}
+        {!loading && !latest && <p>{t('近 30 天暂无 CFETS 中间价数据')}</p>}
         {series && <FXChart series={series} t={t} />}
       </Spin>
       <div className='text-xs text-gray-500'>

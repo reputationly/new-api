@@ -46,7 +46,8 @@ func GetModelSourceFX(c *gin.Context) {
 	common.ApiSuccess(c, gin.H{
 		"from": from.Unix(), "through": through.AddDate(0, 0, 1).Unix() - 1, "quotes": quotes,
 		"status": status, "today": through.Format(time.DateOnly), "latest_date": latestDate,
-		"baseline": baseline, "changes": changes, "last_change": lastChange,
+		"stats_from": through.AddDate(0, 0, -29).Format(time.DateOnly),
+		"baseline":   baseline, "changes": changes, "last_change": lastChange,
 		"current_rate": current,
 	})
 }

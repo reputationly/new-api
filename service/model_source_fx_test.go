@@ -35,14 +35,23 @@ func TestCFETSSyncAndFailure(t *testing.T) {
 				w.WriteHeader(http.StatusBadRequest)
 				return
 			}
-			if r.URL.Query().Get("startDate") == "2026-11-25" {
+			query := r.URL.Query()
+			if query.Get("endDate") == "2026-12-24" {
 				fmt.Fprint(w, `{"head":{"rep_code":"200"},"data":{"searchlist":["USD/CNY"]},"records":[]}`)
 				return
 			}
-			if r.URL.Query().Get("startDate") != "2026-10-26" {
-				t.Error("unexpected CFETS history start date")
+			if query.Get("startDate") != "2026-08-27" || query.Get("endDate") != "2026-11-24" || query.Get("pageSize") != "40" {
+				t.Errorf("unexpected CFETS history query: %s", query)
 			}
-			fmt.Fprint(w, `{"head":{"rep_code":"200"},"data":{"searchlist":["USD/CNY"]},"records":[{"date":"2026-11-23","values":["6.7111"]},{"date":"2026-11-24","values":["6.7100"]}]}`)
+			switch query.Get("pageNum") {
+			case "1":
+				fmt.Fprint(w, `{"head":{"rep_code":"200"},"data":{"searchlist":["USD/CNY"],"pageTotal":2},"records":[{"date":"2026-11-23","values":["6.7111"]},{"date":"2026-11-24","values":["6.7100"]}]}`)
+			case "2":
+				fmt.Fprint(w, `{"head":{"rep_code":"200"},"data":{"searchlist":["USD/CNY"],"pageTotal":2},"records":[{"date":"2026-08-27","values":["6.9"]}]}`)
+			default:
+				t.Errorf("unexpected CFETS history page: %s", query.Get("pageNum"))
+				w.WriteHeader(http.StatusBadRequest)
+			}
 		case cfetsLatest:
 			if r.Method != http.MethodGet {
 				t.Error("unexpected CFETS latest method")
@@ -66,6 +75,10 @@ func TestCFETSSyncAndFailure(t *testing.T) {
 	require.NoError(t, client.sync(ctx, now))
 	success := now.Add(time.Minute)
 	require.NoError(t, client.sync(ctx, success))
+	history, _, err := model.ReadModelSourceFX(ctx, "2026-08-27", "2026-11-24")
+	require.NoError(t, err)
+	require.Len(t, history, 3)
+	require.Equal(t, "2026-08-27", history[0].QuoteDate)
 	mode.Store(1)
 	require.ErrorContains(t, client.sync(ctx, now.Add(2*time.Minute)), "HTTP 503")
 	quotes, status, err := model.ReadModelSourceFX(ctx, "2026-10-26", "2026-11-24")

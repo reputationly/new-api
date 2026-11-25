@@ -17,9 +17,11 @@ import (
 )
 
 const (
-	cfetsOrigin  = "https://www.chinamoney.com.cn"
-	cfetsHistory = "/ags/ms/cm-u-bk-ccpr/CcprHisNew"
-	cfetsLatest  = "/r/cms/www/chinamoney/data/fx/ccpr.json"
+	cfetsOrigin          = "https://www.chinamoney.com.cn"
+	cfetsHistory         = "/ags/ms/cm-u-bk-ccpr/CcprHisNew"
+	cfetsLatest          = "/r/cms/www/chinamoney/data/fx/ccpr.json"
+	cfetsHistoryDays     = 90
+	cfetsHistoryPageSize = 40
 )
 
 var cfetsLocation = time.FixedZone("Asia/Shanghai", 8*60*60)
@@ -27,7 +29,7 @@ var cfetsLocation = time.FixedZone("Asia/Shanghai", 8*60*60)
 func ModelSourceFXWindow(now time.Time) (time.Time, time.Time) {
 	local := now.In(cfetsLocation)
 	today := time.Date(local.Year(), local.Month(), local.Day(), 0, 0, 0, 0, cfetsLocation)
-	return today.AddDate(0, 0, -29), today
+	return today.AddDate(0, 0, 1-cfetsHistoryDays), today
 }
 
 func cfetsPublishTime(day time.Time) time.Time {
@@ -90,34 +92,47 @@ func (c cfetsClient) fetch(ctx context.Context, now time.Time) ([]model.ModelSou
 	from, through := ModelSourceFXWindow(now)
 	query := url.Values{
 		"startDate": {from.Format(time.DateOnly)}, "endDate": {through.Format(time.DateOnly)},
-		"currency": {model.CFETSPair}, "pageNum": {"1"}, "pageSize": {"40"},
+		"currency": {model.CFETSPair}, "pageSize": {strconv.Itoa(cfetsHistoryPageSize)},
 	}
-	var history struct {
+	type historyPage struct {
 		Head cfetsHead `json:"head"`
 		Data struct {
 			SearchList []string `json:"searchlist"`
+			PageTotal  int      `json:"pageTotal"`
 		} `json:"data"`
 		Records []struct {
 			Date   string   `json:"date"`
 			Values []string `json:"values"`
 		} `json:"records"`
 	}
-	if err := c.request(ctx, http.MethodPost, cfetsHistory+"?"+query.Encode(), &history); err != nil {
-		return nil, err
-	}
-	if history.Head.Code != "200" || len(history.Data.SearchList) != 1 || history.Data.SearchList[0] != model.CFETSPair || history.Records == nil {
-		return nil, errors.New("CFETS 历史中间价响应缺少 USD/CNY 数据")
-	}
-	byDate := make(map[string]model.ModelSourceFXQuote, len(history.Records)+1)
-	for _, row := range history.Records {
-		if len(row.Values) != 1 {
-			return nil, errors.New("CFETS 历史中间价栏位无效")
+	byDate := make(map[string]model.ModelSourceFXQuote, cfetsHistoryDays)
+	pages := 1
+	for page := 1; page <= pages; page++ {
+		query.Set("pageNum", strconv.Itoa(page))
+		var history historyPage
+		if err := c.request(ctx, http.MethodPost, cfetsHistory+"?"+query.Encode(), &history); err != nil {
+			return nil, err
 		}
-		quote, ok := parseCFETSQuote(row.Date, row.Values[0], from, through)
-		if !ok {
-			return nil, errors.New("CFETS 历史中间价日期或价格无效")
+		if history.Head.Code != "200" || len(history.Data.SearchList) != 1 || history.Data.SearchList[0] != model.CFETSPair || history.Records == nil {
+			return nil, errors.New("CFETS 历史中间价响应缺少 USD/CNY 数据")
 		}
-		byDate[quote.QuoteDate] = quote
+		if page == 1 {
+			const maxPages = (cfetsHistoryDays + cfetsHistoryPageSize - 1) / cfetsHistoryPageSize
+			if history.Data.PageTotal < 0 || history.Data.PageTotal > maxPages {
+				return nil, errors.New("CFETS 历史中间价页数无效")
+			}
+			pages = history.Data.PageTotal
+		}
+		for _, row := range history.Records {
+			if len(row.Values) != 1 {
+				return nil, errors.New("CFETS 历史中间价栏位无效")
+			}
+			quote, ok := parseCFETSQuote(row.Date, row.Values[0], from, through)
+			if !ok {
+				return nil, errors.New("CFETS 历史中间价日期或价格无效")
+			}
+			byDate[quote.QuoteDate] = quote
+		}
 	}
 	var latest struct {
 		Head cfetsHead `json:"head"`
