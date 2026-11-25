@@ -26,7 +26,8 @@ const isAdminOnlyColumn = (key, COLUMN_KEYS) =>
   key === COLUMN_KEYS.CHANNEL ||
   key === COLUMN_KEYS.USERNAME ||
   key === COLUMN_KEYS.RETRY ||
-  key === COLUMN_KEYS.IP;
+  key === COLUMN_KEYS.IP ||
+  key === COLUMN_KEYS.USER_AGENT;
 
 // 全选框的聚合状态只统计当前用户真正能勾选的列。直接对 visibleColumns 做
 // every/some，会把上面这些对普通用户恒为 false 的列一起算进来，全选框就永远

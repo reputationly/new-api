@@ -71,6 +71,7 @@ const SystemSetting = () => {
     SMTPFrom: '',
     SMTPToken: '',
     WorkerUrl: '',
+    OutboundUserAgent: 'node',
     WorkerValidKey: '',
     WorkerAllowHttpImageRequestEnabled: '',
     Footer: '',
@@ -317,6 +318,15 @@ const SystemSetting = () => {
   const submitServerAddress = async () => {
     let ServerAddress = removeTrailingSlash(inputs.ServerAddress);
     await updateOptions([{ key: 'ServerAddress', value: ServerAddress }]);
+  };
+
+  const submitOutboundUserAgent = async () => {
+    await updateOptions([
+      {
+        key: 'OutboundUserAgent',
+        value: (inputs.OutboundUserAgent || '').trim(),
+      },
+    ]);
   };
 
   const submitSMTP = async () => {
@@ -731,6 +741,28 @@ const SystemSetting = () => {
                   </Row>
                   <Button onClick={submitServerAddress}>
                     {t('更新服务器地址')}
+                  </Button>
+                </Form.Section>
+              </Card>
+
+              <Card>
+                <Form.Section text={t('出站请求伪装')}>
+                  <Row
+                    gutter={{ xs: 8, sm: 16, md: 24, lg: 24, xl: 24, xxl: 24 }}
+                  >
+                    <Col xs={24} sm={24} md={24} lg={24} xl={24}>
+                      <Form.Input
+                        field='OutboundUserAgent'
+                        label={t('出站 User-Agent')}
+                        placeholder={t('留空则不发送 User-Agent')}
+                        extraText={t(
+                          '转发给上游供应商的请求默认带的 User-Agent，默认为 node。留空时不发送该请求头；渠道「请求头覆盖」里配置的 User-Agent 优先',
+                        )}
+                      />
+                    </Col>
+                  </Row>
+                  <Button onClick={submitOutboundUserAgent}>
+                    {t('更新出站 User-Agent')}
                   </Button>
                 </Form.Section>
               </Card>

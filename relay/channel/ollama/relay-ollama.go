@@ -292,7 +292,7 @@ func FetchOllamaModels(baseURL, apiKey string) ([]OllamaModel, error) {
 		request.Header.Set("Authorization", "Bearer "+apiKey)
 	}
 
-	response, err := client.Do(request)
+	response, err := client.Do(withOutboundUA(request))
 	if err != nil {
 		return nil, fmt.Errorf("请求失败: %v", err)
 	}
@@ -344,7 +344,7 @@ func PullOllamaModel(baseURL, apiKey, modelName string) error {
 		request.Header.Set("Authorization", "Bearer "+apiKey)
 	}
 
-	response, err := client.Do(request)
+	response, err := client.Do(withOutboundUA(request))
 	if err != nil {
 		return fmt.Errorf("请求失败: %v", err)
 	}
@@ -385,7 +385,7 @@ func PullOllamaModelStream(baseURL, apiKey, modelName string, progressCallback f
 		request.Header.Set("Authorization", "Bearer "+apiKey)
 	}
 
-	response, err := client.Do(request)
+	response, err := client.Do(withOutboundUA(request))
 	if err != nil {
 		return fmt.Errorf("请求失败: %v", err)
 	}
@@ -459,7 +459,7 @@ func DeleteOllamaModel(baseURL, apiKey, modelName string) error {
 		request.Header.Set("Authorization", "Bearer "+apiKey)
 	}
 
-	response, err := client.Do(request)
+	response, err := client.Do(withOutboundUA(request))
 	if err != nil {
 		return fmt.Errorf("请求失败: %v", err)
 	}
@@ -491,7 +491,7 @@ func FetchOllamaVersion(baseURL, apiKey string) (string, error) {
 		request.Header.Set("Authorization", "Bearer "+apiKey)
 	}
 
-	response, err := client.Do(request)
+	response, err := client.Do(withOutboundUA(request))
 	if err != nil {
 		return "", fmt.Errorf("请求失败: %v", err)
 	}
@@ -519,4 +519,9 @@ func FetchOllamaVersion(baseURL, apiKey string) (string, error) {
 	}
 
 	return versionResp.Version, nil
+}
+
+func withOutboundUA(req *http.Request) *http.Request {
+	service.ApplyOutboundUserAgent(req.Header)
+	return req
 }

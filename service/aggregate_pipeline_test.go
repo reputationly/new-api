@@ -938,7 +938,7 @@ func TestUpscaleSubmitErrorReportsSRRatio(t *testing.T) {
 	task := pipelineTask()
 	task.PrivateData.Aggregate.UpscaleSRRatio = srRatioPtr(4)
 
-	_, err := submitUpscaleTask(context.Background(), task.PrivateData.Aggregate, "/nfs/x.mp4", task.TaskID)
+	_, err := submitUpscaleTask(context.Background(), task.PrivateData.Aggregate, "/nfs/x.mp4", task.TaskID, "")
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "sr_ratio=4", "错误信息里要能看出实际下发的倍率")
 }

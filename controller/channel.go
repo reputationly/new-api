@@ -1146,6 +1146,7 @@ func FetchModels(c *gin.Context) {
 	}
 
 	request.Header.Set("Authorization", "Bearer "+key)
+	service.ApplyOutboundUserAgent(request.Header)
 
 	response, err := client.Do(request)
 	if err != nil {

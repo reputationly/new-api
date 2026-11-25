@@ -80,6 +80,8 @@ type EnhanceInput struct {
 	// 增强是客户请求发出后、生成段任务落库前的一次独立 relay 调用,不标的话
 	// 使用日志里就只剩一条孤立的 qwen 调用,运营看不出它属于哪条流水线。
 	AggregateName string
+	// ClientUserAgent 原始请求的 User-Agent，透传给增强自调用。
+	ClientUserAgent string
 	// Lyrics 客户的歌词,逐字(**只有音乐类型才有**)。
 	//
 	// **只作上下文,永不改写**:MiniMax-Music3 的顶层 prompt 位放的是歌词(门面把它
@@ -357,7 +359,7 @@ func EnhancePrompt(ctx context.Context, agg *common.AggregateModel, authHeader s
 	}
 	reqCtx, cancel := context.WithTimeout(ctx, textBudget(cfg, base))
 	defer cancel()
-	enhanced, usage, err := callEnhance(reqCtx, authHeader, payload, in.AggregateName)
+	enhanced, usage, err := callEnhance(reqCtx, authHeader, payload, in.AggregateName, in.ClientUserAgent)
 	if err != nil {
 		return degrade("%v", err)
 	}
@@ -559,7 +561,7 @@ var enhanceEndpoint = func() string {
 
 // callEnhance 以客户身份向本站发一次 chat 请求,取回首个 choice 的文本与 usage。
 // 走完整 relay 链路,所以这次调用会像客户自己调一样被计费、限流、记日志。
-func callEnhance(ctx context.Context, authHeader string, payload []byte, aggregateName string) (string, *dto.Usage, error) {
+func callEnhance(ctx context.Context, authHeader string, payload []byte, aggregateName, clientUA string) (string, *dto.Usage, error) {
 	endpoint := enhanceEndpoint()
 	if endpoint == "" {
 		// ServerAddress 没配就无法自调用。这是站点配置缺失,不是客户的问题,故降级而非报错。
@@ -578,6 +580,7 @@ func callEnhance(ctx context.Context, authHeader string, payload []byte, aggrega
 	if strings.TrimSpace(aggregateName) != "" {
 		req.Header.Set(AggregatePublicModelHeader, strings.TrimSpace(aggregateName))
 	}
+	setSelfCallUserAgent(req, clientUA)
 
 	// GetHttpClient 返回的是由 InitHttpClient 在启动时赋值的包级变量,拿到 nil 会直接
 	// panic。生产虽然一定初始化过,但这里的失败语义是"降级",不该有任何路径把它变成

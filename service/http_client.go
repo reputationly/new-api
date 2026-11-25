@@ -35,6 +35,37 @@ func checkRedirect(req *http.Request, via []*http.Request) error {
 	return nil
 }
 
+// outboundUATransport 给发往上游的请求补默认 User-Agent（系统设置 OutboundUserAgent）。
+// 只在请求里**没有** User-Agent 键时补：渠道请求头覆盖、适配器显式设置的值都保留。
+// 补的是空串时 net/http（HTTP/1.1 与 HTTP/2）都不发这个头，上游看到的就是没有 UA，
+// 而不是 Go 默认的 Go-http-client/1.1。
+type outboundUATransport struct {
+	base *http.Transport
+}
+
+func (t *outboundUATransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	if _, ok := req.Header["User-Agent"]; !ok {
+		req = req.Clone(req.Context())
+		if req.Header == nil {
+			req.Header = make(http.Header)
+		}
+		ApplyOutboundUserAgent(req.Header)
+	}
+	return t.base.RoundTrip(req)
+}
+
+// ApplyOutboundUserAgent 头里没有 User-Agent 键时补系统设置值（空串即不发）。
+// 不走共享 client 的出站连接（如 realtime websocket 握手）也调这里。
+func ApplyOutboundUserAgent(h http.Header) {
+	if _, ok := h["User-Agent"]; !ok {
+		h["User-Agent"] = []string{system_setting.GetOutboundUserAgent()}
+	}
+}
+
+func (t *outboundUATransport) CloseIdleConnections() {
+	t.base.CloseIdleConnections()
+}
+
 func InitHttpClient() {
 	transport := &http.Transport{
 		MaxIdleConns:        common.RelayMaxIdleConns,
@@ -48,12 +79,12 @@ func InitHttpClient() {
 
 	if common.RelayTimeout == 0 {
 		httpClient = &http.Client{
-			Transport:     transport,
+			Transport:     &outboundUATransport{base: transport},
 			CheckRedirect: checkRedirect,
 		}
 	} else {
 		httpClient = &http.Client{
-			Transport:     transport,
+			Transport:     &outboundUATransport{base: transport},
 			Timeout:       time.Duration(common.RelayTimeout) * time.Second,
 			CheckRedirect: checkRedirect,
 		}
@@ -84,9 +115,7 @@ func ResetProxyClientCache() {
 	proxyClientLock.Lock()
 	defer proxyClientLock.Unlock()
 	for _, client := range proxyClients {
-		if transport, ok := client.Transport.(*http.Transport); ok && transport != nil {
-			transport.CloseIdleConnections()
-		}
+		client.CloseIdleConnections()
 	}
 	proxyClients = make(map[string]*http.Client)
 }
@@ -124,7 +153,7 @@ func NewProxyHttpClient(proxyURL string) (*http.Client, error) {
 			transport.TLSClientConfig = common.InsecureTLSConfig
 		}
 		client := &http.Client{
-			Transport:     transport,
+			Transport:     &outboundUATransport{base: transport},
 			CheckRedirect: checkRedirect,
 		}
 		client.Timeout = time.Duration(common.RelayTimeout) * time.Second
@@ -165,7 +194,7 @@ func NewProxyHttpClient(proxyURL string) (*http.Client, error) {
 			transport.TLSClientConfig = common.InsecureTLSConfig
 		}
 
-		client := &http.Client{Transport: transport, CheckRedirect: checkRedirect}
+		client := &http.Client{Transport: &outboundUATransport{base: transport}, CheckRedirect: checkRedirect}
 		client.Timeout = time.Duration(common.RelayTimeout) * time.Second
 		proxyClientLock.Lock()
 		proxyClients[proxyURL] = client

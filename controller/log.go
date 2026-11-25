@@ -146,7 +146,7 @@ func writeLogCSVHeader(c *gin.Context, w *csv.Writer, includeAdminCols bool) err
 	)
 	// IP 属于管理员可见列，普通用户导出的表头里不能有它。
 	if includeAdminCols {
-		headers = append(headers, "IP")
+		headers = append(headers, "IP", "客户端")
 	}
 	headers = append(headers, "请求ID", "详情", "目录价币种", "本次模型汇率", "本次工具汇率", "目录价")
 	return w.Write(headers)
@@ -310,7 +310,7 @@ func logToRow(l *model.Log, includeAdminCols bool) []string {
 	)
 	// 与 writeLogCSVHeader 的顺序严格对齐：IP 只在管理员视角存在。
 	if includeAdminCols {
-		row = append(row, l.Ip)
+		row = append(row, l.Ip, csvSafeCell(l.UserAgent))
 	}
 	row = append(row,
 		l.RequestId,
@@ -320,6 +320,15 @@ func logToRow(l *model.Log, includeAdminCols bool) []string {
 		return append(row, pricing.Currency, pricing.Rate, pricing.ToolRate, strings.Join(pricing.Catalog, "\n"))
 	}
 	return append(row, "", "", "", "")
+}
+
+// csvSafeCell 防 CSV 公式注入：以 = + - @ 制表符/回车开头的单元格前面加 '，
+// Excel 等表格软件就不会把它当公式执行。用于调用方能任意填写的字段（如 User-Agent）。
+func csvSafeCell(v string) string {
+	if v != "" && strings.ContainsRune("=+-@\t\r", rune(v[0])) {
+		return "'" + v
+	}
+	return v
 }
 
 // logExportMaxRows 单次导出允许的最大行数（管理员与普通用户共用）。超过时在开始写 CSV 之前返回

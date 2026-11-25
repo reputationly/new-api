@@ -1,6 +1,7 @@
 package service
 
 import (
+	"net/http"
 	"strings"
 
 	"github.com/gin-gonic/gin"
@@ -28,6 +29,12 @@ const (
 	AggregatePublicModelHeader = constant.AggregatePublicModelHeader
 	AggregateStageHeader       = constant.AggregateStageHeader
 )
+
+// setSelfCallUserAgent 自调用带上原始客户端的 UA，日志「客户端」列才能对上真实来源；
+// 原始为空时也显式放空键，避免出站 UA 设置补上默认值。
+func setSelfCallUserAgent(req *http.Request, ua string) {
+	req.Header["User-Agent"] = []string{ua}
+}
 
 // PipelineLogLabels 本次提交属于聚合流水线的哪一段,以及它归属哪个聚合请求。
 //

@@ -179,7 +179,7 @@ func TryAdvanceAggregatePipeline(ctx context.Context, adaptor TaskPollingAdaptor
 
 	reqCtx, cancel := context.WithTimeout(ctx, upscaleSubmitTimeout)
 	defer cancel()
-	sub, err := submitUpscaleTask(reqCtx, agg, nfsPath, task.TaskID)
+	sub, err := submitUpscaleTask(reqCtx, agg, nfsPath, task.TaskID, task.PrivateData.ClientUserAgent)
 	if err != nil {
 		// 提交失败不改变任务状态:调用方继续走落盘与结算,客户拿到未超分的成品。
 		common.SysError(fmt.Sprintf("aggregate pipeline: task %s 超分段提交失败,按生成段成品交付: %v",
@@ -318,7 +318,7 @@ func billedUpscaleSize(agg *model.TaskAggregateInfo) string {
 	return strings.TrimSpace(agg.UpscaleTarget)
 }
 
-func submitUpscaleTask(ctx context.Context, agg *model.TaskAggregateInfo, nfsPath, parentTaskID string) (*model.Task, error) {
+func submitUpscaleTask(ctx context.Context, agg *model.TaskAggregateInfo, nfsPath, parentTaskID, clientUA string) (*model.Task, error) {
 	endpoint := videosEndpoint()
 	if endpoint == "" {
 		return nil, fmt.Errorf("站点未配置服务器地址(ServerAddress)")
@@ -363,6 +363,7 @@ func submitUpscaleTask(ctx context.Context, agg *model.TaskAggregateInfo, nfsPat
 	req.Header.Set(AggregateParentTaskHeader, parentTaskID)
 	req.Header.Set(AggregatePublicModelHeader, agg.PublicModel)
 	req.Header.Set(AggregateStageHeader, LogStageUpscale)
+	setSelfCallUserAgent(req, clientUA)
 
 	client := GetHttpClient()
 	if client == nil {

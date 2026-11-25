@@ -232,7 +232,7 @@ func compileQwenPE(ctx context.Context, authHeader, model string, in EnhanceInpu
 		if err != nil {
 			return nil, fmt.Errorf("构造改写请求失败: %w", err)
 		}
-		raw, usage, err := callEnhance(ctx, authHeader, payload, in.AggregateName)
+		raw, usage, err := callEnhance(ctx, authHeader, payload, in.AggregateName, in.ClientUserAgent)
 		accumulateUsage(total, usage)
 		if err != nil {
 			return nil, err

@@ -197,6 +197,7 @@ func updateTask(info *relaycommon.RelayInfo, taskID string) (*AliResponse, error
 	}
 
 	req.Header.Set("Authorization", "Bearer "+info.ApiKey)
+	service.ApplyOutboundUserAgent(req.Header)
 
 	client := &http.Client{}
 	resp, err := client.Do(req)

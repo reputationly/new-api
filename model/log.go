@@ -4,7 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
@@ -37,8 +39,10 @@ type Log struct {
 	TokenId          int    `json:"token_id" gorm:"default:0;index"`
 	Group            string `json:"group" gorm:"index"`
 	Ip               string `json:"ip,omitempty" gorm:"index;default:''"`
-	RequestId        string `json:"request_id,omitempty" gorm:"type:varchar(64);index:idx_logs_request_id;default:''"`
-	Other            string `json:"other"`
+	// UserAgent 客户端请求头里自报的 User-Agent（可伪造，只作参考），与 IP 一样只给管理员看。
+	UserAgent string `json:"user_agent,omitempty" gorm:"type:varchar(512);default:''"`
+	RequestId string `json:"request_id,omitempty" gorm:"type:varchar(64);index:idx_logs_request_id;default:''"`
+	Other     string `json:"other"`
 }
 
 // don't use iota, avoid change log type value
@@ -57,6 +61,7 @@ func formatUserLogs(logs []*Log, startIdx int) {
 		logs[i].ChannelName = ""
 		// IP 只给管理员看（GetAllLogs / ExportAllLogs 不走本函数）。
 		logs[i].Ip = ""
+		logs[i].UserAgent = ""
 		var otherMap map[string]interface{}
 		otherMap, _ = common.StrToMap(logs[i].Other)
 		if otherMap != nil {
@@ -86,6 +91,27 @@ func GetLogByTokenId(tokenId int) (logs []*Log, err error) {
 	err = LOG_DB.Model(&Log{}).Where("token_id = ?", tokenId).Order("id desc").Limit(common.MaxRecentItems).Find(&logs).Error
 	formatUserLogs(logs, 0)
 	return logs, err
+}
+
+// logUserAgentMaxLen 与 Log.UserAgent 的 varchar(512) 对齐（MySQL 严格模式下超长会直接写库失败）。
+const logUserAgentMaxLen = 512
+
+// TruncateUserAgent 按字符截断到列宽，不切坏多字节字符。
+func TruncateUserAgent(ua string) string {
+	// 请求头允许非 UTF-8 字节，PostgreSQL 会拒绝整行日志，先丢掉非法字节。
+	ua = strings.ToValidUTF8(strings.TrimSpace(ua), "")
+	if utf8.RuneCountInString(ua) <= logUserAgentMaxLen {
+		return ua
+	}
+	return string([]rune(ua)[:logUserAgentMaxLen])
+}
+
+// ClientUserAgent 本次请求客户端自报的 User-Agent（已截断到列宽）。
+func ClientUserAgent(c *gin.Context) string {
+	if c == nil || c.Request == nil {
+		return ""
+	}
+	return TruncateUserAgent(c.Request.UserAgent())
 }
 
 func RecordLog(userId int, logType int, content string) {
@@ -193,6 +219,7 @@ func RecordErrorLog(c *gin.Context, userId int, channelId int, modelName string,
 		IsStream:         isStream,
 		Group:            group,
 		Ip:               c.ClientIP(),
+		UserAgent:        ClientUserAgent(c),
 		RequestId:        requestId,
 		Other:            otherStr,
 	}
@@ -294,6 +321,7 @@ func RecordConsumeLog(c *gin.Context, userId int, params RecordConsumeLogParams)
 		IsStream:         params.IsStream,
 		Group:            params.Group,
 		Ip:               c.ClientIP(),
+		UserAgent:        ClientUserAgent(c),
 		RequestId:        requestId,
 		Other:            otherStr,
 	}
@@ -379,6 +407,8 @@ type RecordTaskBillingLogParams struct {
 	// Ip 提交时冻结在 TaskPrivateData.ClientIp 的客户端 IP。轮询阶段没有请求上下文，
 	// 结算/退款只能从这里取；存量任务没有这个字段，留空即不记。
 	Ip string
+	// UserAgent 同 Ip，提交时冻结在 TaskPrivateData.ClientUserAgent。
+	UserAgent string
 }
 
 func RecordTaskBillingLog(params RecordTaskBillingLogParams) {
@@ -413,6 +443,7 @@ func RecordTaskBillingLog(params RecordTaskBillingLogParams) {
 		PointsConsumed:   params.PointsConsumed,
 		CreditConsumed:   params.CreditConsumed,
 		Ip:               params.Ip,
+		UserAgent:        TruncateUserAgent(params.UserAgent),
 		Other:            common.MapToJsonStr(params.Other),
 	}
 	err := LOG_DB.Create(log).Error

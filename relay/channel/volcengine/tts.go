@@ -12,6 +12,7 @@ import (
 
 	"github.com/QuantumNous/new-api/dto"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
+	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/types"
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
@@ -208,6 +209,7 @@ func handleTTSWebSocketResponse(c *gin.Context, requestURL string, volcRequest V
 
 	header := http.Header{}
 	header.Set("Authorization", fmt.Sprintf("Bearer;%s", token))
+	service.ApplyOutboundUserAgent(header)
 
 	conn, resp, dialErr := websocket.DefaultDialer.DialContext(context.Background(), requestURL, header)
 	if dialErr != nil {
