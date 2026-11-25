@@ -32,6 +32,7 @@ import {
   renderNumber,
   getLogOther,
   normalizeLogPricing,
+  normalizeUSDLogTimeRatios,
   copy,
   renderClaudeLogContent,
   renderLogContent,
@@ -39,6 +40,7 @@ import {
   renderAudioModelPrice,
   renderClaudeModelPrice,
   renderModelPrice,
+  renderLogPricingFX,
   renderTieredModelPrice,
   renderTaskBillingProcess,
 } from '../../helpers';
@@ -438,6 +440,7 @@ export const useLogsData = () => {
       // 定价字段统一在这里换算成人民币：后面所有渲染函数只处理人民币一种口径。
       // 历史日志（含 V1 期）是美元口径，见 normalizeLogPricing 的注释。
       let other = normalizeLogPricing(getLogOther(logs[i].other));
+      const billingProcessOpts = normalizeUSDLogTimeRatios(other);
       let expandDataLocal = [];
       if (logs[i].type === 2 && other?.estimatedLegacyFX) {
         expandDataLocal.push({
@@ -501,10 +504,13 @@ export const useLogsData = () => {
             key: t('日志详情'),
             value: other?.claude
               ? renderClaudeLogContent({
-                  ...other,
+                  ...billingProcessOpts,
                   displayMode: billingDisplayMode,
                 })
-              : renderLogContent({ ...other, displayMode: billingDisplayMode }),
+              : renderLogContent({
+                  ...billingProcessOpts,
+                  displayMode: billingDisplayMode,
+                }),
           });
         }
         if (logs[i]?.content) {
@@ -542,12 +548,19 @@ export const useLogsData = () => {
           Boolean(other?.violation_fee_marker);
 
         let content = '';
+        const pricingFX =
+          logs[i].type === 2 && !isViolationFeeLog
+            ? renderLogPricingFX(other || {})
+            : null;
         if (isVideoMatrix) {
           buildVideoMatrixDetailRows({
             ...other,
             completion_tokens: logs[i].completion_tokens,
             group_name: logs[i].group,
           }).forEach((row) => expandDataLocal.push(row));
+          if (pricingFX) {
+            expandDataLocal.push({ key: t('币种换算'), value: pricingFX });
+          }
         }
         if (
           !isViolationFeeLog &&
@@ -555,7 +568,7 @@ export const useLogsData = () => {
           !isVideoMatrix
         ) {
           const logOpts = {
-            ...other,
+            ...billingProcessOpts,
             prompt_tokens: logs[i].prompt_tokens,
             completion_tokens: logs[i].completion_tokens,
             displayMode: billingDisplayMode,
@@ -572,7 +585,14 @@ export const useLogsData = () => {
           }
           expandDataLocal.push({
             key: t('计费过程'),
-            value: content,
+            value: pricingFX ? (
+              <>
+                {content}
+                {pricingFX}
+              </>
+            ) : (
+              content
+            ),
           });
         }
         if (other?.reasoning_effort) {
@@ -584,12 +604,17 @@ export const useLogsData = () => {
         if (other?.billing_mode === 'tiered_expr' && other?.expr_b64) {
           expandDataLocal.push({
             key: t('计费过程'),
-            value: renderTieredModelPrice({
-              ...other,
-              prompt_tokens: logs[i].prompt_tokens,
-              completion_tokens: logs[i].completion_tokens,
-              displayMode: billingDisplayMode,
-            }),
+            value: (
+              <>
+                {renderTieredModelPrice({
+                  ...other,
+                  prompt_tokens: logs[i].prompt_tokens,
+                  completion_tokens: logs[i].completion_tokens,
+                  displayMode: billingDisplayMode,
+                })}
+                {pricingFX}
+              </>
+            ),
           });
         }
       }

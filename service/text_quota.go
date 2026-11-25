@@ -54,6 +54,7 @@ type textQuotaSummary struct {
 	FileSearchCallCount      int
 	AudioInputPrice          float64
 	ImageGenerationCallPrice float64
+	ImageGenerationTool      string
 	ToolCallSurchargeQuota   decimal.Decimal
 }
 
@@ -137,6 +138,7 @@ func calculateTextToolCallSurcharge(ctx *gin.Context, relayInfo *relaycommon.Rel
 
 	if ctx.GetBool("image_generation_call") {
 		name := operation_setting.ImageGenerationToolName(ctx.GetString("image_generation_call_quality"), ctx.GetString("image_generation_call_size"))
+		summary.ImageGenerationTool = name
 		summary.ImageGenerationCallPrice = toolPrice(name, summary.ModelName)
 		surcharge = surcharge.Add(decimal.NewFromFloat(summary.ImageGenerationCallPrice).
 			Mul(dGroupRatio).
@@ -144,6 +146,15 @@ func calculateTextToolCallSurcharge(ctx *gin.Context, relayInfo *relaycommon.Rel
 	}
 
 	return surcharge
+}
+
+func appendTextToolLogPrice(other map[string]interface{}, prices types.PriceData, field, tool string, amount float64) {
+	other[field] = amount
+	if !prices.USDToolPrices[tool] {
+		return
+	}
+	fields, _ := other["usd_tool_price_fields"].([]string)
+	other["usd_tool_price_fields"] = append(fields, field)
 }
 
 func composeTieredTextQuota(relayInfo *relaycommon.RelayInfo, summary textQuotaSummary, tieredQuota int, tieredResult *billingexpr.TieredResult) int {
@@ -448,25 +459,25 @@ func PostTextConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, us
 	if summary.WebSearchCallCount > 0 {
 		other["web_search"] = true
 		other["web_search_call_count"] = summary.WebSearchCallCount
-		other["web_search_price"] = summary.WebSearchPrice
+		appendTextToolLogPrice(other, relayInfo.PriceData, "web_search_price", "web_search_preview", summary.WebSearchPrice)
 	} else if summary.ClaudeWebSearchCallCount > 0 {
 		other["web_search"] = true
 		other["web_search_call_count"] = summary.ClaudeWebSearchCallCount
-		other["web_search_price"] = summary.ClaudeWebSearchPrice
+		appendTextToolLogPrice(other, relayInfo.PriceData, "web_search_price", "web_search", summary.ClaudeWebSearchPrice)
 	}
 	if summary.FileSearchCallCount > 0 {
 		other["file_search"] = true
 		other["file_search_call_count"] = summary.FileSearchCallCount
-		other["file_search_price"] = summary.FileSearchPrice
+		appendTextToolLogPrice(other, relayInfo.PriceData, "file_search_price", "file_search", summary.FileSearchPrice)
 	}
 	if summary.AudioInputPrice > 0 && summary.AudioTokens > 0 {
 		other["audio_input_seperate_price"] = true
 		other["audio_input_token_count"] = summary.AudioTokens
-		other["audio_input_price"] = summary.AudioInputPrice
+		appendTextToolLogPrice(other, relayInfo.PriceData, "audio_input_price", "gemini_audio_input", summary.AudioInputPrice)
 	}
 	if summary.ImageGenerationCallPrice > 0 {
 		other["image_generation_call"] = true
-		other["image_generation_call_price"] = summary.ImageGenerationCallPrice
+		appendTextToolLogPrice(other, relayInfo.PriceData, "image_generation_call_price", summary.ImageGenerationTool, summary.ImageGenerationCallPrice)
 	}
 	if summary.CacheCreationTokens > 0 {
 		other["cache_creation_tokens"] = summary.CacheCreationTokens

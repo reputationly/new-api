@@ -2647,6 +2647,149 @@ export const normalizeLabel = (label) => {
     .toLowerCase();
 };
 
+export function renderLogPricingFX(opts) {
+  const lines = [];
+  const isUSDModel = opts.pricing_currency === 'USD';
+  const isExpression = opts.billing_mode === 'tiered_expr';
+  const validRate = (rate) => Number.isFinite(rate) && rate > 0;
+  const exchange = (rate) =>
+    buildBillingText('本次换算：1 USD = {{rate}} CNY', { rate });
+  const unitPrice = (label, cny, rate, unit) =>
+    buildBillingText('{{label}}：${{usd}} → ¥{{cny}} / {{unit}}', {
+      label: i18next.t(label),
+      usd: formatBillingDisplayPrice(cny / rate, 1, 9),
+      cny: formatBillingDisplayPrice(cny, 1, 9),
+      unit: i18next.t(unit),
+    });
+  if (isUSDModel && isExpression && opts.expr_b64) {
+    let expression;
+    try {
+      expression = decodeFromBase64(opts.expr_b64);
+    } catch {
+      // Older log rows may have an invalid snapshot.
+    }
+    if (expression) {
+      lines.push(
+        buildBillingText('计费表达式：{{expression}}', { expression }),
+      );
+      if (exprUsesFX(expression) && validRate(opts.expr_fx)) {
+        lines.push(
+          buildBillingText('本次 fx = {{rate}}（1 USD = {{rate}} CNY）', {
+            rate: opts.expr_fx,
+          }),
+        );
+      }
+    }
+  }
+
+  if (opts.price_unit === 'cny') {
+    const modelRate = opts.model_source_rate;
+    if (isUSDModel && !isExpression && validRate(modelRate)) {
+      const time = timeFactorDisplay(opts);
+      const inputFactor = time?.fIn ?? 1;
+      const prices = [];
+      if (opts.video_price_mode) {
+        const unit =
+          opts.video_price_mode === 'token'
+            ? '1M tokens'
+            : opts.video_price_mode === 'per_second'
+              ? '秒'
+              : '次';
+        prices.push(['视频单价', opts.video_unit_price, unit]);
+      } else if (opts.model_price >= 0) {
+        prices.push([
+          time ? '时段按次价' : '按次单价',
+          opts.model_price * (time?.scale('per_call') ?? 1),
+          '次',
+        ]);
+      } else if (opts.model_ratio >= 0) {
+        const input = opts.model_ratio * inputFactor;
+        prices.push(
+          [time ? '时段输入单价' : '输入单价', input, '1M tokens'],
+          [
+            time ? '时段输出单价' : '输出单价',
+            input * opts.completion_ratio,
+            '1M tokens',
+          ],
+        );
+      }
+      const displayed = prices
+        .filter(([, amount]) => Number.isFinite(amount) && amount >= 0)
+        .map(([label, amount, unit]) =>
+          unitPrice(label, amount, modelRate, unit),
+        );
+      if (displayed.length > 0) lines.push(exchange(modelRate), ...displayed);
+    }
+
+    const toolRate = opts.tool_source_rate;
+    if (validRate(toolRate) && Array.isArray(opts.usd_tool_price_fields)) {
+      const tools = [
+        ['web_search_price', 'Web搜索单价', '1K 次'],
+        ['file_search_price', '文件搜索单价', '1K 次'],
+        ['audio_input_price', '音频输入单价', '1M tokens'],
+        ['image_generation_call_price', '图片生成调用单价', '次'],
+      ]
+        .filter(
+          ([key]) =>
+            opts.usd_tool_price_fields.includes(key) &&
+            Number.isFinite(opts[key]) &&
+            opts[key] >= 0,
+        )
+        .map(([key, label, unit]) =>
+          unitPrice(label, opts[key], toolRate, unit),
+        );
+      if (tools.length > 0) {
+        lines.push(
+          buildBillingText('工具本次换算：1 USD = {{rate}} CNY', {
+            rate: toolRate,
+          }),
+          ...tools,
+        );
+      }
+    }
+  }
+  return lines.length > 0 ? (
+    <div className='mt-2 break-all'>
+      {lines.map((line) => (
+        <p key={line}>{line}</p>
+      ))}
+    </div>
+  ) : null;
+}
+
+export function normalizeUSDLogTimeRatios(opts) {
+  if (
+    opts?.price_unit !== 'cny' ||
+    opts.pricing_currency !== 'USD' ||
+    !Number.isFinite(opts.model_source_rate) ||
+    opts.model_source_rate <= 0
+  )
+    return opts;
+  const time = timeFactorDisplay(opts);
+  if (!time) return opts;
+  const base = { ...opts };
+  // Log ratios already include f_component / f_input; the process renderers
+  // apply time factors to base ratios when showing each unit price.
+  for (const [field, component] of [
+    ['completion_ratio', 'output'],
+    ['cache_ratio', 'cache'],
+    ['cache_creation_ratio', 'create_cache'],
+    ['cache_creation_ratio_5m', 'create_cache'],
+    ['cache_creation_ratio_1h', 'create_cache'],
+    ['image_ratio', 'image'],
+    ['audio_ratio', 'audio_input'],
+  ]) {
+    if (Number.isFinite(base[field])) {
+      base[field] *= time.fIn / time.scale(component);
+    }
+  }
+  if (Number.isFinite(base.audio_completion_ratio)) {
+    base.audio_completion_ratio *=
+      time.scale('audio_input') / time.scale('audio_output');
+  }
+  return base;
+}
+
 export function renderTieredModelPrice(opts) {
   const {
     prompt_tokens: inputTokens = 0,

@@ -15,6 +15,16 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestAppendTextToolLogPriceMarksOnlyUSDTools(t *testing.T) {
+	prices := types.PriceData{USDToolPrices: map[string]bool{"web_search_preview": true}}
+	other := make(map[string]interface{})
+	appendTextToolLogPrice(other, prices, "web_search_price", "web_search_preview", 40.8)
+	appendTextToolLogPrice(other, prices, "file_search_price", "file_search", 6.8)
+	require.Equal(t, []string{"web_search_price"}, other["usd_tool_price_fields"])
+	require.Equal(t, 40.8, other["web_search_price"])
+	require.Equal(t, 6.8, other["file_search_price"])
+}
+
 func TestCalculateTextQuotaSummaryUnifiedForClaudeSemantic(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	w := httptest.NewRecorder()

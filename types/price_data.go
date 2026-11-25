@@ -113,6 +113,7 @@ type PriceData struct {
 	UpstreamCostFX       float64
 	ToolSourceRate       float64
 	ToolPrices           map[string]float64
+	USDToolPrices        map[string]bool
 	FreeModel            bool
 	ModelPrice           float64
 	ModelRatio           float64

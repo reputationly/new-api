@@ -91,7 +91,7 @@ func ModelPriceHelper(c *gin.Context, info *relaycommon.RelayInfo, promptTokens 
 	if billing_setting.GetBillingMode(info.OriginModelName) == billing_setting.BillingModeTieredExpr {
 		return modelPriceHelperTiered(c, info, promptTokens, meta, groupRatioInfo, currency, factor)
 	}
-	toolPrices, toolRate, err := freezeToolPrices(info.OriginModelName)
+	toolPrices, usdToolPrices, toolRate, err := freezeToolPrices(info.OriginModelName)
 	if err != nil {
 		return types.PriceData{}, err
 	}
@@ -177,6 +177,7 @@ func ModelPriceHelper(c *gin.Context, info *relaycommon.RelayInfo, promptTokens 
 	priceData := types.PriceData{
 		PricingCurrency:      currency,
 		ToolPrices:           toolPrices,
+		USDToolPrices:        usdToolPrices,
 		ToolSourceRate:       toolRate,
 		FreeModel:            freeModel,
 		ModelPrice:           modelPrice,
@@ -316,7 +317,7 @@ func HasModelBillingConfig(modelName string) bool {
 }
 
 func modelPriceHelperTiered(c *gin.Context, info *relaycommon.RelayInfo, promptTokens int, meta *types.TokenCountMeta, groupRatioInfo types.GroupRatioInfo, currency string, factor float64) (types.PriceData, error) {
-	toolPrices, toolRate, err := freezeToolPrices(info.OriginModelName)
+	toolPrices, usdToolPrices, toolRate, err := freezeToolPrices(info.OriginModelName)
 	if err != nil {
 		return types.PriceData{}, err
 	}
@@ -403,6 +404,7 @@ func modelPriceHelperTiered(c *gin.Context, info *relaycommon.RelayInfo, promptT
 		PricingCurrency:   currency,
 		ModelSourceRate:   exprFX,
 		ToolPrices:        toolPrices,
+		USDToolPrices:     usdToolPrices,
 		ToolSourceRate:    toolRate,
 		FreeModel:         freeModel,
 		GroupRatioInfo:    groupRatioInfo,
@@ -420,8 +422,9 @@ func modelPriceHelperTiered(c *gin.Context, info *relaycommon.RelayInfo, promptT
 	return priceData, nil
 }
 
-func freezeToolPrices(modelName string) (map[string]float64, float64, error) {
+func freezeToolPrices(modelName string) (map[string]float64, map[string]bool, float64, error) {
 	prices := make(map[string]float64, 4)
+	usdPrices := make(map[string]bool)
 	var usedRate float64
 	rate, hasRate := billing_setting.GetModelSourceRate()
 	names := []string{"web_search_preview", "web_search", "file_search", "gemini_audio_input"}
@@ -433,12 +436,13 @@ func freezeToolPrices(modelName string) (map[string]float64, float64, error) {
 	for _, name := range names {
 		amount, usd, err := operation_setting.ResolveToolPriceCNY(name, modelName, rate, hasRate)
 		if err != nil {
-			return nil, 0, err
+			return nil, nil, 0, err
 		}
 		if usd {
+			usdPrices[name] = true
 			usedRate = rate
 		}
 		prices[name] = amount
 	}
-	return prices, usedRate, nil
+	return prices, usdPrices, usedRate, nil
 }
