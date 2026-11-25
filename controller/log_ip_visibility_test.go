@@ -97,6 +97,14 @@ func TestExportAllLogsKeepsIpColumnForAdmins(t *testing.T) {
 	require.Equal(t, "ua-"+adminSideIp, records[1][ipIndex+1])
 }
 
+func TestCSVSafeCell(t *testing.T) {
+	require.Equal(t, "WorkBuddy/5.11.3", csvSafeCell("WorkBuddy/5.11.3"))
+	require.Equal(t, "", csvSafeCell(""))
+	for _, v := range []string{"=HYPERLINK(1)", "+1", "-1", "@SUM(1)", "\tx", "\rx"} {
+		require.Equal(t, "'"+v, csvSafeCell(v))
+	}
+}
+
 func callLogListHandler(t *testing.T, handler func(*gin.Context), userId int, path string) map[string]any {
 	t.Helper()
 	gin.SetMode(gin.TestMode)
