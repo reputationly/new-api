@@ -64,8 +64,6 @@ func RatioQuotaPerToken(ratio float64) float64 { return ratio * QuotaPerMillionT
 // 也只会影响美元支付与美元展示，不会影响任何计费结果。
 var QuotaPerUnit = 7300 * 1000 * 1000.0 // 1 美元 = 7.3 元 = 7.3×10⁹ quota
 
-// 保留旧变量以兼容历史逻辑，实际展示由 general_setting.quota_display_type 控制
-var DisplayInCurrencyEnabled = true
 var DisplayTokenStatEnabled = true
 var DrawingEnabled = true
 var TaskEnabled = true

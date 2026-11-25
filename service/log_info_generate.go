@@ -386,7 +386,7 @@ func GenerateMjOtherInfo(relayInfo *relaycommon.RelayInfo, priceData types.Price
 // InjectTieredBillingInfo overlays tiered billing fields onto an existing
 // module-specific other map. Call this after GenerateTextOtherInfo /
 // GenerateClaudeOtherInfo / etc. when the request used tiered_expr billing.
-func InjectTieredBillingInfo(other map[string]interface{}, relayInfo *relaycommon.RelayInfo, result *billingexpr.TieredResult, params ...billingexpr.TokenParams) {
+func InjectTieredBillingInfo(other map[string]interface{}, relayInfo *relaycommon.RelayInfo, result *billingexpr.TieredResult) {
 	if relayInfo == nil || other == nil {
 		return
 	}
@@ -404,15 +404,7 @@ func InjectTieredBillingInfo(other map[string]interface{}, relayInfo *relaycommo
 	if result != nil {
 		other["matched_tier"] = result.MatchedTier
 		if relayInfo.PriceData.PricingCurrency == "USD" {
-			other["expr_quota_before_group"] = result.ActualQuotaBeforeGroup
 			other["expr_group_ratio"] = snap.GroupRatio
-			if len(params) > 0 {
-				p := params[0]
-				other["expr_tokens"] = map[string]float64{
-					"p": p.P, "c": p.C, "cr": p.CR, "cc": p.CC, "cc1h": p.CC1h,
-					"img": p.Img, "img_o": p.ImgO, "ai": p.AI, "ao": p.AO,
-				}
-			}
 		}
 	}
 }

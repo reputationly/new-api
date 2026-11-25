@@ -518,15 +518,7 @@ func PostTextConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, us
 		other["input_tokens_total"] = usage.InputTokens
 	}
 	if tieredBillingApplied {
-		InjectTieredBillingInfo(other, relayInfo, tieredResult, tieredParams)
-	}
-	if relayInfo.PriceData.PricingCurrency == "USD" {
-		if len(relayInfo.PriceData.OtherRatios) > 0 {
-			other["billing_other_ratios"] = relayInfo.PriceData.OtherRatios
-		}
-		if isLegacyClaudeDerivedOpenAIUsage(relayInfo, usage) {
-			other["legacy_claude_input"] = true
-		}
+		InjectTieredBillingInfo(other, relayInfo, tieredResult)
 	}
 
 	model.RecordConsumeLog(ctx, relayInfo.UserId, model.RecordConsumeLogParams{
