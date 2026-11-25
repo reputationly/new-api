@@ -28,9 +28,6 @@ import { usePricingFilterCounts } from '../../../../../hooks/model-pricing/usePr
 
 const FilterModalContent = ({ sidebarProps, t }) => {
   const {
-    currency,
-    setCurrency,
-    siteDisplayType,
     filterPointsOnly,
     setFilterPointsOnly,
     pointsConfig,
@@ -75,9 +72,6 @@ const FilterModalContent = ({ sidebarProps, t }) => {
   return (
     <>
       <PricingDisplaySettings
-        currency={currency}
-        setCurrency={setCurrency}
-        siteDisplayType={siteDisplayType}
         viewMode={viewMode}
         setViewMode={setViewMode}
         filterPointsOnly={filterPointsOnly}

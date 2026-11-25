@@ -18,7 +18,7 @@ For commercial licensing, please contact support@quantumnous.com
 */
 
 import React, { memo, useCallback } from 'react';
-import { Input, Button, Switch, Select, Divider } from '@douyinfe/semi-ui';
+import { Input, Button, Switch, Divider } from '@douyinfe/semi-ui';
 import { IconSearch, IconCopy, IconFilter } from '@douyinfe/semi-icons';
 
 const SearchActions = memo(
@@ -31,8 +31,7 @@ const SearchActions = memo(
     isMobile = false,
     searchValue = '',
     setShowFilterModal,
-    currency,
-    setCurrency,
+
     filterPointsOnly,
     setFilterPointsOnly,
     pointsEnabled = false,
@@ -40,13 +39,11 @@ const SearchActions = memo(
     setFilterEntitlementOnly,
     // 有活跃套餐覆盖才出「仅看套餐可用」开关
     entitlementConfig,
-    siteDisplayType,
+
     viewMode,
     setViewMode,
     t,
   }) => {
-    const supportsCurrencyDisplay = siteDisplayType !== 'TOKENS';
-
     const handleCopyClick = useCallback(() => {
       if (copyText && selectedRowKeys.length > 0) {
         copyText(selectedRowKeys);
@@ -89,21 +86,6 @@ const SearchActions = memo(
         {!isMobile && (
           <>
             <Divider layout='vertical' margin='8px' />
-
-            {/* 货币单位选择。曾经挂在「充值价格显示」开关下面，那个开关删了
-                （本站 price 与 usd_exchange_rate 相等，换算恒等于 1），
-                货币选择本身仍有用，改为独立展示。 */}
-            {supportsCurrencyDisplay && (
-              <Select
-                value={currency}
-                onChange={setCurrency}
-                optionList={[
-                  { value: 'USD', label: 'USD' },
-                  { value: 'CNY', label: 'CNY' },
-                  { value: 'CUSTOM', label: t('自定义货币') },
-                ]}
-              />
-            )}
 
             {/* 仅看可积分抵扣。积分没开的站点不出这一项——开了也筛不出任何模型。 */}
             {pointsEnabled && (

@@ -30,6 +30,7 @@ import {
   formatVideoMatrixSummary,
   buildTimeWindowRows,
 } from '../../../../../helpers';
+import { getModelPricingCurrencyConfig } from '../../../../../helpers/modelPriceCurrency';
 import { DISCOUNT_HEX } from '../../../../../helpers/discount';
 
 import { getModelCoverage } from '../../../../../helpers/entitlementPricing';
@@ -41,10 +42,7 @@ const ModelPricingTable = ({
   groupModelRatio,
   groupTimeRatio,
   groupModelComponentScale,
-  currency,
-  siteDisplayType,
-  displayCurrency,
-  displayPrice,
+
   usableGroup,
   autoGroups = [],
   pointsConfig,
@@ -55,6 +53,7 @@ const ModelPricingTable = ({
     ? modelData.enable_groups
     : [];
   const autoChain = autoGroups.filter((g) => modelEnableGroups.includes(g));
+  const displayCurrency = getModelPricingCurrencyConfig(modelData);
   const renderGroupPriceTable = () => {
     // 仅展示模型可用的分组：模型 enable_groups 与用户可用分组的交集
 
@@ -71,10 +70,6 @@ const ModelPricingTable = ({
             selectedGroup: group,
             groupRatio,
             groupModelRatio,
-            displayCurrency,
-            displayPrice,
-            currency,
-            quotaDisplayType: siteDisplayType,
             componentScaleMap: groupModelComponentScale,
             pointsEnabled: pointsConfig?.enabled,
             quotaPerPoint: pointsConfig?.quotaPerPoint,
@@ -113,7 +108,7 @@ const ModelPricingTable = ({
                 : modelData?.quota_type === 1
                   ? t('按次计费')
                   : '-',
-        priceItems: getModelPriceItems(priceData, t, siteDisplayType),
+        priceItems: getModelPriceItems(priceData, t),
         // 视频矩阵行要按本行分组倍率折算出区间，需要原始 priceData
         priceData,
       };
@@ -220,7 +215,7 @@ const ModelPricingTable = ({
     });
 
     columns.push({
-      title: siteDisplayType === 'TOKENS' ? t('计费摘要') : t('价格摘要'),
+      title: t('价格摘要'),
       dataIndex: 'priceItems',
       render: (items, record) => {
         if (items.length === 1 && items[0].isDynamic) {
@@ -236,7 +231,11 @@ const ModelPricingTable = ({
           return (
             <div className='space-y-1'>
               <div className='font-semibold text-orange-600'>
-                {formatVideoMatrixSummary(record.priceData, t, displayCurrency)}
+                {formatVideoMatrixSummary(
+                  record.priceData,
+                  t,
+                  record.priceData.displayCurrency,
+                )}
               </div>
               <div className='text-xs text-gray-500'>
                 {t('见上方场景计费价目表')}
@@ -392,7 +391,9 @@ const ModelPricingTable = ({
                   (disc > 0 ? inFinal / disc : inDir * 1).toFixed(6),
                 );
                 const outList = Number((cEff * inList).toFixed(6));
-                const fmt = (v) => `¥${Number(v).toFixed(4)}`;
+                if (!displayCurrency) return t('价格不可用');
+                const fmt = (v) =>
+                  `${displayCurrency.symbol}${(v * displayCurrency.ratePerCny).toFixed(4)}`;
                 const listPair =
                   disc > 0 && disc !== 1 ? (
                     <span className='text-gray-400 line-through'>

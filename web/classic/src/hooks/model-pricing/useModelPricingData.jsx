@@ -41,7 +41,6 @@ export const useModelPricingData = () => {
   const [filterCapability, setFilterCapability] = useState('all'); // 模型能力筛选: 'all' | string
   const [pageSize, setPageSize] = useState(20);
   const [currentPage, setCurrentPage] = useState(1);
-  const [currency, setCurrency] = useState('USD');
   // 「仅显示可积分抵扣的模型」。默认关：积分是少数用户才关心的口子，默认开会让
   // 大部分人看到一个被裁剪过的模型列表却不知道为什么。
   const [filterPointsOnly, setFilterPointsOnly] = useState(false);
@@ -77,58 +76,6 @@ export const useModelPricingData = () => {
 
   const [statusState] = useContext(StatusContext);
   const [userState] = useContext(UserContext);
-
-  // 展示币种相对人民币的换算率。定价配置存的就是人民币，价格展示一律
-  // `人民币 × ratePerCny`：
-  //   CNY → 1；USD → 1 / 汇率；CUSTOM → 自定义汇率 / 汇率。
-  //
-  // 曾经还有个「充值价格显示」开关，按 price / usd_exchange_rate 再换算一次 ——
-  // 那是上游给"充值价高于汇率、体现溢价"的站点用的。本站两个值相等（都是 7.3），
-  // 换算恒等于 1，开关点了数字纹丝不动，等于给用户一个坏掉的按钮，已下线。
-  const usdExchangeRate = useMemo(
-    () =>
-      Number(
-        statusState?.status?.model_source_rate ??
-          statusState?.status?.usd_exchange_rate ??
-          1,
-      ),
-    [statusState],
-  );
-  const customExchangeRate = useMemo(
-    () => Number(statusState?.status?.custom_currency_exchange_rate) || 1,
-    [statusState],
-  );
-  const customCurrencySymbol = useMemo(
-    () => statusState?.status?.custom_currency_symbol ?? '¤',
-    [statusState],
-  );
-  const ratePerCny = useMemo(() => {
-    if (currency === 'CNY') return 1;
-    if (!(usdExchangeRate > 0)) return 1;
-    if (currency === 'CUSTOM') return customExchangeRate / usdExchangeRate;
-    return 1 / usdExchangeRate;
-  }, [currency, customExchangeRate, usdExchangeRate]);
-
-  // 默认货币与站点展示类型同步；TOKENS 由视图层走倍率展示
-  const siteDisplayType = useMemo(
-    () => statusState?.status?.quota_display_type || 'USD',
-    [statusState],
-  );
-  useEffect(() => {
-    if (
-      siteDisplayType === 'USD' ||
-      siteDisplayType === 'CNY' ||
-      siteDisplayType === 'CUSTOM'
-    ) {
-      setCurrency(siteDisplayType);
-    }
-  }, [siteDisplayType]);
-
-  useEffect(() => {
-    if (siteDisplayType === 'TOKENS') {
-      setCurrency('USD');
-    }
-  }, [siteDisplayType]);
 
   // 从 URL `?group=xxx` 同步初始筛选分组（仅在 pricing 数据首次到位后执行一次）
   const urlGroupSyncedRef = useRef(false);
@@ -260,19 +207,6 @@ export const useModelPricingData = () => {
     }),
     [selectedRowKeys],
   );
-
-  const displayCurrency = {
-    ratePerCny,
-    symbol:
-      currency === 'CNY' || !(usdExchangeRate > 0)
-        ? '¥'
-        : currency === 'CUSTOM'
-          ? customCurrencySymbol
-          : '$',
-  };
-  const displayPrice = (cnyPrice, digits = 3) => {
-    return `${displayCurrency.symbol}${(Number(cnyPrice) * ratePerCny).toFixed(digits)}`;
-  };
 
   const setModelsFormat = (models, groupRatio, vendorMap) => {
     for (let i = 0; i < models.length; i++) {
@@ -476,13 +410,10 @@ export const useModelPricingData = () => {
     setPageSize,
     currentPage,
     setCurrentPage,
-    currency,
     filterPointsOnly,
     filterEntitlementOnly,
     setFilterPointsOnly,
     setFilterEntitlementOnly,
-    setCurrency,
-    siteDisplayType,
     models,
     loading,
     groupRatio,
@@ -496,7 +427,6 @@ export const useModelPricingData = () => {
     entitlementConfig,
 
     // 计算属性
-    ratePerCny,
     filteredModels,
     rowSelection,
 
@@ -508,8 +438,6 @@ export const useModelPricingData = () => {
     statusState,
 
     // 方法
-    displayCurrency,
-    displayPrice,
     refresh,
     copyText,
     handleChange,

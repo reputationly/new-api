@@ -464,6 +464,9 @@ func updatePricing(imgRaw, vidRaw, audRaw, musRaw string) {
 		currency, factor, conversionErr := billing_setting.ResolveModelPriceConversion(model)
 		pricing.PricingCurrency = currency
 		pricing.PriceUnavailable = conversionErr != nil
+		if currency == billing_setting.CurrencyUSD && conversionErr == nil {
+			pricing.SourceRate = factor
+		}
 		modelPrice, findPrice := ratio_setting.GetModelPrice(model, false)
 		if findPrice {
 			pricing.ModelPrice = modelPrice * factor
@@ -495,10 +498,12 @@ func updatePricing(imgRaw, vidRaw, audRaw, musRaw string) {
 			if expr, ok := billing_setting.GetBillingExpr(model); ok && strings.TrimSpace(expr) != "" {
 				pricing.BillingMode = billingMode
 				pricing.BillingExpr = expr
-				if rate, ok := billing_setting.GetModelSourceRate(); ok {
-					pricing.SourceRate = rate
-				} else if billingexpr.UsedVars(expr)["fx"] {
-					pricing.PriceUnavailable = true
+				if currency != billing_setting.CurrencyUSD {
+					if rate, ok := billing_setting.GetModelSourceRate(); ok {
+						pricing.SourceRate = rate
+					} else if billingexpr.UsedVars(expr)["fx"] {
+						pricing.PriceUnavailable = true
+					}
 				}
 			}
 		}

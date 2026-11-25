@@ -8,6 +8,7 @@ import {
   renderTieredModelPriceSimple,
 } from '../../../../helpers/render';
 import '../../../../i18n/i18n';
+import { getModelPricingCurrencyConfig } from '../../../../helpers/modelPriceCurrency';
 import { formatDynamicPriceSummary } from '../../../../helpers/utils';
 import TieredPricingEditor from '../../../../pages/Setting/Ratio/components/TieredPricingEditor';
 import DynamicPricingBreakdown from '../modal/components/DynamicPricingBreakdown';
@@ -22,12 +23,18 @@ describe('表达式 fx 展示口径', () => {
     expect(exprUsesFX('v2:tier("base", p * 10.2)')).toBe(false);
   });
 
-  it('卡片与详情使用广场选择的币种，不读取站点默认币种', () => {
+  it('卡片与详情使用模型定价币种，不读取站点默认币种', () => {
     localStorage.setItem('quota_display_type', 'CNY');
     const t = (key, args) => args?.price ?? key;
     const expr = 'v2:tier("base", p * 5 * fx)';
-    const cny = { symbol: '¥', ratePerCny: 1 };
-    const usd = { symbol: '$', ratePerCny: 1 / 6.8 };
+    const cny = getModelPricingCurrencyConfig({
+      pricing_currency: 'CNY',
+      source_rate: 6.8,
+    });
+    const usd = getModelPricingCurrencyConfig({
+      pricing_currency: 'USD',
+      source_rate: 6.8,
+    });
     const card = render(formatDynamicPriceSummary(expr, t, 1, 6.8, cny));
     expect(card.container.textContent).toContain('¥34');
     card.rerender(formatDynamicPriceSummary(expr, t, 1, 6.8, usd));

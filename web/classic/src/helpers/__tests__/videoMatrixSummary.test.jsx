@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { render, screen } from '@testing-library/react';
+import { getModelPricingCurrencyConfig } from '../modelPriceCurrency';
 import { formatVideoMatrixSummary } from '../utils';
 import VideoMatrixBreakdown from '../../components/table/model-pricing/modal/components/VideoMatrixBreakdown';
 
@@ -37,10 +38,13 @@ describe('formatVideoMatrixSummary', () => {
     expect(screen.getByText(/\/ 秒/)).toBeTruthy();
   });
 
-  it('视频矩阵摘要与详情跟随广场选择的币种', () => {
+  it('视频矩阵摘要与详情使用模型定价币种', () => {
     const data = priceData('per_second', { per_second: { '1080p': 34 } }, 1);
-    const cny = { symbol: '¥', ratePerCny: 1 };
-    const usd = { symbol: '$', ratePerCny: 1 / 6.8 };
+    const cny = getModelPricingCurrencyConfig({ pricing_currency: 'CNY' });
+    const usd = getModelPricingCurrencyConfig({
+      pricing_currency: 'USD',
+      source_rate: 6.8,
+    });
     const view = (displayCurrency) => (
       <>
         <div>{formatVideoMatrixSummary(data, t, displayCurrency)}</div>

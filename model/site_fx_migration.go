@@ -12,6 +12,10 @@ func isRetiredFXOption(key string) bool {
 	return key == "USDExchangeRate" || key == "QuotaPerUnit"
 }
 
+func IsFixedQuotaDisplayOption(key string) bool {
+	return key == "general_setting.quota_display_type" || key == "DisplayInCurrencyEnabled"
+}
+
 func backupLegacySiteFX(db *gorm.DB) error {
 	return db.Transaction(func(tx *gorm.DB) error {
 		values, err := getOptionValues(tx, []string{"USDExchangeRate", "QuotaPerUnit", "Price"})

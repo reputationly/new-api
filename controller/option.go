@@ -347,6 +347,10 @@ func UpdateOption(c *gin.Context) {
 		return
 	}
 	pricingOption := pricingBatchKeys[option.Key]
+	if model.IsFixedQuotaDisplayOption(option.Key) {
+		common.ApiErrorMsg(c, "额度展示固定为人民币")
+		return
+	}
 	if option.Key == "USDExchangeRate" || option.Key == "QuotaPerUnit" {
 		common.ApiErrorMsg(c, "此配置已停用，请使用全局模型源汇率")
 		return

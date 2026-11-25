@@ -24,6 +24,7 @@ import { IconClose } from '@douyinfe/semi-icons';
 import { useIsMobile } from '../../../../hooks/common/useIsMobile';
 import ModelHeader from './components/ModelHeader';
 import ModelBasicInfo from './components/ModelBasicInfo';
+import { getModelPricingCurrencyConfig } from '../../../../helpers/modelPriceCurrency';
 import ModelEndpoints from './components/ModelEndpoints';
 import ModelPricingTable from './components/ModelPricingTable';
 import DynamicPricingBreakdown from './components/DynamicPricingBreakdown';
@@ -39,10 +40,6 @@ const ModelDetailSideSheet = ({
   groupRatio,
   groupModelRatio,
   groupTimeRatio,
-  currency,
-  siteDisplayType,
-  displayCurrency,
-  displayPrice,
   usableGroup,
   vendorsMap,
   endpointMap,
@@ -51,6 +48,7 @@ const ModelDetailSideSheet = ({
   entitlementConfig,
   t,
 }) => {
+  const displayCurrency = getModelPricingCurrencyConfig(modelData);
   const isMobile = useIsMobile();
 
   return (
@@ -100,7 +98,11 @@ const ModelDetailSideSheet = ({
                 t={t}
               />
             </div>
-            {modelData.billing_mode === 'tiered_expr' &&
+            {!displayCurrency && (
+              <div style={{ padding: '0 24px' }}>{t('价格暂不可用')}</div>
+            )}
+            {displayCurrency &&
+              modelData.billing_mode === 'tiered_expr' &&
               modelData.billing_expr && (
                 <>
                   <Divider margin={16} />
@@ -114,7 +116,7 @@ const ModelDetailSideSheet = ({
                   </div>
                 </>
               )}
-            {modelData.video_pricing?.mode && (
+            {displayCurrency && modelData.video_pricing?.mode && (
               <>
                 <Divider margin={16} />
                 <div style={{ padding: '0 24px' }}>
@@ -143,10 +145,6 @@ const ModelDetailSideSheet = ({
                 groupRatio={groupRatio}
                 groupModelRatio={groupModelRatio}
                 groupTimeRatio={groupTimeRatio}
-                currency={currency}
-                siteDisplayType={siteDisplayType}
-                displayCurrency={displayCurrency}
-                displayPrice={displayPrice}
                 usableGroup={usableGroup}
                 autoGroups={autoGroups}
                 pointsConfig={pointsConfig}

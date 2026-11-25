@@ -4,7 +4,6 @@ import { IconPriceTag } from '@douyinfe/semi-icons';
 import {
   flattenVideoMatrix,
   videoSecondsRank,
-  getModelPricingCurrencyConfig,
   VIDEO_PER_SECOND_COLUMN,
 } from '../../../../../helpers';
 import { getQuotaPerYuan } from '../../../../../helpers/quota';
@@ -41,8 +40,10 @@ export default function VideoMatrixBreakdown({
   // 三种模式不能用 isToken 一个布尔切：per_second 落进 else 分支会被当成 per_call，
   // 列头拼成「__per_second__ 秒」、单位写成「/次」，而它实际是每秒单价。
   const isPerSecond = videoPricing.mode === 'per_second';
-  const { symbol, ratePerCny } =
-    displayCurrency ?? getModelPricingCurrencyConfig();
+  const { symbol, ratePerCny } = displayCurrency ?? {
+    symbol: '¥',
+    ratePerCny: 1,
+  };
 
   // 列：token 模式固定两列（与配置页、供应商价目表同序）；按次模式取出现过的秒数。
   // 秒数用 videoSecondsRank 解析——后端接受 '5s' / '5秒' 这类列名，

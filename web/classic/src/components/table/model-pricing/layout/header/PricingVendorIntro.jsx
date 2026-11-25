@@ -146,8 +146,7 @@ const PricingVendorIntro = memo(
     isMobile = false,
     searchValue = '',
     setShowFilterModal,
-    currency,
-    setCurrency,
+
     viewMode,
     setViewMode,
     filterPointsOnly,
@@ -281,8 +280,6 @@ const PricingVendorIntro = memo(
           isMobile={isMobile}
           searchValue={searchValue}
           setShowFilterModal={setShowFilterModal}
-          currency={currency}
-          setCurrency={setCurrency}
           viewMode={viewMode}
           setViewMode={setViewMode}
           filterPointsOnly={filterPointsOnly}
@@ -303,8 +300,7 @@ const PricingVendorIntro = memo(
         isMobile,
         searchValue,
         setShowFilterModal,
-        currency,
-        setCurrency,
+
         viewMode,
         setViewMode,
         filterPointsOnly,

@@ -21,9 +21,6 @@ import React from 'react';
 import SelectableButtonGroup from '../../../common/ui/SelectableButtonGroup';
 
 const PricingDisplaySettings = ({
-  currency,
-  setCurrency,
-  siteDisplayType,
   viewMode,
   setViewMode,
   filterPointsOnly,
@@ -32,8 +29,6 @@ const PricingDisplaySettings = ({
   loading = false,
   t,
 }) => {
-  const supportsCurrencyDisplay = siteDisplayType !== 'TOKENS';
-
   const items = [
     {
       value: 'tableView',
@@ -48,12 +43,6 @@ const PricingDisplaySettings = ({
           },
         ]
       : []),
-  ];
-
-  const currencyItems = [
-    { value: 'USD', label: 'USD ($)' },
-    { value: 'CNY', label: 'CNY (¥)' },
-    { value: 'CUSTOM', label: t('自定义货币') },
   ];
 
   const handleChange = (value) => {
@@ -86,18 +75,6 @@ const PricingDisplaySettings = ({
         loading={loading}
         t={t}
       />
-
-      {supportsCurrencyDisplay && (
-        <SelectableButtonGroup
-          title={t('货币单位')}
-          items={currencyItems}
-          activeValue={currency}
-          onChange={setCurrency}
-          collapsible={false}
-          loading={loading}
-          t={t}
-        />
-      )}
     </div>
   );
 };

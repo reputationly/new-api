@@ -36,9 +36,7 @@ const PricingTopSection = memo(
     filteredModels,
     loading,
     searchValue,
-    currency,
-    setCurrency,
-    siteDisplayType,
+
     viewMode,
     setViewMode,
     filterPointsOnly,
@@ -65,9 +63,6 @@ const PricingTopSection = memo(
                 isMobile={isMobile}
                 searchValue={searchValue}
                 setShowFilterModal={setShowFilterModal}
-                currency={currency}
-                setCurrency={setCurrency}
-                siteDisplayType={siteDisplayType}
                 viewMode={viewMode}
                 setViewMode={setViewMode}
                 filterPointsOnly={filterPointsOnly}
@@ -101,9 +96,6 @@ const PricingTopSection = memo(
             isMobile={isMobile}
             searchValue={searchValue}
             setShowFilterModal={setShowFilterModal}
-            currency={currency}
-            setCurrency={setCurrency}
-            siteDisplayType={siteDisplayType}
             viewMode={viewMode}
             setViewMode={setViewMode}
             filterPointsOnly={filterPointsOnly}

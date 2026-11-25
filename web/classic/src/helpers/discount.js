@@ -47,20 +47,20 @@ const TIME_PRICE_COMPONENTS = [
   ['per_call', '按次'],
 ];
 
-const formatTimePriceValue = (v) => {
+const formatTimePriceValue = (v, symbol) => {
   const n = Number(v);
   if (!Number.isFinite(n)) return '';
-  return `¥${Number.isInteger(n) ? n : Number(n.toFixed(4))}`;
+  return `${symbol}${Number.isInteger(n) ? n : Number(n.toFixed(4))}`;
 };
 
-export const formatTimePrices = (prices, t, max = 3) => {
+export const formatTimePrices = (prices, t, max = 3, symbol = '¥') => {
   if (!prices || typeof prices !== 'object') return '';
   const tr = typeof t === 'function' ? t : (s) => s;
   const parts = [];
   for (const [comp, label] of TIME_PRICE_COMPONENTS) {
     const price = Number(prices[comp]);
     if (!Number.isFinite(price) || price <= 0) continue;
-    parts.push(`${tr(label)}${formatTimePriceValue(price)}`);
+    parts.push(`${tr(label)}${formatTimePriceValue(price, symbol)}`);
     if (parts.length >= max) break;
   }
   const total = TIME_PRICE_COMPONENTS.filter(

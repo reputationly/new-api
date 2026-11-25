@@ -19,7 +19,8 @@ For commercial licensing, please contact support@quantumnous.com
 
 import { Toast, Pagination } from '@douyinfe/semi-ui';
 import { toastConstants, BILLING_PRICING_VARS } from '../constants';
-import { getDisplayCurrency, getQuotaPerYuan } from './quota';
+import { getQuotaPerYuan } from './quota';
+import { getModelPricingCurrencyConfig } from './modelPriceCurrency';
 import { getExprPriceScale } from './exprPrice';
 import { parseTiersFromExpr, stripStringLiterals } from './billingExprTerms';
 import React from 'react';
@@ -717,13 +718,6 @@ export const selectFilter = (input, option) => {
 // 不建立本地绑定，而本文件内部还要调用它（下面三处）。
 export { formatPriceWithCeiling };
 
-export const getModelPricingCurrencyConfig = () => {
-  // 定价配置（ModelRatio / ModelPrice / 视频矩阵 / 表达式系数）存的就是人民币，
-  // 所以折算基准是人民币：`人民币 × ratePerCny`。
-  const { symbol, ratePerCny } = getDisplayCurrency();
-  return { symbol, ratePerCny };
-};
-
 /**
  * 取某个分组下某个模型的**实际**倍率。
  *
@@ -780,8 +774,8 @@ export const calculateModelPrice = ({
   selectedGroup,
   groupRatio,
   groupModelRatio,
-  displayPrice,
-  quotaDisplayType = 'USD',
+  displayPrice: formatDisplayPrice,
+  quotaDisplayType = 'CNY',
   precision = 2,
   pointsEnabled = false,
   quotaPerPoint = 0,
@@ -799,9 +793,14 @@ export const calculateModelPrice = ({
   // 不传 = 全部按 1，行为与改造前逐位一致。
   componentScaleMap = null,
 }) => {
-  if (record.price_unavailable) {
+  const displayCurrency = getModelPricingCurrencyConfig(record);
+  if (!displayCurrency) {
     return { priceUnavailable: true };
   }
+  const displayPrice =
+    formatDisplayPrice ??
+    ((cny, digits) =>
+      `${displayCurrency.symbol}${(cny * displayCurrency.ratePerCny).toFixed(digits)}`);
   // 1. 选择实际使用的分组
   let usedGroup = selectedGroup;
   let usedGroupRatio = getEffectiveGroupRatio(
@@ -868,6 +867,7 @@ export const calculateModelPrice = ({
   if (record.billing_mode === 'tiered_expr' && record.billing_expr) {
     return {
       isDynamicPricing: true,
+      displayCurrency,
       billingExpr: record.billing_expr,
       usedGroup,
       usedGroupRatio,
@@ -895,6 +895,7 @@ export const calculateModelPrice = ({
       .map((p) => (perCall ? Math.ceil(p) : p));
     return {
       isVideoMatrix: true,
+      displayCurrency,
       videoPricing: record.video_pricing,
       entitlementRange: entPoints.length
         ? { lo: Math.min(...entPoints), hi: Math.max(...entPoints) }
@@ -1112,7 +1113,7 @@ export const calculateModelPrice = ({
   };
 };
 
-export const getModelPriceItems = (priceData, t, quotaDisplayType = 'USD') => {
+export const getModelPriceItems = (priceData, t, quotaDisplayType = 'CNY') => {
   if (priceData.priceUnavailable) {
     return [
       {
@@ -1482,7 +1483,7 @@ export const formatVideoMatrixSummary = (priceData, t, displayCurrency) => {
 };
 
 // 格式化价格信息（用于卡片视图）
-export const formatPriceInfo = (priceData, t, quotaDisplayType = 'USD') => {
+export const formatPriceInfo = (priceData, t, quotaDisplayType = 'CNY') => {
   const items = getModelPriceItems(priceData, t, quotaDisplayType);
   return (
     <>
@@ -1560,7 +1561,6 @@ export const createCardProPagination = ({
 // 模型定价筛选条件默认值
 const DEFAULT_PRICING_FILTERS = {
   search: '',
-  currency: 'USD',
   viewMode: 'card',
   filterGroup: 'all',
   filterPointsOnly: false,
@@ -1576,7 +1576,6 @@ const DEFAULT_PRICING_FILTERS = {
 // 重置模型定价筛选条件
 export const resetPricingFilters = ({
   handleChange,
-  setCurrency,
   setViewMode,
   setFilterPointsOnly,
   setFilterEntitlementOnly,
@@ -1589,7 +1588,6 @@ export const resetPricingFilters = ({
   setCurrentPage,
 }) => {
   handleChange?.(DEFAULT_PRICING_FILTERS.search);
-  setCurrency?.(DEFAULT_PRICING_FILTERS.currency);
   setViewMode?.(DEFAULT_PRICING_FILTERS.viewMode);
   setFilterPointsOnly?.(DEFAULT_PRICING_FILTERS.filterPointsOnly);
   setFilterEntitlementOnly?.(DEFAULT_PRICING_FILTERS.filterEntitlementOnly);

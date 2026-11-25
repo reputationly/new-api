@@ -79,10 +79,7 @@ const PricingCardView = ({
   groupTimeRatio,
   groupModelComponentScale,
   copyText,
-  currency,
-  siteDisplayType,
-  displayCurrency,
-  displayPrice,
+
   t,
   selectedRowKeys = [],
   setSelectedRowKeys,
@@ -331,10 +328,6 @@ const PricingCardView = ({
             selectedGroup,
             groupRatio,
             groupModelRatio,
-            displayCurrency,
-            displayPrice,
-            currency,
-            quotaDisplayType: siteDisplayType,
             // 此刻生效的补全倍率（分时段价目可不等比例变化），算输出价必须用
             componentScaleMap: groupModelComponentScale,
             pointsEnabled: pointsConfig?.enabled,
@@ -372,15 +365,15 @@ const PricingCardView = ({
                               t,
                               priceData.usedGroupRatio,
                               model.source_rate,
-                              displayCurrency,
+                              priceData.displayCurrency,
                             )
                           : priceData.isVideoMatrix
                             ? formatVideoMatrixSummary(
                                 priceData,
                                 t,
-                                displayCurrency,
+                                priceData.displayCurrency,
                               )
-                            : formatPriceInfo(priceData, t, siteDisplayType)}
+                            : formatPriceInfo(priceData, t)}
                         {/*
                           积分抵扣：用 self-start 包一层，否则在 flex-col 里会被拉伸成
                           整条横条（子项默认 stretch）。这里只做"一排价格"末尾的小胶囊，

@@ -22,7 +22,6 @@ import { Avatar, Tag, Table, Typography } from '@douyinfe/semi-ui';
 import { IconPriceTag } from '@douyinfe/semi-icons';
 import {
   parseTiersFromExpr,
-  getModelPricingCurrencyConfig,
   formatPriceWithCeiling,
 } from '../../../../../helpers';
 import { getExprPriceScale } from '../../../../../helpers/exprPrice';
@@ -105,8 +104,10 @@ export default function DynamicPricingBreakdown({
   fx = 0,
   displayCurrency,
 }) {
-  const { symbol, ratePerCny } =
-    displayCurrency ?? getModelPricingCurrencyConfig();
+  const { symbol, ratePerCny } = displayCurrency ?? {
+    symbol: '¥',
+    ratePerCny: 1,
+  };
   // v1 表达式是历史美元口径（已拒绝结算）：系数展示前先按汇率折成人民币，
   // 只保证这里的数字与历史价格一致。v2 的系数本身已是 ¥/百万 tokens。
   const exprPriceScale = getExprPriceScale(billingExpr);

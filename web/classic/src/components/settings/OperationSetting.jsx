@@ -46,7 +46,6 @@ const OperationSetting = () => {
     'general_setting.assistant_link': '',
 
     RetryTimes: 0,
-    'general_setting.quota_display_type': 'USD',
     DisplayTokenStatEnabled: false,
     DefaultCollapseSidebar: false,
     DemoSiteEnabled: false,

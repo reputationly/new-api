@@ -26,6 +26,20 @@ func TestDirectTopupQuotaUsesCNYFaceValue(t *testing.T) {
 	}
 }
 
+func TestUpdateOptionRejectsQuotaDisplayChanges(t *testing.T) {
+	for _, key := range []string{"general_setting.quota_display_type", "DisplayInCurrencyEnabled"} {
+		t.Run(key, func(t *testing.T) {
+			c, rec := newAuthenticatedContext(t, http.MethodPut, "/api/option/", map[string]any{"key": key, "value": "USD"}, 1)
+			UpdateOption(c)
+			res := decodeAPIResponse(t, rec)
+			require.False(t, res.Success)
+			require.Contains(t, res.Message, "固定为人民币")
+			require.Error(t, model.UpdateOption(key, "USD"))
+			require.Error(t, model.ValidateOptionValueForBatch(key, "USD"))
+		})
+	}
+}
+
 func TestUpdateOptionRejectsLegacySiteFX(t *testing.T) {
 	for _, key := range []string{"USDExchangeRate", "QuotaPerUnit"} {
 		t.Run(key, func(t *testing.T) {

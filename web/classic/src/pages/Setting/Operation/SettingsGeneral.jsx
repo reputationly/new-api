@@ -17,17 +17,8 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 
-import React, { useContext, useEffect, useState, useRef, useMemo } from 'react';
-import {
-  Banner,
-  Button,
-  Col,
-  Form,
-  Row,
-  Spin,
-  Modal,
-  Input,
-} from '@douyinfe/semi-ui';
+import React, { useContext, useEffect, useState, useRef } from 'react';
+import { Button, Col, Form, Row, Spin } from '@douyinfe/semi-ui';
 import {
   compareObjects,
   API,
@@ -42,14 +33,10 @@ export default function GeneralSettings(props) {
   const { t } = useTranslation();
   const [statusState, statusDispatch] = useContext(StatusContext);
   const [loading, setLoading] = useState(false);
-  const [showQuotaWarning, setShowQuotaWarning] = useState(false);
   const [inputs, setInputs] = useState({
     TopUpLink: '',
     'general_setting.docs_link': '',
     'general_setting.assistant_link': '',
-    'general_setting.quota_display_type': 'USD',
-    'general_setting.custom_currency_symbol': '¤',
-    'general_setting.custom_currency_exchange_rate': '',
     RetryTimes: '',
     DisplayTokenStatEnabled: false,
     DefaultCollapseSidebar: false,
@@ -113,47 +100,12 @@ export default function GeneralSettings(props) {
       });
   }
 
-  const customRate = inputs['general_setting.custom_currency_exchange_rate'];
-
-  const showTokensOption = useMemo(() => {
-    const initialType = props.options?.['general_setting.quota_display_type'];
-    const legacyTokensMode =
-      initialType === undefined &&
-      props.options?.DisplayInCurrencyEnabled !== undefined &&
-      !props.options.DisplayInCurrencyEnabled;
-    return initialType === 'TOKENS' || legacyTokensMode;
-  }, [props.options]);
-
-  const quotaDisplayType = inputs['general_setting.quota_display_type'];
-
   useEffect(() => {
     const currentInputs = {};
     for (let key in props.options) {
       if (Object.keys(inputs).includes(key)) {
         currentInputs[key] = props.options[key];
       }
-    }
-    // 若旧字段存在且新字段缺失，则做一次兜底映射
-    if (
-      currentInputs['general_setting.quota_display_type'] === undefined &&
-      props.options?.DisplayInCurrencyEnabled !== undefined
-    ) {
-      currentInputs['general_setting.quota_display_type'] = props.options
-        .DisplayInCurrencyEnabled
-        ? 'USD'
-        : 'TOKENS';
-    }
-    // 回填自定义货币相关字段（如果后端已存在）
-    if (props.options['general_setting.custom_currency_symbol'] !== undefined) {
-      currentInputs['general_setting.custom_currency_symbol'] =
-        props.options['general_setting.custom_currency_symbol'];
-    }
-    if (
-      props.options['general_setting.custom_currency_exchange_rate'] !==
-      undefined
-    ) {
-      currentInputs['general_setting.custom_currency_exchange_rate'] =
-        props.options['general_setting.custom_currency_exchange_rate'];
     }
     setInputs(currentInputs);
     setInputsRow(structuredClone(currentInputs));
@@ -211,77 +163,6 @@ export default function GeneralSettings(props) {
                   initValue={''}
                   placeholder={t('失败重试次数')}
                   onChange={handleFieldChange('RetryTimes')}
-                  showClear
-                />
-              </Col>
-              <Col xs={24} sm={12} md={8} lg={8} xl={8}>
-                <Form.Select
-                  field='general_setting.quota_display_type'
-                  label={t('额度展示类型')}
-                  disabled
-                  extraText={t('对公转账/发票对账基准，已锁定不可修改')}
-                  onChange={handleFieldChange(
-                    'general_setting.quota_display_type',
-                  )}
-                >
-                  <Form.Select.Option value='USD'>USD ($)</Form.Select.Option>
-                  <Form.Select.Option value='CNY'>CNY (¥)</Form.Select.Option>
-                  {showTokensOption && (
-                    <Form.Select.Option value='TOKENS'>
-                      Tokens
-                    </Form.Select.Option>
-                  )}
-                  <Form.Select.Option value='CUSTOM'>
-                    {t('自定义货币')}
-                  </Form.Select.Option>
-                </Form.Select>
-              </Col>
-              {quotaDisplayType === 'CUSTOM' && (
-                <Col xs={24} sm={12} md={8} lg={8} xl={8}>
-                  <Form.Slot label={t('汇率')}>
-                    <Input
-                      prefix='1 USD = '
-                      suffix={
-                        inputs['general_setting.custom_currency_symbol'] || '¤'
-                      }
-                      value={customRate}
-                      onChange={handleFieldChange(
-                        'general_setting.custom_currency_exchange_rate',
-                      )}
-                      disabled
-                    />
-                    <Text
-                      type='tertiary'
-                      size='small'
-                      style={{ marginTop: 4, display: 'block' }}
-                    >
-                      {t('对公转账/发票对账基准，已锁定不可修改')}
-                    </Text>
-                  </Form.Slot>
-                </Col>
-              )}
-              <Col
-                xs={24}
-                sm={12}
-                md={8}
-                lg={8}
-                xl={8}
-                style={
-                  quotaDisplayType !== 'CUSTOM'
-                    ? { display: 'none' }
-                    : undefined
-                }
-              >
-                <Form.Input
-                  field='general_setting.custom_currency_symbol'
-                  label={t('自定义货币符号')}
-                  extraText={t(
-                    '自定义货币符号将显示在所有额度数值前，例如 €1.50',
-                  )}
-                  placeholder={t('例如 €, £, Rp, ₩, ₹...')}
-                  onChange={handleFieldChange(
-                    'general_setting.custom_currency_symbol',
-                  )}
                   showClear
                 />
               </Col>
@@ -365,25 +246,6 @@ export default function GeneralSettings(props) {
           </Form.Section>
         </Form>
       </Spin>
-
-      <Modal
-        title={t('警告')}
-        visible={showQuotaWarning}
-        onOk={() => setShowQuotaWarning(false)}
-        onCancel={() => setShowQuotaWarning(false)}
-        closeOnEsc={true}
-        width={500}
-      >
-        <Banner
-          type='warning'
-          description={t(
-            '此设置是「1 美元对应的额度」，只影响美元支付与 USD 展示模式；人民币计费与展示由固定的 QuotaPerYuan（1 额度 = ¥0.000000001）决定，不受它影响。除运营需要自行调整美元换算外，不推荐修改。',
-          )}
-          bordered
-          fullMode={false}
-          closeIcon={null}
-        />
-      </Modal>
     </>
   );
 }

@@ -1,3 +1,5 @@
+localStorage.setItem('quota_display_type', 'CNY');
+
 /*
 Copyright (C) 2025 QuantumNous
 

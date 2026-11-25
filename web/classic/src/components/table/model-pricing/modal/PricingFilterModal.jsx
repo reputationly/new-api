@@ -27,7 +27,6 @@ const PricingFilterModal = ({ visible, onClose, sidebarProps, t }) => {
   const handleResetFilters = () =>
     resetPricingFilters({
       handleChange: sidebarProps.handleChange,
-      setCurrency: sidebarProps.setCurrency,
       setViewMode: sidebarProps.setViewMode,
       setFilterPointsOnly: sidebarProps.setFilterPointsOnly,
       setFilterEntitlementOnly: sidebarProps.setFilterEntitlementOnly,

@@ -24,6 +24,7 @@ import {
   stringToColor,
   calculateModelPrice,
   getModelPriceItems,
+  formatDynamicPriceSummary,
   formatVideoMatrixSummary,
   getLobeHubIcon,
   getGroupDiscountInfo,
@@ -149,10 +150,7 @@ export const getPricingTableColumns = ({
   groupTimeRatio,
   groupModelComponentScale,
   copyText,
-  currency,
-  siteDisplayType,
-  displayCurrency,
-  displayPrice,
+
   pointsConfig,
   entitlementConfig,
 }) => {
@@ -167,10 +165,6 @@ export const getPricingTableColumns = ({
         selectedGroup,
         groupRatio,
         groupModelRatio,
-        displayCurrency,
-        displayPrice,
-        currency,
-        quotaDisplayType: siteDisplayType,
         // 此刻生效的补全倍率（分时段价目可不等比例变化），算输出价必须用
         componentScaleMap: groupModelComponentScale,
         pointsEnabled: pointsConfig?.enabled,
@@ -196,17 +190,13 @@ export const getPricingTableColumns = ({
   // 把 normal_ratio 当成该分组的倍率、模型折扣清空，得到的正好是「没有时段价时的价」。
   const normalPriceCache = new Map();
   const getNormalPriceData = (record, group, normalRatio) => {
-    const cacheKey = group + '|' + normalRatio;
+    const cacheKey = record.model_name + '|' + group + '|' + normalRatio;
     if (normalPriceCache.has(cacheKey)) return normalPriceCache.get(cacheKey);
     const data = calculateModelPrice({
       record,
       selectedGroup: group,
       groupRatio: { [group]: normalRatio },
       groupModelRatio: {},
-      displayCurrency,
-      displayPrice,
-      currency,
-      quotaDisplayType: siteDisplayType,
       // 划线价也走**此刻**的补全倍率：闲时目录价是「输入 1 / 输出 7」，
       // 漏了它输出划线会算成 1×4=4 而不是 7（单测 plazaTimeDisplay 钉住这条）。
       componentScaleMap: groupModelComponentScale,
@@ -270,6 +260,7 @@ export const getPricingTableColumns = ({
       // 不会像卡片视图那样把标签挤掉。
       // 角标用**常规价**（不含时段系数）：折扣率必须与时钟无关，这是本次改造对外的承诺。
       const priceData = getPriceData(record);
+
       // 固定折扣优先用后端算好的 discount_ratio（= 终值 ÷ 此刻目录倍率，与时刻无关）；
       // 没有分时规则时退回常规价比值。
       const viewOfModel = getTimeRatioView(
@@ -371,20 +362,33 @@ export const getPricingTableColumns = ({
   ];
 
   const priceColumn = {
-    title: siteDisplayType === 'TOKENS' ? t('计费摘要') : t('模型价格'),
+    title: t('模型价格'),
     dataIndex: 'model_price',
     ...(isMobile ? {} : { fixed: 'right' }),
     render: (text, record, index) => {
       const priceData = getPriceData(record);
+      if (priceData.isDynamicPricing) {
+        return (
+          <div className='flex flex-col gap-1'>
+            {formatDynamicPriceSummary(
+              record.billing_expr,
+              t,
+              priceData.usedGroupRatio,
+              record.source_rate,
+              priceData.displayCurrency,
+            )}
+          </div>
+        );
+      }
       // 矩阵有多格，列表里放不下，给价格区间；逐格价目在详情弹窗里。
       if (priceData.isVideoMatrix) {
         return (
           <div className='text-gray-700'>
-            {formatVideoMatrixSummary(priceData, t, displayCurrency)}
+            {formatVideoMatrixSummary(priceData, t, priceData.displayCurrency)}
           </div>
         );
       }
-      const priceItems = getModelPriceItems(priceData, t, siteDisplayType);
+      const priceItems = getModelPriceItems(priceData, t);
 
       // 划线价取**该时段的目录价**（不含折扣），角标取**固定折扣**：
       // 客户拿「划线 × 角标」就能算出成交价。原先划线取的是常规价（含折扣），
@@ -404,7 +408,6 @@ export const getPricingTableColumns = ({
               getModelPriceItems(
                 getNormalPriceData(record, priceData?.usedGroup, dirRatio),
                 t,
-                siteDisplayType,
               ).map((it) => [it.key, it.value]),
             )
           : null;

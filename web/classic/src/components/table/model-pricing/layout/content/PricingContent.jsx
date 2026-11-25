@@ -32,8 +32,6 @@ const PricingContent = ({ isMobile, sidebarProps, ...props }) => {
           {...props}
           isMobile={isMobile}
           sidebarProps={sidebarProps}
-          currency={sidebarProps.currency}
-          setCurrency={sidebarProps.setCurrency}
           viewMode={sidebarProps.viewMode}
           setViewMode={sidebarProps.setViewMode}
           filterPointsOnly={sidebarProps.filterPointsOnly}

@@ -68,7 +68,6 @@ func InitOptionMap() {
 	common.OptionMap["AutomaticDisableChannelEnabled"] = strconv.FormatBool(common.AutomaticDisableChannelEnabled)
 	common.OptionMap["AutomaticEnableChannelEnabled"] = strconv.FormatBool(common.AutomaticEnableChannelEnabled)
 	common.OptionMap["LogConsumeEnabled"] = strconv.FormatBool(common.LogConsumeEnabled)
-	common.OptionMap["DisplayInCurrencyEnabled"] = strconv.FormatBool(common.DisplayInCurrencyEnabled)
 	common.OptionMap["DisplayTokenStatEnabled"] = strconv.FormatBool(common.DisplayTokenStatEnabled)
 	common.OptionMap["DrawingEnabled"] = strconv.FormatBool(common.DrawingEnabled)
 	common.OptionMap["TaskEnabled"] = strconv.FormatBool(common.TaskEnabled)
@@ -237,7 +236,9 @@ func InitOptionMap() {
 	// 自动添加所有注册的模型配置
 	modelConfigs := config.GlobalConfig.ExportAllConfigs()
 	for k, v := range modelConfigs {
-		common.OptionMap[k] = v
+		if !IsFixedQuotaDisplayOption(k) {
+			common.OptionMap[k] = v
+		}
 	}
 
 	optionDefaults = maps.Clone(common.OptionMap)
@@ -252,7 +253,7 @@ func loadOptionsFromDatabase() {
 	pricingApplyMu.Lock()
 	defer pricingApplyMu.Unlock()
 	for _, option := range options {
-		if option.Key == pricingWriteLockKey || option.Key == legacyModelSourceRateKey || isRetiredFXOption(option.Key) || option.Key == legacySiteFXBackupKey {
+		if option.Key == pricingWriteLockKey || option.Key == legacyModelSourceRateKey || isRetiredFXOption(option.Key) || option.Key == legacySiteFXBackupKey || IsFixedQuotaDisplayOption(option.Key) {
 			continue
 		}
 		err := updateOptionMap(option.Key, option.Value)
@@ -309,6 +310,9 @@ func OptionValuesFromDatabase() map[string]string {
 }
 
 func UpdateOption(key string, value string) error {
+	if IsFixedQuotaDisplayOption(key) {
+		return fmt.Errorf("额度展示固定为人民币，配置 %s 不可修改", key)
+	}
 	if isRetiredFXOption(key) || key == legacySiteFXBackupKey {
 		return fmt.Errorf("配置 %s 不可修改，请使用全局模型源汇率", key)
 	}
@@ -490,6 +494,9 @@ func (e *OptionValidationError) Unwrap() error { return e.error }
 
 // ValidateOptionValueForBatch 只解析/校验批量保存允许的 key，不写库也不动内存。
 func ValidateOptionValueForBatch(key, value string) error {
+	if IsFixedQuotaDisplayOption(key) {
+		return fmt.Errorf("额度展示固定为人民币，配置 %s 不可修改", key)
+	}
 	if isRetiredFXOption(key) || key == legacySiteFXBackupKey {
 		return fmt.Errorf("配置 %s 不可修改，请使用全局模型源汇率", key)
 	}
@@ -606,16 +613,6 @@ func updateOptionMap(key string, value string) (err error) {
 			common.PlaygroundPipelineServerSide = boolValue
 		case "LogConsumeEnabled":
 			common.LogConsumeEnabled = boolValue
-		case "DisplayInCurrencyEnabled":
-			// 兼容旧字段：同步到新配置 general_setting.quota_display_type（运行时生效）
-			// true -> USD, false -> TOKENS
-			newVal := "USD"
-			if !boolValue {
-				newVal = "TOKENS"
-			}
-			if cfg := config.GlobalConfig.Get("general_setting"); cfg != nil {
-				_ = config.UpdateConfigFromMap(cfg, map[string]string{"quota_display_type": newVal})
-			}
 		case "DisplayTokenStatEnabled":
 			common.DisplayTokenStatEnabled = boolValue
 		case "DrawingEnabled":

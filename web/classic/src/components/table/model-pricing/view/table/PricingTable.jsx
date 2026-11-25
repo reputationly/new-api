@@ -37,10 +37,7 @@ const PricingTable = ({
   groupTimeRatio,
   groupModelComponentScale,
   copyText,
-  currency,
-  siteDisplayType,
-  displayCurrency,
-  displayPrice,
+
   searchValue,
   pointsConfig,
   entitlementConfig,
@@ -57,10 +54,7 @@ const PricingTable = ({
       groupTimeRatio,
       groupModelComponentScale,
       copyText,
-      currency,
-      siteDisplayType,
-      displayCurrency,
-      displayPrice,
+
       pointsConfig,
       entitlementConfig,
     });
@@ -72,10 +66,7 @@ const PricingTable = ({
     groupTimeRatio,
     groupModelComponentScale,
     copyText,
-    currency,
-    siteDisplayType,
-    displayCurrency,
-    displayPrice,
+
     pointsConfig,
     entitlementConfig,
   ]);

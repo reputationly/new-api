@@ -1,6 +1,5 @@
 /*
 Copyright (C) 2025 QuantumNous
-
 This program is free software: you can redistribute it and/or modify
 it under the terms of the GNU Affero General Public License as
 published by the Free Software Foundation, either version 3 of the
@@ -29,8 +28,6 @@ import { resetPricingFilters } from '../../../../helpers/utils';
 import { usePricingFilterCounts } from '../../../../hooks/model-pricing/usePricingFilterCounts';
 
 const PricingSidebar = ({
-  currency,
-  setCurrency,
   setFilterPointsOnly,
   setFilterEntitlementOnly,
   handleChange,
@@ -77,7 +74,7 @@ const PricingSidebar = ({
   const handleResetFilters = () =>
     resetPricingFilters({
       handleChange,
-      setCurrency,
+
       setViewMode,
       // 桌面端「重置」也要清掉「仅看可积分抵扣」——移动端弹窗的重置清了，
       // 两边不一致的话，用户在桌面端点完重置会发现列表还是被筛过的。

@@ -18,6 +18,10 @@ import {
   flattenVideoMatrix,
   VIDEO_PER_SECOND_COLUMN,
 } from '@classic/helpers/videoMatrix';
+import { getModelPricingCurrencyConfig } from '@classic/helpers/modelPriceCurrency';
+import { parseTiersFromExpr } from '@classic/helpers/billingExprTerms';
+import { getExprPriceScale } from '@classic/helpers/exprPrice';
+import { BILLING_PRICING_VARS } from '@classic/constants/billing.constants';
 import { formatPriceWithCeiling } from '@classic/helpers/priceFormat';
 import {
   getGroupDiscountInfo,
@@ -185,28 +189,6 @@ const Models = () => {
     if (!candidates.length) return { group: '', ratio: 1 };
     return candidates.reduce((a, b) => (b.ratio < a.ratio ? b : a));
   };
-  // 展示币种相对人民币的换算率：CNY → 1；USD → 1/汇率；CUSTOM → 自定义汇率/汇率。
-  const currencyConfig = useMemo(() => {
-    const displayType =
-      siteStatus?.quota_display_type ||
-      localStorage.getItem('quota_display_type') ||
-      'USD';
-    const usdRate = Number(
-      siteStatus?.model_source_rate ?? siteStatus?.usd_exchange_rate,
-    );
-    if (displayType === 'CNY' || !(usdRate > 0)) {
-      return { symbol: '¥', ratePerCny: 1 };
-    }
-    if (displayType === 'CUSTOM') {
-      return {
-        symbol: siteStatus?.custom_currency_symbol || '¤',
-        ratePerCny:
-          (Number(siteStatus?.custom_currency_exchange_rate) || 1) / usdRate,
-      };
-    }
-    return { symbol: '$', ratePerCny: 1 / usdRate };
-  }, [siteStatus]);
-
   // 动态计费（tiered_expr）：表达式才是定价事实，静态倍率会误导（同 PC 判定）
   const isDynamic = (m) => m.billing_mode === 'tiered_expr' && !!m.billing_expr;
 
@@ -313,11 +295,35 @@ const Models = () => {
   };
   // 折前价：少乘一个分组倍率。仅在有折扣时给，用于详情里的划线对比。
   const originalInputPricePerM = (m) => m.model_ratio;
-  const displayPrice = (cnyValue) =>
-    `${currencyConfig.symbol}${formatPrice(cnyValue * currencyConfig.ratePerCny)}`;
+  const displayPrice = (model, cnyValue) => {
+    const { symbol, ratePerCny } = getModelPricingCurrencyConfig(model);
+    return `${symbol}${formatPrice(cnyValue * ratePerCny)}`;
+  };
+
+  const dynamicTiers = (model) =>
+    parseTiersFromExpr(model.billing_expr, model.source_rate);
+  const dynamicPriceLines = (model, tier) =>
+    !tier || tier.indivisible
+      ? []
+      : BILLING_PRICING_VARS.filter(
+          ({ field }) => tier[field] !== undefined,
+        ).map(({ field, label }) => ({
+          field,
+          label,
+          amount: displayPrice(
+            model,
+            tier[field] *
+              getExprPriceScale(model.billing_expr) *
+              resolveGroupRatio(model).ratio,
+          ),
+        }));
 
   const priceText = (m) => {
-    if (isDynamic(m)) return '动态计费';
+    if (!getModelPricingCurrencyConfig(m)) return '价格暂不可用';
+    if (isDynamic(m)) {
+      const [firstPrice] = dynamicPriceLines(m, dynamicTiers(m)[0]);
+      return firstPrice ? `${firstPrice.amount}/1M · 动态计费` : '动态计费';
+    }
     if (isVideoMatrix(m)) {
       // 矩阵有多格，列表里放不下，给区间；逐格价目在详情里。
       const cells = videoMatrixCells(m);
@@ -334,12 +340,12 @@ const Models = () => {
             ? '/秒'
             : '/次';
       return lo === hi
-        ? `${displayPrice(lo)}${unit}`
-        : `${displayPrice(lo)}~${displayPrice(hi)}${unit}`;
+        ? `${displayPrice(m, lo)}${unit}`
+        : `${displayPrice(m, lo)}~${displayPrice(m, hi)}${unit}`;
     }
     return m.quota_type === 1
-      ? `${displayPrice(m.model_price * resolveGroupRatio(m).ratio)}/次`
-      : `${displayPrice(inputPricePerM(m))}/1M`;
+      ? `${displayPrice(m, m.model_price * resolveGroupRatio(m).ratio)}/次`
+      : `${displayPrice(m, inputPricePerM(m))}/1M`;
   };
   const detailPricingGroup = detail
     ? resolveGroupRatio(detail)
@@ -633,14 +639,16 @@ const Models = () => {
                 </span>
               )}
             </div>
-            {isVideoMatrix(detail) ? (
+            {!getModelPricingCurrencyConfig(detail) ? (
+              <p>价格暂不可用</p>
+            ) : isVideoMatrix(detail) ? (
               // 交叉表：纵轴分辨率、横轴场景。与配置页和 PC 端同一版式，
               // 手机窄屏下按行堆叠更好读，故用「分辨率 + 场景」两列。
               <div style={{ marginTop: 12 }}>
                 <div
                   style={{ fontSize: 12, color: '#9aa1ad', marginBottom: 6 }}
                 >
-                  单位：{currencyConfig.symbol} /{' '}
+                  单位：{getModelPricingCurrencyConfig(detail).symbol} /{' '}
                   {detail.video_pricing.mode === 'token'
                     ? '1M tokens'
                     : detail.video_pricing.mode === 'per_second'
@@ -682,10 +690,10 @@ const Models = () => {
                             fontWeight: 400,
                           }}
                         >
-                          {displayPrice(cell.originalPriceCNY)}
+                          {displayPrice(detail, cell.originalPriceCNY)}
                         </span>
                       )}
-                      {displayPrice(cell.priceCNY)}
+                      {displayPrice(detail, cell.priceCNY)}
                     </strong>
                   </div>
                 ))}
@@ -693,7 +701,28 @@ const Models = () => {
             ) : (
               <div style={{ fontSize: 14, color: '#374151', marginTop: 12 }}>
                 {isDynamic(detail) ? (
-                  '动态计费：按用量阶梯表达式实时计算，详细规则请在电脑端模型广场查看'
+                  <div>
+                    {(dynamicTiers(detail).length
+                      ? dynamicTiers(detail)
+                      : [null]
+                    ).map((tier, index) => {
+                      const prices = dynamicPriceLines(detail, tier);
+                      return (
+                        <div key={index} style={{ marginBottom: 8 }}>
+                          <strong>{tier?.label || '默认'}</strong>
+                          {prices.length ? (
+                            prices.map(({ field, label, amount }) => (
+                              <div key={field}>
+                                {label} {amount} / 1M Tokens
+                              </div>
+                            ))
+                          ) : (
+                            <div>单价不可拆分</div>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
                 ) : detail.quota_type === 1 ? (
                   // 划线原价的口径同下面按量计费那支：少乘一个分组倍率。
                   // 自建媒体模型几乎全是按次，折扣力度也最大，不给对比价看不出来。
@@ -707,10 +736,11 @@ const Models = () => {
                           marginRight: 4,
                         }}
                       >
-                        {displayPrice(detail.model_price)}
+                        {displayPrice(detail, detail.model_price)}
                       </span>
                     )}
                     {displayPrice(
+                      detail,
                       detail.model_price * detailPricingGroup.ratio,
                     )}
                   </div>
@@ -730,10 +760,10 @@ const Models = () => {
                             marginRight: 4,
                           }}
                         >
-                          {displayPrice(originalInputPricePerM(detail))}
+                          {displayPrice(detail, originalInputPricePerM(detail))}
                         </span>
                       )}
-                      {displayPrice(inputPricePerM(detail))} / 1M Tokens
+                      {displayPrice(detail, inputPricePerM(detail))} / 1M Tokens
                     </div>
                     <div>
                       输出{' '}
@@ -746,12 +776,14 @@ const Models = () => {
                           }}
                         >
                           {displayPrice(
+                            detail,
                             originalInputPricePerM(detail) *
                               completionRatioOf(detail),
                           )}
                         </span>
                       )}
                       {displayPrice(
+                        detail,
                         inputPricePerM(detail) * completionRatioOf(detail),
                       )}{' '}
                       / 1M Tokens
@@ -803,8 +835,14 @@ const Models = () => {
                   </div>
                   {rows.map((r) => {
                     const priceText =
-                      r.priceMode === 'catalog'
-                        ? formatTimePrices(r.prices)
+                      r.priceMode === 'catalog' &&
+                      getModelPricingCurrencyConfig(detail)
+                        ? formatTimePrices(
+                            r.prices,
+                            undefined,
+                            3,
+                            getModelPricingCurrencyConfig(detail).symbol,
+                          )
                         : '';
                     return (
                       <div
