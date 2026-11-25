@@ -148,7 +148,7 @@ func writeLogCSVHeader(c *gin.Context, w *csv.Writer, includeAdminCols bool) err
 	if includeAdminCols {
 		headers = append(headers, "IP")
 	}
-	headers = append(headers, "请求ID", "详情", "目录价币种", "本次模型汇率", "本次工具汇率", "目录价", "计费过程")
+	headers = append(headers, "请求ID", "详情", "目录价币种", "本次模型汇率", "本次工具汇率", "目录价")
 	return w.Write(headers)
 }
 
@@ -317,10 +317,9 @@ func logToRow(l *model.Log, includeAdminCols bool) []string {
 		cleanLogContent(l.Content),
 	)
 	if pricing := buildUsageLogPricing(l); pricing != nil {
-		return append(row, pricing.Currency, pricing.Rate, pricing.ToolRate,
-			strings.Join(pricing.Catalog, "\n"), strings.Join(pricing.Process, "\n"))
+		return append(row, pricing.Currency, pricing.Rate, pricing.ToolRate, strings.Join(pricing.Catalog, "\n"))
 	}
-	return append(row, "", "", "", "", "")
+	return append(row, "", "", "", "")
 }
 
 // logExportMaxRows 单次导出允许的最大行数（管理员与普通用户共用）。超过时在开始写 CSV 之前返回

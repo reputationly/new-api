@@ -5,7 +5,7 @@ import { getLogsColumns } from '../UsageLogsColumnDefs';
 
 const detailCell = (currency, pricingDetail) => {
   const column = getLogsColumns({
-    t: (s) => s,
+    t: (s, values) => (values ? s.replace('{{rate}}', values.rate) : s),
     COLUMN_KEYS: { DETAILS: 'details' },
   }).find((col) => col.key === 'details');
   return render(
@@ -37,17 +37,26 @@ describe('使用日志详情列的目录价', () => {
     detailCell('USD', {
       currency: 'USD',
       rate: '6.8',
-      catalog: ['输入单价：$1.5 / 1M tokens', '图片输出单价：$30 / 1M tokens'],
+      catalog: [
+        '输入价格：$1.50 / 1M tokens（≈ ¥10.20）',
+        '图片输出价格：$30.00 / 1M tokens（≈ ¥204.00）',
+      ],
     });
     expect(screen.getByText(/^分组倍率 0\.850*x$/)).toBeTruthy();
-    expect(screen.getByText('输入单价：$1.5 / 1M tokens')).toBeTruthy();
-    expect(screen.getByText('图片输出单价：$30 / 1M tokens')).toBeTruthy();
+    expect(screen.getByText('输入价格：$1.50 / 1M tokens')).toBeTruthy();
+    expect(screen.getByText('图片输出价格：$30.00 / 1M tokens')).toBeTruthy();
+    expect(screen.getByText('换算汇率：1 USD = 6.8 CNY')).toBeTruthy();
     expect(screen.queryByText(/¥204/)).toBeNull();
   });
 
   it('USD 目录价无快照时不退回人民币单价', () => {
-    detailCell('USD', { currency: 'USD', rate: '', catalog: [] });
-    expect(screen.getByText('缺少当次汇率快照，不回算')).toBeTruthy();
+    detailCell('USD', {
+      currency: 'USD',
+      rate: '',
+      catalog: ['图片输出价格：$30.00 / 1M tokens', '未记录当次换算汇率'],
+    });
+    expect(screen.getByText('图片输出价格：$30.00 / 1M tokens')).toBeTruthy();
+    expect(screen.getByText('未记录当次换算汇率')).toBeTruthy();
     expect(screen.queryByText(/¥204/)).toBeNull();
   });
 

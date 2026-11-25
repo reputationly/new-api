@@ -40,6 +40,7 @@ import {
   renderClaudeModelPrice,
   renderModelPrice,
   renderLoggedToolFX,
+  renderUsageLogCatalog,
   renderTieredModelPrice,
   renderTaskBillingProcess,
 } from '../../helpers';
@@ -556,23 +557,9 @@ export const useLogsData = () => {
             ? renderLoggedToolFX(other || {})
             : null;
         if (pricingDetail) {
-          if (pricingDetail.catalog?.length) {
-            expandDataLocal.push({
-              key: t('目录价'),
-              value: pricingDetail.catalog.map((line, index) => (
-                <div key={index}>{line}</div>
-              )),
-            });
-          }
           expandDataLocal.push({
             key: t('计费过程'),
-            value: (
-              <div className='break-all'>
-                {pricingDetail.process.map((line, index) => (
-                  <div key={index}>{line}</div>
-                ))}
-              </div>
-            ),
+            value: renderUsageLogCatalog(pricingDetail, t),
           });
         }
         if (isVideoMatrix) {

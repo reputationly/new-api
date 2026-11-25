@@ -1,26 +1,19 @@
 package controller
 
 import (
-	"github.com/QuantumNous/new-api/model"
+	"strings"
+
 	"github.com/QuantumNous/new-api/pkg/billingexpr"
 	"github.com/expr-lang/expr/ast"
 	"github.com/expr-lang/expr/parser"
 	"github.com/shopspring/decimal"
 )
 
-type tierLogDetail struct {
-	terms         []usagePriceTerm
-	lines         []string
-	quota         float64
-	valid         bool
-	hasQuantities bool
-}
-
 var tierPriceVars = []struct{ name, label string }{
-	{"p", "输入单价"}, {"c", "输出单价"}, {"cr", "缓存命中单价"},
-	{"cc", "缓存创建单价"}, {"cc1h", "缓存创建 (1h) 单价"},
-	{"img", "图片输入单价"}, {"img_o", "图片输出单价"},
-	{"ai", "音频输入单价"}, {"ao", "音频输出单价"},
+	{"p", "输入价格"}, {"c", "输出价格"}, {"cr", "缓存命中价格"},
+	{"cc", "缓存创建价格"}, {"cc1h", "缓存创建价格（长 TTL：1h/12h）"},
+	{"img", "图片输入价格"}, {"img_o", "图片输出价格"},
+	{"ai", "音频输入价格"}, {"ao", "音频输出价格"},
 }
 
 type tierPriceFinder struct {
@@ -97,32 +90,43 @@ func linearTierPrice(node ast.Node, fx decimal.Decimal) (map[string]decimal.Deci
 	return nil, false
 }
 
-func tierIsResult(root, selected ast.Node) bool {
-	if root == selected {
-		return true
+func fxDegree(node ast.Node) (int, bool) {
+	switch n := node.(type) {
+	case *ast.IntegerNode, *ast.FloatNode:
+		return 0, true
+	case *ast.IdentifierNode:
+		if n.Value == "fx" {
+			return 1, true
+		}
+		return 0, true
+	case *ast.BinaryNode:
+		left, leftOK := fxDegree(n.Left)
+		right, rightOK := fxDegree(n.Right)
+		if leftOK && rightOK {
+			switch n.Operator {
+			case "*":
+				return left + right, true
+			case "/":
+				return left - right, true
+			case "+", "-":
+				return left, left == right
+			}
+		}
 	}
-	switch node := root.(type) {
-	case *ast.CallNode:
-		return len(node.Arguments) == 2 && node.Arguments[1] == selected
-	case *ast.ConditionalNode:
-		return tierIsResult(node.Exp1, selected) || tierIsResult(node.Exp2, selected)
-	default:
-		return false
-	}
+	return 0, false
 }
 
-func tierLogPricing(m pricingLogFields, log *model.Log, expression string, fx, rate decimal.Decimal) tierLogDetail {
-	result := tierLogDetail{}
-	if settled, ok := m.number("expr_quota_before_group"); ok {
-		result.quota, result.valid = settled.InexactFloat64(), true
-	}
-	version, body := billingexpr.ParseExprVersion(expression)
-	if version != billingexpr.ExprVersionV2 {
-		return result
+func tierLogCatalog(m pricingLogFields, expression string, rate decimal.Decimal) ([]string, decimal.Decimal) {
+	base, _, _ := strings.Cut(expression, "|||")
+	version, body := billingexpr.ParseExprVersion(base)
+	fx := m.num("expr_fx")
+	usesFX := billingexpr.UsedVars(base)["fx"]
+	if usesFX {
+		rate = fx
 	}
 	tree, err := parser.Parse(body)
 	if err != nil {
-		return result
+		return nil, rate
 	}
 	finder := tierPriceFinder{name: m.str("matched_tier")}
 	ast.Walk(&tree.Node, &finder)
@@ -130,52 +134,33 @@ func tierLogPricing(m pricingLogFields, log *model.Log, expression string, fx, r
 	if finder.matches == 1 {
 		node = finder.node
 	} else if finder.matches > 1 || finder.name != "" {
-		return result
+		return nil, rate
 	}
+	sourceUSD := version == billingexpr.ExprVersionV1
+	if !rate.IsPositive() && !sourceUSD {
+		degree, ok := fxDegree(node)
+		if !ok || degree != 1 {
+			return nil, rate
+		}
+		sourceUSD = true
+		fx = decimal.NewFromInt(1)
+	}
+
 	coefficients, ok := linearTierPrice(node, fx)
 	if !ok {
-		result.lines = append(result.lines, "该表达式无法拆分为固定目录单价。")
-		return result
+		return []string{"单价不可拆分"}, rate
 	}
-	frozen, hasFrozen := m["expr_tokens"].(map[string]any)
-	quantities := pricingLogFields(frozen)
+	var prices []string
+	hasCache := m.num("cache_tokens").IsPositive() || m.num("cache_creation_tokens").IsPositive() ||
+		m.num("cache_write_tokens").IsPositive() || m.num("cache_creation_tokens_5m").IsPositive() ||
+		m.num("cache_creation_tokens_1h").IsPositive()
 	for _, variable := range tierPriceVars {
-		if price, ok := coefficients[variable.name]; ok {
-			result.terms = append(result.terms, usagePriceTerm{
-				label: variable.label, unit: "1M tokens", price: price, rate: rate,
-				quantity: quantities.tokens(variable.name), unitPower: 6,
-			})
+		if strings.HasPrefix(variable.name, "c") && variable.name != "c" && !hasCache {
+			continue
+		}
+		if price := coefficients[variable.name]; price.IsPositive() {
+			prices = append(prices, catalogPrice(variable.label, "1M tokens", price, rate, sourceUSD))
 		}
 	}
-	// Without settlement snapshots only replay simple text/input-output cases.
-	// Token normalization, runtime conditions and request inputs are not recoverable.
-	if !hasFrozen && (tree.Node == node || finder.matches == 1) &&
-		m.tokens("cache_tokens") == 0 && m.tokens("cache_creation_tokens") == 0 &&
-		m.tokens("cache_creation_tokens_5m") == 0 && m.tokens("cache_creation_tokens_1h") == 0 &&
-		m.tokens("image_output") == 0 && m.tokens("audio_input_token_count") == 0 &&
-		!m.flag("audio") && !m.flag("ws") {
-		for i := range result.terms {
-			if result.terms[i].label == tierPriceVars[0].label {
-				result.terms[i].quantity = log.PromptTokens
-			} else if result.terms[i].label == tierPriceVars[1].label {
-				result.terms[i].quantity = log.CompletionTokens
-			}
-		}
-		hasFrozen = true
-	}
-	if hasFrozen {
-		cost := coefficients[""]
-		for _, term := range result.terms {
-			cost = cost.Add(term.price.Mul(decimal.NewFromInt(int64(term.quantity))))
-		}
-		replayed, err := billingexpr.QuotaFromExprOutput(cost.InexactFloat64(), version)
-		if err == nil && !result.valid && tierIsResult(tree.Node, node) {
-			result.quota, result.valid = replayed, true
-		}
-		if err == nil && result.valid && coefficients[""].IsZero() &&
-			decimal.NewFromFloat(replayed).Sub(decimal.NewFromFloat(result.quota)).Abs().LessThan(decimal.NewFromFloat(0.000001)) {
-			result.hasQuantities = true
-		}
-	}
-	return result
+	return prices, rate
 }

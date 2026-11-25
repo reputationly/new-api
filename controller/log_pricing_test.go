@@ -25,56 +25,59 @@ func usdUsageLog(t *testing.T, quota int, more map[string]any) *model.Log {
 	return &model.Log{Type: model.LogTypeConsume, Quota: quota, PromptTokens: 1000, CompletionTokens: 500, Other: string(raw)}
 }
 
-func TestUSDUsageLogPricingReconcilesToRecordedQuota(t *testing.T) {
+func TestUSDUsageLogPricingShowsDualCurrencyCatalog(t *testing.T) {
 	expression := `v2:tier("base", (p * 5 + c * 10) * fx)`
 	for _, tc := range []struct {
-		name    string
-		fields  map[string]any
-		quota   int
-		catalog []string
-		process string
+		name     string
+		fields   map[string]any
+		catalog  []string
+		rate     string
+		toolRate string
 	}{
-		{"tokens", nil, 68_000_000, []string{"输入单价：$5 / 1M tokens", "输出单价：$10 / 1M tokens"},
-			"$5 × 1000 / 1M tokens × 6.8 + $10 × 500 / 1M tokens × 6.8 = ¥0.068（按 quota 舍入）"},
-		{"call halves round away from zero", map[string]any{"model_price": 0.0000000075, "model_source_rate": 7.5, "group_ratio": 0.2},
-			2, []string{"按次单价：$0.000000001 / 次"}, "$0.000000001 × 1 × 0.2 × 7.5 = ¥0.000000002（按 quota 舍入）"},
+		{"tokens", nil, []string{"输入单价：$5.00 / 1M tokens（≈ ¥34.00）", "输出单价：$10.00 / 1M tokens（≈ ¥68.00）"}, "6.8", ""},
+		{"small per-call price", map[string]any{"model_price": 0.0000000075, "model_source_rate": 7.5, "group_ratio": 0.2},
+			[]string{"按次单价：$0.000000001 / 次（≈ ¥0.000000008）"}, "7.5", ""},
 		{"time window", map[string]any{"completion_ratio": 1, "group_ratio": 0.4, "time_factors": map[string]float64{"input": 0.5, "output": 0.25}},
-			20_400_000, []string{"输入单价：$2.5 / 1M tokens", "输出单价：$2.5 / 1M tokens"},
-			"$2.5 × 1000 / 1M tokens × 0.8 × 6.8 + $2.5 × 500 / 1M tokens × 0.8 × 6.8 = ¥0.0204（按 quota 舍入）"},
-		{"tools cache image audio", map[string]any{"cache_tokens": 100, "cache_ratio": 0.2, "image_output": 200, "image_ratio": 3, "audio_input_token_count": 50, "audio_input_price": 14, "web_search_price": 42, "web_search_call_count": 2, "tool_source_rate": 7, "usd_tool_price_fields": []string{"web_search_price", "audio_input_price"}},
-			161_880_000, []string{"缓存命中单价：$1 / 1M tokens", "图片输入单价：$15 / 1M tokens", "音频输入单价：$2 / 1M tokens", "Web搜索单价：$6 / 1K 次"},
-			"$5 × 650 / 1M tokens × 6.8 + $10 × 500 / 1M tokens × 6.8 + $1 × 100 / 1M tokens × 6.8 + $15 × 200 / 1M tokens × 6.8 + $6 × 2 / 1K 次 × 7 + $2 × 50 / 1M tokens × 7 = ¥0.16188（按 quota 舍入）"},
+			[]string{"输入单价：$2.50 / 1M tokens（≈ ¥17.00）", "输出单价：$2.50 / 1M tokens（≈ ¥17.00）"}, "6.8", ""},
+		{"tools cache image audio", map[string]any{"cache_ratio": 0.2, "image_ratio": 3, "audio_input_price": 14, "web_search_price": 42, "file_search_price": 3, "tool_source_rate": 7, "usd_tool_price_fields": []string{"web_search_price", "audio_input_price"}},
+			[]string{"缓存命中单价：$1.00 / 1M tokens（≈ ¥6.80）", "图片输入单价：$15.00 / 1M tokens（≈ ¥102.00）", "音频输入单价：$2.00 / 1M tokens（≈ ¥14.00）", "Web搜索单价：$6.00 / 1K 次（≈ ¥42.00）", "文件搜索单价：¥3 / 1K 次"}, "6.8", "7"},
 		{"tier with its own snapshot", map[string]any{"billing_mode": "tiered_expr", "matched_tier": "base", "expr_b64": base64.StdEncoding.EncodeToString([]byte(expression)), "expr_fx": 6.9},
-			69_000_000, []string{"命中档位：base", "输入单价：$5 / 1M tokens", "输出单价：$10 / 1M tokens"},
-			"$5 × 1000 / 1M tokens × 6.9 + $10 × 500 / 1M tokens × 6.9 = ¥0.069（按 quota 舍入）"},
-		{"tier uses normalized quantities", map[string]any{"billing_mode": "tiered_expr", "matched_tier": "base",
-			"expr_b64": base64.StdEncoding.EncodeToString([]byte(`v2:tier("base", (p * 5 + cr) * fx)`)), "expr_fx": 6.8,
-			"expr_tokens": map[string]any{"p": 800, "cr": 200}, "expr_group_ratio": 0.5, "expr_quota_before_group": 28_560_000},
-			14_280_000, []string{"输入单价：$5 / 1M tokens", "缓存命中单价：$1 / 1M tokens"},
-			"$5 × 800 / 1M tokens × 0.5 × 6.8 + $1 × 200 / 1M tokens × 0.5 × 6.8 = ¥0.01428（按 quota 舍入）"},
-		{"video uses billed duration", map[string]any{"video_price_mode": "per_second", "video_unit_price": 6.8, "video_seconds": 1, "video_billed_seconds": 1.625},
-			11_050_000_000, []string{"视频单价：$1 / 秒"}, "$1 × 1.625 × 6.8 = ¥11.05（按 quota 舍入）"},
+			[]string{"命中档位：base", "输入价格：$5.00 / 1M tokens（≈ ¥34.50）", "输出价格：$10.00 / 1M tokens（≈ ¥69.00）"}, "6.9", ""},
+		{"tier cache and image output", map[string]any{"billing_mode": "tiered_expr", "matched_tier": "base", "cache_tokens": 100,
+			"expr_b64": base64.StdEncoding.EncodeToString([]byte(`v2:tier("base", (p * 5 + cr + cc1h * 0.5 + img_o * 30) * fx)`)), "expr_fx": 6.8},
+			[]string{"缓存命中价格：$1.00 / 1M tokens（≈ ¥6.80）", "缓存创建价格（长 TTL：1h/12h）：$0.50 / 1M tokens（≈ ¥3.40）", "图片输出价格：$30.00 / 1M tokens（≈ ¥204.00）"}, "6.8", ""},
+		{"video per-second catalog", map[string]any{"video_price_mode": "per_second", "video_unit_price": 6.8, "video_billed_seconds": 1.625},
+			[]string{"视频单价：$1.00 / 秒（≈ ¥6.80）"}, "6.8", ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			detail := buildUsageLogPricing(usdUsageLog(t, tc.quota, tc.fields))
+			detail := buildUsageLogPricing(usdUsageLog(t, 68_000_000, tc.fields))
 			require.NotNil(t, detail)
+			require.Equal(t, tc.rate, detail.Rate)
+			require.Equal(t, tc.toolRate, detail.ToolRate)
 			for _, price := range tc.catalog {
 				require.Contains(t, detail.Catalog, price)
 			}
-			require.Contains(t, detail.Process, tc.process)
-			require.Contains(t, detail.Process, "实际扣费：¥"+logQuotaYuan(tc.quota).String())
 		})
 	}
 }
 
-func TestUsageLogPricingDoesNotInventHistoricalFXOrForceAnEquation(t *testing.T) {
-	legacy := buildUsageLogPricing(usdUsageLog(t, 13, map[string]any{"model_source_rate": nil}))
-	require.Empty(t, legacy.Catalog)
+func TestUsageLogPricingDoesNotInventHistoricalFX(t *testing.T) {
+	legacy := buildUsageLogPricing(usdUsageLog(t, 13, map[string]any{"price_unit": "", "model_price": 0.2, "model_source_rate": nil}))
+	require.Equal(t, []string{"按次单价：$0.20 / 次", "未记录当次换算汇率"}, legacy.Catalog)
 	require.Empty(t, legacy.Rate)
-	require.Contains(t, strings.Join(legacy.Process, "\n"), "不回算")
-	require.Contains(t, legacy.Process, "实际扣费：¥0.000000013")
-	mismatch := buildUsageLogPricing(usdUsageLog(t, 13, nil))
-	require.Contains(t, mismatch.Process, "此笔日志无法仅凭已记录明细复算扣费。")
+
+	tier := func(expr string) *usageLogPricing {
+		return buildUsageLogPricing(usdUsageLog(t, 13, map[string]any{
+			"billing_mode": "tiered_expr", "matched_tier": "base", "expr_b64": base64.StdEncoding.EncodeToString([]byte(expr)),
+		}))
+	}
+	require.Equal(t, []string{"命中档位：base", "输入价格：$5.00 / 1M tokens", "未记录当次换算汇率"},
+		tier(`v2:tier("base", p * 5 * fx)`).Catalog)
+	require.Equal(t, []string{"命中档位：base", "未记录当次换算汇率"},
+		tier(`v2:tier("base", p * 5 * fx * fx)`).Catalog)
+
+	noRateCNYFields := buildUsageLogPricing(usdUsageLog(t, 13, map[string]any{"model_source_rate": nil}))
+	require.Equal(t, []string{"未记录当次换算汇率"}, noRateCNYFields.Catalog)
 	require.Nil(t, buildUsageLogPricing(usdUsageLog(t, 13, map[string]any{"pricing_currency": "CNY"})))
 }
 
@@ -95,20 +98,21 @@ func TestUSDUsageLogCSVMatchesLogPageForAdminAndSelf(t *testing.T) {
 		rec := callExportHandler(t, handlers.export, user, "type=2")
 		rows := parseCSVBody(t, rec.Body.Bytes())
 		require.Len(t, rows, 2)
+		require.Len(t, rows[1], len(rows[0]))
 		fields := make(map[string]string)
 		for i, header := range rows[0] {
 			fields[header] = rows[1][i]
 		}
+		require.NotContains(t, fields, "计费过程")
+		require.NotContains(t, page, "process")
 		require.Equal(t, page["currency"], fields["目录价币种"])
 		require.Equal(t, page["rate"], fields["本次模型汇率"])
 		require.Equal(t, page["tool_rate"], fields["本次工具汇率"])
-		for header, key := range map[string]string{"目录价": "catalog", "计费过程": "process"} {
-			var lines []any
-			for _, line := range strings.Split(fields[header], "\n") {
-				lines = append(lines, line)
-			}
-			require.Equal(t, page[key], lines)
+		var lines []any
+		for _, line := range strings.Split(fields["目录价"], "\n") {
+			lines = append(lines, line)
 		}
+		require.Equal(t, page["catalog"], lines)
 		require.Equal(t, "0.068000000", fields["费用(CNY)"])
 	}
 }

@@ -2647,6 +2647,26 @@ export const normalizeLabel = (label) => {
     .toLowerCase();
 };
 
+export function getUsageLogFXLines(pricing, t) {
+  const lines = [];
+  if (pricing.rate) {
+    lines.push(t('换算汇率：1 USD = {{rate}} CNY', { rate: pricing.rate }));
+  }
+  if (pricing.tool_rate && pricing.tool_rate !== pricing.rate) {
+    lines.push(
+      t('工具换算汇率：1 USD = {{rate}} CNY', { rate: pricing.tool_rate }),
+    );
+  }
+  return lines;
+}
+
+export function renderUsageLogCatalog(pricing, t) {
+  return renderBillingArticle([
+    ...(pricing.catalog ?? []),
+    ...getUsageLogFXLines(pricing, t),
+  ]);
+}
+
 export function renderLoggedToolFX(opts) {
   const lines = [];
   const validRate = (rate) => Number.isFinite(rate) && rate > 0;

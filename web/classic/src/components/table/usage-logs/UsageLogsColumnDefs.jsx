@@ -32,6 +32,7 @@ import {
   renderQuotaTrimmed,
   stringToColor,
   getLogOther,
+  getUsageLogFXLines,
   normalizeLogPricing,
   renderModelTag,
   renderModelPriceSimple,
@@ -528,10 +529,16 @@ function buildUsageLogDetailSummary(record, text, billingDisplayMode, t) {
     return {
       segments: [
         { text: groupText, tone: 'primary' },
-        ...(pricing.catalog ?? []).map((text) => ({ text, tone: 'secondary' })),
-        ...(!pricing.rate
-          ? [{ text: t('缺少当次汇率快照，不回算'), tone: 'secondary' }]
-          : []),
+        ...(pricing.catalog ?? []).map((text) => ({
+          text: text
+            .replace('缓存创建价格（长 TTL：1h/12h）', t('长缓存创建'))
+            .replace(/（≈ ¥[^）]*）$/, ''),
+          tone: 'secondary',
+        })),
+        ...getUsageLogFXLines(pricing, t).map((text) => ({
+          text,
+          tone: 'secondary',
+        })),
       ],
     };
   }
