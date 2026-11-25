@@ -9,8 +9,8 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// 发往上游的 User-Agent：默认不发；系统设置了就用设置值；请求里显式设置的（渠道请求头覆盖、
-// 适配器自带）一律保留。
+// 发往上游的 User-Agent：出厂默认是 node；把它置空则不发（上游看不到 Go-http-client/1.1）；
+// 请求里显式设置的（渠道请求头覆盖、适配器自带）一律保留。
 func TestOutboundUserAgent(t *testing.T) {
 	type seen struct {
 		has bool
@@ -43,8 +43,12 @@ func TestOutboundUserAgent(t *testing.T) {
 		return <-got
 	}
 
+	// 出厂默认值必须真的发到线上：不是 Go 的 Go-http-client/1.1，也不是「不发」。
+	system_setting.SetOutboundUserAgent(system_setting.DefaultOutboundUserAgent)
+	require.Equal(t, seen{has: true, ua: system_setting.DefaultOutboundUserAgent}, send(nil), "出厂默认发 node")
+
 	system_setting.SetOutboundUserAgent("")
-	require.Equal(t, seen{has: false}, send(nil), "默认不发 User-Agent，而不是 Go-http-client/1.1")
+	require.Equal(t, seen{has: false}, send(nil), "置空则不发 User-Agent，而不是 Go-http-client/1.1")
 
 	system_setting.SetOutboundUserAgent("Disguised/1.0")
 	require.Equal(t, seen{has: true, ua: "Disguised/1.0"}, send(nil))

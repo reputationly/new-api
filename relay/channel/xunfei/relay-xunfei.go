@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -209,8 +210,17 @@ func xunfeiMakeRequest(textRequest dto.GeneralOpenAIRequest, domain, authUrl, ap
 	header := http.Header{}
 	service.ApplyOutboundUserAgent(header)
 	conn, resp, err := d.Dial(authUrl, header)
-	if err != nil || resp.StatusCode != 101 {
+	if err != nil {
 		return nil, nil, err
+	}
+	// 拨号失败时 resp 为 nil，先读 StatusCode 会空指针 panic；非 101 时原来会返回 nil error，
+	// 调用方拿到 nil 通道继续用，问题更难查。两种情况都转成明确的错误。
+	if resp == nil {
+		return nil, nil, errors.New("讯飞 websocket 握手失败：没有响应")
+	}
+	if resp.StatusCode != http.StatusSwitchingProtocols {
+		_ = resp.Body.Close()
+		return nil, nil, fmt.Errorf("讯飞 websocket 握手失败：HTTP %d", resp.StatusCode)
 	}
 
 	data := requestOpenAI2Xunfei(textRequest, appId, domain)

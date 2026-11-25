@@ -297,9 +297,9 @@ func logToRow(l *model.Log, includeAdminCols bool) []string {
 	costCNY := logQuotaYuan(signedQuota).StringFixed(9)
 	cacheRead, cacheWrite := otherCacheTokens(l.Other)
 	row = append(row,
-		l.TokenName,
-		l.Group,
-		l.ModelName,
+		csvSafeCell(l.TokenName),
+		csvSafeCell(l.Group),
+		csvSafeCell(l.ModelName),
 		strconv.Itoa(l.UseTime),
 		strconv.Itoa(l.PromptTokens),
 		strconv.Itoa(l.CompletionTokens),
@@ -309,12 +309,13 @@ func logToRow(l *model.Log, includeAdminCols bool) []string {
 		costCNY,
 	)
 	// 与 writeLogCSVHeader 的顺序严格对齐：IP 只在管理员视角存在。
+	// IP 也要防公式注入：真实 IP 取自 X-Forwarded-For，客户端可以伪造任意前缀文本。
 	if includeAdminCols {
-		row = append(row, l.Ip, csvSafeCell(l.UserAgent))
+		row = append(row, csvSafeCell(l.Ip), csvSafeCell(l.UserAgent))
 	}
 	row = append(row,
 		l.RequestId,
-		cleanLogContent(l.Content),
+		csvSafeCell(cleanLogContent(l.Content)),
 	)
 	if pricing := buildUsageLogPricing(l); pricing != nil {
 		return append(row, pricing.Currency, pricing.Rate, pricing.ToolRate, strings.Join(pricing.Catalog, "\n"))
