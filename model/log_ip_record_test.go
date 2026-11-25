@@ -76,4 +76,5 @@ func TestTruncateUserAgentKeepsRunes(t *testing.T) {
 	require.Equal(t, logUserAgentMaxLen, utf8.RuneCountInString(got))
 	require.True(t, utf8.ValidString(got))
 	require.Equal(t, "node", TruncateUserAgent("  node "))
+	require.Equal(t, "ab/1.0", TruncateUserAgent("ab\xff/1.0"), "非 UTF-8 字节要丢掉")
 }

@@ -98,7 +98,8 @@ const logUserAgentMaxLen = 512
 
 // TruncateUserAgent 按字符截断到列宽，不切坏多字节字符。
 func TruncateUserAgent(ua string) string {
-	ua = strings.TrimSpace(ua)
+	// 请求头允许非 UTF-8 字节，PostgreSQL 会拒绝整行日志，先丢掉非法字节。
+	ua = strings.ToValidUTF8(strings.TrimSpace(ua), "")
 	if utf8.RuneCountInString(ua) <= logUserAgentMaxLen {
 		return ua
 	}
