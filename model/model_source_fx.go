@@ -93,7 +93,11 @@ func ReadModelSourceFXChanges(ctx context.Context, from time.Time) (*ModelSource
 			Where("type = ? AND other LIKE ?", LogTypeManage, `%"key":"ModelSourceRate"%`)
 	}
 	var prior []Log
-	if err := query().Where("created_at < ?", from.Unix()).Order("created_at DESC, id DESC").Limit(1).Find(&prior).Error; err != nil {
+	// 基线只回看一年：other 列没有索引，历史上一旦没有匹配行，这条语句会沿 created_at 索引
+	// 一路反向找下去（管理日志永不被清理，越积越多）。超过一年没改过汇率就当作「无审计记录」。
+	if err := query().
+		Where("created_at >= ? AND created_at < ?", from.AddDate(-1, 0, 0).Unix(), from.Unix()).
+		Order("created_at DESC, id DESC").Limit(1).Find(&prior).Error; err != nil {
 		return nil, nil, err
 	}
 	var logs []Log

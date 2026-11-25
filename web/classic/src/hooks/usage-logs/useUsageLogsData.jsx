@@ -45,6 +45,7 @@ import {
   renderTaskBillingProcess,
 } from '../../helpers';
 import { ITEMS_PER_PAGE } from '../../constants';
+import { LEGACY_LOG_SOURCE_RATE } from '../../helpers/quota';
 import { useTableCompactMode } from '../common/useTableCompactMode';
 import ParamOverrideEntry from '../../components/table/usage-logs/components/ParamOverrideEntry';
 import { getEntitlementLogInfo } from '../../helpers/entitlementLog';
@@ -449,7 +450,10 @@ export const useLogsData = () => {
       if (logs[i].type === 2 && other?.estimatedLegacyFX && !pricingDetail) {
         expandDataLocal.push({
           key: t('历史汇率'),
-          value: t('估算（1 USD = 7.3 CNY）'),
+          // 汇率从常量插值：别在文案里再写死一次，否则改常量后标签会说谎。
+          value: t('估算（1 USD = {{rate}} CNY）', {
+            rate: LEGACY_LOG_SOURCE_RATE,
+          }),
         });
       }
       // 视频计费矩阵自带一套展开行（对齐供应商账单），并屏蔽通用的

@@ -116,8 +116,6 @@ func buildUsageLogPricing(log *model.Log) *usageLogPricing {
 			if rate.IsPositive() {
 				detail.Catalog = append(detail.Catalog, modelLogCatalog(m, rate, false)...)
 			}
-		case "":
-			detail.Catalog = append(detail.Catalog, modelLogCatalog(m, rate, true)...)
 		default:
 			detail.Catalog = append(detail.Catalog, "未记录可识别的单价口径")
 		}
@@ -147,22 +145,17 @@ func buildUsageLogPricing(log *model.Log) *usageLogPricing {
 		if !ok {
 			continue
 		}
-		if m.str("price_unit") == "" {
-			detail.Catalog = append(detail.Catalog, catalogPrice(tool.label, tool.unit, price, toolRate, true))
-			if toolRate.IsPositive() {
-				detail.ToolRate = toolRate.String()
-			} else {
-				detail.Catalog = append(detail.Catalog, tool.label+"未记录当次工具汇率")
-			}
-		} else if m.str("price_unit") == common.PriceUnitCNY {
-			if !toolFields[tool.key] {
-				detail.Catalog = append(detail.Catalog, catalogPrice(tool.label, tool.unit, price, decimal.Zero, false))
-			} else if toolRate.IsPositive() {
-				detail.Catalog = append(detail.Catalog, catalogPrice(tool.label, tool.unit, price, toolRate, false))
-				detail.ToolRate = toolRate.String()
-			} else {
-				detail.Catalog = append(detail.Catalog, tool.label+"未记录当次工具汇率")
-			}
+		// price_unit 缺失的历史日志无法判断工具价的币种，不再猜（旧分支按美元解释并乘汇率）。
+		if m.str("price_unit") != common.PriceUnitCNY {
+			continue
+		}
+		if !toolFields[tool.key] {
+			detail.Catalog = append(detail.Catalog, catalogPrice(tool.label, tool.unit, price, decimal.Zero, false))
+		} else if toolRate.IsPositive() {
+			detail.Catalog = append(detail.Catalog, catalogPrice(tool.label, tool.unit, price, toolRate, false))
+			detail.ToolRate = toolRate.String()
+		} else {
+			detail.Catalog = append(detail.Catalog, tool.label+"未记录当次工具汇率")
 		}
 	}
 	return detail

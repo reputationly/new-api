@@ -44,6 +44,9 @@ func TestUSDUsageLogPricingShowsDualCurrencyCatalog(t *testing.T) {
 			[]string{"缓存命中单价：$1.00 / 1M tokens（≈ ¥6.80）", "图片输入单价：$15.00 / 1M tokens（≈ ¥102.00）", "音频输入单价：$2.00 / 1M tokens（≈ ¥14.00）", "Web搜索单价：$6.00 / 1K 次（≈ ¥42.00）", "文件搜索单价：¥3 / 1K 次"}, "6.8", "7"},
 		{"tier with its own snapshot", map[string]any{"billing_mode": "tiered_expr", "matched_tier": "base", "expr_b64": base64.StdEncoding.EncodeToString([]byte(expression)), "expr_fx": 6.9},
 			[]string{"命中档位：base", "输入价格：$5.00 / 1M tokens（≈ ¥34.50）", "输出价格：$10.00 / 1M tokens（≈ ¥69.00）"}, "6.9", ""},
+		// 常数项是人民币（表达式求值结果就是人民币），不能跟着 token 系数一起当美元渲染。
+		{"tier with fixed fee", map[string]any{"billing_mode": "tiered_expr", "matched_tier": "base", "expr_b64": base64.StdEncoding.EncodeToString([]byte(`v2:tier("base", p * 5 * fx + 68)`)), "expr_fx": 6.8},
+			[]string{"输入价格：$5.00 / 1M tokens（≈ ¥34.00）", "固定费：$10.00 / 次（≈ ¥68.00）"}, "6.8", ""},
 		{"tier cache and image output", map[string]any{"billing_mode": "tiered_expr", "matched_tier": "base", "cache_tokens": 100,
 			"expr_b64": base64.StdEncoding.EncodeToString([]byte(`v2:tier("base", (p * 5 + cr + cc1h * 0.5 + img_o * 30) * fx)`)), "expr_fx": 6.8},
 			[]string{"缓存命中价格：$1.00 / 1M tokens（≈ ¥6.80）", "缓存创建价格（长 TTL：1h/12h）：$0.50 / 1M tokens（≈ ¥3.40）", "图片输出价格：$30.00 / 1M tokens（≈ ¥204.00）"}, "6.8", ""},
@@ -67,8 +70,9 @@ func TestUsageLogPricingDoesNotInventHistoricalFX(t *testing.T) {
 	t.Cleanup(func() { require.NoError(t, billing_setting.UpdateModelSourceRateByJSONString(original)) })
 	require.NoError(t, billing_setting.UpdateModelSourceRateByJSONString("9.9"))
 
+	// price_unit 缺失的历史日志：单价口径未知，**不猜**（旧实现会按美元解释并乘汇率）。
 	legacy := buildUsageLogPricing(usdUsageLog(t, 13, map[string]any{"price_unit": "", "model_price": 0.2, "model_source_rate": nil}))
-	require.Equal(t, []string{"按次单价：$0.20 / 次", "未记录当次换算汇率"}, legacy.Catalog)
+	require.Equal(t, []string{"未记录可识别的单价口径", "未记录当次换算汇率"}, legacy.Catalog)
 	require.Empty(t, legacy.Rate)
 
 	tier := func(expr string) *usageLogPricing {

@@ -162,5 +162,11 @@ func tierLogCatalog(m pricingLogFields, expression string, rate decimal.Decimal)
 			prices = append(prices, catalogPrice(variable.label, "1M tokens", price, rate, sourceUSD))
 		}
 	}
+	// 表达式里的常数项是**人民币**（求值结果本来就是人民币），而上面每个 token 系数在美元
+	// 口径下已经折进了 fx。所以固定费必须按人民币来源渲染，不能跟着 sourceUSD 走，否则会把
+	// 一笔 ¥100 的固定费显示成 $100。
+	if fixed := coefficients[""]; !fixed.IsZero() {
+		prices = append(prices, catalogPrice("固定费", "次", fixed, rate, false))
+	}
 	return prices, rate
 }

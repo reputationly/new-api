@@ -34,7 +34,7 @@ import {
 import { UserContext } from '../../context/User';
 import { Modal } from '@douyinfe/semi-ui';
 import { useTranslation } from 'react-i18next';
-import { getQuotaPerYuan } from '../../helpers/quota';
+import { getQuotaPerYuan, getUsdExchangeRate } from '../../helpers/quota';
 
 // 导入子组件
 import UserInfoHeader from './personal/components/UserInfoHeader';
@@ -210,7 +210,8 @@ const PersonalSetting = () => {
         warningType: settings.notify_type || 'email',
         warningThreshold:
           settings.quota_warning_threshold ||
-          Math.round(7.3 * getQuotaPerYuan()),
+          // 默认「约 1 美元」的告警阈值，跟随站点汇率而不是写死 7.3。
+          Math.round((getUsdExchangeRate() ?? 7.3) * getQuotaPerYuan()),
         webhookUrl: settings.webhook_url || '',
         webhookSecret: settings.webhook_secret || '',
         notificationEmail: settings.notification_email || '',

@@ -33,6 +33,7 @@ import {
   quotaToDisplayAmount,
   displayAmountToQuota,
   getQuotaPerYuan,
+  getUsdExchangeRate,
 } from '../../../../helpers/quota';
 import { useIsMobile } from '../../../../hooks/common/useIsMobile';
 import {
@@ -609,7 +610,9 @@ const EditTokenModal = (props) => {
                         placeholder={t('输入额度')}
                         disabled={values.unlimited_quota}
                         min={0}
-                        step={Math.round(7.3 * getQuotaPerYuan())}
+                        step={Math.round(
+                          (getUsdExchangeRate() ?? 7.3) * getQuotaPerYuan(),
+                        )}
                         rules={
                           values.unlimited_quota
                             ? []
