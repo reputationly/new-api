@@ -217,6 +217,9 @@ export default function DynamicPricingBreakdown({
           >
             {t('分档价格表')}
           </Text>
+          <div className='text-xs text-gray-600 mb-2'>
+            {t('基础单价，折扣和价格摘要见下方。')}
+          </div>
           <Table
             dataSource={tierData}
             columns={tierColumns}

@@ -22,11 +22,11 @@ import { Avatar, Typography, Table, Tag, Tooltip } from '@douyinfe/semi-ui';
 import { IconCoinMoneyStroked, IconClock } from '@douyinfe/semi-icons';
 import {
   calculateModelPrice,
-  getEffectiveGroupRatio,
   getGroupDiscountInfo,
   getTimeRatioView,
   hasPointDeduction,
   getModelPriceItems,
+  formatDynamicPriceSummary,
   formatVideoMatrixSummary,
   buildTimeWindowRows,
 } from '../../../../../helpers';
@@ -84,20 +84,9 @@ const ModelPricingTable = ({
           })
         : { inputPrice: '-', outputPrice: '-', price: '-' };
 
-      // 获取分组倍率。这张表逐分组列价，是模型折扣最该生效的地方——
-      // 用基础倍率的话，「倍率」列会和同一行的价格自相矛盾。
-      const groupRatioValue =
-        getEffectiveGroupRatio(
-          groupRatio,
-          groupModelRatio,
-          group,
-          modelData?.model_name,
-        ) ?? 1;
-
       return {
         key: group,
         group: group,
-        ratio: groupRatioValue,
         billingType:
           modelData?.billing_mode === 'tiered_expr'
             ? t('动态计费')
@@ -128,23 +117,6 @@ const ModelPricingTable = ({
       },
     ];
 
-    const isDynamic = modelData?.billing_mode === 'tiered_expr';
-
-    // 动态计费时始终显示倍率列，否则根据设置
-    // 动态计费（计费表达式）的模型仍要列分组倍率——那是它定价的组成部分，
-    // 与已下线的「显示倍率」开关无关。
-    if (isDynamic) {
-      columns.push({
-        title: t('分组倍率'),
-        dataIndex: 'ratio',
-        render: (text) => (
-          <Tag color='blue' size='small' shape='circle'>
-            {text}x
-          </Tag>
-        ),
-      });
-    }
-
     columns.push({
       title: t('计费类型'),
       dataIndex: 'billingType',
@@ -166,8 +138,7 @@ const ModelPricingTable = ({
     // 摊在这一列里，用户能直接比较「我这个令牌几折」。
     columns.push({
       title: t('折扣'),
-      dataIndex: 'ratio',
-      render: (ratio, record) => {
+      render: (_, record) => {
         // 折扣列同理：用固定折扣（discount_ratio），不是含时段系数的终值，
         // 否则配了分时价的模型会显示成「2.5 折」。
         const timeView = record?.priceData
@@ -220,9 +191,19 @@ const ModelPricingTable = ({
       render: (items, record) => {
         if (items.length === 1 && items[0].isDynamic) {
           return (
-            <Text type='tertiary' size='small'>
-              {t('见上方动态计费详情')}
-            </Text>
+            <div className='flex flex-col gap-1'>
+              {record.priceData.usedGroupRatio !== 0 &&
+                formatDynamicPriceSummary(
+                  record.priceData.billingExpr,
+                  t,
+                  record.priceData.usedGroupRatio,
+                  modelData.source_rate,
+                  record.priceData.displayCurrency,
+                )}
+              <Text type='tertiary' size='small'>
+                {t('见上方动态计费详情')}
+              </Text>
+            </div>
           );
         }
         // 场景计费：给出本分组折算后的价格区间，逐档拆解在上方矩阵里。
@@ -403,6 +384,7 @@ const ModelPricingTable = ({
                 // 两件事并排但不混：d.text 是**绝对折扣**（相对目录价），
                 // relative 是「相对常规价」。只显示折数看不出这个时段贵还是便宜。
                 const rel = Number(record.relative);
+                const discount = getGroupDiscountInfo(disc) ?? d;
                 const relTag =
                   Number.isFinite(rel) && rel !== 1 ? (
                     <Tag
@@ -425,15 +407,11 @@ const ModelPricingTable = ({
                       {relTag}
                       {/* 折数用**固定折扣**（与时刻无关），不能用该时段的终值算：
                           终值里含时段系数，会把「5 折 + 空闲 0.5」显示成 2.5 折。 */}
-                      <Tag color='white' size='small' shape='circle'>
-                        {(() => {
-                          const fixed = getGroupDiscountInfo(disc);
-                          if (fixed) return fixed.text;
-                          return d
-                            ? d.text
-                            : `${Number(record.ratio.toFixed(4))}x`;
-                        })()}
-                      </Tag>
+                      {discount && (
+                        <Tag color='white' size='small' shape='circle'>
+                          {discount.text}
+                        </Tag>
+                      )}
                     </span>
                   </span>
                 );

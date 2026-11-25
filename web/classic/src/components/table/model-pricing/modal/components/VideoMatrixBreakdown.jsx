@@ -29,7 +29,7 @@ export default function VideoMatrixBreakdown({
   displayCurrency,
   t,
   // 套餐覆盖（null = 未覆盖）与算力点换算率。每格价格下追加该格的套餐内点数，
-  // 口径与本表的货币价一致（基础单价），表下方「按分组倍率折算」的说明对两者同时适用。
+  // 口径与本表的货币价一致（基础单价）。
   entitlementCoverage = null,
   quotaPerComputePoint = 0,
 }) {
@@ -155,7 +155,7 @@ export default function VideoMatrixBreakdown({
       />
 
       <div className='text-xs text-gray-600 mt-2'>
-        {t('上表为基础单价，实际按下方各分组的倍率折算。')}
+        {t('基础单价，折扣和价格摘要见下方。')}
       </div>
     </div>
   );

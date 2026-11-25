@@ -638,6 +638,20 @@ const Models = () => {
                   {vendorName(detail.vendor_id)}
                 </span>
               )}
+              {discountTag(
+                detailPricingGroup.ratio,
+                Number(
+                  groupTimeRatioMap?.[detailPricingGroup.group]?.[
+                    detail.model_name
+                  ]?.discount_ratio,
+                ) ||
+                  getNormalRatio(
+                    groupTimeRatioMap,
+                    detailPricingGroup.group,
+                    detail.model_name,
+                    undefined,
+                  ),
+              )}
             </div>
             {!getModelPricingCurrencyConfig(detail) ? (
               <p>价格暂不可用</p>
@@ -792,17 +806,6 @@ const Models = () => {
                 )}
               </div>
             )}
-            <div style={{ fontSize: 12, color: '#9aa1ad', marginTop: 6 }}>
-              按「{detailPricingGroup.group || '默认'}」分组倍率 ×
-              {detailPricingGroup.ratio} 计算
-              {!group && detailPricingGroup.group
-                ? '（全部分组取最优倍率）'
-                : ''}
-            </div>
-            {/*
-              分时定价。上面那行的分组倍率**已含**此刻的时段系数，所以这张表是
-              解释「为什么现在是这个价、别的时段是什么价」，不是又一个要乘上去的数。
-            */}
             {(() => {
               // 与 PC 端共用同一份行构造（@classic/helpers/discount 的
               // buildTimeWindowRows）：两端各写一份必然漂移，而漂移的表现是
@@ -860,10 +863,7 @@ const Models = () => {
                           {r.active ? ' · 进行中' : ''}
                         </span>
                         <span style={{ color: DISCOUNT_HEX.cyan.fg }}>
-                          {r.discount?.text ??
-                            (r.priceMode === 'catalog'
-                              ? ''
-                              : `${Number(r.ratio.toFixed(4))}x`)}
+                          {r.discount?.text}
                         </span>
                       </div>
                     );
