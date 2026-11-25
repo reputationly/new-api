@@ -466,6 +466,7 @@ func RefundTaskQuota(ctx context.Context, task *model.Task, reason string) {
 		PointsConsumed: pointsRefunded,
 		CreditConsumed: creditRefunded,
 		Ip:             task.PrivateData.ClientIp,
+		UserAgent:      task.PrivateData.ClientUserAgent,
 	})
 }
 
@@ -624,6 +625,7 @@ func recalculateTaskQuota(ctx context.Context, task *model.Task, actualQuota, co
 		CreditConsumed:   logCredit,
 		Other:            other,
 		Ip:               task.PrivateData.ClientIp,
+		UserAgent:        task.PrivateData.ClientUserAgent,
 	})
 
 	// 调用方在结算前已把终态落盘，这里不写回的话 tasks.quota 永远停在预扣值，

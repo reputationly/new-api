@@ -1083,6 +1083,42 @@ export const getLogsColumns = ({
               );
             },
           },
+          {
+            key: COLUMN_KEYS.USER_AGENT,
+            title: (
+              <div className='flex items-center gap-1'>
+                {t('客户端')}
+                <Tooltip
+                  content={t(
+                    '请求头 User-Agent，由客户端自报、可伪造，只作参考；点击复制',
+                  )}
+                >
+                  <IconHelpCircle className='text-gray-400 cursor-help' />
+                </Tooltip>
+              </div>
+            ),
+            dataIndex: 'user_agent',
+            render: (text) => {
+              return text ? (
+                <Tooltip content={text}>
+                  <span>
+                    <Tag
+                      color='blue'
+                      shape='circle'
+                      style={{ maxWidth: 220 }}
+                      onClick={(event) => {
+                        copyText(event, text);
+                      }}
+                    >
+                      <span className='truncate'>{text}</span>
+                    </Tag>
+                  </span>
+                </Tooltip>
+              ) : (
+                <></>
+              );
+            },
+          },
         ]
       : []),
     {

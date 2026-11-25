@@ -146,7 +146,7 @@ func writeLogCSVHeader(c *gin.Context, w *csv.Writer, includeAdminCols bool) err
 	)
 	// IP 属于管理员可见列，普通用户导出的表头里不能有它。
 	if includeAdminCols {
-		headers = append(headers, "IP")
+		headers = append(headers, "IP", "客户端")
 	}
 	headers = append(headers, "请求ID", "详情", "目录价币种", "本次模型汇率", "本次工具汇率", "目录价")
 	return w.Write(headers)
@@ -310,7 +310,7 @@ func logToRow(l *model.Log, includeAdminCols bool) []string {
 	)
 	// 与 writeLogCSVHeader 的顺序严格对齐：IP 只在管理员视角存在。
 	if includeAdminCols {
-		row = append(row, l.Ip)
+		row = append(row, l.Ip, l.UserAgent)
 	}
 	row = append(row,
 		l.RequestId,

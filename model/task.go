@@ -340,8 +340,10 @@ type TaskPrivateData struct {
 	TokenName string `json:"token_name,omitempty"`
 	// ClientIp 提交任务时的客户端 IP，供异步结算 / 退款日志使用（轮询阶段没有请求上下文）。
 	// PrivateData 是 json:"-"，不会出现在任何对外响应里。
-	ClientIp       string              `json:"client_ip,omitempty"`
-	BillingContext *TaskBillingContext `json:"billing_context,omitempty"` // 计费参数快照（用于轮询阶段重新计算）
+	ClientIp string `json:"client_ip,omitempty"`
+	// ClientUserAgent 同 ClientIp：提交时客户端的 User-Agent。
+	ClientUserAgent string              `json:"client_user_agent,omitempty"`
+	BillingContext  *TaskBillingContext `json:"billing_context,omitempty"` // 计费参数快照（用于轮询阶段重新计算）
 	// PersistRetryCount 上游已完成但成品落 OBS 失败的重试次数（轮询阶段递增，
 	// 超限才判失败退款，避免瞬时 OBS 抖动丢弃已渲染成品）。见 task_polling.go。
 	PersistRetryCount int `json:"persist_retry_count,omitempty"`

@@ -39,6 +39,7 @@ func seedLogWithIp(t *testing.T, userId int, username string, ip string) {
 		Type:      model.LogTypeConsume,
 		Quota:     1,
 		Ip:        ip,
+		UserAgent: "ua-" + ip,
 	}).Error)
 }
 
@@ -58,6 +59,7 @@ func TestExportUserLogsHasNoIpColumn(t *testing.T) {
 
 	header := records[0]
 	require.NotContains(t, header, "IP")
+	require.NotContains(t, header, "客户端")
 	for i, row := range records {
 		require.Len(t, row, len(header), "第 %d 行的列数与表头不一致", i)
 		require.NotContains(t, row, userSideIp)
@@ -91,6 +93,8 @@ func TestExportAllLogsKeepsIpColumnForAdmins(t *testing.T) {
 		require.Len(t, row, len(header), "第 %d 行的列数与表头不一致", i)
 	}
 	require.Equal(t, adminSideIp, records[1][ipIndex])
+	require.Equal(t, "客户端", header[ipIndex+1], "客户端列紧跟 IP")
+	require.Equal(t, "ua-"+adminSideIp, records[1][ipIndex+1])
 }
 
 func callLogListHandler(t *testing.T, handler func(*gin.Context), userId int, path string) map[string]any {
@@ -127,6 +131,8 @@ func TestGetUserLogsHandlerHidesIp(t *testing.T) {
 	require.True(t, ok)
 	_, hasIp := item["ip"]
 	require.False(t, hasIp, "普通用户的日志响应里不该有 ip 键")
+	_, hasUA := item["user_agent"]
+	require.False(t, hasUA, "普通用户的日志响应里不该有 user_agent 键")
 }
 
 // TestGetAllLogsHandlerKeepsIp：管理员列表接口照常返回 IP。

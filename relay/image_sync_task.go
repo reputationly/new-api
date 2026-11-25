@@ -70,6 +70,7 @@ func buildSyncImageTask(c *gin.Context, info *relaycommon.RelayInfo) *model.Task
 	task.PrivateData.TokenName = c.GetString("token_name")
 	// 轮询阶段没有请求上下文，结算/退款日志的 IP 只能靠这里冻结。
 	task.PrivateData.ClientIp = c.ClientIP()
+	task.PrivateData.ClientUserAgent = model.ClientUserAgent(c)
 
 	// 结果引用。存 obs://<key> 占位符而不是签名 URL（后者有有效期），查询时实时签发，
 	// 与异步链路共用 ResolveResultURL 这一个 hook。

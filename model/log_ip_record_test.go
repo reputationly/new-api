@@ -3,7 +3,9 @@ package model
 import (
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
@@ -46,4 +48,32 @@ func TestRecordErrorLogAlwaysRecordsClientIp(t *testing.T) {
 	require.NoError(t, LOG_DB.Order("id desc").First(&got).Error)
 	require.Equal(t, LogTypeError, got.Type)
 	require.Equal(t, "192.0.2.1", got.Ip)
+}
+
+func TestRecordConsumeLogRecordsClientUserAgent(t *testing.T) {
+	truncateTables(t)
+	c := newLogRecordContext()
+	c.Request.Header.Set("User-Agent", "WorkBuddy/5.11.3 WorkBuddy/5.11.3 CLI/2.176.0")
+
+	RecordConsumeLog(c, 9503, RecordConsumeLogParams{
+		ModelName: "ua-test-model",
+		Quota:     1,
+		Other:     map[string]interface{}{},
+	})
+
+	var got Log
+	require.NoError(t, LOG_DB.Order("id desc").First(&got).Error)
+	require.Equal(t, "WorkBuddy/5.11.3 WorkBuddy/5.11.3 CLI/2.176.0", got.UserAgent)
+
+	logs := []*Log{&got}
+	formatUserLogs(logs, 0)
+	require.Empty(t, logs[0].UserAgent, "普通用户视角不能带 User-Agent")
+}
+
+func TestTruncateUserAgentKeepsRunes(t *testing.T) {
+	long := strings.Repeat("客", logUserAgentMaxLen+10)
+	got := TruncateUserAgent(long)
+	require.Equal(t, logUserAgentMaxLen, utf8.RuneCountInString(got))
+	require.True(t, utf8.ValidString(got))
+	require.Equal(t, "node", TruncateUserAgent("  node "))
 }
