@@ -73,12 +73,13 @@ export default function GeneralSettings(props) {
     });
     setLoading(true);
     Promise.all(requestQueue)
-      .then((res) => {
-        if (requestQueue.length === 1) {
-          if (res.includes(undefined)) return;
-        } else if (requestQueue.length > 1) {
-          if (res.includes(undefined))
-            return showError(t('部分保存失败，请重试'));
+      .then((results) => {
+        // 后端对"值不合法"返回 200 + {success:false,message}，不能只看网络异常；
+        // 校验失败时不刷新表单，否则管理员的输入会被库里的旧值盖掉、看不出被拒。
+        const failures = (results || []).filter((res) => !res?.data?.success);
+        if (failures.length > 0) {
+          failures.forEach((res) => showError(res?.data?.message || t('保存失败，请重试')));
+          return;
         }
         showSuccess(t('保存成功'));
         // 顶栏和站内「蒜狸小助手」页都读 StatusContext 里的 assistant_link，
@@ -178,7 +179,7 @@ export default function GeneralSettings(props) {
                   autosize={{ minRows: 3, maxRows: 8 }}
                   placeholder={'{"qwen3.8-flash":["image","video"]}'}
                   extraText={t(
-                    'JSON 对象：模型 → 支持的输入模态（image/video/audio）。留空使用出厂已知表；写入后覆盖同名条目',
+                    'JSON 对象：模型 → 支持的输入模态（image/video/audio）。留空使用出厂已知表；写入后覆盖同名条目。格式或取值写错会在保存时报错',
                   )}
                   onChange={handleFieldChange('general_setting.model_modalities')}
                 />

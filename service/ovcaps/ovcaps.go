@@ -31,6 +31,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
@@ -350,9 +351,11 @@ func Build(scope Scope) []Capability {
 		}
 		if matched {
 			defaults[OperationChat] = configuredChatModel
-		} else {
+		} else if _, warned := warnedMissingDefaultChatModel.LoadOrStore(configuredChatModel, struct{}{}); !warned {
+			// 每把 key 的分组/白名单不同，"看不到默认模型"是合法状态：按模型名只报一次，
+			// 否则每次拉目录都会写一条错误日志。
 			common.SysError(fmt.Sprintf(
-				"通用设置里的默认对话模型 %q 不在本次能力目录中（模型未部署、分组不可见或被令牌白名单过滤），已回退按顺序第一条",
+				"通用设置里的默认对话模型 %q 不在能力目录中（未部署、分组不可见或被令牌白名单过滤），已回退按顺序第一条",
 				configuredChatModel))
 		}
 	}
@@ -586,6 +589,9 @@ func hasChatEndpoint(name string) bool {
 // chatEndpointTypes 是对模型端点元数据的读取口，用例可以替换它来固定"谁是对话模型"。
 // 生产直接走模型定价元数据（由渠道能力同步而来）。
 var chatEndpointTypes = model.GetModelSupportEndpointTypes
+
+// warnedMissingDefaultChatModel 记录已经报过"配置的默认对话模型未下发"的模型名。
+var warnedMissingDefaultChatModel sync.Map
 
 func capabilityID(operation, platformModel string) string {
 	return operation + ":" + platformModel

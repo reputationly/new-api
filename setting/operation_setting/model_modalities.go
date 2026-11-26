@@ -69,10 +69,17 @@ func ValidateModelModalities(raw string) error {
 	if err := common.UnmarshalJsonStr(trimmed, &parsed); err != nil {
 		return fmt.Errorf("模型输入模态必须是「模型名 → 模态数组」的 JSON 对象: %w", err)
 	}
+	seen := map[string]bool{}
 	for model, modalities := range parsed {
-		if strings.TrimSpace(model) == "" {
+		trimmedModel := strings.TrimSpace(model)
+		if trimmedModel == "" {
 			return fmt.Errorf("模型输入模态里存在空的模型名")
 		}
+		// 读路径按 trim 后的名字合并，重复键谁生效取决于 map 遍历顺序，必须在写入时拦掉。
+		if seen[trimmedModel] {
+			return fmt.Errorf("模型输入模态里 %q 重复（忽略首尾空格后同名）", trimmedModel)
+		}
+		seen[trimmedModel] = true
 		for _, modality := range modalities {
 			if !validModality(modality) {
 				return fmt.Errorf("模型 %q 的模态 %q 无效，只能是 image / video / audio", model, modality)

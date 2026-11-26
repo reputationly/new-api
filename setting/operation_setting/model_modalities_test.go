@@ -16,6 +16,7 @@ func TestValidateModelModalities(t *testing.T) {
 		{name: "值不是数组", raw: `{"qwen3.8-flash":"image"}`, wantErr: true},
 		{name: "未知模态", raw: `{"qwen3.8-flash":["text"]}`, wantErr: true},
 		{name: "空模型名", raw: `{"  ":["image"]}`, wantErr: true},
+		{name: "trim 后重复的模型名", raw: `{"glm-5":["image"]," glm-5 ":["video"]}`, wantErr: true},
 	}
 	for _, testCase := range cases {
 		t.Run(testCase.name, func(t *testing.T) {
