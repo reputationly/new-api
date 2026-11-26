@@ -177,3 +177,38 @@ func TestChatModelOutsideHiloTextHasNoModalities(t *testing.T) {
 		}
 	}
 }
+
+// 改 multimodal_model 不动任何 capability 字段，version 必须跟着变 ——
+// 客户端只按 version 判断要不要重拉，漏掉 defaults 就等于这次配置永远不生效。
+func TestVersionFollowsDefaults(t *testing.T) {
+	withChatModels(t, "GLM-5", "qwen3.8-flash")
+	entries := []textEntry{entry("GLM-5", false, false), entry("qwen3.8-flash", true, true)}
+	scope := Scope{Enabled: map[string]bool{"GLM-5": true, "qwen3.8-flash": true}}
+
+	withHiloCatalog(t, entries, "", "qwen3.8-flash")
+	c1 := Build(scope)
+	r1 := ResolveDefaultRoles(c1)
+
+	withHiloCatalog(t, entries, "", "GLM-5") // GLM-5 不支持图片/视频 → multimodal 留空
+	c2 := Build(scope)
+	r2 := ResolveDefaultRoles(c2)
+
+	if r1.Multimodal == r2.Multimodal {
+		t.Fatalf("用例无效：defaults 没变（%q / %q）", r1.Multimodal, r2.Multimodal)
+	}
+	if Version(c1, r1) == Version(c2, r2) {
+		t.Fatal("defaults 变了但 version 没变：按 version 缓存的客户端永远不会重拉")
+	}
+}
+
+// multimodal_model 指到一个不支持图片/视频的模型时，不能下发（否则客户端会把
+// 图片发给只能读文字的模型，错误从上游回来、看不出是配置问题）。
+func TestMultimodalRejectedWhenModelHasNoVision(t *testing.T) {
+	withChatModels(t, "GLM-5", "qwen3.8-flash")
+	withHiloCatalog(t, []textEntry{entry("GLM-5", false, false), entry("qwen3.8-flash", true, true)}, "", "GLM-5")
+
+	roles := ResolveDefaultRoles(Build(Scope{Enabled: map[string]bool{"GLM-5": true, "qwen3.8-flash": true}}))
+	if roles.Multimodal != "" {
+		t.Fatalf("不支持图片/视频的 GLM-5 不应成为默认多模态模型: %q", roles.Multimodal)
+	}
+}

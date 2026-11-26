@@ -22,12 +22,16 @@ import (
 // 反推只能靠 model_name 猜，H3 恰好猜不对。
 
 // ModelCatalogItem 目录里的一条，媒体与对话共用（对话没有 params/max_refs）。
+//
+// 字段名统一 camelCase：这个接口面向客户端，与 `/v1/ov/capabilities`、
+// `/api/v1/models/config` 的既有风格一致（不要照抄 HiloCatalogEntry 内部的
+// snake_case json tag，那是配置文件的写法，不是对外契约）。
 type ModelCatalogItem struct {
 	ID            string                        `json:"id"`
-	PlatformModel string                        `json:"platform_model"`
-	DisplayName   string                        `json:"display_name"`
+	PlatformModel string                        `json:"platformModel"`
+	DisplayName   string                        `json:"displayName"`
 	Description   string                        `json:"description,omitempty"`
-	MaxRefs       int                           `json:"max_refs,omitempty"`
+	MaxRefs       int                           `json:"maxRefs,omitempty"`
 	Params        map[string]dto.HiloModelParam `json:"params,omitempty"`
 	SupportsImage bool                          `json:"supportsImage,omitempty"`
 	SupportsVideo bool                          `json:"supportsVideo,omitempty"`
@@ -108,23 +112,13 @@ func GetModelCatalog(c *gin.Context) {
 	collect(catalog.Video, &out.Video)
 	collect(catalog.Audio, &out.Audio)
 
-	reported := make(map[string]bool, len(catalog.Text))
 	for _, entry := range catalog.Text {
 		if why := unavailable(enabled, entry.PlatformModel); why != "" {
 			continue
 		}
 		out.Text = append(out.Text, textCatalogItem(entry))
-		reported[strings.TrimSpace(entry.PlatformModel)] = true
 	}
-	// 角色默认值只报"真的下发出去"的模型：配错或没部署时留空，由客户端回退。
-	if chat := strings.TrimSpace(catalog.DefaultTextModel); chat != "" && reported[chat] {
-		out.Defaults.Chat = chat
-	} else if len(out.Text) > 0 {
-		out.Defaults.Chat = out.Text[0].PlatformModel
-	}
-	if multimodal := strings.TrimSpace(catalog.MultimodalModel); multimodal != "" && reported[multimodal] {
-		out.Defaults.Multimodal = multimodal
-	}
+	out.Defaults = resolveCatalogDefaults(catalog, out.Text, visionTextModels(catalog.Text))
 
 	payload := struct {
 		Image    []ModelCatalogItem   `json:"image"`
@@ -143,4 +137,41 @@ func GetModelCatalog(c *gin.Context) {
 
 	c.Header("Cache-Control", "no-cache")
 	c.JSON(http.StatusOK, out)
+}
+
+// visionTextModels 目录 text 段里声明了图片或视频能力的平台模型。
+// 只看 `text` 段：多模态默认值是给对话模型用的，媒体条目的"能吃图"是另一回事。
+func visionTextModels(entries []setting.HiloTextEntry) map[string]bool {
+	out := make(map[string]bool, len(entries))
+	for _, entry := range entries {
+		if entry.Model.SupportsImage || entry.Model.SupportsVideo {
+			out[strings.TrimSpace(entry.PlatformModel)] = true
+		}
+	}
+	return out
+}
+
+// resolveCatalogDefaults 算角色默认值。text 是**真的下发出去**的对话条目
+// （顺序即目录顺序），vision 是其中声明了图片/视频能力的平台模型。
+//
+// 两者的取舍不同：chat 是客户端选择器的默认项，空着界面就不好用，所以回退第一条；
+// multimodal 是角色挂载，配错不如留空让客户端自己回退 —— 但"配了却不支持图片/视频"
+// 必须当作没配，否则客户端会把图片发给只能读文字的模型。
+func resolveCatalogDefaults(catalog setting.HiloCatalog, text []ModelCatalogItem, vision map[string]bool) ModelCatalogDefaults {
+	reported := make(map[string]bool, len(text))
+	for _, item := range text {
+		if model := strings.TrimSpace(item.PlatformModel); model != "" {
+			reported[model] = true
+		}
+	}
+	var defaults ModelCatalogDefaults
+	if chat := strings.TrimSpace(catalog.DefaultTextModel); chat != "" && reported[chat] {
+		defaults.Chat = chat
+	} else if len(text) > 0 {
+		defaults.Chat = text[0].PlatformModel
+	}
+	if multimodal := strings.TrimSpace(catalog.MultimodalModel); multimodal != "" && reported[multimodal] && vision[multimodal] {
+		defaults.Multimodal = multimodal
+	}
+	return defaults
 }

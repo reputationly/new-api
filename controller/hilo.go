@@ -120,11 +120,13 @@ func GetHiloModelsConfig(c *gin.Context) {
 	} else if len(out.TextModels) > 0 {
 		out.DefaultTextModelID = out.TextModels[0].ID
 	}
-	if id, ok := reportedTextIDs[strings.TrimSpace(catalog.MultimodalModel)]; ok {
+	// 多模态默认值必须真的下发、且该条目声明了图片/视频能力：只判可见性的话，
+	// 配错会把图片发给一个只能读文字的模型，错误从上游回来、看不出是配置问题。
+	multimodal := strings.TrimSpace(catalog.MultimodalModel)
+	if id, reported := reportedTextIDs[multimodal]; reported && multimodal != "" && visionTextModels(catalog.Text)[multimodal] {
 		out.DefaultMultimodalModelID = id
 	}
-	if len(out.TextModels) > 0 {
-	} else {
+	if len(out.TextModels) == 0 {
 		// 一个都没报出去 = 客户端拿到空列表 → 回落它记着的模型 → 发消息 500，
 		// 而报错来自上游，看不出是模型问题。这条日志是管理员唯一能搜到的线索。
 		// 只打一次：这个接口是客户端在轮询的。

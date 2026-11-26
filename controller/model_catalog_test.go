@@ -41,3 +41,48 @@ func TestTextCatalogItemCarriesModalities(t *testing.T) {
 		t.Fatalf("unexpected item: %+v", item)
 	}
 }
+
+// multimodal 默认值必须同时满足"已下发"和"声明了图片/视频能力"。
+func TestResolveCatalogDefaultsGatesMultimodalByVision(t *testing.T) {
+	catalog := setting.HiloCatalog{MultimodalModel: "GLM-5"}
+	text := []ModelCatalogItem{
+		{ID: "GLM-5", PlatformModel: "GLM-5"},
+		{ID: "qwen3.8-flash-fp8", PlatformModel: "qwen3.8-flash-fp8"},
+	}
+	vision := map[string]bool{"qwen3.8-flash-fp8": true}
+
+	if got := resolveCatalogDefaults(catalog, text, vision); got.Multimodal != "" {
+		t.Fatalf("不支持图片的模型不应成为 multimodal 默认: %q", got.Multimodal)
+	}
+	catalog.MultimodalModel = "qwen3.8-flash-fp8"
+	if got := resolveCatalogDefaults(catalog, text, vision); got.Multimodal != "qwen3.8-flash-fp8" {
+		t.Fatalf("multimodal = %q, want qwen3.8-flash-fp8", got.Multimodal)
+	}
+}
+
+func TestResolveCatalogDefaultsChatFallback(t *testing.T) {
+	text := []ModelCatalogItem{{PlatformModel: "a"}, {PlatformModel: "b"}}
+	if got := resolveCatalogDefaults(setting.HiloCatalog{DefaultTextModel: "not-reported"}, text, nil); got.Chat != "a" {
+		t.Fatalf("chat 应回退下发列表第一条, got %q", got.Chat)
+	}
+	if got := resolveCatalogDefaults(setting.HiloCatalog{DefaultTextModel: "b"}, text, nil); got.Chat != "b" {
+		t.Fatalf("chat 应取目录配置值, got %q", got.Chat)
+	}
+	if got := resolveCatalogDefaults(setting.HiloCatalog{}, nil, nil); got.Chat != "" || got.Multimodal != "" {
+		t.Fatalf("空目录不应给默认值: %+v", got)
+	}
+}
+
+// 线上实测口径：qwen3.8-flash-fp8 支持图片+视频，glm-5.3-flash-w4a8 不支持。
+func TestVisionTextModels(t *testing.T) {
+	vision := visionTextModels([]setting.HiloTextEntry{
+		{PlatformModel: "qwen3.8-flash-fp8", Model: dto.HiloTextModel{ID: "qwen3.8-flash-fp8", SupportsImage: true, SupportsVideo: true}},
+		{PlatformModel: "glm-5.3-flash-w4a8", Model: dto.HiloTextModel{ID: "glm-5.3-flash-w4a8"}},
+	})
+	if !vision["qwen3.8-flash-fp8"] {
+		t.Fatalf("qwen3.8-flash-fp8 应被认作视觉模型: %v", vision)
+	}
+	if vision["glm-5.3-flash-w4a8"] {
+		t.Fatalf("glm-5.3-flash-w4a8 不该被认作视觉模型: %v", vision)
+	}
+}

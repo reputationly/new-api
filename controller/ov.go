@@ -38,14 +38,17 @@ import (
 // 变了（管理员加模型、换分组、停渠道）才更新选择器。
 func GetOvCapabilities(c *gin.Context) {
 	capabilities := ovcaps.Build(capabilityScope(c))
+	// 角色默认值与 Hilo 目录同一份配置：客户端不用再各自硬编码/猜顺序。
+	roles := ovcaps.ResolveDefaultRoles(capabilities)
 	// 目录会随分组/渠道变化，但变化频率很低；客户端自己按 version 判断，
 	// 所以这里明确不让中间层缓存，避免"改完配置客户端还是旧的"。
 	c.Header("Cache-Control", "no-cache")
 	c.JSON(http.StatusOK, gin.H{
-		"version":      ovcaps.Version(capabilities),
+		// version 必须把 defaults 一起算进去：改 multimodal_model 不会动
+		// capabilities 里任何一个字段，漏掉它客户端就永远看不到这次变更。
+		"version":      ovcaps.Version(capabilities, roles),
 		"capabilities": capabilities,
-		// 角色默认值与 Hilo 目录同一份配置：客户端不用再各自硬编码/猜顺序。
-		"defaults": ovcaps.ResolveDefaultRoles(capabilities),
+		"defaults":     roles,
 	})
 }
 

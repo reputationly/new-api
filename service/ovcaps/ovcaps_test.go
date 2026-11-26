@@ -169,13 +169,13 @@ func TestBuildHonoursAggregateGroups(t *testing.T) {
 func TestVersionIsStableAndContentSensitive(t *testing.T) {
 	withAggregateConfig(t, common.DefaultAggregateModelConfig)
 	enabled := map[string]bool{"minimax-h3-image": true, "ace-step": true}
-	first := Version(Build(Scope{Enabled: enabled}))
-	second := Version(Build(Scope{Enabled: enabled}))
+	first := Version(Build(Scope{Enabled: enabled}), DefaultRoles{})
+	second := Version(Build(Scope{Enabled: enabled}), DefaultRoles{})
 	if first == "" || first != second {
 		t.Fatalf("同样输入版本不一致：%q / %q", first, second)
 	}
 	more := map[string]bool{"minimax-h3-image": true, "ace-step": true, "minimax-music3": true}
-	if Version(Build(Scope{Enabled: more})) == first {
+	if Version(Build(Scope{Enabled: more}), DefaultRoles{}) == first {
 		t.Fatalf("多了一条能力，版本没变")
 	}
 }

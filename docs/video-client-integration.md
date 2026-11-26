@@ -33,12 +33,13 @@ Authorization: Bearer <sk-...>
 {
   "version": "…",
   "capabilities": [ … ],
-  "defaults": { "chat": "deepseek-v4-1-flash-1017", "multimodal": "qwen3.8-flash" }
+  "defaults": { "chat": "deepseek-v4-1-flash-1017", "multimodal": "qwen3.8-flash-fp8" }
 }
 ```
 
 - `chat`：默认对话模型，来自 Hilo 目录的 `default_text_model`（未配则回退下发列表第一条），与 chat 条目里的 `default: true` 是同一个模型；
-- `multimodal`：多模态识别模型，来自 Hilo 目录的 `multimodal_model`；该模型对这个 key 不可见时字段为空。
+- `multimodal`：多模态识别模型，来自 Hilo 目录的 `multimodal_model`。**两个前提缺一不可**：该模型对这个 key 可见、且目录里给它声明了图片或视频能力（`supportsImage`/`supportsVideo`）；任一不满足就留空，客户端自行回退。
+- `version`：目录指纹，**`capabilities` 与 `defaults` 都参与计算** —— 管理员改默认模型、改模态声明，它都会变。客户端按它判断要不要重拉（响应带 `Cache-Control: no-cache`）。
 
 ### 1.1 modes（玩法）
 

@@ -371,8 +371,15 @@ func Build(scope Scope) []Capability {
 //
 // 内容变了它才变；同一个 key 反复请求得到同一个值 —— 所以哈希的输入必须是
 // **稳定排序后**的 JSON（由 [Build] 保证），不能带时间戳。
-func Version(capabilities []Capability) string {
-	raw, err := common.Marshal(capabilities)
+//
+// **必须把 roles 一起哈希**：`multimodal_model` 只影响 defaults、不动任何 capability
+// 字段，漏掉它的话管理员改完配置指纹没变，按 version 缓存的客户端就永远不会重拉。
+// 所以这里刻意不留"只哈希 capabilities"的重载 —— 那个签名迟早会被误用。
+func Version(capabilities []Capability, roles DefaultRoles) string {
+	raw, err := common.Marshal(struct {
+		Capabilities []Capability `json:"capabilities"`
+		Defaults     DefaultRoles `json:"defaults"`
+	}{capabilities, roles})
 	if err != nil {
 		// 序列化不了就不给版本号，客户端每次都重拉 —— 比给一个会误导的稳定值好。
 		return ""
@@ -591,8 +598,7 @@ func hasChatEndpoint(name string) bool {
 var chatEndpointTypes = model.GetModelSupportEndpointTypes
 
 // warnedMissingDefaultChatModel 记录已经报过"配置的默认对话模型未下发"的模型名。
-// 用指针是为了能在配置变更时整体替换（sync.Map 值不能在用过后复制）。
-var warnedMissingDefaultChatModel = &sync.Map{}
+var warnedMissingDefaultChatModel sync.Map
 
 func capabilityID(operation, platformModel string) string {
 	return operation + ":" + platformModel
@@ -638,8 +644,8 @@ func maxNumeric(values []string) int {
 }
 
 // FormatVersion 给日志/测试用的可读形式。
-func FormatVersion(capabilities []Capability) string {
-	return fmt.Sprintf("%d capabilities, version %s", len(capabilities), Version(capabilities))
+func FormatVersion(capabilities []Capability, roles DefaultRoles) string {
+	return fmt.Sprintf("%d capabilities, version %s", len(capabilities), Version(capabilities, roles))
 }
 
 // hiloTextModalities 把 Hilo 目录 text 条目的 supports* 标记翻译成输入模态。
@@ -680,20 +686,27 @@ type DefaultRoles struct {
 }
 
 // ResolveDefaultRoles 从已构建的能力清单里解析角色默认值。
-// 只报"这个 key 真的能看到"的模型，避免客户端选中一个调用时才失败的名字。
+//
+// Multimodal 报的是"这个 key 真的能看到、**且真能吃图片/视频**"的模型：只判可见性
+// 不够 —— 配错时会把图片发给一个只能读文字的模型，错误从上游回来，看不出是配置问题。
 func ResolveDefaultRoles(capabilities []Capability) DefaultRoles {
 	roles := DefaultRoles{}
-	visible := make(map[string]bool, len(capabilities))
+	vision := make(map[string]bool, len(capabilities))
 	for _, capability := range capabilities {
 		if capability.Operation != OperationChat {
 			continue
 		}
-		visible[capability.Model] = true
 		if capability.Default && roles.Chat == "" {
 			roles.Chat = capability.Model
 		}
+		for _, modality := range capability.InputModalities {
+			if modality == "image" || modality == "video" {
+				vision[capability.Model] = true
+				break
+			}
+		}
 	}
-	if configured := strings.TrimSpace(setting.GetHiloCatalog().MultimodalModel); configured != "" && visible[configured] {
+	if configured := strings.TrimSpace(setting.GetHiloCatalog().MultimodalModel); configured != "" && vision[configured] {
 		roles.Multimodal = configured
 	}
 	return roles
