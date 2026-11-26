@@ -27,11 +27,14 @@ import (
 // `/api/v1/models/config` 的既有风格一致（不要照抄 HiloCatalogEntry 内部的
 // snake_case json tag，那是配置文件的写法，不是对外契约）。
 type ModelCatalogItem struct {
-	ID            string                        `json:"id"`
-	PlatformModel string                        `json:"platformModel"`
-	DisplayName   string                        `json:"displayName"`
-	Description   string                        `json:"description,omitempty"`
-	MaxRefs       int                           `json:"maxRefs,omitempty"`
+	ID            string `json:"id"`
+	PlatformModel string `json:"platformModel"`
+	DisplayName   string `json:"displayName"`
+	Description   string `json:"description,omitempty"`
+	MaxRefs       int    `json:"maxRefs,omitempty"`
+	// InterfaceType 客户端生成时应使用的接口类型。媒体条目取目录配置；
+	// 对话条目缺省 chat-completion。客户端据此选协议，不再各自维护映射表。
+	InterfaceType string                        `json:"interfaceType,omitempty"`
 	Params        map[string]dto.HiloModelParam `json:"params,omitempty"`
 	SupportsImage bool                          `json:"supportsImage,omitempty"`
 	SupportsVideo bool                          `json:"supportsVideo,omitempty"`
@@ -67,6 +70,7 @@ func mediaCatalogItem(entry setting.HiloCatalogEntry) ModelCatalogItem {
 		DisplayName:   display,
 		Description:   entry.Model.Description,
 		MaxRefs:       entry.Model.MaxRefs,
+		InterfaceType: strings.TrimSpace(entry.InterfaceType),
 		Params:        entry.Model.Params,
 	}
 }
@@ -76,10 +80,15 @@ func textCatalogItem(entry setting.HiloTextEntry) ModelCatalogItem {
 	if display == "" {
 		display = entry.Model.ID
 	}
+	interfaceType := strings.TrimSpace(entry.InterfaceType)
+	if interfaceType == "" {
+		interfaceType = "chat-completion"
+	}
 	return ModelCatalogItem{
 		ID:            entry.Model.ID,
 		PlatformModel: entry.PlatformModel,
 		DisplayName:   display,
+		InterfaceType: interfaceType,
 		SupportsImage: entry.Model.SupportsImage,
 		SupportsVideo: entry.Model.SupportsVideo,
 		SupportsAudio: entry.Model.SupportsAudio,

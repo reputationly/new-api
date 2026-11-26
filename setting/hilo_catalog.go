@@ -56,6 +56,10 @@ type HiloCatalogEntry struct {
 	// 而看上去像"模型没部署"。
 	Transport string `json:"transport,omitempty"`
 
+	// InterfaceType 客户端生成时使用的接口类型（例如 `maas-image`、`maas-video`）。
+	// 留空表示不下发，由客户端自行决定；填了就以这里为准，客户端不再维护后端映射表。
+	InterfaceType string `json:"interface_type,omitempty"`
+
 	// ModeModels 按玩法分派到不同的平台模型。
 	//
 	// # 为什么需要它

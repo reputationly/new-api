@@ -86,3 +86,32 @@ func TestVisionTextModels(t *testing.T) {
 		t.Fatalf("glm-5.3-flash-w4a8 不该被认作视觉模型: %v", vision)
 	}
 }
+
+// interfaceType 由目录配置下发；对话条目缺省为 chat-completion，客户端不再自己维护映射。
+func TestCatalogItemsCarryInterfaceType(t *testing.T) {
+	media := mediaCatalogItem(setting.HiloCatalogEntry{
+		PlatformModel: "minimax-h3-image",
+		InterfaceType: "maas-image",
+		Model:         dto.HiloMediaModel{ID: "MiniMax-H3-Image"},
+	})
+	if media.InterfaceType != "maas-image" {
+		t.Fatalf("media interfaceType = %q", media.InterfaceType)
+	}
+
+	text := textCatalogItem(setting.HiloTextEntry{
+		PlatformModel: "deepseek-v4-1-flash",
+		Model:         dto.HiloTextModel{ID: "deepseek-v4-1-flash"},
+	})
+	if text.InterfaceType != "chat-completion" {
+		t.Fatalf("text default interfaceType = %q, want chat-completion", text.InterfaceType)
+	}
+
+	custom := textCatalogItem(setting.HiloTextEntry{
+		PlatformModel: "minimax-text-native",
+		InterfaceType: "minimax-text-native",
+		Model:         dto.HiloTextModel{ID: "minimax-text-native"},
+	})
+	if custom.InterfaceType != "minimax-text-native" {
+		t.Fatalf("explicit text interfaceType = %q", custom.InterfaceType)
+	}
+}

@@ -39,6 +39,8 @@ type HiloTextEntry struct {
 	// 平台上没有这个模型时这一条**不会出现在目录里** —— 判据和媒体模型
 	// 完全一样（见 HiloCatalogEntry.PlatformModel）。
 	PlatformModel string `json:"platform_model"`
+	// InterfaceType 客户端调用该对话模型时使用的接口类型；留空按 `chat-completion` 下发。
+	InterfaceType string `json:"interface_type,omitempty"`
 	// Model 客户端看到的定义。
 	Model dto.HiloTextModel `json:"model"`
 }

@@ -24,6 +24,7 @@ Authorization: Bearer <sk-...>
 | **`modes`** | **玩法列表**（见下） |
 | **`deliveryDurations`** | 实际可交付时长阶梯（仅带帧栅格的引擎，如 H3） |
 | `paramSchema` | 参数表（`type/properties/enum/default/title`），可直接渲染成表单 |
+| `interfaceType` | 客户端生成时应使用的接口类型（如 `maas-image` / `maas-video`），来自 Hilo 目录条目的 `interface_type`；对话条目缺省 `chat-completion`。客户端据此选协议，不必自己维护后端映射表 |
 | `default` | 该 `operation` 下的默认模型。**同一操作恰好一条为 `true`**（管理员配的默认模型不可见时回退按顺序第一条） |
 | `inputModalities` | 仅 `chat` 条目可能非空：该对话模型能接收的**输入**模态 `image` / `video` / `audio`；`text` 恒支持、不列出。**来源是 Hilo 目录 text 条目的 `supportsImage/Video/Audio`**：没列进 text 的对话模型这里为空，客户端按兼容处理。注意与 OpenAI 请求里的 `modalities`（输出模态）不是一回事 |
 
