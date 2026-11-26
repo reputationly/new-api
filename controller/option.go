@@ -509,6 +509,15 @@ func UpdateOption(c *gin.Context) {
 			})
 			return
 		}
+	case "general_setting.model_modalities":
+		// 写错不会报错的话，客户端只会静默丢掉图片/视频能力，所以校验放在这条写入路径上。
+		if err = operation_setting.ValidateModelModalities(option.Value.(string)); err != nil {
+			c.JSON(http.StatusOK, gin.H{
+				"success": false,
+				"message": err.Error(),
+			})
+			return
+		}
 	case "AutomaticDisableStatusCodes":
 		_, err = operation_setting.ParseHTTPStatusCodeRanges(option.Value.(string))
 		if err != nil {

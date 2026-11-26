@@ -1,8 +1,10 @@
 package ovcaps
 
 import (
+	"strings"
 	"testing"
 
+	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
 )
@@ -77,8 +79,74 @@ func TestChatCapabilityCarriesModalities(t *testing.T) {
 		if capability.Operation != OperationChat {
 			continue
 		}
-		if len(capability.Modalities) != 2 || capability.Modalities[0] != "image" || capability.Modalities[1] != "video" {
-			t.Fatalf("%s modalities = %v, want [image video]", capability.Model, capability.Modalities)
+		if len(capability.InputModalities) != 2 || capability.InputModalities[0] != "image" || capability.InputModalities[1] != "video" {
+			t.Fatalf("%s modalities = %v, want [image video]", capability.Model, capability.InputModalities)
+		}
+		return
+	}
+	t.Fatal("chat capability missing")
+}
+
+// 配置了默认对话模型但它不在本次目录里（未部署 / 分组不可见 / 白名单过滤 / 写错名字）时，
+// 必须回退"按顺序第一条"，保证 chat 恰好一条 default。
+func TestConfiguredDefaultFallsBackWhenModelMissing(t *testing.T) {
+	withChatModels(t, "GLM-5", "qwen3.8-flash")
+	withGeneralSetting(t, func(s *operation_setting.GeneralSetting) { s.DefaultChatModel = "not-deployed-model" })
+
+	capabilities := Build(Scope{Enabled: map[string]bool{"GLM-5": true, "qwen3.8-flash": true}})
+	defaults := []string{}
+	for _, capability := range capabilities {
+		if capability.Operation == OperationChat && capability.Default {
+			defaults = append(defaults, capability.Model)
+		}
+	}
+	if len(defaults) != 1 {
+		t.Fatalf("chat defaults = %v, want exactly 1", defaults)
+	}
+	if defaults[0] != "GLM-5" {
+		t.Fatalf("fallback default = %q, want first emitted chat model GLM-5", defaults[0])
+	}
+}
+
+func TestConfiguredDefaultIgnoredWhenTokenFiltered(t *testing.T) {
+	withChatModels(t, "GLM-5", "qwen3.8-flash")
+	withGeneralSetting(t, func(s *operation_setting.GeneralSetting) { s.DefaultChatModel = "qwen3.8-flash" })
+
+	// 令牌白名单只放行 GLM-5：配置项对这把 key 不可见，仍要恰好一条 default。
+	capabilities := Build(Scope{
+		Enabled:      map[string]bool{"GLM-5": true, "qwen3.8-flash": true},
+		TokenAllowed: map[string]bool{"GLM-5": true},
+	})
+	defaults := []string{}
+	for _, capability := range capabilities {
+		if capability.Operation == OperationChat && capability.Default {
+			defaults = append(defaults, capability.Model)
+		}
+	}
+	if len(defaults) != 1 || defaults[0] != "GLM-5" {
+		t.Fatalf("chat defaults = %v, want exactly [GLM-5]", defaults)
+	}
+}
+
+// 没有模态的对话模型不能凭空带出 inputModalities 字段。
+func TestChatInputModalitiesOmittedWhenEmpty(t *testing.T) {
+	withChatModels(t, "GLM-5")
+	withGeneralSetting(t, func(s *operation_setting.GeneralSetting) { s.ModelModalities = "" })
+
+	capabilities := Build(Scope{Enabled: map[string]bool{"GLM-5": true}})
+	for _, capability := range capabilities {
+		if capability.Operation != OperationChat {
+			continue
+		}
+		if len(capability.InputModalities) != 0 {
+			t.Fatalf("%s inputModalities = %v, want empty", capability.Model, capability.InputModalities)
+		}
+		encoded, err := common.Marshal(capability)
+		if err != nil {
+			t.Fatalf("marshal: %v", err)
+		}
+		if strings.Contains(string(encoded), "inputModalities") {
+			t.Fatalf("空模态不应出现在 JSON 里: %s", encoded)
 		}
 		return
 	}

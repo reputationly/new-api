@@ -132,8 +132,9 @@ type Capability struct {
 	Modes []Mode `json:"modes,omitempty"`
 	// DeliveryDurations 实际可交付的时长阶梯（见类型注释）。
 	DeliveryDurations DeliveryDurations `json:"deliveryDurations,omitempty"`
-	// Modalities 对话模型能接收的输入模态（image/video/audio）。只有 chat 条目可能非空。
-	Modalities []string `json:"modalities,omitempty"`
+	// InputModalities 对话模型能接收的**输入**模态（image/video/audio；text 恒支持，不列出）。
+	// 名字刻意区别于 OpenAI 请求里的 `modalities`（那是输出模态），避免客户端读错。
+	InputModalities []string `json:"inputModalities,omitempty"`
 	// Default 是不是这个操作下的默认模型。同一操作最多一条为 true。
 	Default bool `json:"default"`
 }
@@ -225,10 +226,8 @@ func Build(scope Scope) []Capability {
 	// 它必须在 `sortCapabilities` **之前**定下来 —— 排序只是为了让输出稳定、让
 	// `Version` 的哈希可复现，不应该顺带决定"默认用哪个模型"。
 	defaults := map[string]string{}
-	// 管理员在「通用设置 → 默认对话模型」里指定的模型优先于"按顺序第一条"。
-	if configured := strings.TrimSpace(operation_setting.GetGeneralSetting().DefaultChatModel); configured != "" {
-		defaults[OperationChat] = configured
-	}
+	// 管理员指定的默认对话模型先记下来，等目录发完再决定是否覆盖（见下方）。
+	configuredChatModel := strings.TrimSpace(operation_setting.GetGeneralSetting().DefaultChatModel)
 	emit := func(capability Capability) {
 		if _, ok := defaults[capability.Operation]; !ok {
 			defaults[capability.Operation] = capability.Model
@@ -328,17 +327,35 @@ func Build(scope Scope) []Capability {
 		}
 		emitted[name] = true
 		emit(Capability{
-			ID:          capabilityID(OperationChat, name),
-			Operation:   OperationChat,
-			Model:       name,
-			DisplayName: Localized{Zh: name, En: name},
-			Transport:   Transport{Kind: setting.TransportChat},
-			Limits:      Limits{},
-			Modalities:  modalities[name],
+			ID:              capabilityID(OperationChat, name),
+			Operation:       OperationChat,
+			Model:           name,
+			DisplayName:     Localized{Zh: name, En: name},
+			Transport:       Transport{Kind: setting.TransportChat},
+			Limits:          Limits{},
+			InputModalities: modalities[name],
 		})
 	}
 
 	sortCapabilities(out)
+	// 配置的默认对话模型只有**真的以 chat 条目出现**时才生效：否则静默回退"按顺序第一条"，
+	// 保证"chat 恰好一条 default"的客户端契约不被配置错误破坏。
+	if configuredChatModel != "" {
+		matched := false
+		for _, capability := range out {
+			if capability.Operation == OperationChat && capability.Model == configuredChatModel {
+				matched = true
+				break
+			}
+		}
+		if matched {
+			defaults[OperationChat] = configuredChatModel
+		} else {
+			common.SysError(fmt.Sprintf(
+				"通用设置里的默认对话模型 %q 不在本次能力目录中（模型未部署、分组不可见或被令牌白名单过滤），已回退按顺序第一条",
+				configuredChatModel))
+		}
+	}
 	for index := range out {
 		if defaults[out[index].Operation] == out[index].Model {
 			out[index].Default = true
