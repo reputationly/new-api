@@ -16,6 +16,26 @@ import (
 var RDB *redis.Client
 var RedisEnabled = true
 
+// applyRedisClientDefaults 给连接串未指定的超时/重试参数填默认值。
+// 连接串显式指定的（非 0）保持不变，见 docs/redis-fault-tolerance-design.md §3.1。
+func applyRedisClientDefaults(opt *redis.Options) {
+	if opt.DialTimeout == 0 {
+		opt.DialTimeout = time.Second
+	}
+	if opt.ReadTimeout == 0 {
+		opt.ReadTimeout = 500 * time.Millisecond
+	}
+	if opt.WriteTimeout == 0 {
+		opt.WriteTimeout = 500 * time.Millisecond
+	}
+	if opt.PoolTimeout == 0 {
+		opt.PoolTimeout = time.Second
+	}
+	if opt.MaxRetries == 0 {
+		opt.MaxRetries = -1
+	}
+}
+
 func RedisKeyCacheSeconds() int {
 	return SyncFrequency
 }
@@ -37,6 +57,9 @@ func InitRedisClient() (err error) {
 		FatalLog("failed to parse Redis connection string: " + err.Error())
 	}
 	opt.PoolSize = GetEnvOrDefault("REDIS_POOL_SIZE", 10)
+	applyRedisClientDefaults(opt)
+	SysLog(fmt.Sprintf("Redis client: dial_timeout=%s read_timeout=%s write_timeout=%s pool_timeout=%s max_retries=%d pool_size=%d",
+		opt.DialTimeout, opt.ReadTimeout, opt.WriteTimeout, opt.PoolTimeout, opt.MaxRetries, opt.PoolSize))
 	RDB = redis.NewClient(opt)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)

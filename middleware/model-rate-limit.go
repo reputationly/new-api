@@ -86,8 +86,8 @@ func redisRateLimitHandler(duration int64, totalMaxCount, successMaxCount int) g
 		successKey := fmt.Sprintf("rateLimit:%s:%s", ModelRequestRateLimitSuccessCountMark, userId)
 		allowed, err := checkRedisRateLimit(ctx, rdb, successKey, successMaxCount, duration)
 		if err != nil {
-			fmt.Println("检查成功请求数限制失败:", err.Error())
-			abortWithOpenAiMessage(c, http.StatusInternalServerError, "rate_limit_check_failed")
+			noteRedisRateLimitError(err)
+			memoryRateLimitHandler(duration, totalMaxCount, successMaxCount)(c)
 			return
 		}
 		if !allowed {
@@ -109,8 +109,8 @@ func redisRateLimitHandler(duration int64, totalMaxCount, successMaxCount int) g
 			)
 
 			if err != nil {
-				fmt.Println("检查总请求数限制失败:", err.Error())
-				abortWithOpenAiMessage(c, http.StatusInternalServerError, "rate_limit_check_failed")
+				noteRedisRateLimitError(err)
+				memoryRateLimitHandler(duration, totalMaxCount, successMaxCount)(c)
 				return
 			}
 
@@ -120,6 +120,7 @@ func redisRateLimitHandler(duration int64, totalMaxCount, successMaxCount int) g
 		}
 
 		// 4. 处理请求
+		noteRedisRateLimitOK()
 		c.Next()
 
 		// 5. 如果请求成功，记录成功请求
