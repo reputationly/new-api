@@ -38,6 +38,7 @@ import (
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/setting"
+	"github.com/QuantumNous/new-api/setting/operation_setting"
 )
 
 // 能力操作。
@@ -131,6 +132,8 @@ type Capability struct {
 	Modes []Mode `json:"modes,omitempty"`
 	// DeliveryDurations 实际可交付的时长阶梯（见类型注释）。
 	DeliveryDurations DeliveryDurations `json:"deliveryDurations,omitempty"`
+	// Modalities 对话模型能接收的输入模态（image/video/audio）。只有 chat 条目可能非空。
+	Modalities []string `json:"modalities,omitempty"`
 	// Default 是不是这个操作下的默认模型。同一操作最多一条为 true。
 	Default bool `json:"default"`
 }
@@ -222,6 +225,10 @@ func Build(scope Scope) []Capability {
 	// 它必须在 `sortCapabilities` **之前**定下来 —— 排序只是为了让输出稳定、让
 	// `Version` 的哈希可复现，不应该顺带决定"默认用哪个模型"。
 	defaults := map[string]string{}
+	// 管理员在「通用设置 → 默认对话模型」里指定的模型优先于"按顺序第一条"。
+	if configured := strings.TrimSpace(operation_setting.GetGeneralSetting().DefaultChatModel); configured != "" {
+		defaults[OperationChat] = configured
+	}
 	emit := func(capability Capability) {
 		if _, ok := defaults[capability.Operation]; !ok {
 			defaults[capability.Operation] = capability.Model
@@ -229,6 +236,7 @@ func Build(scope Scope) []Capability {
 		out = append(out, capability)
 	}
 
+	modalities := operation_setting.GetModelModalities()
 	catalog := setting.GetHiloCatalog()
 	for _, group := range []struct {
 		name    string
@@ -326,6 +334,7 @@ func Build(scope Scope) []Capability {
 			DisplayName: Localized{Zh: name, En: name},
 			Transport:   Transport{Kind: setting.TransportChat},
 			Limits:      Limits{},
+			Modalities:  modalities[name],
 		})
 	}
 
@@ -546,7 +555,7 @@ func isMediaModel(name string) bool {
 // 明确是对话类端点才算** —— 反过来"不是媒体端点就当对话模型"会把 embedding、
 // rerank、审核模型一起报进对话选择器。
 func hasChatEndpoint(name string) bool {
-	for _, endpoint := range model.GetModelSupportEndpointTypes(name) {
+	for _, endpoint := range chatEndpointTypes(name) {
 		switch endpoint {
 		case constant.EndpointTypeOpenAI, constant.EndpointTypeOpenAIResponse,
 			constant.EndpointTypeOpenAIResponseCompact, constant.EndpointTypeAnthropic,
@@ -556,6 +565,10 @@ func hasChatEndpoint(name string) bool {
 	}
 	return false
 }
+
+// chatEndpointTypes 是对模型端点元数据的读取口，用例可以替换它来固定"谁是对话模型"。
+// 生产直接走模型定价元数据（由渠道能力同步而来）。
+var chatEndpointTypes = model.GetModelSupportEndpointTypes
 
 func capabilityID(operation, platformModel string) string {
 	return operation + ":" + platformModel

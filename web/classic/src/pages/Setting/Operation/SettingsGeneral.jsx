@@ -37,6 +37,8 @@ export default function GeneralSettings(props) {
     TopUpLink: '',
     'general_setting.docs_link': '',
     'general_setting.assistant_link': '',
+    'general_setting.default_chat_model': '',
+    'general_setting.model_modalities': '',
     RetryTimes: '',
     DisplayTokenStatEnabled: false,
     DefaultCollapseSidebar: false,
@@ -153,6 +155,32 @@ export default function GeneralSettings(props) {
                   )}
                   onChange={handleFieldChange('general_setting.assistant_link')}
                   showClear
+                />
+              </Col>
+              <Col xs={24} sm={12} md={8} lg={8} xl={8}>
+                <Form.Input
+                  field={'general_setting.default_chat_model'}
+                  label={t('默认对话模型')}
+                  initValue={''}
+                  placeholder={t('例如 deepseek-v4-1-flash-1017')}
+                  extraText={t(
+                    '能力目录会把该模型标为对话默认项；留空则沿用"按出现顺序第一条"的旧规则。客户端据此直接选中，不再各自硬编码',
+                  )}
+                  onChange={handleFieldChange('general_setting.default_chat_model')}
+                  showClear
+                />
+              </Col>
+              <Col xs={24} sm={12} md={8} lg={8} xl={8}>
+                <Form.TextArea
+                  field={'general_setting.model_modalities'}
+                  label={t('模型输入模态')}
+                  initValue={''}
+                  autosize={{ minRows: 3, maxRows: 8 }}
+                  placeholder={'{"qwen3.8-flash":["image","video"]}'}
+                  extraText={t(
+                    'JSON 对象：模型 → 支持的输入模态（image/video/audio）。留空使用出厂已知表；写入后覆盖同名条目',
+                  )}
+                  onChange={handleFieldChange('general_setting.model_modalities')}
                 />
               </Col>
               {/* 单位美元额度已合入汇率组合控件（TOKENS 模式下编辑），不再单独展示 */}

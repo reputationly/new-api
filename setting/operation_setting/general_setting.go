@@ -22,6 +22,13 @@ type GeneralSetting struct {
 	CustomCurrencySymbol string `json:"custom_currency_symbol"`
 	// 自定义货币与美元汇率（1 USD = X Custom）
 	CustomCurrencyExchangeRate float64 `json:"custom_currency_exchange_rate"`
+	// 默认对话模型。留空时沿用"按出现顺序第一条"的旧规则；指定后能力目录把这条标为 chat 默认项。
+	// 客户端（蒜狸小助手 / BeefTV）据此直接选中它，不再各自硬编码。
+	DefaultChatModel string `json:"default_chat_model"`
+	// 模型的输入模态，JSON 对象：{"qwen3.8-flash":["image","video"]}。
+	// 能力目录把模态原样透传给对话模型条目，客户端据此决定能不能接图片/视频/音频。
+	// 留空时用出厂已知表（见 model_modalities.go）。
+	ModelModalities string `json:"model_modalities"`
 }
 
 // 默认配置
@@ -33,6 +40,8 @@ var generalSetting = GeneralSetting{
 	QuotaDisplayType:           QuotaDisplayTypeCNY,
 	CustomCurrencySymbol:       "¤",
 	CustomCurrencyExchangeRate: 1.0,
+	DefaultChatModel:           "",
+	ModelModalities:            "",
 }
 
 func init() {
