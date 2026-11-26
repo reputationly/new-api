@@ -148,9 +148,9 @@ Redis 中为每一类缓存维护一个**单调计数**（版本号），**永�
 
 ### 3.6 Redis key 不加命名空间
 
-仓库里没有 Redis key 前缀机制，`cache_version:*` 是实例全局的。按 `docs/cce-architecture.md`
-（§Redis），生产 Redis 是这套部署独占的自建实例，因此不加前缀。若将来与其他环境共用同一
-Redis 实例：后果只是对方的写入会让本方多一次幂等重建，不会写错数据；届时再加前缀。
+仓库里没有 Redis key 前缀机制，`cache_version:*` 是实例全局的。生产 Redis 是 HCSO DCS 主备实例
+（`docs/cce-architecture.md` 里"HCSO 无 DCS、自建单台"的描述已过时）。不加前缀：即使有其他环境
+共用同一实例，后果也只是对方的写入会让本方多一次幂等重建，不会写错数据；届时再加前缀。
 
 ### 3.7 Redis 3.0 兼容
 
