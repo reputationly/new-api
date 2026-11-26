@@ -21,15 +21,24 @@ var defNext = func(c *gin.Context) {
 	c.Next()
 }
 
+// 降级后需连续这么久没有 Redis 限流错误才记"恢复"，避免时好时坏或单个坏 key 时成对刷日志。
+var redisRateLimitRecoverQuietPeriod = 30 * time.Second
+
 var redisRateLimitDegraded atomic.Bool
+var redisRateLimitLastErrorNano atomic.Int64
 
 func noteRedisRateLimitError(err error) {
+	redisRateLimitLastErrorNano.Store(time.Now().UnixNano())
 	if redisRateLimitDegraded.CompareAndSwap(false, true) {
 		common.SysError("rate limit: redis unavailable, falling back to per-pod in-memory limiting: " + err.Error())
 	}
 }
 
 func noteRedisRateLimitOK() {
+	if !redisRateLimitDegraded.Load() ||
+		time.Since(time.Unix(0, redisRateLimitLastErrorNano.Load())) < redisRateLimitRecoverQuietPeriod {
+		return
+	}
 	if redisRateLimitDegraded.CompareAndSwap(true, false) {
 		common.SysLog("rate limit: redis recovered, back to redis limiting")
 	}

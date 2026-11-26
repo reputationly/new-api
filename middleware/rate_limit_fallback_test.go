@@ -1,8 +1,10 @@
 package middleware
 
 import (
+	"bytes"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -34,11 +36,15 @@ func setupRateLimitFallbackRedis(t *testing.T) *miniredis.Miniredis {
 
 func resetRateLimitFallbackState(t *testing.T) {
 	t.Helper()
+	prevRecoverQuietPeriod := redisRateLimitRecoverQuietPeriod
 	inMemoryRateLimiter = common.InMemoryRateLimiter{}
 	redisRateLimitDegraded.Store(false)
+	redisRateLimitLastErrorNano.Store(0)
 	t.Cleanup(func() {
 		inMemoryRateLimiter = common.InMemoryRateLimiter{}
 		redisRateLimitDegraded.Store(false)
+		redisRateLimitLastErrorNano.Store(0)
+		redisRateLimitRecoverQuietPeriod = prevRecoverQuietPeriod
 	})
 }
 
@@ -106,6 +112,7 @@ func TestRateLimitFallbackM2RedisErrorFallsBackToMemory(t *testing.T) {
 func TestRateLimitFallbackM3RedisRecovery(t *testing.T) {
 	mr := setupRateLimitFallbackRedis(t)
 	resetRateLimitFallbackState(t)
+	redisRateLimitRecoverQuietPeriod = 0
 
 	r := newRateLimitTestRouter(rateLimitFactory(3, 60, "T3"))
 	mr.SetError("boom")
@@ -228,5 +235,59 @@ func TestRateLimitFallbackM8RedisWindowSemantics(t *testing.T) {
 	rOutside := newRateLimitTestRouter(rateLimitFactory(3, 60, "T8O"))
 	if got := rateLimitTestRequest(rOutside); got != http.StatusOK {
 		t.Fatalf("outside-window status = %d, want 200", got)
+	}
+}
+
+func TestRateLimitFallbackM9NoLogFlapping(t *testing.T) {
+	mr := setupRateLimitFallbackRedis(t)
+	resetRateLimitFallbackState(t)
+
+	var logBuf bytes.Buffer
+	common.LogWriterMu.Lock()
+	prevWriter := gin.DefaultWriter
+	prevErrorWriter := gin.DefaultErrorWriter
+	gin.DefaultWriter = &logBuf
+	gin.DefaultErrorWriter = &logBuf
+	common.LogWriterMu.Unlock()
+	t.Cleanup(func() {
+		common.LogWriterMu.Lock()
+		gin.DefaultWriter = prevWriter
+		gin.DefaultErrorWriter = prevErrorWriter
+		common.LogWriterMu.Unlock()
+	})
+
+	r := newRateLimitTestRouter(rateLimitFactory(100, 60, "T9"))
+	for i := 0; i < 5; i++ {
+		mr.SetError("boom")
+		if got := rateLimitTestRequest(r); got != http.StatusOK {
+			t.Fatalf("iteration %d redis-error request status = %d, want 200", i+1, got)
+		}
+		mr.SetError("")
+		if got := rateLimitTestRequest(r); got != http.StatusOK {
+			t.Fatalf("iteration %d redis-success request status = %d, want 200", i+1, got)
+		}
+	}
+
+	logs := logBuf.String()
+	if got := strings.Count(logs, "falling back"); got != 1 {
+		t.Fatalf("falling back log count = %d, want 1; logs: %s", got, logs)
+	}
+	if got := strings.Count(logs, "recovered"); got != 0 {
+		t.Fatalf("recovered log count before quiet period = %d, want 0; logs: %s", got, logs)
+	}
+	if !redisRateLimitDegraded.Load() {
+		t.Fatal("redisRateLimitDegraded = false before quiet period elapsed, want true")
+	}
+
+	redisRateLimitLastErrorNano.Store(time.Now().Add(-time.Minute).UnixNano())
+	if got := rateLimitTestRequest(r); got != http.StatusOK {
+		t.Fatalf("post-quiet-period request status = %d, want 200", got)
+	}
+	logs = logBuf.String()
+	if got := strings.Count(logs, "recovered"); got != 1 {
+		t.Fatalf("recovered log count after quiet period = %d, want 1; logs: %s", got, logs)
+	}
+	if redisRateLimitDegraded.Load() {
+		t.Fatal("redisRateLimitDegraded = true after quiet period elapsed, want false")
 	}
 }
