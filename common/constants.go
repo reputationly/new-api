@@ -202,6 +202,8 @@ var RequestInterval time.Duration
 
 var SyncFrequency int // unit is second
 
+var CacheVersionPollInterval int // unit is second; 0 disables cross-pod cache version polling
+
 var BatchUpdateEnabled = false
 var BatchUpdateInterval int
 

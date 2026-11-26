@@ -104,6 +104,8 @@ func CreateModelMeta(c *gin.Context) {
 	model.RefreshPricing()
 	// 可见性是权限判定，有独立缓存，不随 pricing 的 1 分钟 TTL 走
 	model.InitModelVisibilityCache()
+	// 通知其他副本：可见性缓存 + 定价派生表都要重建（见 model/cache_version.go）。
+	model.NotifyCacheChanged(model.CacheDomainModelMeta)
 	common.ApiSuccess(c, &m)
 }
 
@@ -145,6 +147,8 @@ func UpdateModelMeta(c *gin.Context) {
 	model.RefreshPricing()
 	// 可见性是权限判定，有独立缓存，不随 pricing 的 1 分钟 TTL 走
 	model.InitModelVisibilityCache()
+	// 通知其他副本：可见性缓存 + 定价派生表都要重建（见 model/cache_version.go）。
+	model.NotifyCacheChanged(model.CacheDomainModelMeta)
 	common.ApiSuccess(c, &m)
 }
 
@@ -163,6 +167,8 @@ func DeleteModelMeta(c *gin.Context) {
 	model.RefreshPricing()
 	// 可见性是权限判定，有独立缓存，不随 pricing 的 1 分钟 TTL 走
 	model.InitModelVisibilityCache()
+	// 通知其他副本：可见性缓存 + 定价派生表都要重建（见 model/cache_version.go）。
+	model.NotifyCacheChanged(model.CacheDomainModelMeta)
 	common.ApiSuccess(c, nil)
 }
 

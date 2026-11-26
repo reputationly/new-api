@@ -114,6 +114,8 @@ func InitEnv() {
 
 	// Initialize variables with GetEnvOrDefault
 	SyncFrequency = GetEnvOrDefault("SYNC_FREQUENCY", 60)
+	// 跨副本缓存版本号轮询间隔（秒）；0 = 关闭，退回纯 60 秒全量同步。见 model/cache_version.go。
+	CacheVersionPollInterval = GetEnvOrDefault("CACHE_VERSION_POLL_INTERVAL", 1)
 	BatchUpdateInterval = GetEnvOrDefault("BATCH_UPDATE_INTERVAL", 5)
 	RelayTimeout = GetEnvOrDefault("RELAY_TIMEOUT", 0)
 	RelayMaxIdleConns = GetEnvOrDefault("RELAY_MAX_IDLE_CONNS", 500)

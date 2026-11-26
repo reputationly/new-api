@@ -724,6 +724,15 @@ func UpdateChannelStatus(channelId int, usingKey string, status int, reason stri
 		}
 	}
 
+	// 通知其他副本：必须排在下面的 abilities 更新**之后**执行。defer 是 LIFO，
+	// 所以这里先注册、那个后执行。提前返回 false 的分支（缓存里已是目标状态、
+	// 库里已是目标状态、读库失败、保存失败）一律不通知。
+	saved := false
+	defer func() {
+		if saved {
+			NotifyCacheChanged(CacheDomainChannels)
+		}
+	}()
 	shouldUpdateAbilities := false
 	defer func() {
 		if shouldUpdateAbilities {
@@ -765,6 +774,7 @@ func UpdateChannelStatus(channelId int, usingKey string, status int, reason stri
 			return false
 		}
 	}
+	saved = true
 	return true
 }
 

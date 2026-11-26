@@ -131,6 +131,7 @@ func ReplaceChannelModelCosts(channelId int, costs []*ChannelModelCost) error {
 		return err
 	}
 	InitChannelModelCostCache()
+	NotifyCacheChanged(CacheDomainChannels)
 	return nil
 }
 
@@ -141,5 +142,6 @@ func DeleteChannelModelCosts(channelId int) error {
 		return err
 	}
 	InitChannelModelCostCache()
+	NotifyCacheChanged(CacheDomainChannels)
 	return nil
 }

@@ -174,6 +174,9 @@ func main() {
 	// 热更新配置
 	go model.SyncOptions(common.SyncFrequency)
 
+	// 跨副本秒级失效：写方 INCR 版本号，各副本轮询发现变化即重建；60 秒全量同步保留作兜底。
+	model.StartCacheVersionWatcher(time.Duration(common.CacheVersionPollInterval) * time.Second)
+
 	// 数据看板
 	go model.UpdateQuotaData()
 

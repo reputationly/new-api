@@ -337,6 +337,14 @@ func ReconcileHiddenModelAbilities(changedNames []string) {
 
 // refreshModelAliasCache 供渠道写操作调用：刷新缓存，必要时重建受影响渠道的 abilities。
 func refreshModelAliasCache() {
+	// 渠道的每一次写（Insert/Update/Delete/批量/按标签）都经过这里，是 model 层渠道写
+	// 提交后的公共出口 —— 通知放在最前面，连 len(changed)==0 的提前返回也要覆盖。
+	//
+	// ⚠️ 只该被**配置写**经过。高频的限额写（UpdateChannelUsedQuota，按请求累加
+	// used_quota）刻意没有走这里：一旦把它挪进来，就会变成持续 INCR、全 fleet 每秒
+	// 整类重建（channels/abilities/成本表全表读）。新增调用点前先确认它不是
+	// 每请求/每秒级的路径。
+	defer NotifyCacheChanged(CacheDomainChannels)
 	changed := InitModelAliasCache()
 	if len(changed) == 0 {
 		return

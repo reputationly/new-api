@@ -476,7 +476,7 @@ func refreshChannelRuntimeCache() {
 					common.SysLog(fmt.Sprintf("InitChannelCache panic: %v", r))
 				}
 			}()
-			model.InitChannelCache()
+			model.RefreshChannelCache()
 		}()
 	}
 	service.ResetProxyClientCache()

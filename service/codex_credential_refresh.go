@@ -96,7 +96,7 @@ func RefreshCodexChannelCredential(ctx context.Context, channelID int, opts Code
 	}
 
 	if opts.ResetCaches {
-		model.InitChannelCache()
+		model.RefreshChannelCache()
 		ResetProxyClientCache()
 	}
 

@@ -271,6 +271,10 @@ func loadOptionsFromDatabase(startup bool) {
 	}
 }
 
+// SyncOptions 周期性全量重放 options 表，让多副本最终一致。
+//
+// 配了 Redis 时**跨副本通常 1～2 秒**就经 `cache_version:*` 生效（见 model/cache_version.go），
+// 这个 60 秒轮询是兜底：Redis 故障、版本号 INCR 失败、启动窗口等情况才会用到它。
 func SyncOptions(frequency int) {
 	for {
 		time.Sleep(time.Duration(frequency) * time.Second)
@@ -345,8 +349,10 @@ func UpdateOption(key string, value string) error {
 	if err := DB.Save(&option).Error; err != nil {
 		return err
 	}
-	// Update OptionMap
-	return updateOptionMap(key, value)
+	// 库已写入：即使下面的内存应用失败，其他副本也必须能感知到这次改动。
+	err := updateOptionMap(key, value)
+	NotifyCacheChanged(CacheDomainOptions)
+	return err
 }
 
 // UpdateOptions 在一个事务里写入多个 option，然后逐个应用到内存。
@@ -456,6 +462,9 @@ func UpdateOptionsWithAudit(options map[string]string, stateKeys []string, valid
 	if err != nil {
 		return err
 	}
+	// 库已提交：后面的内存应用失败、审计写入失败都不影响"其他副本必须重建"这件事，
+	// 所以用 defer 覆盖本函数的所有返回分支。
+	defer NotifyCacheChanged(CacheDomainOptions)
 	if auditLog != nil && LOG_DB != DB {
 		if LOG_DB == nil {
 			common.SysError("定价配置已提交，但审计日志库未初始化")
