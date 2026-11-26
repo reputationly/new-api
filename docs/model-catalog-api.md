@@ -68,8 +68,12 @@ GET /api/v1/models/catalog
 
 ## 4. 变更 `interface_type` 时注意
 
-- 该字段**不做枚举校验**（客户端协议名可能是自定义的，如 `minimax-text-native`），
-  写错不会报错，只会原样下发 —— 客户端遇到不认识的值必须回退到自己的默认映射。
+- **保存时做形状校验**（`normalizeHiloCatalog` / `validateTextEntries`）：必须以小写字母开头、
+  只含 `a-z 0-9 . _ -`、长度 ≤64、不能有前后空白。形状不对会在**保存目录时直接报错**
+  （整份目录保存被拒，不是静默忽略）。
+- **不做白名单**：取值是**开放词表**，由客户端注册的协议决定（如 `maas-image`、
+  `minimax-text-native`）。形状合法但服务端不认识的协议名仍会原样下发 —— 客户端遇到
+  不认识的值必须回退到自己的默认映射并记录日志。
 - 它和 `transport` 不是一回事：`transport` 决定 **new-api 转发上游**用哪套协议
   （`images` / `videos_task` / `chat` / `audio_speech`），`interface_type` 决定
   **客户端调用 new-api** 用哪套协议。改一个不要以为另一个会跟着变。
