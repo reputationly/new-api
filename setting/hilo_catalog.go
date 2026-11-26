@@ -296,6 +296,9 @@ func normalizeHiloCatalog(c *HiloCatalog) error {
 			if strings.TrimSpace(e.PlatformModel) == "" {
 				return fmt.Errorf("%s 的 platform_model 是空的，无法判断平台上有没有这个模型", id)
 			}
+			if err := validateInterfaceType(fmt.Sprintf("%s 分组第 %d 条（%s）", g.name, i+1, id), e.InterfaceType); err != nil {
+				return err
+			}
 			// transport 写错不会让客户端拒，但会让能力目录报一条调不通的协议 ——
 			// 客户端只会显示"生成失败"。保存时就拦下。
 			if t := strings.TrimSpace(e.Transport); t != "" && !ValidTransports[t] {
@@ -524,4 +527,39 @@ func defaultHiloCatalog() HiloCatalog {
 		},
 		Text: defaultHiloTextCatalog(),
 	}
+}
+
+// validateInterfaceType 校验目录条目里的 `interface_type`。
+//
+// 它是**开放词表**：有效取值由客户端注册的协议决定（同一份目录可能被多个客户端读取，
+// 每个客户端支持的协议集合不同），服务端不可能也不应该内置白名单 —— 内置了就会要求
+// "客户端新增协议必须先改服务端"。
+//
+// 所以这里只校验**形状**，把明显写坏的挡在保存时：空白、大写、中文、JSON 片段、
+// 超长值。写成一个不存在的协议名仍然会被下发，由客户端回退到本地映射并记录日志
+// （见客户端实现）。
+func validateInterfaceType(where, value string) error {
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" {
+		return nil
+	}
+	if trimmed != value {
+		return fmt.Errorf("%s 的 interface_type 前后有空白，请去掉", where)
+	}
+	if len(trimmed) > 64 {
+		return fmt.Errorf("%s 的 interface_type 过长（最多 64 个字符）", where)
+	}
+	for i, r := range trimmed {
+		ok := (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9')
+		if i == 0 {
+			if r < 'a' || r > 'z' {
+				return fmt.Errorf("%s 的 interface_type 必须以小写字母开头：%q", where, trimmed)
+			}
+			continue
+		}
+		if !ok && r != '.' && r != '_' && r != '-' {
+			return fmt.Errorf("%s 的 interface_type 只能用小写字母、数字、`.`、`_`、`-`：%q", where, trimmed)
+		}
+	}
+	return nil
 }

@@ -159,3 +159,34 @@ func TestEmptyTextSectionFallsBackToFactory(t *testing.T) {
 		t.Fatal("显式空 text 数组也没有回落出厂")
 	}
 }
+
+// interface_type 是开放词表：只校验形状，写错的具体协议名由客户端回退，
+// 但空白/大写/中文/超长这类明显写坏的必须在保存时拦下。
+func TestValidateInterfaceType(t *testing.T) {
+	cases := []struct {
+		name    string
+		value   string
+		wantErr bool
+	}{
+		{"空值允许", "", false},
+		{"常规值", "maas-image", false},
+		{"带点与下划线", "newapi.media_task_v1", false},
+		{"大写", "Maas-Image", true},
+		{"含空格", "maas image", true},
+		{"前后空白", " maas-image", true},
+		{"中文", "图像协议", true},
+		{"数字开头", "1-image", true},
+		{"超长", strings.Repeat("a", 65), true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			err := validateInterfaceType("image 分组第 1 条", tc.value)
+			if tc.wantErr && err == nil {
+				t.Fatalf("%q 应该被拒绝", tc.value)
+			}
+			if !tc.wantErr && err != nil {
+				t.Fatalf("%q 不应报错: %v", tc.value, err)
+			}
+		})
+	}
+}

@@ -119,6 +119,9 @@ func validateTextEntries(entries []HiloTextEntry) error {
 		if id == "" {
 			return fmt.Errorf("%s 缺少 model.id，客户端靠它选模型", where)
 		}
+		if err := validateInterfaceType(where, e.InterfaceType); err != nil {
+			return err
+		}
 		// **不能带前缀。** 前缀由持有 provider 配置的那一方补（见上面的说明）；
 		// 这里再带一个，客户端补完就成了 `maas/maas/xxx`，provider 找不到。
 		if strings.Contains(id, "/") {
