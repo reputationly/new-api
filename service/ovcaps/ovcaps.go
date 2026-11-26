@@ -591,7 +591,14 @@ func hasChatEndpoint(name string) bool {
 var chatEndpointTypes = model.GetModelSupportEndpointTypes
 
 // warnedMissingDefaultChatModel 记录已经报过"配置的默认对话模型未下发"的模型名。
-var warnedMissingDefaultChatModel sync.Map
+// 用指针是为了能在配置变更时整体替换（sync.Map 值不能在用过后复制）。
+var warnedMissingDefaultChatModel = &sync.Map{}
+
+// ResetMissingDefaultChatModelWarnings 配置里的默认对话模型被改写后调用：
+// 旧的"未下发"告警作废，允许新配置再告警一次。
+func ResetMissingDefaultChatModelWarnings() {
+	warnedMissingDefaultChatModel = &sync.Map{}
+}
 
 func capabilityID(operation, platformModel string) string {
 	return operation + ":" + platformModel

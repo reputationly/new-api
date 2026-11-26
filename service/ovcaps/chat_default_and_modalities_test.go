@@ -152,3 +152,12 @@ func TestChatInputModalitiesOmittedWhenEmpty(t *testing.T) {
 	}
 	t.Fatal("chat capability missing")
 }
+
+// 配置变更后允许重新告警一次（否则管理员改名写错就再也看不到日志）。
+func TestResetMissingDefaultChatModelWarnings(t *testing.T) {
+	warnedMissingDefaultChatModel.Store("GLM-5", struct{}{})
+	ResetMissingDefaultChatModelWarnings()
+	if _, loaded := warnedMissingDefaultChatModel.Load("GLM-5"); loaded {
+		t.Fatal("Reset 后不应保留旧的告警记录")
+	}
+}
