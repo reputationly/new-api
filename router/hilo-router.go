@@ -59,6 +59,10 @@ func SetHiloRouter(router *gin.Engine) {
 		// 让界面上一个模型都没有。见 controller/hilo.go。
 		hilo.GET("/v1/models/config", controller.GetHiloModelsConfig)
 
+		// 第一方目录：同一份 Hilo 配置，但带 `platform_model`（官方那份故意不下发）。
+		// BeefTV 等直接调平台的客户端用它；与 config 一样只报真有渠道的模型。
+		hilo.GET("/v1/models/catalog", controller.GetModelCatalog)
+
 		// 下面这些官方 gateway 会调，但**对我们没有意义**。
 		//
 		// 返回固定值而不是留 404：404 只产生 WARN 日志、功能不受影响
