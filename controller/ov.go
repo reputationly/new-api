@@ -44,6 +44,8 @@ func GetOvCapabilities(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{
 		"version":      ovcaps.Version(capabilities),
 		"capabilities": capabilities,
+		// 角色默认值与 Hilo 目录同一份配置：客户端不用再各自硬编码/猜顺序。
+		"defaults": ovcaps.ResolveDefaultRoles(capabilities),
 	})
 }
 

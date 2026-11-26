@@ -188,6 +188,14 @@ type HiloCatalog struct {
 	// 这个字段不存在时，配置里写了 `text` 段会被 Unmarshal **静默丢弃** ——
 	// 表现为「后台保存成功，但下发的 textModels 还是空的」。
 	Text []HiloTextEntry `json:"text"`
+
+	// DefaultTextModel 显式指定的默认对话模型（平台模型名，须在 text 里）。
+	// 留空或该模型没下发时回退"下发列表第一条"。
+	DefaultTextModel string `json:"default_text_model,omitempty"`
+
+	// MultimodalModel 多模态识别模型（平台模型名，须在 text 里且声明了图片/视频能力）。
+	// 客户端（蒜狸 / BeefTV）统一读它，不再各自硬编码或按顺序猜。
+	MultimodalModel string `json:"multimodal_model,omitempty"`
 }
 
 var (

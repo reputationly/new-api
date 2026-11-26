@@ -538,8 +538,6 @@ func ValidateOptionValueForBatch(key, value string) error {
 			return fmt.Errorf("%s 不是合法的 JSON 字符串表: %w", key, err)
 		}
 		return nil
-	case "general_setting.model_modalities":
-		return operation_setting.ValidateModelModalities(value)
 	case "VideoPricingConfig":
 		return ratio_setting.CheckVideoPricingByJSONString(value)
 	case "GroupTimeRatio":

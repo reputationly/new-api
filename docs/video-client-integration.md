@@ -25,7 +25,20 @@ Authorization: Bearer <sk-...>
 | **`deliveryDurations`** | 实际可交付时长阶梯（仅带帧栅格的引擎，如 H3） |
 | `paramSchema` | 参数表（`type/properties/enum/default/title`），可直接渲染成表单 |
 | `default` | 该 `operation` 下的默认模型。**同一操作恰好一条为 `true`**（管理员配的默认模型不可见时回退按顺序第一条） |
-| `inputModalities` | 仅 `chat` 条目可能非空：该对话模型能接收的**输入**模态 `image` / `video` / `audio`；`text` 恒支持、不列出。空表示未声明，客户端按兼容处理。注意与 OpenAI 请求里的 `modalities`（输出模态）不是一回事 |
+| `inputModalities` | 仅 `chat` 条目可能非空：该对话模型能接收的**输入**模态 `image` / `video` / `audio`；`text` 恒支持、不列出。**来源是 Hilo 目录 text 条目的 `supportsImage/Video/Audio`**：没列进 text 的对话模型这里为空，客户端按兼容处理。注意与 OpenAI 请求里的 `modalities`（输出模态）不是一回事 |
+
+响应顶层的 `defaults` 给出角色默认值，与 Hilo 目录（`/api/v1/models/config`）共用同一份配置：
+
+```jsonc
+{
+  "version": "…",
+  "capabilities": [ … ],
+  "defaults": { "chat": "deepseek-v4-1-flash-1017", "multimodal": "qwen3.8-flash" }
+}
+```
+
+- `chat`：默认对话模型，来自 Hilo 目录的 `default_text_model`（未配则回退下发列表第一条），与 chat 条目里的 `default: true` 是同一个模型；
+- `multimodal`：多模态识别模型，来自 Hilo 目录的 `multimodal_model`；该模型对这个 key 不可见时字段为空。
 
 ### 1.1 modes（玩法）
 

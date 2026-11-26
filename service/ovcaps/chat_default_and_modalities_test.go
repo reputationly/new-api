@@ -1,12 +1,13 @@
 package ovcaps
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
-	"github.com/QuantumNous/new-api/setting/operation_setting"
+	"github.com/QuantumNous/new-api/setting"
 )
 
 // withChatModels 把给定模型声明为对话端点，并恢复读取口。
@@ -24,140 +25,155 @@ func withChatModels(t *testing.T, models ...string) {
 	t.Cleanup(func() { chatEndpointTypes = previous })
 }
 
-func withGeneralSetting(t *testing.T, mutate func(*operation_setting.GeneralSetting)) {
-	t.Helper()
-	previous := *operation_setting.GetGeneralSetting()
-	mutate(operation_setting.GetGeneralSetting())
-	t.Cleanup(func() { *operation_setting.GetGeneralSetting() = previous })
+type textEntry struct {
+	PlatformModel string `json:"platform_model"`
+	Model         struct {
+		ID            string `json:"id"`
+		Name          string `json:"name"`
+		SupportsImage bool   `json:"supportsImage,omitempty"`
+		SupportsVideo bool   `json:"supportsVideo,omitempty"`
+		SupportsAudio bool   `json:"supportsAudio,omitempty"`
+	} `json:"model"`
 }
 
-func TestChatDefaultFollowsConfiguredModel(t *testing.T) {
+func entry(platformModel string, image, video bool) textEntry {
+	var e textEntry
+	e.PlatformModel = platformModel
+	e.Model.ID = platformModel
+	e.Model.Name = platformModel
+	e.Model.SupportsImage = image
+	e.Model.SupportsVideo = video
+	return e
+}
+
+// withHiloCatalog 用一份 text-only 目录替换当前 Hilo 配置，并在用例结束后还原。
+func withHiloCatalog(t *testing.T, entries []textEntry, defaultText, multimodal string) {
+	t.Helper()
+	payload := map[string]any{"text": entries}
+	if defaultText != "" {
+		payload["default_text_model"] = defaultText
+	}
+	if multimodal != "" {
+		payload["multimodal_model"] = multimodal
+	}
+	raw, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatalf("marshal catalog: %v", err)
+	}
+	previous := setting.HiloCatalog2JsonString()
+	if err := setting.UpdateHiloCatalogByJsonString(string(raw)); err != nil {
+		t.Fatalf("update catalog: %v", err)
+	}
+	t.Cleanup(func() { _ = setting.UpdateHiloCatalogByJsonString(previous) })
+}
+
+func chatDefaults(capabilities []Capability) []string {
+	models := []string{}
+	for _, capability := range capabilities {
+		if capability.Operation == OperationChat && capability.Default {
+			models = append(models, capability.Model)
+		}
+	}
+	return models
+}
+
+func TestChatDefaultFollowsHiloDefaultTextModel(t *testing.T) {
 	withChatModels(t, "deepseek-v4-1-flash-1017", "DeepSeek-V4-Pro-0813")
-	withGeneralSetting(t, func(s *operation_setting.GeneralSetting) { s.DefaultChatModel = "deepseek-v4-1-flash-1017" })
+	withHiloCatalog(t, []textEntry{
+		entry("DeepSeek-V4-Pro-0813", false, false),
+		entry("deepseek-v4-1-flash-1017", true, false),
+	}, "deepseek-v4-1-flash-1017", "")
 
 	capabilities := Build(Scope{Enabled: map[string]bool{
 		"deepseek-v4-1-flash-1017": true,
 		"DeepSeek-V4-Pro-0813":     true,
 	}})
-	defaults := map[string]string{}
-	for _, capability := range capabilities {
-		if capability.Operation != OperationChat || !capability.Default {
-			continue
-		}
-		defaults[capability.Operation] = capability.Model
+	if got := chatDefaults(capabilities); len(got) != 1 || got[0] != "deepseek-v4-1-flash-1017" {
+		t.Fatalf("chat defaults = %v, want exactly [deepseek-v4-1-flash-1017]", got)
 	}
-	if defaults[OperationChat] != "deepseek-v4-1-flash-1017" {
-		t.Fatalf("chat default = %q, want deepseek-v4-1-flash-1017", defaults[OperationChat])
+	if roles := ResolveDefaultRoles(capabilities); roles.Chat != "deepseek-v4-1-flash-1017" {
+		t.Fatalf("defaults.chat = %q", roles.Chat)
 	}
 }
 
-func TestChatDefaultFallsBackToFirstEmittedModel(t *testing.T) {
+func TestChatDefaultFallsBackToFirstReported(t *testing.T) {
 	withChatModels(t, "GLM-5", "qwen3.8-flash")
-	withGeneralSetting(t, func(s *operation_setting.GeneralSetting) { s.DefaultChatModel = "" })
+	withHiloCatalog(t, []textEntry{entry("GLM-5", false, false), entry("qwen3.8-flash", true, true)}, "", "")
 
-	capabilities := Build(Scope{Enabled: map[string]bool{"GLM-5": true, "qwen3.8-flash": true}})
-	marked := 0
-	for _, capability := range capabilities {
-		if capability.Operation == OperationChat && capability.Default {
-			marked++
-		}
-	}
-	if marked != 1 {
-		t.Fatalf("chat defaults = %d, want exactly 1", marked)
+	got := chatDefaults(Build(Scope{Enabled: map[string]bool{"GLM-5": true, "qwen3.8-flash": true}}))
+	if len(got) != 1 {
+		t.Fatalf("chat defaults = %v, want exactly 1", got)
 	}
 }
 
-func TestChatCapabilityCarriesModalities(t *testing.T) {
-	withChatModels(t, "qwen3.8-flash")
-	// 出厂表：qwen3.8-flash 支持图片与视频；管理员配置覆盖时以配置为准。
-	withGeneralSetting(t, func(s *operation_setting.GeneralSetting) {
-		s.ModelModalities = `{"qwen3.8-flash":["image","VIDEO","bogus"]}`
-	})
-
-	capabilities := Build(Scope{Enabled: map[string]bool{"qwen3.8-flash": true}})
-	for _, capability := range capabilities {
-		if capability.Operation != OperationChat {
-			continue
-		}
-		if len(capability.InputModalities) != 2 || capability.InputModalities[0] != "image" || capability.InputModalities[1] != "video" {
-			t.Fatalf("%s modalities = %v, want [image video]", capability.Model, capability.InputModalities)
-		}
-		return
-	}
-	t.Fatal("chat capability missing")
-}
-
-// 配置了默认对话模型但它不在本次目录里（未部署 / 分组不可见 / 白名单过滤 / 写错名字）时，
-// 必须回退"按顺序第一条"，保证 chat 恰好一条 default。
+// 目录里配的默认模型不在 text 段（或没部署）时，必须回退第一条。
 func TestConfiguredDefaultFallsBackWhenModelMissing(t *testing.T) {
 	withChatModels(t, "GLM-5", "qwen3.8-flash")
-	withGeneralSetting(t, func(s *operation_setting.GeneralSetting) { s.DefaultChatModel = "not-deployed-model" })
+	withHiloCatalog(t, []textEntry{entry("GLM-5", false, false), entry("qwen3.8-flash", true, true)}, "not-in-catalog", "")
 
-	capabilities := Build(Scope{Enabled: map[string]bool{"GLM-5": true, "qwen3.8-flash": true}})
-	defaults := []string{}
-	for _, capability := range capabilities {
-		if capability.Operation == OperationChat && capability.Default {
-			defaults = append(defaults, capability.Model)
-		}
-	}
-	if len(defaults) != 1 {
-		t.Fatalf("chat defaults = %v, want exactly 1", defaults)
-	}
-	if defaults[0] != "GLM-5" {
-		t.Fatalf("fallback default = %q, want first emitted chat model GLM-5", defaults[0])
+	got := chatDefaults(Build(Scope{Enabled: map[string]bool{"GLM-5": true, "qwen3.8-flash": true}}))
+	if len(got) != 1 || got[0] != "GLM-5" {
+		t.Fatalf("chat defaults = %v, want exactly [GLM-5]", got)
 	}
 }
 
 func TestConfiguredDefaultIgnoredWhenTokenFiltered(t *testing.T) {
 	withChatModels(t, "GLM-5", "qwen3.8-flash")
-	withGeneralSetting(t, func(s *operation_setting.GeneralSetting) { s.DefaultChatModel = "qwen3.8-flash" })
+	withHiloCatalog(t, []textEntry{entry("GLM-5", false, false), entry("qwen3.8-flash", true, true)}, "qwen3.8-flash", "")
 
-	// 令牌白名单只放行 GLM-5：配置项对这把 key 不可见，仍要恰好一条 default。
 	capabilities := Build(Scope{
 		Enabled:      map[string]bool{"GLM-5": true, "qwen3.8-flash": true},
 		TokenAllowed: map[string]bool{"GLM-5": true},
 	})
-	defaults := []string{}
-	for _, capability := range capabilities {
-		if capability.Operation == OperationChat && capability.Default {
-			defaults = append(defaults, capability.Model)
-		}
+	if got := chatDefaults(capabilities); len(got) != 1 || got[0] != "GLM-5" {
+		t.Fatalf("chat defaults = %v, want exactly [GLM-5]", got)
 	}
-	if len(defaults) != 1 || defaults[0] != "GLM-5" {
-		t.Fatalf("chat defaults = %v, want exactly [GLM-5]", defaults)
+	if roles := ResolveDefaultRoles(capabilities); roles.Multimodal != "" {
+		t.Fatalf("不可见的模态模型不应出现在 defaults 里: %q", roles.Multimodal)
 	}
 }
 
-// 没有模态的对话模型不能凭空带出 inputModalities 字段。
-func TestChatInputModalitiesOmittedWhenEmpty(t *testing.T) {
-	withChatModels(t, "GLM-5")
-	withGeneralSetting(t, func(s *operation_setting.GeneralSetting) { s.ModelModalities = "" })
+func TestChatInputModalitiesComeFromHiloSupports(t *testing.T) {
+	withChatModels(t, "qwen3.8-flash", "GLM-5")
+	withHiloCatalog(t, []textEntry{
+		entry("qwen3.8-flash", true, true),
+		entry("GLM-5", false, false),
+	}, "", "qwen3.8-flash")
 
-	capabilities := Build(Scope{Enabled: map[string]bool{"GLM-5": true}})
+	capabilities := Build(Scope{Enabled: map[string]bool{"qwen3.8-flash": true, "GLM-5": true}})
+	byModel := map[string]Capability{}
 	for _, capability := range capabilities {
-		if capability.Operation != OperationChat {
-			continue
+		if capability.Operation == OperationChat {
+			byModel[capability.Model] = capability
 		}
-		if len(capability.InputModalities) != 0 {
-			t.Fatalf("%s inputModalities = %v, want empty", capability.Model, capability.InputModalities)
-		}
-		encoded, err := common.Marshal(capability)
-		if err != nil {
-			t.Fatalf("marshal: %v", err)
-		}
-		if strings.Contains(string(encoded), "inputModalities") {
-			t.Fatalf("空模态不应出现在 JSON 里: %s", encoded)
-		}
-		return
 	}
-	t.Fatal("chat capability missing")
+	if got := byModel["qwen3.8-flash"].InputModalities; len(got) != 2 || got[0] != "image" || got[1] != "video" {
+		t.Fatalf("qwen3.8-flash inputModalities = %v, want [image video]", got)
+	}
+	if got := byModel["GLM-5"].InputModalities; len(got) != 0 {
+		t.Fatalf("GLM-5 inputModalities = %v, want empty", got)
+	}
+	encoded, err := common.Marshal(byModel["GLM-5"])
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	if strings.Contains(string(encoded), "inputModalities") {
+		t.Fatalf("空模态不应出现在 JSON 里: %s", encoded)
+	}
+	if roles := ResolveDefaultRoles(capabilities); roles.Multimodal != "qwen3.8-flash" {
+		t.Fatalf("defaults.multimodal = %q", roles.Multimodal)
+	}
 }
 
-// 配置变更后允许重新告警一次（否则管理员改名写错就再也看不到日志）。
-func TestResetMissingDefaultChatModelWarnings(t *testing.T) {
-	warnedMissingDefaultChatModel.Store("GLM-5", struct{}{})
-	ResetMissingDefaultChatModelWarnings()
-	if _, loaded := warnedMissingDefaultChatModel.Load("GLM-5"); loaded {
-		t.Fatal("Reset 后不应保留旧的告警记录")
+// 没列进 Hilo text 的对话模型不再有模态信息（路线 B 的取舍）。
+func TestChatModelOutsideHiloTextHasNoModalities(t *testing.T) {
+	withChatModels(t, "GLM-5", "Qwen3.8-Flash")
+	withHiloCatalog(t, []textEntry{entry("GLM-5", false, false)}, "", "")
+
+	capabilities := Build(Scope{Enabled: map[string]bool{"GLM-5": true, "Qwen3.8-Flash": true}})
+	for _, capability := range capabilities {
+		if capability.Operation == OperationChat && capability.Model == "Qwen3.8-Flash" && len(capability.InputModalities) != 0 {
+			t.Fatalf("未列入 text 的模型不应有模态: %v", capability.InputModalities)
+		}
 	}
 }

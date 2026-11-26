@@ -3,6 +3,7 @@ package controller
 import (
 	"fmt"
 	"net/http"
+	"strings"
 	"sync"
 
 	"github.com/QuantumNous/new-api/common"
@@ -101,18 +102,28 @@ func GetHiloModelsConfig(c *gin.Context) {
 	// 对话模型。判据和媒体一样：**平台上真有渠道才报** —— 报一个没渠道的
 	// 出来，用户能在界面上选中它，发消息才失败，而失败信息是渠道层的，
 	// 说不清「这个模型没部署」。
+	// 平台模型名 → 客户端 id，用来把目录里的 default_text_model / multimodal_model
+	// 解析成下发出去的 id（只认真的报出去了的那条）。
+	reportedTextIDs := make(map[string]string, len(catalog.Text))
 	for _, e := range catalog.Text {
 		if why := unavailable(enabled, e.PlatformModel); why != "" {
 			logSkipOnce(e.Model.ID, why)
 			continue
 		}
 		out.TextModels = append(out.TextModels, e.Model)
+		reportedTextIDs[e.PlatformModel] = e.Model.ID
 	}
-	// 默认值指向第一个**真的报出去了**的，不是目录里的第一条 ——
-	// 第一条可能因为没渠道被跳过，那时默认值会指向一个选择器里根本不存在
-	// 的 id，客户端只能回落到它自己记着的上一次选择（多半是官方模型）。
-	if len(out.TextModels) > 0 {
+	// 默认值优先取目录里显式指定的（且真的下发），否则指向第一个报出去的 ——
+	// 第一条可能因为没渠道被跳过，那时默认值会指向一个选择器里根本不存在的 id。
+	if id, ok := reportedTextIDs[strings.TrimSpace(catalog.DefaultTextModel)]; ok {
+		out.DefaultTextModelID = id
+	} else if len(out.TextModels) > 0 {
 		out.DefaultTextModelID = out.TextModels[0].ID
+	}
+	if id, ok := reportedTextIDs[strings.TrimSpace(catalog.MultimodalModel)]; ok {
+		out.DefaultMultimodalModelID = id
+	}
+	if len(out.TextModels) > 0 {
 	} else {
 		// 一个都没报出去 = 客户端拿到空列表 → 回落它记着的模型 → 发消息 500，
 		// 而报错来自上游，看不出是模型问题。这条日志是管理员唯一能搜到的线索。

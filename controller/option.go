@@ -14,7 +14,6 @@ import (
 	"github.com/QuantumNous/new-api/pkg/billingexpr"
 	"github.com/QuantumNous/new-api/service/mediastore"
 	"github.com/QuantumNous/new-api/service/moderation"
-	"github.com/QuantumNous/new-api/service/ovcaps"
 	"github.com/QuantumNous/new-api/setting/billing_setting"
 	"github.com/QuantumNous/new-api/setting/console_setting"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
@@ -504,18 +503,6 @@ func UpdateOption(c *gin.Context) {
 		}
 	case "OutboundUserAgent":
 		if err = system_setting.ValidateOutboundUserAgent(option.Value.(string)); err != nil {
-			c.JSON(http.StatusOK, gin.H{
-				"success": false,
-				"message": err.Error(),
-			})
-			return
-		}
-	case "general_setting.default_chat_model":
-		// 配置变了，之前"默认模型未下发"的告警作废，允许新配置重新告警一次。
-		ovcaps.ResetMissingDefaultChatModelWarnings()
-	case "general_setting.model_modalities":
-		// 写错不会报错的话，客户端只会静默丢掉图片/视频能力，所以校验放在这条写入路径上。
-		if err = operation_setting.ValidateModelModalities(option.Value.(string)); err != nil {
 			c.JSON(http.StatusOK, gin.H{
 				"success": false,
 				"message": err.Error(),

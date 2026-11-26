@@ -182,6 +182,9 @@ type HiloModelsConfig struct {
 	TextModels  []HiloTextModel  `json:"textModels"`
 	// 留空时官方自己挑第一个。
 	DefaultTextModelID string `json:"defaultTextModelId,omitempty"`
+	// 多模态识别模型（图片/视频理解）。来自目录的 `multimodal_model`；
+	// 留空表示没有指定，客户端自行回退。
+	DefaultMultimodalModelID string `json:"defaultMultimodalModelId,omitempty"`
 }
 
 // HiloBackends 是官方 `backendSchema` 的全部枚举值。

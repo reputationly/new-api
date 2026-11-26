@@ -39,7 +39,6 @@ import (
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/setting"
-	"github.com/QuantumNous/new-api/setting/operation_setting"
 )
 
 // 能力操作。
@@ -228,7 +227,8 @@ func Build(scope Scope) []Capability {
 	// `Version` 的哈希可复现，不应该顺带决定"默认用哪个模型"。
 	defaults := map[string]string{}
 	// 管理员指定的默认对话模型先记下来，等目录发完再决定是否覆盖（见下方）。
-	configuredChatModel := strings.TrimSpace(operation_setting.GetGeneralSetting().DefaultChatModel)
+	catalog := setting.GetHiloCatalog()
+	configuredChatModel := strings.TrimSpace(catalog.DefaultTextModel)
 	emit := func(capability Capability) {
 		if _, ok := defaults[capability.Operation]; !ok {
 			defaults[capability.Operation] = capability.Model
@@ -236,8 +236,8 @@ func Build(scope Scope) []Capability {
 		out = append(out, capability)
 	}
 
-	modalities := operation_setting.GetModelModalities()
-	catalog := setting.GetHiloCatalog()
+	// 输入模态唯一来源：Hilo 目录 text 条目的 supportsImage/Video/Audio。
+	modalities := hiloTextModalities(catalog.Text)
 	for _, group := range []struct {
 		name    string
 		entries []setting.HiloCatalogEntry
@@ -594,12 +594,6 @@ var chatEndpointTypes = model.GetModelSupportEndpointTypes
 // 用指针是为了能在配置变更时整体替换（sync.Map 值不能在用过后复制）。
 var warnedMissingDefaultChatModel = &sync.Map{}
 
-// ResetMissingDefaultChatModelWarnings 配置里的默认对话模型被改写后调用：
-// 旧的"未下发"告警作废，允许新配置再告警一次。
-func ResetMissingDefaultChatModelWarnings() {
-	warnedMissingDefaultChatModel = &sync.Map{}
-}
-
 func capabilityID(operation, platformModel string) string {
 	return operation + ":" + platformModel
 }
@@ -646,4 +640,61 @@ func maxNumeric(values []string) int {
 // FormatVersion 给日志/测试用的可读形式。
 func FormatVersion(capabilities []Capability) string {
 	return fmt.Sprintf("%d capabilities, version %s", len(capabilities), Version(capabilities))
+}
+
+// hiloTextModalities 把 Hilo 目录 text 条目的 supports* 标记翻译成输入模态。
+// 这是模态的唯一来源：客户端不再各自硬编码或猜。
+func hiloTextModalities(entries []setting.HiloTextEntry) map[string][]string {
+	if len(entries) == 0 {
+		return nil
+	}
+	out := make(map[string][]string, len(entries))
+	for _, entry := range entries {
+		model := strings.TrimSpace(entry.PlatformModel)
+		if model == "" {
+			continue
+		}
+		modalities := make([]string, 0, 3)
+		if entry.Model.SupportsImage {
+			modalities = append(modalities, "image")
+		}
+		if entry.Model.SupportsVideo {
+			modalities = append(modalities, "video")
+		}
+		if entry.Model.SupportsAudio {
+			modalities = append(modalities, "audio")
+		}
+		if len(modalities) > 0 {
+			out[model] = modalities
+		}
+	}
+	return out
+}
+
+// DefaultRoles 能力目录里的角色默认值，和 Hilo 目录共用同一份配置。
+type DefaultRoles struct {
+	// Chat 默认对话模型（等价于 chat 条目里 Default=true 的那条）。
+	Chat string `json:"chat,omitempty"`
+	// Multimodal 多模态识别模型；目录没配或该模型对这个 key 不可见时为空。
+	Multimodal string `json:"multimodal,omitempty"`
+}
+
+// ResolveDefaultRoles 从已构建的能力清单里解析角色默认值。
+// 只报"这个 key 真的能看到"的模型，避免客户端选中一个调用时才失败的名字。
+func ResolveDefaultRoles(capabilities []Capability) DefaultRoles {
+	roles := DefaultRoles{}
+	visible := make(map[string]bool, len(capabilities))
+	for _, capability := range capabilities {
+		if capability.Operation != OperationChat {
+			continue
+		}
+		visible[capability.Model] = true
+		if capability.Default && roles.Chat == "" {
+			roles.Chat = capability.Model
+		}
+	}
+	if configured := strings.TrimSpace(setting.GetHiloCatalog().MultimodalModel); configured != "" && visible[configured] {
+		roles.Multimodal = configured
+	}
+	return roles
 }
