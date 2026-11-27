@@ -76,7 +76,7 @@ func expandMusicAt(t *testing.T, path, body string) (map[string]any, *service.En
 	rec := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(rec)
 	c.Request = httptest.NewRequest(http.MethodPost, path, strings.NewReader(body))
-	require.NoError(t, applyAggregateExpansion(c, "music3-enhanced", "my-music", agg))
+	require.NoError(t, applyExpansionForTest(c, "music3-enhanced", "my-music", agg))
 	return readBodyMap(t, c), got
 }
 
@@ -146,7 +146,7 @@ func TestMusic3RejectsEnhancementOverJointBudget(t *testing.T) {
 		"model":"music3-enhanced","prompt":"la la",
 		"metadata":{"task_type":"t2m","instructions":"lofi beat"}
 	}`))
-	require.NoError(t, applyAggregateExpansion(c, "music3-enhanced", "my-music", agg))
+	require.NoError(t, applyExpansionForTest(c, "music3-enhanced", "my-music", agg))
 
 	body := readBodyMap(t, c)
 	md, _ := body["metadata"].(map[string]any)
@@ -215,7 +215,7 @@ func TestMusicAggregateFallsBackToNameWhenEngineUndeclared(t *testing.T) {
 		"model":"music3-enhanced","prompt":"[Verse]\n雨落在霓虹上",
 		"metadata":{"task_type":"t2m","instructions":"a warm pop song"}
 	}`))
-	require.NoError(t, applyAggregateExpansion(c, "music3-enhanced", "minimax-music3", agg))
+	require.NoError(t, applyExpansionForTest(c, "music3-enhanced", "minimax-music3", agg))
 
 	require.True(t, called, "名字带 music3 时应按名字兜底发起增强")
 	body := readBodyMap(t, c)
@@ -453,7 +453,7 @@ func TestMusic3OfficialRouteRealEnhanceCall(t *testing.T) {
 	c.Request = httptest.NewRequest(http.MethodPost, "/v1/music_generation",
 		strings.NewReader(`{"model":"music3-enhanced","prompt":"calm piano","lyrics":"[Verse]\nrain on neon"}`))
 	c.Request.Header.Set("Authorization", "Bearer test-token")
-	require.NoError(t, applyAggregateExpansion(c, "music3-enhanced", "my-music", agg))
+	require.NoError(t, applyExpansionForTest(c, "music3-enhanced", "my-music", agg))
 
 	body := readBodyMap(t, c)
 	require.Equal(t, "ENHANCED CAPTION", body["prompt"], "真实增强的结果要写回 prompt 位")

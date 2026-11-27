@@ -97,10 +97,20 @@ package common
 //
 //	必须为真(漏写即为真):增强模型看不到底图只能从文字猜,会写出与底图打架的描述。
 //
-// ── 为什么帧族和参考族要分两条 ──────────────────────────────────────
+// ── 为什么现在是「一个名字 + task_models」 ────────────────────────────
 //
-// H3 的帧族(t2v/i2v/l2va/flf2v)与参考族(r2va)是两个不同的 checkpoint,而一个聚合模型
-// 只能固定一个生成段模型,合并不了。
+// H3 的帧族(t2v/i2v/l2va/flf2v)与参考族(r2va)是两个不同的 checkpoint、两套部署,
+// 而一个聚合模型只能固定一个 `generate.model`。早先的对策是**拆两条聚合**、让集成方
+// 自己按玩法挑名字 —— 代价是客户端选错名字就 400，而选错是常态（官方只有一个
+// MiniMax-H3）。
+//
+// 现在用 `generate.task_models` 按门面 task_type 分派:一个名字覆盖五种玩法,
+// 选渠道/计费/日志都落在真正执行的那个 checkpoint 上。两个 -2k 名字保留为**等价的
+// 别名**,给已经配好的集成方用（它们名下的 task_models 与 MiniMax-H3 完全一致，
+// 不再限制"ref 只能出参考片"）。
+//
+// 别把三条删成一条:现网 MiniMax Design 的配置里写的就是 minimax-h3-2k /
+// minimax-h3-ref-2k,下线别名要等迁移完。
 //
 // ── 画幅上限不在这里配 ──────────────────────────────────────────────
 //
@@ -163,10 +173,10 @@ package common
 // 改这两条聚合配置 —— 升级不会自动改。
 const DefaultAggregateModelConfig = `[
   {
-    "name": "minimax-h3-2k",
+    "name": "MiniMax-H3",
     "type": "video",
     "enabled": true,
-    "note": "H3 帧族(文生/图生/首尾帧/尾帧)2K:生成 → RelayVSR 超分。overrides.duration 是给增强编译器的时长事实(不传时长就不编译、静默回落 text 模板),客户显式传 duration 时以客户为准。",
+    "note": "MiniMax H3 统一入口:一个名字覆盖帧族(文生/首帧/尾帧/首尾帧)与参考族(参考图/视频/音频),按 task_type 分派给对应的 checkpoint(task_models),768P 直接交付、2K 走 RelayVSR 超分。overrides.duration 是给增强编译器的时长事实(不传时长就不编译、静默回落 text 模板),客户显式传 duration 时以客户为准。",
     "prompt_enhance": {
       "model": "qwen3.8-flash-fp8",
       "mode": "singlecall",
@@ -175,6 +185,45 @@ const DefaultAggregateModelConfig = `[
     },
     "generate": {
       "model": "minimax-h3-fl2va",
+      "task_models": {
+        "t2v": "minimax-h3-fl2va",
+        "i2v": "minimax-h3-fl2va",
+        "l2va": "minimax-h3-fl2va",
+        "flf2v": "minimax-h3-fl2va",
+        "r2va": "minimax-h3-ref2va"
+      },
+      "overrides": {
+        "size": "768P",
+        "duration": 5
+      }
+    },
+    "upscale": {
+      "model": "relayvsr",
+      "target_size": "2k",
+      "sr_ratio": 2,
+      "delivered_size": "2K"
+    }
+  },
+  {
+    "name": "minimax-h3-2k",
+    "type": "video",
+    "enabled": true,
+    "note": "H3 的 2K 别名(等价于 MiniMax-H3,保留给已配好这个名字的集成方):一个名字覆盖帧族与参考族,按 task_type 分派。overrides.duration 同上。",
+    "prompt_enhance": {
+      "model": "qwen3.8-flash-fp8",
+      "mode": "singlecall",
+      "reasoning_effort": "low",
+      "timeout_seconds": 180
+    },
+    "generate": {
+      "model": "minimax-h3-fl2va",
+      "task_models": {
+        "t2v": "minimax-h3-fl2va",
+        "i2v": "minimax-h3-fl2va",
+        "l2va": "minimax-h3-fl2va",
+        "flf2v": "minimax-h3-fl2va",
+        "r2va": "minimax-h3-ref2va"
+      },
       "overrides": {
         "size": "768P",
         "duration": 5
@@ -191,7 +240,7 @@ const DefaultAggregateModelConfig = `[
     "name": "minimax-h3-ref-2k",
     "type": "video",
     "enabled": true,
-    "note": "H3 参考族(参考图/参考视频生视频)2K。参考族是另一个 checkpoint,不能和帧族共用一条流水线。overrides.duration 同上。",
+    "note": "H3 的 2K 别名(等价于 MiniMax-H3,保留给已配好这个名字的集成方):一个名字覆盖帧族与参考族,按 task_type 分派(名字里的 ref 不再限制它只出参考片)。overrides.duration 同上。",
     "prompt_enhance": {
       "model": "qwen3.8-flash-fp8",
       "mode": "singlecall",
@@ -200,6 +249,13 @@ const DefaultAggregateModelConfig = `[
     },
     "generate": {
       "model": "minimax-h3-ref2va",
+      "task_models": {
+        "t2v": "minimax-h3-fl2va",
+        "i2v": "minimax-h3-fl2va",
+        "l2va": "minimax-h3-fl2va",
+        "flf2v": "minimax-h3-fl2va",
+        "r2va": "minimax-h3-ref2va"
+      },
       "overrides": {
         "size": "768P",
         "duration": 5

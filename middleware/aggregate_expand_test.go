@@ -57,6 +57,16 @@ const aggConfig = `[{
 	"upscale":{"model":"seedvr2","target_size":"2k"}
 }]`
 
+// applyExpansionForTest 适配 applyAggregateExpansion 的双返回值。
+//
+// 分派结果（第二个返回值）由 distributor 用于选渠道/计费，与本文件里绝大多数
+// 用例关心的"body 有没有被改写"是两件事 —— 那些用例只关心错误。要断言分派结果
+// 的用例直接调 applyAggregateExpansion 取返回值。
+func applyExpansionForTest(c *gin.Context, publicName, realModel string, agg *common.AggregateModel) error {
+	_, err := applyAggregateExpansion(c, publicName, realModel, agg)
+	return err
+}
+
 // 聚合模型名要能展开成生成段的真实模型 —— 它自己没有 ability,不展开就选不到任何渠道。
 func TestExpandAggregateModel(t *testing.T) {
 	withAggregateConfig(t, aggConfig)
@@ -132,7 +142,7 @@ func TestApplyExpansionRewritesBody(t *testing.T) {
 		strings.NewReader(`{"model":"h3-2k","prompt":"a cat","size":"2k"}`))
 
 	agg := common.GetAggregateModel("h3-2k")
-	require.NoError(t, applyAggregateExpansion(c, "h3-2k", "minimax-h3", agg))
+	require.NoError(t, applyExpansionForTest(c, "h3-2k", "minimax-h3", agg))
 
 	body := readBodyMap(t, c)
 	require.Equal(t, "minimax-h3", body["model"], "body 里的 model 必须改写成生成段模型")
@@ -163,7 +173,7 @@ func TestApplyExpansionAppliesOverrides(t *testing.T) {
 	c.Request = httptest.NewRequest(http.MethodPost, "/v1/videos",
 		strings.NewReader(`{"model":"h3-2k","prompt":"a cat","size":"2k"}`))
 
-	require.NoError(t, applyAggregateExpansion(c, "h3-2k", "minimax-h3", common.GetAggregateModel("h3-2k")))
+	require.NoError(t, applyExpansionForTest(c, "h3-2k", "minimax-h3", common.GetAggregateModel("h3-2k")))
 
 	body := readBodyMap(t, c)
 	require.Equal(t, "1280x720", body["size"],
@@ -185,7 +195,7 @@ func TestApplyExpansionOverridesCannotHijackModel(t *testing.T) {
 	c.Request = httptest.NewRequest(http.MethodPost, "/v1/videos",
 		strings.NewReader(`{"model":"h3-2k","prompt":"x"}`))
 
-	require.NoError(t, applyAggregateExpansion(c, "h3-2k", "minimax-h3", common.GetAggregateModel("h3-2k")))
+	require.NoError(t, applyExpansionForTest(c, "h3-2k", "minimax-h3", common.GetAggregateModel("h3-2k")))
 
 	require.Equal(t, "minimax-h3", readBodyMap(t, c)["model"],
 		"overrides 不得覆盖展开决定的 model")
@@ -215,7 +225,7 @@ func TestApplyExpansionWorksWithoutContentType(t *testing.T) {
 		strings.NewReader(`{"model":"h3-2k","prompt":"a cat"}`))
 	c.Request.Header.Del("Content-Type")
 
-	require.NoError(t, applyAggregateExpansion(c, "h3-2k", "minimax-h3", common.GetAggregateModel("h3-2k")))
+	require.NoError(t, applyExpansionForTest(c, "h3-2k", "minimax-h3", common.GetAggregateModel("h3-2k")))
 
 	body := readBodyMap(t, c)
 	require.Equal(t, "minimax-h3", body["model"])
@@ -231,7 +241,7 @@ func TestApplyExpansionRejectsEmptyBody(t *testing.T) {
 	c, _ := gin.CreateTestContext(rec)
 	c.Request = httptest.NewRequest(http.MethodPost, "/v1/videos", strings.NewReader(``))
 
-	require.Error(t, applyAggregateExpansion(c, "h3-2k", "minimax-h3", common.GetAggregateModel("h3-2k")))
+	require.Error(t, applyExpansionForTest(c, "h3-2k", "minimax-h3", common.GetAggregateModel("h3-2k")))
 }
 
 // JSON 字面量 null 解析成功但得到 nil map —— 这是唯一能走到 body==nil 分支的输入
@@ -244,7 +254,7 @@ func TestApplyExpansionRejectsNullBody(t *testing.T) {
 	c, _ := gin.CreateTestContext(rec)
 	c.Request = httptest.NewRequest(http.MethodPost, "/v1/videos", strings.NewReader(`null`))
 
-	err := applyAggregateExpansion(c, "h3-2k", "minimax-h3", common.GetAggregateModel("h3-2k"))
+	err := applyExpansionForTest(c, "h3-2k", "minimax-h3", common.GetAggregateModel("h3-2k"))
 	require.Error(t, err, "body 为 null 时必须报错,不能补空 map 继续")
 }
 
@@ -282,7 +292,7 @@ func TestApplyExpansionKeepsPromptWhenEnhanceDegrades(t *testing.T) {
 	c.Request = httptest.NewRequest(http.MethodPost, "/v1/videos",
 		strings.NewReader(`{"model":"h3-2k","prompt":"a cat"}`))
 
-	require.NoError(t, applyAggregateExpansion(c, "h3-2k", "minimax-h3", common.GetAggregateModel("h3-2k")))
+	require.NoError(t, applyExpansionForTest(c, "h3-2k", "minimax-h3", common.GetAggregateModel("h3-2k")))
 
 	require.Equal(t, "a cat", readBodyMap(t, c)["prompt"],
 		"增强降级后必须原样使用客户的提示词")
@@ -302,7 +312,7 @@ func TestApplyExpansionSkipsEnhanceWhenDisabled(t *testing.T) {
 	c.Request = httptest.NewRequest(http.MethodPost, "/v1/videos",
 		strings.NewReader(`{"model":"h3-2k","prompt":"a cat"}`))
 
-	require.NoError(t, applyAggregateExpansion(c, "h3-2k", "minimax-h3", common.GetAggregateModel("h3-2k")))
+	require.NoError(t, applyExpansionForTest(c, "h3-2k", "minimax-h3", common.GetAggregateModel("h3-2k")))
 
 	require.Equal(t, "a cat", readBodyMap(t, c)["prompt"])
 	require.Nil(t, GetAggregateExpansion(c).Enhance, "未启用增强不该留下记录")
@@ -458,7 +468,7 @@ func TestApplyExpansionPreservesLargeIntegers(t *testing.T) {
 	c.Request = httptest.NewRequest(http.MethodPost, "/v1/videos",
 		strings.NewReader(`{"model":"h3-2k","prompt":"a cat","seed":9007199254740993,"metadata":{"trace_id":1739000000000000123}}`))
 
-	require.NoError(t, applyAggregateExpansion(c, "h3-2k", "minimax-h3", common.GetAggregateModel("h3-2k")))
+	require.NoError(t, applyExpansionForTest(c, "h3-2k", "minimax-h3", common.GetAggregateModel("h3-2k")))
 
 	storage, err := common.GetBodyStorage(c)
 	require.NoError(t, err)
@@ -1058,7 +1068,7 @@ func TestEnhanceInputSendsWhatEvidenceDescribes(t *testing.T) {
 	c.Request = httptest.NewRequest(http.MethodPost, "/v1/videos", strings.NewReader(string(raw)))
 	agg := common.GetAggregateModel("h3-2k")
 	require.NotNil(t, agg)
-	require.NoError(t, applyAggregateExpansion(c, "h3-2k", "minimax-h3", agg))
+	require.NoError(t, applyExpansionForTest(c, "h3-2k", "minimax-h3", agg))
 
 	require.NotNil(t, got.Compiler, "没走到编译（形态应该能推出 flf2v）")
 	var described []string
@@ -1216,7 +1226,7 @@ func TestApplyExpansionWritesQwenPESize(t *testing.T) {
 		rec := httptest.NewRecorder()
 		c, _ := gin.CreateTestContext(rec)
 		c.Request = httptest.NewRequest(http.MethodPost, "/v1/images/generations", strings.NewReader(reqBody))
-		require.NoError(t, applyAggregateExpansion(c, "qwen-image-pro-enhanced", "qwen-image-pro", agg))
+		require.NoError(t, applyExpansionForTest(c, "qwen-image-pro-enhanced", "qwen-image-pro", agg))
 		return readBodyMap(t, c)
 	}
 
@@ -1273,7 +1283,7 @@ func TestUpscaleSkippedByClientRequestedSize(t *testing.T) {
 			c.Request = httptest.NewRequest(http.MethodPost, "/v1/videos",
 				strings.NewReader(tc.body))
 
-			require.NoError(t, applyAggregateExpansion(c, "h3-2k", "minimax-h3", agg))
+			require.NoError(t, applyExpansionForTest(c, "h3-2k", "minimax-h3", agg))
 
 			exp := GetAggregateExpansion(c)
 			require.NotNil(t, exp)
@@ -1307,7 +1317,7 @@ func TestUpscaleSkipComparesAgainstOverridesSizeNotAConstant(t *testing.T) {
 	c.Request = httptest.NewRequest(http.MethodPost, "/v1/videos",
 		strings.NewReader(`{"model":"h3-2k","prompt":"a cat","size":"768P"}`))
 
-	require.NoError(t, applyAggregateExpansion(c, "h3-2k", "minimax-h3", agg))
+	require.NoError(t, applyExpansionForTest(c, "h3-2k", "minimax-h3", agg))
 
 	exp := GetAggregateExpansion(c)
 	require.False(t, exp.UpscaleSkipped,
@@ -1330,7 +1340,7 @@ func TestUpscaleSkippedWhenNoOverridesSize(t *testing.T) {
 	c.Request = httptest.NewRequest(http.MethodPost, "/v1/videos",
 		strings.NewReader(`{"model":"h3-1080","prompt":"a cat","size":"1080P"}`))
 
-	require.NoError(t, applyAggregateExpansion(c, "h3-1080", "minimax-h3", agg))
+	require.NoError(t, applyExpansionForTest(c, "h3-1080", "minimax-h3", agg))
 
 	exp := GetAggregateExpansion(c)
 	require.Equal(t, "1080P", exp.RequestedSize)
@@ -1409,7 +1419,7 @@ func TestApplyExpansionRejectsUndeliverableBeforeEnhance(t *testing.T) {
 	c, _ := gin.CreateTestContext(rec)
 	c.Request = httptest.NewRequest(http.MethodPost, "/v1/videos",
 		strings.NewReader(`{"model":"h3-2k","prompt":"一只猫","size":"4K"}`))
-	err := applyAggregateExpansion(c, "h3-2k", "minimax-h3-fl2va", agg)
+	err := applyExpansionForTest(c, "h3-2k", "minimax-h3-fl2va", agg)
 
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "最高交付短边 1536")
@@ -1507,7 +1517,7 @@ func TestApplyExpansionPublishesTaskAggregateInfo(t *testing.T) {
 	c.Request = httptest.NewRequest(http.MethodPost, "/v1/videos",
 		strings.NewReader(`{"model":"h3-2k","prompt":"a cat"}`))
 
-	require.NoError(t, applyAggregateExpansion(c, "h3-2k", "minimax-h3", common.GetAggregateModel("h3-2k")))
+	require.NoError(t, applyExpansionForTest(c, "h3-2k", "minimax-h3", common.GetAggregateModel("h3-2k")))
 
 	v, ok := c.Get(string(constant.ContextKeyAggregateTaskInfo))
 	require.True(t, ok, "展开点必须把随任务持久化的形态放进 context")
@@ -1529,7 +1539,7 @@ func TestOverridesDurationDoesNotClobberClientValue(t *testing.T) {
 		c.Request = httptest.NewRequest(http.MethodPost, "/v1/videos", strings.NewReader(body))
 		agg := common.GetAggregateModel("agg-dur")
 		require.NotNil(t, agg)
-		require.NoError(t, applyAggregateExpansion(c, "agg-dur", "minimax-h3-fl2va", agg))
+		require.NoError(t, applyExpansionForTest(c, "agg-dur", "minimax-h3-fl2va", agg))
 		return readBodyMap(t, c)
 	}
 
@@ -1559,7 +1569,7 @@ func TestAggregateMarksEnhanceSkipped(t *testing.T) {
 	rec := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(rec)
 	c.Request = httptest.NewRequest(http.MethodPost, "/v1/videos", strings.NewReader(`{"model":"h3-2k","prompt":"a cat"}`))
-	require.NoError(t, applyAggregateExpansion(c, "h3-2k", "minimax-h3", common.GetAggregateModel("h3-2k")))
+	require.NoError(t, applyExpansionForTest(c, "h3-2k", "minimax-h3", common.GetAggregateModel("h3-2k")))
 
 	exp := GetAggregateExpansion(c)
 	require.Nil(t, exp.Enhance, "关掉时不该有增强记录")
@@ -1578,7 +1588,7 @@ func TestPromptOptimizerOverridesConfigDefault(t *testing.T) {
 		rec := httptest.NewRecorder()
 		c, _ := gin.CreateTestContext(rec)
 		c.Request = httptest.NewRequest(http.MethodPost, "/v1/videos", strings.NewReader(body))
-		require.NoError(t, applyAggregateExpansion(c, "h3-2k", "minimax-h3", common.GetAggregateModel("h3-2k")))
+		require.NoError(t, applyExpansionForTest(c, "h3-2k", "minimax-h3", common.GetAggregateModel("h3-2k")))
 		return GetAggregateExpansion(c), readBodyMap(t, c)
 	}
 
@@ -1610,7 +1620,7 @@ func TestPromptOptimizerIgnoredWhenLocked(t *testing.T) {
 	c, _ := gin.CreateTestContext(rec)
 	c.Request = httptest.NewRequest(http.MethodPost, "/v1/videos",
 		strings.NewReader(`{"model":"h3-2k","prompt":"a cat","prompt_optimizer":false}`))
-	require.NoError(t, applyAggregateExpansion(c, "h3-2k", "minimax-h3", common.GetAggregateModel("h3-2k")))
+	require.NoError(t, applyExpansionForTest(c, "h3-2k", "minimax-h3", common.GetAggregateModel("h3-2k")))
 
 	exp := GetAggregateExpansion(c)
 	require.False(t, exp.EnhanceSkipped)
@@ -1638,7 +1648,7 @@ func TestPromptOptimizerEnablesWhenConfigDefaultOff(t *testing.T) {
 	c, _ := gin.CreateTestContext(rec)
 	c.Request = httptest.NewRequest(http.MethodPost, "/v1/videos",
 		strings.NewReader(`{"model":"h3-2k","prompt":"a cat","prompt_optimizer":true}`))
-	require.NoError(t, applyAggregateExpansion(c, "h3-2k", "minimax-h3", common.GetAggregateModel("h3-2k")))
+	require.NoError(t, applyExpansionForTest(c, "h3-2k", "minimax-h3", common.GetAggregateModel("h3-2k")))
 
 	require.True(t, called)
 	exp := GetAggregateExpansion(c)
@@ -1657,7 +1667,7 @@ func TestAggregateLabelsCarryEnhanceSkipReason(t *testing.T) {
 		rec := httptest.NewRecorder()
 		c, _ := gin.CreateTestContext(rec)
 		c.Request = httptest.NewRequest(http.MethodPost, "/v1/videos", strings.NewReader(body))
-		require.NoError(t, applyAggregateExpansion(c, "h3-2k", "minimax-h3", common.GetAggregateModel("h3-2k")))
+		require.NoError(t, applyExpansionForTest(c, "h3-2k", "minimax-h3", common.GetAggregateModel("h3-2k")))
 		v, _ := common.GetContextKey(c, constant.ContextKeyAggregateLabels)
 		m, _ := v.(map[string]string)
 		return m
@@ -1683,7 +1693,7 @@ func TestPromptOptimizerAcceptsNumericForm(t *testing.T) {
 		rec := httptest.NewRecorder()
 		c, _ := gin.CreateTestContext(rec)
 		c.Request = httptest.NewRequest(http.MethodPost, "/v1/videos", strings.NewReader(body))
-		require.NoError(t, applyAggregateExpansion(c, "h3-2k", "minimax-h3", common.GetAggregateModel("h3-2k")))
+		require.NoError(t, applyExpansionForTest(c, "h3-2k", "minimax-h3", common.GetAggregateModel("h3-2k")))
 		return GetAggregateExpansion(c)
 	}
 	require.True(t, run("{\"model\":\"h3-2k\",\"prompt\":\"a cat\",\"prompt_optimizer\":0}").EnhanceSkipped)
@@ -1731,7 +1741,7 @@ func TestAceStepExpandUsesSoleCandidateBudget(t *testing.T) {
 	rec := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(rec)
 	c.Request = httptest.NewRequest(http.MethodPost, "/v1/music/generations", strings.NewReader("{\"model\":\"ace-cover\",\"prompt\":\"warm lofi loop\"}"))
-	require.NoError(t, applyAggregateExpansion(c, "ace-cover", "ace-step-cover", common.GetAggregateModel("ace-cover")))
+	require.NoError(t, applyExpansionForTest(c, "ace-cover", "ace-step-cover", common.GetAggregateModel("ace-cover")))
 	if gotBudget != 120 {
 		t.Fatalf("隐式 cover 时应按 cover 的 120 算预算,得到 %d", gotBudget)
 	}

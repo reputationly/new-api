@@ -41,6 +41,11 @@ type AggregateExpansion struct {
 	// 只有这里还留着"客户以为自己在调什么",排障时是第一手信息。
 	PublicName string
 	Config     *common.AggregateModel
+	// GenerateModel 这次请求**实际选中的生成段模型**（`generate.task_models` 按玩法分派
+	// 的结果，没配 task_models 时就是 `generate.model`）。配置里 `Generate.Model` 只是
+	// 兜底默认值，而这条流水线可能分派到两个 checkpoint —— 排障时"这次到底打到哪个部署"
+	// 是第一手信息，日志标签与任务记录里都只有展开后的名字，没有它就回不到"为什么"。
+	GenerateModel string
 	// Enhance 提示词增强的过程记录(含增强前后的文本、是否降级)。
 	// 增强后的 prompt **不回传给客户**,所以客户报"生成的跟我写的不一样"时,
 	// 这份记录是唯一能解释清楚的证据。未启用增强时为 nil。
@@ -118,6 +123,11 @@ func groupAllowedForAggregate(agg *common.AggregateModel, usingGroup, userGroup 
 
 // routeByMode 用目录里的 `mode_models` 把聚合按玩法分派到对应 checkpoint。
 //
+// **这是老机制，只服务没有 `generate.task_models` 的聚合。** 新配置请用 `task_models`
+// （见 common.AggregateGenerate.ModelFor 与下面的 selectGenerateModel）：它按平台统一的
+// task_type 分派，不依赖 HiloCatalog 有没有配 mode_models —— 后者在老部署的库里经常
+// 没有，于是这条路**静默失效**（本函数 ①② 两条限制都来自那个时代）。
+//
 // 取值优先级：body.image_mode → metadata.image_mode（对象或 JSON 字符串）→
 // metadata.task_type（r2va/r2v/rv2v → reference；fl2va/t2va/s2v → first-last-frame）。
 // 取不到就原样返回（绝不猜）。
@@ -182,7 +192,102 @@ func routeByMode(publicName string, body map[string]any) (string, error) {
 	return target, nil
 }
 
-func applyAggregateExpansion(c *gin.Context, publicName, realModel string, agg *common.AggregateModel) error {
+// selectGenerateModel 这次请求该发给哪个生成段模型。
+//
+// 两条路，按配置**互斥**地选一条（不是兜底关系）：
+//
+//	配了 generate.task_models   按玩法分派（selectGenerateModel 第一支）
+//	没配                        走老的 routeByMode（HiloCatalog 的 mode_models）
+//
+// 两者不叠用：`task_models` 是显式配置，operator 写下它就是要按玩法自己定分派，
+// 此时再去读目录里的 mode_models 会让"配置里写的"和"实际生效的"变成两份知识，
+// 而它们不同步时**谁赢都像 bug**。
+func selectGenerateModel(publicName string, agg *common.AggregateModel, body map[string]any, norm *relaycommon.TaskSubmitReq, realModel string) (string, error) {
+	if len(agg.Generate.TaskModels) > 0 {
+		if selected := agg.Generate.ModelFor(routingTaskType(body, norm)); selected != "" {
+			return selected, nil
+		}
+		return realModel, nil
+	}
+	routed, err := routeByMode(publicName, body)
+	if err != nil {
+		return "", err
+	}
+	if routed != "" && routed != publicName {
+		return routed, nil
+	}
+	return realModel, nil
+}
+
+// routingTaskType 这次请求按哪个门面玩法选生成段。取不到返回空串（调用方回落默认模型）。
+//
+// 顺序是**由具体到笼统**，每一级的理由都不一样：
+//
+//  1. `metadata.image_mode == video-extension` → i2v。
+//     续写有两个等价入口（ContinuationConvert 认 image_mode 和 task_type 两种写法），
+//     而这个入口的请求体里**没有 task_type**。不先认它，下面的形态推断会看到"什么素材
+//     都没有"（源片键是 source_video，推断只认顶层帧图和 src_ref_images）推出 t2v ——
+//     结论碰巧一样（本仓库 t2v 与 i2v 分派到同一个 checkpoint），换个配置就静默错。
+//     老 routeByMode 本来也是先读 image_mode 的，这条读点不能丢。
+//
+//  2. 显式 `metadata.task_type`，走**路由口径**归一：continuation → i2v、r2v/rv2v → r2va。
+//     续写在这里是常态：`/v1` 上 Distribute 是 group 级中间件，跑在 route 级
+//     ContinuationConvert 之前，展开时 task_type 还是 "continuation"。
+//     显式给了我们不认识的玩法（s2v / ads2v …）则**不猜**，回落默认模型。
+//
+//  3. `resolveCompilerTaskType` 的形态兜底：与增强段同一套推断（两张帧图推不出来、
+//     一张帧图推不出来、带参考素材 → r2va、什么都没有 → t2v）。复用而不是新写一份，
+//     否则"增强看到什么素材"与"实际发给哪个部署"会各说各的。
+func routingTaskType(body map[string]any, norm *relaycommon.TaskSubmitReq) string {
+	if mode := routingImageMode(body, norm); mode != "" {
+		if strings.EqualFold(mode, "video-extension") {
+			return common.FacadeTaskTypeI2V
+		}
+	}
+	if norm != nil {
+		if key, ok := common.NormalizeRoutedTaskType(norm.TaskType()); ok {
+			return key
+		}
+		if strings.TrimSpace(norm.TaskType()) != "" {
+			return "" // 明确声明了别的玩法,不猜
+		}
+	}
+	if tt := resolveCompilerTaskType(body, norm); tt != "" {
+		return string(tt)
+	}
+	return ""
+}
+
+// routingImageMode 取 metadata.image_mode（对象或 JSON 编码的字符串都收）。
+//
+// 优先读**归一化后**的那份 metadata（norm.Metadata）：它已经把字符串形态解开了，
+// 而 body 里可能还是一段 JSON 文本。norm 解不出来时再退回原始 body。
+func routingImageMode(body map[string]any, norm *relaycommon.TaskSubmitReq) string {
+	if norm != nil {
+		if v, ok := norm.Metadata["image_mode"].(string); ok && strings.TrimSpace(v) != "" {
+			return strings.TrimSpace(v)
+		}
+	}
+	md, ok := expansionMetadata(body)
+	if !ok {
+		return ""
+	}
+	v, _ := md["image_mode"].(string)
+	return strings.TrimSpace(v)
+}
+
+// applyAggregateExpansion 就地改写请求，返回**最终选中的生成段模型**。
+//
+// 返回值不是装饰：`generate.task_models` 之后同一个聚合可能落到两个 checkpoint 上，
+// 而选渠道、计费、使用日志、任务记录读的都是 `modelRequest.Model`。早期实现只把
+// 分派结果写进 body，distributor 仍拿展开前的 `generate.model` 赋值 —— 于是请求发给
+// 了 A（body），却按 B 选渠道、按 B 计费，且**不报错**。所以这个值必须交回调用方。
+//
+// body 也必须改写：适配器构造上游请求时读的是 body 里的 model（图片生成尤其明显），
+// 只改内存里那份会让上游收到一个它不认识的聚合模型名。
+//
+// 返回 ("", err) 表示请求应当被拒；成功时返回的名字一定非空。
+func applyAggregateExpansion(c *gin.Context, publicName, realModel string, agg *common.AggregateModel) (string, error) {
 	// **刻意不用 UnmarshalBodyReusable**:那个函数按 Content-Type 分派,遇到非
 	// json/form/multipart 的类型会走 `else { skip }` 分支——**返回 nil 却什么都不填**。
 	// 客户端没带 Content-Type 时,body 会是 nil:轻则这里改写落空(聚合模型名原样发给
@@ -190,11 +295,11 @@ func applyAggregateExpansion(c *gin.Context, publicName, realModel string, agg *
 	// 就是纯 JSON 操作,不该看 Content-Type 脸色。直接取字节自己解析,行为与请求头无关。
 	storage, err := common.GetBodyStorage(c)
 	if err != nil {
-		return fmt.Errorf("读取请求体失败: %w", err)
+		return "", fmt.Errorf("读取请求体失败: %w", err)
 	}
 	raw, err := storage.Bytes()
 	if err != nil {
-		return fmt.Errorf("读取请求体失败: %w", err)
+		return "", fmt.Errorf("读取请求体失败: %w", err)
 	}
 	// **UnmarshalWithNumber,不是 Unmarshal**:这里是对客户**整个请求体**做
 	// 读-改-写,普通 Unmarshal 会把所有 JSON 数字变成 float64,超过 2^53 的整数
@@ -209,14 +314,14 @@ func applyAggregateExpansion(c *gin.Context, publicName, realModel string, agg *
 		// 展开只会读-改-写 JSON。报错要把这层说破,否则运营看到的是一句
 		// "解析请求体失败",完全指不到"换 JSON 提交或别用聚合模型"这个动作上。
 		if ct := c.Request.Header.Get("Content-Type"); strings.Contains(ct, "multipart/form-data") {
-			return fmt.Errorf("聚合模型 %s 暂不支持 multipart 提交(Content-Type: %s),请改用 JSON 请求体,或直接调用生成段模型 %s", publicName, ct, realModel)
+			return "", fmt.Errorf("聚合模型 %s 暂不支持 multipart 提交(Content-Type: %s),请改用 JSON 请求体,或直接调用生成段模型 %s", publicName, ct, realModel)
 		}
-		return fmt.Errorf("解析请求体失败: %w", err)
+		return "", fmt.Errorf("解析请求体失败: %w", err)
 	}
 	// 解析出 nil(body 为空、或内容是 JSON null)时必须报错,不能就地补一个空 map ——
 	// 那样改写完只剩 {"model":...},prompt / size / 输入图全被丢掉,而请求还会照常发出去。
 	if body == nil {
-		return fmt.Errorf("请求体为空,无法展开聚合模型 %s", publicName)
+		return "", fmt.Errorf("请求体为空,无法展开聚合模型 %s", publicName)
 	}
 	// 客户要的最终尺寸,**必须在套 Overrides 之前读** —— Overrides 干的正是顶掉它这件事。
 	// 只读改写后的那份,得到的永远是生成段的中间档,超分段就再也没有依据判断该不该跑。
@@ -247,23 +352,24 @@ func applyAggregateExpansion(c *gin.Context, publicName, realModel string, agg *
 		}
 		body[k] = v
 	}
+	// **归一化后的请求，只解一次，后面三处共用**（路由选段、增强段的事实收集、
+	// 编译器输入）。必须在套完 Overrides 之后解：事实要描述真正发出去的那个请求。
+	//
+	// 早先只在增强那里解一次，取值点晚了十几行；现在选段也要读它（task_type），
+	// 两次各解一遍不仅多一次序列化，更糟的是两处读到的 body 状态可能不同 ——
+	// 那正是这个文件反复警告的"两边各说各的"，只是换成同一函数内的两次解析。
+	norm := normalizeTaskRequest(body)
 	// model 由展开结果决定,不允许被 Overrides 顶掉:运营在 overrides 里手滑写一个 model
 	// 会让请求发去一个既非聚合模型、也非配置的生成段模型的地方,且不报错。
-	// **按玩法路由到正确的 checkpoint**。
 	//
-	// H3 的帧族（t2va/fl2va）与参考族（r2va）是两个部署：聚合模型只有一个
-	// `generate.model`，客户带 `image_mode=reference` 时请求会被打上 task_type=r2va，
-	// 却仍然发给帧族的 checkpoint，上游报
-	//   "task_type 'r2va' needs the Ref2VA checkpoint, but model 'minimax-h3-fl2va'
-	//    is deployed from the FL2VA partition (serves t2va/fl2va only)"
-	// 而客户端（以及运营）只能看到一个看不出关联的 400。
-	//
-	// 目录里的 `mode_models` 本来就描述了"玩法 → 平台模型"，这里让它真正参与路由。
-	if routed, err := routeByMode(publicName, body); err != nil {
-		return err
-	} else if routed != "" && routed != publicName {
-		realModel = routed
+	// **按玩法选生成段**：H3 的帧族（t2va/fl2va）与参考族（r2va）是两个部署，一个
+	// 聚合模型名既要能出文生/帧驱动，也要能出多模态参考，就得在这里按 task_type 分派。
+	// 选不出来（说不出玩法）时回落 `generate.model`，绝不猜。
+	selected, err := selectGenerateModel(publicName, agg, body, norm, realModel)
+	if err != nil {
+		return "", err
 	}
+	realModel = selected
 	body["model"] = realModel
 
 	generateSize, _ := body["size"].(string)
@@ -272,6 +378,7 @@ func applyAggregateExpansion(c *gin.Context, publicName, realModel string, agg *
 	exp := &AggregateExpansion{
 		PublicName:        publicName,
 		Config:            agg,
+		GenerateModel:     realModel,
 		RequestedSize:     requestedSize,
 		GenerateSize:      generateSize,
 		RequestedDuration: requestedDuration,
@@ -289,7 +396,7 @@ func applyAggregateExpansion(c *gin.Context, publicName, realModel string, agg *
 	if agg.Upscale.IsEnabled() && !exp.UpscaleSkipped {
 		if reason := upscaleUndeliverableReason(requestedSize, generateSize, agg.Upscale.SRRatio); reason != "" {
 			// 带上聚合模型名:客户拿到的报错要能指回他自己调的那个名字。
-			return fmt.Errorf("聚合模型 %s %s", publicName, reason)
+			return "", fmt.Errorf("聚合模型 %s %s", publicName, reason)
 		}
 	}
 
@@ -301,6 +408,12 @@ func applyAggregateExpansion(c *gin.Context, publicName, realModel string, agg *
 	labels := map[string]string{
 		"aggregate_model": publicName,
 		"pipeline_stage":  "generate",
+	}
+	// 分派到**非默认**生成段时才多记一个键：使用日志那一行的 model 本来就是最终选中的
+	// 段模型，平时不需要重复；而"这次没用配置里的 generate.model"恰恰是排障时最常问的
+	// 那句，且从日志本身看不出来。只在有信息量时写，避免给每条日志加噪音。
+	if defaultModel := strings.TrimSpace(agg.Generate.Model); realModel != defaultModel {
+		labels["generate_model"] = realModel
 	}
 	common.SetContextKey(c, constant.ContextKeyAggregateLabels, labels)
 
@@ -324,7 +437,7 @@ func applyAggregateExpansion(c *gin.Context, publicName, realModel string, agg *
 	if rawSize, ok := body["size"].(string); ok {
 		normalizedSize, sizeErr := relay.NormalizeBilledImageSize(realModel, rawSize)
 		if sizeErr != nil {
-			return sizeErr
+			return "", sizeErr
 		}
 		if normalizedSize != rawSize {
 			body["size"] = normalizedSize
@@ -381,7 +494,6 @@ func applyAggregateExpansion(c *gin.Context, publicName, realModel string, agg *
 			//
 			// 从**改写后**的 body 走一遍序列化,而不是用入口的原始字节:Overrides 可能
 			// 改掉 duration 一类字段,事实要描述真正发出去的那个请求。
-			norm := normalizeTaskRequest(body)
 			resolved := resolveCompilerTaskType(body, norm)
 			// 发给生成段的 size(客户传的,或 overrides 定的)。取 Overrides 之后的值:
 			// 事实要描述真正发出去的那个请求。
@@ -425,17 +537,17 @@ func applyAggregateExpansion(c *gin.Context, publicName, realModel string, agg *
 
 	data, err := common.Marshal(body)
 	if err != nil {
-		return fmt.Errorf("序列化请求体失败: %w", err)
+		return "", fmt.Errorf("序列化请求体失败: %w", err)
 	}
 	if err := common.ReplaceRequestBody(c, data); err != nil {
-		return fmt.Errorf("改写请求体失败: %w", err)
+		return "", fmt.Errorf("改写请求体失败: %w", err)
 	}
 	common.SetContextKey(c, constant.ContextKeyAggregateExpansion, exp)
 	// 同步生图也进任务日志,但它的落库路径在 relay 包里 —— 拿不到这里的展开类型。
 	// 所以在展开点就把"随任务持久化的形态"算好放进 context,两条路读同一份,
 	// 不会出现"异步有 enhance 记录、同步没有"这种同一件事两种记法。
 	common.SetContextKey(c, constant.ContextKeyAggregateTaskInfo, exp.ToTaskAggregateInfo(c))
-	return nil
+	return realModel, nil
 }
 
 // ToTaskAggregateInfo 把一次聚合展开的结果转成随任务持久化的形态。
@@ -1280,20 +1392,16 @@ func buildCompilerInput(body map[string]any, norm *relaycommon.TaskSubmitReq, pr
 // 编译加一轮重修(最多 service.singleCallTimeout),然后才静默回落 text。
 //
 // r2v / rv2v 语义上就是参考族,归到 r2va;其余不认识的一律跳过。
+// **白名单只有一份**：五个玩法词与别名表都在 common.NormalizeCompilerTaskType。
+// 这里只做类型转换 + 一个刻意的分歧 —— 续写(continuation)不在编译口径里，
+// 见 common.NormalizeCompilerTaskType 的注释（它的首帧是运行时抽出来的，
+// 按 i2v 编出来的分镜描述的是一张还不存在的图）。
 func compilerTaskType(raw string) (hilo.TaskType, bool) {
-	switch strings.ToLower(strings.TrimSpace(raw)) {
-	case "t2v":
-		return hilo.TaskT2V, true
-	case "i2v":
-		return hilo.TaskI2V, true
-	case "flf2v":
-		return hilo.TaskFLF2V, true
-	case "l2va":
-		return hilo.TaskL2VA, true
-	case "r2va", "r2v", "rv2v":
-		return hilo.TaskR2VA, true
+	key, ok := common.NormalizeCompilerTaskType(raw)
+	if !ok {
+		return "", false
 	}
-	return "", false
+	return hilo.TaskType(key), true
 }
 
 // readGenerateAudio 这次要不要出声。**漏写 = 要** —— 与 relay/hilo/convert.go
@@ -1486,8 +1594,12 @@ func inferCompilerTaskType(norm *relaycommon.TaskSubmitReq) (hilo.TaskType, bool
 	// s2v —— 编译器照着"首尾帧"编一份提示词,发给一个数字人任务,不报错。
 	// 同理 `{metadata:{video:…}}` 会被推成 t2v,而提示词里会断言
 	// "There is no reference image",可请求里明明有一段视频。
+	//
+	// `source_video` 与 `src_video` 都要查：前者是**续写**的源片键，后者是 v2v/rv2v
+	// 那一族。少查一个的后果是续写的请求被推成 t2v（它什么帧图/参考素材都没有），
+	// 于是增强照"纯文生"写一份没有任何素材描述的分镜。
 	if nonEmpty(norm.RefAudios()) > 0 ||
-		hasMetadataMaterial(norm.Metadata, "audio", "video", "src_video") {
+		hasMetadataMaterial(norm.Metadata, "audio", "video", "src_video", "source_video") {
 		return "", false
 	}
 

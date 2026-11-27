@@ -129,11 +129,18 @@ func Distribute() func(c *gin.Context) {
 			} else if realModel != "" {
 				// 用上面已经解析好的那份配置,不再查第二次 —— 两次查找之间配置若被
 				// 重新保存,第二次可能返回 nil,下游解引用即 panic。
-				if err := applyAggregateExpansion(c, modelRequest.Model, realModel, aggCfg); err != nil {
-					abortWithOpenAiMessage(c, http.StatusBadRequest, err.Error())
+				//
+				// **必须用返回值,不是 realModel。** 聚合可以按玩法分派到不同的生成段
+				// （`generate.task_models`：H3 的帧族与参考族是两个 checkpoint），而
+				// 返回值才是这次请求真正要发的那个。早先这里用的是展开前的
+				// `generate.model`：body 里写的是分派后的名字，选渠道、预扣、日志却
+				// 按默认段来 —— 请求打到 A 部署，却按 B 的价目和渠道记录，且不报错。
+				selected, aggExpandErr := applyAggregateExpansion(c, modelRequest.Model, realModel, aggCfg)
+				if aggExpandErr != nil {
+					abortWithOpenAiMessage(c, http.StatusBadRequest, aggExpandErr.Error())
 					return
 				}
-				modelRequest.Model = realModel
+				modelRequest.Model = selected
 			}
 
 			if shouldSelectChannel {

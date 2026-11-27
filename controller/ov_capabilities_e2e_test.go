@@ -223,12 +223,20 @@ func withAggregateConfig(t *testing.T, raw string) {
 
 // 聚合模型的 `taskTypes` 要按**生成段**查，不能按聚合名查 —— 体验区配置里登记的是
 // 生成段。按聚合名查的话参考族拿不到 `r2va`，客户端就补不上"参考生视频"。
+//
+// 按玩法分派（`generate.task_models`）之后口径是"**当前可调用的全部生成段**的并集"：
+// 一个聚合名底下有两个 checkpoint，只取默认段会让另一半玩法永远报不出来。
 func TestOvCapabilitiesReadsTaskTypesThroughGenerateSegment(t *testing.T) {
 	db := setupOvCapabilitiesDB(t)
 	withAggregateConfig(t, common.DefaultAggregateModelConfig)
 	// 体验区配置：按**生成段模型名**登记玩法（生产里由管理员在后台配，出厂不随代码发）。
+	//
+	// tab key 必须是体验区真实的那几个（constant.PlaygroundTaskTypesForTab）：写成
+	// `{"t2v":{}}` 一个 task_type 都产不出来 —— 这条测试以前正好是**空过**的
+	//（它只断言"帧族没有 r2va"，而帧族其实什么都没取到）。text2video + flf2v
+	// 两个 tab 覆盖 t2v / i2v / l2va / flf2v。
 	withPlaygroundConfig(t, "VideoModelConfig", `{"models": {
-		"minimax-h3-fl2va": {"tabs": {"t2v": {}, "i2v": {}}},
+		"minimax-h3-fl2va": {"tabs": {"text2video": {}, "flf2v": {}}},
 		"minimax-h3-ref2va": {"tabs": {"r2va": {}}}
 	}}`)
 	for _, name := range []string{"minimax-h3-fl2va", "minimax-h3-ref2va", "relayvsr"} {
@@ -240,8 +248,17 @@ func TestOvCapabilitiesReadsTaskTypesThroughGenerateSegment(t *testing.T) {
 	for _, capability := range body.Capabilities {
 		taskTypes[capability.Model] = capability.TaskTypes
 	}
-	require.Contains(t, taskTypes["minimax-h3-ref-2k"], "r2va", "参考族必须带 r2va")
-	require.NotContains(t, taskTypes["minimax-h3-2k"], "r2va", "帧族不该带 r2va")
+	// **两个名字都要带全部五个玩法。** 这条以前是 `NotContains(2k, "r2va")` ——
+	// 那时 2k 只有一个 generate.model，确实出不了参考片；task_models 之后
+	// MiniMax-H3 / minimax-h3-2k / minimax-h3-ref-2k 是等价的别名。
+	for _, want := range []string{"t2v", "i2v", "l2va", "flf2v", "r2va"} {
+		require.Contains(t, taskTypes["minimax-h3-ref-2k"], want, "参考族缺 %s", want)
+		require.Contains(t, taskTypes["minimax-h3-2k"], want, "帧族缺 %s", want)
+	}
+	// 三条等价的名字都必须在目录里（迁移期不藏别名）。
+	for _, name := range []string{"MiniMax-H3", "minimax-h3-2k", "minimax-h3-ref-2k"} {
+		require.Contains(t, taskTypes, name, "目录里应有 %s", name)
+	}
 }
 
 func withPlaygroundConfig(t *testing.T, key, raw string) {

@@ -250,3 +250,43 @@ func TestDefaultAggregateConfigUsesLiveUpscaler(t *testing.T) {
 		}
 	}
 }
+
+// 出厂的三条 H3 聚合必须**按玩法分派**，且分派表覆盖全五个玩法。
+//
+// 不覆盖的玩法会回落到 generate.model —— 若那个模型不在对应分区（参考族就是
+// 另一个部署），引擎会 400，而客户端看到的是一句与它无关的分区错误。
+func TestDefaultH3AggregatesDispatchEveryTaskType(t *testing.T) {
+	items, err := ParseAggregateModelList(DefaultAggregateModelConfig)
+	if err != nil {
+		t.Fatal(err)
+	}
+	names := map[string]bool{}
+	for _, it := range items {
+		names[it.Name] = true
+	}
+	for _, name := range []string{"MiniMax-H3", "minimax-h3-2k", "minimax-h3-ref-2k"} {
+		if !names[name] {
+			t.Fatalf("出厂配置缺 %s：官方那个名字必须能直接用，两个 -2k 是迁移期的别名", name)
+		}
+	}
+
+	aggregates := map[string]bool{}
+	for _, it := range items {
+		aggregates[it.Name] = true
+	}
+	for _, it := range items {
+		if it.Type != "video" || len(it.Generate.TaskModels) == 0 {
+			continue
+		}
+		for _, key := range FacadeTaskTypeKeys() {
+			value := it.Generate.TaskModels[key]
+			if value == "" {
+				t.Errorf("%s 的 task_models 缺 %s：该玩法会回落到 %s", it.Name, key, it.Generate.Model)
+				continue
+			}
+			if aggregates[value] {
+				t.Errorf("%s 的 task_models[%s]=%q 是聚合模型：聚合名没有渠道 ability", it.Name, key, value)
+			}
+		}
+	}
+}

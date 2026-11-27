@@ -2,6 +2,7 @@ package service
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 
 	"github.com/QuantumNous/new-api/common"
@@ -201,50 +202,148 @@ func DryRunAggregateModel(m *common.AggregateModel, peers map[string]int) *Aggre
 				"写在 overrides 会被当成客户传值;要固定行为请用 prompt_enhance.enabled + lock_enabled")
 	}
 	// —— 2. 生成段 ——
-	genExists, genGroups, _ := currentModelFacts(m.Generate.Model)
-	if strings.TrimSpace(m.Generate.Model) == "" {
+	genModel := strings.TrimSpace(m.Generate.Model)
+	genExists, genGroups, _ := currentModelFacts(genModel)
+	if genModel == "" {
 		add("generate", AggregateCheckError, "必须指定生成段模型")
 	} else if !genExists {
 		add("generate", unknownLevel(),
 			"生成段模型 %q 当前没有可用渠道(不在启用的 abilities 里),调用会失败%s",
-			m.Generate.Model, unknownSuffix())
+			genModel, unknownSuffix())
 	} else {
-		add("generate", AggregateCheckOK, "生成段模型 %q 可路由", m.Generate.Model)
-		res.Billable = append(res.Billable, m.Generate.Model)
+		add("generate", AggregateCheckOK, "生成段模型 %q 可路由", genModel)
+		res.Billable = append(res.Billable, genModel)
+	}
+	genFacts := []generateModelFact{{Model: genModel, Exists: genExists, Groups: genGroups}}
+
+	// —— 2b. 按玩法分派(generate.task_models) ——
+	//
+	// 每个 value 都要过一遍和「生成段」**同一套**检查:能不能路由、要不要计入 Billable。
+	// 少查一个的后果是配置页一路绿灯,而客户切到那个玩法才失败 —— 而且失败信息来自
+	// 渠道层,说不清是"这个玩法没部署"还是"你没权限"。
+	if len(m.Generate.TaskModels) > 0 {
+		covered := make(map[string]bool, len(m.Generate.TaskModels))
+		// 两个玩法落到同一个模型时，Billable 只记一次 —— 客户的账单上是一笔，
+		// 配置页上也就该是一行。
+		billed := map[string]bool{genModel: true}
+		for _, rawKey := range sortedKeys(m.Generate.TaskModels) {
+			value := strings.TrimSpace(m.Generate.TaskModels[rawKey])
+			// **严格五个 key，别名不算。** 运行时的 key 是"归一后的门面玩法"，
+			// 写 `r2v` 这个同义写法不会命中任何一个请求，而且不报错 ——
+			// 正是这套校验要消灭的那类静默失效。
+			key := strings.ToLower(strings.TrimSpace(rawKey))
+			if !common.IsFacadeTaskTypeKey(key) {
+				// key 拼错时**运行时静默不命中**(每个请求都回落默认段),而配置页上
+				// 看不出来。必须报错,不是提示。
+				add("task_models", AggregateCheckError,
+					"task_models 的 key %q 不是门面 task_type(只支持 %s),这个玩法永远不会命中,请求会回落到 generate.model %q",
+					rawKey, strings.Join(common.FacadeTaskTypeKeys(), " / "), genModel)
+				continue
+			}
+			if covered[key] {
+				add("task_models", AggregateCheckWarn,
+					"task_models 里 %q 与另一个写法归一后都是 %s,只会生效一个", rawKey, key)
+			}
+			covered[key] = true
+			switch {
+			case value == "":
+				add("task_models", AggregateCheckError,
+					"task_models[%s] 为空:这个玩法会回落到 generate.model %q,若它不在对应分区,引擎会拒", key, genModel)
+			case peers[value] > 0:
+				// 聚合名没有渠道 ability,原样发给上游等于发一个不存在的模型。
+				add("task_models", AggregateCheckError,
+					"task_models[%s]=%q 是同一份配置里的聚合模型:聚合名没有渠道 ability,不能当生成段,请填具体的模型名",
+					key, value)
+			case value == genModel:
+				// 与默认段相同:已经查过、也已经在 Billable 里了。
+			default:
+				exists, groups, _ := currentModelFacts(value)
+				if !exists {
+					add("task_models", unknownLevel(),
+						"task_models[%s]=%q 当前没有可用渠道(不在启用的 abilities 里),这个玩法的调用会失败%s",
+						key, value, unknownSuffix())
+					continue
+				}
+				add("task_models", AggregateCheckOK, "玩法 %s → %s 可路由", key, value)
+				if !billed[value] {
+					billed[value] = true
+					res.Billable = append(res.Billable, value)
+				}
+				genFacts = append(genFacts, generateModelFact{Model: value, TaskType: key, Exists: true, Groups: groups})
+			}
+		}
+		// 覆盖不全不是错(回落默认段是合法配置),但**必须说出来**:没覆盖的玩法会落到
+		// generate.model 上,而那个模型未必在对应分区。
+		var uncovered []string
+		for _, key := range common.FacadeTaskTypeKeys() {
+			if !covered[key] {
+				uncovered = append(uncovered, key)
+			}
+		}
+		if len(uncovered) > 0 {
+			add("task_models", AggregateCheckWarn,
+				"task_models 未覆盖 %s:这些玩法会回落到 generate.model %q,若它不在对应分区,引擎会拒",
+				strings.Join(uncovered, " / "), genModel)
+		}
 	}
 
-	// —— 3. 分组:留空继承生成段 ——
+	// —— 3. 分组:留空继承**全部生成段**的分组交集 ——
 	// 逐项 trim,与本函数对其它运营输入(Name / 三个 Model / Target)的处理一致。
 	// 配置目前仍是手工编辑的 JSON,`["default "]` 这样的多余空格会让比对失配,
 	// 报出一条 error 级别的"该分组无可用渠道" —— 而空格在渲染后的消息里看不见,
 	// 运营只会照着错误的方向去查渠道配置。
 	res.Groups = trimNonEmpty(m.Groups)
 	if len(res.Groups) == 0 {
-		res.Groups = genGroups
 		res.Inherited = true
-		if len(res.Groups) > 0 {
+		if !pricingLoaded() {
+			// 缓存为空时 genGroups 必然是 nil,此时"每个分组都不可用"不是一个发现,
+			// 而是"我们什么都不知道"。照常判定会把每个显式配了分组的模型都标红,
+			// 正是 unknownLevel() 要避免的那种误报 —— 只不过这条判定不经过它,
+			// 所以必须在这里单独挡一次(见 TestDryRunGroupCheckDegradesWhenPricingUnavailable)。
+			add("groups", AggregateCheckWarn,
+				"当前定价缓存为空,无法校验分组与生成段模型的一致性,请稍后重试")
+		} else if inherited, constrained := intersectGroupSets(genFacts); len(inherited) > 0 {
+			res.Groups = inherited
 			add("groups", AggregateCheckOK, "未指定分组,继承生成段模型的可用分组:%s",
 				strings.Join(res.Groups, ", "))
+		} else if !constrained {
+			// 每个生成段的可用分组都查不到（缓存里没有 EnableGroup）。这不是"交集为空"，
+			// 而是"没有依据"—— 和上面缓存为空那条同一个口径：没有依据就什么都不判。
+		} else {
+			// **交集为空必须报错。** 留空 groups 在运行时等价于"不额外限制"
+			// (AllowsGroups 对空列表直接放行),若不在这里拦下,配置页会显示一份
+			// 人畜无害的配置,而按玩法分派到的那几个 checkpoint 根本没有共同分组 ——
+			// 客户能调进来,某个玩法必然失败,且错误来自渠道层。
+			add("groups", AggregateCheckError,
+				"留空 groups 时按「全部生成段都有渠道的分组」继承,而这几个模型没有共同分组(%s):客户会在某些玩法上必然失败。请显式配置 groups,或让它们在同一个分组里都有渠道",
+				describeModelGroups(genFacts))
 		}
 	} else if !pricingLoaded() {
-		// 缓存为空时 genGroups 必然是 nil,此时"每个分组都不可用"不是一个发现,
-		// 而是"我们什么都不知道"。照常判定会把每个显式配了分组的模型都标红,
-		// 正是 unknownLevel() 要避免的那种误报 —— 只不过这条判定不经过它,
-		// 所以必须在这里单独挡一次(见 TestDryRunGroupCheckDegradesWhenPricingUnavailable)。
 		add("groups", AggregateCheckWarn,
 			"当前定价缓存为空,无法校验分组与生成段模型的一致性,请稍后重试")
 	} else {
-		// 聚合模型开放的分组必须是生成段模型也能用的,否则客户能调进来、内部段却没渠道。
-		var missing []string
-		for _, g := range res.Groups {
-			if !common.StringsContains(genGroups, g) {
-				missing = append(missing, g)
+		// 聚合模型开放的分组必须是**每一个**生成段模型都能用的,否则客户能调进来、
+		// 内部某一段却没渠道。按玩法分派之后这条更容易踩:帧族在 default、参考族在
+		// ref 的站点上,一个两边都开放的分组等于有一半玩法跑不通。
+		var problems []string
+		for _, fact := range genFacts {
+			if !fact.Exists {
+				continue
+			}
+			var missing []string
+			for _, g := range res.Groups {
+				if !common.StringsContains(fact.Groups, g) {
+					missing = append(missing, g)
+				}
+			}
+			if len(missing) > 0 {
+				problems = append(problems, fmt.Sprintf("分组 %s 下生成段模型 %q%s 无可用渠道",
+					strings.Join(missing, ", "), fact.Model, fact.Label()))
 			}
 		}
-		if len(missing) > 0 {
-			add("groups", AggregateCheckError,
-				"分组 %s 下生成段模型 %q 无可用渠道,这些分组的客户调用会失败",
-				strings.Join(missing, ", "), m.Generate.Model)
+		if len(problems) > 0 {
+			add("groups", AggregateCheckError, "%s,这些分组的客户调用会失败",
+				strings.Join(problems, ";"))
 		} else {
 			add("groups", AggregateCheckOK, "分组配置与生成段模型一致")
 		}
@@ -563,4 +662,88 @@ func DryRunAggregateConfig(models []*common.AggregateModel) []*AggregateDryRunRe
 		out = append(out, DryRunAggregateModel(m, peers))
 	}
 	return out
+}
+
+// generateModelFact 一条「生成段模型」的现状：谁、由哪个玩法分派到、有没有渠道、能在哪些分组用。
+type generateModelFact struct {
+	Model string
+	// TaskType 非空表示它是 task_models 分派出来的（空 = generate.model 默认段）。
+	TaskType string
+	Exists   bool
+	Groups   []string
+}
+
+// Label 校验消息里指认这条生成段的方式。默认段不带玩法后缀 —— 否则每条消息都拖着
+// 一句"默认段"，而配置里最显眼的那个字段本来就是 generate.model。
+func (f generateModelFact) Label() string {
+	if f.TaskType == "" {
+		return ""
+	}
+	return fmt.Sprintf("(task_models[%s])", f.TaskType)
+}
+
+// intersectGroupSets 所有生成段都有渠道的分组交集，顺序跟第一个模型走（稳定可读）。
+//
+// 第二个返回值表示"到底有没有可用的依据"：所有模型都查不到可用分组时返回 false，
+// 调用方据此**不判定**（"没有依据"≠"交集为空"）。把它俩混起来会在定价缓存半可用
+// 的站点上刷出一屏假的"没有共同分组"。
+func intersectGroupSets(facts []generateModelFact) ([]string, bool) {
+	var out []string
+	seeded := false
+	for _, fact := range facts {
+		// 查不到 / 查不到可用分组的模型不参与交集：前者已由 unknownLevel() 单独报过，
+		// 后者没有依据。让它们清空交集只会追加一条误报。
+		if !fact.Exists || len(fact.Groups) == 0 {
+			// 查不到的模型不参与交集：它已经由 unknownLevel() 那条单独报过了，
+			// 再让它清空交集会追加一条"没有共同分组"的误报。
+			continue
+		}
+		if !seeded {
+			seeded = true
+			seen := make(map[string]bool, len(fact.Groups))
+			for _, g := range fact.Groups {
+				if g == "" || seen[g] {
+					continue
+				}
+				seen[g] = true
+				out = append(out, g)
+			}
+			continue
+		}
+		kept := make([]string, 0, len(out))
+		for _, g := range out {
+			if common.StringsContains(fact.Groups, g) {
+				kept = append(kept, g)
+			}
+		}
+		out = kept
+	}
+	return out, seeded
+}
+
+// describeModelGroups 「模型名 → 可用分组」的可读清单，用于交集为空时的报错。
+func describeModelGroups(facts []generateModelFact) string {
+	parts := make([]string, 0, len(facts))
+	for _, fact := range facts {
+		if !fact.Exists {
+			continue
+		}
+		groups := "无"
+		if len(fact.Groups) > 0 {
+			groups = strings.Join(fact.Groups, ", ")
+		}
+		parts = append(parts, fmt.Sprintf("%s%s: %s", fact.Model, fact.Label(), groups))
+	}
+	return strings.Join(parts, "; ")
+}
+
+// sortedKeys map[string]string 的 key 排序视图 —— 校验消息的顺序必须稳定，
+// 否则同一份配置每次保存报出的顺序都不一样，运营会以为是新问题。
+func sortedKeys(m map[string]string) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return keys
 }

@@ -38,7 +38,7 @@ func TestImageAggregateRejectsBadSizeBeforeEnhance(t *testing.T) {
 		rec := httptest.NewRecorder()
 		c, _ := gin.CreateTestContext(rec)
 		c.Request = httptest.NewRequest(http.MethodPost, "/v1/images/generations", strings.NewReader(body))
-		err := applyAggregateExpansion(c, "img-aggregate", "minimax-h3-image", agg)
+		err := applyExpansionForTest(c, "img-aggregate", "minimax-h3-image", agg)
 		if err != nil {
 			return nil, err
 		}

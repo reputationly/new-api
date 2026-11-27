@@ -27,7 +27,7 @@ func TestVideoAspectRatioAlignment(t *testing.T) {
 		rec := httptest.NewRecorder()
 		c, _ := gin.CreateTestContext(rec)
 		c.Request = httptest.NewRequest(http.MethodPost, "/v1/videos", strings.NewReader(body))
-		require.NoError(t, applyAggregateExpansion(c, "h3-2k", "minimax-h3", agg))
+		require.NoError(t, applyExpansionForTest(c, "h3-2k", "minimax-h3", agg))
 		return readBodyMap(t, c)
 	}
 	aspectOf := func(b map[string]any) any {
@@ -102,7 +102,7 @@ func TestPixelSizeNotDerivedWithoutSizeOverride(t *testing.T) {
 	c, _ := gin.CreateTestContext(rec)
 	c.Request = httptest.NewRequest(http.MethodPost, "/v1/videos",
 		strings.NewReader(`{"model":"h3-plain","prompt":"a cat","size":"1080x1920"}`))
-	require.NoError(t, applyAggregateExpansion(c, "h3-plain", "minimax-h3", agg))
+	require.NoError(t, applyExpansionForTest(c, "h3-plain", "minimax-h3", agg))
 
 	b := readBodyMap(t, c)
 	require.Equal(t, "1080x1920", b["size"], "没有覆盖时像素串照旧透传")
@@ -123,7 +123,7 @@ func TestImageAggregateUntouchedByAspectAlignment(t *testing.T) {
 	c, _ := gin.CreateTestContext(rec)
 	c.Request = httptest.NewRequest(http.MethodPost, "/v1/images/generations",
 		strings.NewReader(`{"model":"img-plain","prompt":"a cat","size":"768x1344","aspect_ratio":"9:16"}`))
-	require.NoError(t, applyAggregateExpansion(c, "img-plain", "qwen-image-pro", agg))
+	require.NoError(t, applyExpansionForTest(c, "img-plain", "qwen-image-pro", agg))
 
 	b := readBodyMap(t, c)
 	require.Equal(t, "9:16", b["aspect_ratio"], "图片聚合的顶层键不属于视频补齐的范围")
