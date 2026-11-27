@@ -20,6 +20,22 @@ func StoreSnapshot(c *gin.Context, s *Snapshot) {
 	c.Set(ContextKeySnapshot, s)
 }
 
+// LoadSnapshot 取回提交侧冻下来的快照；不是 v2 提交或缺席时返回 nil。
+//
+// 响应改写层（错误信封）要用它拿**客户端原始传的模型名** —— 那时 body 已经被
+// ConvertCreateRequest 换成统一任务契约了，原始名字只剩这份快照里还有。
+func LoadSnapshot(c *gin.Context) *Snapshot {
+	if c == nil {
+		return nil
+	}
+	v, ok := c.Get(ContextKeySnapshot)
+	if !ok {
+		return nil
+	}
+	s, _ := v.(*Snapshot)
+	return s
+}
+
 // ApplyTaskSnapshot 把 v2 提交快照写进任务的 Properties(JSON 列,加字段无需迁移,
 // 老行反序列化成零值)。**非 v2 端点提交的任务是 no-op** —— 快照的语义由 v2 协议定义,
 // 给别的入口也写一份既没人读,又会让「这个任务是不是 v2 提交的」失去判据(列表接口正是

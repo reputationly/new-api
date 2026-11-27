@@ -278,12 +278,18 @@ func TestBuildHonoursGroupsForCatalogAggregates(t *testing.T) {
 // 聚合模型的 `taskTypes` / `limits` 要按它的**生成段**查，不能按聚合名查 ——
 // 体验区配置里登记的是生成段，按聚合名查多半什么都拿不到。
 // 后果很具体：参考族拿不到 `r2va`，客户端就补不上"参考生视频"。
+//
+// 按玩法分派之后口径变成"**当前可调用的那些生成段**的并集"：一个聚合名底下可能
+// 有两个 checkpoint，只取 Generate.Model 会让另一个玩法永远报不出来。
 func TestBuildReadsTaskTypesThroughGenerateSegment(t *testing.T) {
 	withAggregateConfig(t, common.DefaultAggregateModelConfig)
 	// `taskType` 来自体验区配置，按**模型名**登记。这里只给生成段登记：
 	// 聚合名（minimax-h3-ref-2k）在体验区里通常查不到东西，实现必须回落到生成段。
+	// **tab key 必须是体验区真实的那几个**（constant.PlaygroundTaskTypesForTab）：
+	// 写成 `{"t2v":{}}` 什么都不会产出，于是"帧族没有 r2va"这条断言会**空过** ——
+	// 它以前一直是这样过的。fl2va 两个 tab 恰好覆盖四个帧族玩法。
 	withPlaygroundConfig(t, "VideoModelConfig", `{"models": {
-		"minimax-h3-fl2va": {"tabs": {"t2v": {}, "i2v": {}}},
+		"minimax-h3-fl2va": {"tabs": {"text2video": {}, "flf2v": {}}},
 		"minimax-h3-ref2va": {"tabs": {"r2va": {}}}
 	}}`)
 	enabled := map[string]bool{
@@ -305,8 +311,20 @@ func TestBuildReadsTaskTypesThroughGenerateSegment(t *testing.T) {
 	if !contains(reference.TaskTypes, "r2va") {
 		t.Errorf("参考族要带 r2va，实际 %v", reference.TaskTypes)
 	}
-	if contains(frames.TaskTypes, "r2va") {
-		t.Errorf("帧族不该带 r2va，实际 %v", frames.TaskTypes)
+	// **两条都要带 r2va。** `generate.task_models` 之后这两个名字是等价的别名，
+	// 都能按 task_type 分派到参考族的 checkpoint —— 这条断言以前是反的
+	// （"帧族不该带 r2va"），那时 2k 只有一个 generate.model，确实出不了参考片。
+	if !contains(frames.TaskTypes, "r2va") {
+		t.Errorf("按玩法分派之后 2k 也能出参考片，taskTypes 必须带 r2va，实际 %v", frames.TaskTypes)
+	}
+	// 并集按**当前可调用的生成段**取：帧族与参考族都可用，故两边都拿到全部五个玩法。
+	for _, want := range []string{"t2v", "i2v", "l2va", "flf2v", "r2va"} {
+		if !contains(frames.TaskTypes, want) {
+			t.Errorf("帧族缺 %s（并集来自可调用的生成段），实际 %v", want, frames.TaskTypes)
+		}
+		if !contains(reference.TaskTypes, want) {
+			t.Errorf("参考族缺 %s（并集来自可调用的生成段），实际 %v", want, reference.TaskTypes)
+		}
 	}
 }
 

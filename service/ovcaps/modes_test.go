@@ -256,8 +256,14 @@ func TestCapabilityJSONCarriesModesAndDeliveryDurations(t *testing.T) {
 	}
 }
 
-// 按玩法分派的模型，各自只报自己的玩法：参考族只报 reference、帧族报其余三个。
-func TestModesSplitByCheckpoint(t *testing.T) {
+// 出厂的三条 H3 聚合（MiniMax-H3 / minimax-h3-2k / minimax-h3-ref-2k）都报**全部**
+// 四个玩法。
+//
+// 这条以前断言的是"参考族只报 reference、帧族报其余三个"—— 那是只有一个
+// `generate.model` 的时代：名字决定了它能出哪种片。`generate.task_models` 之后
+// 三个名字是等价的，五种 task_type 都能分派到对的 checkpoint，再按名字拆玩法
+// 就会把"其实能出"的玩法藏掉。
+func TestAggregateNamesReportEveryPlaystyle(t *testing.T) {
 	withAggregateConfig(t, common.DefaultAggregateModelConfig)
 	withH3Engine(t)
 	caps := Build(Scope{Enabled: map[string]bool{
@@ -273,17 +279,71 @@ func TestModesSplitByCheckpoint(t *testing.T) {
 			modesOfModel[c.Model] = append(modesOfModel[c.Model], m.ID)
 		}
 	}
-	got := modesOfModel["minimax-h3-ref-2k"]
-	if len(got) != 1 || got[0] != "reference" {
-		t.Fatalf("参考族只该报 reference，实际 %v（全部：%v）", got, modesOfModel)
-	}
-	frame := modesOfModel["minimax-h3-2k"]
-	if len(frame) != 3 {
-		t.Fatalf("帧族应报 3 个玩法，实际 %v", frame)
-	}
-	for _, id := range frame {
-		if id == "reference" {
-			t.Fatalf("帧族不该报 reference：%v", frame)
+	for _, name := range []string{"MiniMax-H3", "minimax-h3-2k", "minimax-h3-ref-2k"} {
+		got := modesOfModel[name]
+		if len(got) != 4 {
+			t.Fatalf("%s 应报全部 4 个玩法，实际 %v（全部：%v）", name, got, modesOfModel)
 		}
+		// reference 必须在内：它是唯一走参考族 checkpoint 的玩法，也是最容易被
+		// mode_models 那套旧过滤藏掉的一个。
+		if !contains(got, "reference") {
+			t.Fatalf("%s 缺 reference 玩法：%v", name, got)
+		}
+	}
+}
+
+// 参考族的 checkpoint 停掉时，聚合仍然可用（帧族还在），但**参考玩法不能再报** ——
+// 报了用户切过去必然失败，而失败信息来自渠道层。
+func TestAggregateHidesModeWhoseSegmentIsUnavailable(t *testing.T) {
+	withAggregateConfig(t, common.DefaultAggregateModelConfig)
+	withH3Engine(t)
+	caps := Build(Scope{Enabled: map[string]bool{
+		// 只留帧族：ref2va 与 relayvsr 都停掉。
+		"minimax-h3-fl2va": true,
+	}})
+
+	for _, c := range caps {
+		if c.Model != "MiniMax-H3" {
+			continue
+		}
+		for _, m := range c.Modes {
+			if m.ID == "reference" {
+				t.Fatalf("参考族的生成段没有渠道时不该报 reference：%+v", c.Modes)
+			}
+		}
+		if len(c.Modes) != 3 {
+			t.Fatalf("其余三个玩法应照报，实际 %+v", c.Modes)
+		}
+		if contains(c.TaskTypes, "r2va") {
+			t.Fatalf("参考段不可用时 taskTypes 不该带 r2va，实际 %v", c.TaskTypes)
+		}
+	}
+}
+
+// 续写玩法在 task_models 里没有自己的 key：它第一步就被改写成一次 i2v。
+// 直接拿 mode.TaskType("continuation") 去查会让续写**静默消失**。
+func TestAggregateServesContinuationThroughI2V(t *testing.T) {
+	agg := &common.AggregateModel{
+		Name: "h3-agg", Type: "video",
+		Generate: common.AggregateGenerate{
+			Model: "fl2va-only",
+			TaskModels: map[string]string{
+				"t2v": "fl2va-only", "i2v": "fl2va-only", "r2va": "ref2va-only",
+			},
+		},
+	}
+	if !aggregateServesMode(agg, "continuation", nil) {
+		t.Fatal("续写应通过 i2v 判定为可服务")
+	}
+	if aggregateServesMode(agg, "continuation", func(name string) bool { return name == "ref2va-only" }) {
+		t.Fatal("i2v 映射到的段不可调用时,续写不该报出来")
+	}
+	// 没配 task_models 的聚合按默认段兜底，仍然认续写。
+	plain := &common.AggregateModel{Generate: common.AggregateGenerate{Model: "some-model"}}
+	if !aggregateServesMode(plain, "continuation", func(name string) bool { return name == "some-model" }) {
+		t.Fatal("没有 task_models 时应回落到默认段")
+	}
+	if aggregateServesMode(plain, "s2v", nil) {
+		t.Fatal("不在五个玩法里的 task_type 不该被判定为可服务")
 	}
 }

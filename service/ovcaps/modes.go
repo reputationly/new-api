@@ -35,6 +35,24 @@ const (
 //     客户端按顶层 limits 走 —— 与改造前逐位一致；
 //   - 图片/音乐能力没有玩法概念，也返回 nil。
 func modesOf(entry setting.HiloCatalogEntry, platformModel, probe, transport string) []Mode {
+	return modesOfFor(entry, platformModel, []string{probe}, transport, nil, nil)
+}
+
+// modesOfFor 同 modesOf，另外两个参数决定**聚合模型**该报哪些玩法。
+//
+// 两条分派机制不能混淆：
+//
+//	裸模型          看目录的 `mode_models`（一条目录项按玩法派到多个平台模型）
+//	聚合模型        看它自己的 `generate.task_models`（按门面 task_type 派到生成段），
+//	                `mode_models` 对它没有约束力
+//
+// 聚合不能继续用 mode_models 过滤：聚合名（`MiniMax-H3`）不等于任何 target，
+// 四个玩法会被全部跳过 —— 能力目录里于是出现"有参数、没玩法"的半条条目，
+// 客户端一个玩法都选不了。而反过来，`minimax-h3-2k` 这种"名字叫帧族其实也能出
+// 参考片"的聚合，用 mode_models 判定会把参考玩法藏掉。
+//
+// callable 为 nil 时只能按"配了就有"判定（没有渠道信息），用于不涉及聚合的调用点。
+func modesOfFor(entry setting.HiloCatalogEntry, platformModel string, probes []string, transport string, agg *common.AggregateModel, callable func(string) bool) []Mode {
 	if transport != setting.TransportVideosTask {
 		return nil
 	}
@@ -42,20 +60,29 @@ func modesOf(entry setting.HiloCatalogEntry, platformModel, probe, transport str
 	if !ok || len(modeParam.Options) == 0 {
 		return nil
 	}
-	h3 := common.IsH3VideoModel(probe, entry.Model.ModelName)
+	// **全部候选模型一起判引擎族。** 只判 probes[0] 会让结果取决于顺序：H3 的两个
+	// checkpoint 里若只有一个在「视频模型配置」里声明过 engine，另一个先排到就会
+	// 被判成非 H3 —— 玩法还在，但上限退回保守值（参考族 1 图而不是 9 图），
+	// 客户端于是把本来传得上去的素材藏掉。
+	h3 := common.IsH3VideoModel(append(append([]string{}, probes...), entry.Model.ModelName)...)
 	modes := make([]Mode, 0, len(modeParam.Options))
 	for _, raw := range modeParam.Options {
 		id := strings.ToLower(strings.TrimSpace(raw))
-		// 一条目录项可能按玩法分派到多个平台模型（H3 帧族 / 参考族是两个 checkpoint）。
-		// 每个平台模型只报**真正落在自己身上**的玩法：参考族报"首尾帧"是错的 ——
-		// 客户端照着填，请求会被 routeByMode 派到另一个 checkpoint 上。
-		if target, ok := entry.ModeModels[id]; ok && strings.TrimSpace(target) != strings.TrimSpace(platformModel) {
-			continue
+		if agg == nil {
+			// 一条目录项可能按玩法分派到多个平台模型（H3 帧族 / 参考族是两个 checkpoint）。
+			// 每个平台模型只报**真正落在自己身上**的玩法：参考族报"首尾帧"是错的 ——
+			// 客户端照着填，请求会被派到另一个 checkpoint 上。
+			if target, ok := entry.ModeModels[id]; ok && strings.TrimSpace(target) != strings.TrimSpace(platformModel) {
+				continue
+			}
 		}
 		mode, ok := modeDescriptor(id, h3)
 		if !ok {
 			// 目录里出现了我们不认识的玩法：**跳过而不是编一个** —— 报一个我们其实
 			// 不支持提交的 mode，比不报更糟（客户端会照着填，然后 400）。
+			continue
+		}
+		if agg != nil && !aggregateServesMode(agg, mode.TaskType, callable) {
 			continue
 		}
 		modes = append(modes, mode)
@@ -177,6 +204,52 @@ func deliveryDurationsOf(probe string, entry setting.HiloCatalogEntry) DeliveryD
 	return out
 }
 
+// aggregateServesMode 这条聚合流水线能不能真的出这个玩法。
+//
+// 判据是 **task_type → 生成段**：`generate.task_models` 里配了、而且那个段当前可调用。
+// 续写要按 i2v 查 —— 它在流水线里第一步就被改写成一次 i2v（源片末帧当首帧），
+// `task_models` 里不会有 "continuation" 这个 key。直接拿 mode.TaskType 去查会让
+// 续写**静默消失**：目录里那条玩法一夜之间没了，没有任何日志。
+func aggregateServesMode(agg *common.AggregateModel, taskType string, callable func(string) bool) bool {
+	key, ok := common.NormalizeRoutedTaskType(taskType)
+	if !ok {
+		return false
+	}
+	model := agg.Generate.ModelFor(key)
+	if strings.TrimSpace(model) == "" {
+		return false
+	}
+	if callable == nil {
+		return true
+	}
+	return callable(model)
+}
+
+// catalogEntryForAggregate 找一条聚合模型该复用哪条目录项（参数表、上限、展示名）。
+//
+// **先按聚合自己的名字找**（`model_name` / `id`）：`MiniMax-H3` 这种"官方名 + 聚合名
+// 同名"的情形靠它才能拿到参数表与玩法；只按生成段找的话，`catalogEntryForModel`
+// 的候选是 `PlatformModelsOf()`（目录里的 platform_model 与 mode_models），
+// 而生成段（`minimax-h3-fl2va`）从来不在那份名单里，于是这条聚合会以"无参数"的
+// 裸能力出现。
+//
+// 找不到再退回生成段——那是老行为，服务的是"聚合名不在目录里"的其余模型。
+func catalogEntryForAggregate(agg *common.AggregateModel) (setting.HiloCatalogEntry, string, bool) {
+	if agg == nil {
+		return setting.HiloCatalogEntry{}, "", false
+	}
+	name := strings.TrimSpace(agg.Name)
+	if name != "" {
+		for _, it := range catalogEntriesInOrder() {
+			entry := it.entry
+			if strings.TrimSpace(entry.Model.ModelName) == name || strings.TrimSpace(entry.Model.ID) == name {
+				return entry, it.group, true
+			}
+		}
+	}
+	return catalogEntryForModel(agg.Generate.Model)
+}
+
 // catalogEntryForModel 找"这个平台模型对应哪条目录项"。
 //
 // 用途：目录里没给某条聚合配置条目时，用它的**生成段模型**的条目补参数/玩法/上限。
@@ -187,7 +260,28 @@ func catalogEntryForModel(model string) (setting.HiloCatalogEntry, string, bool)
 	if model == "" {
 		return setting.HiloCatalogEntry{}, "", false
 	}
+	for _, it := range catalogEntriesInOrder() {
+		for _, platformModel := range it.entry.PlatformModelsOf() {
+			if platformModel == model {
+				return it.entry, it.group, true
+			}
+		}
+	}
+	return setting.HiloCatalogEntry{}, "", false
+}
+
+// catalogEntriesInOrder 目录项及其分组名，顺序固定（image → video → audio，
+// 组内保持管理员排的顺序）。目录项被多条能力共用，遍历顺序必须稳定 ——
+// 能力目录的版本哈希与"取第一条"的语义都靠它。
+func catalogEntriesInOrder() []struct {
+	group string
+	entry setting.HiloCatalogEntry
+} {
 	catalog := setting.GetHiloCatalog()
+	out := make([]struct {
+		group string
+		entry setting.HiloCatalogEntry
+	}, 0, len(catalog.Image)+len(catalog.Video)+len(catalog.Audio))
 	for _, group := range []struct {
 		name    string
 		entries []setting.HiloCatalogEntry
@@ -195,12 +289,11 @@ func catalogEntryForModel(model string) (setting.HiloCatalogEntry, string, bool)
 		{"image", catalog.Image}, {"video", catalog.Video}, {"audio", catalog.Audio},
 	} {
 		for _, entry := range group.entries {
-			for _, platformModel := range entry.PlatformModelsOf() {
-				if platformModel == model {
-					return entry, group.name, true
-				}
-			}
+			out = append(out, struct {
+				group string
+				entry setting.HiloCatalogEntry
+			}{group: group.name, entry: entry})
 		}
 	}
-	return setting.HiloCatalogEntry{}, "", false
+	return out
 }

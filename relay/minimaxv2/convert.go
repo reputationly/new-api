@@ -96,6 +96,15 @@ type Snapshot struct {
 	Duration        int
 	InputImageCount int
 	InputVideoCount int
+	// Model 客户端**原始**传的模型名（转换前，未经聚合展开）。
+	//
+	// 给错误改写用：引擎报「这个 task_type 该去另一个分区部署」时，回显给客户的
+	// 必须是它自己写的那个名字，而不是我们内部展开出来的段模型名 —— 后者它不认识，
+	// 照着改也无从改起。
+	Model string
+	// TaskType 这次请求被解析出来的平台 task_type（t2v / i2v / l2va / flf2v / r2va）。
+	// 同上，只服务于错误信封里的提示文案与排障。
+	TaskType string
 }
 
 // ConvertCreateRequest 把官方 POST /v2/video_generation 的 body 转成本仓的统一
@@ -157,6 +166,15 @@ func ConvertCreateRequest(raw []byte) (map[string]any, *Snapshot, *APIError) {
 	if aspectRatio != "" {
 		metadata["aspect_ratio"] = aspectRatio
 	}
+	// generate_audio 落在 metadata：适配器构造上游请求时把 metadata 平铺进 body，
+	// 引擎读的是顶层 generate_audio。nil = 没传，**不写**，与官方默认（有声）一致；
+	// 显式 false 写进去才能真的关掉。
+	//
+	// 同时这也是增强段的事实来源：readGenerateAudio 读 metadata.generate_audio，
+	// 关掉声音时编译器不会再写出整段"有声音"的描述（见 middleware.readGenerateAudio）。
+	if req.GenerateAudio != nil {
+		metadata["generate_audio"] = *req.GenerateAudio
+	}
 	// ⚠️ 帧约束与多模态参考的落点不同,不能统一成一个:
 	//   帧约束(first/last_frame)走**顶层 images[]**,顺序即语义([0]=首帧、[1]=尾帧);
 	//   多模态参考走 metadata 的三个键,与 doubao/Ark 渠道共用同一套字段名。
@@ -192,6 +210,8 @@ func ConvertCreateRequest(raw []byte) (map[string]any, *Snapshot, *APIError) {
 		Duration:        duration,
 		InputImageCount: len(images) + len(parsed.refImages),
 		InputVideoCount: len(parsed.refVideos),
+		Model:           model,
+		TaskType:        taskType,
 	}
 	return body, snapshot, nil
 }
@@ -350,7 +370,7 @@ func resolveResolution(raw, taskType, model string) (string, *APIError) {
 		if aggregateDelivers2K(model) {
 			return res, nil
 		}
-		return "", badRequest("resolution=2K is not supported by this gateway: the self-hosted MiniMax-H3 deployment tops out at 768P (2K depends on the closed-source H3-Regenerate-2K model); use a 2K aggregate model such as minimax-h3-2k / minimax-h3-ref-2k")
+		return "", badRequest("resolution=2K is not supported by this gateway: the self-hosted MiniMax-H3 deployment tops out at 768P (2K depends on the closed-source H3-Regenerate-2K model); use the aggregate model MiniMax-H3 (or the alias minimax-h3-2k / minimax-h3-ref-2k), which delivers 2K via the upscale stage")
 	case resolution768P:
 		return res, nil
 	case resolution480P:

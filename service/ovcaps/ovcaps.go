@@ -267,7 +267,7 @@ func Build(scope Scope) []Capability {
 						continue
 					}
 				}
-				capability, ok := fromCatalogEntry(entry, platformModel, group.name)
+				capability, ok := fromCatalogEntry(scope, entry, platformModel, group.name)
 				if !ok {
 					continue
 				}
@@ -299,12 +299,13 @@ func Build(scope Scope) []Capability {
 		// 聚合只是"多一段增强/超分"，可填的东西与生成段完全一样。不这么做的话
 		// `minimax-music3-enhanced` 这类名字会以"无参数、无玩法"的裸能力出现 ——
 		// 客户端能选中它，却不知道能填什么。
-		if entry, group, ok := catalogEntryForModel(agg.Generate.Model); ok {
-			if enriched, ok := fromCatalogEntry(entry, name, group); ok && len(enriched.ParamSchema) > 0 {
+		if entry, group, ok := catalogEntryForAggregate(agg); ok {
+			if enriched, ok := fromCatalogEntry(scope, entry, name, group); ok && len(enriched.ParamSchema) > 0 {
 				emit(enriched)
 				continue
 			}
 		}
+		probeModels := probeModelsOf(scope, agg, name)
 		emit(Capability{
 			ID:          capabilityID(operation, name),
 			Operation:   operation,
@@ -312,8 +313,8 @@ func Build(scope Scope) []Capability {
 			DisplayName: Localized{Zh: name, En: name},
 			Description: Localized{Zh: agg.Note, En: agg.Note},
 			Transport:   Transport{Kind: transport},
-			TaskTypes:   taskTypesOf(agg.Generate.Model),
-			Limits:      limitsOf(nil, agg.Generate.Model, transport),
+			TaskTypes:   taskTypesOf(probeModels...),
+			Limits:      limitsOf(nil, probeModels, transport),
 		})
 	}
 
@@ -389,7 +390,10 @@ func Version(capabilities []Capability, roles DefaultRoles) string {
 }
 
 // fromCatalogEntry 把一条目录项翻成能力。
-func fromCatalogEntry(entry setting.HiloCatalogEntry, platformModel, group string) (Capability, bool) {
+//
+// scope 参与判定：聚合模型按玩法分派之后，`taskTypes` / `limits` / `modes` 要按
+// **当前可调用的那些生成段**取并集 —— 见 probeModels。
+func fromCatalogEntry(scope Scope, entry setting.HiloCatalogEntry, platformModel, group string) (Capability, bool) {
 	operation, ok := catalogOperation(entry)
 	if !ok {
 		return Capability{}, false
@@ -402,12 +406,18 @@ func fromCatalogEntry(entry setting.HiloCatalogEntry, platformModel, group strin
 	if strings.TrimSpace(display) == "" {
 		display = entry.Model.ID
 	}
-	// `taskTypes` / `limits` 按**真正调用的那个模型**取：聚合模型的名字在体验区配置里
-	// 通常没有登记，登记的是它的生成段（`agg.Generate.Model`）。按聚合名查，多半什么都
-	// 查不到 —— 后果是 `minimax-h3-ref-2k` 拿不到 `r2va`，客户端补不上"参考生视频"。
+	agg := common.GetAggregateModel(platformModel)
+	// `taskTypes` / `limits` / `modes` 按**真正调用的那些模型**取：聚合模型的名字在
+	// 体验区配置里通常没有登记，登记的是它的生成段；而按玩法分派之后，一个聚合名下面
+	// 可能有两个生成段（H3 的帧族 + 参考族）。
+	//
+	// 只取 `Generate.Model` 的后果和"按聚合名查"是同一个：参考族那条拿不到 `r2va`，
+	// 客户端补不上"参考生视频"。只取**可调用的**那部分，是因为没部署的 checkpoint
+	// 报了也没用 —— 用户切过去必然失败，而失败信息来自渠道层。
+	probeModels := probeModelsOf(scope, agg, platformModel)
 	probe := platformModel
-	if agg := common.GetAggregateModel(platformModel); agg != nil && agg.Generate.Model != "" {
-		probe = agg.Generate.Model
+	if len(probeModels) > 0 {
+		probe = probeModels[0]
 	}
 	return Capability{
 		ID:                capabilityID(operation, platformModel),
@@ -416,12 +426,36 @@ func fromCatalogEntry(entry setting.HiloCatalogEntry, platformModel, group strin
 		DisplayName:       Localized{Zh: display, En: display},
 		Description:       Localized{Zh: entry.Model.Description, En: entry.Model.Description},
 		Transport:         Transport{Kind: transport},
-		TaskTypes:         taskTypesOf(probe),
+		TaskTypes:         taskTypesOf(probeModels...),
 		ParamSchema:       paramSchema(entry.Model.Params),
-		Limits:            limitsOf(&entry.Model, probe, transport),
-		Modes:             modesOf(entry, platformModel, probe, transport),
+		Limits:            limitsOf(&entry.Model, probeModels, transport),
+		Modes:             modesOfFor(entry, platformModel, probeModels, transport, agg, scope.callable),
 		DeliveryDurations: deliveryDurationsOf(probe, entry),
 	}, true
+}
+
+// probeModelsOf 这个能力该按哪些模型去查玩法/上限。
+//
+//	裸模型            它自己
+//	聚合模型          `Generate.AllModels()` 里**当前可调用**的那些
+//
+// 一个都不剩下时退回 `Generate.Model`：调用方（catalog 循环 / aggregateAllows）已经
+// 判过"这条流水线跑不跑得起来"，走到这里还能剩下零个只会出现在"裸模型也没有渠道"
+// 的情形，那时按生成段名查就是最小意外。
+func probeModelsOf(scope Scope, agg *common.AggregateModel, platformModel string) []string {
+	if agg == nil {
+		return []string{platformModel}
+	}
+	models := make([]string, 0, len(agg.Generate.TaskModels)+1)
+	for _, name := range agg.Generate.AllModels() {
+		if scope.callable(name) {
+			models = append(models, name)
+		}
+	}
+	if len(models) == 0 && strings.TrimSpace(agg.Generate.Model) != "" {
+		models = append(models, strings.TrimSpace(agg.Generate.Model))
+	}
+	return models
 }
 
 // catalogOperation 目录项属于哪一类操作。判据是官方工具名 —— 那是目录里
@@ -512,7 +546,10 @@ func paramSchema(params map[string]dto.HiloModelParam) map[string]any {
 
 // limitsOf 汇总上限。时长取目录里 duration 档位的最大值 —— 报错成固定值的话，
 // 用户选了超出档位的时长，请求发出去才被拒。
-func limitsOf(entry *dto.HiloMediaModel, platformModel, transport string) Limits {
+// models 是这次要按哪些模型取上限：裸模型就一个，聚合模型是它**当前可调用**的
+// 那些生成段（见 probeModelsOf）。逐个模型查再取最大值 —— 走默认段那一个会在
+// "参考族的时长档比帧族宽"这类配置上报小，客户端于是把用户能选的档位藏掉。
+func limitsOf(entry *dto.HiloMediaModel, models []string, transport string) Limits {
 	limits := Limits{}
 	if entry != nil {
 		limits.MaxReferenceImages = entry.MaxRefs
@@ -521,18 +558,22 @@ func limitsOf(entry *dto.HiloMediaModel, platformModel, transport string) Limits
 		}
 	}
 	if transport == setting.TransportVideosTask && limits.MaxDurationSeconds == 0 {
-		for _, taskType := range taskTypesOf(platformModel) {
-			if durations, configured := common.VideoDurationsAllowedForModel(taskType, platformModel); configured {
-				if seconds := maxNumeric(durations); seconds > limits.MaxDurationSeconds {
-					limits.MaxDurationSeconds = seconds
+		for _, platformModel := range models {
+			for _, taskType := range taskTypesOf(platformModel) {
+				if durations, configured := common.VideoDurationsAllowedForModel(taskType, platformModel); configured {
+					if seconds := maxNumeric(durations); seconds > limits.MaxDurationSeconds {
+						limits.MaxDurationSeconds = seconds
+					}
 				}
 			}
 		}
 	}
 	// 输入文件上限取运营配的那份；没配就是 0（不额外限制）。
-	for _, taskType := range append([]string{""}, taskTypesOf(platformModel)...) {
-		if bytes, configured := common.VideoMaxInputBytesForModel(taskType, platformModel); configured && bytes > limits.MaxInputBytes {
-			limits.MaxInputBytes = bytes
+	for _, platformModel := range models {
+		for _, taskType := range append([]string{""}, taskTypesOf(platformModel)...) {
+			if bytes, configured := common.VideoMaxInputBytesForModel(taskType, platformModel); configured && bytes > limits.MaxInputBytes {
+				limits.MaxInputBytes = bytes
+			}
 		}
 	}
 	return limits

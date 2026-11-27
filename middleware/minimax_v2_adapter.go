@@ -2,6 +2,7 @@ package middleware
 
 import (
 	"bytes"
+	"fmt"
 	"io"
 	"net/http"
 	"strings"
@@ -33,6 +34,9 @@ type minimaxV2Writer struct {
 	// transformSuccess 非 nil 时用于改写 2xx 响应体;nil 表示成功响应原样透出
 	// (查询/列表/删除这几个端点的 body 本来就已经是官方形态)。
 	transformSuccess func([]byte) ([]byte, error)
+	// transformErrorMessage 非 nil 时用于改写**失败响应里的 message**（只影响文案，
+	// 状态码与信封类型不变）。nil = 原样透出。
+	transformErrorMessage func(*gin.Context, string) string
 }
 
 func (w *minimaxV2Writer) WriteHeader(code int) {
@@ -89,7 +93,11 @@ func (w *minimaxV2Writer) commit(c *gin.Context) {
 	case minimaxv2.IsErrorEnvelope(body):
 		// 已经是官方信封(本兼容层自己产生的错误):别二次包装。
 	default:
-		body = minimaxv2.BuildErrorBody(requestID, status, "", extractErrorMessage(body, status))
+		message := extractErrorMessage(body, status)
+		if w.transformErrorMessage != nil {
+			message = w.transformErrorMessage(c, message)
+		}
+		body = minimaxv2.BuildErrorBody(requestID, status, "", message)
 	}
 
 	header := target.Header()
@@ -104,8 +112,12 @@ func (w *minimaxV2Writer) commit(c *gin.Context) {
 // panic 路径**不提交**缓冲内容:main.go 的 CustomRecovery 会在我们这一帧展开之后
 // 往真 writer 写它自己的 500。若我们也写一份,两段 body 会拼在一起变成非法 JSON。
 // 代价是 panic 时的错误不是官方形态 —— panic 是 bug 不是协议状态,可以接受。
-func wrapMiniMaxV2Response(c *gin.Context, transformSuccess func([]byte) ([]byte, error)) {
-	w := &minimaxV2Writer{ResponseWriter: c.Writer, transformSuccess: transformSuccess}
+func wrapMiniMaxV2Response(c *gin.Context, transformSuccess func([]byte) ([]byte, error), transformErrorMessage func(*gin.Context, string) string) {
+	w := &minimaxV2Writer{
+		ResponseWriter:        c.Writer,
+		transformSuccess:      transformSuccess,
+		transformErrorMessage: transformErrorMessage,
+	}
 	c.Writer = w
 	completed := false
 	defer func() {
@@ -151,6 +163,68 @@ func extractErrorMessage(body []byte, status int) string {
 	return raw
 }
 
+// 引擎把「这个 task_type 该去另一个分区部署」报出来时的特征串。
+//
+// 原文（2026-11 线上实测，任务 tsk_7d17cf773ad5）：
+//
+//	task_type 'r2va' needs the MiniMax-H3 Ref2VA checkpoint, but model
+//	'minimax-h3-fl2va' is deployed from the FL2VA partition (serves t2va/fl2va only).
+//	Point this task_type at a Ref2VA deployment.
+//
+// 这句话对**引擎的运维**有用，对客户端一无用处：它既不能改我们的部署，也不知道
+// 「Ref2VA 分区」是什么。按两个子串判，是给聚合分派兜底 —— 正常情况（MiniMax-H3
+// 按 task_type 分派）不会再走到这里，走到这里说明有人直连了裸 checkpoint 或配置被改坏。
+var (
+	partitionErrorRef2VA = "Ref2VA checkpoint"
+	partitionErrorFL2VA  = "FL2VA partition"
+)
+
+// preferredRoutingModelName 网关对外推荐的"按玩法自动分派"的聚合名。
+const preferredRoutingModelName = "MiniMax-H3"
+
+// rewritePartitionError 把分区报错改写成客户端能照做的一句话。其余错误原样返回。
+//
+// 状态码与环境其余部分不变，只换 message：这类错误的成因**永远是请求与部署对不上**，
+// 换模型名就能解决，所以给出的动作是"改用那个自动分派的名字"。
+// 引擎原文写进 SysLog —— 排障要看的是它，而客户看那句话只会更糊涂。
+func rewritePartitionError(c *gin.Context, message string) string {
+	if !strings.Contains(message, partitionErrorRef2VA) && !strings.Contains(message, partitionErrorFL2VA) {
+		return message
+	}
+	snapshot := minimaxv2.LoadSnapshot(c)
+	model, taskType := "", ""
+	if snapshot != nil {
+		model, taskType = snapshot.Model, snapshot.TaskType
+	}
+	common.SysLog(fmt.Sprintf(
+		"[minimaxv2] 下游分区报错已改写（model=%s task_type=%s）:%s", model, taskType, message))
+	if model == "" {
+		// 拿不到客户原始模型名（理论上不该发生：提交接口必然存过快照）时不做改写，
+		// 否则会拼出一句 "model \"\" cannot serve"，比原文更糟。
+		return message
+	}
+	if taskType == "" {
+		taskType = "unknown"
+	}
+	// **客户已经在用推荐的那个名字时，不能再叫它改用自己。**
+	//
+	// `MiniMax-H3` 本身就会按 task_type 分派；它仍然撞到分区错误，说明是网关侧的
+	// 分派配置（AggregateModelConfig 少了 task_models、或生成段指错）出了问题，
+	// 不是客户能通过改 model 解决的。这时给出"改用 MiniMax-H3"只会让客户觉得我们
+	// 在敷衍，并让他去改一个本来就对的请求。
+	if strings.EqualFold(strings.TrimSpace(model), preferredRoutingModelName) {
+		hint := "keep the request_id from this response and contact gateway operations"
+		if requestID := c.GetString(common.RequestIdKey); requestID != "" {
+			hint = fmt.Sprintf("keep request_id %q and contact gateway operations", requestID)
+		}
+		return fmt.Sprintf("model %q cannot serve this request (task_type=%s): "+
+			"the gateway's own routing did not reach a matching deployment, which is a "+
+			"gateway configuration problem rather than a request problem — %s", model, taskType, hint)
+	}
+	return fmt.Sprintf("model %q cannot serve this request (task_type=%s); "+
+		"use model %q, which routes every mode automatically", model, taskType, preferredRoutingModelName)
+}
+
 // MiniMaxV2CreateConvert 处理 POST /v2/video_generation:官方 body → 统一任务契约 body,
 // 路径改写到 /v1/video/generations 后交给 controller.RelayTask;响应改写成 {"task_id"}。
 //
@@ -191,7 +265,7 @@ func MiniMaxV2CreateConvert() gin.HandlerFunc {
 		c.Request.URL.Path = "/v1/video/generations"
 		minimaxv2.StoreSnapshot(c, snapshot)
 
-		wrapMiniMaxV2Response(c, minimaxv2.CreateSuccessBody)
+		wrapMiniMaxV2Response(c, minimaxv2.CreateSuccessBody, rewritePartitionError)
 	}
 }
 
@@ -199,7 +273,7 @@ func MiniMaxV2CreateConvert() gin.HandlerFunc {
 // body 本来就已经是官方形态的端点。
 func MiniMaxV2Envelope() gin.HandlerFunc {
 	return func(c *gin.Context) {
-		wrapMiniMaxV2Response(c, nil)
+		wrapMiniMaxV2Response(c, nil, nil)
 	}
 }
 

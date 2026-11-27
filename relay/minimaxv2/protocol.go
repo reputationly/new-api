@@ -2,12 +2,20 @@
 // /v2/video_generation 系列)的兼容层:官方 API 用户改 base_url + key + model 就能切过来,
 // 请求体、响应体、错误信封与官方逐字段一致。
 //
-// **model 要改**:官方那边 model 只有 MiniMax-H3 一个值、一个名字覆盖全部玩法,而我们
-// 按玩法拆成两套部署 —— minimax-h3-fl2va(纯文本 / 首帧 / 尾帧 / 首尾帧)与
-// minimax-h3-ref2va(多模态参考)。这是刻意的产品选择(2026-08-11 决策):
-// 用一个对外名 + 渠道重定向做不到按 task_type 分流,ModelMappedHelper 是静态的
-// name→name 映射,而 GPUStack 门面是按 model 选实例的 —— 硬凑只会让其中一类玩法
-// 在引擎侧失败。本层不校验模型名(原样透传),选错由引擎拒绝。
+// # model 可以照抄官方那个名字
+//
+// 官方只有一个 MiniMax-H3、一个名字覆盖全部玩法;我们底层是两个部署(帧族
+// minimax-h3-fl2va 与参考族 minimax-h3-ref2va),差别由网关的聚合配置吸收:
+// `MiniMax-H3` 是一条聚合模型,按请求推出来的 task_type 分派到对应 checkpoint
+// (`generate.task_models`,见 common.AggregateGenerate.ModelFor)。选渠道、计费、
+// 使用日志都落在真正执行的那个部署上。
+//
+// `minimax-h3-2k` / `minimax-h3-ref-2k` 是等价的别名,给已经配好的集成方用。
+//
+// 本层仍然**不校验模型名**(原样透传):模型名到渠道的对应关系是运营配置的事,
+// 这里提前判会让"新部署一个模型"必须跟着改代码。名字不认识时由选渠道那一步报
+// 「无可用渠道」;玩法与 checkpoint 对不上时由聚合分派兜住,真漏到引擎也只会在
+// T6 那条兜底里被改写成可照做的提示。
 //
 // 边界(设计见 docs/minimax-h3-playground-design.md §七の二):
 //
@@ -43,6 +51,11 @@ type CreateRequest struct {
 	Duration    *int          `json:"duration"`
 	Ratio       string        `json:"ratio"`
 	CallbackURL string        `json:"callback_url"`
+	// GenerateAudio 要不要生成原生音轨。**必须是指针**：官方默认有声，而客户端
+	// 显式传 false 时要真关掉。用 bool 的话 false 与"没传"不可区分，漏传按 true
+	// 处理是安全的（出来有声），但显式要静音就再也关不掉了 —— 这种"字段被静默
+	// 丢弃"的失败没有任何报错，客户只会觉得"这个网关不支持关声音"。
+	GenerateAudio *bool `json:"generate_audio"`
 }
 
 // ContentItem 是官方 content[] 的一项。type 决定读哪个媒体字段,role 决定它的语义。

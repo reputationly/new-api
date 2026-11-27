@@ -1,6 +1,7 @@
 package common
 
 import (
+	"sort"
 	"strings"
 	"sync"
 )
@@ -254,10 +255,95 @@ func (p *AggregatePromptEnhance) IsSendInputImages() bool {
 // AggregateGenerate 生成段:真正出图/出视频的那次调用。
 type AggregateGenerate struct {
 	Model string `json:"model"`
+	// TaskModels 按门面 task_type 把请求分派到**不同的生成段模型**。
+	//
+	// H3 的帧族(t2v/i2v/l2va/flf2v)与参考族(r2va)是两个 checkpoint、两套部署,
+	// 而一个聚合模型过去只能钉一个 `model` —— 客户带参考图时请求会被打上 r2va 却仍然
+	// 发给帧族的 checkpoint,引擎回一句
+	//   "task_type 'r2va' needs the Ref2VA deployment, but model ... serves t2va/fl2va"
+	// 客户端拿到一个看不出关联的 400。这里让它按玩法分派。
+	//
+	//	key    五个门面 task_type（见 common.FacadeTaskTypeKeys）,值会 trim + 小写归一
+	//	value  具体的生成段模型名，**不能是聚合模型名**（聚合名没有渠道 ability）
+	//
+	// 留空时行为与没有这个字段时完全一致：一律用 `model`。**`model` 必须继续填** ——
+	// 它是任何玩法都判不出来时的兜底，也是干跑校验的必填项。
+	TaskModels map[string]string `json:"task_models,omitempty"`
 	// Overrides 下发给生成段的参数覆盖(如 size)。开了超分时这里配的是**中间产物**的
 	// 尺寸,不是客户最终拿到的尺寸 —— 配置页必须把这层关系显式写出来,否则运营会以为
 	// 这里配的就是最终输出。
 	Overrides map[string]any `json:"overrides"`
+}
+
+// normalizeTaskModelKeys 归一 task_models 的 key（trim + 小写 + 参考族别名）与 value（trim）。
+// 全是空值时返回 nil，让"没配"与"配了空"在运行时表现一致。
+func normalizeTaskModelKeys(in map[string]string) map[string]string {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make(map[string]string, len(in))
+	for rawKey, rawValue := range in {
+		key := strings.ToLower(strings.TrimSpace(rawKey))
+		if normalized, ok := NormalizeRoutedTaskType(key); ok {
+			key = normalized
+		}
+		value := strings.TrimSpace(rawValue)
+		if key == "" || value == "" {
+			continue
+		}
+		out[key] = value
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+// ModelFor 这次请求该用哪个生成段模型。
+//
+// taskType 走**路由口径**归一(见 common.NormalizeRoutedTaskType)：r2v/rv2v 视同 r2va,
+// continuation 视同 i2v —— 续写在前置改写(ContinuationConvert)之前就已经到达聚合展开,
+// 那时它的 task_type 还是 continuation。判不出来(taskType 为空或不在五个玩法里)时不猜,
+// 回落到 `model`。这与聚合展开里"取不到就回落 Generate.Model"是同一条规则。
+func (g AggregateGenerate) ModelFor(taskType string) string {
+	def := strings.TrimSpace(g.Model)
+	key, ok := NormalizeRoutedTaskType(taskType)
+	if !ok {
+		return def
+	}
+	if v := strings.TrimSpace(g.TaskModels[key]); v != "" {
+		return v
+	}
+	return def
+}
+
+// AllModels 这条流水线可能用到的全部生成段模型：`model` 加上 task_models 的值，去重。
+//
+// 能力目录判"这条流水线跑不跑得起来"、干跑校验判"每个玩法有没有渠道"都要看全集 ——
+// 只看 `model` 会让参考族的 checkpoint 停掉时目录照样报出这个模型，用户切到参考玩法
+// 才失败。顺序稳定（`model` 在前，其余按 key 排序）：能力目录的版本哈希与测试断言
+// 都依赖同样的输入产出同样的输出。
+func (g AggregateGenerate) AllModels() []string {
+	out := make([]string, 0, 1+len(g.TaskModels))
+	seen := make(map[string]bool, 1+len(g.TaskModels))
+	add := func(name string) {
+		name = strings.TrimSpace(name)
+		if name == "" || seen[name] {
+			return
+		}
+		seen[name] = true
+		out = append(out, name)
+	}
+	add(g.Model)
+	keys := make([]string, 0, len(g.TaskModels))
+	for k := range g.TaskModels {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	for _, k := range keys {
+		add(g.TaskModels[k])
+	}
+	return out
 }
 
 // AggregateUpscale 超分段(仅视频)。
@@ -395,6 +481,11 @@ func parseAggregateModels(raw string) map[string]*AggregateModel {
 		if it.Name == "" || !it.Enabled {
 			continue
 		}
+		// task_models 的 key 在解析期就归一成门面玩法：运行时的查找键是归一后的
+		// `r2va`，而配置里写成 `R2VA` / `r2v` / 带空格时字面量不相等 —— 请求会
+		// **静默回落到默认段**，边跑边错。干跑校验会对非规范写法报 error，
+		// 这里是"已经存进去的旧配置也不至于失效"。
+		it.Generate.TaskModels = normalizeTaskModelKeys(it.Generate.TaskModels)
 		out[it.Name] = it
 	}
 	return out
