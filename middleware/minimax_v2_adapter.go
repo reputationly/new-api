@@ -179,6 +179,9 @@ var (
 	partitionErrorFL2VA  = "FL2VA partition"
 )
 
+// preferredRoutingModelName 网关对外推荐的"按玩法自动分派"的聚合名。
+const preferredRoutingModelName = "MiniMax-H3"
+
 // rewritePartitionError 把分区报错改写成客户端能照做的一句话。其余错误原样返回。
 //
 // 状态码与环境其余部分不变，只换 message：这类错误的成因**永远是请求与部署对不上**，
@@ -203,8 +206,23 @@ func rewritePartitionError(c *gin.Context, message string) string {
 	if taskType == "" {
 		taskType = "unknown"
 	}
+	// **客户已经在用推荐的那个名字时，不能再叫它改用自己。**
+	//
+	// `MiniMax-H3` 本身就会按 task_type 分派；它仍然撞到分区错误，说明是网关侧的
+	// 分派配置（AggregateModelConfig 少了 task_models、或生成段指错）出了问题，
+	// 不是客户能通过改 model 解决的。这时给出"改用 MiniMax-H3"只会让客户觉得我们
+	// 在敷衍，并让他去改一个本来就对的请求。
+	if strings.EqualFold(strings.TrimSpace(model), preferredRoutingModelName) {
+		hint := "keep the request_id from this response and contact gateway operations"
+		if requestID := c.GetString(common.RequestIdKey); requestID != "" {
+			hint = fmt.Sprintf("keep request_id %q and contact gateway operations", requestID)
+		}
+		return fmt.Sprintf("model %q cannot serve this request (task_type=%s): "+
+			"the gateway's own routing did not reach a matching deployment, which is a "+
+			"gateway configuration problem rather than a request problem — %s", model, taskType, hint)
+	}
 	return fmt.Sprintf("model %q cannot serve this request (task_type=%s); "+
-		"use model \"MiniMax-H3\", which routes every mode automatically", model, taskType)
+		"use model %q, which routes every mode automatically", model, taskType, preferredRoutingModelName)
 }
 
 // MiniMaxV2CreateConvert 处理 POST /v2/video_generation:官方 body → 统一任务契约 body,

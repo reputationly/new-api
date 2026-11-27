@@ -9,6 +9,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
 
+	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/relay/minimaxv2"
 )
 
@@ -50,4 +51,34 @@ func TestRewritePartitionErrorWithoutSnapshot(t *testing.T) {
 
 	require.Equal(t, enginePartitionError, rewritePartitionError(c, enginePartitionError))
 	require.True(t, strings.Contains(rewritePartitionError(c, enginePartitionError), "partition"))
+}
+
+// 客户**已经在用** MiniMax-H3 时不能再叫它改用它自己 —— 那是网关的分派配置出了问题
+// （AggregateModelConfig 少了 task_models，或生成段指错），改 model 解决不了。
+func TestRewritePartitionErrorWhenClientAlreadyUsesRoutingModel(t *testing.T) {
+	for _, model := range []string{"MiniMax-H3", "minimax-h3", " MiniMax-H3 "} {
+		rec := httptest.NewRecorder()
+		c, _ := gin.CreateTestContext(rec)
+		c.Request = httptest.NewRequest(http.MethodPost, "/v2/video_generation", nil)
+		c.Set(common.RequestIdKey, "req-abc123")
+		minimaxv2.StoreSnapshot(c, &minimaxv2.Snapshot{Model: model, TaskType: "r2va"})
+
+		got := rewritePartitionError(c, enginePartitionError)
+		require.NotContains(t, got, `use model "MiniMax-H3"`, "不能叫客户改用他自己正在用的名字：%q", model)
+		require.Contains(t, got, "gateway configuration problem")
+		require.Contains(t, got, `keep request_id "req-abc123"`)
+		require.Contains(t, got, "task_type=r2va")
+	}
+}
+
+// 没有 request_id 时也不能拼一句空的 —— 改成"保留本响应里的 request_id"。
+func TestRewritePartitionErrorWithoutRequestID(t *testing.T) {
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v2/video_generation", nil)
+	minimaxv2.StoreSnapshot(c, &minimaxv2.Snapshot{Model: "MiniMax-H3", TaskType: "r2va"})
+
+	got := rewritePartitionError(c, enginePartitionError)
+	require.Contains(t, got, "keep the request_id from this response")
+	require.NotContains(t, got, `""`)
 }

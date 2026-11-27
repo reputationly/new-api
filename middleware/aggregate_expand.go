@@ -1521,15 +1521,22 @@ func resolveCompilerTaskType(body map[string]any, norm *relaycommon.TaskSubmitRe
 	}
 	// **metadata 读不出来时不猜。**
 	//
-	// 请求体里有 metadata 键、但它不是对象(字符串/数组/数字)时,
-	// TaskSubmitReq.Metadata 会是 nil —— 于是形态推断看到的是"什么素材都
-	// 没有",推出 t2v。可那份 metadata 里本来可能装着 task_type、
-	// src_ref_images、driver audio……**缺证据不等于证据表明没有**,
-	// 而这条路产出的提示词会明说 "There is no reference image"。
-	if raw, present := body["metadata"]; present && raw != nil {
-		if _, isObject := raw.(map[string]any); !isObject {
-			return ""
-		}
+	// 判据是「归一化之后读不到」(`norm.Metadata == nil`)，**不是"原始 body 里它不是
+	// 对象"**。两者在 metadata 被 JSON 编码成字符串时正好相反：
+	// TaskSubmitReq.UnmarshalJSON 会把字符串解开（见 relay/common/relay_info.go 的
+	// 那段），`norm.Metadata` 拿到的是真正的内容 —— 此时拒绝推断等于**明明有证据却说没有**，
+	// 参考图请求于是被推成 t2v、按帧族提交，引擎回 400。
+	//
+	// 而"metadata 是数组/数字/坏 JSON"时 UnmarshalJSON 解不出对象，`norm.Metadata`
+	// 仍是 nil —— 那种情况才真的没有证据：形态推断会看到"什么素材都没有"推出 t2v，
+	// 可那份 metadata 里本来可能装着 task_type、src_ref_images、driver audio……
+	// **缺证据不等于证据表明没有**，而这条路产出的提示词会明说 "There is no reference image"。
+	//
+	// `present && raw != nil` 这两个条件仍然要有：`"metadata": null` 与"没有 metadata 键"
+	// 都是**合法的空 meta**（norm.Metadata 同样是 nil），必须照常推断 —— 只写
+	// `norm.Metadata == nil` 会把它们一起拒掉，singlecall 静默回落 text 模板。
+	if raw, present := body["metadata"]; present && raw != nil && norm.Metadata == nil {
+		return ""
 	}
 	if t, ok := inferCompilerTaskType(norm); ok {
 		return t

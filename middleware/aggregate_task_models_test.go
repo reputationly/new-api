@@ -10,6 +10,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/relay/hilo"
 )
 
 // 一个聚合模型按门面 task_type 分派到两个 checkpoint ——
@@ -53,6 +54,8 @@ func TestTaskModelsDispatchByRoutingTaskType(t *testing.T) {
 		{"两张帧图无 task_type", `{"prompt":"cat","images":["a.png","b.png"]}`, "minimax-h3-fl2va", "帧图不推断，回落默认段"},
 		{"不认识的玩法", `{"prompt":"cat","metadata":{"task_type":"s2v","audio":"a.mp3"}}`, "minimax-h3-fl2va", "显式声明别的玩法时不猜，回落默认段"},
 		{"metadata 是 JSON 字符串", `{"prompt":"cat","metadata":"{\"task_type\":\"r2va\",\"src_ref_images\":[\"a.png\"]}"}`, "minimax-h3-ref2va", "字符串形态的 metadata 也要认"},
+		{"字符串 metadata 只有参考图", `{"prompt":"cat","metadata":"{\"src_ref_images\":[\"a.png\"]}"}`, "minimax-h3-ref2va", "没有 task_type 时也要能从字符串 metadata 里推断素材"},
+		{"metadata 为 null", `{"prompt":"cat","metadata":null}`, "minimax-h3-fl2va", "null 是合法的空 meta，照常推断 t2v"},
 	}
 
 	for _, tc := range cases {
@@ -90,4 +93,57 @@ func TestTaskModelsAbsentKeepsDefaultModel(t *testing.T) {
 	selected, err := applyAggregateExpansion(c, "h3-2k", agg.Generate.Model, agg)
 	require.NoError(t, err)
 	require.Equal(t, "minimax-h3", selected, "没配 task_models 时不该改变行为")
+}
+
+// 「metadata 读不出来」的判据必须是**归一化之后**（norm.Metadata == nil），
+// 不是"原始 body 里它不是对象"：字符串编码的 metadata 会被 UnmarshalJSON 解开，
+// 那时拒绝推断等于明明有证据却说没有，参考图请求会被按帧族提交、被引擎 400。
+func TestResolveCompilerTaskTypeMetadataShapes(t *testing.T) {
+	cases := []struct {
+		name      string
+		body      string
+		want      hilo.TaskType
+		rationale string
+	}{
+		{
+			name:      "字符串 metadata + 参考图（无 task_type）",
+			body:      `{"prompt":"cat","metadata":"{\"src_ref_images\":[\"a.png\"]}"}`,
+			want:      hilo.TaskR2VA,
+			rationale: "字符串形态解出来有参考素材，必须推断成 r2va",
+		},
+		{
+			name:      "对象 metadata + 参考图（无 task_type）",
+			body:      `{"prompt":"cat","metadata":{"src_ref_images":["a.png"]}}`,
+			want:      hilo.TaskR2VA,
+			rationale: "对照项：对象形态一直是对的",
+		},
+		{
+			name:      "metadata 为 null 且无素材",
+			body:      `{"prompt":"cat","metadata":null}`,
+			want:      hilo.TaskT2V,
+			rationale: "null 与「没有 metadata 键」同义，照常推断 t2v（不能退化成不增强）",
+		},
+		{
+			name:      "没有 metadata 键",
+			body:      `{"prompt":"cat"}`,
+			want:      hilo.TaskT2V,
+			rationale: "同上",
+		},
+		{
+			name:      "metadata 是数组（读不出来）",
+			body:      `{"prompt":"cat","metadata":[{"src_ref_images":["a.png"]}]}`,
+			want:      "",
+			rationale: "确实没有证据时才拒绝推断——缺证据不等于证据表明没有",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var body map[string]any
+			require.NoError(t, common.Unmarshal([]byte(tc.body), &body))
+			norm := normalizeTaskRequest(body)
+			require.NotNil(t, norm)
+			require.Equal(t, tc.want, resolveCompilerTaskType(body, norm), tc.rationale)
+		})
+	}
 }
