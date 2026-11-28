@@ -167,7 +167,10 @@ type HiloTextModel struct {
 	// **没实测验证过就留 false** —— 读不了图的模型不会报错，只会编一段听起来
 	// 合理的描述，客户端会把用户上传的图当"看过了"。
 	SupportsImage bool   `json:"supportsImage,omitempty"`
-	Region        string `json:"region,omitempty"`
+	// ReasoningEffort 思考档位；off 表示关闭思考。omitempty 只用于兼容旧目录，
+	// 新配置应显式下发，避免客户端分不清“未配置”和“已关闭”。
+	ReasoningEffort string `json:"reasoningEffort,omitempty"`
+	Region          string `json:"region,omitempty"`
 }
 
 // HiloModelsConfig 是 `/api/v1/models/config` 的完整响应。
