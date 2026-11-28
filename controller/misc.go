@@ -306,8 +306,14 @@ func SendEmailVerification(c *gin.Context) {
 		}
 	}
 	if common.EmailAliasRestrictionEnabled {
-		containsSpecialSymbols := strings.Contains(localPart, "+") || strings.Contains(localPart, ".")
-		if containsSpecialSymbols {
+		// 只拦 plus-addressing 的 "+"：outlook / hotmail / icloud / M365 都支持，
+		// 一个信箱能派生出无限的 a+1@ / a+2@，是真别名渠道。
+		//
+		// 点号不拦。白名单里唯一"点即别名"的是 Gmail（a.b@gmail.com 等价于 ab@gmail.com），
+		// 而 gmail.com 不在白名单；其余域名（含 whggac.com / genomics.cn 等企业域名）
+		// 的点都是真实不同的地址。继续拦只会挡掉「名.姓@」——企业邮箱与海外用户的
+		// 主流写法（zhang.san@whggac.com、first.last@outlook.com），防不到任何滥用。
+		if strings.Contains(localPart, "+") {
 			c.JSON(http.StatusOK, gin.H{
 				"success": false,
 				"message": "管理员已启用邮箱地址别名限制，您的邮箱地址由于包含特殊符号而被拒绝。",
