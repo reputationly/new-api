@@ -32,13 +32,16 @@ func TestMediaCatalogItemKeepsPlatformModelName(t *testing.T) {
 func TestTextCatalogItemCarriesModalities(t *testing.T) {
 	item := textCatalogItem(setting.HiloTextEntry{
 		PlatformModel: "qwen3.8-flash",
-		Model:         dto.HiloTextModel{ID: "qwen3.8-flash", Name: "qwen3.8-flash", SupportsImage: true, SupportsVideo: true},
+		Model:         dto.HiloTextModel{ID: "qwen3.8-flash", Name: "qwen3.8-flash", SupportsImage: true, SupportsVideo: true, ReasoningEffort: "medium"},
 	})
 	if !item.SupportsImage || !item.SupportsVideo || item.SupportsAudio {
 		t.Fatalf("modalities = image:%v video:%v audio:%v", item.SupportsImage, item.SupportsVideo, item.SupportsAudio)
 	}
 	if item.PlatformModel != "qwen3.8-flash" || item.DisplayName != "qwen3.8-flash" {
 		t.Fatalf("unexpected item: %+v", item)
+	}
+	if item.ReasoningEffort != "medium" {
+		t.Fatalf("reasoningEffort = %q, want medium", item.ReasoningEffort)
 	}
 }
 

@@ -39,6 +39,7 @@ type ModelCatalogItem struct {
 	SupportsImage bool                          `json:"supportsImage,omitempty"`
 	SupportsVideo bool                          `json:"supportsVideo,omitempty"`
 	SupportsAudio bool                          `json:"supportsAudio,omitempty"`
+	ReasoningEffort string                      `json:"reasoningEffort,omitempty"`
 }
 
 // ModelCatalog 第一方目录响应。version 是内容哈希，客户端据此判断要不要重拉。
@@ -92,6 +93,7 @@ func textCatalogItem(entry setting.HiloTextEntry) ModelCatalogItem {
 		SupportsImage: entry.Model.SupportsImage,
 		SupportsVideo: entry.Model.SupportsVideo,
 		SupportsAudio: entry.Model.SupportsAudio,
+		ReasoningEffort: entry.Model.ReasoningEffort,
 	}
 }
 
