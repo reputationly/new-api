@@ -1303,6 +1303,11 @@ const SystemSetting = () => {
                       </Form.Checkbox>
                     </Col>
                   </Row>
+                  <Text>
+                    {t(
+                      '别名限制只拦「+」（plus-addressing，如 a+b@outlook.com：一个信箱能派生出无限个地址）。点号不拦——它只在 Gmail 上是别名，而 Gmail 不在白名单；「名.姓@公司域名」是企业与海外用户的主流写法。',
+                    )}
+                  </Text>
                   <TagInput
                     value={emailDomainWhitelist}
                     onChange={setEmailDomainWhitelist}

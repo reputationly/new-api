@@ -335,9 +335,13 @@ func SendEmailVerification(c *gin.Context) {
 	content := fmt.Sprintf("<p>您好，你正在进行%s邮箱验证。</p>"+
 		"<p>您的验证码为: <strong>%s</strong></p>"+
 		"<p>验证码 %d 分钟内有效，如果不是本人操作，请忽略。</p>", common.SystemName, code, common.VerificationValidMinutes)
-	err := common.SendEmail(subject, email, content)
-	if err != nil {
-		common.ApiError(c, err)
+	if err := common.SendEmail(subject, email, content); err != nil {
+		// 不能把 SendEmail 的原始错误返回给调用方：这里没有鉴权，而错误串里带着内部
+		// 邮件中继地址与退信 ID；更糟的是「收件人不存在」会以 550 的形式透出来，
+		// 结合白名单里的企业域名可以拿来枚举客户公司员工的邮箱。详情只进日志，
+		// 与 SendPasswordResetEmail 的处理保持一致。
+		logger.LogError(c.Request.Context(), fmt.Sprintf("failed to send email verification code to %s: %s", email, err.Error()))
+		common.ApiErrorMsg(c, "验证码发送失败，请稍后重试")
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{
